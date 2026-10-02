@@ -57,6 +57,9 @@ a session guest's pet store after the guest exists, and its comment says this
 grants the session "full daemon control".
 The `nixos-admin` and deploy presets, floot's capability bundles for sessions
 that administer the machine they run on, request it on purpose.
+This design closes the setup-script route in Phase 3, but closes floot's
+`host-powers` route only in Phase 4, which waits on Open Question 3.
+Until that question is answered, Gap 1 stays open for floot.
 
 **Gap 2: channel messages.**
 A channel is the daemon's shared chat room: each participant holds an
@@ -97,8 +100,8 @@ from the daemon bootstrap (`E(bootstrap).host()` or the CLI's
 `withEndoHost`), so it runs with the operator's own root host and no guest
 holds it.
 Those sites are out of scope.
-The peer and bootstrap audit below (fact 2, a separate grep) finds one
-more host call outside the guest-provisioning sites:
+The peer and bootstrap audit (a separate grep, the second of the two facts
+below) finds one more host call outside the guest-provisioning sites:
 `packages/floot/floot-factory-setup.js` calls `E(agent).provideHost(...)`
 on the operator's own `--powers @agent` to mint the floot controller host,
 so it is out of scope for the same reason.
@@ -128,7 +131,15 @@ Two facts decide the recommendation:
 
 1. **Every surveyed identifier use has a path equivalent.**
    The host namespace already holds the factory guest under its own name
-   (`selfName`).
+   (`selfName`): the pet name the setup script passed to `provideGuest`
+   when it created the factory guest, which the host's pet store binds to
+   that guest.
+   `copy` resolves `[selfName, X]` by asking that guest's directory for `X`,
+   so the copy crosses from the host's namespace into the factory's own pet
+   store, where `X` (for example `llm-provider`) lives.
+   jaine's pin below is a same-namespace copy, so it does not exercise that
+   hop; the Test Plan adds a case that does, and Phase 3 does not migrate
+   fae until it passes.
    So `locate` then `storeLocator` is the same as
    `copy([selfName, X], [profile, X])`, which fae already uses to pin
    (`copy([driverResultName], ['@pins', driverResultName])`).
@@ -168,20 +179,31 @@ in the repo.
 The secondary goal is least authority: a factory should not hold peer,
 bootstrap, or host-minting powers it never uses.
 
-## Recommendation 1: A Durable Provisioner Facet
+## Recommendation 1: A Durable Attenuated-Host Facet
 
-Give a guest a **provisioner** in place of the host.
+Give a guest an **attenuated host** in place of the host.
 
-- **A new formula type, `provisioner`, with one field, `hostId`.**
-  Its incarnation is an `EndoProvisioner` exo that forwards a fixed subset of
+The name says what the guest holds: a host with some methods removed, not
+a spawning-only grant, since it still reads and writes files, stores
+content, and evaluates code (see the Method Partition).
+An earlier draft called it a *provisioner*.
+That name both undersold the surface and collided with
+`packages/claude-sandbox/src/claude-session-provisioner.js`, whose
+`ClaudeSessionProvisioner` is an unrelated per-session client factory that
+holds a raw `hostAgent`.
+claude-sandbox would have had two different "provisioner" concepts, so this
+design avoids the word for the daemon facet.
+
+- **A new formula type, `attenuated-host`, with one field, `hostId`.**
+  Its incarnation is an `EndoAttenuatedHost` exo that forwards a fixed subset of
   `EndoHost` methods to the host.
-  The provisioner depends on its host formula, so collecting or canceling
-  the host takes the provisioner with it.
-- **A new special name, `@provisioner`, on the host.**
+  The attenuated host depends on its host formula, so collecting or canceling
+  the host takes the attenuated host with it.
+- **A new special name, `@attenuated-host`, on the host.**
   Like `@agent`, it resolves lazily.
-  It formulates, then memoizes, the host's single provisioner formula.
+  It formulates, then memoizes, the host's single attenuated-host formula.
   Setup scripts change `introducedNames: { '@agent': 'host-agent' }` to
-  `introducedNames: { '@provisioner': 'host-agent' }`.
+  `introducedNames: { '@attenuated-host': 'host-agent' }`.
   The guest-side name stays `host-agent`, so the agents' lookups do not change.
 - **A formula, not a lookup-time wrapper.**
   If the full host formula sat in the guest's pet store and only `lookup`
@@ -197,7 +219,7 @@ The two lists below partition every method of `HostInterface` in
 the methods it spreads in from the name-hub, directory-file, and
 content-locator guard groups.
 
-The provisioner exposes these:
+The attenuated host exposes these:
 
 - **Namespace paths:** `has`, `list`, `listValues`, `lookup`, `maybeLookup`,
   `reverseLookup`, `remove`, `move`, `copy`, `makeDirectory`, and
@@ -213,13 +235,23 @@ The provisioner exposes these:
   pet-name paths in the host's namespace and returns only whether they name
   the same formula (see Floot's Container Mounts below).
   It discloses one bit, and no identifier.
-  Only floot calls it, but it sits on every provisioner because it adds no
-  reach: both paths must already resolve through the same provisioner, so
-  the caller can look up both capabilities anyway, and for a capability the
-  daemon does not wrap in a facet, `===` on the two lookups already yields
-  the same bit.
-  Scoping it to floot would need a per-factory provisioner variant for one
-  bit of information the holder can mostly derive.
+  This is a new oracle, not one the holder could already derive.
+  Every attenuated-host method that returns a capability passes it through
+  `guestFacetFor` (below), and this design does not require
+  `guestFacetFor` to return the same facet object for the same formula, so
+  `===` on two lookups cannot be trusted to report equality.
+  `sameCapability` therefore lets the holder learn whether two paths in the
+  host's namespace alias one formula, which it could not otherwise learn.
+  That bit is acceptable to disclose because it is not authority and not a
+  designation: it names nothing, cannot be presented to the daemon, and is
+  confined to paths the holder can already resolve through the same
+  attenuated host, whose `@`-name refusal (below) also applies to both
+  arguments.
+  Only floot calls it.
+  It sits on every attenuated host rather than on a per-factory variant
+  because a variant for one caller costs a second formula type and a second
+  method partition to keep in step, for a bit whose disclosure is the same
+  whichever factory holds it.
 
 It withholds these:
 
@@ -235,7 +267,7 @@ It withholds these:
 - **Code from archives and trees:** `makeArchive`, `makeFromTree`,
   `stageTree`, and `makeUnconfinedFromTree`.
   These carry the same ambient authority as `makeUnconfined`, and no factory
-  calls them, so the provisioner does not offer them (Open Question 1).
+  calls them, so the attenuated host does not offer them (Open Question 1).
 - **Shell, git, and HTTP:** `provideShell`, `provideGit`, `provideGitClone`,
   `provideGitRemote`, `getGitRemoteController`, `getGitCredentialController`,
   `provideHttpClient`, `getHttpClientControl`, `provideBearerCredential`, and
@@ -250,18 +282,18 @@ It withholds these:
 - **Operator surfaces:** `diagnostics`, `listRetentionPaths`, and
   `followRetentionPaths`.
 
-Every provisioner method that returns a capability passes its result through
+Every attenuated-host method that returns a capability passes its result through
 `guestFacetFor`: `lookup`, `maybeLookup`, and `list`, and also the makers,
 so `makeChannel` returns a channel's guest facet and `provideGuest` returns
 the same guest a lookup would.
-That way a path that names a host returns that host's provisioner, and a
+That way a path that names a host returns that host's attenuated host, and a
 channel returns its guest facet (Recommendation 2).
-The provisioner also refuses `@`-special names in paths, except `@main` (the
-worker that `makeUnconfined` targets), `@pins`, and `@provisioner`, which
-names the provisioner itself.
+The attenuated host also refuses `@`-special names in paths, except `@main` (the
+worker that `makeUnconfined` targets), `@pins`, and `@attenuated-host`, which
+names the attenuated host itself.
 Without that rule, `lookup('@endo')` or `lookup('@agent')` would hand back
 the bootstrap or the full host.
-The refusal is keyed to the path, not to the method: the provisioner checks
+The refusal is keyed to the path, not to the method: the attenuated host checks
 the first segment of every name or path argument of every exposed method
 once, at its dispatch boundary, before forwarding to the host.
 That covers `copy` and `move` sources and destinations, `remove`,
@@ -274,7 +306,7 @@ namespace, where Phase 4's guest-destination check does not look, and
 `lookup(['x'])` would then return it.
 A host formula reached under an ordinary name is still safe to look up,
 because `lookup` passes it through `guestFacetFor`, which returns that
-host's provisioner; the path check stops the relabeling, and the facet
+host's attenuated host; the path check stops the relabeling, and the facet
 stops what relabeling would have reached.
 A refused name throws from both `lookup` and `maybeLookup`: `maybeLookup`
 returns `undefined` only for a name that is absent, so a policy refusal is
@@ -297,11 +329,11 @@ the mechanism.
 
 | Package | Change |
 |---|---|
-| every guest-provisioning setup script, including fae's `setup-with-tools.js` | `'@agent'` becomes `'@provisioner'` in `introducedNames` |
-| fae | Every `storeLocator([profile, X], await E(hostAgent).locate(selfName, X))` becomes `copy([selfName, X], [profile, X])`. Forwarding `host-agent` to the spawner copies the provisioner. `provisionFaeAgent` returns a pet name, not a `locator`. |
+| every guest-provisioning setup script, including fae's `setup-with-tools.js` | `'@agent'` becomes `'@attenuated-host'` in `introducedNames` |
+| fae | Every `storeLocator([profile, X], await E(hostAgent).locate(selfName, X))` becomes `copy([selfName, X], [profile, X])`. Forwarding `host-agent` to the spawner copies the attenuated host. `provisionFaeAgent` returns a pet name, not a `locator`. |
 | lal | Drop `identify('lal-primer')`. Its only use is a log line. |
 | jaine | The pin becomes `copy([driverResultName], ['@pins', driverResultName])`, as in fae. |
-| claude-sandbox | `provideContainerMountBridge({ key, capId, mode })` becomes `provideContainerMountBridge({ key, cap, mode })`. The caller passes the capability itself, so the bridge no longer calls `lookupById`. The bridge's same-key check compares `mode` only, since the key now names exactly one pinned capability (below). Both per-session powers builders (`src/claude-sandbox-factory.js` and `src/provision-claude-session.js`) endow `@agent` by pet name into `evaluate`; that endowment becomes `@provisioner`. The per-session powers call only `provideMount` and `remove` on it, both exposed, so the sandbox keeps its shape, and an endowment of `@agent` through a provisioner throws. |
+| claude-sandbox | `provideContainerMountBridge({ key, capId, mode })` becomes `provideContainerMountBridge({ key, cap, mode })`. The caller passes the capability itself, so the bridge no longer calls `lookupById`. The bridge's same-key check compares `mode` only, since the key now names exactly one pinned capability (below). Both per-session powers builders (`src/claude-sandbox-factory.js` and `src/provision-claude-session.js`) endow `@agent` by pet name into `evaluate`; that endowment becomes `@attenuated-host`. The per-session powers call only `provideMount` and `remove` on it, both exposed, so the sandbox keeps its shape, and an endowment of `@agent` through an attenuated host throws. |
 | floot | `container-mounts.js` replaces `capId` with a registrar-private pin, as the section Floot's Container Mounts describes. The `host-powers` kind moves to the opt-in from Open Question 3 in place of `@agent`. |
 
 ### Floot's Container Mounts
@@ -328,7 +360,7 @@ Nothing below touches `@pins`.
   On a record's first attach, the registrar mints a random `pin` token,
   stores it in the record in place of `capId`, and runs
   `copy([sessionName, ...namePath], [pinDirectory, pin])` through its
-  provisioner.
+  attenuated host.
   The copy is also the possession check: it throws when the session does not
   hold the name, as `identify` returning `undefined` does today.
   `pinDirectory` is a directory the registrar makes under its existing
@@ -384,7 +416,34 @@ That registry is `guestFacetMakers` in `directory.js`.
 It could become a shared `guest-facets.js` once directories are not its only
 client.
 Then a guest that looks up a channel, adopts one from mail, or reaches one
-through a provisioner holds only the facet.
+through an attenuated host holds only the facet.
+
+Unlike the host, a channel keeps its formula and its pet-store binding
+unchanged, and the facet is applied when the binding becomes a live
+reference in a guest's hands.
+That is the lookup-time wrapping Alternatives Considered rejects for hosts,
+so the design must say why it holds here.
+The invariant is: **every path by which a pet-store binding becomes a live
+reference for a guest passes through `guestFacetFor`.**
+Those paths are the guest's `lookup`, `maybeLookup`, and `list`; adopting
+from mail; an attenuated host's lookups and makers; the pet-name endowments of
+`evaluate`; and the powers of `makeUnconfined`.
+Forwarding the name with `copy`, `move`, or `send` moves only the binding,
+and the receiving guest meets the same boundary when it reads it.
+So guest A copying or sending a channel name to guest B gives B a facet,
+not the full member.
+The host differs for two reasons.
+First, the binding records which strength of host a guest holds (the full
+host, the attenuated host, or Open Question 3's opt-in), so the strength must
+live in the formula, not be inferred from the reader.
+A channel has one guest strength, so the reader can decide.
+Second, the host's hazard is authority, which a stray unwrapped path would
+hand over whole; the channel's hazard is identifier disclosure, which every
+read path redacts the same way.
+A channel name forwarded into a host's namespace gives that host the full
+member, as `copy` does today; hosts see identifiers already, so this design
+leaves it unchanged.
+The Test Plan exercises the forwarding paths.
 
 The facet behaves like this:
 
@@ -430,11 +489,11 @@ Both appear under Open Questions.
 
 | Boundary | Mechanism | Policy | Durable state | Lifecycle and commit | Value crossing |
 |---|---|---|---|---|---|
-| host → provisioner (daemon) | `provisioner` formula and incarnation in `host.js` / `daemon.js` | the method partition, as an interface guard in `interfaces.js` | the `provisioner` formula record (`hostId`), memoized under `@provisioner` | the daemon formula graph, where the provisioner depends on its host and is collected with it | an `EndoProvisioner` exo |
-| provisioner → guest (daemon) | `introducedNames` in `provideGuest` | the setup script chooses `@provisioner`, and the daemon refuses a host formula in a guest's pet store | the guest's pet-store entry, which holds the provisioner's id | unchanged | a pet name in the guest's namespace |
-| factory → new agent (fae, lal, jaine, claude-sandbox, floot) | path `copy` through the provisioner | each factory decides which capabilities each new guest receives | the new guest's pet store | the factory, as today | pet-name paths, never locators |
+| host → attenuated host (daemon) | `attenuated-host` formula and incarnation in `host.js` / `daemon.js` | the method partition, as an interface guard in `interfaces.js` | the `attenuated-host` formula record (`hostId`), memoized under `@attenuated-host` | the daemon formula graph, where the attenuated host depends on its host and is collected with it | an `EndoAttenuatedHost` exo |
+| attenuated host → guest (daemon) | `introducedNames` in `provideGuest` | the setup script chooses `@attenuated-host`, and the daemon refuses a host formula in a guest's pet store | the guest's pet-store entry, which holds the attenuated host's id | unchanged | a pet name in the guest's namespace |
+| factory → new agent (fae, lal, jaine, claude-sandbox, floot) | path `copy` through the attenuated host | each factory decides which capabilities each new guest receives | the new guest's pet store | the factory, as today | pet-name paths, never locators |
 | channel → guest (daemon) | `guestFacetFor` and `redactChannelMessage` | `ids` withheld, posts carry no ids | none, because the facet is a view and `channel.js`'s message store is unchanged | unchanged, owned by `channel.js` | a redacted `ChannelMessage` |
-| floot registrar → `pinDirectory` (floot) | `container-mounts.js` | the registrar is the only writer, and a pin never leaves it | one `pin`-named entry per mount record in `pinDirectory` | minted on first attach by `copy`, removed on last detach, and a record whose pin is missing on replay is dropped, so the registrar fails closed | a capability through the provisioner, never an identifier |
+| floot registrar → `pinDirectory` (floot) | `container-mounts.js` | the registrar is the only writer, and a pin never leaves it | one `pin`-named entry per mount record in `pinDirectory` | minted on first attach by `copy`, removed on last detach, and a record whose pin is missing on replay is dropped, so the registrar fails closed | a capability through the attenuated host, never an identifier |
 
 Naming check: this change renames nothing internal.
 The outer concept "guest" names only the boundary facets.
@@ -446,13 +505,15 @@ names and semantics.
 
 1. **Channel guest facet** (Recommendation 2).
    It stands alone, is small, and changes no consumer.
-2. **The provisioner formula, its special name, and its interface.**
+2. **The attenuated-host formula, its special name, and its interface.**
    This step is additive, and `@agent` still works.
-3. **Migrate fae, lal, jaine, claude-sandbox, and floot** to `@provisioner`
+3. **Migrate fae, lal, jaine, claude-sandbox, and floot** to `@attenuated-host`
    and path copies, including the mount-bridge signature change (`capId` to
    `cap`) and floot's registrar-private pins.
-   This phase also renames the guest-side `host-agent` to `provisioner`, as
-   Open Question 4 recommends.
+   If the maintainer accepts Open Question 4's recommended answer, this
+   phase also renames the guest-side `host-agent` to `attenuated-host`;
+   otherwise the name stays `host-agent` and the rest of the phase is
+   unchanged.
 4. **Refuse a host formula in a guest's pet store**, by introduction or by
    copy, with floot's `host-powers` moved to the opt-in.
    This phase is blocked on Open Question 3: refusal without an opt-in
@@ -474,23 +535,23 @@ answer phase 3 adopts.
   A member joined through a guest-held invitation is also redacted, and so
   is every member returned by `getMember` or `getMembers` on the facet.
   A host reading the same channel still sees `ids`.
-- **Provisioner surface:** every withheld method is absent from the
+- **Attenuated host surface:** every withheld method is absent from the
   interface guard.
   `lookup(['@endo'])`, `lookup(['@agent'])`, and the same paths through
   `maybeLookup` throw.
   `copy(['@agent'], ['x'])` throws, so a clone-then-lookup cannot recover
   the host; a host formula placed under an ordinary name by the host itself
-  looks up as a provisioner.
+  looks up as an attenuated host.
   `move` from `@agent`, `copy` or `move` onto an `@`-special destination,
   `evaluate` endowing `@agent`, and `sameCapability` with an `@agent` path
-  all throw; `evaluate` endowing `@provisioner` succeeds.
+  all throw; `evaluate` endowing `@attenuated-host` succeeds.
   `makeChannel` returns a guest facet whose messages carry no `ids`.
   A `HostInterface` method in neither list, or in both, fails the partition
   test, and so does a listed name that is not a `HostInterface` method.
-  `lookup` of a path that names a host returns a provisioner.
+  `lookup` of a path that names a host returns an attenuated host.
   A guest that sends `host-agent` to a peer guest gives that peer a
-  provisioner.
-- **Restart:** a guest's `host-agent` still resolves to the same provisioner
+  attenuated host.
+- **Restart:** a guest's `host-agent` still resolves to the same attenuated host
   after the daemon restarts, and a floot container mount re-attaches from
   its persisted pin.
   A record whose pin was removed is dropped on replay.
@@ -504,12 +565,20 @@ answer phase 3 adopts.
   mints a new pin and mounts cleanly.
 - **Migration:** the existing fae subagent, lal primer, jaine pin,
   claude-sandbox container-mount, and floot container-mount tests pass on
-  `@provisioner`, and their mock
+  `@attenuated-host`, and their mock
   powers offer no identifier methods.
 - **Host refusal:** after phase 4, `copy(['@agent'], [guestName, 'x'])`
   throws, and floot's `host-powers` works only through the opt-in.
 - **Compounding regression:** a guest holding both a channel and a
-  provisioner cannot turn a channel attachment into a capability.
+  attenuated host cannot turn a channel attachment into a capability.
+- **Channel forwarding:** guest A copies, moves, and sends a channel name
+  to guest B; B's `lookup`, its mail adoption, and an `evaluate` endowing
+  that name each yield a guest facet whose messages carry no `ids`.
+  An attenuated-host `copy` of a channel into another guest's namespace does the
+  same.
+- **fae copy hop:** a factory guest's `copy([selfName, X], [profile, X])`
+  through its attenuated host reaches `X` in the factory's own pet store, as
+  `locate` then `storeLocator` does today (Phase 3 precondition).
 
 ## Alternatives Considered
 
@@ -533,7 +602,7 @@ answer phase 3 adopts.
 
 ## Open Questions
 
-1. Should the provisioner keep `makeUnconfined` and `evaluate`?
+1. Should the attenuated host keep `makeUnconfined` and `evaluate`?
    Their siblings `makeArchive`, `makeFromTree`, `stageTree`, and
    `makeUnconfinedFromTree` are withheld because no factory calls them,
    but they carry the same authority, so the answer should treat all six
@@ -546,23 +615,23 @@ answer phase 3 adopts.
 2. Is the method partition right?
    In particular, should the git and HTTP credential providers, `makeChannel`,
    and `provideMount` (which reaches the daemon host's filesystem) be on the
-   provisioner?
+   attenuated host?
 3. What should the explicit opt-in for full delegation look like?
    floot's admin presets need one, so refusal without an opt-in would remove
    a shipped capability.
    A separately named special name keeps the grant visible in every setup
    script and preset that uses it.
-   Its name should share a root with `@provisioner`, so the strengths of
-   host delegation read as one family, for example `@provisioner` and
-   `@provisioner-unattenuated`.
+   Its name should share a root with `@attenuated-host`, so the strengths of
+   host delegation read as one family, for example `@attenuated-host` and
+   `@full-host`.
    Phase 4 waits on this answer.
 4. Should the guest-side name stay `host-agent`, or should the migration
-   rename it `provisioner` so the code says what the guest holds?
+   rename it `attenuated-host` so the code says what the guest holds?
    This is a legibility question for the trust boundary, not only a style
    one: under `host-agent`, a reader of a factory assumes the full
    `EndoHost` surface and learns otherwise only from a runtime throw.
    The recommended answer is to rename in phase 3, alongside the
-   `@provisioner` change, so the name and the interface change together.
+   `@attenuated-host` change, so the name and the interface change together.
 5. Should a guest be able to post a capability to a channel by pet name?
    The guest facet would then resolve `petNamesOrPaths` against its guest's
    namespace in the daemon, and that requires a facet keyed to its guest.
@@ -580,3 +649,6 @@ answer phase 3 adopts.
 - [lal-fae-form-provisioning](lal-fae-form-provisioning.md), which introduced
   `'@agent' -> 'host-agent'`.
 - [endoclaw-channel-bridges](endoclaw-channel-bridges.md)
+- [runtime-container-fs-mount](runtime-container-fs-mount.md), which shipped
+  `container-mounts.js`, `provideContainerMountBridge`, and the
+  `capId`-keyed attach records that Floot's Container Mounts changes.
