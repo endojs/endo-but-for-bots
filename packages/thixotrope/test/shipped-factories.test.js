@@ -108,6 +108,9 @@ test('the registry and the workspace access are whole', async t => {
   t.throws(() => access.lookupGrants(harden([['power', 'absent']])), {
     message: /Unknown inventory grant/,
   });
+  t.throws(() => access.put('granted', Far('Other', {})), {
+    message: /Inventory name "granted" was taken by another value/,
+  });
 });
 
 test('the native manager and its kit are whole', async t => {
