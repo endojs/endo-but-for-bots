@@ -46,9 +46,9 @@ export const registerHttpIntegration = (test, kind) => {
       const nativeChildren = [];
       const platform = harden({
         ...nodePowers,
-        nativeWorkers: harden({
+        adapterProcesses: harden({
           start: async options => {
-            const child = await nodePowers.nativeWorkers.start(options);
+            const child = await nodePowers.adapterProcesses.start(options);
             nativeChildren.push(child);
             return child;
           },

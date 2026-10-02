@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { serveThixotrope } from '../src/control/supervisor.js';
 import { connectLocalControl } from '../src/control/local-control.js';
 import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
-import { describeNativeResource } from '../src/native/describe-resource.js';
+import { locateNativeResource } from '../src/native/locate-resource.js';
 import { makeLogPowers } from '../src/platform/logging.js';
 import { makeNodePowers } from '../src/platform/node/powers.js';
 import { makeFsStore } from '../src/store/store-fs.js';
@@ -227,7 +227,7 @@ test.serial(
     t.is(await client.call('evaluate', "inventory.has('web')"), 'false');
     t.is((await managersOf()).length, 0);
     await t.throwsAsync(() => client.call('remove', ''), {
-      message: /inventory name/,
+      message: /installation name/,
     });
   },
 );
@@ -312,23 +312,17 @@ test.serial(
   },
 );
 
-test.serial(
-  'native resource descriptions require both entry files',
-  async t => {
-    const path = await mkdtemp('/tmp/thix-native-resource-');
-    t.teardown(() => rm(path, { recursive: true, force: true }));
-    await writeFile(
-      join(path, 'durable.js'),
-      'export const make = () => ({});',
-    );
-    await t.throwsAsync(() => describeNativeResource(powers, path), {
-      code: 'ENOENT',
-    });
-  },
-);
+test.serial('locating a native resource requires both entry files', async t => {
+  const path = await mkdtemp('/tmp/thix-native-resource-');
+  t.teardown(() => rm(path, { recursive: true, force: true }));
+  await writeFile(join(path, 'durable.js'), 'export const make = () => ({});');
+  await t.throwsAsync(() => locateNativeResource(powers, path), {
+    code: 'ENOENT',
+  });
+});
 
 test.serial(
-  'native resource descriptions locate the entries and consult nothing else',
+  'locating a native resource finds the entries and consults nothing else',
   async t => {
     const path = await mkdtemp('/tmp/thix-native-resource-');
     t.teardown(() => rm(path, { recursive: true, force: true }));
@@ -336,18 +330,18 @@ test.serial(
     await writeFile(join(path, 'durable.js'), source);
     // An entry must be the file that is there, not a link to one.
     await symlink(join(path, 'durable.js'), join(path, 'ephemeral.js'));
-    await t.throwsAsync(() => describeNativeResource(powers, path), {
+    await t.throwsAsync(() => locateNativeResource(powers, path), {
       message: /ephemeral\.js.*must be a file/,
     });
     await rm(join(path, 'ephemeral.js'));
     await writeFile(join(path, 'ephemeral.js'), source);
     // Links elsewhere and vendored packages are the bundler's concern, not
-    // the description's: the identity is the pair of bundles, and nothing
+    // the locator's: the identity is the pair of bundles, and nothing
     // about the directory beyond its entries is pinned.
     await symlink(join(path, 'durable.js'), join(path, 'alias.js'));
     await mkdir(join(path, 'node_modules'));
     const root = await realpath(path);
-    t.deepEqual(await describeNativeResource(powers, path), {
+    t.deepEqual(await locateNativeResource(powers, path), {
       directory: root,
       durablePath: join(root, 'durable.js'),
       ephemeralPath: join(root, 'ephemeral.js'),

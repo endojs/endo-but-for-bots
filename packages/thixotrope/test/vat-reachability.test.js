@@ -53,7 +53,7 @@ test('host resource worker facades retain their target only through reachable ho
     'o+1': {
       kind: 'resource',
       name: 'worker-facade',
-      description: { workerId: 'b' },
+      binding: { workerId: 'b' },
     },
   };
   const report = inspectVatReachability({ workers, hubState, endpointExports });
@@ -202,7 +202,7 @@ test('gift and answer routes through worker facades retain the actual worker', t
     'o+1': {
       kind: 'resource',
       name: 'worker-facade',
-      description: { workerId: 'b' },
+      binding: { workerId: 'b' },
     },
   };
   const refs = { root: ref('a', []), facade: ref('endpoint', []) };

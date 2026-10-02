@@ -7,7 +7,7 @@ import test from '@endo/ses-ava/test.js';
 import { makeThixotropeDaemon } from '../src/core/daemon.js';
 import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
 import { makeMemoryStore } from '../src/store/store-memory.js';
-import { parkWorkers } from './_park-workers.js';
+import { sleepWorkers } from './_sleep-workers.js';
 
 import { makeNodePowers } from '../src/platform/node/powers.js';
 
@@ -49,11 +49,11 @@ test.serial(
     const marker = await worker.evaluate('true');
     t.true(marker);
     daemon.unpublish(secret);
-    await parkWorkers(daemon);
+    await sleepWorkers(daemon);
     t.deepEqual(daemon.inspectReachability().collectible, []);
     client.close();
     await t.throwsAsync(() => result, { message: /Session disconnected/ });
-    await parkWorkers(daemon);
+    await sleepWorkers(daemon);
     t.deepEqual(daemon.inspectReachability().collectible, [worker.workerId]);
     t.false(
       Object.keys(store.getHubState().sessions).some(key =>

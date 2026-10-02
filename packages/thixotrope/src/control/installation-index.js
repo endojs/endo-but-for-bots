@@ -5,6 +5,11 @@ import { Far } from '@endo/far';
 import harden from '@endo/harden';
 
 import { assertRecordVersion } from '../store/versioned-record.js';
+import {
+  assertInstallationName,
+  assertWorkspaceName,
+  WORKSPACE_NAME_PATTERN,
+} from './names.js';
 
 /**
  * The host's own record of what the registry vat holds: one entry per
@@ -46,16 +51,9 @@ const keyOf = (workspace, name) => JSON.stringify([workspace ?? null, name]);
  * @param {SyncStringAtom} storage
  */
 export const makeInstallationIndex = storage => {
-  /** @param {string} name */
-  const assertName = name => {
-    (typeof name === 'string' && name.length > 0) ||
-      Fail`Expected an installation name`;
-  };
   /** @param {string | undefined} workspace */
   const assertWorkspace = workspace => {
-    workspace === undefined ||
-      (typeof workspace === 'string' && workspace.length > 0) ||
-      Fail`Expected a workspace name`;
+    if (workspace !== undefined) assertWorkspaceName(workspace);
   };
   /** @param {unknown} entry */
   const assertEntry = entry => {
@@ -64,7 +62,7 @@ export const makeInstallationIndex = storage => {
       record !== null &&
       (record.workspace === undefined ||
         (typeof record.workspace === 'string' &&
-          record.workspace.length > 0)) &&
+          WORKSPACE_NAME_PATTERN.test(record.workspace))) &&
       (record.kind === 'application' || record.kind === 'native') &&
       typeof record.digest === 'string' &&
       Array.isArray(record.grants) &&
@@ -90,7 +88,7 @@ export const makeInstallationIndex = storage => {
     entries = new Map(
       /** @type {unknown[]} */ (stored ?? []).map(item => {
         const { name, ...entry } = /** @type {{name: string}} */ (item);
-        assertName(name);
+        assertInstallationName(name);
         const record = assertEntry(entry);
         return [keyOf(record.workspace, name), harden({ ...record })];
       }),
@@ -115,7 +113,7 @@ export const makeInstallationIndex = storage => {
      */
     record: (workspace, name, entry) => {
       assertWorkspace(workspace);
-      assertName(name);
+      assertInstallationName(name);
       const record = assertEntry(entry);
       entries.set(
         keyOf(workspace, name),
@@ -132,7 +130,7 @@ export const makeInstallationIndex = storage => {
      */
     forget: (workspace, name) => {
       assertWorkspace(workspace);
-      assertName(name);
+      assertInstallationName(name);
       if (!entries.delete(keyOf(workspace, name))) return false;
       save();
       return true;

@@ -2,8 +2,9 @@
 
 /**
  * The engine seam of the machine: the power to run worker incarnations
- * with (or without) engine-level heap snapshots. `makeXsEngine` is the
- * production implementation; the in-process peer replay engines
+ * with (or without) engine-level heap snapshots. Ironhorse
+ * (`makeIronhorseEngine`) is what the supervisor composes and XS
+ * (`makeXsEngine`) the alternative; the in-process peer replay engines
  * (`peer-replay-engine.js`) are deterministic test doubles. The seam
  * stays open for future JS engines with other heap snapshot mechanisms.
  *

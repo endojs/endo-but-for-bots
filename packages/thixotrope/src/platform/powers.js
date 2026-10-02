@@ -5,7 +5,7 @@
 /** @import { FilePowers } from './files.js' */
 /** @import { HashPowers } from './hashes.js' */
 /** @import { LogPowers } from './logging.js' */
-/** @import { NativeWorkerPowers } from './native-workers.js' */
+/** @import { AdapterProcessPowers } from './adapter-processes.js' */
 /** @import { PathPowers } from './paths.js' */
 /** @import { ProcessPowers } from './processes.js' */
 /** @import { RandomPowers } from './random.js' */
@@ -27,7 +27,7 @@
  * @property {FilePowers} files
  * @property {SyncFilePowers} syncFiles
  * @property {ProcessPowers} processes
- * @property {NativeWorkerPowers} nativeWorkers
+ * @property {AdapterProcessPowers} adapterProcesses
  * @property {SocketPowers} sockets
  * @property {TerminalPowers} terminal
  * @property {HashPowers} hashes

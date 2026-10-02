@@ -1,6 +1,6 @@
 // @ts-check
 /** @import { Logger } from '../platform/logging.js' */
-/** @import { NativeWorkerPowers } from '../platform/native-workers.js' */
+/** @import { AdapterProcessPowers } from '../platform/adapter-processes.js' */
 /** @import { RandomPowers } from '../platform/random.js' */
 /** @import { TimerPowers } from '../platform/timers.js' */
 import harden from '@endo/harden';
@@ -27,7 +27,11 @@ import { settleWithin } from '../platform/timers.js';
 import { isSessionToken } from '../store/store-validators.js';
 import { inspectVatReachability } from './vat-reachability.js';
 import { WorkerHaltError } from './worker-engine.js';
-import { makeWorkerSessionRecords } from './worker-session-records.js';
+import {
+  boundKeyOf,
+  boundWorkerOf,
+  makeWorkerSessionRecords,
+} from './worker-session-records.js';
 
 /**
  * @import {ERef, FarRef} from '@endo/eventual-send'
@@ -66,7 +70,7 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  * resume. Positions are rows; nothing is re-seated because nothing
  * was reified.
  *
- * @typedef {object} ThixotropeWorkerFacade
+ * @typedef {object} ThixotropeWorkerAdmin
  * @property {string} workerId
  * @property {string | undefined} debugLabel
  * @property {(source: string, endowments?: Record<string, unknown>) => Promise<any>} evaluate
@@ -99,8 +103,8 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  *   evaluate in a fresh implicitly-created worker and return the
  *   result; the worker persists like any other (find it via
  *   `listWorkerIds`, retire it via `getWorker(id).retire()`)
- * @property {(options?: { debugLabel?: string, ephemeral?: boolean, allocationKey?: string }) => Promise<ThixotropeWorkerFacade>} createWorker
- * @property {(workerId: string) => ThixotropeWorkerFacade} getWorker
+ * @property {(options?: { debugLabel?: string, ephemeral?: boolean, allocationKey?: string }) => Promise<ThixotropeWorkerAdmin>} createWorker
+ * @property {(workerId: string) => ThixotropeWorkerAdmin} getWorker
  * @property {() => Array<string>} listWorkerIds
  * @property {(name: string, binding?: ResourceBinding) => object} makeResource
  *   a host resource, memoised per name and binding and recorded as such
@@ -130,7 +134,7 @@ const SHELL_SWISSNUM = swissnumFromBytes(textEncoder.encode('shell'));
 // A durable peer session's record; version 1 recorded receipts only.
 const SESSION_RECORD_VERSION = 2;
 // The endpoint's pseudo-worker id: its session records (resource
-// descriptions, pending answers) live in this worker store.
+// bindings, pending answers) live in this worker store.
 const ENDPOINT_ID = 'e'.repeat(32);
 const ENDPOINT_SESSION = 'endpoint';
 // How long startup waits, in all, for notified vats to re-establish whatever
@@ -147,9 +151,9 @@ const START_NOTICE_MS = 10_000;
  * @param {WorkerEngine} options.engine
  * @param {any} options.codec an OCapN codec, e.g. `syrupCodec`
  * @param {(powers: { handlers: any, logger: any, resumption: any }) => Promise<any> | any} options.makeNetlayer
- * @param {Record<string, (description?: unknown) => object>} [options.resources]
- * @param {NativeWorkerPowers} [options.nativeWorkers]
- * @param {number} [options.idleSleepMs] park a worker after this long
+ * @param {Record<string, (binding?: unknown) => object>} [options.resources]
+ * @param {AdapterProcessPowers} [options.adapterProcesses]
+ * @param {number} [options.idleSleepMs] put a worker to sleep after this long
  *   with no deliveries (see the durable worker transport's idle-sleep
  *   policy); omitted means workers sleep only on request
  * @param {() => Array<string>} [options.retainBundles] digests of stored
@@ -166,7 +170,7 @@ const buildDaemon = async (
     codec,
     makeNetlayer,
     resources = {},
-    nativeWorkers,
+    adapterProcesses,
     idleSleepMs = undefined,
     retainBundles = () => [],
     verbose = false,
@@ -256,7 +260,7 @@ const buildDaemon = async (
 
   // --- the endpoint: the daemon's one reifying session ---
 
-  // Records scoped to the endpoint: resource descriptions per export
+  // Records scoped to the endpoint: resource bindings per export
   // slot, and at-most-once answer obligations. Links and forwarders
   // no longer arise — the hub carries all cross-session references.
   const resourceMakers = /** @type {Record<string, any>} */ ({});
@@ -983,13 +987,12 @@ const buildDaemon = async (
   };
 
   /**
-   * The description a binding is recorded as: a record with its defined
-   * fields in one order, so the same binding is the same key, or null for
-   * a daemon-wide singleton. A binding to a worker names one this daemon
-   * serves.
+   * A binding as it is recorded: its defined fields in one order, so the
+   * same binding is the same key, or null for a daemon-wide singleton. A
+   * binding to a worker names one this daemon serves.
    * @param {ResourceBinding | null | undefined} binding
    */
-  const bindingDescription = binding => {
+  const canonicalBinding = binding => {
     if (binding === undefined || binding === null) return null;
     (typeof binding === 'object' &&
       Object.keys(binding).every(
@@ -1009,19 +1012,6 @@ const buildDaemon = async (
       ...(key === undefined ? {} : { key }),
     });
   };
-
-  /**
-   * The worker a recorded resource description binds the resource to, if
-   * any.
-   * @param {unknown} description
-   */
-  const boundWorkerOf = description =>
-    typeof description === 'object' &&
-    description !== null &&
-    'workerId' in description &&
-    typeof description.workerId === 'string'
-      ? description.workerId
-      : undefined;
 
   /** @param {string} workerId */
   const retireWorkerNow = async workerId => {
@@ -1053,7 +1043,7 @@ const buildDaemon = async (
     const retireLog = logging.sub('thixotrope', 'daemon');
     try {
       records.retireResourcesWhere(
-        (_, description) => boundWorkerOf(description) === workerId,
+        (_, binding) => boundWorkerOf(binding) === workerId,
       );
     } catch (error) {
       // The next start retires what is bound to a worker it does not serve.
@@ -1066,9 +1056,9 @@ const buildDaemon = async (
 
   /**
    * @param {string} workerId
-   * @returns {ThixotropeWorkerFacade}
+   * @returns {ThixotropeWorkerAdmin}
    */
-  const makeAdminFacade = workerId => {
+  const makeWorkerAdmin = workerId => {
     const entryOf = () => {
       const entry = workers.get(workerId);
       if (entry === undefined) {
@@ -1095,8 +1085,8 @@ const buildDaemon = async (
   };
 
   // Built-in resources: live in the endpoint like any resource.
-  const makeWorkerFacadeResource = (/** @type {any} */ description) => {
-    const { workerId } = /** @type {{ workerId: string }} */ (description);
+  const makeWorkerFacadeResource = (/** @type {any} */ binding) => {
+    const { workerId } = /** @type {{ workerId: string }} */ (binding);
     return Far('ThixotropeWorkerFacade', {
       help: () =>
         'ThixotropeWorkerFacade: evaluate(source, endowments) evaluates in this worker with the properties of the endowments record bound as named values; getId() returns the worker id; retire() permanently deletes the worker.',
@@ -1166,7 +1156,7 @@ const buildDaemon = async (
       },
     });
   const nativeAdapters = makeNativeAdapters(
-    { nativeWorkers, random, timers },
+    { adapterProcesses, random, timers },
     {
       hub,
       importBootstrap: id =>
@@ -1232,8 +1222,8 @@ const buildDaemon = async (
         !ephemeralWorkers.some(([ephemeral]) => ephemeral === workerId),
     ),
   );
-  records.retireResourcesWhere((_, description) => {
-    const bound = boundWorkerOf(description);
+  records.retireResourcesWhere((_, binding) => {
+    const bound = boundWorkerOf(binding);
     return bound !== undefined && !surviving.has(bound);
   });
 
@@ -1247,8 +1237,8 @@ const buildDaemon = async (
   for (const bytes of endpointOutbound.splice(0)) endpointSink.deliver(bytes);
 
   for (const [workerId, meta] of ephemeralWorkers) {
-    // An image left by an explicit sleep, or by a build that parked ephemeral
-    // workers at shutdown, will never be restored: release it with the
+    // An image left by an explicit sleep, or by a build that put ephemeral
+    // workers to sleep at shutdown, will never be restored: release it with the
     // worker. A release that fails leaks one image; it must not stop the
     // sweep, or startup would fail on the same worker every time.
     const ref = meta.snapshot?.ref;
@@ -1352,12 +1342,13 @@ const buildDaemon = async (
       store.provideWorkerStore(ENDPOINT_ID).getTablesRecord()?.exports ?? {};
     for (const recorded of Object.values(endpointExports)) {
       const found = /** @type {any} */ (recorded);
+      const key = boundKeyOf(found?.binding);
       if (
         found?.kind === 'resource' &&
         found.name === 'native-adapter' &&
-        typeof found.description?.key === 'string'
+        key !== undefined
       )
-        namedBundles.add(found.description.key);
+        namedBundles.add(key);
     }
     // The embedder may name bundles its own records still need: the
     // supervisor's installation index names the bundles of installations
@@ -1445,7 +1436,7 @@ const buildDaemon = async (
       // The lambda-shaped entry point: evaluation implies a worker.
       const workerId = randomHex128();
       provideWorkerSession(workerId);
-      return makeAdminFacade(workerId).evaluate(source, endowments);
+      return makeWorkerAdmin(workerId).evaluate(source, endowments);
     },
     createWorker: async ({
       debugLabel,
@@ -1466,7 +1457,7 @@ const buildDaemon = async (
             (meta.debugLabel === debugLabel &&
               Boolean(meta.ephemeral) === ephemeral) ||
               Fail`Worker allocation options changed`;
-            return makeAdminFacade(id);
+            return makeWorkerAdmin(id);
           }
         }
       }
@@ -1485,17 +1476,17 @@ const buildDaemon = async (
         });
       }
       provideWorkerSession(workerId);
-      return makeAdminFacade(workerId);
+      return makeWorkerAdmin(workerId);
     },
     getWorker: workerId => {
       workers.has(workerId) || Fail`unknown worker ${q(workerId)}`;
-      return makeAdminFacade(workerId);
+      return makeWorkerAdmin(workerId);
     },
     listWorkerIds: () => [...workers.keys()].sort(),
     makeResource: (name, binding = undefined) =>
-      records.provideResource(name, bindingDescription(binding)),
+      records.provideResource(name, canonicalBinding(binding)),
     retireResource: (name, binding = undefined) =>
-      records.retireResource(name, bindingDescription(binding)),
+      records.retireResource(name, canonicalBinding(binding)),
     // Persist a swissnum locator for this held capability. Remote bootstrap
     // fetch(secret) obtains it; withdrawing the locator leaves existing refs valid.
     publish: (value, secret = randomHex128()) => {
@@ -1564,14 +1555,14 @@ const buildDaemon = async (
       return harden(swept.sort());
     },
     shutdown: async () => {
-      // Exit notices stop first: one delivered while vats are being parked
+      // Exit notices stop first: one delivered while vats are put to sleep
       // would wake a vat just put to sleep.
       nativeAdapters.quiesce();
       try {
         for (const [workerId, entry] of workers) {
           // An ephemeral worker's heap is discarded at the next startup, so
           // a parting image would be I/O for something nobody restores; it
-          // is terminated with the rest instead of parked.
+          // is terminated with the rest instead of put to sleep.
           const { ephemeral } = store.provideWorkerStore(workerId).getMeta();
           if (ephemeral !== true) {
             // eslint-disable-next-line no-await-in-loop
@@ -1579,7 +1570,7 @@ const buildDaemon = async (
           }
         }
       } finally {
-        // A later vat can reopen one parked earlier, and a failed sleep must
+        // A later vat can reopen one put to sleep earlier, and a failed sleep must
         // still stop intake before terminating every remaining incarnation.
         await stopDaemon();
       }

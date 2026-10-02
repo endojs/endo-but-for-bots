@@ -15,7 +15,7 @@ import { makeDurableNetLayer } from '../src/net/durable-netlayer.js';
 import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
 import { makeFsStore } from '../src/store/store-fs.js';
 import { makeTestOcapn } from './_util.js';
-import { parkWorkers } from './_park-workers.js';
+import { sleepWorkers } from './_sleep-workers.js';
 
 import { makeNodePowers } from '../src/platform/node/powers.js';
 
@@ -164,7 +164,7 @@ test.serial(
 
     // A completed remote answer can still be followed by GC protocol traffic.
     // Drain that work before requiring the worker to be asleep.
-    await parkWorkers(daemon);
+    await sleepWorkers(daemon);
     t.false(worker.isAwake());
     dropper.dropAll();
 

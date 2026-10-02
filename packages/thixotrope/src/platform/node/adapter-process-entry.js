@@ -11,11 +11,11 @@ import { makePipeNetwork } from '../../net/pipe-network.js';
 import { silentLogger } from '../logging.js';
 import { makeNodePowers } from './powers.js';
 
-const [workerId, bundlePath, bundleDigest] = process.argv.slice(2);
+const [id, bundlePath, bundleDigest] = process.argv.slice(2);
 const { files, hashes, random } = makeNodePowers();
 const pipe = makePipeNetwork({
   codec: syrupCodec,
-  workerId,
+  workerId: id,
   role: 'worker',
   send: bytes => process.send?.({ frame: encodeBase64(bytes) }),
 });
@@ -47,7 +47,7 @@ try {
     codec: syrupCodec,
     network: pipe.network,
     locator: new Map([['root', root]]),
-    debugLabel: workerId,
+    debugLabel: id,
   });
   await client.provideSession(pipe.peerLocation);
   process.send?.({ ready: true });

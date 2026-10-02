@@ -13,7 +13,8 @@ import { makeSerialQueue } from '../serial-queue.js';
  * @typedef {'application' | 'native'} InstallationKind
  *
  * @typedef {object} InstallRequest
- * @property {string} name the inventory name the installed value takes
+ * @property {string} name the installation's name, which its value takes
+ *   in the inventory
  * @property {string} [workspace] the workspace the installation belongs to
  *   and whose inventory takes the value; absent for one the daemon holds
  *   for every workspace, which takes no grants and whose value the host
@@ -333,7 +334,7 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
         await null;
         const { name, kind, digest, allocationKey, workspace, access } =
           request;
-        name.length > 0 || Fail`Expected an inventory name`;
+        name.length > 0 || Fail`Expected an installation name`;
         if (workspace === undefined) {
           access === undefined ||
             Fail`A daemon-wide installation has no workspace access`;

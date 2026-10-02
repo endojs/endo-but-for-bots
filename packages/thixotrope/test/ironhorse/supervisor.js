@@ -206,7 +206,7 @@ test.serial(
 );
 
 test.serial(
-  'failed socket removal still parks workers and releases ownership',
+  'failed socket removal still sleeps workers and releases ownership',
   async t => {
     t.timeout(120_000);
     const path = await mkdtemp('/tmp/thix-unlink-');
@@ -469,7 +469,7 @@ test.serial(
     });
     // Let the actual idle policy snapshot both kinds of subscription while
     // the UI remains connected. status is read-only and does not wake the vat.
-    // The 30-second idle timer only starts parking. Snapshot completion also
+    // The 30-second idle timer only starts sleeping. Snapshot completion also
     // closes SQLite, copies and syncs the heap, and relaunches the worker.
     // Allow another engine-watchdog interval (60 seconds) for that work on CI;
     // this is a test allowance, not an upper bound on filesystem latency.

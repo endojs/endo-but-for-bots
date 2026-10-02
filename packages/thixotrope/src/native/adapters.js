@@ -6,7 +6,7 @@ import { encodeSwissnum } from '@endo/ocapn/client/util';
 import { makeFirstFailure, makeInFlight } from '../in-flight.js';
 import { randomHex128 } from '../random-id.js';
 
-/** @import { NativeWorkerPowers } from '../platform/native-workers.js' */
+/** @import { AdapterProcessPowers } from '../platform/adapter-processes.js' */
 /** @import { RandomPowers } from '../platform/random.js' */
 /** @import { TimerHandle, TimerPowers } from '../platform/timers.js' */
 
@@ -37,11 +37,11 @@ const MAX_EXIT_NOTICE_DELAY_MS = 30_000;
  * while it still desires anything, without waiting for the next operation
  * that needs an adapter or for the next daemon start.
  *
- * @param {{nativeWorkers?: NativeWorkerPowers, random: RandomPowers, timers: TimerPowers}} powers
+ * @param {{adapterProcesses?: AdapterProcessPowers, random: RandomPowers, timers: TimerPowers}} powers
  * @param {{hub: any, importBootstrap: (id: string) => any, bundlePath: (digest: string) => string, onAdapterExit?: (workerId: string) => void}} options
  */
 export const makeNativeAdapters = (
-  { nativeWorkers, random, timers },
+  { adapterProcesses, random, timers },
   { hub, importBootstrap, bundlePath, onAdapterExit = () => {} },
 ) => {
   const opening = makeInFlight();
@@ -113,10 +113,10 @@ export const makeNativeAdapters = (
     return set;
   };
 
-  /** @param {any} description */
-  const resource = description => {
+  /** @param {any} binding */
+  const resource = binding => {
     const { workerId: owner, key: bundleDigest } =
-      /** @type {{ workerId?: string, key?: string }} */ (description ?? {});
+      /** @type {{ workerId?: string, key?: string }} */ (binding ?? {});
     return Far('NativeAdapterLauncher', {
       help: () =>
         'create() starts a fresh native adapter from this installation.',
@@ -126,7 +126,8 @@ export const makeNativeAdapters = (
             if (stopped) throw Error('Native adapters are stopped');
             if (owner !== undefined && retiredOwners.has(owner))
               throw Error('Native adapters of a retired vat cannot start');
-            if (!nativeWorkers) throw Error('Native workers are unavailable');
+            if (!adapterProcesses)
+              throw Error('Adapter processes are unavailable');
             // A launcher recorded by a build that started the process from
             // the resource's directory names no bundle, and nothing can be
             // launched for it now: the installation is to be made again.
@@ -140,7 +141,7 @@ export const makeNativeAdapters = (
             /** @type {Uint8Array[]} */
             const pending = [];
             let exited = false;
-            const child = await nativeWorkers.start({
+            const child = await adapterProcesses.start({
               id,
               bundlePath: bundlePath(bundleDigest),
               bundleDigest,
@@ -269,7 +270,7 @@ export const makeNativeAdapters = (
     },
     /**
      * Stop reporting exits, ahead of shutdown: a notice delivered while the
-     * daemon is parking its vats would wake one it just put to sleep.
+     * daemon is putting its vats to sleep would wake one it just did.
      */
     quiesce: () => {
       stopped = true;

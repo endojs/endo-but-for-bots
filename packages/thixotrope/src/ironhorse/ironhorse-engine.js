@@ -2,7 +2,7 @@
 /** @import { FilePowers } from '../platform/files.js' */
 /** @import { HashPowers } from '../platform/hashes.js' */
 /** @import { PathPowers } from '../platform/paths.js' */
-/** @import { ChildProcessPowers, ProcessPowers } from '../platform/processes.js' */
+/** @import { SpawnedProcess, ProcessPowers } from '../platform/processes.js' */
 /** @import { TimerPowers } from '../platform/timers.js' */
 import harden from '@endo/harden';
 import { acquireIronhorseRuntime, hashFile } from './ironhorse-runtime.js';
@@ -164,7 +164,7 @@ export const makeIronhorseEngine = (
       }
 
       let terminated = false;
-      /** @type {ChildProcessPowers | undefined} */
+      /** @type {SpawnedProcess | undefined} */
       let child;
       /** @type {Promise<number | null> | undefined} */
       let exited;

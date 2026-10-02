@@ -4,7 +4,7 @@
 /**
  * A duplicated line of UTF-8 text from a child's output pipe.
  *
- * @typedef {object} ChildProcessPowers
+ * @typedef {object} SpawnedProcess
  * @property {number} pid
  * @property {(fd: number) => AsyncIterable<string>} lines
  * @property {(fd: number) => ({ write: (text: string) => void, end: (text?: string) => void } | undefined)} input
@@ -20,7 +20,7 @@
  * lines and writes text; it never sees a process handle or stream.
  *
  * @typedef {object} ProcessPowers
- * @property {(executable: string, args: string[], options: { stdio: Array<'pipe' | 'inherit' | 'ignore' | number | OpenFile>, cwd?: string, env?: Record<string, string> }) => ChildProcessPowers} spawn
+ * @property {(executable: string, args: string[], options: { stdio: Array<'pipe' | 'inherit' | 'ignore' | number | OpenFile>, cwd?: string, env?: Record<string, string> }) => SpawnedProcess} spawn
  */
 
 // Port only: the host implementation is `node/processes.js`.

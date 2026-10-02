@@ -3,7 +3,7 @@ import harden from '@endo/harden';
 
 /** @import {ThixotropeDaemon} from '../src/core/daemon.js' */
 /** @param {ThixotropeDaemon} daemon */
-export const parkWorkers = async daemon => {
+export const sleepWorkers = async daemon => {
   for (let pass = 0; pass < 10; pass += 1) {
     for (const id of daemon.listWorkerIds()) {
       // eslint-disable-next-line no-await-in-loop
@@ -12,6 +12,6 @@ export const parkWorkers = async daemon => {
     if (daemon.listWorkerIds().every(id => !daemon.getWorker(id).isAwake()))
       return;
   }
-  throw Error('Workers did not quiesce after parking');
+  throw Error('Workers did not quiesce after sleeping');
 };
-harden(parkWorkers);
+harden(sleepWorkers);

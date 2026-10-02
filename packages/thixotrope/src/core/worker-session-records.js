@@ -1,36 +1,61 @@
 // @ts-check
-import harden from '@endo/harden';
 import { Fail, q } from '@endo/errors';
 import { Far } from '@endo/far';
+import harden from '@endo/harden';
 
 /**
  * @import {ThixotropeStore} from '../store/store.js'
  */
 
 /**
- * Endpoint session records: the durable description of the daemon's
+ * The worker a resource's binding names, if any.
+ * @param {unknown} binding
+ */
+export const boundWorkerOf = binding =>
+  typeof binding === 'object' &&
+  binding !== null &&
+  'workerId' in binding &&
+  typeof binding.workerId === 'string'
+    ? binding.workerId
+    : undefined;
+harden(boundWorkerOf);
+
+/**
+ * The key a resource's binding carries, if any.
+ * @param {unknown} binding
+ */
+export const boundKeyOf = binding =>
+  typeof binding === 'object' &&
+  binding !== null &&
+  'key' in binding &&
+  typeof binding.key === 'string'
+    ? binding.key
+    : undefined;
+harden(boundKeyOf);
+
+/**
+ * Endpoint session records: the durable record of the daemon's
  * one reifying session (the endpoint), so a daemon restart re-seats
  * its exports without reconstructing any live state elsewhere — the
  * hub's tables carry every other session.
  *
- * The machine invariant makes the endpoint's exports describable:
+ * The machine invariant makes the endpoint's exports recordable:
  * every value the endpoint exports is either
  *
- * - a host resource: described as `{ kind: 'resource', name,
- *   description }`, re-instantiated by the registered factory on
- *   restore (instances are per-process singletons per name and
- *   description); or
+ * - a host resource: recorded as `{ kind: 'resource', name, binding }`,
+ *   re-instantiated by the registered factory on restore (instances are
+ *   per-process singletons per name and binding); or
  * - protocol-internal plumbing — the resolver objects the OCapN layer
  *   mints for op:listen subscriptions and op:deliver replies. Their
  *   function is restored separately (resolver obligations re-attach),
  *   so they are recorded as `{ kind: 'internal' }` and re-seat as
  *   tombstones that only keep the position space aligned; calls to one
- *   fail loudly. Ephemeral host observers use this non-revivable description
+ *   fail loudly. Ephemeral host observers use this non-revivable record
  *   too: their closures are never persisted or recreated. Their owner must
  *   cancel guest subscriptions on disconnect and discard old ephemeral
  *   subscriptions on supervisor restart.
  *
- * Descriptions are keyed by export slot in the endpoint's worker-store
+ * Export records are keyed by export slot in the endpoint's worker-store
  * tables record; resolver obligations ride along (promise targets
  * re-subscribe, answer targets reject at-most-once), and the answer
  * epoch partitions the endpoint's question positions across daemon
@@ -38,9 +63,9 @@ import { Far } from '@endo/far';
  *
  * @param {object} options
  * @param {ThixotropeStore} options.store
- * @param {Record<string, (description?: unknown) => object>} [options.resources]
+ * @param {Record<string, (binding?: unknown) => object>} [options.resources]
  *   named resource factories; instances are per-process singletons per
- *   (name, description) pair
+ *   (name, binding) pair
  * @param {(error: unknown) => void} options.reportError
  *   called when a durable record write fails; required so that a caller cannot
  *   silently drop the failures that would otherwise corrupt recovery state
@@ -52,11 +77,11 @@ export const makeWorkerSessionRecords = ({
 }) => {
   /** @type {WeakMap<object, string>} connection -> workerId */
   const workerIdForConnection = new WeakMap();
-  /** @type {WeakMap<object, { name: string, description: unknown }>} */
+  /** @type {WeakMap<object, { name: string, binding: unknown }>} */
   const resourceOrigins = new WeakMap();
-  /** @type {Map<string, object>} (name, description) -> singleton */
+  /** @type {Map<string, object>} (name, binding) -> singleton */
   const resourceInstances = new Map();
-  /** @type {Map<string, { name: string, description: unknown }>} by key */
+  /** @type {Map<string, { name: string, binding: unknown }>} by key */
   const resourceOriginsByKey = new Map();
   /** @type {Map<string, any>} workerId -> ResumedSession controls */
   const resumedByWorkerId = new Map();
@@ -98,42 +123,41 @@ export const makeWorkerSessionRecords = ({
 
   /**
    * @param {string} name
-   * @param {unknown} description
+   * @param {unknown} binding
    */
-  const resourceKey = (name, description) =>
-    `${name}|${JSON.stringify(description)}`;
+  const resourceKey = (name, binding) => `${name}|${JSON.stringify(binding)}`;
 
   /**
    * @param {string} name
-   * @param {unknown} [description]
+   * @param {unknown} [binding]
    */
-  const provideResource = (name, description = null) => {
-    const key = resourceKey(name, description);
+  const provideResource = (name, binding = null) => {
+    const key = resourceKey(name, binding);
     let instance = resourceInstances.get(key);
     if (instance === undefined) {
       const makeResource = resources[name];
       typeof makeResource === 'function' ||
         Fail`thixotrope worker sessions: unknown resource ${q(name)}`;
-      instance = makeResource(description);
+      instance = makeResource(binding);
       resourceInstances.set(key, instance);
-      const origin = harden({ name, description });
+      const origin = harden({ name, binding });
       resourceOrigins.set(instance, origin);
       resourceOriginsByKey.set(key, origin);
     }
     return instance;
   };
   /**
-   * Forget every resource whose name and description the predicate
+   * Forget every resource whose name and binding the predicate
    * accepts: drop its per-process instance and null its recorded exports,
    * so a restart seats tombstones at those positions rather than re-running
    * its factory. Each worker's tables record is one read-modify-write.
-   * @param {(name: string, description: unknown) => boolean} accepts
+   * @param {(name: string, binding: unknown) => boolean} accepts
    * @returns {boolean} whether an instance or a record was forgotten
    */
   const retireResourcesWhere = accepts => {
     let retired = false;
     for (const [key, origin] of [...resourceOriginsByKey]) {
-      if (accepts(origin.name, origin.description)) {
+      if (accepts(origin.name, origin.binding)) {
         const instance = resourceInstances.get(key);
         resourceInstances.delete(key);
         resourceOriginsByKey.delete(key);
@@ -151,7 +175,7 @@ export const makeWorkerSessionRecords = ({
         const found = /** @type {any} */ (recorded);
         if (
           found?.kind === 'resource' &&
-          accepts(found.name, found.description ?? null)
+          accepts(found.name, found.binding ?? null)
         ) {
           exports[slot] = null;
           changed = true;
@@ -166,22 +190,22 @@ export const makeWorkerSessionRecords = ({
   };
 
   /**
-   * @param {any} description
+   * @param {any} exportRecord
    * @returns {object}
    */
-  const provideCapability = description => {
-    if (description.kind === 'resource') {
-      return provideResource(description.name, description.description ?? null);
+  const provideCapability = exportRecord => {
+    if (exportRecord.kind === 'resource') {
+      return provideResource(exportRecord.name, exportRecord.binding ?? null);
     }
-    if (description.kind === 'internal') {
+    if (exportRecord.kind === 'internal') {
       // A protocol-internal resolver from the previous process; its
       // function is restored by resolver obligations and promise
       // re-subscription. This tombstone only keeps the position space
       // aligned.
       return Far('SessionInternalTombstone', {});
     }
-    throw Fail`thixotrope worker sessions: unknown description kind ${q(
-      description.kind,
+    throw Fail`thixotrope worker sessions: unknown export record kind ${q(
+      exportRecord.kind,
     )}`;
   };
 
@@ -203,7 +227,7 @@ export const makeWorkerSessionRecords = ({
           return;
         }
         const resource = resourceOrigins.get(value);
-        const description =
+        const exportRecord =
           resource === undefined
             ? harden({ kind: 'internal' })
             : harden({ kind: 'resource', ...resource });
@@ -211,7 +235,7 @@ export const makeWorkerSessionRecords = ({
         const record = /** @type {any} */ (workerStore.getTablesRecord()) ?? {};
         workerStore.setTablesRecord({
           ...record,
-          exports: { ...record.exports, [slot]: description },
+          exports: { ...record.exports, [slot]: exportRecord },
         });
       } catch (error) {
         reportError(error);
@@ -219,7 +243,7 @@ export const makeWorkerSessionRecords = ({
     },
     /**
      * The peer released every reference to an export: nothing will ever ask
-     * for that position again, so its description need not be re-seated.
+     * for that position again, so its record need not be re-seated.
      *
      * @param {object} connection
      * @param {string} slot
@@ -332,25 +356,25 @@ export const makeWorkerSessionRecords = ({
     provideResource,
     /**
      * Forget a resource: drop its per-process instance so the next
-     * `provideResource` for the same description makes a fresh one, and null
+     * `provideResource` for the same binding makes a fresh one, and null
      * its recorded exports so a restart seats tombstones at those positions
-     * rather than re-running the factory for a description whose meaning has
+     * rather than re-running the factory for a binding whose meaning has
      * ended. A live export the peer still holds is untouched; the peer's
      * reference keeps working until the peer releases it.
      *
      * This is the retirement half of the resource contract: without it a
-     * settled-by-description promise (an alarm, say) would be re-created on
+     * promise bound by its key (an alarm, say) would be re-created on
      * every restart for as long as the state directory lived.
      *
      * Each call is one read-modify-write of the endpoint's tables record,
      * the same cost as recording an export.
      *
      * @param {string} name
-     * @param {unknown} [description]
+     * @param {unknown} [binding]
      * @returns {boolean} whether an instance or a record was forgotten
      */
-    retireResource: (name, description = null) => {
-      const wanted = JSON.stringify(description);
+    retireResource: (name, binding = null) => {
+      const wanted = JSON.stringify(binding);
       return retireResourcesWhere(
         (found, recorded) =>
           found === name && JSON.stringify(recorded) === wanted,
@@ -399,14 +423,14 @@ export const makeWorkerSessionRecords = ({
       resumed.advanceAnswerPosition(BigInt(answerEpoch) * 2n ** 32n);
       restoring = true;
       try {
-        for (const [slot, description] of Object.entries(
+        for (const [slot, exportRecord] of Object.entries(
           record.exports ?? {},
         )) {
           const position = BigInt(slot.slice(2));
           let value =
-            description === null
+            exportRecord === null
               ? Far('UnrestorableExport', {})
-              : provideCapability(description);
+              : provideCapability(exportRecord);
           // A promise position must re-seat as a promise: an object there
           // would be found by the same position lookup and *fulfil* any
           // listener the peer still has on it. A retired or otherwise

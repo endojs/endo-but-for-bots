@@ -2,7 +2,7 @@
 /** @import { FilePowers } from '../platform/files.js' */
 /** @import { HashPowers } from '../platform/hashes.js' */
 /** @import { PathPowers } from '../platform/paths.js' */
-/** @import { ChildProcessPowers, ProcessPowers } from '../platform/processes.js' */
+/** @import { SpawnedProcess, ProcessPowers } from '../platform/processes.js' */
 import { q } from '@endo/errors';
 import harden from '@endo/harden';
 
@@ -127,7 +127,7 @@ export const acquireIronhorseRuntime = async (
     'a+',
     0o600,
   );
-  /** @type {ChildProcessPowers | undefined} */
+  /** @type {SpawnedProcess | undefined} */
   let child;
   try {
     child = spawn(workerBinary, ['--lock-state', statePath], {

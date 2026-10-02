@@ -101,7 +101,7 @@ try {
         const [name, resourceDirectory] = args;
         if (!name || !resourceDirectory)
           throw Error(
-            'Usage: thix install-native state-directory inventory-name resource-directory',
+            'Usage: thix install-native state-directory installation-name resource-directory',
           );
         logging.log(
           JSON.stringify(
@@ -146,7 +146,7 @@ try {
         const [name, modulePath, ...grantArgs] = args;
         if (!name || !modulePath)
           throw Error(
-            'Usage: thix install state-directory name module.js [power=inventory-key ...]',
+            'Usage: thix install state-directory installation-name module.js [power=inventory-key ...]',
           );
         const grants = grantArgs.map(grant => {
           const separator = grant.indexOf('=');
@@ -165,12 +165,15 @@ try {
         );
       } else if (command === 'remove') {
         const [name] = args;
-        if (!name) throw Error('Usage: thix remove state-directory name');
+        if (!name)
+          throw Error('Usage: thix remove state-directory installation-name');
         logging.log(JSON.stringify(await client.call('remove', name)));
       } else if (command === 'create-workspace') {
         const [name] = args;
         if (!name)
-          throw Error('Usage: thix create-workspace state-directory name');
+          throw Error(
+            'Usage: thix create-workspace state-directory workspace-name',
+          );
         logging.log(
           JSON.stringify(await client.call('createWorkspace', name), null, 2),
         );

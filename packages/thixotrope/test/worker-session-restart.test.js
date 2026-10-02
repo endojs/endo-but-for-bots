@@ -28,7 +28,7 @@ import { syrupCodec } from '@endo/ocapn/syrup';
 import { makeThixotropeDaemon } from '../src/core/daemon.js';
 import { makePeerSnapshottingReplayEngine } from '../src/core/peer-replay-engine.js';
 import { makeFsStore } from '../src/store/store-fs.js';
-import { parkWorkers } from './_park-workers.js';
+import { sleepWorkers } from './_sleep-workers.js';
 
 import { makeNodePowers } from '../src/platform/node/powers.js';
 
@@ -159,7 +159,7 @@ test('worker sessions survive a daemon restart', async t => {
     t.truthy(hubState.sessions[idA], 'worker A has hub session rows');
     t.truthy(hubState.sessions[idB], 'worker B has hub session rows');
 
-    await parkWorkers(d1);
+    await sleepWorkers(d1);
     t.false(workerA.isAwake());
     t.false(workerB.isAwake());
 
@@ -171,9 +171,9 @@ test('worker sessions survive a daemon restart', async t => {
     const d2 = await makeDaemon(statePath);
     t.teardown(() => d2.shutdown());
 
-    // Startup may resume journal work. Park explicitly before checking that
+    // Startup may resume journal work. Sleep explicitly before checking that
     // restored references transparently wake their targets on the next call.
-    await parkWorkers(d2);
+    await sleepWorkers(d2);
     t.false(d2.getWorker(idB).isAwake());
 
     const greeter = await d2.lookup('greeter-cap');
@@ -340,7 +340,7 @@ test('retiring a worker retires the resources bound to it', async t => {
           JSON.stringify({
             kind: 'resource',
             name: 'echo',
-            description: { workerId: owner.workerId, key: 'one' },
+            binding: { workerId: owner.workerId, key: 'one' },
           }),
       )?.[0];
     const slot = recordedSlot();

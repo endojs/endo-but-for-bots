@@ -3,6 +3,8 @@ import harden from '@endo/harden';
 import { encodeHex } from '@endo/hex';
 import { sha256 } from '@noble/hashes/sha2.js';
 
+import { boundWorkerOf } from './worker-session-records.js';
+
 /**
  * Explain the same conservative session graph used for vat collection.
  * Secrets, wire payloads, and individual guest heap objects are not exposed.
@@ -63,12 +65,12 @@ export const inspectVatReachability = ({
       row.backing === 'export' &&
       row.flavor === 'object'
     ) {
-      const description = endpointExports?.[`o+${row.position}`];
+      const exportRecord = endpointExports?.[`o+${row.position}`];
       if (
-        description?.kind === 'resource' &&
-        description.name === 'worker-facade'
+        exportRecord?.kind === 'resource' &&
+        exportRecord.name === 'worker-facade'
       ) {
-        target = description.description?.workerId;
+        target = boundWorkerOf(exportRecord.binding);
         facade = true;
       }
     }

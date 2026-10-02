@@ -119,6 +119,9 @@ Two smaller changes follow:
 
 ## 4. Resources bound to workers, not described (Done.)
 
+(Written before the rename: what this section calls a description, the code now calls a
+binding.)
+
 A resource description is the static constructor argument of a host resource: any passable value,
 memoised and persisted as `(name, JSON(description))` so the host can make the same instance again
 after a restart.
@@ -536,8 +539,8 @@ would run the hub's transport over a hub session.
    daemon start once no launcher record names it.
    The launcher is bound to the owning vat with the bundle digest as its
    key instead of described by a module URL and a directory, and the digest
-   check at launch replaced `describeNativeResource` there, which now only
-   locates the two entries; a launcher recorded before this refuses to
+   check at launch replaced the description there; `locateNativeResource`
+   now only locates the two entries; a launcher recorded before this refuses to
    launch and says the resource is to be installed again.
    The installation's identity is its workspace, its name and the digest over
    the pair of bundle digests, so the directory's real path dropped out of it;
