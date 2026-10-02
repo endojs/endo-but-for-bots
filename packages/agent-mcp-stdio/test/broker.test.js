@@ -12,6 +12,7 @@ import {
   makeRelayTransport,
   startGuestBroker,
 } from '../src/broker.js';
+import { confinedToolNames } from '../src/confined.js';
 
 const FORMULA_ID = 'ab'.repeat(32);
 const OTHER_ID = 'cd'.repeat(32);
@@ -54,7 +55,15 @@ const makeFakeGuest = (label, calls) =>
     adopt: () => {},
     dismiss: () => {},
     request: () => new Promise(() => {}),
-    define: () => {},
+    define: () => {
+      calls.push([label, 'define']);
+    },
+    evaluate: () => {
+      calls.push([label, 'evaluate']);
+    },
+    storeIdentifier: () => {
+      calls.push([label, 'storeIdentifier']);
+    },
   });
 
 const makeFakeConnection = () => {
@@ -258,4 +267,152 @@ test('close removes the broker socket and directory', async t => {
   t.true(fs.existsSync(broker.socketPath));
   await broker.close();
   t.false(fs.existsSync(broker.socketPath.replace(/\/[^/]+$/, '')));
+});
+
+test('the broker serves only the confined allow-list and refuses withheld names', async t => {
+  const { calls, connection } = makeFakeConnection();
+  const broker = await startGuestBroker({
+    connection,
+    formulaId: FORMULA_ID,
+    version: '0.0.0-test',
+  });
+  t.teardown(() => broker.close());
+
+  const withheld = [
+    'evaluate',
+    'define',
+    'identify',
+    'reverseIdentify',
+    'listIdentifiers',
+    'storeIdentifier',
+    'locate',
+    'listLocators',
+    'reverseLocate',
+    'storeLocator',
+    'invite',
+    'accept',
+    'followLocatorNameChanges',
+    'loadContent',
+  ];
+  const listed = (await broker.toolsList()).map(tool => tool.name);
+  t.true(listed.length > 0);
+  for (const name of listed) {
+    t.true(confinedToolNames.includes(name), `${name} is allowed`);
+  }
+  for (const name of withheld) {
+    t.false(listed.includes(name), `${name} is not listed`);
+  }
+
+  const child = spawnAsClaudeWould(await broker.transport());
+  const exited = new Promise(resolve => child.on('exit', resolve));
+  const client = makeClient(child);
+  await client.request('initialize', {
+    protocolVersion: '2025-06-18',
+    capabilities: {},
+    clientInfo: { name: 'scripted-client', version: '0' },
+  });
+
+  // What the confined side sees is the pruned catalog, not the full one.
+  const list = await client.request('tools/list');
+  t.deepEqual(
+    list.result.tools.map(tool => tool.name),
+    listed,
+  );
+
+  // A withheld name is refused at call time even when the guest has the
+  // method: the bridge dispatches only from the served catalog.
+  // Every withheld name is tried, with well-formed arguments where the guest
+  // fake implements the method and none otherwise.
+  /** @type {Record<string, object>} */
+  const attemptArguments = {
+    define: { source: '1', slots: {} },
+    evaluate: { source: '1' },
+    storeIdentifier: { petNamePath: ['x'], identifier: OTHER_ID },
+  };
+  /** @type {Array<[string, object]>} */
+  const attempts = withheld.map(name => [name, attemptArguments[name] ?? {}]);
+  const refusals = await Promise.all(
+    attempts.map(([name, toolArguments]) =>
+      client.request('tools/call', { name, arguments: toolArguments }),
+    ),
+  );
+  for (const [index, [name]] of attempts.entries()) {
+    const { error } = /** @type {any} */ (refusals[index]);
+    t.is(error.message, 'tool-not-permitted', name);
+    t.is(error.data.reason, 'name-scope', name);
+  }
+
+  child.stdin.end();
+  t.is(await exited, 0);
+  t.deepEqual(
+    calls.filter(([who]) => who !== 'host'),
+    [],
+    'no withheld method reached the guest',
+  );
+});
+
+test('an explicit allow-list narrows the served catalog further', async t => {
+  const { connection } = makeFakeConnection();
+  const broker = await startGuestBroker({
+    connection,
+    formulaId: FORMULA_ID,
+    version: '0',
+    allowedToolNames: ['list', 'help'],
+  });
+  t.teardown(() => broker.close());
+  t.deepEqual(
+    (await broker.toolsList()).map(tool => tool.name),
+    ['help', 'list'],
+  );
+});
+
+test('an explicit allow-list replaces the default and can widen it', async t => {
+  const { calls, connection } = makeFakeConnection();
+  const broker = await startGuestBroker({
+    connection,
+    formulaId: FORMULA_ID,
+    version: '0',
+    allowedToolNames: ['help', 'evaluate'],
+  });
+  t.teardown(() => broker.close());
+  t.deepEqual((await broker.toolsList()).map(tool => tool.name).sort(), [
+    'evaluate',
+    'help',
+  ]);
+
+  const child = spawnAsClaudeWould(await broker.transport());
+  const exited = new Promise(resolve => child.on('exit', resolve));
+  const client = makeClient(child);
+  await client.request('initialize', {
+    protocolVersion: '2025-06-18',
+    capabilities: {},
+    clientInfo: { name: 'scripted-client', version: '0' },
+  });
+  const response = /** @type {any} */ (
+    await client.request('tools/call', {
+      name: 'evaluate',
+      arguments: { source: '1', codeNames: [], petNamePaths: [] },
+    })
+  );
+  t.falsy(response.error);
+  child.stdin.end();
+  t.is(await exited, 0);
+  t.deepEqual(
+    calls.filter(([who]) => who !== 'host'),
+    [['mine', 'evaluate']],
+    'a widened name reaches the guest',
+  );
+});
+
+test('an allow-list that admits no declared tool fails closed', async t => {
+  const { connection } = makeFakeConnection();
+  await t.throwsAsync(
+    startGuestBroker({
+      connection,
+      formulaId: FORMULA_ID,
+      version: '0',
+      allowedToolNames: ['noSuchTool'],
+    }),
+    { message: /no tools/ },
+  );
 });

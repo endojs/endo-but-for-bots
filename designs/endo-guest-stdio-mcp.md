@@ -402,6 +402,16 @@ infer, enumerate, or synthesize the catalog.
   names, and duplicate or case-confusable names are rejected when the declaration
   is loaded. This is a build-time/interface invariant, not pruning of a
   guest-shaped value.
+  The confined-broker shape narrows this. Live-turn evidence on
+  [#1371](https://github.com/endojs/endo-but-for-bots/pull/1371) showed that a
+  confined `claude` handed an evaluator or a designation-minting tool turns
+  identifiers in its prompt into authority, so `startGuestBroker` serves only the
+  static allow-list `confinedToolNames` and withholds `evaluate`, `define`, the
+  identifier and formula-locator tools, and `loadContent`, whose magnet `ws=`
+  source hints make the daemon fetch from a caller-chosen HTTP(S) address with
+  no destination allowlist
+  ([#1409](https://github.com/endojs/endo-but-for-bots/pull/1409)). The
+  single-tenant server still serves the full catalog.
 - **Arguments remain scoped by the guest interface.** Petname-designating
   operations resolve petnames through the bound guest's own fail-closed petstore,
   and path operations rely on the bound mount or git capability. Arguments
