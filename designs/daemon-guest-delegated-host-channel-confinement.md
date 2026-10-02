@@ -39,7 +39,7 @@ guest's own methods.
 
 **Gap 1: delegated hosts.**
 The packages named here are the repo's LLM agent factories, described in
-§ What the Delegated Host Is Used For.
+the section What the Delegated Host Is Used For.
 The setup scripts of lal, fae, jaine, and claude-sandbox (`setup.js`,
 `*-factory-setup.js`, `credentials.js`, and fae's `setup-with-tools.js`)
 create a guest with
@@ -116,7 +116,7 @@ They are not a third gap, and this design does not touch them.
 | lal (`agent.js`) | `provideGuest`, `storeTree`, `copy`, `has`, `makeUnconfined` | `identify('lal-primer')`, used only in a log line |
 | jaine (`agent.js`) | `provideGuest`, `makeUnconfined`, `copy`, `has` | `identify(driver)` then `storeIdentifier(['@pins', driver], id)` to pin the driver |
 | claude-sandbox (`src/claude-sandbox-factory.js`, `src/claude-credentials-factory.js`, `src/container-mount-bridge.js`) | `provideMount`, `makeDirectory`, `move`, `remove`, `makeUnconfined`, `evaluate`, `storeValue` | `lookupById(capId)` in `provideContainerMountBridge`, where the caller names the mount by identifier |
-| floot (`agent.js`, `src/container-mounts.js`) | `copy`, `move`, `remove`; the controller's own host operations (`provideHostPath`, `provideGit`, `provideMount`) are out of scope, as above | `copy(['@agent'], ...)` for the `host-powers` kind. `identify(sessionName, ...path)` mints the `capId` that `container-mounts.js` persists across restarts and replays into `provideContainerMountBridge`. The same `capId` is also the cross-session equality key for an attach (§ Floot's Container Mounts). |
+| floot (`agent.js`, `src/container-mounts.js`) | `copy`, `move`, `remove`; the controller's own host operations (`provideHostPath`, `provideGit`, `provideMount`) are out of scope, as above | `copy(['@agent'], ...)` for the `host-powers` kind. `identify(sessionName, ...path)` mints the `capId` that `container-mounts.js` persists across restarts and replays into `provideContainerMountBridge`. The same `capId` is also the cross-session equality key for an attach (see Floot's Container Mounts below). |
 
 Two facts decide the recommendation:
 
@@ -134,7 +134,7 @@ Two facts decide the recommendation:
    decide whether two sessions attached the same capability.
    A pet name cannot replace it as that comparison key, because pet names
    are relative to the session that wrote them.
-   § Floot's Container Mounts below splits the two jobs: a registrar-private
+   The section Floot's Container Mounts below splits the two jobs: a registrar-private
    pin carries durability, and a daemon-side equality check carries identity,
    so no identifier reaches floot.
    With that one exception handled, the identifiers in these factories are
@@ -186,11 +186,18 @@ Give a guest a **provisioner** in place of the host.
 
 ### Method Partition
 
+The two lists below partition every method of `HostInterface` in
+`packages/daemon/src/interfaces.js` on the `llm` base (`afc72ca`), including
+the methods it spreads in from the name-hub, directory-file, and
+content-locator guard groups.
+
 The provisioner exposes these:
 
-- **Namespace paths:** `has`, `list`, `lookup`, `maybeLookup`, `remove`,
-  `move`, `copy`, `makeDirectory`, and `followNameChanges` (redacted with
-  `redactNameChange`).
+- **Namespace paths:** `has`, `list`, `listValues`, `lookup`, `maybeLookup`,
+  `reverseLookup`, `remove`, `move`, `copy`, `makeDirectory`, and
+  `followNameChanges` (redacted with `redactNameChange`).
+- **Reading and writing files by path:** `readText`, `maybeReadText`, and
+  `writeText`.
 - **Storing content:** `storeBlob`, `storeValue`, and `storeTree`.
 - **Making things:** `provideGuest`, `provideWorker`, `provideMount`,
   `provideScratchMount`, `provideSubMount`, `evaluate`, `makeUnconfined`,
@@ -198,27 +205,37 @@ The provisioner exposes these:
 - **Tearing down:** `cancel`.
 - **Comparing:** a new `sameCapability(pathA, pathB)`, which resolves both
   pet-name paths in the host's namespace and returns only whether they name
-  the same formula (§ Floot's Container Mounts).
+  the same formula (see Floot's Container Mounts below).
   It discloses one bit, and no identifier.
 
 It withholds these:
 
 - **Identifiers and locators:** `identify`, `locate`, `reverseLocate`,
-  `reverseIdentify`, `storeIdentifier`, `storeLocator`, `lookupById`,
-  `lookupByLocator`, `locateWithHints`, `adoptFromLocator`,
-  `followLocatorNameChanges`, and the content-locator guards.
+  `reverseIdentify`, `listIdentifiers`, `listLocators`, `storeIdentifier`,
+  `storeLocator`, `lookupById`, `lookupByLocator`, `locateWithHints`,
+  `adoptFromLocator`, and `followLocatorNameChanges`.
+- **Content locators:** `locateContent`, `listContent`, `storeContent`,
+  `reverseLocateContent`, `internalizeContentLocator`, and `loadContent`.
 - **Peers and bootstrap:** `invite`, `accept`, `greeter`, `gateway`, `sign`,
-  `identity`, `getPeerInfo`, `addPeerInfo`, `listKnownPeers`, and
-  `followPeerChanges`.
+  `getPeerInfo`, `addPeerInfo`, `listKnownPeers`, and `followPeerChanges`.
 - **Minting authority:** `provideHost` and `provideHostPath`.
-- **The host's mailbox:** `listMessages`, `followMessages`, `send`, `adopt`,
-  `request`, `reply`, `resolve`, `reject`, `dismiss`, `dismissAll`, `submit`,
-  `form`, `deliver`, `editMessage`, `messageHistory`, `endow`, and
+- **Code from archives and trees:** `makeArchive`, `makeFromTree`,
+  `stageTree`, and `makeUnconfinedFromTree`.
+  These carry the same ambient authority as `makeUnconfined`, and no factory
+  calls them, so the provisioner does not offer them (Open Question 1).
+- **Shell, git, and HTTP:** `provideShell`, `provideGit`, `provideGitClone`,
+  `provideGitRemote`, `getGitRemoteController`, `getGitCredentialController`,
+  `provideHttpClient`, `getHttpClientControl`, `provideBearerCredential`, and
+  `provideBasicCredential`.
+  floot's `agent.js` calls the git providers only on its controller's own
+  host, which no guest holds, so no factory loses a call (Open Question 2).
+- **The host's mailbox:** `handle`, `listMessages`, `followMessages`, `send`,
+  `adopt`, `request`, `reply`, `resolve`, `reject`, `dismiss`, `dismissAll`,
+  `submit`, `form`, `deliver`, `editMessage`, `messageHistory`, `endow`, and
   `sendValue`.
   A factory has its own guest mailbox through `powers`.
-- **Operator surfaces:** `diagnostics`, `listRetentionPaths`,
-  `followRetentionPaths`, `allowHistoryRewrite`, and the git and HTTP
-  credential providers and controllers.
+- **Operator surfaces:** `diagnostics`, `listRetentionPaths`, and
+  `followRetentionPaths`.
 
 Every provisioner method that returns a capability passes its result through
 `guestFacetFor`: `lookup`, `maybeLookup`, and `list`, and also the makers,
@@ -256,7 +273,7 @@ the mechanism.
 | lal | Drop `identify('lal-primer')`. Its only use is a log line. |
 | jaine | The pin becomes `copy([driverResultName], ['@pins', driverResultName])`, as in fae. |
 | claude-sandbox | `provideContainerMountBridge({ key, capId, mode })` becomes `provideContainerMountBridge({ key, cap, mode })`. The caller passes the capability itself, so the bridge no longer calls `lookupById`. The bridge's same-key check compares `mode` only, since the key now names exactly one pinned capability (below). |
-| floot | `container-mounts.js` replaces `capId` with a registrar-private pin, as § Floot's Container Mounts describes. The `host-powers` kind moves to the opt-in from Open Question 3 in place of `@agent`. |
+| floot | `container-mounts.js` replaces `capId` with a registrar-private pin, as the section Floot's Container Mounts describes. The `host-powers` kind moves to the opt-in from Open Question 3 in place of `@agent`. |
 
 ### Floot's Container Mounts
 
@@ -380,6 +397,7 @@ Both appear under Open questions.
 | provisioner → guest (daemon) | `introducedNames` in `provideGuest` | the setup script chooses `@provisioner`, and the daemon refuses a host formula in a guest's pet store | the guest's pet-store entry, which holds the provisioner's id | unchanged | a pet name in the guest's namespace |
 | factory → new agent (fae, lal, jaine, claude-sandbox, floot) | path `copy` through the provisioner | each factory decides which capabilities each new guest receives | the new guest's pet store | the factory, as today | pet-name paths, never locators |
 | channel → guest (daemon) | `guestFacetFor` and `redactChannelMessage` | `ids` withheld, posts carry no ids | none, because the facet is a view and `channel.js`'s message store is unchanged | unchanged, owned by `channel.js` | a redacted `ChannelMessage` |
+| floot registrar → `pinDirectory` (floot) | `container-mounts.js` | the registrar is the only writer, and a pin never leaves it | one `pin`-named entry per mount record in `pinDirectory` | minted on first attach by `copy`, removed on last detach, and a record whose pin is missing on replay is dropped, so the registrar fails closed | a capability through the provisioner, never an identifier |
 
 Naming check: this change renames nothing internal.
 The outer concept "guest" names only the boundary facets.
@@ -394,8 +412,10 @@ names and semantics.
 2. **The provisioner formula, its special name, and its interface.**
    This step is additive, and `@agent` still works.
 3. **Migrate fae, lal, jaine, claude-sandbox, and floot** to `@provisioner`
-   and path copies, including the mount-bridge `mountPath` change and floot's
-   persisted mount paths.
+   and path copies, including the mount-bridge signature change (`capId` to
+   `cap`) and floot's registrar-private pins.
+   This phase also renames the guest-side `host-agent` to `provisioner`, as
+   Open Question 4 recommends.
 4. **Refuse a host formula in a guest's pet store**, by introduction or by
    copy, with floot's `host-powers` moved to the opt-in.
    This phase is blocked on Open Question 3: refusal without an opt-in
@@ -403,8 +423,9 @@ names and semantics.
    question is answered.
 
 Each phase is one build PR against `llm`, the bot fork's development branch.
-Phases 1 and 2 can run in parallel, and phases 1 through 3 do not depend on
-any open question.
+Phases 1 and 2 can run in parallel.
+Phases 1 through 3 depend on no open question except Open Question 4,
+whose recommended answer phase 3 adopts.
 
 ## Test Plan
 
@@ -420,7 +441,8 @@ any open question.
   `lookup(['@endo'])`, `lookup(['@agent'])`, and the same paths through
   `maybeLookup` throw.
   `makeChannel` returns a guest facet whose messages carry no `ids`.
-  A `HostInterface` method in neither list fails the partition test.
+  A `HostInterface` method in neither list, or in both, fails the partition
+  test, and so does a listed name that is not a `HostInterface` method.
   `lookup` of a path that names a host returns a provisioner.
   A guest that sends `host-agent` to a peer guest gives that peer a
   provisioner.
@@ -466,6 +488,10 @@ any open question.
 ## Open Questions
 
 1. Should the provisioner keep `makeUnconfined` and `evaluate`?
+   Their siblings `makeArchive`, `makeFromTree`, `stageTree`, and
+   `makeUnconfinedFromTree` are withheld because no factory calls them,
+   but they carry the same authority, so the answer should treat all six
+   alike.
    Keeping them preserves every factory as it is, but leaves ambient
    authority with the guest.
    Withholding them would require pre-bound caplet makers (a caplet is a
