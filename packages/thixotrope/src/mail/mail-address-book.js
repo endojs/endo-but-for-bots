@@ -6,6 +6,7 @@ import harden from '@endo/harden';
 import { M } from '@endo/patterns';
 
 import { isRemotable } from '../is-remotable.js';
+import { HEX128_PATTERN } from '../random-id.js';
 
 /** @import { Mailbox } from './mailbox.js' */
 /** @import { MailContact } from './mail-contact.js' */
@@ -84,7 +85,7 @@ export const makeMailAddressBook = (
       throw Error('Invalid invitation', { cause: error });
     }
     const secret = invitation?.secret;
-    if (typeof secret !== 'string' || !/^[0-9a-f]{32}$/.test(secret))
+    if (typeof secret !== 'string' || !HEX128_PATTERN.test(secret))
       throw Fail`Invalid invitation`;
     return secret;
   };

@@ -130,8 +130,9 @@ Those capabilities cross the host endpoint and have their own failure contracts.
 
 Every vat has the same globals beside the language and the shared intrinsics: `E`, `Far`,
 `harden`, `makeExo`, `defineExoClass`, `defineExoClassKit`, `M`, `matches`, `mustMatch`,
-`passStyleOf`, `Fail`, `q`, `makeError`, `makePromiseKit`, `makeSerialQueue`, `describeError` and
-`isRemotable`.
+`passStyleOf`, `Fail`, `q`, `makeError`, `makePromiseKit`, `makeSerialQueue`, `describeError`,
+`isRemotable`, the 128-bit hex pattern `HEX128_PATTERN`, and the name validators
+`assertWorkspaceName` and `assertInstallationName`.
 The prelude is one hardened record installed on the compartment of every worker peer on every
 engine, so source evaluated in a vat, a bundle installed into one, and a factory the supervisor
 ships into one by its source text all see one vocabulary, and guest code is held to the same

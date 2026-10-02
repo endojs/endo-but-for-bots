@@ -804,7 +804,7 @@ Recommendation: `make` receives `makeManager` and what the installation was gran
 `keys()`, `status()` and the `restore` result go.
 A documented contract change, so it is listed here.
 
-### 10.9 The guest prelude
+### 10.9 The guest prelude (Done in part.)
 
 The observable map re-implements `@endo/pubsub`'s latest topic because the topic is not in the
 prelude; the 128-bit hex pattern and the two name validators are written in shipped-by-source
@@ -817,6 +817,16 @@ Recommendation: add `makeLatestTopic`, `HEX128_PATTERN`, `assertWorkspaceName` a
 unused globals, since the prelude is the guest's standard library and the design lists them on
 purpose.
 Workspace version bump, and the worker bundles' digest changes.
+
+As built, the prelude has `HEX128_PATTERN`, `assertWorkspaceName` and `assertInstallationName`,
+and the registry and the address book use them (version 20).
+The topic is not in the prelude, and the observable map keeps its own delivery.
+`makeLatestTopic`'s reader cannot be cancelled while a read is pending: its `return()` leaves the
+pending `next()` waiting on the next publication, after which it waits again, forever.
+A map whose view subscriptions come and go with every connection would keep one such closure per
+ended subscription in a durable heap.
+Collapsing the map onto the topic waits on `@endo/pubsub` settling a pending read when its reader
+is returned, which is a change to that package.
 
 ### 10.10 Smaller decisions, taken
 

@@ -7,8 +7,13 @@ import { passStyleOf } from '@endo/pass-style';
 import { M, matches, mustMatch } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
 
+import {
+  assertInstallationName,
+  assertWorkspaceName,
+} from '../control/names.js';
 import { describeError } from '../describe-error.js';
 import { isRemotable } from '../is-remotable.js';
+import { HEX128_PATTERN } from '../random-id.js';
 import { makeSerialQueue } from '../serial-queue.js';
 
 /**
@@ -53,6 +58,9 @@ export const guestPrelude = harden({
   makeSerialQueue,
   describeError,
   isRemotable,
+  HEX128_PATTERN,
+  assertWorkspaceName,
+  assertInstallationName,
 });
 
 /** @typedef {typeof globalThis & typeof guestPrelude} GuestGlobals */
