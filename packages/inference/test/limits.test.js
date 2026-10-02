@@ -212,3 +212,30 @@ test('the process group killer tolerates a group that is already gone', t => {
   });
   t.throws(() => denied(1234), { message: 'not permitted' });
 });
+
+test('the process group killer signals the pid itself on win32', t => {
+  /** @type {Array<[number, string]>} */
+  const calls = [];
+  const killProcessGroup = makeProcessGroupKiller({
+    kill: (pid, signal) => calls.push([pid, signal]),
+    platform: 'win32',
+  });
+  t.true(killProcessGroup(1234));
+  t.deepEqual(calls, [[1234, 'SIGKILL']]);
+});
+
+test('a throwing terminate does not escape abort', t => {
+  const timers = harden({
+    setTimeout: () => undefined,
+    clearTimeout: () => {},
+  });
+  const enforcer = makeLimitEnforcer({
+    limits: harden({ maxWallClockMs: 1000, maxOutputBytes: 10, maxTurns: 1 }),
+    timers,
+    terminate: () => {
+      throw Object.assign(Error('not permitted'), { code: 'EPERM' });
+    },
+  });
+  t.notThrows(() => enforcer.abort(harden({ type: 'cancelled' })));
+  t.deepEqual(enforcer.outcome(), { type: 'cancelled' });
+});

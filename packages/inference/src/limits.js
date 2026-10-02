@@ -23,8 +23,8 @@ import { InferLimitsShape, InferResultShape } from './guards.js';
  * @param {LimitTimers} options.timers
  * @param {() => void} options.terminate  ends the provider process; it may
  *   run from the wall-clock timer callback or from the `cancelled`
- *   rejection reaction, and a throw from either is uncaught, so it must not
- *   throw.
+ *   rejection reaction, where a throw would be uncaught, so the enforcer
+ *   catches and drops any throw from it. The recorded outcome stands.
  * @param {PromiseLike<unknown>} [options.cancelled]  rejects to cancel the turn.
  * @returns {LimitEnforcer}
  */
@@ -49,7 +49,12 @@ export const makeLimitEnforcer = ({ limits, timers, terminate, cancelled }) => {
     mustMatch(result, InferResultShape, 'abort result');
     outcome = result;
     stop();
-    terminate();
+    try {
+      terminate();
+    } catch {
+      // The outcome is already recorded; a failed signal must not escape
+      // into a timer callback or rejection reaction and crash the host.
+    }
   };
 
   const timer = timers.setTimeout(
@@ -100,14 +105,22 @@ harden(makeLimitEnforcer);
  * `detached: true`, so helpers the child started die with it. A group that
  * is already gone is not an error. A pid that is not a positive integer is
  * refused, since negating it would not name the child's group.
+ * Windows has no POSIX process groups, so on `win32` the child itself is
+ * signalled instead of its negated pid.
  *
  * @param {object} powers
  * @param {(pid: number, signal: string) => unknown} powers.kill  such as
  *   `process.kill`.
  * @param {string} [powers.signal]
+ * @param {string} [powers.platform]  such as `process.platform`.
  * @returns {(pid: number | undefined) => boolean} whether a signal was sent
  */
-export const makeProcessGroupKiller = ({ kill, signal = 'SIGKILL' }) => {
+export const makeProcessGroupKiller = ({
+  kill,
+  signal = 'SIGKILL',
+  platform,
+}) => {
+  const groupKill = platform !== 'win32';
   /** @param {number | undefined} pid */
   const killProcessGroup = pid => {
     if (pid === undefined) return false;
@@ -115,7 +128,7 @@ export const makeProcessGroupKiller = ({ kill, signal = 'SIGKILL' }) => {
     (Number.isSafeInteger(pid) && pid > 0) ||
       Fail`pid must be a positive integer: ${pid}`;
     try {
-      kill(-pid, signal);
+      kill(groupKill ? -pid : pid, signal);
       return true;
     } catch (error) {
       if (/** @type {{ code?: unknown }} */ (error)?.code === 'ESRCH') {
