@@ -182,6 +182,22 @@ test('the process group killer signals the negated pid', t => {
   t.deepEqual(calls, [[-1234, 'SIGKILL']]);
 });
 
+test('the process group killer refuses a pid that names no child group', t => {
+  /** @type {number[]} */
+  const calls = [];
+  const killProcessGroup = makeProcessGroupKiller({
+    kill: pid => {
+      calls.push(pid);
+    },
+  });
+  for (const pid of [0, -1234, 1.5, NaN]) {
+    t.throws(() => killProcessGroup(pid), {
+      message: /pid must be a positive integer/,
+    });
+  }
+  t.deepEqual(calls, []);
+});
+
 test('the process group killer tolerates a group that is already gone', t => {
   const gone = makeProcessGroupKiller({
     kill: () => {

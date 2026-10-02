@@ -22,7 +22,9 @@ import { InferLimitsShape, InferResultShape } from './guards.js';
  * @param {InferLimits} options.limits
  * @param {LimitTimers} options.timers
  * @param {() => void} options.terminate  ends the provider process; it may
- *   run from a timer callback, where a throw is uncaught.
+ *   run from the wall-clock timer callback or from the `cancelled`
+ *   rejection reaction, and a throw from either is uncaught, so it must not
+ *   throw.
  * @param {PromiseLike<unknown>} [options.cancelled]  rejects to cancel the turn.
  * @returns {LimitEnforcer}
  */
@@ -96,7 +98,8 @@ harden(makeLimitEnforcer);
  * Makes the `terminate` a process-spawning plugin hands the limit enforcer:
  * it signals the whole process group of a child spawned with
  * `detached: true`, so helpers the child started die with it. A group that
- * is already gone is not an error.
+ * is already gone is not an error. A pid that is not a positive integer is
+ * refused, since negating it would not name the child's group.
  *
  * @param {object} powers
  * @param {(pid: number, signal: string) => unknown} powers.kill  such as
@@ -108,6 +111,9 @@ export const makeProcessGroupKiller = ({ kill, signal = 'SIGKILL' }) => {
   /** @param {number | undefined} pid */
   const killProcessGroup = pid => {
     if (pid === undefined) return false;
+    // `kill(-0)` would signal the caller's own process group.
+    (Number.isSafeInteger(pid) && pid > 0) ||
+      Fail`pid must be a positive integer: ${pid}`;
     try {
       kill(-pid, signal);
       return true;
