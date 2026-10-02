@@ -59,6 +59,11 @@ The `nixos-admin` and deploy presets, floot's capability bundles for sessions
 that administer the machine they run on, request it on purpose.
 
 **Gap 2: channel messages.**
+A channel is the daemon's shared chat room: each participant holds an
+`EndoChannelMember` handle, joins through an `EndoChannelInvitation`, and
+posts `ChannelMessage` records that carry text plus optional attached
+capabilities, which the channel stores by formula identifier
+([endoclaw-channel-bridges](endoclaw-channel-bridges.md) describes the model).
 `EndoChannelMember.listMessages` and `followMessages` return each
 `ChannelMessage` with its `ids: FormulaIdentifier[]`, and `post` takes a
 `resolvedIds` argument that `channel.js` stores verbatim.
@@ -92,8 +97,9 @@ from the daemon bootstrap (`E(bootstrap).host()` or the CLI's
 `withEndoHost`), so it runs with the operator's own root host and no guest
 holds it.
 Those sites are out of scope.
-The grep's one other hit outside the guest-provisioning sites,
-`packages/floot/floot-factory-setup.js`, calls `E(agent).provideHost(...)`
+The peer and bootstrap audit below (fact 2, a separate grep) finds one
+more host call outside the guest-provisioning sites:
+`packages/floot/floot-factory-setup.js` calls `E(agent).provideHost(...)`
 on the operator's own `--powers @agent` to mint the floot controller host,
 so it is out of scope for the same reason.
 That controller host is a host, not a guest, so the host operations floot's
@@ -207,6 +213,13 @@ The provisioner exposes these:
   pet-name paths in the host's namespace and returns only whether they name
   the same formula (see Floot's Container Mounts below).
   It discloses one bit, and no identifier.
+  Only floot calls it, but it sits on every provisioner because it adds no
+  reach: both paths must already resolve through the same provisioner, so
+  the caller can look up both capabilities anyway, and for a capability the
+  daemon does not wrap in a facet, `===` on the two lookups already yields
+  the same bit.
+  Scoping it to floot would need a per-factory provisioner variant for one
+  bit of information the holder can mostly derive.
 
 It withholds these:
 
@@ -244,9 +257,25 @@ the same guest a lookup would.
 That way a path that names a host returns that host's provisioner, and a
 channel returns its guest facet (Recommendation 2).
 The provisioner also refuses `@`-special names in paths, except `@main` (the
-worker that `makeUnconfined` targets) and `@pins`.
+worker that `makeUnconfined` targets), `@pins`, and `@provisioner`, which
+names the provisioner itself.
 Without that rule, `lookup('@endo')` or `lookup('@agent')` would hand back
 the bootstrap or the full host.
+The refusal is keyed to the path, not to the method: the provisioner checks
+the first segment of every name or path argument of every exposed method
+once, at its dispatch boundary, before forwarding to the host.
+That covers `copy` and `move` sources and destinations, `remove`,
+`makeDirectory`, the file methods, the makers' result names, the pet-name
+endowments of `evaluate` and `makeUnconfined`'s powers name, and both
+arguments of `sameCapability`.
+Checking only `lookup` would not be enough: `copy(['@agent'], ['x'])`
+would relabel the full host under an ordinary name in the host's own
+namespace, where Phase 4's guest-destination check does not look, and
+`lookup(['x'])` would then return it.
+A host formula reached under an ordinary name is still safe to look up,
+because `lookup` passes it through `guestFacetFor`, which returns that
+host's provisioner; the path check stops the relabeling, and the facet
+stops what relabeling would have reached.
 A refused name throws from both `lookup` and `maybeLookup`: `maybeLookup`
 returns `undefined` only for a name that is absent, so a policy refusal is
 never mistaken for absence.
@@ -272,14 +301,15 @@ the mechanism.
 | fae | Every `storeLocator([profile, X], await E(hostAgent).locate(selfName, X))` becomes `copy([selfName, X], [profile, X])`. Forwarding `host-agent` to the spawner copies the provisioner. `provisionFaeAgent` returns a pet name, not a `locator`. |
 | lal | Drop `identify('lal-primer')`. Its only use is a log line. |
 | jaine | The pin becomes `copy([driverResultName], ['@pins', driverResultName])`, as in fae. |
-| claude-sandbox | `provideContainerMountBridge({ key, capId, mode })` becomes `provideContainerMountBridge({ key, cap, mode })`. The caller passes the capability itself, so the bridge no longer calls `lookupById`. The bridge's same-key check compares `mode` only, since the key now names exactly one pinned capability (below). |
+| claude-sandbox | `provideContainerMountBridge({ key, capId, mode })` becomes `provideContainerMountBridge({ key, cap, mode })`. The caller passes the capability itself, so the bridge no longer calls `lookupById`. The bridge's same-key check compares `mode` only, since the key now names exactly one pinned capability (below). Both per-session powers builders (`src/claude-sandbox-factory.js` and `src/provision-claude-session.js`) endow `@agent` by pet name into `evaluate`; that endowment becomes `@provisioner`. The per-session powers call only `provideMount` and `remove` on it, both exposed, so the sandbox keeps its shape, and an endowment of `@agent` through a provisioner throws. |
 | floot | `container-mounts.js` replaces `capId` with a registrar-private pin, as the section Floot's Container Mounts describes. The `host-powers` kind moves to the opt-in from Open Question 3 in place of `@agent`. |
 
 ### Floot's Container Mounts
 
 `container-mounts.js` uses `capId` for three things: it compares the
 `capId` of an existing record with a new attach at the same `innerPath`,
-which is what lets a shared `ClaudeClient` ref-count one bind across
+which is what lets a shared `ClaudeClient` (the per-host client that runs
+Claude Code sessions in containers) ref-count one bind across
 sessions that name the capability differently; it feeds `capId` into
 `attachKeyFor`; and it replays `capId` into the bridge after a restart.
 Each gets its own replacement.
@@ -315,6 +345,12 @@ Nothing below touches `@pins`.
   The pin is unique per record, so a detach followed by an attach of a
   different capability at the same `innerPath` gets a new key, as a
   different `capId` does today.
+  Unlike `capId`, a detach followed by an attach of the *same* capability
+  also gets a new pin and so a new key.
+  That is safe because the last detach releases the bridge and removes the
+  pin, so nothing keyed by the old key outlives the record; the
+  determinism `attachKeyFor` documents is for replay after a restart, which
+  the persisted pin keeps.
 - **Cross-session identity: a daemon-side comparison.**
   When a second session attaches at an `innerPath` that already has a
   record, the registrar calls
@@ -338,7 +374,7 @@ into a guest's pet store, whether through `introducedNames` or through a
 `copy`, `move`, or `storeValue` whose destination is in the guest's
 namespace.
 Full delegation would then need an explicit, separately named opt-in (see
-Open questions).
+Open Questions).
 
 ## Recommendation 2: A Guest Facet for Channels and Members
 
@@ -362,8 +398,9 @@ The facet behaves like this:
   A guest can post text, replies, edits, and reactions, which is everything
   jaine and fae do (`jaine/agent.js`, `fae/endo-skill.js`).
 - **Methods that return an exo** pass their results through `guestFacetFor`.
-  That covers `createInvitation`, the invitation's `join`, and the channel's
-  `join`.
+  That covers `createInvitation`, the invitation's `join`, the channel's
+  `join`, and `getMember` and `getMembers` on both the channel and the
+  member, each of which returns a full `EndoChannelMember`.
   So a member reached through a guest-held invitation is also a guest facet.
 - **Messages are not stored differently.**
   The facet is a view.
@@ -387,7 +424,7 @@ The redaction closes three concrete hazards:
 
 A guest cannot yet share or receive a capability through a channel.
 Neither is a regression: no guest does either today.
-Both appear under Open questions.
+Both appear under Open Questions.
 
 ## Ownership Map
 
@@ -424,8 +461,8 @@ names and semantics.
 
 Each phase is one build PR against `llm`, the bot fork's development branch.
 Phases 1 and 2 can run in parallel.
-Phases 1 through 3 depend on no open question except Open Question 4,
-whose recommended answer phase 3 adopts.
+Phases 1 through 3 depend only on Open Question 4, whose recommended
+answer phase 3 adopts.
 
 ## Test Plan
 
@@ -434,12 +471,19 @@ whose recommended answer phase 3 adopts.
   `listMessages` and `followMessages` return it without `ids` but with
   `names`.
   `post` with `resolvedIds` throws.
-  A member joined through a guest-held invitation is also redacted.
+  A member joined through a guest-held invitation is also redacted, and so
+  is every member returned by `getMember` or `getMembers` on the facet.
   A host reading the same channel still sees `ids`.
 - **Provisioner surface:** every withheld method is absent from the
   interface guard.
   `lookup(['@endo'])`, `lookup(['@agent'])`, and the same paths through
   `maybeLookup` throw.
+  `copy(['@agent'], ['x'])` throws, so a clone-then-lookup cannot recover
+  the host; a host formula placed under an ordinary name by the host itself
+  looks up as a provisioner.
+  `move` from `@agent`, `copy` or `move` onto an `@`-special destination,
+  `evaluate` endowing `@agent`, and `sameCapability` with an `@agent` path
+  all throw; `evaluate` endowing `@provisioner` succeeds.
   `makeChannel` returns a guest facet whose messages carry no `ids`.
   A `HostInterface` method in neither list, or in both, fails the partition
   test, and so does a listed name that is not a `HostInterface` method.
@@ -456,6 +500,8 @@ whose recommended answer phase 3 adopts.
   A session that names a different capability at that `innerPath` is
   refused.
   `sameCapability` returns a boolean and nothing else.
+  A detach and re-attach of the same capability at the same `innerPath`
+  mints a new pin and mounts cleanly.
 - **Migration:** the existing fae subagent, lal primer, jaine pin,
   claude-sandbox container-mount, and floot container-mount tests pass on
   `@provisioner`, and their mock
