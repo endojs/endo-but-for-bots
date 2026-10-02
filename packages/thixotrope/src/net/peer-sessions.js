@@ -98,10 +98,12 @@ export const makePeerSessions = ({
     if (token !== undefined && isSessionToken(token)) {
       return `peer:${token}`;
     }
-    // Ephemeral keys must be globally unique forever: a counter would
-    // reset in a successor process and inherit the persisted hub
-    // tables of a previous process's connection.
-    return `conn:${randomHex128()}`;
+    // A connection without a resume token is a transient session: the
+    // peer cannot come back to it, and a start forgets any a crash left.
+    // The key must be unique forever: a counter would reset in a
+    // successor process and inherit the persisted hub tables of a
+    // previous process's connection.
+    return `transient:${randomHex128()}`;
   };
 
   /**
@@ -379,8 +381,8 @@ export const makePeerSessions = ({
       if (bound === undefined) {
         return;
       }
-      if (bound.key.startsWith('conn:')) {
-        // An ephemeral peer never comes back: retire its rows (holders
+      if (bound.key.startsWith('transient:')) {
+        // A transient peer never comes back: retire its rows (holders
         // break loudly) and drop its table entry — the key is never
         // reused.
         hub.forgetSession(bound.key);

@@ -756,6 +756,11 @@ const buildDaemon = async (
     if (meta.retired)
       hub.retireSession(meta.hubSessionKey ?? `peer:${token}`, meta.hubEpoch);
   }
+  // The transient sessions a previous process left, named before this one
+  // can seat any of its own.
+  const staleTransient = Object.keys(
+    store.getHubState()?.sessions ?? {},
+  ).filter(key => key.startsWith('transient:'));
   netlayerRef.netlayer.start?.();
   const { location } = netlayerRef.netlayer;
 
@@ -805,12 +810,11 @@ const buildDaemon = async (
   // second dispatch, so no future network traffic need wake these workers.
   // Checkpointed sleepers and quarantined workers remain asleep.
   try {
-    // HTTP sockets and other transient host observers do not survive a process.
+    // Peer connections without a resume token, HTTP sockets and other
+    // transient host observers do not survive a process.
     // Cleanup is inside the startup failure guard: persistence refusal must
     // still stop all transports before releasing exclusive store ownership.
-    for (const key of Object.keys(store.getHubState()?.sessions ?? {})) {
-      if (key.startsWith('transient:')) hub.forgetSession(key);
-    }
+    for (const key of staleTransient) hub.forgetSession(key);
     await Promise.all(
       [...workers].map(async ([workerId, entry]) => {
         const workerStore = store.provideWorkerStore(workerId);
