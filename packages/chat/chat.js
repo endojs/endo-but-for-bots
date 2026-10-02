@@ -1564,7 +1564,7 @@ const bodyComponent = (
                 try {
                   const id = await E(
                     /** @type {ERef<EndoHost>} */ (resolvedPowers),
-                  ).identify(petName);
+                  ).identify(...petName.split('/'));
                   isValid = Boolean(id);
                 } catch {
                   // Not a valid pet name

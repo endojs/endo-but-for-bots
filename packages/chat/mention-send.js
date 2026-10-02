@@ -7,8 +7,9 @@ import harden from '@endo/harden';
  *
  * Structure: "You were mentioned in " [channel] ":\n\n"
  *   [author1] ": msg1\n  " [author2] ": msg2\n\n..."
- * The channel is always the first embedded reference. Each pet name is
- * wrapped as a one-segment path, never split on a delimiter.
+ * The channel is always the first embedded reference. The channel and each
+ * pet name are `/`-joined mention tokens, split into a pet-name path here
+ * at the UI boundary.
  *
  * @param {object} args
  * @param {string} args.channelPetName
@@ -27,7 +28,7 @@ export const assembleMentionSend = ({
   /** @type {string[]} */
   const edgeNames = [edgeName];
   /** @type {string[][]} */
-  const petNamePaths = [[channelPetName]];
+  const petNamePaths = [channelPetName.split('/')];
 
   if (recap.edgeNames.length > 0) {
     // String after the channel ref: separator + recap
@@ -47,7 +48,7 @@ export const assembleMentionSend = ({
       }
       usedEdgeNames.add(recapEdge);
       edgeNames.push(recapEdge);
-      petNamePaths.push([recap.petNames[ri]]);
+      petNamePaths.push(recap.petNames[ri].split('/'));
       strings.push(recap.strings[ri + 1] || '');
     }
     strings[strings.length - 1] += instructions;

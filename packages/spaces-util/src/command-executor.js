@@ -193,14 +193,14 @@ export const createCommandExecutor = ({
             // Resolve pet names to formula IDs for the channel
             const resolvedIds = await Promise.all(
               petNames.map(async petName => {
-                const id = await E(powers).identify(petName);
+                const id = await E(powers).identify(...petName.split('/'));
                 return id || '';
               }),
             );
             await E(/** @type {CommandChannelRef} */ (channelRef)).post(
               strings,
               edgeNames,
-              petNames.map(petName => [petName]),
+              petNames.map(petName => petName.split('/')),
               String(messageNumber),
               resolvedIds,
             );
@@ -215,7 +215,7 @@ export const createCommandExecutor = ({
             BigInt(/** @type {number} */ (messageNumber)),
             strings,
             edgeNames,
-            petNames.map(petName => [petName]),
+            petNames.map(petName => petName.split('/')),
           );
           return {
             success: true,

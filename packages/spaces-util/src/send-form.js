@@ -606,7 +606,7 @@ export const sendFormComponent = ({
         petNames.length > 0
           ? Promise.all(
               petNames.map(async petName => {
-                const id = await E(powers).identify(petName);
+                const id = await E(powers).identify(...petName.split('/'));
                 return id || '';
               }),
             )
@@ -621,7 +621,7 @@ export const sendFormComponent = ({
             ? E(/** @type {SendFormChannelRef} */ (channelRef)).post(
                 messageStrings,
                 edgeNames,
-                petNames.map(petName => [petName]),
+                petNames.map(petName => petName.split('/')),
                 replyTo,
                 ids,
                 sendReplyType,
@@ -629,7 +629,7 @@ export const sendFormComponent = ({
             : E(/** @type {SendFormChannelRef} */ (channelRef)).post(
                 messageStrings,
                 edgeNames,
-                petNames.map(petName => [petName]),
+                petNames.map(petName => petName.split('/')),
                 replyTo,
                 ids,
               ),
@@ -698,7 +698,7 @@ export const sendFormComponent = ({
           conversationRecipient,
           messageStrings,
           edgeNames,
-          petNames.map(petName => [petName]),
+          petNames.map(petName => petName.split('/')),
         )
         .then(
           () => {
@@ -723,7 +723,7 @@ export const sendFormComponent = ({
       petNames.length === 1 && strings.every(part => !part.trim());
     if (onlyToken) {
       const [petName] = petNames;
-      const petNamePath = [petName];
+      const petNamePath = petName.split('/');
       setSubmitting(true);
       Promise.all([
         E(powers).identify(
@@ -796,7 +796,7 @@ export const sendFormComponent = ({
         to.split('/'),
         messageStrings,
         messageEdgeNames,
-        messagePetNames.map(petName => [petName]),
+        messagePetNames.map(petName => petName.split('/')),
       )
       .then(
         () => {

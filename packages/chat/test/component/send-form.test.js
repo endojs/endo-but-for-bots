@@ -301,7 +301,7 @@ test.serial(
 );
 
 test.serial(
-  'a slash in an embedded pet name stays one segment on send',
+  'an embedded slash-joined mention token is split into a pet-name path on send',
   async t => {
     const ctx = setup();
 
@@ -316,8 +316,8 @@ test.serial(
     t.deepEqual(ctx.sentMessages[0].to, ['bob'], 'leading token is recipient');
     t.deepEqual(
       ctx.sentMessages[0].petNames,
-      [['feature/foo']],
-      'the embedded pet name is not split on "/"',
+      [['feature', 'foo']],
+      'the embedded mention token is split on "/"',
     );
 
     t.teardown(() => ctx.component.dispose());
@@ -325,7 +325,7 @@ test.serial(
 );
 
 test.serial(
-  'a lone token with a slash is shown as a one-segment path',
+  'a lone slash-joined token is shown as a pet-name path',
   async t => {
     /** @type {unknown[][]} */
     const shown = [];
@@ -344,11 +344,11 @@ test.serial(
     const identifyCall = ctx.calls.find(c => c.method === 'identify');
     t.deepEqual(
       identifyCall && identifyCall.args,
-      ['feature/foo'],
-      'identify receives one segment',
+      ['feature', 'foo'],
+      'identify receives the path segments',
     );
     t.is(shown.length, 1, 'the value modal opened');
-    t.deepEqual(shown[0][2], ['feature/foo'], 'the path is one segment');
+    t.deepEqual(shown[0][2], ['feature', 'foo'], 'the path is split');
     t.is(ctx.sentMessages.length, 0, 'nothing sent');
 
     t.teardown(() => ctx.component.dispose());

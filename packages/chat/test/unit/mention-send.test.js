@@ -5,7 +5,7 @@ import '@endo/init/debug.js';
 import test from 'ava';
 import { assembleMentionSend } from '../../mention-send.js';
 
-test('assembleMentionSend keeps a slash in each pet name as one segment', t => {
+test('assembleMentionSend splits each slash-joined mention token into a pet-name path', t => {
   const result = assembleMentionSend({
     channelPetName: 'feature/foo',
     recap: {
@@ -16,7 +16,10 @@ test('assembleMentionSend keeps a slash in each pet name as one segment', t => {
     instructions: '!',
   });
   t.deepEqual(result.edgeNames, ['feature/foo', 'alice']);
-  t.deepEqual(result.petNamePaths, [['feature/foo'], ['team/alice']]);
+  t.deepEqual(result.petNamePaths, [
+    ['feature', 'foo'],
+    ['team', 'alice'],
+  ]);
   t.deepEqual(result.strings, ['You were mentioned in ', ':\n\n', ': hi!']);
 });
 
