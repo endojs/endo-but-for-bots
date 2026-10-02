@@ -133,6 +133,24 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
   // installation it removes, and two installations under one name resolve
   // to one.
   const enqueue = makeSerialQueue();
+  /**
+   * The stored bundles a holder names: a request, or an installation until
+   * its vat holds the code.
+   * @param {{bundleDigest?: string, durableDigest?: string, ephemeralDigest?: string}} holder
+   */
+  const digestsOf = holder =>
+    [holder.bundleDigest, holder.durableDigest, holder.ephemeralDigest].filter(
+      digest => typeof digest === 'string',
+    );
+  /**
+   * The bundles of the requests this vat has received and not yet finished
+   * entering, counted, since two requests may name one bundle: a request
+   * waits behind another, and awaits the workspace, before it is an
+   * installation, and its bundles are named for the host's sweep from the
+   * moment it arrives.
+   * @type {Map<string, number>}
+   */
+  const receiving = new Map();
 
   /**
    * A host call, made again if a host restart broke its answer; every host
@@ -239,9 +257,8 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
       try {
         await retrying(() => E(installer).stage(entry.workerId, bundleDigest));
       } finally {
-        // Staged, or failed for good: the index need not keep the bundle
-        // for this installation past its next record, and the host's sweep
-        // frees it at a later start.
+        // Staged, or failed for good: the installation no longer names the
+        // bundle, and the host's sweep frees it at a later start.
         entry.bundleDigest = undefined;
       }
       assertCurrent(name, entry);
@@ -271,7 +288,7 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
       } finally {
         // Made, or failed for good, the manager holds its code or its
         // failure, and the launcher the host made names the ephemeral
-        // bundle: the index need not keep either past its next record.
+        // bundle: the installation no longer names either.
         entry.durableDigest = undefined;
         entry.ephemeralDigest = undefined;
       }
@@ -318,8 +335,11 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
      * hand-over does not await the factory).
      * @param {InstallRequest} request
      */
-    install: request =>
-      enqueue(async () => {
+    install: request => {
+      const named = digestsOf(request);
+      for (const digest of named)
+        receiving.set(digest, (receiving.get(digest) ?? 0) + 1);
+      return enqueue(async () => {
         await null;
         const { name, kind, digest, allocationKey, workspace, access } =
           request;
@@ -416,7 +436,16 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
         await recordIndex(name, current);
         await current.issued.promise;
         return harden({ result: current.result });
-      }),
+      }).finally(() => {
+        // Entered as an installation, which names its own bundles until its
+        // vat holds the code, or refused.
+        for (const digest of named) {
+          const count = (receiving.get(digest) ?? 1) - 1;
+          if (count === 0) receiving.delete(digest);
+          else receiving.set(digest, count);
+        }
+      });
+    },
     /**
      * The vat behind a name, for the host, with the installed value once
      * there is one, so the host can hand a daemon-wide value to every
@@ -468,20 +497,17 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
         return true;
       }),
     /**
-     * The stored bundles the installations held here name, for the host's
-     * sweep: one a request put in the store is kept from the moment this
-     * vat holds the request, whatever the host's index has recorded yet.
+     * The stored bundles the requests and installations held here name,
+     * for the host's sweep: one a request put in the store is kept from the
+     * moment this vat receives the request until its vat holds the code.
      */
     bundles: () =>
-      harden(
-        [...installed.values()].flatMap(entry =>
-          [
-            entry.bundleDigest,
-            entry.durableDigest,
-            entry.ephemeralDigest,
-          ].filter(digest => typeof digest === 'string'),
-        ),
-      ),
+      harden([
+        ...new Set([
+          ...receiving.keys(),
+          ...[...installed.values()].flatMap(digestsOf),
+        ]),
+      ]),
     list: () =>
       harden(
         [...installed].map(([key, entry]) => {

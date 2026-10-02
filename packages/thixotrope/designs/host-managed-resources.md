@@ -368,9 +368,9 @@ Done: `makeRegistry` runs the driver in the registry vat and makes a host call
 again when a restart broke its answer; the host's `installer` resource, granted
 to the registry vat alone, allocates under the key, stages a bundle by digest
 from the store, makes a native manager and retires a vat, each idempotently.
-The registry names a bundle until its vat holds the code, and a start sweeps
-bundles only once the registry has said which it still names; a later start's
-sweep frees them. (As amended by 10.6.)
+The registry names a request's bundles from its arrival until its vat holds the
+code, and a start sweeps only the bundles the registry no longer names (as
+amended by 10.6).
 Collection no longer waits for an installation: an allocation takes a turn
 with collection, and the host keeps a vat it has handed out until the
 registry's next call about it, after which the registry's own reference roots

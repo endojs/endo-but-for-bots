@@ -1120,6 +1120,10 @@ have no timer queue, so frame silence is exact dormancy):
 - `lookup(secret)` — the embedder's in-process route to a publication.
 - `collectVats({ keep? })` — vat-level mark-and-sweep over the hub's
   reference tables; resolves to the swept ids.
+- `sweepBundles(keep)` — frees every stored bundle that neither a native
+  adapter launcher names nor `keep` lists, and returns the digests freed;
+  the embedder calls it while no request is between the store and its own
+  records, as the supervisor does at start.
 - `location` and `makeSturdyRefDetails(secret)` — what a peer needs to
   mint a sturdy ref.
 - `shutdown()` — snapshots and puts every worker to sleep, then closes the

@@ -96,11 +96,13 @@ identity and its error until removed.
 The installation is one durable function in the registry vat, so an interrupted one resumes by
 itself at the next start: a host answer broken by the restart is made again under the same
 allocation key, and every host step is idempotent.
-The host keeps an index of its own beside the vat, written by the registry alone at each step,
-which answers listing and removal while the registry vat cannot.
-The sweep asks the registry which bundles its installations still name, so a request's bundles are
-kept from the moment the registry holds it; a host that ends before then leaves them unnamed, and
-the next start frees them.
+The host keeps an index of its own beside the vat, written by the registry at each step, which
+answers listing and removal while the registry vat cannot; only a removal the registry cannot
+answer is the host's to write there.
+The sweep asks the registry which bundles it still names: a request's, from the moment the
+registry receives it, even while it waits behind another, until its vat holds the code.
+A host that ends before the registry receives a request leaves its bundles unnamed, and the next
+start frees them.
 A quarantined registry vat leaves the host serving from the index: installations are listed and
 removed, none is made and no bundle is swept, until the state directory is replaced.
 

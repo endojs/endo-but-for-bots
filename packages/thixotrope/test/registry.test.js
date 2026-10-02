@@ -615,3 +615,70 @@ test('the same name in two workspaces is two installations, removed apart', asyn
   t.false(f.index.has('other/app'));
   t.is(await E(f.registry).lookup('app'), undefined, 'neither is daemon-wide');
 });
+
+test('a request names its bundles from its arrival, while it waits behind another and on the workspace', async t => {
+  const f = fixture();
+  f.factories.set('app:app', () => Far('Application', {}));
+  f.factories.set('app:other', () => Far('Other', {}));
+  const grantsGate = makePromiseKit();
+  const slow = Far('SlowWorkspace', {
+    /** @param {any} grants */
+    lookupGrants: async grants => {
+      await grantsGate.promise;
+      return E(f.workspace).lookupGrants(grants);
+    },
+    /** @param {string} name */
+    has: name => E(f.workspace).has(name),
+    /**
+     * @param {string} name
+     * @param {unknown} value
+     */
+    put: (name, value) => E(f.workspace).put(name, value),
+    /**
+     * @param {string} name
+     * @param {unknown} value
+     */
+    remove: (name, value) => E(f.workspace).remove(name, value),
+  });
+  const first = E(f.registry).install(
+    request(f, { grants: [], access: slow, bundleDigest: 'bundle-1' }),
+  );
+  const second = E(f.registry).install(
+    request(f, {
+      name: 'other',
+      grants: [],
+      allocationKey: 'key-2',
+      bundleDigest: 'bundle-2',
+    }),
+  );
+  // The first waits on the workspace, the second behind it.
+  await new Promise(resolve => setTimeout(resolve, 0));
+  t.deepEqual([...(await E(f.registry).bundles())].sort(), [
+    'bundle-1',
+    'bundle-2',
+  ]);
+  grantsGate.resolve(undefined);
+  await (
+    await first
+  ).result;
+  await (
+    await second
+  ).result;
+  t.deepEqual(
+    await E(f.registry).bundles(),
+    [],
+    'staged, the bundles are named no longer',
+  );
+});
+
+test('a refused request names its bundles no longer', async t => {
+  const f = fixture();
+  await t.throwsAsync(
+    () =>
+      E(f.registry).install(
+        request(f, { grants: [['power', 'absent']], bundleDigest: 'refused' }),
+      ),
+    { message: /Unknown inventory grant/ },
+  );
+  t.deepEqual(await E(f.registry).bundles(), []);
+});

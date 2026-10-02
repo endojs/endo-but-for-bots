@@ -269,6 +269,9 @@ for (const after of /** @type {const} */ ([
       const second = await start(store, index);
       t.teardown(() => second.daemon.shutdown().catch(() => {}));
       const restoredRegistry = await second.daemon.lookup('registry');
+      // The start's sweep, as the supervisor makes it: the resuming
+      // installation's bundles are named, so none is freed from under it.
+      second.daemon.sweepBundles(await E(restoredRegistry).bundles());
       t.like(await waitForStatus(restoredRegistry, 'resource', 'ready'), {
         kind: 'native',
       });

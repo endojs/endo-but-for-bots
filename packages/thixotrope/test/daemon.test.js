@@ -54,11 +54,13 @@ const makeTimerResource = timers =>
     /** @param {number} ms */
     delay: async ms => {
       const delayMs = Number(ms);
-      if (!(
-        Number.isFinite(delayMs) &&
-        delayMs >= 0 &&
-        delayMs <= MAX_TIMER_DELAY_MS
-      ))
+      if (
+        !(
+          Number.isFinite(delayMs) &&
+          delayMs >= 0 &&
+          delayMs <= MAX_TIMER_DELAY_MS
+        )
+      )
         throw Error(
           `delay must be between 0 and ${MAX_TIMER_DELAY_MS} milliseconds`,
         );
@@ -456,13 +458,9 @@ test.serial(
     t.is(await E(counter).incr(), 1);
     const held = transientKeys();
     t.is(held.length, 1, 'the connection is a transient session');
-    // A crash leaves the session's rows: the hub state from before the
-    // orderly shutdown is put back.
-    const crashImage = JSON.parse(
-      JSON.stringify(makeFsStore(nodePowers, statePath).getHubState()),
-    );
-    await first.shutdown();
-    makeFsStore(nodePowers, statePath).setHubState(crashImage);
+    // A crash leaves the session's rows, as a shutdown does: the close
+    // handler forgets nothing once the daemon is stopping.
+    await first.crash();
     t.deepEqual(transientKeys(), held);
     const second = await start();
     t.teardown(() => second.shutdown());
