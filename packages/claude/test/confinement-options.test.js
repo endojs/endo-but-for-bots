@@ -51,6 +51,7 @@ test('the CLI argv refuses values that would widen or break it', t => {
   t.throws(() => buildCliArguments({ ...cliSpec(), serverName: 'a__b' }));
   t.throws(() => buildCliArguments({ ...cliSpec(), maxTurns: 0 }));
   t.throws(() => buildCliArguments({ ...cliSpec(), mcpConfigPath: '' }));
+  t.throws(() => buildCliArguments({ ...cliSpec(), settingsPath: '' }));
   t.throws(() =>
     buildCliArguments({ ...cliSpec(), model: '--mcp-config=/elsewhere' }),
   );

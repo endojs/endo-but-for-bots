@@ -74,6 +74,22 @@ test('assistant events without a message id each count as a turn', t => {
   t.is(reduction.text, 'xxy');
 });
 
+test('a blank line between events is skipped, not parsed', t => {
+  const reduction = reduce(
+    `${assistant('m1', 'a')}\n${successResult({ result: undefined })}`,
+  );
+  t.is(reduction.terminal, 'success');
+  t.is(reduction.turns, 1);
+});
+
+test('an assistant event with no message field contributes no text and still counts a turn', t => {
+  const reduction = reduce(
+    `${line({ type: 'assistant' })}${successResult({ result: undefined })}`,
+  );
+  t.is(reduction.text, '');
+  t.is(reduction.turns, 1);
+});
+
 test('error_max_turns is the max-turns terminal', t => {
   t.is(
     reduce(line({ type: 'result', subtype: 'error_max_turns', is_error: true }))

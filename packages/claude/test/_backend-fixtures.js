@@ -158,7 +158,8 @@ export const makeManualTimers = () => {
  * @typedef {object} FakeChildScript
  * @property {(string | Uint8Array)[]} [stdout]  chunks written to stdout after stdin
  *   closes
- * @property {string} [stderr]
+ * @property {string | string[]} [stderr]  a single chunk, or several emitted
+ *   in sequence
  * @property {number | null} [exitCode]
  * @property {string | null} [signal]
  * @property {boolean} [hang]  never exits on its own
@@ -202,7 +203,7 @@ export const makeFakeSpawn = script => {
         // eslint-disable-next-line no-await-in-loop
         await null;
       }
-      if (script.stderr !== undefined) emit('stderr', script.stderr);
+      for (const chunk of [script.stderr ?? []].flat()) emit('stderr', chunk);
       if (!script.hang) {
         emit('close', script.exitCode ?? 0, script.signal ?? null);
       }

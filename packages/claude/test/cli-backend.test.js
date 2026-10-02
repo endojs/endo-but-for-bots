@@ -33,11 +33,12 @@ const VERSION = '2.1.268';
  * @param {ReturnType<typeof makeCredentialSource>} [options.source]
  * @param {ShapeTable} [options.responseShapes]
  * @param {boolean} [options.permissionPromptsNone]
+ * @param {ReturnType<typeof makeMemoryScratch>} [options.scratch]
  */
 const makeHarness = (script, options = {}) => {
   const { source = makeCredentialSource(), responseShapes } = options;
   const fake = makeFakeSpawn(script);
-  const scratch = makeMemoryScratch();
+  const scratch = options.scratch ?? makeMemoryScratch();
   const manualTimers = makeManualTimers();
   const projections = { launched: 0, closed: 0 };
   const backend = makeClaudeCliBackend({
@@ -391,4 +392,71 @@ test('a multibyte character split across stdout chunks decodes intact', async t 
   });
   const result = await backend.infer(makeRequest());
   t.like(result, { type: 'ok', text: 'café' });
+});
+
+test('stderr past the ring-buffer ceiling still classifies on its tail', async t => {
+  const responseShapes = shapeTable({
+    [VERSION]: [
+      {
+        pattern: M.splitRecord({ source: 'exit' }),
+        result: { type: 'needs-auth' },
+      },
+    ],
+  });
+  const chunk = 'x'.repeat(8_192);
+  const { backend } = makeHarness(
+    {
+      // 10 chunks of 8 KiB (80 KiB) comfortably exceeds the 64 KiB ring
+      // buffer, forcing the trim loop to shift out early chunks.
+      stderr: Array.from({ length: 10 }, () => chunk),
+      exitCode: 1,
+    },
+    { responseShapes },
+  );
+  t.deepEqual(await backend.infer(makeRequest()), { type: 'needs-auth' });
+});
+
+test('a scratch cleanup failure does not replace the turn result', async t => {
+  const scratch = {
+    makeScratchDirectory: async () =>
+      harden({
+        path: '/scratch/turn',
+        configDirectory: '/scratch/turn/config',
+        writeFile: async (/** @type {string} */ name) =>
+          `/scratch/turn/${name}`,
+        remove: async () => {
+          throw Error('rm failed');
+        },
+      }),
+  };
+  const { backend } = makeHarness(
+    { stdout: [successResult({ result: 'hello' })] },
+    { scratch },
+  );
+  const result = await backend.infer(makeRequest());
+  t.like(result, { type: 'ok', text: 'hello' });
+});
+
+test('a success with no usage fields omits usage from the result', async t => {
+  const { backend } = makeHarness({
+    stdout: [
+      successResult({
+        result: 'hi',
+        usage: {},
+        num_turns: undefined,
+        duration_ms: undefined,
+      }),
+    ],
+  });
+  t.deepEqual(await backend.infer(makeRequest()), { type: 'ok', text: 'hi' });
+});
+
+test('a result missing subtype falls to the generic error detail', async t => {
+  const { backend } = makeHarness({
+    stdout: [line({ type: 'result', is_error: true })],
+  });
+  t.deepEqual(await backend.infer(makeRequest()), {
+    type: 'unavailable',
+    detail: 'turn ended with an error',
+  });
 });

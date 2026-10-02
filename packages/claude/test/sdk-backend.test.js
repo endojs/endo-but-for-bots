@@ -2,6 +2,7 @@
 // spell-out-exempt: `num_turns` and `CLAUDE_CONFIG_DIR` are names Claude Code defines.
 
 import test from '@endo/ses-ava/prepare-endo.js';
+import { Far } from '@endo/far';
 import { M } from '@endo/patterns';
 
 import { makeClaudeSdkBackend } from '../src/sdk-backend.js';
@@ -45,10 +46,11 @@ const success = {
  * @param {object} [options]
  * @param {ReturnType<typeof makeCredentialSource>} [options.source]
  * @param {ShapeTable} [options.responseShapes]
+ * @param {ReturnType<typeof makeMemoryScratch>} [options.scratch]
  */
 const makeHarness = (query, options = {}) => {
   const { source = makeCredentialSource(), responseShapes } = options;
-  const scratch = makeMemoryScratch();
+  const scratch = options.scratch ?? makeMemoryScratch();
   const manualTimers = makeManualTimers();
   const backend = makeClaudeSdkBackend({
     credentialSource: source.credentialSource,
@@ -270,4 +272,58 @@ test('a query that ends with no result is unavailable', async t => {
     type: 'unavailable',
     detail: 'no terminal result event',
   });
+});
+
+test('a message that cannot be serialized still counts as zero bytes', async t => {
+  const { query } = replay([
+    { ...assistant('message-1', 'x'), weird: 10n },
+    success,
+  ]);
+  const { backend } = makeHarness(query);
+  t.deepEqual(await backend.infer(makeRequest()), {
+    type: 'ok',
+    text: 'stored',
+    usage: { inputTokens: 7, outputTokens: 2, turns: 3 },
+  });
+});
+
+test('a projection failure during setup is unavailable, not thrown', async t => {
+  const { guest } = makeProjection();
+  const { query, calls } = replay([success]);
+  const { backend } = makeHarness(query);
+  const result = await backend.infer(
+    makeRequest({
+      guest: harden({
+        ...guest,
+        buildMcpServer: Far('buildMcpServer', () => {
+          throw Error('mcp server build failed');
+        }),
+      }),
+    }),
+  );
+  t.deepEqual(result, {
+    type: 'unavailable',
+    detail: 'turn setup failed: mcp server build failed',
+  });
+  t.is(calls.length, 0);
+});
+
+test('a scratch cleanup failure does not replace the turn result', async t => {
+  const memory = makeMemoryScratch();
+  const scratch = {
+    ...memory,
+    makeScratchDirectory: async () => {
+      const directory = await memory.makeScratchDirectory();
+      return harden({
+        ...directory,
+        remove: async () => {
+          throw Error('rm failed');
+        },
+      });
+    },
+  };
+  const { query } = replay([success]);
+  const { backend } = makeHarness(query, { scratch });
+  const result = await backend.infer(makeRequest());
+  t.like(result, { type: 'ok', text: 'stored' });
 });
