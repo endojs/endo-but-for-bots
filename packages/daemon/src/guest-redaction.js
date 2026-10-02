@@ -5,7 +5,7 @@ import { q } from '@endo/errors';
 
 import { idFromLocator } from './locator.js';
 
-/** @import { FormulaIdentifier, GuestMessage, GuestNameChange, Name, PetStoreNameChange } from './types.js' */
+/** @import { FormulaIdentifier, GuestNameChange, RedactGuestMessage, Name, PetStoreNameChange } from './types.js' */
 
 /**
  * A guest holds no formula identifiers or locators (distributed confinement):
@@ -62,8 +62,9 @@ export const makeMessageRedactor = (
   };
 
   /**
-   * @param {Record<string, any>} message
-   * @returns {GuestMessage}
+   * @template {Record<string, any>} M
+   * @param {M} message
+   * @returns {RedactGuestMessage<M>}
    */
   const redactMessage = message => {
     /** @type {Record<string, any>} */
@@ -75,7 +76,7 @@ export const makeMessageRedactor = (
     for (const field of designationMessageFields) {
       delete redacted[field];
     }
-    return /** @type {GuestMessage} */ (harden(redacted));
+    return /** @type {RedactGuestMessage<M>} */ (harden(redacted));
   };
 
   return harden({ namesForLocator, redactMessage });

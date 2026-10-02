@@ -1751,7 +1751,7 @@ export type GuestWithheldMethod =
  * The omission distributes over each message kind, so every kind keeps its
  * own payload fields (`strings`, `names`, `description`, `source`, ...).
  */
-type RedactGuestMessage<M> = M extends unknown
+export type RedactGuestMessage<M> = M extends unknown
   ? Omit<M, 'from' | 'to' | 'ids' | 'promiseId' | 'resolverId' | 'valueId'> & {
       fromNames: Name[];
       toNames: Name[];
@@ -1760,8 +1760,12 @@ type RedactGuestMessage<M> = M extends unknown
 
 export type GuestMessage = RedactGuestMessage<StampedMessage>;
 
+/**
+ * A revision's envelope is a bare `EnvelopedMessage`: its number, date, and
+ * dismissal state are siblings of the envelope, not fields within it.
+ */
 export type GuestMessageRevision = Omit<MessageRevision, 'envelope'> & {
-  envelope: GuestMessage;
+  envelope: RedactGuestMessage<EnvelopedMessage>;
 };
 
 /** A name change as a guest reads it: the named value's identifier is withheld. */
