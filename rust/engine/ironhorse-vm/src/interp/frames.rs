@@ -504,6 +504,31 @@ impl Interp {
             .map_or(FrameReturn::Call, |caller| caller.returns)
     }
 
+    /// What the current frame, returning `result` as `returns` says, gives
+    /// its caller: for a setter, the value it was entered with, which its
+    /// argument list still holds (a frame's list is replaced only as frames
+    /// are entered, left, captured or parked, and never written as the frame
+    /// runs); for any other frame, `result`. Read before the frame is left.
+    #[inline(always)]
+    pub(super) fn frame_result(&self, returns: FrameReturn, result: Slot) -> Slot {
+        if returns == FrameReturn::Setter {
+            return self.assigned_value();
+        }
+        result
+    }
+
+    /// The value a setter's frame was entered with ([`Self::frame_result`]).
+    /// Out of line: the `START_ASYNC` handler that returns through it sits on
+    /// every level of a nest of async calls.
+    #[cold]
+    #[inline(never)]
+    fn assigned_value(&self) -> Slot {
+        self.args
+            .first()
+            .copied()
+            .expect("a setter's frame holds the value assigned")
+    }
+
     /// Leave a call the way XS's `XS_CODE_END` does: `mxStack = mxFrameEnd`
     /// (xsRun.c:1063) resets the value stack to the frame's base *before*
     /// `*mxStack = *slot` writes the result, so whatever the body left above

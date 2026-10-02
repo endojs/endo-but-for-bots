@@ -538,14 +538,21 @@ impl Interp {
                 // against the pin's raw meter.
                 XS_CODE_SET_PROPERTY => {
                     let id = operand_id(code, pc, 1);
-                    dispatch_result!(
+                    match dispatch_result!(
                         self.dispatch_set_property(code, id),
                         pc,
                         self,
                         return_depth,
                         code
-                    );
-                    pc += ilen;
+                    ) {
+                        None => pc += ilen,
+                        // A setter run in place (STACK-DEPTH-REFACTOR.md
+                        // C7): it returns past this assignment.
+                        Some(body_start) => {
+                            self.set_return_pc(pc + ilen);
+                            pc = body_start;
+                        }
+                    }
                 }
                 // `o.k`. Stack: [.., objectRef] → [.., value]. The handler
                 // calls `mxBehaviorGetProperty` directly (no `mxGetID`
@@ -4079,11 +4086,13 @@ impl Interp {
         // the body explicitly returned an object.
         let ret = dispatch_result_flow!(self.end_completion(op), self, return_depth, code);
         let returns = self.frame_returns();
+        let ret = self.frame_result(returns, ret);
         let resume = self.leave_call_to_frame_base();
         self.push(ret);
         let pc = resume;
         // Returning into a JS caller: `mxFirstCode()` checks, except into
-        // the property read a getter run in place returns to (C7).
+        // the property read or assignment an accessor run in place returns
+        // to (C7).
         if returns == FrameReturn::Call && self.check_meter() == MeterCheck::Abort {
             return Flow::Exit(Step::Host(Halt::MeterAbort));
         }
@@ -4148,9 +4157,10 @@ impl Interp {
         }
         // To the frame base, as `END` returns: the stack is there already,
         // unless the frame begins below its own slots (a `Reflect` call's
-        // target run in place, STACK-DEPTH-REFACTOR.md C2). A getter run in
-        // place checks no meter returning, as `END` checks none (C7).
+        // target run in place, STACK-DEPTH-REFACTOR.md C2). An accessor run
+        // in place returns as `END` returns it (C7).
         let returns = self.frame_returns();
+        let gen_slot = self.frame_result(returns, gen_slot);
         let resume = self.leave_call_to_frame_base();
         self.push(gen_slot);
         pc = resume;
@@ -4258,9 +4268,10 @@ impl Interp {
         }
         // To the frame base, as `END` returns: the stack is there already,
         // unless the frame begins below its own slots (a `Reflect` call's
-        // target run in place, STACK-DEPTH-REFACTOR.md C2). A getter run in
-        // place checks no meter returning, as `END` checks none (C7).
+        // target run in place, STACK-DEPTH-REFACTOR.md C2). An accessor run
+        // in place returns as `END` returns it (C7).
         let returns = self.frame_returns();
+        let slot = self.frame_result(returns, slot);
         let resume = self.leave_call_to_frame_base();
         self.push(slot);
         pc = resume;
@@ -4326,9 +4337,10 @@ impl Interp {
         }
         // To the frame base, as `END` returns: the stack is there already,
         // unless the frame begins below its own slots (a `Reflect` call's
-        // target run in place, STACK-DEPTH-REFACTOR.md C2). A getter run in
-        // place checks no meter returning, as `END` checks none (C7).
+        // target run in place, STACK-DEPTH-REFACTOR.md C2). An accessor run
+        // in place returns as `END` returns it (C7).
         let returns = self.frame_returns();
+        let promise_slot = self.frame_result(returns, promise_slot);
         let resume = self.leave_call_to_frame_base();
         self.push(promise_slot);
         pc = resume;

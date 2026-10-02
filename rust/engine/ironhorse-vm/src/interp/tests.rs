@@ -3867,10 +3867,10 @@ fn a_stale_evaluator_environment_row_restores_without_restoring_the_pin() {
 /// call `RUN` enters in the caller's dispatch loop (STACK-DEPTH-REFACTOR.md
 /// C1, C2, C7), and the innermost calling `bottom`: through a bound function,
 /// a Proxy that forwards to `f`, a Proxy whose `apply` trap calls `f`,
-/// `Reflect.apply`, `Reflect.construct` and a getter. Each defines `wrap`,
-/// which gives a function the same kind of call, and comes with its ceiling
-/// and the depth the refusal one level past it reports.
-const IN_PLACE_NESTS: [(&str, &str, usize, usize); 6] = [
+/// `Reflect.apply`, `Reflect.construct`, a getter and a setter. Each defines
+/// `wrap`, which gives a function the same kind of call, and comes with its
+/// ceiling and the depth the refusal one level past it reports.
+const IN_PLACE_NESTS: [(&str, &str, usize, usize); 7] = [
     (
         "bound",
         "function f(n, bottom) { return n > 0 ? f.bind(null, n - 1, bottom)() : bottom(); } \
@@ -3913,6 +3913,13 @@ const IN_PLACE_NESTS: [(&str, &str, usize, usize); 6] = [
         "getter",
         "function f(n, bottom) { return n > 0 ? { get x() { return f(n - 1, bottom); } }.x : bottom(); } \
          function wrap(w) { var o = { get x() { return w(); } }; return function () { return o.x; }; }",
+        119,
+        2056,
+    ),
+    (
+        "setter",
+        "function f(n, bottom) { if (n <= 0) return bottom(); var r; ({ set x(v) { r = f(v, bottom); } }).x = n - 1; return r; } \
+         function wrap(w) { var o = { set x(v) { w(); } }; return function () { o.x = 0; }; }",
         119,
         2056,
     ),
@@ -4059,16 +4066,18 @@ fn in_place_frames_release_their_charge_after_a_panic_or_heap_exhaustion() {
 fn a_call_that_is_not_entered_in_place_releases_its_units() {
     // `RUN` charges a Proxy layer's unit before it looks up the trap, and a
     // `Reflect.apply` or `Reflect.construct` call's before it reads its
-    // operands, and `GET_PROPERTY` its light unit before it walks an ordinary
-    // object for a getter. A revoked Proxy, a throwing `apply` getter, a trap
-    // that is not callable, a target that cannot be called or constructed, an
-    // argument list that is not an object or whose reads throw, all throw
-    // before any frame holds the units; a native, bound or Proxy callee is
-    // called through `invoke_value` or `construct_value`. So is a native, bound
-    // or Proxy getter, through `invoke_getter`; a Proxy holder's trap that
-    // throws throws before any getter is found; and a getter run in place
-    // throws from its frame, a class one as its body begins. Each gives the
-    // units back, or 200 rounds leave the next nest no budget.
+    // operands, and `GET_PROPERTY` or `SET_PROPERTY` its light unit before it
+    // walks an ordinary object for an accessor. A revoked Proxy, a throwing
+    // `apply` getter, a trap that is not callable, a target that cannot be
+    // called or constructed, an argument list that is not an object or whose
+    // reads throw, all throw before any frame holds the units; a native, bound
+    // or Proxy callee is called through `invoke_value` or `construct_value`. So
+    // is a native, bound or Proxy accessor, through `invoke_getter` or
+    // `invoke_setter`; a Proxy holder's trap that throws throws before any
+    // accessor is found; a typed array holder or parent, or a frozen property,
+    // takes no accessor; and an accessor run in place throws from its frame, a
+    // class one as its body begins. Each gives the units back, or 200 rounds
+    // leave the next nest no budget.
     let (name, nest, ceiling, _) = IN_PLACE_NESTS[2];
     for (setup, call) in [
         (
@@ -4147,6 +4156,33 @@ fn a_call_that_is_not_entered_in_place_releases_its_units() {
             "p.g",
         ),
         ("var p = { get g() { throw 12; } };", "p.g"),
+        (
+            "var p = Object.defineProperty([], 's', { set: Array.prototype.push });",
+            "p.s = 1",
+        ),
+        (
+            "var p = Object.defineProperty({}, 's', { set: function () { throw 13; }.bind(null) });",
+            "p.s = 1",
+        ),
+        (
+            "var p = Object.defineProperty({}, 's', { set: new Proxy(function () { throw 14; }, {}) });",
+            "p.s = 1",
+        ),
+        (
+            "var p = Object.defineProperty({}, 's', { set: class {} });",
+            "p.s = 1",
+        ),
+        (
+            "var p = Object.create(new Proxy({}, { set: function () { throw 15; } }));",
+            "p.s = 1",
+        ),
+        ("var p = new Uint8Array(1);", "p.NaN = 1"),
+        ("var p = Object.create(new Uint8Array(1));", "p.NaN = 1"),
+        (
+            "var p = Object.freeze({ s: 1 });",
+            "(function () { 'use strict'; p.s = 2; })()",
+        ),
+        ("var p = { set s(v) { throw 16; } };", "p.s = 1"),
     ] {
         let (mut m, code) = in_place_machine(
             nest,
@@ -4225,6 +4261,37 @@ fn a_getter_run_in_place_leaves_its_value_where_the_read_was() {
         out.result,
         "0,1,2;0,7,9;13;function,function,function,x;true/4;11"
     );
+    assert!(m.stack.is_empty(), "{} slots left", m.stack.len());
+    assert_eq!(m.native_depth, 0);
+    assert_eq!(m.held_total, 0);
+}
+
+#[test]
+fn a_setter_run_in_place_leaves_the_value_assigned_where_the_assignment_was() {
+    // A setter's `END`, or the `START` of a generator, async or async
+    // generator setter, drops its result and pushes the value assigned, which
+    // reassigning its parameter or `arguments[0]` does not replace, and
+    // returns past the assignment, so operands pending around it see the
+    // value in its place and the program leaves the stack empty.
+    let program = "var log = []; \
+        var o = { \
+            set a(v) { log.push(v); return 'dropped'; }, \
+            set re(v) { v = 'reassigned'; arguments[0] = 'mapped'; log.push(v); } \
+        }; \
+        Object.defineProperty(o, 'gen', { set: function* (v) { log.push('never'); } }); \
+        Object.defineProperty(o, 'agen', { set: async function* (v) {} }); \
+        Object.defineProperty(o, 'async', { set: async function (v) { log.push('async' + v); } }); \
+        var r = [0, o.a = 1, 2].join() + ';' + \
+            (o.a = o.re = 3) + ';' + \
+            (10 + (o.gen = 4) * 3) + ';' + \
+            [o.agen = 5, o.async = 6, 'x'].join() + ';' + \
+            `${o.a = 7}${o.re = 8}` + ';' + log.join(); r";
+    let (code, symbols) = ironhorse_compile::compile_atoms(program).unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&crate::parse_symbols(&symbols));
+    let out = m.run(&code);
+    assert!(out.completed, "{:?}", out.halt);
+    assert_eq!(out.result, "0,1,2;3;22;5,6,x;78;1,mapped,3,async6,7,mapped");
     assert!(m.stack.is_empty(), "{} slots left", m.stack.len());
     assert_eq!(m.native_depth, 0);
     assert_eq!(m.held_total, 0);

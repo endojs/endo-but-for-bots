@@ -665,15 +665,20 @@ impl Interp {
     /// (its `END`, whose meter check is the one `RUN` made after the call
     /// returned, or the `START_*` of a generator or async body), is unwound,
     /// or outlives the loop that runs it.
-    pub(super) fn enter_in_place(
+    pub(super) fn enter_in_place<A>(
         &mut self,
         func: Slot,
         receiver: Slot,
-        args: Vec<Slot>,
+        args: A,
         ret_pc: usize,
         new_target: Option<Slot>,
         outer: usize,
-    ) -> Result<usize, Step> {
+    ) -> Result<usize, Step>
+    where
+        A: IntoIterator<Item = Slot>,
+        A::IntoIter: ExactSizeIterator,
+    {
+        let args = args.into_iter();
         let argc = args.len();
         self.push(receiver);
         self.push(func);

@@ -691,13 +691,104 @@ impl Interp {
         }
         // The frame `invoke_getter` builds through `run_user_callback`: the
         // receiver as `this`, no arguments.
-        let body_start =
-            self.enter_in_place(getter, receiver, Vec::new(), 0, None, LIGHT_FRAME_COST)?;
+        let body_start = self.enter_in_place(getter, receiver, [], 0, None, LIGHT_FRAME_COST)?;
         self.call_stack
             .last_mut()
             .expect("enter_call pushed the frame")
             .returns = FrameReturn::Getter;
         Ok(GetInPlace::Entered(body_start))
+    }
+
+    /// `SET_PROPERTY`'s `[[Set]]` of the ordinary object `inst` for
+    /// `receiver` (STACK-DEPTH-REFACTOR.md C7), which `dispatch_set_property`
+    /// reaches for any object but a Proxy, a typed array or an array's
+    /// `length`: [`Interp::mop_set`]'s step for it (the light unit it
+    /// charges) and [`Self::ordinary_set`]'s walk, repeated here, except that
+    /// a setter the walk reaches that [`Interp::calls_in_place`] is entered in
+    /// the caller's loop, as a setter ([`FrameReturn::Setter`]) with `value`
+    /// its one argument, rather than called, for the loop to set where it
+    /// returns. Its frame holds the light unit with the heavy one the setter's
+    /// nested `dispatch_at` charged. Returns `[[Set]]`'s result, or where the
+    /// setter's body starts. Kept apart from the shared walk, whose frames
+    /// every `[[Set]]` carries: keep the walk in step with `ordinary_set`'s.
+    #[inline(never)]
+    pub(in crate::interp) fn set_property_in_place(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<SetInPlace, Step> {
+        self.enter_native_frame(LIGHT_FRAME_COST)?;
+        let set = self.set_in_place_walk(code, inst, id, value, receiver);
+        if !matches!(set, Ok(SetInPlace::Entered(_))) {
+            self.leave_native_frame(LIGHT_FRAME_COST);
+        }
+        set
+    }
+
+    /// The assignment of [`Self::set_property_in_place`] after its charge.
+    fn set_in_place_walk(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<SetInPlace, Step> {
+        // `ordinary_set`'s walk: `mop_set_inner` differs from it only for a
+        // Proxy or a typed array, which `dispatch_set_property` sent apart.
+        let mut current = inst;
+        loop {
+            let own = self
+                .ordinary_get_own_descriptor(current, id)
+                .or_else(|| self.exotic_own_descriptor(current, id));
+            if let Some(descriptor) = own {
+                if descriptor.is_accessor() {
+                    let setter = descriptor.set.unwrap_or_else(Slot::undefined);
+                    if setter.kind == Kind::Undefined {
+                        return Ok(SetInPlace::Done(false));
+                    }
+                    if !self.calls_in_place(setter) {
+                        self.invoke_setter(code, setter, receiver, value)?;
+                        return Ok(SetInPlace::Done(true));
+                    }
+                    // The frame `invoke_setter` builds through
+                    // `run_user_callback`: the receiver as `this`, the value
+                    // as the one argument.
+                    let body_start =
+                        self.enter_in_place(setter, receiver, [value], 0, None, LIGHT_FRAME_COST)?;
+                    self.call_stack
+                        .last_mut()
+                        .expect("enter_call pushed the frame")
+                        .returns = FrameReturn::Setter;
+                    return Ok(SetInPlace::Entered(body_start));
+                }
+                if descriptor.writable == Some(false) {
+                    return Ok(SetInPlace::Done(false));
+                }
+                break;
+            }
+            let parent = self.instance_prototype(current);
+            if parent.is_null() {
+                break;
+            }
+            let typed_array_element = self.typed_arrays.contains_key(&parent)
+                && !self.is_symbol_key_id(id)
+                && self
+                    .scalar_key_text(id)
+                    .and_then(|name| canonical_numeric_index_string(&name))
+                    .is_some();
+            if self.proxies.contains_key(&parent) || typed_array_element {
+                return self
+                    .mop_set(code, parent, id, value, receiver)
+                    .map(SetInPlace::Done);
+            }
+            current = parent;
+        }
+        self.ordinary_set_on_receiver(code, id, value, receiver)
+            .map(SetInPlace::Done)
     }
 
     pub(in crate::interp::property) fn ordinary_set(
@@ -756,6 +847,22 @@ impl Interp {
             // does.
             current = parent;
         }
+        self.ordinary_set_on_receiver(code, id, value, receiver)
+    }
+
+    /// The end of [`Self::ordinary_set`], after its walk found no setter and
+    /// no non-writable property: the value created or updated as an own data
+    /// property of the receiver. Expanded in its two callers, `ordinary_set`
+    /// and `SET_PROPERTY`'s in-place assignment, as it was written inline in
+    /// the first.
+    #[inline(always)]
+    fn ordinary_set_on_receiver(
+        &mut self,
+        code: &[u8],
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<bool, Step> {
         let receiver_inst = match receiver.value {
             Payload::Reference(receiver_inst) if receiver.kind == Kind::Reference => receiver_inst,
             _ => return Ok(false),
