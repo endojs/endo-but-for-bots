@@ -56,11 +56,7 @@ const store = harden({
       ...s,
       appendJournal: entry => {
         s.appendJournal(entry);
-        if (
-          id === ownerId &&
-          armed === 'journal' &&
-          increment(typeof entry === 'string' ? entry : entry.b64)
-        )
+        if (id === ownerId && armed === 'journal' && increment(entry.b64))
           boundary('journal');
       },
       setMeta: meta => {

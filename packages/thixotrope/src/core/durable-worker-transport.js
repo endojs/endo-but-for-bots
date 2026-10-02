@@ -100,13 +100,9 @@ export const makeDurableWorkerTransport = (
   let deliveredUpTo = 0;
   let deliveredHubSequence = String(store.getMeta().hubDelivery ?? '0');
   let receivedHubSequence = BigInt(deliveredHubSequence);
-  for (const entry of store.readJournal()) {
-    if (
-      typeof entry === 'object' &&
-      entry !== null &&
-      typeof entry.hubSequence === 'string'
-    ) {
-      const n = BigInt(entry.hubSequence);
+  for (const { hubSequence } of store.readJournal()) {
+    if (hubSequence !== undefined) {
+      const n = BigInt(hubSequence);
       if (n > receivedHubSequence) receivedHubSequence = n;
     }
   }
@@ -182,6 +178,17 @@ export const makeDurableWorkerTransport = (
   };
 
   /**
+   * The one way an incarnation leaves: detached first, so no operation
+   * reaches it meanwhile, then terminated; settles once it has ended.
+   */
+  const terminateIncarnation = async () => {
+    const dying = incarnation;
+    incarnation = undefined;
+    if (dying === undefined) return;
+    await dying.terminate();
+  };
+
+  /**
    * The incarnation's engine process died (a delivery or snapshot
    * failed): drop it so the next operation restarts from the snapshot
    * plus the journal suffix instead of wedging on a dead process.
@@ -190,11 +197,7 @@ export const makeDurableWorkerTransport = (
    * @returns {never}
    */
   const abandonIncarnation = error => {
-    const dying = incarnation;
-    incarnation = undefined;
-    if (dying !== undefined) {
-      Promise.resolve(dying.terminate()).catch(() => {});
-    }
+    void terminateIncarnation().catch(() => {});
     if (error instanceof WorkerHaltError) {
       // Preserve the last snapshot for inspection, but do not endlessly
       // replay an input known to exhaust its budget or hit an engine gap.
@@ -251,11 +254,10 @@ export const makeDurableWorkerTransport = (
       const entries = store.readJournal(cut);
       deliveredUpTo = cut;
       deliveredHubSequence = String(meta.hubDelivery ?? '0');
-      for (const entry of entries) {
-        const b64 = typeof entry === 'string' ? entry : entry.b64;
+      for (const { b64, hubSequence } of entries) {
         // eslint-disable-next-line no-await-in-loop
         await started.deliver(harden({ t: 'f', b64 }));
-        if (typeof entry !== 'string') deliveredHubSequence = entry.hubSequence;
+        if (hubSequence !== undefined) deliveredHubSequence = hubSequence;
         deliveredUpTo += 1;
       }
     } catch (error) {
@@ -283,7 +285,7 @@ export const makeDurableWorkerTransport = (
       // Journal before the duct: a frame the OCapN layer believes it
       // sent must survive any crash from here on.
       store.appendJournal(
-        hubSequence === undefined ? b64 : { b64, hubSequence },
+        hubSequence === undefined ? { b64 } : { b64, hubSequence },
       );
       if (hubSequence !== undefined) receivedHubSequence = BigInt(hubSequence);
       enqueue(async () => {
@@ -364,9 +366,7 @@ export const makeDurableWorkerTransport = (
           await engine.releaseSnapshot(previous);
         }
       }
-      const sleeping = incarnation;
-      incarnation = undefined;
-      await sleeping.terminate();
+      await terminateIncarnation();
     });
 
   return harden({
@@ -390,14 +390,7 @@ export const makeDurableWorkerTransport = (
      * journal suffix — the crash-recovery path.
      */
     crash: async () => {
-      await enqueue(async () => {
-        if (incarnation === undefined) {
-          return;
-        }
-        const dying = incarnation;
-        incarnation = undefined;
-        await dying.terminate();
-      });
+      await enqueue(terminateIncarnation);
     },
     /**
      * Permanently destroy the worker: terminate, release its snapshot,
@@ -409,11 +402,7 @@ export const makeDurableWorkerTransport = (
       }
       destroyed = true;
       await enqueue(async () => {
-        if (incarnation !== undefined) {
-          const dying = incarnation;
-          incarnation = undefined;
-          await dying.terminate();
-        }
+        await terminateIncarnation();
         const ref = store.getMeta().snapshot?.ref;
         if (ref !== undefined && engine.releaseSnapshot) {
           await engine.releaseSnapshot(ref);
