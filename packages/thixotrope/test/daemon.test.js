@@ -418,3 +418,54 @@ test.serial(
     t.is(await E(await daemon.lookup('rescued-during-collection')).incr(), 1);
   },
 );
+
+test.serial(
+  'a peer without a resume token has a transient session, which the next start forgets',
+  async t => {
+    t.timeout(15_000);
+    const statePath = await mkdtemp(
+      join(tmpdir(), 'thixotrope-daemon-transient-peer-'),
+    );
+    t.teardown(() => rm(statePath, { recursive: true, force: true }));
+    const start = () =>
+      makeThixotropeDaemon(nodePowers, {
+        store: makeFsStore(nodePowers, statePath),
+        engine: makePeerJournalReplayEngine(nodePowers),
+        codec: syrupCodec,
+        makeNetlayer: ({ handlers, logger }) =>
+          makeTcpNetLayer({ handlers, logger }),
+      });
+    const transientKeys = () =>
+      Object.keys(
+        makeFsStore(nodePowers, statePath).getHubState()?.sessions ?? {},
+      ).filter(key => key.startsWith('transient:'));
+    const first = await start();
+    t.teardown(() => first.shutdown());
+    const worker = await first.createWorker();
+    const secret = first.publish(await worker.evaluate(COUNTER_SOURCE));
+    const peer = await makeTestOcapn({
+      codec: syrupCodec,
+      debugLabel: 'token-less-peer',
+      network: (/** @type {any} */ handlers, /** @type {any} */ logger) =>
+        makeTcpNetLayer({ handlers, logger }),
+    });
+    t.teardown(() => peer.shutdown());
+    const counter = await peer.enlivenSturdyRef(
+      peer.makeSturdyRef(first.location, secret),
+    );
+    t.is(await E(counter).incr(), 1);
+    const held = transientKeys();
+    t.is(held.length, 1, 'the connection is a transient session');
+    // A crash leaves the session's rows: the hub state from before the
+    // orderly shutdown is put back.
+    const crashImage = JSON.parse(
+      JSON.stringify(makeFsStore(nodePowers, statePath).getHubState()),
+    );
+    await first.shutdown();
+    makeFsStore(nodePowers, statePath).setHubState(crashImage);
+    t.deepEqual(transientKeys(), held);
+    const second = await start();
+    t.teardown(() => second.shutdown());
+    t.deepEqual(transientKeys(), [], 'the next start forgot it');
+  },
+);

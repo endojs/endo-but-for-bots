@@ -767,7 +767,7 @@ As built, the registry answers `bundles()` rather than `list()`, the digests its
 still hold, and the supervisor hands them to the daemon's `sweepBundles` once the registry is
 published; launcher records are still read by the daemon itself.
 
-### 10.7 Per-connection peer sessions
+### 10.7 Per-connection peer sessions (Done.)
 
 A peer connection that is not durable gets a `conn:` session key, which the comments call
 ephemeral, and which no start sweeps; `transient:` keys are swept.
@@ -775,6 +775,9 @@ A crash leaves `conn:` rows in the hub's tables for good.
 
 Recommendation: one prefix, `transient:`, one sweep; 10.1 (b) makes the control connections
 transient the same way.
+
+As built, the daemon names the transient sessions a previous process left before its netlayer
+starts, and forgets only those, so a connection accepted during start is not swept with them.
 
 ### 10.8 The durable factory's inputs and the kit's protocol (Done.)
 
