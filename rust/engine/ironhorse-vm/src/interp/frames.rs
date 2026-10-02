@@ -502,9 +502,12 @@ impl Interp {
     /// values, not just the `call: not a function` it produced when the slot
     /// it displaced happened to be a callee.
     ///
-    /// Only the `END` family restores. The `START_*` opcodes hand a generator
-    /// or promise back at function *entry*, before any body has run and with
-    /// nothing to abandon.
+    /// The `END` family restores, and so do the non-boundary `START_*` arms,
+    /// which hand a generator or promise back at function *entry*: the stack
+    /// is already at the base there, except for a `Reflect` call's target run
+    /// in place (STACK-DEPTH-REFACTOR.md C2), whose frame begins at the
+    /// `Reflect` call's base. The boundary `START_*` arms keep a bare
+    /// `leave_call`: a frame run in place is never a loop's boundary frame.
     pub(super) fn leave_call_to_frame_base(&mut self) -> usize {
         let base = self.call_stack.last().map(|caller| caller.stack_base);
         let resume = self.leave_call();

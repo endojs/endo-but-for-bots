@@ -3865,12 +3865,12 @@ fn a_stale_evaluator_environment_row_restores_without_restoring_the_pin() {
 
 /// The nests the in-place tests run, each level calling the next through a
 /// call `RUN` enters in the caller's dispatch loop (STACK-DEPTH-REFACTOR.md
-/// C1), and the innermost calling `bottom`: through a bound function, a
-/// Proxy that forwards to `f`, and a Proxy whose `apply` trap calls `f`.
-/// Each defines `wrap`, which gives a function the same kind of call, and
-/// comes with its ceiling and the depth the refusal one level past it
-/// reports.
-const IN_PLACE_NESTS: [(&str, &str, usize, usize); 3] = [
+/// C1, C2), and the innermost calling `bottom`: through a bound function, a
+/// Proxy that forwards to `f`, a Proxy whose `apply` trap calls `f`,
+/// `Reflect.apply` and `Reflect.construct`. Each defines `wrap`, which
+/// gives a function the same kind of call, and comes with its ceiling and
+/// the depth the refusal one level past it reports.
+const IN_PLACE_NESTS: [(&str, &str, usize, usize); 5] = [
     (
         "bound",
         "function f(n, bottom) { return n > 0 ? f.bind(null, n - 1, bottom)() : bottom(); } \
@@ -3893,6 +3893,21 @@ const IN_PLACE_NESTS: [(&str, &str, usize, usize); 3] = [
          function wrap(w) { return new Proxy(function () {}, { apply: function () { return w(); } }); }",
         119,
         2056,
+    ),
+    (
+        "Reflect.apply",
+        "function f(n, bottom) { return n > 0 ? Reflect.apply(f, null, [n - 1, bottom]) : bottom(); } \
+         function wrap(w) { return function () { return Reflect.apply(w, null, []); }; }",
+        63,
+        2064,
+    ),
+    (
+        "Reflect.construct",
+        "function f(n, bottom) { return n > 0 ? Reflect.construct(F, [n - 1, bottom]).v : bottom(); } \
+         function F(n, bottom) { this.v = f(n, bottom); } \
+         function wrap(w) { function W() { this.v = w(); } return function () { return Reflect.construct(W, []).v; }; }",
+        63,
+        2064,
     ),
 ];
 
@@ -4034,13 +4049,15 @@ fn in_place_frames_release_their_charge_after_a_panic_or_heap_exhaustion() {
 }
 
 #[test]
-fn a_proxy_call_that_is_not_entered_in_place_releases_its_unit() {
-    // `RUN` charges a Proxy layer's unit before it looks up the trap. A
-    // revoked Proxy, a throwing `apply` getter and a trap that is not
-    // callable throw before any frame holds it; a native target or trap, a
-    // further Proxy and a bound trap go back to `RUN` to be called through
-    // `invoke_value`. Each gives the unit back, or 200 rounds leave the next
-    // nest no budget.
+fn a_call_that_is_not_entered_in_place_releases_its_units() {
+    // `RUN` charges a Proxy layer's unit before it looks up the trap, and a
+    // `Reflect.apply` or `Reflect.construct` call's before it reads its
+    // operands. A revoked Proxy, a throwing `apply` getter, a trap that is
+    // not callable, a target that cannot be called or constructed, an
+    // argument list that is not an object or whose reads throw, all throw
+    // before any frame holds the units; a native, bound or Proxy callee is
+    // called through `invoke_value` or `construct_value`. Each gives the
+    // units back, or 200 rounds leave the next nest no budget.
     let (name, nest, ceiling, _) = IN_PLACE_NESTS[2];
     for (setup, call) in [
         (
@@ -4066,6 +4083,38 @@ fn a_proxy_call_that_is_not_entered_in_place_releases_its_unit() {
             "var p = new Proxy(function () {}, { apply: function () { throw 3; }.bind(null) });",
             "p()",
         ),
+        ("var p = 1;", "Reflect.apply(p, null, [])"),
+        ("var p = function () {};", "Reflect.apply(p, null, 1)"),
+        (
+            "var p = function () {};",
+            "Reflect.apply(p, null, { get length() { throw 4; } })",
+        ),
+        ("var p = JSON.parse;", "Reflect.apply(p, null, ['{'])"),
+        ("var p = Math.max;", "Reflect.apply(p, null, [1, 2])"),
+        (
+            "var p = function () { throw 5; }.bind(null);",
+            "Reflect.apply(p, null, [])",
+        ),
+        (
+            "var p = new Proxy(function () { throw 6; }, {});",
+            "Reflect.apply(p, null, [])",
+        ),
+        ("var p = () => 1;", "Reflect.construct(p, [])"),
+        (
+            "var p = function () {};",
+            "Reflect.construct(p, [], Math.max)",
+        ),
+        (
+            "var p = function () {};",
+            "Reflect.construct(p, { length: 1, get 0() { throw 7; } })",
+        ),
+        ("var p = RegExp;", "Reflect.construct(p, ['['])"),
+        ("var p = Array;", "Reflect.construct(p, [3])"),
+        ("var p = Date;", "Reflect.construct(p, [0])"),
+        (
+            "var p = new Proxy(function () { throw 8; }, {});",
+            "Reflect.construct(p, [])",
+        ),
     ] {
         let (mut m, code) = in_place_machine(
             nest,
@@ -4080,6 +4129,38 @@ fn a_proxy_call_that_is_not_entered_in_place_releases_its_unit() {
         assert_eq!(m.native_depth, 0, "{name} {setup}");
         assert_eq!(m.held_total, 0, "{name} {setup}");
     }
+}
+
+#[test]
+fn a_reflect_call_run_in_place_leaves_its_result_where_the_call_was() {
+    // The `Reflect` call's frame stays on the value stack under the target's
+    // frame; the target's `END`, or the `START` of a generator, async
+    // function or async generator, cuts both, so operands pending around the
+    // call see its result in its place, and the program leaves the stack
+    // empty. A construct's new target is the one `Reflect.construct` names.
+    let program = "function F(a) { this.a = a; } \
+        function G() {} \
+        function NT() { this.nt = new.target === G; } \
+        function* g(a) { yield a; yield a + 1; } \
+        async function af() { return 1; } \
+        async function* ag() {} \
+        var r = [0, Reflect.apply(function (a) { return a; }, null, [1]), 2].join() + ';' + \
+            [0, ...Reflect.apply(g, null, [5]), 9].join() + ';' + \
+            (10 + Reflect.construct(F, [4]).a * 3) + ';' + \
+            [Reflect.construct(NT, [], G).nt, Reflect.construct(NT, []).nt].join() + ';' + \
+            [typeof Reflect.apply(af, null, []).then, typeof Reflect.apply(ag, null, []).next, 'x'].join() + ';' + \
+            Reflect.apply(Reflect.apply, null, [function (a, b) { return a + b; }, null, [1, 2]]); r";
+    let (code, symbols) = ironhorse_compile::compile_atoms(program).unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&crate::parse_symbols(&symbols));
+    let out = m.run(&code);
+    assert!(out.completed, "{:?}", out.halt);
+    assert_eq!(
+        out.result,
+        "0,1,2;0,5,6,9;22;true,false;function,function,x;3"
+    );
+    assert!(m.stack.is_empty(), "{} slots left", m.stack.len());
+    assert_eq!(m.native_depth, 0);
 }
 
 #[test]

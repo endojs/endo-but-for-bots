@@ -181,45 +181,67 @@ impl Interp {
             // `Reflect.apply(target, thisArgument, argumentsList)` calls the
             // target with the expanded array-like argument list.
             NativeMethod::ReflectApply => {
-                if !self.is_callable_value(arg0) {
-                    return Err(self.catchable_type_error_msg("target: not a function".into()));
-                }
-                if arg2.kind != Kind::Reference {
-                    return Err(
-                        self.catchable_type_error_msg("argumentsList: not an object".into())
-                    );
-                }
-                let args = self.arraylike_to_vec(code, arg2)?;
-                self.meter.tick_raw(REFLECT_FRAME_METERING);
-                self.invoke_value(code, arg0, arg1, &args)
+                let (target, this, args) = self.reflect_call_operands(m, base, argc, code)?;
+                self.invoke_value(code, target, this, &args)
             }
             // `Reflect.construct(target, argumentsList[, newTarget])` (ECMA-262
             // 28.1.2): `Construct(target, args, newTarget)`.
             NativeMethod::ReflectConstruct => {
-                // ECMA-262 28.1.2: both the target and the (defaulted) newTarget
-                // must be **constructors**, not merely callable — a native
-                // prototype method (the `format` getter, its bound function)
-                // has no `[[Construct]]`, so `Reflect.construct(fn, [], getter)`
-                // throws, and the harness `isConstructor(getter)` is `false`.
-                if !self.is_constructor_value(arg0) {
-                    return Err(self.catchable_type_error_msg("target: not a constructor".into()));
-                }
-                let new_target = if argc >= 3 { arg2 } else { arg0 };
-                if !self.is_constructor_value(new_target) {
-                    return Err(
-                        self.catchable_type_error_msg("newTarget: not a constructor".into())
-                    );
-                }
-                if arg1.kind != Kind::Reference {
-                    return Err(
-                        self.catchable_type_error_msg("argumentsList: not an object".into())
-                    );
-                }
-                let args = self.arraylike_to_vec(code, arg1)?;
-                self.meter.tick_raw(REFLECT_FRAME_METERING);
-                self.construct_value(code, arg0, &args, new_target)
+                let (target, new_target, args) = self.reflect_call_operands(m, base, argc, code)?;
+                self.construct_value(code, target, &args, new_target)
             }
             _ => Err(Step::Host(Halt::EngineInvariant("Reflect:unexpected"))),
         }
+    }
+
+    /// What `Reflect.apply` (method `m`) or `Reflect.construct`, its frame of
+    /// `argc` arguments beginning at `base`, calls: the target, the receiver
+    /// (`apply`) or new target (`construct`), and the argument list, after
+    /// the checks, the list's reads and the tick that precede the call.
+    /// [`Self::call_reflect`] makes the call; `RUN` may instead enter the
+    /// target in place ([`Self::reflect_run_call`]).
+    pub(in crate::interp) fn reflect_call_operands(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<(Slot, Slot, Vec<Slot>), Step> {
+        let arg = |vm: &Self, i: usize| {
+            vm.stack
+                .get(base + 4 + i)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
+        };
+        let (arg0, arg1, arg2) = (arg(self, 0), arg(self, 1), arg(self, 2));
+        if m == NativeMethod::ReflectApply {
+            if !self.is_callable_value(arg0) {
+                return Err(self.catchable_type_error_msg("target: not a function".into()));
+            }
+            if arg2.kind != Kind::Reference {
+                return Err(self.catchable_type_error_msg("argumentsList: not an object".into()));
+            }
+            let args = self.arraylike_to_vec(code, arg2)?;
+            self.meter.tick_raw(REFLECT_FRAME_METERING);
+            return Ok((arg0, arg1, args));
+        }
+        // ECMA-262 28.1.2: both the target and the (defaulted) newTarget must
+        // be **constructors**, not merely callable — a native prototype
+        // method (the `format` getter, its bound function) has no
+        // `[[Construct]]`, so `Reflect.construct(fn, [], getter)` throws, and
+        // the harness `isConstructor(getter)` is `false`.
+        if !self.is_constructor_value(arg0) {
+            return Err(self.catchable_type_error_msg("target: not a constructor".into()));
+        }
+        let new_target = if argc >= 3 { arg2 } else { arg0 };
+        if !self.is_constructor_value(new_target) {
+            return Err(self.catchable_type_error_msg("newTarget: not a constructor".into()));
+        }
+        if arg1.kind != Kind::Reference {
+            return Err(self.catchable_type_error_msg("argumentsList: not an object".into()));
+        }
+        let args = self.arraylike_to_vec(code, arg1)?;
+        self.meter.tick_raw(REFLECT_FRAME_METERING);
+        Ok((arg0, new_target, args))
     }
 }

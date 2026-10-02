@@ -1214,6 +1214,7 @@ impl Interp {
     /// 7), so `new` on one whose target is not a constructor throws before
     /// any trap runs, with XS's message (XS sets `XS_CAN_CONSTRUCT_FLAG` from
     /// the target when it creates the Proxy).
+    #[inline(never)]
     pub(in crate::interp) fn proxy_construct(
         &mut self,
         code: &[u8],

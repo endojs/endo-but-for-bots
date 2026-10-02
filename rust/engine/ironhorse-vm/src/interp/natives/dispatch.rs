@@ -2117,7 +2117,8 @@ impl Interp {
         // timings or per-step work attribution. `invoke_regexp_protocol`
         // (natives/regexp.rs) repeats this count, and skips the Proxy
         // pre-check below, for the intrinsic RegExp protocol methods it calls
-        // in place: keep the two in step.
+        // in place, as `reflect_run_call` (invoke.rs) does for `RUN`'s
+        // `Reflect.apply` and `Reflect.construct`: keep them in step.
         self.cost.on_builtin(m);
         let this = self
             .stack
