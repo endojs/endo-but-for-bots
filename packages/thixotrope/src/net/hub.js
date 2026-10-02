@@ -16,7 +16,7 @@ import { makeOcapnOperationsCodecs } from '@endo/ocapn/operations';
 import { locationToLocationId } from '@endo/ocapn/client/util';
 
 import { describeError } from '../describe-error.js';
-import { assertRecordVersion } from '../store/versioned-record.js';
+import { restoreHubState, serializeHubState } from './hub-state.js';
 
 /**
  * Thixotrope's comms hub: an OCapN forwarding node that is NOT a
@@ -100,13 +100,6 @@ import { assertRecordVersion } from '../store/versioned-record.js';
  */
 
 const BOOTSTRAP_POSITION = '0';
-const STATE_VERSION = 2;
-const QUEUED_FRAME_PATTERN = /^(?:[0-9a-f]{2})*$/;
-
-/** @param {string} message */
-const raise = message => {
-  throw Error(message);
-};
 
 /**
  * The publications table key for a swissnum in either of its accepted
@@ -321,55 +314,9 @@ export const makeOcapnHub = ({
     if (!dirty) {
       return;
     }
-    /** @type {any} */
-    const state = {
-      version: STATE_VERSION,
-      refs: {},
-      sessions: {},
-      publications: {},
-    };
-    for (const [refId, row] of refs.entries()) {
-      state.refs[refId] = {
-        origin: row.origin,
-        epoch: row.epoch,
-        position: row.position,
-        backing: row.backing,
-        flavor: row.flavor,
-        resolver: row.resolver,
-        dead: row.dead,
-        mentionsIn: row.mentionsIn,
-        listeners: [...row.listeners],
-        refcounts: Object.fromEntries(row.refcounts),
-      };
-    }
-    for (const [sessionKey, session] of sessions.entries()) {
-      state.sessions[sessionKey] = {
-        epoch: session.epoch,
-        ourExports: Object.fromEntries(session.ourExports),
-        nextExport: String(session.nextExport),
-        nextAnswer: String(session.nextAnswer),
-        answersOwed: Object.fromEntries(session.answersOwed),
-        processedUpTo: String(session.processedUpTo),
-        durable: session.durable,
-        retired: session.retired,
-        queue: [...session.queue],
-        queueSequences: [...session.queueSequences],
-        nextDelivery: String(session.nextDelivery),
-        identity: session.identity,
-        usedGiftHandoffs: [...session.usedGiftHandoffs],
-        pendingWithdraws: session.pendingWithdraws.map(pending => ({
-          ...pending,
-        })),
-        nextHandoffCount: String(session.nextHandoffCount),
-        dialLocation: session.dialLocation,
-      };
-    }
-    state.publications = Object.fromEntries(publications);
-    state.gifts = Object.fromEntries(gifts);
-    state.giftWaiters = Object.fromEntries(
-      [...giftWaiters.entries()].map(([key, list]) => [key, [...list]]),
+    store.setState(
+      serializeHubState({ refs, sessions, publications, gifts, giftWaiters }),
     );
-    store.setState(state);
     dirty = false;
   };
 
@@ -438,70 +385,13 @@ export const makeOcapnHub = ({
     if (state === undefined) {
       return;
     }
-    assertRecordVersion('hub state', state.version, STATE_VERSION);
-    for (const [refId, row] of Object.entries(state.refs ?? {})) {
-      const r = /** @type {any} */ (row);
-      refs.set(refId, {
-        refId,
-        origin: r.origin,
-        epoch: Number(r.epoch ?? 0),
-        position: r.position,
-        backing: r.backing === 'answer' ? 'answer' : 'export',
-        flavor: r.flavor,
-        resolver: Boolean(r.resolver),
-        dead: Boolean(r.dead),
-        mentionsIn: Number(r.mentionsIn ?? 0),
-        listeners: [...(r.listeners ?? [])],
-        facing: new Map(),
-        refcounts: new Map(
-          Object.entries(r.refcounts ?? {}).map(([k, v]) => [k, Number(v)]),
-        ),
-      });
-    }
-    for (const [sessionKey, s] of Object.entries(state.sessions ?? {})) {
-      const sd = /** @type {any} */ (s);
-      const session = provideSessionState(sessionKey);
-      session.epoch = Number(sd.epoch ?? 0);
-      session.ourExports = new Map(Object.entries(sd.ourExports ?? {}));
-      session.nextExport = BigInt(sd.nextExport ?? '1');
-      session.nextAnswer = BigInt(sd.nextAnswer ?? '1');
-      session.answersOwed = new Map(Object.entries(sd.answersOwed ?? {}));
-      session.processedUpTo = BigInt(sd.processedUpTo ?? 0);
-      session.retired = sd.retired ?? false;
-      session.durable = Boolean(sd.durable);
-      session.queue = [...(sd.queue ?? [])];
-      // The hub wrote every queued frame as hex; one that is not is a
-      // damaged state file, refused here rather than at the next send.
-      session.queue.every(
-        hex => typeof hex === 'string' && QUEUED_FRAME_PATTERN.test(hex),
-      ) || raise(`ocapn hub: malformed queued frame for session ${sessionKey}`);
-      session.queueSequences = sd.queueSequences
-        ? [...sd.queueSequences]
-        : session.queue.map((_, index) => String(BigInt(index) + 1n));
-      session.nextDelivery = BigInt(sd.nextDelivery ?? session.queue.length);
-      session.identity = sd.identity;
-      session.usedGiftHandoffs = [...(sd.usedGiftHandoffs ?? [])];
-      session.pendingWithdraws = (sd.pendingWithdraws ?? []).map(
-        (/** @type {any} */ pending) => ({ ...pending }),
-      );
-      session.nextHandoffCount = BigInt(sd.nextHandoffCount ?? '1');
-      session.dialLocation = sd.dialLocation;
-      for (const [position, refId] of session.ourExports.entries()) {
-        const row = refs.get(refId);
-        if (row !== undefined) {
-          row.facing.set(sessionKey, position);
-        }
-      }
-    }
-    for (const [swissnum, refId] of Object.entries(state.publications ?? {})) {
-      publications.set(swissnum, /** @type {string} */ (refId));
-    }
-    for (const [giftKey, refId] of Object.entries(state.gifts ?? {})) {
-      gifts.set(giftKey, /** @type {string} */ (refId));
-    }
-    for (const [giftKey, list] of Object.entries(state.giftWaiters ?? {})) {
-      giftWaiters.set(giftKey, [.../** @type {Array<string>} */ (list)]);
-    }
+    restoreHubState(state, {
+      refs,
+      provideSessionState,
+      publications,
+      gifts,
+      giftWaiters,
+    });
     dirty = false;
   };
   restore();
@@ -1568,6 +1458,63 @@ export const makeOcapnHub = ({
   };
 
   /**
+   * Hold a resolver as a listener on a row: an outstanding obligation that
+   * breaks if the row's origin dies before settling it. Undone with the
+   * rollback scope it was noted in.
+   * @param {{ listeners: Array<string> }} row
+   * @param {any} resolveMeDesc
+   */
+  const noteListener = (row, resolveMeDesc) => {
+    const { refId } = infoOf(resolveMeDesc);
+    if (row.listeners.includes(refId)) return;
+    row.listeners.push(refId);
+    noteUndo(() => {
+      const index = row.listeners.indexOf(refId);
+      if (index >= 0) row.listeners.splice(index, 1);
+    });
+    dirty = true;
+  };
+
+  /**
+   * Forward a message to the session a row belongs to: break to the sender
+   * if the row is unreachable, prepare the destination's bytes under one
+   * rollback scope (an answer route, a listener), break to the sender if
+   * that fails, and dispatch.
+   * @param {string} sessionKey the sender
+   * @param {any} message
+   * @param {any} row the target's row
+   * @param {string} what the operation, for the break reason
+   * @param {(destination: string) => Uint8Array} prepare
+   * @param {() => void} [settled] what a successful forward settles locally
+   */
+  const forwardToRow = (sessionKey, message, row, what, prepare, settled) => {
+    const unreachable = unreachableReason(row);
+    if (unreachable !== undefined) {
+      breakToSender(sessionKey, message, unreachable);
+      return;
+    }
+    const destination = row.origin;
+    /** @type {Uint8Array} */
+    let bytes;
+    try {
+      bytes = withRollback(() => prepare(destination));
+    } catch (error) {
+      logError(
+        `forwarding ${message.type} from ${sessionKey} toward ${destination} failed:`,
+        error,
+      );
+      breakToSender(
+        sessionKey,
+        message,
+        `ocapn hub: the ${what} could not be forwarded`,
+      );
+      return;
+    }
+    settled?.();
+    dispatchBytes(destination, bytes);
+  };
+
+  /**
    * @param {string} sessionKey
    * @param {any} message
    */
@@ -1600,69 +1547,39 @@ export const makeOcapnHub = ({
           );
           return;
         }
-        const { row } = target;
-        const unreachable = unreachableReason(row);
-        if (unreachable !== undefined) {
-          breakToSender(sessionKey, message, unreachable);
-          return;
-        }
-        const destination = row.origin;
-        /** @type {Uint8Array} */
-        let bytes;
-        try {
-          bytes = withRollback(() => {
-            /** @type {bigint | false} */
-            let forwardedAnswer = false;
+        forwardToRow(
+          sessionKey,
+          message,
+          target.row,
+          'delivery',
+          destination => {
             const { answerPosition } = message;
-            if (answerPosition !== false && answerPosition !== undefined) {
-              forwardedAnswer = allocateAnswerRoute(
-                session,
-                String(answerPosition),
-                destination,
-              );
-            }
+            const forwardedAnswer =
+              answerPosition !== false && answerPosition !== undefined
+                ? allocateAnswerRoute(
+                    session,
+                    String(answerPosition),
+                    destination,
+                  )
+                : false;
             // A direct call's resolver is an outstanding obligation just
             // like op:listen. If the target dies before replying, break it.
             if (
               message.resolveMeDesc !== false &&
               message.resolveMeDesc !== undefined
-            ) {
-              const resolverInfo = infoOf(message.resolveMeDesc);
-              if (!row.listeners.includes(resolverInfo.refId)) {
-                row.listeners.push(resolverInfo.refId);
-                noteUndo(() =>
-                  row.listeners.splice(
-                    row.listeners.indexOf(resolverInfo.refId),
-                    1,
-                  ),
-                );
-                dirty = true;
-              }
-            }
-            const { writeOcapnMessage } = provideCodecKit(destination);
-            return writeOcapnMessage({
+            )
+              noteListener(target.row, message.resolveMeDesc);
+            return provideCodecKit(destination).writeOcapnMessage({
               ...message,
               answerPosition: forwardedAnswer,
             });
-          });
-        } catch (error) {
-          logError(
-            `forwarding op:deliver from ${sessionKey} toward ${destination} failed:`,
-            error,
-          );
-          breakToSender(
-            sessionKey,
-            message,
-            'ocapn hub: the delivery could not be forwarded',
-          );
-          return;
-        }
-        if (row.resolver) {
-          // The one-shot settlement of a listen: whatever this
-          // resolver was pending on is settled by this delivery.
-          clearListenerEntries(row.refId);
-        }
-        dispatchBytes(destination, bytes);
+          },
+          () => {
+            // The one-shot settlement of a listen: whatever this
+            // resolver was pending on is settled by this delivery.
+            if (target.row.resolver) clearListenerEntries(target.row.refId);
+          },
+        );
         return;
       }
       case 'op:get':
@@ -1689,41 +1606,21 @@ export const makeOcapnHub = ({
           );
           return;
         }
-        const { row } = target;
-        const unreachable = unreachableReason(row);
-        if (unreachable !== undefined) {
-          breakToSender(sessionKey, message, unreachable);
-          return;
-        }
-        const destination = row.origin;
-        /** @type {Uint8Array} */
-        let bytes;
-        try {
-          bytes = withRollback(() => {
-            const forwardedAnswer = allocateAnswerRoute(
-              session,
-              String(message.answerPosition),
-              destination,
-            );
-            const { writeOcapnMessage } = provideCodecKit(destination);
-            return writeOcapnMessage({
+        forwardToRow(
+          sessionKey,
+          message,
+          target.row,
+          message.type,
+          destination =>
+            provideCodecKit(destination).writeOcapnMessage({
               ...message,
-              answerPosition: forwardedAnswer,
-            });
-          });
-        } catch (error) {
-          logError(
-            `forwarding ${message.type} from ${sessionKey} toward ${destination} failed:`,
-            error,
-          );
-          breakToSender(
-            sessionKey,
-            message,
-            `ocapn hub: the ${message.type} could not be forwarded`,
-          );
-          return;
-        }
-        dispatchBytes(destination, bytes);
+              answerPosition: allocateAnswerRoute(
+                session,
+                String(message.answerPosition),
+                destination,
+              ),
+            }),
+        );
         return;
       }
       case 'op:listen': {
@@ -1769,43 +1666,10 @@ export const makeOcapnHub = ({
           );
           return;
         }
-        const unreachable = unreachableReason(row);
-        if (unreachable !== undefined) {
-          breakToSender(sessionKey, message, unreachable);
-          return;
-        }
-        const destination = row.origin;
-        /** @type {Uint8Array} */
-        let bytes;
-        try {
-          bytes = withRollback(() => {
-            const resolverInfo = infoOf(message.resolveMeDesc);
-            if (!row.listeners.includes(resolverInfo.refId)) {
-              row.listeners.push(resolverInfo.refId);
-              noteUndo(() => {
-                const index = row.listeners.indexOf(resolverInfo.refId);
-                if (index >= 0) {
-                  row.listeners.splice(index, 1);
-                }
-              });
-              dirty = true;
-            }
-            const { writeOcapnMessage } = provideCodecKit(destination);
-            return writeOcapnMessage(message);
-          });
-        } catch (error) {
-          logError(
-            `forwarding op:listen from ${sessionKey} toward ${destination} failed:`,
-            error,
-          );
-          breakToSender(
-            sessionKey,
-            message,
-            'ocapn hub: the listen could not be forwarded',
-          );
-          return;
-        }
-        dispatchBytes(destination, bytes);
+        forwardToRow(sessionKey, message, row, 'listen', destination => {
+          noteListener(row, message.resolveMeDesc);
+          return provideCodecKit(destination).writeOcapnMessage(message);
+        });
         return;
       }
       case 'op:gc-exports': {
