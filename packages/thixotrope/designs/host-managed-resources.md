@@ -730,7 +730,7 @@ without renaming; `register` answers `{ handle, status }`.
 
 Recommendation: yes; a small visible change for three copies and two round trips fewer.
 
-### 10.5 An occupied name at placement
+### 10.5 An occupied name at placement (Done: (b).)
 
 The registry keeps an installed value whose name was taken meanwhile as `unplaced`, and places it
 when the same identity is installed again, with a `placing` guard and a `complete` flag that

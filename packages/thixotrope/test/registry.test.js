@@ -282,7 +282,6 @@ test('an application is installed once: grants resolved, vat allocated, code sta
     kind: 'application',
     workerId: 'w1',
     value: root,
-    complete: true,
     status: 'ready',
   });
   t.like(f.index.get('main/app'), { workerId: 'w1', status: 'ready' });
@@ -485,43 +484,47 @@ test('a removal that lands while the value is being placed takes it back out', a
   );
 });
 
-test('same-identity installs arriving while an unplaced value is being placed make one placement', async t => {
+test('a name taken while an installation runs fails it, and the installation keeps the name from no one', async t => {
   const f = fixture();
   const front = frontWorkspace(f);
   const root = Far('Application', {});
   f.factories.set('app:app', () => root);
-  // The name is taken while the factory runs, so the value cannot be placed
-  // and the installation keeps it, unplaced.
+  // The name is taken while the factory runs, so the value cannot be placed.
   const factoryGate = makePromiseKit();
   f.holdFactory(factoryGate);
   const { result: first } = await E(f.registry).install(
     request(f, { grants: [], access: front.workspace }),
   );
-  f.inventory.set('app', Far('Occupant', {}));
+  const occupant = Far('Occupant', {});
+  f.inventory.set('app', occupant);
   factoryGate.resolve(undefined);
   await t.throwsAsync(() => /** @type {Promise<unknown>} */ (first), {
-    message: /occupied/,
+    message: /was taken while it was being installed/,
   });
   t.like((await E(f.registry).list())[0], { status: 'failed' });
-  // The name is freed; the next two installs of the same identity arrive
-  // while the first placement is held.
+  t.is(f.index.get('main/app')?.status, 'failed');
+  // Freeing the name does not revive it: the same identity installed again
+  // finds the failed installation, and only a removal clears it.
   f.inventory.delete('app');
-  const gate = makePromiseKit();
-  front.holdPut(gate);
-  const second = E(f.registry).install(
+  const { result: again } = await E(f.registry).install(
     request(f, { grants: [], access: front.workspace }),
   );
-  const third = E(f.registry).install(
-    request(f, { grants: [], access: front.workspace }),
+  await t.throwsAsync(() => /** @type {Promise<unknown>} */ (again), {
+    message: /was taken while it was being installed/,
+  });
+  t.false(f.inventory.has('app'), 'nothing was placed');
+  t.true(await E(f.registry).remove('app', 'main'));
+  // A new request, under a new allocation key, as the host makes for each.
+  const { result: fresh } = await E(f.registry).install(
+    request(f, {
+      grants: [],
+      access: front.workspace,
+      allocationKey: 'key-2',
+    }),
   );
-  gate.resolve(undefined);
-  const [{ result: a }, { result: b }] = await Promise.all([second, third]);
-  t.is(await a, root);
-  t.is(await b, root);
-  t.is(front.puts(), 2, 'one placement per attempt, not one per install');
+  t.is(await fresh, root);
   t.is(f.inventory.get('app'), root);
   t.like((await E(f.registry).list())[0], { status: 'ready' });
-  t.is(f.index.get('main/app')?.status, 'ready');
 });
 
 test('a workspace that refuses to give a value back does not keep the name in the index', async t => {

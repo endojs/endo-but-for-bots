@@ -266,6 +266,8 @@ The host keeps an index of its own beside the vat, `installations.json`, which `
 `remove` read when the registry vat cannot answer.
 A failed installation, whether its factory or a step before it failed, stays inspectable and is
 not retried; remove it and install again.
+That includes one whose name the user took while it was being installed: the name is the user's,
+and the installation fails rather than waiting for the name.
 `thix remove ./private-state NAME` removes an installation of either kind, completed, failed, or
 pending: its vat is retired, so references already held elsewhere break, and the name is free.
 This initial version provides installation, not live code upgrades.
@@ -395,7 +397,7 @@ The process checks wall-clock time before reporting, so this is not a precise ti
 A backward clock adjustment delays firing; a forward adjustment is noticed at the next timer check.
 Recurring scheduling, per-application quotas, and notification UI remain future work.
 
-Workspace metadata version 13 is required.
+Workspace metadata version 14 is required.
 It includes dedicated native manager vats (version 4), the mail address book that introduces
 contacts through the `mail-introductions` resource with observable inbox and outbox maps
 (version 5), adapter launchers described by the manager vat that owns them, so that removing or
@@ -407,7 +409,8 @@ the registry in a vat of the daemon's own with the host's index beside it (versi
 table of workspaces, each allocated under a key derived from its name, with installations
 belonging to a workspace or to the daemon (version 11), and host resources bound to a worker and
 a key, the adapter launcher's key being its bundle digest (version 12), and an export record
-naming its resource's binding (version 13).
+naming its resource's binding (version 13), and an installation whose name is taken while it runs
+failing (version 14).
 Older workspaces require migration or a fresh state directory because persisted registry and clock
 closures cannot be updated by loading new source; startup rejects them before restoring workers.
 

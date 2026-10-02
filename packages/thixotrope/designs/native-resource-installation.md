@@ -91,9 +91,8 @@ never runs the factory twice; the bundle stays in the store until a later start'
 nothing naming it, the index having stopped naming it once the manager held it.
 The host then publishes the lifecycle facet and installs the manager's start notice.
 Finally the registry puts the facet into the inventory through the workspace's access object; a
-name taken meanwhile fails that attempt but not the installation, which keeps the facet and
-places it when the same identity is installed again, and a failed manager retains its identity
-and error until removed.
+name taken meanwhile fails the installation, and a failed installation retains its vat, its
+identity and its error until removed.
 The installation is one durable function in the registry vat, so an interrupted one resumes by
 itself at the next start: a host answer broken by the restart is made again under the same
 allocation key, and every host step is idempotent.

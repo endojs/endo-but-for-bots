@@ -148,7 +148,7 @@ test.serial(
 );
 
 test.serial(
-  'a root whose name was taken meanwhile is published once the name is free',
+  'a root whose name was taken meanwhile fails its installation until it is removed',
   async t => {
     t.timeout(30_000);
     const { client } = await start(t);
@@ -169,18 +169,20 @@ test.serial(
       "inventory.set('taken', 'user value'); undefined",
     );
     await client.call('evaluate', 'openGate(); undefined');
-    await t.throwsAsync(() => pending, { message: /became occupied/ });
+    await t.throwsAsync(() => pending, { message: /was taken/ });
     const failed = (await client.call('installations')).find(
       entry => entry.name === 'taken',
     );
     t.is(failed.status, 'failed');
-    t.regex(failed.error, /became occupied/);
+    t.regex(failed.error, /was taken/);
     t.is(
       await client.call('evaluate', "inventory.get('taken')"),
       "'user value'",
     );
-    // The factory ran once; a retry publishes its result now that the name is free.
+    // Freeing the name does not revive the installation; removing it does,
+    // and installing again runs the factory in a fresh vat.
     await client.call('evaluate', "inventory.delete('taken'); undefined");
+    t.true(await client.call('remove', 'taken'));
     const retried = client.call(
       'install',
       'taken',
@@ -193,6 +195,10 @@ test.serial(
       await client.call('evaluate', "E(inventory.get('taken')).read()"),
       '4n',
     );
-    t.is(await client.call('evaluate', 'waits'), '1', 'the factory ran once');
+    t.is(
+      await client.call('evaluate', 'waits'),
+      '2',
+      'each installation ran its factory',
+    );
   },
 );
