@@ -3,7 +3,7 @@
     "target": "x86_64-unknown-linux-gnu",
     "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
     "profile": "release",
-    "engine_tree": "63baf764b7e06c2f41066cec3fe9576723403881"
+    "engine_tree": "268c8bccc560ff57242df93ab3588ebedd7122b8"
   },
   "slack": 0.02,
   "cases": {
@@ -280,7 +280,7 @@
       "outcome": "compiled"
     },
     "async-64.run": {
-      "bytes": 157247,
+      "bytes": 157263,
       "outcome": "completed"
     },
     "async-10k.compile": {
@@ -344,7 +344,7 @@
       "outcome": "compiled"
     },
     "async-gen-drain-40k.run": {
-      "bytes": 9823,
+      "bytes": 9839,
       "outcome": "completed"
     },
     "eval-deep.compile": {
@@ -560,7 +560,7 @@
       "outcome": "compiled"
     },
     "promise-exec-64.run": {
-      "bytes": 252959,
+      "bytes": 252935,
       "outcome": "ReentryLimit"
     },
     "tagged-then-61.compile": {
@@ -584,7 +584,7 @@
       "outcome": "compiled"
     },
     "async-126.run": {
-      "bytes": 303071,
+      "bytes": 303087,
       "outcome": "completed"
     },
     "async-127.compile": {
@@ -600,7 +600,7 @@
       "outcome": "compiled"
     },
     "gen-next-62.run": {
-      "bytes": 311823,
+      "bytes": 8471,
       "outcome": "completed"
     },
     "gen-next-63.compile": {
@@ -608,7 +608,7 @@
       "outcome": "compiled"
     },
     "gen-next-63.run": {
-      "bytes": 315679,
+      "bytes": 8471,
       "outcome": "ReentryLimit"
     },
     "asyncgen-62.compile": {
@@ -616,7 +616,7 @@
       "outcome": "compiled"
     },
     "asyncgen-62.run": {
-      "bytes": 348111,
+      "bytes": 348127,
       "outcome": "completed"
     },
     "asyncgen-63.compile": {
@@ -632,7 +632,7 @@
       "outcome": "compiled"
     },
     "for-of-62.run": {
-      "bytes": 311823,
+      "bytes": 8471,
       "outcome": "completed"
     },
     "for-of-63.compile": {
@@ -640,7 +640,7 @@
       "outcome": "compiled"
     },
     "for-of-63.run": {
-      "bytes": 315679,
+      "bytes": 8471,
       "outcome": "ReentryLimit"
     },
     "yield-star-62.compile": {
@@ -648,7 +648,7 @@
       "outcome": "compiled"
     },
     "yield-star-62.run": {
-      "bytes": 311823,
+      "bytes": 8471,
       "outcome": "completed"
     },
     "yield-star-63.compile": {
@@ -656,7 +656,7 @@
       "outcome": "compiled"
     },
     "yield-star-63.run": {
-      "bytes": 315679,
+      "bytes": 8471,
       "outcome": "ReentryLimit"
     },
     "getter-119.compile": {
@@ -792,7 +792,7 @@
       "outcome": "compiled"
     },
     "function-call-63.run": {
-      "bytes": 220095,
+      "bytes": 220111,
       "outcome": "completed"
     },
     "function-call-64.compile": {
@@ -1152,7 +1152,7 @@
       "outcome": "compiled"
     },
     "proxy-with-has-trap-120.run": {
-      "bytes": 353679,
+      "bytes": 353687,
       "outcome": "ReentryLimit"
     },
     "proxy-forin-ownkeys-trap-126.compile": {
@@ -1160,7 +1160,7 @@
       "outcome": "compiled"
     },
     "proxy-forin-ownkeys-trap-126.run": {
-      "bytes": 428447,
+      "bytes": 428535,
       "outcome": "completed"
     },
     "proxy-forin-ownkeys-trap-127.compile": {
@@ -1224,7 +1224,7 @@
       "outcome": "compiled"
     },
     "species-41.run": {
-      "bytes": 307863,
+      "bytes": 307855,
       "outcome": "completed"
     },
     "species-42.compile": {
@@ -1296,7 +1296,7 @@
       "outcome": "compiled"
     },
     "jparse-obj-2016.run": {
-      "bytes": 9135,
+      "bytes": 9223,
       "outcome": "ReentryLimit"
     },
     "jrevive-arr-2000.compile": {
@@ -1304,7 +1304,7 @@
       "outcome": "compiled"
     },
     "jrevive-arr-2000.run": {
-      "bytes": 10607,
+      "bytes": 10623,
       "outcome": "completed"
     },
     "jrevive-arr-2001.compile": {
@@ -1320,7 +1320,7 @@
       "outcome": "compiled"
     },
     "jrevive-obj-1999.run": {
-      "bytes": 10607,
+      "bytes": 10623,
       "outcome": "completed"
     },
     "jrevive-obj-2000.compile": {
@@ -1336,7 +1336,7 @@
       "outcome": "compiled"
     },
     "jstr-arr-2014.run": {
-      "bytes": 8911,
+      "bytes": 8951,
       "outcome": "completed"
     },
     "jstr-arr-2015.compile": {
@@ -1344,7 +1344,7 @@
       "outcome": "compiled"
     },
     "jstr-arr-2015.run": {
-      "bytes": 8951,
+      "bytes": 8911,
       "outcome": "ReentryLimit"
     },
     "jstr-obj-2014.compile": {
@@ -1352,7 +1352,7 @@
       "outcome": "compiled"
     },
     "jstr-obj-2014.run": {
-      "bytes": 9919,
+      "bytes": 9975,
       "outcome": "completed"
     },
     "jstr-obj-2015.compile": {
@@ -1368,7 +1368,7 @@
       "outcome": "compiled"
     },
     "jstr-replacer-1999.run": {
-      "bytes": 10831,
+      "bytes": 10847,
       "outcome": "completed"
     },
     "jstr-replacer-2000.compile": {
@@ -1376,7 +1376,7 @@
       "outcome": "compiled"
     },
     "jstr-replacer-2000.run": {
-      "bytes": 10831,
+      "bytes": 10847,
       "outcome": "ReentryLimit"
     },
     "flat-fast-2015.compile": {
@@ -1512,7 +1512,7 @@
       "outcome": "compiled"
     },
     "parse-binding-511.compile": {
-      "bytes": 127423,
+      "bytes": 127607,
       "outcome": "refused"
     },
     "parse-cond-chain-1011.compile": {
