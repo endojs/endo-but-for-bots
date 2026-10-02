@@ -125,10 +125,6 @@ const fixture = () => {
           alive();
           return E(adapter).restore(entries);
         },
-        keys: () => {
-          alive();
-          return E(adapter).keys();
-        },
       });
       const kill = () => {
         dead = true;
@@ -140,8 +136,6 @@ const fixture = () => {
     },
   });
   const kit = makeClock({
-    makeKeeper: makeAdapterKeeper,
-    adapters,
     makeManager: options =>
       makeManager({ adapters, makeKeeper: makeAdapterKeeper }, options),
   });

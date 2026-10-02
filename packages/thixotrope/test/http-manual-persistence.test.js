@@ -38,7 +38,6 @@ const fixture = (failClose = false, failBind = false) => {
       if (failBind) return;
       for (const [key, spec] of entries) bound.set(key, spec);
     },
-    keys: () => harden([...bound.keys()]),
   });
   const adapters = Far('Launcher', {
     create: () =>
@@ -48,8 +47,6 @@ const fixture = (failClose = false, failBind = false) => {
       }),
   });
   const kit = makeHttp({
-    makeKeeper: makeAdapterKeeper,
-    adapters,
     makeManager: options =>
       makeManager({ adapters, makeKeeper: makeAdapterKeeper }, options),
   });
@@ -139,7 +136,12 @@ test.serial(
     );
     t.is(results[0].key, blocked);
     t.regex(String(results[0].error), /EADDRINUSE/);
-    t.deepEqual(await E(adapter).keys(), [available]);
+    t.like(results[1], { key: available });
+    t.false('error' in results[1], 'the free port was bound');
+    t.false(
+      await E(adapter).unbind(blocked),
+      'nothing is kept under the occupied port',
+    );
   },
 );
 

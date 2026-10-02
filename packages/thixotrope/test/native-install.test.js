@@ -485,23 +485,48 @@ test.serial(
     const writeEphemeral = version =>
       writeFile(
         join(directory, 'ephemeral.js'),
-        `import { Far } from '@endo/far';\nexport const make = () => Far('Adapter', { version: () => ${version} });\n`,
+        // The process ends with its one registration, so the next launches
+        // afresh, from the stored bundle.
+        `import { makeAdapter } from '../../../native-adapter.js';
+export const make = () =>
+  makeAdapter({
+    label: 'Version',
+    same: () => true,
+    bind: () => ${version},
+    unbind: () => {
+      setImmediate(() => process.exit(0));
+    },
+    resolve: version => ({ version }),
+  });
+`,
       );
     await writeEphemeral(1);
     await writeFile(
       join(directory, 'durable.js'),
-      `export const make = ({ adapters }) => harden({
-        facet: Far('Versioned', {
-          // A fresh process each time, so the answer is the stored bundle's.
-          version: async () => {
-            const incarnation = await E(adapters).create();
-            const version = await E(E(incarnation).getRoot()).version();
-            await E(incarnation).retire();
-            return version;
-          },
-        }),
-        lifecycle: Far('Lifecycle', { started: () => {}, exited: () => {} }),
-      });`,
+      `export const make = ({ makeManager }) => {
+        const manager = makeManager({
+          label: 'Version',
+          same: () => false,
+          replaces: () => true,
+          decorate: (_key, spec) => harden({ version: spec.version }),
+        });
+        let asked = 0;
+        return harden({
+          facet: Far('Versioned', {
+            // Each answer is a launch's, so it is the stored bundle's.
+            version: async () => {
+              asked += 1;
+              const { handle, status } = await manager.register(
+                asked,
+                harden({}),
+              );
+              await handle.close();
+              return status.version;
+            },
+          }),
+          lifecycle: manager.lifecycle,
+        });
+      };`,
     );
     let host = await serve(t, path);
     await host.client.call('installNative', 'versioned', directory);

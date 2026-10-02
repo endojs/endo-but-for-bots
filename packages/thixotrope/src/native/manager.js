@@ -28,15 +28,11 @@ export const makeNativeManager = (
     const namespace = load();
     if (typeof namespace.make !== 'function')
       throw Error('Native durable module must export make(powers)');
-    for (const name of ['adapters', 'makeKeeper', 'makeManager']) {
-      if (name in powers)
-        throw Error(`A native module's power cannot be named ${name}`);
-    }
+    if ('makeManager' in powers)
+      throw Error("A native module's power cannot be named makeManager");
     const kit = namespace.make(
       harden({
         ...powers,
-        makeKeeper,
-        adapters,
         /** @param {any} options */
         makeManager: options =>
           makeManagerKit({ adapters, makeKeeper }, options),

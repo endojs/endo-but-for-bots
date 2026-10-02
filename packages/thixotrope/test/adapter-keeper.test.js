@@ -95,8 +95,10 @@ test.serial('a manager rebuilds its resource vat after a restart', async t => {
   const managerSource = `
     (() => {
       const desired = new Map();
+      let incarnations = 0n;
       const keeper = (${makeAdapterKeeper.toString()})({
         create: async () => {
+          incarnations += 1n;
           const worker = await E(vats).createEphemeralWorker('adapter');
           const evaluator = await E(worker).getEvaluator();
           const adapter = await E(evaluator).evaluate(${JSON.stringify(ADAPTER_SOURCE)});
@@ -120,7 +122,7 @@ test.serial('a manager rebuilds its resource vat after a restart', async t => {
           return E(adapter).count();
         },
         desired: () => harden([...desired]),
-        incarnations: async () => (await E(keeper).status()).incarnations,
+        incarnations: () => incarnations,
       });
     })()
   `;
@@ -186,8 +188,10 @@ test.serial('retiring the adapter builds another on next use', async t => {
     `
     (() => {
       const desired = new Map();
+      let incarnations = 0n;
       const keeper = (${makeAdapterKeeper.toString()})({
         create: async () => {
+          incarnations += 1n;
           const worker = await E(vats).createEphemeralWorker('adapter');
           const evaluator = await E(worker).getEvaluator();
           const adapter = await E(evaluator).evaluate(${JSON.stringify(ADAPTER_SOURCE)});
@@ -204,7 +208,7 @@ test.serial('retiring the adapter builds another on next use', async t => {
         },
         count: async () => E(await E(keeper).provide()).count(),
         drop: () => E(keeper).retire(),
-        incarnations: async () => (await E(keeper).status()).incarnations,
+        incarnations: () => incarnations,
       });
     })()
     `,

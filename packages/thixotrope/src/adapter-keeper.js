@@ -16,8 +16,6 @@ import { makeSerialQueue } from './serial-queue.js';
 export const makeAdapterKeeper = ({ create, restore = async () => {} }) => {
   /** @type {{adapter: any, retire: () => Promise<unknown>} | undefined} */
   let current;
-  let incarnations = 0n;
-  let building = false;
   const enqueue = makeSerialQueue();
   return harden({
     provide: () =>
@@ -34,21 +32,15 @@ export const makeAdapterKeeper = ({ create, restore = async () => {} }) => {
             current = undefined;
           }
         }
-        building = true;
+        const next = await create();
         try {
-          const next = await create();
-          try {
-            await restore(next.adapter);
-          } catch (error) {
-            await next.retire();
-            throw error;
-          }
-          current = next;
-          incarnations += 1n;
-          return next.adapter;
-        } finally {
-          building = false;
+          await restore(next.adapter);
+        } catch (error) {
+          await next.retire();
+          throw error;
         }
+        current = next;
+        return next.adapter;
       }),
     retire: () =>
       enqueue(async () => {
@@ -64,8 +56,6 @@ export const makeAdapterKeeper = ({ create, restore = async () => {} }) => {
      * something in a live adapter, an absent adapter means nothing to undo.
      */
     current: () => current?.adapter,
-    status: () =>
-      harden({ incarnations, live: current !== undefined, building }),
   });
 };
 harden(makeAdapterKeeper);

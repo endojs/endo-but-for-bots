@@ -767,7 +767,7 @@ A crash leaves `conn:` rows in the hub's tables for good.
 Recommendation: one prefix, `transient:`, one sweep; 10.1 (b) makes the control connections
 transient the same way.
 
-### 10.8 The durable factory's inputs and the kit's protocol
+### 10.8 The durable factory's inputs and the kit's protocol (Done.)
 
 `make(powers)` receives `adapters` and `makeKeeper` raw, for a manager that would hold an
 incarnation itself; none does, and the installer binds both into `makeManager`.
