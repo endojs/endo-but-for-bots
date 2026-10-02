@@ -699,7 +699,7 @@ Workspace version bump.
 
 Recommendation: yes, with 10.1.
 
-### 10.3 One-sided registration sameness
+### 10.3 One-sided registration sameness (Done: (b).)
 
 The kit protocol has the author state the sameness of a registration on both sides, so `same` and
 `replaces` are written once per half in every resource, and the adapter re-sends `bind` on every
@@ -717,6 +717,11 @@ Options:
 
 Recommendation: (b).
 Workspace version bump, since both kits are frozen into heaps and bundles.
+
+As built, an epoch is a `bigint` from a counter in the manager's heap, new for each registration
+made or replaced, so a registration made again after a close differs from the one closed.
+The HTTP adapter no longer compares origin sets, and the clock states no sameness at all.
+Version 18.
 
 ### 10.4 Status owned by the kit (Done.)
 

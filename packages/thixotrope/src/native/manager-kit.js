@@ -17,12 +17,15 @@ import { makeSerialQueue } from '../serial-queue.js';
  * the identity of a registration and, optionally, what its status carries;
  * the adapter side, built with `makeAdapter`, supplies the verbs.
  *
- * The manager and the adapter speak one protocol: `bind(key, spec)`,
- * `unbind(key)` and `restore([[key, spec], ...])`, where `spec` is
- * whatever passable record the author registers under a key. A bind or a
- * restore may answer a resolved spec, what the registration became once
- * bound; the manager adopts it as the desired spec, so `same`, `decorate`
- * and the next restore all see the resolved form.
+ * The manager and the adapter speak one protocol: `bind(key, spec, epoch)`,
+ * `unbind(key)` and `restore([[key, spec, epoch], ...])`, where `spec` is
+ * whatever passable record the author registers under a key and `epoch`
+ * names the registration, new for each one made or replaced, so the adapter
+ * tells the same registration from its replacement without asking the
+ * author. A bind or a restore may answer a resolved spec, what the
+ * registration became once bound; the manager adopts it as the desired
+ * spec, so `same`, `decorate` and the next restore all see the resolved
+ * form.
  *
  * Shipped by source: this factory is evaluated in the manager vat, so it
  * may import only what the guest prelude provides, under those names.
@@ -33,18 +36,19 @@ import { makeSerialQueue } from '../serial-queue.js';
  *   the native manager, so a durable module receives `makeManager` alone
  * @param {object} options
  * @param {string} options.label what a key names, for messages
- * @param {(existing: Spec, wanted: Spec) => boolean} options.same
+ * @param {(existing: Spec, wanted: Spec) => boolean} [options.same]
  *   whether a registration already in place is the one wanted, so that
- *   registering it again changes nothing. A spec is usually a record built
- *   for each registration, so identity would refuse the same registration
- *   made twice; the author says what sameness is. Once a registration has
+ *   registering it again changes nothing; never by default, for keys that
+ *   are never registered twice. A spec is usually a record built for each
+ *   registration, so identity would refuse the same registration made
+ *   twice; the author says what sameness is. Once a registration has
  *   resolved, `existing` is the resolved form while a consumer may well
  *   register the unresolved one again, so `same` must accept a wanted spec
  *   that leaves open what the existing one settled.
  * @param {(existing: Spec, wanted: Spec) => boolean} [options.replaces]
  *   whether a differing registration may take the place of the existing one
- *   under the same key, in which case the adapter is told to rebind; never by
- *   default, so the key is refused as already registered
+ *   under the same key, in which case it takes a new epoch and the adapter
+ *   rebinds; never by default, so the key is refused as already registered
  * @param {(key: unknown, spec: Spec, status: 'bound' | 'inactive') => Record<string, unknown>} [options.decorate]
  *   fields a status record carries beside the kit's own `key`, `status`
  *   and `error`, from what the registration is (the URL a listener serves,
@@ -54,10 +58,9 @@ import { makeSerialQueue } from '../serial-queue.js';
  */
 export const makeManager = (
   { adapters, makeKeeper },
-  { label, same, replaces = () => false, decorate = undefined },
+  { label, same = () => false, replaces = () => false, decorate = undefined },
 ) => {
   if (typeof label !== 'string') throw Error('makeManager needs a label');
-  if (typeof same !== 'function') throw Error('makeManager needs same()');
   /**
    * The status record a handle reports: one shape and one word for each
    * state across every resource, `bound`, `inactive` or `closed`, with
@@ -87,10 +90,17 @@ export const makeManager = (
    * Desired state, one mutable record per key. The handle a caller holds is
    * bound to its record, so a later registration under the same key cannot
    * be closed through a handle from an earlier one. A desired record always
-   * has its spec; a closed one has dropped it.
-   * @type {Map<unknown, {spec: Spec | undefined, handle: any}>}
+   * has its spec; a closed one has dropped it. Its epoch names the
+   * registration to the adapter.
+   * @type {Map<unknown, {spec: Spec | undefined, epoch: bigint, handle: any}>}
    */
   const desired = new Map();
+  /** The epoch last given; each registration made or replaced takes the next. */
+  let epochs = 0n;
+  const nextEpoch = () => {
+    epochs += 1n;
+    return epochs;
+  };
   const enqueue = makeSerialQueue();
   /**
    * Adopt what the adapter says a registration became, if it is still the
@@ -116,7 +126,9 @@ export const makeManager = (
       const entries = [...desired];
       /** @type {Array<{ key: unknown, spec?: Spec, error?: string }>} */
       const results = await E(adapter).restore(
-        harden(entries.map(([key, { spec }]) => harden([key, spec]))),
+        harden(
+          entries.map(([key, { spec, epoch }]) => harden([key, spec, epoch])),
+        ),
       );
       // An adapter that reports nothing resolved nothing; one that answers
       // out of shape is the author's problem to see in status, not a reason
@@ -139,8 +151,8 @@ export const makeManager = (
    * A failed bind retains the desired state but must not withhold the close
    * handle; status retries reconciliation and reports the current outcome.
    * @param {unknown} key
-   * @param {{spec: Spec | undefined}} entry a desired record, so its spec
-   *   is present
+   * @param {{spec: Spec | undefined, epoch: bigint}} entry a desired
+   *   record, so its spec is present
    */
   const reconcile = async (key, entry) => {
     try {
@@ -151,7 +163,11 @@ export const makeManager = (
       adopt(
         key,
         entry,
-        await E(adapter).bind(key, /** @type {Spec} */ (entry.spec)),
+        await E(adapter).bind(
+          key,
+          /** @type {Spec} */ (entry.spec),
+          entry.epoch,
+        ),
       );
       return report(key, entry.spec, 'bound');
     } catch (error) {
@@ -174,8 +190,8 @@ export const makeManager = (
         harden(spec);
         let entry = desired.get(key);
         if (entry === undefined) {
-          /** @type {{spec: Spec | undefined, handle: any}} */
-          const created = { spec, handle: undefined };
+          /** @type {{spec: Spec | undefined, epoch: bigint, handle: any}} */
+          const created = { spec, epoch: nextEpoch(), handle: undefined };
           created.handle = Far('RegistrationHandle', {
             status: () =>
               enqueue(async () => {
@@ -222,8 +238,10 @@ export const makeManager = (
           if (!same(existing, spec)) {
             if (!replaces(existing, spec))
               throw Error(`${label} is already registered`);
-            // The desired state changes and the adapter is told to rebind.
+            // The desired state changes, under a new epoch, so the adapter
+            // rebinds.
             entry.spec = spec;
+            entry.epoch = nextEpoch();
           }
         }
         const status = await reconcile(key, entry);

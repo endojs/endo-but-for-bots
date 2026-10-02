@@ -43,29 +43,33 @@
 
 /**
  * The protocol between a manager and its adapter. A registration is a
- * passable `spec` desired under a `key`; the adapter binds it, unbinds it,
- * and restores a set of them one at a time. A bind
- * answers the resolved spec when binding settled something the spec left
- * open, or `undefined` when the registration is as sent; a restore reports
- * each resolved registration with its resolved spec. The manager adopts a
- * resolved spec as the desired one, so a later restore sends that form;
- * resolving an already-resolved spec must leave it as it is, `same` on both
- * sides must accept an unresolved spec against the resolved one it became,
- * and a resolved spec is data and the manager's own remotables only, since
- * it outlives the process that resolved it.
+ * passable `spec` desired under a `key`, named by an `epoch` the manager
+ * gives each registration it makes or replaces; the adapter binds it,
+ * unbinds it, and restores a set of them one at a time. A bind under the
+ * epoch already bound changes nothing, and one under another epoch replaces
+ * the binding; which registrations may replace which is the manager's alone
+ * to decide. A bind answers the resolved spec when binding settled
+ * something the spec left open, or `undefined` when the registration is as
+ * sent; a restore reports each resolved registration with its resolved
+ * spec. The manager adopts a resolved spec as the desired one, so a later
+ * restore sends that form; resolving an already-resolved spec must leave it
+ * as it is, the manager's `same` must accept an unresolved spec against the
+ * resolved one it became, and a resolved spec is data and the manager's own
+ * remotables only, since it outlives the process that resolved it.
  *
  * @template Spec
  * @typedef {object} AdapterProtocol
- * @property {(key: unknown, spec: Spec) => Promise<Spec | undefined>} bind
+ * @property {(key: unknown, spec: Spec, epoch: bigint) => Promise<Spec | undefined>} bind
  * @property {(key: unknown) => Promise<boolean>} unbind
- * @property {(entries: Array<[unknown, Spec]>) => Promise<Array<{ key: unknown, spec?: Spec, error?: string }>>} restore
+ * @property {(entries: Array<[unknown, Spec, bigint]>) => Promise<Array<{ key: unknown, spec?: Spec, error?: string }>>} restore
  */
 
 /**
  * @template Spec
  * @typedef {object} ManagerOptions
  * @property {string} label what a key names, for messages
- * @property {(existing: Spec, wanted: Spec) => boolean} same
+ * @property {(existing: Spec, wanted: Spec) => boolean} [same] never by
+ *   default, for keys registered once
  * @property {(existing: Spec, wanted: Spec) => boolean} [replaces]
  * @property {(key: unknown, spec: Spec, status: 'bound' | 'inactive') => Record<string, unknown>} [decorate]
  *   fields a status record carries beside `key`, `status` and `error`,

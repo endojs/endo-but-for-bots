@@ -130,8 +130,8 @@ test.serial(
     const spec = harden({ handler, policy: { origins: [] } });
     const results = await E(adapter).restore(
       harden([
-        [blocked, spec],
-        [available, spec],
+        [blocked, spec, 1n],
+        [available, spec, 2n],
       ]),
     );
     t.is(results[0].key, blocked);

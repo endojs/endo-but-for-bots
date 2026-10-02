@@ -15,6 +15,9 @@ import { makeManager } from '../src/native/manager-kit.js';
 const fixture = () => {
   /** @type {Map<unknown, unknown>} */
   const bound = new Map();
+  /** The epoch each key was last bound or restored under. */
+  /** @type {Map<unknown, bigint>} */
+  const epochs = new Map();
   /** @type {string[]} */
   const log = [];
   let failBind = false;
@@ -33,11 +36,13 @@ const fixture = () => {
     /**
      * @param {unknown} key
      * @param {unknown} spec
+     * @param {bigint} epoch
      */
-    bind: (key, spec) => {
+    bind: (key, spec, epoch) => {
       if (failBind) throw Error('resource unavailable');
       const resolved = resolveSpec(spec);
       bound.set(key, resolved ?? spec);
+      epochs.set(key, epoch);
       log.push(`bind ${key}`);
       return resolved;
     },
@@ -50,7 +55,7 @@ const fixture = () => {
       log.push(`unbind ${key}`);
       return bound.delete(key);
     },
-    /** @param {Array<[unknown, unknown]>} entries */
+    /** @param {Array<[unknown, unknown, bigint]>} entries */
     restore: entries => {
       log.push(`restore ${entries.map(([key]) => key).join(',')}`);
       if (failBind)
@@ -60,9 +65,10 @@ const fixture = () => {
           ),
         );
       return harden(
-        entries.map(([key, spec]) => {
+        entries.map(([key, spec, epoch]) => {
           const resolved = resolveSpec(spec);
           bound.set(key, resolved ?? spec);
+          epochs.set(key, epoch);
           return harden(
             resolved === undefined ? { key } : { key, spec: resolved },
           );
@@ -104,6 +110,7 @@ const fixture = () => {
   return {
     manager,
     bound,
+    epochs,
     log,
     incarnations: () => incarnations,
     setFailBind: (/** @type {boolean} */ value) => {
@@ -163,18 +170,49 @@ test('a registration is reconciled, described, and closed by its own handle only
 });
 
 test('a differing registration replaces or is refused as the author decides', async t => {
-  const { manager, bound } = fixture();
+  const { manager, bound, epochs } = fixture();
   const handle = (await manager.register('one', harden({ who: 'a', n: 1 })))
     .handle;
+  const first = epochs.get('one');
+  await manager.register('one', harden({ who: 'a', n: 1 }));
+  t.is(epochs.get('one'), first, 'the same registration keeps its epoch');
   const replaced = (await manager.register('one', harden({ who: 'a', n: 2 })))
     .handle;
   t.is(replaced, handle, 'a replacement keeps the handle');
   t.deepEqual(bound.get('one'), { who: 'a', n: 2 });
+  const second = epochs.get('one');
+  t.not(second, first, 'and takes a new epoch, so the adapter rebinds');
   await t.throwsAsync(
     () => manager.register('one', harden({ who: 'b', n: 2 })),
     { message: /Slot is already registered/ },
   );
   t.deepEqual(bound.get('one'), { who: 'a', n: 2 });
+  t.is(epochs.get('one'), second);
+  // A registration made again after a close is a new one.
+  await E(replaced).close();
+  await manager.register('one', harden({ who: 'a', n: 2 }));
+  t.not(epochs.get('one'), second);
+});
+
+test('without sameness, a key registered again is refused', async t => {
+  const adapter = Far('Adapter', {
+    bind: () => undefined,
+    unbind: () => true,
+    restore: () => harden([]),
+  });
+  const adapters = Far('Launcher', {
+    create: () =>
+      Far('Incarnation', { getRoot: () => adapter, retire: () => {} }),
+  });
+  const manager = makeManager(
+    { adapters, makeKeeper: makeAdapterKeeper },
+    { label: 'Alarm' },
+  );
+  const spec = harden({ at: 1n });
+  await manager.register('1', spec);
+  await t.throwsAsync(() => manager.register('1', spec), {
+    message: /Alarm is already registered/,
+  });
 });
 
 test('a failed bind keeps the desired state and reports it until it succeeds', async t => {
@@ -229,17 +267,13 @@ test('closing while no incarnation is live does not build one', async t => {
 
 test('the manager refuses a construction that leaves out what it needs', t => {
   const adapters = Far('Launcher', { create: () => {} });
-  const same = () => true;
   /** @param {any} options */
   const attempt = options =>
     makeManager({ adapters, makeKeeper: makeAdapterKeeper }, options);
-  t.throws(() => attempt({ same }), { message: /needs a label/ });
-  t.throws(() => attempt({ label: 'Slot' }), {
-    message: /needs same\(\)/,
-  });
-  // The status record is the kit's own: nothing beyond the label and
-  // sameness is needed to make a manager.
-  t.notThrows(() => attempt({ label: 'Slot', same }));
+  t.throws(() => attempt({}), { message: /needs a label/ });
+  // The status record and the epochs are the kit's own: nothing beyond the
+  // label is needed to make a manager.
+  t.notThrows(() => attempt({ label: 'Slot' }));
 });
 
 test('startup rebuilds the adapter only when something is desired', async t => {
@@ -309,7 +343,6 @@ test('over a resolving adapter, a first registration is bound once and adopted; 
     a.who === b.who && (b.slot === undefined || a.slot === b.slot);
   const adapter = makeAdapter({
     label: 'Slot',
-    same,
     /**
      * @param {unknown} key
      * @param {{who: string, slot?: number}} spec

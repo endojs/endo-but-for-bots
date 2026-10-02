@@ -110,17 +110,18 @@ const fixture = () => {
         /**
          * @param {unknown} key
          * @param {any} spec
+         * @param {bigint} epoch
          */
-        bind: (key, spec) => {
+        bind: (key, spec, epoch) => {
           alive();
-          return E(adapter).bind(key, spec);
+          return E(adapter).bind(key, spec, epoch);
         },
         /** @param {unknown} key */
         unbind: key => {
           alive();
           return E(adapter).unbind(key);
         },
-        /** @param {Array<[unknown, any]>} entries */
+        /** @param {Array<[unknown, any, bigint]>} entries */
         restore: entries => {
           alive();
           return E(adapter).restore(entries);
