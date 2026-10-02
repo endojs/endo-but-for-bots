@@ -73,11 +73,11 @@ export const makeManager = (
   const report = (key, spec, status, error = undefined) => {
     const extra =
       spec === undefined || status === 'closed' || decorate === undefined
-        ? {}
+        ? undefined
         : decorate(key, spec, status);
     return harden({
       ...Object.fromEntries(
-        Object.entries(extra).filter(
+        Object.entries(extra ?? {}).filter(
           ([field]) => !['key', 'status', 'error'].includes(field),
         ),
       ),

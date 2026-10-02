@@ -56,6 +56,8 @@ import { makeSerialQueue } from '../serial-queue.js';
  *   once the installation has been handed to its vat: an application's
  *   factory called, a native resource's manager made
  * @property {unknown} value
+ * @property {boolean} placed whether the value was put into the workspace,
+ *   which a removal takes back even when a later step failed
  */
 
 /**
@@ -297,6 +299,7 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
       throw Fail`Installation was removed`;
     }
     entry.value = value;
+    entry.placed = true;
     entry.status = 'ready';
     entry.error = undefined;
     entry.worker = undefined;
@@ -391,6 +394,7 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
           result: undefined,
           issued: makePromiseKit(),
           value: undefined,
+          placed: false,
         };
         installed.set(key, entry);
         const current = entry;
@@ -425,8 +429,10 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
       if (!entry) return undefined;
       return harden({
         kind: entry.kind,
+        digest: entry.digest,
         workerId: entry.workerId,
         status: entry.status,
+        ...(entry.error === undefined ? {} : { error: entry.error }),
         value: entry.value,
       });
     },
@@ -452,10 +458,7 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
         try {
           // A value placed and then failed (its index record refused) is in
           // the workspace as surely as a ready one.
-          if (
-            (entry.status === 'ready' || entry.value !== undefined) &&
-            entry.access !== undefined
-          )
+          if (entry.placed && entry.access !== undefined)
             await E(entry.access).remove(name, entry.value);
         } finally {
           // The host's index forgets the name whatever the workspace, which

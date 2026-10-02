@@ -287,6 +287,7 @@ test('an application is installed once: grants resolved, vat allocated, code sta
   });
   t.deepEqual(f.registry.lookup('app', 'main'), {
     kind: 'application',
+    digest: 'code',
     workerId: 'w1',
     value: root,
     status: 'ready',
@@ -554,6 +555,7 @@ test('removing an installation placed before its index refused the record takes 
   f.refuseRecord(undefined);
   t.true(await E(f.registry).remove('app', 'main'));
   t.false(f.inventory.has('app'), 'the removal took the value out');
+  t.false(f.index.has('main/app'));
 });
 
 test('a workspace that refuses to give a value back does not keep the name in the index', async t => {

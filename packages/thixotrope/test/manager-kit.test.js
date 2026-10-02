@@ -400,3 +400,34 @@ test('over a resolving adapter, a first registration is bound once and adopted; 
   );
   t.deepEqual(log, ['bind one unresolved', 'bind two unresolved']);
 });
+
+test('decorate may answer nothing, and does not override what the kit reports', async t => {
+  const adapter = Far('Adapter', {
+    bind: () => undefined,
+    unbind: () => true,
+    restore: () => harden([]),
+  });
+  const adapters = Far('Launcher', {
+    create: () =>
+      Far('Incarnation', { getRoot: () => adapter, retire: () => {} }),
+  });
+  /** @param {(key: unknown, spec: any, status: string) => any} decorate */
+  const managerWith = decorate =>
+    makeManager(
+      { adapters, makeKeeper: makeAdapterKeeper },
+      { label: 'Slot', decorate },
+    );
+  const silent = managerWith(() => undefined);
+  t.deepEqual((await silent.register('one', harden({}))).status, {
+    key: 'one',
+    status: 'bound',
+  });
+  const forward = managerWith(() =>
+    harden({ key: 'x', status: 'bogus', error: 'e', extra: 1 }),
+  );
+  t.deepEqual((await forward.register('one', harden({}))).status, {
+    extra: 1,
+    key: 'one',
+    status: 'bound',
+  });
+});

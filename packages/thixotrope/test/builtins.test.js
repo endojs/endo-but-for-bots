@@ -140,3 +140,42 @@ test.serial(
     t.is(await vatOf('mailbox'), mailboxVat, 'the mailbox is kept');
   },
 );
+
+test('a built-in whose installation failed is reported, not shipped or requested again', async t => {
+  const { makeBuiltins } = await import('../src/control/builtins.js');
+  /** @type {string[]} */
+  const said = [];
+  let requests = 0;
+  const builtins = makeBuiltins(
+    /** @type {any} */ ({
+      registry: harden({
+        lookup: () =>
+          harden({
+            kind: 'native',
+            digest: 'builtin:clock',
+            status: 'failed',
+            error: 'Inventory name "clock" was taken by another value',
+          }),
+      }),
+      registryHealthy: () => true,
+      requestInstall: async () => {
+        requests += 1;
+        return harden({ result: Promise.resolve(undefined) });
+      },
+      randomId: () => 'key',
+      log: {
+        error: (/** @type {unknown[]} */ ...args) =>
+          said.push(args.map(String).join(' ')),
+      },
+    }),
+  );
+  let shipped = 0;
+  const value = await builtins.provide('clock', async () => {
+    shipped += 1;
+    return harden({ kind: 'application', bundleDigest: 'b' });
+  });
+  t.is(value, undefined);
+  t.is(shipped, 0, 'its code was not shipped again');
+  t.is(requests, 0, 'nor its installation requested again');
+  t.regex(said.join('\n'), /clock not provided: .*was taken by another value/);
+});
