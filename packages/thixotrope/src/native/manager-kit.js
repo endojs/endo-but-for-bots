@@ -94,7 +94,7 @@ export const makeManager = (
         if (style === 'copyRecord') fields = Object.entries(extra);
         // A promise is no record, and its rejection is no one's to report.
         else if (style === 'promise')
-          void (/** @type {Promise<unknown>} */ (extra).catch(() => {}));
+          void Promise.resolve(extra).catch(() => {});
       } catch (_error) {
         // What the author adds is decoration: a status is reported, and a
         // registration kept closable, whatever it threw.
