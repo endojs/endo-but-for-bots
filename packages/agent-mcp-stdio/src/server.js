@@ -189,8 +189,10 @@ harden(resolveGuest);
  * @returns {Promise<unknown>}
  */
 export const resolveScopedGuest = async (guest, formulaId) => {
+  let expected;
   let selfId;
   try {
+    expected = isValidNumber(formulaId) ? formulaId : parseId(formulaId).number;
     selfId = await E(/** @type {any} */ (guest)).identify('@agent');
   } catch (cause) {
     throw makeServerConstructionError(
@@ -199,9 +201,6 @@ export const resolveScopedGuest = async (guest, formulaId) => {
       { cause },
     );
   }
-  const expected = isValidNumber(formulaId)
-    ? formulaId
-    : parseId(formulaId).number;
   let actual;
   try {
     actual = parseId(String(selfId)).number;

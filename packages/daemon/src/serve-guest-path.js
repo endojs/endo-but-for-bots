@@ -85,7 +85,14 @@ export const makeGuestPathIssuer = ({
     numberByName.set(name, formulaNumber);
     const issued = (async () => {
       if (directoryReady === undefined) {
-        directoryReady = makePrivateDirectory(directory);
+        const making = makePrivateDirectory(directory);
+        directoryReady = making;
+        // A failed directory may be retried by the next issue, for any guest.
+        making.catch(() => {
+          if (directoryReady === making) {
+            directoryReady = undefined;
+          }
+        });
       }
       await directoryReady;
       const { started, stopped } = servePrivatePath(

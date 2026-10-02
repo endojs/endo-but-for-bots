@@ -12,6 +12,7 @@ import {
   makeRelayTransport,
   startGuestBroker,
 } from '../src/broker.js';
+import { resolveScopedGuest } from '../src/server.js';
 
 const FORMULA_ID = 'ab'.repeat(32);
 const OTHER_ID = 'cd'.repeat(32);
@@ -326,6 +327,14 @@ test('a broker refuses a guest socket issued for a different guest', async t => 
   });
   await broker.close();
   t.pass();
+});
+
+test('resolveScopedGuest refuses a malformed formula id with a discriminated error', async t => {
+  const guest = makeFakeGuest('guest', [], FORMULA_ID);
+  const error = await t.throwsAsync(resolveScopedGuest(guest, 'not-an-id'), {
+    message: /does not resolve to a guest/,
+  });
+  t.is(/** @type {any} */ (error).reason, 'invalid-formula-id');
 });
 
 test('a broker refuses a guest socket whose bootstrap is not a guest', async t => {
