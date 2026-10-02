@@ -141,6 +141,15 @@ test.serial(
         return status.pending === 0;
       });
     await waitForDelivery();
+    // The clock's count drops when its vat settles the alarm; the reminder
+    // hears of it in its own vat a message later.
+    await waitUntil(
+      async () =>
+        (await recovered.client.call(
+          'evaluate',
+          "E(inventory.get('reminders')).status().then(s => s.items[0].state !== 'waiting')",
+        )) === 'true',
+    );
     t.is(
       await recovered.client.call(
         'evaluate',
