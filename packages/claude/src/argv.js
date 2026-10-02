@@ -8,13 +8,15 @@
 //
 //   - the pinned CLI version whose flag semantics were last measured live
 //     (2.1.280; the design's original measurement was 2.1.232);
-//   - the six presence-required flags the harness refuses to spawn without;
-//   - the per-spawn path flags `--settings` and `--mcp-config`, each at most
-//     once (a later occurrence would substitute another file);
+//   - the seven presence-required flags the harness refuses to spawn without;
+//   - the per-spawn path flags `--settings` and `--mcp-config`, each exactly
+//     once (a repeat could substitute another file);
 //   - the value assertion that `--tools` and `--setting-sources` each carry
 //     exactly the empty string (presence-only is the `"alg":"none"` shape),
 //     and that `--permission-mode` / `--permission-prompts` carry `dontAsk` /
 //     `none`, each exactly once;
+//   - that no bare token follows the value of any of those flags, since
+//     `--tools` and `--mcp-config` are variadic in 2.1.280 and would absorb it;
 //   - `buildArgv`, which emits the prompt at NO index (it is delivered on stdin),
 //     so the construction invariant holds by construction.
 
@@ -30,16 +32,18 @@ import { KNOWN_BUILTIN_TOOLS } from './tool-permissions.js';
 export const PINNED_CLI_VERSION = '2.1.280';
 
 /**
- * The six flags whose PRESENCE the harness asserts before every spawn
+ * The seven flags whose PRESENCE the harness asserts before every spawn
  * (§ Design Decision 1). Three close the discovery surfaces (`--bare` closes
  * CLAUDE.md/hooks/keychain; `--strict-mcp-config` closes MCP auto-discovery;
- * `--setting-sources` closes the discovered settings layers); `--tools` empties
+ * `--setting-sources` closes the discovered settings layers); `--mcp-config` names
+ * the only MCP servers; `--tools` empties
  * the built-in set; `--disable-slash-commands` closes the `/skill-name` surface
  * `--bare` leaves resolving and `--tools ""` does not reach; `--settings` carries
  * the `enabledPlugins` key that disables the builtin plugins `--bare` still loads.
  */
 export const REQUIRED_FLAGS = harden([
   '--bare',
+  '--mcp-config',
   '--strict-mcp-config',
   '--setting-sources',
   '--settings',
@@ -49,8 +53,8 @@ export const REQUIRED_FLAGS = harden([
 
 /**
  * Flags that carry their confinement in their *value*, not their presence. Each
- * must appear exactly once with exactly this value: a later occurrence would
- * override the pinned one (last flag wins).
+ * must appear exactly once with exactly this value. Any repeat is refused, so
+ * which occurrence the CLI would honor does not matter.
  *
  * `--tools Bash` re-opens the built-in set, and a non-empty `--setting-sources`
  * re-admits a discovered layer, so each must carry exactly `""`. Without
@@ -72,8 +76,8 @@ const PINNED_VALUE_FLAGS = harden({
  * Flags whose value is a per-spawn file path, so it cannot be value-pinned, but
  * whose file carries confinement: `--settings` carries `enabledPlugins` and the
  * credential, `--mcp-config` names the only MCP servers. Each may appear at most
- * once (a later occurrence would substitute another file, last flag wins);
- * `--settings` is also required, so it appears exactly once.
+ * once, since a repeat could substitute another file; both are also required, so
+ * each appears exactly once.
  */
 const SINGLE_OCCURRENCE_FLAGS = harden(['--settings', '--mcp-config']);
 
@@ -173,8 +177,8 @@ export const buildArgv = spec => {
 harden(buildArgv);
 
 /**
- * The six-flag spawn-refusal predicate (§ Design Decision 1). Throws unless all
- * six required flags are present.
+ * The seven-flag spawn-refusal predicate (§ Design Decision 1). Throws unless
+ * all seven required flags are present.
  *
  * @param {readonly string[]} argv
  */
@@ -190,9 +194,30 @@ export const assertRequiredFlags = argv => {
 harden(assertRequiredFlags);
 
 /**
+ * `claude --help` (2.1.280) documents `--tools <tools...>` and
+ * `--mcp-config <configs...>` as variadic: one occurrence absorbs every
+ * following bare token, so `--tools "" Bash` yields `"tools":["Bash"]` and
+ * `--mcp-config legit.json attacker.json` loads both files. The token after a
+ * checked flag's value must therefore be absent or another `--` flag.
+ *
+ * @param {readonly string[]} argv
+ * @param {string} flag
+ * @param {number} at index of `flag` in `argv`
+ */
+const assertNoTrailingBareToken = (argv, flag, at) => {
+  const next = argv[at + 2];
+  if (next !== undefined && !next.startsWith('--')) {
+    throw makeError(
+      X`confinement: bare token ${q(next)} follows the value of ${q(flag)}`,
+    );
+  }
+};
+
+/**
  * `--tools`, `--setting-sources`, `--permission-mode`, and `--permission-prompts`
- * are value-asserted, not presence-asserted: each must appear exactly once, and
- * the token immediately after it must be exactly its pinned value.
+ * are value-asserted, not presence-asserted: each must appear exactly once, the
+ * token immediately after it must be exactly its pinned value, and no bare token
+ * may follow that value.
  *
  * @param {readonly string[]} argv
  */
@@ -209,6 +234,7 @@ export const assertPinnedValueFlags = argv => {
         )}`,
       );
     }
+    assertNoTrailingBareToken(argv, flag, at);
     if (argv.indexOf(flag, at + 1) !== -1) {
       throw makeError(X`confinement: flag ${q(flag)} appears more than once`);
     }
@@ -218,15 +244,19 @@ harden(assertPinnedValueFlags);
 
 /**
  * `--settings` and `--mcp-config` each appear at most once, so a trailing
- * occurrence cannot substitute an attacker-chosen file.
+ * occurrence cannot substitute an attacker-chosen file, and no bare token may
+ * follow the path, so variadic `--mcp-config` cannot absorb a second file.
  *
  * @param {readonly string[]} argv
  */
 export const assertSingleOccurrenceFlags = argv => {
   for (const flag of SINGLE_OCCURRENCE_FLAGS) {
     const at = argv.indexOf(flag);
-    if (at !== -1 && argv.indexOf(flag, at + 1) !== -1) {
-      throw makeError(X`confinement: flag ${q(flag)} appears more than once`);
+    if (at !== -1) {
+      assertNoTrailingBareToken(argv, flag, at);
+      if (argv.indexOf(flag, at + 1) !== -1) {
+        throw makeError(X`confinement: flag ${q(flag)} appears more than once`);
+      }
     }
   }
 };
@@ -252,7 +282,8 @@ harden(assertNoTranscriptResume);
  * The full structural confinement gate over an argv (version-independent):
  * required flags present, pinned-value flags (including the empty-value
  * `--tools` and `--setting-sources`) each appear once with their value,
- * `--settings` and `--mcp-config` each at most once, no transcript resume.
+ * `--settings` and `--mcp-config` each at most once, no bare token after any of
+ * those flags' values, no transcript resume.
  * `buildArgv` output always passes this; the property tests feed it arbitrary
  * argvs.
  *

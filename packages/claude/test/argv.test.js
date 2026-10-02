@@ -22,7 +22,7 @@ const spec = () => ({
   maxTurns: 16,
 });
 
-test('buildArgv emits all six required flags, empty-value flags, and never --resume', t => {
+test('buildArgv emits all seven required flags, empty-value flags, and never --resume', t => {
   const argv = buildArgv(spec());
   assertConfinedArgv(argv); // does not throw
   for (const flag of REQUIRED_FLAGS) t.true(argv.includes(flag), flag);
@@ -105,6 +105,51 @@ test('an argv without --settings is refused', t => {
   t.throws(() => assertConfinedArgv(argv), { message: /--settings/ });
 });
 
+test('an argv without --mcp-config is refused', t => {
+  const argv = conformingArgv();
+  argv.splice(argv.indexOf('--mcp-config'), 2);
+  t.throws(() => assertConfinedArgv(argv), { message: /--mcp-config/ });
+});
+
+test('a bare token spliced after a variadic flag value is refused', t => {
+  // 2.1.280 measured: `--tools "" Bash` yields `"tools":["Bash"]`, and
+  // `--mcp-config legit.json attacker.json` loads both configs.
+  for (const [flag, bare] of [
+    ['--tools', 'Bash'],
+    ['--mcp-config', '/tmp/attacker.json'],
+    ['--settings', '/tmp/attacker.json'],
+    ['--setting-sources', 'user'],
+    ['--permission-mode', 'bypassPermissions'],
+    ['--permission-prompts', 'ask'],
+  ]) {
+    const argv = conformingArgv();
+    argv.splice(argv.indexOf(flag) + 2, 0, bare);
+    t.throws(() => assertConfinedArgv(argv), { message: /bare token/ }, flag);
+  }
+});
+
+test('property: any bare token after a checked flag value is refused', t => {
+  fc.assert(
+    fc.property(
+      fc.constantFrom(
+        '--tools',
+        '--setting-sources',
+        '--permission-mode',
+        '--permission-prompts',
+        '--settings',
+        '--mcp-config',
+      ),
+      fc.string().filter(s => !s.startsWith('--')),
+      (flag, bare) => {
+        const argv = conformingArgv();
+        argv.splice(argv.indexOf(flag) + 2, 0, bare);
+        t.throws(() => assertConfinedArgv(argv), { message: /bare token/ });
+      },
+    ),
+    { numRuns: 200 },
+  );
+});
+
 test('a trailing --tools Bash cannot re-open the built-in set', t => {
   const argv = [...conformingArgv(), '--tools', 'Bash'];
   t.throws(() => assertConfinedArgv(argv), { message: /more than once/ });
@@ -142,11 +187,11 @@ test('property: any repeat of --settings or --mcp-config is refused', t => {
   );
 });
 
-// property: six-flag spawn-refusal predicate
+// property: seven-flag spawn-refusal predicate
 
 const conformingArgv = () => [...buildArgv(spec())];
 
-test('property: dropping any of the six required flags refuses', t => {
+test('property: dropping any of the seven required flags refuses', t => {
   fc.assert(
     fc.property(
       fc.subarray([...REQUIRED_FLAGS], {
