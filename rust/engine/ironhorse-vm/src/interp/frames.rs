@@ -418,6 +418,7 @@ impl Interp {
             ret_pc,
             stack_base: base,
             held: 0,
+            returns: FrameReturn::Call,
         });
         self.switch_environment(self.functions[&func].global_env);
         self.result = Slot::undefined();
@@ -486,6 +487,21 @@ impl Interp {
             _ if self.result.kind != Kind::Reference => Ok(self.this_val),
             _ => Ok(self.result),
         }
+    }
+
+    /// Set where the frame just entered returns to.
+    pub(super) fn set_return_pc(&mut self, ret_pc: usize) {
+        debug_assert!(!self.call_stack.is_empty(), "no frame was entered");
+        if let Some(caller) = self.call_stack.last_mut() {
+            caller.ret_pc = ret_pc;
+        }
+    }
+
+    /// How the current frame returns ([`FrameReturn`]).
+    pub(super) fn frame_returns(&self) -> FrameReturn {
+        self.call_stack
+            .last()
+            .map_or(FrameReturn::Call, |caller| caller.returns)
     }
 
     /// Leave a call the way XS's `XS_CODE_END` does: `mxStack = mxFrameEnd`

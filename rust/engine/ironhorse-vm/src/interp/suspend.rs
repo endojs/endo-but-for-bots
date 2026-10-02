@@ -1,11 +1,12 @@
 //! Activation capture, reinstallation, and generator/async resume drivers.
 use super::{
     AsyncGenRunFrame, AsyncGeneratorRequest, AsyncGeneratorState, AsyncRunFrame, CallerHandlers,
-    CallerState, CatchJump, GenRunFrame, GenStatus, GeneratorState, Halt, Interp, Kind, Payload,
-    ReactionKind, ResumeStatus, SavedFrame, SavedJump, Slot, Step, ASYNC_AWAIT_FASTPATH_CREDIT,
-    ASYNC_AWAIT_GENERAL_METERING, ASYNC_GENERATOR_BRAND_REJECT_CALL_METERING,
-    ASYNC_START_REJECT_BOUNDARY_METERING, ASYNC_STEP_SETTLE_METERING, FRAME_OVERHEAD_SLOTS,
-    GENERATOR_RESULT_METERING, GENERATOR_RESUME_METERING, GENERATOR_YIELD_METERING,
+    CallerState, CatchJump, FrameReturn, GenRunFrame, GenStatus, GeneratorState, Halt, Interp,
+    Kind, Payload, ReactionKind, ResumeStatus, SavedFrame, SavedJump, Slot, Step,
+    ASYNC_AWAIT_FASTPATH_CREDIT, ASYNC_AWAIT_GENERAL_METERING,
+    ASYNC_GENERATOR_BRAND_REJECT_CALL_METERING, ASYNC_START_REJECT_BOUNDARY_METERING,
+    ASYNC_STEP_SETTLE_METERING, FRAME_OVERHEAD_SLOTS, GENERATOR_RESULT_METERING,
+    GENERATOR_RESUME_METERING, GENERATOR_YIELD_METERING,
 };
 
 pub(super) enum Suspension {
@@ -271,6 +272,7 @@ impl Interp {
             // driver's stack is suspended below it, and `END` restores to here.
             stack_base: self.stack.len(),
             held: 0,
+            returns: FrameReturn::Call,
         });
         // Sync generators may unwind directly into a caller's live handler.
         self.run_guest_under_native_try(CallerHandlers::Preserve, |machine| {
@@ -609,6 +611,7 @@ impl Interp {
             // driver's stack is suspended below it, and `END` restores to here.
             stack_base: self.stack.len(),
             held: 0,
+            returns: FrameReturn::Call,
         });
         // Async body throws reject their promise, without consuming a handler
         // live around the caller's synchronous start. Rebased body handlers
@@ -823,6 +826,7 @@ impl Interp {
             // driver's stack is suspended below it, and `END` restores to here.
             stack_base: self.stack.len(),
             held: 0,
+            returns: FrameReturn::Call,
         });
         // Async body throws reject their promise, without consuming a handler
         // live around the caller's synchronous start. Rebased body handlers

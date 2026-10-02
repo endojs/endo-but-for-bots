@@ -3,7 +3,14 @@
 use super::super::*;
 
 impl Interp {
-    pub(super) fn dispatch_get_property(&mut self, code: &[u8], id: u16) -> Result<(), Step> {
+    /// `GET_PROPERTY`: the read's value pushed, or a getter entered in place
+    /// (STACK-DEPTH-REFACTOR.md C7), whose body to continue at; the loop sets
+    /// where its frame returns.
+    pub(super) fn dispatch_get_property(
+        &mut self,
+        code: &[u8],
+        id: u16,
+    ) -> Result<Option<usize>, Step> {
         let obj = self.pop_checked()?;
         let v = match obj.value {
             Payload::Reference(inst)
@@ -354,7 +361,10 @@ impl Interp {
             // that throws (the `format` accessor read on a
             // non-NumberFormat `this`, or any user getter) inside a
             // `try` would escape its handler.
-            Payload::Reference(inst) => (self.mop_get(code, inst, id, obj))?,
+            Payload::Reference(inst) => match (self.get_property_in_place(code, inst, id, obj))? {
+                GetInPlace::Value(value) => value,
+                GetInPlace::Entered(body_start) => return Ok(Some(body_start)),
+            },
             // A primitive string boxes to `%String.prototype%`
             // (XS's `fxCoerceToString`/string behavior): `.length`
             // is the UTF-16 code-unit count; any other name
@@ -384,6 +394,6 @@ impl Interp {
             _ => Slot::undefined(),
         };
         self.push(v);
-        Ok(())
+        Ok(None)
     }
 }

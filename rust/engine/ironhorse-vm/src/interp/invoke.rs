@@ -665,7 +665,7 @@ impl Interp {
     /// (its `END`, whose meter check is the one `RUN` made after the call
     /// returned, or the `START_*` of a generator or async body), is unwound,
     /// or outlives the loop that runs it.
-    fn enter_in_place(
+    pub(super) fn enter_in_place(
         &mut self,
         func: Slot,
         receiver: Slot,

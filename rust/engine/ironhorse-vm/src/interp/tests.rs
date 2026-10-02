@@ -3865,12 +3865,12 @@ fn a_stale_evaluator_environment_row_restores_without_restoring_the_pin() {
 
 /// The nests the in-place tests run, each level calling the next through a
 /// call `RUN` enters in the caller's dispatch loop (STACK-DEPTH-REFACTOR.md
-/// C1, C2), and the innermost calling `bottom`: through a bound function, a
-/// Proxy that forwards to `f`, a Proxy whose `apply` trap calls `f`,
-/// `Reflect.apply` and `Reflect.construct`. Each defines `wrap`, which
-/// gives a function the same kind of call, and comes with its ceiling and
-/// the depth the refusal one level past it reports.
-const IN_PLACE_NESTS: [(&str, &str, usize, usize); 5] = [
+/// C1, C2, C7), and the innermost calling `bottom`: through a bound function,
+/// a Proxy that forwards to `f`, a Proxy whose `apply` trap calls `f`,
+/// `Reflect.apply`, `Reflect.construct` and a getter. Each defines `wrap`,
+/// which gives a function the same kind of call, and comes with its ceiling
+/// and the depth the refusal one level past it reports.
+const IN_PLACE_NESTS: [(&str, &str, usize, usize); 6] = [
     (
         "bound",
         "function f(n, bottom) { return n > 0 ? f.bind(null, n - 1, bottom)() : bottom(); } \
@@ -3908,6 +3908,13 @@ const IN_PLACE_NESTS: [(&str, &str, usize, usize); 5] = [
          function wrap(w) { function W() { this.v = w(); } return function () { return Reflect.construct(W, []).v; }; }",
         63,
         2064,
+    ),
+    (
+        "getter",
+        "function f(n, bottom) { return n > 0 ? { get x() { return f(n - 1, bottom); } }.x : bottom(); } \
+         function wrap(w) { var o = { get x() { return w(); } }; return function () { return o.x; }; }",
+        119,
+        2056,
     ),
 ];
 
@@ -4052,11 +4059,15 @@ fn in_place_frames_release_their_charge_after_a_panic_or_heap_exhaustion() {
 fn a_call_that_is_not_entered_in_place_releases_its_units() {
     // `RUN` charges a Proxy layer's unit before it looks up the trap, and a
     // `Reflect.apply` or `Reflect.construct` call's before it reads its
-    // operands. A revoked Proxy, a throwing `apply` getter, a trap that is
-    // not callable, a target that cannot be called or constructed, an
+    // operands, and `GET_PROPERTY` its light unit before it walks an ordinary
+    // object for a getter. A revoked Proxy, a throwing `apply` getter, a trap
+    // that is not callable, a target that cannot be called or constructed, an
     // argument list that is not an object or whose reads throw, all throw
     // before any frame holds the units; a native, bound or Proxy callee is
-    // called through `invoke_value` or `construct_value`. Each gives the
+    // called through `invoke_value` or `construct_value`. So is a native, bound
+    // or Proxy getter, through `invoke_getter`; a Proxy holder's trap that
+    // throws throws before any getter is found; and a getter run in place
+    // throws from its frame, a class one as its body begins. Each gives the
     // units back, or 200 rounds leave the next nest no budget.
     let (name, nest, ceiling, _) = IN_PLACE_NESTS[2];
     for (setup, call) in [
@@ -4115,6 +4126,27 @@ fn a_call_that_is_not_entered_in_place_releases_its_units() {
             "var p = new Proxy(function () { throw 8; }, {});",
             "Reflect.construct(p, [])",
         ),
+        (
+            "var p = Object.defineProperty([1, 2], 'g', { get: Array.prototype.join });",
+            "p.g",
+        ),
+        (
+            "var p = Object.defineProperty({}, 'g', { get: function () { throw 9; }.bind(null) });",
+            "p.g",
+        ),
+        (
+            "var p = Object.defineProperty({}, 'g', { get: new Proxy(function () { throw 10; }, {}) });",
+            "p.g",
+        ),
+        (
+            "var p = Object.defineProperty({}, 'g', { get: class {} });",
+            "p.g",
+        ),
+        (
+            "var p = Object.create(new Proxy({}, { get: function () { throw 11; } }));",
+            "p.g",
+        ),
+        ("var p = { get g() { throw 12; } };", "p.g"),
     ] {
         let (mut m, code) = in_place_machine(
             nest,
@@ -4161,6 +4193,41 @@ fn a_reflect_call_run_in_place_leaves_its_result_where_the_call_was() {
     );
     assert!(m.stack.is_empty(), "{} slots left", m.stack.len());
     assert_eq!(m.native_depth, 0);
+}
+
+#[test]
+fn a_getter_run_in_place_leaves_its_value_where_the_read_was() {
+    // A getter's `END`, or the `START` of a generator, async or async
+    // generator getter, pushes its result as the read's value and returns
+    // past the read, so operands pending around it see the value in its place,
+    // a method read through a getter is then called, and the program leaves
+    // the stack empty.
+    let program = "var o = { \
+            get one() { return 1; }, \
+            get self() { return this; }, \
+            get af() { return (async function () {})(); }, \
+            get m() { var self = this; return function (a) { return [self === o, a].join('/'); }; } \
+        }; \
+        Object.defineProperty(o, 'gen', { get: function* () { yield 7; } }); \
+        Object.defineProperty(o, 'agen', { get: async function* () {} }); \
+        Object.defineProperty(o, 'async', { get: async function () {} }); \
+        var r = [0, o.one, 2].join() + ';' + \
+            [0, ...o.gen, 9].join() + ';' + \
+            (10 + o.self.self.one * 3) + ';' + \
+            [typeof o.async.then, typeof o.agen.next, typeof o.af.then, 'x'].join() + ';' + \
+            o.m(4) + ';' + `${o.one}${o.self.one}`; r";
+    let (code, symbols) = ironhorse_compile::compile_atoms(program).unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&crate::parse_symbols(&symbols));
+    let out = m.run(&code);
+    assert!(out.completed, "{:?}", out.halt);
+    assert_eq!(
+        out.result,
+        "0,1,2;0,7,9;13;function,function,function,x;true/4;11"
+    );
+    assert!(m.stack.is_empty(), "{} slots left", m.stack.len());
+    assert_eq!(m.native_depth, 0);
+    assert_eq!(m.held_total, 0);
 }
 
 #[test]
