@@ -60,6 +60,13 @@ test('turns count distinct assistant messages, across chunk boundaries', t => {
   t.is(reducer.finish().turns, 2);
 });
 
+test('a message id that returns after another message is a new turn', t => {
+  const reduction = reduce(
+    `${assistant('m1', 'a')}${assistant('m2', 'b')}${assistant('m1', 'c')}`,
+  );
+  t.is(reduction.turns, 3);
+});
+
 test('assistant events without a message id each count as a turn', t => {
   const anonymous = line({
     type: 'assistant',

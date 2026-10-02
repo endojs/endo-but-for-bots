@@ -23,7 +23,7 @@ export type StreamReduction = {
   /** The terminal `result.result`, else the assistant text seen. */
   text: string;
   usage?: InferUsage;
-  /** Model turns observed, counted by distinct assistant message id. */
+  /** Model turns observed: a run of assistant events sharing a message id is one turn. */
   turns: number;
   /** The terminal `result` event, when exactly one arrived. */
   resultEvent?: Record<string, unknown>;

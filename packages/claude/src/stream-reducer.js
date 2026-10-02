@@ -86,9 +86,9 @@ export const makeClaudeStreamReducer = () => {
   let pending = '';
   let lineNumber = 0;
   let accumulatedText = '';
-  /** @type {Set<unknown>} */
-  const messageIds = new Set();
-  let anonymousTurns = 0;
+  let turns = 0;
+  /** @type {unknown} */
+  let currentMessageId;
   /** @type {Record<string, unknown>[]} */
   const results = [];
   /** @type {string | undefined} */
@@ -106,13 +106,13 @@ export const makeClaudeStreamReducer = () => {
     if (event.type === 'assistant') {
       accumulatedText += assistantText(event);
       // One model turn may arrive as several events sharing a message id.
+      // Only the message in progress continues: an id that returns after a
+      // different message is a new turn, so a stream that replays one id
+      // across turns cannot slip under `maxTurns`.
       const id = isRecord(event.message) ? event.message.id : undefined;
-      if (id === undefined) {
-        anonymousTurns += 1;
-        return true;
-      }
-      if (messageIds.has(id)) return false;
-      messageIds.add(id);
+      if (id !== undefined && id === currentMessageId) return false;
+      currentMessageId = id;
+      turns += 1;
       return true;
     }
     if (event.type === 'result') {
@@ -157,7 +157,6 @@ export const makeClaudeStreamReducer = () => {
       pushLine(pending);
       pending = '';
     }
-    const turns = messageIds.size + anonymousTurns;
     if (malformed === undefined && results.length > 1) {
       malformed = `${results.length} terminal result events`;
     }
