@@ -10,7 +10,11 @@
 //     (2.1.280; the design's original measurement was 2.1.232);
 //   - the seven presence-required flags the harness refuses to spawn without;
 //   - the per-spawn path flags `--settings` and `--mcp-config`, each exactly
-//     once (a repeat could substitute another file);
+//     once with a value (a repeat could substitute another file), and the
+//     allow/deny lists `--allowedTools` / `--disallowedTools`, each at most once
+//     with a value;
+//   - that no `--flag=value` token appears, since 2.1.280 parses that spelling
+//     as the same option and a duplicate check over exact tokens would miss it;
 //   - the value assertion that `--tools` and `--setting-sources` each carry
 //     exactly the empty string (presence-only is the `"alg":"none"` shape),
 //     and that `--permission-mode` / `--permission-prompts` carry `dontAsk` /
@@ -73,13 +77,20 @@ const PINNED_VALUE_FLAGS = harden({
 });
 
 /**
- * Flags whose value is a per-spawn file path, so it cannot be value-pinned, but
- * whose file carries confinement: `--settings` carries `enabledPlugins` and the
- * credential, `--mcp-config` names the only MCP servers. Each may appear at most
- * once, since a repeat could substitute another file; both are also required, so
- * each appears exactly once.
+ * Flags whose value varies per spawn, so it cannot be value-pinned, but which
+ * carry confinement: `--settings` carries `enabledPlugins` and the credential,
+ * `--mcp-config` names the only MCP servers, `--allowedTools` is the capability
+ * grant, and `--disallowedTools` is the belt deny set. Each may appear at most
+ * once and must carry a value, since a repeat could substitute another file or
+ * list. `--settings` and `--mcp-config` are also required, so each appears
+ * exactly once.
  */
-const SINGLE_OCCURRENCE_FLAGS = harden(['--settings', '--mcp-config']);
+const SINGLE_OCCURRENCE_FLAGS = harden([
+  '--settings',
+  '--mcp-config',
+  '--allowedTools',
+  '--disallowedTools',
+]);
 
 /**
  * Flags that must NEVER appear: both restore the full prior transcript (past tool
@@ -243,9 +254,12 @@ export const assertPinnedValueFlags = argv => {
 harden(assertPinnedValueFlags);
 
 /**
- * `--settings` and `--mcp-config` each appear at most once, so a trailing
- * occurrence cannot substitute an attacker-chosen file, and no bare token may
- * follow the path, so variadic `--mcp-config` cannot absorb a second file.
+ * `--settings`, `--mcp-config`, `--allowedTools`, and `--disallowedTools` each
+ * appear at most once, so a trailing occurrence cannot substitute an
+ * attacker-chosen file or list. Each occurrence must carry a value that is not
+ * itself flag-shaped, so a dangling flag cannot swallow the next flag as its
+ * value. No bare token may follow the value, so a variadic flag cannot absorb a
+ * second file or list.
  *
  * @param {readonly string[]} argv
  */
@@ -253,6 +267,12 @@ export const assertSingleOccurrenceFlags = argv => {
   for (const flag of SINGLE_OCCURRENCE_FLAGS) {
     const at = argv.indexOf(flag);
     if (at !== -1) {
+      const value = argv[at + 1];
+      if (typeof value !== 'string' || value.startsWith('-')) {
+        throw makeError(
+          X`confinement: flag ${q(flag)} must carry a value, got ${q(value)}`,
+        );
+      }
       assertNoTrailingBareToken(argv, flag, at);
       if (argv.indexOf(flag, at + 1) !== -1) {
         throw makeError(X`confinement: flag ${q(flag)} appears more than once`);
@@ -261,6 +281,30 @@ export const assertSingleOccurrenceFlags = argv => {
   }
 };
 harden(assertSingleOccurrenceFlags);
+
+/**
+ * No token may spell an option as `--flag=value`. 2.1.280 parses
+ * `--permission-mode=x` and `--mcp-config=x` exactly as the space-separated
+ * form, so an `=`-joined repeat would escape the exact-token duplicate checks
+ * above and, as the later occurrence, win. The harness never emits that
+ * spelling, so every such token is refused.
+ *
+ * @param {readonly string[]} argv
+ */
+export const assertNoInlineFlagValues = argv => {
+  for (const token of argv) {
+    if (
+      typeof token === 'string' &&
+      token.startsWith('--') &&
+      token.includes('=')
+    ) {
+      throw makeError(
+        X`confinement: inline-valued flag token ${q(token)} is refused`,
+      );
+    }
+  }
+};
+harden(assertNoInlineFlagValues);
 
 /**
  * No `--resume` / `--continue` (or their short forms) may appear.
@@ -282,8 +326,9 @@ harden(assertNoTranscriptResume);
  * The full structural confinement gate over an argv (version-independent):
  * required flags present, pinned-value flags (including the empty-value
  * `--tools` and `--setting-sources`) each appear once with their value,
- * `--settings` and `--mcp-config` each at most once, no bare token after any of
- * those flags' values, no transcript resume.
+ * `--settings`, `--mcp-config`, `--allowedTools`, and `--disallowedTools` each at
+ * most once with a value, no bare token after any of those flags' values, no
+ * `--flag=value` token, no transcript resume.
  * `buildArgv` output always passes this; the property tests feed it arbitrary
  * argvs.
  *
@@ -296,6 +341,7 @@ export const assertConfinedArgv = argv => {
   assertRequiredFlags(argv);
   assertPinnedValueFlags(argv);
   assertSingleOccurrenceFlags(argv);
+  assertNoInlineFlagValues(argv);
   assertNoTranscriptResume(argv);
 };
 harden(assertConfinedArgv);

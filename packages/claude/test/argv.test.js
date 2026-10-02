@@ -177,9 +177,9 @@ test('property: any repeat of --settings or --mcp-config is refused', t => {
       fc.constantFrom('--settings', '--mcp-config'),
       fc.string(),
       fc.nat(),
-      (flag, value, pos) => {
+      (flag, value, position) => {
         const argv = conformingArgv();
-        const at = pos % (argv.length + 1);
+        const at = position % (argv.length + 1);
         argv.splice(at, 0, flag, value);
         t.throws(() => assertConfinedArgv(argv));
       },
@@ -242,5 +242,68 @@ test('property: a version generator that differs from the pin always refuses', t
       },
     ),
     { numRuns: 200 },
+  );
+});
+
+test('a value-less --settings or --mcp-config is refused', t => {
+  for (const flag of ['--settings', '--mcp-config']) {
+    const atEnd = conformingArgv();
+    atEnd.splice(atEnd.indexOf(flag), 2);
+    atEnd.push(flag);
+    t.throws(
+      () => assertConfinedArgv(atEnd),
+      { message: /must carry a value/ },
+      flag,
+    );
+
+    const beforeFlag = conformingArgv();
+    beforeFlag.splice(beforeFlag.indexOf(flag) + 1, 1);
+    t.throws(
+      () => assertConfinedArgv(beforeFlag),
+      { message: /must carry a value/ },
+      flag,
+    );
+  }
+});
+
+test('a repeated or bare-token-trailed --allowedTools / --disallowedTools is refused', t => {
+  for (const flag of ['--allowedTools', '--disallowedTools']) {
+    const repeated = conformingArgv();
+    repeated.push(flag, 'mcp__attacker__steal');
+    t.throws(
+      () => assertConfinedArgv(repeated),
+      { message: /more than once/ },
+      flag,
+    );
+
+    const trailed = conformingArgv();
+    trailed.splice(trailed.indexOf(flag) + 2, 0, 'mcp__attacker__steal');
+    t.throws(
+      () => assertConfinedArgv(trailed),
+      { message: /bare token/ },
+      flag,
+    );
+  }
+});
+
+test('property: an --flag=value token for any checked flag is refused', t => {
+  fc.assert(
+    fc.property(
+      fc.constantFrom(
+        ...REQUIRED_FLAGS,
+        '--permission-mode',
+        '--permission-prompts',
+        '--allowedTools',
+        '--disallowedTools',
+      ),
+      fc.string(),
+      fc.nat(),
+      (flag, value, position) => {
+        const argv = conformingArgv();
+        const at = position % (argv.length + 1);
+        argv.splice(at, 0, `${flag}=${value}`);
+        t.throws(() => assertConfinedArgv(argv));
+      },
+    ),
   );
 });
