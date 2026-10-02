@@ -1947,6 +1947,15 @@ enum GetInPlace {
     Entered(usize),
 }
 
+/// What `SET_PROPERTY`'s `[[Set]]` of an ordinary object made of the
+/// assignment ([`Interp::set_property_in_place`]).
+enum SetInPlace {
+    /// `[[Set]]`'s result: whether the assignment took.
+    Done(bool),
+    /// A setter entered in the caller's loop: continue at its body.
+    Entered(usize),
+}
+
 /// How a frame the dispatch loop runs hands its result back.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum FrameReturn {
@@ -1961,6 +1970,11 @@ enum FrameReturn {
     /// value and no meter is checked, as none was when the getter's nested
     /// loop returned through its boundary and the read went on.
     Getter,
+    /// A setter `SET_PROPERTY` reached and runs in place (C7): the result is
+    /// dropped and the value assigned, the frame's one argument, pushed as the
+    /// assignment's, and no meter is checked, as none was when the setter's
+    /// nested loop returned and the assignment went on.
+    Setter,
 }
 
 /// One entry of the exception jump-buffer chain (XS's `txJump`, pushed by

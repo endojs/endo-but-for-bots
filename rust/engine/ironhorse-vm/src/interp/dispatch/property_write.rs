@@ -3,7 +3,14 @@
 use super::super::*;
 
 impl Interp {
-    pub(super) fn dispatch_set_property(&mut self, code: &[u8], id: u16) -> Result<(), Step> {
+    /// `SET_PROPERTY`: the assigned value pushed, or a setter entered in
+    /// place (STACK-DEPTH-REFACTOR.md C7), whose body to continue at; the loop
+    /// sets where its frame returns, and the frame pushes the value.
+    pub(super) fn dispatch_set_property(
+        &mut self,
+        code: &[u8],
+        id: u16,
+    ) -> Result<Option<usize>, Step> {
         let value = self.pop_checked()?;
         let obj = self.pop_checked()?;
         // A primitive symbol's `Payload::Reference` is its
@@ -50,7 +57,7 @@ impl Interp {
                         return Err(self.raise_js(error));
                     }
                     self.push(value);
-                    return Ok(());
+                    return Ok(None);
                 }
                 let accepted = (self.array_define_length(
                     code,
@@ -69,17 +76,30 @@ impl Interp {
                     );
                     return Err(self.raise_js(error));
                 }
-            } else if !(self.mop_set(code, inst, id, value, obj))? {
-                // A frozen / non-writable property, or a new key on a
-                // non-extensible object: XS's `mxBehaviorSetProperty`
-                // stores nothing. A **sloppy** callee silently
-                // ignores the failed set (the assignment still
-                // evaluates to the RHS) — fully modeled, no
-                // allocation, so it meters nothing beyond its
-                // dispatch (verified against the pin). A **strict**
-                // callee throws a realm-local, catchable TypeError.
-                if self.strict {
-                    return Err(self.failed_set_error(inst, id, "set"));
+            } else {
+                let accepted = if self.typed_arrays.contains_key(&inst) {
+                    // A typed array's own `[[Set]]`, whose element store
+                    // coerces the value and so can re-enter, keeps the
+                    // frames it had.
+                    (self.mop_set(code, inst, id, value, obj))?
+                } else {
+                    match (self.set_property_in_place(code, inst, id, value, obj))? {
+                        SetInPlace::Done(accepted) => accepted,
+                        SetInPlace::Entered(body_start) => return Ok(Some(body_start)),
+                    }
+                };
+                if !accepted {
+                    // A frozen / non-writable property, or a new key on a
+                    // non-extensible object: XS's `mxBehaviorSetProperty`
+                    // stores nothing. A **sloppy** callee silently
+                    // ignores the failed set (the assignment still
+                    // evaluates to the RHS) — fully modeled, no
+                    // allocation, so it meters nothing beyond its
+                    // dispatch (verified against the pin). A **strict**
+                    // callee throws a realm-local, catchable TypeError.
+                    if self.strict {
+                        return Err(self.failed_set_error(inst, id, "set"));
+                    }
                 }
             }
         } else if matches!(obj.kind, Kind::Null | Kind::Undefined) {
@@ -89,7 +109,7 @@ impl Interp {
             return Err(self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)));
         }
         self.push(value);
-        Ok(())
+        Ok(None)
     }
 
     pub(super) fn dispatch_delete_property(&mut self, code: &[u8], id: u16) -> Result<(), Step> {
