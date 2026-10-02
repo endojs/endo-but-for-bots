@@ -108,7 +108,24 @@ export const makeAdapterProcessPowers = ({
                   if (!child.connected)
                     throw Error('Native resource process is closed');
                   child.send({ frame: encodeBase64(bytes) }, error => {
-                    if (error) fail(error);
+                    if (!error) return;
+                    // A process that went away between the check above and
+                    // the write cannot be written to: that is its exit,
+                    // which 'exit' reports, not a failure of its own for
+                    // `terminate` to rethrow. A drop sent by collection
+                    // while the process ends meets exactly this.
+                    const { code } = /** @type {NodeJS.ErrnoException} */ (
+                      error
+                    );
+                    if (
+                      code === 'EPIPE' ||
+                      code === 'ECONNRESET' ||
+                      code === 'ERR_IPC_CHANNEL_CLOSED'
+                    ) {
+                      if (!exited) child.kill('SIGKILL');
+                      return;
+                    }
+                    fail(error);
                   });
                 },
               }),
