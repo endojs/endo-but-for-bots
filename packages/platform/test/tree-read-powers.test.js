@@ -43,6 +43,10 @@ const makeSpyTree = tree => {
       calls.push(['has', names]);
       return E(tree).has(...names);
     },
+    list: (...names) => {
+      calls.push(['list', names]);
+      return E(tree).list(...names);
+    },
   });
   return { spy, calls };
 };
@@ -153,7 +157,7 @@ test('canonical applies the hook and confines its result', async t => {
 });
 
 test('fileURLToPath and pathToFileURL round-trip under the root', t => {
-  const powers = makeTreeReadPowers(harden({}));
+  const powers = makeTreeReadPowers(makeLocalTree(makeFixture(t)));
   t.is(powers.fileURLToPath('file:///app/a%20b.js'), '/app/a b.js');
   t.is(powers.pathToFileURL('/app/a b.js').href, 'file:///app/a%20b.js');
   t.throws(() => powers.pathToFileURL('/app/../outside'));

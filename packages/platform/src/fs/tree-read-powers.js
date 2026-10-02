@@ -17,6 +17,11 @@ import { E } from '@endo/eventual-send';
 import { makeError, X, q } from '@endo/errors';
 import { collectBytes } from './extended/helpers.js';
 
+/**
+ * @import { ERef } from '@endo/eventual-send';
+ * @import { ReadableTree } from './types.js';
+ */
+
 const defaultRoot = 'file:///app/';
 
 /**
@@ -95,7 +100,7 @@ const assertRoot = root => {
  * Make compartment-mapper `ReadPowers` (`read`, `maybeRead`, `canonical`,
  * `fileURLToPath`, `pathToFileURL`) over a `ReadableTree` or `Mount`.
  *
- * @param {unknown} tree - a `ReadableTree` or `Mount` reference
+ * @param {ERef<ReadableTree>} tree - a `ReadableTree` or `Mount` reference
  * @param {TreeReadPowersOptions} [options]
  */
 export const makeTreeReadPowers = (tree, options = {}) => {
@@ -167,7 +172,7 @@ export const makeTreeReadPowers = (tree, options = {}) => {
     }
     // Walk one segment at a time so a missing intermediate directory reads
     // as absent rather than surfacing the tree's lookup error.
-    /** @type {unknown} */
+    /** @type {ERef<ReadableTree>} */
     let node = tree;
     for (const segment of segments) {
       // eslint-disable-next-line no-await-in-loop
@@ -176,7 +181,7 @@ export const makeTreeReadPowers = (tree, options = {}) => {
         return undefined;
       }
       // eslint-disable-next-line no-await-in-loop
-      node = await E(node).lookup(segment);
+      node = /** @type {ReadableTree} */ (await E(node).lookup(segment));
     }
     return collectBytes(node);
   };
