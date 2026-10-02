@@ -40,14 +40,17 @@ live as described under [Known gaps](#known-gaps-prerequisites)):
 | `enabledPlugins` in `--settings` | the builtin plugins `agents-md` and `telemetry`, which `init` lists even under `--bare`. |
 | never `--resume` / `--continue` | both restore the full prior transcript across the confinement boundary. |
 
-The harness **refuses to spawn** unless all six presence flags appear
-(`--bare`, `--strict-mcp-config`, `--setting-sources`, `--settings`, `--tools`,
-`--disable-slash-commands`), `--tools` and `--setting-sources` each carry exactly the empty string (a non-empty value
+The harness **refuses to spawn** unless all seven presence flags appear
+(`--bare`, `--mcp-config`, `--strict-mcp-config`, `--setting-sources`,
+`--settings`, `--tools`, `--disable-slash-commands`), `--tools` and
+`--setting-sources` each carry exactly the empty string (a non-empty value
 re-opens the surface — the `"alg":"none"` shape), `--permission-mode` and
-`--permission-prompts` carry their pinned values, each of these four appears
-exactly once (a later occurrence would override the pinned one), `--settings`
-and `--mcp-config` each appear at most once (a later occurrence would
-substitute another file), and
+`--permission-prompts` are present with their pinned values, each of these four
+and `--settings` and `--mcp-config` appears exactly once (any repeat is
+refused, so which occurrence the CLI would honor does not matter), no bare
+token follows the value of any of those six flags (2.1.280 documents `--tools`
+and `--mcp-config` as variadic, and measured live, `--tools "" Bash` re-opens
+`Bash` and `--mcp-config legit.json attacker.json` loads both files), and
 `claude --version` equals the pinned version (an upgraded CLI may have changed
 the flag semantics the confinement rests on).
 
