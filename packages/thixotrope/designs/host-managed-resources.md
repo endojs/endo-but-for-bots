@@ -405,12 +405,13 @@ supervisor provides it at every start under `clock`, installing it when
 missing, as it did the guest clock.
 `durable.js` makes a manager labelled `Alarm`.
 A spec is `{ at, sink }` or `{ after, sink }`, where `sink` is one exo of the
-manager with `fire(key, now)`; `same` compares the sink and, when the wanted
-spec has one, the deadline; `replaces` is never.
+manager with `fire(key, now)`; keys are fresh per alarm, so it states no
+`same` and no `replaces` (as amended by 10.3).
 The facet has `at(deadline)` and `after(delay)`, each settling at or after the
 deadline with the host time; `arm({ at } | { after })`, which also returns a
-canceller for that one alarm; and `status()`, a count of pending alarms, since
-a holder that could enumerate alarms could cancel every other holder's.
+canceller for that one alarm; and `status()`, counts of pending and armed
+alarms, since a holder that could enumerate alarms could cancel every other
+holder's.
 Each alarm is a fresh key with a promise kit in the manager's heap; `fire`
 settles it once, idempotently per key, and closes the registration; a fire
 that outruns the registration's own answer is kept until the answer arrives.
@@ -721,6 +722,10 @@ Workspace version bump, since both kits are frozen into heaps and bundles.
 As built, an epoch is a `bigint` from a counter in the manager's heap, new for each registration
 made or replaced, so a registration made again after a close differs from the one closed.
 The HTTP adapter no longer compares origin sets, and the clock states no sameness at all.
+A `status()` still binds again, under the same epoch, since that bind is how a registration the
+adapter could not take is retried; the adapter answers it from what it holds.
+A replacement the adapter did not take retires the incarnation, since its failed release may have
+left the replaced binding in place, and a fresh one restores every registration at once.
 Version 18.
 
 ### 10.4 Status owned by the kit (Done.)
@@ -771,9 +776,10 @@ A bundle put by a request the registry never heard of is freed at the next start
 
 Recommendation: yes.
 
-As built, the registry answers `bundles()` rather than `list()`, the digests its installations
-still hold, and the supervisor hands them to the daemon's `sweepBundles` once the registry is
-published; launcher records are still read by the daemon itself.
+As built, the registry answers `bundles()` rather than `list()`: the digests of the requests it
+has received and not yet entered, and those its installations still hold.
+The supervisor hands them to the daemon's `sweepBundles` once the registry is published, and
+launcher records are still read by the daemon itself.
 
 ### 10.7 Per-connection peer sessions (Done.)
 

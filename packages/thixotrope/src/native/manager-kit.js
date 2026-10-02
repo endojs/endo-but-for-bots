@@ -14,8 +14,9 @@ import { makeSerialQueue } from '../serial-queue.js';
  * the adapter, retire an incarnation whose unbinding is uncertain, and rebuild
  * the adapter at startup and after its own exit when there is anything to
  * restore. This factory writes all of that once. A resource author supplies
- * the identity of a registration and, optionally, what its status carries;
- * the adapter side, built with `makeAdapter`, supplies the verbs.
+ * a label and, optionally, which registrations are the same, which may
+ * replace one another and what a status carries; the adapter side, built
+ * with `makeAdapter`, supplies the verbs.
  *
  * The manager and the adapter speak one protocol: `bind(key, spec, epoch)`,
  * `unbind(key)` and `restore([[key, spec, epoch], ...])`, where `spec` is
@@ -61,6 +62,14 @@ export const makeManager = (
   { label, same = () => false, replaces = () => false, decorate = undefined },
 ) => {
   if (typeof label !== 'string') throw Error('makeManager needs a label');
+  for (const [name, option] of [
+    ['same', same],
+    ['replaces', replaces],
+    ['decorate', decorate],
+  ]) {
+    if (option !== undefined && typeof option !== 'function')
+      throw Error(`makeManager ${name} must be a function`);
+  }
   /**
    * The status record a handle reports: one shape and one word for each
    * state across every resource, `bound`, `inactive` or `closed`, with
@@ -71,15 +80,23 @@ export const makeManager = (
    * @param {string} [error]
    */
   const report = (key, spec, status, error = undefined) => {
-    const extra =
-      spec === undefined || status === 'closed' || decorate === undefined
-        ? undefined
-        : decorate(key, spec, status);
+    /** @type {unknown} */
+    let extra;
+    if (spec !== undefined && status !== 'closed' && decorate !== undefined) {
+      try {
+        extra = decorate(key, spec, status);
+      } catch (_error) {
+        // What the author adds is decoration: a status is reported, and a
+        // registration kept closable, whatever it threw.
+      }
+    }
+    const fields =
+      typeof extra === 'object' && extra !== null && !Array.isArray(extra)
+        ? Object.entries(extra)
+        : [];
     return harden({
       ...Object.fromEntries(
-        Object.entries(extra ?? {}).filter(
-          ([field]) => !['key', 'status', 'error'].includes(field),
-        ),
+        fields.filter(([field]) => !['key', 'status', 'error'].includes(field)),
       ),
       key,
       status,
@@ -242,6 +259,17 @@ export const makeManager = (
             // rebinds.
             entry.spec = spec;
             entry.epoch = nextEpoch();
+            const status = await reconcile(key, entry);
+            // A replacement the adapter did not take may have left the
+            // replaced binding in place, its release having failed: the
+            // incarnation is retired so that binding goes with its process,
+            // and a fresh one restores every desired registration, this one
+            // in its replaced form.
+            if (status.status === 'inactive') {
+              await keeper.retire().catch(() => {});
+              await keeper.provide().catch(() => {});
+            }
+            return harden({ handle: entry.handle, status });
           }
         }
         const status = await reconcile(key, entry);

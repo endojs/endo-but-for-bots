@@ -490,7 +490,6 @@ test.serial(
 export const make = () =>
   makeAdapter({
     label: 'Version',
-    same: () => true,
     bind: () => ${version},
     unbind: () => {
       setImmediate(() => process.exit(0));

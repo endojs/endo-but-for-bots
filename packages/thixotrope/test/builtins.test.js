@@ -179,3 +179,53 @@ test('a built-in whose installation failed is reported, not shipped or requested
   t.is(requests, 0, 'nor its installation requested again');
   t.regex(said.join('\n'), /clock not provided: .*was taken by another value/);
 });
+
+test('a name held by an installation of the user is theirs, whatever its health', async t => {
+  const { makeBuiltins } = await import('../src/control/builtins.js');
+  /** @type {string[]} */
+  const said = [];
+  /** @type {string[]} */
+  const asked = [];
+  const builtins = makeBuiltins(
+    /** @type {any} */ ({
+      registry: harden({
+        lookup: () =>
+          harden({
+            kind: 'application',
+            digest: 'the user code',
+            status: 'ready',
+            workerId: 'gone',
+            value: harden({}),
+          }),
+        remove: () => {
+          asked.push('remove');
+          return true;
+        },
+      }),
+      registryHealthy: () => true,
+      requestInstall: async () => {
+        asked.push('request');
+        return harden({ result: Promise.resolve(undefined) });
+      },
+      randomId: () => 'key',
+      log: {
+        error: (/** @type {unknown[]} */ ...args) =>
+          said.push(args.map(String).join(' ')),
+      },
+    }),
+  );
+  const value = await builtins.provide(
+    'mailbox',
+    async () => {
+      asked.push('ship');
+      return harden({ kind: 'application', bundleDigest: 'b' });
+    },
+    { into: { workspace: 'main', access: harden({}) }, replaceUnhealthy: true },
+  );
+  t.is(value, undefined);
+  t.deepEqual(asked, [], 'nothing shipped, requested or removed');
+  t.regex(
+    said.join('\n'),
+    /mailbox not provided to main: the name is held by another installation/,
+  );
+});
