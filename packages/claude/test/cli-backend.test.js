@@ -164,6 +164,17 @@ test('a refused admission maps to its tag and starts no process', async t => {
   t.is(source.counts.released, 0, 'a refusal holds nothing to release');
 });
 
+test('a credential source that rejects is unavailable and starts no process', async t => {
+  const source = makeCredentialSource({ failure: Error('vault sealed') });
+  const { backend, fake, scratch } = makeHarness({}, { source });
+  t.deepEqual(await backend.infer(makeRequest()), {
+    type: 'unavailable',
+    detail: 'credential source failed: vault sealed',
+  });
+  t.is(fake.spawns.length, 0);
+  t.is(scratch.state.made, 0);
+});
+
 test('output beyond the byte limit kills the process group', async t => {
   const { backend, fake, source } = makeHarness({
     stdout: [assistant('message-1', 'x'.repeat(200))],

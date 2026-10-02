@@ -60,6 +60,20 @@ test('turns count distinct assistant messages, across chunk boundaries', t => {
   t.is(reducer.finish().turns, 2);
 });
 
+test('assistant events without a message id each count as a turn', t => {
+  const anonymous = line({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: 'x' }] },
+  });
+  const reduction = reduce(
+    `${anonymous}${anonymous}${assistant('m1', 'y')}${successResult({
+      result: undefined,
+    })}`,
+  );
+  t.is(reduction.turns, 3);
+  t.is(reduction.text, 'xxy');
+});
+
 test('error_max_turns is the max-turns terminal', t => {
   t.is(
     reduce(line({ type: 'result', subtype: 'error_max_turns', is_error: true }))

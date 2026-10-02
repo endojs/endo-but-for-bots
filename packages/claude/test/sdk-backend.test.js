@@ -148,6 +148,18 @@ test('a refused admission maps to its tag and never queries', async t => {
   t.is(calls.length, 0);
 });
 
+test('a credential source that rejects is unavailable and never queries', async t => {
+  const { query, calls } = replay([success]);
+  const source = makeCredentialSource({ failure: Error('vault sealed') });
+  const { backend, scratch } = makeHarness(query, { source });
+  t.deepEqual(await backend.infer(makeRequest()), {
+    type: 'unavailable',
+    detail: 'credential source failed: vault sealed',
+  });
+  t.is(calls.length, 0);
+  t.is(scratch.state.made, 0);
+});
+
 test('output beyond the byte limit aborts the query', async t => {
   /** @type {AbortController | undefined} */
   let abortController;

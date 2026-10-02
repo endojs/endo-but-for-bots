@@ -61,16 +61,18 @@ export const makeRequest = ({
   });
 
 /**
- * A credential source that grants `env` (or refuses with `refusal`) and
- * counts acquisitions and releases.
+ * A credential source that grants `env` (or refuses with `refusal`, or
+ * rejects with `failure`) and counts acquisitions and releases.
  *
  * @param {object} [options]
  * @param {Record<string, string>} [options.env]
  * @param {CredentialRefusal['admission']} [options.refusal]
+ * @param {Error} [options.failure]
  */
 export const makeCredentialSource = ({
   env = { ANTHROPIC_AUTH_TOKEN: CREDENTIAL },
   refusal,
+  failure,
 } = {}) => {
   const counts = { acquired: 0, released: 0 };
   const credentialSource = makeExo(
@@ -80,6 +82,9 @@ export const makeCredentialSource = ({
       /** @returns {Promise<CredentialGrant | CredentialRefusal>} */
       async acquire() {
         counts.acquired += 1;
+        if (failure !== undefined) {
+          throw failure;
+        }
         if (refusal !== undefined) {
           return harden({ type: 'refused', admission: harden(refusal) });
         }
