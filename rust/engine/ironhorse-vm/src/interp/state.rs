@@ -2549,9 +2549,13 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(GenRunStack, 22, 22, EmptyAtBoundary, "gen_run_stack")]
-    /// The stack of generators currently executing on a nested
-    /// [`Self::resume_generator`] dispatch (its top is the innermost). The
-    /// `YIELD` arm reads the top to snapshot the right instance.
+    /// The stack of generators currently executing, on a nested
+    /// [`Self::resume_generator`] dispatch or resumed in their callers' loop
+    /// (STACK-DEPTH-REFACTOR.md C4). The `YIELD` arm reads the top, the
+    /// innermost, to snapshot the right instance. A throw can leave a body
+    /// resumed in place while the entries of nested dispatches above it
+    /// still wait for their drivers to pop them, so that body's frame drops
+    /// its own entry, by its `call_depth_base`.
     gen_run_stack: Vec<GenRunFrame>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),

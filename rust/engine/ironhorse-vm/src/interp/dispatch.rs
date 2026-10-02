@@ -19,7 +19,7 @@
 //! through `dispatch_halt_flow!`/`dispatch_result_flow!`, the loop macros'
 //! twins with the same ownership and metering checks.
 //! `tests/dispatch_loop_control_transfer.rs` locks this boundary and its roster.
-use super::invoke::RunCall;
+use super::invoke::{runs_callee_in_place, RunCall};
 use super::{
     branch_target, cannot_coerce_to_object, canonicalize_nan, cesu8_to_units, count_new_locals,
     to_int32, to_number, unary_minus, units_to_be16, ArithOp, AsyncGeneratorState, BitOp,
@@ -2639,35 +2639,6 @@ impl Interp {
                     Err(halt) => dispatch_halt_flow!(halt, self, return_depth, code),
                 },
             }
-        } else if let Some((
-            m @ (NativeMethod::ReflectApply | NativeMethod::ReflectConstruct),
-            base,
-        )) = method
-        {
-            // `Reflect.apply` / `Reflect.construct`, which are not
-            // constructors. A target that is a user function over this
-            // loop's buffer runs in this loop (STACK-DEPTH-REFACTOR.md
-            // C2); any other is called as the native called it.
-            if has_target {
-                dispatch_halt_flow!(
-                    self.catchable_type_error_msg("new: not a constructor".into()),
-                    self,
-                    return_depth,
-                    code
-                );
-            }
-            if let Some(body_start) = dispatch_result_flow!(
-                self.reflect_run_call(m, base, argc, ret_pc, code),
-                self,
-                return_depth,
-                code
-            ) {
-                return Flow::Next(body_start);
-            }
-            if self.check_meter() == MeterCheck::Abort {
-                return Flow::Exit(Step::Host(Halt::MeterAbort));
-            }
-            pc = ret_pc;
         } else if let Some((m, base)) = method {
             // A native prototype method: the call's receiver is
             // `this` (stack[base]); its arguments follow. `code` is
@@ -2685,12 +2656,28 @@ impl Interp {
                     code
                 );
             }
-            dispatch_result_flow!(
-                self.call_native_method_in_place(m, base, argc, code),
-                self,
-                return_depth,
-                code
-            );
+            if runs_callee_in_place(m) {
+                // `Reflect.apply` / `Reflect.construct` and a generator's
+                // `next` / `return` / `throw`: a target that is a user
+                // function, or a generator's body, over this loop's buffer
+                // runs in this loop (STACK-DEPTH-REFACTOR.md C2, C4); any
+                // other is called as the native called it.
+                if let Some(body_start) = dispatch_result_flow!(
+                    self.native_run_call(m, base, argc, ret_pc, code),
+                    self,
+                    return_depth,
+                    code
+                ) {
+                    return Flow::Next(body_start);
+                }
+            } else {
+                dispatch_result_flow!(
+                    self.call_native_method_in_place(m, base, argc, code),
+                    self,
+                    return_depth,
+                    code
+                );
+            }
             if self.check_meter() == MeterCheck::Abort {
                 return Flow::Exit(Step::Host(Halt::MeterAbort));
             }
@@ -4087,16 +4074,32 @@ impl Interp {
         let ret = dispatch_result_flow!(self.end_completion(op), self, return_depth, code);
         let returns = self.frame_returns();
         let ret = self.frame_result(returns, ret);
-        let resume = self.leave_call_to_frame_base();
-        self.push(ret);
-        let pc = resume;
+        let pc = self.leave_call_to_frame_base();
+        if returns == FrameReturn::Generator {
+            self.push_generator_done(ret);
+        } else {
+            self.push(ret);
+        }
         // Returning into a JS caller: `mxFirstCode()` checks, except into
         // the property read or assignment an accessor run in place returns
-        // to (C7).
-        if returns == FrameReturn::Call && self.check_meter() == MeterCheck::Abort {
+        // to (C7). A generator's body run in place (C4) returns to `RUN`'s
+        // call, which checked once the native returned.
+        if matches!(returns, FrameReturn::Call | FrameReturn::Generator)
+            && self.check_meter() == MeterCheck::Abort
+        {
             return Flow::Exit(Step::Host(Halt::MeterAbort));
         }
         Flow::Next(pc)
+    }
+
+    /// `END` of a generator's body resumed in place (STACK-DEPTH-REFACTOR.md
+    /// C4), its frame left, which completed the generator: push the
+    /// `{value: ret, done: true}` result where `RUN`'s call was.
+    #[cold]
+    #[inline(never)]
+    fn push_generator_done(&mut self, ret: Slot) {
+        let result = self.new_generator_result(ret, true);
+        self.push(result);
     }
 
     // `return` (`XS_CODE_RETURN`, xsRun.c:1080): the top-level
@@ -4175,7 +4178,9 @@ impl Interp {
     // temporaries + resume cursor) back into the `generators` table
     // and unwind to the `resume_generator` driver via
     // [`Step::Yielded`], carrying the yielded value (the `.next`
-    // result). `YIELD_STAR` uses the same suspension machinery,
+    // result), or, for a body resumed in place (STACK-DEPTH-REFACTOR.md
+    // C4), return it to `RUN`'s call in this loop. `YIELD_STAR` uses the
+    // same suspension machinery,
     // carrying the delegate's iterator-result object as-is.
     /// The dispatch loop's `YIELD` arm, which also runs `YIELD_STAR`.
     #[inline(never)]
@@ -4232,7 +4237,29 @@ impl Interp {
             g.state = GeneratorState::SuspendedYield;
             g.frame = Some(frame);
         }
+        if self.frame_returns() == FrameReturn::Generator {
+            // A body resumed in place (STACK-DEPTH-REFACTOR.md C4) returns
+            // to `RUN`'s call as its driver returned through the native,
+            // which checked the meter once the native returned.
+            let pc = self.leave_yield_in_place(yielded);
+            if self.check_meter() == MeterCheck::Abort {
+                return Flow::Exit(Step::Host(Halt::MeterAbort));
+            }
+            return Flow::Next(pc);
+        }
         Flow::Exit(Step::Yielded(yielded))
+    }
+
+    /// `YIELD` from a generator's body resumed in place (C4), once the body
+    /// is suspended: leave its frame, which cuts the call's frame and drops
+    /// the generator's run entry, and push the yielded result where the
+    /// call's was. Returns where `RUN`'s caller resumes.
+    #[cold]
+    #[inline(never)]
+    fn leave_yield_in_place(&mut self, yielded: Slot) -> usize {
+        let resume = self.leave_call_to_frame_base();
+        self.push(yielded);
+        resume
     }
 
     // ---- async functions --------------------------------

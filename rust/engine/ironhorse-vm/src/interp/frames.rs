@@ -588,7 +588,48 @@ impl Interp {
         // The frame's activation is over: release the units it held.
         self.held_total -= caller.held;
         self.leave_native_frame(caller.held);
+        if caller.returns == FrameReturn::Generator {
+            self.leave_generator_in_place();
+        }
         caller.ret_pc
+    }
+
+    /// Leaving a generator's body resumed in place (STACK-DEPTH-REFACTOR.md
+    /// C4), by `YIELD`, `END` or a throw unwinding past it: drop its run
+    /// entry and the resume status, as `resume_generator` did once its nested
+    /// loop returned, and complete the generator unless it suspended (a body
+    /// that ended or threw runs no more). A loop that halts leaves such frames
+    /// through [`Self::release_held_above`] instead. After a reset has cleared
+    /// the run stack there is no entry and nothing to do.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn leave_generator_in_place(&mut self) {
+        self.drop_generator_run(self.call_stack.len() + 1);
+    }
+
+    /// Drop the run entry of the generator whose body returns into the frame
+    /// at `call_depth_base - 1`, and the resume status, and complete that
+    /// generator if it is still executing. The entry is the topmost with that
+    /// base, though not always the top one: a throw unwinds frames before the
+    /// nested loops it crosses return, so the entries of bodies that
+    /// `resume_generator` runs above this frame may still be on the stack,
+    /// each to be popped by its own driver.
+    fn drop_generator_run(&mut self, call_depth_base: usize) {
+        let Some(at) = self
+            .gen_run_stack
+            .iter()
+            .rposition(|run| run.call_depth_base == call_depth_base)
+        else {
+            return;
+        };
+        let run = self.gen_run_stack.remove(at);
+        self.resume_status = ResumeStatus::NoStatus;
+        if let Some(g) = self.generators.get_mut(&run.gen) {
+            if g.state == GeneratorState::Executing {
+                g.state = GeneratorState::Completed;
+                g.frame = None;
+            }
+        }
     }
 
     /// Release the units held by the frames above `depth` (see
@@ -596,6 +637,10 @@ impl Interp {
     /// charge on its way out, and clear them so a later pop releases nothing.
     /// The dispatch loop that pushed them calls this when it exits with them
     /// still on the call stack (a halt, or a throw no frame of it caught).
+    /// A generator's body among them is left as its `resume_generator` left
+    /// it on such an exit (C4): its run entry dropped and the generator
+    /// completed, innermost first, the frame kept for the reset to pop as a
+    /// call.
     #[cold]
     #[inline(never)]
     pub(super) fn release_held_above(&mut self, depth: usize) {
@@ -605,6 +650,12 @@ impl Interp {
         }
         self.held_total -= held;
         self.leave_native_frame(held);
+        for index in (depth..self.call_stack.len()).rev() {
+            if self.call_stack[index].returns == FrameReturn::Generator {
+                self.call_stack[index].returns = FrameReturn::Call;
+                self.drop_generator_run(index + 1);
+            }
+        }
     }
 
     /// Clear the units every frame on the call stack holds, without releasing

@@ -3865,12 +3865,13 @@ fn a_stale_evaluator_environment_row_restores_without_restoring_the_pin() {
 
 /// The nests the in-place tests run, each level calling the next through a
 /// call `RUN` enters in the caller's dispatch loop (STACK-DEPTH-REFACTOR.md
-/// C1, C2, C7), and the innermost calling `bottom`: through a bound function,
-/// a Proxy that forwards to `f`, a Proxy whose `apply` trap calls `f`,
-/// `Reflect.apply`, `Reflect.construct`, a getter and a setter. Each defines
-/// `wrap`, which gives a function the same kind of call, and comes with its
-/// ceiling and the depth the refusal one level past it reports.
-const IN_PLACE_NESTS: [(&str, &str, usize, usize); 7] = [
+/// C1, C2, C4, C7), and the innermost calling `bottom`: through a bound
+/// function, a Proxy that forwards to `f`, a Proxy whose `apply` trap calls
+/// `f`, `Reflect.apply`, `Reflect.construct`, a getter, a setter and a
+/// generator's `next`. Each defines `wrap`, which gives a function the same
+/// kind of call, and comes with its ceiling and the depth the refusal one
+/// level past it reports.
+const IN_PLACE_NESTS: [(&str, &str, usize, usize); 8] = [
     (
         "bound",
         "function f(n, bottom) { return n > 0 ? f.bind(null, n - 1, bottom)() : bottom(); } \
@@ -3922,6 +3923,13 @@ const IN_PLACE_NESTS: [(&str, &str, usize, usize); 7] = [
          function wrap(w) { var o = { set x(v) { w(); } }; return function () { o.x = 0; }; }",
         119,
         2056,
+    ),
+    (
+        "generator",
+        "function f(n, bottom) { if (n <= 0) return bottom(); var r; function* g() { r = f(n - 1, bottom); } g().next(); return r; } \
+         function wrap(w) { function* g() { w(); } return function () { g().next(); }; }",
+        63,
+        2064,
     ),
 ];
 
@@ -4065,19 +4073,22 @@ fn in_place_frames_release_their_charge_after_a_panic_or_heap_exhaustion() {
 #[test]
 fn a_call_that_is_not_entered_in_place_releases_its_units() {
     // `RUN` charges a Proxy layer's unit before it looks up the trap, and a
-    // `Reflect.apply` or `Reflect.construct` call's before it reads its
-    // operands, and `GET_PROPERTY` or `SET_PROPERTY` its light unit before it
-    // walks an ordinary object for an accessor. A revoked Proxy, a throwing
-    // `apply` getter, a trap that is not callable, a target that cannot be
-    // called or constructed, an argument list that is not an object or whose
-    // reads throw, all throw before any frame holds the units; a native, bound
-    // or Proxy callee is called through `invoke_value` or `construct_value`. So
-    // is a native, bound or Proxy accessor, through `invoke_getter` or
-    // `invoke_setter`; a Proxy holder's trap that throws throws before any
-    // accessor is found; a typed array holder or parent, or a frozen property,
-    // takes no accessor; and an accessor run in place throws from its frame, a
-    // class one as its body begins. Each gives the units back, or 200 rounds
-    // leave the next nest no budget.
+    // `Reflect.apply`, `Reflect.construct` or generator method call's before it
+    // reads its operands, and `GET_PROPERTY` or `SET_PROPERTY` its light unit
+    // before it walks an ordinary object for an accessor. A revoked Proxy, a
+    // throwing `apply` getter, a trap that is not callable, a target that
+    // cannot be called or constructed, an argument list that is not an object
+    // or whose reads throw, a receiver that is not a generator, all throw
+    // before any frame holds the units; a native, bound or Proxy callee is
+    // called through `invoke_value` or `construct_value`. So is a native, bound
+    // or Proxy accessor, through `invoke_getter` or `invoke_setter`; a Proxy
+    // holder's trap that throws throws before any accessor is found; a typed
+    // array holder or parent, or a frozen property, takes no accessor; a
+    // running generator throws, and one completed, or not started for a
+    // `return` or `throw`, gives its result without its body; and an accessor
+    // or generator body run in place throws from its frame, a class one as
+    // its body begins.
+    // Each gives the units back, or 200 rounds leave the next nest no budget.
     let (name, nest, ceiling, _) = IN_PLACE_NESTS[2];
     for (setup, call) in [
         (
@@ -4183,6 +4194,24 @@ fn a_call_that_is_not_entered_in_place_releases_its_units() {
             "(function () { 'use strict'; p.s = 2; })()",
         ),
         ("var p = { set s(v) { throw 16; } };", "p.s = 1"),
+        (
+            "var p = (function* () {})().next;",
+            "p.call({})",
+        ),
+        (
+            "function* g() { yield 1; } var p = g(); p.next(); p.next();",
+            "p.next()",
+        ),
+        ("function* g() { yield 1; } var p = g();", "g().return(1)"),
+        ("function* g() { yield 1; } var p = g();", "g().throw(17)"),
+        (
+            "function* g() { p.next(); } var p = g();",
+            "g(); p = g(); p.next()",
+        ),
+        (
+            "function* g() { yield 1; throw 18; } var p;",
+            "p = g(); p.next(); p.next()",
+        ),
     ] {
         let (mut m, code) = in_place_machine(
             nest,
@@ -4293,6 +4322,112 @@ fn a_setter_run_in_place_leaves_the_value_assigned_where_the_assignment_was() {
     assert!(out.completed, "{:?}", out.halt);
     assert_eq!(out.result, "0,1,2;3;22;5,6,x;78;1,mapped,3,async6,7,mapped");
     assert!(m.stack.is_empty(), "{} slots left", m.stack.len());
+    assert_eq!(m.native_depth, 0);
+    assert_eq!(m.held_total, 0);
+}
+
+#[test]
+fn a_generator_resumed_in_place_leaves_its_result_where_the_call_was() {
+    // A generator body's `YIELD` and `END`, resumed by `next`, `return` or
+    // `throw`, push the `{value, done}` result where the call was, so
+    // operands pending around it see the result in its place; the program
+    // leaves the stack empty and no generator run entry behind.
+    let program = "function* g(a) { var x = yield a; try { yield x * 2; } finally { yield 'f'; } return 'r'; } \
+        var it = g(1); \
+        var r = [0, it.next().value, 2].join() + ';' + \
+            (10 + it.next(3).value * 3) + ';' + \
+            `${it.return(9).value}|${it.next().value}|${JSON.stringify(it.next())}` + ';' + \
+            [g(5).next(0).value, ...[g(6).next().value]].join() + ';'; \
+        function* h() { try { yield 1; } catch (e) { yield 'c' + e; } } \
+        var hi = h(); hi.next(); r += [hi.throw('t').value, hi.next().done].join(); r";
+    let (code, symbols) = ironhorse_compile::compile_atoms(program).unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&crate::parse_symbols(&symbols));
+    let out = m.run(&code);
+    assert!(out.completed, "{:?}", out.halt);
+    assert_eq!(out.result, "0,1,2;28;f|9|{\"done\":true};5,6;ct,true");
+    assert!(m.stack.is_empty(), "{} slots left", m.stack.len());
+    assert!(m.gen_run_stack.is_empty());
+    assert_eq!(m.native_depth, 0);
+    assert_eq!(m.held_total, 0);
+}
+
+#[test]
+fn a_generator_resumed_in_place_is_done_after_a_halt_in_its_body() {
+    // A halt or an uncaught throw inside a body resumed in place leaves the
+    // generator completed, as `resume_generator` left it once its nested
+    // loop returned: the next crank's `next` gives `{done: true}` rather
+    // than "generator is running".
+    let cases = [
+        ("StepLimit", "while (true) {}"),
+        ("MeterAbort", "while (true) {}"),
+        ("StackOverflow", "(function deep() { return deep(); })()"),
+        ("ReentryLimit", "f(200, function () { return 0; })"),
+        ("Throw", "throw new Error('body')"),
+    ];
+    for (kind, body) in cases {
+        let (mut m, code) = in_place_machine(
+            IN_PLACE_NESTS[7].1,
+            &format!("function* halted() {{ yield 0; {body}; }} var it = halted(); it.next(); f(20, function () {{ return it.next(); }})"),
+        );
+        if kind == "MeterAbort" {
+            let mut checks = 0;
+            m.arm_meter(
+                1,
+                Box::new(move |_| {
+                    checks += 1;
+                    checks < 400
+                }),
+            );
+        }
+        let out = if kind == "StepLimit" {
+            m.run_bounded(&code, 200_000)
+        } else {
+            m.run(&code)
+        };
+        assert!(
+            format!("{:?}", out.halt).starts_with(kind),
+            "{kind}: {:?}",
+            out.halt
+        );
+        m.reattach_meter_host(Box::new(|_| true));
+        let (next, names) = ironhorse_compile::compile_atoms("JSON.stringify(it.next())").unwrap();
+        let next = m
+            .relink_crank(&next, &crate::parse_symbols(&names))
+            .unwrap();
+        let out = m.run(&next);
+        assert!(out.completed, "{kind}: {:?}", out.halt);
+        assert_eq!(out.result, "{\"done\":true}", "{kind}");
+        assert_eq!(m.native_depth, 0, "{kind}");
+    }
+}
+
+#[test]
+fn a_throw_past_a_generator_resumed_in_place_completes_each_generator_it_leaves() {
+    // A generator `resume_generator` still runs in a nested loop, inside a
+    // body resumed in place, throws to a handler below both. The throw
+    // leaves the in-place frame before the nested loop returns, so that
+    // frame must drop its own run entry, not the inner generator's still
+    // above it: both generators end completed, not "running" (the C4
+    // pre-commit review's regression).
+    let program = "function* boom() { throw new Error('boom'); } \
+        var resumers = [function (g) { return Reflect.apply(g.next, g, []); }, function (g) { return g.next.call(g); }]; \
+        var out = []; \
+        for (var i = 0; i < resumers.length; i++) { \
+            var inner = boom(); \
+            var outer = (function* () { resumers[i](inner); yield 1; })(); \
+            try { outer.next(); } catch (e) { out.push(String(e)); } \
+            out.push(JSON.stringify(outer.next()), JSON.stringify(inner.next())); \
+        } \
+        out.join('|')";
+    let (code, symbols) = ironhorse_compile::compile_atoms(program).unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&crate::parse_symbols(&symbols));
+    let out = m.run(&code);
+    assert!(out.completed, "{:?}", out.halt);
+    let once = "Error: boom|{\"done\":true}|{\"done\":true}";
+    assert_eq!(out.result, format!("{once}|{once}"));
+    assert!(m.gen_run_stack.is_empty());
     assert_eq!(m.native_depth, 0);
     assert_eq!(m.held_total, 0);
 }
