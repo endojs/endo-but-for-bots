@@ -403,7 +403,7 @@ test('stderr past the ring-buffer ceiling still classifies on its tail', async t
       },
     ],
   });
-  const chunk = 'x'.repeat(8_192);
+  const chunk = 'x'.repeat(8192);
   const { backend } = makeHarness(
     {
       // 10 chunks of 8 KiB (80 KiB) comfortably exceeds the 64 KiB ring
@@ -417,17 +417,18 @@ test('stderr past the ring-buffer ceiling still classifies on its tail', async t
 });
 
 test('a scratch cleanup failure does not replace the turn result', async t => {
+  const memory = makeMemoryScratch();
   const scratch = {
-    makeScratchDirectory: async () =>
-      harden({
-        path: '/scratch/turn',
-        configDirectory: '/scratch/turn/config',
-        writeFile: async (/** @type {string} */ name) =>
-          `/scratch/turn/${name}`,
+    ...memory,
+    makeScratchDirectory: async () => {
+      const directory = await memory.makeScratchDirectory();
+      return harden({
+        ...directory,
         remove: async () => {
           throw Error('rm failed');
         },
-      }),
+      });
+    },
   };
   const { backend } = makeHarness(
     { stdout: [successResult({ result: 'hello' })] },
