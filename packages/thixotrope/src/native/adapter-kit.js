@@ -55,6 +55,8 @@ export const makeAdapter = ({ label, bind, unbind, resolve }) => {
     throw Error('makeAdapter resolve must be a function');
   /** @type {Map<unknown, {spec: Spec, epoch: bigint, binding: Binding}>} */
   const bound = new Map();
+  // A manager's epochs count up from one, so none is this.
+  const UNRESOLVED_EPOCH = -1n;
   const enqueue = makeSerialQueue();
   /**
    * Bind a registration, or find it already bound. Answers the resolved
@@ -91,11 +93,14 @@ export const makeAdapter = ({ label, bind, unbind, resolve }) => {
       resolved = harden(resolve(binding, spec));
     } catch (error) {
       // The resource was acquired; a registration that cannot say what it
-      // became is released rather than kept where nothing can name it.
+      // became is released rather than kept where nothing can name it. One
+      // whose release fails too is kept under its key with an epoch no
+      // registration has, so the next bind or unbind of the key releases
+      // it again.
       try {
         await unbind(binding, key);
       } catch (_release) {
-        // The failure to report is the bind's own.
+        bound.set(key, { spec, epoch: UNRESOLVED_EPOCH, binding });
       }
       throw error;
     }

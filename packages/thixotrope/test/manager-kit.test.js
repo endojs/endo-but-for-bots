@@ -464,40 +464,43 @@ test('a decorate that throws or answers no record adds nothing, and the registra
   });
 });
 
-test('a replacement the adapter does not take retires the incarnation, and a fresh one restores the rest', async t => {
-  /** @type {Map<unknown, any>} */
-  const bound = new Map();
-  let incarnations = 0;
-  /**
-   * @param {unknown} key
-   * @param {any} spec
-   */
-  const bindOne = (key, spec) => {
-    if (spec.refused) throw Error('refused');
-    bound.set(key, spec);
-  };
-  const adapter = Far('Adapter', {
-    bind: (/** @type {unknown} */ key, /** @type {any} */ spec) =>
-      bindOne(key, spec),
-    unbind: (/** @type {unknown} */ key) => bound.delete(key),
-    restore: (/** @type {Array<[unknown, any, bigint]>} */ entries) =>
-      harden(
-        entries.map(([key, spec]) => {
-          try {
-            bindOne(key, spec);
-            return harden({ key });
-          } catch (error) {
-            return harden({ key, error: /** @type {Error} */ (error).message });
-          }
-        }),
-      ),
-  });
+/**
+ * Managers over the real adapter kit, each incarnation its own resource,
+ * whose releases can be made to fail and whose binds refuse a spec marked
+ * so, for what a replacement the adapter did not take leaves behind.
+ */
+const replacementFixture = () => {
+  /** @type {Array<Map<unknown, any>>} */
+  const incarnations = [];
+  let failingReleases = 0;
   const adapters = Far('Launcher', {
     create: () => {
-      incarnations += 1;
+      /** @type {Map<unknown, any>} */
+      const held = new Map();
+      incarnations.push(held);
+      const adapter = makeAdapter({
+        label: 'Slot',
+        /**
+         * @param {unknown} key
+         * @param {any} spec
+         */
+        bind: (key, spec) => {
+          if (spec.refused) throw Error('refused');
+          held.set(key, spec);
+          return key;
+        },
+        /** @param {unknown} key */
+        unbind: key => {
+          if (failingReleases > 0) {
+            failingReleases -= 1;
+            throw Error('release failed');
+          }
+          held.delete(key);
+        },
+      });
       return Far('Incarnation', {
         getRoot: () => adapter,
-        retire: () => bound.clear(),
+        retire: () => held.clear(),
       });
     },
   });
@@ -509,19 +512,64 @@ test('a replacement the adapter does not take retires the incarnation, and a fre
        * @param {any} a
        * @param {any} b
        */
-      same: (a, b) => a.n === b.n,
+      same: (a, b) => a.n === b.n && a.refused === b.refused,
       replaces: () => true,
     },
   );
-  await manager.register('one', harden({ n: 1 }));
-  await manager.register('two', harden({ n: 1 }));
-  t.is(incarnations, 1);
-  const replaced = await manager.register(
+  return {
+    manager,
+    incarnations,
+    current: () => incarnations[incarnations.length - 1],
+    /** @param {number} count */
+    failReleases: count => {
+      failingReleases = count;
+    },
+  };
+};
+
+test('a replacement the adapter refuses leaves the rest of the incarnation alone', async t => {
+  const f = replacementFixture();
+  await f.manager.register('one', harden({ n: 1 }));
+  await f.manager.register('two', harden({ n: 1 }));
+  const replaced = await f.manager.register(
     'one',
     harden({ n: 2, refused: true }),
   );
   t.like(replaced.status, { status: 'inactive', error: 'refused' });
-  t.is(incarnations, 2, 'the incarnation holding the replaced binding went');
-  t.false(bound.has('one'), 'nothing holds the replaced registration');
-  t.deepEqual(bound.get('two'), { n: 1 }, 'the rest were restored at once');
+  t.is(f.incarnations.length, 1, 'no incarnation was retired');
+  t.false(f.current().has('one'));
+  t.deepEqual(f.current().get('two'), { n: 1 });
+});
+
+test('a replaced binding whose release failed is released by asking again', async t => {
+  const f = replacementFixture();
+  await f.manager.register('one', harden({ n: 1 }));
+  await f.manager.register('two', harden({ n: 1 }));
+  f.failReleases(1);
+  const replaced = await f.manager.register('one', harden({ n: 2 }));
+  t.like(
+    replaced.status,
+    { status: 'bound' },
+    'the replacement was bound once the second release freed the key',
+  );
+  t.is(f.incarnations.length, 1, 'the second release succeeded in place');
+  t.deepEqual(f.current().get('one'), { n: 2 });
+  t.deepEqual(f.current().get('two'), { n: 1 });
+});
+
+test('a replaced binding that cannot be released goes with its incarnation, and a fresh one binds the rest', async t => {
+  const f = replacementFixture();
+  await f.manager.register('one', harden({ n: 1 }));
+  await f.manager.register('two', harden({ n: 1 }));
+  f.failReleases(2);
+  const replaced = await f.manager.register('one', harden({ n: 2 }));
+  t.is(f.incarnations.length, 2, 'the uncertain incarnation was retired');
+  t.is(f.incarnations[0].size, 0, 'its bindings went with it');
+  t.like(
+    replaced.status,
+    { status: 'bound' },
+    'the status is the fresh incarnation outcome',
+  );
+  t.deepEqual(f.current().get('one'), { n: 2 });
+  t.deepEqual(f.current().get('two'), { n: 1 });
 });

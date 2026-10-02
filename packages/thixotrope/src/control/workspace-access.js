@@ -5,6 +5,7 @@ import harden from '@endo/harden';
 import { M } from '@endo/patterns';
 
 import { isRemotable } from '../is-remotable.js';
+import { assertInstallationName } from './names.js';
 
 /**
  * What a workspace lets the host's registry do to it: resolve the grants an
@@ -64,7 +65,7 @@ export const makeWorkspaceAccess = inventory => {
      * @param {unknown} value
      */
     put: (name, value) => {
-      name.length > 0 || Fail`Expected an installation name`;
+      assertInstallationName(name);
       if (inventory.has(name)) {
         inventory.get(name) === value ||
           Fail`Inventory name ${q(name)} was taken by another value`;

@@ -1,6 +1,7 @@
 // @ts-check
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
+import { passStyleOf } from '@endo/pass-style';
 
 import { describeError } from '../describe-error.js';
 import { makeSerialQueue } from '../serial-queue.js';
@@ -54,8 +55,10 @@ import { makeSerialQueue } from '../serial-queue.js';
  *   fields a status record carries beside the kit's own `key`, `status`
  *   and `error`, from what the registration is (the URL a listener serves,
  *   the deadline an alarm keeps); a field under one of the kit's names is
- *   dropped. Never asked of a closed registration, which no longer names
- *   what it was made with
+ *   dropped. The answer is hardened, so it must be a fresh record of
+ *   passable fields, and anything else, a promise included, adds nothing.
+ *   Never asked of a closed registration, which no longer names what it
+ *   was made with
  */
 export const makeManager = (
   { adapters, makeKeeper },
@@ -80,20 +83,23 @@ export const makeManager = (
    * @param {string} [error]
    */
   const report = (key, spec, status, error = undefined) => {
-    /** @type {unknown} */
-    let extra;
+    /** @type {Array<[string, unknown]>} */
+    let fields = [];
     if (spec !== undefined && status !== 'closed' && decorate !== undefined) {
       try {
-        extra = decorate(key, spec, status);
+        // Only a record of passable fields decorates a status, which may
+        // cross to another vat.
+        const extra = harden(decorate(key, spec, status));
+        const style = passStyleOf(extra);
+        if (style === 'copyRecord') fields = Object.entries(extra);
+        // A promise is no record, and its rejection is no one's to report.
+        else if (style === 'promise')
+          void (/** @type {Promise<unknown>} */ (extra).catch(() => {}));
       } catch (_error) {
         // What the author adds is decoration: a status is reported, and a
         // registration kept closable, whatever it threw.
       }
     }
-    const fields =
-      typeof extra === 'object' && extra !== null && !Array.isArray(extra)
-        ? Object.entries(extra)
-        : [];
     return harden({
       ...Object.fromEntries(
         fields.filter(([field]) => !['key', 'status', 'error'].includes(field)),
@@ -259,15 +265,24 @@ export const makeManager = (
             // rebinds.
             entry.spec = spec;
             entry.epoch = nextEpoch();
-            const status = await reconcile(key, entry);
+            let status = await reconcile(key, entry);
             // A replacement the adapter did not take may have left the
-            // replaced binding in place, its release having failed: the
-            // incarnation is retired so that binding goes with its process,
-            // and a fresh one restores every desired registration, this one
-            // in its replaced form.
-            if (status.status === 'inactive') {
-              await keeper.retire().catch(() => {});
-              await keeper.provide().catch(() => {});
+            // replaced binding in place, its release having failed. The
+            // adapter is asked to let it go, as a close does; only if that is
+            // uncertain is the incarnation retired, so the binding goes with
+            // its process, and the replacement reconciled on a fresh one,
+            // which restores every desired registration.
+            const adapter = keeper.current();
+            if (status.status === 'inactive' && adapter !== undefined) {
+              try {
+                // A release that succeeds now leaves the key free, so the
+                // replacement is bound again rather than left inactive.
+                if (await E(adapter).unbind(key))
+                  status = await reconcile(key, entry);
+              } catch (_error) {
+                await keeper.retire().catch(() => {});
+                status = await reconcile(key, entry);
+              }
             }
             return harden({ handle: entry.handle, status });
           }

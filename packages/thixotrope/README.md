@@ -382,7 +382,7 @@ own and holds every pending deadline in its heap, and its ephemeral module is a 
 one OS timer per alarm against its own clock and reports each firing to the manager.
 A delay is resolved to a deadline in that process when the alarm is armed, and the manager adopts
 the resolved registration, so a restart restores the deadline rather than counting the delay again.
-A restart, or the process ending on its own, rebuilds the process and re-arms every pending alarm;
+A restart, or the process ending on its own, rebuilds the process and re-arms every armed alarm;
 one whose deadline passed meanwhile fires at once, and a firing the manager had not recorded is
 reported again and settles once.
 `thix installations` lists the clock; removing it retires its vat, its alarms and its process, and
@@ -396,8 +396,8 @@ The reminder example attaches its listener in another guest vat; both survive re
 `alarms` asks the clock in the workspace for the number of `pending` alarms and, of those, the
 `armed` ones, whose registration the clock's process took, so it fails while the workspace vat is
 quarantined or the clock is not installed.
-Arming is a round trip to the process: an alarm still being armed when the host ends is rejected
-rather than retried, and only an armed one survives the restart.
+Arming is a round trip to the process: an alarm still being armed when the host or the process
+ends is rejected rather than retried, and only an armed one survives the restart.
 
 Deadlines are nonnegative signed 64-bit bigint Unix milliseconds; a delay is a bigint of
 milliseconds up to 2^53.
@@ -405,7 +405,7 @@ The process checks wall-clock time before reporting, so this is not a precise ti
 A backward clock adjustment delays firing; a forward adjustment is noticed at the next timer check.
 Recurring scheduling, per-application quotas, and notification UI remain future work.
 
-Workspace metadata version 20 is required.
+Workspace metadata version 21 is required.
 The supervisor bumps the version whenever a guest closure it ships by source changes shape, since
 an installed closure is frozen in its vat's heap; `src/control/supervisor.js` lists what each
 version changed.
