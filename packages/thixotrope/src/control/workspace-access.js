@@ -48,7 +48,7 @@ export const makeWorkspaceAccess = inventory => {
         // A value the user put into the inventory that is not even passable
         // is not a capability, rather than an error to explain.
         isRemotable(value) ||
-          Fail`Installation grants must be remotable capabilities`;
+          Fail`A value granted from the inventory must be a remotable capability`;
         Object.defineProperty(powers, power, { value, enumerable: true });
       }
       return harden(powers);

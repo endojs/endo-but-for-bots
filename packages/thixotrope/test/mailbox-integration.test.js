@@ -5,6 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { connectLocalControl } from '../src/control/local-control.js';
+import { makeWorkspaceClient } from '../src/control/workspace-client.js';
 import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
 import { makeNodePowers } from '../src/platform/node/powers.js';
 import { serveThixotrope } from '../src/control/supervisor.js';
@@ -35,10 +36,10 @@ test.serial(
       'evaluate',
       "(() => { const broken = Promise.reject(Error('broken mailbox')); broken.catch(() => {}); globalThis.mailAddressBook = broken; return true; })()",
     );
-    await t.throwsAsync(() => client.call('contacts'), {
+    await t.throwsAsync(() => makeWorkspaceClient(client).contacts(), {
       message: /broken mailbox/,
     });
     await client.call('evaluate', 'delete globalThis.mailAddressBook');
-    t.deepEqual(await client.call('contacts'), []);
+    t.deepEqual(await makeWorkspaceClient(client).contacts(), []);
   },
 );

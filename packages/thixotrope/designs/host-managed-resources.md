@@ -441,7 +441,7 @@ row cap, the release and retry protocol of the guest clock
 `onRetireWorker` and `beforeStartNotices` hooks, the supervisor's `alarmNow`
 test power, and `alarm-settlement.md`; section 7.1 is superseded.
 `alarmStatus` asks the clock for its count and reports `{ pending }` (and `armed`, as of
-version 19).
+version 19; the client asks the clock itself since 10.2).
 Workspace metadata was version 9 at this step; sections 1, 2 and 4 took it to 12.
 
 ### 8.2 The control socket (Done.)
@@ -684,7 +684,7 @@ It is the larger change and the larger reduction, and it leaves the host providi
 A start that cannot serve the hub cannot serve anything, so the fallback has nothing left to fall
 back from.
 
-### 10.2 Resource commands off the administration
+### 10.2 Resource commands off the administration (Done in part.)
 
 Nine administration methods forward to the address book, two of them by evaluating guest source
 strings because the book's `send` and `take` take capabilities rather than inventory keys; a tenth
@@ -700,6 +700,21 @@ The mail view subscribes to the inbox and the outbox through the one view lifeti
 Workspace version bump.
 
 Recommendation: yes, with 10.1.
+
+As built, without 10.1: the control connection already carries references, so the administration
+hands out the selected workspace's address book, `getAddressBook()`, the remotable capability under
+an inventory key, `lookup(key)`, and keeps a value under a key, `keep(key, value)`, and the ten
+methods go.
+It does not hand out the inventory itself: a connection that held it could subscribe durably or
+put references of its own into the workspace's heap past the connection's end, which the views'
+ephemeral bridges exist to prevent; `keep` can still keep a reference the connection exports, which
+breaks when it closes.
+`makeWorkspaceClient` (`src/control/workspace-client.js`) composes the commands in the client, for
+`thix`, the mail view and the tests alike: a message's capability is fetched from the inventory and
+handed to the book, and a taken one is put into the inventory, since the book holds no inventory
+authority of its own and mail can be granted to applications.
+The book is still made on first use rather than at bootstrap, and the mail view still refreshes on
+command; a `watch(name, listener)` for it is not done.
 
 ### 10.3 One-sided registration sameness (Done: (b).)
 

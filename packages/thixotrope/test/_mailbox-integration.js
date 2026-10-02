@@ -8,6 +8,7 @@ import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 import { connectLocalControl } from '../src/control/local-control.js';
+import { makeWorkspaceClient } from '../src/control/workspace-client.js';
 import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
 import { serveThixotrope } from '../src/control/supervisor.js';
 import { makeFsStore } from '../src/store/store-fs.js';
@@ -67,7 +68,9 @@ export const registerMailboxIntegration = (test, kind) => {
         };
         let alice = await start('alice');
         let bob = await start('bob');
-        const invitation = await alice.client.call('invite', 'bob');
+        const invitation = await makeWorkspaceClient(alice.client).invite(
+          'bob',
+        );
         const bobStore = makeFsStore(nodePowers, join(root, 'bob'));
         const beforeSessions = bobStore.listSessionTokens();
         const invalid = {
@@ -78,7 +81,11 @@ export const registerMailboxIntegration = (test, kind) => {
           },
         };
         await t.throwsAsync(
-          () => bob.client.call('accept', 'bad', JSON.stringify(invalid)),
+          () =>
+            makeWorkspaceClient(bob.client).accept(
+              'bad',
+              JSON.stringify(invalid),
+            ),
           { message: /Unix peer/ },
         );
         t.deepEqual(
@@ -86,16 +93,21 @@ export const registerMailboxIntegration = (test, kind) => {
           beforeSessions,
           'invalid invitations create no durable session obligations',
         );
-        t.true(await bob.client.call('accept', 'alice', invitation));
+        t.true(
+          await makeWorkspaceClient(bob.client).accept('alice', invitation),
+        );
         await until(
           async () =>
-            (await bob.client.call('contacts'))[0]?.status === 'ready',
+            (await makeWorkspaceClient(bob.client).contacts())[0]?.status ===
+            'ready',
         );
         t.deepEqual(
-          (await alice.client.call('contacts')).map(({ name, status }) => ({
-            name,
-            status,
-          })),
+          (await makeWorkspaceClient(alice.client).contacts()).map(
+            ({ name, status }) => ({
+              name,
+              status,
+            }),
+          ),
           [{ name: 'bob', status: 'ready' }],
         );
         await alice.client.call(
@@ -103,15 +115,22 @@ export const registerMailboxIntegration = (test, kind) => {
           "E(vats).createWorker('shared-counter').then(w => E(w).evaluate(\"(() => { let n = 0n; return Far('Counter', { incr: () => ++n, read: () => n }); })()\")).then(counter => { inventory.set('counter', counter); return true; })",
         );
         t.is(
-          await alice.client.call('send', 'bob', 'Try this counter', 'counter'),
+          await makeWorkspaceClient(alice.client).send(
+            'bob',
+            'Try this counter',
+            'counter',
+          ),
           '1',
         );
-        await until(async () => (await bob.client.call('inbox')).length === 1);
-        t.deepEqual(await bob.client.call('inbox'), [
+        await until(
+          async () =>
+            (await makeWorkspaceClient(bob.client).inbox()).length === 1,
+        );
+        t.deepEqual(await makeWorkspaceClient(bob.client).inbox(), [
           { id: '1', from: 'alice', text: 'Try this counter' },
         ]);
         if (recovery) {
-          t.true(await bob.client.call('takeMessage', '1', 'shared'));
+          t.true(await makeWorkspaceClient(bob.client).take('1', 'shared'));
         } else {
           const view = spawn(
             process.execPath,
@@ -147,8 +166,7 @@ export const registerMailboxIntegration = (test, kind) => {
         );
         if (!recovery) {
           t.is(
-            await bob.client.call(
-              'send',
+            await makeWorkspaceClient(bob.client).send(
               'alice',
               'Returning the same capability',
               'shared',
@@ -156,9 +174,10 @@ export const registerMailboxIntegration = (test, kind) => {
             '1',
           );
           await until(
-            async () => (await alice.client.call('inbox')).length === 1,
+            async () =>
+              (await makeWorkspaceClient(alice.client).inbox()).length === 1,
           );
-          t.true(await alice.client.call('takeMessage', '1', 'returned'));
+          t.true(await makeWorkspaceClient(alice.client).take('1', 'returned'));
           t.is(
             await alice.client.call(
               'evaluate',
@@ -171,7 +190,11 @@ export const registerMailboxIntegration = (test, kind) => {
         bob.client.close();
         await bob.supervisor.close();
         t.is(
-          await alice.client.call('send', 'bob', 'While offline', 'counter'),
+          await makeWorkspaceClient(alice.client).send(
+            'bob',
+            'While offline',
+            'counter',
+          ),
           '2',
         );
         alice.client.close();
@@ -179,9 +202,12 @@ export const registerMailboxIntegration = (test, kind) => {
         // Both roles restart, with the sender returning first while Bob is absent.
         alice = await start('alice');
         bob = await start('bob');
-        await until(async () => (await bob.client.call('inbox')).length === 2);
+        await until(
+          async () =>
+            (await makeWorkspaceClient(bob.client).inbox()).length === 2,
+        );
         await until(async () =>
-          (await alice.client.call('outbox')).every(
+          (await makeWorkspaceClient(alice.client).outbox()).every(
             entry => entry.status === 'delivered',
           ),
         );
@@ -193,10 +219,12 @@ export const registerMailboxIntegration = (test, kind) => {
           '2n',
         );
         t.deepEqual(
-          (await bob.client.call('inbox')).map(entry => entry.text),
+          (await makeWorkspaceClient(bob.client).inbox()).map(
+            entry => entry.text,
+          ),
           ['Try this counter', 'While offline'],
         );
-        t.true(await bob.client.call('discardMessage', '1'));
+        t.true(await makeWorkspaceClient(bob.client).discard('1'));
         t.is(
           await bob.client.call(
             'evaluate',
@@ -210,10 +238,11 @@ export const registerMailboxIntegration = (test, kind) => {
         );
         // Redemption already withdrew the publication, so there is nothing
         // left to revoke; the established contact is untouched either way.
-        t.false(await alice.client.call('revokeInvitation', invitation));
+        t.false(
+          await makeWorkspaceClient(alice.client).revokeInvitation(invitation),
+        );
         t.is(
-          await bob.client.call(
-            'send',
+          await makeWorkspaceClient(bob.client).send(
             'alice',
             'Contact remains usable',
             'shared',
@@ -221,7 +250,8 @@ export const registerMailboxIntegration = (test, kind) => {
           '1',
         );
         await until(
-          async () => (await alice.client.call('inbox')).length === 1,
+          async () =>
+            (await makeWorkspaceClient(alice.client).inbox()).length === 1,
         );
 
         // Removing the mailbox loses its messages, not the address book or
@@ -237,12 +267,11 @@ export const registerMailboxIntegration = (test, kind) => {
         const removedMailbox = await mailboxVatOf(bob);
         t.truthy(removedMailbox);
         t.true(await bob.client.call('remove', 'mailbox'));
-        await t.throwsAsync(() => bob.client.call('inbox'), {
+        await t.throwsAsync(() => makeWorkspaceClient(bob.client).inbox(), {
           message: /no mailbox/,
         });
         t.is(
-          await alice.client.call(
-            'send',
+          await makeWorkspaceClient(alice.client).send(
             'renamed bob',
             'Into the void',
             'counter',
@@ -250,13 +279,14 @@ export const registerMailboxIntegration = (test, kind) => {
           '3',
         );
         await until(async () =>
-          (await alice.client.call('outbox')).some(
+          (await makeWorkspaceClient(alice.client).outbox()).some(
             entry => entry.id === '3' && entry.status === 'failed',
           ),
         );
         t.regex(
-          (await alice.client.call('outbox')).find(entry => entry.id === '3')
-            .error,
+          (await makeWorkspaceClient(alice.client).outbox()).find(
+            entry => entry.id === '3',
+          ).error,
           /no mailbox/,
         );
         bob.client.close();
@@ -269,26 +299,30 @@ export const registerMailboxIntegration = (test, kind) => {
           { status: 'ready' },
         );
         t.not(await mailboxVatOf(bob), removedMailbox);
-        t.deepEqual(await bob.client.call('inbox'), []);
-        t.like((await bob.client.call('contacts'))[0], {
+        t.deepEqual(await makeWorkspaceClient(bob.client).inbox(), []);
+        t.like((await makeWorkspaceClient(bob.client).contacts())[0], {
           name: 'alice',
           status: 'ready',
         });
         t.is(
-          await alice.client.call(
-            'send',
+          await makeWorkspaceClient(alice.client).send(
             'renamed bob',
             'After the new mailbox',
             'counter',
           ),
           '4',
         );
-        await until(async () => (await bob.client.call('inbox')).length === 1);
+        await until(
+          async () =>
+            (await makeWorkspaceClient(bob.client).inbox()).length === 1,
+        );
         t.deepEqual(
-          (await bob.client.call('inbox')).map(entry => entry.text),
+          (await makeWorkspaceClient(bob.client).inbox()).map(
+            entry => entry.text,
+          ),
           ['After the new mailbox'],
         );
-        t.true(await bob.client.call('takeMessage', '1', 'again'));
+        t.true(await makeWorkspaceClient(bob.client).take('1', 'again'));
         t.is(
           await bob.client.call('evaluate', "E(inventory.get('again')).read()"),
           '2n',

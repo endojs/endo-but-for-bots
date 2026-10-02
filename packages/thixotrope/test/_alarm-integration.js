@@ -6,6 +6,7 @@ import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 import { connectLocalControl } from '../src/control/local-control.js';
+import { makeWorkspaceClient } from '../src/control/workspace-client.js';
 import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
 import { serveThixotrope } from '../src/control/supervisor.js';
 
@@ -103,7 +104,7 @@ export const registerAlarmIntegration = (test, kind) => {
       let armed = 0;
       for (let attempt = 0; attempt < 400 && armed !== 1; attempt += 1) {
         // eslint-disable-next-line no-await-in-loop
-        ({ armed } = await host.client.call('alarmStatus'));
+        ({ armed } = await makeWorkspaceClient(host.client).alarms());
         // eslint-disable-next-line no-await-in-loop
         if (armed !== 1) await setTimeout(50);
       }
@@ -125,7 +126,7 @@ export const registerAlarmIntegration = (test, kind) => {
         host,
         `s.count === 1n && s.items[0].state === 'fired' && s.items[0].message === 'after restart' && s.items[0].firedAt >= ${armedAt + delay}n`,
       );
-      t.like(await host.client.call('alarmStatus'), { pending: 0 });
+      t.like(await makeWorkspaceClient(host.client).alarms(), { pending: 0 });
       // Restart again with no pending alarm: the completed listener must not
       // fire again. Reuse the exact retained clock grant for a new alarm.
       host.client.close();
@@ -143,7 +144,7 @@ export const registerAlarmIntegration = (test, kind) => {
         host,
         "s.count === 2n && s.items.length === 2 && s.items[1].state === 'fired' && s.items[1].message === 'reuse'",
       );
-      t.like(await host.client.call('alarmStatus'), { pending: 0 });
+      t.like(await makeWorkspaceClient(host.client).alarms(), { pending: 0 });
     },
   );
 };

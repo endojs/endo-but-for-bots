@@ -7,6 +7,7 @@ import { join } from 'node:path';
 
 import { serveThixotrope } from '../src/control/supervisor.js';
 import { connectLocalControl } from '../src/control/local-control.js';
+import { makeWorkspaceClient } from '../src/control/workspace-client.js';
 import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
 import { makeLogPowers } from '../src/platform/logging.js';
 import { makeNodePowers } from '../src/platform/node/powers.js';
@@ -116,7 +117,7 @@ test.serial(
     let armed = false;
     for (let attempt = 0; attempt < 100 && !armed; attempt += 1) {
       // eslint-disable-next-line no-await-in-loop
-      const status = await host.client.call('alarmStatus');
+      const status = await makeWorkspaceClient(host.client).alarms();
       armed = status.armed === 1;
       // eslint-disable-next-line no-await-in-loop
       if (!armed) await setTimeout(25);
@@ -125,7 +126,7 @@ test.serial(
     // Removing the clock retires its vat, with its alarms and its adapter
     // process; the next start provides a fresh one.
     t.true(await host.client.call('remove', 'clock'));
-    await t.throwsAsync(() => host.client.call('alarmStatus'), {
+    await t.throwsAsync(() => makeWorkspaceClient(host.client).alarms(), {
       message: /not installed/,
     });
     t.is(await host.client.call('evaluate', "inventory.has('clock')"), 'false');

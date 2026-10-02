@@ -584,6 +584,21 @@ test.serial(
         .some(line => line.includes('control socket served by the host')),
       'the control socket cannot be provided, so the host listens and says so',
     );
+    // Over the host's own listener a capability makes the round trip whole.
+    t.true(
+      await host.client.call(
+        'keep',
+        'copy',
+        await host.client.call('lookup', 'one'),
+      ),
+    );
+    t.is(
+      await host.client.call(
+        'evaluate',
+        "inventory.get('copy') === inventory.get('one')",
+      ),
+      'true',
+    );
     const listed = await host.client.call('installations');
     t.deepEqual(
       listed.map((/** @type {{name: string}} */ entry) => entry.name).sort(),

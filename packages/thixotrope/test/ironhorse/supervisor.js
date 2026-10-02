@@ -830,7 +830,7 @@ test.serial(
         restored.call('install', 'copy-grant', '({make: () => 0})', [
           ['data', 'large-copy'],
         ]),
-      { message: /remotable capabilities/ },
+      { message: /must be a remotable capability/ },
     );
     t.is(
       await restored.call('evaluate', '2 + 2'),
