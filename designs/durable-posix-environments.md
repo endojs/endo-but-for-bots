@@ -9,9 +9,12 @@
 
 ## Implementation status
 
-2026-10-02: initial implementation is complete and live on Tokyo generation 194,
+2026-10-02: initial implementation passed Tokyo acceptance on generation 194,
 app `854a4c5aae573b669692fd132bcd30cbb0cc3926`, host
 `1f2a4bdc027089096a6cea27d549903e527c2b6b`.
+Tokyo now runs generation 195, app `a5d46b544aeaa173f5b20e2337618642cdb048a4`,
+host `2a8b02f6c7a781f479b29eac2c991e685ed10477`, with the DNS and request-body
+follow-up below.
 The Floot development preset publishes only the common
 Shell as `shell` in inventory and exposes structured `runCommand`/`inspectShell`
 tools, distinct from JavaScript `exec`. Only Fae inference backends select it;
@@ -84,6 +87,34 @@ Revising the daemon-wide shutdown boundary is follow-up lifecycle research
 (#1323), not an additional native recovery mechanism in this implementation.
 Automatic environment GC remains a design gap: cleanup is explicit on the
 private admin facet, not a finalizer or cancellation side effect.
+
+### User-trial follow-up: DNS and inference admission
+
+Later user sessions exposed two failures beyond the initial acceptance.
+Vultr's DHCP resolver returned `SERVFAIL` for the Rust download domains.
+Tokyo now uses independently tested public resolvers, without adopting DNS from
+DHCP/RA; address and route assignment remain unchanged.
+Sandbox public-address validation and internet-off policy remain intact.
+
+Fae through the Codex pool also hit the shared endpoint wrapper's implicit
+100,000-character `M.string()` guard after successfully building Rust programs.
+This was not model context exhaustion: the reading was about 20k of 272k tokens.
+The wrapper now matches the existing 8 MiB transport admission envelope;
+configured UTF-8 byte quotas still run before credential access or dispatch.
+Buffered/streamed regressions through direct endpoints, shares and wrapped pools
+pass, including multibyte quota refusal with no extra credential reads or fetches.
+The four focused broker/issuer/share/transport suites pass 180 tests; types and
+changed-file lint pass, and the docs build reports no errors.
+
+Generation 195 passed a real Luna/Floot turn with 120,662 input characters.
+The agent installed stable Rust 1.99 with rustup, built and ran Cargo Hello World,
+and returned a successful final answer.
+It corrected one ordinary shell failure (`sh` does not support `pipefail`) by
+using Bash; this was not a transport or unresolved-outcome failure.
+Internet-off denied the Rust URL with curl exit 6; public-only returned HTTP 200.
+The dedicated test session, native storage and factory/profile were disposed.
+Existing sessions, installations, Secrets and renewal owners were preserved.
+Private receipts and logs: `/var/lib/endo/dns-body-acceptance-20261002/`.
 
 ### Earlier slice history (superseded by the current status above)
 
