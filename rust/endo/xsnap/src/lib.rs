@@ -8,6 +8,7 @@ pub mod archive;
 pub mod cesu8;
 pub mod envelope;
 pub mod ffi;
+pub mod host_ledger;
 pub mod powers;
 pub mod worker_io;
 
@@ -78,6 +79,7 @@ pub struct Machine {
 // This is intentional: each worker gets its own machine.
 
 /// Result of evaluating JavaScript.
+#[derive(Debug, PartialEq)]
 pub enum JsValue {
     Undefined,
     Null,
@@ -530,6 +532,8 @@ pub enum SnapshotError {
     InvalidName,
     /// File I/O error during streaming snapshot.
     Io(std::io::Error),
+    /// A CAS snapshot's name is not the SHA-256 of its bytes.
+    Corrupt(String),
 }
 
 impl std::fmt::Display for SnapshotError {
@@ -539,6 +543,9 @@ impl std::fmt::Display for SnapshotError {
             SnapshotError::Read(e) => write!(f, "snapshot read failed (error {})", e),
             SnapshotError::InvalidName => write!(f, "machine name contains null byte"),
             SnapshotError::Io(e) => write!(f, "snapshot I/O: {}", e),
+            SnapshotError::Corrupt(hash) => {
+                write!(f, "snapshot {hash} does not match its content hash")
+            }
         }
     }
 }
@@ -766,8 +773,13 @@ impl Machine {
             std::process::id(),
             seq
         ));
-        let file = std::fs::File::create(&tmp_path)
-            .map_err(SnapshotError::Io)?;
+        // The heap holds the worker's secrets, so it is its owner's alone
+        // from the first byte, whatever the umask.
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let file = options.open(&tmp_path).map_err(SnapshotError::Io)?;
         let mut cbs = self.registered_callbacks.borrow().clone();
         let hash = match self.write_snapshot_to_file(signature, &mut cbs, file) {
             Ok(hash) => hash,
@@ -778,10 +790,20 @@ impl Machine {
         };
         let final_path = cas_dir.join(&hash);
         std::fs::rename(&tmp_path, &final_path).map_err(SnapshotError::Io)?;
+        // The rename is durable only once its directory is synced; a
+        // published snapshot must survive power loss
+        // (designs/ironhorse-panic.md § Slot Machine per-worker write-ahead
+        // transcript).
+        slot_machine_transcript::sync_directory(cas_dir).map_err(SnapshotError::Io)?;
         Ok(hash)
     }
 
     /// Restore a machine from a CAS-stored snapshot file.
+    ///
+    /// The bytes are checked against their name before XS sees them: a
+    /// resumed heap's name is what authorizes re-seating its native handles
+    /// (`host_ledger::attach`), so a blob that is not what it claims to be
+    /// must never run.
     pub fn resume_from_cas(
         cas_dir: &std::path::Path,
         sha256: &str,
@@ -789,9 +811,16 @@ impl Machine {
         signature: &[u8],
         callbacks: &mut [ffi::XsCallback],
     ) -> Result<Machine, SnapshotError> {
-        let path = cas_dir.join(sha256);
-        let file = std::fs::File::open(&path).map_err(SnapshotError::Io)?;
-        Machine::from_snapshot_file(file, name, signature, callbacks)
+        let well_formed = sha256.len() == 64
+            && sha256.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+        if !well_formed {
+            return Err(SnapshotError::Corrupt(sha256.to_string()));
+        }
+        let bytes = std::fs::read(cas_dir.join(sha256)).map_err(SnapshotError::Io)?;
+        if slot_machine_transcript::blob_hash(&bytes) != sha256 {
+            return Err(SnapshotError::Corrupt(sha256.to_string()));
+        }
+        Machine::from_snapshot(&bytes, name, signature, callbacks)
     }
 }
 
@@ -1030,14 +1059,119 @@ pub enum XsnapError {
     ///   leaves `location` `None`.
     ///
     /// Carries the caught panic's message and optional `file:line:col`. The
-    /// daemon seam maps this to `ExecutionOutcome::Panicked` alongside a
-    /// prospective Ironhorse `Halt::Panic(PanicKind::EngineFault)`; here on the
-    /// live C-XS path there is no `Halt` to carry, so the worker-death value is
-    /// this error.
+    /// daemon's C-XS adapter (`endo::worker_outcome`) maps this, together
+    /// with [`XsnapError::Aborted`], to `WorkerOutcome::Panicked`, the arm a
+    /// prospective Ironhorse `Halt::Panic(PanicKind::EngineFault)` also
+    /// reaches; here on the live C-XS path there is no `Halt` to carry, so
+    /// the worker-death value is this error.
     Panicked {
         message: String,
         location: Option<String>,
     },
+    /// An `fxAbort` exit ended the supervised run: XS longjmp'd out of the
+    /// crank's reactive pump with a nonzero `exitStatus` (design
+    /// `designs/ironhorse-panic.md` § Architectural Boundary: the live C-XS
+    /// adapter maps these exits, together with [`XsnapError::Panicked`], to
+    /// one supervisor-visible `Panicked` arm). `abort` names which exit fired
+    /// so a stack overflow is no longer reported as a metering death;
+    /// `computrons` is the crank's meter reading at the abort.
+    Aborted { abort: XsAbort, computrons: u64 },
+}
+
+/// Which `fxAbort` exit status ended a C-XS run.
+///
+/// `xsnap-platform.c`'s `fxAbort` longjmps to the nearest `mxTry` for every
+/// status listed here except `Unknown`, and `run_promise_jobs_metered`
+/// returns the status. This is the C-XS counterpart of the Ironhorse `Halt`
+/// abort variants; [`XsAbort::is_panic`] is its one membership predicate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XsAbort {
+    /// `XS_JAVASCRIPT_STACK_OVERFLOW_EXIT`: the emulated JS stack overflowed
+    /// (Ironhorse `Halt::StackOverflow`).
+    StackOverflow,
+    /// `XS_NATIVE_STACK_OVERFLOW_EXIT`: the C stack guard fired (Ironhorse
+    /// `Halt::ReentryLimit`).
+    NativeStackOverflow,
+    /// `XS_TOO_MUCH_COMPUTATION_EXIT`: the crank's hard meter limit refused
+    /// more computation (Ironhorse `Halt::MeterAbort`).
+    MeterAbort,
+    /// `XS_NOT_ENOUGH_MEMORY_EXIT`: the heap could not grow (Ironhorse
+    /// `Halt::HeapExhausted`).
+    OutOfMemory,
+    /// `XS_NO_MORE_KEYS_EXIT`: the property-key table is exhausted, a heap
+    /// exhaustion of a different table.
+    NoMoreKeys,
+    /// `XS_UNHANDLED_EXCEPTION_EXIT`: a JS throw escaped every handler. Not
+    /// a panic: catchable in principle.
+    UnhandledException,
+    /// `XS_UNHANDLED_REJECTION_EXIT`: an unhandled rejection was promoted
+    /// to an abort. Not a panic: a guest-level error.
+    UnhandledRejection,
+    /// Any other status. Not a member of the panic category, but the
+    /// adapter fails closed and discards the crank.
+    Unknown(i32),
+}
+
+impl XsAbort {
+    /// Classify an `fxAbort` exit status.
+    pub fn from_status(status: i32) -> XsAbort {
+        match status {
+            ffi::XS_JAVASCRIPT_STACK_OVERFLOW_EXIT => XsAbort::StackOverflow,
+            ffi::XS_NATIVE_STACK_OVERFLOW_EXIT => XsAbort::NativeStackOverflow,
+            ffi::XS_TOO_MUCH_COMPUTATION_EXIT => XsAbort::MeterAbort,
+            ffi::XS_NOT_ENOUGH_MEMORY_EXIT => XsAbort::OutOfMemory,
+            ffi::XS_NO_MORE_KEYS_EXIT => XsAbort::NoMoreKeys,
+            ffi::XS_UNHANDLED_EXCEPTION_EXIT => XsAbort::UnhandledException,
+            ffi::XS_UNHANDLED_REJECTION_EXIT => XsAbort::UnhandledRejection,
+            other => XsAbort::Unknown(other),
+        }
+    }
+
+    /// The `fxAbort` exit status this abort was classified from.
+    pub fn status(self) -> i32 {
+        match self {
+            XsAbort::StackOverflow => ffi::XS_JAVASCRIPT_STACK_OVERFLOW_EXIT,
+            XsAbort::NativeStackOverflow => ffi::XS_NATIVE_STACK_OVERFLOW_EXIT,
+            XsAbort::MeterAbort => ffi::XS_TOO_MUCH_COMPUTATION_EXIT,
+            XsAbort::OutOfMemory => ffi::XS_NOT_ENOUGH_MEMORY_EXIT,
+            XsAbort::NoMoreKeys => ffi::XS_NO_MORE_KEYS_EXIT,
+            XsAbort::UnhandledException => ffi::XS_UNHANDLED_EXCEPTION_EXIT,
+            XsAbort::UnhandledRejection => ffi::XS_UNHANDLED_REJECTION_EXIT,
+            XsAbort::Unknown(status) => status,
+        }
+    }
+
+    /// Whether this abort is a member of the formal panic category (design
+    /// § The Formal `Panic` Category): an uncatchable engine-limit
+    /// termination. The two unhandled-error exits are guest-level errors,
+    /// and an unknown status is not claimed as a panic.
+    pub fn is_panic(self) -> bool {
+        match self {
+            XsAbort::StackOverflow
+            | XsAbort::NativeStackOverflow
+            | XsAbort::MeterAbort
+            | XsAbort::OutOfMemory
+            | XsAbort::NoMoreKeys => true,
+            XsAbort::UnhandledException
+            | XsAbort::UnhandledRejection
+            | XsAbort::Unknown(_) => false,
+        }
+    }
+}
+
+impl std::fmt::Display for XsAbort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            XsAbort::StackOverflow => write!(f, "JavaScript stack overflow"),
+            XsAbort::NativeStackOverflow => write!(f, "native stack overflow"),
+            XsAbort::MeterAbort => write!(f, "meter limit exceeded"),
+            XsAbort::OutOfMemory => write!(f, "out of memory"),
+            XsAbort::NoMoreKeys => write!(f, "property-key table exhausted"),
+            XsAbort::UnhandledException => write!(f, "unhandled exception"),
+            XsAbort::UnhandledRejection => write!(f, "unhandled rejection"),
+            XsAbort::Unknown(status) => write!(f, "abort status {status}"),
+        }
+    }
 }
 
 impl std::fmt::Display for XsnapError {
@@ -1057,6 +1191,9 @@ impl std::fmt::Display for XsnapError {
                 }
                 None => write!(f, "worker panicked: {message}"),
             },
+            XsnapError::Aborted { abort, computrons } => {
+                write!(f, "worker aborted: {abort} (used {computrons} computrons)")
+            }
         }
     }
 }
@@ -1137,6 +1274,9 @@ enum EnvelopeAction {
     Continue,
     /// Worker should suspend: snapshot written, exit the loop.
     Suspend,
+    /// The host transcript refused to record the delivery, so it did not
+    /// run: the worker must stop rather than silently drop the frame.
+    Refused(String),
 }
 
 /// Handle an incoming envelope: intercept control verbs
@@ -1163,8 +1303,26 @@ fn handle_envelope(machine: &Machine, data: &[u8]) -> EnvelopeAction {
                 flush_debug_outbound();
                 return EnvelopeAction::Continue;
             }
+            // Suspending and attaching a transcript name paths and rebuild
+            // authority, so only the supervisor (handle 0) may ask.
+            "suspend" if env.handle != 0 => {
+                send_suspend_error(env.nonce, "suspend: only the supervisor may suspend");
+                return EnvelopeAction::Continue;
+            }
+            "host-transcript" if env.handle != 0 => {
+                send_host_transcript_reply(
+                    env.nonce,
+                    "host-transcript-error",
+                    "host-transcript: only the supervisor may attach a transcript".into(),
+                );
+                return EnvelopeAction::Continue;
+            }
             "suspend" => {
                 return handle_suspend(machine, env.nonce, &env.payload);
+            }
+            "host-transcript" => {
+                handle_host_transcript(machine, env.nonce, &env.payload);
+                return EnvelopeAction::Continue;
             }
             "meter-config" => {
                 // Decode CBOR map: {"hard_limit": u64}
@@ -1177,8 +1335,10 @@ fn handle_envelope(machine: &Machine, data: &[u8]) -> EnvelopeAction {
             _ => {}
         }
     }
-    dispatch_envelope(machine, data);
-    EnvelopeAction::Continue
+    match dispatch_envelope(machine, data) {
+        Ok(()) => EnvelopeAction::Continue,
+        Err(e) => EnvelopeAction::Refused(e),
+    }
 }
 
 /// Handle a suspend request: stream snapshot to CAS, send back hash.
@@ -1190,11 +1350,18 @@ fn handle_envelope(machine: &Machine, data: &[u8]) -> EnvelopeAction {
 /// sent back to the supervisor — the snapshot never transits the
 /// envelope bus.
 fn handle_suspend(machine: &Machine, nonce: i64, cas_dir: &[u8]) -> EnvelopeAction {
-    if powers::fs::has_open_handles()
-        || powers::sqlite::has_open_handles()
-        || powers::crypto::has_open_handles()
-    {
-        send_suspend_error(nonce, "suspend: close native file, directory, SQLite, and hasher handles first");
+    if host_ledger::suspend_blocked() {
+        send_suspend_error(
+            nonce,
+            "suspend: close native file, directory, SQLite, and hasher handles first, \
+             or attach a host transcript that can re-seat them",
+        );
+        return EnvelopeAction::Continue;
+    }
+    // The snapshot must agree with the committed handle descriptors, so a
+    // crank that failed to commit fails the suspend.
+    if let Err(e) = host_ledger::end_delivery(true) {
+        send_suspend_error(nonce, &format!("suspend: {e}"));
         return EnvelopeAction::Continue;
     }
     let cas_path = match std::str::from_utf8(cas_dir) {
@@ -1204,7 +1371,17 @@ fn handle_suspend(machine: &Machine, nonce: i64, cas_dir: &[u8]) -> EnvelopeActi
             return EnvelopeAction::Continue;
         }
     };
-    match machine.suspend_to_cas(SNAPSHOT_SIGNATURE, &cas_path) {
+    let published = machine
+        .suspend_to_cas(SNAPSHOT_SIGNATURE, &cas_path)
+        .and_then(|hash| {
+            if host_ledger::attached() {
+                let heap = std::fs::read(cas_path.join(&hash)).map_err(SnapshotError::Io)?;
+                host_ledger::publish_heap(&heap)
+                    .map_err(|e| SnapshotError::Io(std::io::Error::other(e)))?;
+            }
+            Ok(hash)
+        });
+    match published {
         Ok(hash) => {
             let env = envelope::Envelope {
                 handle: 0,
@@ -1221,6 +1398,45 @@ fn handle_suspend(machine: &Machine, nonce: i64, cas_dir: &[u8]) -> EnvelopeActi
             EnvelopeAction::Continue
         }
     }
+}
+
+/// Attach the worker's host transcript and re-seat every handle it records
+/// as open. The payload is the transcript's path, the worker's stable
+/// identity, and, when the worker resumed a heap, that heap's hash, one per
+/// line. Replies `host-transcript-attached` with the re-seat report as JSON,
+/// or `host-transcript-error`.
+fn handle_host_transcript(machine: &Machine, nonce: i64, payload: &[u8]) {
+    let context = unsafe { (*machine.raw).context } as *const powers::HostPowers;
+    let result = match std::str::from_utf8(payload).map(|p| p.split('\n').collect::<Vec<_>>()) {
+        Ok(lines) if !context.is_null() && matches!(lines.as_slice(), [path, worker] | [path, worker, _] if !path.is_empty() && !worker.is_empty()) => {
+            let path = std::path::Path::new(lines[0]);
+            let resumed = lines.get(2).copied().filter(|h| !h.is_empty());
+            host_ledger::attach(path, lines[1], resumed, unsafe { &*context }, || {
+                machine
+                    .suspend(SNAPSHOT_SIGNATURE)
+                    .map(|data| data.snapshot)
+                    .map_err(|e| format!("snapshot heap: {e}"))
+            })
+        }
+        _ => Err("host-transcript: expected path and worker identity, or missing host powers".to_string()),
+    };
+    match result {
+        Ok(attachment) => {
+            send_host_transcript_reply(nonce, "host-transcript-attached", attachment.to_json())
+        }
+        Err(e) => send_host_transcript_reply(nonce, "host-transcript-error", e),
+    }
+}
+
+fn send_host_transcript_reply(nonce: i64, verb: &str, payload: String) {
+    let env = envelope::Envelope {
+        handle: 0,
+        verb: verb.to_string(),
+        payload: payload.into_bytes(),
+        nonce,
+    };
+    let encoded = envelope::encode_envelope(&env);
+    let _ = worker_io::with_transport(|t| t.send_raw_frame(&encoded));
 }
 
 fn send_suspend_error(nonce: i64, msg: &str) {
@@ -1243,7 +1459,16 @@ fn send_suspend_error(nonce: i64, msg: &str) {
 /// directly — no hex encoding. This is O(n) instead of the previous
 /// O(n²) hex-parse approach, which is critical for large envelopes
 /// (e.g. 1 MB CapTP payloads from storeBlob).
-fn dispatch_envelope(machine: &Machine, data: &[u8]) {
+///
+/// A crank still open from work outside any delivery (a promise job or the
+/// crank-end `__shouldTerminate` probe) is committed first, so this delivery
+/// opens a crank of its own that records its inbound bytes. A delivery the
+/// transcript refuses to record does not run, and the refusal is returned
+/// so the worker stops: its host calls would otherwise be unrecorded or land
+/// in another delivery's crank.
+fn dispatch_envelope(machine: &Machine, data: &[u8]) -> Result<(), String> {
+    host_ledger::end_delivery(true)?;
+    host_ledger::begin_delivery(data)?;
     worker_io::set_pending_envelope(data.to_vec());
     machine.eval(
         "try { \
@@ -1252,6 +1477,7 @@ fn dispatch_envelope(machine: &Machine, data: &[u8]) {
             handleCommand(__bytes); \
          } catch(e) { trace('handleCommand error: ' + e.message) }",
     );
+    Ok(())
 }
 
 /// Bootstrap an XS machine with polyfills and the SES boot bundle.
@@ -1871,6 +2097,11 @@ pub fn run_xs_program(
     // panic-injection harness (tracked follow-on; the `guard_ffi` unit suite
     // pins the poison/short-circuit mechanics these checkpoints consume).
     let mut ffi_death: Option<worker_io::FfiPanic> = None;
+    // A delivery the host transcript refused to record: the worker stops.
+    let mut refused: Option<String> = None;
+    // The `fxAbort` exit that ended the supervised run, with the crank's meter
+    // reading; surfaced as `XsnapError::Aborted` after teardown.
+    let mut xs_abort: Option<(XsAbort, u64)> = None;
 
     // A guarded `extern "C"` callback can panic during *bootstrap eval*
     // above — the bundle's own guest JS calls `hostBase64Decode`,
@@ -1928,12 +2159,18 @@ pub fn run_xs_program(
             // Block until the next envelope arrives.
             let frame = worker_io::with_transport(|t| t.recv_raw_envelope());
             match frame {
-                Ok(Some(data)) => {
-                    if matches!(handle_envelope(&machine, &data), EnvelopeAction::Suspend) {
+                Ok(Some(data)) => match handle_envelope(&machine, &data) {
+                    EnvelopeAction::Continue => {}
+                    EnvelopeAction::Suspend => {
                         eprintln!("{label}: suspended");
                         break;
                     }
-                }
+                    EnvelopeAction::Refused(e) => {
+                        eprintln!("{label}: refusing delivery: {e}");
+                        refused = Some(e);
+                        break 'outer;
+                    }
+                },
                 Ok(None) => break,
                 Err(e) => {
                     eprintln!("{label}: recv error: {e}");
@@ -1952,7 +2189,7 @@ pub fn run_xs_program(
             // drain inbound envelopes. If after draining we still have
             // fresh jobs, repeat. When both promise jobs and envelopes
             // are exhausted, break.
-            let mut metering_abort = false;
+            let mut abort_status: Option<i32> = None;
             loop {
                 // Drain all ready promise jobs (multiple turns may be
                 // needed as resolving one promise can queue another).
@@ -1964,11 +2201,12 @@ pub fn run_xs_program(
                         Ok(()) => {}
                         Err(status) => {
                             eprintln!(
-                                "{label}: metering abort (status {status}) \
+                                "{label}: {} (status {status}) \
                                  after {} computrons",
+                                XsAbort::from_status(status),
                                 machine.current_computrons()
                             );
-                            metering_abort = true;
+                            abort_status = Some(status);
                             break;
                         }
                     }
@@ -1977,7 +2215,7 @@ pub fn run_xs_program(
                     }
                 }
 
-                if metering_abort {
+                if abort_status.is_some() {
                     break;
                 }
 
@@ -2019,9 +2257,24 @@ pub fn run_xs_program(
                                 break 'outer;
                             }
                             got_envelope = true;
-                            if matches!(handle_envelope(&machine, &data), EnvelopeAction::Suspend) {
-                                eprintln!("{label}: suspended (during pump)");
-                                break 'outer;
+                            match handle_envelope(&machine, &data) {
+                                EnvelopeAction::Continue => {}
+                                EnvelopeAction::Suspend => {
+                                    eprintln!("{label}: suspended (during pump)");
+                                    break 'outer;
+                                }
+                                EnvelopeAction::Refused(e) => {
+                                    eprintln!("{label}: refusing delivery: {e}");
+                                    refused = Some(e);
+                                    break 'outer;
+                                }
+                            }
+                            // One crank is one delivery plus its promise
+                            // jobs. Under a transcript, leave the drain so
+                            // the job loop runs this delivery's jobs before
+                            // the next envelope commits its crank.
+                            if host_ledger::attached() {
+                                break;
                             }
                         }
                         Ok(None) => break,
@@ -2095,9 +2348,20 @@ pub fn run_xs_program(
                 break 'outer;
             }
 
-            if metering_abort {
+            // A metered-out delivery's host calls never happened. A crank
+            // that fails to commit latches the ledger, so no later suspend
+            // publishes a heap that runs ahead of the log.
+            if let Err(e) = host_ledger::end_delivery(abort_status.is_none()) {
+                eprintln!("{label}: {e}");
+            }
+
+            if let Some(status) = abort_status {
+                // The meter report keeps its worker-death spelling; the run's
+                // return value carries which exit fired.
                 send_meter_report(steps, "terminated");
-                eprintln!("{label}: terminated by metering (used {steps} computrons)");
+                let abort = XsAbort::from_status(status);
+                eprintln!("{label}: terminated by {abort} (used {steps} computrons)");
+                xs_abort = Some((abort, steps));
                 break 'outer;
             }
 
@@ -2111,6 +2375,11 @@ pub fn run_xs_program(
             }
         }
 
+        // A delivery the loop left open died with its worker.
+        if let Err(e) = host_ledger::end_delivery(false) {
+            eprintln!("{label}: {e}");
+        }
+        host_ledger::detach();
         machine.end_metering();
     } else if ffi_death.is_none() {
         // Run until idle: drain promise jobs and fire timers until
@@ -2134,6 +2403,12 @@ pub fn run_xs_program(
             message: ffi_panic.message,
             location: ffi_panic.location,
         });
+    }
+    if let Some((abort, computrons)) = xs_abort {
+        return Err(XsnapError::Aborted { abort, computrons });
+    }
+    if let Some(e) = refused {
+        return Err(XsnapError::Io(format!("refused a delivery: {e}")));
     }
     Ok(())
 }
@@ -4431,6 +4706,589 @@ mod tests {
         worker_io::clear_transport();
     }
 
+    /// Attach a fresh host transcript to this thread's worker, with the
+    /// guest's `handleCommand` counting deliveries and making a recorded
+    /// host call in each.
+    fn attach_counting_transcript(
+        machine: &Machine,
+        dir: &std::path::Path,
+    ) -> powers::HostPowers {
+        unsafe { worker_io::register(machine) };
+        machine.define_function("randomHex256", powers::crypto::host_random_hex256, 0);
+        machine.eval(
+            "var deliveries = 0; \
+             function handleCommand(bytes) { deliveries += 1; randomHex256(); }",
+        );
+        let powers = powers::HostPowers::new();
+        host_ledger::attach(&dir.join("worker.sqlite"), "worker-1", None, &powers, || {
+            machine.suspend(SNAPSHOT_SIGNATURE).map(|data| data.snapshot).map_err(|e| e.to_string())
+        })
+        .unwrap();
+        powers
+    }
+
+    /// A delivery opens a crank of its own even when a host call made
+    /// outside any delivery left one open, so no delivery's inbound bytes
+    /// or host calls are folded into another crank.
+    #[test]
+    fn each_delivery_commits_its_own_crank() {
+        let machine = new_machine();
+        let dir = tempfile::tempdir().unwrap();
+        let _powers = attach_counting_transcript(&machine, dir.path());
+        assert!(matches!(
+            machine.eval("randomHex256().length"),
+            Some(JsValue::Integer(64))
+        ));
+        assert!(matches!(handle_envelope(&machine, b"first"), EnvelopeAction::Continue));
+        assert!(matches!(handle_envelope(&machine, b"second"), EnvelopeAction::Continue));
+        host_ledger::end_delivery(true).unwrap();
+        assert!(matches!(machine.eval("deliveries"), Some(JsValue::Integer(2))));
+        let transcript = host_ledger::detach().unwrap();
+        // The out-of-delivery call's crank, then one per delivery.
+        assert_eq!(transcript.stats().releases, 3);
+    }
+
+    /// Every read of nondeterministic state is recorded with the value the
+    /// guest saw, and replay answers the same call with that value rather
+    /// than reading again: random bytes, a generated key, file and
+    /// directory reads, the environment.
+    #[test]
+    fn replay_answers_recorded_reads_with_the_values_the_guest_saw() {
+        use slot_machine_transcript::HostReply;
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("a.txt"), "first").unwrap();
+        let mut powers = powers::HostPowers::new();
+        powers.add_dir(
+            "test",
+            cap_std::fs::Dir::open_ambient_dir(&data, cap_std::ambient_authority()).unwrap(),
+        );
+        let machine = new_machine_with_powers(&mut powers);
+        host_ledger::attach(
+            &root.path().join("worker.sqlite"),
+            "worker-1",
+            None,
+            &powers,
+            || {
+                machine
+                    .suspend(SNAPSHOT_SIGNATURE)
+                    .map(|data| data.snapshot)
+                    .map_err(|e| e.to_string())
+            },
+        )
+        .unwrap();
+        host_ledger::begin_delivery(b"reads").unwrap();
+        machine.eval(
+            "var hex = randomHex256(); \
+             var keys = ed25519Keygen(); \
+             var text = readFileText('test', 'a.txt'); \
+             var names = readDir('test', ''); \
+             var there = exists('test', 'a.txt'); \
+             var path = getEnv('PATH');",
+        );
+        host_ledger::end_delivery(true).unwrap();
+        // The world moves on after the crank; replay still answers with
+        // what the guest observed.
+        std::fs::write(data.join("b.txt"), "second").unwrap();
+        std::fs::write(data.join("a.txt"), "changed").unwrap();
+        let transcript = host_ledger::detach().unwrap();
+
+        let guest = |name: &str| match machine.eval(name) {
+            Some(JsValue::String(value)) => value.into_bytes(),
+            other => panic!("{name} is not a string: {other:?}"),
+        };
+        let directory =
+            |path: &str| serde_json::to_vec(&(None::<u32>, Some("test"), path)).unwrap();
+        let mut replay = transcript.host_replay().unwrap();
+        replay.begin_crank(*replay.cranks().last().unwrap());
+        let mut answer =
+            |callback: &str, request: &[u8]| match replay.call(callback, None, request).unwrap() {
+                HostReply::Reply { reply, .. } => reply,
+                other => panic!("{callback} was not answered: {other:?}"),
+            };
+        assert_eq!(answer("randomHex256", b"[]"), guest("hex"));
+        assert_eq!(answer("ed25519Keygen", b"[]"), guest("keys"));
+        assert_eq!(answer("readFileText", &directory("a.txt")), b"tfirst");
+        assert_eq!(answer("readDir", &directory("")), b"s[\"a.txt\"]");
+        assert_eq!(answer("exists", &directory("a.txt")), b"1");
+        assert_eq!(
+            answer("getEnv", b"PATH"),
+            [b"s".as_slice(), &guest("path")].concat()
+        );
+        replay.end_crank().unwrap();
+    }
+
+    /// A delivery the transcript refuses to record never reaches the guest,
+    /// and the refusal is surfaced so the worker loop stops.
+    #[test]
+    fn a_refused_delivery_does_not_run_and_is_reported() {
+        let machine = new_machine();
+        let dir = tempfile::tempdir().unwrap();
+        let _powers = attach_counting_transcript(&machine, dir.path());
+        assert!(matches!(handle_envelope(&machine, b"small"), EnvelopeAction::Continue));
+        let oversized = vec![0u8; 16 * 1024 * 1024 + 1];
+        assert!(matches!(
+            handle_envelope(&machine, &oversized),
+            EnvelopeAction::Refused(_)
+        ));
+        assert!(matches!(machine.eval("deliveries"), Some(JsValue::Integer(1))));
+        host_ledger::detach();
+    }
+
+    /// A CAS blob whose bytes do not hash to its name never reaches XS.
+    #[test]
+    fn resume_from_cas_refuses_a_blob_that_is_not_its_name() {
+        let cas = tempfile::tempdir().unwrap();
+        let name = slot_machine_transcript::blob_hash(b"the real heap");
+        std::fs::write(cas.path().join(&name), b"a different heap").unwrap();
+        std::fs::write(cas.path().join("0".repeat(64)), b"").unwrap();
+        for hash in [name.as_str(), &"0".repeat(64), "../escape", ""] {
+            assert!(matches!(
+                Machine::resume_from_cas(cas.path(), hash, "test", SNAPSHOT_SIGNATURE, &mut []),
+                Err(SnapshotError::Corrupt(_))
+            ), "{hash}");
+        }
+    }
+
+    /// The worker side of § Verification's host-handle / effect contract,
+    /// driven against a live XS worker: suspend with open native handles
+    /// under a host transcript, resume in a fresh worker thread, and re-seat.
+    #[test]
+    fn host_transcript_lifts_the_suspend_refusal_and_resume_reseats_handles() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        std::fs::create_dir_all(data.join("sub")).unwrap();
+        std::fs::write(data.join("a.txt"), "abcdefgh").unwrap();
+        std::fs::write(data.join("sub/inner.txt"), "inner").unwrap();
+        let transcript = root.path().join("worker.sqlite");
+        let database = root.path().join("guest.sqlite");
+        let cas = root.path().join("cas");
+        std::fs::create_dir_all(&cas).unwrap();
+
+        let worker = |data: std::path::PathBuf| {
+            setup();
+            let mut powers = powers::HostPowers::new();
+            powers.add_dir(
+                "test",
+                cap_std::fs::Dir::open_ambient_dir(&data, cap_std::ambient_authority()).unwrap(),
+            );
+            Box::into_raw(Box::new(powers))
+        };
+        let attach = |machine: &Machine,
+                      sent: &std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
+                      resumed: &str| {
+            let request = envelope::encode_envelope(&envelope::Envelope {
+                handle: 0,
+                verb: "host-transcript".into(),
+                payload: format!("{}\nworker-1\n{resumed}", transcript.to_str().unwrap())
+                    .into_bytes(),
+                nonce: 7,
+            });
+            assert!(matches!(
+                handle_envelope(machine, &request),
+                EnvelopeAction::Continue
+            ));
+            let reply = envelope::decode_envelope(sent.lock().unwrap().last().unwrap()).unwrap();
+            assert_eq!(
+                reply.verb,
+                "host-transcript-attached",
+                "{}",
+                String::from_utf8_lossy(&reply.payload)
+            );
+            serde_json::from_slice::<serde_json::Value>(&reply.payload).unwrap()
+        };
+
+        let (data_path, db_path, cas_dir) = (data.clone(), database.clone(), cas.clone());
+        let (hash, callbacks) = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let powers = worker(data_path);
+                    let machine = Machine::new(&DEFAULT_CREATION, "live").unwrap();
+                    machine.register_powers(powers);
+                    let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
+                    worker_io::install_transport(Box::new(MockTransport { sent: sent.clone() }));
+                    let report = attach(&machine, &sent, "");
+                    assert_eq!(report["reseated"], serde_json::json!([]));
+                    host_ledger::begin_delivery(b"d1").unwrap();
+                    machine.eval(&format!(
+                        "var r = openReader('test', 'a.txt');
+                     var first = String.fromCharCode(...new Uint8Array(read(r, 4)));
+                     var w = openWriter('test', 'out.bin');
+                     write(w, new Uint8Array([1, 2, 3]));
+                     var h = sha256Init();
+                     sha256Update(h, 'ab');
+                     var db = sqliteOpen({db:?});
+                     sqliteExec(db, 'CREATE TABLE t (x); INSERT INTO t VALUES (1)');
+                     var s = sqlitePrepare(db, 'SELECT count(*) AS n FROM t');
+                     var d = openDir('test', 'sub');
+                     var nested = openReader(d, 'inner.txt');
+                     var head = String.fromCharCode(...new Uint8Array(read(nested, 2)));
+                     var m = sqliteOpen(':memory:');",
+                        db = db_path.to_str().unwrap(),
+                    ));
+                    assert_eq!(machine.eval("first"), Some(JsValue::String("abcd".into())));
+                    assert_eq!(machine.eval("head"), Some(JsValue::String("in".into())));
+                    host_ledger::end_delivery(true).unwrap();
+                    let callbacks = machine.registered_callbacks.borrow().clone();
+                    let cas_bytes = cas_dir.to_str().unwrap().as_bytes();
+                    assert!(matches!(
+                        handle_suspend(&machine, 9, cas_bytes),
+                        EnvelopeAction::Suspend
+                    ));
+                    let reply =
+                        envelope::decode_envelope(sent.lock().unwrap().last().unwrap()).unwrap();
+                    assert_eq!(reply.verb, "suspended");
+                    host_ledger::detach();
+                    worker_io::clear_transport();
+                    (String::from_utf8(reply.payload).unwrap(), callbacks)
+                })
+                .join()
+                .unwrap()
+        });
+
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let powers = worker(data.clone());
+                    let mut callbacks = callbacks;
+                    let machine = Machine::resume_from_cas(
+                        &cas,
+                        &hash,
+                        "resumed",
+                        SNAPSHOT_SIGNATURE,
+                        &mut callbacks,
+                    )
+                    .unwrap();
+                    machine.register_powers(powers);
+                    let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
+                    worker_io::install_transport(Box::new(MockTransport { sent: sent.clone() }));
+                    let report = attach(&machine, &sent, &hash);
+                    let handle = |name: &str| match machine.eval(name) {
+                        Some(JsValue::Integer(h)) => h as u64,
+                        other => panic!("{name} is not a handle: {other:?}"),
+                    };
+                    let memory = handle("m");
+                    let mut reseated: Vec<u64> = ["r", "w", "h", "db", "s", "d", "nested"]
+                        .iter()
+                        .map(|n| handle(n))
+                        .collect();
+                    reseated.sort_unstable();
+                    assert_eq!(report["reseated"], serde_json::json!(reseated));
+                    assert_eq!(report["broken"][0][0], serde_json::json!(memory));
+                    assert!(report["stopped"]
+                        .as_str()
+                        .unwrap()
+                        .contains("BrokenHandles"));
+
+                    // No delivery opens a crank here: host calls made first, as
+                    // promise jobs a heap suspended mid-pump would make, open
+                    // one of their own.
+                    let eval = |code: &str| machine.eval(code);
+                    // Each re-seated handle resumes from its committed position.
+                    assert_eq!(
+                        eval("String.fromCharCode(...new Uint8Array(read(r, 4)))"),
+                        Some(JsValue::String("efgh".into()))
+                    );
+                    eval("write(w, new Uint8Array([4])); closeWriter(w)");
+                    assert_eq!(
+                        std::fs::read(data.join("out.bin")).unwrap(),
+                        vec![1, 2, 3, 4]
+                    );
+                    eval("sha256Update(h, 'c')");
+                    assert_eq!(
+                        eval("sha256Finish(h) === sha256('abc')"),
+                        Some(JsValue::Boolean(true))
+                    );
+                    assert_eq!(
+                        eval("sqliteStmtGet(s, '[]')"),
+                        Some(JsValue::String(r#"{"n":{"$bigint":"1"}}"#.into()))
+                    );
+                    assert_eq!(
+                        eval("readFileText(d, 'inner.txt')"),
+                        Some(JsValue::String("inner".into()))
+                    );
+                    // A reader opened below a directory handle re-seats at its
+                    // joined path and committed offset.
+                    assert_eq!(
+                        eval("String.fromCharCode(...new Uint8Array(read(nested, 3)))"),
+                        Some(JsValue::String("ner".into()))
+                    );
+                    // The in-memory database had no descriptor: its use is refused
+                    // without reaching a fabricated connection.
+                    let refused = format!("Error: handle {memory} was not re-seated");
+                    assert_eq!(
+                        eval("sqliteExec(m, 'SELECT 1')"),
+                        Some(JsValue::String(refused))
+                    );
+                    assert!(powers::sqlite::has_open_handles());
+                    // Closing it records the loss, which reopens recovery.
+                    eval("sqliteClose(m)");
+                    host_ledger::end_delivery(true).unwrap();
+                    let transcript = host_ledger::detach().unwrap();
+                    assert_eq!(transcript.recovery_gate().unwrap(), Ok(()));
+                    worker_io::clear_transport();
+                })
+                .join()
+                .unwrap();
+        });
+    }
+
+    /// A barrier (a file write through a handle, or any whole-file
+    /// mutation) in a delivery that never committed keeps recovery stopped
+    /// for the next incarnation. Each case names the path whose presence
+    /// (`true`) or absence (`false`) shows the effect escaped.
+    #[test]
+    fn host_transcript_barrier_in_an_aborted_delivery_stops_recovery() {
+        for (escape, witness, present) in [
+            (
+                "var w = openWriter('test', 'escaped'); write(w, new Uint8Array([1]))",
+                "escaped",
+                true,
+            ),
+            ("writeFileText('test', 'escaped', 'x')", "escaped", true),
+            ("appendFile('test', 'escaped', new Uint8Array([1]))", "escaped", true),
+            ("mkdir('test', 'escaped')", "escaped", true),
+            ("remove('test', 'seed')", "seed", false),
+            ("rename('test', 'seed', 'escaped')", "escaped", true),
+            ("symlink('test', 'seed', 'escaped')", "escaped", true),
+            ("link('test', 'seed', 'escaped')", "escaped", true),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::write(root.path().join("seed"), "seed").unwrap();
+            let transcript = root.path().join("worker.sqlite");
+            let incarnation = |abort: bool, resumed: Option<String>| {
+                let root = root.path().to_owned();
+                let transcript = transcript.clone();
+                std::thread::spawn(move || {
+                    setup();
+                    let mut powers = powers::HostPowers::new();
+                    powers.add_dir(
+                        "test",
+                        cap_std::fs::Dir::open_ambient_dir(&root, cap_std::ambient_authority())
+                            .unwrap(),
+                    );
+                    let machine = Machine::new(&DEFAULT_CREATION, "barrier").unwrap();
+                    let powers = Box::into_raw(Box::new(powers));
+                    machine.register_powers(powers);
+                    let heap = || Ok(machine.suspend(SNAPSHOT_SIGNATURE).unwrap().snapshot);
+                    let attachment = host_ledger::attach(
+                        &transcript,
+                        "barrier",
+                        resumed.as_deref(),
+                        unsafe { &*powers },
+                        heap,
+                    )
+                    .unwrap();
+                    if abort {
+                        host_ledger::begin_delivery(b"d1").unwrap();
+                        machine.eval(escape);
+                        host_ledger::end_delivery(false).unwrap();
+                    }
+                    host_ledger::detach();
+                    attachment
+                })
+                .join()
+                .unwrap()
+            };
+            assert_eq!(incarnation(true, None).stopped, None, "{escape}");
+            assert_eq!(
+                root.path().join(witness).symlink_metadata().is_ok(),
+                present,
+                "{escape}"
+            );
+            assert!(
+                matches!(
+                    incarnation(false, Some(published_hash(&transcript, "barrier"))).stopped,
+                    Some(slot_machine_transcript::RecoveryStop::EscapedBarrier { .. })
+                ),
+                "{escape}"
+            );
+        }
+    }
+
+    /// Descriptors record positions as of the latest committed crank, so
+    /// attaching refuses a resumed heap that is not the published snapshot,
+    /// and refuses while committed host calls lie past its watermark.
+    #[test]
+    fn host_transcript_attach_refuses_a_heap_behind_the_log() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.txt"), "abcdefgh").unwrap();
+        let transcript = root.path().join("worker.sqlite");
+        let incarnation = |resumed: Option<String>, deliver: bool| {
+            let root = root.path().to_owned();
+            let transcript = transcript.clone();
+            std::thread::spawn(move || {
+                setup();
+                let mut powers = powers::HostPowers::new();
+                powers.add_dir(
+                    "test",
+                    cap_std::fs::Dir::open_ambient_dir(&root, cap_std::ambient_authority())
+                        .unwrap(),
+                );
+                let machine = Machine::new(&DEFAULT_CREATION, "behind").unwrap();
+                let powers = Box::into_raw(Box::new(powers));
+                machine.register_powers(powers);
+                let heap = || Ok(machine.suspend(SNAPSHOT_SIGNATURE).unwrap().snapshot);
+                let attached = host_ledger::attach(
+                    &transcript,
+                    "behind",
+                    resumed.as_deref(),
+                    unsafe { &*powers },
+                    heap,
+                );
+                if attached.is_ok() && deliver {
+                    // A crank commits after the snapshot, and the worker dies
+                    // before the next suspend.
+                    host_ledger::begin_delivery(b"d1").unwrap();
+                    machine.eval("var r = openReader('test', 'a.txt'); read(r, 4)");
+                    host_ledger::end_delivery(true).unwrap();
+                }
+                host_ledger::detach();
+                attached.map(drop)
+            })
+            .join()
+            .unwrap()
+        };
+        incarnation(None, true).unwrap();
+        let published = published_hash(&transcript, "behind");
+        let refused = incarnation(Some(published), false).unwrap_err();
+        assert!(refused.contains("past the snapshot watermark"), "{refused}");
+        let refused = incarnation(Some("0".repeat(64)), false).unwrap_err();
+        assert!(refused.contains("is not the transcript's published snapshot"), "{refused}");
+        // Leaving the resumed hash out (a two-line payload, or an empty
+        // third line) must not skip the check.
+        let refused = incarnation(None, false).unwrap_err();
+        assert!(refused.contains("no resumed heap was named"), "{refused}");
+    }
+
+    fn published_hash(transcript: &std::path::Path, worker: &str) -> String {
+        let (transcript, _) = slot_machine_transcript::Transcript::open(
+            transcript,
+            slot_machine_transcript::TranscriptConfig::new(worker),
+        )
+        .unwrap();
+        transcript.latest_snapshot().unwrap().unwrap().hash
+    }
+
+    /// `sqliteStmtGet` and `sqliteStmtAll` are classed `Read`, so under a
+    /// transcript they refuse a statement that writes, including those SQLite
+    /// reports read-only although they change the connection.
+    #[test]
+    fn host_transcript_refuses_a_write_through_a_read_statement() {
+        let root = tempfile::tempdir().unwrap();
+        let transcript = root.path().join("worker.sqlite");
+        let database = root.path().join("guest.db");
+        let replies = std::thread::spawn(move || {
+            setup();
+            let powers = Box::into_raw(Box::new(powers::HostPowers::new()));
+            let machine = Machine::new(&DEFAULT_CREATION, "read-write").unwrap();
+            machine.register_powers(powers);
+            let heap = || Ok(machine.suspend(SNAPSHOT_SIGNATURE).unwrap().snapshot);
+            host_ledger::attach(&transcript, "read-write", None, unsafe { &*powers }, heap)
+                .unwrap();
+            host_ledger::begin_delivery(b"d1").unwrap();
+            machine
+                .eval(&format!(
+                    "var db = sqliteOpen({:?}); \
+                     sqliteExec(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY)')",
+                    database.to_str().unwrap()
+                ))
+                .unwrap();
+            let replies = [
+                "sqliteStmtGet(sqlitePrepare(db, 'INSERT INTO t VALUES (1) RETURNING id'), '[]')",
+                "sqliteStmtAll(sqlitePrepare(db, 'INSERT INTO t VALUES (2) RETURNING id'), '[]')",
+                "sqliteStmtAll(sqlitePrepare(db, 'BEGIN'), '[]')",
+                "sqliteStmtGet(sqlitePrepare(db, ' /* c */ savepoint s'), '[]')",
+                "sqliteStmtAll(sqlitePrepare(db, \"ATTACH ':memory:' AS other\"), '[]')",
+                "sqliteStmtAll(sqlitePrepare(db, 'PRAGMA foreign_keys = OFF'), '[]')",
+                "sqliteStmtAll(sqlitePrepare(db, 'SELECT id FROM t'), '[]')",
+            ]
+            .map(|source| match machine.eval(source).unwrap() {
+                JsValue::String(reply) => reply,
+                other => panic!("expected a string, got {:?}", js_value_debug(&other)),
+            });
+            host_ledger::end_delivery(true).unwrap();
+            host_ledger::detach();
+            replies
+        })
+        .join()
+        .unwrap();
+        let (refused, [selected]) = replies.split_at(replies.len() - 1) else {
+            unreachable!()
+        };
+        for refused in refused {
+            assert!(refused.contains("must run through sqliteStmtRun"), "{refused}");
+        }
+        assert_eq!(selected, "[]");
+    }
+
+    /// Only the supervisor may attach a transcript or suspend: a peer
+    /// worker's envelope carries its own handle, never 0.
+    #[test]
+    fn host_transcript_and_suspend_refuse_a_peer_sender() {
+        setup();
+        let mut powers_store = powers::HostPowers::new();
+        let machine = new_machine_with_powers(&mut powers_store);
+        let root = tempfile::tempdir().unwrap();
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
+        worker_io::install_transport(Box::new(MockTransport { sent: sent.clone() }));
+        let transcript = root.path().join("peer.sqlite");
+        for (verb, payload, refusal) in [
+            (
+                "host-transcript",
+                format!("{}\npeer", transcript.to_str().unwrap()),
+                "host-transcript-error",
+            ),
+            ("suspend", root.path().to_str().unwrap().to_string(), "suspend-error"),
+        ] {
+            let request = envelope::encode_envelope(&envelope::Envelope {
+                handle: 5,
+                verb: verb.into(),
+                payload: payload.into_bytes(),
+                nonce: 11,
+            });
+            assert!(matches!(
+                handle_envelope(&machine, &request),
+                EnvelopeAction::Continue
+            ));
+            let reply = envelope::decode_envelope(sent.lock().unwrap().last().unwrap()).unwrap();
+            assert_eq!(reply.verb, refusal);
+        }
+        assert!(!host_ledger::attached());
+        assert!(!transcript.exists());
+        worker_io::clear_transport();
+    }
+
+    /// Re-seating a writer never changes its file: a file whose length is
+    /// not the writer's committed position re-seats the writer as broken.
+    #[test]
+    fn writer_reseat_refuses_a_file_of_another_length() {
+        let root = tempfile::tempdir().unwrap();
+        let mut powers = powers::HostPowers::new();
+        powers.add_dir(
+            "test",
+            cap_std::fs::Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap(),
+        );
+        let writer = |position| host_ledger::Descriptor::Writer {
+            base: host_ledger::Base::Token("test".into()),
+            path: "out.bin".into(),
+            position,
+        };
+        std::fs::write(root.path().join("out.bin"), [1, 2, 3, 4, 5]).unwrap();
+        std::thread::spawn(move || {
+            assert!(powers::fs::reseat(1, &writer(3), &powers).is_err());
+            assert!(powers::fs::reseat(2, &writer(8), &powers).is_err());
+            assert!(powers::fs::reseat(3, &writer(5), &powers).is_ok());
+        })
+        .join()
+        .unwrap();
+        assert_eq!(
+            std::fs::read(root.path().join("out.bin")).unwrap(),
+            vec![1, 2, 3, 4, 5]
+        );
+    }
+
     /// Mock transport that captures sent frames.
     struct MockTransport {
         sent: std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
@@ -4751,6 +5609,12 @@ mod tests {
         assert!(cas_file.exists(), "CAS file should exist at {}", cas_file.display());
         let file_size = std::fs::metadata(&cas_file).unwrap().len();
         assert!(file_size > 0, "CAS file should not be empty");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&cas_file).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "the heap is its owner's alone");
+        }
 
         // Restore from the CAS file and verify state.
         let mut callbacks: Vec<ffi::XsCallback> = Vec::new();
@@ -4957,6 +5821,42 @@ mod tests {
             ),
         }
 
+        machine.end_metering();
+    }
+
+    #[test]
+    fn xs_abort_classifies_every_fxabort_exit() {
+        use XsAbort::*;
+        let cases = [
+            (ffi::XS_JAVASCRIPT_STACK_OVERFLOW_EXIT, StackOverflow, true),
+            (ffi::XS_NATIVE_STACK_OVERFLOW_EXIT, NativeStackOverflow, true),
+            (ffi::XS_TOO_MUCH_COMPUTATION_EXIT, MeterAbort, true),
+            (ffi::XS_NOT_ENOUGH_MEMORY_EXIT, OutOfMemory, true),
+            (ffi::XS_NO_MORE_KEYS_EXIT, NoMoreKeys, true),
+            (ffi::XS_UNHANDLED_EXCEPTION_EXIT, UnhandledException, false),
+            (ffi::XS_UNHANDLED_REJECTION_EXIT, UnhandledRejection, false),
+            (ffi::XS_FATAL_CHECK_EXIT, Unknown(ffi::XS_FATAL_CHECK_EXIT), false),
+        ];
+        for (status, abort, panic) in cases {
+            assert_eq!(XsAbort::from_status(status), abort, "status {status}");
+            assert_eq!(abort.status(), status, "{abort:?} must round-trip");
+            assert_eq!(abort.is_panic(), panic, "{abort:?} panic membership");
+        }
+    }
+
+    #[test]
+    fn metered_stack_overflow_is_not_classified_as_a_meter_abort() {
+        let machine = new_machine();
+        machine.begin_metering(DEFAULT_METERING_INTERVAL);
+        set_crank_limit(0);
+        machine.set_meter(0);
+        machine
+            .eval("Promise.resolve().then(function f() { return f() + 1; })")
+            .expect("promise creation should succeed");
+        let status = machine
+            .run_promise_jobs_metered()
+            .expect_err("unbounded recursion must abort");
+        assert_eq!(XsAbort::from_status(status), XsAbort::StackOverflow);
         machine.end_metering();
     }
 

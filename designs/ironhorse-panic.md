@@ -196,11 +196,47 @@ tables therefore belong to the dedicated worker thread. Thread exit drops these
 resources. Handle identifiers remain globally allocated, and a lookup resolves
 only against the calling thread's table. This also closes the pre-existing
 cross-worker handle lookup gap: the former process-wide tables did not check
-ownership even in runs without a panic. Reconstruction after restart remains
-separate work in § Slot Machine Termination and Retry. Until those handles can
-be reconstructed, a supervised suspend request with open native handles returns
-`suspend-error` and leaves the worker running. The caller must close its file,
-directory, SQLite, and hasher handles before retrying suspension.
+ownership even in runs without a panic. A worker that has attached its host
+transcript (the `host-transcript` control envelope) routes these tables through
+`Transcript::host_call`, so each handle is a logical id with a reconstruction
+descriptor that tracks its committed position, and suspension with open handles
+is allowed. Attaching on resume re-seats every open handle before any delivery
+can use it; a handle with no descriptor (an in-memory, temporary, or URI-named
+database, a hasher fed more than its recording limit) is re-seated as broken and
+every use is refused (§ Host functions are messages too). Re-seating never
+changes outside state: a writer whose file is no longer exactly its committed
+length is re-seated as broken rather than truncated. The whole-file mutations
+(`writeFileText`, `appendFile`, `mkdir`, `remove`, `rename`, `symlink`, `link`)
+run through the transcript as barriers too, and a host call made outside any
+delivery (promise jobs a heap suspended mid-pump carried) opens a crank of its
+own. Every other callback that reads host state (whole-file reads, directory
+listings, `stat`, `exists`, `readLink`, the environment, `realPath`, module
+sources, random bytes, generated keys) runs through the transcript as a read,
+so the log records the value the guest observed and a replay answers with it
+instead of reading the live world again. A worker's open hashers together keep
+a bounded number of fed bytes, so opening more hashers cannot grow native
+memory the crank meter does not see; a hasher past that bound is re-seated as
+broken. Only the supervisor (envelope handle 0) may attach a transcript or suspend a
+worker, since both name paths and a transcript's descriptors rebuild authority:
+whoever can write the transcript file chooses what a resumed worker reopens, so
+the file is as sensitive as the worker's own grants and data. That includes
+ambient `root` directories, whose absolute paths a descriptor records and a
+resume reopens without consulting the live grants. It is also a durable,
+plaintext record of the worker's secrets: every generated private key, every
+random byte, and every byte fed to a hasher is in the log, and every heap
+snapshot holds the worker's secrets too. The transcript and its heap blobs are
+therefore created readable and writable by their owner alone (mode `0600`,
+whatever the umask), and opening an existing transcript restricts it the same
+way. Encrypting the log, or recording a commitment in place of key material,
+is not attempted here: replay needs the bytes themselves, and a key held
+elsewhere would move the secret rather than remove it. Descriptors record
+positions as of the latest committed crank, so attaching refuses a resumed heap
+that is not the transcript's published snapshot, and refuses while committed host
+calls lie past that snapshot's watermark, until a replay driver can bring the
+heap forward. A crank that fails to commit fails the suspend that would snapshot
+past it. A worker with no attached transcript still
+answers a suspend request with open native handles with `suspend-error` and keeps
+running, because nothing durable could rebuild them.
 
 **Limits of the unwind boundary.** `catch_unwind` catches unwinding Rust panics.
 It cannot contain native stack overflow, explicit process abort, allocation
@@ -555,7 +591,7 @@ The Slot Machine worker supervisor is the only writer. Its crank protocol is:
    in one transaction. Only after that transaction is durable may the supervisor
    release outbound messages, in sequence order. Each released frame carries its
    stable event sequence so the receiver can discard a duplicate if the
-   supervisor crashes after send but before recording the acknowledgement.
+   supervisor crashes after send but before recording the acknowledgment.
 4. On `ExecutionOutcome::Panicked` or `ExecutionOutcome::Uncaught`, discard the staged
    outbound payloads, close tentative native handles, and mark every event and
    the crank aborted. The original inbound row remains available for diagnosis

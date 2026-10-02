@@ -36,6 +36,7 @@ use crate::codec;
 use crate::paths::EndoPaths;
 use crate::supervisor::Supervisor;
 use crate::types::{Envelope, Handle, Message, WorkerInfo};
+use crate::worker_outcome::WorkerOutcome;
 
 /// Spawn the manager bundle inside this process.
 ///
@@ -248,14 +249,16 @@ pub fn spawn_inproc_xs_peer(
         // "The already-live FFI abort hazard", "the machine-thread run
         // entry").
         let result = catch_run_panic(&label_for_thread, || run(transport));
-        if let Err(e) = result {
+        if let Err(e) = &result {
             eprintln!("inproc: {label_for_thread} exited with error: {e}");
         } else {
             eprintln!("inproc: {label_for_thread} exited cleanly");
         }
-        // Notify the daemon that the peer has stopped and withdraw
-        // the inbox so route_message drops new deliveries cleanly.
-        sup_for_exit.unregister(handle);
+        // Classify the run once, here in the C-XS adapter, so the `fxAbort`
+        // exits and a caught Rust panic reach the supervisor as one
+        // `Panicked` arm. Retiring withdraws the inbox so route_message
+        // drops new deliveries cleanly.
+        sup_for_exit.retire(handle, WorkerOutcome::from_xs_run(&result));
         if let Some(n) = shutdown_notify {
             n.notify_one();
             sup_for_exit.stop();
@@ -292,6 +295,7 @@ fn catch_run_panic(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::worker_outcome::{CrankDisposition, PanicReason};
     use std::time::Duration;
     use tokio::time::timeout;
 
@@ -317,6 +321,144 @@ mod tests {
                 }
                 other => panic!("unexpected error: {other}"),
             }
+        }
+    }
+
+    /// Drive a live C-XS worker through the real run loop: optionally set
+    /// its crank hard limit, then deliver one envelope whose handler queues
+    /// the aborting job. Returns the outcome the supervisor retired it with.
+    async fn live_retired_outcome(
+        handler: &'static str,
+        hard_limit: Option<u64>,
+    ) -> WorkerOutcome {
+        // The live loop evaluates `__shouldTerminate()` after every crank.
+        let bundle: &'static str = Box::leak(
+            format!("globalThis.__shouldTerminate = function () {{ return false; }}; {handler}")
+                .into_boxed_str(),
+        );
+        xsnap::ensure_shared_cluster();
+        let (sup, outbox) = Supervisor::new();
+        // Each crank ends with a meter report; a new limit applies from the
+        // next crank, so wait for the configuring crank to end.
+        let (crank_end_tx, mut crank_end_rx) = tokio::sync::mpsc::unbounded_channel();
+        crate::supervisor::start_routing(
+            &sup,
+            outbox,
+            crate::supervisor::RoutingCallbacks {
+                on_control: Box::new(move |msg| {
+                    if msg.envelope.verb == "meter-report" {
+                        let _ = crank_end_tx.send(());
+                    }
+                }),
+                on_resume: Box::new(|_, _, _, _| {}),
+            },
+        );
+        let handle = spawn_inproc_xs_peer(
+            &sup,
+            "abort probe".into(),
+            None,
+            Box::new(move |transport| {
+                xsnap::run_xs_program(
+                    xsnap::XsProgram::Bundle(bundle),
+                    &xsnap::DEFAULT_CREATION,
+                    "abort probe",
+                    Some(transport),
+                )
+            }),
+        )
+        .unwrap();
+        let send = |verb: &str, payload: Vec<u8>| {
+            sup.deliver(Message {
+                from: 0,
+                to: handle,
+                envelope: Envelope {
+                    handle: 0,
+                    verb: verb.into(),
+                    payload,
+                    nonce: 0,
+                },
+                response_tx: None,
+            })
+        };
+        if let Some(limit) = hard_limit {
+            // CBOR `{"hard_limit": limit}`.
+            let mut config = vec![0xa1, 0x6a];
+            config.extend_from_slice(b"hard_limit");
+            config.push(0x1a);
+            config.extend_from_slice(&u32::try_from(limit).unwrap().to_be_bytes());
+            send("meter-config", config);
+            timeout(Duration::from_secs(30), crank_end_rx.recv())
+                .await
+                .expect("the configuring crank must end");
+        }
+        send("deliver", Vec::new());
+        let outcome = timeout(Duration::from_secs(30), async {
+            loop {
+                if let Some(outcome) = sup.retired_outcome(handle) {
+                    return outcome;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("an aborted worker must be retired with an outcome");
+        sup.stop();
+        outcome
+    }
+
+    #[tokio::test]
+    async fn live_stack_overflow_retires_as_panicked_not_meter_abort() {
+        let outcome = live_retired_outcome(
+            "globalThis.handleCommand = function () { \
+                Promise.resolve().then(function f() { return f() + 1; }); \
+            };",
+            None,
+        )
+        .await;
+        match &outcome {
+            WorkerOutcome::Panicked(PanicReason::Abort { abort, .. }) => {
+                assert_eq!(*abort, xsnap::XsAbort::StackOverflow);
+            }
+            other => panic!("expected a stack-overflow Panicked, got {other:?}"),
+        }
+        assert_eq!(outcome.disposition(), CrankDisposition::DiscardAndRecover);
+    }
+
+    #[tokio::test]
+    async fn live_meter_abort_retires_as_panicked() {
+        let outcome = live_retired_outcome(
+            "globalThis.handleCommand = function () { \
+                Promise.resolve().then(function () { for (;;) {} }); \
+            };",
+            Some(100_000),
+        )
+        .await;
+        match &outcome {
+            WorkerOutcome::Panicked(PanicReason::Abort { abort, computrons }) => {
+                assert_eq!(*abort, xsnap::XsAbort::MeterAbort);
+                assert!(*computrons > 0);
+            }
+            other => panic!("expected a meter-abort Panicked, got {other:?}"),
+        }
+        assert_eq!(outcome.disposition(), CrankDisposition::DiscardAndRecover);
+    }
+
+    #[tokio::test]
+    async fn run_entry_panic_retires_as_an_engine_fault() {
+        let (sup, _outbox) = Supervisor::new();
+        let handle = spawn_inproc_xs_peer(
+            &sup,
+            "engine fault".into(),
+            None,
+            Box::new(|_transport| panic!("injected run-entry panic")),
+        )
+        .unwrap();
+        wait_for_unregister(&sup, handle).await;
+        match sup.retired_outcome(handle) {
+            Some(WorkerOutcome::Panicked(PanicReason::EngineFault { message, .. })) => {
+                assert!(message.contains("injected run-entry panic"), "{message}");
+            }
+            other => panic!("expected an engine-fault Panicked, got {other:?}"),
         }
     }
 

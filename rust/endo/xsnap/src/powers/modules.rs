@@ -9,6 +9,7 @@
 //!   resolveModule(specifier, referrer) -> string (resolved specifier)
 
 use crate::ffi::*;
+use crate::host_ledger::{self, Answer};
 use crate::powers::HostPowers;
 use crate::worker_io::{arg_str, set_result_string};
 
@@ -25,13 +26,16 @@ pub unsafe extern "C" fn host_load_module_source(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let powers = get_powers(the);
         let specifier = arg_str(the, 0);
-
-        match powers.get_module(&specifier) {
-            Some(source) => set_result_string(the, source),
-            None => {
-                // Leave xsResult as undefined (default)
-            }
-        }
+        host_ledger::answer(
+            the,
+            "loadModuleSource",
+            None,
+            specifier.as_bytes(),
+            || match powers.get_module(&specifier) {
+                Some(source) => Answer::Message(source.to_string()),
+                None => Answer::Nothing,
+            },
+        );
     });
 }
 
@@ -81,6 +85,13 @@ fn normalize_path(path: &str) -> String {
     }
     parts.join("/")
 }
+
+/// Every callback in [`CALLBACKS`], by guest name, with its host-call
+/// classification.
+pub const CLASSES: &[(&str, slot_machine_transcript::HostClass)] = &[
+    ("loadModuleSource", slot_machine_transcript::HostClass::Read),
+    ("resolveModule", slot_machine_transcript::HostClass::Pure),
+];
 
 /// All host callbacks in registration order for snapshot tables.
 pub const CALLBACKS: &[crate::ffi::XsCallback] = &[

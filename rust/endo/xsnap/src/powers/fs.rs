@@ -20,12 +20,15 @@
 //!   link(dirOrToken, srcPath, dstPath) -> undefined
 
 use crate::ffi::*;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
+use crate::host_ledger::{self, join, Answer, Base, Descriptor, Outcome};
 use crate::powers::HostPowers;
 use crate::worker_io::{abort_if_ffi_panicked, arg_str, read_typed_array_bytes, set_result_string};
+use slot_machine_transcript::HostClass;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::{BufReader, BufWriter, Read, Write};
-use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Helper: get HostPowers from the machine context.
 ///
@@ -61,53 +64,6 @@ unsafe fn arg_bytes(the: *mut XsMachine, index: usize) -> &'static [u8] {
     std::slice::from_raw_parts(ptr, len)
 }
 
-/// Helper: set xsResult to a string from raw bytes. The bytes must not
-/// contain an interior NUL. Used when passing potentially non-UTF-8
-/// XS string bytes (CESU-8 surrogate encoding) back to JS intact.
-unsafe fn set_result_bytes(the: *mut XsMachine, bytes: &[u8]) {
-    // Build a null-terminated buffer without going through CString
-    // (which would reject interior NULs but also requires valid UTF-8
-    // nowhere — CString itself is fine; we just skip that assertion).
-    let mut buf = Vec::with_capacity(bytes.len() + 1);
-    buf.extend_from_slice(bytes);
-    buf.push(0);
-    fxString(
-        the,
-        &mut (*the).scratch,
-        buf.as_ptr() as *const std::os::raw::c_char,
-    );
-    *(*the).frame.add(1) = (*the).scratch;
-}
-
-/// Helper: set xsResult to a fresh ArrayBuffer holding the given bytes.
-///
-/// Allocates a chunk in XS heap (via `fxArrayBuffer`) and copies the
-/// bytes in.  Use this for binary file payloads — the string round-trip
-/// in `set_result_bytes` corrupts non-ASCII data because XS treats the
-/// bytes as CESU-8.
-unsafe fn set_result_array_buffer(the: *mut XsMachine, bytes: &[u8]) {
-    let len = bytes.len() as i32;
-    let data_ptr = if bytes.is_empty() {
-        std::ptr::null_mut()
-    } else {
-        bytes.as_ptr() as *mut std::os::raw::c_void
-    };
-    fxArrayBuffer(the, &mut (*the).scratch, data_ptr, len, len);
-    *(*the).frame.add(1) = (*the).scratch;
-}
-
-/// Helper: set xsResult to undefined.
-unsafe fn set_result_undefined(the: *mut XsMachine) {
-    fxUndefined(the, &mut (*the).scratch);
-    *(*the).frame.add(1) = (*the).scratch;
-}
-
-/// Helper: set xsResult to a boolean.
-unsafe fn set_result_bool(the: *mut XsMachine, v: bool) {
-    fxBoolean(the, &mut (*the).scratch, if v { 1 } else { 0 });
-    *(*the).frame.add(1) = (*the).scratch;
-}
-
 // ---------------------------------------------------------------------------
 // Handle-based streaming file I/O
 // ---------------------------------------------------------------------------
@@ -120,9 +76,7 @@ enum FileResource {
 
 // Handle tables belong to the dedicated worker thread. A caught callback panic
 // cannot expose a torn mutation to a sibling worker, and thread exit drops all
-// remaining native resources. Global IDs prevent a sibling's handle from aliasing
-// an entry in this worker's table.
-static NEXT_FILE_HANDLE: AtomicU32 = AtomicU32::new(1);
+// remaining native resources. `host_ledger::call` allocates the ids.
 thread_local! {
     static FILE_MAP: RefCell<HashMap<u32, FileResource>> = RefCell::new(HashMap::new());
 }
@@ -131,7 +85,6 @@ thread_local! {
 // Handle-based open directory registry
 // ---------------------------------------------------------------------------
 
-static NEXT_DIR_HANDLE: AtomicU32 = AtomicU32::new(1);
 thread_local! {
     static DIR_MAP: RefCell<HashMap<u32, cap_std::fs::Dir>> = RefCell::new(HashMap::new());
 }
@@ -191,30 +144,254 @@ unsafe fn resolve_dir(the: *mut XsMachine, slot_index: usize) -> Result<cap_std:
     })
 }
 
+/// The authority a new file or directory handle derives from the directory
+/// slot: a token, or an open directory handle's own authority joined with
+/// `path`. `None` when the directory handle has no descriptor.
+///
+/// # Safety
+/// `the` must be valid, `slot_index` must be in range.
+unsafe fn origin(
+    the: *mut XsMachine,
+    slot_index: usize,
+    path: &str,
+) -> (Option<u32>, Option<(Base, String)>) {
+    match arg_dir_token(the, slot_index) {
+        Some(token) => (None, Some((Base::Token(token), path.to_string()))),
+        None => {
+            let handle = fxToInteger(the, (*the).frame.sub(1 + slot_index)) as u32;
+            abort_if_ffi_panicked();
+            let base = match host_ledger::descriptor(handle) {
+                Some(Descriptor::Directory { base, path: parent }) => {
+                    Some((base, join(&parent, path)))
+                }
+                _ => None,
+            };
+            (Some(handle), base)
+        }
+    }
+}
+
+unsafe fn set_result_handle(the: *mut XsMachine, handle: u32) {
+    fxInteger(the, &mut (*the).scratch, handle as i32);
+    *(*the).frame.add(1) = (*the).scratch;
+}
+
+/// Open a file handle under the host-call ledger.
+///
+/// # Safety
+/// `the` must be valid with two arguments.
+unsafe fn open_file(the: *mut XsMachine, callback: &str, writer: bool) {
+    let path = arg_str(the, 1);
+    let (target, base) = origin(the, 0, &path);
+    let dir = resolve_dir(the, 0);
+    let request = serde_json::to_vec(&(target, &base, &path)).unwrap_or_default();
+    let mut opened = None;
+    let result = host_ledger::call(callback, target, &request, || {
+        let dir = match dir {
+            Ok(dir) => dir,
+            Err(msg) => return error_outcome(the, msg),
+        };
+        let file = if writer {
+            dir.create(&path)
+        } else {
+            dir.open(&path)
+        };
+        match file {
+            Ok(file) => {
+                opened = Some(if writer {
+                    FileResource::Writer(BufWriter::new(file))
+                } else {
+                    FileResource::Reader(BufReader::new(file))
+                });
+                let descriptor = base.map(|(base, path)| {
+                    if writer {
+                        Descriptor::Writer {
+                            base,
+                            path,
+                            position: 0,
+                        }
+                    } else {
+                        Descriptor::Reader {
+                            base,
+                            path,
+                            position: 0,
+                        }
+                    }
+                });
+                Outcome {
+                    opens: Some(descriptor),
+                    ..Outcome::default()
+                }
+            }
+            Err(e) => error_outcome(the, format!("Error: {}", e)),
+        }
+    });
+    match (result, opened) {
+        (Ok(Some(handle)), Some(resource)) => {
+            FILE_MAP.with(|m| m.borrow_mut().insert(handle, resource));
+            set_result_handle(the, handle);
+        }
+        (Err(msg), _) => set_result_string(the, &msg),
+        _ => {}
+    }
+}
+
+/// The directory slot as the ledger records it: an open directory handle,
+/// or a token.
+///
+/// # Safety
+/// `the` must be valid, `slot_index` must be in range.
+unsafe fn directory_slot(the: *mut XsMachine, slot_index: usize) -> (Option<u32>, Option<String>) {
+    match arg_dir_token(the, slot_index) {
+        Some(token) => (None, Some(token)),
+        None => {
+            let handle = fxToInteger(the, (*the).frame.sub(1 + slot_index)) as u32;
+            abort_if_ffi_panicked();
+            (Some(handle), None)
+        }
+    }
+}
+
+/// The directory slot of a mutation, with its resolved directory. `None`
+/// in place of the directory means the ambient `"root"` token.
+///
+/// # Safety
+/// `the` must be valid, `slot_index` must be in range.
+#[allow(clippy::type_complexity)]
+unsafe fn directory_argument(
+    the: *mut XsMachine,
+    slot_index: usize,
+) -> (
+    Option<u32>,
+    Option<String>,
+    Option<Result<cap_std::fs::Dir, String>>,
+) {
+    let (target, token) = directory_slot(the, slot_index);
+    let directory = (token.as_deref() != Some("root")).then(|| resolve_dir(the, slot_index));
+    (target, token, directory)
+}
+
+fn io_error(e: std::io::Error) -> String {
+    format!("Error: {}", e)
+}
+
+/// Run a filesystem mutation under the host-call ledger, targeting the
+/// directory handle it resolves through, if any. Under a
+/// transcript its request is durable before `effect` runs, so a mutation
+/// that escapes an aborted crank stops recovery. `effect` returns the
+/// guest's error string on failure.
+///
+/// Coerce every guest argument before calling (see [`host_ledger::call`]).
+///
+/// # Safety
+/// `the` must be valid.
+unsafe fn mutate(
+    the: *mut XsMachine,
+    callback: &str,
+    target: Option<u32>,
+    request: &impl serde::Serialize,
+    effect: impl FnOnce() -> Result<(), String>,
+) {
+    let request = serde_json::to_vec(request).unwrap_or_default();
+    let result = host_ledger::call(callback, target, &request, || match effect() {
+        Ok(()) => Outcome::default(),
+        Err(message) => error_outcome(the, message),
+    });
+    if let Err(message) = result {
+        set_result_string(the, &message);
+    }
+}
+
+/// Set the guest's result to an error and record it as the reply.
+unsafe fn error_outcome(the: *mut XsMachine, message: String) -> Outcome {
+    set_result_string(the, &message);
+    Outcome {
+        reply: message.into_bytes(),
+        ..Outcome::default()
+    }
+}
+
+/// Run a whole-value read through the directory slot under the host-call
+/// ledger, so the transcript records what the guest observed. `read`
+/// receives the resolved directory, or `None` for the ambient `"root"`
+/// token.
+///
+/// # Safety
+/// `the` must be valid with the directory in slot 0.
+unsafe fn read_through(
+    the: *mut XsMachine,
+    callback: &str,
+    request: &impl serde::Serialize,
+    read: impl FnOnce(Option<Result<cap_std::fs::Dir, String>>) -> Answer,
+) {
+    let (target, token, directory) = directory_argument(the, 0);
+    let request = serde_json::to_vec(&(target, &token, request)).unwrap_or_default();
+    host_ledger::answer(the, callback, target, &request, || read(directory));
+}
+
+/// Read a whole file through a resolved directory, or ambiently for the
+/// `"root"` token.
+fn read_whole(
+    directory: Option<Result<cap_std::fs::Dir, String>>,
+    path: &str,
+) -> Result<Vec<u8>, String> {
+    match directory {
+        None => std::fs::read(root_to_abs(path)).map_err(io_error),
+        Some(directory) => {
+            let mut file = directory?.open(path).map_err(io_error)?;
+            let mut contents = Vec::new();
+            file.read_to_end(&mut contents).map_err(io_error)?;
+            Ok(contents)
+        }
+    }
+}
+
+/// The position-advanced descriptor of a file handle.
+fn advanced(handle: u32, by: u64) -> Option<Option<Descriptor>> {
+    Some(match host_ledger::descriptor(handle)? {
+        Descriptor::Reader {
+            base,
+            path,
+            position,
+        } => Some(Descriptor::Reader {
+            base,
+            path,
+            position: position + by,
+        }),
+        Descriptor::Writer {
+            base,
+            path,
+            position,
+        } => Some(Descriptor::Writer {
+            base,
+            path,
+            position: position + by,
+        }),
+        _ => None,
+    })
+}
+
+/// Close a file or directory handle under the host-call ledger. Closing is
+/// idempotent, so a refusal is not reported to the guest.
+///
+/// # Safety
+/// `the` must be valid with one argument.
+unsafe fn close_handle(the: *mut XsMachine, callback: &str, close: impl FnOnce(u32) -> bool) {
+    let handle = fxToInteger(the, (*the).frame.sub(1)) as u32;
+    abort_if_ffi_panicked();
+    let request = handle.to_string().into_bytes();
+    let _ = host_ledger::call(callback, Some(handle), &request, || Outcome {
+        closes: close(handle),
+        ..Outcome::default()
+    });
+}
+
 /// `openReader(dirOrToken, path) -> number | string`
 ///
 /// Opens a file for reading, wraps in BufReader, returns a handle.
 /// Returns an "Error: ..." string on failure.
 pub unsafe extern "C" fn host_open_reader(the: *mut XsMachine) {
-    crate::worker_io::guard_ffi(|| unsafe {
-        FILE_MAP.with(|file_map| {
-            let path = arg_str(the, 1);
-
-            match resolve_dir(the, 0) {
-                Ok(dir) => match dir.open(path) {
-                    Ok(file) => {
-                        let handle = NEXT_FILE_HANDLE.fetch_add(1, Ordering::SeqCst);
-                        let mut map = file_map.borrow_mut();
-                        map.insert(handle, FileResource::Reader(BufReader::new(file)));
-                        fxInteger(the, &mut (*the).scratch, handle as i32);
-                        *(*the).frame.add(1) = (*the).scratch;
-                    }
-                    Err(e) => set_result_string(the, &format!("Error: {}", e)),
-                },
-                Err(msg) => set_result_string(the, &msg),
-            }
-        });
-    });
+    crate::worker_io::guard_ffi(|| unsafe { open_file(the, "openReader", false) });
 }
 
 /// `read(handle, maxBytes) -> ArrayBuffer | null`
@@ -224,40 +401,56 @@ pub unsafe extern "C" fn host_open_reader(the: *mut XsMachine) {
 /// Returns an "Error: ..." string for invalid handles.
 pub unsafe extern "C" fn host_read_chunk(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        FILE_MAP.with(|file_map| {
-            let handle_slot = (*the).frame.sub(1);
-            let handle = fxToInteger(the, handle_slot) as u32;
-            abort_if_ffi_panicked();
-            let max_slot = (*the).frame.sub(2);
-            let max_bytes = fxToInteger(the, max_slot) as usize;
-            abort_if_ffi_panicked();
-
-            let mut map = file_map.borrow_mut();
-            match map.get_mut(&handle) {
+        let handle_slot = (*the).frame.sub(1);
+        let handle = fxToInteger(the, handle_slot) as u32;
+        abort_if_ffi_panicked();
+        let max_slot = (*the).frame.sub(2);
+        let max_bytes = fxToInteger(the, max_slot) as usize;
+        abort_if_ffi_panicked();
+        let request = format!("{handle},{max_bytes}").into_bytes();
+        let result = host_ledger::call("read", Some(handle), &request, || {
+            // Release the file map before touching the XS heap: an `fxAbort`
+            // in the allocation would longjmp over a live borrow.
+            let read = FILE_MAP.with(|file_map| match file_map.borrow_mut().get_mut(&handle) {
                 Some(FileResource::Reader(reader)) => {
                     let mut buf = vec![0u8; max_bytes];
-                    match reader.read(&mut buf) {
-                        Ok(0) => {
-                            // EOF — return null
-                            fxNull(the, &mut (*the).scratch);
-                            *(*the).frame.add(1) = (*the).scratch;
-                        }
-                        Ok(n) => {
-                            fxArrayBuffer(
-                                the,
-                                &mut (*the).scratch,
-                                buf.as_mut_ptr() as *mut _,
-                                n as i32,
-                                n as i32,
-                            );
-                            *(*the).frame.add(1) = (*the).scratch;
-                        }
-                        Err(e) => set_result_string(the, &format!("Error: {}", e)),
+                    Some(reader.read(&mut buf).map(|n| {
+                        buf.truncate(n);
+                        buf
+                    }))
+                }
+                _ => None,
+            });
+            match read {
+                Some(Ok(buf)) if buf.is_empty() => {
+                    // EOF — return null
+                    fxNull(the, &mut (*the).scratch);
+                    *(*the).frame.add(1) = (*the).scratch;
+                    Outcome::default()
+                }
+                Some(Ok(mut buf)) => {
+                    let n = buf.len();
+                    fxArrayBuffer(
+                        the,
+                        &mut (*the).scratch,
+                        buf.as_mut_ptr() as *mut _,
+                        n as i32,
+                        n as i32,
+                    );
+                    *(*the).frame.add(1) = (*the).scratch;
+                    Outcome {
+                        reply: buf,
+                        redescribes: advanced(handle, n as u64),
+                        ..Outcome::default()
                     }
                 }
-                _ => set_result_string(the, "Error: invalid file handle"),
+                Some(Err(e)) => error_outcome(the, format!("Error: {}", e)),
+                None => error_outcome(the, "Error: invalid file handle".into()),
             }
         });
+        if let Err(msg) = result {
+            set_result_string(the, &msg);
+        }
     });
 }
 
@@ -266,12 +459,8 @@ pub unsafe extern "C" fn host_read_chunk(the: *mut XsMachine) {
 /// Closes the reader handle. Idempotent.
 pub unsafe extern "C" fn host_close_reader(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        FILE_MAP.with(|file_map| {
-            let handle_slot = (*the).frame.sub(1);
-            let handle = fxToInteger(the, handle_slot) as u32;
-            abort_if_ffi_panicked();
-            let mut map = file_map.borrow_mut();
-            map.remove(&handle);
+        close_handle(the, "closeReader", |handle| {
+            FILE_MAP.with(|m| m.borrow_mut().remove(&handle).is_some())
         });
     });
 }
@@ -281,54 +470,56 @@ pub unsafe extern "C" fn host_close_reader(the: *mut XsMachine) {
 /// Creates/truncates a file for writing, wraps in BufWriter,
 /// returns a handle. Returns an "Error: ..." string on failure.
 pub unsafe extern "C" fn host_open_writer(the: *mut XsMachine) {
-    crate::worker_io::guard_ffi(|| unsafe {
-        FILE_MAP.with(|file_map| {
-            let path = arg_str(the, 1);
-
-            match resolve_dir(the, 0) {
-                Ok(dir) => match dir.create(path) {
-                    Ok(file) => {
-                        let handle = NEXT_FILE_HANDLE.fetch_add(1, Ordering::SeqCst);
-                        let mut map = file_map.borrow_mut();
-                        map.insert(handle, FileResource::Writer(BufWriter::new(file)));
-                        fxInteger(the, &mut (*the).scratch, handle as i32);
-                        *(*the).frame.add(1) = (*the).scratch;
-                    }
-                    Err(e) => set_result_string(the, &format!("Error: {}", e)),
-                },
-                Err(msg) => set_result_string(the, &msg),
-            }
-        });
-    });
+    crate::worker_io::guard_ffi(|| unsafe { open_file(the, "openWriter", true) });
 }
 
 /// `write(handle, uint8Array) -> undefined | string`
 ///
 /// Writes bytes from a Uint8Array to the open writer handle.
 /// Returns undefined on success, or an "Error: ..." string on failure.
+/// Under a host transcript each write is flushed, so the descriptor's
+/// position never runs ahead of the file.
 pub unsafe extern "C" fn host_write_chunk(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        FILE_MAP.with(|file_map| {
-            let handle_slot = (*the).frame.sub(1);
-            let handle = fxToInteger(the, handle_slot) as u32;
-            abort_if_ffi_panicked();
-            let data_slot = (*the).frame.sub(2);
+        let handle_slot = (*the).frame.sub(1);
+        let handle = fxToInteger(the, handle_slot) as u32;
+        abort_if_ffi_panicked();
+        let data_slot = (*the).frame.sub(2);
 
-            let buf = match read_typed_array_bytes(the, data_slot) {
-                Some(b) => b,
-                None => return, // empty typed array — no-op
-            };
-
-            let mut map = file_map.borrow_mut();
-            match map.get_mut(&handle) {
-                Some(FileResource::Writer(writer)) => {
-                    if let Err(e) = writer.write_all(&buf) {
-                        set_result_string(the, &format!("Error: {}", e));
+        let buf = match read_typed_array_bytes(the, data_slot) {
+            Some(b) => b,
+            None => return, // empty typed array — no-op
+        };
+        let flush = host_ledger::attached();
+        let mut request = handle.to_be_bytes().to_vec();
+        request.extend_from_slice(&buf);
+        let result = host_ledger::call("write", Some(handle), &request, || {
+            FILE_MAP.with(|file_map| {
+                let mut map = file_map.borrow_mut();
+                match map.get_mut(&handle) {
+                    Some(FileResource::Writer(writer)) => {
+                        let written = writer.write_all(&buf).and_then(|()| {
+                            if flush {
+                                writer.flush()
+                            } else {
+                                Ok(())
+                            }
+                        });
+                        match written {
+                            Ok(()) => Outcome {
+                                redescribes: advanced(handle, buf.len() as u64),
+                                ..Outcome::default()
+                            },
+                            Err(e) => error_outcome(the, format!("Error: {}", e)),
+                        }
                     }
+                    _ => error_outcome(the, "Error: invalid file handle".into()),
                 }
-                _ => set_result_string(the, "Error: invalid file handle"),
-            }
+            })
         });
+        if let Err(msg) = result {
+            set_result_string(the, &msg);
+        }
     });
 }
 
@@ -337,15 +528,15 @@ pub unsafe extern "C" fn host_write_chunk(the: *mut XsMachine) {
 /// Flushes and closes the writer handle. Idempotent.
 pub unsafe extern "C" fn host_close_writer(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        FILE_MAP.with(|file_map| {
-            let handle_slot = (*the).frame.sub(1);
-            let handle = fxToInteger(the, handle_slot) as u32;
-            abort_if_ffi_panicked();
-
-            let mut map = file_map.borrow_mut();
-            if let Some(FileResource::Writer(mut writer)) = map.remove(&handle) {
-                let _ = writer.flush();
-            }
+        close_handle(the, "closeWriter", |handle| {
+            FILE_MAP.with(|m| match m.borrow_mut().remove(&handle) {
+                Some(FileResource::Writer(mut writer)) => {
+                    let _ = writer.flush();
+                    true
+                }
+                Some(_) => true,
+                None => false,
+            })
         });
     });
 }
@@ -361,28 +552,12 @@ pub unsafe extern "C" fn host_close_writer(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_read_file_text(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            match std::fs::read(root_to_abs(&path)) {
-                Ok(contents) => set_result_bytes(the, &contents),
-                Err(e) => set_result_string(the, &format!("Error: {}", e)),
+        read_through(the, "readFileText", &path, |directory| {
+            match read_whole(directory, &path) {
+                Ok(contents) => Answer::Text(contents),
+                Err(message) => Answer::Message(message),
             }
-            return;
-        }
-
-        match resolve_dir(the, 0) {
-            Ok(dir) => match dir.open(path) {
-                Ok(mut file) => {
-                    let mut contents = Vec::new();
-                    match file.read_to_end(&mut contents) {
-                        Ok(_) => set_result_bytes(the, &contents),
-                        Err(e) => set_result_string(the, &format!("Error: {}", e)),
-                    }
-                }
-                Err(e) => set_result_string(the, &format!("Error: {}", e)),
-            },
-            Err(msg) => set_result_string(the, &msg),
-        }
+        });
     });
 }
 
@@ -399,28 +574,12 @@ pub unsafe extern "C" fn host_read_file_text(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_read_file_bytes(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            match std::fs::read(root_to_abs(&path)) {
-                Ok(contents) => set_result_array_buffer(the, &contents),
-                Err(e) => set_result_string(the, &format!("Error: {}", e)),
+        read_through(the, "readFile", &path, |directory| {
+            match read_whole(directory, &path) {
+                Ok(contents) => Answer::Buffer(contents),
+                Err(message) => Answer::Message(message),
             }
-            return;
-        }
-
-        match resolve_dir(the, 0) {
-            Ok(dir) => match dir.open(path) {
-                Ok(mut file) => {
-                    let mut contents = Vec::new();
-                    match file.read_to_end(&mut contents) {
-                        Ok(_) => set_result_array_buffer(the, &contents),
-                        Err(e) => set_result_string(the, &format!("Error: {}", e)),
-                    }
-                }
-                Err(e) => set_result_string(the, &format!("Error: {}", e)),
-            },
-            Err(msg) => set_result_string(the, &msg),
-        }
+        });
     });
 }
 
@@ -432,49 +591,33 @@ pub unsafe extern "C" fn host_read_file_bytes(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_maybe_read_file_bytes(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
-
-        let read_result: Result<Option<Vec<u8>>, std::io::Error> =
-            if arg_dir_token(the, 0).as_deref() == Some("root") {
-                match std::fs::read(root_to_abs(&path)) {
-                    Ok(contents) => Ok(Some(contents)),
-                    Err(e)
-                        if e.kind() == std::io::ErrorKind::NotFound
-                            || e.kind() == std::io::ErrorKind::IsADirectory =>
-                    {
-                        Ok(None)
-                    }
-                    Err(e) => Err(e),
-                }
-            } else {
-                match resolve_dir(the, 0) {
-                    Ok(dir) => match dir.open(&path) {
-                        Ok(mut file) => {
-                            let mut contents = Vec::new();
-                            match file.read_to_end(&mut contents) {
-                                Ok(_) => Ok(Some(contents)),
-                                Err(e) => Err(e),
-                            }
-                        }
-                        Err(e)
-                            if e.kind() == std::io::ErrorKind::NotFound
-                                || e.kind() == std::io::ErrorKind::IsADirectory =>
-                        {
-                            Ok(None)
-                        }
-                        Err(e) => Err(e),
-                    },
-                    Err(msg) => {
-                        set_result_string(the, &msg);
-                        return;
-                    }
-                }
+        read_through(the, "maybeReadFile", &path, |directory| {
+            let absent = |e: &std::io::Error| {
+                e.kind() == std::io::ErrorKind::NotFound
+                    || e.kind() == std::io::ErrorKind::IsADirectory
             };
-
-        match read_result {
-            Ok(Some(contents)) => set_result_array_buffer(the, &contents),
-            Ok(None) => set_result_undefined(the),
-            Err(e) => set_result_string(the, &format!("Error: {}", e)),
-        }
+            let read_result: Result<Option<Vec<u8>>, std::io::Error> = match directory {
+                None => match std::fs::read(root_to_abs(&path)) {
+                    Ok(contents) => Ok(Some(contents)),
+                    Err(e) if absent(&e) => Ok(None),
+                    Err(e) => Err(e),
+                },
+                Some(Err(message)) => return Answer::Message(message),
+                Some(Ok(dir)) => match dir.open(&path) {
+                    Ok(mut file) => {
+                        let mut contents = Vec::new();
+                        file.read_to_end(&mut contents).map(|_| Some(contents))
+                    }
+                    Err(e) if absent(&e) => Ok(None),
+                    Err(e) => Err(e),
+                },
+            };
+            match read_result {
+                Ok(Some(contents)) => Answer::Buffer(contents),
+                Ok(None) => Answer::Nothing,
+                Err(e) => Answer::Message(io_error(e)),
+            }
+        });
     });
 }
 
@@ -485,25 +628,14 @@ pub unsafe extern "C" fn host_maybe_read_file_bytes(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_write_file_text(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
+        let (target, token, directory) = directory_argument(the, 0);
         // Read the file contents as raw bytes (may be non-UTF-8 CESU-8).
         let data = arg_bytes(the, 2);
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            let abs = root_to_abs(&path);
-            if let Err(e) = std::fs::write(&abs, data) {
-                set_result_string(the, &format!("Error: {}", e));
-            }
-            return;
-        }
-
-        match resolve_dir(the, 0) {
-            Ok(dir) => {
-                if let Err(e) = dir.write(path, data) {
-                    set_result_string(the, &format!("Error: {}", e));
-                }
-            }
-            Err(msg) => set_result_string(the, &msg),
-        }
+        let request = (target, &token, &path, BASE64.encode(data));
+        mutate(the, "writeFileText", target, &request, || match directory {
+            None => std::fs::write(root_to_abs(&path), data).map_err(io_error),
+            Some(directory) => directory?.write(&path, data).map_err(io_error),
+        });
     });
 }
 
@@ -514,37 +646,27 @@ pub unsafe extern "C" fn host_write_file_text(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_append_file(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
+        let (target, token, directory) = directory_argument(the, 0);
         // Read the contents as raw bytes (may be non-UTF-8 CESU-8), matching
         // host_write_file_text.
         let data = arg_bytes(the, 2);
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            let abs = root_to_abs(&path);
-            let result = std::fs::OpenOptions::new()
-                .append(true)
-                .create(true)
-                .open(&abs)
-                .and_then(|mut file| file.write_all(data));
-            if let Err(e) = result {
-                set_result_string(the, &format!("Error: {}", e));
-            }
-            return;
-        }
-
-        match resolve_dir(the, 0) {
-            Ok(dir) => {
-                let result = dir
+        let request = (target, &token, &path, BASE64.encode(data));
+        mutate(the, "appendFile", target, &request, || {
+            match directory {
+                None => std::fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(root_to_abs(&path))
+                    .and_then(|mut file| file.write_all(data)),
+                Some(directory) => directory?
                     .open_with(
-                        path,
+                        &path,
                         cap_std::fs::OpenOptions::new().append(true).create(true),
                     )
-                    .and_then(|mut file| file.write_all(data));
-                if let Err(e) = result {
-                    set_result_string(the, &format!("Error: {}", e));
-                }
+                    .and_then(|mut file| file.write_all(data)),
             }
-            Err(msg) => set_result_string(the, &msg),
-        }
+            .map_err(io_error)
+        });
     });
 }
 
@@ -580,56 +702,51 @@ pub unsafe extern "C" fn host_stat(the: *mut XsMachine) {
             )
         };
 
-        let result = if arg_dir_token(the, 0).as_deref() == Some("root") {
-            use std::os::unix::fs::MetadataExt;
-            std::fs::symlink_metadata(root_to_abs(&path)).map(|meta| {
-                let modified_ms = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0);
-                encode(
-                    kind_of(meta.is_dir(), meta.is_symlink()),
-                    meta.len(),
-                    modified_ms,
-                    meta.dev(),
-                    meta.ino(),
-                )
-            })
-        } else {
-            use cap_std::fs::MetadataExt;
-            let dir = match resolve_dir(the, 0) {
-                Ok(dir) => dir,
-                Err(msg) => {
-                    set_result_string(the, &msg);
-                    return;
+        read_through(the, "stat", &path, |directory| {
+            let result = match directory {
+                None => {
+                    use std::os::unix::fs::MetadataExt;
+                    std::fs::symlink_metadata(root_to_abs(&path)).map(|meta| {
+                        let modified_ms = meta
+                            .modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0);
+                        encode(
+                            kind_of(meta.is_dir(), meta.is_symlink()),
+                            meta.len(),
+                            modified_ms,
+                            meta.dev(),
+                            meta.ino(),
+                        )
+                    })
+                }
+                Some(Err(message)) => return Answer::Message(message),
+                Some(Ok(dir)) => {
+                    use cap_std::fs::MetadataExt;
+                    dir.symlink_metadata(&path).map(|meta| {
+                        let modified_ms = meta
+                            .modified()
+                            .ok()
+                            .and_then(|t| {
+                                t.duration_since(cap_std::time::SystemClock::UNIX_EPOCH)
+                                    .ok()
+                            })
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0);
+                        encode(
+                            kind_of(meta.is_dir(), meta.is_symlink()),
+                            meta.len(),
+                            modified_ms,
+                            meta.dev(),
+                            meta.ino(),
+                        )
+                    })
                 }
             };
-            dir.symlink_metadata(path).map(|meta| {
-                let modified_ms = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| {
-                        t.duration_since(cap_std::time::SystemClock::UNIX_EPOCH)
-                            .ok()
-                    })
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0);
-                encode(
-                    kind_of(meta.is_dir(), meta.is_symlink()),
-                    meta.len(),
-                    modified_ms,
-                    meta.dev(),
-                    meta.ino(),
-                )
-            })
-        };
-
-        match result {
-            Ok(json) => set_result_string(the, &json),
-            Err(e) => set_result_string(the, &format!("Error: {}", e)),
-        }
+            Answer::Message(result.unwrap_or_else(io_error))
+        });
     });
 }
 
@@ -650,47 +767,31 @@ pub unsafe extern "C" fn host_read_dir(the: *mut XsMachine) {
                     .join(",")
             )
         };
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            match std::fs::read_dir(root_to_abs(&path)) {
-                Ok(entries) => {
-                    let names: Vec<String> = entries
+        read_through(the, "readDir", &path, |directory| {
+            let listing: std::io::Result<Vec<String>> = match directory {
+                None => std::fs::read_dir(root_to_abs(&path)).map(|entries| {
+                    entries
                         .filter_map(|e| e.ok())
                         .map(|e| e.file_name().to_string_lossy().into_owned())
-                        .collect();
-                    set_result_string(the, &encode_json(names));
-                }
-                Err(e) => set_result_string(the, &format!("Error: {}", e)),
-            }
-            return;
-        }
-
-        match resolve_dir(the, 0) {
-            Ok(dir) => {
-                let sub = if path.is_empty() {
-                    dir.entries()
-                } else {
-                    match dir.open_dir(path) {
-                        Ok(sub) => sub.entries(),
-                        Err(e) => {
-                            set_result_string(the, &format!("Error: {}", e));
-                            return;
-                        }
-                    }
-                };
-                match sub {
-                    Ok(entries) => {
-                        let names: Vec<String> = entries
+                        .collect()
+                }),
+                Some(Err(message)) => return Answer::Message(message),
+                Some(Ok(dir)) => {
+                    let sub = if path.is_empty() {
+                        dir.entries()
+                    } else {
+                        dir.open_dir(&path).and_then(|sub| sub.entries())
+                    };
+                    sub.map(|entries| {
+                        entries
                             .filter_map(|e| e.ok())
                             .map(|e| e.file_name().to_string_lossy().into_owned())
-                            .collect();
-                        set_result_string(the, &encode_json(names));
-                    }
-                    Err(e) => set_result_string(the, &format!("Error: {}", e)),
+                            .collect()
+                    })
                 }
-            }
-            Err(msg) => set_result_string(the, &msg),
-        }
+            };
+            Answer::Message(listing.map(encode_json).unwrap_or_else(io_error))
+        });
     });
 }
 
@@ -701,22 +802,17 @@ pub unsafe extern "C" fn host_read_dir(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_mkdir(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            if let Err(e) = std::fs::create_dir_all(root_to_abs(&path)) {
-                set_result_string(the, &format!("Error: {}", e));
-            }
-            return;
-        }
-
-        match resolve_dir(the, 0) {
-            Ok(dir) => {
-                if let Err(e) = dir.create_dir_all(path) {
-                    set_result_string(the, &format!("Error: {}", e));
-                }
-            }
-            Err(msg) => set_result_string(the, &msg),
-        }
+        let (target, token, directory) = directory_argument(the, 0);
+        mutate(
+            the,
+            "mkdir",
+            target,
+            &(target, &token, &path),
+            || match directory {
+                None => std::fs::create_dir_all(root_to_abs(&path)).map_err(io_error),
+                Some(directory) => directory?.create_dir_all(&path).map_err(io_error),
+            },
+        );
     });
 }
 
@@ -727,27 +823,24 @@ pub unsafe extern "C" fn host_mkdir(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_remove(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            let abs = root_to_abs(&path);
-            let result = match std::fs::symlink_metadata(&abs) {
-                Ok(meta) if meta.is_dir() => std::fs::remove_dir(&abs),
-                _ => std::fs::remove_file(&abs),
-            };
-            if let Err(e) = result {
-                set_result_string(the, &format!("Error: {}", e));
-            }
-            return;
-        }
-
-        match resolve_dir(the, 0) {
-            Ok(dir) => {
-                if let Err(e) = dir.remove_file(path) {
-                    set_result_string(the, &format!("Error: {}", e));
+        let (target, token, directory) = directory_argument(the, 0);
+        mutate(
+            the,
+            "remove",
+            target,
+            &(target, &token, &path),
+            || match directory {
+                None => {
+                    let abs = root_to_abs(&path);
+                    match std::fs::symlink_metadata(&abs) {
+                        Ok(meta) if meta.is_dir() => std::fs::remove_dir(&abs),
+                        _ => std::fs::remove_file(&abs),
+                    }
+                    .map_err(io_error)
                 }
-            }
-            Err(msg) => set_result_string(the, &msg),
-        }
+                Some(directory) => directory?.remove_file(&path).map_err(io_error),
+            },
+        );
     });
 }
 
@@ -759,22 +852,20 @@ pub unsafe extern "C" fn host_rename(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let from = arg_str(the, 1);
         let to = arg_str(the, 2);
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            if let Err(e) = std::fs::rename(root_to_abs(&from), root_to_abs(&to)) {
-                set_result_string(the, &format!("Error: {}", e));
-            }
-            return;
-        }
-
-        match resolve_dir(the, 0) {
-            Ok(dir) => {
-                if let Err(e) = dir.rename(from, &dir, to) {
-                    set_result_string(the, &format!("Error: {}", e));
+        let (target, token, directory) = directory_argument(the, 0);
+        mutate(
+            the,
+            "rename",
+            target,
+            &(target, &token, &from, &to),
+            || match directory {
+                None => std::fs::rename(root_to_abs(&from), root_to_abs(&to)).map_err(io_error),
+                Some(directory) => {
+                    let directory = directory?;
+                    directory.rename(&from, &directory, &to).map_err(io_error)
                 }
-            }
-            Err(msg) => set_result_string(the, &msg),
-        }
+            },
+        );
     });
 }
 
@@ -782,18 +873,15 @@ pub unsafe extern "C" fn host_rename(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_exists(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            let exists = std::fs::symlink_metadata(root_to_abs(&path)).is_ok();
-            set_result_bool(the, exists);
-            return;
-        }
-
-        let exists = resolve_dir(the, 0)
-            .ok()
-            .and_then(|dir| dir.try_exists(path).ok())
-            .unwrap_or(false);
-        set_result_bool(the, exists);
+        read_through(the, "exists", &path, |directory| {
+            Answer::Flag(match directory {
+                None => std::fs::symlink_metadata(root_to_abs(&path)).is_ok(),
+                Some(directory) => directory
+                    .ok()
+                    .and_then(|dir| dir.try_exists(&path).ok())
+                    .unwrap_or(false),
+            })
+        });
     });
 }
 
@@ -801,23 +889,20 @@ pub unsafe extern "C" fn host_exists(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_is_dir(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            // Follow symlinks — a symlink pointing at a directory should
-            // report true, matching Node's `fs.statSync().isDirectory()`.
-            let is_dir = std::fs::metadata(root_to_abs(&path))
-                .map(|m| m.is_dir())
-                .unwrap_or(false);
-            set_result_bool(the, is_dir);
-            return;
-        }
-
-        let is_dir = resolve_dir(the, 0)
-            .ok()
-            .and_then(|dir| dir.metadata(path).ok())
-            .map(|m| m.is_dir())
-            .unwrap_or(false);
-        set_result_bool(the, is_dir);
+        read_through(the, "isDir", &path, |directory| {
+            Answer::Flag(match directory {
+                // Follow symlinks — a symlink pointing at a directory should
+                // report true, matching Node's `fs.statSync().isDirectory()`.
+                None => std::fs::metadata(root_to_abs(&path))
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false),
+                Some(directory) => directory
+                    .ok()
+                    .and_then(|dir| dir.metadata(&path).ok())
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false),
+            })
+        });
     });
 }
 
@@ -827,20 +912,17 @@ pub unsafe extern "C" fn host_is_dir(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_read_link(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            if let Ok(target) = std::fs::read_link(root_to_abs(&path)) {
-                set_result_string(the, &target.to_string_lossy());
+        read_through(the, "readLink", &path, |directory| {
+            // If not a symlink or error, return undefined.
+            let target = match directory {
+                None => std::fs::read_link(root_to_abs(&path)).ok(),
+                Some(directory) => directory.ok().and_then(|dir| dir.read_link(&path).ok()),
+            };
+            match target {
+                Some(target) => Answer::Message(target.to_string_lossy().into_owned()),
+                None => Answer::Nothing,
             }
-            return;
-        }
-
-        if let Ok(dir) = resolve_dir(the, 0) {
-            if let Ok(target) = dir.read_link(path) {
-                set_result_string(the, &target.to_string_lossy());
-            }
-            // If not a symlink or error, return undefined (default).
-        }
+        });
     });
 }
 
@@ -855,41 +937,42 @@ pub unsafe extern "C" fn host_read_link(the: *mut XsMachine) {
 /// Returns an "Error: ..." string on failure.
 pub unsafe extern "C" fn host_open_dir(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        DIR_MAP.with(|dir_map| {
-            let path = arg_str(the, 1);
-
-            if arg_dir_token(the, 0).as_deref() == Some("root") {
-                // Open ambiently so symlinks are followed.
-                match cap_std::fs::Dir::open_ambient_dir(
-                    root_to_abs(&path),
-                    cap_std::ambient_authority(),
-                ) {
-                    Ok(sub) => {
-                        let handle = NEXT_DIR_HANDLE.fetch_add(1, Ordering::SeqCst);
-                        let mut map = dir_map.borrow_mut();
-                        map.insert(handle, sub);
-                        fxInteger(the, &mut (*the).scratch, handle as i32);
-                        *(*the).frame.add(1) = (*the).scratch;
-                    }
-                    Err(e) => set_result_string(the, &format!("Error: {}", e)),
+        let path = arg_str(the, 1);
+        // Open ambiently so symlinks are followed.
+        let ambient = arg_dir_token(the, 0).as_deref() == Some("root");
+        let (target, base) = if ambient {
+            let absolute = root_to_abs(&path).to_string_lossy().into_owned();
+            (None, Some((Base::Ambient(absolute), String::new())))
+        } else {
+            origin(the, 0, &path)
+        };
+        let dir = if ambient {
+            cap_std::fs::Dir::open_ambient_dir(root_to_abs(&path), cap_std::ambient_authority())
+                .map_err(|e| format!("Error: {}", e))
+        } else {
+            resolve_dir(the, 0)
+                .and_then(|dir| dir.open_dir(&path).map_err(|e| format!("Error: {}", e)))
+        };
+        let request = serde_json::to_vec(&(target, &base, &path)).unwrap_or_default();
+        let mut opened = None;
+        let result = host_ledger::call("openDir", target, &request, || match dir {
+            Ok(sub) => {
+                opened = Some(sub);
+                Outcome {
+                    opens: Some(base.map(|(base, path)| Descriptor::Directory { base, path })),
+                    ..Outcome::default()
                 }
-                return;
             }
-
-            match resolve_dir(the, 0) {
-                Ok(dir) => match dir.open_dir(path) {
-                    Ok(sub) => {
-                        let handle = NEXT_DIR_HANDLE.fetch_add(1, Ordering::SeqCst);
-                        let mut map = dir_map.borrow_mut();
-                        map.insert(handle, sub);
-                        fxInteger(the, &mut (*the).scratch, handle as i32);
-                        *(*the).frame.add(1) = (*the).scratch;
-                    }
-                    Err(e) => set_result_string(the, &format!("Error: {}", e)),
-                },
-                Err(msg) => set_result_string(the, &msg),
-            }
+            Err(msg) => error_outcome(the, msg),
         });
+        match (result, opened) {
+            (Ok(Some(handle)), Some(sub)) => {
+                DIR_MAP.with(|m| m.borrow_mut().insert(handle, sub));
+                set_result_handle(the, handle);
+            }
+            (Err(msg), _) => set_result_string(the, &msg),
+            _ => {}
+        }
     });
 }
 
@@ -898,12 +981,8 @@ pub unsafe extern "C" fn host_open_dir(the: *mut XsMachine) {
 /// Removes the directory handle from `DIR_MAP`. Idempotent.
 pub unsafe extern "C" fn host_close_dir(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        DIR_MAP.with(|dir_map| {
-            let handle_slot = (*the).frame.sub(1);
-            let handle = fxToInteger(the, handle_slot) as u32;
-            abort_if_ffi_panicked();
-            let mut map = dir_map.borrow_mut();
-            map.remove(&handle);
+        close_handle(the, "closeDir", |handle| {
+            DIR_MAP.with(|m| m.borrow_mut().remove(&handle).is_some())
         });
     });
 }
@@ -915,24 +994,30 @@ pub unsafe extern "C" fn host_close_dir(the: *mut XsMachine) {
 /// Returns undefined on success, or an "Error: ..." string on failure.
 pub unsafe extern "C" fn host_symlink(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        let target = arg_str(the, 1);
+        let target_path = arg_str(the, 1);
         let link_name = arg_str(the, 2);
-
-        match resolve_dir(the, 0) {
-            Ok(dir) => {
+        let (target, token) = directory_slot(the, 0);
+        let dir = resolve_dir(the, 0);
+        mutate(
+            the,
+            "symlink",
+            target,
+            &(target, &token, &target_path, &link_name),
+            || {
+                let dir = dir?;
                 #[cfg(unix)]
-                let result = dir.symlink(target, link_name);
+                let result = dir.symlink(&target_path, &link_name);
                 #[cfg(not(unix))]
-                let result = Err(std::io::Error::new(
-                    std::io::ErrorKind::Unsupported,
-                    "symlinks not supported on this platform",
-                ));
-                if let Err(e) = result {
-                    set_result_string(the, &format!("Error: {}", e));
-                }
-            }
-            Err(msg) => set_result_string(the, &msg),
-        }
+                let result = {
+                    let _ = dir;
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        "symlinks not supported on this platform",
+                    ))
+                };
+                result.map_err(io_error)
+            },
+        );
     });
 }
 
@@ -945,22 +1030,134 @@ pub unsafe extern "C" fn host_link(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let src_path = arg_str(the, 1);
         let dst_path = arg_str(the, 2);
-
-        match resolve_dir(the, 0) {
-            Ok(dir) => {
-                if let Err(e) = dir.hard_link(src_path, &dir, dst_path) {
-                    set_result_string(the, &format!("Error: {}", e));
-                }
-            }
-            Err(msg) => set_result_string(the, &msg),
-        }
+        let (target, token) = directory_slot(the, 0);
+        let dir = resolve_dir(the, 0);
+        mutate(
+            the,
+            "link",
+            target,
+            &(target, &token, &src_path, &dst_path),
+            || {
+                let dir = dir?;
+                dir.hard_link(&src_path, &dir, &dst_path).map_err(io_error)
+            },
+        );
     });
 }
 
 /// Native handles cannot be serialized with the XS heap.
+/// Drop every open file and directory handle.
+pub(crate) fn drop_open_handles() {
+    FILE_MAP.with(|map| map.borrow_mut().clear());
+    DIR_MAP.with(|map| map.borrow_mut().clear());
+}
+
 pub(crate) fn has_open_handles() -> bool {
     FILE_MAP.with(|map| !map.borrow().is_empty()) || DIR_MAP.with(|map| !map.borrow().is_empty())
 }
+
+/// Rebuild a file or directory handle from its descriptor under the same
+/// logical id. A writer reopens without truncating, and only when the file's
+/// length is still its committed position.
+pub(crate) fn reseat(
+    handle: u32,
+    descriptor: &Descriptor,
+    powers: &HostPowers,
+) -> Result<(), String> {
+    let base_dir = |base: &Base| match base {
+        Base::Token(token) => powers
+            .get_dir(token)
+            .ok_or_else(|| format!("unknown directory token '{token}'"))?
+            .try_clone()
+            .map_err(|e| e.to_string()),
+        Base::Ambient(path) => {
+            cap_std::fs::Dir::open_ambient_dir(path, cap_std::ambient_authority())
+                .map_err(|e| e.to_string())
+        }
+    };
+    match descriptor {
+        Descriptor::Directory { base, path } => {
+            let dir = base_dir(base)?;
+            let dir = if path.is_empty() {
+                dir
+            } else {
+                dir.open_dir(path).map_err(|e| e.to_string())?
+            };
+            DIR_MAP.with(|m| m.borrow_mut().insert(handle, dir));
+        }
+        Descriptor::Reader {
+            base,
+            path,
+            position,
+        } => {
+            let mut file = base_dir(base)?.open(path).map_err(|e| e.to_string())?;
+            std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(*position))
+                .map_err(|e| e.to_string())?;
+            FILE_MAP.with(|m| {
+                m.borrow_mut()
+                    .insert(handle, FileResource::Reader(BufReader::new(file)))
+            });
+        }
+        Descriptor::Writer {
+            base,
+            path,
+            position,
+        } => {
+            let mut options = cap_std::fs::OpenOptions::new();
+            options.write(true);
+            let mut file = base_dir(base)?
+                .open_with(path, &options)
+                .map_err(|e| e.to_string())?;
+            // Rebuilding a handle never changes the file: bytes past the
+            // committed position (an escaped write, a later append) or a
+            // shortfall (writes lost with the page cache) re-seat the
+            // writer as broken, before the recovery gate is consulted.
+            let length = file.metadata().map_err(|e| e.to_string())?.len();
+            if length != *position {
+                return Err(format!(
+                    "{path} is {length} bytes, not the {position} its writer committed"
+                ));
+            }
+            std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(*position))
+                .map_err(|e| e.to_string())?;
+            FILE_MAP.with(|m| {
+                m.borrow_mut()
+                    .insert(handle, FileResource::Writer(BufWriter::new(file)))
+            });
+        }
+        _ => return Err("not a file or directory descriptor".into()),
+    }
+    Ok(())
+}
+
+/// Every callback in [`CALLBACKS`], by guest name, with its host-call
+/// classification. Mutations of the filesystem neither join the worker's
+/// crank commit nor carry an idempotency protocol, so they are barriers.
+pub const CLASSES: &[(&str, HostClass)] = &[
+    ("readFileText", HostClass::Read),
+    ("writeFileText", HostClass::Barrier),
+    ("readDir", HostClass::Read),
+    ("mkdir", HostClass::Barrier),
+    ("remove", HostClass::Barrier),
+    ("rename", HostClass::Barrier),
+    ("exists", HostClass::Read),
+    ("isDir", HostClass::Read),
+    ("readLink", HostClass::Read),
+    ("openReader", HostClass::Read),
+    ("read", HostClass::Read),
+    ("closeReader", HostClass::Read),
+    ("openWriter", HostClass::Barrier),
+    ("write", HostClass::Barrier),
+    ("closeWriter", HostClass::Barrier),
+    ("openDir", HostClass::Read),
+    ("closeDir", HostClass::Read),
+    ("symlink", HostClass::Barrier),
+    ("link", HostClass::Barrier),
+    ("readFile", HostClass::Read),
+    ("maybeReadFile", HostClass::Read),
+    ("appendFile", HostClass::Barrier),
+    ("stat", HostClass::Read),
+];
 
 /// All host callbacks in registration order for snapshot tables.
 ///

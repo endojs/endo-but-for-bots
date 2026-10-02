@@ -22,14 +22,15 @@
 //!   BLOB    → {$bytes: b}  → Uint8Array (base64 in JSON)
 
 use crate::ffi::*;
+use crate::host_ledger::{self, Descriptor, Outcome};
 use crate::worker_io::{abort_if_ffi_panicked, arg_str, set_result_string};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use rusqlite::{types::Value as SqlValue, Connection};
 use serde_json::{json, Map, Value as JsonValue};
+use slot_machine_transcript::HostClass;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 // ---------------------------------------------------------------------------
 // Handle maps
@@ -37,20 +38,17 @@ use std::sync::atomic::{AtomicU32, Ordering};
 //
 // Handle tables belong to the dedicated worker thread. A caught callback panic
 // cannot expose a torn mutation to a sibling worker, and thread exit drops all
-// remaining native resources. Global IDs prevent a sibling's handle from aliasing
-// an entry in this worker's table.
-static NEXT_DB_HANDLE: AtomicU32 = AtomicU32::new(1);
+// remaining native resources. `host_ledger::call` allocates the ids.
 thread_local! {
     static DB_MAP: RefCell<HashMap<u32, Connection>> = RefCell::new(HashMap::new());
 }
 
-static NEXT_STMT_HANDLE: AtomicU32 = AtomicU32::new(1);
 thread_local! {
     static STMT_MAP: RefCell<HashMap<u32, PreparedStmt>> = RefCell::new(HashMap::new());
 }
 
 struct PreparedStmt {
-    db_handle: u32,
+    database_handle: u32,
     sql: String,
 }
 
@@ -130,7 +128,11 @@ enum ParamSet {
 }
 
 /// Execute a statement with parsed params and return the rusqlite statement result.
-fn execute_stmt(conn: &Connection, sql: &str, params: &ParamSet) -> Result<usize, rusqlite::Error> {
+fn execute_statement(
+    conn: &Connection,
+    sql: &str,
+    params: &ParamSet,
+) -> Result<usize, rusqlite::Error> {
     let mut stmt = conn.prepare(sql)?;
     match params {
         ParamSet::Positional(vals) => {
@@ -150,9 +152,74 @@ fn execute_stmt(conn: &Connection, sql: &str, params: &ParamSet) -> Result<usize
     }
 }
 
+/// `sqliteStmtGet` and `sqliteStmtAll` are classed `Read`, so under a host
+/// transcript they must not reach a statement that writes (an `INSERT ...
+/// RETURNING`, say): a retried crank would repeat the write, and a replayed
+/// crank would skip it. Such a statement goes through the `Barrier`-classed
+/// `sqliteStmtRun` instead.
+///
+/// SQLite reports transaction control (`BEGIN`, `COMMIT`, `END`,
+/// `ROLLBACK`, `SAVEPOINT`, `RELEASE`), `ATTACH`, `DETACH`, and pragmas as
+/// read-only although they change the connection, so those are refused by
+/// their leading keyword. A pragma is admitted only as a bare read
+/// (`PRAGMA user_version`), never with an argument.
+///
+/// `transcript` is whether one is attached, read before the host call
+/// borrows the ledger.
+fn refuse_write_under_transcript(
+    statement: &rusqlite::Statement<'_>,
+    sql: &str,
+    transcript: bool,
+) -> Result<(), String> {
+    if transcript && (!statement.readonly() || changes_connection(sql)) {
+        return Err(
+            "Error: a statement that writes must run through sqliteStmtRun under a host transcript"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+/// Whether `sql`, by its leading keyword, changes the connection's state
+/// even though SQLite reports it read-only.
+fn changes_connection(sql: &str) -> bool {
+    let text = skip_leading_trivia(sql);
+    let keyword: String = text
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    match keyword.as_str() {
+        "BEGIN" | "COMMIT" | "END" | "ROLLBACK" | "SAVEPOINT" | "RELEASE" | "ATTACH"
+        | "DETACH" => true,
+        "PRAGMA" => text.contains('=') || text.contains('('),
+        _ => false,
+    }
+}
+
+/// `sql` past leading whitespace and comments.
+fn skip_leading_trivia(mut sql: &str) -> &str {
+    loop {
+        sql = sql.trim_start();
+        if let Some(rest) = sql.strip_prefix("--") {
+            sql = rest.find('\n').map_or("", |at| &rest[at..]);
+        } else if let Some(rest) = sql.strip_prefix("/*") {
+            sql = rest.find("*/").map_or("", |at| &rest[at + 2..]);
+        } else {
+            return sql;
+        }
+    }
+}
+
 /// Query a single row.
-fn query_get(conn: &Connection, sql: &str, params: &ParamSet) -> Result<Option<JsonValue>, String> {
+fn query_get(
+    conn: &Connection,
+    sql: &str,
+    params: &ParamSet,
+    transcript: bool,
+) -> Result<Option<JsonValue>, String> {
     let mut stmt = conn.prepare(sql).map_err(|e| format!("Error: {}", e))?;
+    refuse_write_under_transcript(&stmt, sql, transcript)?;
     let col_count = stmt.column_count();
     let col_names: Vec<String> = (0..col_count)
         .map(|i| stmt.column_name(i).unwrap_or("?").to_string())
@@ -197,8 +264,14 @@ fn query_get(conn: &Connection, sql: &str, params: &ParamSet) -> Result<Option<J
 }
 
 /// Query all rows.
-fn query_all(conn: &Connection, sql: &str, params: &ParamSet) -> Result<JsonValue, String> {
+fn query_all(
+    conn: &Connection,
+    sql: &str,
+    params: &ParamSet,
+    transcript: bool,
+) -> Result<JsonValue, String> {
     let mut stmt = conn.prepare(sql).map_err(|e| format!("Error: {}", e))?;
+    refuse_write_under_transcript(&stmt, sql, transcript)?;
     let col_count = stmt.column_count();
     let col_names: Vec<String> = (0..col_count)
         .map(|i| stmt.column_name(i).unwrap_or("?").to_string())
@@ -242,62 +315,165 @@ fn query_all(conn: &Connection, sql: &str, params: &ParamSet) -> Result<JsonValu
 // Host functions
 // ---------------------------------------------------------------------------
 
+/// Open a connection with the default pragmas.
+fn open_connection(path: &str) -> Result<Connection, String> {
+    let conn = if path == ":memory:" {
+        Connection::open_in_memory()
+    } else {
+        Connection::open(path)
+    }
+    .map_err(|e| format!("Error: {}", e))?;
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+        .map_err(|e| format!("Error: {}", e))?;
+    conn.busy_timeout(std::time::Duration::from_millis(5000))
+        .map_err(|e| format!("Error: {}", e))?;
+    Ok(conn)
+}
+
+unsafe fn set_result_handle(the: *mut XsMachine, handle: u32) {
+    fxInteger(the, &mut (*the).scratch, handle as i32);
+    *(*the).frame.add(1) = (*the).scratch;
+}
+
+/// Set the guest's result to `text` (when there is one) and record it as
+/// the reply.
+unsafe fn reply(the: *mut XsMachine, text: Option<String>) -> Outcome {
+    match text {
+        Some(text) => {
+            set_result_string(the, &text);
+            Outcome {
+                reply: text.into_bytes(),
+                ..Outcome::default()
+            }
+        }
+        None => Outcome::default(),
+    }
+}
+
+/// Read a handle argument.
+unsafe fn argument_handle(the: *mut XsMachine, index: usize) -> u32 {
+    let handle = fxToInteger(the, (*the).frame.sub(1 + index)) as u32;
+    abort_if_ffi_panicked();
+    handle
+}
+
+/// Run a statement-handle callback: look up the statement and its
+/// connection, and answer with `op`'s text.
+///
+/// # Safety
+/// `the` must be valid with the callback's arguments.
+unsafe fn with_statement(
+    the: *mut XsMachine,
+    callback: &str,
+    params: bool,
+    op: impl FnOnce(&Connection, &str, &ParamSet) -> String,
+) {
+    let statement_handle = argument_handle(the, 0);
+    let params_json = if params {
+        arg_str(the, 1)
+    } else {
+        String::new()
+    };
+    let request = format!("{statement_handle},{params_json}").into_bytes();
+    let result = host_ledger::call(callback, Some(statement_handle), &request, || {
+        let text = STMT_MAP.with(|stmts| {
+            let Some((database_handle, sql)) = stmts
+                .borrow()
+                .get(&statement_handle)
+                .map(|s| (s.database_handle, s.sql.clone()))
+            else {
+                return format!("Error: invalid statement handle {}", statement_handle);
+            };
+            let params = if params {
+                match parse_params(&params_json) {
+                    Ok(p) => p,
+                    Err(e) => return e,
+                }
+            } else {
+                ParamSet::Positional(Vec::new())
+            };
+            DB_MAP.with(|dbs| match dbs.borrow().get(&database_handle) {
+                Some(conn) => op(conn, &sql, &params),
+                None => format!("Error: invalid database handle {}", database_handle),
+            })
+        });
+        reply(the, Some(text))
+    });
+    if let Err(msg) = result {
+        set_result_string(the, &msg);
+    }
+}
+
+/// Whether reopening `path` reaches the same database. An in-memory
+/// (`":memory:"`) or temporary (`""`) database is private to its
+/// connection, and a `file:` URI may name one (`file::memory:`,
+/// `?mode=memory`) or carry parameters a reopen would not honor, so none of
+/// these is reopenable.
+fn reopenable(path: &str) -> bool {
+    !(path.is_empty() || path == ":memory:" || path.starts_with("file:"))
+}
+
 /// `sqliteOpen(path) -> number | "Error: ..."`
+///
+/// A database that is not [`reopenable`] has no reconstruction descriptor:
+/// its handle is re-seated as broken.
 pub unsafe extern "C" fn host_sqlite_open(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        DB_MAP.with(|db_map| {
-            let path = arg_str(the, 0);
-            let conn = if path == ":memory:" {
-                Connection::open_in_memory()
-            } else {
-                Connection::open(path)
-            };
-
-            match conn {
-                Ok(c) => {
-                    // Apply default pragmas.
-                    if let Err(e) =
-                        c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-                    {
-                        set_result_string(the, &format!("Error: {}", e));
-                        return;
+        let path = arg_str(the, 0);
+        let mut opened = None;
+        let result = host_ledger::call(
+            "sqliteOpen",
+            None,
+            path.as_bytes(),
+            || match open_connection(&path) {
+                Ok(conn) => {
+                    opened = Some(conn);
+                    let descriptor =
+                        reopenable(&path).then(|| Descriptor::Database { path: path.clone() });
+                    Outcome {
+                        opens: Some(descriptor),
+                        ..Outcome::default()
                     }
-                    if let Err(e) = c.busy_timeout(std::time::Duration::from_millis(5000)) {
-                        set_result_string(the, &format!("Error: {}", e));
-                        return;
-                    }
-                    let handle = NEXT_DB_HANDLE.fetch_add(1, Ordering::SeqCst);
-                    let mut map = db_map.borrow_mut();
-                    map.insert(handle, c);
-                    fxInteger(the, &mut (*the).scratch, handle as i32);
-                    *(*the).frame.add(1) = (*the).scratch;
                 }
-                Err(e) => {
-                    set_result_string(the, &format!("Error: {}", e));
-                }
+                Err(e) => reply(the, Some(e)),
+            },
+        );
+        match (result, opened) {
+            (Ok(Some(handle)), Some(conn)) => {
+                DB_MAP.with(|m| m.borrow_mut().insert(handle, conn));
+                set_result_handle(the, handle);
             }
-        });
+            (Err(msg), _) => set_result_string(the, &msg),
+            _ => {}
+        }
     });
 }
 
 /// `sqliteClose(dbH) -> undefined`
 pub unsafe extern "C" fn host_sqlite_close(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        DB_MAP.with(|db_map| {
-            STMT_MAP.with(|stmt_map| {
-                let handle_slot = (*the).frame.sub(1);
-                let handle = fxToInteger(the, handle_slot) as u32;
-                abort_if_ffi_panicked();
-
-                // Remove associated statements first.
-                {
-                    let mut stmts = stmt_map.borrow_mut();
-                    stmts.retain(|_, s| s.db_handle != handle);
-                }
-                // Then remove the connection.
-                let mut dbs = db_map.borrow_mut();
-                dbs.remove(&handle);
+        let handle = argument_handle(the, 0);
+        let request = handle.to_string().into_bytes();
+        let _ = host_ledger::call("sqliteClose", Some(handle), &request, || {
+            // Remove associated statements first.
+            let mut also_closes = Vec::new();
+            STMT_MAP.with(|stmts| {
+                stmts.borrow_mut().retain(|id, s| {
+                    let keep = s.database_handle != handle;
+                    if !keep {
+                        also_closes.push(*id);
+                    }
+                    keep
+                })
             });
+            also_closes.sort_unstable();
+            // Then remove the connection.
+            let closes = DB_MAP.with(|dbs| dbs.borrow_mut().remove(&handle).is_some());
+            Outcome {
+                closes,
+                also_closes,
+                ..Outcome::default()
+            }
         });
     });
 }
@@ -305,282 +481,138 @@ pub unsafe extern "C" fn host_sqlite_close(the: *mut XsMachine) {
 /// `sqliteExec(dbH, sql) -> undefined | "Error: ..."`
 pub unsafe extern "C" fn host_sqlite_exec(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        DB_MAP.with(|db_map| {
-            let handle_slot = (*the).frame.sub(1);
-            let handle = fxToInteger(the, handle_slot) as u32;
-            abort_if_ffi_panicked();
-            let sql = arg_str(the, 1);
-
-            let map = db_map.borrow();
-            match map.get(&handle) {
-                Some(conn) => {
-                    if let Err(e) = conn.execute_batch(&sql) {
-                        set_result_string(the, &format!("Error: {}", e));
-                    }
-                }
-                None => {
-                    set_result_string(the, &format!("Error: invalid database handle {}", handle));
-                }
-            }
+        let handle = argument_handle(the, 0);
+        let sql = arg_str(the, 1);
+        let request = format!("{handle},{sql}").into_bytes();
+        let result = host_ledger::call("sqliteExec", Some(handle), &request, || {
+            let text = DB_MAP.with(|dbs| match dbs.borrow().get(&handle) {
+                Some(conn) => conn
+                    .execute_batch(&sql)
+                    .err()
+                    .map(|e| format!("Error: {}", e)),
+                None => Some(format!("Error: invalid database handle {}", handle)),
+            });
+            reply(the, text)
         });
+        if let Err(msg) = result {
+            set_result_string(the, &msg);
+        }
     });
 }
 
 /// `sqlitePrepare(dbH, sql) -> number | "Error: ..."`
 pub unsafe extern "C" fn host_sqlite_prepare(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        DB_MAP.with(|db_map| {
-            STMT_MAP.with(|stmt_map| {
-                let handle_slot = (*the).frame.sub(1);
-                let db_handle = fxToInteger(the, handle_slot) as u32;
-                abort_if_ffi_panicked();
-                let sql = arg_str(the, 1);
-
-                // Validate that the db handle exists.
-                {
-                    let map = db_map.borrow();
-                    if !map.contains_key(&db_handle) {
-                        set_result_string(
-                            the,
-                            &format!("Error: invalid database handle {}", db_handle),
-                        );
-                        return;
-                    }
-                }
-
-                let stmt_handle = NEXT_STMT_HANDLE.fetch_add(1, Ordering::SeqCst);
-                let mut stmts = stmt_map.borrow_mut();
-                stmts.insert(stmt_handle, PreparedStmt { db_handle, sql });
-                fxInteger(the, &mut (*the).scratch, stmt_handle as i32);
-                *(*the).frame.add(1) = (*the).scratch;
-            });
+        let database_handle = argument_handle(the, 0);
+        let sql = arg_str(the, 1);
+        let request = format!("{database_handle},{sql}").into_bytes();
+        let mut prepared = false;
+        let result = host_ledger::call("sqlitePrepare", Some(database_handle), &request, || {
+            // Validate that the db handle exists.
+            if !DB_MAP.with(|dbs| dbs.borrow().contains_key(&database_handle)) {
+                return reply(
+                    the,
+                    Some(format!(
+                        "Error: invalid database handle {}",
+                        database_handle
+                    )),
+                );
+            }
+            prepared = true;
+            Outcome {
+                opens: Some(Some(Descriptor::Statement {
+                    database: database_handle,
+                    sql: sql.clone(),
+                })),
+                ..Outcome::default()
+            }
         });
+        match result {
+            Ok(Some(statement_handle)) if prepared => {
+                STMT_MAP.with(|m| {
+                    m.borrow_mut().insert(
+                        statement_handle,
+                        PreparedStmt {
+                            database_handle,
+                            sql,
+                        },
+                    )
+                });
+                set_result_handle(the, statement_handle);
+            }
+            Err(msg) => set_result_string(the, &msg),
+            _ => {}
+        }
     });
 }
 
 /// `sqliteStmtRun(stmtH, paramsJson) -> JSON | "Error: ..."`
 pub unsafe extern "C" fn host_sqlite_stmt_run(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        DB_MAP.with(|db_map| {
-            STMT_MAP.with(|stmt_map| {
-                let handle_slot = (*the).frame.sub(1);
-                let stmt_handle = fxToInteger(the, handle_slot) as u32;
-                abort_if_ffi_panicked();
-                let params_json = arg_str(the, 1);
-
-                // Look up statement info.
-                let (db_handle, sql) = {
-                    let stmts = stmt_map.borrow();
-                    match stmts.get(&stmt_handle) {
-                        Some(s) => (s.db_handle, s.sql.clone()),
-                        None => {
-                            set_result_string(
-                                the,
-                                &format!("Error: invalid statement handle {}", stmt_handle),
-                            );
-                            return;
-                        }
-                    }
-                };
-
-                let params = match parse_params(&params_json) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        set_result_string(the, &e);
-                        return;
-                    }
-                };
-
-                let map = db_map.borrow();
-                match map.get(&db_handle) {
-                    Some(conn) => match execute_stmt(conn, &sql, &params) {
-                        Ok(changes) => {
-                            let rowid = conn.last_insert_rowid();
-                            let result = format!(
-                                "{{\"changes\":\"{}\",\"lastInsertRowid\":\"{}\"}}",
-                                changes, rowid
-                            );
-                            set_result_string(the, &result);
-                        }
-                        Err(e) => {
-                            set_result_string(the, &format!("Error: {}", e));
-                        }
-                    },
-                    None => {
-                        set_result_string(
-                            the,
-                            &format!("Error: invalid database handle {}", db_handle),
-                        );
-                    }
-                }
-            });
-        });
+        with_statement(
+            the,
+            "sqliteStmtRun",
+            true,
+            |conn, sql, params| match execute_statement(conn, sql, params) {
+                Ok(changes) => format!(
+                    "{{\"changes\":\"{}\",\"lastInsertRowid\":\"{}\"}}",
+                    changes,
+                    conn.last_insert_rowid()
+                ),
+                Err(e) => format!("Error: {}", e),
+            },
+        );
     });
 }
 
 /// `sqliteStmtGet(stmtH, paramsJson) -> JSON | "null" | "Error: ..."`
 pub unsafe extern "C" fn host_sqlite_stmt_get(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        DB_MAP.with(|db_map| {
-            STMT_MAP.with(|stmt_map| {
-                let handle_slot = (*the).frame.sub(1);
-                let stmt_handle = fxToInteger(the, handle_slot) as u32;
-                abort_if_ffi_panicked();
-                let params_json = arg_str(the, 1);
-
-                let (db_handle, sql) = {
-                    let stmts = stmt_map.borrow();
-                    match stmts.get(&stmt_handle) {
-                        Some(s) => (s.db_handle, s.sql.clone()),
-                        None => {
-                            set_result_string(
-                                the,
-                                &format!("Error: invalid statement handle {}", stmt_handle),
-                            );
-                            return;
-                        }
-                    }
-                };
-
-                let params = match parse_params(&params_json) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        set_result_string(the, &e);
-                        return;
-                    }
-                };
-
-                let map = db_map.borrow();
-                match map.get(&db_handle) {
-                    Some(conn) => match query_get(conn, &sql, &params) {
-                        Ok(Some(row)) => {
-                            set_result_string(the, &row.to_string());
-                        }
-                        Ok(None) => {
-                            set_result_string(the, "null");
-                        }
-                        Err(e) => {
-                            set_result_string(the, &e);
-                        }
-                    },
-                    None => {
-                        set_result_string(
-                            the,
-                            &format!("Error: invalid database handle {}", db_handle),
-                        );
-                    }
-                }
-            });
-        });
+        let transcript = host_ledger::attached();
+        with_statement(
+            the,
+            "sqliteStmtGet",
+            true,
+            |conn, sql, params| match query_get(conn, sql, params, transcript) {
+                Ok(Some(row)) => row.to_string(),
+                Ok(None) => "null".to_string(),
+                Err(e) => e,
+            },
+        );
     });
 }
 
 /// `sqliteStmtAll(stmtH, paramsJson) -> JSON | "Error: ..."`
 pub unsafe extern "C" fn host_sqlite_stmt_all(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        DB_MAP.with(|db_map| {
-            STMT_MAP.with(|stmt_map| {
-                let handle_slot = (*the).frame.sub(1);
-                let stmt_handle = fxToInteger(the, handle_slot) as u32;
-                abort_if_ffi_panicked();
-                let params_json = arg_str(the, 1);
-
-                let (db_handle, sql) = {
-                    let stmts = stmt_map.borrow();
-                    match stmts.get(&stmt_handle) {
-                        Some(s) => (s.db_handle, s.sql.clone()),
-                        None => {
-                            set_result_string(
-                                the,
-                                &format!("Error: invalid statement handle {}", stmt_handle),
-                            );
-                            return;
-                        }
-                    }
-                };
-
-                let params = match parse_params(&params_json) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        set_result_string(the, &e);
-                        return;
-                    }
-                };
-
-                let map = db_map.borrow();
-                match map.get(&db_handle) {
-                    Some(conn) => match query_all(conn, &sql, &params) {
-                        Ok(rows) => {
-                            set_result_string(the, &rows.to_string());
-                        }
-                        Err(e) => {
-                            set_result_string(the, &e);
-                        }
-                    },
-                    None => {
-                        set_result_string(
-                            the,
-                            &format!("Error: invalid database handle {}", db_handle),
-                        );
-                    }
-                }
-            });
-        });
+        let transcript = host_ledger::attached();
+        with_statement(
+            the,
+            "sqliteStmtAll",
+            true,
+            |conn, sql, params| match query_all(conn, sql, params, transcript) {
+                Ok(rows) => rows.to_string(),
+                Err(e) => e,
+            },
+        );
     });
 }
 
 /// `sqliteStmtColumns(stmtH) -> JSON | "Error: ..."`
 pub unsafe extern "C" fn host_sqlite_stmt_columns(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        DB_MAP.with(|db_map| {
-            STMT_MAP.with(|stmt_map| {
-                let handle_slot = (*the).frame.sub(1);
-                let stmt_handle = fxToInteger(the, handle_slot) as u32;
-                abort_if_ffi_panicked();
-
-                let (db_handle, sql) = {
-                    let stmts = stmt_map.borrow();
-                    match stmts.get(&stmt_handle) {
-                        Some(s) => (s.db_handle, s.sql.clone()),
-                        None => {
-                            set_result_string(
-                                the,
-                                &format!("Error: invalid statement handle {}", stmt_handle),
-                            );
-                            return;
-                        }
-                    }
-                };
-
-                let map = db_map.borrow();
-                match map.get(&db_handle) {
-                    Some(conn) => match conn.prepare(&sql) {
-                        Ok(stmt) => {
-                            let mut cols = Vec::new();
-                            for i in 0..stmt.column_count() {
-                                let name = stmt.column_name(i).unwrap_or("?");
-                                // column_type() requires an executed statement;
-                                // use the SQL-declared type via statement introspection.
-                                // column_names() / column_name() are available pre-execution,
-                                // but declared type requires iterating column metadata.
-                                // For now, return null for type — the JS side doesn't
-                                // strictly need it.
-                                cols.push(json!({"name": name, "type": null}));
-                            }
-                            set_result_string(the, &JsonValue::Array(cols).to_string());
-                        }
-                        Err(e) => {
-                            set_result_string(the, &format!("Error: {}", e));
-                        }
-                    },
-                    None => {
-                        set_result_string(
-                            the,
-                            &format!("Error: invalid database handle {}", db_handle),
-                        );
-                    }
+        with_statement(the, "sqliteStmtColumns", false, |conn, sql, _| {
+            match conn.prepare(sql) {
+                Ok(stmt) => {
+                    // column_type() requires an executed statement, and the
+                    // JS side does not need the declared type, so it is null.
+                    let cols: Vec<JsonValue> = (0..stmt.column_count())
+                        .map(|i| json!({"name": stmt.column_name(i).unwrap_or("?"), "type": null}))
+                        .collect();
+                    JsonValue::Array(cols).to_string()
                 }
-            });
+                Err(e) => format!("Error: {}", e),
+            }
         });
     });
 }
@@ -588,21 +620,73 @@ pub unsafe extern "C" fn host_sqlite_stmt_columns(the: *mut XsMachine) {
 /// `sqliteStmtFinalize(stmtH) -> undefined`
 pub unsafe extern "C" fn host_sqlite_stmt_finalize(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        STMT_MAP.with(|stmt_map| {
-            let handle_slot = (*the).frame.sub(1);
-            let stmt_handle = fxToInteger(the, handle_slot) as u32;
-            abort_if_ffi_panicked();
-
-            let mut stmts = stmt_map.borrow_mut();
-            stmts.remove(&stmt_handle);
-        });
+        let statement_handle = argument_handle(the, 0);
+        let request = statement_handle.to_string().into_bytes();
+        let _ = host_ledger::call(
+            "sqliteStmtFinalize",
+            Some(statement_handle),
+            &request,
+            || Outcome {
+                closes: STMT_MAP.with(|m| m.borrow_mut().remove(&statement_handle).is_some()),
+                ..Outcome::default()
+            },
+        );
     });
 }
 
 /// Native handles cannot be serialized with the XS heap.
+/// Drop every open database and statement handle.
+pub(crate) fn drop_open_handles() {
+    STMT_MAP.with(|map| map.borrow_mut().clear());
+    DB_MAP.with(|map| map.borrow_mut().clear());
+}
+
 pub(crate) fn has_open_handles() -> bool {
     DB_MAP.with(|map| !map.borrow().is_empty()) || STMT_MAP.with(|map| !map.borrow().is_empty())
 }
+
+/// Rebuild a database or statement handle from its descriptor under the
+/// same logical id. A statement needs its database re-seated first, which
+/// id order guarantees.
+pub(crate) fn reseat(handle: u32, descriptor: &Descriptor) -> Result<(), String> {
+    match descriptor {
+        Descriptor::Database { path } => {
+            let conn = open_connection(path)?;
+            DB_MAP.with(|m| m.borrow_mut().insert(handle, conn));
+        }
+        Descriptor::Statement { database, sql } => {
+            if !DB_MAP.with(|m| m.borrow().contains_key(database)) {
+                return Err(format!("database handle {database} was not re-seated"));
+            }
+            STMT_MAP.with(|m| {
+                m.borrow_mut().insert(
+                    handle,
+                    PreparedStmt {
+                        database_handle: *database,
+                        sql: sql.clone(),
+                    },
+                )
+            });
+        }
+        _ => return Err("not a database or statement descriptor".into()),
+    }
+    Ok(())
+}
+
+/// Every callback in [`CALLBACKS`], by guest name, with its host-call
+/// classification. The guest's databases are not the worker's transcript,
+/// so a write cannot join the crank commit and is a barrier.
+pub const CLASSES: &[(&str, HostClass)] = &[
+    ("sqliteOpen", HostClass::Barrier),
+    ("sqliteClose", HostClass::Read),
+    ("sqliteExec", HostClass::Barrier),
+    ("sqlitePrepare", HostClass::Read),
+    ("sqliteStmtRun", HostClass::Barrier),
+    ("sqliteStmtGet", HostClass::Read),
+    ("sqliteStmtAll", HostClass::Read),
+    ("sqliteStmtColumns", HostClass::Read),
+    ("sqliteStmtFinalize", HostClass::Read),
+];
 
 /// All host callbacks in registration order for snapshot tables.
 pub const CALLBACKS: &[crate::ffi::XsCallback] = &[
@@ -635,6 +719,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn connection_changes_are_recognized_by_leading_keyword() {
+        for sql in [
+            "BEGIN",
+            "begin immediate",
+            "  COMMIT",
+            "END TRANSACTION",
+            "ROLLBACK TO s",
+            "SAVEPOINT s",
+            "RELEASE s",
+            "ATTACH 'x.db' AS x",
+            "DETACH x",
+            "-- note\nBEGIN",
+            "/* note */ ATTACH ':memory:' AS m",
+            "PRAGMA foreign_keys = OFF",
+            "pragma case_sensitive_like(1)",
+        ] {
+            assert!(changes_connection(sql), "{sql:?}");
+        }
+        for sql in [
+            "SELECT 1",
+            "WITH x AS (SELECT 1) SELECT * FROM x",
+            "PRAGMA user_version",
+            "-- BEGIN\nSELECT 1",
+            "/* ATTACH */ SELECT 1",
+            "BEGINNING",
+            "",
+        ] {
+            assert!(!changes_connection(sql), "{sql:?}");
+        }
+    }
+
+    #[test]
+    fn private_and_uri_databases_are_not_reopenable() {
+        for path in [
+            "",
+            ":memory:",
+            "file::memory:",
+            "file:x?mode=memory",
+            "file:data.db",
+        ] {
+            assert!(!reopenable(path), "{path:?}");
+        }
+        assert!(reopenable("data.db"));
+        assert!(reopenable("/var/lib/endo/data.db"));
+    }
+
+    #[test]
     fn worker_panic_isolates_database_handles_and_releases_transaction_locks() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("worker.sqlite");
@@ -653,7 +784,7 @@ mod tests {
                         stmts.borrow_mut().insert(
                             42,
                             PreparedStmt {
-                                db_handle: 42,
+                                database_handle: 42,
                                 sql: "SELECT * FROM data".into(),
                             },
                         );

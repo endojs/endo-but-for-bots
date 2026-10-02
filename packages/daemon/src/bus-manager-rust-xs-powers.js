@@ -23,6 +23,21 @@
 /** @import { CryptoPowers, FilePowers } from './types.js' */
 
 /**
+ * A host function's result, or its refusal thrown: a host transcript can
+ * refuse any call it records, and answers with an `"Error: ..."` string.
+ *
+ * @template T
+ * @param {T} result
+ * @returns {T}
+ */
+const hostResult = result => {
+  if (typeof result === 'string' && result.startsWith('Error: ')) {
+    throw new Error(result);
+  }
+  return result;
+};
+
+/**
  * Convert a Uint8Array to a hex string.
  *
  * @param {Uint8Array} bytes
@@ -178,9 +193,9 @@ export const makeXsFilePowers = () => {
    */
   const sha256 = async path => {
     const bytes = await readFile(path);
-    const handle = hostSha256Init();
-    hostSha256UpdateBytes(handle, bytes);
-    return hostSha256Finish(handle);
+    const handle = hostResult(hostSha256Init());
+    hostResult(hostSha256UpdateBytes(handle, bytes));
+    return hostResult(hostSha256Finish(handle));
   };
 
   /**
@@ -491,25 +506,25 @@ harden(makeXsFilePowers);
  */
 export const makeXsCryptoPowers = () => {
   const makeSha256 = () => {
-    const handle = hostSha256Init();
+    const handle = hostResult(hostSha256Init());
     return harden({
       /** @param {Uint8Array} chunk */
       update: chunk => {
-        hostSha256UpdateBytes(handle, chunk);
+        hostResult(hostSha256UpdateBytes(handle, chunk));
       },
       /** @param {string} chunk */
       updateText: chunk => {
-        hostSha256Update(handle, chunk);
+        hostResult(hostSha256Update(handle, chunk));
       },
-      digestHex: () => hostSha256Finish(handle),
+      digestHex: () => hostResult(hostSha256Finish(handle)),
     });
   };
 
   /** @returns {Promise<string>} */
-  const randomHex256 = async () => hostRandomHex256();
+  const randomHex256 = async () => hostResult(hostRandomHex256());
 
   const generateEd25519Keypair = async () => {
-    const json = hostEd25519Keygen();
+    const json = hostResult(hostEd25519Keygen());
     const { publicKey: pubHex, privateKey: privHex } = JSON.parse(json);
     // Store keys as hex strings internally and convert to Uint8Array
     // via getters. Uint8Array instances cannot be frozen in XS (their
@@ -524,7 +539,7 @@ export const makeXsCryptoPowers = () => {
       },
       /** @param {Uint8Array} message */
       sign: message => {
-        const sigHex = hostEd25519Sign(privHex, toHex(message));
+        const sigHex = hostResult(hostEd25519Sign(privHex, toHex(message)));
         return fromHex(sigHex);
       },
     };
@@ -537,7 +552,9 @@ export const makeXsCryptoPowers = () => {
    * @returns {Uint8Array}
    */
   const ed25519Sign = (privateKey, message) => {
-    const sigHex = hostEd25519Sign(toHex(privateKey), toHex(message));
+    const sigHex = hostResult(
+      hostEd25519Sign(toHex(privateKey), toHex(message)),
+    );
     return fromHex(sigHex);
   };
 

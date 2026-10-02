@@ -7,6 +7,7 @@
 //!   realPath(dirToken, path) -> string
 
 use crate::ffi::*;
+use crate::host_ledger::{self, Answer};
 use crate::powers::HostPowers;
 use crate::worker_io::{arg_str, set_result_string};
 
@@ -15,9 +16,9 @@ use crate::worker_io::{arg_str, set_result_string};
 /// Returns the current process ID.
 pub unsafe extern "C" fn host_get_pid(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        let pid = std::process::id();
-        fxInteger(the, &mut (*the).scratch, pid as i32);
-        *(*the).frame.add(1) = (*the).scratch;
+        host_ledger::answer(the, "getPid", None, b"", || {
+            Answer::Integer(std::process::id() as i32)
+        });
     });
 }
 
@@ -27,12 +28,16 @@ pub unsafe extern "C" fn host_get_pid(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_get_env(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let name = arg_str(the, 0);
-        match std::env::var(name) {
-            Ok(value) => set_result_string(the, &value),
-            Err(_) => {
-                // Return undefined (xsResult is already undefined by default).
-            }
-        }
+        host_ledger::answer(
+            the,
+            "getEnv",
+            None,
+            name.as_bytes(),
+            || match std::env::var(&name) {
+                Ok(value) => Answer::Message(value),
+                Err(_) => Answer::Nothing,
+            },
+        );
     });
 }
 
@@ -99,35 +104,46 @@ pub unsafe extern "C" fn host_real_path(the: *mut XsMachine) {
         let powers = &*((*the).context as *const HostPowers);
         let dir_token = arg_str(the, 0);
         let path = arg_str(the, 1);
+        let request = serde_json::to_vec(&(&dir_token, &path)).unwrap_or_default();
 
-        if dir_token == "root" {
-            // The root token maps to "/"; daemon code passes a path that
-            // is already relative to "/" (leading slash stripped). Turn
-            // it back into an absolute path and resolve ambiently.
-            let abs = if path.starts_with('/') {
-                std::path::PathBuf::from(path)
+        host_ledger::answer(the, "realPath", None, &request, || {
+            let canonical = if dir_token == "root" {
+                // The root token maps to "/"; daemon code passes a path that
+                // is already relative to "/" (leading slash stripped). Turn
+                // it back into an absolute path and resolve ambiently.
+                let abs = if path.starts_with('/') {
+                    std::path::PathBuf::from(&path)
+                } else {
+                    std::path::PathBuf::from("/").join(&path)
+                };
+                std::fs::canonicalize(&abs)
             } else {
-                std::path::PathBuf::from("/").join(path)
+                match powers.get_dir(&dir_token) {
+                    Some(dir) => dir.canonicalize(&path),
+                    None => {
+                        return Answer::Message(format!(
+                            "Error: unknown directory token '{}'",
+                            dir_token
+                        ))
+                    }
+                }
             };
-            match std::fs::canonicalize(&abs) {
-                Ok(canonical) => set_result_string(the, &canonical.to_string_lossy()),
-                Err(e) => set_result_string(the, &format!("Error: {}", e)),
-            }
-            return;
-        }
-
-        match powers.get_dir(&dir_token) {
-            Some(dir) => match dir.canonicalize(&path) {
-                Ok(canonical) => set_result_string(the, &canonical.to_string_lossy()),
-                Err(e) => set_result_string(the, &format!("Error: {}", e)),
-            },
-            None => set_result_string(
-                the,
-                &format!("Error: unknown directory token '{}'", dir_token),
-            ),
-        }
+            Answer::Message(match canonical {
+                Ok(canonical) => canonical.to_string_lossy().into_owned(),
+                Err(e) => format!("Error: {}", e),
+            })
+        });
     });
 }
+
+/// Every callback in [`CALLBACKS`], by guest name, with its host-call
+/// classification.
+pub const CLASSES: &[(&str, slot_machine_transcript::HostClass)] = &[
+    ("getPid", slot_machine_transcript::HostClass::Read),
+    ("getEnv", slot_machine_transcript::HostClass::Read),
+    ("joinPath", slot_machine_transcript::HostClass::Pure),
+    ("realPath", slot_machine_transcript::HostClass::Read),
+];
 
 /// All host callbacks in registration order for snapshot tables.
 pub const CALLBACKS: &[crate::ffi::XsCallback] = &[
