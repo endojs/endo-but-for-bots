@@ -449,10 +449,11 @@ The measurements below predate the refactors of
 After its Phase 3, every one of the 242 cases of the stack-lanes corpus
 (`stack-lanes/README.md`), each recursion family at its ceiling among them, returns the
 native result on Wasmtime at 409,600 B, under Node at a 425 KiB `--stack-size` with either
-tier pinned and on workerd at 836 KiB.
+tier pinned and on workerd at 836 KiB, all with the 4 MiB shadow stack of the build recipe.
 None is an expected trap any longer: the Proxy prototype cycle, the last, needs 7,168 B on
 Wasmtime.
-The trapped-Proxy layer chains are not in that corpus and wait on its B10 (§5, Phase 4).
+The trapped-Proxy layer chains are not in that corpus and wait on STACK-DEPTH-REFACTOR.md's
+B10 (§5, Phase 4).
 
 ### Measurements
 

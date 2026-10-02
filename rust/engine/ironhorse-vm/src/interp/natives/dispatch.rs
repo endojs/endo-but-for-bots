@@ -5618,8 +5618,8 @@ impl Interp {
         let _ = (base, argc, code, this, arg0);
         let result: Slot = match m {
             // Every `Promise.prototype` method and static has an arm here;
-            // `.then` and the statics thread `code` to build derived promises
-            // and call their resolving functions.
+            // `.then`, `.catch`, `.finally` and the statics thread `code` to
+            // build derived promises and call user code.
             // `Promise.prototype.then`: register the reaction and return the
             // derived promise. The reaction runs later, at the pump-loop drain
             // — no synchronous re-entry here, so it fits the value-returning
