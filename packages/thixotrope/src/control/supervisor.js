@@ -100,8 +100,9 @@ import {
 // the keeper answers what only tests asked; 17: the registry names the
 // bundles it still needs, and the host keeps no row of its own; 18: the
 // manager names each registration with an epoch and the adapter compares
-// epochs, so sameness is stated once, to the manager.
-const WORKSPACE_VERSION = 18;
+// epochs, so sameness is stated once, to the manager; 19: the clock counts
+// its armed alarms beside its pending ones.
+const WORKSPACE_VERSION = 19;
 // The daemon takes allocation keys from the host alone, so a fixed key names
 // the host's own registry vat and nothing else can carry it.
 const REGISTRY_ALLOCATION_KEY = '00000000000000000000000000000001';
@@ -759,10 +760,10 @@ export const serveThixotrope = async (
         // The clock counts its own pending alarms; the host keeps none.
         if (!(await workspace.worker.evaluate("inventory.has('clock')")))
           throw Error('The clock is not installed');
-        const { pending } = await workspace.worker.evaluate(
+        const { pending, armed } = await workspace.worker.evaluate(
           "E(inventory.get('clock')).status()",
         );
-        return harden({ pending: Number(pending) });
+        return harden({ pending: Number(pending), armed: Number(armed) });
       },
       inventoryStatus: () => {
         const { inventory } = current();

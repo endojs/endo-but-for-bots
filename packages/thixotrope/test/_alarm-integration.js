@@ -97,15 +97,17 @@ export const registerAlarmIntegration = (test, kind) => {
         'true',
       );
       await waitFor(host, "s.count === 0n && s.items[0].state === 'waiting'");
-      // The deadline is in the clock's hands before the host goes down.
-      let pending = 0;
-      for (let attempt = 0; attempt < 400 && pending !== 1; attempt += 1) {
+      // The deadline is in the adapter's hands before the host goes down: an
+      // alarm still being registered when the host ends is rejected, by
+      // design, rather than retried.
+      let armed = 0;
+      for (let attempt = 0; attempt < 400 && armed !== 1; attempt += 1) {
         // eslint-disable-next-line no-await-in-loop
-        ({ pending } = await host.client.call('alarmStatus'));
+        ({ armed } = await host.client.call('alarmStatus'));
         // eslint-disable-next-line no-await-in-loop
-        if (pending !== 1) await setTimeout(50);
+        if (armed !== 1) await setTimeout(50);
       }
-      t.is(pending, 1, 'the clock holds the alarm');
+      t.is(armed, 1, 'the clock armed the alarm');
       t.true(
         BigInt(Date.now()) - armedAt < delay,
         'the deadline is still ahead when the host goes down',

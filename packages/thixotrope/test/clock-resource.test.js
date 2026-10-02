@@ -161,7 +161,7 @@ test('an alarm settles at or after its deadline with the host time, absolute or 
     .after(200n)
     .then(at => order.push(`after ${at}`));
   await settled();
-  t.deepEqual(await E(clock).status(), { pending: 2 });
+  t.deepEqual(await E(clock).status(), { pending: 2, armed: 2 });
   time.advance(199n);
   await settled();
   t.deepEqual(order, []);
@@ -171,7 +171,7 @@ test('an alarm settles at or after its deadline with the host time, absolute or 
   time.advance(300n);
   await absolute;
   t.deepEqual(order, ['after 1200', 'at 1500']);
-  t.deepEqual(await E(clock).status(), { pending: 0 });
+  t.deepEqual(await E(clock).status(), { pending: 0, armed: 0 });
   t.is(time.armed(), 0, 'a settled alarm holds no timer');
 });
 
@@ -192,7 +192,7 @@ test('a canceller rejects its own alarm and frees its timer; nothing else', asyn
   t.true(await E(canceller).cancel());
   await t.throwsAsync(() => settlement, { message: /cancelled/ });
   t.false(await E(canceller).cancel(), 'once');
-  t.deepEqual(await E(clock).status(), { pending: 1 });
+  t.deepEqual(await E(clock).status(), { pending: 1, armed: 1 });
   time.advance(50n);
   t.is(await other, 1050n);
 });
@@ -211,7 +211,11 @@ test('a relative alarm restores as the deadline it resolved to, not the delay ag
   await settled();
   time.advance(599n);
   await settled();
-  t.deepEqual(await E(clock).status(), { pending: 1 }, 'not yet: 1999 < 2000');
+  t.deepEqual(
+    await E(clock).status(),
+    { pending: 1, armed: 1 },
+    'not yet: 1999 < 2000',
+  );
   time.advance(1n);
   t.is(await settlement, 2000n, 'fired at the original deadline');
 });
@@ -229,7 +233,7 @@ test('an overdue alarm fires once after a rebuild, even if reported twice', asyn
   // A second rebuild finds nothing desired and nothing to fire.
   killAdapter();
   await E(lifecycle).started();
-  t.deepEqual(await E(clock).status(), { pending: 0 });
+  t.deepEqual(await E(clock).status(), { pending: 0, armed: 0 });
 });
 
 test('the facet refuses what is not a deadline or a delay', async t => {

@@ -159,12 +159,12 @@ test('the clock the supervisor provides is whole', async t => {
     }),
   );
   assertInterface(t, kit.facet, 'Clock');
-  t.deepEqual(await E(kit.facet).status(), { pending: 0 });
+  t.deepEqual(await E(kit.facet).status(), { pending: 0, armed: 0 });
   const { canceller } = await E(kit.facet).arm(harden({ after: 5n }));
   assertInterface(t, canceller, 'AlarmCanceller');
-  t.deepEqual(await E(kit.facet).status(), { pending: 1 });
+  t.deepEqual(await E(kit.facet).status(), { pending: 1, armed: 1 });
   t.true(await E(canceller).cancel());
-  t.deepEqual(await E(kit.facet).status(), { pending: 0 });
+  t.deepEqual(await E(kit.facet).status(), { pending: 0, armed: 0 });
 });
 
 test('the control socket the supervisor provides is whole', async t => {

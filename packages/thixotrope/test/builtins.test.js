@@ -117,7 +117,7 @@ test.serial(
     for (let attempt = 0; attempt < 100 && !armed; attempt += 1) {
       // eslint-disable-next-line no-await-in-loop
       const status = await host.client.call('alarmStatus');
-      armed = status.pending === 1;
+      armed = status.armed === 1;
       // eslint-disable-next-line no-await-in-loop
       if (!armed) await setTimeout(25);
     }
