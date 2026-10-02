@@ -128,9 +128,13 @@ same `parentDom` to update.
 The renderer defends against live DOM access (refs), raw DOM events
 (every handler receives a frozen `SafeEvent`), HTML injection / live
 DOM-setter abuse (the allow-by-default attribute filter rebuilds the
-prop bag with a null prototype), dangerous element types (replaced with
+prop bag with a null prototype), dangerous element types and any `type`
+that is neither a tag-name string nor a function (replaced with
 `Fragment`), URL-scheme injection (`javascript:` etc. dropped), and
 inline event-handler strings.
+Preact would render an object `type` as an element named by its
+`toString()`, so an object posing as `'div'` would otherwise skip the
+tag allowlist and the attribute filter.
 
 ### `SafeEvent` — what a handler receives
 

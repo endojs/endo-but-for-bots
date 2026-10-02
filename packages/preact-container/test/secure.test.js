@@ -1696,4 +1696,91 @@ describe('../src/renderer.js', () => {
       expect(() => render(h(HostBoundary), scratch)).to.not.throw();
     });
   });
+
+  describe('vnode types that are neither a tag name nor a function', () => {
+    // Preact renders any non-function `type` as an element named by its
+    // string conversion, so an object `type` could stand in for a tag
+    // name while skipping the tag allowlist and the attribute filter.
+
+    it('an object type that converts to "div" cannot inject HTML', () => {
+      let conversions = 0;
+      const type = {
+        toString() {
+          conversions += 1;
+          return 'div';
+        },
+      };
+      function Guest() {
+        return h(
+          'section',
+          null,
+          h(type, {
+            dangerouslySetInnerHTML: { __html: '<b id="OBJTYPE_INJ">x</b>' },
+          }),
+        );
+      }
+      renderConfined(h(Guest, null), scratch);
+      expect(scratch.querySelector('#OBJTYPE_INJ')).to.equal(null);
+      expect(scratch.innerHTML).to.equal('<section></section>');
+      // Neither the sanitizer nor Preact converted the type.
+      expect(conversions).to.equal(0);
+    });
+
+    it('an object type that converts to "script" renders no script', () => {
+      const type = { toString: () => 'script' };
+      function Guest() {
+        return h('div', null, h(type, { src: 'data:text/javascript,' }));
+      }
+      renderConfined(h(Guest, null), scratch);
+      expect(scratch.querySelector('script')).to.equal(null);
+    });
+
+    it('keeps the children of an object-typed vnode, like a disallowed tag', () => {
+      const type = { toString: () => 'div' };
+      function Guest() {
+        return h(
+          'div',
+          { class: 'outer' },
+          h(type, { id: 'dropped' }, h('span', { class: 'kid' }, 'x')),
+        );
+      }
+      renderConfined(h(Guest, null), scratch);
+      expect(scratch.innerHTML).to.equal(
+        '<div class="outer"><span class="kid">x</span></div>',
+      );
+    });
+
+    it('sanitizes an object-typed vnode in the tree handed to renderConfined', () => {
+      renderConfined(
+        h(
+          'div',
+          null,
+          h(
+            { toString: () => 'div' },
+            { dangerouslySetInnerHTML: { __html: '<b id="ENTRY_INJ">x</b>' } },
+          ),
+        ),
+        scratch,
+      );
+      expect(scratch.querySelector('#ENTRY_INJ')).to.equal(null);
+      expect(scratch.innerHTML).to.equal('<div></div>');
+    });
+
+    it('a symbol type does not abort the render', () => {
+      function Guest() {
+        return h('div', null, h(Symbol('div'), null, 'kept'));
+      }
+      expect(() => renderConfined(h(Guest, null), scratch)).to.not.throw();
+      expect(scratch.innerHTML).to.equal('<div>kept</div>');
+    });
+
+    it('text vnodes still render', () => {
+      function Guest() {
+        // eslint-disable-next-line no-new-wrappers
+        return h('p', null, 'a', 1, new String('b'));
+      }
+      renderConfined(h(Guest, null), scratch);
+      expect(scratch.innerHTML).to.equal('<p>a1b</p>');
+    });
+  });
 });

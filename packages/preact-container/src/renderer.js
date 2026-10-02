@@ -69,9 +69,9 @@ const deepFreeze = value =>
  * The renderer wraps the user's tree in a SecureBoundary. While Preact
  * is rendering anything inside that boundary, freshly created vnodes
  * are sanitized: refs are stripped, dangerous props are removed,
- * disallowed tags are replaced with Fragments, URLs are scheme-checked,
- * and event listeners are wrapped so they only ever see SafeEvent
- * facades.
+ * disallowed tags and non-tag, non-function types are replaced with
+ * Fragments, URLs are scheme-checked, and event listeners are wrapped so
+ * they only ever see SafeEvent facades.
  *
  * Sanitization is scoped: vnodes outside any SecureBoundary are
  * untouched, so the host application can keep rendering normally.
@@ -1038,37 +1038,28 @@ function install() {
 function sanitizeVNode(vnode, allowedTags, safeAttrs) {
   if (vnode.ref) vnode.ref = null;
 
+  const type = vnode.type;
+  // Text vnodes (`type: null`) carry their text as `props`.
+  if (type === null) return;
+  // A `type` that is neither an allowed tag name nor a function becomes
+  // a Fragment. Preact renders any non-function `type` as an element
+  // named by its string conversion, so an object whose `toString`
+  // returns `'div'` (or `'script'`) would otherwise pass through as an
+  // element with none of its props sanitized. The type is never
+  // converted here: that would call guest code, and Preact converts it
+  // again later, when it may return something else.
+  if (
+    typeof type !== 'function' &&
+    (typeof type !== 'string' || !allowedTags.has(type.toLowerCase()))
+  ) {
+    replaceWithFragment(vnode);
+    return;
+  }
+
   const props = vnode.props;
   if (!props || typeof props !== 'object') return;
 
-  if (typeof vnode.type === 'string') {
-    const tag = vnode.type.toLowerCase();
-    if (!allowedTags.has(tag)) {
-      vnode.type = Fragment;
-      // `props.children` is read via direct property access, which
-      // would resolve an inherited `children` if the own slot is
-      // absent. To stay consistent with the rest of the
-      // allow-by-default model, use Object.hasOwn so a polluted
-      // `Object.prototype.children` cannot smuggle a tree into a
-      // Fragment-replaced subtree. The read is also guarded: a hostile
-      // own `children` getter that throws must not abort the host
-      // render, so fail closed by treating it as absent.
-      let ownChildren;
-      try {
-        ownChildren = Object.prototype.hasOwnProperty.call(props, 'children')
-          ? props.children
-          : undefined;
-      } catch (_) {
-        ownChildren = undefined;
-      }
-      // Fresh null-proto bag so the downstream Preact diff's
-      // `for (i in newProps)` cannot pick up Object.prototype
-      // pollution on attribute-shaped keys.
-      const out = Object.create(null);
-      if (ownChildren !== undefined) out.children = ownChildren;
-      vnode.props = out;
-      return;
-    }
+  if (typeof type === 'string') {
     // Per-prop sanitization only meaningful on DOM elements —
     // Preact's `name in dom` setter path and `setAttribute` only
     // fire for string-tagged vnodes. Function components can
@@ -1096,6 +1087,37 @@ function sanitizeVNode(vnode, allowedTags, safeAttrs) {
       // frozen/sealed props bag — leave the inert slot in place.
     }
   }
+}
+
+// Turn a vnode whose `type` is disallowed into a Fragment that keeps only
+// its own `children`.
+function replaceWithFragment(vnode) {
+  const props = vnode.props;
+  // `props.children` is read via direct property access, which would
+  // resolve an inherited `children` if the own slot is absent. To stay
+  // consistent with the rest of the allow-by-default model, use
+  // Object.hasOwn so a polluted `Object.prototype.children` cannot
+  // smuggle a tree into a Fragment-replaced subtree. The read is also
+  // guarded: a hostile own `children` getter that throws must not abort
+  // the host render, so fail closed by treating it as absent.
+  let ownChildren;
+  try {
+    ownChildren =
+      props &&
+      typeof props === 'object' &&
+      Object.prototype.hasOwnProperty.call(props, 'children')
+        ? props.children
+        : undefined;
+  } catch (_) {
+    ownChildren = undefined;
+  }
+  vnode.type = Fragment;
+  // Fresh null-proto bag so the downstream Preact diff's
+  // `for (i in newProps)` cannot pick up Object.prototype pollution on
+  // attribute-shaped keys.
+  const out = Object.create(null);
+  if (ownChildren !== undefined) out.children = ownChildren;
+  vnode.props = out;
 }
 
 // Build a fresh null-prototype props bag containing only the
