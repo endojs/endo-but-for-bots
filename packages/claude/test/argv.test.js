@@ -9,6 +9,7 @@ import {
   assertPinnedVersion,
   assertRequiredFlags,
   assertPinnedValueFlags,
+  assertSingleOccurrenceFlags,
   REQUIRED_FLAGS,
   PINNED_CLI_VERSION,
 } from '../src/argv.js';
@@ -107,6 +108,38 @@ test('an argv without --settings is refused', t => {
 test('a trailing --tools Bash cannot re-open the built-in set', t => {
   const argv = [...conformingArgv(), '--tools', 'Bash'];
   t.throws(() => assertConfinedArgv(argv), { message: /more than once/ });
+});
+
+test('a trailing --settings or --mcp-config cannot substitute another file', t => {
+  for (const flag of ['--settings', '--mcp-config']) {
+    const argv = [...conformingArgv(), flag, '/tmp/attacker.json'];
+    t.throws(
+      () => assertConfinedArgv(argv),
+      { message: /more than once/ },
+      flag,
+    );
+    t.throws(
+      () => assertSingleOccurrenceFlags(argv),
+      { message: /more than once/ },
+      flag,
+    );
+  }
+});
+
+test('property: any repeat of --settings or --mcp-config is refused', t => {
+  fc.assert(
+    fc.property(
+      fc.constantFrom('--settings', '--mcp-config'),
+      fc.string(),
+      fc.nat(),
+      (flag, value, pos) => {
+        const argv = conformingArgv();
+        const at = pos % (argv.length + 1);
+        argv.splice(at, 0, flag, value);
+        t.throws(() => assertConfinedArgv(argv));
+      },
+    ),
+  );
 });
 
 // --- property: six-flag spawn-refusal predicate -------------------------

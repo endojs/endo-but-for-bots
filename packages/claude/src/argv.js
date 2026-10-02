@@ -9,6 +9,8 @@
 //   - the pinned CLI version whose flag semantics were last measured live
 //     (2.1.280; the design's original measurement was 2.1.232);
 //   - the six presence-required flags the harness refuses to spawn without;
+//   - the per-spawn path flags `--settings` and `--mcp-config`, each at most
+//     once (a later occurrence would substitute another file);
 //   - the value assertion that `--tools` and `--setting-sources` each carry
 //     exactly the empty string (presence-only is the `"alg":"none"` shape),
 //     and that `--permission-mode` / `--permission-prompts` carry `dontAsk` /
@@ -65,6 +67,15 @@ const PINNED_VALUE_FLAGS = harden({
   '--permission-mode': 'dontAsk',
   '--permission-prompts': 'none',
 });
+
+/**
+ * Flags whose value is a per-spawn file path, so it cannot be value-pinned, but
+ * whose file carries confinement: `--settings` carries `enabledPlugins` and the
+ * credential, `--mcp-config` names the only MCP servers. Each may appear at most
+ * once (a later occurrence would substitute another file, last flag wins);
+ * `--settings` is also required, so it appears exactly once.
+ */
+const SINGLE_OCCURRENCE_FLAGS = harden(['--settings', '--mcp-config']);
 
 /**
  * Flags that must NEVER appear: both restore the full prior transcript (past tool
@@ -206,6 +217,22 @@ export const assertPinnedValueFlags = argv => {
 harden(assertPinnedValueFlags);
 
 /**
+ * `--settings` and `--mcp-config` each appear at most once, so a trailing
+ * occurrence cannot substitute an attacker-chosen file.
+ *
+ * @param {readonly string[]} argv
+ */
+export const assertSingleOccurrenceFlags = argv => {
+  for (const flag of SINGLE_OCCURRENCE_FLAGS) {
+    const at = argv.indexOf(flag);
+    if (at !== -1 && argv.indexOf(flag, at + 1) !== -1) {
+      throw makeError(X`confinement: flag ${q(flag)} appears more than once`);
+    }
+  }
+};
+harden(assertSingleOccurrenceFlags);
+
+/**
  * No `--resume` / `--continue` (or their short forms) may appear.
  *
  * @param {readonly string[]} argv
@@ -224,8 +251,8 @@ harden(assertNoTranscriptResume);
 /**
  * The full structural confinement gate over an argv (version-independent):
  * required flags present, pinned-value flags (including the empty-value
- * `--tools` and `--setting-sources`) each appear once with their value, no
- * transcript resume.
+ * `--tools` and `--setting-sources`) each appear once with their value,
+ * `--settings` and `--mcp-config` each at most once, no transcript resume.
  * `buildArgv` output always passes this; the property tests feed it arbitrary
  * argvs.
  *
@@ -237,6 +264,7 @@ export const assertConfinedArgv = argv => {
   }
   assertRequiredFlags(argv);
   assertPinnedValueFlags(argv);
+  assertSingleOccurrenceFlags(argv);
   assertNoTranscriptResume(argv);
 };
 harden(assertConfinedArgv);
