@@ -21,7 +21,6 @@
     "url": "https://github.com/endojs/endo/issues"
   },
   "type": "module",
-  "types": "./types-index.types.d.ts",
   "exports": {
     "./guards.js": "./src/guards.js",
     "./limits.js": "./src/limits.js",

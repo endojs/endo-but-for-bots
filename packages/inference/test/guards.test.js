@@ -123,7 +123,7 @@ test('a request requires a projection, limits, and a cancellation promise', t =>
     ),
   );
   t.false(
-    matches(harden({ ...request, secretId: 'x' }), InferRequestShape),
+    matches(harden({ ...request, secretIdentifier: 'x' }), InferRequestShape),
     'a request cannot name a credential',
   );
 });
@@ -196,11 +196,11 @@ test('admission refusal reasons are closed', t => {
   t.false(matches(harden({ reason: 'limit-exceeded' }), AdmissionRefusalShape));
 });
 
-test('a usage record carries a secretId and no credential field', t => {
+test('a usage record carries a secretIdentifier and no credential field', t => {
   const record = harden({
     provider: 'anthropic',
     backendKind: 'claude-cli',
-    secretId: 'secret:root-subscription',
+    secretIdentifier: 'secret:root-subscription',
     formulaIdentifier: 'formula:guest-1',
     latencyMs: 4971,
     resultType: 'ok',
@@ -216,7 +216,7 @@ test('a usage record carries a secretId and no credential field', t => {
     matches(
       harden({
         ...record,
-        runId: 'run-1',
+        runIdentifier: 'run-1',
         costEstimate: 0.006,
         verifiedEffect: true,
       }),

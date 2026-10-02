@@ -16,7 +16,8 @@ A provider may join at any of these layers.
    `InferenceBackendInterface` (`describe()`, and `infer(request)`, which
    never rejects for any outcome of a turn), its request, result, and
    usage-record shapes, and the `CredentialSourceInterface` (`acquire()`
-   returns a grant carrying an `env` and a `release`, or a refusal carrying an
+   returns either a grant, `{ type: 'granted', env, release }`, or a refusal,
+   `{ type: 'refused', admission }` whose `admission` is an
    `AdmissionRefusal`). Every record is closed, so a request cannot carry a
    credential.
 2. **Provider plugins.** Not here. A plugin is a maker that returns an
@@ -41,7 +42,7 @@ A provider may join at any of these layers.
      backend whose turns run without OS containment in it.
    - `@endo/inference/usage-recorder.js`: `makeUsageRecorder` hands one usage
      record per turn to the deployment's usage sink. The deployment passes the
-     backend's credential `secretId` at construction; the sink adds the run id
+     backend's credential `secretIdentifier` at construction; the sink adds the run id
      and cost estimate.
 
 Admission is not an enricher. It belongs to the credential source, which the

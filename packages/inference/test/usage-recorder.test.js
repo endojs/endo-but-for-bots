@@ -59,7 +59,7 @@ test('an ok result becomes one record with usage, turns, and bytes', async t => 
   });
   const { records, sink } = makeSink();
   const recorder = makeUsageRecorder(backend, {
-    secretId: 'secret:root-subscription',
+    secretIdentifier: 'secret:root-subscription',
     sink,
     now: makeSteppingClock(),
   });
@@ -77,7 +77,7 @@ test('an ok result becomes one record with usage, turns, and bytes', async t => 
     provider: 'anthropic',
     backendKind: 'claude-cli',
     backendVersion: '2.1.278',
-    secretId: 'secret:root-subscription',
+    secretIdentifier: 'secret:root-subscription',
     formulaIdentifier: 'formula:guest-1',
     promptOrigin: 'root-authored',
     latencyMs: 250,
@@ -106,7 +106,7 @@ test('failure tags record their detail and never a run id or cost', async t => {
     });
     const { records, sink } = makeSink();
     const recorder = makeUsageRecorder(backend, {
-      secretId: 'secret:guest-key',
+      secretIdentifier: 'secret:guest-key',
       sink,
       now: makeSteppingClock(),
     });
@@ -118,7 +118,7 @@ test('failure tags record their detail and never a run id or cost', async t => {
     t.is(record.detail, detail);
     t.false('backendVersion' in record);
     t.false('promptOrigin' in record, 'a missing origin stays missing');
-    t.false('runId' in record);
+    t.false('runIdentifier' in record);
     t.false('costEstimate' in record);
   };
   await Promise.all(cases.map(checkCase));
@@ -128,7 +128,7 @@ test('the formula identifier comes from the request, never the prompt', async t 
   const { backend } = makeRecordingBackend(harden({ type: 'cancelled' }));
   const { records, sink } = makeSink();
   const recorder = makeUsageRecorder(backend, {
-    secretId: 'secret:a',
+    secretIdentifier: 'secret:a',
     sink,
     now: makeSteppingClock(),
   });
@@ -142,7 +142,7 @@ test('output bytes count UTF-8, including astral and lone surrogates', async t =
   const { backend } = makeRecordingBackend(harden({ type: 'ok', text }));
   const { records, sink } = makeSink();
   const recorder = makeUsageRecorder(backend, {
-    secretId: 'secret:a',
+    secretIdentifier: 'secret:a',
     sink,
     now: makeSteppingClock(),
   });
@@ -156,7 +156,7 @@ test('a failing sink does not change the result and is reported', async t => {
   /** @type {unknown[]} */
   const reported = [];
   const recorder = makeUsageRecorder(backend, {
-    secretId: 'secret:a',
+    secretIdentifier: 'secret:a',
     sink: harden({
       write: () => {
         throw Error('ledger offline');
@@ -180,7 +180,7 @@ test('a backend that rejects writes no record', async t => {
   });
   const { records, sink } = makeSink();
   const recorder = makeUsageRecorder(broken, {
-    secretId: 'secret:a',
+    secretIdentifier: 'secret:a',
     sink,
     now: makeSteppingClock(),
   });
@@ -201,7 +201,7 @@ test('a backend result that breaks its shape rejects and writes no record', asyn
   });
   const { records, sink } = makeSink();
   const recorder = makeUsageRecorder(unguarded, {
-    secretId: 'secret:a',
+    secretIdentifier: 'secret:a',
     sink,
     now: makeSteppingClock(),
   });
@@ -218,7 +218,7 @@ test('the gate inside the recorder records a needs-containment refusal', async t
   );
   const { records, sink } = makeSink();
   const recorder = makeUsageRecorder(makePromptOriginGate(backend), {
-    secretId: 'secret:root-subscription',
+    secretIdentifier: 'secret:root-subscription',
     sink,
     now: makeSteppingClock(),
   });
@@ -244,7 +244,7 @@ test('describe passes through to the wrapped backend', t => {
   );
   const { sink } = makeSink();
   const recorder = makeUsageRecorder(backend, {
-    secretId: 'secret:root-subscription',
+    secretIdentifier: 'secret:root-subscription',
     sink,
     now: makeSteppingClock(),
   });

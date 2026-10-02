@@ -8,23 +8,15 @@ import { InferResultShape, InferenceBackendInterface } from './guards.js';
 
 /** @import { InferRequest, InferResult, InferenceBackend, UsageRecord, UsageSink } from './types.js' */
 
+const textEncoder = new TextEncoder();
+
 /**
  * The UTF-8 encoded length of `text`. A lone surrogate counts as the three
- * bytes of the replacement character an encoder would write for it.
+ * bytes of the replacement character the encoder writes for it.
  *
  * @param {string} text
  */
-const utf8ByteLength = text => {
-  let length = 0;
-  for (const character of text) {
-    const codePoint = /** @type {number} */ (character.codePointAt(0));
-    if (codePoint < 0x80) length += 1;
-    else if (codePoint < 0x800) length += 2;
-    else if (codePoint < 0x1_0000) length += 3;
-    else length += 4;
-  }
-  return length;
-};
+const utf8ByteLength = text => textEncoder.encode(text).length;
 
 /**
  * Wraps a backend so that each classified result becomes one usage record
@@ -36,7 +28,7 @@ const utf8ByteLength = text => {
  * identifier from the request; latency around `infer`; and the tag, turns,
  * bytes, and token usage from the result. It cannot see inside the
  * credential source, so the deployment, which makes one backend per
- * credential, passes that credential's `secretId` at construction. The sink
+ * credential, passes that credential's `secretIdentifier` at construction. The sink
  * adds the run id and cost estimate when it writes.
  *
  * A wrapped backend that rejects breaks the `infer` contract; the rejection
@@ -46,7 +38,7 @@ const utf8ByteLength = text => {
  *
  * @param {InferenceBackend} backend
  * @param {object} options
- * @param {string} options.secretId  the secret manager's identifier for the
+ * @param {string} options.secretIdentifier  the secret manager's identifier for the
  *   backend's credential, never its bytes.
  * @param {UsageSink} options.sink
  * @param {() => number} options.now  milliseconds, such as `Date.now`.
@@ -57,7 +49,7 @@ const utf8ByteLength = text => {
  */
 export const makeUsageRecorder = (
   backend,
-  { secretId, sink, now, reportSinkError = () => {} },
+  { secretIdentifier, sink, now, reportSinkError = () => {} },
 ) =>
   makeExo('UsageRecorder', InferenceBackendInterface, {
     describe() {
@@ -78,7 +70,7 @@ export const makeUsageRecorder = (
       const record = {
         provider,
         backendKind: kind,
-        secretId,
+        secretIdentifier,
         formulaIdentifier: request.guest.formulaIdentifier,
         latencyMs,
         resultType: result.type,

@@ -130,7 +130,7 @@ export interface CredentialSource {
 
 /**
  * One record per turn. The usage recorder fills the fields it can observe;
- * the deployment supplies `secretId` at construction; the sink adds `runId`
+ * the deployment supplies `secretIdentifier` at construction; the sink adds `runIdentifier`
  * and `costEstimate` when it writes; an evaluation harness adds
  * `verifiedEffect` in a comparison run.
  */
@@ -138,8 +138,8 @@ export type UsageRecord = {
   provider: string;
   backendKind: string;
   backendVersion?: string;
-  /** The secret manager's `secretId`, never credential bytes. */
-  secretId: string;
+  /** The secret manager's identifier for the credential, never its bytes. */
+  secretIdentifier: string;
   promptOrigin?: string;
   formulaIdentifier: string;
   latencyMs: number;
@@ -149,7 +149,7 @@ export type UsageRecord = {
   turns?: number;
   outputBytes?: number;
   usage?: InferUsage;
-  runId?: string;
+  runIdentifier?: string;
   costEstimate?: number;
   verifiedEffect?: boolean;
 };

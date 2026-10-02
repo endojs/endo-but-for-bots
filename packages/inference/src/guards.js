@@ -65,25 +65,24 @@ export const OkResultShape = M.splitRecord(
 export const NeedsContainmentResultShape = harden(
   /** @type {const} */ ({ type: 'needs-containment' }),
 );
-harden(NeedsContainmentResultShape);
+
+/**
+ * The tags that mean "try again later": each may carry `retryAfterMs`, and
+ * each is also a reason a credential source refuses admission.
+ */
+export const RETRY_LATER_TYPES = harden(
+  /** @type {const} */ ([
+    'usage-exhausted',
+    'rate-limited',
+    'budget-exhausted',
+  ]),
+);
 
 /** Every tag except `ok` and `needs-containment`: the classifier's range. */
 export const ClassifiedResultShape = M.or(
   harden(/** @type {const} */ ({ type: 'needs-auth' })),
-  M.splitRecord(
-    { type: 'usage-exhausted' },
-    { retryAfterMs: NonNegativeNumberShape },
-    {},
-  ),
-  M.splitRecord(
-    { type: 'rate-limited' },
-    { retryAfterMs: NonNegativeNumberShape },
-    {},
-  ),
-  M.splitRecord(
-    { type: 'budget-exhausted' },
-    { retryAfterMs: NonNegativeNumberShape },
-    {},
+  ...RETRY_LATER_TYPES.map(type =>
+    M.splitRecord({ type }, { retryAfterMs: NonNegativeNumberShape }, {}),
   ),
   harden(
     /** @type {const} */ ({ type: 'limit-exceeded', which: LimitNameShape }),
@@ -113,11 +112,7 @@ export const InferenceBackendInterface = M.interface('InferenceBackend', {
   infer: M.callWhen(InferRequestShape).returns(InferResultShape),
 });
 
-export const AdmissionReasonShape = M.or(
-  'rate-limited',
-  'usage-exhausted',
-  'budget-exhausted',
-);
+export const AdmissionReasonShape = M.or(...RETRY_LATER_TYPES);
 
 export const AdmissionRefusalShape = M.splitRecord(
   { reason: AdmissionReasonShape },
@@ -130,13 +125,11 @@ export const CredentialGrantShape = harden({
   env: M.recordOf(M.string(), M.string()),
   release: M.remotable('release'),
 });
-harden(CredentialGrantShape);
 
 export const CredentialRefusalShape = harden({
   type: /** @type {const} */ ('refused'),
   admission: AdmissionRefusalShape,
 });
-harden(CredentialRefusalShape);
 
 export const CredentialSourceInterface = M.interface('CredentialSource', {
   acquire: M.callWhen().returns(
@@ -160,7 +153,7 @@ export const UsageRecordShape = M.splitRecord(
   {
     provider: M.string(),
     backendKind: M.string(),
-    secretId: M.string(),
+    secretIdentifier: M.string(),
     formulaIdentifier: M.string(),
     latencyMs: NonNegativeNumberShape,
     resultType: InferResultTypeShape,
@@ -172,7 +165,7 @@ export const UsageRecordShape = M.splitRecord(
     turns: NonNegativeNumberShape,
     outputBytes: NonNegativeNumberShape,
     usage: InferUsageShape,
-    runId: M.string(),
+    runIdentifier: M.string(),
     costEstimate: NonNegativeNumberShape,
     verifiedEffect: M.boolean(),
   },

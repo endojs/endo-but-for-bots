@@ -3,15 +3,13 @@
 import { Fail, q } from '@endo/errors';
 import { assertPattern, matches, mustMatch } from '@endo/patterns';
 
-import { AdmissionRefusalShape, ClassifiedResultShape } from './guards.js';
+import {
+  AdmissionRefusalShape,
+  ClassifiedResultShape,
+  RETRY_LATER_TYPES,
+} from './guards.js';
 
 /** @import { AdmissionRefusal, ClassifiedResult, InferResult, ShapeClassifier, ShapeTable, ShapeTableEntry } from './types.js' */
-
-const RETRY_LATER_TYPES = harden([
-  'rate-limited',
-  'usage-exhausted',
-  'budget-exhausted',
-]);
 
 /**
  * @param {string} version
@@ -24,8 +22,9 @@ const assertShapeTableEntry = (version, entry) => {
   if (retryAfterMs !== undefined) {
     typeof retryAfterMs === 'function' ||
       Fail`retryAfterMs for ${q(version)} must be a function`;
-    RETRY_LATER_TYPES.includes(result.type) ||
-      Fail`retryAfterMs is meaningless for a ${q(result.type)} entry`;
+    /** @type {readonly string[]} */ (RETRY_LATER_TYPES).includes(
+      result.type,
+    ) || Fail`retryAfterMs is meaningless for a ${q(result.type)} entry`;
   }
 };
 
