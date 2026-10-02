@@ -9,6 +9,7 @@ import harden from '@endo/harden';
  * for `status`, not a benchmark.
  * @param {WorkerEngine} rawEngine
  * @param {TimerPowers} timers
+ * @returns {{ engine: WorkerEngine, timings: () => Record<'delivery' | 'snapshot' | 'wake', { count: number, milliseconds: number }> }}
  */
 export const makeMeasuredEngine = (rawEngine, timers) => {
   const metrics = {
@@ -41,16 +42,16 @@ export const makeMeasuredEngine = (rawEngine, timers) => {
       });
     },
   });
+  /** @param {{ count: bigint, milliseconds: number }} metric */
+  const report = ({ count, milliseconds }) =>
+    harden({ count: Number(count), milliseconds });
   /** The measurements as the control socket reports them: counts as numbers. */
   const timings = () =>
-    harden(
-      Object.fromEntries(
-        Object.entries(metrics).map(([name, metric]) => [
-          name,
-          { count: Number(metric.count), milliseconds: metric.milliseconds },
-        ]),
-      ),
-    );
+    harden({
+      delivery: report(metrics.delivery),
+      snapshot: report(metrics.snapshot),
+      wake: report(metrics.wake),
+    });
   return harden({ engine, timings });
 };
 harden(makeMeasuredEngine);
