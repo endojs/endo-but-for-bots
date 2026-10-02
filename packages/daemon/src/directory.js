@@ -759,6 +759,7 @@ export const makeDirectoryMaker = ({
       /** @param {string[]} petNamePath */
       const identifyAt = async petNamePath => {
         const { prefixPath, petName } = petNamePathFrom(petNamePath);
+        await null;
         if (prefixPath.length === 0) {
           return controller.identifyLocal(petName);
         }
@@ -771,6 +772,7 @@ export const makeDirectoryMaker = ({
        */
       const storeIdentifierAt = async (petNamePath, id) => {
         const { prefixPath, petName } = petNamePathFrom(petNamePath);
+        await null;
         if (prefixPath.length === 0) {
           await controller.storeIdentifier(petName, id);
           return;
@@ -846,9 +848,10 @@ export const makeDirectoryMaker = ({
      */
     const lookupGuestOwnHub = async prefixPath => {
       /** @type {NameHub} */
-      // eslint-disable-next-line no-use-before-define
       let hub = directory;
+      await null;
       for (const name of prefixPath) {
+        // eslint-disable-next-line no-await-in-loop
         const next = /** @type {NameHub} */ (await E(hub).lookup(name));
         const unwrapped = /** @type {NameHub} */ (unwrapGuestFacet(next));
         if (unwrapped === next && amplifyNameHub(next) !== next) {
