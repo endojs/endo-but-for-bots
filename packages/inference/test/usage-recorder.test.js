@@ -191,6 +191,27 @@ test('a backend that rejects writes no record', async t => {
   t.is(records.length, 0);
 });
 
+test('a backend result that breaks its shape rejects and writes no record', async t => {
+  // An exo guard would reject the result before the recorder saw it, so
+  // the wrapped backend here is unguarded.
+  /** @type {any} */
+  const unguarded = harden({
+    describe: () => harden({ provider: 'p', kind: 'k' }),
+    infer: async () => harden({ type: 'ok' }),
+  });
+  const { records, sink } = makeSink();
+  const recorder = makeUsageRecorder(unguarded, {
+    secretId: 'secret:a',
+    sink,
+    now: makeSteppingClock(),
+  });
+  await t.throwsAsync(() => recorder.infer(makeRequest()), {
+    message: /backend result/,
+  });
+  await settle();
+  t.is(records.length, 0);
+});
+
 test('the gate inside the recorder records a needs-containment refusal', async t => {
   const { backend, requests } = makeRecordingBackend(
     harden({ type: 'ok', text: 'x' }),
@@ -209,4 +230,23 @@ test('the gate inside the recorder records a needs-containment refusal', async t
   t.is(requests.length, 0);
   t.is(records[0].resultType, 'needs-containment');
   t.is(records[0].promptOrigin, 'guest-influenced');
+});
+
+test('describe passes through to the wrapped backend', t => {
+  const description = harden({
+    provider: 'anthropic',
+    kind: 'claude-cli',
+    version: '2.1.278',
+  });
+  const { backend } = makeRecordingBackend(
+    harden({ type: 'needs-auth' }),
+    description,
+  );
+  const { sink } = makeSink();
+  const recorder = makeUsageRecorder(backend, {
+    secretId: 'secret:root-subscription',
+    sink,
+    now: makeSteppingClock(),
+  });
+  t.deepEqual(recorder.describe(), description);
 });

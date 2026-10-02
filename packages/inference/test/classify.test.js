@@ -75,6 +75,43 @@ test('an unrecognized response does not classify', t => {
   );
 });
 
+test('a response that throws while hardened does not classify', t => {
+  const classifier = makeShapeClassifier(table);
+  const hostile = new Proxy(
+    {},
+    {
+      ownKeys: () => {
+        throw Error('hostile response');
+      },
+    },
+  );
+  t.is(classifier.classify('2.1.278', hostile), undefined);
+});
+
+test('a refill reader that throws leaves the row without a refill time', t => {
+  const classifier = makeShapeClassifier(
+    harden({
+      '2.1.278': [
+        {
+          pattern: rateLimitPattern,
+          result: { type: 'rate-limited' },
+          retryAfterMs: () => {
+            throw Error('missing header');
+          },
+        },
+      ],
+    }),
+  );
+  t.deepEqual(
+    classifier.classify('2.1.278', {
+      type: 'result',
+      subtype: 'rate_limited',
+      retry_after_ms: 30_000,
+    }),
+    { type: 'rate-limited' },
+  );
+});
+
 test('a retry-later row carries the refill time it reads', t => {
   const classifier = makeShapeClassifier(table);
   t.deepEqual(
@@ -136,6 +173,24 @@ test('a refill reader belongs only on a retry-later row', t => {
         }),
       ),
     { message: /meaningless/ },
+  );
+});
+
+test('a refill reader must be a function', t => {
+  t.throws(
+    () =>
+      makeShapeClassifier(
+        harden({
+          '1.0.0': [
+            {
+              pattern: M.any(),
+              result: { type: 'rate-limited' },
+              retryAfterMs: /** @type {any} */ (1),
+            },
+          ],
+        }),
+      ),
+    { message: /must be a function/ },
   );
 });
 

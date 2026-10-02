@@ -57,7 +57,10 @@ export const makeShapeClassifier = table => {
 
   /**
    * Hardens `response`, because matching a pattern requires a passable
-   * specimen. A response that cannot be passed does not classify.
+   * specimen. A response that cannot be hardened or passed does not
+   * classify. A refill reader that throws on a matched response leaves the
+   * row's result without a refill time, as a reader returning a nonsensical
+   * time does.
    *
    * @param {string | undefined} version
    * @param {unknown} response
@@ -67,25 +70,30 @@ export const makeShapeClassifier = table => {
     if (version === undefined) return undefined;
     const entries = rows.get(version);
     if (entries === undefined) return undefined;
-    harden(response);
-    for (const { pattern, result, retryAfterMs } of entries) {
-      let matched;
-      try {
-        matched = matches(response, pattern);
-      } catch {
-        return undefined;
-      }
-      if (matched) {
-        const delay = retryAfterMs?.(response);
-        if (typeof delay === 'number' && Number.isFinite(delay) && delay >= 0) {
-          return /** @type {ClassifiedResult} */ (
-            harden({ ...result, retryAfterMs: delay })
-          );
-        }
-        return result;
-      }
+    let row;
+    try {
+      harden(response);
+      row = entries.find(({ pattern }) => matches(response, pattern));
+    } catch {
+      // A provider response is untrusted: whatever makes hardening or
+      // matching it throw is an unrecognized response, never a classifier
+      // failure.
+      return undefined;
     }
-    return undefined;
+    if (row === undefined) return undefined;
+    const { result, retryAfterMs } = row;
+    let delay;
+    try {
+      delay = retryAfterMs?.(response);
+    } catch {
+      return result;
+    }
+    if (typeof delay === 'number' && Number.isFinite(delay) && delay >= 0) {
+      return /** @type {ClassifiedResult} */ (
+        harden({ ...result, retryAfterMs: delay })
+      );
+    }
+    return result;
   };
 
   return harden({ versions: () => versions, classify });

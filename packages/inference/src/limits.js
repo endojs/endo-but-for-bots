@@ -1,5 +1,6 @@
 // @ts-check
 
+import { Fail } from '@endo/errors';
 import { mustMatch } from '@endo/patterns';
 
 import { InferLimitsShape, InferResultShape } from './guards.js';
@@ -36,7 +37,6 @@ export const makeLimitEnforcer = ({ limits, timers, terminate, cancelled }) => {
   let turns = 0;
 
   const stop = () => {
-    if (stopped) return;
     stopped = true;
     timers.clearTimeout(timer);
   };
@@ -64,6 +64,8 @@ export const makeLimitEnforcer = ({ limits, timers, terminate, cancelled }) => {
    * @returns {boolean} whether the turn may continue
    */
   const countOutputBytes = byteCount => {
+    (Number.isSafeInteger(byteCount) && byteCount >= 0) ||
+      Fail`byteCount must be a non-negative safe integer: ${byteCount}`;
     outputBytes += byteCount;
     if (outputBytes > maxOutputBytes) {
       abort(harden({ type: 'limit-exceeded', which: 'output-bytes' }));

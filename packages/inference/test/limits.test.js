@@ -131,6 +131,30 @@ test('stop ends enforcement without terminating', t => {
   t.is(terminations(), 0);
 });
 
+test('stop is idempotent and stays quiet after an abort', t => {
+  const { timers, enforcer, terminations } = setup();
+  enforcer.stop();
+  enforcer.stop();
+  t.is(timers.pending.size, 0);
+  t.is(terminations(), 0);
+
+  const second = setup();
+  second.enforcer.abort(harden({ type: 'cancelled' }));
+  second.enforcer.stop();
+  t.deepEqual(second.enforcer.outcome(), { type: 'cancelled' });
+  t.is(second.terminations(), 1);
+});
+
+test('output byte counts must be non-negative safe integers', t => {
+  const { enforcer, terminations } = setup();
+  t.throws(() => enforcer.countOutputBytes(NaN));
+  t.throws(() => enforcer.countOutputBytes(-1));
+  t.throws(() => enforcer.countOutputBytes(1.5));
+  t.true(enforcer.countOutputBytes(10));
+  t.false(enforcer.countOutputBytes(1));
+  t.is(terminations(), 1);
+});
+
 test('limits are checked at construction', t => {
   t.throws(() =>
     makeLimitEnforcer({
