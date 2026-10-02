@@ -46,7 +46,10 @@ name is absent from `tools/list`, so the confined `claude` never sees it, and a
 (`identify`, `reverseIdentify`, `listIdentifiers`, `storeIdentifier`,
 `locate`, `listLocators`, `reverseLocate`, `storeLocator`, `invite`, `accept`,
 `followLocatorNameChanges`), which take or mint a designation and so would turn
-one in the prompt into authority. Served results are not scrubbed:
+one in the prompt into authority. It also withholds `loadContent`: the daemon
+fetches over HTTP(S) from any `ws=` source hint in the magnet locator a caller
+passes, with no destination allowlist, so serving it would give the confined
+side outbound network authority from the daemon process. Served results are not scrubbed:
 `listMessages`, `followMessages`, and `followNameChanges` still disclose
 locators and identifiers, which grant nothing without the withheld tools.
 Being an allow-list, it also withholds any tool added to the catalog later
@@ -69,11 +72,14 @@ it, and each server gets its own copy (with its own follower table). The tool
 families are:
 
 - names: `help`, `has`, `list`, `remove`, `move`, `copy`, `identify`,
-  `reverseIdentify`, `listIdentifiers`, `storeIdentifier`;
+  `reverseIdentify`, `listIdentifiers`, `storeIdentifier` (the last four
+  withheld by the confined broker);
 - locators: `locate`, `listLocators`, `reverseLocate`, `storeLocator` (adopt a
   locator under a pet name), the content-locator family (`locateContent`,
   `listContent`, `storeContent`, `reverseLocateContent`,
-  `internalizeContentLocator`, `loadContent`), `invite`, and `accept`;
+  `internalizeContentLocator`, `loadContent`), `invite`, and `accept` (all but
+  the content-locator family, and `loadContent` within it, withheld by the
+  confined broker);
 - files: `makeDirectory`, `makePath` (creates only the missing intermediate
   directories), `readText`, `maybeReadText`, `writeText`, `storeValue`;
 - search over a mount the guest holds: `glob`, `grep`, `glorp`;
@@ -83,7 +89,8 @@ families are:
   `adopt`, `dismiss`, `dismissAll`, `request`, `resolve`, `reject`,
   `sendValue`, `form`, `submit`;
 - following: `followMessages`, `followNameChanges`,
-  `followLocatorNameChanges`, and `followStream` (a reader stored under a pet
+  `followLocatorNameChanges` (withheld by the confined broker), and
+  `followStream` (a reader stored under a pet
   name) each return a follower handle. MCP calls are request/response, so
   `readFollower` pulls at most `maxItems` items, waiting at most
   `waitMilliseconds` in all, and `closeFollower` releases the handle.

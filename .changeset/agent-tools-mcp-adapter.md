@@ -19,6 +19,6 @@ The new `@endo/agent-mcp-stdio` package provides the `endo-mcp-stdio` binary, a 
 It learns which guest from `ENDO_GUEST_FORMULA_ID` at startup, never over the MCP wire, and fails closed with `invalid-formula-id` or `daemon-unreachable` before answering any frame.
 Every tool call dispatches to that one guest facet, so the model reaches no authority the guest does not already hold.
 The package's `startGuestBroker` serves only the confined allow-list (`confinedToolNames`) by default, not the full guest catalog.
-Withheld names (`evaluate`, `define`, and the identifier and formula-locator tools) are absent from the broker's `tools/list` and refused at `tools/call`.
+Withheld names (`evaluate`, `define`, the identifier and formula-locator tools, and `loadContent`, which makes the daemon fetch from caller-chosen HTTP(S) source hints) are absent from the broker's `tools/list` and refused at `tools/call`.
 An `allowedToolNames` option replaces the default allow-list; it is not intersected with it.
 The allow-list and `selectConfinedTools` are exported.

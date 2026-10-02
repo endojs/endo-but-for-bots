@@ -55,7 +55,8 @@ and the server-side dispatch check derive from that one pinned value, so a
 withheld or code-eval name is absent at the **boundary**, not merely omitted from
 the belt. In `runConfinedTurn` the boundary is also the broker:
 `@endo/agent-mcp-stdio`'s `startGuestBroker` serves only its confined
-allow-list, so `evaluate`, `define`, and the identifier tools are absent from the
+allow-list, so `evaluate`, `define`, the identifier tools, and the
+network-fetching `loadContent` are absent from the
 broker's own `tools/list` (and so from the `init` tool list `claude` reports) and
 are refused if called by name. An empty post-prune catalog is a hard error, never a silent pass.
 

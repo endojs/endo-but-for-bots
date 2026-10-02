@@ -282,11 +282,17 @@ test('the broker serves only the confined allow-list and refuses withheld names'
     'evaluate',
     'define',
     'identify',
+    'reverseIdentify',
+    'listIdentifiers',
     'storeIdentifier',
     'locate',
+    'listLocators',
+    'reverseLocate',
     'storeLocator',
     'invite',
     'accept',
+    'followLocatorNameChanges',
+    'loadContent',
   ];
   const listed = (await broker.toolsList()).map(tool => tool.name);
   t.true(listed.length > 0);
@@ -315,12 +321,16 @@ test('the broker serves only the confined allow-list and refuses withheld names'
 
   // A withheld name is refused at call time even when the guest has the
   // method: the bridge dispatches only from the served catalog.
+  // Every withheld name is tried, with well-formed arguments where the guest
+  // fake implements the method and none otherwise.
+  /** @type {Record<string, object>} */
+  const attemptArguments = {
+    define: { source: '1', slots: {} },
+    evaluate: { source: '1' },
+    storeIdentifier: { petNamePath: ['x'], identifier: OTHER_ID },
+  };
   /** @type {Array<[string, object]>} */
-  const attempts = [
-    ['define', { source: '1', slots: {} }],
-    ['evaluate', { source: '1' }],
-    ['storeIdentifier', { petNamePath: ['x'], identifier: OTHER_ID }],
-  ];
+  const attempts = withheld.map(name => [name, attemptArguments[name] ?? {}]);
   const refusals = await Promise.all(
     attempts.map(([name, toolArguments]) =>
       client.request('tools/call', { name, arguments: toolArguments }),
@@ -353,6 +363,44 @@ test('an explicit allow-list narrows the served catalog further', async t => {
   t.deepEqual(
     (await broker.toolsList()).map(tool => tool.name),
     ['help', 'list'],
+  );
+});
+
+test('an explicit allow-list replaces the default and can widen it', async t => {
+  const { calls, connection } = makeFakeConnection();
+  const broker = await startGuestBroker({
+    connection,
+    formulaId: FORMULA_ID,
+    version: '0',
+    allowedToolNames: ['help', 'evaluate'],
+  });
+  t.teardown(() => broker.close());
+  t.deepEqual((await broker.toolsList()).map(tool => tool.name).sort(), [
+    'evaluate',
+    'help',
+  ]);
+
+  const child = spawnAsClaudeWould(await broker.transport());
+  const exited = new Promise(resolve => child.on('exit', resolve));
+  const client = makeClient(child);
+  await client.request('initialize', {
+    protocolVersion: '2025-06-18',
+    capabilities: {},
+    clientInfo: { name: 'scripted-client', version: '0' },
+  });
+  const response = /** @type {any} */ (
+    await client.request('tools/call', {
+      name: 'evaluate',
+      arguments: { source: '1', codeNames: [], petNamePaths: [] },
+    })
+  );
+  t.falsy(response.error);
+  child.stdin.end();
+  t.is(await exited, 0);
+  t.deepEqual(
+    calls.filter(([who]) => who !== 'host'),
+    [['mine', 'evaluate']],
+    'a widened name reaches the guest',
   );
 });
 

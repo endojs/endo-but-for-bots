@@ -10,8 +10,11 @@
 // mint a designation (endo-but-for-bots#1371, #1404). Served results are not
 // scrubbed: `listMessages`, `followMessages`, and `followNameChanges` still
 // disclose locators and identifiers, which grant nothing without the withheld
-// tools. Content locators carry no designation authority, though `loadContent`
-// does make the daemon fetch from the locator's source hints.
+// tools. Content locators carry no designation authority, but `loadContent` is
+// withheld too: it makes the daemon fetch over HTTP(S) from any `ws=` source
+// hint in a caller-supplied magnet locator, and the content plane has no
+// destination allowlist, so serving it would grant the confined side outbound
+// network authority from the daemon process.
 //
 // `@endo/claude`'s `CODE_EVAL_NAMES` deny-list is a separate belt; the two
 // lists are not kept in sync, and this allow-list is the boundary.
@@ -31,7 +34,6 @@ export const confinedToolNames = harden([
   'storeContent',
   'reverseLocateContent',
   'internalizeContentLocator',
-  'loadContent',
   // Files and search.
   'makeDirectory',
   'makePath',
@@ -72,13 +74,13 @@ export const confinedToolNames = harden([
  * @template {{ name: string }} T
  * @param {ReadonlyArray<T>} tools
  * @param {ReadonlyArray<string>} [allowedNames]
- * @returns {T[]}
+ * @returns {ReadonlyArray<T>}
  */
 export const selectConfinedTools = (
   tools,
   allowedNames = confinedToolNames,
 ) => {
   const allowed = new Set(allowedNames);
-  return tools.filter(({ name }) => allowed.has(name));
+  return harden(tools.filter(({ name }) => allowed.has(name)));
 };
 harden(selectConfinedTools);

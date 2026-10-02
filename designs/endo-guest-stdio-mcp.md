@@ -406,8 +406,10 @@ infer, enumerate, or synthesize the catalog.
   [#1371](https://github.com/endojs/endo-but-for-bots/pull/1371) showed that a
   confined `claude` handed an evaluator or a designation-minting tool turns
   identifiers in its prompt into authority, so `startGuestBroker` serves only the
-  static allow-list `confinedToolNames` and withholds `evaluate`, `define`, and the
-  identifier and formula-locator tools
+  static allow-list `confinedToolNames` and withholds `evaluate`, `define`, the
+  identifier and formula-locator tools, and `loadContent`, whose magnet `ws=`
+  source hints make the daemon fetch from a caller-chosen HTTP(S) address with
+  no destination allowlist
   ([#1409](https://github.com/endojs/endo-but-for-bots/pull/1409)). The
   single-tenant server still serves the full catalog.
 - **Arguments remain scoped by the guest interface.** Petname-designating

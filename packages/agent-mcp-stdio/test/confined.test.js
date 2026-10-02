@@ -22,6 +22,7 @@ const withheldToolNames = [
   'invite',
   'accept',
   'followLocatorNameChanges',
+  'loadContent',
 ];
 
 test('every confined name is a declared tool', t => {
@@ -40,7 +41,7 @@ test('every declared tool is either confined or withheld', t => {
   }
 });
 
-test('code evaluation and identifier tools are withheld', t => {
+test('code evaluation, identifier, and network-fetching tools are withheld', t => {
   for (const name of withheldToolNames) {
     t.false(confinedToolNames.includes(name), name);
   }
@@ -56,4 +57,8 @@ test('selectConfinedTools keeps declaration order and ignores unknown names', t 
 
 test('the confined allow-list is frozen', t => {
   t.true(Object.isFrozen(confinedToolNames));
+});
+
+test('selectConfinedTools returns a frozen selection', t => {
+  t.true(Object.isFrozen(selectConfinedTools([{ name: 'list' }])));
 });
