@@ -15,6 +15,7 @@ export {
   makeAgentTools,
   requiredGuestMethods,
 } from './src/agent-interface.js';
+export { confinedToolNames, selectConfinedTools } from './src/confined.js';
 export { makeMcpConfig, renderGuestAllowedTools } from './src/config.js';
 export { parseClaudeStreamJson } from './src/claude-stream.js';
 export { serveStdio, makeLineWriter } from './src/stdio.js';

@@ -37,7 +37,23 @@ connection and binds the resolved facet with `makeGuestMcpServer`.
 process's half. Over a daemon connection the caller already holds, it resolves
 the one guest, then serves the static catalog as newline-delimited JSON-RPC on
 a `0600` Unix socket in a `0700` per-inference directory, with a fresh MCP
-session per connection. Its `transport()` names the claude-spawned half:
+session per connection. It serves only the **confined allow-list**
+(`confinedToolNames`, in `src/confined.js`), never the full catalog: a withheld
+name is absent from `tools/list`, so the confined `claude` never sees it, and a
+`tools/call` naming one is refused with the error message `tool-not-permitted`
+(`error.data.reason` `name-scope`). The allow-list withholds code evaluation
+(`evaluate`, `define`) and the identifier and formula-locator tools
+(`identify`, `reverseIdentify`, `listIdentifiers`, `storeIdentifier`,
+`locate`, `listLocators`, `reverseLocate`, `storeLocator`, `invite`, `accept`,
+`followLocatorNameChanges`), which take or mint a designation and so would turn
+one in the prompt into authority. Served results are not scrubbed:
+`listMessages`, `followMessages`, and `followNameChanges` still disclose
+locators and identifiers, which grant nothing without the withheld tools.
+Being an allow-list, it also withholds any tool added to the catalog later
+until that tool is named in it. Pass `allowedToolNames` to
+replace it; the option is not intersected with the default, so a caller can
+widen the served set as well as narrow it. Its `transport()` names the
+claude-spawned half:
 `src/relay.mjs`, a plain-Node byte pipe between stdio and that socket, launched
 as `env -i <node> relay.mjs <socket>`. The relay never sees the daemon socket,
 a daemon descriptor, or the formula id, and it starts with an **empty**
@@ -61,7 +77,8 @@ families are:
 - files: `makeDirectory`, `makePath` (creates only the missing intermediate
   directories), `readText`, `maybeReadText`, `writeText`, `storeValue`;
 - search over a mount the guest holds: `glob`, `grep`, `glorp`;
-- evaluation, deliberately present: `evaluate` and `define`;
+- evaluation, deliberately present: `evaluate` and `define` (withheld by the
+  confined broker);
 - mail: `listMessages`, `send`, `reply`, `editMessage`, `messageHistory`,
   `adopt`, `dismiss`, `dismissAll`, `request`, `resolve`, `reject`,
   `sendValue`, `form`, `submit`;

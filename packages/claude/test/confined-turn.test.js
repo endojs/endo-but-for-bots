@@ -130,6 +130,16 @@ test('a confined turn reaches exactly one guest through the harness-owned broker
 
   t.is(report.serverInfo.name, 'endo');
   t.true(report.tools.includes('list'));
+  // The broker's own tools/list, as the confined side reads it, carries no
+  // withheld name: pruning is at the broker, not only in --allowedTools.
+  for (const name of [
+    'evaluate',
+    'define',
+    'storeIdentifier',
+    'storeLocator',
+  ]) {
+    t.false(report.tools.includes(name), `${name} is absent at the broker`);
+  }
   t.falsy(report.call.result.isError);
   t.true(JSON.stringify(report.call.result).includes('mine-name'));
   t.deepEqual(
