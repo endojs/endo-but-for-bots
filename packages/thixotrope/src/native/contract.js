@@ -68,8 +68,9 @@
  * @property {(existing: Spec, wanted: Spec) => boolean} same
  * @property {(existing: Spec, wanted: Spec) => boolean} [replaces]
  * @property {(key: unknown, spec: Spec, status: 'bound' | 'inactive') => Record<string, unknown>} [decorate]
- *   fields a status record carries beside `key`, `status` and `error`;
- *   never asked of a closed registration
+ *   fields a status record carries beside `key`, `status` and `error`,
+ *   which are the kit's own and dropped from what it answers; never asked
+ *   of a closed registration
  */
 
 /**

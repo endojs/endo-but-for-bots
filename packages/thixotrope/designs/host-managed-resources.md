@@ -176,8 +176,8 @@ be upgraded into something more, because the index record is the something more.
   packages read (`ENDO_RANK_STRINGS`, `DEBUG`) must be the same across runs that share a journal.
   Either pin them in the doubles or document the constraint where the doubles are configured.
   (Done: documented in the prelude and the replay engine.)
-- The manager kit's `describe` receives no spec for a closed registration; the HTTP facet could
-  carry a `closedAt` or similar if views want it.
+- The manager kit never asks `decorate` about a closed registration, which has dropped its spec;
+  a `closedAt` or similar, if views want it, would be a field of the kit's own.
   (Not done: no view wants it yet.)
 - `installNative` returns the installation record; `thix install` prints it. A `thix install`
   retry that hits "name has a different installation" should say what differed.
@@ -203,8 +203,9 @@ Each entry names the copies; the fix is the one piece they should share.
   `isRemotable` throws the same way and is not a drop-in.
   One prelude helper. (Done: `isRemotable`, in the prelude.)
 - **Bytes to hex.**
-  `hub.js`, `durable-netlayer.js` and `random-id.js` each spell `byte.toString(16).padStart(2,
-  '0')`; `@endo/hex` exports `encodeHex` and is already in the Ironhorse bundle's graph.
+  `hub.js`, `durable-netlayer.js` and `random-id.js` each spell
+  `byte.toString(16).padStart(2, '0')`; `@endo/hex` exports `encodeHex` and is already in the
+  Ironhorse bundle's graph.
   (Done.)
 - **Versioned records on disk.**
   The alarm ledger (version 2), workspace metadata (version 8), the runtime manifest (format 2) and
@@ -562,7 +563,7 @@ would run the hub's transport over a hub session.
    answers the resolved spec, or `undefined` when a registration is as sent,
    and `restore` reports each resolved registration with its resolved spec.
    The manager kit adopts a resolved spec as the desired one, if the entry
-   is still the desired registration under its key, so `same`, `describe`
+   is still the desired registration under its key, so `same`, `decorate`
    and the next restore all see the resolved form.
    HTTP has no `resolve` and is unchanged.
 
@@ -730,11 +731,15 @@ without renaming; `register` answers `{ handle, status }`.
 
 Recommendation: yes; a small visible change for three copies and two round trips fewer.
 
+As built, `decorate(key, spec, status)` answers only the extra fields, the kit drops any under its
+own names, and it is never asked of a closed registration.
+`thix alarms` prints only `{ pending }` and was unchanged.
+
 ### 10.5 An occupied name at placement (Done: (b).)
 
 The registry keeps an installed value whose name was taken meanwhile as `unplaced`, and places it
-when the same identity is installed again, with a `placing` guard and a `complete` flag that
-always equals `status === 'ready'`.
+when the same identity is installed again, with a `placing` guard and a `complete` flag set once
+the value was placed.
 This handles one race, a user taking the name between the registry's check and its put.
 
 Options: (a) keep it; (b) the installation fails with the error "name taken", keeping its vat and

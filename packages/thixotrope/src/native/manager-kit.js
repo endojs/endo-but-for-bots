@@ -13,10 +13,9 @@ import { makeSerialQueue } from '../serial-queue.js';
  * only its own generation, withdraw a registration durably before telling
  * the adapter, retire an incarnation whose unbinding is uncertain, and rebuild
  * the adapter at startup and after its own exit when there is anything to
- * restore. This factory
- * writes all of that once. A resource author supplies the identity of a
- * registration and, optionally, what its status carries; the adapter side, built with
- * `makeAdapter`, supplies the verbs.
+ * restore. This factory writes all of that once. A resource author supplies
+ * the identity of a registration and, optionally, what its status carries;
+ * the adapter side, built with `makeAdapter`, supplies the verbs.
  *
  * The manager and the adapter speak one protocol: `bind(key, spec)`,
  * `unbind(key)` and `restore([[key, spec], ...])`, where `spec` is
@@ -49,8 +48,9 @@ import { makeSerialQueue } from '../serial-queue.js';
  * @param {(key: unknown, spec: Spec, status: 'bound' | 'inactive') => Record<string, unknown>} [options.decorate]
  *   fields a status record carries beside the kit's own `key`, `status`
  *   and `error`, from what the registration is (the URL a listener serves,
- *   the deadline an alarm keeps); never asked of a closed registration,
- *   which no longer names what it was made with
+ *   the deadline an alarm keeps); a field under one of the kit's names is
+ *   dropped. Never asked of a closed registration, which no longer names
+ *   what it was made with
  */
 export const makeManager = (
   { adapters, makeKeeper },
@@ -67,15 +67,22 @@ export const makeManager = (
    * @param {'bound' | 'inactive' | 'closed'} status
    * @param {string} [error]
    */
-  const report = (key, spec, status, error = undefined) =>
-    harden({
-      ...(spec === undefined || status === 'closed' || decorate === undefined
+  const report = (key, spec, status, error = undefined) => {
+    const extra =
+      spec === undefined || status === 'closed' || decorate === undefined
         ? {}
-        : decorate(key, spec, status)),
+        : decorate(key, spec, status);
+    return harden({
+      ...Object.fromEntries(
+        Object.entries(extra).filter(
+          ([field]) => !['key', 'status', 'error'].includes(field),
+        ),
+      ),
       key,
       status,
       ...(error === undefined ? {} : { error }),
     });
+  };
   /**
    * Desired state, one mutable record per key. The handle a caller holds is
    * bound to its record, so a later registration under the same key cannot

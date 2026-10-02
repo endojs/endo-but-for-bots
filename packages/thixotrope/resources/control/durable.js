@@ -67,7 +67,7 @@ export const make = ({ makeManager, admin }) => {
   };
   const facet = makeExo('ControlSocket', ControlI, {
     help: () =>
-      'serve(path) listens for local administration sessions on the Unix socket at path, each starting from a facet of its own that the administration this resource was provided makes; status() reports the listener; close() stops it.',
+      'serve(path) listens for local administration sessions on the Unix socket at path, each starting from a facet of its own that the administration this resource was provided makes; status() reports the registration of the listener, or a closed status naming no key while none is held; close() stops it.',
     /**
      * Listen at the path, or report the listener already there. A
      * registration the adapter could not take would otherwise wait in
