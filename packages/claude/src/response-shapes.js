@@ -27,7 +27,7 @@ import { makeShapeClassifier } from '@endo/inference/classify.js';
  */
 export const CLAUDE_CODE_RESPONSE_SHAPES = harden({});
 
-const STDERR_TAIL_BYTES = 4096;
+const STDERR_TAIL_CODE_UNITS = 4096;
 
 /**
  * @param {unknown} value
@@ -54,6 +54,20 @@ export const resultResponse = resultEvent => {
 harden(resultResponse);
 
 /**
+ * The last `STDERR_TAIL_CODE_UNITS` code units of `stderr`, never beginning with
+ * the low half of a surrogate pair the cut split.
+ *
+ * @param {string} stderr
+ */
+const stderrTail = stderr => {
+  const tail = stderr.slice(-STDERR_TAIL_CODE_UNITS);
+  const first = tail.charCodeAt(0);
+  return first >= 0xdc00 && first <= 0xdfff && tail.length < stderr.length
+    ? tail.slice(1)
+    : tail;
+};
+
+/**
  * The record a row matches for a process that ended without a terminal
  * `result` event. Only the tail of stderr is kept.
  *
@@ -68,7 +82,7 @@ export const exitResponse = ({ exitCode, signal, stderr }) =>
     source: 'exit',
     exitCode,
     signal,
-    stderr: stderr.slice(-STDERR_TAIL_BYTES),
+    stderr: stderrTail(stderr),
   });
 harden(exitResponse);
 

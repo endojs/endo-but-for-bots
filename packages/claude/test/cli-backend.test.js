@@ -394,26 +394,56 @@ test('a multibyte character split across stdout chunks decodes intact', async t 
   t.like(result, { type: 'ok', text: 'café' });
 });
 
-test('stderr past the ring-buffer ceiling still classifies on its tail', async t => {
+test('stderr past the ring-buffer ceiling classifies on its exact tail', async t => {
+  // Each 8 KiB chunk is marked by its index, so only the newest 4096 code
+  // units, which lie wholly inside the last chunk, match the row; a trim that
+  // dropped the newest chunks instead of the oldest would not.
+  const chunks = Array.from({ length: 10 }, (_, index) =>
+    String(index).repeat(8192),
+  );
   const responseShapes = shapeTable({
     [VERSION]: [
       {
-        pattern: M.splitRecord({ source: 'exit' }),
+        pattern: M.splitRecord({ source: 'exit', stderr: '9'.repeat(4096) }),
         result: { type: 'needs-auth' },
       },
     ],
   });
-  const chunk = 'x'.repeat(8192);
   const { backend } = makeHarness(
-    {
-      // 10 chunks of 8 KiB (80 KiB) comfortably exceeds the 64 KiB ring
-      // buffer, forcing the trim loop to shift out early chunks.
-      stderr: Array.from({ length: 10 }, () => chunk),
-      exitCode: 1,
-    },
+    { stderr: chunks, exitCode: 1 },
     { responseShapes },
   );
   t.deepEqual(await backend.infer(makeRequest()), { type: 'needs-auth' });
+});
+
+test('the stderr tail never begins with half a surrogate pair', async t => {
+  const responseShapes = shapeTable({
+    [VERSION]: [
+      {
+        pattern: M.splitRecord({ source: 'exit', stderr: 'y'.repeat(4095) }),
+        result: { type: 'needs-auth' },
+      },
+    ],
+  });
+  // The astral character straddles the 4096-code-unit cut.
+  const { backend } = makeHarness(
+    { stderr: `x\u{1F600}${'y'.repeat(4095)}`, exitCode: 1 },
+    { responseShapes },
+  );
+  t.deepEqual(await backend.infer(makeRequest()), { type: 'needs-auth' });
+});
+
+test('a turn settles after exit when a descendant holds the pipes open', async t => {
+  const { backend, fake, manualTimers } = makeHarness({
+    stdout: [successResult({ result: 'hello' })],
+    lingers: true,
+  });
+  const pending = backend.infer(makeRequest());
+  await settle();
+  const graceTimer = [...manualTimers.pending.values()].at(-1);
+  graceTimer?.();
+  t.like(await pending, { type: 'ok', text: 'hello' });
+  t.is(fake.kills.length > 0, true, 'the lingering group is reaped');
 });
 
 test('a scratch cleanup failure does not replace the turn result', async t => {
