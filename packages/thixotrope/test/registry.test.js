@@ -25,6 +25,8 @@ const fixture = () => {
   const allocations = new Map();
   let nextWorker = 0;
   let breakNext = false;
+  /** @type {((entry: any) => boolean) | undefined} */
+  let refuseRecord;
   /** @type {import('@endo/promise-kit').PromiseKit<void> | undefined} */
   let holdFactory;
   /** @type {Map<string, (powers: any) => unknown>} */
@@ -136,6 +138,7 @@ const fixture = () => {
      * @param {any} entry
      */
     record: (workspace, name, entry) => {
+      if (refuseRecord?.(entry)) throw Error('index refused');
       index.set(workspace === undefined ? name : `${workspace}/${name}`, entry);
       maybeBreak();
     },
@@ -167,6 +170,10 @@ const fixture = () => {
     /** @param {import('@endo/promise-kit').PromiseKit<void>} kit */
     holdFactory: kit => {
       holdFactory = kit;
+    },
+    /** @param {((entry: any) => boolean) | undefined} refuse */
+    refuseRecord: refuse => {
+      refuseRecord = refuse;
     },
   };
 };
@@ -499,7 +506,7 @@ test('a name taken while an installation runs fails it, and the installation kee
   f.inventory.set('app', occupant);
   factoryGate.resolve(undefined);
   await t.throwsAsync(() => /** @type {Promise<unknown>} */ (first), {
-    message: /was taken while it was being installed/,
+    message: /was taken by another value/,
   });
   t.like((await E(f.registry).list())[0], { status: 'failed' });
   t.is(f.index.get('main/app')?.status, 'failed');
@@ -510,10 +517,16 @@ test('a name taken while an installation runs fails it, and the installation kee
     request(f, { grants: [], access: front.workspace }),
   );
   await t.throwsAsync(() => /** @type {Promise<unknown>} */ (again), {
-    message: /was taken while it was being installed/,
+    message: /was taken by another value/,
   });
   t.false(f.inventory.has('app'), 'nothing was placed');
+  // Removing the failed installation retires its vat and leaves a value the
+  // user put under the name since.
+  f.inventory.set('app', occupant);
   t.true(await E(f.registry).remove('app', 'main'));
+  t.true(f.log.includes('retire w1'));
+  t.is(f.inventory.get('app'), occupant);
+  f.inventory.delete('app');
   // A new request, under a new allocation key, as the host makes for each.
   const { result: fresh } = await E(f.registry).install(
     request(f, {
@@ -525,6 +538,22 @@ test('a name taken while an installation runs fails it, and the installation kee
   t.is(await fresh, root);
   t.is(f.inventory.get('app'), root);
   t.like((await E(f.registry).list())[0], { status: 'ready' });
+});
+
+test('removing an installation placed before its index refused the record takes the value out', async t => {
+  const f = fixture();
+  const root = Far('Application', {});
+  f.factories.set('app:app', () => root);
+  f.refuseRecord(entry => entry.status === 'ready');
+  const { result } = await E(f.registry).install(request(f, { grants: [] }));
+  await t.throwsAsync(() => /** @type {Promise<unknown>} */ (result), {
+    message: /index refused/,
+  });
+  t.like((await E(f.registry).list())[0], { status: 'failed' });
+  t.is(f.inventory.get('app'), root, 'the value was placed');
+  f.refuseRecord(undefined);
+  t.true(await E(f.registry).remove('app', 'main'));
+  t.false(f.inventory.has('app'), 'the removal took the value out');
 });
 
 test('a workspace that refuses to give a value back does not keep the name in the index', async t => {

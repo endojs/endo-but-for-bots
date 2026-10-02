@@ -287,16 +287,17 @@ A manager holding a consumer's handler retains that consumer's vat, which is cor
 served is reachable, and withdrawing the registration releases it: a closed handle no longer
 names the handler it was made with.
 
-`durable.js` exports a synchronous `make(powers)` that receives `{ makeManager }` together with whatever the installation was granted or provided, such as the control
-socket's `admin`, with the guest prelude in scope, and returns `{ facet, lifecycle }`.
+`durable.js` exports a synchronous `make(powers)` that receives `{ makeManager }` together with
+whatever the installation was granted or provided, such as the control socket's `admin`, with the
+guest prelude in scope, and returns `{ facet, lifecycle }`.
 `makeManager({ label, same, replaces, decorate })` writes the manager's bookkeeping once: it keeps
 the desired registrations, holds one adapter incarnation through a keeper, reconciles each
 registration against it, answers `register` with the handle and the status reconciling found,
 hands out per-registration handles whose `status()` and `close()` act only on their own
 generation, reports every status as one record, `{ key, status, error? }` with `bound`,
-`inactive` or `closed` and whatever fields the optional `decorate` adds, withdraws desired state durably before telling the adapter, retires an
-incarnation whose unbinding is uncertain, and rebuilds the adapter at startup and after its own
-exit when anything is desired.
+`inactive` or `closed` and whatever fields the optional `decorate` adds, withdraws desired state
+durably before telling the adapter, retires an incarnation whose unbinding is uncertain, and
+rebuilds the adapter at startup and after its own exit when anything is desired.
 `ephemeral.js` exports `make()` returning the adapter, built with `makeAdapter({ label, same,
 replaces, bind, unbind, resolve })` from `@endo/thixotrope/native-adapter.js`, which serializes
 operations, keeps the bindings, replaces or refuses a differing registration as the author decides,

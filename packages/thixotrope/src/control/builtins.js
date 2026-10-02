@@ -57,8 +57,9 @@ export const makeBuiltins = ({
    *
    * The registry finds one it holds again, so a healthy installation
    * costs a start one lookup; only one that is missing, or whose vat is
-   * gone, or whose installation did not complete, is installed, and its
-   * code is put in the store for that. Resolves to the installed value,
+   * gone, or still pending, is installed, and its code is put in the
+   * store for that. A failed one stays failed until it is removed, unless
+   * `replaceUnhealthy` says otherwise. Resolves to the installed value,
    * or to undefined when it could not be provided.
    * @param {string} name
    * @param {() => Promise<{kind: 'application', bundleDigest: string} | {kind: 'native', durableDigest: string, ephemeralDigest: string}>} ship
@@ -108,6 +109,12 @@ export const makeBuiltins = ({
         // installation made again.
         await E(registry).remove(name, into?.workspace);
         held = undefined;
+      }
+      if (held?.status === 'failed') {
+        log.error(
+          `${name} not provided${where}: its installation failed; remove it and the next start provides it afresh`,
+        );
+        return undefined;
       }
       if (held?.status === 'ready') {
         if (

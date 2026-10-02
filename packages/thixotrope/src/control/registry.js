@@ -449,7 +449,12 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
           await retrying(() => E(installer).retire(entry.workerId));
         installed.delete(key);
         try {
-          if (entry.status === 'ready' && entry.access !== undefined)
+          // A value placed and then failed (its index record refused) is in
+          // the workspace as surely as a ready one.
+          if (
+            (entry.status === 'ready' || entry.value !== undefined) &&
+            entry.access !== undefined
+          )
             await E(entry.access).remove(name, entry.value);
         } finally {
           // The host's index forgets the name whatever the workspace, which
