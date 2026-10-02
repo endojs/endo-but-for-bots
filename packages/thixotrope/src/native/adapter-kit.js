@@ -9,66 +9,51 @@ import { makeSerialQueue } from '../serial-queue.js';
  * What a native adapter process has to do that is not about its resource:
  * serialize its operations, keep what it has bound under each key, answer a
  * repeated bind for the same registration without rebinding, replace a
- * registration the manager may replace and refuse one it may not, release a
- * binding on unbind, and restore a set of registrations one at a time,
- * reporting each failure without giving up on the rest. This factory writes
- * all of that once. A resource author supplies the identity of a
- * registration and the two verbs.
+ * registration the manager replaced, release a binding on unbind, and
+ * restore a set of registrations one at a time, reporting each failure
+ * without giving up on the rest. This factory writes all of that once. A
+ * resource author supplies the two verbs.
  *
  * The adapter and its manager, built with `makeManager`, speak one protocol:
- * `bind(key, spec)`, `unbind(key)` and `restore([[key, spec], ...])`, where `spec` is whatever passable record the manager registers
- * under a key. A bind answers what the registration became when binding
- * settled something the spec left open (a delay becomes a deadline, a port
- * of zero becomes the port the listener got), or `undefined` when it is as
- * sent; the manager keeps the resolved form, so a restore sends it.
+ * `bind(key, spec, epoch)`, `unbind(key)` and
+ * `restore([[key, spec, epoch], ...])`, where `spec` is whatever passable
+ * record the manager registers under a key and `epoch` names that
+ * registration: the manager gives a new one to each registration it makes or
+ * replaces, so the same epoch under a key is the registration already bound,
+ * and another is one that takes its place. Which registrations may replace
+ * which is the manager's to decide, alone. A bind answers what the
+ * registration became when binding settled something the spec left open (a
+ * delay becomes a deadline, a port of zero becomes the port the listener
+ * got), or `undefined` when it is as sent; the manager keeps the resolved
+ * form, so a restore sends it.
  *
  * @template Spec
  * @template Binding
  * @param {object} options
  * @param {string} options.label what a key names, for messages
- * @param {(existing: Spec, wanted: Spec) => boolean} options.same
- *   whether a registration already bound is the one wanted, so that binding
- *   it again changes nothing. A record crosses the wire as a fresh copy each
- *   time, so identity would only ever be right for a primitive or remotable
- *   spec; the author says what sameness is.
- * @param {(existing: Spec, wanted: Spec) => boolean} [options.replaces]
- *   whether a differing registration may take the place of the existing one
- *   under the same key, in which case the existing binding is released
- *   before the new one is made; never by default, so the key is refused as
- *   already registered
  * @param {(key: unknown, spec: Spec) => Promise<Binding> | Binding} options.bind
  *   acquire the resource for a registration
  * @param {(binding: Binding, key: unknown) => Promise<unknown> | unknown} options.unbind
  *   release it
  * @param {(binding: Binding, spec: Spec) => Spec} [options.resolve]
  *   what the registration became once bound, when binding settles something
- *   the spec left open; the resolved spec is what the adapter keeps, reports
- *   and compares a repeated bind against. By default a registration is as
- *   sent, and binds answer `undefined`. Three obligations come with it: the
- *   manager adopts the resolved spec and sends it back on every restore, so
- *   `resolve` must leave an already-resolved spec as it is; `same` is then
- *   asked about a resolved `existing` and a possibly unresolved `wanted`,
- *   and must accept one that leaves open what the other settled; and the
+ *   the spec left open; the resolved spec is what the adapter keeps and
+ *   answers a repeated bind with. By default a registration is as sent, and
+ *   binds answer `undefined`. Two obligations come with it: the manager
+ *   adopts the resolved spec and sends it back on every restore, so
+ *   `resolve` must leave an already-resolved spec as it is; and the
  *   resolved spec lives on in the manager's durable heap, so it must be
  *   data and the manager's own remotables, never something of this
  *   process, which no later incarnation could use. A `resolve` that throws
  *   releases the binding and fails the bind.
  */
-export const makeAdapter = ({
-  label,
-  same,
-  replaces = () => false,
-  bind,
-  unbind,
-  resolve,
-}) => {
+export const makeAdapter = ({ label, bind, unbind, resolve }) => {
   if (typeof label !== 'string') throw Error('makeAdapter needs a label');
-  if (typeof same !== 'function') throw Error('makeAdapter needs same()');
   if (typeof bind !== 'function' || typeof unbind !== 'function')
     throw Error('makeAdapter needs bind() and unbind()');
   if (resolve !== undefined && typeof resolve !== 'function')
     throw Error('makeAdapter resolve must be a function');
-  /** @type {Map<unknown, {spec: Spec, binding: Binding}>} */
+  /** @type {Map<unknown, {spec: Spec, epoch: bigint, binding: Binding}>} */
   const bound = new Map();
   const enqueue = makeSerialQueue();
   /**
@@ -77,25 +62,27 @@ export const makeAdapter = ({
    * standing form even for a bind it repeats; `undefined` otherwise.
    * @param {unknown} key
    * @param {Spec} spec
+   * @param {bigint} epoch
    * @returns {Promise<Spec | undefined>}
    */
-  const bindOne = async (key, spec) => {
+  const bindOne = async (key, spec, epoch) => {
+    if (typeof epoch !== 'bigint')
+      throw Error(`${label} registration needs an epoch`);
     const standing = bound.get(key);
     if (standing !== undefined) {
-      if (same(standing.spec, spec))
+      if (standing.epoch === epoch)
         return resolve === undefined ? undefined : standing.spec;
-      if (!replaces(standing.spec, spec))
-        throw Error(`${label} is already registered`);
-      // The binding closes over its registration, so it is replaced rather
-      // than edited: released first, so the new one can take its place, and
-      // forgotten only once released, so a release that fails leaves the
-      // binding where a later unbind retries it and reports the failure.
+      // The manager replaced the registration. The binding closes over its
+      // registration, so it is replaced rather than edited: released first,
+      // so the new one can take its place, and forgotten only once
+      // released, so a release that fails leaves the binding where a later
+      // unbind retries it and reports the failure.
       await unbind(standing.binding, key);
       bound.delete(key);
     }
     const binding = await bind(key, spec);
     if (resolve === undefined) {
-      bound.set(key, { spec, binding });
+      bound.set(key, { spec, epoch, binding });
       return undefined;
     }
     /** @type {Spec} */
@@ -112,15 +99,16 @@ export const makeAdapter = ({
       }
       throw error;
     }
-    bound.set(key, { spec: resolved, binding });
+    bound.set(key, { spec: resolved, epoch, binding });
     return resolved;
   };
   return Far('Adapter', {
     /**
      * @param {unknown} key
      * @param {Spec} spec
+     * @param {bigint} epoch
      */
-    bind: (key, spec) => enqueue(() => bindOne(key, spec)),
+    bind: (key, spec, epoch) => enqueue(() => bindOne(key, spec, epoch)),
     /** @param {unknown} key */
     unbind: key =>
       enqueue(async () => {
@@ -134,15 +122,15 @@ export const makeAdapter = ({
      * Bind a set of registrations, one at a time; a failure is reported for
      * its key and the rest are still attempted. A registration that resolved
      * is reported with its resolved spec.
-     * @param {Array<[unknown, Spec]>} entries
+     * @param {Array<[unknown, Spec, bigint]>} entries
      */
     restore: entries =>
       enqueue(async () => {
         /** @type {Array<{ key: unknown, spec?: Spec, error?: string }>} */
         const results = [];
-        for (const [key, spec] of entries) {
+        for (const [key, spec, epoch] of entries) {
           // eslint-disable-next-line no-await-in-loop
-          const result = await bindOne(key, spec).then(
+          const result = await bindOne(key, spec, epoch).then(
             resolved =>
               harden(
                 resolved === undefined ? { key } : { key, spec: resolved },

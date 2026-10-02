@@ -39,13 +39,6 @@ export const make = () => {
   return makeAdapter({
     label: 'Control socket',
     /**
-     * @param {ControlSpec} existing
-     * @param {ControlSpec} wanted
-     */
-    same: (existing, wanted) =>
-      existing.path === wanted.path && existing.admin === wanted.admin,
-    replaces: () => true,
-    /**
      * @param {unknown} path
      * @param {ControlSpec} spec
      */

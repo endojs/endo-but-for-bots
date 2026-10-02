@@ -75,15 +75,8 @@ export const make = ({ makeManager }) => {
   /** @type {ReturnType<typeof makeManager>} */
   const manager = makeManager({
     label: 'Alarm',
-    // Keys are fresh per alarm, so the only repeated registration is this
-    // side's own, in the resolved form or the one it was made with.
-    /**
-     * @param {AlarmSpec} existing
-     * @param {AlarmSpec} wanted
-     */
-    same: (existing, wanted) =>
-      existing.sink === wanted.sink &&
-      (wanted.at === undefined || existing.at === wanted.at),
+    // Keys are fresh per alarm and registered once, so the kit's default,
+    // refusing a key registered again, is never reached.
     /**
      * @param {unknown} _key
      * @param {AlarmSpec} spec

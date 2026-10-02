@@ -19,16 +19,6 @@ const fixture = () => {
   const adapter = makeAdapter({
     label: 'Slot',
     /**
-     * @param {{who: string, n: number}} a
-     * @param {{who: string, n: number}} b
-     */
-    same: (a, b) => a.who === b.who && a.n === b.n,
-    /**
-     * @param {{who: string}} a
-     * @param {{who: string}} b
-     */
-    replaces: (a, b) => a.who === b.who,
-    /**
      * @param {unknown} key
      * @param {{who: string, n: number}} spec
      */
@@ -76,12 +66,6 @@ const resolvingFixture = () => {
   const adapter = makeAdapter({
     label: 'Slot',
     /**
-     * @param {{who: string, slot?: number}} a
-     * @param {{who: string, slot?: number}} b
-     */
-    same: (a, b) =>
-      a.who === b.who && (b.slot === undefined || a.slot === b.slot),
-    /**
      * @param {unknown} key
      * @param {{who: string, slot?: number}} spec
      */
@@ -116,32 +100,42 @@ const resolvingFixture = () => {
   };
 };
 
-test('a repeated bind of the same registration changes nothing', async t => {
+test('a repeated bind under the same epoch changes nothing', async t => {
   const { adapter, log, held } = fixture();
-  t.is(await E(adapter).bind('one', harden({ who: 'a', n: 1 })), undefined);
-  t.is(await E(adapter).bind('one', harden({ who: 'a', n: 1 })), undefined);
+  t.is(await E(adapter).bind('one', harden({ who: 'a', n: 1 }), 1n), undefined);
+  t.is(await E(adapter).bind('one', harden({ who: 'a', n: 1 }), 1n), undefined);
   t.deepEqual(log, ['bind one a1 -> 1']);
   t.deepEqual(held(), ['one']);
 });
 
-test('a replaceable registration is released before the new one is bound; others are refused', async t => {
+test('a bind under another epoch releases the standing binding before binding anew', async t => {
   const { adapter, log } = fixture();
-  await E(adapter).bind('one', harden({ who: 'a', n: 1 }));
-  await E(adapter).bind('one', harden({ who: 'a', n: 2 }));
+  await E(adapter).bind('one', harden({ who: 'a', n: 1 }), 1n);
+  await E(adapter).bind('one', harden({ who: 'a', n: 2 }), 2n);
   t.deepEqual(log, ['bind one a1 -> 1', 'unbind one 1', 'bind one a2 -> 2']);
+  // Whatever the spec, the epoch decides: the manager alone says which
+  // registrations may replace which.
+  await E(adapter).bind('one', harden({ who: 'b', n: 2 }), 2n);
+  t.is(log.length, 3, 'the same epoch is the standing registration');
+});
+
+test('a bind without an epoch is refused', async t => {
+  const { adapter, log } = fixture();
+  // A manager of another protocol, as an untyped peer would send.
+  const untyped = /** @type {any} */ (adapter);
   await t.throwsAsync(
-    () => E(adapter).bind('one', harden({ who: 'b', n: 2 })),
-    { message: /Slot is already registered/ },
+    () => E(untyped).bind('one', harden({ who: 'a', n: 1 })),
+    { message: /Slot registration needs an epoch/ },
   );
-  t.deepEqual(log.length, 3, 'a refused bind touches nothing');
+  t.deepEqual(log, []);
 });
 
 test('a replacement whose release fails stays bound until a release succeeds', async t => {
   const { adapter, log, failNextUnbind, held } = fixture();
-  await E(adapter).bind('one', harden({ who: 'a', n: 1 }));
+  await E(adapter).bind('one', harden({ who: 'a', n: 1 }), 1n);
   failNextUnbind();
   await t.throwsAsync(
-    () => E(adapter).bind('one', harden({ who: 'a', n: 2 })),
+    () => E(adapter).bind('one', harden({ who: 'a', n: 2 }), 2n),
     { message: /release interrupted/ },
   );
   t.deepEqual(held(), ['one'], 'the old binding is kept');
@@ -157,24 +151,21 @@ test('a replacement whose release fails stays bound until a release succeeds', a
 });
 
 test('the adapter refuses a construction that leaves out what it needs', t => {
-  const same = () => true;
   const bind = () => 1;
   const unbind = () => {};
   /** @param {any} options */
   const attempt = options => makeAdapter(options);
-  t.throws(() => attempt({ same, bind, unbind }), { message: /needs a label/ });
-  t.throws(() => attempt({ label: 'Slot', bind, unbind }), {
-    message: /needs same\(\)/,
-  });
-  t.throws(() => attempt({ label: 'Slot', same, bind }), {
+  t.throws(() => attempt({ bind, unbind }), { message: /needs a label/ });
+  t.throws(() => attempt({ label: 'Slot', bind }), {
     message: /needs bind\(\) and unbind\(\)/,
   });
+  t.notThrows(() => attempt({ label: 'Slot', bind, unbind }));
 });
 
 test('unbind releases the binding and reports whether there was one', async t => {
   const { adapter, log, held } = fixture();
   t.false(await E(adapter).unbind('one'));
-  await E(adapter).bind('one', harden({ who: 'a', n: 1 }));
+  await E(adapter).bind('one', harden({ who: 'a', n: 1 }), 1n);
   t.true(await E(adapter).unbind('one'));
   t.false(await E(adapter).unbind('one'));
   t.deepEqual(log, ['bind one a1 -> 1', 'unbind one 1']);
@@ -186,9 +177,9 @@ test('restore binds each entry and reports failures without giving up', async t 
   const spec = harden({ who: 'a', n: 1 });
   const results = await E(adapter).restore(
     harden([
-      ['one', spec],
-      ['broken', spec],
-      ['two', spec],
+      ['one', spec, 1n],
+      ['broken', spec, 2n],
+      ['two', spec, 3n],
     ]),
   );
   t.deepEqual(results, [
@@ -201,36 +192,38 @@ test('restore binds each entry and reports failures without giving up', async t 
 
 test('a bind answers undefined when the registration is as sent', async t => {
   const { adapter } = fixture();
-  t.is(await E(adapter).bind('one', harden({ who: 'a', n: 1 })), undefined);
-  t.deepEqual(await E(adapter).restore(harden([['two', { who: 'b', n: 1 }]])), [
-    { key: 'two' },
-  ]);
+  t.is(await E(adapter).bind('one', harden({ who: 'a', n: 1 }), 1n), undefined);
+  t.deepEqual(
+    await E(adapter).restore(harden([['two', { who: 'b', n: 1 }, 2n]])),
+    [{ key: 'two' }],
+  );
 });
 
 test('a resolving adapter answers what the registration became, and keeps it', async t => {
   const { adapter, log } = resolvingFixture();
-  t.deepEqual(await E(adapter).bind('one', harden({ who: 'a' })), {
+  t.deepEqual(await E(adapter).bind('one', harden({ who: 'a' }), 1n), {
     who: 'a',
     slot: 1,
   });
   t.deepEqual(
-    await E(adapter).bind('one', harden({ who: 'a' })),
+    await E(adapter).bind('one', harden({ who: 'a' }), 1n),
     { who: 'a', slot: 1 },
     'the unresolved form again is the standing registration, answered resolved',
   );
   t.deepEqual(
-    await E(adapter).bind('one', harden({ who: 'a', slot: 1 })),
+    await E(adapter).bind('one', harden({ who: 'a', slot: 1 }), 1n),
     { who: 'a', slot: 1 },
     'and so is the resolved form the manager adopted',
   );
   t.deepEqual(log, ['bind one a -> 1'], 'bound once');
-  await t.throwsAsync(
-    () => E(adapter).bind('one', harden({ who: 'a', slot: 7 })),
-    { message: /Slot is already registered/ },
-    'a resolved form that differs is a different registration',
+  t.deepEqual(
+    await E(adapter).bind('one', harden({ who: 'a', slot: 7 }), 2n),
+    { who: 'a', slot: 7 },
+    'a replacement under a new epoch is bound, and a resolved form kept',
   );
+  t.deepEqual(log.slice(1), ['unbind one 1', 'bind one a -> 2']);
   t.true(await E(adapter).unbind('one'));
-  t.is(log.at(-1), 'unbind one 1', 'unbind receives the binding, not the spec');
+  t.is(log.at(-1), 'unbind one 2', 'unbind receives the binding, not the spec');
 });
 
 test('a restore reports each resolved registration with its resolved spec', async t => {
@@ -238,8 +231,8 @@ test('a restore reports each resolved registration with its resolved spec', asyn
   t.deepEqual(
     await E(adapter).restore(
       harden([
-        ['one', { who: 'a' }],
-        ['two', { who: 'b', slot: 9 }],
+        ['one', { who: 'a' }, 1n],
+        ['two', { who: 'b', slot: 9 }, 2n],
       ]),
     ),
     [
@@ -258,7 +251,6 @@ test('resolve, when given, must be a function', t => {
     () =>
       attempt({
         label: 'Slot',
-        same: () => true,
         bind: () => 1,
         unbind: () => {},
         resolve: 'later',
@@ -272,8 +264,6 @@ test('a resolve that throws releases the binding and fails the bind', async t =>
   const log = [];
   const adapter = makeAdapter({
     label: 'Slot',
-    /** @type {(a: {}, b: {}) => boolean} */
-    same: () => true,
     /** @type {(key: unknown, spec: {}) => Promise<number>} */
     bind: async () => {
       log.push('bind');
@@ -287,7 +277,7 @@ test('a resolve that throws releases the binding and fails the bind', async t =>
       log.push(`unbind ${slot}`);
     },
   });
-  await t.throwsAsync(() => E(adapter).bind('one', harden({})), {
+  await t.throwsAsync(() => E(adapter).bind('one', harden({}), 1n), {
     message: /address unavailable/,
   });
   t.deepEqual(log, ['bind', 'unbind 1'], 'the resource was released');

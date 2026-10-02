@@ -47,39 +47,8 @@ export const make = () => {
       return refuse('Cross-site requests are not permitted');
     return harden({ allowed: /** @type {const} */ (true) });
   };
-  /**
-   * The manager sends origins sorted; sorting again here costs nothing and
-   * keeps this side right about the set on its own.
-   * @param {HttpRegistrationSpec} spec
-   */
-  const originsOf = spec => harden([...(spec.policy?.origins ?? [])].sort());
-  /**
-   * @param {HttpRegistrationSpec} a
-   * @param {HttpRegistrationSpec} b
-   */
-  const sameOrigins = (a, b) => {
-    const existing = originsOf(a);
-    const wanted = originsOf(b);
-    return (
-      existing.length === wanted.length &&
-      existing.every((origin, index) => origin === wanted[index])
-    );
-  };
   return makeAdapter({
     label: 'Port',
-    /**
-     * @param {HttpRegistrationSpec} existing
-     * @param {HttpRegistrationSpec} wanted
-     */
-    same: (existing, wanted) =>
-      existing.handler === wanted.handler && sameOrigins(existing, wanted),
-    // Same consumer, new policy: the listener closes over its origins, so it
-    // is replaced rather than edited.
-    /**
-     * @param {HttpRegistrationSpec} existing
-     * @param {HttpRegistrationSpec} wanted
-     */
-    replaces: (existing, wanted) => existing.handler === wanted.handler,
     /**
      * @param {unknown} port
      * @param {HttpRegistrationSpec} spec
@@ -87,7 +56,7 @@ export const make = () => {
     bind: (port, spec) => {
       if (typeof port !== 'number') throw Error('Expected a port');
       const { handler } = spec;
-      const origins = originsOf(spec);
+      const origins = spec.policy?.origins ?? [];
       return listen({
         port,
         host: '127.0.0.1',

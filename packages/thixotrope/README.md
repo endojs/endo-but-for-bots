@@ -291,12 +291,15 @@ Each installation runs its durable module in a dedicated manager vat with its ow
 Its `make({ makeManager })` returns `{ facet, lifecycle }`, the record also
 carrying whatever the installation was granted or provided, such as the control socket's `admin`;
 `makeManager` writes the manager's bookkeeping once, the status record included, so the module
-supplies only what identifies a registration and, optionally, fields its status carries beside
-`key`, `status` (`bound`, `inactive` or `closed`) and `error`.
+supplies only, when a key may be registered again, which registrations are the same and which may
+replace one another, and, optionally, fields its status carries beside `key`, `status` (`bound`,
+`inactive` or `closed`) and `error`.
 The ephemeral module runs in a separate Node process with native platform APIs; its `make()`
 builds the adapter with `makeAdapter` from `@endo/thixotrope/native-adapter.js`, supplying the
-identity rules, the two verbs that acquire and release the resource, and optionally `resolve`,
-what a registration became once bound (a delay becoming a deadline, say), which the manager adopts.
+two verbs that acquire and release the resource, and optionally `resolve`, what a registration
+became once bound (a delay becoming a deadline, say), which the manager adopts.
+The manager names each registration it makes or replaces with a new epoch, so the adapter tells a
+repeated bind from a replacement without rules of its own.
 The two halves speak one protocol, so `resources/http` is HTTP and little else on each side.
 The registry vat retains the installation and the workspace inventory holds the public facet.
 Each manager receives its own daemon startup notification, independently of workspace execution,
@@ -398,7 +401,7 @@ The process checks wall-clock time before reporting, so this is not a precise ti
 A backward clock adjustment delays firing; a forward adjustment is noticed at the next timer check.
 Recurring scheduling, per-application quotas, and notification UI remain future work.
 
-Workspace metadata version 17 is required.
+Workspace metadata version 18 is required.
 The supervisor bumps the version whenever a guest closure it ships by source changes shape, since
 an installed closure is frozen in its vat's heap; `src/control/supervisor.js` lists what each
 version changed.

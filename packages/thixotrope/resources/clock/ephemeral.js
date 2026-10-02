@@ -30,13 +30,6 @@ export const makeClockAdapter = ({ now, setTimer, clearTimer }) =>
   makeAdapter({
     label: 'Alarm',
     /**
-     * @param {AlarmSpec} existing
-     * @param {AlarmSpec} wanted
-     */
-    same: (existing, wanted) =>
-      existing.sink === wanted.sink &&
-      (wanted.at === undefined || existing.at === wanted.at),
-    /**
      * @param {unknown} key
      * @param {AlarmSpec} spec
      */

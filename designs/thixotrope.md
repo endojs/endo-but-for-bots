@@ -77,7 +77,7 @@ One word for one thing, throughout the code, the README and this document:
 | Word | Meaning |
 |---|---|
 | vat | One guest heap behind one OCapN endpoint, run by a worker. A **durable** vat has a heap image and journal and survives sleep and restart; an **ephemeral** vat or worker has no recovery baseline and is discarded at startup. |
-| session | A logical protocol relationship in the hub, with reference tables, answer routes and lifecycle; never a socket. A **durable session** belongs to a worker, a remote peer or the host endpoint itself and outlives sockets, processes and the daemon. A **transient session** (`transient:` key prefix) belongs to a transient client or a native adapter process and is discarded at startup. |
+| session | A logical protocol relationship in the hub, with reference tables, answer routes and lifecycle; never a socket. A **durable session** belongs to a worker, a remote peer or the host endpoint itself and outlives sockets, processes and the daemon. A **transient session** (`transient:` key prefix) belongs to a transient client, a native adapter process or a peer connection without a resume token, and is discarded at startup. |
 | transient client | A disposable host-side OCapN client with a transient session, for embedders; `daemon.openTransientClient()`. |
 | resource | A host capability bound to a worker, a key, both or neither, reconstructed through a registered factory at the host endpoint and retired when its meaning ends or with the worker it is bound to (`makeResource`, `retireResource`): introductions, worker facades, adapter launchers. |
 | native resource | A directory with `durable.js` and `ephemeral.js`, installed by name; its **manager** runs the durable module in a dedicated vat and its **adapter** runs the ephemeral module in a Node process. |
@@ -298,21 +298,24 @@ generation, reports every status as one record, `{ key, status, error? }` with `
 `inactive` or `closed` and whatever fields the optional `decorate` adds, withdraws desired state
 durably before telling the adapter, retires an incarnation whose unbinding is uncertain, and
 rebuilds the adapter at startup and after its own exit when anything is desired.
-`ephemeral.js` exports `make()` returning the adapter, built with `makeAdapter({ label, same,
-replaces, bind, unbind, resolve })` from `@endo/thixotrope/native-adapter.js`, which serializes
-operations, keeps the bindings, replaces or refuses a differing registration as the author decides,
-and restores a set of registrations one at a time, reporting each failure without giving up on the
-rest.
-The two speak one protocol: `bind(key, spec)`, `unbind(key)` and `restore([[key, spec], …])`,
-where `spec` is whatever passable record the author registers under a key.
+`ephemeral.js` exports `make()` returning the adapter, built with `makeAdapter({ label, bind,
+unbind, resolve })` from `@endo/thixotrope/native-adapter.js`, which serializes operations, keeps
+the bindings, replaces a registration the manager replaced, and restores a set of registrations
+one at a time, reporting each failure without giving up on the rest.
+The two speak one protocol: `bind(key, spec, epoch)`, `unbind(key)` and
+`restore([[key, spec, epoch], …])`, where `spec` is whatever passable record the author registers
+under a key and `epoch` names the registration, new for each one the manager makes or replaces.
 A registration may resolve at bind time, when binding settles something the spec left open (a
 relative delay becomes an absolute deadline; a port of zero becomes the port the listener got):
 the optional `resolve(binding, spec)` says what it became, a bind answers that resolved spec
 (`undefined` when the registration is as sent), a restore reports it, and the manager adopts it as
 the desired spec, so `same`, `decorate` and the next restore all see the resolved form.
-Sameness of a registration is the author's to state on both sides, since a record crosses the wire
-as a fresh copy each time; an adapter forgets a binding only once its release succeeds, so a failed
-release is retried by a later unbind and reaches the manager's retirement path.
+Sameness of a registration is the author's to state once, to the manager, and only for a key that
+may be registered again (a record crosses the wire as a fresh copy each time, so identity would
+refuse the same registration made twice); by default a key registered again is refused.
+The adapter compares epochs: the same epoch is the binding it holds, another a replacement.
+An adapter forgets a binding only once its release succeeds, so a failed release is retried by a
+later unbind and reaches the manager's retirement path.
 `src/native/contract.js` states the contract as types.
 
 Only the facet enters the named inventory slot; applications receive it through grants.
