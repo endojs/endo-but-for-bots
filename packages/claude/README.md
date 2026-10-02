@@ -45,7 +45,9 @@ The harness **refuses to spawn** unless all six presence flags appear
 `--disable-slash-commands`), `--tools` and `--setting-sources` each carry exactly the empty string (a non-empty value
 re-opens the surface — the `"alg":"none"` shape), `--permission-mode` and
 `--permission-prompts` carry their pinned values, each of these four appears
-exactly once (a later occurrence would override the pinned one), and
+exactly once (a later occurrence would override the pinned one), `--settings`
+and `--mcp-config` each appear at most once (a later occurrence would
+substitute another file), and
 `claude --version` equals the pinned version (an upgraded CLI may have changed
 the flag semantics the confinement rests on).
 
