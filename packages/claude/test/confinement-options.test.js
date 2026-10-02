@@ -98,3 +98,12 @@ test('the allow-list is exactly the pinned catalog', t => {
   ]);
   t.throws(() => confinedAllowList('guest', ['constructor']));
 });
+
+test('a budget ceiling becomes --max-budget-usd, as in the SDK options', t => {
+  t.false(buildCliArguments(cliSpec()).includes('--max-budget-usd'));
+  const argv = buildCliArguments({ ...cliSpec(), maxBudgetUsd: 0.25 });
+  t.is(argv[argv.indexOf('--max-budget-usd') + 1], '0.25');
+  for (const maxBudgetUsd of [0, -1, Number.NaN, Infinity]) {
+    t.throws(() => buildCliArguments({ ...cliSpec(), maxBudgetUsd }));
+  }
+});

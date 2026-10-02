@@ -63,6 +63,7 @@ export const buildCliArguments = ({
   toolNames,
   maxTurns,
   model,
+  maxBudgetUsd,
   permissionPromptsNone = false,
 }) => {
   (typeof mcpConfigPath === 'string' && mcpConfigPath !== '') ||
@@ -109,6 +110,13 @@ export const buildCliArguments = ({
   }
   if (model !== undefined) {
     argv.push('--model', model);
+  }
+  if (maxBudgetUsd !== undefined) {
+    (typeof maxBudgetUsd === 'number' &&
+      Number.isFinite(maxBudgetUsd) &&
+      maxBudgetUsd > 0) ||
+      Fail`maxBudgetUsd must be a positive finite number, got ${q(maxBudgetUsd)}`;
+    argv.push('--max-budget-usd', String(maxBudgetUsd));
   }
   harden(argv);
   assertConfinedArgv(argv);
