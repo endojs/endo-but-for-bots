@@ -746,6 +746,11 @@ mod tests {
             // flight; every guarded entry releases its charge on return,
             // so it is `0` before control can reach a persistence boundary.
             "native_depth",
+            // The part of `native_depth` that frames run in place hold
+            // (STACK-DEPTH-REFACTOR.md §4.5): released as those frames are
+            // left, or by the loop that exits with them, so it too is `0` at a
+            // persistence boundary.
+            "held_total",
             // Array Iterator Proxy-Get context is installed only around one
             // synchronous trap call and restored on both success and throw.
             // `is_quiescent` additionally refuses a leaked context.
@@ -1254,6 +1259,8 @@ mod tests {
             // The native-recursion budget in flight: every guarded entry
             // releases its charge on return, so it is `0` at a boundary.
             "native_depth",
+            // The part of it that frames run in place hold, likewise `0`.
+            "held_total",
             // The property-key id-space poison latch.
             "id_space_exhausted",
         ];

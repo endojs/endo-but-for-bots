@@ -742,7 +742,43 @@ impl Interp {
         })
     }
 
-    /// One layer of the forwarding loop of [`Self::proxy_get_with_metering`].
+    /// The Proxy leg of [`Interp::get_legs`] (STACK-DEPTH-REFACTOR.md B1,
+    /// B9): [`Self::proxy_get_with_metering`]'s layer and forwarding loop,
+    /// charging each forwarded-to Proxy the unit `mop_get_with_proxy_metering`
+    /// charged it, into `held`. Ends with the trap's result, or at the first
+    /// target that is not a Proxy, with the forward's metering for it. Out of
+    /// line, so that a trap it calls runs under its frame and the loop's
+    /// small one alone.
+    #[inline(never)]
+    pub(in crate::interp) fn proxy_get_leg(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        key: ReadKey,
+        receiver: Slot,
+        mut metering: GetMetering,
+        held: &mut usize,
+    ) -> Result<GetLeg, Step> {
+        let mut proxy = proxy;
+        loop {
+            let target = match self.proxy_get_step(code, proxy, key, receiver, metering)? {
+                ProxyStep::Done(result) => return Ok(GetLeg::Value(result)),
+                ProxyStep::Forward(target) => target,
+            };
+            // A forward past the Array Iterator's trap turns on the target's
+            // forwarded metering for the rest of the walk.
+            metering.forwarded_target |= metering.proxy_trap != 0;
+            if !self.proxies.contains_key(&target) {
+                return Ok(GetLeg::Target(target, metering));
+            }
+            // The unit `mop_get_with_proxy_metering(target)` charged.
+            self.forwarding_hop(held)?;
+            proxy = target;
+        }
+    }
+
+    /// One layer of the forwarding loop of [`Self::proxy_get_with_metering`],
+    /// and of [`Self::proxy_get_leg`]'s.
     /// A forward past the Array Iterator's trap charges its residual here;
     /// the loop then meters the target as forwarded
     /// (`forwarded_target || proxy_trap != 0`), as the recursive shape passed
@@ -873,11 +909,15 @@ impl Interp {
         self.forwarding_loop(
             proxy,
             |vm, proxy| vm.proxy_set_step(code, proxy, id, value, receiver),
-            |vm, target| vm.mop_set(code, target, id, value, receiver),
+            |vm, target| vm.set_from(code, target, id, value, receiver),
         )
     }
 
-    /// One layer of the forwarding loop of [`Self::proxy_set`].
+    /// One layer of the forwarding loop of [`Self::proxy_set`], and the step
+    /// of `proxy_set_leg` (STACK-DEPTH-REFACTOR.md B9). Expanded in both, as
+    /// it was in the first alone: a frame of its own would sit on every level
+    /// of a nest through a `set` trap.
+    #[inline(always)]
     pub(in crate::interp) fn proxy_set_step(
         &mut self,
         code: &[u8],
@@ -1151,47 +1191,6 @@ impl Interp {
         Ok(trap_keys)
     }
 
-    /// `[[Call]]` (ECMA-262 10.5.12). A light frame of the native-recursion
-    /// budget, like the `mop_*` entries. The dispatch path's first Proxy layer
-    /// comes here; `invoke_value` takes every further layer as a turn of its
-    /// loop, charging each the same unit.
-    pub(in crate::interp) fn proxy_call(
-        &mut self,
-        code: &[u8],
-        proxy: crate::value::SlotIndex,
-        this: Slot,
-        args: &[Slot],
-    ) -> Result<Slot, Step> {
-        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
-            vm.proxy_call_inner(code, proxy, this, args)
-        })
-    }
-
-    pub(in crate::interp) fn proxy_call_inner(
-        &mut self,
-        code: &[u8],
-        proxy: crate::value::SlotIndex,
-        this: Slot,
-        args: &[Slot],
-    ) -> Result<Slot, Step> {
-        // The same layer as `proxy_call_step`, written out so the dispatch
-        // path's frame does not carry a `ProxyCall` between the step and the
-        // call; `invoke_value` takes any further Proxy layer as a turn.
-        let (target, handler) = self.proxy_target_handler(proxy, "apply")?;
-        let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
-        let trap = match self.proxy_trap(code, handler, "apply")? {
-            Some(t) => t,
-            None => {
-                self.charge_and_check(self.proxy_call_forward_metering(target))?;
-                return self.invoke_value(code, target_slot, this, args);
-            }
-        };
-        self.meter.tick_raw(PROXY_CALL_TRAP_METERING);
-        let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
-        let arg_array = self.array_from_slots(args);
-        self.invoke_value(code, trap, handler_slot, &[target_slot, this, arg_array])
-    }
-
     /// What forwarding `[[Call]]` to `target` costs, by the kind of callable
     /// it is.
     fn proxy_call_forward_metering(&self, target: crate::value::SlotIndex) -> u64 {
@@ -1249,12 +1248,13 @@ impl Interp {
     }
 
     /// `[[Construct]]` (ECMA-262 10.5.13). A light frame of the
-    /// native-recursion budget, like [`Self::proxy_call`].
+    /// native-recursion budget, like `[[Call]]` ([`Self::proxy_run_call`]).
     ///
     /// A Proxy has [[Construct]] only when its target does (ProxyCreate step
     /// 7), so `new` on one whose target is not a constructor throws before
     /// any trap runs, with XS's message (XS sets `XS_CAN_CONSTRUCT_FLAG` from
     /// the target when it creates the Proxy).
+    #[inline(never)]
     pub(in crate::interp) fn proxy_construct(
         &mut self,
         code: &[u8],

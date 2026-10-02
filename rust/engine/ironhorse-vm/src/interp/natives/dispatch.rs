@@ -2114,7 +2114,12 @@ impl Interp {
         // `native_method_*` family it routes to belongs to `m`). The
         // feature-off recorder is a no-op; cost.rs tests its zero-sized
         // representation. It records invocation counts, not wall-clock
-        // timings or per-step work attribution.
+        // timings or per-step work attribution. `invoke_regexp_protocol`
+        // (natives/regexp.rs) repeats this count, and skips the Proxy
+        // pre-check below, for the intrinsic RegExp protocol methods it calls
+        // in place, as `native_run_call` (invoke.rs) does for `RUN`'s
+        // `Reflect.apply`, `Reflect.construct` and generator methods: keep
+        // them in step.
         self.cost.on_builtin(m);
         let this = self
             .stack
@@ -5612,12 +5617,9 @@ impl Interp {
     ) -> Result<NativeResult, Step> {
         let _ = (base, argc, code, this, arg0);
         let result: Slot = match m {
-            // The `Promise.prototype` methods and statics that re-enter user
-            // code / build derived promises are handled outside this
-            // value-returning match (`.then` and the statics thread `code`);
-            // this arm is reached only for the not-yet-modeled ones, an honest
-            // named skip. `.then`/`resolve`/`reject` are intercepted before the
-            // generic method dispatch (see `call_native_method_reentrant`).
+            // Every `Promise.prototype` method and static has an arm here;
+            // `.then`, `.catch`, `.finally` and the statics thread `code` to
+            // build derived promises and call user code.
             // `Promise.prototype.then`: register the reaction and return the
             // derived promise. The reaction runs later, at the pump-loop drain
             // — no synchronous re-entry here, so it fits the value-returning
@@ -5814,6 +5816,61 @@ impl Interp {
                 self.regexp_test(code, inst, this, arg0)?
             }
             NativeMethod::RegExpCompile => this,
+            NativeMethod::RegExpMatch
+            | NativeMethod::RegExpMatchAll
+            | NativeMethod::RegExpSearch
+            | NativeMethod::RegExpSplit
+            | NativeMethod::RegExpReplace => self.regexp_protocol(m, base, code, this, arg0)?,
+            NativeMethod::RegExpToString => {
+                let inst = match this.value {
+                    Payload::Reference(r) if this.kind == Kind::Reference => r,
+                    _ if matches!(this.kind, Kind::Null | Kind::Undefined) => {
+                        return Err(
+                            self.catchable_type_error_msg(cannot_coerce_to_object(this.kind))
+                        )
+                    }
+                    // Spec requires an object. XS boxes other primitives and
+                    // can complete, so this guard has no XS error counterpart.
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "RegExp.toString: receiver must be an object".into(),
+                        ))
+                    }
+                };
+                let source_id = self.intern_static_key("source");
+                let flags_id = self.intern_static_key("flags");
+                let default_source = self.regexps.contains_key(&inst)
+                    && self.regexp_getter_uses_default(inst, source_id);
+                let default_flags = self.regexps.contains_key(&inst)
+                    && self.regexp_getter_uses_default(inst, flags_id);
+                if default_source && default_flags {
+                    self.regexp_to_string(inst)?
+                } else {
+                    self.regexp_to_string_generic(code, inst, this)?
+                }
+            }
+            _ => unreachable!("not one of the RegExp methods"),
+        };
+        Ok(NativeResult::Value(result))
+    }
+
+    /// The RegExp methods a String method reaches through its protocol
+    /// symbol (`@@match`, `@@matchAll`, `@@replace`, `@@search`, `@@split`),
+    /// on the frame `base` that a call of one builds: from
+    /// [`Self::native_method_regexp`], and in place from
+    /// [`Self::invoke_regexp_protocol`]. Out of line, so that the RegExp
+    /// family's dispatcher, which every RegExp method's re-entry carries, does
+    /// not hold these methods' state.
+    #[inline(never)]
+    pub(in crate::interp) fn regexp_protocol(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        code: &[u8],
+        this: Slot,
+        arg0: Slot,
+    ) -> Result<Slot, Step> {
+        Ok(match m {
             NativeMethod::RegExpMatch => self.regexp_match(code, this, arg0)?,
             NativeMethod::RegExpMatchAll => self.regexp_match_all(code, this, arg0)?,
             NativeMethod::RegExpSearch => self.regexp_search(code, this, arg0)?,
@@ -5856,37 +5913,8 @@ impl Interp {
                     self.regexp_replace_generic(code, regexp, this, subject, replacement)?
                 }
             }
-            NativeMethod::RegExpToString => {
-                let inst = match this.value {
-                    Payload::Reference(r) if this.kind == Kind::Reference => r,
-                    _ if matches!(this.kind, Kind::Null | Kind::Undefined) => {
-                        return Err(
-                            self.catchable_type_error_msg(cannot_coerce_to_object(this.kind))
-                        )
-                    }
-                    // Spec requires an object. XS boxes other primitives and
-                    // can complete, so this guard has no XS error counterpart.
-                    _ => {
-                        return Err(self.catchable_type_error_msg(
-                            "RegExp.toString: receiver must be an object".into(),
-                        ))
-                    }
-                };
-                let source_id = self.intern_static_key("source");
-                let flags_id = self.intern_static_key("flags");
-                let default_source = self.regexps.contains_key(&inst)
-                    && self.regexp_getter_uses_default(inst, source_id);
-                let default_flags = self.regexps.contains_key(&inst)
-                    && self.regexp_getter_uses_default(inst, flags_id);
-                if default_source && default_flags {
-                    self.regexp_to_string(inst)?
-                } else {
-                    self.regexp_to_string_generic(code, inst, this)?
-                }
-            }
-            _ => unreachable!("not one of the RegExp methods"),
-        };
-        Ok(NativeResult::Value(result))
+            _ => unreachable!("not one of the RegExp protocol methods"),
+        })
     }
 
     /// The String methods of [`Self::call_native_method_inner`], out of line
@@ -5954,7 +5982,7 @@ impl Interp {
                 self.meter.tick_raw(STRING_REGEXP_PROTOCOL_FRAME_METERING);
                 let search_method = self.string_protocol_method(code, arg0, "search")?;
                 if !matches!(search_method.kind, Kind::Undefined | Kind::Null) {
-                    self.invoke_value(code, search_method, arg0, &[this])?
+                    self.invoke_regexp_protocol(code, search_method, arg0, &[this])?
                 } else {
                     let subject = if this.kind == Kind::String {
                         this
@@ -5970,7 +5998,7 @@ impl Interp {
                         Slot::of(Kind::Reference, Payload::Reference(regexp_constructor));
                     let matcher = self.construct_value(code, constructor, &[arg0], constructor)?;
                     let method = self.string_protocol_method(code, matcher, "search")?;
-                    self.invoke_value(code, method, matcher, &[subject])?
+                    self.invoke_regexp_protocol(code, method, matcher, &[subject])?
                 }
             }
             // `String.prototype.match`: a custom `regexp[Symbol.match]` is
@@ -5991,7 +6019,7 @@ impl Interp {
                 self.meter.tick_raw(STRING_REGEXP_PROTOCOL_FRAME_METERING);
                 let match_method = self.string_protocol_method(code, arg0, "match")?;
                 if !matches!(match_method.kind, Kind::Undefined | Kind::Null) {
-                    self.invoke_value(code, match_method, arg0, &[this])?
+                    self.invoke_regexp_protocol(code, match_method, arg0, &[this])?
                 } else {
                     let subject = if this.kind == Kind::String {
                         this
@@ -6007,7 +6035,7 @@ impl Interp {
                         Slot::of(Kind::Reference, Payload::Reference(regexp_constructor));
                     let matcher = self.construct_value(code, constructor, &[arg0], constructor)?;
                     let method = self.string_protocol_method(code, matcher, "match")?;
-                    self.invoke_value(code, method, matcher, &[subject])?
+                    self.invoke_regexp_protocol(code, method, matcher, &[subject])?
                 }
             }
             NativeMethod::StringMatchAll => self.string_match_all(code, this, arg0)?,
@@ -6033,7 +6061,7 @@ impl Interp {
                     .unwrap_or_else(Slot::undefined);
                 let replace_method = self.string_protocol_method(code, arg0, "replace")?;
                 if !matches!(replace_method.kind, Kind::Undefined | Kind::Null) {
-                    self.invoke_value(code, replace_method, arg0, &[this, repl])?
+                    self.invoke_regexp_protocol(code, replace_method, arg0, &[this, repl])?
                 } else {
                     let subject = if this.kind == Kind::String {
                         this
@@ -6083,7 +6111,7 @@ impl Interp {
 
                 let replace_method = self.string_protocol_method(code, arg0, "replace")?;
                 if !matches!(replace_method.kind, Kind::Undefined | Kind::Null) {
-                    self.invoke_value(code, replace_method, arg0, &[this, repl])?
+                    self.invoke_regexp_protocol(code, replace_method, arg0, &[this, repl])?
                 } else {
                     let subject = if this.kind == Kind::String {
                         this
@@ -6119,7 +6147,7 @@ impl Interp {
                 let split_method = self.string_protocol_method(code, arg0, "split")?;
                 if !matches!(split_method.kind, Kind::Undefined | Kind::Null) {
                     self.meter.tick_raw(STRING_SPLIT_PROTOCOL_FRAME_METERING);
-                    self.invoke_value(code, split_method, arg0, &[this, limit])?
+                    self.invoke_regexp_protocol(code, split_method, arg0, &[this, limit])?
                 } else {
                     self.string_split_plain(code, this, arg0, limit)?
                 }

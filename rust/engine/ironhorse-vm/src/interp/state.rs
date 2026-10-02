@@ -425,6 +425,23 @@ pub struct Interp {
     /// native entry; accepting it would make a restored twin halt at a different
     /// recursion depth, so the boundary policy refuses it.
     native_depth: usize,
+    #[boot_new(0)]
+    #[gc_root(none)]
+    #[quiescent(zero)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// The part of [`Self::native_depth`] that frames on [`Self::call_stack`]
+    /// hold (the sum of their `CallerState::held`; STACK-DEPTH-REFACTOR.md
+    /// §4.5), so that a path restoring the depth it saved can tell the units
+    /// those frames released in between, which the recursive shape released
+    /// later, from its own. An `eval` that parks the call stack parks this
+    /// with it. Always `0` at a crank boundary.
+    held_total: usize,
     #[boot_new(Tracked::new(
         Vec::new(),
         snapshot_dirt.clone(),
@@ -2532,9 +2549,13 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(GenRunStack, 22, 22, EmptyAtBoundary, "gen_run_stack")]
-    /// The stack of generators currently executing on a nested
-    /// [`Self::resume_generator`] dispatch (its top is the innermost). The
-    /// `YIELD` arm reads the top to snapshot the right instance.
+    /// The stack of generators currently executing, on a nested
+    /// [`Self::resume_generator`] dispatch or resumed in their callers' loop
+    /// (STACK-DEPTH-REFACTOR.md C4). The `YIELD` arm reads the top, the
+    /// innermost, to snapshot the right instance. A throw can leave a body
+    /// resumed in place while the entries of nested dispatches above it
+    /// still wait for their drivers to pop them, so that body's frame drops
+    /// its own entry, by its `call_depth_base`.
     gen_run_stack: Vec<GenRunFrame>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),

@@ -1328,6 +1328,150 @@ impl Interp {
         self.ordinary_get(code, inst, id, receiver)
     }
 
+    /// A `[[Get]]` of `key` for `receiver` from `leg` on
+    /// (STACK-DEPTH-REFACTOR.md B9), for the step that re-entered `mop_get`:
+    /// [`Self::ordinary_get`]'s at a prototype it delegates to. The read then
+    /// runs to its end in [`Self::get_legs`]'s loop, one frame chain however
+    /// many objects it crosses. A Proxy's forward to its target still enters
+    /// `mop_get_with_proxy_metering` once, as before, so that a getter or trap
+    /// one crossing away runs under the frames it always did; the loop takes
+    /// over at that target's next Proxy.
+    #[inline(never)]
+    pub(super) fn get_from(
+        &mut self,
+        code: &[u8],
+        leg: GetLeg,
+        key: ReadKey,
+        receiver: Slot,
+    ) -> Result<Slot, Step> {
+        self.with_forwarding_walk(|vm, held| vm.get_legs(code, leg, key, receiver, held))
+    }
+
+    /// The rest of a `[[Get]]` from `leg` on. A read that crosses from an
+    /// ordinary object to a Proxy prototype and on to the Proxy's ordinary
+    /// target re-entered `mop_get` and `mop_get_with_proxy_metering` at each
+    /// crossing, a native frame chain and a unit per object. This takes each
+    /// leg in turn instead: it charges the next object the unit its guarded
+    /// entry charged, adds it to the units the walk holds (`held`, released
+    /// when the read returns, as the recursion released them), and meters the
+    /// object as that entry did, so `native_depth` and the meter at each step
+    /// are what the recursion had and a prototype cycle through a Proxy halts
+    /// at the same depth.
+    pub(super) fn get_legs(
+        &mut self,
+        code: &[u8],
+        mut leg: GetLeg,
+        key: ReadKey,
+        receiver: Slot,
+        held: &mut usize,
+    ) -> Result<Slot, Step> {
+        loop {
+            let (next, metering) = match leg {
+                GetLeg::Value(value) => return Ok(value),
+                GetLeg::Prototype(parent) => (parent, self.get_entry_metering(parent, key)),
+                GetLeg::Target(target, metering) => (target, metering),
+            };
+            // The unit the guarded entry charged.
+            self.forwarding_hop(held)?;
+            // `mop_get_with_proxy_metering_inner`'s first step. Each leg runs
+            // out of line, so that a getter or trap it calls runs under its
+            // frame and this loop's small one alone.
+            leg = if self.proxies.contains_key(&next) {
+                self.proxy_get_leg(code, next, key, receiver, metering, held)?
+            } else {
+                self.mop_get_leg(code, next, key, receiver, metering)?
+            };
+        }
+    }
+
+    /// How [`Self::mop_get`] meters a read of `key` from `inst`: as the read
+    /// of the Array Iterator's active `get` trap if that read is aimed here,
+    /// else as an ordinary `[[Get]]`.
+    fn get_entry_metering(&self, inst: crate::value::SlotIndex, key: ReadKey) -> GetMetering {
+        match self
+            .array_iterator_proxy_get_context
+            .filter(|context| context.target == inst)
+            .filter(|context| self.refresh_read_key(context.key) == key)
+        {
+            Some(context) => GetMetering {
+                proxy_trap: context.trap_metering,
+                terminal_wrapper: context.meter_terminal_wrapper,
+                forwarded_target: false,
+                after_active_trap: true,
+            },
+            None => GetMetering::default(),
+        }
+    }
+
+    /// One leg of [`Self::get_legs`] at an object that is not a Proxy:
+    /// [`Self::mop_get_with_proxy_metering_inner`] for `inst`, which ends with
+    /// the value or at the next object the read goes on with. Kept apart from
+    /// that body, which every `[[Get]]` runs, so that its frame and the
+    /// inlining around it stay as they were: keep the two in step.
+    #[inline(never)]
+    fn mop_get_leg(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        key: ReadKey,
+        receiver: Slot,
+        metering: GetMetering,
+    ) -> Result<GetLeg, Step> {
+        if metering.forwarded_target {
+            let terminal_is_wrapper = self.wrapper_data.contains_key(&inst);
+            self.charge_and_check(if metering.after_active_trap {
+                if metering.proxy_trap == ARRAY_ITERATOR_PROXY_VALUE_METERING {
+                    ARRAY_ITERATOR_PROXY_VALUE_ACTIVE_FORWARD_TARGET_METERING
+                } else {
+                    ARRAY_ITERATOR_PROXY_ACTIVE_FORWARD_TARGET_METERING
+                }
+            } else if metering.proxy_trap == ARRAY_ITERATOR_PROXY_VALUE_METERING
+                && !terminal_is_wrapper
+            {
+                ARRAY_ITERATOR_PROXY_VALUE_FORWARD_TARGET_METERING
+            } else {
+                ARRAY_ITERATOR_PROXY_FORWARD_TARGET_METERING
+            })?;
+        }
+        if metering.terminal_wrapper {
+            if let Some(value) = self.wrapper_data.get(&inst) {
+                if value.kind == Kind::String {
+                    self.charge_and_check(if metering.forwarded_target {
+                        ARRAY_ITERATOR_PROXY_STRING_RECEIVER_METERING
+                    } else {
+                        ARRAY_ITERATOR_STRING_RECEIVER_METERING
+                    })?;
+                } else if matches!(value.kind, Kind::Symbol | Kind::BigInt) {
+                    self.meter
+                        .tick_raw(ARRAY_ITERATOR_WIDE_PRIMITIVE_RECEIVER_METERING);
+                }
+            }
+        }
+        let id = match key {
+            ReadKey::Id(id) => id,
+            ReadKey::Index(index) => {
+                return self
+                    .uninterned_index_get(code, inst, index, receiver)
+                    .map(GetLeg::Value)
+            }
+        };
+        if self.find_property(inst, id).is_none() {
+            if let Some(&typed_array) = self.typed_arrays.get(&inst) {
+                if let Some(index) = self.ta_numeric_index_at(id, 0) {
+                    return Ok(GetLeg::Value(
+                        self.ta_indexed_element_get(typed_array, index),
+                    ));
+                }
+            }
+            if let Some(d) = self.exotic_own_descriptor(inst, id) {
+                if d.is_data() {
+                    return Ok(GetLeg::Value(d.value.unwrap_or_else(Slot::undefined)));
+                }
+            }
+        }
+        self.ordinary_get_walk(code, inst, id, receiver)
+    }
+
     /// Whether a RegExp property lookup reaches the VM's implicit intrinsic
     /// accessor without encountering an observable own/inherited override.
     /// The default `source` and `flags` accessors are represented by the
@@ -1597,6 +1741,125 @@ impl Interp {
             }
         }
         self.ordinary_set(code, inst, id, value, receiver)
+    }
+
+    /// [`Self::proxy_set`]'s `[[Set]]` of the target a Proxy forwarded to, not
+    /// itself a Proxy, which re-entered `mop_set` (STACK-DEPTH-REFACTOR.md
+    /// B9): the assignment runs to its end in [`Self::set_legs`]'s loop, one
+    /// frame chain however many objects it crosses. [`Self::get_from`] for an
+    /// assignment, entered from the other side of a crossing:
+    /// [`Self::ordinary_set`]'s delegation to a Proxy prototype still enters
+    /// `mop_set` once, as before, since LLVM folds that entry into
+    /// `ordinary_set` and a `set` trap there runs under `proxy_set`'s frame
+    /// alone; the loop takes over at the Proxy's forward.
+    #[inline(never)]
+    pub(super) fn set_from(
+        &mut self,
+        code: &[u8],
+        target: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<bool, Step> {
+        self.with_forwarding_walk(|vm, held| {
+            vm.set_legs(code, SetLeg::Next(target), id, value, receiver, held)
+        })
+    }
+
+    /// The rest of a `[[Set]]` from `leg` on: [`Self::get_legs`]'s loop for
+    /// an assignment. Each object it goes on with is charged the unit
+    /// `mop_set` charged it and held until the assignment returns, so a
+    /// setter, a trap or the receiver's update at the end runs at the depth
+    /// the recursion ran it.
+    fn set_legs(
+        &mut self,
+        code: &[u8],
+        mut leg: SetLeg,
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+        held: &mut usize,
+    ) -> Result<bool, Step> {
+        loop {
+            let next = match leg {
+                SetLeg::Done(accepted) => return Ok(accepted),
+                SetLeg::Next(next) => next,
+            };
+            // The unit `mop_set` or a forwarding hop charged.
+            self.forwarding_hop(held)?;
+            // `mop_set_inner` for the next object, a step at a time: each step
+            // runs out of line, so that a trap, a setter or the receiver's
+            // update runs under its frame and this loop's small one alone.
+            leg = if self.proxies.contains_key(&next) {
+                self.proxy_set_leg(code, next, id, value, receiver)?
+            } else if self.typed_arrays.contains_key(&next) {
+                match self.typed_array_set_leg(code, next, id, value, receiver)? {
+                    Some(accepted) => SetLeg::Done(accepted),
+                    None => self.ordinary_set_walk(code, next, id, value, receiver)?,
+                }
+            } else {
+                self.ordinary_set_walk(code, next, id, value, receiver)?
+            };
+        }
+    }
+
+    /// The Proxy step of [`Self::set_legs`]: one layer of `proxy_set`'s
+    /// forwarding loop, ending with the trap's result or at the target, Proxy
+    /// or not, which the recursive shape charged as a forwarding hop or
+    /// through `mop_set`.
+    #[inline(never)]
+    fn proxy_set_leg(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<SetLeg, Step> {
+        Ok(
+            match self.proxy_set_step(code, proxy, id, value, receiver)? {
+                ProxyStep::Done(accepted) => SetLeg::Done(accepted),
+                ProxyStep::Forward(target) => SetLeg::Next(target),
+            },
+        )
+    }
+
+    /// The TypedArray step of [`Self::set_legs`]: [`Self::mop_set_inner`]'s
+    /// integer-indexed element, which answers the whole `[[Set]]`, or `None`
+    /// for a key that names none, which the ordinary walk then takes. Kept
+    /// apart from that body, which every `[[Set]]` runs: keep the two in step.
+    #[inline(never)]
+    fn typed_array_set_leg(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<Option<bool>, Step> {
+        let Some(&ta) = self.typed_arrays.get(&inst) else {
+            return Ok(None);
+        };
+        let numeric_index = if self.is_symbol_key_id(id) {
+            None
+        } else {
+            self.scalar_key_text(id)
+                .and_then(|name| canonical_numeric_index_string(&name))
+        };
+        let Some(index) = numeric_index else {
+            return Ok(None);
+        };
+        let target = Slot::of(Kind::Reference, Payload::Reference(inst));
+        if self.same_value(target, receiver) {
+            self.ta_indexed_element_set(code, ta, index, value)?;
+            return Ok(Some(true));
+        }
+        if self.ta_valid_index(ta, index).is_none() {
+            return Ok(Some(true));
+        }
+        let key = self.property_key_slot(id)?;
+        self.set_data_on_receiver(code, receiver, key, value)
+            .map(Some)
     }
 
     /// `O.[[Delete]](P)`.

@@ -286,6 +286,9 @@ fn b(op: Opcode) -> u8 {
 thread_local! {
     pub(super) static GC_AT_STEP: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
     pub(super) static GC_HITS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// A step at which the dispatch loop panics, for the abort paths that
+    /// unwind native activations without returning a `Step`.
+    pub(super) static PANIC_AT_STEP: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
 #[test]
@@ -3858,4 +3861,603 @@ fn a_stale_evaluator_environment_row_restores_without_restoring_the_pin() {
         restored.functions[&function].global_env.is_null(),
         "the stale pin must be dropped, not applied"
     );
+}
+
+/// The nests the in-place tests run, each level calling the next through a
+/// call `RUN` enters in the caller's dispatch loop (STACK-DEPTH-REFACTOR.md
+/// C1, C2, C4, C7), and the innermost calling `bottom`: through a bound
+/// function, a Proxy that forwards to `f`, a Proxy whose `apply` trap calls
+/// `f`, `Reflect.apply`, `Reflect.construct`, a getter, a setter and a
+/// generator's `next`. Each defines `wrap`, which gives a function the same
+/// kind of call, and comes with its ceiling and the depth the refusal one
+/// level past it reports.
+const IN_PLACE_NESTS: [(&str, &str, usize, usize); 8] = [
+    (
+        "bound",
+        "function f(n, bottom) { return n > 0 ? f.bind(null, n - 1, bottom)() : bottom(); } \
+         function wrap(w) { return w.bind(null); }",
+        127,
+        2049,
+    ),
+    (
+        "forward",
+        "function f(n, bottom) { return n > 0 ? fp(n - 1, bottom) : bottom(); } \
+         var fp = new Proxy(f, {}); \
+         function wrap(w) { return new Proxy(w, {}); }",
+        119,
+        2056,
+    ),
+    (
+        "trap",
+        "function f(n, bottom) { return n > 0 ? ft(n - 1, bottom) : bottom(); } \
+         var ft = new Proxy(function () {}, { apply: function (t, s, a) { return f(a[0], a[1]); } }); \
+         function wrap(w) { return new Proxy(function () {}, { apply: function () { return w(); } }); }",
+        119,
+        2056,
+    ),
+    (
+        "Reflect.apply",
+        "function f(n, bottom) { return n > 0 ? Reflect.apply(f, null, [n - 1, bottom]) : bottom(); } \
+         function wrap(w) { return function () { return Reflect.apply(w, null, []); }; }",
+        63,
+        2064,
+    ),
+    (
+        "Reflect.construct",
+        "function f(n, bottom) { return n > 0 ? Reflect.construct(F, [n - 1, bottom]).v : bottom(); } \
+         function F(n, bottom) { this.v = f(n, bottom); } \
+         function wrap(w) { function W() { this.v = w(); } return function () { return Reflect.construct(W, []).v; }; }",
+        63,
+        2064,
+    ),
+    (
+        "getter",
+        "function f(n, bottom) { return n > 0 ? { get x() { return f(n - 1, bottom); } }.x : bottom(); } \
+         function wrap(w) { var o = { get x() { return w(); } }; return function () { return o.x; }; }",
+        119,
+        2056,
+    ),
+    (
+        "setter",
+        "function f(n, bottom) { if (n <= 0) return bottom(); var r; ({ set x(v) { r = f(v, bottom); } }).x = n - 1; return r; } \
+         function wrap(w) { var o = { set x(v) { w(); } }; return function () { o.x = 0; }; }",
+        119,
+        2056,
+    ),
+    (
+        "generator",
+        "function f(n, bottom) { if (n <= 0) return bottom(); var r; function* g() { r = f(n - 1, bottom); } g().next(); return r; } \
+         function wrap(w) { function* g() { w(); } return function () { g().next(); }; }",
+        63,
+        2064,
+    ),
+];
+
+fn in_place_machine(nest: &str, program: &str) -> (Interp, Vec<u8>) {
+    let source = format!("{nest} {program}");
+    let (code, symbols) = ironhorse_compile::compile_atoms(&source).unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&crate::parse_symbols(&symbols));
+    (m, code)
+}
+
+/// No charge outlives the crank: the depth is zero, the frames the halted
+/// activation retains hold none, and the next crank's nest completes at its
+/// ceiling and is refused one level past it, as with nested loops.
+fn assert_no_charge_survives(m: &mut Interp, nest: &(&str, &str, usize, usize), kind: &str) {
+    let &(name, nest, ceiling, refused_at) = nest;
+    assert_eq!(
+        m.native_depth, 0,
+        "{name} {kind}: native depth after the crank"
+    );
+    assert!(
+        m.call_stack.iter().all(|frame| frame.held == 0),
+        "{name} {kind}: a retained frame still holds units"
+    );
+    m.reattach_meter_host(Box::new(|_| true));
+    for (depth, completes) in [(ceiling, true), (ceiling + 1, false)] {
+        let (next, names) = ironhorse_compile::compile_atoms(&format!(
+            "{nest} f({depth}, function () {{ return 'bottom'; }})"
+        ))
+        .unwrap();
+        let next = m
+            .relink_crank(&next, &crate::parse_symbols(&names))
+            .unwrap();
+        let out = m.run(&next);
+        if completes {
+            assert!(out.completed, "{name} {kind}: f({depth}): {:?}", out.halt);
+            assert_eq!(out.result, "bottom", "{name} {kind}: f({depth})");
+        } else {
+            assert!(
+                matches!(
+                    out.halt,
+                    Halt::ReentryLimit { depth, limit: 2048 } if depth == refused_at
+                ),
+                "{name} {kind}: f({depth}): {:?}",
+                out.halt
+            );
+        }
+        assert_eq!(
+            m.native_depth, 0,
+            "{name} {kind}: native depth after f({depth})"
+        );
+    }
+}
+
+#[test]
+fn in_place_frames_release_their_charge_after_every_halt() {
+    let cases = [
+        ("StepLimit", "f(60, function () { while (true) {} })"),
+        ("MeterAbort", "f(60, function () { while (true) {} })"),
+        (
+            "StackOverflow",
+            "function deep() { return deep(); } f(60, deep)",
+        ),
+        ("ReentryLimit", "f(200, function () { return 0; })"),
+        ("Throw", "f(60, function () { throw new Error('bottom'); })"),
+    ];
+    for nest in &IN_PLACE_NESTS {
+        for (kind, program) in cases {
+            let (mut m, code) = in_place_machine(nest.1, program);
+            if kind == "MeterAbort" {
+                let mut checks = 0;
+                m.arm_meter(
+                    1,
+                    Box::new(move |_| {
+                        checks += 1;
+                        checks < 400
+                    }),
+                );
+            }
+            let out = if kind == "StepLimit" {
+                m.run_bounded(&code, 200_000)
+            } else {
+                m.run(&code)
+            };
+            assert!(
+                format!("{:?}", out.halt).starts_with(kind),
+                "{} {kind}: {:?}",
+                nest.0,
+                out.halt
+            );
+            assert!(
+                m.call_stack.len() > 50,
+                "{} {kind}: the halt must come from inside the in-place frames",
+                nest.0
+            );
+            assert_no_charge_survives(&mut m, nest, kind);
+        }
+    }
+}
+
+#[test]
+fn in_place_frames_release_their_charge_after_a_panic_or_heap_exhaustion() {
+    for nest in &IN_PLACE_NESTS {
+        // A panic unwinds every native activation without the loops'
+        // releases: the generic handler zeroes the depth and the frames'
+        // units.
+        let (mut m, code) = in_place_machine(nest.1, "f(60, function () { while (true) {} })");
+        PANIC_AT_STEP.with(|step| step.set(Some(200_000)));
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.run(&code)));
+        PANIC_AT_STEP.with(|step| step.set(None));
+        assert!(
+            panicked.is_err(),
+            "{}: the dispatch loop must panic",
+            nest.0
+        );
+        assert!(
+            m.call_stack.len() > 50,
+            "{}: the panic must come from inside the in-place frames",
+            nest.0
+        );
+        assert_no_charge_survives(&mut m, nest, "panic");
+
+        // So does heap exhaustion, which unwinds as a panic payload.
+        let (mut m, code) = in_place_machine(
+            nest.1,
+            "f(60, function () { var a = []; for (;;) a.push({}); })",
+        );
+        m.set_slot_ceiling(m.slots.capacity() + 2_000);
+        let out = m.run(&code);
+        m.set_slot_ceiling(u32::MAX);
+        assert!(
+            matches!(out.halt, Halt::HeapExhausted),
+            "{}: {:?}",
+            nest.0,
+            out.halt
+        );
+        assert_no_charge_survives(&mut m, nest, "HeapExhausted");
+    }
+}
+
+#[test]
+fn a_call_that_is_not_entered_in_place_releases_its_units() {
+    // `RUN` charges a Proxy layer's unit before it looks up the trap, and a
+    // `Reflect.apply`, `Reflect.construct` or generator method call's before it
+    // reads its operands, and `GET_PROPERTY` or `SET_PROPERTY` its light unit
+    // before it walks an ordinary object for an accessor. A revoked Proxy, a
+    // throwing `apply` getter, a trap that is not callable, a target that
+    // cannot be called or constructed, an argument list that is not an object
+    // or whose reads throw, a receiver that is not a generator, all throw
+    // before any frame holds the units; a native, bound or Proxy callee is
+    // called through `invoke_value` or `construct_value`. So is a native, bound
+    // or Proxy accessor, through `invoke_getter` or `invoke_setter`; a Proxy
+    // holder's trap that throws throws before any accessor is found; a typed
+    // array holder or parent, or a frozen property, takes no accessor; a
+    // running generator throws, and one completed, or not started for a
+    // `return` or `throw`, gives its result without its body; and an accessor
+    // or generator body run in place throws from its frame, a class one as
+    // its body begins.
+    // Each gives the units back, or 200 rounds leave the next nest no budget.
+    let (name, nest, ceiling, _) = IN_PLACE_NESTS[2];
+    for (setup, call) in [
+        (
+            "var r = Proxy.revocable(function () {}, {}); r.revoke(); var p = r.proxy;",
+            "p()",
+        ),
+        (
+            "var p = new Proxy(function () {}, { get apply() { throw 1; } });",
+            "p()",
+        ),
+        ("var p = new Proxy(function () {}, { apply: 1 });", "p()"),
+        ("var p = new Proxy(JSON.parse, {});", "p('{')"),
+        ("var p = new Proxy(JSON.parse, {});", "p('1')"),
+        (
+            "var p = new Proxy(function (f) { return f(); }, { apply: Reflect.apply });",
+            "p(function () { throw 2; })",
+        ),
+        (
+            "var p = new Proxy(new Proxy(function () {}, {}), {});",
+            "p()",
+        ),
+        (
+            "var p = new Proxy(function () {}, { apply: function () { throw 3; }.bind(null) });",
+            "p()",
+        ),
+        ("var p = 1;", "Reflect.apply(p, null, [])"),
+        ("var p = function () {};", "Reflect.apply(p, null, 1)"),
+        (
+            "var p = function () {};",
+            "Reflect.apply(p, null, { get length() { throw 4; } })",
+        ),
+        ("var p = JSON.parse;", "Reflect.apply(p, null, ['{'])"),
+        ("var p = Math.max;", "Reflect.apply(p, null, [1, 2])"),
+        (
+            "var p = function () { throw 5; }.bind(null);",
+            "Reflect.apply(p, null, [])",
+        ),
+        (
+            "var p = new Proxy(function () { throw 6; }, {});",
+            "Reflect.apply(p, null, [])",
+        ),
+        ("var p = () => 1;", "Reflect.construct(p, [])"),
+        (
+            "var p = function () {};",
+            "Reflect.construct(p, [], Math.max)",
+        ),
+        (
+            "var p = function () {};",
+            "Reflect.construct(p, { length: 1, get 0() { throw 7; } })",
+        ),
+        ("var p = RegExp;", "Reflect.construct(p, ['['])"),
+        ("var p = Array;", "Reflect.construct(p, [3])"),
+        ("var p = Date;", "Reflect.construct(p, [0])"),
+        (
+            "var p = new Proxy(function () { throw 8; }, {});",
+            "Reflect.construct(p, [])",
+        ),
+        (
+            "var p = Object.defineProperty([1, 2], 'g', { get: Array.prototype.join });",
+            "p.g",
+        ),
+        (
+            "var p = Object.defineProperty({}, 'g', { get: function () { throw 9; }.bind(null) });",
+            "p.g",
+        ),
+        (
+            "var p = Object.defineProperty({}, 'g', { get: new Proxy(function () { throw 10; }, {}) });",
+            "p.g",
+        ),
+        (
+            "var p = Object.defineProperty({}, 'g', { get: class {} });",
+            "p.g",
+        ),
+        (
+            "var p = Object.create(new Proxy({}, { get: function () { throw 11; } }));",
+            "p.g",
+        ),
+        ("var p = { get g() { throw 12; } };", "p.g"),
+        (
+            "var p = Object.defineProperty([], 's', { set: Array.prototype.push });",
+            "p.s = 1",
+        ),
+        (
+            "var p = Object.defineProperty({}, 's', { set: function () { throw 13; }.bind(null) });",
+            "p.s = 1",
+        ),
+        (
+            "var p = Object.defineProperty({}, 's', { set: new Proxy(function () { throw 14; }, {}) });",
+            "p.s = 1",
+        ),
+        (
+            "var p = Object.defineProperty({}, 's', { set: class {} });",
+            "p.s = 1",
+        ),
+        (
+            "var p = Object.create(new Proxy({}, { set: function () { throw 15; } }));",
+            "p.s = 1",
+        ),
+        ("var p = new Uint8Array(1);", "p.NaN = 1"),
+        ("var p = Object.create(new Uint8Array(1));", "p.NaN = 1"),
+        (
+            "var p = Object.freeze({ s: 1 });",
+            "(function () { 'use strict'; p.s = 2; })()",
+        ),
+        ("var p = { set s(v) { throw 16; } };", "p.s = 1"),
+        (
+            "var p = (function* () {})().next;",
+            "p.call({})",
+        ),
+        (
+            "function* g() { yield 1; } var p = g(); p.next(); p.next();",
+            "p.next()",
+        ),
+        ("function* g() { yield 1; } var p = g();", "g().return(1)"),
+        ("function* g() { yield 1; } var p = g();", "g().throw(17)"),
+        (
+            "function* g() { p.next(); } var p = g();",
+            "g(); p = g(); p.next()",
+        ),
+        (
+            "function* g() { yield 1; throw 18; } var p;",
+            "p = g(); p.next(); p.next()",
+        ),
+    ] {
+        let (mut m, code) = in_place_machine(
+            nest,
+            &format!(
+                "{setup} for (var i = 0; i < 200; i++) {{ try {{ {call}; }} catch (e) {{}} }} \
+                 f({ceiling}, function () {{ return 'bottom'; }})"
+            ),
+        );
+        let out = m.run(&code);
+        assert!(out.completed, "{name} {setup}: {:?}", out.halt);
+        assert_eq!(out.result, "bottom", "{name} {setup}");
+        assert_eq!(m.native_depth, 0, "{name} {setup}");
+        assert_eq!(m.held_total, 0, "{name} {setup}");
+    }
+}
+
+#[test]
+fn a_reflect_call_run_in_place_leaves_its_result_where_the_call_was() {
+    // The `Reflect` call's frame stays on the value stack under the target's
+    // frame; the target's `END`, or the `START` of a generator, async
+    // function or async generator, cuts both, so operands pending around the
+    // call see its result in its place, and the program leaves the stack
+    // empty. A construct's new target is the one `Reflect.construct` names.
+    let program = "function F(a) { this.a = a; } \
+        function G() {} \
+        function NT() { this.nt = new.target === G; } \
+        function* g(a) { yield a; yield a + 1; } \
+        async function af() { return 1; } \
+        async function* ag() {} \
+        var r = [0, Reflect.apply(function (a) { return a; }, null, [1]), 2].join() + ';' + \
+            [0, ...Reflect.apply(g, null, [5]), 9].join() + ';' + \
+            (10 + Reflect.construct(F, [4]).a * 3) + ';' + \
+            [Reflect.construct(NT, [], G).nt, Reflect.construct(NT, []).nt].join() + ';' + \
+            [typeof Reflect.apply(af, null, []).then, typeof Reflect.apply(ag, null, []).next, 'x'].join() + ';' + \
+            Reflect.apply(Reflect.apply, null, [function (a, b) { return a + b; }, null, [1, 2]]); r";
+    let (code, symbols) = ironhorse_compile::compile_atoms(program).unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&crate::parse_symbols(&symbols));
+    let out = m.run(&code);
+    assert!(out.completed, "{:?}", out.halt);
+    assert_eq!(
+        out.result,
+        "0,1,2;0,5,6,9;22;true,false;function,function,x;3"
+    );
+    assert!(m.stack.is_empty(), "{} slots left", m.stack.len());
+    assert_eq!(m.native_depth, 0);
+}
+
+#[test]
+fn a_getter_run_in_place_leaves_its_value_where_the_read_was() {
+    // A getter's `END`, or the `START` of a generator, async or async
+    // generator getter, pushes its result as the read's value and returns
+    // past the read, so operands pending around it see the value in its place,
+    // a method read through a getter is then called, and the program leaves
+    // the stack empty.
+    let program = "var o = { \
+            get one() { return 1; }, \
+            get self() { return this; }, \
+            get af() { return (async function () {})(); }, \
+            get m() { var self = this; return function (a) { return [self === o, a].join('/'); }; } \
+        }; \
+        Object.defineProperty(o, 'gen', { get: function* () { yield 7; } }); \
+        Object.defineProperty(o, 'agen', { get: async function* () {} }); \
+        Object.defineProperty(o, 'async', { get: async function () {} }); \
+        var r = [0, o.one, 2].join() + ';' + \
+            [0, ...o.gen, 9].join() + ';' + \
+            (10 + o.self.self.one * 3) + ';' + \
+            [typeof o.async.then, typeof o.agen.next, typeof o.af.then, 'x'].join() + ';' + \
+            o.m(4) + ';' + `${o.one}${o.self.one}`; r";
+    let (code, symbols) = ironhorse_compile::compile_atoms(program).unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&crate::parse_symbols(&symbols));
+    let out = m.run(&code);
+    assert!(out.completed, "{:?}", out.halt);
+    assert_eq!(
+        out.result,
+        "0,1,2;0,7,9;13;function,function,function,x;true/4;11"
+    );
+    assert!(m.stack.is_empty(), "{} slots left", m.stack.len());
+    assert_eq!(m.native_depth, 0);
+    assert_eq!(m.held_total, 0);
+}
+
+#[test]
+fn a_setter_run_in_place_leaves_the_value_assigned_where_the_assignment_was() {
+    // A setter's `END`, or the `START` of a generator, async or async
+    // generator setter, drops its result and pushes the value assigned, which
+    // reassigning its parameter or `arguments[0]` does not replace, and
+    // returns past the assignment, so operands pending around it see the
+    // value in its place and the program leaves the stack empty.
+    let program = "var log = []; \
+        var o = { \
+            set a(v) { log.push(v); return 'dropped'; }, \
+            set re(v) { v = 'reassigned'; arguments[0] = 'mapped'; log.push(v); } \
+        }; \
+        Object.defineProperty(o, 'gen', { set: function* (v) { log.push('never'); } }); \
+        Object.defineProperty(o, 'agen', { set: async function* (v) {} }); \
+        Object.defineProperty(o, 'async', { set: async function (v) { log.push('async' + v); } }); \
+        var r = [0, o.a = 1, 2].join() + ';' + \
+            (o.a = o.re = 3) + ';' + \
+            (10 + (o.gen = 4) * 3) + ';' + \
+            [o.agen = 5, o.async = 6, 'x'].join() + ';' + \
+            `${o.a = 7}${o.re = 8}` + ';' + log.join(); r";
+    let (code, symbols) = ironhorse_compile::compile_atoms(program).unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&crate::parse_symbols(&symbols));
+    let out = m.run(&code);
+    assert!(out.completed, "{:?}", out.halt);
+    assert_eq!(out.result, "0,1,2;3;22;5,6,x;78;1,mapped,3,async6,7,mapped");
+    assert!(m.stack.is_empty(), "{} slots left", m.stack.len());
+    assert_eq!(m.native_depth, 0);
+    assert_eq!(m.held_total, 0);
+}
+
+#[test]
+fn a_generator_resumed_in_place_leaves_its_result_where_the_call_was() {
+    // A generator body's `YIELD` and `END`, resumed by `next`, `return` or
+    // `throw`, push the `{value, done}` result where the call was, so
+    // operands pending around it see the result in its place; the program
+    // leaves the stack empty and no generator run entry behind.
+    let program = "function* g(a) { var x = yield a; try { yield x * 2; } finally { yield 'f'; } return 'r'; } \
+        var it = g(1); \
+        var r = [0, it.next().value, 2].join() + ';' + \
+            (10 + it.next(3).value * 3) + ';' + \
+            `${it.return(9).value}|${it.next().value}|${JSON.stringify(it.next())}` + ';' + \
+            [g(5).next(0).value, ...[g(6).next().value]].join() + ';'; \
+        function* h() { try { yield 1; } catch (e) { yield 'c' + e; } } \
+        var hi = h(); hi.next(); r += [hi.throw('t').value, hi.next().done].join(); r";
+    let (code, symbols) = ironhorse_compile::compile_atoms(program).unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&crate::parse_symbols(&symbols));
+    let out = m.run(&code);
+    assert!(out.completed, "{:?}", out.halt);
+    assert_eq!(out.result, "0,1,2;28;f|9|{\"done\":true};5,6;ct,true");
+    assert!(m.stack.is_empty(), "{} slots left", m.stack.len());
+    assert!(m.gen_run_stack.is_empty());
+    assert_eq!(m.native_depth, 0);
+    assert_eq!(m.held_total, 0);
+}
+
+#[test]
+fn a_generator_resumed_in_place_is_done_after_a_halt_in_its_body() {
+    // A halt or an uncaught throw inside a body resumed in place leaves the
+    // generator completed, as `resume_generator` left it once its nested
+    // loop returned: the next crank's `next` gives `{done: true}` rather
+    // than "generator is running".
+    let cases = [
+        ("StepLimit", "while (true) {}"),
+        ("MeterAbort", "while (true) {}"),
+        ("StackOverflow", "(function deep() { return deep(); })()"),
+        ("ReentryLimit", "f(200, function () { return 0; })"),
+        ("Throw", "throw new Error('body')"),
+    ];
+    for (kind, body) in cases {
+        let (mut m, code) = in_place_machine(
+            IN_PLACE_NESTS[7].1,
+            &format!("function* halted() {{ yield 0; {body}; }} var it = halted(); it.next(); f(20, function () {{ return it.next(); }})"),
+        );
+        if kind == "MeterAbort" {
+            let mut checks = 0;
+            m.arm_meter(
+                1,
+                Box::new(move |_| {
+                    checks += 1;
+                    checks < 400
+                }),
+            );
+        }
+        let out = if kind == "StepLimit" {
+            m.run_bounded(&code, 200_000)
+        } else {
+            m.run(&code)
+        };
+        assert!(
+            format!("{:?}", out.halt).starts_with(kind),
+            "{kind}: {:?}",
+            out.halt
+        );
+        m.reattach_meter_host(Box::new(|_| true));
+        let (next, names) = ironhorse_compile::compile_atoms("JSON.stringify(it.next())").unwrap();
+        let next = m
+            .relink_crank(&next, &crate::parse_symbols(&names))
+            .unwrap();
+        let out = m.run(&next);
+        assert!(out.completed, "{kind}: {:?}", out.halt);
+        assert_eq!(out.result, "{\"done\":true}", "{kind}");
+        assert_eq!(m.native_depth, 0, "{kind}");
+    }
+}
+
+#[test]
+fn a_throw_past_a_generator_resumed_in_place_completes_each_generator_it_leaves() {
+    // A generator `resume_generator` still runs in a nested loop, inside a
+    // body resumed in place, throws to a handler below both. The throw
+    // leaves the in-place frame before the nested loop returns, so that
+    // frame must drop its own run entry, not the inner generator's still
+    // above it: both generators end completed, not "running" (the C4
+    // pre-commit review's regression).
+    let program = "function* boom() { throw new Error('boom'); } \
+        var resumers = [function (g) { return Reflect.apply(g.next, g, []); }, function (g) { return g.next.call(g); }]; \
+        var out = []; \
+        for (var i = 0; i < resumers.length; i++) { \
+            var inner = boom(); \
+            var outer = (function* () { resumers[i](inner); yield 1; })(); \
+            try { outer.next(); } catch (e) { out.push(String(e)); } \
+            out.push(JSON.stringify(outer.next()), JSON.stringify(inner.next())); \
+        } \
+        out.join('|')";
+    let (code, symbols) = ironhorse_compile::compile_atoms(program).unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&crate::parse_symbols(&symbols));
+    let out = m.run(&code);
+    assert!(out.completed, "{:?}", out.halt);
+    let once = "Error: boom|{\"done\":true}|{\"done\":true}";
+    assert_eq!(out.result, format!("{once}|{once}"));
+    assert!(m.gen_run_stack.is_empty());
+    assert_eq!(m.native_depth, 0);
+    assert_eq!(m.held_total, 0);
+}
+
+#[test]
+fn a_walk_that_throws_past_in_place_frames_restores_only_its_own_charge() {
+    // Each throw from inside an explicit-stack walk, caught below the
+    // in-place frame that called it, pops that frame inside the walk; the
+    // walk's restore must not charge its units again, or 200 rounds leave the
+    // next nest no budget (the C1 pre-commit review's regression).
+    for (name, nest, ceiling, _) in IN_PLACE_NESTS {
+        for walk in [
+            "JSON.parse('{')",
+            "JSON.stringify({ toJSON: function () { throw 1; } })",
+            "JSON.parse('{\"a\":[1]}', function (k, w) { if (k === 'a') throw 2; return w; })",
+            "[[1]].flatMap(function () { throw 3; })",
+        ] {
+            let (mut m, code) = in_place_machine(
+                nest,
+                &format!(
+                    "function w() {{ return {walk}; }} var wb = wrap(w); \
+                     for (var i = 0; i < 200; i++) {{ try {{ wb(); }} catch (e) {{}} }} \
+                     f({ceiling}, function () {{ return 'bottom'; }})"
+                ),
+            );
+            let out = m.run(&code);
+            assert!(out.completed, "{name} {walk}: {:?}", out.halt);
+            assert_eq!(out.result, "bottom", "{name} {walk}");
+            assert_eq!(m.native_depth, 0, "{name} {walk}");
+            assert_eq!(m.held_total, 0, "{name} {walk}");
+        }
+    }
 }

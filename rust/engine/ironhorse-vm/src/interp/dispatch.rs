@@ -19,14 +19,15 @@
 //! through `dispatch_halt_flow!`/`dispatch_result_flow!`, the loop macros'
 //! twins with the same ownership and metering checks.
 //! `tests/dispatch_loop_control_transfer.rs` locks this boundary and its roster.
+use super::invoke::{runs_callee_in_place, RunCall};
 use super::{
     branch_target, cannot_coerce_to_object, canonicalize_nan, cesu8_to_units, count_new_locals,
     to_int32, to_number, unary_minus, units_to_be16, ArithOp, AsyncGeneratorState, BitOp,
-    CatchJump, GeneratorState, Halt, Interp, Kind, MeterCheck, Native, NativeMethod, Opcode,
-    Payload, RelOp, ResumeStatus, Slot, Step, Suspension, BIGINT_LITERAL_METERING,
+    CatchJump, FrameReturn, GeneratorState, Halt, Interp, Kind, MeterCheck, Native, NativeMethod,
+    Opcode, Payload, RelOp, ResumeStatus, Slot, Step, Suspension, BIGINT_LITERAL_METERING,
     BIGINT_NEG_FRAME_METERING, BOUNDED_RUN_SLOT_CEILING, FUNCTION_LOCAL_METERING, HEAVY_FRAME_COST,
-    USING_DECL_METERING, USING_RESOURCE_METERING, WITH_ENV_SETUP_METERING, XS_DONT_DELETE_FLAG,
-    XS_DONT_ENUM_FLAG, XS_DONT_SET_FLAG,
+    LIGHT_FRAME_COST, USING_DECL_METERING, USING_RESOURCE_METERING, WITH_ENV_SETUP_METERING,
+    XS_DONT_DELETE_FLAG, XS_DONT_ENUM_FLAG, XS_DONT_SET_FLAG,
 };
 use crate::DecodeError;
 
@@ -182,6 +183,7 @@ impl Interp {
     /// inner loop's many early returns; every re-entry site
     /// (`run_callback`/`step_async`/`step_async_generator`/`resume_generator`)
     /// calls back through here, so their native recursion is counted uniformly.
+    #[inline]
     pub(super) fn dispatch_at(
         &mut self,
         code: &[u8],
@@ -194,6 +196,11 @@ impl Interp {
             return halt;
         }
         let halt = self.dispatch_at_inner(code, start_pc, return_depth);
+        // Frames this loop ran in place and left on the call stack release
+        // their charge now, where the nested loops they replace released it.
+        if self.call_stack.len() > return_depth {
+            self.release_held_above(return_depth);
+        }
         self.leave_native_frame(HEAVY_FRAME_COST);
         halt
     }
@@ -238,6 +245,10 @@ impl Interp {
                     assert_eq!(super::tests::refusal_state(self), before);
                     assert!(!self.gc_failed);
                     super::tests::GC_HITS.with(|hits| hits.set(hits.get() + 1));
+                }
+                if super::tests::PANIC_AT_STEP.with(|step| step.get() == Some(self.n_dispatched)) {
+                    super::tests::PANIC_AT_STEP.with(|step| step.set(None));
+                    panic!("PANIC_AT_STEP");
                 }
             }
             if self.n_dispatched >= self.step_limit {
@@ -527,14 +538,21 @@ impl Interp {
                 // against the pin's raw meter.
                 XS_CODE_SET_PROPERTY => {
                     let id = operand_id(code, pc, 1);
-                    dispatch_result!(
+                    match dispatch_result!(
                         self.dispatch_set_property(code, id),
                         pc,
                         self,
                         return_depth,
                         code
-                    );
-                    pc += ilen;
+                    ) {
+                        None => pc += ilen,
+                        // A setter run in place (STACK-DEPTH-REFACTOR.md
+                        // C7): it returns past this assignment.
+                        Some(body_start) => {
+                            self.set_return_pc(pc + ilen);
+                            pc = body_start;
+                        }
+                    }
                 }
                 // `o.k`. Stack: [.., objectRef] → [.., value]. The handler
                 // calls `mxBehaviorGetProperty` directly (no `mxGetID`
@@ -543,14 +561,21 @@ impl Interp {
                 // repeated `o.a;` adds only its dispatch computrons).
                 XS_CODE_GET_PROPERTY => {
                     let id = operand_id(code, pc, 1);
-                    dispatch_result!(
+                    match dispatch_result!(
                         self.dispatch_get_property(code, id),
                         pc,
                         self,
                         return_depth,
                         code
-                    );
-                    pc += ilen;
+                    ) {
+                        None => pc += ilen,
+                        // A getter run in place (STACK-DEPTH-REFACTOR.md
+                        // C7): it returns past this read.
+                        Some(body_start) => {
+                            self.set_return_pc(pc + ilen);
+                            pc = body_start;
+                        }
+                    }
                 }
                 XS_CODE_DELETE_PROPERTY => {
                     dispatch_flow!(self.exec_delete_property(code, pc, return_depth, ilen), pc)
@@ -2631,12 +2656,28 @@ impl Interp {
                     code
                 );
             }
-            dispatch_result_flow!(
-                self.call_native_method(m, base, argc, code),
-                self,
-                return_depth,
-                code
-            );
+            if runs_callee_in_place(m) {
+                // `Reflect.apply` / `Reflect.construct` and a generator's
+                // `next` / `return` / `throw`: a target that is a user
+                // function, or a generator's body, over this loop's buffer
+                // runs in this loop (STACK-DEPTH-REFACTOR.md C2, C4); any
+                // other is called as the native called it.
+                if let Some(body_start) = dispatch_result_flow!(
+                    self.native_run_call(m, base, argc, ret_pc, code),
+                    self,
+                    return_depth,
+                    code
+                ) {
+                    return Flow::Next(body_start);
+                }
+            } else {
+                dispatch_result_flow!(
+                    self.call_native_method_in_place(m, base, argc, code),
+                    self,
+                    return_depth,
+                    code
+                );
+            }
             if self.check_meter() == MeterCheck::Abort {
                 return Flow::Exit(Step::Host(Halt::MeterAbort));
             }
@@ -2685,52 +2726,80 @@ impl Interp {
                     Err(halt) => dispatch_halt_flow!(halt, self, return_depth, code),
                 }
             }
-            let result = dispatch_result_flow!(
-                self.call_bound_frame(code, bf, base, argc),
+            // BoundFunction.[[Call]] is ordinary abstract Call
+            // redispatch: prepend this wrapper's arguments,
+            // substitute its `this`, and repeat for a chain. A target
+            // that is a user function over this loop's buffer runs in
+            // this loop (STACK-DEPTH-REFACTOR.md C1); any other goes
+            // through the shared dispatcher, so user/native/method
+            // targets have identical semantics at opcode and callback
+            // call sites.
+            match dispatch_result_flow!(
+                self.bound_call(bf, base, argc, ret_pc),
                 self,
                 return_depth,
                 code
-            );
-            self.push(result);
+            ) {
+                RunCall::Entered(body_start) => return Flow::Next(body_start),
+                RunCall::Call(target, receiver, args) => {
+                    let result = dispatch_result_flow!(
+                        self.invoke_value(code, target, receiver, &args),
+                        self,
+                        return_depth,
+                        code
+                    );
+                    self.push(result);
+                }
+            }
             if self.check_meter() == MeterCheck::Abort {
                 return Flow::Exit(Step::Host(Halt::MeterAbort));
             }
             pc = ret_pc;
         } else if let Some((px, base)) = func_ref.filter(|(f, _)| self.proxies.contains_key(f)) {
-            // `p(...)` / `new p(...)`: collect the frame's args and
-            // receiver, clear the frame, and run the proxy's
+            // `p(...)` / `new p(...)`: run the proxy's
             // `[[Call]]`/`[[Construct]]` (its `apply`/`construct`
-            // trap, or the target).
-            let args =
-                dispatch_result_flow!(self.frame_arguments(base, argc), self, return_depth, code);
-            let this = self
-                .stack
-                .get(base)
-                .copied()
-                .unwrap_or_else(Slot::undefined);
-            let nt = self.proxy_construct_new_target(base, px);
-            self.stack.truncate(base);
-            let result = if has_target {
+            // trap, or the target) on the frame's args and receiver.
+            if has_target {
+                let args = dispatch_result_flow!(
+                    self.frame_arguments(base, argc),
+                    self,
+                    return_depth,
+                    code
+                );
+                let nt = self.proxy_construct_new_target(base, px);
+                self.stack.truncate(base);
                 // A Proxy takes its `new.target` as an argument, never from
                 // the latch, which nothing on this path would consume: left
                 // set, it leaked into the next construct, so a later plain
                 // `new Map()` built a subclass instance.
                 self.pending_new_target = None;
-                dispatch_result_flow!(
+                let result = dispatch_result_flow!(
                     self.proxy_construct(code, px, &args, nt),
                     self,
                     return_depth,
                     code
-                )
+                );
+                self.push(result);
             } else {
-                dispatch_result_flow!(
-                    self.proxy_call(code, px, this, &args),
+                // A trap or target that is a user function over this
+                // loop's buffer runs in this loop (STACK-DEPTH-REFACTOR.md
+                // C1); any other is called here, inside the layer's light
+                // unit.
+                match dispatch_result_flow!(
+                    self.proxy_run_call(code, px, base, argc, ret_pc),
                     self,
                     return_depth,
                     code
-                )
-            };
-            self.push(result);
+                ) {
+                    RunCall::Entered(body_start) => return Flow::Next(body_start),
+                    RunCall::Call(callee, receiver, args) => {
+                        let result = self.invoke_value(code, callee, receiver, &args);
+                        self.leave_native_frame(LIGHT_FRAME_COST);
+                        let result = dispatch_result_flow!(result, self, return_depth, code);
+                        self.push(result);
+                    }
+                }
+            }
             if self.check_meter() == MeterCheck::Abort {
                 return Flow::Exit(Step::Host(Halt::MeterAbort));
             }
@@ -4003,14 +4072,34 @@ impl Interp {
         // a constructor's completion is its `this` instance unless
         // the body explicitly returned an object.
         let ret = dispatch_result_flow!(self.end_completion(op), self, return_depth, code);
-        let resume = self.leave_call_to_frame_base();
-        self.push(ret);
-        let pc = resume;
-        // Returning into a JS caller: `mxFirstCode()` checks.
-        if self.check_meter() == MeterCheck::Abort {
+        let returns = self.frame_returns();
+        let ret = self.frame_result(returns, ret);
+        let pc = self.leave_call_to_frame_base();
+        if returns == FrameReturn::Generator {
+            self.push_generator_done(ret);
+        } else {
+            self.push(ret);
+        }
+        // Returning into a JS caller: `mxFirstCode()` checks, except into
+        // the property read or assignment an accessor run in place returns
+        // to (C7). A generator's body run in place (C4) returns to `RUN`'s
+        // call, which checked once the native returned.
+        if matches!(returns, FrameReturn::Call | FrameReturn::Generator)
+            && self.check_meter() == MeterCheck::Abort
+        {
             return Flow::Exit(Step::Host(Halt::MeterAbort));
         }
         Flow::Next(pc)
+    }
+
+    /// `END` of a generator's body resumed in place (STACK-DEPTH-REFACTOR.md
+    /// C4), its frame left, which completed the generator: push the
+    /// `{value: ret, done: true}` result where `RUN`'s call was.
+    #[cold]
+    #[inline(never)]
+    fn push_generator_done(&mut self, ret: Slot) {
+        let result = self.new_generator_result(ret, true);
+        self.push(result);
     }
 
     // `return` (`XS_CODE_RETURN`, xsRun.c:1080): the top-level
@@ -4069,10 +4158,16 @@ impl Interp {
                 "start_generator:frame-underflow",
             )));
         }
-        let resume = self.leave_call();
+        // To the frame base, as `END` returns: the stack is there already,
+        // unless the frame begins below its own slots (a `Reflect` call's
+        // target run in place, STACK-DEPTH-REFACTOR.md C2). An accessor run
+        // in place returns as `END` returns it (C7).
+        let returns = self.frame_returns();
+        let gen_slot = self.frame_result(returns, gen_slot);
+        let resume = self.leave_call_to_frame_base();
         self.push(gen_slot);
         pc = resume;
-        if self.check_meter() == MeterCheck::Abort {
+        if returns == FrameReturn::Call && self.check_meter() == MeterCheck::Abort {
             return Flow::Exit(Step::Host(Halt::MeterAbort));
         }
         Flow::Next(pc)
@@ -4083,7 +4178,9 @@ impl Interp {
     // temporaries + resume cursor) back into the `generators` table
     // and unwind to the `resume_generator` driver via
     // [`Step::Yielded`], carrying the yielded value (the `.next`
-    // result). `YIELD_STAR` uses the same suspension machinery,
+    // result), or, for a body resumed in place (STACK-DEPTH-REFACTOR.md
+    // C4), return it to `RUN`'s call in this loop. `YIELD_STAR` uses the
+    // same suspension machinery,
     // carrying the delegate's iterator-result object as-is.
     /// The dispatch loop's `YIELD` arm, which also runs `YIELD_STAR`.
     #[inline(never)]
@@ -4140,7 +4237,29 @@ impl Interp {
             g.state = GeneratorState::SuspendedYield;
             g.frame = Some(frame);
         }
+        if self.frame_returns() == FrameReturn::Generator {
+            // A body resumed in place (STACK-DEPTH-REFACTOR.md C4) returns
+            // to `RUN`'s call as its driver returned through the native,
+            // which checked the meter once the native returned.
+            let pc = self.leave_yield_in_place(yielded);
+            if self.check_meter() == MeterCheck::Abort {
+                return Flow::Exit(Step::Host(Halt::MeterAbort));
+            }
+            return Flow::Next(pc);
+        }
         Flow::Exit(Step::Yielded(yielded))
+    }
+
+    /// `YIELD` from a generator's body resumed in place (C4), once the body
+    /// is suspended: leave its frame, which cuts the call's frame and drops
+    /// the generator's run entry, and push the yielded result where the
+    /// call's was. Returns where `RUN`'s caller resumes.
+    #[cold]
+    #[inline(never)]
+    fn leave_yield_in_place(&mut self, yielded: Slot) -> usize {
+        let resume = self.leave_call_to_frame_base();
+        self.push(yielded);
+        resume
     }
 
     // ---- async functions --------------------------------
@@ -4174,10 +4293,16 @@ impl Interp {
                 "start_async_generator:frame-underflow",
             )));
         }
-        let resume = self.leave_call();
+        // To the frame base, as `END` returns: the stack is there already,
+        // unless the frame begins below its own slots (a `Reflect` call's
+        // target run in place, STACK-DEPTH-REFACTOR.md C2). An accessor run
+        // in place returns as `END` returns it (C7).
+        let returns = self.frame_returns();
+        let slot = self.frame_result(returns, slot);
+        let resume = self.leave_call_to_frame_base();
         self.push(slot);
         pc = resume;
-        if self.check_meter() == MeterCheck::Abort {
+        if returns == FrameReturn::Call && self.check_meter() == MeterCheck::Abort {
             return Flow::Exit(Step::Host(Halt::MeterAbort));
         }
         Flow::Next(pc)
@@ -4237,10 +4362,16 @@ impl Interp {
                 "start_async:frame-underflow",
             )));
         }
-        let resume = self.leave_call();
+        // To the frame base, as `END` returns: the stack is there already,
+        // unless the frame begins below its own slots (a `Reflect` call's
+        // target run in place, STACK-DEPTH-REFACTOR.md C2). An accessor run
+        // in place returns as `END` returns it (C7).
+        let returns = self.frame_returns();
+        let promise_slot = self.frame_result(returns, promise_slot);
+        let resume = self.leave_call_to_frame_base();
         self.push(promise_slot);
         pc = resume;
-        if self.check_meter() == MeterCheck::Abort {
+        if returns == FrameReturn::Call && self.check_meter() == MeterCheck::Abort {
             return Flow::Exit(Step::Host(Halt::MeterAbort));
         }
         Flow::Next(pc)

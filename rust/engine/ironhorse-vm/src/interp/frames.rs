@@ -95,19 +95,24 @@ impl Interp {
     /// `native_depth` where it found it, but an error leaves the units of
     /// every level still open charged. The recursion released them on its way
     /// out; this restores the depth on every return path so none leaks across
-    /// a crank.
+    /// a crank. A throw from inside the walk can pop frames from before it
+    /// that held units for a call run in place (§4.5): they released them as
+    /// they were popped, where the recursion released them only after the
+    /// walk, so the depth restored is less what they released.
     #[inline(always)]
     pub(super) fn with_native_depth_restored<T>(
         &mut self,
         f: impl FnOnce(&mut Self) -> Result<T, Step>,
     ) -> Result<T, Step> {
         let base = self.native_depth;
+        let held = self.held_total;
         let result = f(self);
         debug_assert!(
             result.is_err() || self.native_depth == base,
             "an explicit-stack walk returned with its levels still charged"
         );
-        self.native_depth = base;
+        debug_assert!(self.held_total <= held, "a walk left frames holding units");
+        self.native_depth = base - held.saturating_sub(self.held_total);
         result
     }
 
@@ -412,6 +417,8 @@ impl Interp {
             target_func: self.target_func,
             ret_pc,
             stack_base: base,
+            held: 0,
+            returns: FrameReturn::Call,
         });
         self.switch_environment(self.functions[&func].global_env);
         self.result = Slot::undefined();
@@ -482,6 +489,46 @@ impl Interp {
         }
     }
 
+    /// Set where the frame just entered returns to.
+    pub(super) fn set_return_pc(&mut self, ret_pc: usize) {
+        debug_assert!(!self.call_stack.is_empty(), "no frame was entered");
+        if let Some(caller) = self.call_stack.last_mut() {
+            caller.ret_pc = ret_pc;
+        }
+    }
+
+    /// How the current frame returns ([`FrameReturn`]).
+    pub(super) fn frame_returns(&self) -> FrameReturn {
+        self.call_stack
+            .last()
+            .map_or(FrameReturn::Call, |caller| caller.returns)
+    }
+
+    /// What the current frame, returning `result` as `returns` says, gives
+    /// its caller: for a setter, the value it was entered with, which its
+    /// argument list still holds (a frame's list is replaced only as frames
+    /// are entered, left, captured or parked, and never written as the frame
+    /// runs); for any other frame, `result`. Read before the frame is left.
+    #[inline(always)]
+    pub(super) fn frame_result(&self, returns: FrameReturn, result: Slot) -> Slot {
+        if returns == FrameReturn::Setter {
+            return self.assigned_value();
+        }
+        result
+    }
+
+    /// The value a setter's frame was entered with ([`Self::frame_result`]).
+    /// Out of line: the `START_ASYNC` handler that returns through it sits on
+    /// every level of a nest of async calls.
+    #[cold]
+    #[inline(never)]
+    fn assigned_value(&self) -> Slot {
+        self.args
+            .first()
+            .copied()
+            .expect("a setter's frame holds the value assigned")
+    }
+
     /// Leave a call the way XS's `XS_CODE_END` does: `mxStack = mxFrameEnd`
     /// (xsRun.c:1063) resets the value stack to the frame's base *before*
     /// `*mxStack = *slot` writes the result, so whatever the body left above
@@ -496,9 +543,12 @@ impl Interp {
     /// values, not just the `call: not a function` it produced when the slot
     /// it displaced happened to be a callee.
     ///
-    /// Only the `END` family restores. The `START_*` opcodes hand a generator
-    /// or promise back at function *entry*, before any body has run and with
-    /// nothing to abandon.
+    /// The `END` family restores, and so do the non-boundary `START_*` arms,
+    /// which hand a generator or promise back at function *entry*: the stack
+    /// is already at the base there, except for a `Reflect` call's target run
+    /// in place (STACK-DEPTH-REFACTOR.md C2), whose frame begins at the
+    /// `Reflect` call's base. The boundary `START_*` arms keep a bare
+    /// `leave_call`: a frame run in place is never a loop's boundary frame.
     pub(super) fn leave_call_to_frame_base(&mut self) -> usize {
         let base = self.call_stack.last().map(|caller| caller.stack_base);
         let resume = self.leave_call();
@@ -535,6 +585,86 @@ impl Interp {
         self.cur_func = caller.cur_func;
         self.cur_target = caller.cur_target;
         self.target_func = caller.target_func;
+        // The frame's activation is over: release the units it held.
+        self.held_total -= caller.held;
+        self.leave_native_frame(caller.held);
+        if caller.returns == FrameReturn::Generator {
+            self.leave_generator_in_place();
+        }
         caller.ret_pc
+    }
+
+    /// Leaving a generator's body resumed in place (STACK-DEPTH-REFACTOR.md
+    /// C4), by `YIELD`, `END` or a throw unwinding past it: drop its run
+    /// entry and the resume status, as `resume_generator` did once its nested
+    /// loop returned, and complete the generator unless it suspended (a body
+    /// that ended or threw runs no more). A loop that halts leaves such frames
+    /// through [`Self::release_held_above`] instead. After a reset has cleared
+    /// the run stack there is no entry and nothing to do.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn leave_generator_in_place(&mut self) {
+        self.drop_generator_run(self.call_stack.len() + 1);
+    }
+
+    /// Drop the run entry of the generator whose body returns into the frame
+    /// at `call_depth_base - 1`, and the resume status, and complete that
+    /// generator if it is still executing. The entry is the topmost with that
+    /// base, though not always the top one: a throw unwinds frames before the
+    /// nested loops it crosses return, so the entries of bodies that
+    /// `resume_generator` runs above this frame may still be on the stack,
+    /// each to be popped by its own driver.
+    fn drop_generator_run(&mut self, call_depth_base: usize) {
+        let Some(at) = self
+            .gen_run_stack
+            .iter()
+            .rposition(|run| run.call_depth_base == call_depth_base)
+        else {
+            return;
+        };
+        let run = self.gen_run_stack.remove(at);
+        self.resume_status = ResumeStatus::NoStatus;
+        if let Some(g) = self.generators.get_mut(&run.gen) {
+            if g.state == GeneratorState::Executing {
+                g.state = GeneratorState::Completed;
+                g.frame = None;
+            }
+        }
+    }
+
+    /// Release the units held by the frames above `depth` (see
+    /// `CallerState::held`), as each nested `dispatch_at` released its own
+    /// charge on its way out, and clear them so a later pop releases nothing.
+    /// The dispatch loop that pushed them calls this when it exits with them
+    /// still on the call stack (a halt, or a throw no frame of it caught).
+    /// A generator's body among them is left as its `resume_generator` left
+    /// it on such an exit (C4): its run entry dropped and the generator
+    /// completed, innermost first, the frame kept for the reset to pop as a
+    /// call.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn release_held_above(&mut self, depth: usize) {
+        let mut held = 0;
+        for caller in self.call_stack.iter_mut().skip(depth) {
+            held += std::mem::take(&mut caller.held);
+        }
+        self.held_total -= held;
+        self.leave_native_frame(held);
+        for index in (depth..self.call_stack.len()).rev() {
+            if self.call_stack[index].returns == FrameReturn::Generator {
+                self.call_stack[index].returns = FrameReturn::Call;
+                self.drop_generator_run(index + 1);
+            }
+        }
+    }
+
+    /// Clear the units every frame on the call stack holds, without releasing
+    /// them: for the paths that reset `native_depth` itself, after which the
+    /// frames' charges are no longer in it.
+    pub(super) fn clear_held(&mut self) {
+        for caller in &mut self.call_stack {
+            caller.held = 0;
+        }
+        self.held_total = 0;
     }
 }

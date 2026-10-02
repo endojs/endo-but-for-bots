@@ -176,6 +176,11 @@ The prototype patches were measured in a scratch copy of the engine.
   After Phase 2, every Target 1 case should pass at Wasmtime's 512 KiB, in a Chromium Worker and
   on workerd with either tier pinned *(est.; each component measured separately)*.
   The exception is the trapped-Proxy ceilings: they stay expected traps until B10 (Phase 4).
+  As run, Phase 2 met that on the lane corpus, with Node standing in for the Chromium Worker,
+  except for the Proxy prototype cycle, which B9 cleared in Phase 3.
+  After Phase 3 every heavy family costs at most 186 B of stack per budget unit on Wasmtime, on
+  Node with either tier pinned and on the shadow stack, within Target 2 (§5, Phase 3,
+  "As run").
   Two parts of making the budget a true byte bound need decisions:
   - trapped Proxy nesting and the runtime compile seam, which need an L-effort change or a
     versioned release;
@@ -207,7 +212,8 @@ of exactly `NATIVE_STACK_BYTES` (`:42-55`).
 The compiler has separate counters, which also belong to the release contract:
 
 - `PARSER_STACK_BUDGET = 1024` (`ironhorse-compile/src/parser.rs:127`), checked in
-  `Parser::nested` (`:343`, `if self.depth + cost > PARSER_STACK_BUDGET`);
+  `Parser::nested` (`:343`, `if self.depth + cost > PARSER_STACK_BUDGET`), which D3 replaced
+  with the `charged!` macro and the same check;
 - `TREE_DEPTH_LIMIT = 2048` (`ironhorse-compile/src/ast.rs:166`), checked as nodes are built
   (`parser.rs:567`);
 - the RegExp compiler's `MAX_NESTING_DEPTH: u32 = 512` (`ironhorse-regexp/src/compile.rs:261`).
@@ -830,7 +836,7 @@ The native dispatchers charge at `invoke.rs:199` (`call_native`) and `invoke.rs:
 | Bound `[[Call]]` from RUN | `dispatch.rs:1663` `self.invoke_value(code, func, this, &args)` → `run_user_callback` | 16 | 126 | 5,632 | 11,997 | – | – |
 | Cross-segment call (a `Function`-made unit ↔ top level) | `call_cross_segment` → `dispatch_entered_cross_segment` → `dispatch_at` (`code.rs:137`) | 16 per crossing, 32 per level | 63 | 9,583 | 22,223 | 4,289 | – |
 | `eval`, indirect `eval`, `Compartment.evaluate` | `call_native(_method)` → `eval_source` → compile → `dispatch_at` (`eval.rs:164`) | 48 | 42 | 14,960 / 19,472 | 24,651 / 24,249 | 5,120 | – |
-| Proxy `apply` trap | `proxy_call` (light) → `invoke_value` → `dispatch_at` | 17 | 118 | 6,016 | 12,271 | – | – |
+| Proxy `apply` trap | `proxy_call` (light) → `invoke_value` → `dispatch_at` (C1 removed `proxy_call`) | 17 | 118 | 6,016 | 12,271 | – | – |
 | String/RegExp protocol with a guest callback: `replace(re, fn)`, a user `exec`, species | two `call_native_method` + `dispatch_at` | 48 | 42 (41 for species) | ≈23,450 | at ceiling 706,560-713,728 B | at ceiling 198-206 KiB (Node default) | – |
 | RegExp `lastIndex.valueOf`; `test` via a user `exec` | `call_native_method` → `regexp_exec_inner` → `regexp_last_index_length` → … → `dispatch_at` | 32 | 63 | at ceiling 978 KiB | at ceiling 961,536 B | at ceiling 286 KiB (Node default) | – |
 | Copied iterator setter (`iter-setter`) | kept off `call_native_method_inner` by `invoke.rs:316-317`; each level is a `mop_set` (light) and a `call_native_method` (heavy), `collection.rs:2822-2823` | 17 | – | 1,600 (212 KiB at the ceiling) | – | ≈689 | ≈834 |
@@ -841,6 +847,13 @@ The iterator-helper and `tagged-then` rows were measured for this revision
 `ReentryLimit { depth: 2064, limit: 2048 }`; `tagged-then`-61 returns and `tagged-then`-62
 halts at depth 2,062.
 Their frame chains were not traced.
+
+Phase 3 runs the bound `[[Call]]`, Proxy `apply` trap, accessor and synchronous generator rows
+in the caller's dispatch loop, and `Reflect.apply` and `Reflect.construct` when `RUN` calls
+them; async generators and the other rows still recurse.
+In the String/RegExp protocol row, the String method and the intrinsic RegExp method it calls
+now share one native activation, though the guest callback still re-enters through
+`dispatch_at` (§4.5, "As landed (Phase 3)").
 
 Where these bytes go: two monolithic frames, sized differently per host
 (`$S/stack/measure/top40_compact.txt`):
@@ -1781,6 +1794,34 @@ Re-run the array-iterator context check (`property.rs:1099-1114`) at each transi
 Effort M, not prototyped.
 After B1 alone, alt-get still costs 991 B N / 688 B WT per level.
 
+**As landed (Phase 3):** for id-keyed `[[Get]]` and `[[Set]]`; `[[HasProperty]]` and the
+index-keyed walks were already loops after B1.
+One edge of each crossing hands the rest of the walk to a loop: for a read, `ordinary_get`'s
+delegation to a Proxy prototype (`get_from`, `get_legs`); for an assignment, `proxy_set`'s
+forward to its target (`set_from`, `set_legs`).
+Each leg charges the next object the unit its guarded entry charged, through
+`forwarding_hop`, holds it until the operation returns, and meters the object as that entry
+did, the Array Iterator context check included.
+So `native_depth` and the meter at each step are what the recursion had, and a cycle halts with
+the same `ReentryLimit` at the same computron.
+The legs are out-of-line copies of the hot bodies (`mop_get_leg`, `ordinary_get_walk`,
+`proxy_get_leg`, `proxy_set_leg`, `typed_array_set_leg`, `ordinary_set_walk`).
+The other edge of each crossing still enters its guarded entry once, so a getter, setter or
+trap one crossing away runs under the frames it always did, and the loop takes over from the
+second crossing on.
+A first version that shared the hot bodies and sent every edge into the loop ran such a getter
+under the loop's 624-720 B frame, grew shapes outside the lane corpus by 160-576 B a level, and
+stopped LLVM inlining `to_primitive_with_hint` into `mop_get`, which grew `valueOf-126` by
+40 KB N.
+Against B9's parent, `proxy-proto-cycle` falls from 1,061,567 B N (the stack-lanes probe's
+mark) to the floor and from 1,174,528 to 7,168 B on WT, so no lane expects a trap any more;
+alternating get and set chains at their ceilings (2,031 and 2,030 objects) fall from about
+1.06 and 1.09 MB N to the floor, and `proxy-set-trap` and `proxy-inherited-set-trap` by 2,016
+and 1,792 B N.
+One shape outside the corpus grows: a trap-free Proxy forwarding an element write to a
+TypedArray, whose `valueOf` now runs under `set_from` and `typed_array_set_leg`, by 176-192 B a
+level N and about 220 B on WT.
+
 **B10. Tier 2: trapped Proxy layers.**
 At a trapped layer:
 
@@ -1874,10 +1915,111 @@ the match state is built.
 Spec order allows it, since RegExpBuiltinExec reads `lastIndex` first.
 It shrinks the frames that are live across the `valueOf` re-entry *(est.)*.
 
+**As landed (Phase 3):** C3, then C1, C2, C7 and C4 with the `held` field, in that order; C5
+and C6 are deferred, and C8 was not attempted.
+
+- **The virtual charge.**
+  `CallerState` gains `held`, the units the replaced nested loop held, and `returns`, how the
+  frame returns (`FrameReturn`: `Call`, `Getter`, `Setter` or `Generator`); `held_total` sums
+  `held` over the call stack, and `eval` parks it with the stack it swaps out.
+  `leave_call` releases a frame's units when a return or an unwinding throw pops it.
+  A dispatch loop that exits with such frames above its return depth, on a halt or a throw
+  caught below it, releases them in `release_held_above`, as each nested loop released its own
+  on its way out.
+  Both rules above are applied.
+  Every site that zeroes or restores `native_depth` clears `held` (`clear_held`, on every frame
+  of the call stack): the heap-exhaustion and panic handlers; `HostCallContext::call` after a
+  caught panic, which also restores its saved depth less what the frames held at its entry;
+  and the explicit-stack walks (`with_native_depth_restored`), which restore their base less
+  what frames popped by a throw inside the walk released.
+  `reset_activation` also clears `held` before it pops the retained frames, as a backstop, so
+  a pop can never release units `native_depth` no longer holds, and it asserts in debug builds
+  that no charge outlived the crank.
+  Unit tests run every halt, a panic and heap exhaustion inside in-place frames and check that
+  no unit survives and the next crank's ceiling is unchanged.
+- **The meter and the value stack.**
+  An in-place frame checks no meter on entry, as the nested loop did not, and its `END` makes
+  the one check `RUN` made after the call returned.
+  A getter's or setter's frame checks none on return, since the nested loop's boundary return
+  checked none, and a setter's frame pushes its one argument rather than its result.
+  Each frame is laid out on the value stack as the recursive path laid it out, so
+  `enter_call`'s overflow checks see the same stack (invariant 8), and the `error.stack` chain
+  is unchanged (invariant 7); no marker frame was needed.
+- **C3** covers every String method's RegExp protocol call (`@@replace`, `@@split`,
+  `@@match`, `@@search`, `@@matchAll`), not `@@replace` alone.
+  When the method is the unmodified intrinsic, `invoke_regexp_protocol` builds the
+  native-method frame on the value stack, charges the same 16 units and runs the RegExp
+  method's body in the String method's activation, so no `held` units are needed.
+  A replacement function, user `exec` or `@@species` getter still re-enters through
+  `dispatch_at`, so these nests still recurse, under fewer frames.
+- **C1** folds a bound call's chain as `invoke_value` did (`fold_bound_chain`) and enters a
+  user-function target over the same buffer in the caller's loop, holding 16 units.
+  A Proxy call's `apply` trap or forwarded target enters the same way (`proxy_run_call`,
+  through `proxy_call_step`), holding the layer's light unit with the heavy one, 17;
+  `proxy_call` is gone.
+  A separate commit makes `RUN`'s native-method arm charge its heavy unit around the
+  dispatcher with no closure frame between (`call_native_method_in_place`): measured before
+  the rebase, about 575 B a level N off the Array-callback and RegExp families, about 540 B
+  off the generator families and about 48 B off the accessor and coercion families, while the
+  `eval` and `Function` families rose by up to 32 B a level.
+- **C2** gives `Reflect.apply` and `Reflect.construct` an arm of their own in `RUN`
+  (`native_run_call`): the target's frame holds the native's 16 units with the 16 of its
+  nested loop, and begins at the `Reflect` call's base, so that its `END` cuts both.
+- **C7** landed as C7a, `GET_PROPERTY`'s getter, and C7b, `SET_PROPERTY`'s setter, each
+  holding 1 + 16 units, with no marker frame: the accessor's own frame returns as
+  `FrameReturn::Getter` or `Setter`.
+  Accessors reached from natives (the `mop_get` and `to_primitive` calls in `interp/natives/`)
+  still recurse.
+- **C4** sends `next`, `return` and `throw` to the same arm: the generator's body resumes in
+  the caller's loop, and `YIELD` or `END` returns `{value, done}` to the call.
+  However its frame is left, it drops its own run entry, found by `call_depth_base`, and
+  completes the generator unless it suspended, as `resume_generator` did after its nested loop.
+  A generator that is running, completed, not started for a `return` or `throw`, or whose body
+  lives in another segment still takes `resume_generator`, and async generators still
+  recurse (`asyncgen-62` needs 348,127 B N, from 380,351, and 196,608 B on WT, from 227,328).
+- **C5 and C6 are deferred.**
+  The sync `async` nest costs 60 B per unit on WT and calls of `Function`-made units 62 B,
+  measured as in §5, Phase 3, "As run", and at most 56 B on Node with either tier pinned:
+  under Target 2's 200 B on every host measured, so neither is needed for it.
+
+At their ceilings, from the start of Phase 3 to its end (native: the stack-height baseline,
+`benches/stack-height-baseline.json`; WT: the smallest passing `max_wasm_stack`, bisected at
+1 KiB on probes built at both ends).
+Each end figure includes every item's effect, not only the one named: C1's Proxy commit, C2
+and C4 each shrank `exec_run`'s frame, which every nest through `RUN` holds, and the
+native-method commit and C1's bound fold shrank the native-to-native nests.
+The figures in the D3, C3 and C1 commit messages came from builds before the branch was
+rebased onto the base branch, so they differ from these.
+
+| Case | Converted by | N | WT |
+|---|---|---|---|
+| `replace-re-fn-42` | C3 | 281,947 (from 410,251) | 196,608 (from 285,696) |
+| `user-exec-42` | C3 | 292,699 (from 390,763) | 203,776 (from 264,192) |
+| `species-41` | C3 | 307,855 (from 403,575) | 228,352 (from 287,744) |
+| `bound-127` | C1 | 8,471 (from 327,087) | 7,168 (from 243,712) |
+| `proxy-trap-119` | C1 | 8,471 (from 342,043) | 12,288 (from 253,952) |
+| `forEach-63` | native-method arm | 282,283 (from 317,515) | 217,088 (from 252,928) |
+| `reflect-apply-63` | C2 | 8,471 (from 380,351) | 8,192 (from 275,456) |
+| `getter-119` | C7a | 8,471 (from 364,891) | 10,240 (from 267,264) |
+| `setter-119` | C7b | 8,471 (from 399,163) | 10,240 (from 269,312) |
+| `gen-next-62` | C4 | 8,471 (from 344,063) | 7,168 (from 200,704) |
+| `join-63` | none (native to native) | 555,151 (from 623,663) | 303,104 (from 369,664) |
+| `function-call-63` | none (C6 deferred) | 220,111 (from 216,047) | 129,024 (from 151,552) |
+| `async-126` | none (C5 deferred) | 303,087 (from 303,055) | 123,904 (from 123,904) |
+
+The release-neutral gate grew from 1,377 programs to 1,763 over the phase, a snippet file per
+item (`stack-lanes/differential/c1-bound-in-place.js` and its siblings), and each item's
+pre-commit review compared between about 5,000 and 41,600 generated programs more; none
+differed.
+The dispatch benchmarks ran at 0.94-1.04× against the parent of each commit that changes the
+dispatch loop (C1's Proxy commit, the native-method commit, C2, C7a, C7b and C4; interleaved
+medians).
+
 ### 4.6 Class (d): compiler restructuring
 
-The acceptance of source programs is decided only by `Parser::nested` charges
-(`parser.rs:338-350`) and by the tree-depth check at node construction (`parser.rs:567`).
+The acceptance of source programs is decided only by the parser's charges (`Parser::nested`,
+`parser.rs:338-350`, which D3 made the `charged!` macro) and by the tree-depth check at node
+construction (`parser.rs:567`).
 The scoper and coder checks (`scoper.rs:1137`, `coder.rs:1431`) are backstops that parser output
 never reaches.
 So walker refactors cannot change which programs get the "stack overflow" `SyntaxError`,
@@ -2010,7 +2152,7 @@ The scratch data file names still say E1-E4: `d1a-compiler-outline-only.patch` i
   and assignment chains in 120 KB, which is their parse (D3), and 512 nested functions in
   332 KB (from 513 KB, within 3 KB of their parse).
   The tagged eval nest (`u3-eval-nest-tagged-2038`) fell from 904 KB N to 551 KB with D2 and to
-  279,255 B with A2; it needs 188,416 B on WT.
+  278,743 B with A2; it needs 188,416 B on WT.
   As predicted, the remaining compile peak is the parser's own nest: `parse-functions-512`
   needs 405,504 B on WT, the largest of any case that lane A passes.
   A test compiles 16 chains of every left-folded kind at or near the tree-depth limit on a
@@ -2038,6 +2180,30 @@ The scratch data file names still say E1-E4: `d1a-compiler-outline-only.patch` i
 - **Priority is low:** the parser corners are the smallest compile corners on every wasm host.
 - **Not recommended:** an explicit-stack statement parser (L), because the bodies save and
   restore `self.flags` in many places (`stmt.rs:1657-1680`, `:1798-1826`, `:1842-2015`).
+- **As landed (Phase 3):** all three parts, in one commit.
+  `binary_expression` climbs the 11 rungs in one loop: `pending[r]` holds rung r's operator
+  while its right operand is parsed, which is all a rung's frame held, and after each operand
+  the loop returns through the rungs from the top down, each folding its pending operator after
+  `check_arrow_function(2)`.
+  The relational quirks are kept, among them escaped `in`, `instanceof` and `of`, which the
+  rungs accept in a program as they did.
+  `new_expression` consumes the leading `new`s in a loop, charging `STATEMENT_COST` for each,
+  and finishes them innermost first, so the depth every member, argument and template re-entry
+  sees is unchanged.
+  `nested` became the `charged!` macro, which expands the same check, charge and release in
+  place; each of the seven charged productions is an `#[inline(never)]` wrapper whose body the
+  optimizer inlines into it.
+  At the end of Phase 3 the cascade chains at their pins need 152,943 B N for `parse-parens-91`
+  (from 223,599), 100,527 for `parse-call-args-91` (from 171,183) and 205,359 for
+  `parse-template-91` (from 276,015), and `parse-new-505` 84,719 B (from 410,831), the rest of
+  which is the coder's `code_new`; on WT they need 120,832, 98,304, 141,312 and 156,672 B (from
+  225,280, 202,752, 245,760 and 232,448).
+  The statement chains are unchanged, so `parse-functions-512` and its refused twin `-513`
+  (331,999 and 332,191 B N) are now the largest compile marks natively, where `parse-new-505`
+  was, and `parse-functions-512` is still the largest compile need on WT, at 405,504 B.
+  Every one of the 79,800 test262 compiles gave the same bytecode, symbols, parse meter, charge
+  sequence and refusal, and the pre-commit review compared about 5.8 million generated programs
+  by their trees and compile digests; none differed.
 
 **D4. The runtime compile seam.**
 This covers every `eval_source` entry: `eval`, the `Function` constructor and
@@ -2410,7 +2576,10 @@ measured after A2.
 landed").
 A2 took A2b's shape directly: with the 52 most frequent arms inline, per-opcode handlers stay
 within 0.98-1.12× of the base on interleaved runs, where A2a's group split cost 2-16%.
-Its gate, run as Phase 1's was, against D2c (5ab463e5) remeasured on the same host:
+Its gate, run as Phase 1's was, against D2c remeasured on the same host, before the series was
+rebased onto `origin/llm` (D2c 5ab463e5 and A2 6f2e1aeb then, 8b666027 and 5355d7b8 as landed; in
+the native stack-lanes probe the rebase leaves the dispatch loop and every outlined arm the same
+instructions):
 
 | Workload | `run.py --check-baseline` | Four interleaved runs |
 |---|---|---|
@@ -2426,7 +2595,8 @@ The `run.py` run flagged six GC and chunk-slide timings of 0.03-8 ms, which run 
 code; five interleaved runs of `gc_bench` put them at 0.85-1.17×, inside each build's own
 spread.
 
-Lane A now runs at 524,288 B and expects one trap, `proxy-proto-cycle` (B10).
+Lane A then ran at 524,288 B and expected one trap, `proxy-proto-cycle`, which B9 cleared in
+Phase 3.
 The corpus also passes at 409,600 B; at 327,680 B, 17 more cases trap.
 Bisected on WT at 4 KiB resolution, the cases that need the most stack are the parser's nests
 (D3) and the native-to-native recursions:
@@ -2454,6 +2624,73 @@ stay expected traps until B10.
 
 C1-C7 with virtual charges, B9 (alternating chains) and D3 (parser).
 Lower lane A below 512 KiB toward 400 KiB, and gate on lane C's per-unit slopes at ≤ 200 B.
+
+**As run (end of Phase 3):** D3, C3, C1, C2, C7 and C4, then B9 (§4.4, §4.5 and §4.6, "As
+landed"); C5 and C6 are deferred.
+Every item kept every program's halt, result, meter trace and bytecode: the release-neutral
+gate (`stack-lanes/differential.py`) grew from 1,377 programs to 1,763, a snippet file per
+item.
+Against the parent of each commit that changes the dispatch loop (all but D3, C3 and C1's
+bound commit) the dispatch benchmarks ran at 0.92-1.10× (interleaved medians), and D3's compile
+of a 2.3 MB expression-heavy script at 1.00×.
+
+Natively, from the stack-height baseline at the start of Phase 3 to the one at its end
+(`benches/stack-height-baseline.json`, afc72caf to 57c3dd32):
+
+- the 188 run marks total 20.6% less (49.0 MB to 39.0 MB), with a median case 5.1% less; 143
+  fall by more than 1%, and two rise, `function-call-63` and `-64`, by 1.9%;
+- the 241 compile marks total 22.6% less (8.8 MB to 6.8 MB), with a median case 17.8% less, and
+  none rises; the largest falls 19%, from 410,831 B (`parse-new-505`) to 332,191 B
+  (`parse-functions-513`);
+- the getter, setter, bound, Proxy `apply`, `Reflect.apply` and generator nests and the Proxy
+  prototype cycle run at the 8,471 B floor, 97-99% less.
+
+On WT, bisected at 1 KiB on probes built at both ends, the Proxy prototype cycle falls from
+1,175,552 B, an expected trap, to 7,168 B (B9).
+Among the other cases measured, the largest run-time need falls 17.7%, from 381,952 B to
+314,368 B (`proxy-inherited-get-trap-113`), and the native-to-native nests 18% (`join-64` from
+371,712 to 305,152 B).
+The largest need of any case is now the parser's `parse-functions-512`, unchanged at
+405,504 B.
+
+Lane A now runs at 409,600 B, the 400 KiB that Target 2 comes to, and expects no trap; the
+corpus has 4 KiB of headroom there, all of it `parse-functions-512`'s.
+Lane B is unchanged at 425 KiB on Node and 836 KiB on workerd and expects no trap on any
+configuration.
+So on the lane corpus Target 1 holds at Wasmtime's 512 KiB with 116 KiB to spare, on the Node
+stand-in for the Chromium Worker and on workerd with either tier pinned.
+The trapped-Proxy layer chains of §1.3 are not in the lane corpus and were not re-measured;
+they wait on B10.
+
+Target 2 measured directly: for each of lane C's 57 heavy families, the smallest passing host
+stack at two depths, bisected at 1 KiB (WT at 10 and 40 levels; Node near the ceiling and at
+half of it, since its own frames need 57 KiB), and the difference divided by the units
+between them.
+The shadow-stack and native slopes are lane C's, painted at two depths:
+
+| Host tier | Largest slope | Families over 200 B |
+|---|---|---|
+| WT | 158 B (`proxy-forin-ownkeys-trap`); `join` 149, `toString` 144 | none |
+| Node, `--liftoff-only` | 125 B (`join`); `proxy-inherited-get-trap` 124, `toString` 122 | none |
+| Node, `--no-liftoff` | 117 B (`proxy-forin-ownkeys-trap`); `proxy-inherited-get-trap` 111 | none |
+| wasm shadow stack (lane C) | 186 B (`join`); `toString` 180, `array-from` 158 | none |
+| native (lane C) | 274 B (`join`) | nine: `join`, `toString` 265, `proxy-inherited-get-trap` 234, `take` and `iter-map` 232, `array-from` 225, `sort-cmp` 216, `proxy-forin-ownkeys-trap` 210, `proxy-get-trap` 204 |
+
+Where Node's 57 KiB hid the lower depth, the slope is bounded by the whole stack at the
+ceiling over its units: at most 56 B for those families on either tier.
+The families that run in place need the floor at every depth, so their slope is 0.
+So Target 2 holds for every heavy family on every host tier measured, though not natively;
+native x86-64 is not a Target 2 host, since its contract is `NATIVE_STACK_BYTES`, 8 MiB.
+The native-to-native nests (`join`, `toString`, `take`, `Iterator.prototype.map`,
+`Array.from`) and the Proxy trap families are the steepest everywhere.
+The next margin for the first would be folding a native's call of an intrinsic into the same
+activation, as C3 did for the RegExp protocol (`join`'s call of `Array.prototype.toString`,
+say), or C8; for the second it is B10.
+The trapped-Proxy layer chains and the runtime compile seam remain Target 2's two known
+exceptions (§1.7), not re-measured here.
+The plan's lane C gate at ≤ 200 B was not added: lane C is still trend only and paints only
+the shadow-stack and native slopes, so whether to gate, and on which host tiers, is still to
+decide.
 
 ### Phase 4: decisions
 

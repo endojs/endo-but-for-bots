@@ -302,7 +302,7 @@ var q = alt(a, 2031);
 q[923456787] = 3;
 out.join()
 // ---
-// B1 v2 review: [[Call]] from the dispatch path (proxy_call) for every forward-metering class
+// B1 v2 review: [[Call]] from the dispatch path (RUN) for every forward-metering class
 // of target, one and three layers deep, with and without an apply trap at the top.
 var m = new Map([[1, 2]]);
 var targets = [function u(a) { return 'u' + a; }, (function (a, b) { return 'b' + a + b; }).bind(null, 'B'),

@@ -441,6 +441,11 @@ impl Interp {
     /// deliberately rejects native callees (`callback:non-user-function`). The
     /// native path builds the `[THIS, FUNCTION, RESULT, FRAME]` frame the call
     /// opcode would, dispatches with zero arguments, and pops the pushed result.
+    /// Expanded in its callers, `ordinary_get`, its leg
+    /// [`Self::ordinary_get_walk`] and `GET_PROPERTY`'s in-place read: a frame
+    /// of its own would sit on every level of a nest through a getter that a
+    /// native reads (`then`, `@@species`).
+    #[inline(always)]
     pub(in crate::interp) fn invoke_getter(
         &mut self,
         code: &[u8],
@@ -551,7 +556,9 @@ impl Interp {
                         && self.refresh_read_key(context.key) == ReadKey::Id(id)
                 });
             if self.proxies.contains_key(&parent) || iterator_context_aimed_at_parent {
-                return self.mop_get(code, parent, id, receiver);
+                // The rest of the read runs as a loop (STACK-DEPTH-REFACTOR.md
+                // B9), where `mop_get` nested a frame chain per crossing.
+                return self.get_from(code, GetLeg::Prototype(parent), ReadKey::Id(id), receiver);
             }
             // Every other parent's `[[Get]]` is `mop_get`'s non-Proxy path —
             // its exotic own surface, then this very algorithm — so perform
@@ -577,6 +584,273 @@ impl Interp {
             }
             current = parent;
         }
+    }
+
+    /// [`Self::ordinary_get`] as one leg of [`Interp::get_legs`]
+    /// (STACK-DEPTH-REFACTOR.md B9): the same walk, ending at the prototype
+    /// whose `[[Get]]` it delegates to rather than entering it. Kept apart
+    /// from `ordinary_get`, which every `[[Get]]` runs, so that its frame and
+    /// the inlining around it stay as they were: keep the two in step.
+    pub(in crate::interp::property) fn ordinary_get_walk(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        receiver: Slot,
+    ) -> Result<GetLeg, Step> {
+        let mut current = inst;
+        loop {
+            if let Some(descriptor) = self.ordinary_get_own_descriptor(current, id) {
+                if descriptor.is_accessor() {
+                    let getter = descriptor.get.unwrap_or_else(Slot::undefined);
+                    if getter.kind == Kind::Undefined {
+                        return Ok(GetLeg::Value(Slot::undefined()));
+                    }
+                    return self
+                        .invoke_getter(code, getter, receiver)
+                        .map(GetLeg::Value);
+                }
+                return Ok(GetLeg::Value(
+                    descriptor.value.unwrap_or_else(Slot::undefined),
+                ));
+            }
+            let parent = self.instance_prototype(current);
+            if parent.is_null() {
+                return Ok(GetLeg::Value(Slot::undefined()));
+            }
+            let iterator_context_aimed_at_parent = self
+                .array_iterator_proxy_get_context
+                .is_some_and(|context| {
+                    context.target == parent
+                        && self.refresh_read_key(context.key) == ReadKey::Id(id)
+                });
+            if self.proxies.contains_key(&parent) || iterator_context_aimed_at_parent {
+                return Ok(GetLeg::Prototype(parent));
+            }
+            if self.find_property(parent, id).is_none() {
+                if let Some(&typed_array) = self.typed_arrays.get(&parent) {
+                    if let Some(index) = self.ta_numeric_index_at(id, 0) {
+                        return Ok(GetLeg::Value(
+                            self.ta_indexed_element_get(typed_array, index),
+                        ));
+                    }
+                }
+                if let Some(d) = self.exotic_own_descriptor(parent, id) {
+                    if d.is_data() {
+                        return Ok(GetLeg::Value(d.value.unwrap_or_else(Slot::undefined)));
+                    }
+                }
+            }
+            current = parent;
+        }
+    }
+
+    /// `GET_PROPERTY`'s `[[Get]]` of the ordinary object `inst` for
+    /// `receiver` (STACK-DEPTH-REFACTOR.md C7): [`Interp::mop_get`]'s steps
+    /// for it (the light unit its guarded entry charges, the exotic own
+    /// surface, then [`Self::ordinary_get`]'s walk, repeated here), except
+    /// that a getter the walk reaches that [`Interp::calls_in_place`] is
+    /// entered in the caller's loop, as a getter ([`FrameReturn::Getter`]),
+    /// rather than called, for the loop to set where it returns (a frame's
+    /// `ret_pc` is read only when it returns). Its frame holds the
+    /// light unit with the heavy one the getter's nested `dispatch_at`
+    /// charged. Returns the value, or where the getter's body starts. Kept
+    /// apart from the shared walk, whose frames every `[[Get]]` carries: keep
+    /// the walk in step with `ordinary_get`'s and the prefix with
+    /// `mop_get_with_proxy_metering_inner`'s.
+    #[inline(never)]
+    pub(in crate::interp) fn get_property_in_place(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        receiver: Slot,
+    ) -> Result<GetInPlace, Step> {
+        // A read `mop_get` meters or forwards apart takes `mop_get`.
+        if self.array_iterator_proxy_get_context.is_some() || self.proxies.contains_key(&inst) {
+            return self
+                .mop_get(code, inst, id, receiver)
+                .map(GetInPlace::Value);
+        }
+        self.enter_native_frame(LIGHT_FRAME_COST)?;
+        let got = self.get_in_place_walk(code, inst, id, receiver);
+        if !matches!(got, Ok(GetInPlace::Entered(_))) {
+            self.leave_native_frame(LIGHT_FRAME_COST);
+        }
+        got
+    }
+
+    /// The read of [`Self::get_property_in_place`] after its charge.
+    fn get_in_place_walk(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        receiver: Slot,
+    ) -> Result<GetInPlace, Step> {
+        // `mop_get_with_proxy_metering_inner`'s exotic own surface, which it
+        // reads with no metering flags for an id key.
+        if self.find_property(inst, id).is_none() {
+            if let Some(&typed_array) = self.typed_arrays.get(&inst) {
+                if let Some(index) = self.ta_numeric_index_at(id, 0) {
+                    return Ok(GetInPlace::Value(
+                        self.ta_indexed_element_get(typed_array, index),
+                    ));
+                }
+            }
+            if let Some(d) = self.exotic_own_descriptor(inst, id) {
+                if d.is_data() {
+                    return Ok(GetInPlace::Value(d.value.unwrap_or_else(Slot::undefined)));
+                }
+            }
+        }
+        // `ordinary_get`'s walk. The array-iterator Proxy context is unset
+        // (it was checked on entry, and nothing before the getter's call can
+        // set it), so only a Proxy parent leaves the walk for `mop_get`.
+        let mut current = inst;
+        let getter = loop {
+            if let Some(descriptor) = self.ordinary_get_own_descriptor(current, id) {
+                if descriptor.is_accessor() {
+                    let getter = descriptor.get.unwrap_or_else(Slot::undefined);
+                    if getter.kind == Kind::Undefined {
+                        return Ok(GetInPlace::Value(Slot::undefined()));
+                    }
+                    break getter;
+                }
+                return Ok(GetInPlace::Value(
+                    descriptor.value.unwrap_or_else(Slot::undefined),
+                ));
+            }
+            let parent = self.instance_prototype(current);
+            if parent.is_null() {
+                return Ok(GetInPlace::Value(Slot::undefined()));
+            }
+            if self.proxies.contains_key(&parent) {
+                return self
+                    .mop_get(code, parent, id, receiver)
+                    .map(GetInPlace::Value);
+            }
+            if self.find_property(parent, id).is_none() {
+                if let Some(&typed_array) = self.typed_arrays.get(&parent) {
+                    if let Some(index) = self.ta_numeric_index_at(id, 0) {
+                        return Ok(GetInPlace::Value(
+                            self.ta_indexed_element_get(typed_array, index),
+                        ));
+                    }
+                }
+                if let Some(d) = self.exotic_own_descriptor(parent, id) {
+                    if d.is_data() {
+                        return Ok(GetInPlace::Value(d.value.unwrap_or_else(Slot::undefined)));
+                    }
+                }
+            }
+            current = parent;
+        };
+        if !self.calls_in_place(getter) {
+            return self
+                .invoke_getter(code, getter, receiver)
+                .map(GetInPlace::Value);
+        }
+        // The frame `invoke_getter` builds through `run_user_callback`: the
+        // receiver as `this`, no arguments.
+        let body_start = self.enter_in_place(getter, receiver, [], 0, None, LIGHT_FRAME_COST)?;
+        self.call_stack
+            .last_mut()
+            .expect("enter_call pushed the frame")
+            .returns = FrameReturn::Getter;
+        Ok(GetInPlace::Entered(body_start))
+    }
+
+    /// `SET_PROPERTY`'s `[[Set]]` of the ordinary object `inst` for
+    /// `receiver` (STACK-DEPTH-REFACTOR.md C7), which `dispatch_set_property`
+    /// reaches for any object but a Proxy, a typed array or an array's
+    /// `length`: [`Interp::mop_set`]'s step for it (the light unit it
+    /// charges) and [`Self::ordinary_set`]'s walk, repeated here, except that
+    /// a setter the walk reaches that [`Interp::calls_in_place`] is entered in
+    /// the caller's loop, as a setter ([`FrameReturn::Setter`]) with `value`
+    /// its one argument, rather than called, for the loop to set where it
+    /// returns. Its frame holds the light unit with the heavy one the setter's
+    /// nested `dispatch_at` charged. Returns `[[Set]]`'s result, or where the
+    /// setter's body starts. Kept apart from the shared walk, whose frames
+    /// every `[[Set]]` carries: keep the walk in step with `ordinary_set`'s.
+    #[inline(never)]
+    pub(in crate::interp) fn set_property_in_place(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<SetInPlace, Step> {
+        self.enter_native_frame(LIGHT_FRAME_COST)?;
+        let set = self.set_in_place_walk(code, inst, id, value, receiver);
+        if !matches!(set, Ok(SetInPlace::Entered(_))) {
+            self.leave_native_frame(LIGHT_FRAME_COST);
+        }
+        set
+    }
+
+    /// The assignment of [`Self::set_property_in_place`] after its charge.
+    fn set_in_place_walk(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<SetInPlace, Step> {
+        // `ordinary_set`'s walk: `mop_set_inner` differs from it only for a
+        // Proxy or a typed array, which `dispatch_set_property` sent apart.
+        let mut current = inst;
+        loop {
+            let own = self
+                .ordinary_get_own_descriptor(current, id)
+                .or_else(|| self.exotic_own_descriptor(current, id));
+            if let Some(descriptor) = own {
+                if descriptor.is_accessor() {
+                    let setter = descriptor.set.unwrap_or_else(Slot::undefined);
+                    if setter.kind == Kind::Undefined {
+                        return Ok(SetInPlace::Done(false));
+                    }
+                    if !self.calls_in_place(setter) {
+                        self.invoke_setter(code, setter, receiver, value)?;
+                        return Ok(SetInPlace::Done(true));
+                    }
+                    // The frame `invoke_setter` builds through
+                    // `run_user_callback`: the receiver as `this`, the value
+                    // as the one argument.
+                    let body_start =
+                        self.enter_in_place(setter, receiver, [value], 0, None, LIGHT_FRAME_COST)?;
+                    self.call_stack
+                        .last_mut()
+                        .expect("enter_call pushed the frame")
+                        .returns = FrameReturn::Setter;
+                    return Ok(SetInPlace::Entered(body_start));
+                }
+                if descriptor.writable == Some(false) {
+                    return Ok(SetInPlace::Done(false));
+                }
+                break;
+            }
+            let parent = self.instance_prototype(current);
+            if parent.is_null() {
+                break;
+            }
+            let typed_array_element = self.typed_arrays.contains_key(&parent)
+                && !self.is_symbol_key_id(id)
+                && self
+                    .scalar_key_text(id)
+                    .and_then(|name| canonical_numeric_index_string(&name))
+                    .is_some();
+            if self.proxies.contains_key(&parent) || typed_array_element {
+                return self
+                    .mop_set(code, parent, id, value, receiver)
+                    .map(SetInPlace::Done);
+            }
+            current = parent;
+        }
+        self.ordinary_set_on_receiver(code, id, value, receiver)
+            .map(SetInPlace::Done)
     }
 
     pub(in crate::interp::property) fn ordinary_set(
@@ -635,6 +909,75 @@ impl Interp {
             // does.
             current = parent;
         }
+        self.ordinary_set_on_receiver(code, id, value, receiver)
+    }
+
+    /// [`Self::ordinary_set`] as one leg of [`Interp::set_legs`]
+    /// (STACK-DEPTH-REFACTOR.md B9): the same walk, ending at the prototype
+    /// whose `[[Set]]` it delegates to rather than entering it. Kept apart
+    /// from `ordinary_set`, which every `[[Set]]` runs: keep the two in step.
+    /// Out of line, so that a setter or the receiver's update it makes runs
+    /// under its frame and the loop's small one alone.
+    #[inline(never)]
+    pub(in crate::interp::property) fn ordinary_set_walk(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<SetLeg, Step> {
+        let mut current = inst;
+        loop {
+            let own = self
+                .ordinary_get_own_descriptor(current, id)
+                .or_else(|| self.exotic_own_descriptor(current, id));
+            if let Some(descriptor) = own {
+                if descriptor.is_accessor() {
+                    let setter = descriptor.set.unwrap_or_else(Slot::undefined);
+                    if setter.kind == Kind::Undefined {
+                        return Ok(SetLeg::Done(false));
+                    }
+                    self.invoke_setter(code, setter, receiver, value)?;
+                    return Ok(SetLeg::Done(true));
+                }
+                if descriptor.writable == Some(false) {
+                    return Ok(SetLeg::Done(false));
+                }
+                break;
+            }
+            let parent = self.instance_prototype(current);
+            if parent.is_null() {
+                break;
+            }
+            let typed_array_element = self.typed_arrays.contains_key(&parent)
+                && !self.is_symbol_key_id(id)
+                && self
+                    .scalar_key_text(id)
+                    .and_then(|name| canonical_numeric_index_string(&name))
+                    .is_some();
+            if self.proxies.contains_key(&parent) || typed_array_element {
+                return Ok(SetLeg::Next(parent));
+            }
+            current = parent;
+        }
+        self.ordinary_set_on_receiver(code, id, value, receiver)
+            .map(SetLeg::Done)
+    }
+
+    /// The end of [`Self::ordinary_set`], after its walk found no setter and
+    /// no non-writable property: the value created or updated as an own data
+    /// property of the receiver. Expanded in its callers, `ordinary_set`, its
+    /// leg [`Self::ordinary_set_walk`] and `SET_PROPERTY`'s in-place
+    /// assignment, as it was written inline in the first.
+    #[inline(always)]
+    fn ordinary_set_on_receiver(
+        &mut self,
+        code: &[u8],
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<bool, Step> {
         let receiver_inst = match receiver.value {
             Payload::Reference(receiver_inst) if receiver.kind == Kind::Reference => receiver_inst,
             _ => return Ok(false),

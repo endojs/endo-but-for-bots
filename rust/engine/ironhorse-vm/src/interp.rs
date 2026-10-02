@@ -704,6 +704,33 @@ struct GetMetering {
     after_active_trap: bool,
 }
 
+/// Where one leg of a `[[Get]]` ended (STACK-DEPTH-REFACTOR.md B9): with its
+/// value, or at the next object whose `[[Get]]` the read is, which the
+/// recursive shape entered through its guarded entry, one native frame and
+/// one unit deeper each time. [`Interp::get_legs`] takes them in a loop
+/// instead, charging and holding the same units.
+enum GetLeg {
+    Value(Slot),
+    /// The prototype an ordinary walk delegates to (a Proxy, or the object
+    /// the Array Iterator's read is aimed at), entered as `mop_get` entered
+    /// it.
+    Prototype(crate::value::SlotIndex),
+    /// The object a Proxy forwarded to, not itself a Proxy, entered as
+    /// `mop_get_with_proxy_metering` entered it, with the forward's metering.
+    Target(crate::value::SlotIndex, GetMetering),
+}
+
+/// Where one leg of a `[[Set]]` ended (STACK-DEPTH-REFACTOR.md B9): with its
+/// result, or at the next object whose `[[Set]]` the assignment is (a
+/// prototype that is a Proxy or holds the TypedArray element, or the object a
+/// Proxy forwarded to), which the recursive shape entered through `mop_set`
+/// or, for a Proxy forwarded to, a forwarding hop. [`Interp::set_legs`] takes
+/// them in a loop.
+enum SetLeg {
+    Done(bool),
+    Next(crate::value::SlotIndex),
+}
+
 /// What one Proxy layer of an internal method does: forward the method to
 /// its target (the trap is absent), or finish with the trap's checked result.
 /// The `mop_*` walks loop over `Forward` instead of recursing once per layer
@@ -716,7 +743,8 @@ enum ProxyStep<T> {
 /// What one Proxy layer of `[[Call]]` does: forward the call to its target
 /// with the same receiver and arguments, or call the `apply` trap with the
 /// handler as receiver and `(target, thisArgument, argumentsList)`. Either is
-/// a tail call, which `invoke_value` takes as its next turn.
+/// a tail call, which `invoke_value` takes as its next turn and `RUN` makes
+/// itself ([`Interp::proxy_run_call`]).
 enum ProxyCall {
     Forward(crate::value::SlotIndex),
     Trap {
@@ -1917,7 +1945,81 @@ struct CallerState {
     /// `mxFrameEnd`, the slot its result is written to. `END` restores the
     /// stack to it so operands the body abandoned (a `switch` discriminant a
     /// `return` jumped over, say) cannot survive into the caller's expression.
+    /// For a `Reflect.apply` or `Reflect.construct` target, or a generator's
+    /// body, run in place it is the base of the native call's frame, below the
+    /// callee's own slots, so the return cuts that frame too
+    /// (`Interp::native_run_call`).
     stack_base: usize,
+    /// Native-recursion budget units this frame holds for the activation it
+    /// replaces (STACK-DEPTH-REFACTOR.md §4.5): a call the dispatch loop runs
+    /// in place, which the recursive shape ran in a nested `dispatch_at`,
+    /// charges that loop's [`HEAVY_FRAME_COST`] here, with any units its
+    /// caller charged around the call (a Proxy layer's light unit, or a
+    /// `Reflect` call's heavy unit; see `Interp::enter_in_place`).
+    /// `Interp::leave_call`
+    /// releases them when the frame is popped, and the dispatch loop that owns
+    /// the frame releases them when it exits with the frame still on the call
+    /// stack, so the depth is released where the nested loop released it.
+    /// Zero for every other frame.
+    held: usize,
+    /// How the frame hands its result back to the caller's loop.
+    returns: FrameReturn,
+}
+
+/// What `GET_PROPERTY`'s `[[Get]]` of an ordinary object made of the read
+/// ([`Interp::get_property_in_place`]).
+enum GetInPlace {
+    /// The property's value.
+    Value(Slot),
+    /// A getter entered in the caller's loop: continue at its body.
+    Entered(usize),
+}
+
+/// What `RUN`'s call of a generator's `next`, `return` or `throw` made of it
+/// ([`Interp::resume_generator_in_place`]).
+enum GenResume {
+    /// The call's result.
+    Value(Slot),
+    /// The generator's body resumed in the caller's loop: continue there.
+    Entered(usize),
+}
+
+/// What `SET_PROPERTY`'s `[[Set]]` of an ordinary object made of the
+/// assignment ([`Interp::set_property_in_place`]).
+enum SetInPlace {
+    /// `[[Set]]`'s result: whether the assignment took.
+    Done(bool),
+    /// A setter entered in the caller's loop: continue at its body.
+    Entered(usize),
+}
+
+/// How a frame the dispatch loop runs hands its result back.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum FrameReturn {
+    /// Any other frame: `END`, and the `START_*` of a generator or async
+    /// body, push the result and check the meter on the return into the
+    /// caller's loop (`mxFirstCode`'s check, which for a call run in place is
+    /// the one `RUN` made after the call's nested loop returned).
+    #[default]
+    Call,
+    /// A getter `GET_PROPERTY` reached and runs in place
+    /// (STACK-DEPTH-REFACTOR.md C7): the result is pushed as the property's
+    /// value and no meter is checked, as none was when the getter's nested
+    /// loop returned through its boundary and the read went on.
+    Getter,
+    /// A setter `SET_PROPERTY` reached and runs in place (C7): the result is
+    /// dropped and the value assigned, the frame's one argument, pushed as the
+    /// assignment's, and no meter is checked, as none was when the setter's
+    /// nested loop returned and the assignment went on.
+    Setter,
+    /// A generator's body that `RUN`'s call of `next`, `return` or `throw`
+    /// resumed in place (STACK-DEPTH-REFACTOR.md C4), its driver's activation
+    /// saved in this frame as `resume_generator` saved it: `END` pushes the
+    /// `{value, done: true}` result, and `YIELD` the yielded one, with the
+    /// meter check `RUN` made after the native returned. However the frame is
+    /// left, the generator's own run entry goes with it, and a generator still
+    /// executing is completed ([`Interp::leave_generator_in_place`]).
+    Generator,
 }
 
 /// One entry of the exception jump-buffer chain (XS's `txJump`, pushed by
@@ -1965,8 +2067,9 @@ enum GeneratorState {
     /// Suspended at a `yield`; `.next(v)` resumes with `v` as the yield
     /// expression's value.
     SuspendedYield,
-    /// Currently running on a `resume_generator` nested dispatch (a
-    /// re-entrant `.next`/`for-of` while executing is a `TypeError` in XS).
+    /// Currently running, on a `resume_generator` nested dispatch or resumed
+    /// in its caller's loop (STACK-DEPTH-REFACTOR.md C4); a re-entrant
+    /// `.next`/`for-of` while executing is a `TypeError` in XS.
     Executing,
     /// Fell off the end or `return`ed; every further `.next` yields
     /// `{value: undefined, done: true}`.
@@ -2048,9 +2151,10 @@ struct GeneratorData {
     frame: Option<SavedFrame>,
 }
 
-/// The context of a generator currently executing on a nested
-/// [`Interp::resume_generator`] dispatch, so the `YIELD` arm knows which
-/// instance to snapshot into and where its value-stack region begins.
+/// The context of a generator currently executing, on a nested
+/// [`Interp::resume_generator`] dispatch or resumed in its caller's loop
+/// (STACK-DEPTH-REFACTOR.md C4), so the `YIELD` arm knows which instance to
+/// snapshot into and where its value-stack region begins.
 /// A stack (not a scalar) because a generator body may drive another
 /// generator's `.next` before it yields.
 struct GenRunFrame {
@@ -2630,6 +2734,7 @@ impl Interp {
                 // All native activations have unwound. The interrupted heap
                 // remains non-quiescent and must be rewound by the supervisor.
                 self.native_depth = 0;
+                self.clear_held();
                 self.last_crank_completed = false;
                 // A lazy Iterator helper's "already running" latch rides
                 // `IterState::generation`, cleared by the step's own exit path
@@ -2669,6 +2774,7 @@ impl Interp {
                 // not retain native recursion charges for frames that no
                 // longer exist. A later explicit run resets guest activation.
                 self.native_depth = 0;
+                self.clear_held();
                 self.last_crank_completed = false;
                 std::panic::resume_unwind(payload)
             }
@@ -2680,9 +2786,15 @@ impl Interp {
         self.gen_run_stack.clear();
         self.async_run_stack.clear();
         self.async_gen_run_stack.clear();
+        // Retained frames hold no charge by now (their loops released it on
+        // exit, or a reset cleared it); clear it anyway so popping them can
+        // never release units `native_depth` no longer holds.
+        self.clear_held();
         while !self.call_stack.is_empty() {
             let _ = self.leave_call();
         }
+        // No native activation is live between runs.
+        debug_assert_eq!(self.native_depth, 0, "a native charge outlived its crank");
         self.stack.clear();
         self.jumps.clear();
         self.locals.clear();
