@@ -315,7 +315,9 @@ may be registered again (a record crosses the wire as a fresh copy each time, so
 refuse the same registration made twice); by default a key registered again is refused.
 The adapter compares epochs: the same epoch is the binding it holds, another a replacement.
 An adapter forgets a binding only once its release succeeds, so a failed release is retried by a
-later unbind and reaches the manager's retirement path.
+later unbind and reaches the manager's retirement path; a replacement the adapter did not take
+retires the incarnation, so a replaced binding whose release failed goes with its process, and a
+fresh incarnation restores every registration.
 `src/native/contract.js` states the contract as types.
 
 Only the facet enters the named inventory slot; applications receive it through grants.

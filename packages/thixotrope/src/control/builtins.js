@@ -96,6 +96,14 @@ export const makeBuiltins = ({
     }
     try {
       let held = await E(registry).lookup(name, into?.workspace);
+      if (held !== undefined && held.digest !== `builtin:${name}`) {
+        // The user's own installation under the name, which a removal of
+        // the built-in let them make: theirs, whatever its health.
+        log.error(
+          `${name} not provided${where}: the name is held by another installation`,
+        );
+        return undefined;
+      }
       if (
         held !== undefined &&
         replaceUnhealthy &&
@@ -110,7 +118,7 @@ export const makeBuiltins = ({
         await E(registry).remove(name, into?.workspace);
         held = undefined;
       }
-      if (held?.status === 'failed' && held.digest === `builtin:${name}`) {
+      if (held?.status === 'failed') {
         // Asking again would only answer the same failure.
         log.error(
           `${name} not provided${where}: its installation failed, and stays failed until it is removed: ${held.error}`,
