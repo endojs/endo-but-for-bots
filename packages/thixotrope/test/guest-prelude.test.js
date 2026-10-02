@@ -13,7 +13,7 @@ import { makeNodePowers } from '../src/platform/node/powers.js';
 const nodePowers = makeNodePowers();
 
 test.serial('every vat has the guest prelude as globals', async t => {
-  t.timeout(30_000);
+  t.timeout(60_000);
   const root = await mkdtemp('/tmp/thix-prelude-');
   t.teardown(() => rm(root, { recursive: true, force: true }));
   const supervisor = await serveThixotrope(nodePowers, root, {

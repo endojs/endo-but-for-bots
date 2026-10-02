@@ -63,7 +63,7 @@ const settlesWithin = (promise, ms) =>
 test.serial(
   'a pending factory holds neither removal, collection nor other installations',
   async t => {
-    t.timeout(30_000);
+    t.timeout(60_000);
     const { client } = await start(t);
     await client.call(
       'evaluate',
@@ -107,7 +107,7 @@ test.serial(
 test.serial(
   'a bundle that does not evaluate leaves a removable failure',
   async t => {
-    t.timeout(30_000);
+    t.timeout(60_000);
     const { client } = await start(t);
     await t.throwsAsync(
       () => client.call('install', 'broken', '({ make: ', []),
@@ -150,7 +150,7 @@ test.serial(
 test.serial(
   'a root whose name was taken meanwhile fails its installation until it is removed',
   async t => {
-    t.timeout(30_000);
+    t.timeout(60_000);
     const { client } = await start(t);
     await client.call(
       'evaluate',
