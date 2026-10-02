@@ -742,7 +742,43 @@ impl Interp {
         })
     }
 
-    /// One layer of the forwarding loop of [`Self::proxy_get_with_metering`].
+    /// The Proxy leg of [`Interp::get_legs`] (STACK-DEPTH-REFACTOR.md B1,
+    /// B9): [`Self::proxy_get_with_metering`]'s layer and forwarding loop,
+    /// charging each forwarded-to Proxy the unit `mop_get_with_proxy_metering`
+    /// charged it, into `held`. Ends with the trap's result, or at the first
+    /// target that is not a Proxy, with the forward's metering for it. Out of
+    /// line, so that a trap it calls runs under its frame and the loop's
+    /// small one alone.
+    #[inline(never)]
+    pub(in crate::interp) fn proxy_get_leg(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        key: ReadKey,
+        receiver: Slot,
+        mut metering: GetMetering,
+        held: &mut usize,
+    ) -> Result<GetLeg, Step> {
+        let mut proxy = proxy;
+        loop {
+            let target = match self.proxy_get_step(code, proxy, key, receiver, metering)? {
+                ProxyStep::Done(result) => return Ok(GetLeg::Value(result)),
+                ProxyStep::Forward(target) => target,
+            };
+            // A forward past the Array Iterator's trap turns on the target's
+            // forwarded metering for the rest of the walk.
+            metering.forwarded_target |= metering.proxy_trap != 0;
+            if !self.proxies.contains_key(&target) {
+                return Ok(GetLeg::Target(target, metering));
+            }
+            // The unit `mop_get_with_proxy_metering(target)` charged.
+            self.forwarding_hop(held)?;
+            proxy = target;
+        }
+    }
+
+    /// One layer of the forwarding loop of [`Self::proxy_get_with_metering`],
+    /// and of [`Self::proxy_get_leg`]'s.
     /// A forward past the Array Iterator's trap charges its residual here;
     /// the loop then meters the target as forwarded
     /// (`forwarded_target || proxy_trap != 0`), as the recursive shape passed
@@ -873,11 +909,15 @@ impl Interp {
         self.forwarding_loop(
             proxy,
             |vm, proxy| vm.proxy_set_step(code, proxy, id, value, receiver),
-            |vm, target| vm.mop_set(code, target, id, value, receiver),
+            |vm, target| vm.set_from(code, target, id, value, receiver),
         )
     }
 
-    /// One layer of the forwarding loop of [`Self::proxy_set`].
+    /// One layer of the forwarding loop of [`Self::proxy_set`], and the step
+    /// of `proxy_set_leg` (STACK-DEPTH-REFACTOR.md B9). Expanded in both, as
+    /// it was in the first alone: a frame of its own would sit on every level
+    /// of a nest through a `set` trap.
+    #[inline(always)]
     pub(in crate::interp) fn proxy_set_step(
         &mut self,
         code: &[u8],
