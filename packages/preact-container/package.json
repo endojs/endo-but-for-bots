@@ -2,7 +2,7 @@
   "name": "@endo/preact-container",
   "version": "0.1.0",
   "private": true,
-  "description": "Mount untrusted Preact component code in a contained tree: a sanitizing renderer (components never see DOM nodes or raw events) plus a compartment wrapper",
+  "description": "Mount untrusted Preact component code in a contained tree: a sanitizing renderer plus a compartment wrapper that keeps confined components from DOM nodes and raw events",
   "keywords": [
     "preact",
     "container",

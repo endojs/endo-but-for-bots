@@ -61,10 +61,11 @@ const deepFreeze = value =>
 /**
  * Secure renderer for Preact.
  *
- * Threat model: a component author is untrusted. They may render JSX,
- * receive props from the host, manage their own state, and register
- * event listeners. They must not be able to obtain a reference to any
- * DOM node, the real DOM `Event` object, or perform HTML injection.
+ * Threat model: a component author's OUTPUT is untrusted. They may
+ * render JSX, receive props from the host, manage their own state, and
+ * register event listeners. Nothing they render may hand them a
+ * reference to any DOM node or the real DOM `Event` object, or inject
+ * HTML.
  *
  * The renderer wraps the user's tree in a SecureBoundary. While Preact
  * is rendering anything inside that boundary, freshly created vnodes
@@ -72,6 +73,17 @@ const deepFreeze = value =>
  * disallowed tags and non-tag, non-function types are replaced with
  * Fragments, URLs are scheme-checked, and event listeners are wrapped so
  * they only ever see SafeEvent facades.
+ *
+ * Sanitization happens when `h()` creates a vnode, so it assumes the
+ * component builds its vnodes with `h()` and leaves them alone. It does
+ * not confine component CODE that reaches into Preact itself: Preact
+ * renders a hand-built vnode object as-is, records the real DOM node on
+ * the very vnode object a component returned (where the component can
+ * read it if it kept a reference), and calls a function component with
+ * its component instance as `this`. Hostile code is mounted through
+ * `@endo/preact-container/compartment`, which rebuilds every vnode the
+ * guest returns and calls it without `this` (see the README, "What
+ * `renderConfined` alone does not contain").
  *
  * Sanitization is scoped: vnodes outside any SecureBoundary are
  * untouched, so the host application can keep rendering normally.
@@ -1427,8 +1439,10 @@ function walkSanitize(node, allowedTags, safeAttrs) {
 }
 
 /**
- * Render a Preact vnode into a container while enforcing the secure
- * sandbox. Components in the tree never see DOM nodes or raw events.
+ * Render a Preact vnode into a container, sanitizing the vnodes the tree
+ * renders: refs are stripped and event handlers receive `SafeEvent`
+ * facades, never raw events. This sanitizes output; it does not confine
+ * component code that reaches into Preact (see the module comment).
  *
  * @param {*} vnode The vnode to render.
  * @param {Element} parentDom The host-controlled DOM container.

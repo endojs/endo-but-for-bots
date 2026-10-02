@@ -14,16 +14,20 @@ Policy.
 The package ships two entry points:
 
 - **`@endo/preact-container/renderer`** — a sanitizing renderer.
-  Component code rendered through `renderConfined` does not see DOM
-  nodes, raw DOM `Event` objects, or ambient authority the host did not
-  explicitly hand it. It strips refs, blocks dangerous tag names,
-  validates URL schemes, filters attributes with an allow-by-default
-  allowlist, and wraps event listeners into a frozen `SafeEvent` facade.
+  What a tree rendered through `renderConfined` puts on the page cannot
+  hand its components DOM nodes or raw DOM `Event` objects: it strips
+  refs, blocks dangerous tag names, validates URL schemes, filters
+  attributes with an allow-by-default allowlist, and wraps event
+  listeners into a frozen `SafeEvent` facade.
+  It sanitizes output, not code: a component that reaches into Preact
+  itself can still find the DOM (see "What `renderConfined` alone does
+  not contain" below).
 - **`@endo/preact-container/compartment`** — mounts a function the host
   evaluated in a SES `Compartment` (or any untrusted function) as a
   Preact component. It coerces whatever the function returns by walking
   it once and rebuilding it with primitives this package controls, then
   renders the result through the renderer above.
+  This is the layer that contains hostile component code.
 
 ```js
 import {
@@ -172,6 +176,39 @@ Renders its children with sanitization turned off. Use only with vnodes
 the host fully controls (e.g. transcluding host-supplied content through
 an untrusted component — which `@endo/preact-container/compartment` does
 for its opaque-children mechanism).
+
+### What `renderConfined` alone does not contain
+
+The renderer sanitizes each vnode when `h()` creates it, so it assumes
+the components in the tree build their vnodes with `h()` and leave them
+alone.
+It does not stand between component code and Preact itself, and a
+component that reaches into Preact can still find the live DOM:
+
+- **A vnode the component keeps.** Preact renders the very vnode object
+  a component returns, then records the real DOM node on it (published
+  as `__e`) and links it to its parent vnodes (`__`).
+  A component that kept a reference reads them afterwards.
+- **A vnode built by hand.** An object literal a component returns
+  shaped like a vnode (`constructor: undefined`, plus an `_original`,
+  published as `__v`) never passes through `h()`, so the sanitizer never
+  sees it, and Preact renders it as-is: a `ref` on it receives the real
+  DOM node.
+- **A vnode changed after `h()` returns it.** Setting its `ref` or adding
+  `dangerouslySetInnerHTML` to its props happens after sanitization.
+- **`this`.** Preact calls a function component with its component
+  instance as `this`, which holds the parent DOM node (`__P`), the
+  component's first DOM node (`base`), and its vnode (`__v`).
+  A class component's `this` is that instance by design.
+
+Hostile component code belongs in a SES `Compartment`, mounted with
+`confineComponent` from `@endo/preact-container/compartment`.
+The wrapper calls the guest without `this`, hands it only `h`,
+`Fragment`, and the hooks, and rebuilds every vnode the guest returns
+with `h()`, so Preact renders and annotates copies the guest never
+holds, and those copies go through the sanitizer.
+Render a component through `renderConfined` directly only when you
+trust it not to reach into Preact and want its output sanitized.
 
 ### Known gaps — ambient authority (NOT covered)
 
