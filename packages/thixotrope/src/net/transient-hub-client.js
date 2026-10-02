@@ -2,11 +2,10 @@
 /** @import { RandomPowers } from '../platform/random.js' */
 import { E } from '@endo/far';
 import harden from '@endo/harden';
-import { makeOcapn } from '@endo/ocapn';
 import { encodeSwissnum, swissnumFromBytes } from '@endo/ocapn/client/util';
 
 import { silentLogger } from '../platform/logging.js';
-import { derivePipeResumption } from './pipe-network.js';
+import { makeInProcessHubSession } from './in-process-session.js';
 
 /**
  * A disposable host observer. Accepted guest calls remain durable, but its
@@ -19,63 +18,38 @@ export const makeTransientHubClient = async (
   random,
   { codec, hub, sessionKey },
 ) => {
-  const resumption = derivePipeResumption({
-    codec,
-    workerId: sessionKey,
-    role: 'worker',
-  });
   let closed = false;
   let forgotten = false;
-  /** @type {any} */
-  let handlers;
-  /** @type {any} */
-  let sink;
-  /** @type {Uint8Array[]} */
-  const outbound = [];
-  const connection = harden({
-    netlayer: harden({ location: resumption.peerLocation }),
-    isOutgoing: true,
-    get isDestroyed() {
-      return closed;
+  /** @type {() => void} */
+  let close;
+  const hubSession = await makeInProcessHubSession({
+    random,
+    codec,
+    hub,
+    id: sessionKey,
+    sessionKey,
+    networkId: 'thixotrope-transient',
+    logger: silentLogger,
+    debugLabel: sessionKey,
+    isClosed: () => closed,
+    onEnd: () => {
+      if (!closed) close();
     },
-    /** @param {Uint8Array} bytes */
-    write: bytes => {
-      if (closed) return;
-      if (sink === undefined) outbound.push(bytes);
-      else sink.deliver(bytes);
-    },
-    end: () => {
+    onShutdown: () => {
       if (!closed) close();
     },
   });
-  const client = await makeOcapn({
-    randomBytes: length => random.randomBytes(length),
-    logger: silentLogger,
-    codec,
-    debugLabel: sessionKey,
-    network: (/** @type {any} */ nextHandlers) => {
-      handlers = nextHandlers;
-      return harden({
-        networkId: 'thixotrope-transient',
-        codec,
-        location: resumption.peerLocation,
-        shutdown: () => {
-          if (!closed) close();
-        },
-      });
-    },
-  });
-  const close = () => {
+  const { client, connection } = hubSession;
+  close = () => {
     if (forgotten) return;
     const wasClosed = closed;
     closed = true;
-    outbound.length = 0;
+    hubSession.discardOutbound();
     try {
       if (!wasClosed)
-        handlers.handleConnectionClose(
-          connection,
-          Error('Transient client closed'),
-        );
+        hubSession
+          .handlers()
+          .handleConnectionClose(connection, Error('Transient client closed'));
     } finally {
       try {
         hub.forgetSession(sessionKey);
@@ -86,16 +60,11 @@ export const makeTransientHubClient = async (
     }
   };
   try {
-    handlers.resumeSession(connection, resumption);
-    sink = hub.attachSession(sessionKey, {
-      durable: false,
-      send: (/** @type {Uint8Array} */ bytes) => {
-        if (!closed) handlers.handleMessageData(connection, bytes);
-      },
-      onAbort: close,
-    });
-    for (const bytes of outbound.splice(0)) sink.deliver(bytes);
-    const session = await client.provideSession(resumption.peerLocation);
+    hubSession.resume();
+    hubSession.attach({ durable: false, onAbort: close });
+    const session = await client.provideSession(
+      hubSession.resumption.peerLocation,
+    );
     return harden({
       /**
        * @param {string | Uint8Array} secret
