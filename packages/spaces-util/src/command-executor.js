@@ -649,9 +649,10 @@ export const createCommandExecutor = ({
           console.log(
             `[Chat] Accepting invitation for "${guestName}" from ${String(locator).slice(0, 40)}...`,
           );
-          const accepted = E(powers).accept(String(locator), [
-            String(guestName),
-          ]);
+          const accepted = E(powers).accept(
+            String(locator),
+            String(guestName).split('/'),
+          );
           /** @type {ReturnType<typeof setTimeout> | undefined} */
           let timeoutId;
           const timeout = new Promise((_, reject) => {
@@ -705,7 +706,10 @@ export const createCommandExecutor = ({
           const { locator, petName } = params;
           const petNameStr = String(petName);
           console.log(`[Chat] Adopting from locator as "${petNameStr}"...`);
-          await E(powers).adoptFromLocator(String(locator), [petNameStr]);
+          await E(powers).adoptFromLocator(
+            String(locator),
+            petNameStr.split('/'),
+          );
           return {
             success: true,
             message: `Adopted as "${petNameStr}" from locator`,
