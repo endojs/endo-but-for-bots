@@ -124,10 +124,13 @@ authenticated encrypted QUIC connection carrying netstring-framed OCapN
 messages under the `ocapn/netstring/0` ALPN; `@number0/iroh` is optional
 and injectable so CI tests run against an in-memory mock, with a
 real-endpoint integration test gated behind `ENDO_IROH_INTEGRATION=1`),
-[thixotrope](thixotrope.md) (added 2026-07-16, rewritten 2026-09-08;
+[thixotrope](thixotrope.md) (added 2026-07-16, revised 2026-09-30;
 `@endo/thixotrope` is an orthogonally persistent object-capability machine with an OCapN comms hub,
 XS and Ironhorse worker engines, durable guest references and listeners, a persistent workspace,
-application installation, and retention diagnostics.
+one installation registry for applications and directory-native resources, each in a vat of its
+own, a manager and adapter kit for native resources, a guest prelude with exo interface guards in
+every vat, acknowledged alarm settlement, configurable Ironhorse defaults, retention diagnostics,
+and a glossary that gives each term one meaning.
 The main design describes current architecture and delivery limitations; potential upgrades,
 revocation mechanisms, and persistence-boundary experiments live in the package's designs directory),
 [endor-git-bindings](endor-git-bindings.md) (added 2026-07-15,
@@ -491,7 +494,7 @@ LLM-agent stack).*
 | [ocapn-noise-key-only-session-boundary](ocapn-noise-key-only-session-boundary.md) | 2026-07-18 | 2026-07-19 | Proposed |
 | [ocapn-noise-network](ocapn-noise-network.md) | 2026-02-14 | 2026-05-18 | **Complete** |
 | [ocapn-noise-session-reconnect](ocapn-noise-session-reconnect.md) | 2026-05-14 | 2026-05-19 | Proposed |
-| [thixotrope](thixotrope.md) | 2026-07-16 | 2026-09-08 | In Progress |
+| [thixotrope](thixotrope.md) | 2026-07-16 | 2026-09-30 | In Progress |
 | [thixotrope-on-cloudflare](thixotrope-on-cloudflare.md) | 2026-09-23 | 2026-09-24 | Proposed |
 | [thixotrope-on-cloudflare-addendum-single-vat-hub](thixotrope-on-cloudflare-addendum-single-vat-hub.md) | 2026-09-24 | 2026-09-24 | Proposed |
 | [thixotrope-on-cloudflare-review](thixotrope-on-cloudflare-review.md) | 2026-09-24 | 2026-09-24 | Reference |
@@ -573,8 +576,9 @@ LLM-agent stack).*
 | [immutable-arraybuffer/immutable-arraybuffer](../packages/immutable-arraybuffer/designs/immutable-arraybuffer.md) | 2026-06-09 | 2026-08-28 | **Implemented** |
 | [thixotrope/message-delivery](../packages/thixotrope/designs/message-delivery.md) | 2026-09-08 | — | **Implemented** |
 | [thixotrope/vat-replacement](../packages/thixotrope/designs/vat-replacement.md) | 2026-09-08 | — | Proposed (exploratory) |
+| [thixotrope/host-managed-resources](../packages/thixotrope/designs/host-managed-resources.md) | 2026-10-01 | — | Proposed |
 
-**Current totals (2026-09-27 full corpus reconciliation):** 76 Complete/Implemented, 83 In Progress, 19 Not Started, 25 Proposed, 3 Active, 21 Reference, 4 Deprecated, 2 Draft, 5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phases 1–2 implemented* and [genie-integration](genie-integration.md) as a *Largely realized* retrospective (**243 indexed records**). The bucket sum is 243. The raw audit covered 242 files (`designs/*.md` plus `packages/*/designs/*.md`): six ledger/support files were excluded, while four already-indexed nested channel-thread research records lie outside those two globs. Every indexed record and untallied file was checked in six disjoint batches against document metadata, all-state PR searches, and the `llm` log; 63 claimed-to-verified status corrections and 16 new rows are recorded in [`ARCHIVE.md`](ARCHIVE.md). The totals also count [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md) (**Implemented**, #1306), which landed on `llm` concurrently with this pass and was folded in at rebase. The Cloudflare pass adds [thixotrope-on-cloudflare](thixotrope-on-cloudflare.md) (Proposed), [thixotrope-on-cloudflare-addendum-single-vat-hub](thixotrope-on-cloudflare-addendum-single-vat-hub.md) (Proposed) and [thixotrope-on-cloudflare-review](thixotrope-on-cloudflare-review.md) (Reference) to the summary table (Proposed 23 → 25, Reference 20 → 21, records 240 → 243), and both Proposed designs to the M4 table, the dependency graph and the estimates table. Neither is estimated: the base design's Phase 0 is a go/no-go measurement gated on the engine work in `rust/engine/WASM-BLOCKERS.md` and `rust/engine/STACK-DEPTH-REFACTOR.md`, so no milestone-duration, critical-path or timeline change is assigned.
+**Current totals (2026-09-27 full corpus reconciliation):** 76 Complete/Implemented, 83 In Progress, 19 Not Started, 26 Proposed, 3 Active, 21 Reference, 4 Deprecated, 2 Draft, 5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phases 1–2 implemented* and [genie-integration](genie-integration.md) as a *Largely realized* retrospective (**243 indexed records**). The bucket sum is 243. The raw audit covered 242 files (`designs/*.md` plus `packages/*/designs/*.md`): six ledger/support files were excluded, while four already-indexed nested channel-thread research records lie outside those two globs. Every indexed record and untallied file was checked in six disjoint batches against document metadata, all-state PR searches, and the `llm` log; 63 claimed-to-verified status corrections and 16 new rows are recorded in [`ARCHIVE.md`](ARCHIVE.md). The totals also count [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md) (**Implemented**, #1306), which landed on `llm` concurrently with this pass and was folded in at rebase. The Cloudflare pass adds [thixotrope-on-cloudflare](thixotrope-on-cloudflare.md) (Proposed), [thixotrope-on-cloudflare-addendum-single-vat-hub](thixotrope-on-cloudflare-addendum-single-vat-hub.md) (Proposed) and [thixotrope-on-cloudflare-review](thixotrope-on-cloudflare-review.md) (Reference) to the summary table (Proposed 23 → 25, Reference 20 → 21, records 240 → 243), and both Proposed designs to the M4 table, the dependency graph and the estimates table. Neither is estimated: the base design's Phase 0 is a go/no-go measurement gated on the engine work in `rust/engine/WASM-BLOCKERS.md` and `rust/engine/STACK-DEPTH-REFACTOR.md`, so no milestone-duration, critical-path or timeline change is assigned.
 
 The 2026-09-30 rebase of PR #1116 adds [guest-native-invitations](guest-native-invitations.md) (**In Progress**: the guest `invite`/`accept` surface landed in #1305 and #1310), increasing In Progress from 83 to 84 and the indexed records from 243 to 244.
 
@@ -1184,6 +1188,7 @@ finalized.
 | thixotrope-on-cloudflare | Proposed | Run each Thixotrope worker as a hibernating SQLite-backed Durable Object, with Ironhorse compiled to wasm and the heap store on Durable Object SQLite. Gated on the engine work in `rust/engine/WASM-BLOCKERS.md` and `rust/engine/STACK-DEPTH-REFACTOR.md`; the [verification review](thixotrope-on-cloudflare-review.md) ranks the blockers. |
 | thixotrope-on-cloudflare-addendum-single-vat-hub | Proposed | Replaces the base design's architecture with single-vat hubs (vat and OCapN hub tables in one Durable Object) and a per-tenant control object for lifecycle and collection. |
 | `thixotrope/message-delivery` | **Implemented** | Package-level implementation record for the durable message-delivery slice. |
+| `thixotrope/host-managed-resources` | Proposed | Package-level proposal: the installation registry out of the user's workspace, many workspaces per daemon with one default, the control socket kept in the host, typed resource descriptions. |
 | `thixotrope/vat-replacement` | Proposed (exploratory) | Package-level replacement experiment; remains exploratory rather than a committed standalone deliverable. |
 | `daemon/iroh-network-design` | **Implemented** | Package-level Iroh transport implementation supporting the M4 networking cut. |
 
@@ -1622,6 +1627,7 @@ an explicit accounting disposition.
 | `immutable-arraybuffer/immutable-arraybuffer` | Implemented, none | M2 historical |
 | `thixotrope/message-delivery` | Implemented, none | M4 |
 | `thixotrope/vat-replacement` | S-M, 3-5 days exploratory | M4 |
+| `thixotrope/host-managed-resources` | M, not estimated; registry move first | M4 |
 
 #### Calibration round 2026-05-20
 

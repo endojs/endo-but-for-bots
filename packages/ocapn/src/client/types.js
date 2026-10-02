@@ -323,6 +323,9 @@
  *
  * @typedef {object} SessionHooks
  * @property {(connection: Connection, slot: import('../captp/types.js').Slot, value: object) => void} [onExport]
+ * @property {(connection: Connection, slot: import('../captp/types.js').Slot) => void} [onExportReleased]
+ *   the peer has released every reference to this export; a recorded
+ *   description of it can be dropped
  * @property {(connection: Connection, slot: import('../captp/types.js').Slot, value: FarRef<object>) => void} [onImport]
  * @property {(connection: Connection, resolverSlot: import('../captp/types.js').Slot, target: { kind: 'promise' | 'answer', position: bigint }) => void} [onPendingResolver]
  * @property {(connection: Connection, resolverSlot: import('../captp/types.js').Slot) => void} [onResolverSettled]

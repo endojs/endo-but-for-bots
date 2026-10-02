@@ -9,7 +9,9 @@ const execute = promisify(execFile);
 test.serial(
   'stalled view setup cannot retain a closed socket lexical scope',
   async t => {
-    t.timeout(5000);
+    // A generous budget: the covered CI run spawns this child alongside the
+    // rest of the workspace suite, and the child itself asserts the stall.
+    t.timeout(30_000);
     const controller = new AbortController();
     t.teardown(() => controller.abort());
     const { stdout } = await execute(
