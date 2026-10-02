@@ -327,11 +327,9 @@ test('the broker serves only the confined allow-list and refuses withheld names'
     ),
   );
   for (const [index, [name]] of attempts.entries()) {
-    t.is(
-      /** @type {any} */ (refusals[index]).error.data.reason,
-      'name-scope',
-      name,
-    );
+    const { error } = /** @type {any} */ (refusals[index]);
+    t.is(error.message, 'tool-not-permitted', name);
+    t.is(error.data.reason, 'name-scope', name);
   }
 
   child.stdin.end();
