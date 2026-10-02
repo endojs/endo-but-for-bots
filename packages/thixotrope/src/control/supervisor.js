@@ -101,8 +101,10 @@ import {
 // bundles it still needs, and the host keeps no row of its own; 18: the
 // manager names each registration with an epoch and the adapter compares
 // epochs, so sameness is stated once, to the manager; 19: the clock counts
-// its armed alarms beside its pending ones.
-const WORKSPACE_VERSION = 19;
+// its armed alarms beside its pending ones; 20: the guest prelude has the
+// 128-bit hex pattern and the name validators, which the registry and the
+// address book use.
+const WORKSPACE_VERSION = 20;
 // The daemon takes allocation keys from the host alone, so a fixed key names
 // the host's own registry vat and nothing else can carry it.
 const REGISTRY_ALLOCATION_KEY = '00000000000000000000000000000001';

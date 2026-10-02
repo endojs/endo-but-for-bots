@@ -8,6 +8,7 @@ import { makePromiseKit } from '@endo/promise-kit';
 
 import { describeError } from '../describe-error.js';
 import { makeSerialQueue } from '../serial-queue.js';
+import { assertInstallationName, assertWorkspaceName } from './names.js';
 
 /**
  * @typedef {'application' | 'native'} InstallationKind
@@ -88,9 +89,6 @@ import { makeSerialQueue } from '../serial-queue.js';
 export const makeRegistry = ({ installer, index, restartMessage }) => {
   // Shipped by source: the guards travel with the factory, defined here.
   const KindShape = M.or('application', 'native');
-  // What the supervisor accepts as a workspace name, checked here too so
-  // the two boundaries agree.
-  const WorkspaceNamePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
   const DigestShape = M.string({ stringLengthLimit: 128 });
   const GrantsShape = M.arrayOf(harden([M.string(), M.string()]));
   const RequestShape = M.splitRecord(
@@ -343,13 +341,13 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
         await null;
         const { name, kind, digest, allocationKey, workspace, access } =
           request;
-        name.length > 0 || Fail`Expected an installation name`;
+        assertInstallationName(name);
         if (workspace === undefined) {
           access === undefined ||
             Fail`A daemon-wide installation has no workspace access`;
         } else {
-          WorkspaceNamePattern.test(workspace) ||
-            Fail`Expected a workspace name`;
+          // What the supervisor accepts, so the two boundaries agree.
+          assertWorkspaceName(workspace);
           access !== undefined ||
             Fail`A workspace installation needs the workspace's access`;
         }
