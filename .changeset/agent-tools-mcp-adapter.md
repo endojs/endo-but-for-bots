@@ -2,6 +2,7 @@
 '@endo/agent-tools': minor
 '@endo/daemon': minor
 '@endo/agent-mcp-stdio': major
+'@endo/claude': minor
 ---
 
 Implement the MCP adapter at `@endo/agent-tools/adapters/mcp.js`, previously a declared stub.
@@ -22,3 +23,5 @@ The package's `startGuestBroker` serves only the confined allow-list (`confinedT
 Withheld names (`evaluate`, `define`, the identifier and formula-locator tools, and `loadContent`, which makes the daemon fetch from caller-chosen HTTP(S) source hints) are absent from the broker's `tools/list` and refused at `tools/call`.
 An `allowedToolNames` option replaces the default allow-list; it is not intersected with it.
 The allow-list and `selectConfinedTools` are exported.
+
+`@endo/claude`'s `runConfinedTurn` therefore offers the confined `claude` this narrower surface: the withheld names are absent from the turn's `tools/list` and refused if called by name.

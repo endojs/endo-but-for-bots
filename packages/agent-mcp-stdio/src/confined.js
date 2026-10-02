@@ -2,9 +2,9 @@
 /// <reference types="ses"/>
 
 // The confined allow-list the guest broker serves
-// (designs/endo-guest-stdio-mcp.md § How the confinement properties change,
-// shape 1). The README documents the served and withheld names and how a
-// withheld name is refused.
+// (designs/endo-guest-stdio-mcp.md § Static tool catalog, "Evaluators are
+// deliberately present"; endo-but-for-bots#1409). The README documents the
+// served and withheld names and how a withheld name is refused.
 //
 // The withheld identifier and formula-locator tools are the ones that take or
 // mint a designation (endo-but-for-bots#1371, #1404). Served results are not
