@@ -159,3 +159,28 @@ test('fileURLToPath and pathToFileURL round-trip under the root', t => {
   t.throws(() => powers.pathToFileURL('/app/../outside'));
   t.throws(() => powers.pathToFileURL('/etc/passwd'));
 });
+
+test('the tree root and non-string locations are refused', async t => {
+  const { spy, calls } = makeSpyTree(makeLocalTree(makeFixture(t)));
+  const powers = makeTreeReadPowers(spy);
+  await t.throwsAsync(() => powers.read('file:///app/'), {
+    message: /Cannot read the tree root as a file/,
+  });
+  t.is(await powers.maybeRead('file:///app/'), undefined);
+  t.is(await powers.canonical('file:///app/'), 'file:///app/');
+  // @ts-expect-error deliberately not a string
+  await t.throwsAsync(() => powers.read(42), {
+    message: /must be a string/,
+  });
+  t.deepEqual(calls, []);
+});
+
+test('canonical refuses a hook result that is not an array', async t => {
+  const powers = makeTreeReadPowers(makeLocalTree(makeFixture(t)), {
+    // @ts-expect-error deliberately not an array
+    canonical: () => 'node_modules',
+  });
+  await t.throwsAsync(() => powers.canonical('file:///app/main.js'), {
+    message: /canonical hook must return an array of segments/,
+  });
+});
