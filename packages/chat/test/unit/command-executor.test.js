@@ -282,12 +282,12 @@ test('execute resolve command', async t => {
 });
 
 test('execute resolve command splits a typed slash into a pet-name path', async t => {
-  const ctx = createMockContext();
+  const context = createMockContext();
   const executor = createCommandExecutor({
-    powers: ctx.powers,
-    showValue: v => ctx.showValueCalls.push(v),
-    showMessage: m => ctx.showMessageCalls.push(m),
-    showError: e => ctx.showErrorCalls.push(e),
+    powers: context.powers,
+    showValue: v => context.showValueCalls.push(v),
+    showMessage: m => context.showMessageCalls.push(m),
+    showError: e => context.showErrorCalls.push(e),
   });
 
   const result = await executor.execute('resolve', {
@@ -296,7 +296,7 @@ test('execute resolve command splits a typed slash into a pet-name path', async 
   });
 
   t.true(result.success);
-  t.deepEqual(ctx.calls[0].args, [10n, ['feature', 'foo']]);
+  t.deepEqual(context.calls[0].args, [10n, ['feature', 'foo']]);
 });
 
 test('execute reject command', async t => {
@@ -347,12 +347,12 @@ test('execute js command', async t => {
 });
 
 test('execute js command splits a typed slash in each name into a pet-name path', async t => {
-  const ctx = createMockContext();
+  const context = createMockContext();
   const executor = createCommandExecutor({
-    powers: ctx.powers,
-    showValue: v => ctx.showValueCalls.push(v),
-    showMessage: m => ctx.showMessageCalls.push(m),
-    showError: e => ctx.showErrorCalls.push(e),
+    powers: context.powers,
+    showValue: v => context.showValueCalls.push(v),
+    showMessage: m => context.showMessageCalls.push(m),
+    showError: e => context.showErrorCalls.push(e),
   });
 
   const result = await executor.execute('js', {
@@ -363,7 +363,7 @@ test('execute js command splits a typed slash in each name into a pet-name path'
   });
 
   t.true(result.success);
-  t.deepEqual(ctx.calls[0].args, [
+  t.deepEqual(context.calls[0].args, [
     ['@main'],
     '1 + 1',
     ['x'],

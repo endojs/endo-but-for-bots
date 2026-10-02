@@ -49,7 +49,7 @@ The Mount and ReadableTree surfaces are the exception (see below).
 
 ### provideGuest idempotency
 
-On restart, calling `provideGuest` with `introducedNames` on an already-existing guest fails because the reincarnated handle formula lacks `write`. Guard with `E(agent).has(...petNamePath)` before calling `provideGuest`.
+On restart, calling `provideGuest` with `introducedNames` on an already-existing guest fails because the reincarnated handle formula lacks `write`. Guard with `E(agent).has(petNamePath)` before calling `provideGuest`.
 
 ## Message Protocol
 

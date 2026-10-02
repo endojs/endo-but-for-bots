@@ -303,24 +303,28 @@ test.serial(
 test.serial(
   'an embedded slash-joined mention token is split into a pet-name path on send',
   async t => {
-    const ctx = setup();
+    const context = setup();
 
-    appendToken(ctx.$input, 'bob');
-    ctx.$input.appendChild(testDocument.createTextNode(' see '));
-    appendToken(ctx.$input, 'feature/foo');
+    appendToken(context.$input, 'bob');
+    context.$input.appendChild(testDocument.createTextNode(' see '));
+    appendToken(context.$input, 'feature/foo');
 
-    ctx.$sendButton.click();
-    await waitFor(() => ctx.sentMessages.length > 0);
+    context.$sendButton.click();
+    await waitFor(() => context.sentMessages.length > 0);
 
-    t.is(ctx.sentMessages.length, 1, 'one message sent');
-    t.deepEqual(ctx.sentMessages[0].to, ['bob'], 'leading token is recipient');
+    t.is(context.sentMessages.length, 1, 'one message sent');
     t.deepEqual(
-      ctx.sentMessages[0].petNames,
+      context.sentMessages[0].to,
+      ['bob'],
+      'leading token is recipient',
+    );
+    t.deepEqual(
+      context.sentMessages[0].petNames,
       [['feature', 'foo']],
       'the embedded mention token is split on "/"',
     );
 
-    t.teardown(() => ctx.component.dispose());
+    t.teardown(() => context.component.dispose());
   },
 );
 
@@ -329,19 +333,19 @@ test.serial(
   async t => {
     /** @type {unknown[][]} */
     const shown = [];
-    const ctx = setup({
+    const context = setup({
       showValue: (...args) => {
         shown.push(args);
       },
     });
-    ctx.setValue('feature/foo', 'value');
+    context.setValue('feature/foo', 'value');
 
-    appendToken(ctx.$input, 'feature/foo');
+    appendToken(context.$input, 'feature/foo');
 
-    ctx.$sendButton.click();
-    await waitFor(() => shown.length > 0 || ctx.$error.textContent !== '');
+    context.$sendButton.click();
+    await waitFor(() => shown.length > 0 || context.$error.textContent !== '');
 
-    const identifyCall = ctx.calls.find(c => c.method === 'identify');
+    const identifyCall = context.calls.find(c => c.method === 'identify');
     t.deepEqual(
       identifyCall && identifyCall.args,
       ['feature', 'foo'],
@@ -349,9 +353,9 @@ test.serial(
     );
     t.is(shown.length, 1, 'the value modal opened');
     t.deepEqual(shown[0][2], ['feature', 'foo'], 'the path is split');
-    t.is(ctx.sentMessages.length, 0, 'nothing sent');
+    t.is(context.sentMessages.length, 0, 'nothing sent');
 
-    t.teardown(() => ctx.component.dispose());
+    t.teardown(() => context.component.dispose());
   },
 );
 

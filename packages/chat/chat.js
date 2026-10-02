@@ -1225,7 +1225,7 @@ const bodyComponent = (
                 /** @type {{ adopt: (n: bigint, edge: string, pet: string[]) => Promise<void> }} */ (
                   resolvedPowers
                 ),
-              ).adopt(number, name, [petName]);
+              ).adopt(number, name, petName.split('/'));
               window.alert(
                 `Adopted \u201C${name}\u201D as \u201C${petName}\u201D`,
               );
@@ -1249,12 +1249,12 @@ const bodyComponent = (
                 /** @type {{ adopt: (n: bigint, edge: string, pet: string[]) => Promise<void> }} */ (
                   resolvedPowers
                 ),
-              ).adopt(number, name, [localName]);
+              ).adopt(number, name, localName.split('/'));
 
               // Look up and join the channel
               const channelRef = await E(
                 /** @type {ERef<EndoHost>} */ (resolvedPowers),
-              ).lookup([localName]);
+              ).lookup(localName.split('/'));
               const displayName =
                 window.prompt('Your display name in this channel:', 'Guest') ||
                 'Guest';
@@ -1521,7 +1521,7 @@ const bodyComponent = (
         } = assembleMentionSend({ channelPetName, recap, instructions });
 
         await E(/** @type {ERef<EndoHost>} */ (resolvedPowers)).send(
-          [petName],
+          petName.split('/'),
           sendStrings,
           sendEdgeNames,
           petNamePaths,
