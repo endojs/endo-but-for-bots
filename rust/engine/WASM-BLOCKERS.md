@@ -444,6 +444,16 @@ On wasm there are two stacks, and **both** can bind:
   defaults to 512 KiB.
   In a browser it is not configurable at all.
 
+The measurements below predate the refactors of
+[STACK-DEPTH-REFACTOR.md](STACK-DEPTH-REFACTOR.md) §5.
+After its Phase 3, every one of the 242 cases of the stack-lanes corpus
+(`stack-lanes/README.md`), each recursion family at its ceiling among them, returns the
+native result on Wasmtime at 409,600 B, under Node at a 425 KiB `--stack-size` with either
+tier pinned and on workerd at 836 KiB.
+None is an expected trap any longer: the Proxy prototype cycle, the last, needs 7,168 B on
+Wasmtime.
+The trapped-Proxy layer chains are not in that corpus and wait on its B10 (§5, Phase 4).
+
 ### Measurements
 
 The 25 cases below cover the families in `ironhorse-vm/tests/native_recursion_budget.rs`, each

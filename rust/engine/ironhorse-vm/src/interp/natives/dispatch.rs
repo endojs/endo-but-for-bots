@@ -5617,12 +5617,9 @@ impl Interp {
     ) -> Result<NativeResult, Step> {
         let _ = (base, argc, code, this, arg0);
         let result: Slot = match m {
-            // The `Promise.prototype` methods and statics that re-enter user
-            // code / build derived promises are handled outside this
-            // value-returning match (`.then` and the statics thread `code`);
-            // this arm is reached only for the not-yet-modeled ones, an honest
-            // named skip. `.then`/`resolve`/`reject` are intercepted before the
-            // generic method dispatch (see `call_native_method_reentrant`).
+            // Every `Promise.prototype` method and static has an arm here;
+            // `.then` and the statics thread `code` to build derived promises
+            // and call their resolving functions.
             // `Promise.prototype.then`: register the reaction and return the
             // derived promise. The reaction runs later, at the pump-loop drain
             // — no synchronous re-entry here, so it fits the value-returning
