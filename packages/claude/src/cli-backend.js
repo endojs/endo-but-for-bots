@@ -52,6 +52,9 @@ const toBytes = chunk =>
 
 const NEWLINE = 0x0a;
 
+/** How long the pipes may stay open after `claude` exits. */
+const EXIT_DRAIN_GRACE_MS = 1000;
+
 /**
  * Decodes a byte stream one complete line at a time, so a multibyte character
  * split across two chunks decodes intact.
@@ -96,6 +99,7 @@ export const makeClaudeCliBackend = ({
   serverName = 'endo',
   responseShapes = CLAUDE_CODE_RESPONSE_SHAPES,
   permissionPromptsNone = false,
+  maxBudgetUsd,
 }) => {
   const classify = makeClaudeCodeClassifier(responseShapes, version);
   const killProcessGroup = makeProcessGroupKiller({ kill });
@@ -139,6 +143,8 @@ export const makeClaudeCliBackend = ({
         }
       },
     });
+    /** @type {unknown} */
+    let exitGraceTimer;
     /** @type {ScratchDirectory | undefined} */
     let scratch;
     /** @type {StdioProjection | undefined} */
@@ -167,6 +173,7 @@ export const makeClaudeCliBackend = ({
         toolNames: guest.toolNames,
         maxTurns: limits.maxTurns,
         model,
+        maxBudgetUsd,
         permissionPromptsNone,
       });
       const env = buildConstructedEnvironment({
@@ -203,6 +210,19 @@ export const makeClaudeCliBackend = ({
         spawned.on('close', (exitCode, signal) =>
           resolve({ exitCode, signal }),
         );
+        // A descendant that inherited the pipes can hold them open after
+        // `claude` itself exits, so `close` may never come. Give the pipes a
+        // grace period to drain after `exit`, then settle and reap the group.
+        spawned.on('exit', (exitCode, signal) => {
+          exitGraceTimer = timers.setTimeout(() => {
+            exitGraceTimer = undefined;
+            try {
+              killProcessGroup(spawned.pid);
+            } finally {
+              resolve({ exitCode, signal });
+            }
+          }, EXIT_DRAIN_GRACE_MS);
+        });
       });
 
       /** @param {string} text */
@@ -258,6 +278,7 @@ export const makeClaudeCliBackend = ({
       );
     } finally {
       enforcer.stop();
+      if (exitGraceTimer !== undefined) timers.clearTimeout(exitGraceTimer);
       const cleanups = [
         () => E(release)(),
         () => projection?.close?.(),

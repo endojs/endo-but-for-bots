@@ -163,6 +163,8 @@ export const makeManualTimers = () => {
  * @property {number | null} [exitCode]
  * @property {string | null} [signal]
  * @property {boolean} [hang]  never exits on its own
+ * @property {boolean} [lingers]  exits, but a descendant keeps the pipes
+ *   open, so `close` never comes
  * @property {string} [spawnError]  emits `error` instead of running
  */
 
@@ -185,7 +187,13 @@ export const makeFakeSpawn = script => {
     const record = { command, commandArguments, options, stdin: '' };
     spawns.push(record);
     /** @type {Record<string, ((...values: any[]) => void)[]>} */
-    const listeners = { error: [], close: [], stdout: [], stderr: [] };
+    const listeners = {
+      error: [],
+      exit: [],
+      close: [],
+      stdout: [],
+      stderr: [],
+    };
     const emit = (
       /** @type {string} */ name,
       /** @type {any[]} */ ...values
@@ -205,7 +213,10 @@ export const makeFakeSpawn = script => {
       }
       for (const chunk of [script.stderr ?? []].flat()) emit('stderr', chunk);
       if (!script.hang) {
-        emit('close', script.exitCode ?? 0, script.signal ?? null);
+        emit('exit', script.exitCode ?? 0, script.signal ?? null);
+        if (!script.lingers) {
+          emit('close', script.exitCode ?? 0, script.signal ?? null);
+        }
       }
     };
     /** @type {ChildProcessLike} */

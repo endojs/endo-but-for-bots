@@ -93,7 +93,7 @@ export type ChildProcessLike = {
   stderr: ChildStream | null;
   on: ((event: 'error', listener: (error: Error) => void) => void) &
     ((
-      event: 'close',
+      event: 'close' | 'exit',
       listener: (exitCode: number | null, signal: string | null) => void,
     ) => void);
 };
@@ -118,6 +118,8 @@ export type CliArgumentsSpec = {
   toolNames: readonly string[];
   maxTurns: number;
   model?: string;
+  /** Adds `--max-budget-usd`, the same ceiling as the SDK's `maxBudgetUsd`. */
+  maxBudgetUsd?: number;
   /** Adds `--permission-prompts none`, on CLI versions that have it. */
   permissionPromptsNone?: boolean;
 };
@@ -161,6 +163,7 @@ export type ClaudeCliBackendOptions = {
   serverName?: string;
   responseShapes?: ShapeTable;
   permissionPromptsNone?: boolean;
+  maxBudgetUsd?: number;
 };
 
 export type SdkQuery = (parameters: {
