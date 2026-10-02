@@ -3,7 +3,7 @@
     "target": "x86_64-unknown-linux-gnu",
     "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
     "profile": "release",
-    "engine_tree": "268c8bccc560ff57242df93ab3588ebedd7122b8"
+    "engine_tree": "deb43e82f9a3eebd9d8c1aad0499e7fafdb1187b"
   },
   "slack": 0.02,
   "cases": {
@@ -144,7 +144,7 @@
       "outcome": "compiled"
     },
     "proxy-proto-cycle.run": {
-      "bytes": 1061567,
+      "bytes": 8471,
       "outcome": "ReentryLimit"
     },
     "join-self.compile": {
@@ -224,7 +224,7 @@
       "outcome": "compiled"
     },
     "json-stringify-10k.run": {
-      "bytes": 8911,
+      "bytes": 8951,
       "outcome": "ReentryLimit"
     },
     "json-stringify-256.compile": {
@@ -232,7 +232,7 @@
       "outcome": "compiled"
     },
     "json-stringify-256.run": {
-      "bytes": 8911,
+      "bytes": 8951,
       "outcome": "completed"
     },
     "flat-self.compile": {
@@ -560,7 +560,7 @@
       "outcome": "compiled"
     },
     "promise-exec-64.run": {
-      "bytes": 252935,
+      "bytes": 252959,
       "outcome": "ReentryLimit"
     },
     "tagged-then-61.compile": {
@@ -888,7 +888,7 @@
       "outcome": "compiled"
     },
     "proxy-set-trap-126.run": {
-      "bytes": 369979,
+      "bytes": 367963,
       "outcome": "completed"
     },
     "proxy-set-trap-127.compile": {
@@ -896,7 +896,7 @@
       "outcome": "compiled"
     },
     "proxy-set-trap-127.run": {
-      "bytes": 371815,
+      "bytes": 369799,
       "outcome": "ReentryLimit"
     },
     "proxy-has-trap-126.compile": {
@@ -1112,7 +1112,7 @@
       "outcome": "compiled"
     },
     "proxy-inherited-set-trap-112.run": {
-      "bytes": 393947,
+      "bytes": 392155,
       "outcome": "completed"
     },
     "proxy-inherited-set-trap-113.compile": {
@@ -1120,7 +1120,7 @@
       "outcome": "compiled"
     },
     "proxy-inherited-set-trap-113.run": {
-      "bytes": 396175,
+      "bytes": 394383,
       "outcome": "ReentryLimit"
     },
     "proxy-reflect-get-trap-61.compile": {
@@ -1152,7 +1152,7 @@
       "outcome": "compiled"
     },
     "proxy-with-has-trap-120.run": {
-      "bytes": 353687,
+      "bytes": 353679,
       "outcome": "ReentryLimit"
     },
     "proxy-forin-ownkeys-trap-126.compile": {
@@ -1160,7 +1160,7 @@
       "outcome": "compiled"
     },
     "proxy-forin-ownkeys-trap-126.run": {
-      "bytes": 428535,
+      "bytes": 428447,
       "outcome": "completed"
     },
     "proxy-forin-ownkeys-trap-127.compile": {
@@ -1296,7 +1296,7 @@
       "outcome": "compiled"
     },
     "jparse-obj-2016.run": {
-      "bytes": 9223,
+      "bytes": 9135,
       "outcome": "ReentryLimit"
     },
     "jrevive-arr-2000.compile": {
@@ -1512,7 +1512,7 @@
       "outcome": "compiled"
     },
     "parse-binding-511.compile": {
-      "bytes": 127607,
+      "bytes": 127423,
       "outcome": "refused"
     },
     "parse-cond-chain-1011.compile": {
@@ -1720,7 +1720,7 @@
       "outcome": "compiled"
     },
     "regexp-backtrack.run": {
-      "bytes": 9855,
+      "bytes": 9863,
       "outcome": "completed"
     }
   }
