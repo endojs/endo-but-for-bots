@@ -3,28 +3,11 @@
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { mustMatch } from '@endo/patterns';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 
 import { InferResultShape, InferenceBackendInterface } from './guards.js';
 
 /** @import { InferRequest, InferResult, InferenceBackend, UsageRecord, UsageSink } from './types.js' */
-
-/**
- * The UTF-8 encoded length of `text`. A lone surrogate counts as the three
- * bytes of the replacement character an encoder would write for it.
- *
- * @param {string} text
- */
-const utf8ByteLength = text => {
-  let length = 0;
-  for (const character of text) {
-    const codePoint = /** @type {number} */ (character.codePointAt(0));
-    if (codePoint < 0x80) length += 1;
-    else if (codePoint < 0x800) length += 2;
-    else if (codePoint < 0x1_0000) length += 3;
-    else length += 4;
-  }
-  return length;
-};
 
 /**
  * Wraps a backend so that each classified result becomes one usage record
@@ -90,7 +73,7 @@ export const makeUsageRecorder = (
       if (result.type === 'unavailable') record.detail = result.detail;
       if (result.type === 'limit-exceeded') record.detail = result.which;
       if (result.type === 'ok') {
-        record.outputBytes = utf8ByteLength(result.text);
+        record.outputBytes = encodeUtf8(result.text).length;
         if (result.usage !== undefined) {
           record.usage = result.usage;
           if (result.usage.turns !== undefined) {
