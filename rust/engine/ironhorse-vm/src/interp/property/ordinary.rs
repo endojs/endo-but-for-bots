@@ -441,6 +441,10 @@ impl Interp {
     /// deliberately rejects native callees (`callback:non-user-function`). The
     /// native path builds the `[THIS, FUNCTION, RESULT, FRAME]` frame the call
     /// opcode would, dispatches with zero arguments, and pops the pushed result.
+    /// Expanded in its two callers, `ordinary_get` and `GET_PROPERTY`'s
+    /// in-place read: a frame of its own would sit on every level of a nest
+    /// through a getter that a native reads (`then`, `@@species`).
+    #[inline(always)]
     pub(in crate::interp) fn invoke_getter(
         &mut self,
         code: &[u8],
@@ -577,6 +581,123 @@ impl Interp {
             }
             current = parent;
         }
+    }
+
+    /// `GET_PROPERTY`'s `[[Get]]` of the ordinary object `inst` for
+    /// `receiver` (STACK-DEPTH-REFACTOR.md C7): [`Interp::mop_get`]'s steps
+    /// for it (the light unit its guarded entry charges, the exotic own
+    /// surface, then [`Self::ordinary_get`]'s walk, repeated here), except
+    /// that a getter the walk reaches that [`Interp::calls_in_place`] is
+    /// entered in the caller's loop, as a getter ([`FrameReturn::Getter`]),
+    /// rather than called, for the loop to set where it returns (a frame's
+    /// `ret_pc` is read only when it returns). Its frame holds the
+    /// light unit with the heavy one the getter's nested `dispatch_at`
+    /// charged. Returns the value, or where the getter's body starts. Kept
+    /// apart from the shared walk, whose frames every `[[Get]]` carries: keep
+    /// the walk in step with `ordinary_get`'s and the prefix with
+    /// `mop_get_with_proxy_metering_inner`'s.
+    #[inline(never)]
+    pub(in crate::interp) fn get_property_in_place(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        receiver: Slot,
+    ) -> Result<GetInPlace, Step> {
+        // A read `mop_get` meters or forwards apart takes `mop_get`.
+        if self.array_iterator_proxy_get_context.is_some() || self.proxies.contains_key(&inst) {
+            return self
+                .mop_get(code, inst, id, receiver)
+                .map(GetInPlace::Value);
+        }
+        self.enter_native_frame(LIGHT_FRAME_COST)?;
+        let got = self.get_in_place_walk(code, inst, id, receiver);
+        if !matches!(got, Ok(GetInPlace::Entered(_))) {
+            self.leave_native_frame(LIGHT_FRAME_COST);
+        }
+        got
+    }
+
+    /// The read of [`Self::get_property_in_place`] after its charge.
+    fn get_in_place_walk(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        receiver: Slot,
+    ) -> Result<GetInPlace, Step> {
+        // `mop_get_with_proxy_metering_inner`'s exotic own surface, which it
+        // reads with no metering flags for an id key.
+        if self.find_property(inst, id).is_none() {
+            if let Some(&typed_array) = self.typed_arrays.get(&inst) {
+                if let Some(index) = self.ta_numeric_index_at(id, 0) {
+                    return Ok(GetInPlace::Value(
+                        self.ta_indexed_element_get(typed_array, index),
+                    ));
+                }
+            }
+            if let Some(d) = self.exotic_own_descriptor(inst, id) {
+                if d.is_data() {
+                    return Ok(GetInPlace::Value(d.value.unwrap_or_else(Slot::undefined)));
+                }
+            }
+        }
+        // `ordinary_get`'s walk. The array-iterator Proxy context is unset
+        // (it was checked on entry, and nothing before the getter's call can
+        // set it), so only a Proxy parent leaves the walk for `mop_get`.
+        let mut current = inst;
+        let getter = loop {
+            if let Some(descriptor) = self.ordinary_get_own_descriptor(current, id) {
+                if descriptor.is_accessor() {
+                    let getter = descriptor.get.unwrap_or_else(Slot::undefined);
+                    if getter.kind == Kind::Undefined {
+                        return Ok(GetInPlace::Value(Slot::undefined()));
+                    }
+                    break getter;
+                }
+                return Ok(GetInPlace::Value(
+                    descriptor.value.unwrap_or_else(Slot::undefined),
+                ));
+            }
+            let parent = self.instance_prototype(current);
+            if parent.is_null() {
+                return Ok(GetInPlace::Value(Slot::undefined()));
+            }
+            if self.proxies.contains_key(&parent) {
+                return self
+                    .mop_get(code, parent, id, receiver)
+                    .map(GetInPlace::Value);
+            }
+            if self.find_property(parent, id).is_none() {
+                if let Some(&typed_array) = self.typed_arrays.get(&parent) {
+                    if let Some(index) = self.ta_numeric_index_at(id, 0) {
+                        return Ok(GetInPlace::Value(
+                            self.ta_indexed_element_get(typed_array, index),
+                        ));
+                    }
+                }
+                if let Some(d) = self.exotic_own_descriptor(parent, id) {
+                    if d.is_data() {
+                        return Ok(GetInPlace::Value(d.value.unwrap_or_else(Slot::undefined)));
+                    }
+                }
+            }
+            current = parent;
+        };
+        if !self.calls_in_place(getter) {
+            return self
+                .invoke_getter(code, getter, receiver)
+                .map(GetInPlace::Value);
+        }
+        // The frame `invoke_getter` builds through `run_user_callback`: the
+        // receiver as `this`, no arguments.
+        let body_start =
+            self.enter_in_place(getter, receiver, Vec::new(), 0, None, LIGHT_FRAME_COST)?;
+        self.call_stack
+            .last_mut()
+            .expect("enter_call pushed the frame")
+            .returns = FrameReturn::Getter;
+        Ok(GetInPlace::Entered(body_start))
     }
 
     pub(in crate::interp::property) fn ordinary_set(

@@ -23,8 +23,8 @@ use super::invoke::RunCall;
 use super::{
     branch_target, cannot_coerce_to_object, canonicalize_nan, cesu8_to_units, count_new_locals,
     to_int32, to_number, unary_minus, units_to_be16, ArithOp, AsyncGeneratorState, BitOp,
-    CatchJump, GeneratorState, Halt, Interp, Kind, MeterCheck, Native, NativeMethod, Opcode,
-    Payload, RelOp, ResumeStatus, Slot, Step, Suspension, BIGINT_LITERAL_METERING,
+    CatchJump, FrameReturn, GeneratorState, Halt, Interp, Kind, MeterCheck, Native, NativeMethod,
+    Opcode, Payload, RelOp, ResumeStatus, Slot, Step, Suspension, BIGINT_LITERAL_METERING,
     BIGINT_NEG_FRAME_METERING, BOUNDED_RUN_SLOT_CEILING, FUNCTION_LOCAL_METERING, HEAVY_FRAME_COST,
     LIGHT_FRAME_COST, USING_DECL_METERING, USING_RESOURCE_METERING, WITH_ENV_SETUP_METERING,
     XS_DONT_DELETE_FLAG, XS_DONT_ENUM_FLAG, XS_DONT_SET_FLAG,
@@ -554,14 +554,21 @@ impl Interp {
                 // repeated `o.a;` adds only its dispatch computrons).
                 XS_CODE_GET_PROPERTY => {
                     let id = operand_id(code, pc, 1);
-                    dispatch_result!(
+                    match dispatch_result!(
                         self.dispatch_get_property(code, id),
                         pc,
                         self,
                         return_depth,
                         code
-                    );
-                    pc += ilen;
+                    ) {
+                        None => pc += ilen,
+                        // A getter run in place (STACK-DEPTH-REFACTOR.md
+                        // C7): it returns past this read.
+                        Some(body_start) => {
+                            self.set_return_pc(pc + ilen);
+                            pc = body_start;
+                        }
+                    }
                 }
                 XS_CODE_DELETE_PROPERTY => {
                     dispatch_flow!(self.exec_delete_property(code, pc, return_depth, ilen), pc)
@@ -4071,11 +4078,13 @@ impl Interp {
         // a constructor's completion is its `this` instance unless
         // the body explicitly returned an object.
         let ret = dispatch_result_flow!(self.end_completion(op), self, return_depth, code);
+        let returns = self.frame_returns();
         let resume = self.leave_call_to_frame_base();
         self.push(ret);
         let pc = resume;
-        // Returning into a JS caller: `mxFirstCode()` checks.
-        if self.check_meter() == MeterCheck::Abort {
+        // Returning into a JS caller: `mxFirstCode()` checks, except into
+        // the property read a getter run in place returns to (C7).
+        if returns == FrameReturn::Call && self.check_meter() == MeterCheck::Abort {
             return Flow::Exit(Step::Host(Halt::MeterAbort));
         }
         Flow::Next(pc)
@@ -4139,11 +4148,13 @@ impl Interp {
         }
         // To the frame base, as `END` returns: the stack is there already,
         // unless the frame begins below its own slots (a `Reflect` call's
-        // target run in place, STACK-DEPTH-REFACTOR.md C2).
+        // target run in place, STACK-DEPTH-REFACTOR.md C2). A getter run in
+        // place checks no meter returning, as `END` checks none (C7).
+        let returns = self.frame_returns();
         let resume = self.leave_call_to_frame_base();
         self.push(gen_slot);
         pc = resume;
-        if self.check_meter() == MeterCheck::Abort {
+        if returns == FrameReturn::Call && self.check_meter() == MeterCheck::Abort {
             return Flow::Exit(Step::Host(Halt::MeterAbort));
         }
         Flow::Next(pc)
@@ -4247,11 +4258,13 @@ impl Interp {
         }
         // To the frame base, as `END` returns: the stack is there already,
         // unless the frame begins below its own slots (a `Reflect` call's
-        // target run in place, STACK-DEPTH-REFACTOR.md C2).
+        // target run in place, STACK-DEPTH-REFACTOR.md C2). A getter run in
+        // place checks no meter returning, as `END` checks none (C7).
+        let returns = self.frame_returns();
         let resume = self.leave_call_to_frame_base();
         self.push(slot);
         pc = resume;
-        if self.check_meter() == MeterCheck::Abort {
+        if returns == FrameReturn::Call && self.check_meter() == MeterCheck::Abort {
             return Flow::Exit(Step::Host(Halt::MeterAbort));
         }
         Flow::Next(pc)
@@ -4313,11 +4326,13 @@ impl Interp {
         }
         // To the frame base, as `END` returns: the stack is there already,
         // unless the frame begins below its own slots (a `Reflect` call's
-        // target run in place, STACK-DEPTH-REFACTOR.md C2).
+        // target run in place, STACK-DEPTH-REFACTOR.md C2). A getter run in
+        // place checks no meter returning, as `END` checks none (C7).
+        let returns = self.frame_returns();
         let resume = self.leave_call_to_frame_base();
         self.push(promise_slot);
         pc = resume;
-        if self.check_meter() == MeterCheck::Abort {
+        if returns == FrameReturn::Call && self.check_meter() == MeterCheck::Abort {
             return Flow::Exit(Step::Host(Halt::MeterAbort));
         }
         Flow::Next(pc)

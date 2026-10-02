@@ -1934,6 +1934,33 @@ struct CallerState {
     /// stack, so the depth is released where the nested loop released it.
     /// Zero for every other frame.
     held: usize,
+    /// How the frame hands its result back to the caller's loop.
+    returns: FrameReturn,
+}
+
+/// What `GET_PROPERTY`'s `[[Get]]` of an ordinary object made of the read
+/// ([`Interp::get_property_in_place`]).
+enum GetInPlace {
+    /// The property's value.
+    Value(Slot),
+    /// A getter entered in the caller's loop: continue at its body.
+    Entered(usize),
+}
+
+/// How a frame the dispatch loop runs hands its result back.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum FrameReturn {
+    /// Any other frame: `END`, and the `START_*` of a generator or async
+    /// body, push the result and check the meter on the return into the
+    /// caller's loop (`mxFirstCode`'s check, which for a call run in place is
+    /// the one `RUN` made after the call's nested loop returned).
+    #[default]
+    Call,
+    /// A getter `GET_PROPERTY` reached and runs in place
+    /// (STACK-DEPTH-REFACTOR.md C7): the result is pushed as the property's
+    /// value and no meter is checked, as none was when the getter's nested
+    /// loop returned through its boundary and the read went on.
+    Getter,
 }
 
 /// One entry of the exception jump-buffer chain (XS's `txJump`, pushed by
