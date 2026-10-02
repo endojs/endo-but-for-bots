@@ -214,7 +214,7 @@ Returned (the caller branches on `result.status`):
 - `already-consumed` (**consumed** earlier by a *different* agent): "this invite
   link was already used".
 - `revoked` (**not redeemable**): the formula-store state records the invitation
-  as cancelled, overwritten by a re-`invite`, or removed (section 7), so it is
+  as canceled, overwritten by a re-`invite`, or removed (section 7), so it is
   distinguishable from an unknown formula.
 - `peer-conflict` (**not consumed**): the insert-only peer registration refused
   because the locator names a known node with differing addresses, or would rebind
@@ -233,7 +233,7 @@ least as a distinguishable message):
 The committed binding, a positive GC-independent fact, is what makes
 `already-consumed` and `already-joined` decidable without a second store; the
 inviter-side `Invitation.accept` returns the discriminated record that carries the
-judgement back.
+judgment back.
 The `status` constants are exported the way `Registry*ErrorName` are
 (`packages/daemon/src/registry.js`), so callers branch on a constant, not a
 literal.
@@ -513,7 +513,7 @@ unless `enableFormulaCollection` (`packages/daemon/src/manager.js`), and
 default for now").
 Collection is cleanup, not the correctness mechanism.
 
-Cancelling the invitation controller makes any reference still live in memory
+Canceling the invitation controller makes any reference still live in memory
 fail fast.
 It is not the durable record, and it must **not** share a serialization point with
 the commit:
@@ -591,7 +591,7 @@ skips the layer and preserves each invariant explicitly:
 A raw `formulaGraphJobs.enqueue(...)` runs its body with `formulaGraphLockDepth`
 still `0`, since only `withFormulaGraphLock` increments it
 (`packages/daemon/src/manager.js:563-575`).
-On a cold cache, the post-restart path section 7 requires, `provideController`
+On a cold cache, which is the post-restart path section 7 requires, `provideController`
 reaches `evaluateFormulaForId` -> `getFormulaForId` -> `withFormulaGraphLock`
 (`packages/daemon/src/manager.js:4324,1255`), which sees depth `0`, enqueues on the
 token the outer enqueue still holds, and hangs forever.
@@ -915,7 +915,7 @@ checked against what has landed since; question 7 was answered in a later
    time, which would otherwise leave two relationships.
    Both daemons compare the two invitation formula ids, and the lower id wins.
    The losing invitation resolves as `already-joined` against the winning
-   relationship and is cancelled, so both sides settle on one pair of bindings
+   relationship and is canceled, so both sides settle on one pair of bindings
    without further coordination.
 4. **Durability across a restart: resolved, the state machine is persisted.**
    The state machine is recorded in the formula store (section 7).
@@ -923,7 +923,7 @@ checked against what has landed since; question 7 was answered in a later
    and turns its outcome-unknown error into a state that is resumed automatically.
 5. **`remove` / `rename` of a pending invitation: resolved by collection.**
    `remove` of the last reference makes the formula unreachable, so it is
-   collected and its incarnation cancelled promptly, revoking the invitation.
+   collected and its incarnation canceled promptly, revoking the invitation.
    `rename` keeps it reachable, so it stays pending under its new name and
    redemption binds there (section 5).
    No reject guard is needed.
