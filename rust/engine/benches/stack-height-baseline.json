@@ -3,7 +3,7 @@
     "target": "x86_64-unknown-linux-gnu",
     "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
     "profile": "release",
-    "engine_tree": "9d54e35ecea7de25fd4906fc64ff62d5a0a5ad35"
+    "engine_tree": "63baf764b7e06c2f41066cec3fe9576723403881"
   },
   "slack": 0.02,
   "cases": {
@@ -224,7 +224,7 @@
       "outcome": "compiled"
     },
     "json-stringify-10k.run": {
-      "bytes": 8951,
+      "bytes": 8911,
       "outcome": "ReentryLimit"
     },
     "json-stringify-256.compile": {
@@ -680,7 +680,7 @@
       "outcome": "compiled"
     },
     "setter-119.run": {
-      "bytes": 389691,
+      "bytes": 8471,
       "outcome": "completed"
     },
     "setter-120.compile": {
@@ -688,7 +688,7 @@
       "outcome": "compiled"
     },
     "setter-120.run": {
-      "bytes": 391371,
+      "bytes": 8471,
       "outcome": "ReentryLimit"
     },
     "valueOf-126.compile": {
@@ -1112,7 +1112,7 @@
       "outcome": "compiled"
     },
     "proxy-inherited-set-trap-112.run": {
-      "bytes": 415451,
+      "bytes": 393947,
       "outcome": "completed"
     },
     "proxy-inherited-set-trap-113.compile": {
@@ -1120,7 +1120,7 @@
       "outcome": "compiled"
     },
     "proxy-inherited-set-trap-113.run": {
-      "bytes": 417679,
+      "bytes": 396175,
       "outcome": "ReentryLimit"
     },
     "proxy-reflect-get-trap-61.compile": {
@@ -1224,7 +1224,7 @@
       "outcome": "compiled"
     },
     "species-41.run": {
-      "bytes": 307855,
+      "bytes": 307863,
       "outcome": "completed"
     },
     "species-42.compile": {
@@ -1352,7 +1352,7 @@
       "outcome": "compiled"
     },
     "jstr-obj-2014.run": {
-      "bytes": 9975,
+      "bytes": 9919,
       "outcome": "completed"
     },
     "jstr-obj-2015.compile": {
@@ -1512,7 +1512,7 @@
       "outcome": "compiled"
     },
     "parse-binding-511.compile": {
-      "bytes": 127607,
+      "bytes": 127423,
       "outcome": "refused"
     },
     "parse-cond-chain-1011.compile": {
@@ -1720,7 +1720,7 @@
       "outcome": "compiled"
     },
     "regexp-backtrack.run": {
-      "bytes": 9863,
+      "bytes": 9855,
       "outcome": "completed"
     }
   }
