@@ -774,9 +774,11 @@ jobs:
     if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-thixotrope-ironhorse']) }}
     name: test-thixotrope-ironhorse
     runs-on: ubuntu-latest
-    # Serial native recovery tests plus worker compilation exceed 20 minutes.
-    # AVA retains its three-minute inactivity guard and per-test deadlines.
-    timeout-minutes: 30
+    # Serial native recovery tests plus worker compilation exceed 30 minutes,
+    # each supervisor test starting the clock's and the control socket's
+    # adapter processes. AVA retains its three-minute inactivity guard and
+    # per-test deadlines.
+    timeout-minutes: 45
     steps:
       - name: Require successful change detection
         if: needs.changes.result != 'success'
