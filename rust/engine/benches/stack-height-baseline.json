@@ -3,7 +3,7 @@
     "target": "x86_64-unknown-linux-gnu",
     "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
     "profile": "release",
-    "engine_tree": "31d8f180c186ec0ab12ce31e9abbf7c16c6fb930"
+    "engine_tree": "9d54e35ecea7de25fd4906fc64ff62d5a0a5ad35"
   },
   "slack": 0.02,
   "cases": {
@@ -144,7 +144,7 @@
       "outcome": "compiled"
     },
     "proxy-proto-cycle.run": {
-      "bytes": 1061615,
+      "bytes": 1061567,
       "outcome": "ReentryLimit"
     },
     "join-self.compile": {
@@ -224,7 +224,7 @@
       "outcome": "compiled"
     },
     "json-stringify-10k.run": {
-      "bytes": 9039,
+      "bytes": 8951,
       "outcome": "ReentryLimit"
     },
     "json-stringify-256.compile": {
@@ -232,7 +232,7 @@
       "outcome": "compiled"
     },
     "json-stringify-256.run": {
-      "bytes": 9039,
+      "bytes": 8911,
       "outcome": "completed"
     },
     "flat-self.compile": {
@@ -304,7 +304,7 @@
       "outcome": "compiled"
     },
     "regexp-deep.run": {
-      "bytes": 10111,
+      "bytes": 10199,
       "outcome": "completed"
     },
     "regexp-nests-512.compile": {
@@ -664,7 +664,7 @@
       "outcome": "compiled"
     },
     "getter-119.run": {
-      "bytes": 359227,
+      "bytes": 8471,
       "outcome": "completed"
     },
     "getter-120.compile": {
@@ -672,7 +672,7 @@
       "outcome": "compiled"
     },
     "getter-120.run": {
-      "bytes": 360651,
+      "bytes": 8471,
       "outcome": "ReentryLimit"
     },
     "setter-119.compile": {
@@ -872,7 +872,7 @@
       "outcome": "compiled"
     },
     "proxy-get-trap-126.run": {
-      "bytes": 414331,
+      "bytes": 416347,
       "outcome": "completed"
     },
     "proxy-get-trap-127.compile": {
@@ -880,7 +880,7 @@
       "outcome": "compiled"
     },
     "proxy-get-trap-127.run": {
-      "bytes": 416279,
+      "bytes": 418311,
       "outcome": "ReentryLimit"
     },
     "proxy-set-trap-126.compile": {
@@ -1096,7 +1096,7 @@
       "outcome": "compiled"
     },
     "proxy-inherited-get-trap-112.run": {
-      "bytes": 481755,
+      "bytes": 476379,
       "outcome": "completed"
     },
     "proxy-inherited-get-trap-113.compile": {
@@ -1104,7 +1104,7 @@
       "outcome": "compiled"
     },
     "proxy-inherited-get-trap-113.run": {
-      "bytes": 484459,
+      "bytes": 479035,
       "outcome": "ReentryLimit"
     },
     "proxy-inherited-set-trap-112.compile": {
@@ -1512,7 +1512,7 @@
       "outcome": "compiled"
     },
     "parse-binding-511.compile": {
-      "bytes": 127423,
+      "bytes": 127607,
       "outcome": "refused"
     },
     "parse-cond-chain-1011.compile": {
@@ -1720,7 +1720,7 @@
       "outcome": "compiled"
     },
     "regexp-backtrack.run": {
-      "bytes": 9855,
+      "bytes": 9863,
       "outcome": "completed"
     }
   }
