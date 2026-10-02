@@ -284,6 +284,46 @@ test('with a guest socket the default connect issues nothing', async t => {
   t.deepEqual(steps, [['connect', '/given/guest.sock']]);
 });
 
+test('a daemon that serves no guest sockets gets the root connection', async t => {
+  /** @type {unknown[][]} */
+  const steps = [];
+  const rootConnection = harden({
+    host: {},
+    closed: new Promise(() => {}),
+    close: () => {},
+  });
+  const connect = makeGuestConnect({
+    formulaId: FORMULA_ID,
+    issue: async () => {
+      steps.push(['issue']);
+      throw Error('This daemon does not serve guest-scoped bootstraps');
+    },
+    connectTo: async () => {
+      steps.push(['connect']);
+      return /** @type {any} */ (harden({ guest: {} }));
+    },
+    connectToRoot: async ({ env }) => {
+      steps.push(['root', env.ENDO_SOCK]);
+      return /** @type {any} */ (rootConnection);
+    },
+  });
+  t.is(await connect(), rootConnection);
+  t.deepEqual(steps, [['issue'], ['root', DAEMON_SOCK]]);
+});
+
+test('any other issue failure does not fall back to the root connection', async t => {
+  const connect = makeGuestConnect({
+    formulaId: FORMULA_ID,
+    issue: async () => {
+      throw Error('Unknown guest');
+    },
+    connectToRoot: async () => {
+      throw Error('unexpected root connection');
+    },
+  });
+  await t.throwsAsync(connect(), { message: 'Unknown guest' });
+});
+
 test('a default turn whose root socket is unreachable fails before any spawn', async t => {
   const parentDir = fs.mkdtempSync('/tmp/ect-');
   t.teardown(() => fs.rmSync(parentDir, { recursive: true, force: true }));

@@ -41,6 +41,7 @@ import path from 'node:path';
 import { E } from '@endo/eventual-send';
 import { makeError, X } from '@endo/errors';
 import {
+  connectToDaemon,
   connectToGuestBootstrap,
   issueGuestBootstrapPath,
   startGuestBroker,
@@ -56,38 +57,67 @@ import { PINNED_CLI_VERSION } from './argv.js';
 /** @import { DaemonConnection, GuestConnection } from '@endo/agent-mcp-stdio' */
 
 /**
+ * Whether `error` says the daemon cannot issue guest sockets at all: a
+ * daemon without a guest path issuer (win32), or one that predates
+ * `guestBootstrapPath` (the Go and Rust supervisors).
+ *
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+const isGuestBootstrapUnsupported = error => {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes('does not serve guest-scoped bootstraps') ||
+    message.includes('"guestBootstrapPath"')
+  );
+};
+
+/**
  * The default harness connection: a session on `guestSocketPath`, or, when
  * absent, on a guest socket issued for `formulaId` over the root socket
- * (`issue` closes that root session before it returns).
+ * (`issue` closes that root session before it returns). A daemon that cannot
+ * issue guest sockets gets the root connection (`connectToRoot`) instead, as
+ * before guest-scoped bootstraps existed; an explicit `guestSocketPath` never
+ * falls back.
  *
  * @param {object} options
  * @param {string} options.formulaId
  * @param {string} [options.guestSocketPath]
  * @param {typeof issueGuestBootstrapPath} [options.issue]
  * @param {typeof connectToGuestBootstrap} [options.connectTo]
- * @returns {() => Promise<GuestConnection>}
+ * @param {typeof connectToDaemon} [options.connectToRoot]
+ * @returns {() => Promise<GuestConnection | DaemonConnection>}
  */
 export const makeGuestConnect = ({
   formulaId,
   guestSocketPath,
   issue = issueGuestBootstrapPath,
   connectTo = connectToGuestBootstrap,
+  connectToRoot = connectToDaemon,
 }) => {
-  return async () =>
-    connectTo({
-      socketPath:
-        guestSocketPath ??
-        (await issue({
-          formulaId,
-          env: process.env,
-          platform: process.platform,
-          info: {
-            user: os.userInfo().username,
-            home: os.homedir(),
-            temp: os.tmpdir(),
-          },
-        })),
-    });
+  return async () => {
+    if (guestSocketPath !== undefined) {
+      return connectTo({ socketPath: guestSocketPath });
+    }
+    const where = {
+      env: process.env,
+      platform: process.platform,
+      info: {
+        user: os.userInfo().username,
+        home: os.homedir(),
+        temp: os.tmpdir(),
+      },
+    };
+    /** @type {string} */
+    let socketPath;
+    try {
+      socketPath = await issue({ formulaId, ...where });
+    } catch (error) {
+      if (!isGuestBootstrapUnsupported(error)) throw error;
+      return connectToRoot(where);
+    }
+    return connectTo({ socketPath });
+  };
 };
 harden(makeGuestConnect);
 
