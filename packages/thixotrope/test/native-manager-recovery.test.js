@@ -279,7 +279,6 @@ for (const after of /** @type {const} */ ([
       const restoredRegistry = await second.daemon.lookup('registry');
       t.like(await waitForStatus(restoredRegistry, 'resource', 'ready'), {
         kind: 'native',
-        complete: true,
       });
       const managers = second.daemon
         .inspectWorkers()
@@ -426,7 +425,6 @@ test.serial(
     t.is(managers.length, 1);
     t.like(await E(registry).lookup('resource', 'main'), {
       status: 'ready',
-      complete: true,
       workerId: managers[0].workerId,
     });
   },

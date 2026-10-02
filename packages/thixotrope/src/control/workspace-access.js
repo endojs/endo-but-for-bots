@@ -67,7 +67,7 @@ export const makeWorkspaceAccess = inventory => {
       name.length > 0 || Fail`Expected an installation name`;
       if (inventory.has(name)) {
         inventory.get(name) === value ||
-          Fail`Inventory name became occupied during installation`;
+          Fail`Installation name was taken while it was being installed; remove the installation and install it again`;
         return;
       }
       inventory.set(name, value);

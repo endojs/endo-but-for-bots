@@ -56,12 +56,6 @@ import { makeSerialQueue } from '../serial-queue.js';
  *   once the installation has been handed to its vat: an application's
  *   factory called, a native resource's manager made
  * @property {unknown} value
- * @property {boolean} complete
- * @property {{value: unknown} | undefined} unplaced an installed value whose
- *   name was occupied when it was ready; a later install of the same
- *   identity tries to place it again
- * @property {Promise<unknown> | undefined} placing that later placement
- *   while it is in flight, so two such installs make one
  */
 
 /**
@@ -286,34 +280,25 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
   };
   /**
    * Put the installed value under its name in the workspace, guest to guest.
-   * A name taken meanwhile fails the attempt but not the installation: the
-   * value is kept, and a later install of the same identity tries again, so
-   * the name is taken once it is free.
+   * A name taken meanwhile fails the installation, like any other step
+   * that fails: it keeps its vat and its identity until it is removed, and
+   * the name is the user's.
    * @param {string} name
    * @param {Installation} entry
    * @param {unknown} value
    */
   const place = async (name, entry, value) => {
-    if (entry.access !== undefined) {
-      try {
-        await E(entry.access).put(name, value);
-      } catch (error) {
-        entry.unplaced = harden({ value });
-        throw error;
-      }
-    }
+    if (entry.access !== undefined) await E(entry.access).put(name, value);
     if (installed.get(keyOf(entry.workspace, name)) !== entry) {
       // Removed while the value was on its way: the removal found nothing
       // to take out, so it is taken out here.
       if (entry.access !== undefined) await E(entry.access).remove(name, value);
       throw Fail`Installation was removed`;
     }
-    entry.unplaced = undefined;
     entry.value = value;
     entry.status = 'ready';
     entry.error = undefined;
     entry.worker = undefined;
-    entry.complete = true;
     await recordIndex(name, entry);
     return value;
   };
@@ -363,31 +348,6 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
           differs === undefined ||
             Fail`Installation name has a different installation: its ${q(differs)} differs`;
           await entry.issued.promise;
-          if (entry.unplaced !== undefined && entry.placing === undefined) {
-            // One placement at a time: an install arriving while another's
-            // placement is in flight joins it, rather than placing the
-            // value again onto that one's success.
-            const { value } = entry.unplaced;
-            const current = entry;
-            const placing = place(name, current, value).then(
-              placed => {
-                current.placing = undefined;
-                return placed;
-              },
-              error => {
-                current.placing = undefined;
-                if (installed.get(key) === current) {
-                  current.status = 'failed';
-                  current.error = describeError(error);
-                  void recordIndex(name, current).catch(() => {});
-                }
-                throw error;
-              },
-            );
-            current.placing = placing;
-            current.result = placing;
-            void placing.catch(() => {});
-          }
           return harden({ result: entry.result });
         }
         if (kind === 'application') {
@@ -430,9 +390,6 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
           result: undefined,
           issued: makePromiseKit(),
           value: undefined,
-          complete: false,
-          unplaced: undefined,
-          placing: undefined,
         };
         installed.set(key, entry);
         const current = entry;
@@ -468,7 +425,6 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
       return harden({
         kind: entry.kind,
         workerId: entry.workerId,
-        complete: entry.complete,
         status: entry.status,
         value: entry.value,
       });
@@ -493,7 +449,7 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
           await retrying(() => E(installer).retire(entry.workerId));
         installed.delete(key);
         try {
-          if (entry.complete && entry.access !== undefined)
+          if (entry.status === 'ready' && entry.access !== undefined)
             await E(entry.access).remove(name, entry.value);
         } finally {
           // The host's index forgets the name whatever the workspace, which
