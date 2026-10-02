@@ -274,16 +274,26 @@ test('a query that ends with no result is unavailable', async t => {
   });
 });
 
-test('a message that cannot be serialized still counts as zero bytes', async t => {
-  const { query } = replay([
-    { ...assistant('message-1', 'x'), weird: 10n },
+test('a message JSON cannot serialize still counts toward the byte limit', async t => {
+  const big = 10n ** 200n;
+  /** @type {Record<string, unknown>} */
+  const looped = { ...assistant('message-1', 'x') };
+  looped.self = looped;
+  const { query: bigQuery } = replay([
+    { ...assistant('message-1', 'x'), weird: big },
     success,
   ]);
-  const { backend } = makeHarness(query);
-  t.deepEqual(await backend.infer(makeRequest()), {
+  const { backend: bigBackend } = makeHarness(bigQuery);
+  t.deepEqual(
+    await bigBackend.infer(makeRequest({ limits: { maxOutputBytes: 150 } })),
+    { type: 'limit-exceeded', which: 'output-bytes' },
+    'a bigint counts as its digits',
+  );
+  const { query: loopQuery } = replay([looped, success]);
+  const { backend: loopBackend } = makeHarness(loopQuery);
+  t.like(await loopBackend.infer(makeRequest()), {
     type: 'ok',
     text: 'stored',
-    usage: { inputTokens: 7, outputTokens: 2, turns: 3 },
   });
 });
 

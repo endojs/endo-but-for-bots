@@ -36,16 +36,25 @@ const messageOf = error =>
   error instanceof Error ? error.message : String(error);
 
 /**
+ * The UTF-8 length of `message` as JSON. Values `JSON.stringify` refuses
+ * still count, so that no message slips past the output-bytes ceiling: a
+ * bigint counts as its decimal digits and a repeated object as a short
+ * marker.
+ *
  * @param {unknown} message
  * @returns {number}
  */
 const serializedByteCount = message => {
-  let text;
-  try {
-    text = JSON.stringify(message) ?? '';
-  } catch {
-    text = '';
-  }
+  const seen = new WeakSet();
+  const text =
+    JSON.stringify(message, (_key, value) => {
+      if (typeof value === 'bigint') return `${value}`;
+      if (typeof value === 'object' && value !== null) {
+        if (seen.has(value)) return '[Repeated]';
+        seen.add(value);
+      }
+      return value;
+    }) ?? '';
   return encodeUtf8(text).length;
 };
 
