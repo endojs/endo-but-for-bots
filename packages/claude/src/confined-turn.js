@@ -57,19 +57,18 @@ import { PINNED_CLI_VERSION } from './argv.js';
 /** @import { DaemonConnection, GuestConnection } from '@endo/agent-mcp-stdio' */
 
 /**
- * Whether `error` says the daemon cannot issue guest sockets at all: a
- * daemon without a guest path issuer (win32), or one that predates
- * `guestBootstrapPath` (the Go and Rust supervisors).
+ * Whether `error` says the daemon cannot issue guest sockets at all (a
+ * daemon without a guest path issuer, such as on win32).
+ * Only the daemon-owned refusal text counts: a loose match on the method
+ * name would also catch argument-guard failures and silently widen the
+ * harness to full host authority.
  *
  * @param {unknown} error
  * @returns {boolean}
  */
 const isGuestBootstrapUnsupported = error => {
   const message = error instanceof Error ? error.message : String(error);
-  return (
-    message.includes('does not serve guest-scoped bootstraps') ||
-    message.includes('"guestBootstrapPath"')
-  );
+  return message.includes('does not serve guest-scoped bootstraps');
 };
 
 /**
