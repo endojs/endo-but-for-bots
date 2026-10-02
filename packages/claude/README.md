@@ -160,6 +160,24 @@ The network namespace is shared, because `claude` must reach the inference
 API. A loopback TCP listener on the host is therefore still reachable from the
 slice (see § Known gaps).
 
+The slice's building blocks are importable from `@endo/claude` for deployment
+companions that run other commands in the same shape:
+
+- `makeBwrapSpawn({ spawn, bwrapPath, systemMounts, readOnlyPaths,
+  writablePaths, home })` wraps a `spawn` so each command it starts runs inside
+  the slice, with `HOME` set inside the slice only.
+- `assembleBwrapArgv({ systemMounts, readOnlyPaths, writablePaths, home, cwd,
+  command, commandArguments })` returns the `bwrap` argv for one command.
+- `resolveSystemMounts({ fileSystem })` resolves the system mounts present on
+  this host, as `SliceMount`s.
+- `SYSTEM_DIRECTORIES` and `SYSTEM_ETC_ENTRIES` are the system directories and
+  `/etc` entries the slice binds, when present.
+- `DEFAULT_SCRATCH_HOME` is the scratch `HOME`, `/home/endo-claude`.
+- The `SliceMount` type, `{ kind, source, target }`, with `kind` one of
+  `'ro-bind'`, `'bind'`, or `'symlink'`, describes one system mount.
+
+These spawn the caller's environment as given; pass a constructed allowlist.
+
 ## Two transports
 
 - **Preferred (v1): a claude-spawned stdio adapter reaching a separate,
