@@ -757,7 +757,8 @@ const buildDaemon = async (
       hub.retireSession(meta.hubSessionKey ?? `peer:${token}`, meta.hubEpoch);
   }
   // The transient sessions a previous process left, named before this one
-  // can seat any of its own.
+  // can seat any of its own: no turn separates the netlayer's start from
+  // the sweep below today, and none added later may sweep a live one.
   const staleTransient = Object.keys(
     store.getHubState()?.sessions ?? {},
   ).filter(key => key.startsWith('transient:'));

@@ -440,10 +440,18 @@ export const serveThixotrope = async (
       }
       daemon.publish(registry, registryPublication);
       // Bundles are freed once the registry has said which it still needs:
-      // a request's bundles are in the store before the registry holds the
-      // request, and kept from then on. While the registry vat is
-      // quarantined nothing can be installed, and nothing is swept.
-      daemon.sweepBundles(await E(registry).bundles());
+      // a request's bundles are in the store before the registry receives
+      // the request, and named from then until its vat holds the code.
+      // While the registry vat is quarantined nothing can be installed, and
+      // nothing is swept; a registry that cannot answer leaves the store as
+      // it is, which only keeps what a later start frees.
+      await E(registry)
+        .bundles()
+        .then(
+          (/** @type {string[]} */ named) => daemon.sweepBundles(named),
+          (/** @type {Error} */ error) =>
+            log.error('stored bundles not swept:', error),
+        );
     } else {
       log.error(
         'The registry vat is quarantined: installations are listed and removed from the host index, and none can be made; this version offers no command to repair it',
@@ -722,10 +730,8 @@ export const serveThixotrope = async (
           }
         }
         // The registry vat does not hold the name, or cannot answer. The
-        // host index may still: for a request that never reached the
-        // registry, the host having ended between recording it and handing
-        // it over, or for a vat the registry cannot retire. It is retired
-        // and forgotten here; the inventory entry, if any, is the
+        // host index may still, for a vat the registry cannot retire: it is
+        // retired and forgotten here; the inventory entry, if any, is the
         // workspace's to clear.
         for (const scope of [workspace.name, undefined]) {
           const entry = index.get(scope, name);

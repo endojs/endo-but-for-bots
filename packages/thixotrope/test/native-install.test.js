@@ -5,7 +5,6 @@ import test from '@endo/ses-ava/test.js';
 import {
   mkdir,
   mkdtemp,
-  readFile,
   realpath,
   rm,
   symlink,
@@ -631,11 +630,10 @@ test.serial(
     t.timeout(60_000);
     const path = await mkdtemp('/tmp/thix-unreceived-');
     t.teardown(() => rm(path, { recursive: true, force: true }));
-    const indexPath = join(path, 'installations.json');
-    const entries = async () =>
-      JSON.parse(await readFile(indexPath, 'utf8')).entries;
     let host = await serve(t, path);
-    // A request the registry refuses leaves nothing in the index.
+    const store = makeFsStore(powers, path);
+    // A request the registry refuses names its bundle no longer.
+    const initial = store.listBundles();
     await t.throwsAsync(
       () =>
         host.client.call('install', 'refused', '({ make: () => undefined })', [
@@ -643,25 +641,25 @@ test.serial(
         ]),
       { message: /Unknown inventory grant/ },
     );
-    t.false(
-      (await entries()).some(
-        (/** @type {{name: string}} */ entry) => entry.name === 'refused',
-      ),
-    );
+    const refused = store
+      .listBundles()
+      .filter(digest => !initial.includes(digest));
+    t.is(refused.length, 1, 'the refused request had put its bundle');
     host.client.close();
     await host.supervisor.close();
     // A bundle a request put in the store, the host having ended before the
-    // registry held the request: nothing names it.
-    const store = makeFsStore(powers, path);
+    // registry received the request: nothing names it.
     const unreceived = store.putBundle('({ make: () => null })');
     host = await serve(t, path);
     t.false(
       store.listBundles().includes(unreceived),
       'the next start frees it once the registry has said what it needs',
     );
+    t.false(store.listBundles().includes(refused[0]), 'and the refused one');
     // An installed application's code is in its vat once staged, so the
     // registry stops naming its bundle and a start frees it; the launchers'
     // bundles stay, and the application is unaffected.
+    const beforeInstall = store.listBundles();
     t.like(
       await host.client.call(
         'install',
@@ -672,12 +670,16 @@ test.serial(
       { name: 'kept', status: 'ready' },
     );
     const held = store.listBundles();
+    const staged = held.filter(digest => !beforeInstall.includes(digest));
+    t.is(staged.length, 1, 'the installation put its bundle');
     host.client.close();
     await host.supervisor.close();
     host = await serve(t, path);
-    const after = store.listBundles();
-    t.true(after.every(digest => held.includes(digest)));
-    t.true(after.length < held.length, 'the staged bundle was freed');
+    t.deepEqual(
+      store.listBundles().sort(),
+      held.filter(digest => digest !== staged[0]).sort(),
+      'the staged bundle alone was freed',
+    );
     t.is(
       await host.client.call('evaluate', "inventory.get('kept')"),
       "'placed'",
