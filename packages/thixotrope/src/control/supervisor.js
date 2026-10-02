@@ -4,8 +4,10 @@
  * and turns it into a running workspace. It is the composition root beneath
  * `bin/thix.js` — the only module that assembles a daemon, the durable and
  * Unix netlayers, application and native-resource installation, and the
- * host services (clock, mailbox), and the only one that holds the engine
- * lease and the private control socket that authorizes administration.
+ * built-ins (the clock, the control socket and the mailbox; what each ships
+ * and the rule that provides it are `builtins.js`), and the only one that
+ * holds the engine lease and the private control socket that authorizes
+ * administration.
  *
  * Three responsibilities are worth separating when reading it:
  *
@@ -13,10 +15,11 @@
  *   encloses socket lifetime, so a successor never serves a directory whose
  *   predecessor can still write it, and shutdown drains transient clients
  *   before releasing the store.
- * - **Workspace.** A single durable guest vat holds the user's inventory and
- *   the bindings an attached terminal evaluates against. Host services are
- *   provided at every start and granted into that vat by explicit inventory key,
- *   never ambiently.
+ * - **Workspaces.** A table of named workspaces, `default` always, each a
+ *   durable guest vat holding its inventory and the bindings an attached
+ *   terminal evaluates against (`workspaces.js`). The built-ins are provided
+ *   at every start, the clock daemon-wide and handed to every workspace and
+ *   a mailbox into each, by explicit inventory key, never ambiently.
  * - **Administration.** Each control-socket connection gets its own
  *   `ThixotropeLocalAdmin` facet over an OCapN session. Connection lifetime
  *   is an observer lifetime only: closing a terminal cancels its ephemeral
@@ -43,13 +46,13 @@ import { randomHex128 } from '../random-id.js';
 import { makeSerialQueue } from '../serial-queue.js';
 
 import { evaluateSource } from '../core/evaluate-source.js';
-import { makeInstallationIndex } from './installation-index.js';
 import { makeBuiltins } from './builtins.js';
+import { makeInstallationIndex } from './installation-index.js';
 import { makeInstaller } from './installer.js';
 import { makeMeasuredEngine } from './measured-engine.js';
 import { assertInstallationName, assertWorkspaceName } from './names.js';
 import { makeRegistry } from './registry.js';
-import { makeWorkspaces } from './workspaces.js';
+import { DEFAULT_WORKSPACE, makeWorkspaces } from './workspaces.js';
 import { makeThixotropeDaemon } from '../core/daemon.js';
 import { makeFileSyncStringAtom } from '../store/file-sync-string-atom.js';
 import { assertRecordVersion } from '../store/versioned-record.js';
@@ -67,11 +70,13 @@ import {
 
 /** @import { WorkerEngine } from '../core/worker-engine.js' */
 
-// The shape of what the supervisor keeps in the workspace vat's heap. Guest
-// closures the supervisor ships (the inventory, the registries, the clock,
-// the mail address book) are frozen in the heap at first evaluation, so a
-// build whose closures differ cannot serve an older workspace and refuses
-// it rather than run new host code against old guest code.
+// The shape of what the host keeps in its vats' heaps. Guest closures shipped
+// by source, the registry (here), the inventory, the workspace access object
+// and the mail address book (`workspaces.js`), and the clock, the control
+// socket and the mailbox (`builtins.js`), are frozen in the heap at first
+// evaluation, so a build whose closures differ cannot serve an older state
+// directory and refuses it rather than run new host code against old guest
+// code.
 // 4: dedicated native manager vats; 5: the mail address book introduces
 // contacts through the `mail-introductions` resource and its inbox and outbox
 // are observable; 6: a manager's adapter launcher is described by the
@@ -502,7 +507,7 @@ export const serveThixotrope = async (
     };
     const { provide, shipClock, shipControl, shipMailbox } = makeBuiltins({
       store,
-      platform,
+      bundler: platform.bundler,
       paths,
       packagePath,
       daemon,
@@ -520,7 +525,6 @@ export const serveThixotrope = async (
 
     const {
       workspaces,
-      DEFAULT_WORKSPACE,
       openWorkspace,
       provideInto,
       createWorkspace,
@@ -978,7 +982,6 @@ export const serveThixotrope = async (
     };
     // Served last, once everything a connection can reach exists.
     controlFacet = await provide('control', shipControl, {
-      onStale: value => takeBack('control', value, opened),
       powers: harden({ admin: daemon.makeResource('control-admin') }),
       replaceUnhealthy: true,
     });

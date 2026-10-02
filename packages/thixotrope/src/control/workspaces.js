@@ -1,8 +1,9 @@
 // @ts-check
 /** @import { Logger } from '../platform/logging.js' */
-/** @import { FilePowers } from '../platform/files.js' */
 /** @import { HashPowers } from '../platform/hashes.js' */
 /** @import { makeThixotropeDaemon } from '../core/daemon.js' */
+/** @import { makeBuiltins } from './builtins.js' */
+/** @import { makeInstallationIndex } from './installation-index.js' */
 import { E } from '@endo/far';
 import harden from '@endo/harden';
 
@@ -37,10 +38,17 @@ import { makeWorkspaceAccess } from './workspace-access.js';
  * @property {Record<string, { workerId: string }>} workspaces
  */
 
+/** The workspace every state directory serves, under this name. */
+export const DEFAULT_WORKSPACE = 'default';
+
 /**
  * The workspaces a state directory serves: the table of their names, each
  * opened under the allocation key derived from its name, provided its
- * mailbox and handed the daemon's clock, and made by name on request.
+ * mailbox and handed the daemon's clock, and made by name on request. What
+ * this module ships into a vat by source (the inventory, the workspace
+ * access object, the mail address book) is frozen in that vat's heap at
+ * first evaluation: a change to it is a `WORKSPACE_VERSION` bump in
+ * `supervisor.js`.
  *
  * @param {object} powers
  * @param {Awaited<ReturnType<typeof makeThixotropeDaemon>>} powers.daemon
@@ -53,10 +61,11 @@ import { makeWorkspaceAccess } from './workspace-access.js';
  *   turn a vat allocation and a collection take
  * @param {any} powers.registry the registry vat's presence
  * @param {() => boolean} powers.registryHealthy
- * @param {() => any} powers.getIndex the host's installation index, opened
- *   under the store lease
- * @param {any} powers.provide the provide rule of the built-ins
- * @param {any} powers.shipMailbox
+ * @param {() => ReturnType<typeof makeInstallationIndex>} powers.getIndex
+ *   the host's installation index, opened under the store lease
+ * @param {ReturnType<typeof makeBuiltins>['provide']} powers.provide the
+ *   provide rule of the built-ins
+ * @param {ReturnType<typeof makeBuiltins>['shipMailbox']} powers.shipMailbox
  * @param {() => unknown} powers.clockFacet the clock's facet as provided
  *   this lifetime, or undefined once the clock is removed
  * @param {() => boolean} powers.isStopping
@@ -78,7 +87,6 @@ export const makeWorkspaces = ({
 }) => {
   /** @type {Map<string, Workspace>} */
   const workspaces = new Map();
-  const DEFAULT_WORKSPACE = 'default';
   /**
    * The allocation key of a workspace's vat is derived from its name, so
    * every start finds the vat again with no record to lose, and a start
@@ -117,27 +125,27 @@ export const makeWorkspaces = ({
             : evaluateSource(
                 worker,
                 `(({ introductions }) => {
-        // The book and its contacts look the mailbox up at each use, so
-        // one provided afresh after a removal is the one they speak to,
-        // and its absence is reported at every use, not memoised.
-        const provideMailbox = () => {
-          const mailbox = inventory.get('mailbox');
-          if (mailbox === undefined)
-            throw Error('The workspace has no mailbox; restart the supervisor to provide one');
-          return mailbox;
-        };
-        provideMailbox();
-        return (globalThis.mailAddressBook ??= (async () => {
-          if (!inventory.has('contacts')) {
-            inventory.set('contacts', (${makeObservableMap.toString()})());
-          }
-          const mail = (${makeMailAddressBook.toString()})(
-            provideMailbox, inventory.get('contacts'), (${makeMailContact.toString()}), introductions
-          );
-          if (!inventory.has('mail')) inventory.set('mail', mail);
-          return mail;
-        })());
-      })`,
+          // The book and its contacts look the mailbox up at each use, so
+          // one provided afresh after a removal is the one they speak to,
+          // and its absence is reported at every use, not memoised.
+          const provideMailbox = () => {
+            const mailbox = inventory.get('mailbox');
+            if (mailbox === undefined)
+              throw Error('The workspace has no mailbox; restart the supervisor to provide one');
+            return mailbox;
+          };
+          provideMailbox();
+          return (globalThis.mailAddressBook ??= (async () => {
+            if (!inventory.has('contacts')) {
+              inventory.set('contacts', (${makeObservableMap.toString()})());
+            }
+            const mail = (${makeMailAddressBook.toString()})(
+              provideMailbox, inventory.get('contacts'), (${makeMailContact.toString()}), introductions
+            );
+            if (!inventory.has('mail')) inventory.set('mail', mail);
+            return mail;
+          })());
+        })`,
                 { introductions },
                 { slot: 'thixotrope.mailSource' },
               ),
@@ -376,13 +384,10 @@ export const makeWorkspaces = ({
     harden({ name: workspace.name, workerId: workspace.workerId });
   return harden({
     workspaces,
-    DEFAULT_WORKSPACE,
     openWorkspace,
     provideInto,
     createWorkspace,
-    handOut,
     takeBack,
-    removeInstallationsOf,
     describeWorkspace,
   });
 };

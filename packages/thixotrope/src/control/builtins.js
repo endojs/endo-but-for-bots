@@ -1,4 +1,5 @@
 // @ts-check
+/** @import { BundlerPowers } from '../platform/bundler.js' */
 /** @import { Logger } from '../platform/logging.js' */
 /** @import { PathPowers } from '../platform/paths.js' */
 /** @import { makeThixotropeDaemon } from '../core/daemon.js' */
@@ -6,18 +7,21 @@
 import { E } from '@endo/far';
 import harden from '@endo/harden';
 
-import { makeMailbox } from '../mail/mailbox.js';
-import { makeObservableMap } from '../observable-map.js';
 import { make as makeClock } from '../../resources/clock/durable.js';
 import { make as makeControl } from '../../resources/control/durable.js';
+import { makeMailbox } from '../mail/mailbox.js';
+import { makeObservableMap } from '../observable-map.js';
 
 /**
  * The installations the supervisor provides rather than the user: the
- * rule that provides one, and what each built-in ships.
+ * rule that provides one, and what each built-in ships. What this module
+ * ships into a vat by source is frozen in that vat's heap at first
+ * evaluation: a change to it is a `WORKSPACE_VERSION` bump in
+ * `supervisor.js`.
  *
  * @param {object} powers
  * @param {ThixotropeStore} powers.store
- * @param {{ bundler: { bundleNative: (path: string) => Promise<string> } }} powers.platform
+ * @param {BundlerPowers} powers.bundler
  * @param {PathPowers} powers.paths
  * @param {string} powers.packagePath
  * @param {Awaited<ReturnType<typeof makeThixotropeDaemon>>} powers.daemon
@@ -29,7 +33,7 @@ import { make as makeControl } from '../../resources/control/durable.js';
  */
 export const makeBuiltins = ({
   store,
-  platform,
+  bundler,
   paths,
   packagePath,
   daemon,
@@ -46,8 +50,9 @@ export const makeBuiltins = ({
    * removed, in which case the next start provides it again. Its digest
    * is a constant: what it ships changes only with the workspace
    * version. One provided daemon-wide is held by the registry, and its
-   * value handed to every workspace; one provided to a workspace takes
-   * its name in that workspace's inventory. A name the user has taken is
+   * caller hands the value to the workspaces that need it (the clock, to
+   * every one); one provided to a workspace takes its name in that
+   * workspace's inventory. A name the user has taken is
    * theirs; the supervisor says so and goes on without.
    *
    * The registry finds one it holds again, so a healthy installation
@@ -62,8 +67,9 @@ export const makeBuiltins = ({
    * @param {{ workspace: string, access: any }} [options.into] the
    *   workspace the installation belongs to; absent for a daemon-wide one
    * @param {(value: unknown) => Promise<void>} [options.onStale] what to
-   *   do with a daemon-wide value whose vat is gone: take it back from the
-   *   workspaces it was handed to
+   *   do with a daemon-wide value whose vat is gone: take it back from
+   *   wherever it was handed; omitted, a stale value is left where it was
+   *   handed, for one handed nowhere
    * @param {Record<string, unknown>} [options.powers] host powers the
    *   installation is provided, beside its grants
    * @param {boolean} [options.replaceUnhealthy] an installation that
@@ -122,8 +128,9 @@ export const makeBuiltins = ({
         }
         // Ready, but its vat is gone: retired by the host while the
         // registry could not answer, or collected once quarantined. The
-        // name is freed, a daemon-wide value taken back from every
-        // workspace, and the installation provided afresh.
+        // name is freed, a daemon-wide value handed to `onStale` to take
+        // back from wherever it was handed, and the installation provided
+        // afresh.
         await E(registry).remove(name, into?.workspace);
         if (into === undefined && held.value !== undefined && onStale)
           await onStale(held.value);
@@ -155,7 +162,8 @@ export const makeBuiltins = ({
   // digest, so the package's own directory is never pinned and may change
   // underneath a running installation. The installed clock keeps running
   // the bundle it was installed with, so a change to what its two halves
-  // say to each other is a WORKSPACE_VERSION bump, which makes a fresh
+  // say to each other is a `WORKSPACE_VERSION` bump (in `supervisor.js`),
+  // which makes a fresh
   // installation of it.
   const shipClock = async () => {
     const directory = paths.resolve(packagePath, 'resources', 'clock');
@@ -163,9 +171,7 @@ export const makeBuiltins = ({
       kind: 'native',
       durableDigest: store.putBundle(`({ make: ${makeClock.toString()} })`),
       ephemeralDigest: store.putBundle(
-        await platform.bundler.bundleNative(
-          paths.join(directory, 'ephemeral.js'),
-        ),
+        await bundler.bundleNative(paths.join(directory, 'ephemeral.js')),
       ),
     });
   };
@@ -181,9 +187,7 @@ export const makeBuiltins = ({
       kind: 'native',
       durableDigest: store.putBundle(`({ make: ${makeControl.toString()} })`),
       ephemeralDigest: store.putBundle(
-        await platform.bundler.bundleNative(
-          paths.join(directory, 'ephemeral.js'),
-        ),
+        await bundler.bundleNative(paths.join(directory, 'ephemeral.js')),
       ),
     });
   };
