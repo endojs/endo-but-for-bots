@@ -57,9 +57,9 @@ bundling names no bundle and refuses to launch, saying the resource is to be ins
 The directory is consulted only at installation: an edit or a removal afterwards changes nothing
 for a running or restarted installation, and edited source is a different installation, installed
 explicitly under another name or after a removal.
-Bundles that no launcher record names are freed at the next daemon start, once the endpoint's
-records are settled, which releases a removed installation's bundle and one left by an
-installation interrupted before its manager held the launcher.
+Bundles that neither a launcher record nor an installation the registry holds names are freed at
+the next daemon start, once the registry has said which it still needs, which releases a removed
+installation's bundles and those of a request the registry never received.
 Reinstalling the same identity returns the same installation record without replacing later
 inventory edits.
 The two entries must be files rather than links, so what is bundled is what is there; nothing else
@@ -88,7 +88,7 @@ The host's installer, a resource granted to the registry vat alone, stages the d
 from the store into the manager in bounded chunks and evaluates it once there, together with the
 manager kit and the keeper, retaining the kit or the failure in the manager's own heap so a retry
 never runs the factory twice; the bundle stays in the store until a later start's sweep finds
-nothing naming it, the index having stopped naming it once the manager held it.
+nothing naming it, the registry having stopped naming it once the manager held it.
 The host then publishes the lifecycle facet and installs the manager's start notice.
 Finally the registry puts the facet into the inventory through the workspace's access object; a
 name taken meanwhile fails the installation, and a failed installation retains its vat, its
@@ -96,14 +96,13 @@ identity and its error until removed.
 The installation is one durable function in the registry vat, so an interrupted one resumes by
 itself at the next start: a host answer broken by the restart is made again under the same
 allocation key, and every host step is idempotent.
-The host keeps an index of its own beside the vat, written by the registry at each step, which
-names the bundles not yet staged for the sweep and answers listing and removal while the registry
-vat cannot.
-The host records a request there before handing it to the registry, since the registry journals
-the request before the host hears of it, and a start in between would otherwise sweep the bundles
-from under the resuming driver.
+The host keeps an index of its own beside the vat, written by the registry alone at each step,
+which answers listing and removal while the registry vat cannot.
+The sweep asks the registry which bundles its installations still name, so a request's bundles are
+kept from the moment the registry holds it; a host that ends before then leaves them unnamed, and
+the next start frees them.
 A quarantined registry vat leaves the host serving from the index: installations are listed and
-removed, and none is made, until the state directory is replaced.
+removed, none is made and no bundle is swept, until the state directory is replaced.
 
 Removal is the registry's to drive, in the opposite order.
 The manager vat is retired first, which closes the native processes it launched (each launcher is

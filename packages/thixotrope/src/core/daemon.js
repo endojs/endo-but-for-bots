@@ -100,6 +100,8 @@ import {
  * @property {(options?: { debugLabel?: string, ephemeral?: boolean, allocationKey?: string }) => Promise<ThixotropeWorkerAdmin>} createWorker
  * @property {(workerId: string) => ThixotropeWorkerAdmin} getWorker
  * @property {() => Array<string>} listWorkerIds
+ * @property {(keep: Iterable<string>) => Array<string>} sweepBundles free
+ *   the stored bundles no launcher names and the embedder does not keep
  * @property {(name: string, binding?: ResourceBinding) => object} makeResource
  *   a host resource, memoised per name and binding and recorded as such
  *   against every export of it, so a restart makes the same instance again
@@ -148,9 +150,6 @@ const START_NOTICE_MS = 10_000;
  * @param {number} [options.idleSleepMs] put a worker to sleep after this long
  *   with no deliveries (see the durable worker transport's idle-sleep
  *   policy); omitted means workers sleep only on request
- * @param {() => Array<string>} [options.retainBundles] digests of stored
- *   bundles the embedder's own records still need, which the start-up sweep
- *   keeps beside those a native adapter launcher names
  * @param {boolean} [options.verbose]
  * @returns {Promise<ThixotropeDaemon>}
  */
@@ -164,7 +163,6 @@ const buildDaemon = async (
     resources = {},
     adapterProcesses,
     idleSleepMs = undefined,
-    retainBundles = () => [],
     verbose = false,
   },
 ) => {
@@ -813,32 +811,6 @@ const buildDaemon = async (
     for (const key of Object.keys(store.getHubState()?.sessions ?? {})) {
       if (key.startsWith('transient:')) hub.forgetSession(key);
     }
-    // A stored ephemeral bundle lives as long as a launcher names it. One
-    // that none does belonged to an installation since removed, or to one
-    // interrupted before its manager held the launcher, which a retry
-    // stores again; it is freed here, once the endpoint's records are the
-    // settled ones for this process.
-    /** @type {Set<string>} */
-    const namedBundles = new Set();
-    const endpointExports =
-      store.provideWorkerStore(ENDPOINT_ID).getTablesRecord()?.exports ?? {};
-    for (const recorded of Object.values(endpointExports)) {
-      const found = /** @type {any} */ (recorded);
-      const key = boundKeyOf(found?.binding);
-      if (
-        found?.kind === 'resource' &&
-        found.name === 'native-adapter' &&
-        key !== undefined
-      )
-        namedBundles.add(key);
-    }
-    // The embedder may name bundles its own records still need: the
-    // supervisor's installation index names the bundles of installations
-    // not yet staged.
-    for (const digest of retainBundles()) namedBundles.add(digest);
-    for (const digest of store.listBundles()) {
-      if (!namedBundles.has(digest)) store.deleteBundle(digest);
-    }
     await Promise.all(
       [...workers].map(async ([workerId, entry]) => {
         const workerStore = store.provideWorkerStore(workerId);
@@ -923,6 +895,35 @@ const buildDaemon = async (
       return makeWorkerAdmin(workerId);
     },
     listWorkerIds: () => [...workers.keys()].sort(),
+    /**
+     * Free every stored bundle that neither a native adapter's launcher
+     * names (its key is the ephemeral bundle the launcher starts processes
+     * from) nor the embedder keeps, the bundles of the installations it
+     * still holds. One that none names belonged to an installation since
+     * removed, or to a request the embedder never handed on, which a retry
+     * stores again. The embedder calls it while no request is between the
+     * store and its records, as at start before it accepts any. Returns the
+     * digests freed.
+     * @param {Iterable<string>} keep
+     */
+    sweepBundles: keep => {
+      const named = new Set(keep);
+      const endpointExports =
+        store.provideWorkerStore(ENDPOINT_ID).getTablesRecord()?.exports ?? {};
+      for (const recorded of Object.values(endpointExports)) {
+        const found = /** @type {any} */ (recorded);
+        const key = boundKeyOf(found?.binding);
+        if (
+          found?.kind === 'resource' &&
+          found.name === 'native-adapter' &&
+          key !== undefined
+        )
+          named.add(key);
+      }
+      const freed = store.listBundles().filter(digest => !named.has(digest));
+      for (const digest of freed) store.deleteBundle(digest);
+      return harden(freed);
+    },
     makeResource: (name, binding = undefined) =>
       records.provideResource(name, canonicalBinding(binding)),
     retireResource: (name, binding = undefined) =>

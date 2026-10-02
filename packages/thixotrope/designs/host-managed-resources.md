@@ -368,9 +368,9 @@ Done: `makeRegistry` runs the driver in the registry vat and makes a host call
 again when a restart broke its answer; the host's `installer` resource, granted
 to the registry vat alone, allocates under the key, stages a bundle by digest
 from the store, makes a native manager and retires a vat, each idempotently.
-The index names a bundle until its vat holds the code, and the host records a
-request in the index before handing it to the registry, so a start in between
-keeps the bundles; a later start's sweep frees them.
+The registry names a bundle until its vat holds the code, and a start sweeps
+bundles only once the registry has said which it still names; a later start's
+sweep frees them. (As amended by 10.6.)
 Collection no longer waits for an installation: an allocation takes a turn
 with collection, and the host keeps a vat it has handed out until the
 registry's next call about it, after which the registry's own reference roots
@@ -748,7 +748,7 @@ again; (c) reserve the name in the inventory when the request is made.
 
 Recommendation: (b); it is what the README already says of a failed installation.
 
-### 10.6 The bundle sweep and the provisional index row
+### 10.6 The bundle sweep and the provisional index row (Done.)
 
 The host records a provisional index row before handing a request to the registry, makes a vat
 round trip to decide whether a stale row may be overwritten, and forgets the row on refusal, all
@@ -762,6 +762,10 @@ The provisional row, the lookup and the forget go; the index is written by the r
 A bundle put by a request the registry never heard of is freed at the next start's sweep.
 
 Recommendation: yes.
+
+As built, the registry answers `bundles()` rather than `list()`, the digests its installations
+still hold, and the supervisor hands them to the daemon's `sweepBundles` once the registry is
+published; launcher records are still read by the daemon itself.
 
 ### 10.7 Per-connection peer sessions
 
