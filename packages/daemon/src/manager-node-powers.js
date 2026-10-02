@@ -1271,9 +1271,12 @@ export const makeNodeGuestPathIssuer = ({
   return makeGuestPathIssuer({
     directory,
     socketPathFor: name => path.join(directory, name),
-    makePrivateDirectory: async dir => {
-      await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-      await fs.promises.chmod(dir, 0o700);
+    makePrivateDirectory: async privateDirectory => {
+      await fs.promises.mkdir(privateDirectory, {
+        recursive: true,
+        mode: 0o700,
+      });
+      await fs.promises.chmod(privateDirectory, 0o700);
     },
     servePath,
     cancelled,

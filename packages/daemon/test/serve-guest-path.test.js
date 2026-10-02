@@ -37,9 +37,9 @@ const makeHarness = ({
   const issuer = makeGuestPathIssuer({
     directory,
     socketPathFor: name => `${directory}/${name}`,
-    makePrivateDirectory: async dir => {
-      madeDirectories.push(dir);
-      return makePrivateDirectory(dir);
+    makePrivateDirectory: async privateDirectory => {
+      madeDirectories.push(privateDirectory);
+      return makePrivateDirectory(privateDirectory);
     },
     servePath: /** @type {any} */ (
       async (/** @type {{ path: string }} */ { path }) => {
