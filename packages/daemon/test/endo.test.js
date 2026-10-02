@@ -3669,6 +3669,8 @@ test('a guest cannot copy or move through another guest it names', async t => {
     agentName: 'named-agent',
   });
   await E(named).storeValue(42, 'secret');
+  await E(named).makeDirectory(['vault']);
+  await E(named).storeValue(43, ['vault', 'deep']);
   await E(host).storeValue(7, ['namer-agent', 'mine']);
   await E(host).copy(['named-agent'], ['namer-agent', 'peer']);
   await E(namer).makeDirectory(['shelf']);
@@ -3682,14 +3684,30 @@ test('a guest cannot copy or move through another guest it names', async t => {
     'move into': () => E(namer).move(['mine'], ['peer', 'planted']),
     'facet copy from': () => E(shelf).copy(['peer', 'secret'], ['stolen']),
     'facet move from': () => E(shelf).move(['peer', 'secret'], ['stolen']),
+    // The other guest's own `lookup` yields its sub-directory as a facet,
+    // which must not be recovered as that guest's directory.
+    'nested copy from': () =>
+      E(namer).copy(['peer', 'vault', 'deep'], ['stolen']),
+    'nested copy into': () =>
+      E(namer).copy(['mine'], ['peer', 'vault', 'planted']),
+    'nested move from': () =>
+      E(namer).move(['peer', 'vault', 'deep'], ['stolen']),
+    'nested rename': () =>
+      E(namer).move(['peer', 'vault', 'deep'], ['peer', 'vault', 'moved']),
   };
   for (const [label, attempt] of Object.entries(refusals)) {
     // eslint-disable-next-line no-await-in-loop
-    await t.throwsAsync(attempt, { message: /target has no method/u }, label);
+    await t.throwsAsync(
+      attempt,
+      { message: /target has no method|Cannot move or copy through/u },
+      label,
+    );
   }
   t.false(await E(namer).has('stolen'));
   t.false(await E(shelf).has('stolen'));
   t.false(await E(named).has('planted'));
+  t.false(await E(named).has('vault', 'planted'));
+  t.true(await E(named).has('vault', 'deep'));
   t.true(await E(named).has('secret'));
   t.true(await E(namer).has('mine'));
 
