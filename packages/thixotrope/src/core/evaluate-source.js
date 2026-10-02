@@ -29,7 +29,7 @@ export const evaluateSource = async (
 ) => {
   const holder = `globalThis[Symbol.for(${JSON.stringify(slot)})]`;
   await worker.evaluate(`(${holder} = [], true)`);
-  for (let offset = 0; offset < source.length; ) {
+  for (let offset = 0; offset < source.length;) {
     let end = Math.min(offset + 1024, source.length);
     const last = source.charCodeAt(end - 1);
     if (end < source.length && last >= 0xd800 && last <= 0xdbff) end -= 1;

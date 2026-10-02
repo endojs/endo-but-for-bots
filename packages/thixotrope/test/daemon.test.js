@@ -54,13 +54,11 @@ const makeTimerResource = timers =>
     /** @param {number} ms */
     delay: async ms => {
       const delayMs = Number(ms);
-      if (
-        !(
-          Number.isFinite(delayMs) &&
-          delayMs >= 0 &&
-          delayMs <= MAX_TIMER_DELAY_MS
-        )
-      )
+      if (!(
+        Number.isFinite(delayMs) &&
+        delayMs >= 0 &&
+        delayMs <= MAX_TIMER_DELAY_MS
+      ))
         throw Error(
           `delay must be between 0 and ${MAX_TIMER_DELAY_MS} milliseconds`,
         );
