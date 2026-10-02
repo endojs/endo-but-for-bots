@@ -37,7 +37,7 @@ resolves only in a postinstall).
 cd rust/engine/stack-lanes
 python3 build_probe.py                       # native and wasm probes
 python3 ceilings.py --no-build               # the corpus's ceilings still hold
-python3 lane_a.py --no-build --shard all     # Wasmtime at 524,288 B
+python3 lane_a.py --no-build --shard all     # Wasmtime at 409,600 B
 python3 lane_b_node.py --no-build --shard all --paint
 python3 lane_b_workerd.py --no-build --shard all --paint
 python3 lane_c.py --no-build --output lane-c.json
