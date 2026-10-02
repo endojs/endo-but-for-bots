@@ -1918,13 +1918,17 @@ struct CallerState {
     /// `mxFrameEnd`, the slot its result is written to. `END` restores the
     /// stack to it so operands the body abandoned (a `switch` discriminant a
     /// `return` jumped over, say) cannot survive into the caller's expression.
+    /// For a `Reflect.apply` or `Reflect.construct` target run in place it is
+    /// the `Reflect` call's base, below the callee's own slots, so the return
+    /// cuts the `Reflect` call's frame too (`Interp::reflect_run_call`).
     stack_base: usize,
     /// Native-recursion budget units this frame holds for the activation it
     /// replaces (STACK-DEPTH-REFACTOR.md §4.5): a call the dispatch loop runs
     /// in place, which the recursive shape ran in a nested `dispatch_at`,
     /// charges that loop's [`HEAVY_FRAME_COST`] here, with any units its
-    /// caller charged around the call (a Proxy layer's light unit; see
-    /// `Interp::enter_in_place`). `Interp::leave_call`
+    /// caller charged around the call (a Proxy layer's light unit, or a
+    /// `Reflect` call's heavy unit; see `Interp::enter_in_place`).
+    /// `Interp::leave_call`
     /// releases them when the frame is popped, and the dispatch loop that owns
     /// the frame releases them when it exits with the frame still on the call
     /// stack, so the depth is released where the nested loop released it.

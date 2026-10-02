@@ -2625,6 +2625,35 @@ impl Interp {
                     Err(halt) => dispatch_halt_flow!(halt, self, return_depth, code),
                 },
             }
+        } else if let Some((
+            m @ (NativeMethod::ReflectApply | NativeMethod::ReflectConstruct),
+            base,
+        )) = method
+        {
+            // `Reflect.apply` / `Reflect.construct`, which are not
+            // constructors. A target that is a user function over this
+            // loop's buffer runs in this loop (STACK-DEPTH-REFACTOR.md
+            // C2); any other is called as the native called it.
+            if has_target {
+                dispatch_halt_flow!(
+                    self.catchable_type_error_msg("new: not a constructor".into()),
+                    self,
+                    return_depth,
+                    code
+                );
+            }
+            if let Some(body_start) = dispatch_result_flow!(
+                self.reflect_run_call(m, base, argc, ret_pc, code),
+                self,
+                return_depth,
+                code
+            ) {
+                return Flow::Next(body_start);
+            }
+            if self.check_meter() == MeterCheck::Abort {
+                return Flow::Exit(Step::Host(Halt::MeterAbort));
+            }
+            pc = ret_pc;
         } else if let Some((m, base)) = method {
             // A native prototype method: the call's receiver is
             // `this` (stack[base]); its arguments follow. `code` is
@@ -4108,7 +4137,10 @@ impl Interp {
                 "start_generator:frame-underflow",
             )));
         }
-        let resume = self.leave_call();
+        // To the frame base, as `END` returns: the stack is there already,
+        // unless the frame begins below its own slots (a `Reflect` call's
+        // target run in place, STACK-DEPTH-REFACTOR.md C2).
+        let resume = self.leave_call_to_frame_base();
         self.push(gen_slot);
         pc = resume;
         if self.check_meter() == MeterCheck::Abort {
@@ -4213,7 +4245,10 @@ impl Interp {
                 "start_async_generator:frame-underflow",
             )));
         }
-        let resume = self.leave_call();
+        // To the frame base, as `END` returns: the stack is there already,
+        // unless the frame begins below its own slots (a `Reflect` call's
+        // target run in place, STACK-DEPTH-REFACTOR.md C2).
+        let resume = self.leave_call_to_frame_base();
         self.push(slot);
         pc = resume;
         if self.check_meter() == MeterCheck::Abort {
@@ -4276,7 +4311,10 @@ impl Interp {
                 "start_async:frame-underflow",
             )));
         }
-        let resume = self.leave_call();
+        // To the frame base, as `END` returns: the stack is there already,
+        // unless the frame begins below its own slots (a `Reflect` call's
+        // target run in place, STACK-DEPTH-REFACTOR.md C2).
+        let resume = self.leave_call_to_frame_base();
         self.push(promise_slot);
         pc = resume;
         if self.check_meter() == MeterCheck::Abort {

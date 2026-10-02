@@ -336,9 +336,10 @@ impl Interp {
         // accessor's native setter re-entering itself — nests the dispatch's
         // frames on the host stack, so it is charged at the heavy class and
         // bounded by [`NATIVE_DEPTH_LIMIT`]. `call_native_method_in_place`
-        // repeats this charge for `RUN`, and `invoke_regexp_protocol`
+        // repeats this charge for `RUN`, `reflect_run_call` for `RUN`'s
+        // `Reflect.apply` and `Reflect.construct`, and `invoke_regexp_protocol`
         // (natives/regexp.rs) for the intrinsic RegExp protocol methods it
-        // calls in place: keep the three in step.
+        // calls in place: keep the four in step.
         self.enter_native_frame(HEAVY_FRAME_COST)?;
         let result = self.call_native_method_body(m, base, argc, code);
         self.leave_native_frame(HEAVY_FRAME_COST);
@@ -511,7 +512,7 @@ impl Interp {
         if !self.calls_in_place(target) {
             return Ok(RunCall::Call(target, receiver, combined));
         }
-        self.enter_in_place(target, receiver, combined, ret_pc, 0)
+        self.enter_in_place(target, receiver, combined, ret_pc, None, 0)
             .map(RunCall::Entered)
     }
 
@@ -579,23 +580,98 @@ impl Interp {
         if !self.calls_in_place(callee) {
             return Ok(RunCall::Call(callee, receiver, args));
         }
-        self.enter_in_place(callee, receiver, args, ret_pc, LIGHT_FRAME_COST)
+        self.enter_in_place(callee, receiver, args, ret_pc, None, LIGHT_FRAME_COST)
             .map(RunCall::Entered)
     }
 
-    /// Enter the frame [`Self::run_user_callback`] would build for `func`,
-    /// which [`Self::calls_in_place`], in the caller's loop to return to
+    /// `RUN`'s call of the intrinsic `Reflect.apply` or `Reflect.construct`
+    /// (method `m`), its frame of `argc` arguments beginning at `base`
+    /// (STACK-DEPTH-REFACTOR.md C2). The call charges the heavy unit and
+    /// counts the builtin as [`Self::call_native_method`] does, and takes
+    /// [`Self::reflect_call_operands`]. A target that
+    /// [`Self::calls_in_place`] then has its frame entered in the caller's
+    /// loop above the `Reflect` call's frame, which stays on the value stack
+    /// as it did while the target ran, holding the heavy unit with the one
+    /// its nested `dispatch_at` charged until its `END`. The frame begins at
+    /// `base`, so that `END` cuts the `Reflect` call's frame with it and
+    /// leaves the result where the call's would have been: returns where the
+    /// target's body starts. Any other target is called here, through
+    /// `invoke_value` or `construct_value` as [`Self::call_reflect`] calls
+    /// it, and its result replaces the frame: returns `None`. An error leaves
+    /// the frame, as the native's did, and releases the unit.
+    #[inline(never)]
+    pub(super) fn reflect_run_call(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        ret_pc: usize,
+        code: &[u8],
+    ) -> Result<Option<usize>, Step> {
+        self.enter_native_frame(HEAVY_FRAME_COST)?;
+        self.cost.on_builtin(m);
+        let entry = self.reflect_run_step(m, base, argc, ret_pc, code);
+        if !matches!(entry, Ok(Some(_))) {
+            self.leave_native_frame(HEAVY_FRAME_COST);
+        }
+        entry
+    }
+
+    /// The call of [`Self::reflect_run_call`] after its charge.
+    fn reflect_run_step(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        ret_pc: usize,
+        code: &[u8],
+    ) -> Result<Option<usize>, Step> {
+        let construct = m == NativeMethod::ReflectConstruct;
+        let (target, second, args) = self.reflect_call_operands(m, base, argc, code)?;
+        if !self.calls_in_place(target) {
+            let result = if construct {
+                self.construct_value(code, target, &args, second)?
+            } else {
+                self.invoke_value(code, target, second, &args)?
+            };
+            self.stack.truncate(base);
+            self.push(result);
+            return Ok(None);
+        }
+        // A construct's receiver is the uninitialized placeholder, as
+        // `run_callback_construct` pushes it.
+        let (receiver, new_target) = if construct {
+            (Slot::of(Kind::Uninitialized, Payload::None), Some(second))
+        } else {
+            (second, None)
+        };
+        let body_start =
+            self.enter_in_place(target, receiver, args, ret_pc, new_target, HEAVY_FRAME_COST)?;
+        self.call_stack
+            .last_mut()
+            .expect("enter_call pushed the frame")
+            .stack_base = base;
+        Ok(Some(body_start))
+    }
+
+    /// Enter the frame [`Self::run_user_callback`] would build for `func`, or
+    /// [`Self::run_callback_construct`] to construct it for `new_target`
+    /// (latching a new target other than `func` as it does), which
+    /// [`Self::calls_in_place`], in the caller's loop to return to
     /// `ret_pc`, and return where its body starts. The nested `dispatch_at`
     /// the callee ran in charged its activation after `enter_call` and
     /// checked no meter on entry, so the frame holds that charge, with the
-    /// `outer` units its caller charged around the call, until its `END`,
-    /// whose meter check is the one `RUN` made after the call returned.
+    /// `outer` units its caller charged around the call, until it returns
+    /// (its `END`, whose meter check is the one `RUN` made after the call
+    /// returned, or the `START_*` of a generator or async body), is unwound,
+    /// or outlives the loop that runs it.
     fn enter_in_place(
         &mut self,
         func: Slot,
         receiver: Slot,
         args: Vec<Slot>,
         ret_pc: usize,
+        new_target: Option<Slot>,
         outer: usize,
     ) -> Result<usize, Step> {
         let argc = args.len();
@@ -606,7 +682,14 @@ impl Interp {
         for arg in args {
             self.push(arg);
         }
-        let body_start = self.enter_call(argc, ret_pc, false)?;
+        if let (Some(new_target), Payload::Reference(f)) = (new_target, func.value) {
+            let new_target = match new_target.value {
+                Payload::Reference(target) if new_target.kind == Kind::Reference => target,
+                _ => f,
+            };
+            self.pending_new_target = (new_target != f).then_some(new_target);
+        }
+        let body_start = self.enter_call(argc, ret_pc, new_target.is_some())?;
         self.enter_native_frame(HEAVY_FRAME_COST)?;
         let held = outer + HEAVY_FRAME_COST;
         self.call_stack
@@ -622,7 +705,7 @@ impl Interp {
     /// [`Self::invoke_value`] pass it through (not a Proxy, a promise
     /// resolving function, a bound function, a native function or a native
     /// method) and its body lives in the active segment. Such a call can run
-    /// in place in the dispatch loop (STACK-DEPTH-REFACTOR.md C1).
+    /// in place in the dispatch loop (STACK-DEPTH-REFACTOR.md C1, C2).
     pub(super) fn calls_in_place(&self, func: Slot) -> bool {
         let Payload::Reference(f) = func.value else {
             return false;
@@ -784,8 +867,9 @@ impl Interp {
             // `invoke_regexp_protocol` (natives/regexp.rs) calls the intrinsic
             // RegExp protocol methods without this dispatch, after the same
             // tests as the turns above, and `calls_in_place` repeats them to
-            // enter a bound call's target or a Proxy call's trap or target in
-            // place: keep the three in step.
+            // enter a bound call's target, a Proxy call's trap or target or a
+            // `Reflect.apply` or `Reflect.construct` target in place: keep the
+            // three in step.
             if native.is_some() || method.is_some() {
                 // Native / native-method: build the [THIS, FUNCTION, RESULT,
                 // FRAME] frame + args, dispatch, and take the pushed result.

@@ -395,6 +395,7 @@ impl Interp {
     /// [`Self::enter_construct_bound`] enters in place. A native target
     /// constructs through [`Self::construct_value`] instead (as a Proxy
     /// target would, once `bind` accepts one).
+    #[inline(never)]
     pub(super) fn bound_construct_enters_bytecode(&self, bf: crate::value::SlotIndex) -> bool {
         let mut current = bf;
         while let Some(data) = self.bound_functions.get(&current) {
@@ -448,6 +449,7 @@ impl Interp {
     /// (via [`Self::run_constructor`] reading `target_func`). The caller
     /// sends any other target through [`Self::construct_value`]
     /// ([`Self::bound_construct_enters_bytecode`]).
+    #[inline(never)]
     pub(super) fn enter_construct_bound(
         &mut self,
         bf: crate::value::SlotIndex,
