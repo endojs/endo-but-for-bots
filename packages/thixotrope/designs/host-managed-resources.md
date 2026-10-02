@@ -738,7 +738,10 @@ Recommendation: yes; a small visible change for three copies and two round trips
 
 As built, `decorate(key, spec, status)` answers only the extra fields, the kit drops any under its
 own names, and it is never asked of a closed registration.
-`thix alarms` prints only `{ pending }` and was unchanged.
+`thix alarms` printed only `{ pending }` and was unchanged.
+Without the clock's second `status()` after `register`, which had retried an arm across a restart
+by accident, an arm interrupted by a restart is rejected as the design says; `thix alarms` now
+also prints `armed`, the alarms whose registration answered, which the tests wait on.
 
 ### 10.5 An occupied name at placement (Done: (b).)
 

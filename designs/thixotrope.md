@@ -364,7 +364,9 @@ A restart, or the adapter ending on its own, rebuilds the adapter and re-arms ev
 one whose deadline passed meanwhile fires at once, and a firing the manager never recorded is
 reported again and settles once, since settlement is idempotent per key.
 There is no host ledger, no acknowledgement protocol and no host control facet that enumerates
-guest alarms; `alarms` reports a count.
+guest alarms; `alarms` reports counts, of the pending alarms and of the armed ones.
+Arming is a round trip to the adapter, so an alarm whose registration has not answered when the
+host ends is rejected rather than retried; only an armed one is restored.
 
 The initial profile uses absolute bigint Unix milliseconds in the nonnegative signed 64-bit range
 and delays up to 2^53 milliseconds.

@@ -115,11 +115,12 @@ test.serial(
       ),
       'true',
     );
-    // arm() itself acknowledges before the cross-vat after() runs. A pending
-    // alarm in the clock's count proves its manager admitted it.
+    // arm() itself acknowledges before the cross-vat after() runs. An armed
+    // alarm in the clock's count proves its adapter took it; one still being
+    // registered when the host is killed is rejected, by design.
     await waitUntil(async () => {
       const status = await first.client.call('alarmStatus');
-      return status.pending === 1;
+      return status.armed === 1;
     });
     t.is(
       await first.client.call(

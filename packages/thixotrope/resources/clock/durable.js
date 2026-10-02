@@ -171,7 +171,7 @@ export const make = ({ makeManager }) => {
 
   const facet = makeExo('Clock', ClockI, {
     help: () =>
-      'at(deadline) and after(delay) settle at or after the deadline with the host time; arm({at}|{after}) also returns a canceller for that one alarm; status() counts pending alarms.',
+      'at(deadline) and after(delay) settle at or after the deadline with the host time; arm({at}|{after}) also returns a canceller for that one alarm; status() counts pending alarms, and of those the armed ones, whose registration the adapter took; one still being registered is pending but not armed, and a restart in between rejects it.',
     /** @param {bigint} deadline */
     at: async deadline => {
       const { settlement } = await arm(harden({ at: deadline }));
@@ -194,7 +194,14 @@ export const make = ({ makeManager }) => {
         canceller: makeExo('AlarmCanceller', AlarmCancellerI, { cancel }),
       });
     },
-    status: () => harden({ pending: pending.size }),
+    status: () =>
+      harden({
+        pending: pending.size,
+        // An alarm has a handle once its registration answered bound; one
+        // that answered otherwise is no longer pending.
+        armed: [...pending.values()].filter(entry => entry.handle !== undefined)
+          .length,
+      }),
   });
   return harden({ facet, lifecycle: manager.lifecycle });
 };
