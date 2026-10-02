@@ -41,7 +41,8 @@ guest's own methods.
 The packages named here are the repo's LLM agent factories, described in
 § What the Delegated Host Is Used For.
 The setup scripts of lal, fae, jaine, and claude-sandbox (`setup.js`,
-`*-factory-setup.js`, `credentials.js`) create a guest with
+`*-factory-setup.js`, `credentials.js`, and fae's `setup-with-tools.js`)
+create a guest with
 `introducedNames: { '@agent': 'host-agent' }`.
 That binds the host formula itself into the guest's pet store.
 `E(powers).lookup('host-agent')` returns the full `EndoHost`, which has
@@ -91,10 +92,20 @@ from the daemon bootstrap (`E(bootstrap).host()` or the CLI's
 `withEndoHost`), so it runs with the operator's own root host and no guest
 holds it.
 Those sites are out of scope.
+The grep's one other hit outside the guest-provisioning sites,
+`packages/floot/floot-factory-setup.js`, calls `E(agent).provideHost(...)`
+on the operator's own `--powers @agent` to mint the floot controller host,
+so it is out of scope for the same reason.
+That controller host is a host, not a guest, so the host operations floot's
+`agent.js` performs on it (`provideHostPath`, `provideGit`, `provideMount`,
+`copy`, `move`, `remove`) are untouched by this design.
+Only floot's identifier traffic and its `host-powers` grant to a session
+guest are in scope.
 
-The guest-side calls on `llm` are already rewritten by #1404, whose
-`EndoGuest` interface carries none of those methods.
-They are jaine copying `llm-provider` and `agent` into its driver with
+On the `llm` branch, the guest-side calls are already rewritten by #1404,
+whose `EndoGuest` interface carries none of those methods.
+They are jaine copying its `llm-provider` and `agent` capabilities into its
+driver with
 `identify` and `storeIdentifier`, and both claude-sandbox factories resolving
 a form reply with `lookupById(msg.valueId)`.
 They are not a third gap, and this design does not touch them.
@@ -105,7 +116,7 @@ They are not a third gap, and this design does not touch them.
 | lal (`agent.js`) | `provideGuest`, `storeTree`, `copy`, `has`, `makeUnconfined` | `identify('lal-primer')`, used only in a log line |
 | jaine (`agent.js`) | `provideGuest`, `makeUnconfined`, `copy`, `has` | `identify(driver)` then `storeIdentifier(['@pins', driver], id)` to pin the driver |
 | claude-sandbox (`src/claude-sandbox-factory.js`, `src/claude-credentials-factory.js`, `src/container-mount-bridge.js`) | `provideMount`, `makeDirectory`, `move`, `remove`, `makeUnconfined`, `evaluate`, `storeValue` | `lookupById(capId)` in `provideContainerMountBridge`, where the caller names the mount by identifier |
-| floot (`agent.js`, `src/container-mounts.js`) | `copy`, `move`, `remove`, `provideHostPath`, `provideGit`, `provideMount` | `copy(['@agent'], ...)` for the `host-powers` kind. `identify(sessionName, ...path)` mints the `capId` that `container-mounts.js` persists across restarts and replays into `provideContainerMountBridge`. The same `capId` is also the cross-session equality key for an attach (§ floot's container mounts). |
+| floot (`agent.js`, `src/container-mounts.js`) | `copy`, `move`, `remove`; the controller's own host operations (`provideHostPath`, `provideGit`, `provideMount`) are out of scope, as above | `copy(['@agent'], ...)` for the `host-powers` kind. `identify(sessionName, ...path)` mints the `capId` that `container-mounts.js` persists across restarts and replays into `provideContainerMountBridge`. The same `capId` is also the cross-session equality key for an attach (§ Floot's Container Mounts). |
 
 Two facts decide the recommendation:
 
@@ -115,19 +126,28 @@ Two facts decide the recommendation:
    So `locate` then `storeLocator` is the same as
    `copy([selfName, X], [profile, X])`, which fae already uses to pin
    (`copy([driverResultName], ['@pins', driverResultName])`).
+   `@pins` is the special name of a guest's own durability directory: a
+   capability written there is retained across restarts even after the
+   guest drops its other names for it.
    The one use that is more than a lookup key is floot's `capId`.
    It outlives a daemon restart, and it is also the value floot compares to
    decide whether two sessions attached the same capability.
    A pet name cannot replace it as that comparison key, because pet names
    are relative to the session that wrote them.
-   § floot's container mounts below splits the two jobs: a registrar-private
+   § Floot's Container Mounts below splits the two jobs: a registrar-private
    pin carries durability, and a daemon-side equality check carries identity,
    so no identifier reaches floot.
    With that one exception handled, the identifiers in these factories are
    incidental, not essential.
 2. **No factory uses peer or bootstrap authority.**
    No factory calls `invite`, `accept`, `provideHost`, `gateway`, `greeter`,
-   `sign`, `addPeerInfo`, or `adoptFromLocator`.
+   `sign`, `addPeerInfo`, or `adoptFromLocator` on a delegated host.
+   The audit is
+   `git grep -nE "\.(invite|accept|gateway|greeter|sign|addPeerInfo|adoptFromLocator|provideHost)\(" -- packages/{fae,lal,jaine,claude-sandbox,floot}`
+   on `90b4f72604`, outside tests.
+   Its one call site is floot's `provideHost` on the operator's own host,
+   excluded above; its other hit is prose in floot's agent prompt
+   (`agent.js`), not a call.
    floot's `host-powers` kind is the one deliberate grant of the full host,
    and Phase 4 gives it an explicit opt-in rather than leaving it implicit.
 
@@ -178,7 +198,7 @@ The provisioner exposes these:
 - **Tearing down:** `cancel`.
 - **Comparing:** a new `sameCapability(pathA, pathB)`, which resolves both
   pet-name paths in the host's namespace and returns only whether they name
-  the same formula (§ floot's container mounts).
+  the same formula (§ Floot's Container Mounts).
   It discloses one bit, and no identifier.
 
 It withholds these:
@@ -213,6 +233,9 @@ the bootstrap or the full host.
 A refused name throws from both `lookup` and `maybeLookup`: `maybeLookup`
 returns `undefined` only for a name that is absent, so a policy refusal is
 never mistaken for absence.
+`has` and `list` report the host's names as they are, including refused
+`@`-special names: the existence of `@agent` or `@endo` is not a secret, and
+only resolving one is refused.
 
 The interface guard in `interfaces.js` is the exposed list, and nothing
 else is reachable.
@@ -224,25 +247,35 @@ classified for the right reason, so `interfaces.js` groups the withheld
 methods under one comment per category above, naming its rationale beside
 the mechanism.
 
-### Provisioning changes
+### Provisioning Changes
 
 | Package | Change |
 |---|---|
-| all four setup scripts | `'@agent'` becomes `'@provisioner'` in `introducedNames` |
+| every guest-provisioning setup script, including fae's `setup-with-tools.js` | `'@agent'` becomes `'@provisioner'` in `introducedNames` |
 | fae | Every `storeLocator([profile, X], await E(hostAgent).locate(selfName, X))` becomes `copy([selfName, X], [profile, X])`. Forwarding `host-agent` to the spawner copies the provisioner. `provisionFaeAgent` returns a pet name, not a `locator`. |
 | lal | Drop `identify('lal-primer')`. Its only use is a log line. |
 | jaine | The pin becomes `copy([driverResultName], ['@pins', driverResultName])`, as in fae. |
 | claude-sandbox | `provideContainerMountBridge({ key, capId, mode })` becomes `provideContainerMountBridge({ key, cap, mode })`. The caller passes the capability itself, so the bridge no longer calls `lookupById`. The bridge's same-key check compares `mode` only, since the key now names exactly one pinned capability (below). |
-| floot | `container-mounts.js` replaces `capId` with a registrar-private pin, as § floot's container mounts describes. The `host-powers` kind moves to the opt-in from Open Question 3 in place of `@agent`. |
+| floot | `container-mounts.js` replaces `capId` with a registrar-private pin, as § Floot's Container Mounts describes. The `host-powers` kind moves to the opt-in from Open Question 3 in place of `@agent`. |
 
-### floot's container mounts
+### Floot's Container Mounts
 
 `container-mounts.js` uses `capId` for three things: it compares the
 `capId` of an existing record with a new attach at the same `innerPath`,
 which is what lets a shared `ClaudeClient` ref-count one bind across
 sessions that name the capability differently; it feeds `capId` into
 `attachKeyFor`; and it replays `capId` into the bridge after a restart.
-Each gets its own replacement:
+Each gets its own replacement.
+
+Three names in this section and the survey above share the word "pin" and
+are different things.
+`@pins` is a guest's own durability directory, written by fae and jaine.
+`pinDirectory` is a directory private to floot's registrar, which no guest
+can name.
+A `pin` is a random token the registrar mints per mount record, used as the
+entry's name inside `pinDirectory`.
+Nothing below touches `@pins`.
+
 
 - **Durability: a pin.**
   On a record's first attach, the registrar mints a random `pin` token,
@@ -348,7 +381,8 @@ Both appear under Open questions.
 | factory → new agent (fae, lal, jaine, claude-sandbox, floot) | path `copy` through the provisioner | each factory decides which capabilities each new guest receives | the new guest's pet store | the factory, as today | pet-name paths, never locators |
 | channel → guest (daemon) | `guestFacetFor` and `redactChannelMessage` | `ids` withheld, posts carry no ids | none, because the facet is a view and `channel.js`'s message store is unchanged | unchanged, owned by `channel.js` | a redacted `ChannelMessage` |
 
-Naming check: the outer concept "guest" names only the boundary facets.
+Naming check: this change renames nothing internal.
+The outer concept "guest" names only the boundary facets.
 The inner channel mechanism (`postInternal`, the function in `channel.js`
 that appends a message) and the message store keep their
 names and semantics.
@@ -388,7 +422,7 @@ any open question.
   `makeChannel` returns a guest facet whose messages carry no `ids`.
   A `HostInterface` method in neither list fails the partition test.
   `lookup` of a path that names a host returns a provisioner.
-  A guest that `send`s `host-agent` to a peer guest gives that peer a
+  A guest that sends `host-agent` to a peer guest gives that peer a
   provisioner.
 - **Restart:** a guest's `host-agent` still resolves to the same provisioner
   after the daemon restarts, and a floot container mount re-attaches from
@@ -452,6 +486,11 @@ any open question.
    Phase 4 waits on this answer.
 4. Should the guest-side name stay `host-agent`, or should the migration
    rename it `provisioner` so the code says what the guest holds?
+   This is a legibility question for the trust boundary, not only a style
+   one: under `host-agent`, a reader of a factory assumes the full
+   `EndoHost` surface and learns otherwise only from a runtime throw.
+   The recommended answer is to rename in phase 3, alongside the
+   `@provisioner` change, so the name and the interface change together.
 5. Should a guest be able to post a capability to a channel by pet name?
    The guest facet would then resolve `petNamesOrPaths` against its guest's
    namespace in the daemon, and that requires a facet keyed to its guest.
