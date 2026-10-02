@@ -440,7 +440,8 @@ row cap, the release and retry protocol of the guest clock
 (`guest-clock.js`), the `alarm` and `alarms` host resources, the daemon's
 `onRetireWorker` and `beforeStartNotices` hooks, the supervisor's `alarmNow`
 test power, and `alarm-settlement.md`; section 7.1 is superseded.
-`alarmStatus` asks the clock for its count and reports `{ pending }`.
+`alarmStatus` asks the clock for its count and reports `{ pending }` (and `armed`, as of
+version 19).
 Workspace metadata was version 9 at this step; sections 1, 2 and 4 took it to 12.
 
 ### 8.2 The control socket (Done.)
@@ -575,7 +576,7 @@ facade, the adapter launcher and publication; the peer netlayer; the startup
 sequence.
 The supervisor becomes the main of `thix serve`: take the lease, check
 versions, start the daemon, install the built-ins if missing.
-Alarm status is the clock facet's count of pending alarms, and the operator's
+Alarm status is the clock facet's counts of pending and armed alarms, and the operator's
 administration stays a host resource, `control-admin`, provided to the control
 socket (8.2).
 
@@ -724,9 +725,11 @@ made or replaced, so a registration made again after a close differs from the on
 The HTTP adapter no longer compares origin sets, and the clock states no sameness at all.
 A `status()` still binds again, under the same epoch, since that bind is how a registration the
 adapter could not take is retried; the adapter answers it from what it holds.
-A replacement the adapter did not take retires the incarnation, since its failed release may have
-left the replaced binding in place, and a fresh one restores every registration at once.
 Version 18.
+A replacement the adapter did not take may have left the replaced binding in place, its release
+having failed: the manager asks the adapter to unbind the key, as a close does, and retires the
+incarnation only when that fails too, reconciling the replacement on a fresh one that restores
+every registration (versions 20 and 21).
 
 ### 10.4 Status owned by the kit (Done.)
 
@@ -822,9 +825,12 @@ As built, the prelude has `HEX128_PATTERN`, `assertWorkspaceName` and `assertIns
 and the registry and the address book use them (version 20).
 The topic is not in the prelude, and the observable map keeps its own delivery.
 `makeLatestTopic`'s reader cannot be cancelled while a read is pending: its `return()` leaves the
-pending `next()` waiting on the next publication, after which it waits again, forever.
+pending `next()` waiting on the next publication, after which it waits again, until the topic
+itself ends, which a map's topic never does.
+A `next()` made after `return()` waits the same way, although the package's own comment says it
+answers a terminal result, which looks like a bug in `@endo/pubsub`.
 A map whose view subscriptions come and go with every connection would keep one such closure per
-ended subscription in a durable heap.
+ended subscription with a read pending in a durable heap.
 Collapsing the map onto the topic waits on `@endo/pubsub` settling a pending read when its reader
 is returned, which is a change to that package.
 

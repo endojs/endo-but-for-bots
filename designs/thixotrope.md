@@ -316,9 +316,10 @@ may be registered again (a record crosses the wire as a fresh copy each time, so
 refuse the same registration made twice); by default a key registered again is refused.
 The adapter compares epochs: the same epoch is the binding it holds, another a replacement.
 An adapter forgets a binding only once its release succeeds, so a failed release is retried by a
-later unbind and reaches the manager's retirement path; a replacement the adapter did not take
-retires the incarnation, so a replaced binding whose release failed goes with its process, and a
-fresh incarnation restores every registration.
+later unbind and reaches the manager's retirement path; after a replacement the adapter did not
+take, the manager asks it to unbind the key, and only when that fails too retires the incarnation,
+so a replaced binding whose release failed goes with its process and a fresh incarnation restores
+every registration.
 `src/native/contract.js` states the contract as types.
 
 Only the facet enters the named inventory slot; applications receive it through grants.
@@ -363,13 +364,13 @@ process, which owns a clock of its own, arms one timer per alarm and reports eac
 manager's sink.
 A delay is resolved to a deadline in the adapter when the alarm is bound, and the manager adopts
 the resolved registration, so a restart restores the deadline, never the delay counted again.
-A restart, or the adapter ending on its own, rebuilds the adapter and re-arms every pending alarm;
+A restart, or the adapter ending on its own, rebuilds the adapter and re-arms every armed alarm;
 one whose deadline passed meanwhile fires at once, and a firing the manager never recorded is
 reported again and settles once, since settlement is idempotent per key.
 There is no host ledger, no acknowledgement protocol and no host control facet that enumerates
 guest alarms; `alarms` reports counts, of the pending alarms and of the armed ones.
 Arming is a round trip to the adapter, so an alarm whose registration has not answered when the
-host ends is rejected rather than retried; only an armed one is restored.
+host or the adapter ends is rejected rather than retried; only an armed one is restored.
 
 The initial profile uses absolute bigint Unix milliseconds in the nonnegative signed 64-bit range
 and delays up to 2^53 milliseconds.

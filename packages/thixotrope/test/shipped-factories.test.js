@@ -136,6 +136,41 @@ test('the native manager and its kit are whole', async t => {
   t.deepEqual(await E(kit.facet).keys(), []);
 });
 
+test('the kit decorates a status with only the prelude in scope', async t => {
+  const adapters = Far('Launcher', {
+    create: () =>
+      Far('Incarnation', {
+        getRoot: () =>
+          Far('Adapter', {
+            bind: () => undefined,
+            unbind: () => true,
+            restore: () => harden([]),
+          }),
+        retire: () => {},
+      }),
+  });
+  const manager = evaluateShipped(makeManager)(
+    { adapters, makeKeeper: evaluateShipped(makeAdapterKeeper) },
+    {
+      label: 'Slot',
+      /**
+       * @param {unknown} _key
+       * @param {{url: string}} spec
+       */
+      decorate: (_key, spec) => ({ url: spec.url }),
+    },
+  );
+  const { status } = await manager.register(
+    'one',
+    harden({ url: 'http://127.0.0.1:1/' }),
+  );
+  t.deepEqual(status, {
+    url: 'http://127.0.0.1:1/',
+    key: 'one',
+    status: 'bound',
+  });
+});
+
 test('the clock the supervisor provides is whole', async t => {
   // Shipped by source like every built-in, though it is a native resource:
   // its factory may close over nothing but the guest prelude.

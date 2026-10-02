@@ -73,8 +73,9 @@
  * @property {(existing: Spec, wanted: Spec) => boolean} [replaces]
  * @property {(key: unknown, spec: Spec, status: 'bound' | 'inactive') => Record<string, unknown>} [decorate]
  *   fields a status record carries beside `key`, `status` and `error`,
- *   which are the kit's own and dropped from what it answers; never asked
- *   of a closed registration
+ *   which are the kit's own and dropped from what it answers: a fresh
+ *   record of passable fields, which is hardened; never asked of a closed
+ *   registration
  */
 
 /**

@@ -283,3 +283,34 @@ test('a resolve that throws releases the binding and fails the bind', async t =>
   t.deepEqual(log, ['bind', 'unbind 1'], 'the resource was released');
   t.false(await E(adapter).unbind('one'), 'and nothing is kept under the key');
 });
+
+test('a resolve that throws keeps a binding whose release failed, for the next release', async t => {
+  /** @type {string[]} */
+  const log = [];
+  let failRelease = true;
+  const adapter = makeAdapter({
+    label: 'Slot',
+    /** @type {(key: unknown, spec: {}) => Promise<number>} */
+    bind: async () => {
+      log.push('bind');
+      return 1;
+    },
+    /** @type {(slot: number, spec: {}) => {}} */
+    resolve: () => {
+      throw Error('address unavailable');
+    },
+    unbind: async (/** @type {number} */ slot) => {
+      if (failRelease) {
+        failRelease = false;
+        throw Error('release failed');
+      }
+      log.push(`unbind ${slot}`);
+    },
+  });
+  await t.throwsAsync(() => E(adapter).bind('one', harden({}), 1n), {
+    message: /address unavailable/,
+  });
+  t.deepEqual(log, ['bind'], 'its release failed');
+  t.true(await E(adapter).unbind('one'), 'an unbind releases it');
+  t.deepEqual(log, ['bind', 'unbind 1']);
+});
