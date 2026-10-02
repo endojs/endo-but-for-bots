@@ -8,7 +8,7 @@
 import { Fail, q } from '@endo/errors';
 import { renderAllowedTools } from '@endo/agent-tools/adapters/mcp.js';
 
-import { assertConfinedArgv } from './argv.js';
+import { assertConfinedArgv, buildConfinementFlags } from './argv.js';
 import {
   KNOWN_BUILTIN_TOOLS,
   isAdmissibleServerName,
@@ -85,21 +85,7 @@ export const buildCliArguments = ({
     '--verbose',
     '--input-format',
     'text',
-    '--bare',
-    '--strict-mcp-config',
-    '--setting-sources',
-    '',
-    '--tools',
-    '',
-    '--disable-slash-commands',
-    '--mcp-config',
-    mcpConfigPath,
-    '--settings',
-    settingsPath,
-    '--disallowedTools',
-    KNOWN_BUILTIN_TOOLS.join(','),
-    '--allowedTools',
-    allowList.join(','),
+    ...buildConfinementFlags({ mcpConfigPath, settingsPath, allowList }),
     '--permission-mode',
     'dontAsk',
     '--max-turns',
@@ -146,11 +132,18 @@ export const buildSdkOptions = ({
 }) => {
   assertTurnCeiling(maxTurns);
   const allowList = confinedAllowList(serverName, toolNames);
+  // Not `harden`ed, unlike the CLI argv: `harden` is transitive and would
+  // freeze the in-process MCP server instance and the abort controller, which
+  // the SDK must still drive.
   return {
     abortController,
     pathToClaudeCodeExecutable: executablePath,
     cwd: workingDirectory,
-    env: environment,
+    // A fresh copy of the hardened constructed environment, as the CLI backend
+    // makes: the SDK spawns the pinned binary with this record, and Node's
+    // spawn writes into `options.env` (it adds NODE_V8_COVERAGE when the
+    // parent has it), which throws on a frozen record.
+    env: { ...environment },
     tools: [],
     disallowedTools: [...KNOWN_BUILTIN_TOOLS],
     allowedTools: [...allowList],
