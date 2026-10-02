@@ -216,6 +216,10 @@ export const runConfinedTurn = async ({
       // siblings from the installation directory it is granted. Only a
       // package directory (one holding `package.json`) is granted whole; a
       // binary in a shared directory such as `/usr/local/bin` is granted alone.
+      // Narrower grants are not viable: the package loads modules, vendored
+      // binaries, and WebAssembly lazily by paths only known at run time, and
+      // that set changes between `claude` releases. The grant is read-only and
+      // holds only the package's own files, none of the daemon's state.
       const realClaudePath = await fs.realpath(claudePath);
       const claudeDirectory = path.dirname(realClaudePath);
       const isPackageDirectory = await fs
