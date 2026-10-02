@@ -23,10 +23,10 @@ The package ships two entry points:
   itself can still find the DOM (see "What `renderConfined` alone does
   not contain" below).
 - **`@endo/preact-container/compartment`** — mounts a function the host
-  evaluated in a SES `Compartment` (or any untrusted function) as a
-  Preact component. It coerces whatever the function returns by walking
-  it once and rebuilding it with primitives this package controls, then
-  renders the result through the renderer above.
+  evaluated in a SES `Compartment` as a Preact component. It coerces
+  whatever the function returns by walking it once and rebuilding it
+  with primitives this package controls, then renders the result
+  through the renderer above.
   This is the layer that contains hostile component code.
 
 ```js
@@ -40,6 +40,42 @@ import {
   isConfinedComponent,
 } from '@endo/preact-container/compartment';
 ```
+
+## Containing untrusted code
+
+Running untrusted component code takes all three of these pieces.
+Each one covers something the others do not.
+
+1. **SES `lockdown()`, and a `Compartment` that evaluates the guest
+   source.**
+   The guest has no `document`, `window`, or module imports: only the
+   globals the host passes to the `Compartment`.
+2. **`confineComponent(fn)` around the function the `Compartment`
+   returns.**
+   It calls the guest without `this`, hands it only `h`, `Fragment`, and
+   the hooks, and rebuilds every vnode the guest returns with `h()`, so
+   Preact never renders or annotates an object the guest holds.
+   It drops refs, and vnodes passed in props other than `children`.
+3. **`renderConfined(...)` at the root of the tree.**
+   It filters what reaches the DOM: tag and attribute allowlists,
+   URL-scheme checks, ref stripping, and `SafeEvent` facades for
+   handlers.
+
+What happens without one of them:
+
+- **No `Compartment`.** A function evaluated in the page's own realm —
+  an ordinary module import, say — can use `document` directly, and
+  neither `confineComponent` nor `renderConfined` can stop it.
+- **A `Compartment` with DOM or Preact globals.** Do not pass
+  `document`, `window`, any DOM node, or the `preact` or
+  `@endo/preact-container` modules to the guest's `Compartment`.
+  Preact's `options` object holds the hooks the renderer installs, so a
+  guest that reaches it can remove them.
+- **No `confineComponent`.** `renderConfined` still sanitizes what the
+  component renders, but not what its code can reach (see "What
+  `renderConfined` alone does not contain").
+- **No `renderConfined`.** A confined component refuses to render (see
+  "`confineComponent(fn, opts?)`").
 
 ## Provenance
 
@@ -94,7 +130,8 @@ import 'ses';
 
 lockdown({ overrideTaming: 'severe' });
 
-// The host evaluates untrusted source in its own compartment.
+// The host evaluates untrusted source in its own compartment. Its
+// globals must not include `document`, `window`, DOM nodes, or Preact.
 const compartment = new Compartment(/* host's chosen globals */);
 const guestFn = compartment.evaluate(`
   ({ h, useState }, props) => {
@@ -244,11 +281,24 @@ it gets as untrusted data.
 when `fn` throws (the host render is not interrupted; exceptions from
 `onError` itself are swallowed).
 
-A confined component mounted via plain `preact.render` (i.e. **without**
-`renderConfined` on top) **throws synchronously** — the allow-by-default
-attribute filter lives in the renderer, so rendering without it would
-silently expose the host to HTML injection. Merely _defining_ a confined
-component arms this fail-fast.
+A confined component **refuses to render** outside a `renderConfined`
+tree: the allow-by-default attribute filter lives in the renderer, so
+rendering without it would silently expose the host to HTML injection.
+Merely _defining_ a confined component arms this check.
+In each case the guest function never runs:
+
+- Rendered by Preact's own `render` (or `hydrate`), the render throws an
+  error naming `renderConfined`.
+  Under an error boundary, the boundary receives that error instead of
+  the caller.
+  A confined component that first mounts during a later re-render (after
+  a state change, say) throws from that re-render, not from the original
+  `render` call.
+- Rendered by a second copy of Preact, one this package's hooks are not
+  installed on, it renders nothing and reports no error: the wrapper
+  runs the guest only when this package's hooks armed the call.
+  Keep a single copy of `preact` in the bundle (for example with Vite's
+  `resolve.dedupe`).
 
 A confined wrapper can only be **rendered by Preact's diff**. Calling it
 directly — the exfiltration move of reading its rendered output as a
