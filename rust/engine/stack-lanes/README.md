@@ -71,8 +71,9 @@ A mismatch between a host's output and native is always a failure: it is the
 cross-host determinism check `WASM-BLOCKERS.md` B7 asks for.
 
 Lane A started at 2,097,152 B and is lowered as phases land.
-After the report's Phase 2 it runs at 524,288 B, where it expects a trap only from the
-Proxy prototype cycle (B10).
+After the report's Phase 2 it runs at 524,288 B.
+It expected a trap only from the Proxy prototype cycle until Phase 3's B9 took an
+alternating ordinary/Proxy `[[Get]]` and `[[Set]]` in one loop; no lane expects a trap now.
 The corpus also passes at 409,600 B; at 327,680 B the native recursions of Phase 3 trap
 (`join`, `toString`, `take`, `Iterator.prototype.map`, `Array.from`, a `lastIndex`
 `valueOf`) and so do the parser's binding and function nests.

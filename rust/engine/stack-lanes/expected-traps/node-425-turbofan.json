@@ -6,7 +6,5 @@
       "--no-liftoff"
     ]
   },
-  "expected_traps": [
-    "proxy-proto-cycle"
-  ]
+  "expected_traps": []
 }

@@ -582,6 +582,46 @@ fn an_ordinary_prototype_chain_is_walked_in_place() {
     }
 }
 
+#[test]
+fn an_alternating_ordinary_and_proxy_chain_is_walked_in_one_loop() {
+    // An id-keyed `[[Get]]` or `[[Set]]` that crosses from an ordinary object
+    // to a Proxy prototype and on to the Proxy's ordinary target takes the
+    // crossings after its first in one loop (STACK-DEPTH-REFACTOR.md B9),
+    // charging the unit the parent's or the target's guarded entry charged:
+    // two per pair, so the budget refuses at the depth the recursion did. The recursion needed
+    // about a kilobyte of host stack per pair natively, more than this
+    // thread's stack at these depths; the loop needs none per pair.
+    let alt = "function alt(o, n) { for (var i = 0; i < n; i++) o = i % 2 ? Object.create(o) : new Proxy(o, {}); return o; } ";
+    let on_small_stack = |source: String| {
+        std::thread::Builder::new()
+            .stack_size(NATIVE_STACK_BYTES / 16)
+            .spawn(move || {
+                let (bytecode, names) = compile(&source);
+                let mut machine = Interp::new();
+                machine.link_intrinsics(&names);
+                machine.run(&bytecode)
+            })
+            .expect("spawn the small-stack thread")
+            .join()
+            .expect("the engine must halt, never panic or abort")
+    };
+    for (n, tail, want) in [
+        (2031, "p.x", Some("1")),
+        (2032, "p.x", None),
+        (2015, "Reflect.get(p, 'x')", Some("1")),
+        (2016, "Reflect.get(p, 'x')", None),
+        (2030, "p.y = 2; p.y", Some("2")),
+        (2031, "p.y = 2", None),
+    ] {
+        let out = on_small_stack(format!("{alt}var p = alt({{x: 1}}, {n}); {tail}"));
+        let what = format!("an alternating chain of {n}: {tail}");
+        match want {
+            Some(want) => assert_completes(&out, want, &what),
+            None => assert_stack_overflow(&out, &what),
+        }
+    }
+}
+
 /// [`on_contract_stack`] with the production eval bridge installed, so the
 /// compiler-side budgets are observed through the guest-visible surface.
 fn on_contract_stack_with_compiler(source: String) -> RunOutcome {

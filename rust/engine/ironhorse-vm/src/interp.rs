@@ -704,6 +704,33 @@ struct GetMetering {
     after_active_trap: bool,
 }
 
+/// Where one leg of a `[[Get]]` ended (STACK-DEPTH-REFACTOR.md B9): with its
+/// value, or at the next object whose `[[Get]]` the read is, which the
+/// recursive shape entered through its guarded entry, one native frame and
+/// one unit deeper each time. [`Interp::get_legs`] takes them in a loop
+/// instead, charging and holding the same units.
+enum GetLeg {
+    Value(Slot),
+    /// The prototype an ordinary walk delegates to (a Proxy, or the object
+    /// the Array Iterator's read is aimed at), entered as `mop_get` entered
+    /// it.
+    Prototype(crate::value::SlotIndex),
+    /// The object a Proxy forwarded to, not itself a Proxy, entered as
+    /// `mop_get_with_proxy_metering` entered it, with the forward's metering.
+    Target(crate::value::SlotIndex, GetMetering),
+}
+
+/// Where one leg of a `[[Set]]` ended (STACK-DEPTH-REFACTOR.md B9): with its
+/// result, or at the next object whose `[[Set]]` the assignment is (a
+/// prototype that is a Proxy or holds the TypedArray element, or the object a
+/// Proxy forwarded to), which the recursive shape entered through `mop_set`
+/// or, for a Proxy forwarded to, a forwarding hop. [`Interp::set_legs`] takes
+/// them in a loop.
+enum SetLeg {
+    Done(bool),
+    Next(crate::value::SlotIndex),
+}
+
 /// What one Proxy layer of an internal method does: forward the method to
 /// its target (the trap is absent), or finish with the trap's checked result.
 /// The `mop_*` walks loop over `Forward` instead of recursing once per layer

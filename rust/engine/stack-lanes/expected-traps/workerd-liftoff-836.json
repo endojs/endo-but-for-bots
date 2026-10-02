@@ -6,7 +6,5 @@
       "--stack-size=836"
     ]
   },
-  "expected_traps": [
-    "proxy-proto-cycle"
-  ]
+  "expected_traps": []
 }
