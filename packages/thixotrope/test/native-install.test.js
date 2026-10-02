@@ -626,10 +626,10 @@ test.serial(
 );
 
 test.serial(
-  "the host's index covers a request before the registry has it, and is cleared of one it never got",
+  'a start frees the bundles of a request the registry never received',
   async t => {
     t.timeout(60_000);
-    const path = await mkdtemp('/tmp/thix-index-provisional-');
+    const path = await mkdtemp('/tmp/thix-unreceived-');
     t.teardown(() => rm(path, { recursive: true, force: true }));
     const indexPath = join(path, 'installations.json');
     const entries = async () =>
@@ -643,73 +643,43 @@ test.serial(
         ]),
       { message: /Unknown inventory grant/ },
     );
-    const listed = async (/** @type {string} */ name) =>
-      (await entries()).find(
-        (/** @type {{name: string}} */ entry) => entry.name === name,
-      );
-    t.is(await listed('refused'), undefined);
+    t.false(
+      (await entries()).some(
+        (/** @type {{name: string}} */ entry) => entry.name === 'refused',
+      ),
+    );
     host.client.close();
     await host.supervisor.close();
-    // Two requests the registry never received, the host having ended
-    // between recording them and handing them over: their bundles are kept
-    // for them at the next start, the registry does not list them, one is
-    // replaced by a new request under its name and the other removed.
+    // A bundle a request put in the store, the host having ended before the
+    // registry held the request: nothing names it.
     const store = makeFsStore(powers, path);
-    const ghostBundle = store.putBundle('({ make: () => undefined })');
-    const orphanBundle = store.putBundle('({ make: () => null })');
-    const file = JSON.parse(await readFile(indexPath, 'utf8'));
-    for (const [name, bundleDigest] of [
-      ['ghost', ghostBundle],
-      ['orphan', orphanBundle],
-    ]) {
-      file.entries.push({
-        workspace: 'default',
-        name,
-        kind: 'application',
-        digest: bundleDigest,
-        grants: [],
-        allocationKey: name === 'ghost' ? '3'.repeat(32) : '4'.repeat(32),
-        bundleDigest,
-        status: 'pending',
-        provisional: true,
-      });
-    }
-    await writeFile(indexPath, JSON.stringify(file));
+    const unreceived = store.putBundle('({ make: () => null })');
     host = await serve(t, path);
-    t.true(store.listBundles().includes(ghostBundle));
-    t.true(store.listBundles().includes(orphanBundle));
-    const names = (await host.client.call('installations')).map(
-      (/** @type {{name: string}} */ entry) => entry.name,
+    t.false(
+      store.listBundles().includes(unreceived),
+      'the next start frees it once the registry has said what it needs',
     );
-    t.false(names.includes('ghost'));
-    t.false(names.includes('orphan'));
+    // An installed application's code is in its vat once staged, so the
+    // registry stops naming its bundle and a start frees it; the launchers'
+    // bundles stay, and the application is unaffected.
     t.like(
       await host.client.call(
         'install',
-        'ghost',
+        'kept',
         '({ make: () => "placed" })',
         [],
       ),
-      { name: 'ghost', status: 'ready' },
+      { name: 'kept', status: 'ready' },
     );
-    t.is((await listed('ghost'))?.provisional, undefined);
-    t.is((await listed('ghost'))?.status, 'ready');
-    t.true(await host.client.call('remove', 'orphan'));
-    t.is(await listed('orphan'), undefined);
-    t.false(await host.client.call('remove', 'orphan'));
+    const held = store.listBundles();
     host.client.close();
     await host.supervisor.close();
     host = await serve(t, path);
-    t.false(
-      store.listBundles().includes(ghostBundle),
-      'the bundle of the replaced request is freed',
-    );
-    t.false(
-      store.listBundles().includes(orphanBundle),
-      'the bundle of the removed request is freed',
-    );
+    const after = store.listBundles();
+    t.true(after.every(digest => held.includes(digest)));
+    t.true(after.length < held.length, 'the staged bundle was freed');
     t.is(
-      await host.client.call('evaluate', "inventory.get('ghost')"),
+      await host.client.call('evaluate', "inventory.get('kept')"),
       "'placed'",
     );
   },

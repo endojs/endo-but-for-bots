@@ -35,8 +35,6 @@ import {
  * @property {string} [ephemeralDigest]
  * @property {'pending' | 'ready' | 'failed'} status
  * @property {string} [error]
- * @property {boolean} [provisional] recorded by the host before the registry
- *   received the request; the registry's own records replace it
  */
 
 const INDEX_VERSION = 2;

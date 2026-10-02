@@ -97,8 +97,9 @@ import {
 // name taken while an installation runs fails the installation; 15: the
 // manager kit owns the status record and `register` reports it; 16: a
 // durable module receives `makeManager` alone, and neither the adapter nor
-// the keeper answers what only tests asked.
-const WORKSPACE_VERSION = 16;
+// the keeper answers what only tests asked; 17: the registry names the
+// bundles it still needs, and the host keeps no row of its own.
+const WORKSPACE_VERSION = 17;
 // The daemon takes allocation keys from the host alone, so a fixed key names
 // the host's own registry vat and nothing else can carry it.
 const REGISTRY_ALLOCATION_KEY = '00000000000000000000000000000001';
@@ -291,18 +292,6 @@ export const serveThixotrope = async (
         adapterProcesses: platform.adapterProcesses,
         codec: syrupCodec,
         idleSleepMs,
-        // A bundle an installation has put in the store but not yet staged
-        // is named by the index until it is.
-        retainBundles: () =>
-          index
-            .list()
-            .flatMap(entry =>
-              [
-                entry.bundleDigest,
-                entry.durableDigest,
-                entry.ephemeralDigest,
-              ].filter(digest => typeof digest === 'string'),
-            ),
         validateState: async () => {
           try {
             config = JSON.parse(await files.readText(configPath));
@@ -448,6 +437,11 @@ export const serveThixotrope = async (
         );
       }
       daemon.publish(registry, registryPublication);
+      // Bundles are freed once the registry has said which it still needs:
+      // a request's bundles are in the store before the registry holds the
+      // request, and kept from then on. While the registry vat is
+      // quarantined nothing can be installed, and nothing is swept.
+      daemon.sweepBundles(await E(registry).bundles());
     } else {
       log.error(
         'The registry vat is quarantined: installations are listed and removed from the host index, and none can be made; this version offers no command to repair it',
@@ -460,54 +454,15 @@ export const serveThixotrope = async (
         );
     };
     /**
-     * Hand an installation request to the registry vat. The host's index
-     * names the request's bundles first: the registry journals the request
-     * before the host hears of it, so a host that ended between the two
-     * would otherwise sweep the bundles at its next start, from under the
-     * driver resuming the request. The registry's own record replaces this
-     * one at its first step; one for a request the registry refused is
-     * forgotten here.
+     * Hand an installation request to the registry vat, whose code is
+     * already in the store under its digest. A host that ends before the
+     * registry holds the request leaves its bundles unnamed, and the next
+     * start's sweep frees them.
      * @param {any} request
      */
     const requestInstall = async request => {
       if (requested) throw Error('Supervisor is stopping');
-      const { name, workspace } = request;
-      const held = index.get(workspace, name);
-      // A record of the host's own is replaced by the registry's at its
-      // first step; one still the host's names a request the registry never
-      // received, the host having ended in between, and is replaced too.
-      const provisional =
-        held === undefined ||
-        (held.provisional === true &&
-          (await E(registry).lookup(name, workspace)) === undefined);
-      if (provisional) {
-        index.record(workspace, name, {
-          ...(workspace === undefined ? {} : { workspace }),
-          kind: request.kind,
-          digest: request.digest,
-          grants: Array.isArray(request.grants) ? request.grants : [],
-          allocationKey: request.allocationKey,
-          ...(request.bundleDigest === undefined
-            ? {}
-            : { bundleDigest: request.bundleDigest }),
-          ...(request.durableDigest === undefined
-            ? {}
-            : { durableDigest: request.durableDigest }),
-          ...(request.ephemeralDigest === undefined
-            ? {}
-            : { ephemeralDigest: request.ephemeralDigest }),
-          status: 'pending',
-          provisional: true,
-        });
-      }
-      try {
-        return await E(registry).install(request);
-      } catch (error) {
-        // Refused before the registry held it: still the host's record.
-        if (provisional && index.get(workspace, name)?.provisional === true)
-          index.forget(workspace, name);
-        throw error;
-      }
+      return E(registry).install(request);
     };
     const { provide, shipClock, shipControl, shipMailbox } = makeBuiltins({
       store,

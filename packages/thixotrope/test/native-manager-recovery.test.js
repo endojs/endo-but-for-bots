@@ -96,14 +96,6 @@ const start = async (store, index, { after, collectAfterAllocate } = {}) => {
     codec: syrupCodec,
     makeNetlayer: ({ handlers, logger }) =>
       makeTcpNetLayer({ handlers, logger }),
-    retainBundles: () =>
-      index
-        .list()
-        .flatMap(entry =>
-          [entry.durableDigest, entry.ephemeralDigest].filter(
-            digest => typeof digest === 'string',
-          ),
-        ),
     resources: {
       installer: () => {
         const installer = makeInstaller({

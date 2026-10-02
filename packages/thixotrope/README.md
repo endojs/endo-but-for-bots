@@ -398,7 +398,7 @@ The process checks wall-clock time before reporting, so this is not a precise ti
 A backward clock adjustment delays firing; a forward adjustment is noticed at the next timer check.
 Recurring scheduling, per-application quotas, and notification UI remain future work.
 
-Workspace metadata version 16 is required.
+Workspace metadata version 17 is required.
 The supervisor bumps the version whenever a guest closure it ships by source changes shape, since
 an installed closure is frozen in its vat's heap; `src/control/supervisor.js` lists what each
 version changed.

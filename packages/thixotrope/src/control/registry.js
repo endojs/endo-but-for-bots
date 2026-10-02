@@ -115,6 +115,7 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
     lookup: M.call(M.string()).optional(M.string()).returns(M.opt(M.record())),
     remove: M.call(M.string()).optional(M.string()).returns(M.promise()),
     list: M.call().returns(M.arrayOf(M.record())),
+    bundles: M.call().returns(M.arrayOf(M.string())),
   });
 
   /**
@@ -305,7 +306,7 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
 
   return makeExo('Registry', RegistryI, {
     help: () =>
-      "The daemon's record of installed applications and native resources, and their installer: install(request) reserves a name in a workspace, or daemon-wide, resolves its grants in the workspace, allocates a vat, stages the code and puts the value into the workspace; lookup(name, workspace?), remove(name, workspace?), list().",
+      "The daemon's record of installed applications and native resources, and their installer: install(request) reserves a name in a workspace, or daemon-wide, resolves its grants in the workspace, allocates a vat, stages the code and puts the value into the workspace; lookup(name, workspace?), remove(name, workspace?), list(), bundles().",
     /**
      * Reserve a name for one installation, or find the reservation a retry
      * is resuming: the same kind, code and grants, else refused. Resolves,
@@ -463,6 +464,21 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
         }
         return true;
       }),
+    /**
+     * The stored bundles the installations held here name, for the host's
+     * sweep: one a request put in the store is kept from the moment this
+     * vat holds the request, whatever the host's index has recorded yet.
+     */
+    bundles: () =>
+      harden(
+        [...installed.values()].flatMap(entry =>
+          [
+            entry.bundleDigest,
+            entry.durableDigest,
+            entry.ephemeralDigest,
+          ].filter(digest => typeof digest === 'string'),
+        ),
+      ),
     list: () =>
       harden(
         [...installed].map(([key, entry]) => {
