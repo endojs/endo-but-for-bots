@@ -122,6 +122,20 @@ export const makeWorkerSessionRecords = ({
   };
 
   /**
+   * One read-modify-write of a worker's tables record: `change` answers the
+   * record as it should be from the record as it is, or undefined to leave
+   * it.
+   * @param {string} workerId
+   * @param {(record: any) => any} change
+   */
+  const updateTables = (workerId, change) => {
+    const workerStore = store.provideWorkerStore(workerId);
+    const record = /** @type {any} */ (workerStore.getTablesRecord()) ?? {};
+    const changed = change(record);
+    if (changed !== undefined) workerStore.setTablesRecord(changed);
+  };
+
+  /**
    * @param {string} name
    * @param {unknown} binding
    */
@@ -166,25 +180,24 @@ export const makeWorkerSessionRecords = ({
       }
     }
     for (const workerId of resumedByWorkerId.keys()) {
-      const workerStore = store.provideWorkerStore(workerId);
-      const record = /** @type {any} */ (workerStore.getTablesRecord()) ?? {};
-      /** @type {Record<string, unknown>} */
-      const exports = { ...record.exports };
-      let changed = false;
-      for (const [slot, recorded] of Object.entries(exports)) {
-        const found = /** @type {any} */ (recorded);
-        if (
-          found?.kind === 'resource' &&
-          accepts(found.name, found.binding ?? null)
-        ) {
-          exports[slot] = null;
-          changed = true;
+      updateTables(workerId, record => {
+        /** @type {Record<string, unknown>} */
+        const exports = { ...record.exports };
+        let changed = false;
+        for (const [slot, recorded] of Object.entries(exports)) {
+          const found = /** @type {any} */ (recorded);
+          if (
+            found?.kind === 'resource' &&
+            accepts(found.name, found.binding ?? null)
+          ) {
+            exports[slot] = null;
+            changed = true;
+          }
         }
-      }
-      if (changed) {
-        workerStore.setTablesRecord({ ...record, exports });
+        if (!changed) return undefined;
         retired = true;
-      }
+        return { ...record, exports };
+      });
     }
     return retired;
   };
@@ -231,12 +244,10 @@ export const makeWorkerSessionRecords = ({
           resource === undefined
             ? harden({ kind: 'internal' })
             : harden({ kind: 'resource', ...resource });
-        const workerStore = store.provideWorkerStore(workerId);
-        const record = /** @type {any} */ (workerStore.getTablesRecord()) ?? {};
-        workerStore.setTablesRecord({
+        updateTables(workerId, record => ({
           ...record,
           exports: { ...record.exports, [slot]: exportRecord },
-        });
+        }));
       } catch (error) {
         reportError(error);
       }
@@ -254,36 +265,34 @@ export const makeWorkerSessionRecords = ({
         return;
       }
       try {
-        const workerStore = store.provideWorkerStore(workerId);
-        const record = /** @type {any} */ (workerStore.getTablesRecord()) ?? {};
-        let changed = false;
-        const exports = { ...record.exports };
-        if (slot in exports) {
-          delete exports[slot];
-          changed = true;
-        }
-        // A released promise export can still be named by a resolver
-        // obligation (the peer had listened on it, then let it go, or the
-        // peer's session was retired with the listen outstanding). Nothing
-        // can be delivered to that resolver now, and a restart that tried to
-        // re-link it would find no export at the position. The two records
-        // go together.
-        const pendingResolvers = { ...record.pendingResolvers };
-        if (slot.startsWith('p+')) {
-          const position = slot.slice(2);
-          for (const [resolverSlot, target] of Object.entries(
-            pendingResolvers,
-          )) {
-            const found = /** @type {any} */ (target);
-            if (found.kind === 'promise' && found.position === position) {
-              delete pendingResolvers[resolverSlot];
-              changed = true;
+        updateTables(workerId, record => {
+          let changed = false;
+          const exports = { ...record.exports };
+          if (slot in exports) {
+            delete exports[slot];
+            changed = true;
+          }
+          // A released promise export can still be named by a resolver
+          // obligation (the peer had listened on it, then let it go, or the
+          // peer's session was retired with the listen outstanding). Nothing
+          // can be delivered to that resolver now, and a restart that tried to
+          // re-link it would find no export at the position. The two records
+          // go together.
+          const pendingResolvers = { ...record.pendingResolvers };
+          if (slot.startsWith('p+')) {
+            const position = slot.slice(2);
+            for (const [resolverSlot, target] of Object.entries(
+              pendingResolvers,
+            )) {
+              const found = /** @type {any} */ (target);
+              if (found.kind === 'promise' && found.position === position) {
+                delete pendingResolvers[resolverSlot];
+                changed = true;
+              }
             }
           }
-        }
-        if (changed) {
-          workerStore.setTablesRecord({ ...record, exports, pendingResolvers });
-        }
+          return changed ? { ...record, exports, pendingResolvers } : undefined;
+        });
       } catch (error) {
         reportError(error);
       }
@@ -308,9 +317,7 @@ export const makeWorkerSessionRecords = ({
             position: BigInt(resolverSlot.slice(2)),
           }),
         );
-        const workerStore = store.provideWorkerStore(workerId);
-        const record = /** @type {any} */ (workerStore.getTablesRecord()) ?? {};
-        workerStore.setTablesRecord({
+        updateTables(workerId, record => ({
           ...record,
           pendingResolvers: {
             ...record.pendingResolvers,
@@ -319,7 +326,7 @@ export const makeWorkerSessionRecords = ({
               position: target.position.toString(),
             },
           },
-        });
+        }));
       } catch (error) {
         reportError(error);
       }
@@ -334,16 +341,16 @@ export const makeWorkerSessionRecords = ({
         return;
       }
       try {
-        const workerStore = store.provideWorkerStore(workerId);
-        const record = /** @type {any} */ (workerStore.getTablesRecord()) ?? {};
-        if (
-          record.pendingResolvers &&
-          resolverSlot in record.pendingResolvers
-        ) {
+        updateTables(workerId, record => {
+          if (
+            !record.pendingResolvers ||
+            !(resolverSlot in record.pendingResolvers)
+          )
+            return undefined;
           const pendingResolvers = { ...record.pendingResolvers };
           delete pendingResolvers[resolverSlot];
-          workerStore.setTablesRecord({ ...record, pendingResolvers });
-        }
+          return { ...record, pendingResolvers };
+        });
         pendingResolverReferences.delete(`${workerId}:${resolverSlot}`);
       } catch (error) {
         reportError(error);
