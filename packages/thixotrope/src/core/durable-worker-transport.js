@@ -38,13 +38,13 @@ import { WorkerHaltError } from './worker-engine.js';
  *   journal suffix and re-emits the suffix's frames under their
  *   original numbers, which the hub skips.
  *
- * Sleep parks the incarnation: snapshot, record `{ ref, cut }` (the
+ * Sleep ends the incarnation: snapshot, record `{ ref, cut }` (the
  * journal index the snapshot subsumes), advance the outbound base,
  * truncate, terminate. The OCapN session — and every remote reference through
  * it — stays live; the next inbound frame wakes the worker.
  *
- * Every incarnation-touching operation — frame delivery, wake, park,
- * crash, retirement — is serialized on one operation chain, so a park
+ * Every incarnation-touching operation — frame delivery, wake, sleep,
+ * crash, retirement — is serialized on one operation chain, so a sleep
  * naturally drains the deliveries queued before it, and deliveries
  * queued after it reopen the worker from the snapshot it just took.
  *
@@ -58,16 +58,16 @@ import { WorkerHaltError } from './worker-engine.js';
  * @param {(bytes: Uint8Array, sequenceNumber: number) => void} options.onFrame
  *   worker→host frames, each with its session-lifetime sequence
  *   number for the hub's inbound watermark
- * @param {number} [options.idleSleepMs] park the worker after this long
- *   with no operations. The XS worker binary drains the engine's
+ * @param {number} [options.idleSleepMs] put the worker to sleep after this
+ *   long with no operations. The worker binary drains the engine's
  *   promise-job queue to quiescence after every delivery and workers
  *   have no timer queue, so "no inbound frames for a while" is an
  *   exact dormancy signal, not a heuristic — a worker awaiting a
- *   remote promise parks as heap state and the settlement frame wakes
+ *   remote promise sleeps as heap state and the settlement frame wakes
  *   it. If a future engine surfaces its own dormancy signal, it can
  *   feed this same seam.
  * @param {string} [options.debugLabel]
- * @param {boolean} [options.resident] never park this worker on the host's own
+ * @param {boolean} [options.resident] never put this worker to sleep on the host's own
  *   initiative. An explicit `sleep` is still honoured: residency is the host
  *   declining to take that decision, not a refusal to obey one
  * @param {() => void} [options.onFatal] retire the failed logical session
@@ -111,7 +111,7 @@ export const makeDurableWorkerTransport = (
     }
   }
   /**
-   * The operation queue: deliveries, wakes, parks, crashes, and
+   * The operation queue: deliveries, wakes, sleeps, crashes, and
    * retirement all serialize here.
    */
   const serial = makeSerialQueue();
@@ -321,7 +321,7 @@ export const makeDurableWorkerTransport = (
   });
 
   /**
-   * Park the worker: after the deliveries already queued drain,
+   * Put the worker to sleep: after the deliveries already queued drain,
    * snapshot, record the snapshot ref and journal cut, reset the
    * outbound watermark, truncate the subsumed journal prefix, and
    * terminate the incarnation. The OCapN session stays live; the
@@ -364,9 +364,9 @@ export const makeDurableWorkerTransport = (
           await engine.releaseSnapshot(previous);
         }
       }
-      const parked = incarnation;
+      const sleeping = incarnation;
       incarnation = undefined;
-      await parked.terminate();
+      await sleeping.terminate();
     });
 
   return harden({

@@ -5,7 +5,7 @@ import { Fail, q } from '@endo/errors';
 import harden from '@endo/harden';
 
 /**
- * @typedef {object} NativeResourceDescription
+ * @typedef {object} NativeResourceEntries
  * @property {string} directory the directory's real path
  * @property {string} durablePath the `durable.js` entry, bundled for the
  *   manager vat
@@ -20,16 +20,16 @@ import harden from '@endo/harden';
  * import is frozen in the bundles, and the directory may be edited or
  * removed afterwards; its new version is a new installation.
  *
- * Entries are described without following links, so a link is refused:
+ * Entries are located without following links, so a link is refused:
  * what is bundled is the file that is there.
  *
  * @param {object} powers
  * @param {FilePowers} powers.files
  * @param {PathPowers} powers.paths
  * @param {string} directory
- * @returns {Promise<NativeResourceDescription>}
+ * @returns {Promise<NativeResourceEntries>}
  */
-export const describeNativeResource = async ({ files, paths }, directory) => {
+export const locateNativeResource = async ({ files, paths }, directory) => {
   const root = await files.realPath(directory);
   /** @param {string} name */
   const locate = async name => {
@@ -42,4 +42,4 @@ export const describeNativeResource = async ({ files, paths }, directory) => {
   const ephemeralPath = await locate('ephemeral.js');
   return harden({ directory: root, durablePath, ephemeralPath });
 };
-harden(describeNativeResource);
+harden(locateNativeResource);

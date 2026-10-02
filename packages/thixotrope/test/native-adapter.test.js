@@ -37,7 +37,7 @@ const makeNativeFixture = async t => {
   const daemon = await makeThixotropeDaemon(powers, {
     store,
     engine: makePeerJournalReplayEngine(powers),
-    nativeWorkers: powers.nativeWorkers,
+    adapterProcesses: powers.adapterProcesses,
     codec: syrupCodec,
     makeNetlayer: ({ handlers, logger }) =>
       makeTcpNetLayer({ handlers, logger }),
@@ -106,7 +106,7 @@ const makeExitFixture = () => {
     {
       random: makeNodePowers().random,
       timers: fake.timers,
-      nativeWorkers: {
+      adapterProcesses: {
         start: async ({ bundleDigest, onExit }) => {
           /** @type {() => void} */
           let resolveClosed = () => {};
@@ -183,7 +183,7 @@ test.serial(
       {
         random: makeNodePowers().random,
         timers: makeFakeTimers().timers,
-        nativeWorkers: {
+        adapterProcesses: {
           start: async ({ bundleDigest }) => {
             const child = { owner: bundleDigest, terminated: false };
             children.push(child);
@@ -250,7 +250,7 @@ test.serial('native shutdown closes a process awaiting its root', async t => {
     {
       random: makeNodePowers().random,
       timers: makeFakeTimers().timers,
-      nativeWorkers: {
+      adapterProcesses: {
         start: async ({ onExit }) => {
           reportExit = onExit;
           return {
@@ -295,7 +295,7 @@ test.serial('failed native startup reports exit before rejecting', async t => {
   let exited = false;
   await t.throwsAsync(
     () =>
-      makeNodePowers().nativeWorkers.start({
+      makeNodePowers().adapterProcesses.start({
         id: 'failed-start',
         bundlePath: fileURLToPath(
           new URL('./fixtures/absent-native-bundle.cjs', import.meta.url),
@@ -459,7 +459,10 @@ test.serial(
     // The process says why on its stderr, which the daemon only inherits.
     const child = fork(
       fileURLToPath(
-        new URL('../src/platform/node/native-worker-entry.js', import.meta.url),
+        new URL(
+          '../src/platform/node/adapter-process-entry.js',
+          import.meta.url,
+        ),
       ),
       ['tampered', store.bundlePath(bundleDigest), bundleDigest],
       { stdio: ['ignore', 'ignore', 'pipe', 'ipc'], execArgv: [] },

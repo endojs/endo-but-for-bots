@@ -17,7 +17,7 @@ import { makeThixotropeDaemon } from '../src/core/daemon.js';
 import { makePeerSnapshottingReplayEngine } from '../src/core/peer-replay-engine.js';
 import { makeFsStore } from '../src/store/store-fs.js';
 import { makeNodePowers } from '../src/platform/node/powers.js';
-import { parkWorkers } from './_park-workers.js';
+import { sleepWorkers } from './_sleep-workers.js';
 
 const nodePowers = makeNodePowers();
 const macrotask = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -85,7 +85,7 @@ test.serial('a start notice is delivered at every daemon startup', async t => {
       'the publication secret never leaves the daemon',
     );
     t.is(await E(root).starts(), 0, 'nothing delivered yet');
-    await parkWorkers(d1);
+    await sleepWorkers(d1);
     await d1.crash();
   }
 
@@ -95,7 +95,7 @@ test.serial('a start notice is delivered at every daemon startup', async t => {
     const root = await d2.lookup('noticed-cap');
     // The delivery is the wake: nothing woke this vat first.
     t.true(await tickUntil(async () => (await E(root).starts()) === 1));
-    await parkWorkers(d2);
+    await sleepWorkers(d2);
     await d2.crash();
   }
 
@@ -122,7 +122,7 @@ test.serial('clearing the notice stops the delivery', async t => {
     worker.notifyOnStart(root);
     t.is(worker.clearStartNotice(), undefined);
     t.false(workerMeta(d1, worker.workerId).startNotice);
-    await parkWorkers(d1);
+    await sleepWorkers(d1);
     await d1.crash();
   }
 
@@ -158,7 +158,7 @@ test.serial('an ephemeral vat is resident without asking', async t => {
       'resource adapter that sleeps is woken by the traffic it exists to absorb',
   );
 
-  // Residency is the host declining to park on its own initiative, not a
+  // Residency is the host declining to sleep on its own initiative, not a
   // refusal to obey a request.
   await ephemeral.sleep();
   t.false(ephemeral.isAwake(), 'an explicit sleep is still honoured');

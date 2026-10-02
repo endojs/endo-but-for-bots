@@ -23,7 +23,7 @@ import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
 import { MAX_TIMER_DELAY_MS } from '../src/platform/timers.js';
 import { makeFsStore } from '../src/store/store-fs.js';
 import { makeTestOcapn } from './_util.js';
-import { parkWorkers } from './_park-workers.js';
+import { sleepWorkers } from './_sleep-workers.js';
 
 import { makeNodePowers } from '../src/platform/node/powers.js';
 
@@ -191,18 +191,18 @@ test.serial('a host resource reaches a guest as an endowment', async t => {
   t.is(typeof (await E(clock).read()), 'number');
 
   // The worker sleeps and wakes; the resource endowment still works.
-  // `parkWorkers` rather than a bare `sleep`: trailing protocol traffic can
-  // re-wake a worker just after it parks, so one sleep is not always enough —
+  // `sleepWorkers` rather than a bare `sleep`: trailing protocol traffic can
+  // re-wake a worker just after it sleeps, so one sleep is not always enough —
   // which is why the helper retries. Under a loaded suite that race is
   // reachable often enough to matter.
-  await parkWorkers(daemon);
+  await sleepWorkers(daemon);
   t.false(worker.isAwake());
   t.is(typeof (await E(clock).read()), 'number');
   t.true(worker.isAwake());
 });
 
 test.serial(
-  'an idle worker parks itself and wakes on the next call',
+  'an idle worker sleeps itself and wakes on the next call',
   async t => {
     t.timeout(10_000);
     const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-daemon-test-'));
@@ -224,13 +224,13 @@ test.serial(
 
     // Workers run to quiescence after every delivery and have no timer
     // queue, so "no inbound frames for a while" is exact dormancy: the
-    // idle policy parks the worker without being asked.
+    // idle policy sleeps the worker without being asked.
     const deadline = Date.now() + 5000;
     while (worker.isAwake() && Date.now() < deadline) {
       // eslint-disable-next-line no-await-in-loop
       await new Promise(resolve => setTimeout(resolve, 25));
     }
-    t.false(worker.isAwake(), 'the worker parked itself');
+    t.false(worker.isAwake(), 'the worker sleeping itself');
     t.is(await E(counter).incr(), 2, 'the next delivery wakes it');
   },
 );
@@ -406,7 +406,7 @@ test.serial(
       [first.workerId, await first.evaluate(COUNTER_SOURCE)],
       [second.workerId, await second.evaluate(COUNTER_SOURCE)],
     ]);
-    await parkWorkers(daemon);
+    await sleepWorkers(daemon);
     const [victim, rescued] = daemon.inspectReachability().collectible;
     t.is(daemon.inspectReachability().collectible.length, 2);
     deleting = id => {

@@ -64,7 +64,7 @@ export const makeWorkspaceAccess = inventory => {
      * @param {unknown} value
      */
     put: (name, value) => {
-      name.length > 0 || Fail`Expected an inventory name`;
+      name.length > 0 || Fail`Expected an installation name`;
       if (inventory.has(name)) {
         inventory.get(name) === value ||
           Fail`Inventory name became occupied during installation`;

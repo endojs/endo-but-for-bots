@@ -21,7 +21,7 @@ import { makeAdapterKeeper } from '../src/adapter-keeper.js';
 import { makePeerSnapshottingReplayEngine } from '../src/core/peer-replay-engine.js';
 import { makeFsStore } from '../src/store/store-fs.js';
 import { makeNodePowers } from '../src/platform/node/powers.js';
-import { parkWorkers } from './_park-workers.js';
+import { sleepWorkers } from './_sleep-workers.js';
 
 const nodePowers = makeNodePowers();
 
@@ -72,7 +72,7 @@ test.serial('an ephemeral worker is retired at the next startup', async t => {
     durableId = durable.workerId;
     ephemeralId = ephemeral.workerId;
     t.is(await ephemeral.evaluate('6n * 7n'), 42n);
-    await parkWorkers(d1);
+    await sleepWorkers(d1);
     await d1.crash();
   }
 
@@ -144,7 +144,7 @@ test.serial('a manager rebuilds its resource vat after a restart', async t => {
     t.is(await E(root).incarnations(), 1n, 'one adapter so far');
     t.is(d1.listWorkerIds().length, 2, 'manager plus adapter');
 
-    await parkWorkers(d1);
+    await sleepWorkers(d1);
     await d1.crash();
   }
 

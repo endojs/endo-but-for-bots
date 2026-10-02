@@ -10,14 +10,14 @@ import harden from '@endo/harden';
  * bound, goes this way.
  *
  * Each concurrent transfer into one vat needs its own staging slot, named by
- * `stage`; two transfers sharing a stage would interleave. A subsequent
- * attempt on a stage replaces an interrupted transfer, whose chunks stay in
+ * `slot`; two transfers sharing a slot would interleave. A subsequent
+ * attempt on a slot replaces an interrupted transfer, whose chunks stay in
  * the vat's heap only until then.
  *
  * @param {{evaluate: (source: string, endowments?: Record<string, unknown>) => Promise<any>}} worker
  * @param {string} source an expression yielding a function of the endowments
  * @param {Record<string, unknown>} endowments
- * @param {{ stage?: 'thixotrope.installSource' | 'thixotrope.mailSource' }} [options]
+ * @param {{ slot?: 'thixotrope.installSource' | 'thixotrope.mailSource' }} [options]
  *   the staging slot, a name this module's callers agree on rather than
  *   anything user-derived
  */
@@ -25,24 +25,24 @@ export const evaluateSource = async (
   worker,
   source,
   endowments,
-  { stage = 'thixotrope.installSource' } = {},
+  { slot = 'thixotrope.installSource' } = {},
 ) => {
-  const slot = `globalThis[Symbol.for(${JSON.stringify(stage)})]`;
-  await worker.evaluate(`(${slot} = [], true)`);
+  const holder = `globalThis[Symbol.for(${JSON.stringify(slot)})]`;
+  await worker.evaluate(`(${holder} = [], true)`);
   for (let offset = 0; offset < source.length;) {
     let end = Math.min(offset + 1024, source.length);
     const last = source.charCodeAt(end - 1);
     if (end < source.length && last >= 0xd800 && last <= 0xdbff) end -= 1;
     // eslint-disable-next-line no-await-in-loop
-    await worker.evaluate(`(${slot}.push(chunk), true)`, {
+    await worker.evaluate(`(${holder}.push(chunk), true)`, {
       chunk: source.slice(offset, end),
     });
     offset = end;
   }
   return worker.evaluate(
     `(() => {
-    const source = ${slot}.join('');
-    delete ${slot};
+    const source = ${holder}.join('');
+    delete ${holder};
     return globalThis.eval(source)(endowments);
   })()`,
     { endowments: harden(endowments) },

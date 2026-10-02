@@ -1,5 +1,5 @@
 // @ts-check
-/** @import { NativeWorkerPowers } from '../native-workers.js' */
+/** @import { AdapterProcessPowers } from '../adapter-processes.js' */
 /** @import { TimerPowers } from '../timers.js' */
 import { decodeBase64, encodeBase64 } from '@endo/base64';
 import harden from '@endo/harden';
@@ -15,9 +15,12 @@ import { fork } from 'node:child_process';
  * @param {TimerPowers} host.timers
  * @param {number} [host.startupTimeoutMs] how long a child may take to
  *   report readiness before it is killed and `start` rejects
- * @returns {NativeWorkerPowers}
+ * @returns {AdapterProcessPowers}
  */
-export const makeNativeWorkerPowers = ({ timers, startupTimeoutMs = 30_000 }) =>
+export const makeAdapterProcessPowers = ({
+  timers,
+  startupTimeoutMs = 30_000,
+}) =>
   harden({
     start: ({ id, bundlePath, bundleDigest, onFrame, onExit }) =>
       new Promise((resolve, reject) => {
@@ -58,7 +61,7 @@ export const makeNativeWorkerPowers = ({ timers, startupTimeoutMs = 30_000 }) =>
         );
         try {
           child = fork(
-            new URL('./native-worker-entry.js', import.meta.url),
+            new URL('./adapter-process-entry.js', import.meta.url),
             [id, bundlePath, bundleDigest],
             {
               stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
@@ -114,4 +117,4 @@ export const makeNativeWorkerPowers = ({ timers, startupTimeoutMs = 30_000 }) =>
         });
       }),
   });
-harden(makeNativeWorkerPowers);
+harden(makeAdapterProcessPowers);

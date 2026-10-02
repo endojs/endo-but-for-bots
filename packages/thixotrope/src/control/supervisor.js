@@ -37,13 +37,14 @@ import { makePromiseKit } from '@endo/promise-kit';
 
 import { makeInFlight } from '../in-flight.js';
 import { settleWithin } from '../platform/timers.js';
-import { describeNativeResource } from '../native/describe-resource.js';
+import { locateNativeResource } from '../native/locate-resource.js';
 import { randomHex128 } from '../random-id.js';
 import { makeSerialQueue } from '../serial-queue.js';
 
 import { evaluateSource } from '../core/evaluate-source.js';
 import { makeInstallationIndex } from './installation-index.js';
 import { makeInstaller } from './installer.js';
+import { assertInstallationName, assertWorkspaceName } from './names.js';
 import { makeRegistry } from './registry.js';
 import { makeWorkspaceAccess } from './workspace-access.js';
 import { makeThixotropeDaemon } from '../core/daemon.js';
@@ -82,7 +83,7 @@ import {
 // values live in the inventory under their names; 8: the clock and the
 // mailbox are installations the supervisor provides, each in its own vat;
 // 9: native adapters are launched from bundles stored under their digest,
-// which the launcher's description names in place of a directory, and the
+// which the launcher's binding names in place of a directory, and the
 // clock is a native resource, with no host alarm ledger; 10: the
 // installation registry is the host's, in a registry vat of its own with an
 // index beside it, and a workspace only resolves grants and holds values;
@@ -90,8 +91,8 @@ import {
 // from its name, and an installation belongs to a workspace or to the
 // daemon, whose clock every workspace is handed; 12: a host resource is
 // bound to a worker and a key, and a launcher's key is its ephemeral
-// bundle digest.
-const WORKSPACE_VERSION = 12;
+// bundle digest; 13: an export record names its resource's binding.
+const WORKSPACE_VERSION = 13;
 // The daemon takes allocation keys from the host alone, so a fixed key names
 // the host's own registry vat and nothing else can carry it.
 const REGISTRY_ALLOCATION_KEY = '00000000000000000000000000000001';
@@ -309,7 +310,7 @@ export const serveThixotrope = async (
       {
         store,
         engine: measured,
-        nativeWorkers: platform.nativeWorkers,
+        adapterProcesses: platform.adapterProcesses,
         codec: syrupCodec,
         idleSleepMs,
         // A bundle an installation has put in the store but not yet staged
@@ -547,7 +548,7 @@ export const serveThixotrope = async (
      * code is put in the store for that. Resolves to the installed value,
      * or to undefined when it could not be provided.
      * @param {string} name
-     * @param {() => Promise<{kind: 'application', bundleDigest: string} | {kind: 'native', durableDigest: string, ephemeralDigest: string}>} stage
+     * @param {() => Promise<{kind: 'application', bundleDigest: string} | {kind: 'native', durableDigest: string, ephemeralDigest: string}>} ship
      *   put the code in the store and name it
      * @param {{ workspace: string, access: any }} [into] the workspace the
      *   installation belongs to; absent for a daemon-wide one
@@ -562,7 +563,7 @@ export const serveThixotrope = async (
      */
     const provide = async (
       name,
-      stage,
+      ship,
       into = undefined,
       among = workspaces.values(),
       { powers = undefined, replaceUnhealthy = false } = {},
@@ -623,7 +624,7 @@ export const serveThixotrope = async (
             allocationKey: randomId(),
             grants: [],
             ...(powers === undefined ? {} : { powers }),
-            ...(await stage()),
+            ...(await ship()),
           }),
         );
         return await result;
@@ -644,7 +645,7 @@ export const serveThixotrope = async (
     // the bundle it was installed with, so a change to what its two halves
     // say to each other is a WORKSPACE_VERSION bump, which makes a fresh
     // installation of it.
-    const clockStage = async () => {
+    const shipClock = async () => {
       const directory = paths.resolve(packagePath, 'resources', 'clock');
       return /** @type {const} */ ({
         kind: 'native',
@@ -662,7 +663,7 @@ export const serveThixotrope = async (
     // from a facet of the administration, so the operator's authority stays
     // host code and works while vats are broken. It keeps nothing worth
     // repairing, so one that failed is made again.
-    const controlStage = async () => {
+    const shipControl = async () => {
       const directory = paths.resolve(packagePath, 'resources', 'control');
       return /** @type {const} */ ({
         kind: 'native',
@@ -680,7 +681,7 @@ export const serveThixotrope = async (
     /** @type {unknown} */
     let clockFacet;
     /** @returns {Promise<{kind: 'application', bundleDigest: string}>} */
-    const mailboxStage = async () => ({
+    const shipMailbox = async () => ({
       kind: 'application',
       bundleDigest: store.putBundle(
         `({ make: () => (${makeMailbox.toString()})((${makeObservableMap.toString()})) })`,
@@ -700,20 +701,12 @@ export const serveThixotrope = async (
      *   the vat is quarantined
      * @property {any} access the workspace access object's presence;
      *   undefined while the vat is quarantined
-     * @property {() => Promise<any>} getMailbox the address book, made on
+     * @property {() => Promise<any>} getAddressBook the address book, made on
      *   first use
      */
     /** @type {Map<string, Workspace>} */
     const workspaces = new Map();
     const DEFAULT_WORKSPACE = 'default';
-    const WorkspaceNamePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-    /** @param {unknown} name */
-    const assertWorkspaceName = name => {
-      if (typeof name !== 'string' || !WorkspaceNamePattern.test(name))
-        throw Error(
-          'Expected a workspace name: letters, digits, dot, dash and underscore, 64 at most, starting with a letter or digit',
-        );
-    };
     /**
      * The allocation key of a workspace's vat is derived from its name, so
      * every start finds the vat again with no record to lose, and a start
@@ -732,13 +725,13 @@ export const serveThixotrope = async (
      * @param {string} name
      * @param {any} worker
      */
-    const makeMailboxGetter = (name, worker) => {
+    const makeAddressBookGetter = (name, worker) => {
       /** @type {Promise<any> | undefined} */
       let mailboxAddressBook;
       return () => {
         if (mailboxAddressBook) return mailboxAddressBook;
         // Some fifteen kilobytes of guest source, more than one message
-        // can carry: transferred in bounded messages, on a stage of its
+        // can carry: transferred in bounded messages, on a staging slot of its
         // own so no future transfer into the workspace can collide with
         // it. A vat that already holds the address book is asked first, so
         // a supervisor restart costs one message rather than the whole
@@ -774,7 +767,7 @@ export const serveThixotrope = async (
           })());
         })`,
                   { introductions },
-                  { stage: 'thixotrope.mailSource' },
+                  { slot: 'thixotrope.mailSource' },
                 ),
           );
         // Supervisor restart is a lifetime boundary for view subscriptions
@@ -962,7 +955,7 @@ export const serveThixotrope = async (
         worker,
         inventory,
         access,
-        getMailbox: makeMailboxGetter(name, worker),
+        getAddressBook: makeAddressBookGetter(name, worker),
       });
       return workspace;
     };
@@ -980,7 +973,7 @@ export const serveThixotrope = async (
       }
       if (clockFacet !== undefined)
         await handOut(workspace, 'clock', clockFacet);
-      await provide('mailbox', mailboxStage, {
+      await provide('mailbox', shipMailbox, {
         workspace: workspace.name,
         access: workspace.access,
       });
@@ -998,7 +991,7 @@ export const serveThixotrope = async (
       // eslint-disable-next-line no-await-in-loop
       opened.push(await openWorkspace(name));
     }
-    clockFacet = await provide('clock', clockStage, undefined, opened);
+    clockFacet = await provide('clock', shipClock, undefined, opened);
     for (const workspace of opened) {
       // eslint-disable-next-line no-await-in-loop
       await provideInto(workspace);
@@ -1175,15 +1168,13 @@ export const serveThixotrope = async (
         assertRegistry();
         if (typeof directory !== 'string')
           throw Error('Expected a native resource directory');
-        const description = await describeNativeResource(
+        const entries = await locateNativeResource(
           { files, paths },
           paths.resolve(directory),
         );
-        const { bundle } = await platform.bundler.bundle(
-          description.durablePath,
-        );
+        const { bundle } = await platform.bundler.bundle(entries.durablePath);
         const ephemeralBundle = await platform.bundler.bundleNative(
-          description.ephemeralPath,
+          entries.ephemeralPath,
         );
         // Bundling is the host's and may outlast a stop: nothing goes into
         // the store once the supervisor is stopping.
@@ -1208,7 +1199,7 @@ export const serveThixotrope = async (
           }),
         );
         await result;
-        return harden({ name, directory: description.directory, digest });
+        return harden({ name, directory: entries.directory, digest });
       },
       /**
        * Remove an installation of either kind by name: its vat is retired,
@@ -1221,8 +1212,7 @@ export const serveThixotrope = async (
        */
       remove: async name => {
         if (requested) throw Error('Supervisor is stopping');
-        if (typeof name !== 'string' || !name.length)
-          throw Error('Expected an inventory name');
+        assertInstallationName(name);
         const workspace = current();
         if (registryHealthy()) {
           if (await E(registry).remove(name, workspace.name)) return true;
@@ -1285,19 +1275,19 @@ export const serveThixotrope = async (
         return E(inventory).subscriptionCounts();
       },
       /** @param {string} name */
-      invite: name => E(current().getMailbox()).invite(name),
+      invite: name => E(current().getAddressBook()).invite(name),
       /**
        * @param {string} name
        * @param {string} invitationText
        */
       accept: (name, invitationText) =>
-        E(current().getMailbox()).accept(name, invitationText),
+        E(current().getAddressBook()).accept(name, invitationText),
       /** @param {string} invitationText */
       revokeInvitation: invitationText =>
-        E(current().getMailbox()).revokeInvitation(invitationText),
-      contacts: () => E(current().getMailbox()).contacts(),
-      inbox: () => E(current().getMailbox()).inbox(),
-      outbox: () => E(current().getMailbox()).outbox(),
+        E(current().getAddressBook()).revokeInvitation(invitationText),
+      contacts: () => E(current().getAddressBook()).contacts(),
+      inbox: () => E(current().getAddressBook()).inbox(),
+      outbox: () => E(current().getAddressBook()).outbox(),
       /**
        * @param {string} name
        * @param {string} text
@@ -1307,7 +1297,7 @@ export const serveThixotrope = async (
         const workspace = current();
         // Resolve the grant in the workspace so only the explicitly selected
         // value crosses into the mailbox vat.
-        await workspace.getMailbox();
+        await workspace.getAddressBook();
         return workspace.worker.evaluate(
           'E(mailAddressBook).send(name, text, inventory.get(key))',
           { name, text, key },
@@ -1321,14 +1311,14 @@ export const serveThixotrope = async (
         if (typeof key !== 'string' || !key.length)
           throw Error('Expected inventory key');
         const workspace = current();
-        const book = await workspace.getMailbox();
+        const book = await workspace.getAddressBook();
         return workspace.worker.evaluate(
           'E(book).take(id).then(value => { inventory.set(key, value); return true; })',
           { id, key, book },
         );
       },
       /** @param {string} id */
-      discardMessage: id => E(current().getMailbox()).discard(id),
+      discardMessage: id => E(current().getAddressBook()).discard(id),
     });
     /**
      * The administration one client connection speaks to: the daemon's
@@ -1462,7 +1452,7 @@ export const serveThixotrope = async (
       });
     };
     // Served last, once everything a connection can reach exists.
-    controlFacet = await provide('control', controlStage, undefined, opened, {
+    controlFacet = await provide('control', shipControl, undefined, opened, {
       powers: harden({ admin: daemon.makeResource('control-admin') }),
       replaceUnhealthy: true,
     });

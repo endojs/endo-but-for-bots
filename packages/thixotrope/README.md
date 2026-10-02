@@ -205,7 +205,7 @@ experiments; it is not a measure of physical heap reclamation.
 `status` reports worker state and cumulative process-local counts and milliseconds
 for delivery (including its commit cranks), snapshot creation, and engine startup/wake.
 These are coarse measurements, not a latency benchmark or isolated fsync timings.
-The idle sleep delay is 30 seconds; `stop`, SIGINT, and SIGTERM park workers before exit.
+The idle sleep delay is 30 seconds; `stop`, SIGINT, and SIGTERM put workers to sleep before exit.
 A quarantined application or native manager vat is cleared by `thix remove` of its installation
 and reinstalled; a quarantined workspace vat remains inspectable with `status`, and this version
 offers no command to repair it.
@@ -395,7 +395,7 @@ The process checks wall-clock time before reporting, so this is not a precise ti
 A backward clock adjustment delays firing; a forward adjustment is noticed at the next timer check.
 Recurring scheduling, per-application quotas, and notification UI remain future work.
 
-Workspace metadata version 12 is required.
+Workspace metadata version 13 is required.
 It includes dedicated native manager vats (version 4), the mail address book that introduces
 contacts through the `mail-introductions` resource with observable inbox and outbox maps
 (version 5), adapter launchers described by the manager vat that owns them, so that removing or
@@ -406,7 +406,8 @@ under their digest together with the clock as a native resource with no host led
 the registry in a vat of the daemon's own with the host's index beside it (version 10), a
 table of workspaces, each allocated under a key derived from its name, with installations
 belonging to a workspace or to the daemon (version 11), and host resources bound to a worker and
-a key, the adapter launcher's key being its bundle digest (version 12).
+a key, the adapter launcher's key being its bundle digest (version 12), and an export record
+naming its resource's binding (version 13).
 Older workspaces require migration or a fresh state directory because persisted registry and clock
 closures cannot be updated by loading new source; startup rejects them before restoring workers.
 
@@ -537,7 +538,7 @@ yarn workspace @endo/thixotrope test:ironhorse
 
 Both demos accept a state-directory argument after the command and support
 `status`; `demo:ironhorse` is an alias for the counter demo.
-Each invocation starts the daemon, calls the published guest, then parks the vats
+Each invocation starts the daemon, calls the published guest, then puts the vats to sleep
 and exits.
 Existing heaps keep their original guest code; use fresh directories for these
 split examples.
@@ -746,7 +747,7 @@ const secret = daemon.publish(counter);
 // and call the counter — across worker sleeps and daemon restarts.
 console.log(await E(counter).incr()); // 1n, via the in-process endpoint
 
-await daemon.shutdown(); // parks every worker; the store resumes it all
+await daemon.shutdown(); // puts every worker to sleep; the store resumes it all
 ```
 
 A restarted daemon must serve the same address its peers hold: pin the
@@ -978,7 +979,7 @@ Resume tokens are bearer capabilities: use a confidential, authenticated base tr
 The TCP testing transport in the example is suitable only for controlled tests.
 
 Known limits of the prototype: retransmit buffers are unbounded until
-acked; parked sessions are kept indefinitely (no session GC); and
+acked; dormant sessions are kept indefinitely (no session GC); and
 daemon-side imports re-mint lazily (identity across the restart is
 per-session only).
 
@@ -1101,7 +1102,7 @@ settle normally across restarts.
 ## API
 
 `makeThixotropeDaemon(powers, { store, engine, codec, makeNetlayer, resources?, idleSleepMs?, verbose? })`
-resolves to a daemon (`idleSleepMs` parks any worker that has seen no
+resolves to a daemon (`idleSleepMs` puts to sleep any worker that has seen no
 deliveries for that long; workers run to quiescence per delivery and
 have no timer queue, so frame silence is exact dormancy):
 
@@ -1124,7 +1125,7 @@ have no timer queue, so frame silence is exact dormancy):
   reference tables; resolves to the swept ids.
 - `location` and `makeSturdyRefDetails(secret)` — what a peer needs to
   mint a sturdy ref.
-- `shutdown()` — snapshots and parks every worker, then closes the
+- `shutdown()` — snapshots and puts every worker to sleep, then closes the
   endpoint and the netlayer.
 - `crash()` — abandons live state the way a power failure would (for
   tests and supervisors; the store is left recoverable).

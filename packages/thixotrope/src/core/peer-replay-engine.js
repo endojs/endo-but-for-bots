@@ -111,9 +111,9 @@ const makePeerIncarnation = (
 };
 
 /**
- * The no-snapshot mirror of `makeJournalReplayEngine`: every wake
- * replays the full journal (init included) into a fresh worker peer.
- * The transport's outbound watermark absorbs every regenerated frame.
+ * The no-snapshot replay engine: every wake replays the full journal
+ * (init included) into a fresh worker peer. The transport's outbound
+ * watermark absorbs every regenerated frame.
  *
  * @param {object} powers
  * @param {TimerPowers} powers.timers
@@ -147,11 +147,11 @@ export const makePeerJournalReplayEngine = powers =>
 harden(makePeerJournalReplayEngine);
 
 /**
- * The snapshotting mirror of `makeSnapshottingReplayEngine`: the
- * "snapshot" is the engine's own log of delivered envelopes, restored
- * by suppressed replay — indistinguishable, to the transport, from an
- * XS heap restore (no pre-snapshot outbound reappears). Exercises the
- * journal cut and watermark reset without an XS build.
+ * The snapshotting replay engine: the "snapshot" is the engine's own log
+ * of delivered envelopes, restored by suppressed replay, indistinguishable
+ * to the transport from an engine's heap restore (no pre-snapshot outbound
+ * reappears). Exercises the journal cut and watermark reset without a
+ * worker binary.
  *
  * @param {object} powers
  * @param {TimerPowers} powers.timers

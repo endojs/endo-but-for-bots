@@ -6,7 +6,7 @@
  */
 
 /**
- * The daemon-side record of one endpoint session: export descriptions,
+ * The daemon-side record of one endpoint session: export records,
  * resolver obligations, and the answer epoch
  * (worker-session-records.js).
  *
@@ -41,7 +41,7 @@
 /**
  * Durable storage for one worker: its CapTP tables record, its inbound
  * message journal, and its metadata (bootstrap slot, engine snapshot ref,
- * resource export descriptions).
+ * resource export records).
  *
  * The journal is indexed by absolute entry number: indices remain stable
  * across truncation, so a snapshot's recorded `journalLength` always

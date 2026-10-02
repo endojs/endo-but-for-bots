@@ -28,7 +28,7 @@ import { MAX_TIMER_DELAY_MS, makeTimerPowers } from '../timers.js';
 import { makeFilePowers } from './files.js';
 import { makeHashPowers } from './hashes.js';
 import { makeProcessPowers } from './processes.js';
-import { makeNativeWorkerPowers } from './native-workers.js';
+import { makeAdapterProcessPowers } from './adapter-processes.js';
 import { makeSocketPowers } from './sockets.js';
 import { makeSyncFilePowers } from './sync-files.js';
 import { makeTerminalPowers } from './terminal.js';
@@ -160,7 +160,7 @@ export const makeNodePowers = () => {
     files,
     syncFiles,
     processes,
-    nativeWorkers: makeNativeWorkerPowers({ timers: timerPowers }),
+    adapterProcesses: makeAdapterProcessPowers({ timers: timerPowers }),
     sockets,
     terminal,
     hashes,
@@ -170,5 +170,3 @@ export const makeNodePowers = () => {
   });
 };
 harden(makeNodePowers);
-
-/** @typedef {PlatformPowers} NodePowers */

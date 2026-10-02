@@ -151,7 +151,7 @@ Explicit retirement uses persistent tombstones and reconnect-time terminal notif
 
 Peer acceptance scope is explicit: restart-safe with the persistence adapter, process-lifetime without it.
 Version 1 peers and snapshots are not automatically migrated.
-Retransmission buffers and parked session retention remain unbounded; admission quotas, the public
+Retransmission buffers and dormant session retention remain unbounded; admission quotas, the public
 connection-acquisition interface, and user-space availability subscriptions remain separate work.
 Resume tokens require protection by the base transport; TCP testing does not authenticate or encrypt it.
 Tests exercise durable handoff failure boundaries and reconnect/restart recovery, not hardware

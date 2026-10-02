@@ -94,6 +94,15 @@ One word for one thing, throughout the code, the README and this document:
 | message | One mailbox record, sent to a contact or received from one; the CLI area for this is **mail**. |
 | identity | An OCapN key pair and the node location it signs; a **contact** is a local object for one correspondent, and a contact name is a label, not an identity. |
 | guest prelude | The globals every vat has beside the language: `E`, `Far`, `harden`, `makeExo`, `M` and the rest, typed as `GuestGlobals`. |
+| administration | The operator's authority over the daemon and its workspaces: host code, the `control-admin` resource, reached through the control socket. A **connection facet** is one connection's hold on it, speaking for one workspace at a time. |
+| view | A terminal client with a connection and ephemeral subscriptions of its own, rendering descriptions of what it watches; it ends with its connection. |
+| shell | The evaluator every vat publishes under the swissnum `shell`, through which the host evaluates source in it. |
+| allocation key | The idempotent key a vat is found again under: derived from its name for a workspace, fixed for the registry, random and indexed for an installation. |
+| incarnation | One process of a worker or an adapter, from a start to an exit; references into it break with it, and its successor restores from durable state. |
+| spec | The passable record a manager registers under a key and an adapter binds: what a registration desires. |
+| launcher | The host resource bound to a manager's vat that starts its adapter processes, keyed by the ephemeral bundle digest. |
+| lifecycle | A manager's private facet for the host's notices, `started()` and `exited()`. |
+| power | What a factory receives as a property of its one argument: a capability the host provides or the user grants. |
 
 ## Guest state, identity, and authority
 
@@ -533,7 +542,7 @@ their worker, and ephemeral UI cleanup.
 Process-crash tests do not establish hardware power-loss safety or exactly-once effects in an
 arbitrary external service.
 
-Other present limitations include unbounded remote retransmission buffers, indefinite parked durable
+Other present limitations include unbounded remote retransmission buffers, indefinitely dormant durable
 sessions, whole-image copying for sleep/wake, and no live heap/code upgrade.
 The engine does not persist suspended async generators or `Array.fromAsync` operations.
 Protocol limits include rejection of a listen on the sender's own export and pipelining onto an

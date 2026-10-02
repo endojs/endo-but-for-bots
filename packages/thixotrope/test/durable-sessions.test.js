@@ -95,7 +95,7 @@ test.serial('live remote references survive a daemon restart', async t => {
   t.is(await E(remoteCounter).incr(), 1);
   t.is(await E(remoteCounter).incr(), 2);
 
-  // Restart: the first daemon shuts down (parking its durable
+  // Restart: the first daemon shuts down (sleeping its durable
   // sessions), and a successor process boots from the same store on
   // the same port. The client is never told anything ended.
   await daemon1.shutdown();

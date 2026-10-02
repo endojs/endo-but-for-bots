@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * The endpoint's durable session records: resource descriptions that a
+ * The endpoint's durable session records: resource bindings that a
  * restart re-seats, and what retires them.
  */
 import test from '@endo/ses-ava/test.js';
@@ -20,9 +20,9 @@ const makeFixture = () => {
   const records = makeWorkerSessionRecords({
     store,
     resources: {
-      counter: description => {
+      counter: binding => {
         made += 1;
-        return Far('Counter', { describe: () => description });
+        return Far('Counter', { describe: () => binding });
       },
     },
     reportError: error => {
@@ -55,17 +55,17 @@ test('retiring a resource forgets its instance and nulls its export records', t 
   t.deepEqual(tables().exports['o+5'], {
     kind: 'resource',
     name: 'counter',
-    description: { n: 1 },
+    binding: { n: 1 },
   });
 
   t.true(records.retireResource('counter', { n: 1 }));
   t.is(tables().exports['o+5'], null, 'a restart seats a tombstone there');
   const second = records.provideResource('counter', { n: 1 });
-  t.not(second, first, 'the factory runs again for the same description');
+  t.not(second, first, 'the factory runs again for the same binding');
   t.is(count(), 2);
   t.false(
     records.retireResource('counter', { n: 2 }),
-    'nothing to retire for a description never provided',
+    'nothing to retire for a binding never provided',
   );
 });
 
@@ -84,9 +84,9 @@ test('restore re-seats exports and drops answer obligations after breaking them'
   const { store, records, restored, tables } = makeFixture();
   store.provideWorkerStore(ENDPOINT_ID).setTablesRecord({
     exports: {
-      'o+1': { kind: 'resource', name: 'counter', description: { n: 9 } },
+      'o+1': { kind: 'resource', name: 'counter', binding: { n: 9 } },
       'o+2': null,
-      'p+7': { kind: 'resource', name: 'counter', description: { n: 7 } },
+      'p+7': { kind: 'resource', name: 'counter', binding: { n: 7 } },
     },
     pendingResolvers: {
       'o-1': { kind: 'answer', position: '1' },

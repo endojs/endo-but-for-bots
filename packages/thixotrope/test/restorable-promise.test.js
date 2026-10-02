@@ -4,7 +4,7 @@
  *
  * A guest awaiting a host *answer* loses it when the host restarts. A guest
  * listening on a host *promise* does not, provided the host can re-create that
- * promise from the durable description its resource factory is keyed by.
+ * promise from the durable binding its resource factory is keyed by.
  *
  * Two properties, both load-bearing and neither obvious.
  */
@@ -50,9 +50,9 @@ test.serial(
     /** @type {Map<string, (value: unknown) => void>} */
     const settlers = new Map();
     const resources = {
-      'pending-value': (/** @type {any} */ description) => {
+      'pending-value': (/** @type {any} */ binding) => {
         const promise = new Promise(resolve => {
-          settlers.set(JSON.stringify(description), resolve);
+          settlers.set(JSON.stringify(binding), resolve);
         });
         void promise.catch(() => {});
         return promise;
@@ -98,9 +98,9 @@ test.serial(
       t.is(await E(watcher).getGot(), null, 'still pending after the restart');
 
       // Re-seating the guest's export re-ran the factory for the same
-      // description, so this process owns a fresh resolver for the same alarm.
+      // binding, so this process owns a fresh resolver for the same alarm.
       const settle = settlers.get(JSON.stringify({ key: 'a1' }));
-      t.truthy(settle, 'the factory re-ran for the same description');
+      t.truthy(settle, 'the factory re-ran for the same binding');
       settle?.('after-restart');
 
       /** @type {any} */

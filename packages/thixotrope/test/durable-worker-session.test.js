@@ -243,7 +243,7 @@ test('a retired worker session breaks its imports', async t => {
   });
 });
 
-test('idle parking reports awake until the snapshot commits', async t => {
+test('idle sleeping reports awake until the snapshot commits', async t => {
   t.timeout(10_000);
   const snapshotStarted = Promise.withResolvers();
   const snapshot = Promise.withResolvers();
@@ -284,7 +284,7 @@ test('idle parking reports awake until the snapshot commits', async t => {
     await delay(1);
   }
   await snapshotStarted.promise;
-  // The idle threshold has elapsed, but parking is not yet complete.
+  // The idle threshold has elapsed, but sleeping is not yet complete.
   t.true(transport.isAwake());
   t.is(store.getMeta().snapshot, undefined);
   snapshot.resolve('snapshot');
