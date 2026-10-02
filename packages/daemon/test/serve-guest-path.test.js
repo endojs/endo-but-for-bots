@@ -20,10 +20,12 @@ const noConnections = async () => [];
  * @param {object} [options]
  * @param {string} [options.directory]
  * @param {(path: string) => Promise<unknown>} [options.servePath]
+ * @param {(directory: string) => Promise<void>} [options.makePrivateDirectory]
  */
 const makeHarness = ({
   directory = '/run/guests',
   servePath = noConnections,
+  makePrivateDirectory = async () => {},
 } = {}) => {
   /** @type {string[]} */
   const served = [];
@@ -37,6 +39,7 @@ const makeHarness = ({
     socketPathFor: name => `${directory}/${name}`,
     makePrivateDirectory: async dir => {
       madeDirectories.push(dir);
+      return makePrivateDirectory(dir);
     },
     servePath: /** @type {any} */ (
       async (/** @type {{ path: string }} */ { path }) => {
@@ -90,6 +93,43 @@ test('a socket path too long for a Unix socket is refused', t => {
     message: /too long for a Unix socket/,
   });
   t.deepEqual(served, []);
+});
+
+test('a socket path at the Unix socket limit is served', async t => {
+  // A 73-character directory, a slash, and a 29-character name: 103.
+  const directory = `/${'d'.repeat(72)}`;
+  const { issuer } = makeHarness({ directory });
+  const socketPath = await issuer.issue(numberA, {});
+  t.is(socketPath.length, 103);
+});
+
+test('a socket path one past the Unix socket limit is refused', t => {
+  const directory = `/${'d'.repeat(73)}`;
+  const { issuer, served } = makeHarness({ directory });
+  t.throws(() => issuer.issue(numberA, {}), {
+    message: /too long for a Unix socket/,
+  });
+  t.deepEqual(served, []);
+});
+
+test('a failed private directory is made again by the next issue', async t => {
+  let fail = true;
+  const { issuer, madeDirectories, served } = makeHarness({
+    makePrivateDirectory: async () => {
+      if (fail) {
+        throw Error('no space left on device');
+      }
+    },
+  });
+  await t.throwsAsync(() => issuer.issue(numberA, {}), {
+    message: /no space left on device/,
+  });
+  fail = false;
+  // A different guest is not wedged by the first guest's failure.
+  const socketPath = await issuer.issue(numberC, {});
+  t.is(socketPath, `/run/guests/${'c'.repeat(24)}.sock`);
+  t.deepEqual(madeDirectories, ['/run/guests', '/run/guests']);
+  t.deepEqual(served, [socketPath]);
 });
 
 test('a failed issue releases its name so it may be retried', async t => {
