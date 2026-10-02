@@ -199,7 +199,7 @@ impl Interp {
     /// (`apply`) or new target (`construct`), and the argument list, after
     /// the checks, the list's reads and the tick that precede the call.
     /// [`Self::call_reflect`] makes the call; `RUN` may instead enter the
-    /// target in place ([`Self::reflect_run_call`]).
+    /// target in place ([`Self::native_run_call`]).
     pub(in crate::interp) fn reflect_call_operands(
         &mut self,
         m: NativeMethod,

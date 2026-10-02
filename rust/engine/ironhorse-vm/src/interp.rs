@@ -1918,9 +1918,10 @@ struct CallerState {
     /// `mxFrameEnd`, the slot its result is written to. `END` restores the
     /// stack to it so operands the body abandoned (a `switch` discriminant a
     /// `return` jumped over, say) cannot survive into the caller's expression.
-    /// For a `Reflect.apply` or `Reflect.construct` target run in place it is
-    /// the `Reflect` call's base, below the callee's own slots, so the return
-    /// cuts the `Reflect` call's frame too (`Interp::reflect_run_call`).
+    /// For a `Reflect.apply` or `Reflect.construct` target, or a generator's
+    /// body, run in place it is the base of the native call's frame, below the
+    /// callee's own slots, so the return cuts that frame too
+    /// (`Interp::native_run_call`).
     stack_base: usize,
     /// Native-recursion budget units this frame holds for the activation it
     /// replaces (STACK-DEPTH-REFACTOR.md §4.5): a call the dispatch loop runs
@@ -1944,6 +1945,15 @@ enum GetInPlace {
     /// The property's value.
     Value(Slot),
     /// A getter entered in the caller's loop: continue at its body.
+    Entered(usize),
+}
+
+/// What `RUN`'s call of a generator's `next`, `return` or `throw` made of it
+/// ([`Interp::resume_generator_in_place`]).
+enum GenResume {
+    /// The call's result.
+    Value(Slot),
+    /// The generator's body resumed in the caller's loop: continue there.
     Entered(usize),
 }
 
@@ -1975,6 +1985,14 @@ enum FrameReturn {
     /// assignment's, and no meter is checked, as none was when the setter's
     /// nested loop returned and the assignment went on.
     Setter,
+    /// A generator's body that `RUN`'s call of `next`, `return` or `throw`
+    /// resumed in place (STACK-DEPTH-REFACTOR.md C4), its driver's activation
+    /// saved in this frame as `resume_generator` saved it: `END` pushes the
+    /// `{value, done: true}` result, and `YIELD` the yielded one, with the
+    /// meter check `RUN` made after the native returned. However the frame is
+    /// left, the generator's own run entry goes with it, and a generator still
+    /// executing is completed ([`Interp::leave_generator_in_place`]).
+    Generator,
 }
 
 /// One entry of the exception jump-buffer chain (XS's `txJump`, pushed by
@@ -2022,8 +2040,9 @@ enum GeneratorState {
     /// Suspended at a `yield`; `.next(v)` resumes with `v` as the yield
     /// expression's value.
     SuspendedYield,
-    /// Currently running on a `resume_generator` nested dispatch (a
-    /// re-entrant `.next`/`for-of` while executing is a `TypeError` in XS).
+    /// Currently running, on a `resume_generator` nested dispatch or resumed
+    /// in its caller's loop (STACK-DEPTH-REFACTOR.md C4); a re-entrant
+    /// `.next`/`for-of` while executing is a `TypeError` in XS.
     Executing,
     /// Fell off the end or `return`ed; every further `.next` yields
     /// `{value: undefined, done: true}`.
@@ -2105,9 +2124,10 @@ struct GeneratorData {
     frame: Option<SavedFrame>,
 }
 
-/// The context of a generator currently executing on a nested
-/// [`Interp::resume_generator`] dispatch, so the `YIELD` arm knows which
-/// instance to snapshot into and where its value-stack region begins.
+/// The context of a generator currently executing, on a nested
+/// [`Interp::resume_generator`] dispatch or resumed in its caller's loop
+/// (STACK-DEPTH-REFACTOR.md C4), so the `YIELD` arm knows which instance to
+/// snapshot into and where its value-stack region begins.
 /// A stack (not a scalar) because a generator body may drive another
 /// generator's `.next` before it yields.
 struct GenRunFrame {

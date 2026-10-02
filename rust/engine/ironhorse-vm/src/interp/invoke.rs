@@ -21,6 +21,21 @@ fn is_iterator_setter(m: NativeMethod) -> bool {
     )
 }
 
+/// Whether `RUN` calls the native method `m` through
+/// [`Interp::native_run_call`], which can run its callee in the caller's loop:
+/// `Reflect.apply`, `Reflect.construct` (STACK-DEPTH-REFACTOR.md C2) and a
+/// generator's `next`, `return` and `throw` (C4).
+pub(super) fn runs_callee_in_place(m: NativeMethod) -> bool {
+    matches!(
+        m,
+        NativeMethod::ReflectApply
+            | NativeMethod::ReflectConstruct
+            | NativeMethod::GeneratorNext
+            | NativeMethod::GeneratorReturn
+            | NativeMethod::GeneratorThrow
+    )
+}
+
 impl Interp {
     /// Invoke a callback through the shared, complete ECMAScript `Call`
     /// dispatcher. Native algorithms use this name at callback-taking sites;
@@ -336,8 +351,8 @@ impl Interp {
         // accessor's native setter re-entering itself — nests the dispatch's
         // frames on the host stack, so it is charged at the heavy class and
         // bounded by [`NATIVE_DEPTH_LIMIT`]. `call_native_method_in_place`
-        // repeats this charge for `RUN`, `reflect_run_call` for `RUN`'s
-        // `Reflect.apply` and `Reflect.construct`, and `invoke_regexp_protocol`
+        // repeats this charge for `RUN`, `native_run_call` for `RUN`'s
+        // `Reflect.apply`, `Reflect.construct` and generator methods, and `invoke_regexp_protocol`
         // (natives/regexp.rs) for the intrinsic RegExp protocol methods it
         // calls in place: keep the four in step.
         self.enter_native_frame(HEAVY_FRAME_COST)?;
@@ -348,8 +363,7 @@ impl Interp {
 
     /// [`Self::call_native_method`] for `RUN`'s arm for a native method,
     /// which every level of a nest that re-enters through a native method
-    /// called from bytecode (`forEach`, `sort`, a generator's `next`)
-    /// passes. It charges the activation around the dispatcher itself, with
+    /// called from bytecode (`forEach`, `sort`, `map`) passes. It charges the activation around the dispatcher itself, with
     /// no frame between: `with_native_frame` and its closure left two (560 B
     /// natively), and on wasm, which has no sibling calls, the wrapper's
     /// body leaves one.
@@ -584,23 +598,19 @@ impl Interp {
             .map(RunCall::Entered)
     }
 
-    /// `RUN`'s call of the intrinsic `Reflect.apply` or `Reflect.construct`
-    /// (method `m`), its frame of `argc` arguments beginning at `base`
-    /// (STACK-DEPTH-REFACTOR.md C2). The call charges the heavy unit and
-    /// counts the builtin as [`Self::call_native_method`] does, and takes
-    /// [`Self::reflect_call_operands`]. A target that
-    /// [`Self::calls_in_place`] then has its frame entered in the caller's
-    /// loop above the `Reflect` call's frame, which stays on the value stack
-    /// as it did while the target ran, holding the heavy unit with the one
-    /// its nested `dispatch_at` charged until its `END`. The frame begins at
-    /// `base`, so that `END` cuts the `Reflect` call's frame with it and
-    /// leaves the result where the call's would have been: returns where the
-    /// target's body starts. Any other target is called here, through
-    /// `invoke_value` or `construct_value` as [`Self::call_reflect`] calls
-    /// it, and its result replaces the frame: returns `None`. An error leaves
-    /// the frame, as the native's did, and releases the unit.
+    /// `RUN`'s call of a native method `m` whose callee can run in the
+    /// caller's loop, its frame of `argc` arguments beginning at `base`: the
+    /// intrinsic `Reflect.apply` or `Reflect.construct`
+    /// (STACK-DEPTH-REFACTOR.md C2, [`Self::reflect_run_step`]) or a
+    /// generator's `next`, `return` or `throw` (C4,
+    /// [`Self::generator_run_step`]). The call charges the heavy unit and
+    /// counts the builtin as [`Self::call_native_method`] does. A callee run
+    /// in place keeps the unit, in the frame it enters, and the call returns
+    /// where that frame's code continues; otherwise its result has replaced
+    /// the call's frame and it returns `None`. An error leaves the frame, as
+    /// the native's did, and releases the unit.
     #[inline(never)]
-    pub(super) fn reflect_run_call(
+    pub(super) fn native_run_call(
         &mut self,
         m: NativeMethod,
         base: usize,
@@ -610,14 +620,31 @@ impl Interp {
     ) -> Result<Option<usize>, Step> {
         self.enter_native_frame(HEAVY_FRAME_COST)?;
         self.cost.on_builtin(m);
-        let entry = self.reflect_run_step(m, base, argc, ret_pc, code);
+        let entry = if matches!(
+            m,
+            NativeMethod::ReflectApply | NativeMethod::ReflectConstruct
+        ) {
+            self.reflect_run_step(m, base, argc, ret_pc, code)
+        } else {
+            self.generator_run_step(m, base, ret_pc, code)
+        };
         if !matches!(entry, Ok(Some(_))) {
             self.leave_native_frame(HEAVY_FRAME_COST);
         }
         entry
     }
 
-    /// The call of [`Self::reflect_run_call`] after its charge.
+    /// `Reflect.apply` or `Reflect.construct` for [`Self::native_run_call`]
+    /// (C2): takes [`Self::reflect_call_operands`]. A target that
+    /// [`Self::calls_in_place`] then has its frame entered in the caller's
+    /// loop above the `Reflect` call's frame, which stays on the value stack
+    /// as it did while the target ran, holding the heavy unit with the one
+    /// its nested `dispatch_at` charged until its `END`. The frame begins at
+    /// `base`, so that `END` cuts the `Reflect` call's frame with it and
+    /// leaves the result where the call's would have been: returns where the
+    /// target's body starts. Any other target is called here, through
+    /// `invoke_value` or `construct_value` as [`Self::call_reflect`] calls
+    /// it, and its result replaces the frame: returns `None`.
     fn reflect_run_step(
         &mut self,
         m: NativeMethod,
@@ -652,6 +679,49 @@ impl Interp {
             .expect("enter_call pushed the frame")
             .stack_base = base;
         Ok(Some(body_start))
+    }
+
+    /// A generator's `next`, `return` or `throw` (method `m`) for
+    /// [`Self::native_run_call`] (C4): the receiver checked as the native
+    /// checks it, then [`Self::resume_generator_in_place`], whose result
+    /// replaces the call's frame unless the body was entered in place. Out of
+    /// line, so that the frame of `native_run_call`, which a `Reflect` call
+    /// of a target not run in place holds, stays the size C2 left it.
+    #[inline(never)]
+    fn generator_run_step(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        ret_pc: usize,
+        code: &[u8],
+    ) -> Result<Option<usize>, Step> {
+        let this = self
+            .stack
+            .get(base)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let sent = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let gen = match this.value {
+            Payload::Reference(r) if self.generators.contains_key(&r) => r,
+            _ => return Err(self.catchable_type_error_msg("this: not a Generator instance".into())),
+        };
+        let status = match m {
+            NativeMethod::GeneratorNext => GenStatus::Next,
+            NativeMethod::GeneratorReturn => GenStatus::Return,
+            _ => GenStatus::Throw,
+        };
+        match self.resume_generator_in_place(code, gen, sent, status, base, ret_pc)? {
+            GenResume::Value(result) => {
+                self.stack.truncate(base);
+                self.push(result);
+                Ok(None)
+            }
+            GenResume::Entered(resume_pc) => Ok(Some(resume_pc)),
+        }
     }
 
     /// Enter the frame [`Self::run_user_callback`] would build for `func`, or
