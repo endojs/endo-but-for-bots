@@ -135,8 +135,8 @@ launch seam parses `--output-format stream-json --verbose` with
 malformed stream is a `parse-error`, or a `nonzero-exit` if the process failed.
 `error_max_turns` maps to `limit-exceeded: max-turns`, and a rate-limit result
 maps to `rate-limited`, with `retryAfterMs` taken from the last
-`rate_limit_event`. Every exit path closes the broker, the guest session, and
-the files.
+`rate_limit_event`. Every exit path closes the broker, the daemon connection
+(the guest session, or the root session after a fallback), and the files.
 
 ## Two transports
 

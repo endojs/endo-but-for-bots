@@ -2611,6 +2611,11 @@ export type CapTpConnectionRegistrar = (args: {
 
 /** Serves one guest on its own socket (`serve-guest-path.js`). */
 export type GuestPathIssuer = {
+  /**
+   * Serve a guest on its socket and resolve to the socket path. Throws
+   * synchronously, before returning a promise, when the socket name is held
+   * by another guest or the socket path is too long.
+   */
   issue: (
     formulaNumber: string,
     guest: unknown,
