@@ -121,9 +121,10 @@ const petNameHubMethodGuards = harden({
 // The full name-hub method-guard record: the portable read contract plus the
 // daemon-specific registry/locator/mutation surface. `EndoDirectory` and
 // `EndoHost` spread it (and `directoryFileMethodGuards`); `EndoGuest` spreads
-// only `petNameHubMethodGuards`. Agents override `follow*` methods, which
-// return `M.promise()` on agents where the hub returns `M.remotable()` (the
-// exo awaits before wrapping the reader).
+// only `petNameHubMethodGuards`. Each agent interface (`HostInterface`,
+// `GuestInterface`) then overrides the `follow*` guards it carries to return
+// `M.promise()` where a hub returns `M.remotable()`, because the agent exo
+// awaits before wrapping the reader.
 export const nameHubMethodGuards = harden({
   ...petNameHubMethodGuards,
   ...designationMethodGuards,
