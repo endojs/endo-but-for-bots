@@ -3,11 +3,10 @@
 
 /**
  * @import { OcapnLocation } from '../codecs/components.js'
- * @import { InternalSession } from './types.js'
+ * @import { InternalSession, NonceLocator } from './types.js'
  */
 
 import harden from '@endo/harden';
-import { thawedBytes } from '@endo/immutable-arraybuffer';
 import { E } from '@endo/eventual-send';
 import { makeSturdyRef as makeRealmSturdyRef } from '@endo/sturdyref';
 import {
@@ -168,6 +167,67 @@ export const makeSturdyRef = (
 };
 
 /**
+ * Look up secret bytes in a nonce locator, exactly as a peer's bootstrap
+ * `fetch` does. Try ASCII decoding first so locators keyed by friendly
+ * string names continue to match: any secret whose bytes all fall in
+ * 0x00-0x7f reaches the locator as a string, even one minted as bytes.
+ * If the bytes aren't valid ASCII (e.g. a Spritely-style random 24-byte
+ * secret), fall back to passing the raw bytes through; locators that
+ * index by bytes can match those, locators that don't will simply return
+ * undefined.
+ *
+ * @param {NonceLocator} locator
+ * @param {Uint8Array} secretBytes
+ * @returns {Promise<unknown>}
+ */
+const lookupSecretBytes = async (locator, secretBytes) => {
+  // `swissnumFromBytes` copies a mutable view and the shim's frozen
+  // wrapper alike, so both shapes resolve the same way.
+  const swissNum = swissnumFromBytes(secretBytes);
+  let secret;
+  try {
+    // Keep this `try` around the decode: its RangeError names the
+    // offending byte, so letting it escape would leak part of the secret.
+    secret = decodeSwissnum(swissNum);
+  } catch (error) {
+    if (!(error instanceof RangeError)) {
+      throw error;
+    }
+    return locator.get(swissnumToBytes(swissNum));
+  }
+  return locator.get(secret);
+};
+
+/**
+ * Resolve a secret that names this client from its own locator.
+ *
+ * @param {NonceLocator} locator
+ * @param {string | Uint8Array} secret
+ * @returns {Promise<unknown>}
+ */
+const enlivenAtHome = async (locator, secret) => {
+  // A SturdyRef read off the wire carries its secret as bytes, even
+  // one minted here with a string secret and sent back home. Resolve
+  // bytes exactly as the bootstrap `fetch` would, so enlivening at home
+  // reaches the same capability a peer's fetch reaches. ASCII-range
+  // bytes therefore reach the locator as a string; only non-ASCII
+  // bytes pass through as bytes.
+  const lookup =
+    typeof secret === 'string'
+      ? locator.get(secret)
+      : lookupSecretBytes(locator, secret);
+  const value = await lookup;
+  if (value === undefined) {
+    // Intentionally do NOT include `secret` in the message: this
+    // error rides up into rejection chains that may be serialized
+    // into peer-visible op:abort or logs, and `secret` is the
+    // long-lived authority granting access to the capability.
+    throw Error('ocapn: locator has no capability for sturdyref secret');
+  }
+  return value;
+};
+
+/**
  * Resolve a `(location, secret)` pair to an actual reference: local values
  * come from the injected `locator`; remote values are fetched from the
  * peer's bootstrap over a session.
@@ -175,7 +235,7 @@ export const makeSturdyRef = (
  * @param {SturdyRefDetails} details
  * @param {(location: OcapnLocation) => Promise<InternalSession>} provideSession
  * @param {(location: OcapnLocation) => boolean} isSelfLocation
- * @param {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} locator
+ * @param {NonceLocator} locator
  */
 export const enlivenSturdyRefDetails = async (
   details,
@@ -186,15 +246,7 @@ export const enlivenSturdyRefDetails = async (
   const { location, secret } = details;
 
   if (isSelfLocation(location)) {
-    const value = await locator.get(secret);
-    if (value === undefined) {
-      // Intentionally do NOT include `secret` in the message: this
-      // error rides up into rejection chains that may be serialized
-      // into peer-visible op:abort or logs, and `secret` is the
-      // long-lived authority granting access to the capability.
-      throw Error('ocapn: locator has no capability for sturdyref secret');
-    }
-    return value;
+    return enlivenAtHome(locator, secret);
   }
 
   const { ocapn } = await provideSession(location);
@@ -214,7 +266,7 @@ export const enlivenSturdyRefDetails = async (
  * @param {SturdyRef} sturdyRef
  * @param {(location: OcapnLocation) => Promise<InternalSession>} provideSession
  * @param {(location: OcapnLocation) => boolean} isSelfLocation
- * @param {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} locator
+ * @param {NonceLocator} locator
  */
 export const enlivenSturdyRef = async (
   sturdyRef,
@@ -249,7 +301,7 @@ export const enlivenSturdyRef = async (
  */
 
 /**
- * @param {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} locator
+ * @param {NonceLocator} locator
  * @param {EnlivenSturdyRefDetails} [enlivenDetails] how the SturdyRefs this
  *   tracker mints are enlivened; typically bound to the owning client.
  * @returns {SturdyRefTracker}
@@ -265,20 +317,6 @@ export const makeSturdyRefTracker = (locator, enlivenDetails) => {
     },
     getDetails: sturdyRef =>
       minted.has(sturdyRef) ? sturdyRefDetails.get(sturdyRef) : undefined,
-    lookup: async secretBytes => {
-      const swissNum = swissnumFromBytes(thawedBytes(secretBytes));
-      // Try ASCII decoding first so locators keyed by friendly string
-      // names continue to match. If the bytes aren't valid ASCII (e.g.
-      // a Spritely-style random 24-byte secret), fall back to passing
-      // the raw bytes through; locators that index by bytes can match
-      // those, locators that don't will simply return undefined.
-      let secret;
-      try {
-        secret = decodeSwissnum(swissNum);
-      } catch {
-        return locator.get(swissnumToBytes(swissNum));
-      }
-      return locator.get(secret);
-    },
+    lookup: async secretBytes => lookupSecretBytes(locator, secretBytes),
   });
 };
