@@ -3122,6 +3122,7 @@ __metadata:
     "@endo/stream": "workspace:^"
     "@endo/stream-node": "workspace:^"
     "@endo/utf8": "workspace:^"
+    "@fast-check/ava": "catalog:dev"
     ava: "catalog:dev"
     eslint: "catalog:dev"
     expect-type: "npm:^1.4.0"
