@@ -176,16 +176,18 @@ export const makeEvaluateTool = host => {
       const codeNames = Object.keys(
         /** @type {Record<string, string>} */ (endowments),
       );
-      const petNames = Object.values(
+      // Each endowment pet name and the worker name are single names,
+      // wrapped as one-segment pet-name paths.
+      const petNamePaths = Object.values(
         /** @type {Record<string, string>} */ (endowments),
-      );
+      ).map(petName => [petName]);
       const resultPath = resultName ? [resultName] : undefined;
       const result = await E(host).evaluate(
-        workerName,
+        harden([workerName]),
         source,
-        codeNames,
-        petNames,
-        resultPath,
+        harden(codeNames),
+        harden(petNamePaths),
+        resultPath && harden(resultPath),
       );
       if (result === undefined) {
         return 'undefined';
