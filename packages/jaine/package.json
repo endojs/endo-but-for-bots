@@ -24,7 +24,8 @@
     "setup-factory": "endo run --UNCONFINED jaine-factory-setup.js --powers @agent -E PROVIDER_NAME=${PROVIDER_NAME:-default} -E FACTORY_NAME=${FACTORY_NAME:-jaine-factory}",
     "lint": "yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix",
-    "lint:eslint": "eslint '**/*.js'"
+    "lint:eslint": "eslint '**/*.js'",
+    "test": "ava"
   },
   "dependencies": {
     "@endo/daemon": "workspace:^",
@@ -43,6 +44,14 @@
   },
   "devDependencies": {
     "@endo/cli": "workspace:^",
+    "@endo/ses-ava": "workspace:^",
+    "ava": "catalog:dev",
     "eslint": "catalog:dev"
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.*"
+    ],
+    "timeout": "2m"
   }
 }
