@@ -366,9 +366,15 @@ export interface WorkspaceGrants {
   git?: ERef<WorkspaceGitCapability>;
   /** Network + credential layer: the granted `GitRemote` push tier. */
   remote?: ERef<GitRemoteToolCapability>;
-  /** Command layer: the granted `Shell`. */
+  /**
+   * Command layer: the granted `Shell`. Cannot be combined with `readOnly`,
+   * because a shell can exercise authority beyond the read-only file slice.
+   */
   shell?: ERef<ShellToolCapability>;
-  /** Drop the file-tool write slice; forwarded to `makeMountFsTools`. */
+  /**
+   * Drop the file-tool write slice; forwarded to `makeMountFsTools`.
+   * Cannot be combined with `shell`.
+   */
   readOnly?: boolean;
   /** Read-tool truncation limit; forwarded to `makeMountFsTools`. */
   maxChars?: number;

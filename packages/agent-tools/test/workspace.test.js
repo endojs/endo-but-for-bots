@@ -89,6 +89,21 @@ test('a shell grant composes the command tools', t => {
   t.true(names.has('inspectShell'));
 });
 
+test('a read-only workspace rejects a shell grant', t => {
+  t.throws(
+    () =>
+      makeWorkspaceTools({
+        readOnly: true,
+        shell: grant('Shell'),
+      }),
+    {
+      instanceOf: TypeError,
+      message:
+        'makeWorkspaceTools: readOnly cannot be combined with a shell grant',
+    },
+  );
+});
+
 test('grants compose into one flat catalog with distinct names', t => {
   // filesystem + git + remote all coexist: every tool name across the three
   // groups is unique, so the catalog is a flat, unambiguous set.

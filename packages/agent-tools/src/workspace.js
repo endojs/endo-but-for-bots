@@ -72,6 +72,14 @@ export const makeWorkspaceTools = ({
   maxChars,
   shellOptions,
 } = {}) => {
+  // `readOnly` describes a workspace whose exposed authority is limited to
+  // reads. A Shell grant can execute commands with its own authority, so the
+  // two cannot describe the same workspace safely.
+  if (readOnly && shell !== undefined) {
+    throw TypeError(
+      'makeWorkspaceTools: readOnly cannot be combined with a shell grant',
+    );
+  }
   /** @type {{ group: string, records: ToolRecord[], names?: Map<string, string> }[]} */
   const groups = [];
   if (filesystem !== undefined) {
