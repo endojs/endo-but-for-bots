@@ -22,8 +22,10 @@
 //
 // With `sandbox`, `claude` runs inside the `bwrap` slice of `bwrap-slice.js`,
 // which binds the broker directory and that spawn's files directory, supplies
-// a scratch HOME, and leaves the daemon socket without a path. Without it, the
-// confinement is the harness-side shape alone.
+// a scratch HOME, and leaves the daemon socket without a path. The caller must
+// choose: `sandbox: false` leaves the confinement to the harness-side shape
+// alone, and omitting `sandbox` is an error, so the slice is never dropped
+// silently.
 
 import childProcess from 'node:child_process';
 import fs from 'node:fs/promises';
@@ -110,10 +112,11 @@ const defaultPathValue = nodePath =>
  * @param {(chunk: Buffer) => void} [options.onStderr] - the confined child's
  *   stderr, for diagnostics.
  * @param {(command: string, args: readonly string[], options: SpawnOptions) => ChildProcess} [options.spawn]
- * @param {{ bwrapPath: string, home?: string, systemMounts?: ReadonlyArray<SliceMount> }} [options.sandbox]
- *   - run `claude` inside the `bwrap` slice: `bwrapPath` is absolute, `home`
- *   is the scratch HOME inside it, and `systemMounts` defaults to this host's
- *   `resolveSystemMounts()`.
+ * @param {{ bwrapPath: string, home?: string, systemMounts?: ReadonlyArray<SliceMount> } | false} options.sandbox
+ *   - required: run `claude` inside the `bwrap` slice, where `bwrapPath` is
+ *   absolute, `home` is the scratch HOME inside it, and `systemMounts`
+ *   defaults to this host's `resolveSystemMounts()`; or `false` to run
+ *   `claude` unconfined, which only a prompt no guest can influence may use.
  * @returns {Promise<InferResult>}
  */
 export const runConfinedTurn = async ({
@@ -147,6 +150,11 @@ export const runConfinedTurn = async ({
 }) => {
   if (typeof claudePath !== 'string' || !path.isAbsolute(claudePath)) {
     throw makeError(X`runConfinedTurn: claudePath must be absolute`);
+  }
+  if (sandbox !== false && typeof sandbox?.bwrapPath !== 'string') {
+    throw makeError(
+      X`runConfinedTurn: sandbox must be { bwrapPath } or an explicit false`,
+    );
   }
   if (typeof credential !== 'string' || credential.length === 0) {
     throw makeError(X`runConfinedTurn: credential must be a non-empty string`);
@@ -208,7 +216,7 @@ export const runConfinedTurn = async ({
     });
     /** @type {ReturnType<typeof makeLaunch>} */
     let launch = unsandboxedLaunch;
-    if (sandbox !== undefined) {
+    if (sandbox !== false) {
       const systemMounts =
         sandbox.systemMounts ?? (await resolveSystemMounts());
       // Inside the slice `claude` is run by its real path, so a symlinked

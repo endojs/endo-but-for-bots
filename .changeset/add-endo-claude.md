@@ -38,9 +38,10 @@ test against a real `claude -p`, a network profile for the DD6 slice (the
 `bwrap` slice shares the host network), and the credential-path / entitlement
 verifications remain named prerequisites (package README, design Known Gaps).
 
-`runConfinedTurn` accepts an opt-in `sandbox: { bwrapPath }` option, and
-`endo-claude-turn` a matching `--bwrap <path>` flag, that run the confined
-`claude` inside a `bwrap` slice.
+`runConfinedTurn` requires a `sandbox` option, and `endo-claude-turn` a
+matching `--bwrap <path>` flag: `sandbox: { bwrapPath }` runs the confined
+`claude` inside a `bwrap` slice, and only an explicit `sandbox: false`
+(`--unconfined`) runs it without one.
 Inside the slice the daemon socket has no path: `claude` sees only the system
 directories, its own installation, the guest's broker socket, its spawn files,
 and a writable working directory, with a scratch `HOME`.

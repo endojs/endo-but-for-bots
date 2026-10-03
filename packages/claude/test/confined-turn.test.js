@@ -125,6 +125,7 @@ const turn = async (overrides = {}) => {
     connect: daemon.connect,
     parentDir,
     onStderr: chunk => process.stderr.write(chunk),
+    sandbox: false,
     ...overrides,
   });
   const leftovers = fs.readdirSync(parentDir);
@@ -213,6 +214,12 @@ test('a formula that is not a guest fails closed before any spawn', async t => {
 test('an unpinned claude version refuses to spawn', async t => {
   await t.throwsAsync(turn({ pinnedCliVersion: '9.9.9' }), {
     message: /pinned/,
+  });
+});
+
+test('omitting the sandbox refuses to run instead of dropping the slice', async t => {
+  await t.throwsAsync(turn({ sandbox: undefined }), {
+    message: /sandbox must be/,
   });
 });
 

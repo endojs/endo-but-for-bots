@@ -105,12 +105,13 @@ const result = await runConfinedTurn({
   prompt,               // delivered on stdin
   model: 'claude-sonnet-4-5',
   claudePath: '/usr/local/bin/claude', // the pinned binary
-  sandbox: { bwrapPath: '/usr/bin/bwrap' }, // run claude in the bwrap slice
+  sandbox: { bwrapPath: '/usr/bin/bwrap' }, // required; `false` runs unconfined
 });
 ```
 
 The `endo-claude-turn` bin does the same thing. It takes `--formula-id`,
-`--model`, `--claude`, `--credential-file`, and optionally `--bwrap`, reads
+`--model`, `--claude`, `--credential-file`, and one of `--bwrap <path>` or
+`--unconfined`, reads
 the prompt from stdin, and writes the tagged result as JSON.
 
 `runConfinedTurn` opens the ordinary daemon client in the harness process and
@@ -130,10 +131,9 @@ the files.
 
 ### The `bwrap` slice
 
-With `sandbox`, `claude` runs under `bwrap` (`src/bwrap-slice.js`) in fresh
-user, mount, PID, IPC, and UTS namespaces with every capability dropped and
-nested user namespaces disabled. The
-slice root is an empty tmpfs. Into it are mounted:
+With `sandbox: { bwrapPath }`, `claude` runs under `bwrap`
+(`src/bwrap-slice.js`) in fresh user, mount, PID, IPC, and UTS namespaces with
+every capability dropped and nested user namespaces disabled. The slice root is an empty tmpfs. Into it are mounted:
 
 - read-only: `/usr`, `/bin`, `/sbin`, `/lib*` (top-level symlinks recreated as
   symlinks) and the `/etc` entries for name resolution, TLS roots, the user
@@ -150,11 +150,6 @@ slice root is an empty tmpfs. Into it are mounted:
 
 The daemon socket lives under `$XDG_RUNTIME_DIR`, the user's home, or the host
 `/tmp`, none of which is mounted, so it has no path inside the slice.
-
-The slice does not reuse `@endo/sandbox`'s `bwrap` driver. That driver's argv
-assembler is not exported, and it takes capability-shaped `Mount`s through a
-slice factory, while this harness needs a `spawn` that runs host paths in
-place.
 
 The network namespace is shared, because `claude` must reach the inference
 API. A loopback TCP listener on the host is therefore still reachable from the
@@ -177,6 +172,8 @@ companions that run other commands in the same shape:
   `'ro-bind'`, `'bind'`, or `'symlink'`, describes one system mount.
 
 These spawn the caller's environment as given; pass a constructed allowlist.
+Both refuse a read-only path that equals, contains, or lies beneath a writable
+path.
 
 ## Two transports
 
@@ -207,9 +204,9 @@ an inherited `ANTHROPIC_API_KEY` cannot silently bypass the pool.
 
 This increment is honest about what it does **not** yet do:
 
-- **The slice is opt-in and shares the network.** `runConfinedTurn` runs
-  `claude` in the `bwrap` slice only when given `sandbox`; without it the
-  daemon socket is still reachable by path. Inside the slice the daemon socket
+- **The slice can be declined and shares the network.** `runConfinedTurn`
+  requires `sandbox`, but an explicit `sandbox: false` runs `claude` without
+  the slice, where the daemon socket is still reachable by path. Inside the slice the daemon socket
   has no path, but the host network namespace is shared, so a loopback TCP
   listener (a gateway, a daemon-side HTTP port) is reachable. Closing that
   waits on the `@endo/sandbox` `network: private` egress profile, or a

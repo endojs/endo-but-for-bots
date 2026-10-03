@@ -169,7 +169,7 @@ from `os.tmpdir()`/`os.userInfo()` with an entirely empty env (`packages/where/i
 so unsetting `ENDO_SOCK` makes the live path the *default*, not absent. The actual
 structural boundary is a DD6 slice (*Design Decision 6*), whose
 filesystem-namespace isolation is what puts the socket path out of reach (today
-`@endo/claude` realizes its filesystem half in-package, as the opt-in `bwrap`
+`@endo/claude` realizes its filesystem half in-package, as the `bwrap`
 slice described in the note below, rather than as a separate
 `@endo/claude-sandbox`); it is
 **required, not merely recommended, for any guest-influenced prompt**, and the child
@@ -180,9 +180,10 @@ no MCP server but the one guest's; it holds *only* the facet's method set. Broad
 OS-level guarantees (no host filesystem, no un-permitted network) are **not**
 properties of `@endo/claude` alone: they hold only inside that DD6 slice.
 
-*Implementation note.* The in-package slice is `runConfinedTurn`'s opt-in
+*Implementation note.* The in-package slice is `runConfinedTurn`'s required
 `sandbox` option (`packages/claude/src/bwrap-slice.js`, package README § *The
-`bwrap` slice*). It puts the daemon socket out of
+`bwrap` slice*); only an explicit `sandbox: false` runs `claude` without it, so
+the slice cannot be dropped by omission. It puts the daemon socket out of
 reach but shares the host network namespace, so the network half of DD6 is
 still open.
 
@@ -1210,9 +1211,9 @@ doc, e.g. `4b4ede37f7`, `e50ffce8cf`); they are the build PR's.
 | Dependency | Relationship |
 | --- | --- |
 | [`@endo/agent-tools`](endo-agent-tools.md) MCP adapter | **Prerequisite**: projects a facet's method set to an MCP `tools/list` catalog and dispatches `tools/call` to `E(facet).<method>`. Designed in the merged [endo-gateway-mcp](endo-gateway-mcp.md) and present as a declared stub at `packages/agent-tools/src/adapters/mcp.js` ("Planned adapter shape only"); implementing it plus the stdio-shim / loopback hosting seam is the adapter-implementation prerequisite (to be filed as its own repo issue). `@endo/claude` composes with it; it does not reinvent the projection. |
-| [`@endo/claude-sandbox`](../packages/claude-sandbox/README.md) | **Sibling / extend + reuse**: the `ClaudeCredentials` caplet supplies the pooled subscriptions. Its live surface is `issue(sessionTag)` / `revoke(sessionTag)` / `rotate(newApiKey)` returning an `IssuedCredential` with single-shot `materialise()`, over kinds `harden(['apiKey','oauthToken'])`. Neither kind is usable here (§ *Design Decision 5*), so this design **extends** the caplet with a subscription credential kind, then wraps `issue`/`revoke` in the `acquire`/return allocator. It does not replace the caplet's protocol. The podman slice is **required** for guest-influenced prompts (*Design Decision 6*), not merely optional. |
+| [`@endo/claude-sandbox`](../packages/claude-sandbox/README.md) | **Sibling / extend + reuse**: the `ClaudeCredentials` caplet supplies the pooled subscriptions. Its live surface is `issue(sessionTag)` / `revoke(sessionTag)` / `rotate(newApiKey)` returning an `IssuedCredential` with single-shot `materialise()`, over kinds `harden(['apiKey','oauthToken'])`. Neither kind is usable here (§ *Design Decision 5*), so this design **extends** the caplet with a subscription credential kind, then wraps `issue`/`revoke` in the `acquire`/return allocator. It does not replace the caplet's protocol. DD6's slice is **required** for guest-influenced prompts, not merely optional; `@endo/claude` discharges its filesystem half with its own `bwrap` slice, not this package's podman slice (§ *Design Decision 6*, *Implementation note*). |
 | [`@endo/eventual-send`](../packages/eventual-send/README.md) | The bridge invokes the resolved facet with `E(facet).<method>(...)`; the credential caplet's methods are eventual-sends. |
-| [endo-posix-sandbox](endo-posix-sandbox.md) (`@endo/sandbox`) | **Prerequisite for the required DD6 slice** (In Progress, Phase 3; the sandbox that `@endo/claude-sandbox` slices are built on). DD6 makes the OS-level slice **required** for any guest-influenced prompt, and the `network: private` egress profile the loopback-HTTP transport and Anthropic egress both need is an intentionally-deferred item in this design (§ *Local deployment*, *Alternative*). So `@endo/claude`'s confinement boundary rests on this landing, not just on the tool-surface flags. |
+| [endo-posix-sandbox](endo-posix-sandbox.md) (`@endo/sandbox`) | **Prerequisite for the network half of the required DD6 slice** (In Progress, Phase 3; the sandbox that `@endo/claude-sandbox` slices are built on). The filesystem half ships in-package as `@endo/claude`'s `bwrap` slice, without `@endo/sandbox` (§ *Design Decision 6*, *Implementation note*). The `network: private` egress profile the loopback-HTTP transport and Anthropic egress both need is an intentionally-deferred item in this design (§ *Local deployment*, *Alternative*), so `@endo/claude`'s network confinement rests on this landing. |
 | [gateway-bearer-token-auth](gateway-bearer-token-auth.md) / [endo-gateway-mcp](endo-gateway-mcp.md) | The bearer-is-formula-id auth shape reused for the loopback **HTTP** bridge and the remote endpoint (the stdio shim carries no bearer; it resolves the facet from the formula id directly). |
 
 Naming: the maintainer's prompt (§ *Prompt*, below) names the package `@endo/claude`, matching the sibling
