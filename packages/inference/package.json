@@ -28,7 +28,8 @@
     "./prompt-origin-gate.js": "./src/prompt-origin-gate.js",
     "./usage-recorder.js": "./src/usage-recorder.js",
     "./types.js": {
-      "types": "./types-index.types.d.ts"
+      "types": "./types-index.types.d.ts",
+      "default": "./types-index.js"
     },
     "./package.json": "./package.json"
   },
@@ -59,6 +60,7 @@
   },
   "files": [
     "./*.d.ts",
+    "types-index.js",
     "LICENSE*",
     "SECURITY*",
     "src"
