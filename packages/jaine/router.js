@@ -194,12 +194,12 @@ export const makeRouter = async (_powers, provider) => {
   /**
    * Get the participation settings for a channel.
    *
-   * @param {string} channelId
+   * @param {string} channelName
    * @returns {{ level: string, notes: string }}
    */
-  const getParticipation = channelId => {
+  const getParticipation = channelName => {
     return (
-      channelParticipation.get(channelId) ||
+      channelParticipation.get(channelName) ||
       harden({ level: 'normal', notes: '' })
     );
   };
@@ -207,20 +207,20 @@ export const makeRouter = async (_powers, provider) => {
   /**
    * Set the participation level for a channel.
    *
-   * @param {string} channelId
+   * @param {string} channelName
    * @param {string} level
    * @param {string} [notes]
    */
-  const setParticipation = (channelId, level, notes) => {
-    const existing = getParticipation(channelId);
+  const setParticipation = (channelName, level, notes) => {
+    const existing = getParticipation(channelName);
     channelParticipation.set(
-      channelId,
+      channelName,
       harden({
         level,
         notes: notes !== undefined ? notes : existing.notes,
       }),
     );
-    console.log(`[jaine][router] Participation for ${channelId}: ${level}`);
+    console.log(`[jaine][router] Participation for ${channelName}: ${level}`);
   };
 
   // ----- Inbox routing (rule-based, synchronous) -----
@@ -266,18 +266,18 @@ export const makeRouter = async (_powers, provider) => {
    * Route a channel message using the LLM.
    *
    * @param {object} message - channel message object
-   * @param {string} channelId - the agent's own pet name for the channel
+   * @param {string} channelName - the agent's own pet name for the channel
    * @param {string} recentContext - formatted recent channel messages
    * @param {string} authorName - display name of the message author
    * @returns {Promise<ChannelRouteResult>}
    */
   const routeChannelMessage = async (
     message,
-    channelId,
+    channelName,
     recentContext,
     authorName,
   ) => {
-    const { level, notes } = getParticipation(channelId);
+    const { level, notes } = getParticipation(channelName);
 
     if (level === 'observer') {
       return harden({ shouldEngage: false, reason: 'observer mode' });
