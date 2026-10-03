@@ -12,11 +12,21 @@ import {
 /** @import { AdmissionRefusal, ClassifiedResult, InferResult, ShapeClassifier, ShapeTable, ShapeTableEntry } from './types.js' */
 
 /**
+ * Reads each field of a caller-supplied entry exactly once into a fresh
+ * hardened data record, checks that copy, and returns it, so an accessor
+ * cannot answer the check with one value and a later lookup with another.
+ *
  * @param {string} version
  * @param {ShapeTableEntry} entry
+ * @returns {ShapeTableEntry}
  */
-const assertShapeTableEntry = (version, entry) => {
+const snapshotShapeTableEntry = (version, entry) => {
   const { pattern, result, retryAfterMs } = entry;
+  const copy = harden(
+    retryAfterMs === undefined
+      ? { pattern, result }
+      : { pattern, result, retryAfterMs },
+  );
   assertPattern(pattern);
   mustMatch(result, ClassifiedResultShape, `table entry for ${version}`);
   if (retryAfterMs !== undefined) {
@@ -26,6 +36,7 @@ const assertShapeTableEntry = (version, entry) => {
       result.type,
     ) || Fail`retryAfterMs is meaningless for a ${q(result.type)} entry`;
   }
+  return copy;
 };
 
 /**
@@ -38,7 +49,9 @@ const assertShapeTableEntry = (version, entry) => {
  * produce a false `needs-auth`.
  *
  * The classifier writes every tag except `ok` and `needs-containment`; the
- * table is checked for that at construction.
+ * table is checked for that at construction. The constructor iterates each
+ * row once and keeps only the hardened data copies it checked, never the
+ * caller's own row or entry objects.
  *
  * @param {ShapeTable} table
  * @returns {ShapeClassifier}
@@ -47,10 +60,12 @@ export const makeShapeClassifier = table => {
   /** @type {Map<string, readonly ShapeTableEntry[]>} */
   const rows = new Map();
   for (const [version, entries] of Object.entries(table)) {
-    for (const entry of entries) {
-      assertShapeTableEntry(version, entry);
-    }
-    rows.set(version, harden([...entries]));
+    rows.set(
+      version,
+      harden(
+        Array.from(entries, entry => snapshotShapeTableEntry(version, entry)),
+      ),
+    );
   }
   const versions = harden([...rows.keys()]);
 

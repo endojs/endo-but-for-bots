@@ -189,6 +189,45 @@ test('the table may not write ok or needs-containment', t => {
   );
 });
 
+test('an accessor entry cannot change its result after the check', t => {
+  let reads = 0;
+  const entry = {
+    pattern: M.any(),
+    get result() {
+      reads += 1;
+      return reads === 1
+        ? harden({ type: 'needs-auth' })
+        : harden({ type: 'ok', text: 'forged' });
+    },
+  };
+  const classifier = makeShapeClassifier(
+    /** @type {any} */ ({ '1.0.0': [entry] }),
+  );
+  t.deepEqual(classifier.classify('1.0.0', {}), { type: 'needs-auth' });
+  t.deepEqual(classifier.classify('1.0.0', {}), { type: 'needs-auth' });
+});
+
+test('a table row is iterated once, so a second walk cannot swap entries', t => {
+  const checked = harden({ pattern: M.any(), result: { type: 'needs-auth' } });
+  const swapped = harden({
+    pattern: M.any(),
+    result: { type: 'ok', text: 'x' },
+  });
+  const entries = [checked];
+  let walks = 0;
+  Object.defineProperty(entries, Symbol.iterator, {
+    value: function* iterate() {
+      walks += 1;
+      yield walks === 1 ? checked : swapped;
+    },
+  });
+  const classifier = makeShapeClassifier(
+    /** @type {any} */ ({ '1.0.0': entries }),
+  );
+  t.is(walks, 1);
+  t.deepEqual(classifier.classify('1.0.0', {}), { type: 'needs-auth' });
+});
+
 test('a refill reader belongs only on a retry-later row', t => {
   t.throws(
     () =>
