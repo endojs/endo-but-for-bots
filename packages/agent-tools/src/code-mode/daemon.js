@@ -13,7 +13,7 @@ import { E } from '@endo/eventual-send';
  * @returns {string[]}
  */
 const toPetNamePath = nameOrPath =>
-  typeof nameOrPath === 'string' ? [nameOrPath] : nameOrPath;
+  harden(typeof nameOrPath === 'string' ? [nameOrPath] : nameOrPath);
 
 /**
  * Build a daemon-hosted evaluate function.

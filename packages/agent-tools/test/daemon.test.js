@@ -74,6 +74,26 @@ test('makeDaemonEvaluate passes a string name as one segment, never split', asyn
   ]);
 });
 
+test('makeDaemonEvaluate hardens the paths it passes to the daemon', async t => {
+  /** @type {unknown[][]} */
+  const calls = [];
+  const powers = Far('Powers', {
+    evaluate: async (...args) => {
+      calls.push(args);
+      return 'done';
+    },
+  });
+  await makeDaemonEvaluate(powers)({
+    source: '1',
+    resultName: 'one',
+    globals: [{ name: 'counter' }],
+  });
+  const [[, , codeNames, petNamePaths, resultNamePath]] = calls;
+  t.true(Object.isFrozen(codeNames));
+  t.true(Object.isFrozen(petNamePaths));
+  t.true(Object.isFrozen(resultNamePath));
+});
+
 // Any string, including ones containing `/`, `@`, `\0`, and lone surrogates.
 const anyStringArb = fc.string({ unit: 'binary', maxLength: 64 });
 
