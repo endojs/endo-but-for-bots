@@ -127,8 +127,10 @@ harden(makeLimitEnforcer);
  * Makes the `terminate` a process-spawning plugin hands the limit enforcer:
  * it signals the whole process group of one child spawned with
  * `detached: true`, so helpers the child started die with it. The child's
- * pid is bound when the killer is made, so the killer can signal that group
- * and no other. A group that is already gone is not an error.
+ * pid is bound when the killer is made, so the killer signals only the group
+ * that pid names. The operating system may reuse the pid once that group has
+ * exited, so the plugin should stop using the killer once it has reaped the
+ * child. A group that is already gone is not an error.
  * Windows has no POSIX process groups, so on `win32` the child itself is
  * signalled instead of its negated pid.
  *
@@ -140,7 +142,9 @@ harden(makeLimitEnforcer);
  *   nothing. Any other value must be an integer in `[2, 2 ** 31 - 1]`:
  *   negating `0` or `1` would name the caller's own group or every process.
  * @param {string} [powers.signal]
- * @param {string} [powers.platform]  such as `process.platform`.
+ * @param {string} powers.platform  such as `process.platform`. Required, so
+ *   a forgotten power fails at construction instead of choosing the POSIX
+ *   branch on Windows.
  * @returns {() => boolean} whether a signal was sent
  */
 export const makeProcessGroupKiller = ({
@@ -149,6 +153,8 @@ export const makeProcessGroupKiller = ({
   signal = 'SIGKILL',
   platform,
 }) => {
+  typeof platform === 'string' ||
+    Fail`platform must be a string, such as process.platform: ${platform}`;
   if (pid !== undefined) {
     (Number.isInteger(pid) && pid > 1 && pid <= 2 ** 31 - 1) ||
       Fail`pid must be an integer from 2 to 2 ** 31 - 1: ${pid}`;

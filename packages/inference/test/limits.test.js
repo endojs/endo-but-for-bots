@@ -273,10 +273,17 @@ test('the process group killer signals the negated pid it was made for', t => {
       calls.push([pid, signal]);
     },
     pid: 1234,
+    platform: 'linux',
   });
   t.true(killProcessGroup());
   t.deepEqual(calls, [[-1234, 'SIGKILL']]);
-  t.false(makeProcessGroupKiller({ kill: () => {}, pid: undefined })());
+  t.false(
+    makeProcessGroupKiller({
+      kill: () => {},
+      pid: undefined,
+      platform: 'linux',
+    })(),
+  );
 });
 
 test('the process group killer refuses a pid that names no child group', t => {
@@ -290,6 +297,7 @@ test('the process group killer refuses a pid that names no child group', t => {
             calls.push(target);
           },
           pid,
+          platform: 'linux',
         }),
       { message: /pid must be an integer from 2/ },
       String(pid),
@@ -304,6 +312,7 @@ test('the process group killer tolerates a group that is already gone', t => {
       throw Object.assign(Error('no such process'), { code: 'ESRCH' });
     },
     pid: 1234,
+    platform: 'linux',
   });
   t.false(gone());
   const denied = makeProcessGroupKiller({
@@ -311,6 +320,7 @@ test('the process group killer tolerates a group that is already gone', t => {
       throw Object.assign(Error('not permitted'), { code: 'EPERM' });
     },
     pid: 1234,
+    platform: 'linux',
   });
   t.throws(() => denied(), { message: 'not permitted' });
 });
@@ -325,6 +335,24 @@ test('the process group killer signals the pid itself on win32', t => {
   });
   t.true(killProcessGroup());
   t.deepEqual(calls, [[1234, 'SIGKILL']]);
+});
+
+test('the process group killer requires the platform power', t => {
+  /** @type {number[]} */
+  const calls = [];
+  t.throws(
+    () =>
+      makeProcessGroupKiller(
+        /** @type {any} */ ({
+          kill: (/** @type {number} */ target) => {
+            calls.push(target);
+          },
+          pid: 1234,
+        }),
+      ),
+    { message: /platform must be a string/ },
+  );
+  t.deepEqual(calls, []);
 });
 
 test('a throwing terminate does not escape abort', t => {
