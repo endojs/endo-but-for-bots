@@ -261,6 +261,38 @@ test('an ask refuses a subagent name that was rebound to someone else', async t 
   t.is((await answerP).text, 'done');
 });
 
+test('an ask refuses a subagent name rebound between its check and its send', async t => {
+  const mailbox = makeMailbox({
+    names: { 'subagent.helper': CHILD },
+  });
+  const { timers } = makeManualTimers();
+  // The name still names the subagent when first checked, and is rebound
+  // before the send re-resolves it.
+  const verdicts = [true, false];
+  const delegations = makeSubagentDelegations({
+    powers: mailbox.powers,
+    timers,
+    verifyBinding: async () => /** @type {boolean} */ (verdicts.shift()),
+  });
+
+  const answerP = delegations.ask({
+    name: 'helper',
+    task: 'do it',
+    timeoutSeconds: 30,
+  });
+  await t.throwsAsync(answerP, { message: /was rebound while asking/ });
+  t.deepEqual(verdicts, []);
+  // The ask went out, but whatever answers it is not taken for the subagent.
+  t.is(mailbox.stream.length, 1);
+  delegations.claim(mailbox.stream[0]);
+  t.deepEqual(
+    delegations.claim(
+      mailbox.deliverReply({ from: CHILD, replyTo: 'out-1', text: 'forged' }),
+    ),
+    { claimed: true },
+  );
+});
+
 test('a reply reports the capabilities it carried', async t => {
   const mailbox = makeMailbox({
     names: { 'subagent.helper': CHILD },

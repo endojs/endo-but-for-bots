@@ -512,6 +512,15 @@ export const makeSubagentDelegations = ({
       // The registry is armed before the send so that the echo of this very
       // message cannot be observed by the inbox loop before it can be matched.
       await E(powers).send(petName, harden([task]), harden([]), harden([]));
+      // The send re-resolves the pet name, so a rebind that lands between
+      // the check above and the send reaches whatever the name then names.
+      // Checking again after the send refuses to take that recipient's reply
+      // for the subagent's. A rebind undone before this second check is not
+      // caught; closing that would need the send to name the recipient by
+      // formula identity, which a guest cannot.
+      verifyBinding === undefined ||
+        (await verifyBinding(name)) ||
+        Fail`The pet name ${q(petName)} was rebound while asking the subagent spawned as ${q(name)}; stop and respawn it`;
       const outcome = await Promise.race([
         answerKit.promise.then(answer => harden({ answer })),
         deadline.then(() => harden({ answer: undefined })),
