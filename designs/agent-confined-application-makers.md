@@ -151,7 +151,7 @@ the mount first and passes the snapshot.
 
 ### The tree `ReadPowers`
 
-A new `makeTreeReadPowers(tree, { root })` in `@endo/platform/fs` turns a
+A new `makeTreeReadPowers(tree, { root })` in `@endo/platform/fs/tree-read-powers` turns a
 `ReadableTree` or `Mount` into compartment-mapper `ReadPowers`:
 
 - `read(location)` accepts only `file:` URLs under a synthetic root
@@ -159,8 +159,10 @@ A new `makeTreeReadPowers(tree, { root })` in `@endo/platform/fs` turns a
   and returns the bytes.
 - It rejects `..`, empty, and percent-encoded separator segments before any
   lookup, so a map or a `package.json` cannot name a file outside the tree.
-- `maybeRead` returns `undefined` for a missing entry, which `mapNodeModules`
-  needs to probe `node_modules` directories.
+- `maybeRead` returns `undefined` for a missing entry, for a directory (as
+  Node's `maybeRead` treats `EISDIR`), and for a location outside the root,
+  which `mapNodeModules` needs to probe `node_modules` directories and to
+  climb past the root when an optional dependency is absent.
 - `canonical` collapses every path that reaches one package directory to a
   single location, as the stock Node `canonical` does with `realpath`.
   `mapNodeModules` relies on this to build one compartment for a package
@@ -315,7 +317,7 @@ Capture errors surface as an `isError` result, and a rejected option
 
 ## Phased implementation
 
-1. `makeTreeReadPowers` in `@endo/platform/fs`, with segment-confinement tests.
+1. `makeTreeReadPowers` in `@endo/platform/fs/tree-read-powers`, with segment-confinement tests.
 2. Daemon capture for `node-modules-with-map` and `node-modules-scan`,
    including the daemon's `canonical` hook for mounts; `EndoHost.makeFromTree`
    gains `layout` and `entry`.

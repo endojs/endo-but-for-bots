@@ -16,6 +16,9 @@ depends on the seam it needs without pulling a host graph it does not.
   (`makeLocalBlob`, `makeLocalTree`, `makeTreeWriter`, and the
   content-store powers below).
 - `@endo/platform/fs/extended` — the extended filesystem backends.
+- `@endo/platform/fs/tree-read-powers` — `makeTreeReadPowers`, the
+  compartment-mapper `ReadPowers` over a `ReadableTree` or `Mount`, confined
+  to a synthetic `file:` root.
 - `@endo/platform/proc` and `@endo/platform/exo-fs` — process and
   exo-filesystem helpers.
 
