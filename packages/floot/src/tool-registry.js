@@ -220,6 +220,10 @@ harden(makeEndoToolSet);
  *   git workspace. They enter the same pinned catalog, so a hosted thread's
  *   `toolSetId` covers them and a name that collides with a built-in is
  *   refused rather than shadowing it.
+ * @param {(petName: string) => Promise<string | undefined>} [options.locateStoredTool]
+ *   The locator of the caplet tool stored under `tools/<petName>`, read on the
+ *   host side: a session's `powers` is a guest, which has no `locate`.
+ *   Without it, a stored tool enters `toolSetId` by name alone.
  */
 export const makeFlootToolRegistry = (
   powers,
@@ -231,6 +235,7 @@ export const makeFlootToolRegistry = (
     getModelId,
     settledMail,
     extraTools,
+    locateStoredTool,
   } = {},
 ) => {
   /** @type {Map<string, any>} */
@@ -258,7 +263,11 @@ export const makeFlootToolRegistry = (
         const summary = (Array.isArray(messages) ? messages : []).map(
           message => ({
             number: Number(message.number),
-            from: message.from,
+            // A guest reads its correspondents by its own pet names; a host
+            // by locator.
+            from: Array.isArray(message.fromNames)
+              ? message.fromNames
+              : message.from,
             type: message.type,
             text: Array.isArray(message.strings)
               ? message.strings.join('')
@@ -280,7 +289,6 @@ export const makeFlootToolRegistry = (
     builtins.set(name, tool);
   if (spawner && delegations) {
     for (const [name, tool] of makeSubagentTools({
-      powers,
       spawner,
       delegations,
       // A Floot session dismisses every message it handles, a delegation reply
@@ -318,7 +326,10 @@ export const makeFlootToolRegistry = (
           petName,
           // Endo locators bind the schema to the durable formula/capability,
           // not merely to a same-shaped replacement after reincarnation.
-          locator: await E(powers).locate('tools', petName),
+          locator:
+            locateStoredTool === undefined
+              ? undefined
+              : await locateStoredTool(petName),
         }),
       ),
     );

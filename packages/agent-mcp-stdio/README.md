@@ -39,12 +39,12 @@ The catalog is static: `makeAgentTools()` in `src/agent-interface.js` declares
 it, and each server gets its own copy (with its own follower table). The tool
 families are:
 
-- names: `help`, `has`, `list`, `remove`, `move`, `copy`, `identify`,
-  `reverseIdentify`, `listIdentifiers`, `storeIdentifier`;
-- locators: `locate`, `listLocators`, `reverseLocate`, `storeLocator` (adopt a
-  locator under a pet name), the content-locator family (`locateContent`,
-  `listContent`, `storeContent`, `reverseLocateContent`,
-  `internalizeContentLocator`, `loadContent`), `invite`, and `accept`;
+- names: `help`, `has`, `list`, `remove`, `move`, `copy`. A guest designates
+  only by pet name: it has no identifier or locator tools (`identify`,
+  `locate`, `storeIdentifier`, `storeLocator`, `invite`, `accept`, and kin),
+  so a designation in its prompt cannot become authority;
+- content locators: `locateContent`, `listContent`, `storeContent`,
+  `reverseLocateContent`, `internalizeContentLocator`, `loadContent`;
 - files: `makeDirectory`, `makePath` (creates only the missing intermediate
   directories), `readText`, `maybeReadText`, `writeText`, `storeValue`;
 - search over a mount the guest holds: `glob`, `grep`, `glorp`;
@@ -52,10 +52,9 @@ families are:
 - mail: `listMessages`, `send`, `reply`, `editMessage`, `messageHistory`,
   `adopt`, `dismiss`, `dismissAll`, `request`, `resolve`, `reject`,
   `sendValue`, `form`, `submit`;
-- following: `followMessages`, `followNameChanges`,
-  `followLocatorNameChanges`, and `followStream` (a reader stored under a pet
-  name) each return a follower handle. MCP calls are request/response, so
-  `readFollower` pulls at most `maxItems` items, waiting at most
+- following: `followMessages`, `followNameChanges`, and `followStream` (a
+  reader stored under a pet name) each return a follower handle. MCP calls
+  are request/response, so `readFollower` pulls at most `maxItems` items, waiting at most
   `waitMilliseconds` in all, and `closeFollower` releases the handle.
 
 The harness renders the same declaration into `--allowedTools` with

@@ -126,13 +126,15 @@ const provideAccountOracle = async (agent, { dir, provider, factoryHost }) => {
     if (profilePath) {
       // A run that died between the oracle's launch and the moves below
       // left its powers guest top-level; find it wherever it is.
-      const oraclePowers = await E(agent).lookup(
-        (await E(agent).has(...powersPath)) ? powersPath : powersName,
-      );
-      await E(oraclePowers).storeLocator(
+      // A guest neither produces nor consumes locators, so bind the profile
+      // into its petstore from the host side, by path.
+      const oraclePowersPath = (await E(agent).has(...powersPath))
+        ? powersPath
+        : [powersName];
+      await E(agent).copy(profileNamePath, [
+        ...oraclePowersPath,
         'account-profile',
-        await E(agent).locate(...profileNamePath),
-      );
+      ]);
     }
     await E(factoryHost).storeLocator(
       'account-oracle',
@@ -180,11 +182,7 @@ const provideAccountOracle = async (agent, { dir, provider, factoryHost }) => {
     }
     await E(agent).provideGuest(handleName, { agentName: powersName });
   }
-  const oracleGuest = await E(agent).lookup(powersName);
-  await E(oracleGuest).storeLocator(
-    'account-profile',
-    await E(agent).locate(...profileNamePath),
-  );
+  await E(agent).copy(profileNamePath, [powersName, 'account-profile']);
   await E(agent).makeUnconfined('@main', accountOracleSpecifier, {
     powersName,
     resultName: oraclePath,

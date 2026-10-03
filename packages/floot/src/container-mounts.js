@@ -204,7 +204,7 @@ const isValidRecord = value => {
  * @param {object} options
  * @param {any} options.powers - the factory's own host powers: petstore
  *   (`has`/`lookup`/`remove`/`storeValue`) for persistence and
- *   `identify` on session guests for possession proofs.
+ *   `identify` through each session guest's name for possession proofs.
  * @param {() => Promise<any>} options.getBridgeProvider - resolves the
  *   host-side bridge provider (`@endo/claude-sandbox`'s
  *   `container-mount-bridge.js`, which holds the `fs-mounter` and root-host
@@ -569,7 +569,7 @@ export const makeContainerMountRegistrar = ({
   /**
    * @param {object} options
    * @param {string} options.sessionId
-   * @param {any} options.sessionGuest
+   * @param {string} options.sessionName
    * @param {string} options.clientKey
    * @param {any} options.client
    * @param {string | string[]} options.petName
@@ -578,7 +578,7 @@ export const makeContainerMountRegistrar = ({
    */
   const attachLocked = async ({
     sessionId,
-    sessionGuest,
+    sessionName,
     clientKey,
     client,
     petName,
@@ -595,8 +595,10 @@ export const makeContainerMountRegistrar = ({
     const petLabel = namePath.join('/');
     // Possession is the authority check: resolution starts from THIS
     // session guest's own petstore, and the record stores the resolved cap
-    // identity (formula id), not the name.
-    const capId = await E(sessionGuest).identify(...namePath);
+    // identity (formula id), not the name. A guest does not reveal formula
+    // identifiers, so the factory host resolves the path through its own
+    // name for the session guest.
+    const capId = await E(powers).identify(sessionName, ...namePath);
     if (capId === undefined) {
       throw new Error(
         `This session does not hold "${petLabel}" — store or adopt the capability in the session petstore first.`,
@@ -830,9 +832,10 @@ export const makeContainerMountRegistrar = ({
    *
    * @param {object} options
    * @param {string} options.sessionId
-   * @param {any} options.sessionGuest
+   * @param {string} options.sessionName - the factory host's pet name for
+   *   the session guest, through which possession is resolved
    */
-  const makeSessionKit = ({ sessionId, sessionGuest }) => {
+  const makeSessionKit = ({ sessionId, sessionName }) => {
     /** @type {{ clientKey: string, client: any } | undefined} */
     let armed;
     const requireArmed = () => {
@@ -886,7 +889,7 @@ export const makeContainerMountRegistrar = ({
       const { clientKey, client } = requireArmed();
       return attach({
         sessionId,
-        sessionGuest,
+        sessionName,
         clientKey,
         client,
         petName,

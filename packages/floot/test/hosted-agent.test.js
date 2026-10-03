@@ -265,15 +265,17 @@ test('a rejected hosted interrupt quarantines the streaming agent', async t => {
 
 test('shutdown cancels inbox startup delayed before iterator creation', async t => {
   const base = makeFakePowers();
-  let releaseLocate = () => {};
-  const locateReady = new Promise(resolve => {
-    releaseLocate = () => resolve('self-locator');
+  let releaseFollow = () => {};
+  const followReady = new Promise(resolve => {
+    releaseFollow = () => resolve(undefined);
   });
   const inbox = makeBufferedReader();
   const powers = harden({
     ...base,
-    locate: async () => locateReady,
-    followMessages: async () => inbox.reader,
+    followMessages: async () => {
+      await followReady;
+      return inbox.reader;
+    },
   });
   const provider = harden({
     async chatStream() {
@@ -288,7 +290,7 @@ test('shutdown cancels inbox startup delayed before iterator creation', async t 
   );
   agent.startInbox();
   const shutdown = agent.shutdown();
-  releaseLocate();
+  releaseFollow();
   await shutdown;
   t.true(inbox.isClosed());
 });

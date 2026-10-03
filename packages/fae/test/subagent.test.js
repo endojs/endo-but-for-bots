@@ -3,40 +3,49 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Fail } from '@endo/errors';
 import { Far } from '@endo/far';
-import { formatLocator, formatLocatorWithHints } from '@endo/daemon/locator.js';
 
 import {
   assertSubagentName,
   composeSubagentSystemPrompt,
-  isSameFormula,
   makeSubagentDelegations,
   makeSubagentTools,
   messageText,
+  subagentPetName,
 } from '../src/subagent.js';
 
-const NODE = 'a'.repeat(64);
-const PARENT = 'b'.repeat(64);
-const CHILD = 'c'.repeat(64);
-const OTHER = 'd'.repeat(64);
+// Opaque stand-ins for the formulas behind the parent's names. A guest never
+// sees these: its mail names correspondents only by its own pet names.
+const PARENT = 'parent';
+const CHILD = 'child';
+const OTHER = 'other';
 
 /**
- * @param {string} number
- * @param {string[]} [hints]
- */
-const locatorFor = (number, hints = []) =>
-  hints.length === 0
-    ? formatLocator(`${number}:${NODE}`, 'handle')
-    : formatLocatorWithHints(`${number}:${NODE}`, 'handle', hints);
-
-/**
- * A mailbox stub that behaves like the daemon's: `send` posts the message to
- * the recipient and echoes it into the sender's own stream first, and `reply`
- * stamps the parent message's `messageId` as `replyTo`.
+ * A mailbox stub that behaves like the daemon's toward a *guest*: `send` posts
+ * the message to the recipient and echoes it into the sender's own stream
+ * first, `reply` stamps the parent message's `messageId` as `replyTo`, and
+ * every message names its sender and recipient only by the guest's top-level
+ * pet names (`fromNames`/`toNames`), never by locator. The guest's powers
+ * offer no `locate` or `storeLocator`, so code that needs either fails here
+ * as it would in a live daemon.
  *
  * @param {object} [options]
- * @param {Record<string, string>} [options.names]
+ * @param {Record<string, string>} [options.names] - Pet name (or `/`-joined
+ *   path) to the formula it names.
  */
-const makeMailbox = ({ names = { subagents: 'directory' } } = {}) => {
+const makeMailbox = ({ names = {} } = {}) => {
+  /**
+   * The daemon's `reverseIdentify` over the guest's special and top-level
+   * names: a name inside a directory never appears.
+   *
+   * @param {string} formula
+   */
+  const namesFor = formula =>
+    harden([
+      ...(formula === PARENT ? ['@self'] : []),
+      ...Object.keys(names).filter(
+        name => !name.includes('/') && names[name] === formula,
+      ),
+    ]);
   /** @type {any[]} */
   const stream = [];
   let nextNumber = 1n;
@@ -48,29 +57,16 @@ const makeMailbox = ({ names = { subagents: 'directory' } } = {}) => {
     notifySent = () => resolve(undefined);
   });
   const powers = Far('Powers', {
-    // `locate`'s daemon guard is `M.call().rest(NamePathShape)`: the path
-    // arrives as separate name arguments, and an array would be rejected
-    // outright. The stub enforces that so a call shape the daemon refuses
-    // fails here rather than only in a live daemon.
-    locate: async (...path) => {
-      path.every(segment => typeof segment === 'string') ||
-        Fail`locate takes name segments, not ${path[0]}`;
-      return names[path.join('/')];
-    },
     has: async (...path) => names[path.join('/')] !== undefined,
-    makeDirectory: async () => {},
-    remove: async () => {},
-    storeLocator: async (path, locator) => {
-      names[Array.isArray(path) ? path.join('/') : path] = locator;
-    },
     send: async (path, strings) => {
       const key = Array.isArray(path) ? path.join('/') : path;
+      names[key] !== undefined || Fail`Unknown pet name ${key}`;
       nextId += 1;
       stream.push(
         harden({
           type: 'package',
-          from: locatorFor(PARENT),
-          to: names[key],
+          fromNames: namesFor(PARENT),
+          toNames: namesFor(names[key]),
           strings: harden([...strings]),
           names: harden([]),
           messageId: `out-${nextId}`,
@@ -101,8 +97,8 @@ const makeMailbox = ({ names = { subagents: 'directory' } } = {}) => {
   }) => {
     const message = harden({
       type: 'package',
-      from,
-      to: locatorFor(PARENT),
+      fromNames: namesFor(from),
+      toNames: namesFor(PARENT),
       strings: harden([text, ...edgeNames.map(() => '')]),
       names: harden([...edgeNames]),
       messageId: `in-${nextNumber}`,
@@ -118,6 +114,7 @@ const makeMailbox = ({ names = { subagents: 'directory' } } = {}) => {
     powers,
     stream,
     deliverReply,
+    namesFor,
     names,
     whenSent: () => whenSent,
   };
@@ -168,13 +165,12 @@ test('subagent names are restricted to a shape that is unambiguous as a pet name
   }
 });
 
-test('locator identity ignores the transport hints locate() appends', t => {
-  t.true(
-    isSameFormula(locatorFor(CHILD), locatorFor(CHILD, ['tcp/1.2.3.4:1'])),
-  );
-  t.false(isSameFormula(locatorFor(CHILD), locatorFor(OTHER)));
-  t.false(isSameFormula(locatorFor(CHILD), 'not-a-locator'));
-  t.false(isSameFormula(undefined, locatorFor(CHILD)));
+test('a subagent is held under a top-level pet name derived from its name', t => {
+  t.is(subagentPetName('helper'), 'subagent.helper');
+  // Top-level, because the daemon names a guest's correspondents by its
+  // top-level names only; and dot-free names keep the derivation one-to-one.
+  t.false(subagentPetName('helper').includes('/'));
+  t.throws(() => subagentPetName('has.dot'), { message: /must match/ });
 });
 
 test('message text interleaves strings and edge names', t => {
@@ -193,7 +189,7 @@ test('message text interleaves strings and edge names', t => {
 
 test('askSubagent resolves with the reply the subagent mails back', async t => {
   const mailbox = makeMailbox({
-    names: { 'subagents/helper': locatorFor(CHILD) },
+    names: { 'subagent.helper': CHILD },
   });
   const { timers } = makeManualTimers();
   const delegations = makeSubagentDelegations({
@@ -212,7 +208,7 @@ test('askSubagent resolves with the reply the subagent mails back', async t => {
   t.deepEqual(delegations.claim(mailbox.stream[0]), { claimed: false });
 
   const reply = mailbox.deliverReply({
-    from: locatorFor(CHILD),
+    from: CHILD,
     replyTo: 'out-1',
     text: 'the design is sound',
   });
@@ -223,9 +219,83 @@ test('askSubagent resolves with the reply the subagent mails back', async t => {
   t.deepEqual(answer.edgeNames, []);
 });
 
+test('an ask refuses a subagent name that was rebound to someone else', async t => {
+  const mailbox = makeMailbox({
+    names: { 'subagent.helper': CHILD },
+  });
+  const { timers } = makeManualTimers();
+  /** @type {string[]} */
+  const verified = [];
+  const delegations = makeSubagentDelegations({
+    powers: mailbox.powers,
+    timers,
+    verifyBinding: async name => {
+      verified.push(name);
+      return false;
+    },
+  });
+
+  await t.throwsAsync(
+    delegations.ask({ name: 'helper', task: 'do it', timeoutSeconds: 30 }),
+    { message: /no longer names the subagent/ },
+  );
+  t.deepEqual(verified, ['helper']);
+  // Nothing was sent to whatever the name now reaches.
+  t.is(mailbox.stream.length, 0);
+  // The slot is released, so a respawned subagent can be asked again.
+  const retry = makeSubagentDelegations({
+    powers: mailbox.powers,
+    timers,
+    verifyBinding: async () => true,
+  });
+  const answerP = retry.ask({
+    name: 'helper',
+    task: 'do it',
+    timeoutSeconds: 30,
+  });
+  await mailbox.whenSent();
+  retry.claim(mailbox.stream[0]);
+  retry.claim(
+    mailbox.deliverReply({ from: CHILD, replyTo: 'out-1', text: 'done' }),
+  );
+  t.is((await answerP).text, 'done');
+});
+
+test('an ask refuses a subagent name rebound between its check and its send', async t => {
+  const mailbox = makeMailbox({
+    names: { 'subagent.helper': CHILD },
+  });
+  const { timers } = makeManualTimers();
+  // The name still names the subagent when first checked, and is rebound
+  // before the send re-resolves it.
+  const verdicts = [true, false];
+  const delegations = makeSubagentDelegations({
+    powers: mailbox.powers,
+    timers,
+    verifyBinding: async () => /** @type {boolean} */ (verdicts.shift()),
+  });
+
+  const answerP = delegations.ask({
+    name: 'helper',
+    task: 'do it',
+    timeoutSeconds: 30,
+  });
+  await t.throwsAsync(answerP, { message: /was rebound while asking/ });
+  t.deepEqual(verdicts, []);
+  // The ask went out, but whatever answers it is not taken for the subagent.
+  t.is(mailbox.stream.length, 1);
+  delegations.claim(mailbox.stream[0]);
+  t.deepEqual(
+    delegations.claim(
+      mailbox.deliverReply({ from: CHILD, replyTo: 'out-1', text: 'forged' }),
+    ),
+    { claimed: true },
+  );
+});
+
 test('a reply reports the capabilities it carried', async t => {
   const mailbox = makeMailbox({
-    names: { 'subagents/helper': locatorFor(CHILD) },
+    names: { 'subagent.helper': CHILD },
   });
   const { timers } = makeManualTimers();
   const delegations = makeSubagentDelegations({
@@ -240,7 +310,7 @@ test('a reply reports the capabilities it carried', async t => {
   await mailbox.whenSent();
   delegations.claim(mailbox.stream[0]);
   const reply = mailbox.deliverReply({
-    from: locatorFor(CHILD),
+    from: CHILD,
     replyTo: 'out-1',
     text: 'here it is: ',
     edgeNames: ['grep'],
@@ -252,7 +322,7 @@ test('a reply reports the capabilities it carried', async t => {
 
 test('a reply from a different sender does not settle the delegation', async t => {
   const mailbox = makeMailbox({
-    names: { 'subagents/helper': locatorFor(CHILD) },
+    names: { 'subagent.helper': CHILD },
   });
   const { timers, fireAll } = makeManualTimers();
   const delegations = makeSubagentDelegations({
@@ -269,7 +339,7 @@ test('a reply from a different sender does not settle the delegation', async t =
 
   // Same replyTo, wrong sender: an impostor must not be able to answer.
   const forged = mailbox.deliverReply({
-    from: locatorFor(OTHER),
+    from: OTHER,
     replyTo: 'out-1',
     text: 'I am not your subagent',
   });
@@ -281,7 +351,7 @@ test('a reply from a different sender does not settle the delegation', async t =
 
 test('a late reply is consumed rather than answered', async t => {
   const mailbox = makeMailbox({
-    names: { 'subagents/helper': locatorFor(CHILD) },
+    names: { 'subagent.helper': CHILD },
   });
   const { timers, fireAll, pendingCount } = makeManualTimers();
   const delegations = makeSubagentDelegations({
@@ -304,7 +374,7 @@ test('a late reply is consumed rather than answered', async t => {
   // makes it an ordinary message: the parent answers its subagent, the subagent
   // answers back, and two models bill an unbounded exchange nobody asked for.
   const late = mailbox.deliverReply({
-    from: locatorFor(CHILD),
+    from: CHILD,
     replyTo: 'out-1',
     text: 'sorry, took a while',
   });
@@ -319,7 +389,7 @@ test('a late reply is consumed rather than answered', async t => {
 
 test('a second reply to an answered ask is consumed, not answered', async t => {
   const mailbox = makeMailbox({
-    names: { 'subagents/helper': locatorFor(CHILD) },
+    names: { 'subagent.helper': CHILD },
   });
   const { timers } = makeManualTimers();
   const delegations = makeSubagentDelegations({
@@ -334,7 +404,7 @@ test('a second reply to an answered ask is consumed, not answered', async t => {
   await mailbox.whenSent();
   delegations.claim(mailbox.stream[0]);
   const answer = mailbox.deliverReply({
-    from: locatorFor(CHILD),
+    from: CHILD,
     replyTo: 'out-1',
     text: 'done',
   });
@@ -345,7 +415,7 @@ test('a second reply to an answered ask is consumed, not answered', async t => {
   // sent twice: nobody is waiting, and answering it would start an exchange
   // between two models.
   const encore = mailbox.deliverReply({
-    from: locatorFor(CHILD),
+    from: CHILD,
     replyTo: 'out-1',
     text: 'and one more thing',
   });
@@ -354,7 +424,7 @@ test('a second reply to an answered ask is consumed, not answered', async t => {
 
 test('unsolicited mail from a subagent the parent has asked is consumed', async t => {
   const mailbox = makeMailbox({
-    names: { 'subagents/helper': locatorFor(CHILD) },
+    names: { 'subagent.helper': CHILD },
   });
   const { timers } = makeManualTimers();
   const delegations = makeSubagentDelegations({
@@ -370,7 +440,7 @@ test('unsolicited mail from a subagent the parent has asked is consumed', async 
   delegations.claim(mailbox.stream[0]);
   delegations.claim(
     mailbox.deliverReply({
-      from: locatorFor(CHILD),
+      from: CHILD,
       replyTo: 'out-1',
       text: 'done',
     }),
@@ -382,8 +452,8 @@ test('unsolicited mail from a subagent the parent has asked is consumed', async 
   // parent, and the subagent would answer that.
   const unsolicited = harden({
     type: 'package',
-    from: locatorFor(CHILD),
-    to: locatorFor(PARENT),
+    fromNames: mailbox.namesFor(CHILD),
+    toNames: mailbox.namesFor(PARENT),
     strings: harden(['are you still there?']),
     names: harden([]),
     messageId: 'in-99',
@@ -393,7 +463,7 @@ test('unsolicited mail from a subagent the parent has asked is consumed', async 
   // Mail from anyone else still reaches the model.
   const stranger = harden({
     ...unsolicited,
-    from: locatorFor(OTHER),
+    fromNames: harden(['alice']),
     messageId: 'in-100',
     number: 100n,
   });
@@ -408,12 +478,11 @@ test('the sets of closed asks and known subagents are bounded', async t => {
     timers,
   });
   /** @param {number} index */
-  const childFor = index =>
-    locatorFor(`${'c'.repeat(62)}${index.toString(16).padStart(2, '0')}`);
+  const childFor = index => `child-${index}`;
   // 33 asks to 33 distinct subagents, one more than either bound, each timed
   // out with its reply still outstanding.
   for (let index = 0; index < 33; index += 1) {
-    mailbox.names[`subagents/helper${index}`] = childFor(index);
+    mailbox.names[`subagent.helper${index}`] = childFor(index);
     const answerP = delegations.ask({
       name: `helper${index}`,
       task: `task ${index}`,
@@ -442,7 +511,7 @@ test('the sets of closed asks and known subagents are bounded', async t => {
 
 test('two questions raced at one subagent are refused, not silently dropped', async t => {
   const mailbox = makeMailbox({
-    names: { 'subagents/helper': locatorFor(CHILD) },
+    names: { 'subagent.helper': CHILD },
   });
   const { timers } = makeManualTimers();
   const delegations = makeSubagentDelegations({
@@ -469,7 +538,7 @@ test('two questions raced at one subagent are refused, not silently dropped', as
   await mailbox.whenSent();
   for (const message of mailbox.stream) delegations.claim(message);
   mailbox.deliverReply({
-    from: locatorFor(CHILD),
+    from: CHILD,
     replyTo: 'out-1',
     text: 'answered the first',
   });
@@ -479,7 +548,7 @@ test('two questions raced at one subagent are refused, not silently dropped', as
 
 test('two questions to one subagent at a time are refused', async t => {
   const mailbox = makeMailbox({
-    names: { 'subagents/helper': locatorFor(CHILD) },
+    names: { 'subagent.helper': CHILD },
   });
   const { timers, fireAll } = makeManualTimers();
   const delegations = makeSubagentDelegations({
@@ -516,7 +585,7 @@ test('asking an unknown subagent fails before any mail is sent', async t => {
 
 test('ask rejects an out-of-range timeout and an oversized task', async t => {
   const mailbox = makeMailbox({
-    names: { 'subagents/helper': locatorFor(CHILD) },
+    names: { 'subagent.helper': CHILD },
   });
   const { timers } = makeManualTimers();
   const delegations = makeSubagentDelegations({
@@ -542,7 +611,7 @@ test('ask rejects an out-of-range timeout and an oversized task', async t => {
   t.is(mailbox.stream.length, 0);
 });
 
-test('spawnSubagent binds the subagent under the parent’s own authority', async t => {
+test("spawnSubagent leaves the parent's edge to the spawner", async t => {
   const mailbox = makeMailbox({ names: {} });
   const { timers } = makeManualTimers();
   const delegations = makeSubagentDelegations({
@@ -554,14 +623,16 @@ test('spawnSubagent binds the subagent under the parent’s own authority', asyn
   const spawner = Far('SubagentSpawner', {
     spawn: async (name, options) => {
       spawned.push({ name, options });
-      return harden({ name, locator: locatorFor(CHILD) });
+      // The spawner holds host authority and binds the child's handle into
+      // the parent's pet store; a guest could not store a locator itself.
+      mailbox.names[subagentPetName(name)] = CHILD;
+      return harden({ name });
     },
     stop: async name => {
       spawned.push({ stopped: name });
     },
   });
   const tools = makeSubagentTools({
-    powers: mailbox.powers,
     spawner,
     delegations,
   });
@@ -575,8 +646,14 @@ test('spawnSubagent binds the subagent under the parent’s own authority', asyn
     name: 'helper',
     options: { systemPrompt: 'be terse' },
   });
-  // The spawner returned a locator; the parent, not the spawner, bound it.
-  t.is(mailbox.names['subagents/helper'], locatorFor(CHILD));
+  t.is(mailbox.names['subagent.helper'], CHILD);
+
+  const stopTool = /** @type {any} */ (tools.get('stopSubagent'));
+  t.regex(
+    await stopTool.execute(harden({ name: 'helper' })),
+    /Stopped subagent "helper"/,
+  );
+  t.deepEqual(spawned[1], { stopped: 'helper' });
 
   await t.throwsAsync(spawnTool.execute(harden({ name: 'Bad Name' })), {
     message: /must match/,
@@ -587,7 +664,6 @@ test('every subagent tool advertises a well-formed schema', t => {
   const mailbox = makeMailbox({ names: {} });
   const { timers } = makeManualTimers();
   const tools = makeSubagentTools({
-    powers: mailbox.powers,
     spawner: Far('SubagentSpawner', {}),
     delegations: makeSubagentDelegations({ powers: mailbox.powers, timers }),
   });
@@ -608,7 +684,7 @@ test('every subagent tool advertises a well-formed schema', t => {
 
 test('a partial reply is left alone until the sender settles it', async t => {
   const mailbox = makeMailbox({
-    names: { 'subagents/helper': locatorFor(CHILD) },
+    names: { 'subagent.helper': CHILD },
   });
   const { timers } = makeManualTimers();
   const delegations = makeSubagentDelegations({
@@ -626,7 +702,7 @@ test('a partial reply is left alone until the sender settles it', async t => {
   // The subagent reveals its answer progressively. Settling the ask on the
   // placeholder would hand the model "Thinking…" as the subagent's answer.
   const partial = mailbox.deliverReply({
-    from: locatorFor(CHILD),
+    from: CHILD,
     replyTo: 'out-1',
     text: 'Thinking…',
     done: false,
@@ -634,7 +710,7 @@ test('a partial reply is left alone until the sender settles it', async t => {
   t.deepEqual(delegations.claim(partial), { claimed: false });
 
   const settled = mailbox.deliverReply({
-    from: locatorFor(CHILD),
+    from: CHILD,
     replyTo: 'out-1',
     text: 'here is the answer',
   });
@@ -644,7 +720,7 @@ test('a partial reply is left alone until the sender settles it', async t => {
 
 test('the attachment advice matches what the harness actually retains', async t => {
   const mailbox = makeMailbox({
-    names: { 'subagents/helper': locatorFor(CHILD) },
+    names: { 'subagent.helper': CHILD },
   });
   const { timers } = makeManualTimers();
   const spawner = Far('SubagentSpawner', {});
@@ -655,7 +731,6 @@ test('the attachment advice matches what the harness actually retains', async t 
       timers,
     });
     const tools = makeSubagentTools({
-      powers: mailbox.powers,
       spawner,
       delegations,
       retainsAttachments,
@@ -669,7 +744,7 @@ test('the attachment advice matches what the harness actually retains', async t 
     delegations.claim(outbound);
     delegations.claim(
       mailbox.deliverReply({
-        from: locatorFor(CHILD),
+        from: CHILD,
         replyTo: outbound.messageId,
         text: 'here: ',
         edgeNames: ['grep'],
@@ -696,10 +771,10 @@ test('a failed ask releases the subagent slot for the next one', async t => {
     delegations.ask({ name: 'helper', task: 'x', timeoutSeconds: 60 }),
     { message: /No subagent named "helper"/ },
   );
-  // The slot is now claimed before `locate`, so failing to resolve the name
+  // The slot is now claimed before `has`, so failing to resolve the name
   // must give it back — otherwise one typo wedges that subagent name with
   // "already has a question in flight" for the life of the agent.
-  mailbox.names['subagents/helper'] = locatorFor(CHILD);
+  mailbox.names['subagent.helper'] = CHILD;
   const answerP = delegations.ask({
     name: 'helper',
     task: 'x',
@@ -708,7 +783,7 @@ test('a failed ask releases the subagent slot for the next one', async t => {
   await mailbox.whenSent();
   for (const message of mailbox.stream) delegations.claim(message);
   mailbox.deliverReply({
-    from: locatorFor(CHILD),
+    from: CHILD,
     replyTo: 'out-1',
     text: 'done',
   });
@@ -718,7 +793,7 @@ test('a failed ask releases the subagent slot for the next one', async t => {
 
 test('closing the registry fails pending and later asks at once', async t => {
   const mailbox = makeMailbox({
-    names: { 'subagents/helper': locatorFor(CHILD) },
+    names: { 'subagent.helper': CHILD },
   });
   const { timers, pendingCount } = makeManualTimers();
   const delegations = makeSubagentDelegations({

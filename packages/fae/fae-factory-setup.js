@@ -64,11 +64,11 @@ export const main = async agent => {
     });
   }
 
-  // Write the provider reference into the factory's petstore.
+  // Write the provider reference into the factory's petstore. A guest
+  // consumes no identifiers or locators, so the host binds it by path.
   // E(agent).identify(...) returns a bare formula id, so use
   // storeIdentifier rather than storeLocator (which requires endo://).
-  const factoryPowers = await E(agent).lookup(agentName);
-  await E(factoryPowers).storeIdentifier('llm-provider', providerId);
+  await E(agent).storeIdentifier([agentName, 'llm-provider'], providerId);
 
   // The provider config names the pet name its token was bound to under
   // `secrets/`. A name means nothing to the factory — it has no `secrets`
@@ -85,17 +85,21 @@ export const main = async agent => {
         `Provider "${providerName}" names secret "${authSecretName}", which does not exist.`,
       );
     }
-    await E(factoryPowers).storeLocator(AUTH_SECRET_PETNAME, secretLocator);
-  } else if (await E(factoryPowers).has(AUTH_SECRET_PETNAME)) {
+    await E(agent).storeLocator(
+      [agentName, AUTH_SECRET_PETNAME],
+      secretLocator,
+    );
+  } else if (await E(agent).has(agentName, AUTH_SECRET_PETNAME)) {
     // A provider that reverted to a plaintext token must not keep silently
     // reading a stale blob, which the resolver would prefer.
-    await E(factoryPowers).remove(AUTH_SECRET_PETNAME);
+    await E(agent).remove(agentName, AUTH_SECRET_PETNAME);
   }
 
   // Launch the fae-factory caplet.
   await E(agent).makeUnconfined('@main', faeFactorySpecifier, {
     powersName: agentName,
     resultName: factoryName,
+    env: harden({ FAE_FACTORY_POWERS_NAME: agentName }),
   });
 
   console.log(

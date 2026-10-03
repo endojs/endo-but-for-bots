@@ -42,6 +42,7 @@ import {
   TracesInterface,
 } from './interfaces.js';
 import { hostHelp, makeHelp } from './help-text.js';
+import { amplifyNameHub } from './guest-amplification.js';
 import { assertValidTreeEntryName, getMountBacking } from './mount.js';
 
 /**
@@ -1867,7 +1868,10 @@ export const makeHostMaker = ({
           if (introducedId === undefined) {
             return;
           }
-          await agent.storeIdentifier([childName], introducedId);
+          await E(amplifyNameHub(agent)).storeIdentifier(
+            [childName],
+            introducedId,
+          );
         }),
       );
     };
@@ -2183,8 +2187,8 @@ export const makeHostMaker = ({
     /**
      * Redeem an invitation locator into THIS host. Acceptance binds the
      * inviter's handle reciprocally under `correspondentName` — no synthetic
-     * local guest is minted. Shares one implementation with `EndoGuest.accept`
-     * via the daemon-core `acceptInvitation` helper, which carries the whole
+     * local guest is minted. Delegates to the daemon-core `acceptInvitation`
+     * helper, which carries the whole
      * register-peer / record-agent-key / bind sequence so the contract does not
      * fork by facet.
      * @param {string} invitationLocator

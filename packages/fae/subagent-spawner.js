@@ -7,6 +7,7 @@ import {
   DEFAULT_MAX_SUBAGENT_DEPTH,
   DEFAULT_MAX_SUBAGENTS,
   makeSubagentSpawner,
+  spawnerProfileNameFor,
 } from './src/subagent-host.js';
 
 /**
@@ -70,15 +71,20 @@ export const make = async (powers, _context, { env } = {}) => {
   const provideContext = () => {
     if (!contextP) {
       contextP = (async () => {
-        const [hostAgent, providerLocator, hostAgentLocator, hasAuthSecret] =
+        // A guest cannot locate its own petstore entries; the host can,
+        // through its name for this spawner's guest.
+        const selfName = spawnerProfileNameFor(parentName);
+        const hostAgent = await E(powers).lookup('host-agent');
+        const [providerLocator, hostAgentLocator, hasAuthSecret] =
           await Promise.all([
-            E(powers).lookup('host-agent'),
-            E(powers).locate('llm-provider'),
-            E(powers).locate('host-agent'),
+            E(hostAgent).locate(selfName, 'llm-provider'),
+            E(hostAgent).locate(selfName, 'host-agent'),
             E(powers).has(AUTH_SECRET_PETNAME),
           ]);
         const authSecretLocator = hasAuthSecret
-          ? /** @type {string} */ (await E(powers).locate(AUTH_SECRET_PETNAME))
+          ? /** @type {string} */ (
+              await E(hostAgent).locate(selfName, AUTH_SECRET_PETNAME)
+            )
           : undefined;
         return harden({
           hostAgent,

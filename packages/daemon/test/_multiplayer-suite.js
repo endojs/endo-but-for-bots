@@ -7,7 +7,7 @@ import { E } from '@endo/eventual-send';
 import { makePromiseKit } from '@endo/promise-kit';
 import { start, stop, restart, purge, makeEndoClient } from '../index.js';
 import { parseId } from '../src/formula-identifier.js';
-import { idFromLocator, parseLocator } from '../src/locator.js';
+import { idFromLocator } from '../src/locator.js';
 import { makeDaemonDatabase } from '../src/manager-database-node.js';
 
 /**
@@ -395,213 +395,6 @@ export const runMultiplayerSuite = ({ test, network }) => {
     t.true(bobNames.includes('bob'), 'bob persists across restart');
   });
 
-  // Guest-owned invitation primitive (designs/remote-guest-endo-cli.md sect 3):
-  // an EndoGuest — not the top host — mints the invitation. Its locator `from`
-  // names the guest's own handle, network mediation stays internal to the
-  // daemon (the guest never gains getPeerInfo/addPeerInfo), both pet stores end
-  // up with the opposite handle, neither bound handle carries host-only methods,
-  // and a replayed invitation is rejected (single-use).
-  test.serial('EndoGuest (not the top host) mints an invitation', async t => {
-    const { host: hostA } = await prepareHostWithGcAndNetwork(t);
-    const { host: hostB } = await prepareHostWithGcAndNetwork(t);
-
-    // The inviter is a guest on A, driven only through its guest facet.
-    const guestA = await E(hostA).provideGuest('guest-handle', {
-      agentName: 'guest-agent',
-    });
-
-    // Guest-safety: the guest can invite but holds no network administration.
-    await t.throwsAsync(
-      () => E(guestA).getPeerInfo(),
-      undefined,
-      'guest has no getPeerInfo',
-    );
-    await t.throwsAsync(
-      () => E(guestA).addPeerInfo({ node: 'x', addresses: [] }),
-      undefined,
-      'guest has no addPeerInfo',
-    );
-
-    // The guest mints and locates the invitation.
-    const invitation = await E(guestA).invite('bob');
-    const invitationLocator = await E(invitation).locate();
-
-    // The locator `from` names the inviting guest's handle, not the top host's.
-    const guestHandleId = await E(hostA).identify('guest-handle');
-    const hostHandleId = await E(hostA).identify('@self');
-    const fromNumber = new URL(invitationLocator).searchParams.get('from');
-    t.is(
-      fromNumber,
-      parseId(guestHandleId).number,
-      'invitation `from` names the inviting guest handle',
-    );
-    t.not(
-      fromNumber,
-      parseId(hostHandleId).number,
-      'invitation `from` is NOT the top host handle',
-    );
-
-    // The top host on B accepts.
-    await E(hostB).accept(invitationLocator, 'alice');
-
-    // Both pet stores received the opposite handle.
-    const bobId = await E(guestA).identify('bob');
-    t.truthy(bobId, "inviting guest bound the acceptor's handle under 'bob'");
-    const aliceId = await E(hostB).identify('alice');
-    t.truthy(
-      aliceId,
-      "acceptor bound the inviting guest's handle under 'alice'",
-    );
-    t.is(
-      parseId(aliceId).number,
-      parseId(guestHandleId).number,
-      "acceptor's 'alice' is the inviting guest handle, not the top host",
-    );
-
-    // Neither bound handle carries host-only methods.
-    const boundOnB = await E(hostB).lookup('alice');
-    await t.throwsAsync(
-      () => E(boundOnB).addPeerInfo({ node: 'x', addresses: [] }),
-      undefined,
-      "acceptor's handle has no addPeerInfo",
-    );
-    await t.throwsAsync(
-      () => E(boundOnB).invite('x'),
-      undefined,
-      "acceptor's handle has no invite",
-    );
-    const boundOnA = await E(guestA).lookup('bob');
-    await t.throwsAsync(
-      () => E(boundOnA).addPeerInfo({ node: 'x', addresses: [] }),
-      undefined,
-      "inviter's handle has no addPeerInfo",
-    );
-
-    // A replayed invitation fails cleanly (single-use).
-    await t.throwsAsync(
-      () => E(hostB).accept(invitationLocator, 'alice-again'),
-      undefined,
-      'replayed invitation is rejected',
-    );
-  });
-
-  // Give a guest its own reachable `@nets` by minting a second network on the
-  // guest's daemon and moving it into the guest's networks directory. A guest's
-  // `@nets` starts empty (the anonymizing-persona default), so an acceptor is
-  // undialable across daemons until its host populates it — the reciprocal
-  // precondition the guest-native-invitations design states for a cross-daemon
-  // guest acceptor.
-  const giveGuestOwnNetwork = async (host, guestAgentName) => {
-    // The network module reads its listen address from a fixed pet name and,
-    // once bound, rewrites that name to the concrete assigned port. The host's
-    // network already did so, so reset the name to the ephemeral-port sentinel
-    // before minting the guest's network, or it would try to bind the host
-    // network's live port (EADDRINUSE).
-    await E(host).storeValue(network.listenAddr, network.listenAddrName);
-    const servicePath = path.join(dirname, network.modulePath);
-    const serviceLocation = url.pathToFileURL(servicePath).href;
-    const guestNetwork = await E(host).makeUnconfined(
-      '@main',
-      serviceLocation,
-      {
-        powersName: '@agent',
-        resultName: 'guest-network',
-      },
-    );
-    await guestNetwork;
-    // Move the guest network under the guest's own `@nets` so its address rides
-    // the guest's handle locator (getAllNetworkAddresses reads the guest's
-    // networks directory).
-    await E(host).move(
-      ['guest-network'],
-      [guestAgentName, '@nets', network.netsKey],
-    );
-  };
-
-  // The guest-native acceptance contract: a GUEST (not the top host) redeems an
-  // invitation into ITSELF across daemons — the symmetric complement of the
-  // guest-inviter test above, and the shape minion.town's onboarding needs.
-  test.serial(
-    'EndoGuest accepts an invitation into itself across daemons',
-    async t => {
-      const { host: hostA } = await prepareHostWithGcAndNetwork(t);
-      const { host: hostB } = await prepareHostWithGcAndNetwork(t);
-
-      const guestA = await E(hostA).provideGuest('guest-a-handle', {
-        agentName: 'guest-a-agent',
-      });
-      const guestB = await E(hostB).provideGuest('guest-b-handle', {
-        agentName: 'guest-b-agent',
-      });
-
-      // Populate the acceptor guest's `@nets` so the inviter's daemon can dial
-      // it back for the inviter->acceptor mail direction.
-      await giveGuestOwnNetwork(hostB, 'guest-b-agent');
-
-      // The inviting guest mints; the accepting guest redeems into itself.
-      const invitation = await E(guestA).invite('to-b');
-      const invitationLocator = await E(invitation).locate();
-      await E(guestB).accept(invitationLocator, 'to-a');
-
-      // Reciprocal binding, each guest under its own chosen pet name.
-      const toBId = await E(guestA).identify('to-b');
-      const toAId = await E(guestB).identify('to-a');
-      t.truthy(
-        toBId,
-        "inviting guest bound the acceptor's handle under 'to-b'",
-      );
-      t.truthy(
-        toAId,
-        "accepting guest bound the inviter's handle under 'to-a'",
-      );
-
-      // Each side bound the OTHER guest's own handle (not a host, not a minted
-      // replacement guest).
-      const guestAHandleId = await E(hostA).identify('guest-a-handle');
-      const guestBHandleId = await E(hostB).identify('guest-b-handle');
-      t.is(
-        parseId(toAId).number,
-        parseId(guestAHandleId).number,
-        "acceptor's 'to-a' is the inviting guest's own handle",
-      );
-      t.is(
-        parseId(toBId).number,
-        parseId(guestBHandleId).number,
-        "inviter's 'to-b' is the accepting guest's own handle",
-      );
-
-      // The accepting guest minted no replacement guest under @pins.
-      t.is(await E(guestB).identify('@pins', 'guest-to-a'), undefined);
-
-      // Bidirectional mail proves both dialing directions established.
-      await E(guestA).send('to-b', ['Hello from A'], [], []);
-      await E(guestB).send('to-a', ['Hello from B'], [], []);
-
-      await waitForCondition(async () => {
-        const messages = /** @type {any[]} */ (await E(guestB).listMessages());
-        return messages.some(
-          m => m.type === 'package' && m.strings?.[0] === 'Hello from A',
-        );
-      });
-      t.pass("acceptor received the inviter's message");
-
-      await waitForCondition(async () => {
-        const messages = /** @type {any[]} */ (await E(guestA).listMessages());
-        return messages.some(
-          m => m.type === 'package' && m.strings?.[0] === 'Hello from B',
-        );
-      });
-      t.pass("inviter received the acceptor's message");
-
-      // Single-use survives CapTP: the replayed accept is rejected.
-      await t.throwsAsync(
-        () => E(guestB).accept(invitationLocator, 'to-a-again'),
-        undefined,
-        'replayed invitation is rejected',
-      );
-    },
-  );
-
   // Rebuild a locator with a different connection-hint set, preserving its node,
   // formula number, and query params. Used to prove the acceptor treats an
   // unverified locator's hints as advisory-only for an already-known peer.
@@ -719,73 +512,8 @@ export const runMultiplayerSuite = ({ test, network }) => {
     },
   );
 
-  // Same-daemon acceptance (the minion.town shape: inviter and acceptor guests
-  // are siblings under ONE daemon) must register NO peer route and NO
-  // remote-agent-key row — the inviter's daemon IS this daemon, so a self-peer
-  // or self-referential agent-key row would be spurious (section 4 of the
-  // guest-native-invitations design). Two skips enforce this: the acceptor-side
-  // `peerKey !== localNodeNumber` in `acceptInvitation` and the inviter-side
-  // `guestDaemonNode !== localNodeNumber` in `Invitation.accept`.
-  //
-  // Same-daemon coverage that ran with EMPTY `@nets` on both agents could not
-  // pin either skip: the orthogonal `hints.length > 0` (acceptor) and
-  // `addresses.length > 0` (inviter) guards keep the peer store empty on their
-  // own, so deleting a same-daemon skip passed unnoticed (prover round 4). Here
-  // the daemon has a reachable network — so the invitation locator carries
-  // non-empty hints — AND the accepting guest has its own populated `@nets` — so
-  // its handle locator carries non-empty addresses. Both orthogonal guards are
-  // therefore satisfied, leaving the same-daemon skips as the ONLY thing keeping
-  // the shared peer store empty: deleting EITHER skip reddens this test.
-  test.serial(
-    'same-daemon accept writes no peer route with reachable @nets on both sides (guards load-bearing)',
-    async t => {
-      const { host } = await prepareHostWithGcAndNetwork(t);
-      const guestA = await E(host).provideGuest('guest-a-handle', {
-        agentName: 'guest-a-agent',
-      });
-      const guestB = await E(host).provideGuest('guest-b-handle', {
-        agentName: 'guest-b-agent',
-      });
-
-      // Give the accepting guest a reachable `@nets` so its handle locator
-      // carries a non-empty address list — otherwise the inviter-side
-      // `addresses.length > 0` guard, not the same-daemon skip, is what keeps the
-      // peer write from firing.
-      await giveGuestOwnNetwork(host, 'guest-b-agent');
-
-      const invitation = await E(guestA).invite('to-b');
-      const invitationLocator = await E(invitation).locate();
-      // The daemon has a network, so the invitation carries connection hints;
-      // this is what makes the acceptor-side `peerKey !== localNodeNumber` skip
-      // (rather than an empty hint list) the thing preventing a self-peer write.
-      const { hints } = parseLocator(invitationLocator);
-      t.true(
-        hints.length > 0,
-        'the invitation carries connection hints (daemon has a reachable network)',
-      );
-
-      await E(guestB).accept(invitationLocator, 'to-a');
-
-      // Reciprocal binding still succeeds same-daemon.
-      t.truthy(await E(guestA).identify('to-b'));
-      t.truthy(await E(guestB).identify('to-a'));
-
-      // The point of the test: neither the acceptor-side nor the inviter-side
-      // same-daemon skip wrote a self-peer route despite both address lists being
-      // non-empty.
-      const peersAfter = /** @type {import('../src/types.js').PeerInfo[]} */ (
-        await E(host).listKnownPeers()
-      );
-      t.deepEqual(
-        peersAfter,
-        [],
-        'same-daemon accept registers no known-peer entry on either side',
-      );
-    },
-  );
-
   // The invitation object's own cancel() revokes exactly that pending
-  // invitation, leaving a sibling invitation for the same guest redeemable.
+  // invitation, leaving a sibling invitation for the same host redeemable.
   test.serial(
     'invitation cancel() revokes exactly one pending invitation',
     async t => {
@@ -793,13 +521,9 @@ export const runMultiplayerSuite = ({ test, network }) => {
       const { host: hostB } = await prepareHostWithGcAndNetwork(t);
       const { host: hostC } = await prepareHostWithGcAndNetwork(t);
 
-      const guestA = await E(hostA).provideGuest('guest-handle', {
-        agentName: 'guest-agent',
-      });
-
-      // Two independent pending invitations from the same guest.
-      const inv1 = await E(guestA).invite('peer1');
-      const inv2 = await E(guestA).invite('peer2');
+      // Two independent pending invitations from the same host.
+      const inv1 = await E(hostA).invite('peer1');
+      const inv2 = await E(hostA).invite('peer2');
       const locator1 = await E(inv1).locate();
       const locator2 = await E(inv2).locate();
 
@@ -816,13 +540,13 @@ export const runMultiplayerSuite = ({ test, network }) => {
       // The sibling invitation is untouched and still redeemable.
       await E(hostC).accept(locator2, 'from-peer2');
       t.truthy(
-        await E(guestA).identify('peer2'),
+        await E(hostA).identify('peer2'),
         'sibling invitation still redeemed and bound',
       );
 
       // The canceled invitation left its pet name unbound.
       t.is(
-        await E(guestA).identify('peer1'),
+        await E(hostA).identify('peer1'),
         undefined,
         'canceled invitation left its name unbound',
       );

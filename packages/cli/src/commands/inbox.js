@@ -10,7 +10,33 @@ const { stringify: q } = JSON;
 
 export const inbox = async ({ follow, agentNames }) =>
   withEndoAgent(agentNames, { os, process }, async ({ agent }) => {
-    const selfLocator = await E(agent).locate('@self');
+    /** @type {string | undefined} */
+    let selfLocator;
+    /**
+     * A guest reads its correspondents by its own pet names (`fromNames`,
+     * `toNames`) and holds no locators; a host reads locators and names them
+     * by reverse lookup.
+     *
+     * @param {any} message
+     */
+    const correspondents = async message => {
+      if (message.fromNames !== undefined) {
+        const { fromNames, toNames } = message;
+        return {
+          fromSelf: fromNames.includes('@self'),
+          toSelf: toNames.includes('@self'),
+          fromName: fromNames[0],
+          toName: toNames[0],
+        };
+      }
+      selfLocator ??= await E(agent).locate('@self');
+      const { from, to } = message;
+      const fromSelf = from === selfLocator;
+      const toSelf = to === selfLocator;
+      const [fromName] = fromSelf ? [] : await E(agent).reverseLocate(from);
+      const [toName] = toSelf ? [] : await E(agent).reverseLocate(to);
+      return { fromSelf, toSelf, fromName, toName };
+    };
     const messages = follow
       ? iterateReader(E(agent).followMessages())
       : await E(agent).listMessages();
@@ -22,7 +48,7 @@ export const inbox = async ({ follow, agentNames }) =>
     }
     for await (const message of messages) {
       messageNumberById.set(message.messageId, message.number);
-      const { number, type, from, to, date } = message;
+      const { number, type, date } = message;
 
       let verb = '';
       if (type === 'request') {
@@ -40,23 +66,21 @@ export const inbox = async ({ follow, agentNames }) =>
       }
 
       let provenance = 'unrecognizable message';
-      if (from === selfLocator && to === selfLocator) {
+      const { fromSelf, toSelf, fromName, toName } =
+        await correspondents(message);
+      if (fromSelf && toSelf) {
         provenance = `you ${verb} yourself `;
-      } else if (from === selfLocator) {
-        const [toName] = await E(agent).reverseLocate(to);
+      } else if (fromSelf) {
         if (toName === undefined) {
           continue;
         }
         provenance = `${verb} ${q(toName)} `;
-      } else if (to === selfLocator) {
-        const [fromName] = await E(agent).reverseLocate(from);
+      } else if (toSelf) {
         if (fromName === undefined) {
           continue;
         }
         provenance = `${q(fromName)} ${verb} `;
       } else {
-        const [toName] = await E(agent).reverseLocate(to);
-        const [fromName] = await E(agent).reverseLocate(from);
         if (fromName === undefined || toName === undefined) {
           continue;
         }

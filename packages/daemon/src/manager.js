@@ -47,7 +47,11 @@ import {
 } from '@endo/tar/writer.js';
 import { checkinTarTree } from './tar-checkin.js';
 import { makeEndoRegistry, makeRegistryTable } from './registry.js';
-import { makeDirectoryMaker, makeReadOnlyDirectoryView } from './directory.js';
+import {
+  makeDirectoryMaker,
+  makeReadOnlyDirectoryView,
+  registerReadOnlyGuestFacet,
+} from './directory.js';
 import { makeContentDataPlaneRegistry } from './content-data-plane.js';
 import { makeHttpContentDataPlane } from './http-content-plane.js';
 import { makeDeferredTasks } from './deferred-tasks.js';
@@ -127,6 +131,7 @@ import {
 } from './interfaces.js';
 import { makeTraceAggregator } from './trace-aggregator.js';
 import { getUnredactedStackString } from './unredacted-stack.js';
+import { amplifyNameHub } from './guest-amplification.js';
 
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
@@ -3065,6 +3070,28 @@ const makeDaemonCore = async (
       )
     );
 
+    // A guest that looks this hub up receives its guest facet, which has no
+    // identifier or locator methods.
+    registerReadOnlyGuestFacet(
+      mailHub,
+      {
+        has,
+        list,
+        listValues,
+        lookup,
+        maybeLookup,
+        reverseLookup,
+        followNameChanges: () => followNameChanges(),
+      },
+      () => {
+        if (mailboxCancelled) {
+          throw new Error('Mailbox directory has been revoked');
+        }
+      },
+      disallowedMutation,
+      notSupported,
+    );
+
     return mailHub;
   };
 
@@ -3487,6 +3514,28 @@ const makeDaemonCore = async (
           }),
         )
       )
+    );
+
+    // A guest that looks this hub up receives its guest facet, which has no
+    // identifier or locator methods.
+    registerReadOnlyGuestFacet(
+      messageHub,
+      {
+        has,
+        list,
+        listValues,
+        lookup,
+        maybeLookup,
+        reverseLookup,
+        followNameChanges: () => followNameChanges(),
+      },
+      () => {
+        if (messageCancelled) {
+          throw new Error('Message directory has been revoked');
+        }
+      },
+      disallowedMutation,
+      notSupported,
     );
 
     return messageHub;
@@ -4435,29 +4484,18 @@ const makeDaemonCore = async (
           makeExo('EndoGuest', GuestInterface, {
             help: makeHelp(guestHelp),
             has: disallowedFn,
-            identify: disallowedFn,
-            reverseIdentify: disallowedSyncFn,
-            locate: disallowedFn,
-            reverseLocate: disallowedFn,
             locateContent: disallowedFn,
             listContent: disallowedFn,
             storeContent: disallowedFn,
             reverseLocateContent: disallowedFn,
             internalizeContentLocator: disallowedFn,
             loadContent: disallowedFn,
-            followLocatorNameChanges: disallowedFn,
             list: disallowedFn,
             listValues: disallowedFn,
-            listIdentifiers: disallowedFn,
-            listLocators: disallowedFn,
             followNameChanges: disallowedFn,
             lookup: disallowedFn,
             maybeLookup: disallowedSyncFn,
-            lookupById: disallowedFn,
-            lookupByLocator: disallowedFn,
             reverseLookup: disallowedFn,
-            storeIdentifier: disallowedFn,
-            storeLocator: disallowedFn,
             remove: disallowedFn,
             move: disallowedFn,
             copy: disallowedFn,
@@ -4483,9 +4521,6 @@ const makeDaemonCore = async (
             storeValue: disallowedFn,
             submit: disallowedFn,
             sendValue: disallowedFn,
-            invite: disallowedFn,
-            accept: disallowedFn,
-            deliver: disallowedSyncFn,
             editMessage: disallowedFn,
             messageHistory: disallowedFn,
           })
@@ -5287,9 +5322,11 @@ const makeDaemonCore = async (
   };
 
   /**
-   * Formulate an invitation minted by an inviting `EndoAgent`. The agent may be
-   * an `EndoHost` (via `EndoHost.invite`) or an `EndoGuest` (via
-   * `EndoGuest.invite`); the resulting invitation's locator `from` names the
+   * Formulate an invitation minted by an inviting `EndoHost` (via
+   * `EndoHost.invite`); a guest cannot invite, though an invitation formula
+   * persisted before guests lost `invite` may still name a guest as its
+   * inviter, which settles through `amplifyNameHub`. The resulting
+   * invitation's locator `from` names the
    * inviting agent's handle, and network mediation is supplied internally by the
    * daemon (see `makeInvitation`), never drawn from the inviting agent, so a
    * guest inviter gains no network authority.
@@ -7070,8 +7107,8 @@ const makeDaemonCore = async (
   };
 
   /**
-   * Acceptor-side invitation redemption, shared by `EndoHost.accept` and
-   * `EndoGuest.accept`. Runs on the ACCEPTOR's daemon and binds the
+   * Acceptor-side invitation redemption behind `EndoHost.accept` (a guest
+   * cannot accept). Runs on the ACCEPTOR's daemon and binds the
    * relationship into the CALLING agent — no replacement guest is minted. The
    * accepting agent accepts *as itself*: its own `@self` handle is the identity
    * presented to the inviter, and the inviter's handle is bound reciprocally
@@ -7616,7 +7653,9 @@ const makeDaemonCore = async (
       // retry repeats that idempotent registration. Callers must therefore
       // treat a crashed accept as "retry the whole accept", not "resume".
       return invitationJobs.enqueue(async () => {
-        const currentSlot = await E(invitingAgent).identify(...guestNamePath);
+        const currentSlot = await E(amplifyNameHub(invitingAgent)).identify(
+          ...guestNamePath,
+        );
         if (currentSlot !== id) {
           throw makeError(
             'Invitation has already been accepted, canceled, or superseded',
@@ -7725,7 +7764,7 @@ const makeDaemonCore = async (
         // subsequent accept()/cancel() (already serialized behind us) observes
         // a spent invitation.  It also installs the remote guest handle under
         // `guestName` for mail delivery.
-        await E(invitingAgent).storeLocator(
+        await E(amplifyNameHub(invitingAgent)).storeLocator(
           guestNamePath,
           guestHandleLocatorString,
         );
@@ -7764,7 +7803,9 @@ const makeDaemonCore = async (
       // rebound the slot, cancel()'s `current !== id` and it is the promised
       // idempotent no-op.
       await invitationJobs.enqueue(async () => {
-        const current = await E(invitingAgent).identify(...guestNamePath);
+        const current = await E(amplifyNameHub(invitingAgent)).identify(
+          ...guestNamePath,
+        );
         if (current === id) {
           await E(invitingAgent).remove(...guestNamePath);
         }
@@ -7834,8 +7875,6 @@ const makeDaemonCore = async (
     formulateEval,
     formulateReadableBlob,
     formulateMarshalValue,
-    formulateInvitation,
-    acceptInvitation,
     getFormulaForId,
     getAllNetworkAddresses,
     getAllContentSources,

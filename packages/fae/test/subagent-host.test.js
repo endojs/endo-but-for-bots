@@ -3,10 +3,13 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
 
+import { AUTH_SECRET_PETNAME } from '../src/credentials.js';
+
 import {
   makeSubagentSpawner,
   provisionFaeAgent,
   releaseFaeAgent,
+  spawnerProfileNameFor,
   subagentAgentName,
   subagentNamesIn,
 } from '../src/subagent-host.js';
@@ -26,6 +29,9 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
   const cancelled = [];
   /** @type {string[]} */
   const removed = [];
+  /** Locators the host bound into a guest's namespace, by full path. */
+  /** @type {Map<string, string>} */
+  const bindings = new Map();
   /** Caplet environments keyed by result name. */
   /** @type {Map<string, Record<string, string> | undefined>} */
   const envs = new Map();
@@ -64,6 +70,9 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
     async has(...petNamePath) {
       return names.has(petNamePath.join('/'));
     },
+    async identify(...petNamePath) {
+      return names.get(petNamePath.join('/'));
+    },
     async locate(...petNamePath) {
       const id = names.get(petNamePath.join('/'));
       return id === undefined ? undefined : `endo://node/${id}?type=handle`;
@@ -72,11 +81,12 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
       onStep({ op: 'provideGuest', name });
       bind(name);
       if (options.agentName) bind(options.agentName);
-      return Far('Guest', {
-        async storeLocator() {
-          return undefined;
-        },
-      });
+      // A guest neither produces nor consumes locators: the host binds into
+      // its namespace by path.
+      return Far('Guest', {});
+    },
+    async storeLocator(petNamePath, locator) {
+      bindings.set(petNamePath.join('/'), locator);
     },
     async makeUnconfined(_worker, _specifier, options = {}) {
       onStep({ op: 'makeUnconfined', name: options.resultName });
@@ -103,7 +113,7 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
       names.delete(key);
     },
   });
-  return { hostAgent, names, cancelled, removed, envs };
+  return { hostAgent, names, cancelled, removed, envs, bindings };
 };
 
 const provisionOptions = {
@@ -144,6 +154,49 @@ test('provisioning releases a half-built agent when a later step fails', async t
     'no name may still reach the spawner that held host-agent',
   );
   t.false(names.has('parent'), 'the agent guest must be released too');
+});
+
+test('provisioning binds each guest its capabilities through the host', async t => {
+  const { hostAgent, bindings } = makeFakeHost();
+  await provisionFaeAgent({
+    hostAgent,
+    name: 'parent',
+    depth: 0,
+    maxDepth: 1,
+    authSecretLocator: 'endo://node/secret?type=secret-blob',
+    ...provisionOptions,
+  });
+
+  const spawner = spawnerProfileNameFor('parent');
+  t.is(spawner, 'profile-for-parent-spawner-handle');
+  const driver = 'profile-for-parent-driver-handle';
+  t.is(
+    bindings.get(`${spawner}/llm-provider`),
+    provisionOptions.providerLocator,
+  );
+  t.is(
+    bindings.get(`${spawner}/host-agent`),
+    provisionOptions.hostAgentLocator,
+  );
+  t.is(
+    bindings.get(`${driver}/llm-provider`),
+    provisionOptions.providerLocator,
+  );
+  t.regex(
+    /** @type {string} */ (bindings.get(`${driver}/agent`)),
+    /profile-for-parent-id/,
+  );
+  t.regex(
+    /** @type {string} */ (bindings.get(`${driver}/subagent-spawner`)),
+    /parent-spawner-id/,
+  );
+  for (const guest of [spawner, driver]) {
+    t.is(
+      bindings.get(`${guest}/${AUTH_SECRET_PETNAME}`),
+      'endo://node/secret?type=secret-blob',
+      `${guest} should hold the auth secret`,
+    );
+  }
 });
 
 test('releasing an agent cancels its guests, not only its caplets', async t => {
@@ -518,5 +571,103 @@ test('two stops of one subagent do not cancel it twice', async t => {
     cancelled.filter(entry => entry === 'profile-for-p.sub.c-driver-handle')
       .length,
     1,
+  );
+});
+
+test("the spawner binds and drops the parent's top-level edge to its subagent", async t => {
+  const { hostAgent, names } = makeFakeHost();
+  const spawner = makeSubagentSpawner({
+    provideContext: async () =>
+      harden({
+        hostAgent,
+        providerLocator: provisionOptions.providerLocator,
+        hostAgentLocator: provisionOptions.hostAgentLocator,
+      }),
+    parentName: 'p',
+    driverSpecifier: provisionOptions.driverSpecifier,
+    spawnerSpecifier: provisionOptions.spawnerSpecifier,
+    depth: 1,
+    maxDepth: 1,
+  });
+
+  // A guest can neither receive nor store a locator, so the spawner — which
+  // holds host authority — writes the parent's edge, and hands back none.
+  t.deepEqual(await spawner.spawn('c'), { name: 'c' });
+  // Top-level in the parent's guest, because the daemon names a guest's
+  // correspondents by its top-level names only: the parent's delegation
+  // registry matches the child's replies by `subagent.c` in `fromNames`.
+  t.is(names.get('profile-for-p/subagent.c'), names.get('p.sub.c'));
+
+  await spawner.stop('c');
+  t.false(names.has('profile-for-p/subagent.c'));
+});
+
+test("verify confirms the parent's edge by formula identity, not by name", async t => {
+  const { hostAgent, names } = makeFakeHost();
+  const spawner = makeSubagentSpawner({
+    provideContext: async () =>
+      harden({
+        hostAgent,
+        providerLocator: provisionOptions.providerLocator,
+        hostAgentLocator: provisionOptions.hostAgentLocator,
+      }),
+    parentName: 'p',
+    driverSpecifier: provisionOptions.driverSpecifier,
+    spawnerSpecifier: provisionOptions.spawnerSpecifier,
+    depth: 1,
+    maxDepth: 1,
+  });
+
+  t.false(await spawner.verify('c'));
+  await spawner.spawn('c');
+  t.true(await spawner.verify('c'));
+
+  // The parent rebinds `subagent.c` to a correspondent's handle, as `adopt`
+  // or `store` would let it. The name still resolves, but not to the child.
+  names.set('profile-for-p/subagent.c', 'mallory-id');
+  t.false(await spawner.verify('c'));
+
+  await spawner.stop('c');
+  t.false(await spawner.verify('c'));
+});
+
+test('a subagent the parent cannot be given a name for is released', async t => {
+  const { hostAgent, names } = makeFakeHost();
+  const failingHost = Far('HostAgent', {
+    ...Object.fromEntries(
+      [
+        'list',
+        'has',
+        'locate',
+        'provideGuest',
+        'storeLocator',
+        'makeUnconfined',
+        'cancel',
+        'remove',
+      ].map(method => [method, (...args) => hostAgent[method](...args)]),
+    ),
+    async copy(_from, to) {
+      if (to[0] === 'profile-for-p') throw Error('parent is gone');
+    },
+  });
+  const spawner = makeSubagentSpawner({
+    provideContext: async () =>
+      harden({
+        hostAgent: failingHost,
+        providerLocator: provisionOptions.providerLocator,
+        hostAgentLocator: provisionOptions.hostAgentLocator,
+      }),
+    parentName: 'p',
+    driverSpecifier: provisionOptions.driverSpecifier,
+    spawnerSpecifier: provisionOptions.spawnerSpecifier,
+    depth: 1,
+    maxDepth: 1,
+  });
+
+  await t.throwsAsync(spawner.spawn('c'), { message: /parent is gone/ });
+  // A running child nobody can address is a model loop nobody can stop.
+  t.deepEqual(
+    [...names.keys()].filter(name => name.includes('p.sub.c')),
+    [],
   );
 });

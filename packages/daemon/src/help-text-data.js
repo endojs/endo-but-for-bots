@@ -95,10 +95,8 @@ export const helpTextEntries = harden([
   [
     'EndoGuest',
     {
-      '': 'EndoGuest - A confined agent with directory and mail capabilities.\n\nA guest can:\n- Manage pet names for values (directory operations)\n- Send and receive messages (mail operations)\n- Request capabilities from its host\n\nSpecial names available:\n- @self: This guest\'s own handle\n- @host: The host that created this guest\n- @agent: This guest\'s formula identifier\n\nUse help("methodName") for details on specific methods.',
+      '': 'EndoGuest - A confined agent with directory and mail capabilities.\n\nA guest can:\n- Manage pet names for values (directory operations)\n- Send and receive messages (mail operations)\n- Request capabilities from its host\n\nSpecial names available:\n- @self: This guest\'s own handle\n- @host: The host that created this guest\n- @agent: This guest itself\n\nA guest designates values only by pet name. It cannot read or store formula\nidentifiers or locators (no identify, locate, storeIdentifier, storeLocator,\nlookupById, lookupByLocator, invite, or accept), so a designation carried as\ndata never becomes authority. Messages it reads name their sender and\nrecipient by this guest\'s own pet names (fromNames, toNames); attachments are\nreached with adopt.\n\nUse help("methodName") for details on specific methods.',
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.\n- help() returns an overview of the guest capabilities\n- help("request") returns documentation for the request method\n- help("send") returns documentation for send method',
-      reverseIdentify:
-        'reverseIdentify(formulaId) -> string[]\nFind all pet names that refer to a given formula identifier.\nSynchronous version of reverse lookup by identifier.',
       define:
         'define(source, slots) -> Promise<any>\nPropose code with named capability slots for the host to endow.\nThe guest specifies code and named slots with descriptions.\nThe host sees the code and slot descriptions, then decides which capabilities\nto provide for each slot using the endow() command.\n\n- source: JavaScript code to evaluate\n- slots: Record of slot descriptions, e.g. { counter: { label: "A counter to increment" } }\n\nThe host reviews the code and slots, then calls endow() to bind capabilities\nand trigger evaluation. This separates code proposal from capability binding.\n\nExample: define("E(counter).incr()", { counter: { label: "A counter capability" } })',
       form: 'form(recipientName, description, fields) -> Promise<void>\nSend a structured form to another agent.\nThe form appears in the recipient\'s inbox. They can submit values using submit().\n\n- recipientName: Pet name of the recipient (e.g., "@host")\n- description: Human-readable description of the form\n- fields: Array of field definitions, e.g. [{ name: "email", label: "Your email" }]\n\nExample: form("@host", "Configure settings", [{ name: "name", label: "Your name" }])',
@@ -116,10 +114,6 @@ export const helpTextEntries = harden([
         'maybeReadText(petNameOrPath) -> Promise<string | undefined>\nRead text content, returning undefined if not found.\nSame as readText but returns undefined instead of throwing.',
       writeText:
         'writeText(petNameOrPath, content) -> Promise<void>\nWrite text content by pet name or path.\nFor a single name, creates a ReadableBlob and binds the name.\nFor a multi-segment path, writes through the mount.\nExample: writeText(["my-blob"], "hello")\nExample: writeText(["my-mount", "output.txt"], "hello")',
-      invite:
-        'invite(correspondentName) -> Promise<Invitation>\nMint a single-use invitation whose locator names this guest\'s own handle, so an\nacceptor becomes a peer of this guest (not of the top host). Bind the acceptor\nunder correspondentName once they accept. Hand the returned invitation\'s\nlocate() string to the invitee out of band.\nExample: invite("new-neighbor")',
-      accept:
-        'accept(invitationLocator, correspondentName) -> Promise<void>\nRedeem an invitation locator into this guest, binding the relationship to the\ncalling guest — no replacement guest is minted. This guest accepts as itself;\nthe inviter\'s handle is bound under correspondentName, a pet name this guest\nchooses (the inviter chooses its own independently, so they may differ).\nExample: accept(invitationLocator, "my-neighbor")',
     },
   ],
   [

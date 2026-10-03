@@ -3,7 +3,7 @@ import type {
   EndoGuest,
   NamePath,
   NameOrPath,
-  StampedMessage,
+  GuestMessage,
 } from '@endo/daemon';
 
 export type { NameOrPath };
@@ -52,7 +52,7 @@ export type ToolCallArgs = {
   slots?: Record<string, { label: string }>;
 };
 
-export type InboxMessage = StampedMessage;
+export type InboxMessage = GuestMessage;
 export type GuestPowers = EndoGuest;
 
 /** Configuration for a worker spawned from a form submission */

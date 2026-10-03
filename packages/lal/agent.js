@@ -178,8 +178,22 @@ export const make = (guestPowers, _context) => {
 
     // Resolve the host agent reference for provideGuest calls.
     const agent = await E(powers).lookup('host-agent');
-    const selfLocator = await E(powers).locate('@self');
     const activeWorkers = new Map();
+
+    /**
+     * Read the value a value message carries: adopt it under a scratch pet
+     * name, read it, and drop the name.
+     * @param {bigint | number | string} messageNumber
+     */
+    const adoptValue = async messageNumber => {
+      const scratchName = `form-value-${messageNumber}`;
+      await E(powers).adopt(messageNumber, 'value', scratchName);
+      try {
+        return await E(powers).lookup(scratchName);
+      } finally {
+        await E(powers).remove(scratchName);
+      }
+    };
 
     // Check in the primer directory as a content-addressed readable-tree.
     // Stored once in the host namespace; each sub-guest gets a reference.
@@ -190,16 +204,24 @@ export const make = (guestPowers, _context) => {
     console.log(`[lal] Primer tree checked in (${primerTreeId})`);
 
     /**
-     * Ensure the sub-guest has a `primer` reference.
-     * @param {any} guest
+     * Ensure the sub-guest has a `primer` reference. A guest consumes no
+     * formula identifiers, so the host binds it into the guest's namespace
+     * by path.
+     * @param {string} guestAgentName - the host's pet name for the guest agent
      */
-    const provisionPrimer = async guest => {
-      const hasPrimer = await E(guest).has('primer');
+    const provisionPrimer = async guestAgentName => {
+      const hasPrimer = await E(agent).has(guestAgentName, 'primer');
       if (!hasPrimer) {
-        await E(guest).storeIdentifier('primer', primerTreeId);
+        await E(agent).copy(['lal-primer'], [guestAgentName, 'primer']);
         console.log('[lal] Primer provisioned for guest');
       }
     };
+
+    /** @param {any} message */
+    const isOwnForm = message =>
+      message.type === 'form' &&
+      Array.isArray(message.fromNames) &&
+      message.fromNames.includes('@self');
 
     // Pre-scan existing messages to find our latest form messageId so that
     // old value messages (from prior sessions) that reply to an earlier form
@@ -210,8 +232,7 @@ export const make = (guestPowers, _context) => {
       await E(powers).listMessages()
     );
     for (const msg of existingMessages) {
-      // eslint-disable-next-line @endo/restrict-comparison-operands
-      if (msg.from === selfLocator && msg.type === 'form') {
+      if (isOwnForm(msg)) {
         formMessageId = msg.messageId;
       }
     }
@@ -224,8 +245,7 @@ export const make = (guestPowers, _context) => {
       const msg = /** @type {any} */ (message);
 
       // Capture the form's messageId from our own outbound message.
-      // eslint-disable-next-line @endo/restrict-comparison-operands
-      if (msg.from === selfLocator && msg.type === 'form') {
+      if (isOwnForm(msg)) {
         formMessageId = msg.messageId;
       } else if (
         msg.type === 'value' &&
@@ -234,10 +254,11 @@ export const make = (guestPowers, _context) => {
       ) {
         // Only process value messages that reply to our form.
         try {
-          // Resolve the submitted values from the value message.
+          // Resolve the submitted values from the value message. A guest
+          // reaches a message's value by adopting it, not by its formula id.
           const config =
             /** @type {{ name: string, host: string, model: string, authToken: string }} */ (
-              await E(powers).lookupById(msg.valueId)
+              await adoptValue(msg.number)
             );
 
           const { name } = config;
@@ -266,7 +287,7 @@ export const make = (guestPowers, _context) => {
             }
 
             // Ensure the sub-guest has the primer directory.
-            await provisionPrimer(guest);
+            await provisionPrimer(`profile-for-${name}`);
 
             // Spawn a worker loop for this guest.
             const workerP = spawnWorkerLoop(guest, null, {

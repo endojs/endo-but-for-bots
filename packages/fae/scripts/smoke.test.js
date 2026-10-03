@@ -541,11 +541,14 @@ const setupDaemon = async () => {
       introducedNames: harden({ '@agent': 'host-agent' }),
       agentName: factoryAgentName,
     });
-    const factoryPowers = await E(host).lookup(factoryAgentName);
-    await E(factoryPowers).storeIdentifier('llm-provider', providerId);
+    await E(host).storeIdentifier(
+      [factoryAgentName, 'llm-provider'],
+      providerId,
+    );
     await E(host).makeUnconfined('@main', factorySpecifier, {
       powersName: factoryAgentName,
       resultName: factoryName,
+      env: harden({ FAE_FACTORY_POWERS_NAME: factoryAgentName }),
     });
     const factory = await E(host).lookup(factoryName);
     factoriesByModel.set(modelName, factory);

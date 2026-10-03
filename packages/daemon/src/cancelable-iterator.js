@@ -81,3 +81,26 @@ export const makeCancelableIterator = generate => {
   return harden(Object.assign(iterator, { cancelPending }));
 };
 harden(makeCancelableIterator);
+
+/**
+ * Transform each item of a cancelable source, preserving its cancellation.
+ * @template T, U
+ * @param {AsyncGenerator<T, undefined, undefined>} source
+ * @param {(item: T) => U} transform
+ */
+export const mapCancelableIterator = (source, transform) =>
+  makeCancelableIterator(async function* mapped(setCancelPending) {
+    try {
+      const cancellation = setCancelPending(() =>
+        cancelPendingIterator(source),
+      );
+      if (cancellation !== undefined) await cancellation;
+      for await (const item of source) {
+        yield transform(item);
+      }
+    } finally {
+      await source.return(undefined);
+    }
+    return undefined;
+  });
+harden(mapCancelableIterator);

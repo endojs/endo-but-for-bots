@@ -6,15 +6,11 @@ import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
 import { makeStreamingAgent } from '../agent.js';
 
-const NODE = 'a'.repeat(64);
-const SELF = 'b'.repeat(64);
-const CHILD = 'c'.repeat(64);
-const HOST = 'd'.repeat(64);
-
-// The locator format the daemon's `formatLocator` produces. Spelled out here
-// because floot does not depend on `@endo/daemon`.
-/** @param {string} number */
-const locatorFor = number => `endo://${NODE}/${number}?type=handle`;
+// Opaque stand-ins for the formulas behind the guest's names. They never reach
+// the guest: its mail names correspondents only by its own pet names.
+const SELF = 'self';
+const CHILD = 'child';
+const HOST = 'host';
 
 /**
  * Guest powers with a *live* mailbox: the stream stays open, and every send is
@@ -27,8 +23,9 @@ const locatorFor = number => `endo://${NODE}/${number}?type=handle`;
 const makeLiveMailbox = ({ onEcho } = {}) => {
   /** @type {Map<string, unknown>} */
   const store = new Map([
-    ['@self', locatorFor(SELF)],
-    ['subagents/helper', locatorFor(CHILD)],
+    ['@self', SELF],
+    ['@host', HOST],
+    ['subagent.helper', CHILD],
   ]);
   const nameOf = petName =>
     Array.isArray(petName) ? petName.join('/') : `${petName}`;
@@ -45,6 +42,28 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
   const dismissed = [];
   const received = [];
   const resolved = [];
+
+  /**
+   * Redact a message the way the daemon redacts a guest's mail: the sender
+   * and recipient become the guest's own top-level names for them, and the
+   * formulas behind those names never reach it.
+   *
+   * @param {any} message
+   */
+  const redact = ({ from, to, ...rest }) => {
+    /** @param {unknown} formula */
+    const namesFor = formula =>
+      harden(
+        [...store]
+          .filter(([key, value]) => value === formula && !key.includes('/'))
+          .map(([key]) => key),
+      );
+    return harden({
+      ...rest,
+      fromNames: namesFor(from),
+      toNames: namesFor(to),
+    });
+  };
 
   const push = message => {
     if (closed) return;
@@ -113,11 +132,11 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
     nextId += 1;
     const messageNumber = number === undefined ? nextNumber : number;
     if (number === undefined) nextNumber += 1n;
-    const message = harden({
+    const message = redact({
       type,
       description,
       from,
-      to: locatorFor(SELF),
+      to: SELF,
       strings: harden([...strings]),
       names: harden([]),
       ids: harden([]),
@@ -134,9 +153,9 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
 
   const echo = (to, strings, replyTo) => {
     nextId += 1;
-    const message = harden({
+    const message = redact({
       type: 'package',
-      from: locatorFor(SELF),
+      from: SELF,
       to,
       strings: harden([...strings]),
       names: harden([]),
@@ -161,9 +180,6 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
     },
     async storeValue(value, petName) {
       store.set(nameOf(petName), value);
-    },
-    async storeLocator(petName, locator) {
-      store.set(nameOf(petName), locator);
     },
     async lookup(petName) {
       const name = nameOf(petName);
@@ -192,20 +208,15 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
       }
       return harden([...names].sort());
     },
-    async locate(...petNamePath) {
-      return store.get(petNamePath.map(nameOf).join('/'));
-    },
-    async reverseLocate() {
-      return harden([]);
-    },
     async send(recipient, strings) {
       const key = nameOf(recipient);
+      if (!store.has(key)) throw Error(`not found: ${key}`);
       sent.push({ recipient: key, strings: [...strings] });
-      echo(store.get(key) || key, strings);
+      echo(store.get(key), strings);
     },
     async reply(number, strings) {
       sent.push({ replyTo: number, strings: [...strings] });
-      echo(locatorFor(HOST), strings, `reply-to-${number}`);
+      echo(HOST, strings, `reply-to-${number}`);
     },
     async dismiss(number) {
       dismissed.push(number);
@@ -233,9 +244,10 @@ const inertTimers = /** @type {any} */ (
 );
 
 const stubSpawner = Far('SubagentSpawner', {
-  spawn: async name => harden({ name, locator: locatorFor(CHILD) }),
+  spawn: async name => harden({ name }),
   stop: async () => {},
   list: async () => harden(['helper']),
+  verify: async name => name === 'helper',
   help: () => 'stub',
 });
 
@@ -265,9 +277,9 @@ test('a mail turn blocked on askSubagent still observes the reply', async t => {
   t.timeout(20_000);
   const mailbox = makeLiveMailbox({
     onEcho: (message, box) => {
-      if (message.to === locatorFor(CHILD)) {
+      if (message.toNames.includes('subagent.helper')) {
         box.deliver({
-          from: locatorFor(CHILD),
+          from: CHILD,
           strings: ['the answer is 42'],
           replyTo: message.messageId,
         });
@@ -319,7 +331,7 @@ test('a mail turn blocked on askSubagent still observes the reply', async t => {
     mailbox.close();
     await agent.shutdown();
   });
-  mailbox.deliver({ from: locatorFor(HOST), strings: ['please delegate'] });
+  mailbox.deliver({ from: HOST, strings: ['please delegate'] });
 
   t.true(
     await until(() =>
@@ -365,13 +377,13 @@ test('a partial message does not swallow its settled revision', async t => {
     await agent.shutdown();
   });
   mailbox.deliver({
-    from: locatorFor(HOST),
+    from: HOST,
     strings: ['half a th'],
     done: false,
     number: 1n,
   });
   mailbox.deliver({
-    from: locatorFor(HOST),
+    from: HOST,
     strings: ['half a thought, now complete'],
     number: 1n,
   });
@@ -420,7 +432,7 @@ test('a backlog larger than any bound is answered, not declined', async t => {
   // deferred.
   for (let index = 0; index < 20; index += 1) {
     mailbox.deliver({
-      from: locatorFor(HOST),
+      from: HOST,
       strings: [`message ${index}`],
     });
   }
@@ -457,8 +469,8 @@ test('a completed turn is answered even if shutdown starts mid-drain', async t =
   agent.startInbox();
   t.teardown(() => mailbox.close());
 
-  mailbox.deliver({ from: locatorFor(HOST), strings: ['first'] });
-  mailbox.deliver({ from: locatorFor(HOST), strings: ['second'] });
+  mailbox.deliver({ from: HOST, strings: ['first'] });
+  mailbox.deliver({ from: HOST, strings: ['second'] });
 
   // Shutting down while the queue drains must not throw away a turn that
   // already ran: its history is committed and the model was paid for, so the
@@ -553,7 +565,7 @@ test('workflow requests reach Floot as tasks and settle with typed verdicts', as
   });
   agent.startInbox();
   mailbox.deliver({
-    from: locatorFor(HOST),
+    from: HOST,
     type: 'request',
     description: 'Review candidate abc',
   });
@@ -610,7 +622,7 @@ for (const acknowledge of [false, true]) {
     });
     agent.startInbox();
     mailbox.deliver({
-      from: locatorFor(HOST),
+      from: HOST,
       type: 'request',
       description: 'Your design is ready. Candidate abc.',
     });

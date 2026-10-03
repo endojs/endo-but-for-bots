@@ -261,7 +261,14 @@ A guest can:
 Special names available:
 - @self: This guest's own handle
 - @host: The host that created this guest
-- @agent: This guest's formula identifier
+- @agent: This guest itself
+
+A guest designates values only by pet name. It cannot read or store formula
+identifiers or locators (no identify, locate, storeIdentifier, storeLocator,
+lookupById, lookupByLocator, invite, or accept), so a designation carried as
+data never becomes authority. Messages it reads name their sender and
+recipient by this guest's own pet names (fromNames, toNames); attachments are
+reached with adopt.
 
 Use help("methodName") for details on specific methods.
 
@@ -271,11 +278,6 @@ Get documentation for this interface or a specific method.
 - help() returns an overview of the guest capabilities
 - help("request") returns documentation for the request method
 - help("send") returns documentation for send method
-
-## reverseIdentify(formulaId) -> string[]
-
-Find all pet names that refer to a given formula identifier.
-Synchronous version of reverse lookup by identifier.
 
 ## define(source, slots) -> Promise<any>
 
@@ -357,22 +359,6 @@ For a single name, creates a ReadableBlob and binds the name.
 For a multi-segment path, writes through the mount.
 Example: writeText(["my-blob"], "hello")
 Example: writeText(["my-mount", "output.txt"], "hello")
-
-## invite(correspondentName) -> Promise<Invitation>
-
-Mint a single-use invitation whose locator names this guest's own handle, so an
-acceptor becomes a peer of this guest (not of the top host). Bind the acceptor
-under correspondentName once they accept. Hand the returned invitation's
-locate() string to the invitee out of band.
-Example: invite("new-neighbor")
-
-## accept(invitationLocator, correspondentName) -> Promise<void>
-
-Redeem an invitation locator into this guest, binding the relationship to the
-calling guest — no replacement guest is minted. This guest accepts as itself;
-the inviter's handle is bound under correspondentName, a pet name this guest
-chooses (the inviter chooses its own independently, so they may differ).
-Example: accept(invitationLocator, "my-neighbor")
 
 # EndoHost - A privileged agent with full Endo capabilities.
 
@@ -854,8 +840,8 @@ options.followSymlinks: boolean — Let `**` descend through directory symlinks 
 (default false). This is `rg -L`, and like it, the sweep can become very large: in a
 workspace checkout every node_modules link points back into the tree, so the walk
 enumerates every route to every package rather than every file.
-Example: glob("**/*.js") → all JavaScript files at any depth.
-Example: glob("src/*") → the immediate children of src.
+Example: glob("**/*.js") -> all JavaScript files at any depth.
+Example: glob("src/*") -> the immediate children of src.
 
 ## grep(pattern, paths?, options?) -> Promise<Array<{ file, line, text }>>
 
@@ -874,8 +860,8 @@ Each matching line yields one { file, line, text } record: file is the mount-fac
 path, line is 1-based, and text is the whole line with any trailing carriage return stripped
 (CRLF normalization). A path that is denied, escapes the mount, resolves into a denied
 directory, is a directory, or cannot be read is skipped silently.
-Example: grep("TODO", await glob("src/**/*.js")) → every TODO line under src.
-Example: grep("^export") → up to 1000 exported-symbol lines across the whole mount.
+Example: grep("TODO", await glob("src/**/*.js")) -> every TODO line under src.
+Example: grep("^export") -> up to 1000 exported-symbol lines across the whole mount.
 
 ## glorp(globPattern, grepPattern, options?) -> Promise<Array<{ file, line, text }>>
 
@@ -892,7 +878,7 @@ options.maxResults: number — Non-negative safe-integer cap on match records (d
 options.followSymlinks: boolean — Passed to the glob half only (see glob); the grep half
 receives the enumerated paths, which are named and so always read.
 glorp(g, p) is the fused equivalent of grep(p, glob(g)); prefer it when you have both patterns up front.
-Example: glorp("src/**/*.js", "TODO") → every TODO line in a .js file under src.
+Example: glorp("src/**/*.js", "TODO") -> every TODO line in a .js file under src.
 
 ## lookup(path) -> Promise<EndoMount | EndoMountFile>
 

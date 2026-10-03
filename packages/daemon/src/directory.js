@@ -11,6 +11,7 @@ import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import {
   cancelPendingIterator,
   makeCancelableIterator,
+  mapCancelableIterator,
 } from './cancelable-iterator.js';
 import {
   externalizeId,
@@ -29,9 +30,187 @@ import {
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { directoryHelp, readableNameHubHelp, makeHelp } from './help-text.js';
 
-import { DirectoryInterface, ReadableNameHubInterface } from './interfaces.js';
+import {
+  DirectoryInterface,
+  GuestDirectoryInterface,
+  ReadableNameHubInterface,
+} from './interfaces.js';
+import {
+  amplifyNameHub,
+  registerGuestDirectory,
+} from './guest-amplification.js';
+import { redactNameChange } from './guest-redaction.js';
 
-/** @import { DaemonCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, ContentLocatable, ContentIdentity, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, ReadableNameHub, StoreController } from './types.js' */
+/** @import { DaemonCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, GuestPathOperations, ContentLocatable, ContentIdentity, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, ReadableNameHub, StoreController } from './types.js' */
+
+// A directory reaches a guest only as its pet-name facet (distributed
+// confinement): the guest-facing `lookup`, `maybeLookup`, `listValues`, and
+// `makeDirectory` pass every result through `guestFacetFor`. Each directory
+// registers a memoized facet maker, keyed by the directory exo.
+
+/** @type {WeakMap<object, () => object>} */
+const guestFacetMakers = new WeakMap();
+
+// Facets are also registered with `registerGuestDirectory` so that
+// `amplifyNameHub` recovers their directories, but `amplifyNameHub` amplifies
+// a guest exo too. This map holds facets only, so `unwrapGuestFacet` recovers
+// a directory from a facet while leaving a guest exo opaque, which a guest's
+// own `reverseLookup` and path operations rely on.
+
+/** @type {WeakMap<object, object>} */
+const directoriesByGuestFacet = new WeakMap();
+
+/**
+ * The value a guest receives in place of `value`: a directory's pet-name
+ * facet, or `value` itself when it is not a directory.
+ *
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+export const guestFacetFor = value => {
+  if (
+    value === null ||
+    (typeof value !== 'object' && typeof value !== 'function')
+  ) {
+    return value;
+  }
+  const makeGuestFacet = guestFacetMakers.get(value);
+  return makeGuestFacet === undefined ? value : makeGuestFacet();
+};
+harden(guestFacetFor);
+
+/**
+ * The directory behind a guest facet, so a guest's `reverseLookup` of a facet
+ * finds the names of the directory it stands for.
+ *
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+export const unwrapGuestFacet = value => {
+  if (
+    value === null ||
+    (typeof value !== 'object' && typeof value !== 'function')
+  ) {
+    return value;
+  }
+  return directoriesByGuestFacet.get(value) ?? value;
+};
+harden(unwrapGuestFacet);
+
+/**
+ * Register a guest facet for a read-only name hub that is not built by
+ * `makeIdentifiedDirectory` (the mailbox hub behind `@mail` and each message
+ * hub under it). Like a directory's facet, it has no identifier or locator
+ * methods, so a guest that looks the hub up cannot read a message's
+ * designations as data through `identify`, `locate`, or `listIdentifiers`.
+ * Its lookups yield guest facets in turn, so a message hub reached through
+ * the mailbox hub is narrowed too.
+ *
+ * @param {object} hubExo The hub as daemon code holds it.
+ * @param {object} hub
+ * @param {NameHub['has']} hub.has
+ * @param {NameHub['list']} hub.list
+ * @param {() => Promise<unknown[]>} hub.listValues
+ * @param {NameHub['lookup']} hub.lookup
+ * @param {NameHub['maybeLookup']} hub.maybeLookup
+ * @param {NameHub['reverseLookup']} hub.reverseLookup
+ * @param {() => AsyncGenerator<PetStoreNameChange, undefined, undefined>} hub.followNameChanges
+ * @param {() => void} assertLive Throws once the hub has been canceled.
+ * @param {() => Promise<never>} disallowedMutation
+ * @param {() => Promise<never>} notSupported
+ */
+export const registerReadOnlyGuestFacet = (
+  hubExo,
+  hub,
+  assertLive,
+  disallowedMutation,
+  notSupported,
+) => {
+  /** @param {unknown} value */
+  const forGuest = async value => guestFacetFor(await value);
+  /** @type {object | undefined} */
+  let guestFacet;
+  const makeGuestFacet = () => {
+    if (guestFacet !== undefined) {
+      return guestFacet;
+    }
+    const lookup = (/** @type {any} */ petNamePath) =>
+      forGuest(hub.lookup(petNamePath));
+    const maybeLookup = (/** @type {any} */ petNamePath) =>
+      forGuest(hub.maybeLookup(petNamePath));
+    const readOnlyView = makeReadOnlyDirectoryView(
+      harden({ has: hub.has, list: hub.list, lookup, maybeLookup }),
+      assertLive,
+    );
+    guestFacet = makeExo(
+      'EndoGuestDirectory',
+      GuestDirectoryInterface,
+      /** @type {any} */ ({
+        help: makeHelp(guestDirectoryHelp),
+        has: hub.has,
+        list: hub.list,
+        listValues: async () =>
+          harden(
+            (await hub.listValues()).map(value =>
+              Promise.resolve(value).then(guestFacetFor),
+            ),
+          ),
+        followNameChanges: () => {
+          const iterator = mapCancelableIterator(
+            hub.followNameChanges(),
+            redactNameChange,
+          );
+          return readerFromIterator(iterator, {
+            cancelPending: () => cancelPendingIterator(iterator),
+          });
+        },
+        lookup,
+        maybeLookup,
+        reverseLookup: value => hub.reverseLookup(unwrapGuestFacet(value)),
+        remove: disallowedMutation,
+        move: disallowedMutation,
+        copy: disallowedMutation,
+        makeDirectory: disallowedMutation,
+        readText: notSupported,
+        maybeReadText: notSupported,
+        writeText: disallowedMutation,
+        readOnly: async () => readOnlyView,
+      }),
+    );
+    directoriesByGuestFacet.set(guestFacet, hubExo);
+    registerGuestDirectory(guestFacet, /** @type {any} */ (hubExo));
+    return guestFacet;
+  };
+  guestFacetMakers.set(hubExo, makeGuestFacet);
+};
+harden(registerReadOnlyGuestFacet);
+
+const designationMethodNames = new Set([
+  'identify',
+  'locate',
+  'reverseLocate',
+  'followLocatorNameChanges',
+  'listIdentifiers',
+  'listLocators',
+  'storeIdentifier',
+  'storeLocator',
+]);
+
+const guestDirectoryHelp = harden({
+  ...Object.fromEntries(
+    Object.entries(directoryHelp).filter(
+      ([method]) => !designationMethodNames.has(method),
+    ),
+  ),
+  '': `EndoDirectory - A naming hub for managing pet names.
+
+A directory maps pet names to values. Pet names are strings like
+"my-worker", "counter", or "index.html". Special names are @-prefixed
+like "@self", "@host", or "@agent".
+
+Use lookup() to get a value by name, list() to see available names,
+and copy() or move() to name a value you already hold.`,
+});
 
 // A read-only view of a name hub: a local in-daemon exo that forwards only the
 // readable hub methods (help / has / list / lookup / maybeLookup) to the
@@ -221,8 +400,14 @@ export const makeDirectoryMaker = ({
       return E(hub).has(name);
     };
 
-    /** @type {EndoDirectory['identify']} */
-    const identify = async (...petNamePath) => {
+    /**
+     * Identify the value at a path, reaching the hub at its prefix through
+     * `toHub`.
+     *
+     * @param {(hub: NameHub) => NameHub} toHub
+     * @param {string[]} petNamePath
+     */
+    const identifyThrough = async (toHub, petNamePath) => {
       assertNames(petNamePath);
       if (petNamePath.length === 1) {
         const petName = petNamePath[0];
@@ -231,8 +416,12 @@ export const makeDirectoryMaker = ({
       const { hub, name } = await lookupTailNameHub(
         /** @type {NamePath} */ (petNamePath),
       );
-      return E(hub).identify(name);
+      return E(toHub(hub)).identify(name);
     };
+
+    /** @type {EndoDirectory['identify']} */
+    const identify = (...petNamePath) =>
+      identifyThrough(amplifyNameHub, petNamePath);
 
     /** @type {EndoDirectory['locate']} */
     const locate = async (...petNamePath) => {
@@ -339,7 +528,7 @@ export const makeDirectoryMaker = ({
         return harden(record);
       }
       const hub = /** @type {NameHub} */ (await lookup(petNamePath));
-      return E(hub).listLocators();
+      return E(amplifyNameHub(hub)).listLocators();
     };
 
     // Content locators (magnet URNs). The content-side analogue of `locate` /
@@ -532,61 +721,15 @@ export const makeDirectoryMaker = ({
       await E(hub).remove(petName);
     };
 
-    /** @type {EndoDirectory['move']} */
-    const move = async (fromPath, toPath) => {
-      const { prefixPath: fromPrefixPath, petName: fromPetName } =
-        assertPetNamePath(fromPath);
-      const { prefixPath: toPrefixPath, petName: toPetName } =
-        assertPetNamePath(toPath);
-      await null;
-
-      // Optimize for same-hub moves (rename)
-      if (fromPrefixPath.length === toPrefixPath.length) {
-        const samePrefix = fromPrefixPath.every(
-          (name, i) => name === toPrefixPath[i],
-        );
-        if (samePrefix) {
-          if (fromPrefixPath.length === 0) {
-            await controller.rename(fromPetName, toPetName);
-          } else {
-            const hub = /** @type {NameHub} */ (await lookup(fromPrefixPath));
-            await E(hub).move([fromPetName], [toPetName]);
-          }
-          return;
-        }
-      }
-
-      // Cross-hub move: copy then remove
-      const id = await identify(...fromPath);
-      if (id === undefined) {
-        throw new Error(`Unknown name: ${q(fromPath)}`);
-      }
-      // First write to the "to" hub so that the original name is preserved on the
-      // "from" hub in case of failure.
-      await storeIdentifier(toPath, id);
-      await remove(...fromPath);
-    };
-
-    /** @type {EndoDirectory['copy']} */
-    const copy = async (fromPath, toPath) => {
-      assertNamePath(fromPath);
-      assertPetNamePath(toPath);
-      const fromNamePath = /** @type {NamePath} */ (fromPath);
-      const { hub: fromHub, name: fromName } =
-        await lookupTailNameHub(fromNamePath);
-      const id = await E(fromHub).identify(fromName);
-      if (id === undefined) {
-        throw new Error(`Unknown name: ${q(fromPath)}`);
-      }
-      await storeIdentifier(toPath, id);
-    };
-
     /**
-     * Store a formula identifier at a pet name path (internal).
+     * Store a formula identifier at a pet name path, reaching the hub at its
+     * prefix through `toHub`.
+     *
+     * @param {(hub: NameHub) => NameHub} toHub
      * @param {string | string[]} petNamePath
      * @param {string} id
      */
-    const storeIdentifier = async (petNamePath, id) => {
+    const storeIdentifierThrough = async (toHub, petNamePath, id) => {
       const { prefixPath, petName } = petNamePathFrom(petNamePath);
       await null;
       if (prefixPath.length === 0) {
@@ -594,8 +737,227 @@ export const makeDirectoryMaker = ({
         return;
       }
       const hub = /** @type {NameHub} */ (await lookup(prefixPath));
-      await E(hub).storeIdentifier([petName], id);
+      await E(toHub(hub)).storeIdentifier([petName], id);
     };
+
+    /**
+     * Store a formula identifier at a pet name path (internal).
+     * @param {string | string[]} petNamePath
+     * @param {string} id
+     */
+    const storeIdentifier = (petNamePath, id) =>
+      storeIdentifierThrough(amplifyNameHub, petNamePath, id);
+
+    /**
+     * `move`, `copy`, `remove`, `readText`, `maybeReadText`, and `writeText`,
+     * reaching the hub at the prefix of each path through `lookupHub`, which
+     * must yield a hub with `identify` and `storeIdentifier`.
+     *
+     * @param {(prefixPath: Name[]) => Promise<NameHub>} lookupHub
+     */
+    const makePathOperations = lookupHub => {
+      /**
+       * @param {Name[]} namePath
+       * @returns {Promise<{ hub: NameHub, name: Name }>}
+       */
+      const lookupTailHub = async namePath => ({
+        hub: await lookupHub(namePath.slice(0, -1)),
+        name: namePath[namePath.length - 1],
+      });
+
+      /** @type {EndoDirectory['remove']} */
+      const removeAt = async (...petNamePath) => {
+        const { prefixPath, petName } = assertPetNamePath(petNamePath);
+        await null;
+        if (prefixPath.length === 0) {
+          await controller.remove(petName);
+          return;
+        }
+        await E(await lookupHub(prefixPath)).remove(petName);
+      };
+
+      /** @param {string[]} petNamePath */
+      const identifyAt = async petNamePath => {
+        const { prefixPath, petName } = petNamePathFrom(petNamePath);
+        await null;
+        if (prefixPath.length === 0) {
+          return controller.identifyLocal(petName);
+        }
+        return E(await lookupHub(prefixPath)).identify(petName);
+      };
+
+      /**
+       * @param {string[]} petNamePath
+       * @param {string} id
+       */
+      const storeIdentifierAt = async (petNamePath, id) => {
+        const { prefixPath, petName } = petNamePathFrom(petNamePath);
+        await null;
+        if (prefixPath.length === 0) {
+          await controller.storeIdentifier(petName, id);
+          return;
+        }
+        await E(await lookupHub(prefixPath)).storeIdentifier([petName], id);
+      };
+
+      /** @type {EndoDirectory['move']} */
+      const move = async (fromPath, toPath) => {
+        const { prefixPath: fromPrefixPath, petName: fromPetName } =
+          assertPetNamePath(fromPath);
+        const { prefixPath: toPrefixPath, petName: toPetName } =
+          assertPetNamePath(toPath);
+        await null;
+
+        // Optimize for same-hub moves (rename)
+        if (fromPrefixPath.length === toPrefixPath.length) {
+          const samePrefix = fromPrefixPath.every(
+            (name, i) => name === toPrefixPath[i],
+          );
+          if (samePrefix) {
+            if (fromPrefixPath.length === 0) {
+              await controller.rename(fromPetName, toPetName);
+            } else {
+              const hub = await lookupHub(fromPrefixPath);
+              await E(hub).move([fromPetName], [toPetName]);
+            }
+            return;
+          }
+        }
+
+        // Cross-hub move: copy then remove
+        const id = await identifyAt(fromPath);
+        if (id === undefined) {
+          throw new Error(`Unknown name: ${q(fromPath)}`);
+        }
+        // First write to the "to" hub so that the original name is preserved on
+        // the "from" hub in case of failure.
+        await storeIdentifierAt(toPath, id);
+        await removeAt(...fromPath);
+      };
+
+      /** @type {EndoDirectory['copy']} */
+      const copy = async (fromPath, toPath) => {
+        assertNamePath(fromPath);
+        assertPetNamePath(toPath);
+        const id = await identifyAt(fromPath);
+        if (id === undefined) {
+          throw new Error(`Unknown name: ${q(fromPath)}`);
+        }
+        await storeIdentifierAt(toPath, id);
+      };
+
+      /** @type {EndoDirectory['readText']} */
+      const readText = async petNameOrPath => {
+        const namePath = namePathFrom(petNameOrPath);
+        if (namePath.length < 2) {
+          const blob = await lookup(namePath);
+          return E(/** @type {any} */ (blob)).text();
+        }
+        const { hub, name } = await lookupTailHub(namePath);
+        return E(/** @type {any} */ (hub)).readText(name);
+      };
+
+      /** @type {EndoDirectory['maybeReadText']} */
+      const maybeReadText = async petNameOrPath => {
+        const namePath = namePathFrom(petNameOrPath);
+        if (namePath.length < 2) {
+          const blob = await maybeLookup(namePath);
+          if (blob === undefined || blob === null) {
+            return undefined;
+          }
+          return E(/** @type {any} */ (blob)).text();
+        }
+        const { hub, name } = await lookupTailHub(namePath);
+        return E(/** @type {any} */ (hub)).maybeReadText(name);
+      };
+
+      /** @type {EndoDirectory['writeText']} */
+      const writeText = async (petNameOrPath, content) => {
+        // Coerce for branching only; the store funnels through this
+        // directory's own storeIdentifier, which enforces a pet-name leaf.
+        const namePath = namePathFrom(petNameOrPath);
+        if (namePath.length < 2) {
+          const bytes = encodeUtf8(content);
+          const readerRef = bytesReaderFromIterator([bytes]);
+          /** @type {DeferredTasks<ReadableBlobDeferredTaskParams>} */
+          const tasks = makeDeferredTasks();
+          tasks.push(identifiers =>
+            storeIdentifier(namePath, identifiers.readableBlobId),
+          );
+          await formulateReadableBlob(/** @type {any} */ (readerRef), tasks);
+          return;
+        }
+        const { hub, name } = await lookupTailHub(namePath);
+        await E(/** @type {any} */ (hub)).writeText(name, content);
+      };
+
+      return {
+        move,
+        copy,
+        remove: removeAt,
+        readText,
+        maybeReadText,
+        writeText,
+      };
+    };
+
+    const { move, copy, readText, maybeReadText, writeText } =
+      makePathOperations(
+        async prefixPath =>
+          /** @type {NameHub} */ (amplifyNameHub(await lookup(prefixPath))),
+      );
+
+    /**
+     * The hub at `prefixPath` for a guest's own path operations (`move`,
+     * `copy`, `remove`, `readText`, `maybeReadText`, `writeText`). The path
+     * is walked one name at a time from this directory, and every hub along
+     * it must be a directory: a guest facet is recovered as its directory,
+     * and a guest is refused. Refusing at each step, rather than only at the
+     * prefix's last hub, keeps a path from passing through another guest's
+     * own `lookup`, whose guest facets would otherwise be recovered as that
+     * guest's directories.
+     *
+     * Every hub reached this way is one the guest already holds through its
+     * own pet names, so the walk grants nothing the hub's guest facet does
+     * not: that facet's own `lookup`, `copy`, `move`, `remove`, and text
+     * methods reach the same entries. Formula identifiers read by `identify`
+     * here pass only from one store to another inside the daemon and never
+     * reach the guest, and a value copied out is narrowed again by the
+     * guest's own `lookup`.
+     *
+     * @param {Name[]} prefixPath
+     * @returns {Promise<NameHub>}
+     */
+    const lookupGuestOwnHub = async prefixPath => {
+      /** @type {NameHub} */
+      let hub = directory;
+      await null;
+      for (const name of prefixPath) {
+        // eslint-disable-next-line no-await-in-loop
+        const next = /** @type {NameHub} */ (await E(hub).lookup(name));
+        const unwrapped = /** @type {NameHub} */ (unwrapGuestFacet(next));
+        if (unwrapped === next && amplifyNameHub(next) !== next) {
+          throw new TypeError(
+            `Cannot traverse a path through another agent: ${q(name)}`,
+          );
+        }
+        hub = unwrapped;
+      }
+      return hub;
+    };
+
+    // A guest's own path operations recover a directory from its guest
+    // facet but never amplify a guest: a name bound to another guest must not
+    // open that guest's directory to `identify`, `storeIdentifier`, `remove`,
+    // or its text methods, at any depth.
+    const {
+      move: guestMove,
+      copy: guestCopy,
+      remove: guestRemove,
+      readText: guestReadText,
+      maybeReadText: guestMaybeReadText,
+      writeText: guestWriteText,
+    } = makePathOperations(lookupGuestOwnHub);
 
     /**
      * Store a locator (endo:// URL) at a pet name path.
@@ -624,52 +986,7 @@ export const makeDirectoryMaker = ({
       return newDirectory;
     };
 
-    /** @type {EndoDirectory['readText']} */
-    const readText = async petNameOrPath => {
-      const namePath = namePathFrom(petNameOrPath);
-      if (namePath.length < 2) {
-        const blob = await lookup(namePath);
-        return E(/** @type {any} */ (blob)).text();
-      }
-      const { hub, name } = await lookupTailNameHub(namePath);
-      return E(/** @type {any} */ (hub)).readText(name);
-    };
-
-    /** @type {EndoDirectory['maybeReadText']} */
-    const maybeReadText = async petNameOrPath => {
-      const namePath = namePathFrom(petNameOrPath);
-      if (namePath.length < 2) {
-        const blob = await maybeLookup(namePath);
-        if (blob === undefined || blob === null) {
-          return undefined;
-        }
-        return E(/** @type {any} */ (blob)).text();
-      }
-      const { hub, name } = await lookupTailNameHub(namePath);
-      return E(/** @type {any} */ (hub)).maybeReadText(name);
-    };
-
-    /** @type {EndoDirectory['writeText']} */
-    const writeText = async (petNameOrPath, content) => {
-      // Coerce for branching only; the store funnels through this
-      // directory's own storeIdentifier, which enforces a pet-name leaf.
-      const namePath = namePathFrom(petNameOrPath);
-      if (namePath.length < 2) {
-        const bytes = encodeUtf8(content);
-        const readerRef = bytesReaderFromIterator([bytes]);
-        /** @type {DeferredTasks<ReadableBlobDeferredTaskParams>} */
-        const tasks = makeDeferredTasks();
-        tasks.push(identifiers =>
-          storeIdentifier(namePath, identifiers.readableBlobId),
-        );
-        await formulateReadableBlob(/** @type {any} */ (readerRef), tasks);
-        return;
-      }
-      const { hub, name } = await lookupTailNameHub(namePath);
-      await E(/** @type {any} */ (hub)).writeText(name, content);
-    };
-
-    /** @type {EndoDirectory & ContentLocatable} */
+    /** @type {EndoDirectory & ContentLocatable & GuestPathOperations} */
     const directory = {
       has,
       identify,
@@ -694,6 +1011,12 @@ export const makeDirectoryMaker = ({
       move,
       remove,
       copy,
+      guestMove,
+      guestCopy,
+      guestRemove,
+      guestReadText,
+      guestMaybeReadText,
+      guestWriteText,
       makeDirectory,
       readText,
       maybeReadText,
@@ -778,7 +1101,7 @@ export const makeDirectoryMaker = ({
       }
     };
 
-    return makeExo(
+    const directoryExo = makeExo(
       'EndoDirectory',
       DirectoryInterface,
       /** @type {any} */ ({
@@ -833,6 +1156,81 @@ export const makeDirectoryMaker = ({
         },
       }),
     );
+
+    /** @param {unknown} value */
+    const forGuest = async value => guestFacetFor(await value);
+
+    /** @type {ReadableNameHub | undefined} */
+    let guestReadOnlyView;
+    /** @type {object | undefined} */
+    let guestFacet;
+    const makeGuestFacet = () => {
+      if (guestFacet !== undefined) {
+        return guestFacet;
+      }
+      const guestHelp = makeHelp(guestDirectoryHelp);
+      guestFacet = makeExo(
+        'EndoGuestDirectory',
+        GuestDirectoryInterface,
+        /** @type {any} */ ({
+          help: guestHelp,
+          has,
+          list,
+          listValues: async () =>
+            harden(
+              (await listValues()).map(value =>
+                Promise.resolve(value).then(guestFacetFor),
+              ),
+            ),
+          followNameChanges: () => {
+            const iterator = mapCancelableIterator(
+              directory.followNameChanges(),
+              redactNameChange,
+            );
+            return readerFromIterator(iterator, {
+              cancelPending: () => cancelPendingIterator(iterator),
+            });
+          },
+          lookup: petNamePath => forGuest(lookup(petNamePath)),
+          maybeLookup: petNamePath =>
+            forGuest(directory.maybeLookup(petNamePath)),
+          reverseLookup: value => reverseLookup(unwrapGuestFacet(value)),
+          remove: directory.guestRemove,
+          move: directory.guestMove,
+          copy: directory.guestCopy,
+          makeDirectory: petNamePath => forGuest(makeDirectory(petNamePath)),
+          readText: directory.guestReadText,
+          maybeReadText: directory.guestMaybeReadText,
+          writeText: directory.guestWriteText,
+          // Unlike the directory's own view, this view's lookups yield guest
+          // facets, so a directory reached through it is narrowed too.
+          readOnly: async () => {
+            assertReadOnlyViewLive();
+            if (guestReadOnlyView === undefined) {
+              guestReadOnlyView = makeReadOnlyDirectoryView(
+                harden({
+                  has,
+                  list,
+                  lookup: petNamePath => forGuest(lookup(petNamePath)),
+                  maybeLookup: petNamePath =>
+                    forGuest(directory.maybeLookup(petNamePath)),
+                }),
+                assertReadOnlyViewLive,
+              );
+            }
+            return guestReadOnlyView;
+          },
+        }),
+      );
+      directoriesByGuestFacet.set(guestFacet, directoryExo);
+      // Daemon code that traverses a pet-name path through the facet (as
+      // through a guest) still reaches the directory.
+      registerGuestDirectory(guestFacet, /** @type {any} */ (directoryExo));
+      return guestFacet;
+    };
+    guestFacetMakers.set(directoryExo, makeGuestFacet);
+
+    return directoryExo;
   };
 
   return { makeIdentifiedDirectory, makeDirectoryNode };

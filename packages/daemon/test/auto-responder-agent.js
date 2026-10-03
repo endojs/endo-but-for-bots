@@ -23,18 +23,16 @@ export const AutoResponderInterface = M.interface(
  * @param {any} powers - The agent (a host or guest) whose mailbox to service.
  */
 export const make = async powers => {
-  // The agent's own locator, used to tell inbound messages (which we answer)
-  // from the agent's own outbound traffic — including the replies we send.
-  const selfLocator = await E(powers).locate('@self');
   let responded = 0;
 
   const serviceMailbox = async () => {
     for await (const message of iterateReader(E(powers).followMessages())) {
       // Only react to messages the agent receives, never to messages it sent
       // (a reply carries a `replyTo`), so the acknowledgments below cannot
-      // feed the loop back into itself.
+      // feed the loop back into itself. A guest reads its correspondents by
+      // its own pet names, so its own outbound traffic comes from `@self`.
       const inbound =
-        message.from !== selfLocator && message.replyTo === undefined;
+        !message.fromNames.includes('@self') && message.replyTo === undefined;
       if (inbound) {
         if (typeof message.messageId === 'string') {
           // Echo the prompt so each acknowledgment is distinguishable from a
