@@ -93,24 +93,32 @@ export type PassByRef =
 export type Passable<
   PC extends PassableCap = PassableCap,
   E extends Error = Error,
-> = void | Atom | Container<PC, E> | PC | E | SturdyRef;
+  SR extends SturdyRef = SturdyRef,
+> = void | Atom | Container<PC, E, SR> | PC | E | SR;
 
-export type Container<PC extends PassableCap, E extends Error> =
-  | CopyArrayInterface<PC, E>
-  | CopyRecordInterface<PC, E>
-  | CopyTaggedInterface<PC, E>;
+export type Container<
+  PC extends PassableCap,
+  E extends Error,
+  SR extends SturdyRef = SturdyRef,
+> =
+  | CopyArrayInterface<PC, E, SR>
+  | CopyRecordInterface<PC, E, SR>
+  | CopyTaggedInterface<PC, E, SR>;
 export interface CopyArrayInterface<
   PC extends PassableCap,
   E extends Error,
-> extends CopyArray<Passable<PC, E>> {}
+  SR extends SturdyRef = SturdyRef,
+> extends CopyArray<Passable<PC, E, SR>> {}
 export interface CopyRecordInterface<
   PC extends PassableCap,
   E extends Error,
-> extends CopyRecord<Passable<PC, E>> {}
+  SR extends SturdyRef = SturdyRef,
+> extends CopyRecord<Passable<PC, E, SR>> {}
 export interface CopyTaggedInterface<
   PC extends PassableCap,
   E extends Error,
-> extends CopyTagged<string, Passable<PC, E>> {}
+  SR extends SturdyRef = SturdyRef,
+> extends CopyTagged<string, Passable<PC, E, SR>> {}
 
 export type PassStyleOf = {
   (p: undefined): 'undefined';
