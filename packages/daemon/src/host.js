@@ -20,6 +20,7 @@ import {
   makeGitRemoteEndpoint,
 } from '@endo/exo-git';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+import { normalizeShellCommandGrammars } from '@endo/exo-shell';
 
 import { cancelPendingIterator } from './cancelable-iterator.js';
 import {
@@ -99,17 +100,22 @@ export const normalizeShellPolicy = policy => {
   if (!policy || typeof policy !== 'object') {
     throw makeError(X`provideShell: policy must be an object`);
   }
-  const { allowedCommands, timeoutMs, maxOutputBytes, env, searchPath } =
+  const { commands, timeoutMs, maxOutputBytes, env, searchPath } =
     /** @type {Record<string, unknown>} */ (policy);
   if (
-    !Array.isArray(allowedCommands) ||
-    allowedCommands.length === 0 ||
-    !allowedCommands.every(c => typeof c === 'string' && c.length > 0)
+    /** @type {Record<string, unknown>} */ (policy).allowedCommands !==
+    undefined
   ) {
     throw makeError(
-      X`provideShell: policy.allowedCommands must be a non-empty array of command-name strings`,
+      X`provideShell: policy.allowedCommands is gone; grant passable command grammars via policy.commands instead (a command-name allowlist cannot attenuate a POSIX command)`,
     );
   }
+  // Validates the grammar shapes and returns a frozen deep copy, so the
+  // persisted formula can only carry a well-formed accepted language.
+  const normalizedCommands = normalizeShellCommandGrammars(
+    commands,
+    'policy.commands',
+  );
   if (!Number.isInteger(timeoutMs) || /** @type {number} */ (timeoutMs) <= 0) {
     throw makeError(
       X`provideShell: policy.timeoutMs must be a positive integer`,
@@ -148,7 +154,7 @@ export const normalizeShellPolicy = policy => {
   const timeoutMsValue = /** @type {number} */ (timeoutMs);
   const maxOutputBytesValue = /** @type {number} */ (maxOutputBytes);
   return harden({
-    allowedCommands: harden([...allowedCommands]),
+    commands: normalizedCommands,
     timeoutMs: timeoutMsValue,
     maxOutputBytes: maxOutputBytesValue,
     env: harden(normalizedEnv),

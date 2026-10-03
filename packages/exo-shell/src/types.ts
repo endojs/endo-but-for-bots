@@ -1,5 +1,49 @@
+export type ShellSlotType = 'string' | 'path';
+
+export type ShellOptionMember =
+  string | { prefix: string; type: ShellSlotType; name?: string };
+
+export type ShellCommandElement =
+  | { kind: 'literal'; value: string }
+  | {
+      kind: 'slot';
+      name: string;
+      type: ShellSlotType;
+      prefix?: string;
+      optional?: boolean;
+      description?: string;
+    }
+  | {
+      kind: 'options';
+      options: readonly ShellOptionMember[];
+      optional?: boolean;
+      repeat?: boolean;
+      name?: string;
+      description?: string;
+    }
+  | {
+      kind: 'group';
+      elements: readonly ShellCommandElement[];
+      optional?: boolean;
+      repeat?: boolean;
+      description?: string;
+    }
+  | { kind: 'rest'; name: string; type: ShellSlotType; description?: string };
+
+/**
+ * A passable (copyable pass-style data) description of one accepted command
+ * form: a fixed program name and a grammar over its argument tokens.  Matched
+ * argument vectors are the only ones `exec` will spawn; the grammar
+ * constrains the argument language, not just argv[0].
+ */
+export type ShellCommandGrammar = {
+  program: string;
+  args: readonly ShellCommandElement[];
+  description?: string;
+};
+
 export type ShellPolicy = {
-  allowedCommands: readonly string[];
+  commands: readonly ShellCommandGrammar[];
   timeoutMs: number;
   maxOutputBytes: number;
   env?: Record<string, string>;
@@ -7,7 +51,8 @@ export type ShellPolicy = {
 };
 
 export type ShellInspectResult = {
-  allowedCommands: readonly string[];
+  commands: readonly ShellCommandGrammar[];
+  usage: readonly string[];
   timeoutMs: number;
   maxOutputBytes: number;
 };
@@ -44,4 +89,8 @@ export type EndoShell = {
     args: readonly string[],
     options?: { timeoutMs?: number },
   ) => Promise<ShellResult>;
+  attenuate: (
+    commands: readonly ShellCommandGrammar[],
+    options?: { timeoutMs?: number },
+  ) => Promise<EndoShell>;
 };

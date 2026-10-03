@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-03-02 |
-| **Updated** | 2026-08-06 |
+| **Updated** | 2026-09-29 |
 | **Author** | Kris Kowal, endolinbot (prompted) |
 | **Status** | In Progress |
 
@@ -44,9 +44,8 @@ What has shipped, by layer:
   confinement core) and `@endo/exo-http-client` (the `HttpClient` /
   `HttpClientControl` capability), realizing
   [endoclaw-network-fetch](endoclaw-network-fetch.md). The daemon formula was
-  superseded by the `@endo/fetch` / `@endo/confined-fetch` plugin split; those
-  plugins, their policy store, and `makeHttpTool` are the remaining delta
-  (§ Tool Groups, § Implementation Plan).
+  superseded by the plugin provisioning of [endo-fetch](endo-fetch.md), which
+  tracks its own status; the `makeHttpTool` binding has landed (#661).
 - **Package-management tier.** `@endo/exo-package-manager` provides the
   portable reader, safe-installer, and project-executor facets (#948).
   The daemon-backed base-session design is #949, the grant-sensitive
@@ -54,11 +53,19 @@ What has shipped, by layer:
   design is #953.
   Code mode may consume the facets directly; #950 is part of the reviewed
   JSON-tool tail already in flight when that surface was parked.
+- **Integration.** #707 landed capability-based workspace composition and the
+  worked version-controlled-filesystem loop, driven through the provisioned
+  tool catalog. `@endo/agentry/workspace-agent` adds an explicit harness that
+  receives its grants from the caller, qualifies the Shell and GitRemote
+  inspection names, and never discovers additional authority from a guest
+  petstore.
 - **Remaining** (the phased delta in § Implementation Plan below): the
-  **network tool** (plugin provisioning plus `makeHttpTool`),
-  the **sandbox-spawner shell engine** (Phase 2c, gated on
-  [endo-posix-sandbox](endo-posix-sandbox.md)), and the provisioning and
-  across-turn persistence wiring.
+  **sandbox-spawner shell engine** (Phase 2c, gated on
+  [endo-posix-sandbox](endo-posix-sandbox.md)); the Phase 4 end-to-end
+  provisioning wiring, in which daemon-provisioned grants reach a lal or fae
+  agent (whether through that JSON-tool harness or through code mode is open
+  on #731, see the parking callout below); the Phase 3.5 cap-bearing-result persistence;
+  and the Phase 5 contract-test extension.
 
 ## What is the Problem Being Solved?
 
@@ -110,9 +117,9 @@ What this document owns is the remainder:
 | Shell | `makeShell({ cwd, allowedCommands, … })` from a raw path | `Shell` capability derived from a writable `EndoMount`, executing through the `Spawner` seam (§ Shell Capability) | capability + `makeShellTool` landed (#615, host-spawner engine); sandbox engine (Phase 2c) remaining |
 | Git (local) | `Git` exo over a repository path string | `Git` over `EndoMount` via `provideGit(mountCap, petName)` ([daemon-git-capability](daemon-git-capability.md)) | capability landed (#364); facet-derived catalogs landed (`makeGitTool`); mount-bridged `status` / `add` landed (#616), with conflict checkout added in Phase 6 |
 | Git (remote) | deliberately omitted ("network access is a separate capability") | `GitRemote` = `Git` + bounded HTTPS transport + non-extractable credential ([daemon-git-remotes](daemon-git-remotes.md)) | capability landed (#365, #368); `makeGitRemoteTool` landed (#705) |
-| Network (HTTP) | not in sketch (network excluded from `Git`, Design Decision 3) | `HttpClient` / `HttpClientControl` from `@endo/exo-http-client` over the `@endo/http-confine` core, granted standalone from an injected `fetch` seam (not mount-derived) | capability landed (#566); plugin provisioning and `makeHttpTool` remaining |
+| Network (HTTP) | not in sketch (network excluded from `Git`, Design Decision 3) | `HttpClient` / `HttpClientControl` from `@endo/exo-http-client` over the `@endo/http-confine` core, granted standalone from an injected `fetch` seam (not mount-derived) | capability landed (#566); `makeHttpTool` landed (#661); plugin provisioning tracked in [endo-fetch](endo-fetch.md) |
 | Package management | not in sketch | Portable `EndoPackageManager` reader, safe-installer, and project-executor facets over an injected, snapshot-revalidating backend | portable facets in #948; daemon-backed base-session design in #949; grant-sensitive agent-tools projection in #950; optional backend design in #953 |
-| Search | `grep` / `glob` on `Dir` | interim: `Filesystem` walks plus the Shell group's allowlisted `grep`; a capability-backed search substrate is an open question | not started |
+| Search | `grep` / `glob` on `Dir` | interim: `Filesystem` walks plus a Shell-group `grep` grammar; a capability-backed search substrate is an open question | not started |
 
 > **The JSON tool-wrapper surface is parked — see #731.** The `ToolRecord`
 > wrappers the Status column names (`makeGitTool`, `makeGitRemoteTool`,
@@ -126,6 +133,11 @@ What this document owns is the remainder:
 > grandfathered
 > ([daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan,
 > *Status and the #731 grandfathering*).
+> `@endo/agentry/workspace-agent` projects `ToolRecord`s to an agent, so it is
+> new JSON-tool surface and is **not** grandfathered. Whether the parking is
+> lifted for it is undecided on #731. Until that is decided, code mode stays the
+> default Phase 4 consumer, and the harness is recorded here as a candidate,
+> not as the path.
 
 Three properties of the reconciled map, each a correction to the sketch:
 
@@ -204,7 +216,26 @@ designs that already carry their own normative content.
 ```js
 const worktree = await E(host).provideMount('/repo', 'repo-worktree');
 const shell = await E(host).provideShell(worktree, 'repo-shell', {
-  allowedCommands: ['node', 'npm', 'yarn', 'make', 'grep', 'sed', 'awk'],
+  commands: [
+    {
+      program: 'grep',
+      description: 'Search tracked files for a fixed pattern',
+      args: [
+        { kind: 'options', optional: true, repeat: true,
+          options: ['-r', '-n', '-l', '-i', '--'] },
+        { kind: 'slot', name: 'pattern', type: 'string' },
+        { kind: 'rest', name: 'paths', type: 'path' },
+      ],
+    },
+    {
+      program: 'node',
+      description: 'Run a worktree script',
+      args: [
+        { kind: 'slot', name: 'script', type: 'path' },
+        { kind: 'rest', name: 'scriptArgs', type: 'string' },
+      ],
+    },
+  ],
   env: { CI: 'true' }, // explicit passlist; nothing inherited
   timeoutMs: 60_000,
   maxOutputBytes: 1_048_576,
@@ -225,17 +256,21 @@ const shell = await E(host).provideShell(worktree, 'repo-shell', {
    (formula-owned, like `GitRemote`'s Phase 1 endpoint policy), so the
    capability reconstitutes across daemon restart with the same bounds.
 
-Attenuation is construction-time: a narrower grant is a new
-`provideShell` call with a shorter allowlist. There is no
-`Shell.readOnly()` — a shell that cannot mutate is not a shell, and
-pretending otherwise would invite the misrepresentation rejected in
-point 3.
+Attenuation is first-class: `shell.attenuate(commands)` derives a new
+`Shell` whose accepted argument language is the given grammars **and**
+every grammar up the derivation chain (the attenuated shell checks its
+own grammars and then delegates to its parent, which checks again, so a
+derived shell can only narrow — no sublanguage-inclusion proof is
+needed, and none is attempted). A fresh root with different bounds is
+still a new `provideShell` call. There is no `Shell.readOnly()` — a
+shell that cannot mutate is not a shell, and pretending otherwise would
+invite the misrepresentation rejected in point 3.
 
 ### Interface
 
 ```ts
 type ShellPolicy = {
-  allowedCommands: string[];
+  commands: ShellCommandGrammar[];
   timeoutMs: number;
   maxOutputBytes: number;
 };
@@ -249,12 +284,21 @@ type ShellResult = {
 };
 
 interface Shell {
-  inspect(): Promise<ShellPolicy>;
+  inspect(): Promise<{
+    commands: ShellCommandGrammar[];
+    usage: string[]; // one rendered usage line per grammar
+    timeoutMs: number;
+    maxOutputBytes: number;
+  }>;
   exec(
     command: string,
     args: string[],
     options?: { timeoutMs?: number },
   ): Promise<ShellResult>;
+  attenuate(
+    commands: ShellCommandGrammar[],
+    options?: { timeoutMs?: number }, // narrow-only
+  ): Promise<Shell>;
 }
 ```
 
@@ -263,10 +307,11 @@ interface Shell {
   `@endo/host-shell` and genie's host spawner expose for operators is
   deliberately absent here). This is the sketch's Design Decision 4,
   kept verbatim.
-- **Allowlist before spawn.** `command` must be a member of
-  `allowedCommands`. Policy closures in the genie style
-  (`rejectPatterns`, `rejectFlags` — see
-  `packages/genie/src/tools/command.js`) run after the allowlist check
+- **Grammar match before spawn.** `[command, ...args]` must match one of
+  the policy's command grammars (§ Command grammars) or `exec` throws —
+  with the usage lines in the error — before anything is spawned. Policy
+  closures in the genie style (`rejectPatterns`, `rejectFlags` — see
+  `packages/genie/src/tools/command.js`) run after the grammar check
   and may veto or annotate; they are advisory hardening, not the
   boundary (see § The honest boundary).
 - **Sanitized environment.** The child env is exactly the policy's
@@ -282,6 +327,100 @@ interface Shell {
   `@endo/host-shell` (`PassableBytesReader` stdout / stderr, an
   awaitable `{ code, signal }`) are the named path, added as sibling
   methods rather than a change to `exec`.
+
+### Command grammars
+
+A command-name allowlist cannot attenuate a POSIX command: the argument
+language is where the authority lives. Allowlisting `find` grants
+arbitrary execution through `-exec`; `sed` has GNU `e`, `awk` has
+`system()`, `git` has `-c core.sshCommand=…`. So the unit of grant is
+not a command name but a **command grammar**: a passable (copyable,
+pass-style data) expression that describes the accepted argument
+strings and interpolates them into an argv array — never a shell
+string. The grammar constrains the argument *language*, not just
+`argv[0]` (maintainer directive, #1348, 2026-10-01).
+
+Because a grammar is pass-style data, it travels in a `provideShell`
+policy, bakes into the `shell` formula, returns from `inspect()`, and
+passes over the wire to `attenuate` — no closures, no patterns objects,
+no `RegExp`.
+
+```ts
+type ShellSlotType = 'string' | 'path';
+
+type ShellCommandElement =
+  // A fixed argv token.
+  | { kind: 'literal'; value: string }
+  // One typed token: `<name>`, or `--flag=<name>` when `prefix` is given
+  // (the prefix is glued; the remainder is the slot value).
+  | { kind: 'slot'; name: string; type: ShellSlotType;
+      prefix?: string; optional?: boolean; description?: string }
+  // A union of option tokens: exact flags ('-r') and prefix flags
+  // ({ prefix: '--max-count=', type: 'string' }). `optional` admits zero
+  // occurrences, `repeat` admits several.
+  | { kind: 'options';
+      options: Array<string | { prefix: string; type: ShellSlotType;
+                                name?: string }>;
+      optional?: boolean; repeat?: boolean;
+      name?: string; description?: string }
+  // A sequence matched as a unit, e.g. an optional flag-value pair
+  // `[-n <count>]` or a repeatable `[--include <path>]…`.
+  | { kind: 'group'; elements: ShellCommandElement[];
+      optional?: boolean; repeat?: boolean; description?: string }
+  // Zero or more trailing typed tokens; only valid as the final
+  // top-level element.
+  | { kind: 'rest'; name: string; type: ShellSlotType;
+      description?: string };
+
+type ShellCommandGrammar = {
+  program: string; // argv[0], a fixed literal
+  args: ShellCommandElement[];
+  description?: string;
+};
+```
+
+**Slot types.** Every slot value must be a non-empty string with no NUL
+and no leading `-` — a free slot can never inject an option token; a
+flag the grammar means to admit is spelled as a `literal` or an
+`options` member. `path` additionally confines the value to the granted
+worktree lexically: no absolute path, no `..` segment. (Under the host
+engine this bounds the *request*, not the child — see § The honest
+boundary.) A grammar needing a dash-leading positional value (say a
+`grep` pattern) puts a `--` literal before the slot, exactly as a
+careful script would.
+
+**Matching.** `exec(command, args)` matches `command` against
+`program` and `args` against the element sequence with a frontier-set
+automaton (each element maps a set of token positions to a set of
+successor positions; optional/repeat/group fall out naturally; cost is
+O(elements × tokens)). No match → structured rejection carrying the
+rendered usage lines, before any spawn.
+
+**Usage rendering.** Each grammar renders to one deterministic usage
+line — `grep [-r | -n | -l | -i | --]... <pattern> [<paths:path> ...]`
+— exposed by `inspect()` and embedded in the agent-facing tool
+description, so the accepted language is legible to the agent up front
+rather than discovered by rejection.
+
+**Attenuation.** `attenuate(commands, { timeoutMs? })` validates the
+grammars and returns a derived `Shell` that matches its own grammars
+and then **delegates to its parent's `exec`**, so every ancestor's
+grammar is enforced in turn: intersection by conjunction. A derived
+shell therefore can only narrow, and no inclusion relation between
+grammars ever needs deciding. `timeoutMs` may only shrink along the
+chain; `maxOutputBytes` is inherited. Attenuation chains, and exposing
+`attenuate` to a guest is safe — self-attenuation is narrowing by
+construction.
+
+**What this fixes, honestly stated.** With grammars, "grant `find`"
+can mean `find <root:path> -name <pattern>` with no `-exec` in the
+language — the delegation hole is closed *at the argument level*,
+which a name allowlist could never do. What it does not change: a
+started child's OS authority (§ The honest boundary). A grammar whose
+language still reaches an interpreter (`node <script:path>` where the
+agent can also write files) still delegates; composing grants remains
+the granter's judgment call, and the usage line makes what was granted
+reviewable.
 
 ### Execution engine: the `Spawner` seam
 
@@ -305,7 +444,8 @@ backend-private-data-plane discipline as
 Relationship to `@endo/host-shell`: that package is a one-command
 formula (each instance re-runs a single command captured in its `env`,
 streaming stdio) aimed at operator one-offs and plumbing. The `Shell`
-capability is the multi-invocation, allowlisted, agent-facing sibling.
+capability is the multi-invocation, grammar-bounded, agent-facing
+sibling.
 They share the unconfined-plugin loading shape (the shell formula, like
 host-shell, reaches `node:child_process` through the daemon's
 unconfined-module worker path) and, eventually, the stream shapes.
@@ -313,15 +453,24 @@ unconfined-module worker path) and, eventually, the stream shapes.
 ### The honest boundary
 
 The 2026-03 sketch implied that an allowlist confines a shell. It does
-not, and this reconciliation states the boundary truthfully, adopting
+not — and a command-name allowlist does not even bound what can be
+*asked for*, which is why it was replaced by command grammars
+(§ Command grammars). This reconciliation states the boundary
+truthfully, adopting
 the confinement-axis vocabulary of
 [endo-agent-tools](endo-agent-tools.md) § The confinement axis:
 
 - Under the **host engine**, the `Shell` capability bounds *which
-  commands start* and *with what env, cwd, timeout, and output budget* —
-  but a started child is an ordinary host process. `grep` from the
-  allowlist can read `~/.ssh` if the OS user can. The policy closures
-  are a veto on the command string, "advice, not a boundary".
+  argument vectors start a child* and *with what env, cwd, timeout, and
+  output budget* — but a started child is an ordinary host process. A
+  granted `grep` can read `~/.ssh` if the OS user can, and a `path`
+  slot's lexical confinement bounds the request, not the child's OS
+  authority. The command grammars (§ Command grammars) make the
+  *argument language* a real boundary — a `find` grammar without
+  `-exec` in its language cannot be asked to exec — which a command
+  name or prefix never was; what the started process then does remains
+  unconfined here. The policy closures are a veto on the command
+  string, "advice, not a boundary".
 - Under the **sandbox engine**, the same capability surface gains a
   kernel boundary: the child sees only the slice's filesystem view
   (the worktree), its own pid namespace, and no network unless the
@@ -334,8 +483,12 @@ the difference legible instead of papering over it.
 
 ### Tool adapter
 
-`makeShellTool(shellCap)` in `@endo/agent-tools` closes over the `Shell`
-capability and emits canonical `ToolRecord`s
+`makeShellTool(shellCap, { commands })` in `@endo/agent-tools` closes
+over the `Shell` capability and emits canonical `ToolRecord`s for
+`exec` and `inspect` — `attenuate` is granter-facing and deliberately
+not a tool. When the caller passes the granted grammars, their rendered
+usage lines are embedded in the `exec` tool description, so the agent
+reads the accepted command forms instead of probing for them
 (`makeTool` over a MethodGuard, hand-authored wire schema pinned by the
 divergence gate — all per [endo-agent-tools](endo-agent-tools.md); this
 document introduces no rival tool shape). Genie's existing
@@ -390,9 +543,9 @@ endows it plus a state directory to `@endo/confined-fetch`. The confined
 plugin mints the `HttpClient` / `HttpClientControl` pair, retains the
 policy-bearing control facet, and binds only the use-facing `HttpClient` into
 the guest petstore. #566 landed the package pair (`@endo/http-confine` plus
-`@endo/exo-http-client`); the two plugins, their durable virtual-file-system
-policy store, and the `makeHttpTool` binding are the remaining wiring (§
-Implementation Plan, Network tier). The
+`@endo/exo-http-client`), and the `makeHttpTool` binding landed in #661;
+the plugins and their durable virtual-file-system policy store are tracked in
+[endo-fetch](endo-fetch.md) (§ Implementation Plan, Network tier). The
 conditional-composition rule is unchanged: the network tool group is
 absent from the catalog unless the agent holds the `HttpClient`.
 
@@ -404,12 +557,17 @@ the host running the derivation flow above and binding the petnames.
 ## Implementation Plan
 
 Phases are ordered by what gates the M3 exit pillar. Phase 0 records
-the landed substrate; Phases 1–3 are dispatchable builder work; Phase 4
-is the integration pass that demonstrates the pillar. As of 2026-08-06,
-Phase 1 (#614), Phase 2a/2b (#615), the local mount-bridged git
-tools (#616, Phase 3.5), and the push tier (#705, Phase 3) have landed on
-`llm`; the remaining builder work is the network tool wiring (Phase 3.6),
-the sandbox shell engine (Phase 2c), and the Phase 4 worked loop.
+the landed substrate; Phases 1–3 built the capability tools; Phase 4
+integrates and demonstrates the pillar. The file, Shell, local Git,
+GitRemote, and HTTP slices landed in #614, #615, #616, #705, and #661.
+#707 landed workspace composition and the worked loop. The harness
+integration uses an explicit `@endo/agentry` harness rather than the dynamic
+petstore discovery attempted in the archived #618, which was closed over
+concerns that discovery could leak dangerous capabilities. The remaining work
+is the sandbox shell engine (Phase 2c) and the Phase 4 end-to-end provisioning
+wiring into a lal or fae agent. Which surface carries that wiring, the
+explicit JSON-tool harness or code mode, turns on the #731 parking (§ Tool
+Groups, Reconciled).
 
 The loop-level, cross-design sequencing of the git-capability stack is
 canonical in [daemon-git-next-steps](daemon-git-next-steps.md) § Phased
@@ -453,7 +611,9 @@ deliverable's shape.
 - [x] 2a — the daemon `shell` formula and `provideShell` per § Shell
   Capability: writable-mount derivation via `provideHostPath`,
   formula-owned policy, host-spawner engine, hardening tests
-  (allowlist enforcement, env sanitization — assert no host env
+  (grammar-match enforcement — originally a command-name allowlist,
+  reworked to command grammars per the 2026-10-01 directive on #1348 —
+  env sanitization — assert no host env
   leakage, argv-only spawn, timeout kill, output-cap truncation,
   read-only-mount rejection, restart reconstitution with identical
   policy, `inspect()` reveals no host path). Landed as the `'shell'`
@@ -506,8 +666,8 @@ The confined-HTTP substrate landed in #566 as `@endo/http-confine` (the
 pure confinement core) and `@endo/exo-http-client` (the `HttpClient` /
 `HttpClientControl` capability); the provisioning is redrafted as the
 `@endo/fetch` base plus `@endo/confined-fetch` plugin
-([endo-fetch](endo-fetch.md)). Only the tool binding remains in this
-document's scope.
+([endo-fetch](endo-fetch.md)). The tool binding, `makeHttpTool`, has landed
+(#661), so this document's network-tier scope is complete.
 
 - ~~Reconcile the largely in-flight daemon HTTP formula from #286 onto
   the shared HTTP core~~ — **superseded by
@@ -519,23 +679,32 @@ document's scope.
   policy persistence and restart reconstitution; #286's formula shape is
   superseded outright and its CLI intent survives as the `endo http` eventual
   surface sketched there.
-- [ ] `makeHttpTool` in `@endo/agent-tools`: `ToolRecord` plus
+- [x] `makeHttpTool` in `@endo/agent-tools`: `ToolRecord` plus
   hand-authored wire schema and divergence gate, mirroring `makeGitTool`
   / `makeShellTool`; bounds come entirely from the granted `HttpClient`
   ([endo-fetch](endo-fetch.md) Phase 3 tracks the binding against the
   plugin-provisioned client).
 
-### Phase 4: Provisioning and the worked loop
+### Phase 4: Provisioning and the worked loop — worked loop landed (#707)
 
 - [ ] Wire the § Granting and Provisioning flow end to end for one
   agent harness (lal front-loaded binding first; fae's `adopt` accretion
-  follows).
-- [ ] Run the worked reference flow of
+  follows). Progress: `@endo/agentry/workspace-agent` provides the explicit
+  harness seam. Its caller supplies every grant, and it neither enumerates nor
+  probes a guest petstore. Workspace composition qualifies the two
+  otherwise-colliding `inspect` records as `inspectShell` and
+  `inspectGitRemote`. No lal or fae agent consumes the harness yet, so no
+  observation shows daemon-provisioned grants reaching an agent. The harness
+  is new JSON-tool surface under the #731 parking; if the parking is not
+  lifted for it, this item is met through code mode instead.
+- [x] Run the worked reference flow of
   [daemon-git-next-steps](daemon-git-next-steps.md) § Open Work as the
   acceptance test: branch → edit via file tools → status / diff / commit
   via git tools → push via the remote tool → inspect the pushed ref via
   `filesystemAt` — with a shell-tool build step (`npm test`) in the
-  middle. That single pass demonstrates the M3 pillar.
+  middle. That single pass demonstrates the M3 pillar. Landed in #707 as
+  `packages/agent-tools/test/git-worked-loop.test.js`, which drives the
+  provisioned workspace catalog directly rather than through an agent harness.
 
 ### Phase 5: Commit-metadata history verbs (agentry eval lane)
 
@@ -616,15 +785,22 @@ is the `stack-surgery` scenario in `designs/agentry-git-eval-scenarios.md`
 3. **Git split by authority.** (Kept, and validated by the landed
    model.) Local `Git` excludes network; remotes are separately granted
    `GitRemote` bundles; a read-only `Git` structurally excludes push.
-4. **Shell is array-based, allowlisted, env-sanitized — and honest
-   about its boundary.** (Kept and extended.) Argv tuples, no shell
-   strings, explicit env passlist; and the design says plainly that
-   only the sandbox engine adds a kernel boundary, so hosts grant the
-   host-engine shell as a trusted-operator posture, not as confinement.
-5. **Shell attenuation is construction-time policy.** (New.) No
-   `Shell.readOnly()`; a narrower shell is a new grant with a shorter
-   allowlist. This keeps the mutability of the capability legible from
-   its construction.
+4. **Shell is array-based, grammar-bounded, env-sanitized — and honest
+   about its boundary.** (Kept and extended; reworked 2026-10-01.)
+   Argv tuples, no shell strings, explicit env passlist, and the
+   accepted argument language is a passable command grammar
+   (§ Command grammars) rather than a command-name allowlist, which
+   cannot attenuate a POSIX command. The design still says plainly
+   that only the sandbox engine adds a kernel boundary, so hosts grant
+   the host-engine shell as a trusted-operator posture, not as
+   confinement.
+5. **Shell attenuation is first-class and narrowing-only.** (Revised
+   2026-10-01; was construction-time-only.) `shell.attenuate(commands)`
+   derives a shell whose language is checked by every ancestor in the
+   delegation chain, so it can only narrow; there is still no
+   `Shell.readOnly()`, and a differently-bounded root remains a new
+   grant. The granted language stays legible: `inspect()` renders one
+   usage line per grammar.
 6. **One tool shape, owned elsewhere.** (New.) Every group emits
    [endo-agent-tools](endo-agent-tools.md)' `ToolRecord` via `makeTool`;
    this document defines capabilities and sequencing, never a rival
@@ -658,7 +834,7 @@ is the `stack-surgery` scenario in `designs/agentry-git-eval-scenarios.md`
    [endo-posix-sandbox](endo-posix-sandbox.md) converges. The
    alternative (wait for slices) couples the M3 pillar to sandbox
    phase work that is not otherwise on its critical path.
-2. **Search substrate.** Does an allowlisted `grep` through the Shell
+2. **Search substrate.** Does a granted `grep` grammar through the Shell
    group suffice for M3, or does a capability-backed search (a
    `Filesystem`-level `glob` / content search, adjacent to genie's
    host-path FTS5 memory tools) deserve its own design? The interim

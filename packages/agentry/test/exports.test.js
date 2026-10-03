@@ -7,6 +7,7 @@ test('agentry subpaths resolve through package exports', async t => {
     rootModule,
     harnessModule,
     defineAgentModule,
+    workspaceAgentModule,
     codeModeModule,
     codeModeProvisioningModule,
     harnessTypesModule,
@@ -18,6 +19,7 @@ test('agentry subpaths resolve through package exports', async t => {
     import('@endo/agentry'),
     import('@endo/agentry/harness'),
     import('@endo/agentry/define-agent'),
+    import('@endo/agentry/workspace-agent'),
     import('@endo/agentry/code-mode'),
     import('@endo/agentry/code-mode-provisioning'),
     import('@endo/agentry/harness/types.js'),
@@ -68,6 +70,12 @@ test('agentry subpaths resolve through package exports', async t => {
     Object.keys(defineAgentModule).sort(),
     ['defineAgent', 'makeEnvCredentials'],
     '@endo/agentry/define-agent export surface',
+  );
+
+  t.deepEqual(
+    Object.keys(workspaceAgentModule).sort(),
+    ['defineWorkspaceAgent'],
+    '@endo/agentry/workspace-agent export surface',
   );
 
   t.is(typeof codeModeModule.makeCodeModeAgent, 'function');

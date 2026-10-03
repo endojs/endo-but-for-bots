@@ -6,9 +6,14 @@ import { makeError, q, X } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 
 import { ShellInterface } from './interfaces.js';
+import {
+  formatShellCommandUsage,
+  matchShellCommand,
+  normalizeShellCommandGrammars,
+} from './command-grammar.js';
 
 /**
- * @import { EndoShell, ShellPolicy, Spawner } from './types.js'
+ * @import { EndoShell, ShellCommandGrammar, ShellPolicy, Spawner } from './types.js'
  */
 
 /**
@@ -74,13 +79,105 @@ const drainBounded = async (stream, maxBytes) => {
 };
 
 /**
+ * Build one `Shell` facet: the root facet runs matched argvs through the
+ * spawner; an attenuated facet (from `attenuate`) runs them through its
+ * parent's `exec`, so every ancestor's grammar check is enforced in turn —
+ * a derived shell can only narrow (design § Command grammars, Attenuation).
+ *
+ * @param {object} state
+ * @param {readonly ShellCommandGrammar[]} state.commands
+ * @param {number} state.timeoutMs
+ * @param {number} state.maxOutputBytes
+ * @param {(command: string, args: readonly string[], timeoutMs: number) =>
+ *   Promise<import('./types.js').ShellResult>} state.run
+ * @returns {EndoShell}
+ */
+const makeShellFacet = ({ commands, timeoutMs, maxOutputBytes, run }) => {
+  const usage = harden(commands.map(formatShellCommandUsage));
+
+  const exo = makeExo('Shell', ShellInterface, {
+    /**
+     * Reveal only the grant surface the design's inspect shape names — the
+     * command grammars with their rendered usage lines, the timeout, and the
+     * output cap; never `cwd`, `env`, or the baked `searchPath`.
+     */
+    async inspect() {
+      return harden({ commands, usage, timeoutMs, maxOutputBytes });
+    },
+
+    /**
+     * @param {string} command
+     * @param {readonly string[]} args
+     * @param {{ timeoutMs?: number }} [options]
+     */
+    async exec(command, args, options = {}) {
+      if (
+        !commands.some(grammar => matchShellCommand(grammar, command, args))
+      ) {
+        throw makeError(
+          X`Shell.exec: argv ${q([command, ...args])} matches no granted command grammar; usage: ${q(usage)}`,
+        );
+      }
+      // A per-call timeout may only narrow this facet's value, never widen it.
+      const requested = options.timeoutMs;
+      const effectiveTimeoutMs =
+        requested !== undefined && requested > 0
+          ? Math.min(timeoutMs, requested)
+          : timeoutMs;
+      return run(command, args, effectiveTimeoutMs);
+    },
+
+    /**
+     * Derive a narrower `Shell`: the derived facet accepts only argvs its own
+     * grammars match, then delegates to this facet's `exec`, which re-checks
+     * against this facet's grammars (and so on up the chain).  Intersection
+     * by conjunction — no grammar-inclusion proof is needed, and a grammar
+     * outside every ancestor's language yields a shell that accepts nothing.
+     * Self-attenuation is narrowing by construction, so exposing this to a
+     * guest is safe.
+     *
+     * The guard admits the grammar pattern; `normalizeShellCommandGrammars`
+     * re-validates in depth, so the declared parameter stays `unknown` rather
+     * than fighting the guard's structurally inferred copy-record types.
+     *
+     * @param {unknown} newCommands
+     * @param {{ timeoutMs?: number }} [options]
+     */
+    async attenuate(newCommands, options = {}) {
+      const normalized = normalizeShellCommandGrammars(newCommands);
+      const requested = options.timeoutMs;
+      let narrowedTimeoutMs = timeoutMs;
+      if (requested !== undefined) {
+        if (!Number.isInteger(requested) || requested <= 0) {
+          throw makeError(
+            X`Shell.attenuate: timeoutMs must be a positive integer`,
+          );
+        }
+        narrowedTimeoutMs = Math.min(timeoutMs, requested);
+      }
+      return makeShellFacet({
+        commands: normalized,
+        timeoutMs: narrowedTimeoutMs,
+        maxOutputBytes,
+        run: (command, args, effectiveTimeoutMs) =>
+          exo.exec(command, args, { timeoutMs: effectiveTimeoutMs }),
+      });
+    },
+  });
+
+  return /** @type {EndoShell} */ (exo);
+};
+
+/**
  * Build the portable `Shell` exo over a working directory, a formula-owned
  * policy, and an injected `Spawner` engine (host or sandbox — chosen host-side
  * and invisible on this surface).  The exo enforces the guest-facing bounds:
- * allowlist-before-spawn, argv-only (no shell string), the policy's sanitized
- * env (carried by the spawner's defaults plus `policy.env`), a per-stream
- * output cap, and a timeout that narrows-only per call.  `cwd` and the env
- * passlist are host-private and never surface through `inspect()`.
+ * grammar-match-before-spawn (the policy's passable command grammars are the
+ * accepted argument language — design § Command grammars), argv-only (no
+ * shell string), the policy's sanitized env (carried by the spawner's
+ * defaults plus `policy.env`), a per-stream output cap, and a timeout that
+ * narrows-only per call.  `cwd` and the env passlist are host-private and
+ * never surface through `inspect()`.
  *
  * A read-only mount cannot bound a child process's OS-level write authority, so
  * a "read-only shell" would misrepresent the authority actually granted; the
@@ -111,21 +208,14 @@ export const makeShell = ({
   if (typeof cwd !== 'string' || cwd.length === 0) {
     throw makeError(X`makeShell: cwd must be a non-empty host path string`);
   }
-  const {
-    allowedCommands,
-    timeoutMs: policyTimeoutMs,
-    maxOutputBytes,
-    env = {},
-  } = policy;
-  if (
-    !Array.isArray(allowedCommands) ||
-    allowedCommands.length === 0 ||
-    !allowedCommands.every(c => typeof c === 'string' && c.length > 0)
-  ) {
-    throw makeError(
-      X`makeShell: policy.allowedCommands must be a non-empty array of command-name strings`,
-    );
-  }
+  const { timeoutMs: policyTimeoutMs, maxOutputBytes, env = {} } = policy;
+  // Validated, frozen deep copies, so a later mutation of the caller's
+  // structures cannot widen the accepted language or alter the child env
+  // after construction.
+  const commands = normalizeShellCommandGrammars(
+    policy.commands,
+    'policy.commands',
+  );
   if (!Number.isInteger(policyTimeoutMs) || policyTimeoutMs <= 0) {
     throw makeError(X`makeShell: policy.timeoutMs must be a positive integer`);
   }
@@ -137,109 +227,83 @@ export const makeShell = ({
   if (!Number.isInteger(killGraceMs) || killGraceMs <= 0) {
     throw makeError(X`makeShell: killGraceMs must be a positive integer`);
   }
-
-  const allowed = new Set(allowedCommands);
-  // Frozen copies, so a later mutation of the caller's arrays cannot widen
-  // the allowlist or alter the child env after construction.
-  const allowedList = harden([...allowedCommands]);
   const childEnv = harden({ ...env });
 
-  const exo = makeExo('Shell', ShellInterface, {
-    /**
-     * Reveal only the policy the design's `ShellPolicy` names — never `cwd`,
-     * `env`, or the baked `searchPath`, all of which carry host paths.
-     */
-    async inspect() {
-      return harden({
-        allowedCommands: allowedList,
-        timeoutMs: policyTimeoutMs,
-        maxOutputBytes,
-      });
-    },
+  /**
+   * @param {string} command
+   * @param {readonly string[]} args
+   * @param {number} effectiveTimeoutMs
+   */
+  const run = async (command, args, effectiveTimeoutMs) => {
+    // Argv only — the program name is argv[0], never a shell string, and
+    // `shell: false` forbids the spawner from wrapping it in `/bin/sh -c`.
+    const argv = harden([command, ...args]);
+    const proc = await spawner(argv, {
+      cwd,
+      env: childEnv,
+      shell: false,
+    });
 
-    /**
-     * @param {string} command
-     * @param {readonly string[]} args
-     * @param {{ timeoutMs?: number }} [options]
-     */
-    async exec(command, args, options = {}) {
-      if (!allowed.has(command)) {
-        throw makeError(
-          X`Shell.exec: command ${q(command)} is not in the allowlist`,
-        );
+    let timedOut = false;
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let killTimer;
+    // On expiry, ask the child to terminate with `SIGTERM`; a child can trap
+    // or ignore it (and a forked descendant can hold the stdio pipes open),
+    // which would leave `proc.wait()` and the output drains pending forever —
+    // the timeout would not be a bound at all.  So after a grace window we
+    // escalate to the uncatchable `SIGKILL`.  The daemon spawner kills the
+    // whole process group, so a stubborn child and its descendants are reaped,
+    // their pipes reach EOF, and `exec` settles: the timeout is enforceable,
+    // not merely advisory.
+    const timer = setTimeout(() => {
+      timedOut = true;
+      void proc.kill('SIGTERM');
+      killTimer = setTimeout(() => {
+        void proc.kill('SIGKILL');
+      }, killGraceMs);
+    }, effectiveTimeoutMs);
+
+    /** @type {{ text: string, truncated: boolean }} */
+    let outRes;
+    /** @type {{ text: string, truncated: boolean }} */
+    let errRes;
+    /** @type {{ code: number | null, signal: string | null }} */
+    let status;
+    try {
+      [outRes, errRes, status] = await Promise.all([
+        drainBounded(proc.stdout, maxOutputBytes),
+        drainBounded(proc.stderr, maxOutputBytes),
+        proc.wait(),
+      ]);
+    } finally {
+      clearTimeout(timer);
+      if (killTimer !== undefined) {
+        clearTimeout(killTimer);
       }
-      // A per-call timeout may only narrow the policy value, never widen it.
-      const requested = options.timeoutMs;
-      const effectiveTimeoutMs =
-        requested !== undefined && requested > 0
-          ? Math.min(policyTimeoutMs, requested)
-          : policyTimeoutMs;
+    }
 
-      // Argv only — the program name is argv[0], never a shell string, and
-      // `shell: false` forbids the spawner from wrapping it in `/bin/sh -c`.
-      const argv = harden([command, ...args]);
-      const proc = await spawner(argv, {
-        cwd,
-        env: childEnv,
-        shell: false,
-      });
+    const { code } = status;
+    let { signal } = status;
+    // A timeout kill may race the natural exit; surface the kill signal when
+    // the runtime reported neither a code nor a signal.
+    if (timedOut && code === null && signal === null) {
+      signal = 'SIGTERM';
+    }
 
-      let timedOut = false;
-      /** @type {ReturnType<typeof setTimeout> | undefined} */
-      let killTimer;
-      // On expiry, ask the child to terminate with `SIGTERM`; a child can trap
-      // or ignore it (and a forked descendant can hold the stdio pipes open),
-      // which would leave `proc.wait()` and the output drains pending forever —
-      // the timeout would not be a bound at all.  So after a grace window we
-      // escalate to the uncatchable `SIGKILL`.  The daemon spawner kills the
-      // whole process group, so a stubborn child and its descendants are reaped,
-      // their pipes reach EOF, and `exec` settles: the timeout is enforceable,
-      // not merely advisory.
-      const timer = setTimeout(() => {
-        timedOut = true;
-        void proc.kill('SIGTERM');
-        killTimer = setTimeout(() => {
-          void proc.kill('SIGKILL');
-        }, killGraceMs);
-      }, effectiveTimeoutMs);
+    return harden({
+      stdout: outRes.text,
+      stderr: errRes.text,
+      exitCode: code,
+      signal,
+      truncated: outRes.truncated || errRes.truncated,
+    });
+  };
 
-      /** @type {{ text: string, truncated: boolean }} */
-      let outRes;
-      /** @type {{ text: string, truncated: boolean }} */
-      let errRes;
-      /** @type {{ code: number | null, signal: string | null }} */
-      let status;
-      try {
-        [outRes, errRes, status] = await Promise.all([
-          drainBounded(proc.stdout, maxOutputBytes),
-          drainBounded(proc.stderr, maxOutputBytes),
-          proc.wait(),
-        ]);
-      } finally {
-        clearTimeout(timer);
-        if (killTimer !== undefined) {
-          clearTimeout(killTimer);
-        }
-      }
-
-      const { code } = status;
-      let { signal } = status;
-      // A timeout kill may race the natural exit; surface the kill signal when
-      // the runtime reported neither a code nor a signal.
-      if (timedOut && code === null && signal === null) {
-        signal = 'SIGTERM';
-      }
-
-      return harden({
-        stdout: outRes.text,
-        stderr: errRes.text,
-        exitCode: code,
-        signal,
-        truncated: outRes.truncated || errRes.truncated,
-      });
-    },
+  return makeShellFacet({
+    commands,
+    timeoutMs: policyTimeoutMs,
+    maxOutputBytes,
+    run,
   });
-
-  return /** @type {EndoShell} */ (exo);
 };
 harden(makeShell);

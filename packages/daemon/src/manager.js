@@ -3662,10 +3662,23 @@ const makeDaemonCore = async (
         defaultEnv: baseEnv,
         killProcessGroup: true,
       });
+      // A pre-grammar formula carries `allowedCommands` and no `commands`.
+      // There is no widening-free translation (the old allowlist admitted
+      // every argument), so refuse loudly rather than reincarnate broader
+      // authority than a grammar could express; the host re-provisions with
+      // `provideShell` and a command grammar.
+      if (
+        /** @type {{ commands?: unknown }} */ (policy).commands === undefined
+      ) {
+        throw makeError(
+          X`Shell formula predates command grammars (policy.allowedCommands); re-provision the shell with provideShell and a policy.commands grammar`,
+        );
+      }
       return makeShell({
         cwd: backing.currentDir,
         policy: harden({
-          allowedCommands: harden([...policy.allowedCommands]),
+          // `makeShell` validates and deep-copies the grammars.
+          commands: policy.commands,
           timeoutMs: policy.timeoutMs,
           maxOutputBytes: policy.maxOutputBytes,
           env: harden({ ...(policy.env || {}) }),

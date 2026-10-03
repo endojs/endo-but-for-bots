@@ -97,8 +97,21 @@ import {
   makeMountFsTools,
   makeShellTool,
   makeHttpTool,
+  makeWorkspaceTools,
+  provisionWorkspaceTools,
+  provisionHistoryTools,
 } from '@endo/agent-tools';
 ```
+
+`makeWorkspaceTools` composes an explicit grant record into one catalog. It
+qualifies the Shell and GitRemote bounds records as `inspectShell` and
+`inspectGitRemote`, so both capabilities can coexist without name shadowing.
+`provisionWorkspaceTools` can derive the filesystem view from a supplied Git
+worktree; it never discovers grants from a petstore.
+`provisionHistoryTools({ git, ref, maxChars })` composes the read-only read,
+list, and stat tools over `git.filesystemAt(ref)`, so an agent can inspect a
+historical ref as an ordinary filesystem without any path to mutate the
+worktree.
 
 Scoped imports expose each layer:
 
@@ -212,6 +225,13 @@ import { makeMountFsTools } from '@endo/agent-tools/json-tools/fs.js';
 import { makeShellTool } from '@endo/agent-tools/json-tools/shell.js';
 import { makeHttpTool } from '@endo/agent-tools/json-tools/http.js';
 ```
+
+`makeShellTool(shellCap, { commands })` emits `exec` and `inspect` records
+for a `@endo/exo-shell` Shell; `attenuate` is granter-facing and deliberately
+not a tool. Pass the granted command grammars as `commands` to embed their
+rendered usage lines in the `exec` tool description and reject a non-matching
+argv tool-side before the round trip; the capability's own grammar check
+remains the boundary.
 
 `makeTool` produces a `ToolRecord` with a JSON-schema `parameters`, the same
 schema as `inputSchema`, and an `invoke(args)` function.
