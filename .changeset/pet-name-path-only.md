@@ -41,12 +41,16 @@ The `adopt` method's edge name is a message label, not a path, and stays a strin
 Migration:
 `NameOrPathShape` and `NamesOrPathsShape` in `@endo/daemon/type-guards.js` are replaced by `NamePathArgumentShape` and `NamePathsArgumentShape`, and the `NameOrPath` and `NamesOrPaths` types by `NamePath`.
 `@endo/daemon/type-guards.js` also newly exports `NameShape` and `NamePathShape`.
+`@endo/daemon/pet-name.js` newly exports `namePathLabel`, which encodes a whole pet-name path as one label (the daemon uses it to name a scratch mount after a nested result path).
 `@endo/sandbox`'s `provideScratchMount` and `@endo/agentry`'s `NormalizedGitRemoteSpec.credential` now take a pet-name path.
 `@endo/lal`'s tool-call arguments that hold a pet-name path are renamed to say so (`petNameOrPath`, `petName`, `recipientName`, `responseName`, `workerName`, `resultName`, and `petNames` become `petNamePath`, `petNamePath`, `recipientNamePath`, `responseNamePath`, `workerNamePath`, `resultNamePath`, and `petNamePaths`); an agent sending an old key must switch.
 `@endo/lal`'s `readText`, `writeText`, and `editText` tools accept `fileName` as an array of path components, which a daemon directory requires.
 `@endo/agent-tools` code-mode evaluation reads a string `petName` or `resultName` as one pet name: `'a/b'` used to address `b` inside `a` and now names a single entry, so write `['a', 'b']` for a nested name; `LookupPowers.lookup` takes only a path.
 Name hubs outside the daemon reached by a multi-segment path now receive a one-segment array per step.
 The remaining packages pass pet-name paths to the daemon.
+`@endo/chat` labels the channel in a mention notification by the leaf of its `/`-joined token, since an edge name may not contain `/`, and numbers repeated author edge names (`-author`, `-author-2`, …) so that every edge name in the notification is distinct.
+
+The 0.x packages (`@endo/lal`, `@endo/sandbox`, `@endo/agentry`, and `@endo/agent-tools`) take a minor bump, which is the breaking-change bump below 1.0: a caret range on a 0.x version does not admit the next minor.
 
 Scope: mounts and readable trees, and `@endo/platform`'s portable name-hub guards, still accept a string.
 
