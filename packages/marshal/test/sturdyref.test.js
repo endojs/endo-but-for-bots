@@ -15,11 +15,11 @@ import { compareRank } from '../src/rankOrder.js';
 const { SturdyRef } = globalThis;
 
 // A test handler stands in for the CapTP behaviors of a later layer: it
-// enlivens a ref to a presence it closes over.
-const makeRef = label => {
+// enlivens a sturdyRef to a presence it closes over.
+const makeSturdyRef = label => {
   const live = Far(label, { label: () => label });
-  const ref = new SturdyRef(harden({ enliven: () => live }));
-  return { ref, live };
+  const sturdyRef = new SturdyRef(harden({ enliven: () => live }));
+  return { sturdyRef, live };
 };
 
 // A slot table that keeps each SturdyRef in its own kind of slot and gives
@@ -46,21 +46,23 @@ for (const serializeBodyFormat of /** @type {const} */ ([
       convertSlotToVal,
       { serializeBodyFormat },
     );
-    const { ref, live } = makeRef('Alice');
-    const capData = toCapData(harden({ ref, again: ref, list: [ref] }));
+    const { sturdyRef, live } = makeSturdyRef('Alice');
+    const capData = toCapData(
+      harden({ sturdyRef, again: sturdyRef, list: [sturdyRef] }),
+    );
     t.deepEqual(capData.slots, ['sturdyRef:0']);
     const expectedBody =
       serializeBodyFormat === 'capdata'
-        ? '{"again":{"@qclass":"sturdyRef","index":0},"list":[{"@qclass":"sturdyRef","index":0}],"ref":{"@qclass":"sturdyRef","index":0}}'
-        : `#{"again":"'0","list":["'0"],"ref":"'0"}`;
+        ? '{"again":{"@qclass":"sturdyRef","index":0},"list":[{"@qclass":"sturdyRef","index":0}],"sturdyRef":{"@qclass":"sturdyRef","index":0}}'
+        : `#{"again":"'0","list":["'0"],"sturdyRef":"'0"}`;
     t.is(capData.body, expectedBody);
 
     const decoded = /** @type {any} */ (fromCapData(capData));
-    t.is(decoded.ref, ref);
-    t.is(decoded.again, ref);
-    t.is(decoded.list[0], ref);
-    t.is(passStyleOf(decoded.ref), 'sturdyRef');
-    const enlivened = await SturdyRef.enliven(decoded.ref);
+    t.is(decoded.sturdyRef, sturdyRef);
+    t.is(decoded.again, sturdyRef);
+    t.is(decoded.list[0], sturdyRef);
+    t.is(passStyleOf(decoded.sturdyRef), 'sturdyRef');
+    const enlivened = await SturdyRef.enliven(decoded.sturdyRef);
     t.is(enlivened, live);
   });
 
@@ -71,20 +73,20 @@ for (const serializeBodyFormat of /** @type {const} */ ([
       convertSlotToVal,
       { serializeBodyFormat },
     );
-    const { ref, live } = makeRef('Bob');
+    const { sturdyRef, live } = makeSturdyRef('Bob');
     const p = Promise.resolve();
-    const capData = toCapData(harden([live, ref, p]));
+    const capData = toCapData(harden([live, sturdyRef, p]));
     t.deepEqual(capData.slots, ['remotable:0', 'sturdyRef:1', 'promise:2']);
     const [decodedLive, decodedRef, decodedPromise] = /** @type {any} */ (
       fromCapData(capData)
     );
     t.is(decodedLive, live);
-    t.is(decodedRef, ref);
+    t.is(decodedRef, sturdyRef);
     t.is(decodedPromise, p);
   });
 
   test(`${serializeBodyFormat} rejects a non-SturdyRef in a sturdyRef slot`, t => {
-    const { live } = makeRef('Carol');
+    const { live } = makeSturdyRef('Carol');
     const { fromCapData } = makeMarshal(undefined, () => live, {
       serializeBodyFormat,
     });
@@ -99,8 +101,8 @@ for (const serializeBodyFormat of /** @type {const} */ ([
 }
 
 test('capdata rejects an iface on a sturdyRef', t => {
-  const { ref } = makeRef('Dave');
-  const { fromCapData } = makeMarshal(undefined, () => ref);
+  const { sturdyRef } = makeSturdyRef('Dave');
+  const { fromCapData } = makeMarshal(undefined, () => sturdyRef);
   t.throws(
     () =>
       fromCapData({
@@ -112,7 +114,7 @@ test('capdata rejects an iface on a sturdyRef', t => {
 });
 
 test('a slot decoded as a remotable cannot be reused as a sturdyRef', t => {
-  const { live } = makeRef('Eve');
+  const { live } = makeSturdyRef('Eve');
   const { fromCapData } = makeMarshal(undefined, () => live, {
     serializeBodyFormat: 'smallcaps',
   });
@@ -133,10 +135,10 @@ test('a slot decoded as a remotable cannot be reused as a sturdyRef', t => {
     sturdyRef: `"'0"`,
   };
   const makeSlotValue = kind => {
-    const { ref, live } = makeRef('Oscar');
+    const { sturdyRef, live } = makeSturdyRef('Oscar');
     if (kind === 'remotable') return live;
     if (kind === 'promise') return harden(Promise.resolve());
-    return ref;
+    return sturdyRef;
   };
   const kinds = Object.keys(smallcapsEncodings);
   const pairs = kinds.flatMap(first =>
@@ -160,8 +162,8 @@ test('a slot decoded as a remotable cannot be reused as a sturdyRef', t => {
 }
 
 test('capdata cannot reuse a sturdyRef slot as a plain slot', t => {
-  const { ref } = makeRef('Mallory');
-  const { fromCapData } = makeMarshal(undefined, () => ref);
+  const { sturdyRef } = makeSturdyRef('Mallory');
+  const { fromCapData } = makeMarshal(undefined, () => sturdyRef);
   const body = JSON.stringify([
     { '@qclass': 'sturdyRef', index: 0 },
     { '@qclass': 'slot', index: 0, iface: 'Alleged: Mallory' },
@@ -172,8 +174,8 @@ test('capdata cannot reuse a sturdyRef slot as a plain slot', t => {
 });
 
 test('capdata rejects a SturdyRef in a plain slot', t => {
-  const { ref } = makeRef('Trudy');
-  const { fromCapData } = makeMarshal(undefined, () => ref);
+  const { sturdyRef } = makeSturdyRef('Trudy');
+  const { fromCapData } = makeMarshal(undefined, () => sturdyRef);
   t.throws(
     () =>
       fromCapData({
@@ -185,7 +187,7 @@ test('capdata rejects a SturdyRef in a plain slot', t => {
 });
 
 test('capdata cannot reuse a plain slot as a sturdyRef', t => {
-  const { live } = makeRef('Walter');
+  const { live } = makeSturdyRef('Walter');
   const { fromCapData } = makeMarshal(undefined, () => live);
   const body = JSON.stringify([
     { '@qclass': 'slot', index: 0, iface: 'Alleged: Walter' },
@@ -198,9 +200,11 @@ test('capdata cannot reuse a plain slot as a sturdyRef', t => {
 
 test('the dot-membrane passes an enliven rejection across', async t => {
   const secret = Far('secret', { reveal: () => 'mine' });
-  const ref = new SturdyRef(harden({ enliven: () => Promise.reject(secret) }));
+  const sturdyRef = new SturdyRef(
+    harden({ enliven: () => Promise.reject(secret) }),
+  );
   const { proxy, revoke } = makeDotMembraneKit(
-    Far('Holder', { get: () => ref }),
+    Far('Holder', { get: () => sturdyRef }),
   );
   const yourRef = await proxy.get();
   const reason = await SturdyRef.enliven(yourRef).then(
@@ -216,11 +220,11 @@ test('the dot-membrane passes an enliven rejection across', async t => {
 test('the default converters carry a SturdyRef as its own slot', t => {
   // The default converters pass values through, so this only checks that
   // the smallcaps and capdata encoders accept a SturdyRef at all.
-  const { ref } = makeRef('Frank');
+  const { sturdyRef } = makeSturdyRef('Frank');
   const { toCapData } = makeMarshal(undefined, undefined, {
     serializeBodyFormat: 'smallcaps',
   });
-  t.deepEqual(toCapData(ref), { body: `#"'0"`, slots: [ref] });
+  t.deepEqual(toCapData(sturdyRef), { body: `#"'0"`, slots: [sturdyRef] });
 });
 
 test('decodeToJustin renders a sturdyRef', t => {
@@ -230,8 +234,8 @@ test('decodeToJustin renders a sturdyRef', t => {
 });
 
 test('encodePassable round-trips a SturdyRef', t => {
-  const { ref } = makeRef('Grace');
-  const refs = [ref];
+  const { sturdyRef } = makeSturdyRef('Grace');
+  const refs = [sturdyRef];
   for (const format of /** @type {const} */ ([
     'legacyOrdered',
     'compactOrdered',
@@ -241,22 +245,24 @@ test('encodePassable round-trips a SturdyRef', t => {
       encodeSturdyRef: r => `t${refs.indexOf(r)}`,
       decodeSturdyRef: e => refs[Number(e.slice(1))],
     });
-    const encoded = encodePassable(harden([ref, 'x']));
+    const encoded = encodePassable(harden([sturdyRef, 'x']));
     t.true(encoded.includes('t0'), encoded);
     const decoded = /** @type {any} */ (decodePassable(encoded));
-    t.is(decoded[0], ref);
+    t.is(decoded[0], sturdyRef);
   }
   const { encodePassable } = makePassableKit();
-  t.throws(() => encodePassable(ref), { message: /sturdyRef unexpected/ });
+  t.throws(() => encodePassable(sturdyRef), {
+    message: /sturdyRef unexpected/,
+  });
   const bad = makePassableKit({ encodeSturdyRef: () => 'r0' });
-  t.throws(() => bad.encodePassable(ref), {
+  t.throws(() => bad.encodePassable(sturdyRef), {
     message: /SturdyRef encoding must start with "t"/,
   });
 });
 
 test('SturdyRefs rank as a tied category of their own', t => {
-  const { ref: a } = makeRef('a');
-  const { ref: b } = makeRef('b');
+  const { sturdyRef: a } = makeSturdyRef('a');
+  const { sturdyRef: b } = makeSturdyRef('b');
   t.is(passStylePrefixes.sturdyRef, 't');
   t.is(compareRank(a, b), 0);
   // After strings, before null.
@@ -265,13 +271,13 @@ test('SturdyRefs rank as a tied category of their own', t => {
 });
 
 test('the dot-membrane passes a SturdyRef as a membraned SturdyRef', async t => {
-  const { ref, live } = makeRef('Heidi');
+  const { sturdyRef, live } = makeSturdyRef('Heidi');
   const { proxy, revoke } = makeDotMembraneKit(
-    Far('Holder', { get: () => ref }),
+    Far('Holder', { get: () => sturdyRef }),
   );
   const yourRef = await proxy.get();
   t.is(passStyleOf(yourRef), 'sturdyRef');
-  t.not(yourRef, ref);
+  t.not(yourRef, sturdyRef);
   const yourLive = await SturdyRef.enliven(yourRef);
   t.not(yourLive, live);
   t.is(await yourLive.label(), 'Heidi');

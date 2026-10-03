@@ -586,8 +586,8 @@ const makeEncodePromise = (unsafeEncodePromise, verifyEncoding) => {
 };
 
 const makeEncodeSturdyRef = (unsafeEncodeSturdyRef, verifyEncoding) => {
-  const encodeSturdyRef = (ref, innerEncode) => {
-    const encoding = unsafeEncodeSturdyRef(ref, innerEncode);
+  const encodeSturdyRef = (sturdyRef, innerEncode) => {
+    const encoding = unsafeEncodeSturdyRef(sturdyRef, innerEncode);
     (typeof encoding === 'string' && encoding.charAt(0) === 't') ||
       Fail`SturdyRef encoding must start with "t": ${encoding}`;
     verifyEncoding(encoding, 'SturdyRef');

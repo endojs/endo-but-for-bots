@@ -16,34 +16,36 @@ import {
 /** @type {any} */
 const { SturdyRef } = globalThis;
 
-const makeRef = () => {
+const makeSturdyRef = () => {
   const live = Far('Alice', {});
   return new SturdyRef(harden({ enliven: () => live }));
 };
 
 test('a SturdyRef is not a key', t => {
-  const ref = makeRef();
-  t.false(isKey(ref));
-  t.false(isKey(harden({ ref })));
-  t.false(isKey(harden([ref])));
-  t.throws(() => assertKey(ref), { message: /"sturdyRef" cannot be a key/ });
+  const sturdyRef = makeSturdyRef();
+  t.false(isKey(sturdyRef));
+  t.false(isKey(harden({ sturdyRef })));
+  t.false(isKey(harden([sturdyRef])));
+  t.throws(() => assertKey(sturdyRef), {
+    message: /"sturdyRef" cannot be a key/,
+  });
 });
 
 test('a SturdyRef is not a pattern', t => {
-  const ref = makeRef();
-  t.false(isPattern(ref));
-  t.false(isPattern(harden({ ref })));
-  t.throws(() => assertPattern(ref), {
+  const sturdyRef = makeSturdyRef();
+  t.false(isPattern(sturdyRef));
+  t.false(isPattern(harden({ sturdyRef })));
+  t.throws(() => assertPattern(sturdyRef), {
     message: /"sturdyRef" cannot be a pattern/,
   });
-  t.false(matches(1, ref));
+  t.false(matches(1, sturdyRef));
 });
 
 test('a SturdyRef matches M.any() but no key pattern', t => {
-  const ref = makeRef();
-  t.true(matches(ref, M.any()));
-  t.true(matches(harden({ ref }), M.record()));
-  t.false(matches(ref, M.remotable()));
-  t.false(matches(ref, M.promise()));
-  t.false(matches(ref, M.key()));
+  const sturdyRef = makeSturdyRef();
+  t.true(matches(sturdyRef, M.any()));
+  t.true(matches(harden({ sturdyRef }), M.record()));
+  t.false(matches(sturdyRef, M.remotable()));
+  t.false(matches(sturdyRef, M.promise()));
+  t.false(matches(sturdyRef, M.key()));
 });

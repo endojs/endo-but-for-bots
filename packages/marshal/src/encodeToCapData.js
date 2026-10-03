@@ -33,7 +33,7 @@ import { X, Fail, q } from '@endo/errors';
  * @param {unknown} val
  * @returns {val is SturdyRef}
  */
-const isSturdyRef = val => {
+const isPassableSturdyRef = val => {
   try {
     return passStyleOf(val) === 'sturdyRef';
   } catch {
@@ -101,7 +101,8 @@ const dontEncodeRemotableToCapData = rem => Fail`remotable unexpected: ${rem}`;
 
 const dontEncodePromiseToCapData = prom => Fail`promise unexpected: ${prom}`;
 
-const dontEncodeSturdyRefToCapData = ref => Fail`sturdyRef unexpected: ${ref}`;
+const dontEncodeSturdyRefToCapData = sturdyRef =>
+  Fail`sturdyRef unexpected: ${sturdyRef}`;
 
 const dontEncodeErrorToCapData = err => Fail`error object unexpected: ${err}`;
 
@@ -438,7 +439,7 @@ export const makeDecodeFromCapData = (decodeOptions = {}) => {
           // a 'slot'. The slot cache is keyed only by index, so without this
           // check a SturdyRef decoded under a 'sturdyRef' tag could be
           // reused under a 'slot' tag for the same index.
-          !isSturdyRef(decoded) ||
+          !isPassableSturdyRef(decoded) ||
             Fail`a sturdyRef cannot be decoded as a slot: ${decoded}`;
           return decoded;
         }

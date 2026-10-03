@@ -114,8 +114,8 @@ const dontEncodeRemotableToSmallcaps = rem =>
 
 const dontEncodePromiseToSmallcaps = prom => Fail`promise unexpected: ${prom}`;
 
-const dontEncodeSturdyRefToSmallcaps = ref =>
-  Fail`sturdyRef unexpected: ${ref}`;
+const dontEncodeSturdyRefToSmallcaps = sturdyRef =>
+  Fail`sturdyRef unexpected: ${sturdyRef}`;
 
 const dontEncodeErrorToSmallcaps = err =>
   Fail`error object unexpected: ${q(err)}`;
