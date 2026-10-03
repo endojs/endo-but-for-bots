@@ -218,6 +218,19 @@ test('a credential source that rejects is unavailable and starts no process', as
   t.is(scratch.state.made, 0);
 });
 
+test('a fractional count ceiling resolves to a tag, never a rejection', async t => {
+  const { backend, fake, source } = makeHarness({});
+  for (const limits of [{ maxTurns: 1.5 }, { maxOutputBytes: 0.5 }]) {
+    // eslint-disable-next-line no-await-in-loop
+    t.deepEqual(await backend.infer(makeRequest({ limits })), {
+      type: 'unavailable',
+      detail: 'limits refused: Error',
+    });
+  }
+  t.is(fake.spawns.length, 0);
+  t.is(source.counts.acquired, 0);
+});
+
 test('output beyond the byte limit kills the process group', async t => {
   const { backend, fake, source } = makeHarness({
     stdout: [assistant('message-1', 'x'.repeat(200))],

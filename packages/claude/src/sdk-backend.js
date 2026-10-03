@@ -35,7 +35,7 @@ import {
   makeTerminationRace,
 } from './turn-guard.js';
 
-/** @import { InferRequest, InferResult, InferenceBackend } from '@endo/inference/types.js' */
+/** @import { InferRequest, InferResult, InferenceBackend, LimitEnforcer } from '@endo/inference/types.js' */
 /** @import { ClaudeCodeResponse, ClaudeSdkBackendOptions, ScratchDirectory } from './backends.types.js' */
 
 /**
@@ -116,18 +116,27 @@ export const makeClaudeSdkBackend = ({
     const abortController = new AbortController();
     // Built before anything is awaited, so the wall clock and cancellation
     // also bound the version check and the wait for a credential.
-    const enforcer = makeLimitEnforcer({
-      limits,
-      timers,
-      cancelled,
-      terminate: () => {
-        try {
-          abortController.abort();
-        } finally {
-          signalTerminated();
-        }
-      },
-    });
+    /** @type {LimitEnforcer} */
+    let enforcer;
+    try {
+      enforcer = makeLimitEnforcer({
+        limits,
+        timers,
+        cancelled,
+        terminate: () => {
+          try {
+            abortController.abort();
+          } finally {
+            signalTerminated();
+          }
+        },
+      });
+    } catch (error) {
+      // A request inside `InferRequestShape` that the enforcer still refuses,
+      // such as a fractional count ceiling, ends as a tag: `infer` never
+      // rejects for an outcome of a turn.
+      return unavailable(`limits refused: ${errorCategory(error)}`);
+    }
     /** @type {(() => unknown) | undefined} */
     let release;
     /** @type {ScratchDirectory | undefined} */

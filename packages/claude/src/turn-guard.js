@@ -85,6 +85,7 @@ harden(errorCategory);
 export const makeTerminationRace = () => {
   /** @type {(reason: Error) => void} */
   let reject = () => {};
+  let fired = false;
   /** @type {Promise<never>} */
   const terminated = new Promise((_resolve, rejectTerminated) => {
     reject = rejectTerminated;
@@ -100,7 +101,11 @@ export const makeTerminationRace = () => {
    */
   const untilTerminated = (promise, lateCleanup) => {
     const settled = Promise.resolve(promise);
-    return Promise.race([settled, terminated]).catch(error => {
+    // Once fired, `terminated` is not raced: when both are already settled,
+    // `Promise.race` takes the first listed, so a party that answers at once
+    // would win every race after termination.
+    const race = fired ? terminated : Promise.race([settled, terminated]);
+    return race.catch(error => {
       if (lateCleanup !== undefined) {
         settled.then(lateCleanup).catch(() => {});
       } else {
@@ -111,7 +116,10 @@ export const makeTerminationRace = () => {
   };
 
   return harden({
-    signalTerminated: () => reject(Error('turn terminated')),
+    signalTerminated: () => {
+      fired = true;
+      reject(Error('turn terminated'));
+    },
     untilTerminated,
   });
 };

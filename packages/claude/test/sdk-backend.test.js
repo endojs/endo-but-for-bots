@@ -177,6 +177,20 @@ test('a credential source that rejects is unavailable and never queries', async 
   t.is(scratch.state.made, 0);
 });
 
+test('a fractional count ceiling resolves to a tag, never a rejection', async t => {
+  const { query, calls } = replay([success]);
+  const { backend, source } = makeHarness(query);
+  for (const limits of [{ maxTurns: 1.5 }, { maxOutputBytes: 0.5 }]) {
+    // eslint-disable-next-line no-await-in-loop
+    t.deepEqual(await backend.infer(makeRequest({ limits })), {
+      type: 'unavailable',
+      detail: 'limits refused: Error',
+    });
+  }
+  t.is(calls.length, 0);
+  t.is(source.counts.acquired, 0);
+});
+
 test('output beyond the byte limit aborts the query', async t => {
   /** @type {AbortController | undefined} */
   let abortController;

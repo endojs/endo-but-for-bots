@@ -41,7 +41,7 @@ import {
   makeTerminationRace,
 } from './turn-guard.js';
 
-/** @import { InferRequest, InferResult, InferenceBackend } from '@endo/inference/types.js' */
+/** @import { InferRequest, InferResult, InferenceBackend, LimitEnforcer } from '@endo/inference/types.js' */
 /** @import { ChildProcessLike, ClaudeCliBackendOptions, ScratchDirectory, StdioProjection } from './backends.types.js' */
 
 /**
@@ -127,20 +127,29 @@ export const makeClaudeCliBackend = ({
     let child;
     // Built before anything is awaited, so the wall clock and cancellation
     // also bound the version check and the wait for a credential.
-    const enforcer = makeLimitEnforcer({
-      limits,
-      timers,
-      cancelled,
-      terminate: () => {
-        try {
-          if (child !== undefined) killProcessGroup(child.pid);
-        } finally {
-          // A killed group can leave a grandchild holding stdout open, so a
-          // limit or cancellation settles without waiting for `close`.
-          signalTerminated();
-        }
-      },
-    });
+    /** @type {LimitEnforcer} */
+    let enforcer;
+    try {
+      enforcer = makeLimitEnforcer({
+        limits,
+        timers,
+        cancelled,
+        terminate: () => {
+          try {
+            if (child !== undefined) killProcessGroup(child.pid);
+          } finally {
+            // A killed group can leave a grandchild holding stdout open, so a
+            // limit or cancellation settles without waiting for `close`.
+            signalTerminated();
+          }
+        },
+      });
+    } catch (error) {
+      // A request inside `InferRequestShape` that the enforcer still refuses,
+      // such as a fractional count ceiling, ends as a tag: `infer` never
+      // rejects for an outcome of a turn.
+      return unavailable(`limits refused: ${errorCategory(error)}`);
+    }
     /** @type {unknown} */
     let exitGraceTimer;
     // Set once `infer` returns, so that a late `exit` from a killed process
