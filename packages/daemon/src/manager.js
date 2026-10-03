@@ -2427,12 +2427,12 @@ const makeDaemonCore = async (
     if (cancelWithWorker) {
       context.thisDiesIfThatDies(cancelWithWorker);
     }
-    // Register the cleanup before the first await: a context cancelled
+    // Register the cleanup before the first await: a context canceled
     // while the worker runs accepts no further `onCancel` hooks, so a
     // hook registered afterward would leave an entry nothing deletes.
-    let incarnationCancelled = false;
+    let incarnationCanceled = false;
     context.onCancel(() => {
-      incarnationCancelled = true;
+      incarnationCanceled = true;
       treeLayoutRunningAs.delete(id);
     });
 
@@ -2461,7 +2461,7 @@ const makeDaemonCore = async (
       env,
       context,
     );
-    if (!incarnationCancelled) {
+    if (!incarnationCanceled) {
       treeLayoutRunningAs.set(id, runningAs);
     }
     return value;
