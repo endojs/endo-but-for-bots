@@ -1,4 +1,5 @@
 ---
+'@endo/captp': patch
 '@endo/marshal': minor
 '@endo/pass-style': minor
 '@endo/patterns': patch
@@ -10,6 +11,6 @@ A SturdyRef occupies a slot, as a remotable or a promise does, and `convertValTo
 A capdata `slot` that decodes to a SturdyRef is rejected, so a SturdyRef cannot be passed off as a remotable or a promise by reusing its slot index.
 SturdyRefs sort as their own rank category, after strings and before `null`, and all SturdyRefs tie, which shifts the rank-cover indexes `@endo/patterns` reports for later categories.
 `@endo/patterns` treats a SturdyRef as neither a key nor a pattern, as it does a promise.
-`decodeToJustin` renders one as `sturdyRefToVal(v)` when its slot resolves and as `sturdyRef(N)` otherwise, and the dot-membrane wraps one in a SturdyRef whose handler enlivens the original across the membrane, passing both its fulfillment and its rejection.
+`decodeToJustin` renders one as `slotToSturdyRef(v)` when its slot resolves and as `sturdyRefSlot(N)` otherwise, and the dot-membrane wraps one in a SturdyRef whose handler enlivens the original across the membrane, passing both its fulfillment and its rejection.
 The `Passable` type now includes `SturdyRef`, and the `@endo/pass-style/tools.js` arbitraries generate SturdyRefs when the realm has one, unless `excludePassStyles` names `sturdyRef`.
-`@endo/spaces-util` renders a SturdyRef instead of throwing on it.
+`@endo/spaces-util` renders a SturdyRef instead of throwing on it, and `@endo/captp` refuses to send one until CapTP gives it a slot kind of its own.
