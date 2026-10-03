@@ -332,12 +332,17 @@ harden(connectToGuestBootstrap);
  * resolves; this is the step that holds host authority, so an operator may run
  * it once and hand a turn only the returned path.
  *
+ * Resolves to `undefined` when the daemon serves no guest sockets: one that
+ * predates `guestBootstrapPath` (its bootstrap's `__getMethodNames__()` lacks
+ * the method) or one that answers `undefined` (a platform without Unix
+ * sockets). Every other failure rejects.
+ *
  * @param {object} powers
  * @param {string} powers.formulaId - the guest's formula id or number.
  * @param {Record<string, string | undefined>} powers.env
  * @param {string} powers.platform
  * @param {{ user: string, home: string, temp: string }} powers.info
- * @returns {Promise<string>}
+ * @returns {Promise<string | undefined>}
  */
 export const issueGuestBootstrapPath = async ({ formulaId, ...where }) => {
   const { bootstrap, closed, close } = await openClient(
@@ -345,6 +350,13 @@ export const issueGuestBootstrapPath = async ({ formulaId, ...where }) => {
   );
   Promise.resolve(closed).catch(() => {});
   try {
+    const methodNames = /** @type {string[]} */ (
+      // eslint-disable-next-line no-underscore-dangle
+      await E(/** @type {any} */ (bootstrap)).__getMethodNames__()
+    );
+    if (!methodNames.includes('guestBootstrapPath')) {
+      return undefined;
+    }
     return await E(/** @type {any} */ (bootstrap)).guestBootstrapPath(
       formulaId,
     );
