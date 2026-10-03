@@ -108,7 +108,7 @@ const buildSessionPowersSource = (
       if (name !== ${JSON.stringify(mountName)}) {
         throw Error('claude-sandbox session powers: provideMount restricted to this session workspace Mount name');
       }
-      return E(agent).provideMount(path, name);
+      return E(agent).provideMount(path, [name]);
     },
     // Scoped teardown: remove *only* this session's workspace Mount pet name
     // (which provideMount registered at the host root) so it does not leak a

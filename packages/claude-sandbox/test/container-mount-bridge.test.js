@@ -60,9 +60,15 @@ const makeBridgeHarness = (options = {}) => {
       return byId.get(id);
     },
     async provideMount(path, name, opts) {
+      // The daemon refuses a bare pet-name string; so does this fake.
+      if (!Array.isArray(name)) {
+        throw TypeError(
+          `expected a pet-name path, got ${JSON.stringify(name)}`,
+        );
+      }
       const cap = harden({ kind: 'attach-mount', path, name });
       provideMountCalls.push({ path, name, opts });
-      names.set(name, cap);
+      names.set(keyFor(name), cap);
       return cap;
     },
   });
@@ -157,7 +163,7 @@ test('bridges a Mount-shaped cap over 9P at a host-picked layout', async t => {
   t.deepEqual(h.provideMountCalls, [
     {
       path: '/attach-mounts/claude-attach-abc123',
-      name: 'claude-attach-abc123',
+      name: ['claude-attach-abc123'],
       opts: { readOnly: false },
     },
   ]);

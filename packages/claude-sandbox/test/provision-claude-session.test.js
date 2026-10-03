@@ -9,6 +9,16 @@ import {
 
 const keyFor = names => (Array.isArray(names) ? names.join('/') : names);
 
+// The daemon refuses a bare pet-name string; the fake does too, so a
+// regression to a string argument fails here rather than in production.
+const assertNamePath = namePath => {
+  if (!Array.isArray(namePath)) {
+    throw TypeError(
+      `expected a pet-name path, got ${JSON.stringify(namePath)}`,
+    );
+  }
+};
+
 /**
  * A mock `@agent` host that records the calls provisionClaudeSession makes and
  * satisfies the pet-name existence checks against an in-memory set.
@@ -26,10 +36,18 @@ const makeRecordingHost = () => {
       names.delete(keyFor(path));
     },
     async evaluate(_main, source, codeNames, petNames, resultName) {
-      evaluateCalls.push({ source, codeNames, petNames, resultName });
+      petNames.forEach(assertNamePath);
+      assertNamePath(resultName);
+      evaluateCalls.push({
+        source,
+        codeNames,
+        petNames: petNames.map(keyFor),
+        resultName,
+      });
       names.add(keyFor(resultName));
     },
     async provideMount(path, name, options) {
+      assertNamePath(name);
       provideMountCalls.push({ path, name, options });
       names.add(keyFor(name));
       return harden({ kind: 'mount', path, name });
@@ -108,7 +126,7 @@ test('provisionClaudeSession wires the MCP bridge mount, powers ref, and env', a
   // source hands it back.
   const evalCall = rec.evaluateCalls[0];
   t.true(evalCall.codeNames.includes('mcpMount'));
-  t.true(evalCall.petNames.includes(mcpMountName));
+  t.true(evalCall.petNames.includes(keyFor(mcpMountName)));
   t.true(evalCall.source.includes('mcpMount: () => mcpMount'));
 
   // The client formula env carries the slice-internal config + mount paths.

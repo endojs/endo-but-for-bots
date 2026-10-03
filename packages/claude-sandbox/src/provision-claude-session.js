@@ -76,7 +76,7 @@ export const buildSessionPowersSource = (
       if (!allowed.some(pair => pair[0] === path && pair[1] === name)) {
         throw Error('claude-sandbox session powers: provideMount restricted to this session mountpoints');
       }
-      return E(agent).provideMount(path, name);
+      return E(agent).provideMount(path, [name]);
     },
     removeMount: () =>
       Promise.allSettled(
@@ -102,10 +102,19 @@ const slugify = name =>
 /**
  * @param {string} sandboxNamespace
  * @param {string} name
- * @returns {string | string[]}
+ * @returns {string[]}
  */
 const underNamespace = (sandboxNamespace, name) =>
-  sandboxNamespace ? [sandboxNamespace, name] : name;
+  sandboxNamespace ? [sandboxNamespace, name] : [name];
+
+/**
+ * The daemon refuses a bare pet-name string, so a lone name from the spec
+ * becomes a one-segment path.
+ *
+ * @param {string | string[]} name
+ * @returns {string[]}
+ */
+const namePathOf = name => (typeof name === 'string' ? [name] : name);
 
 /**
  * Resolve hosted sandbox configuration from caplet formula env and process env.
@@ -231,19 +240,21 @@ export const provisionClaudeSession = async (
     const powersName = `claude-${sessionId}-powers`;
     toCleanup = [powersName, ...removeNames];
     const codeNames = ['agent', 'sandboxFactory', 'fsMounter', 'filesystem'];
-    const petNames = [
-      '@agent',
+    const petNamePaths = [
+      ['@agent'],
       underNamespace(sandboxNamespace, sandboxFactoryName),
       underNamespace(sandboxNamespace, fsMounterName),
-      filesystemName,
+      namePathOf(filesystemName),
     ];
     if (hasConfigFilesystem) {
       codeNames.push('configFilesystem');
-      petNames.push(/** @type {string | string[]} */ (configFilesystemName));
+      petNamePaths.push(
+        namePathOf(/** @type {string | string[]} */ (configFilesystemName)),
+      );
     }
     if (credentialsName) {
       codeNames.push('credentials');
-      petNames.push(credentialsName);
+      petNamePaths.push(namePathOf(credentialsName));
     }
 
     // Optional Endo tool bridge: register the bridge's socket directory as a
@@ -259,12 +270,12 @@ export const provisionClaudeSession = async (
       mcpConfigPath = /** @type {any} */ (mcp).configPath;
       await E(hostAgent).provideMount(
         /** @type {any} */ (mcp).socketDir,
-        mcpMountName,
+        [mcpMountName],
         harden({ readOnly: true }),
       );
       toCleanup = [mcpMountName, ...toCleanup];
       codeNames.push('mcpMount');
-      petNames.push(mcpMountName);
+      petNamePaths.push([mcpMountName]);
     }
 
     const mountList = [
@@ -283,7 +294,7 @@ export const provisionClaudeSession = async (
         hasConfigFilesystem,
       ),
       harden(codeNames),
-      harden(petNames),
+      harden(petNamePaths),
       [powersName],
     );
 
