@@ -976,16 +976,96 @@ fn a_transactional_write_cannot_touch_the_transcript_tables() {
         "SAVEPOINT s",
         "ATTACH DATABASE ':memory:' AS other",
         "REINDEX",
+        // SQLite folds identifier case.
+        "SELECT count(*) FROM EVENT",
+        "UPDATE Crank SET state = 'aborted' WHERE crank_id = 0",
+        // A temp object would shadow the transcript's unqualified names.
+        "CREATE TEMP TABLE EVENT (seq INTEGER PRIMARY KEY)",
+        "CREATE TEMP TABLE own_scratch (v INTEGER)",
+        "CREATE TEMP VIEW event AS SELECT 1",
+        "CREATE TEMP VIEW Crank AS SELECT 1 AS crank_id, 'committed' AS state",
+        "CREATE TABLE own (v INTEGER); CREATE TEMP TRIGGER t AFTER INSERT ON own BEGIN SELECT 1; END",
+        "CREATE VIEW host_handle_v AS SELECT 1; DROP VIEW host_handle_v; CREATE VIEW Host_Handle AS SELECT 1",
+        // The transcript's AUTOINCREMENT counters.
+        "UPDATE sqlite_sequence SET seq = 9223372036854775807 WHERE name = 'event'",
     ] {
         assert!(authorizer_denies(statement), "{statement} was allowed");
     }
     // The adapter's own tables stay writable.
     for statement in [
         "CREATE TABLE own (v INTEGER)",
+        "CREATE TABLE own (v INTEGER PRIMARY KEY AUTOINCREMENT); INSERT INTO own DEFAULT VALUES",
+        "CREATE TABLE own (v INTEGER); CREATE VIEW own_view AS SELECT v FROM own; DROP VIEW own_view; DROP TABLE own",
         "CREATE TABLE own (v INTEGER); INSERT INTO own VALUES (abs(-1)); SELECT count(*) FROM own",
     ] {
         assert!(!authorizer_denies(statement), "{statement} was denied");
     }
+}
+
+#[test]
+fn a_shadowing_temp_table_cannot_capture_the_transcript_writes() {
+    let root = tempfile::tempdir().unwrap();
+    let callbacks = callbacks();
+    let (mut t, _) = open(root.path());
+    t.begin_crank(b"d1").unwrap();
+    t.host_call_transactional(&callbacks, "put-row", None, b"k=v", |_| {
+        let write: TransactionalWrite = Box::new(|transaction| {
+            transaction.execute_batch(
+                "CREATE TEMP TABLE EVENT (seq INTEGER PRIMARY KEY, crank_id, kind, payload)",
+            )
+        });
+        (reply(b"ok"), write)
+    })
+    .unwrap();
+    assert!(t.commit_crank().is_err());
+    drop(t);
+    // The refused write left nothing behind: a fresh delivery's inbound
+    // event is durable in the main schema.
+    let mut t = reopen(root.path());
+    t.begin_crank(b"d2").unwrap();
+    t.commit_crank().unwrap();
+    drop(t);
+    let connection = rusqlite::Connection::open(root.path().join("t.sqlite")).unwrap();
+    let durable: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM main.event WHERE payload = ?1",
+            [b"d2".as_slice()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(durable, 1);
+}
+
+#[test]
+fn an_escaped_close_of_a_handle_opened_in_the_same_crank_breaks_it() {
+    let root = tempfile::tempdir().unwrap();
+    let callbacks = callbacks();
+    let (mut t, _) = open(root.path());
+    t.begin_crank(b"d1").unwrap();
+    let file = opened(
+        t.host_call(&callbacks, "open-file", None, b"/a.txt", |_| {
+            opens(b"fd", Some(b"cap:/a.txt@0"))
+        })
+        .unwrap(),
+    );
+    // A misclassified pure call closes the handle the crank just opened.
+    assert_eq!(
+        t.host_call(&callbacks, "hash", Some(file), b"x", |_| closes(b"h")),
+        Err(HostCallError::Misclassified("hash".into()))
+    );
+    assert_eq!(
+        t.host_call(&callbacks, "read-file", Some(file), b"n", |_| reply(b"")),
+        Err(HostCallError::BrokenHandle(file))
+    );
+    t.commit_crank().unwrap();
+    let handles = t.open_handles().unwrap();
+    assert_eq!(handles.len(), 1);
+    assert_eq!(handles[0].handle, file);
+    assert!(handles[0].broken);
+    assert_eq!(
+        t.recovery_gate().unwrap(),
+        Err(RecoveryStop::BrokenHandles(vec![file]))
+    );
 }
 
 #[test]

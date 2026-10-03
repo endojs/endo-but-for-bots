@@ -214,11 +214,20 @@ pub struct HostOutcome {
 /// crank never runs it, so a retry cannot apply the effect twice.
 ///
 /// The write runs under an SQLite authorizer that confines it to the
-/// adapter's own tables: it may not read or write the transcript's tables
-/// (`meta`, `snapshot`, `crank`, `event`, `host_call`, `host_handle`), end or
-/// nest the transaction, attach a database, or change a pragma. Any action
-/// the authorizer does not allow-list is denied. A denied statement fails
-/// the write, which fails the crank's commit.
+/// adapter's own tables in the `main` schema: it may not read or write the
+/// transcript's tables (`meta`, `snapshot`, `crank`, `event`, `host_call`,
+/// `host_handle`) or `sqlite_sequence`, in any letter case; create or drop
+/// anything in the `temp` schema, whose names would shadow the
+/// transcript's unqualified ones for the life of the connection; end or
+/// nest the transaction; attach a database; or change a pragma. Any action
+/// the authorizer does not allow-list is denied. A
+/// denied statement fails the write, which fails the crank's commit and
+/// poisons the transcript until it is reopened.
+///
+/// The authorizer guards against a cooperating adapter's mistakes. It is
+/// not a boundary against a hostile one: the write receives the
+/// transaction, which derefs to the connection that installs the
+/// authorizer and so could remove it. Admit only trusted adapters.
 pub type TransactionalWrite = Box<dyn Fn(&rusqlite::Transaction<'_>) -> rusqlite::Result<()>>;
 
 /// What the guest gets back from a host call.
@@ -326,7 +335,6 @@ pub enum ReplayStop {
     BrokenHandle(HandleId),
 }
 
-/// One call staged in the active crank.
 /// The transcript's own tables, which a [`TransactionalWrite`] may not touch.
 const TRANSCRIPT_TABLES: [&str; 6] = [
     "meta",
@@ -342,28 +350,26 @@ const TRANSCRIPT_TABLES: [&str; 6] = [
 /// newer SQLite reports as `Unknown`) fails closed. Function calls are
 /// allowed: the crate enables neither rusqlite's `functions` nor its `vtab`
 /// feature, so only SQLite's built-in functions exist on the connection.
+///
+/// Every `temp`-schema action is denied: SQLite resolves an unqualified
+/// name in `temp` before `main`, and the transcript's own statements are
+/// unqualified, so a temp table or view named `event` would capture its
+/// writes or forge its reads. SQLite folds identifier case, and the
+/// authorizer sees a name as the statement spelled it, so names are
+/// compared case-insensitively.
 fn confine_transactional_write(context: AuthContext<'_>) -> Authorization {
-    let table = match context.action {
+    let name = match context.action {
         AuthAction::Select | AuthAction::Recursive | AuthAction::Function { .. } => {
             return Authorization::Allow
         }
-        AuthAction::CreateView { .. }
-        | AuthAction::CreateTempView { .. }
-        | AuthAction::DropView { .. }
-        | AuthAction::DropTempView { .. } => return Authorization::Allow,
+        AuthAction::CreateView { view_name } | AuthAction::DropView { view_name } => view_name,
         AuthAction::CreateIndex { table_name, .. }
-        | AuthAction::CreateTempIndex { table_name, .. }
         | AuthAction::CreateTable { table_name }
-        | AuthAction::CreateTempTable { table_name }
         | AuthAction::CreateTrigger { table_name, .. }
-        | AuthAction::CreateTempTrigger { table_name, .. }
         | AuthAction::Delete { table_name }
         | AuthAction::DropIndex { table_name, .. }
-        | AuthAction::DropTempIndex { table_name, .. }
         | AuthAction::DropTable { table_name }
-        | AuthAction::DropTempTable { table_name }
         | AuthAction::DropTrigger { table_name, .. }
-        | AuthAction::DropTempTrigger { table_name, .. }
         | AuthAction::Insert { table_name }
         | AuthAction::Read { table_name, .. }
         | AuthAction::Update { table_name, .. }
@@ -371,28 +377,48 @@ fn confine_transactional_write(context: AuthContext<'_>) -> Authorization {
         | AuthAction::Analyze { table_name } => table_name,
         _ => return Authorization::Deny,
     };
-    if TRANSCRIPT_TABLES.contains(&table) {
+    if context.database_name.is_some_and(|db| db != "main") || is_reserved_name(name) {
         Authorization::Deny
     } else {
         Authorization::Allow
     }
 }
 
+/// Whether `name` is a transcript table or `sqlite_sequence`, whose
+/// counters the transcript's `AUTOINCREMENT` keys draw from, in any letter
+/// case. (`CREATE` and `DROP` themselves write `sqlite_schema`, so that
+/// table stays reachable; SQLite refuses a direct write to it.)
+fn is_reserved_name(name: &str) -> bool {
+    TRANSCRIPT_TABLES
+        .iter()
+        .chain(&["sqlite_sequence"])
+        .any(|table| table.eq_ignore_ascii_case(name))
+}
+
 /// Run a transactional write confined by [`confine_transactional_write`].
 /// The statement cache is flushed first so the write cannot reuse a
-/// statement the transcript prepared without the authorizer.
+/// statement the transcript prepared without the authorizer, and again
+/// after, by a guard that also removes the authorizer if the write
+/// unwinds, so the transcript's own statements never run under it.
 fn run_transactional_write(
     transaction: &rusqlite::Transaction<'_>,
     write: &TransactionalWrite,
 ) -> rusqlite::Result<()> {
+    struct Confined<'a, 'c>(&'a rusqlite::Transaction<'c>);
+    impl Drop for Confined<'_, '_> {
+        fn drop(&mut self) {
+            self.0
+                .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+            self.0.flush_prepared_statement_cache();
+        }
+    }
     transaction.flush_prepared_statement_cache();
     transaction.authorizer(Some(confine_transactional_write));
-    let result = write(transaction);
-    transaction.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
-    transaction.flush_prepared_statement_cache();
-    result
+    let _confined = Confined(transaction);
+    write(transaction)
 }
 
+/// One call staged in the active crank.
 pub(crate) enum Staged {
     Call {
         /// The call's position among the crank's recorded calls.
@@ -427,8 +453,13 @@ pub(crate) enum Staged {
     /// A handle effect refused after the live adapter ran, durably
     /// recorded by [`Transcript::record_escape`]. It counts toward the
     /// crank's call bound, so a misclassified callback cannot write
-    /// unboundedly many escape records in one crank.
-    Escaped,
+    /// unboundedly many escape records in one crank. `closed` names a
+    /// handle the escaped effect closed: the durable record cannot mark a
+    /// handle this crank opened, so the crank marks it broken here and
+    /// its commit makes that durable.
+    Escaped {
+        closed: Option<HandleId>,
+    },
 }
 
 /// A committed outbound effect awaiting release to its provider.
@@ -575,7 +606,15 @@ pub(crate) fn commit_staged(
                     [*handle as i64],
                 )?;
             }
-            Staged::RefusedBarrier | Staged::Escaped => {}
+            Staged::Escaped {
+                closed: Some(handle),
+            } => {
+                transaction.execute(
+                    "UPDATE host_handle SET broken = 1 WHERE handle_id = ?1 AND open = 1",
+                    [*handle as i64],
+                )?;
+            }
+            Staged::RefusedBarrier | Staged::Escaped { closed: None } => {}
         }
     }
     Ok(())
@@ -623,6 +662,9 @@ impl Transcript {
                         ..
                     } if *h == handle => return Ok(HandleState::Open),
                     Staged::Loss { handle: h } if *h == handle => return Ok(HandleState::Closed),
+                    Staged::Escaped { closed: Some(h) } if *h == handle => {
+                        return Ok(HandleState::Broken)
+                    }
                     _ => {}
                 }
             }
@@ -675,7 +717,7 @@ impl Transcript {
                     calls += 1;
                     bytes = bytes.saturating_add(request.len());
                 }
-                Staged::RefusedBarrier | Staged::Escaped => calls += 1,
+                Staged::RefusedBarrier | Staged::Escaped { .. } => calls += 1,
                 Staged::Loss { .. } => {}
             }
         }
@@ -781,7 +823,7 @@ impl Transcript {
         let (refused_barrier, escaped) = self.active.as_ref().map_or((false, false), |a| {
             (
                 a.host.iter().any(|s| matches!(s, Staged::RefusedBarrier)),
-                a.host.iter().any(|s| matches!(s, Staged::Escaped)),
+                a.host.iter().any(|s| matches!(s, Staged::Escaped { .. })),
             )
         });
         if class != HostClass::Pure {
@@ -922,7 +964,7 @@ impl Transcript {
         let closed = handle.filter(|_| outcome.closes);
         let callback = callback.to_string();
         if let Some(active) = self.active.as_mut() {
-            active.host.push(Staged::Escaped);
+            active.host.push(Staged::Escaped { closed });
         }
         self.transact(Operation::HostEscape, Some(crank), |transaction| {
             if let Some((h, descriptor)) = &opened {
