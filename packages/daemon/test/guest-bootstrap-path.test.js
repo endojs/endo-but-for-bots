@@ -174,7 +174,7 @@ testNodeDaemon('removing a guest revokes its bootstrap path', async t => {
 });
 
 testNodeDaemon(
-  'cancelling a guest revokes its bootstrap path without collection',
+  'canceling a guest revokes its bootstrap path without collection',
   async t => {
     const config = { ...makeConfig('gb-cancel'), gcEnabled: false };
     const { cancelled, cancel } = makeCancelKit();
@@ -196,7 +196,7 @@ testNodeDaemon(
     const scoped = await connect(guestPath, cancelled);
     t.is(await E(scoped).identify('@agent'), guestId);
 
-    await E(host).cancel('cancelled-agent', Error('guest cancelled'));
+    await E(host).cancel('cancelled-agent', Error('guest canceled'));
 
     const deadline = Date.now() + 10_000;
     for (;;) {

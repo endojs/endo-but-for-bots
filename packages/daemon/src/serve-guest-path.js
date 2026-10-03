@@ -8,7 +8,7 @@
 // exactly one guest instead connects to a socket this module serves for that
 // guest: the CapTP bootstrap (export offset 0) on that socket IS the guest
 // facet, so the connection reaches that guest and nothing else.
-// Revoking a guest's socket, as when the guest is cancelled or collected,
+// Revoking a guest's socket, as when the guest is canceled or collected,
 // closes the listener, removes the pathname, and ends every connection made
 // on it. With formula collection off (no ENDO_GC=1), dropping a guest's last
 // pet name neither collects nor cancels it, so its socket stays served.
