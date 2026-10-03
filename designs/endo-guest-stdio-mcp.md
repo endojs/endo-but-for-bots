@@ -840,8 +840,12 @@ positive-confinement test. An implementation is accepted only when these pass.
   names itself (`@agent`) by the configured formula number and carries the guest
   interface, and given a root-host connection it still narrows by `lookupById`.
   Issuing is the one step that holds host authority, so an operator can issue once
-  and hand each turn only the socket path. Collecting the guest formula revokes its
-  socket: the listener closes, the pathname is removed, and open sessions end. Not
+  and hand each turn only the socket path. Cancelling the guest (`cancel`, or
+  collection under `ENDO_GC=1`) revokes its socket: the listener closes, the
+  pathname is removed, and open sessions end. Removing a guest's last pet name
+  revokes nothing while formula collection is off (the default), because the guest
+  is then neither collected nor cancelled; an operator who wants the socket gone
+  cancels the guest. Not
   yet built: re-issuing automatically after a restart, and serving guest sockets
   from the Go and Rust supervisors.
 - **`claude`'s `--mcp-config` intake (resolved, PR #1226).** Pinned now, not

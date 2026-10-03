@@ -4312,6 +4312,12 @@ const makeDaemonCore = async (
                 const socketPath = await guestPathIssuer.issue(number, guest, {
                   capTpConnectionRegistrar,
                 });
+                // Cancelling the guest revokes its socket, whether or not
+                // formula collection is enabled (ENDO_GC). Revoking twice is
+                // harmless, so a repeated request may register again.
+                provideController(id).context.cancelled.catch(reason => {
+                  guestPathIssuer.revoke(number, reason);
+                });
                 // A guest collected while its socket was being issued may
                 // have been swept before the issuer knew of the socket, so
                 // its revocation missed it: revoke here instead. A guest
