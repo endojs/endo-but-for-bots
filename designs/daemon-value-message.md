@@ -82,15 +82,16 @@ Add `ValueMessage` to the `Message` union type.
 
 ### Mail interface: `sendValue`
 
-Add a new method to the `Mail` interface:
+Add a new method to the `Mail` interface (the signature as of the
+pet-name-path-only change, which made `petNamePath` an array of path
+components and refuses a bare string):
 
 ```ts
 interface Mail {
   // ...existing methods...
   sendValue(
     messageNumber: bigint | number | string,
-    petNameOrPath: string | string[],
-    resultName?: string | string[],
+    petNamePath: string[],
   ): Promise<void>;
 }
 ```
@@ -190,8 +191,7 @@ interface EndoGuest {
   // ...existing...
   sendValue(
     messageNumber: bigint | number | string,
-    petNameOrPath: string | string[],
-    resultName?: string | string[],
+    petNamePath: string[],
   ): Promise<void>;
 }
 
@@ -199,8 +199,7 @@ interface EndoHost {
   // ...existing...
   sendValue(
     messageNumber: bigint | number | string,
-    petNameOrPath: string | string[],
-    resultName?: string | string[],
+    petNamePath: string[],
   ): Promise<void>;
 }
 ```

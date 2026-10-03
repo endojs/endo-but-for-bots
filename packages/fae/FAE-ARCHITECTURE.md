@@ -402,7 +402,7 @@ Fae is provisioned as a guest caplet inside the Endo daemon:
 ### Without tools (`setup.js`)
 
 ```
-E(agent).provideGuest('fae', { introducedNames: {}, agentName: 'profile-for-fae' })
+E(agent).provideGuest(['fae'], { introducedNames: {}, agentName: ['profile-for-fae'] })
     │
     └─ E(agent).makeUnconfined(['MAIN'], 'agent.js', {
          powersName: ['profile-for-fae'],
