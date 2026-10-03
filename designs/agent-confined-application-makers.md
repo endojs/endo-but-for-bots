@@ -151,7 +151,7 @@ the mount first and passes the snapshot.
 
 ### The tree `ReadPowers`
 
-A new `makeTreeReadPowers(tree, { root, canonical })` in
+A new `makeTreeReadPowers(tree, { root, canonicalSegments })` in
 `@endo/platform/fs/tree-read-powers` turns a `ReadableTree` into
 compartment-mapper `ReadPowers`. A caller holding a `Mount` passes
 `mount.readOnly()` or `await mount.snapshot()`, so the read powers never hold
@@ -160,8 +160,9 @@ a write-capable reference:
 - `read(location)` accepts only `file:` URLs under a synthetic root
   (`file:///app/` by default), maps the path segments to `E(tree).lookup(...)`,
   and returns the bytes.
-- It rejects `..`, empty, and percent-encoded separator segments before any
-  lookup, so a map or a `package.json` cannot name a file outside the tree.
+- It rejects `.`, `..`, and separator segments, plain or percent-encoded,
+  before any lookup, so a map or a `package.json` cannot name a file outside
+  the tree. Empty segments collapse, as Node's `fs` reads `lib//index.js`.
 - `maybeRead` returns `undefined` for a missing entry, for a directory (as
   Node's `maybeRead` treats `EISDIR`), and for a location outside the root,
   which `mapNodeModules` needs to probe `node_modules` directories and to
@@ -175,7 +176,7 @@ a write-capable reference:
   path; without it, such a
   package would load twice and break identity-sensitive code (`instanceof`,
   module-level singletons). `makeTreeReadPowers` takes an optional
-  `canonical(segments)` hook and defaults to the identity. The public
+  `canonicalSegments(segments)` hook and defaults to the identity. The public
   `EndoMount` exo (`MountInterface`) exposes no physical path, and this design
   does not add one: the mount's physical-path accessors (`getMountBacking`,
   `getEntryPhysicalPath` in `../packages/daemon/src/mount.js`) are host-private.
