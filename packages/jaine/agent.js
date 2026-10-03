@@ -241,12 +241,12 @@ export const spawnWorkerLoop = async (
    * Watch a channel for new messages and route them through Layer 1.
    * Runs as a background loop — fire-and-forget via void.
    *
-   * @param {string} channelName - petname for the channel
-   * @param {string} channelId - the agent's own pet name for the channel
+   * @param {string} channelName - the agent's own pet name for the channel,
+   *   which also keys its router state and channel layers
    * @param {object} member - channel member handle
    * @param {string | null} selfMemberId - own member ID to skip own msgs
    */
-  const watchChannel = async (channelName, channelId, member, selfMemberId) => {
+  const watchChannel = async (channelName, member, selfMemberId) => {
     console.log(`[jaine][watch] Watching ${channelName}`);
 
     // Initialize lastSeen to current latest to avoid replaying history
@@ -319,7 +319,7 @@ export const spawnWorkerLoop = async (
 
           const decision = await router.routeChannelMessage(
             msg,
-            channelId,
+            channelName,
             recentContext,
             authorName,
           );
@@ -332,7 +332,7 @@ export const spawnWorkerLoop = async (
           // Handle participation change
           if (decision.participationChange) {
             router.setParticipation(
-              channelId,
+              channelName,
               decision.participationChange.level,
             );
             if (decision.participationChange.acknowledgment) {
@@ -352,15 +352,15 @@ export const spawnWorkerLoop = async (
           // Compose and post response using channel-scoped layers
           if (decision.shouldEngage) {
             try {
-              if (!channelLayers.has(channelId)) {
+              if (!channelLayers.has(channelName)) {
                 channelLayers.set(
-                  channelId,
+                  channelName,
                   makeChannelLayers(member, channelName),
                 );
               }
               const layers =
                 /** @type {{ composer: { compose: Function } }} */ (
-                  channelLayers.get(channelId)
+                  channelLayers.get(channelName)
                 );
               await handleChannelResponse(layers.composer, member, msg);
             } catch (err) {
@@ -422,15 +422,13 @@ export const spawnWorkerLoop = async (
         const ch = await E(powers).lookup(chName);
         const member = await E(ch).join('jaine');
         // A guest holds no identifiers; its own pet name keys the channel.
-        const channelId = chName;
-
-        if (!watchedChannels.has(channelId)) {
-          watchedChannels.set(channelId, true);
+        if (!watchedChannels.has(chName)) {
+          watchedChannels.set(chName, true);
           const selfMemberId = await resolveSelfMemberId(member, 'jaine');
           console.log(
             `[jaine] Channel ${chName}: selfMemberId=${selfMemberId}`,
           );
-          void watchChannel(chName, channelId, member, selfMemberId);
+          void watchChannel(chName, member, selfMemberId);
         }
       } catch (chErr) {
         console.error(
@@ -519,10 +517,10 @@ export const spawnWorkerLoop = async (
         // the response using channel-scoped layers
         if (mentionResult) {
           try {
-            const channelId = mentionResult.channelName;
-            if (!channelLayers.has(channelId)) {
+            const { channelName } = mentionResult;
+            if (!channelLayers.has(channelName)) {
               channelLayers.set(
-                channelId,
+                channelName,
                 makeChannelLayers(
                   mentionResult.member,
                   mentionResult.channelName,
@@ -532,22 +530,21 @@ export const spawnWorkerLoop = async (
 
             // Now compose the response with channel-scoped executor
             const layers = /** @type {{ composer: { compose: Function } }} */ (
-              channelLayers.get(channelId)
+              channelLayers.get(channelName)
             );
             await mentionResult.compose(layers.composer);
 
-            if (!watchedChannels.has(channelId)) {
-              watchedChannels.set(channelId, true);
+            if (!watchedChannels.has(channelName)) {
+              watchedChannels.set(channelName, true);
               const selfMemberId = await resolveSelfMemberId(
                 mentionResult.member,
                 decision.mentionInfo.join,
               );
               console.log(
-                `[jaine] Channel ${mentionResult.channelName}: selfMemberId=${selfMemberId}`,
+                `[jaine] Channel ${channelName}: selfMemberId=${selfMemberId}`,
               );
               void watchChannel(
-                mentionResult.channelName,
-                channelId,
+                channelName,
                 mentionResult.member,
                 selfMemberId,
               );

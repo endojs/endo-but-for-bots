@@ -266,7 +266,7 @@ export const makeRouter = async (_powers, provider) => {
    * Route a channel message using the LLM.
    *
    * @param {object} message - channel message object
-   * @param {string} channelId - canonical channel identifier
+   * @param {string} channelId - the agent's own pet name for the channel
    * @param {string} recentContext - formatted recent channel messages
    * @param {string} authorName - display name of the message author
    * @returns {Promise<ChannelRouteResult>}
