@@ -154,7 +154,16 @@ export const openParcelDetails = async (
 ) => {
   const { location, secret } = details;
   if (isSelfLocation(location)) {
-    const value = await locator.get(secret);
+    let localSecret = secret;
+    if (typeof localSecret !== 'string') {
+      const swissNum = swissnumFromBytes(thawedBytes(localSecret));
+      try {
+        localSecret = decodeSwissnum(swissNum);
+      } catch {
+        localSecret = swissnumToBytes(swissNum);
+      }
+    }
+    const value = await locator.get(localSecret);
     if (value === undefined) {
       throw Error('ocapn: locator has no capability for parcel value');
     }
