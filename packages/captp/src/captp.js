@@ -9,6 +9,7 @@
 
 import harden from '@endo/harden';
 import { Remotable, Far, makeMarshal, QCLASS } from '@endo/marshal';
+import { passStyleOf } from '@endo/pass-style';
 import { E, HandledPromise } from '@endo/eventual-send';
 import { isPromise, makePromiseKit } from '@endo/promise-kit';
 
@@ -599,6 +600,10 @@ export const makeCapTP = (
    * @type {import('@endo/marshal').ConvertValToSlot<CapTPSlot>}
    */
   function convertValToSlot(val) {
+    // CapTP has no slot kind for a SturdyRef yet, so refuse one here, on the
+    // sender, rather than export it as an object the peer cannot decode.
+    passStyleOf(val) !== 'sturdyRef' ||
+      Fail`CapTP cannot pass a SturdyRef yet: ${val}`;
     if (!valToSlot.has(val)) {
       /** @type {CapTPSlot} */
       let slot;
