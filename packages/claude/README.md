@@ -135,9 +135,11 @@ of them.
 | `@endo/claude/constructed-environment.js` | `buildConstructedEnvironment`: the process environment, built from nothing plus the grant. A grant may deliver only `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, and `ANTHROPIC_BASE_URL`; `CLAUDE_CODE_OAUTH_TOKEN`, which `--bare` ignores, fails the turn.                |
 | `@endo/claude/stream-reducer.js`          | `makeClaudeStreamReducer`: reduces stream-json stdout or SDK messages to one terminal outcome, counting model turns by message id.                                                                                                                                           |
 | `@endo/claude/response-shapes.js`         | `CLAUDE_CODE_RESPONSE_SHAPES`, the pinned failure-shape table, and `turnOutcome`. The table is empty until verification gate 3 captures shapes against a pinned binary, so every failure is `unavailable` and never `needs-auth`.                                            |
-| `@endo/claude/scratch-directory.js`       | `makeNodeScratchDirectoryMaker`: the per-turn private directory used as `HOME`, `CLAUDE_CONFIG_DIR`, and working directory.                                                                                                                                                  |
+| `@endo/claude/scratch-directory.js`       | `makeNodeScratchDirectoryMaker`: the per-turn private directory used as `HOME`, `CLAUDE_CONFIG_DIR`, and working directory, removed when the turn ends.                                                                                                                                                  |
 
-Both backends acquire the credential before any work, map a refusal to the
+Each turn first compares `getVersion()` with the pinned `version` and runs
+nothing, not even `acquire()`, on a mismatch. Both backends acquire the
+credential before any other work, map a refusal to the
 matching tag, enforce the wall-clock, output-byte, and turn limits through the
 `@endo/inference` limit enforcer (the CLI backend kills the process group), and
 release the grant on every path. The projection's `formulaIdentifier` is never

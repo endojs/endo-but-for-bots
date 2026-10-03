@@ -123,9 +123,8 @@ harden(buildConfinementFlags);
  * is NOT a parameter and appears at no index — it is delivered on stdin — so a
  * prompt can never be swallowed by an adjacent variadic flag.
  *
- * Variadic flag values (`--mcp-config`, `--allowedTools`, `--disallowedTools`)
- * are emitted as a SINGLE comma-joined token each, so there is no multi-token
- * value run for a following positional to be swallowed into.
+ * The confinement flags come from `buildConfinementFlags`; this function
+ * appends only the model, the turn ceiling, and `-p`.
  *
  * @param {ArgvSpec} spec
  * @returns {readonly string[]}
