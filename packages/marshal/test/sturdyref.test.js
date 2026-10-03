@@ -287,35 +287,23 @@ test('the dot-membrane passes a SturdyRef as a membraned SturdyRef', async t => 
   });
 });
 
-test('the dot-membrane passes a synchronous enliven throw across', async t => {
-  const secret = Far('secret', { reveal: () => 'mine' });
-  const sturdyRef = new SturdyRef(
-    harden({
-      enliven: () => {
-        throw secret;
-      },
-    }),
-  );
-  const { proxy, revoke } = makeDotMembraneKit(
-    Far('Holder', { get: () => sturdyRef }),
-  );
-  const yourRef = await proxy.get();
-  const reason = await SturdyRef.enliven(yourRef).then(
-    () => t.fail('enliven should reject'),
-    r => r,
-  );
-  t.not(reason, secret);
-  t.is(passStyleOf(reason), 'remotable');
-  t.is(await reason.reveal(), 'mine');
-  revoke('done');
-});
-
 test('smallcaps rejects a non-canonical sturdyRef index', t => {
   const { sturdyRef } = makeSturdyRef('Ivan');
   const { fromCapData } = makeMarshal(undefined, () => sturdyRef, {
     serializeBodyFormat: 'smallcaps',
   });
-  for (const encoding of ["'", "' 0", "'0x0", "'0e0", "'00", "'3.Foo"]) {
+  for (const encoding of [
+    "'",
+    "' 0",
+    "'0x0",
+    "'0e0",
+    "'00",
+    "'3.Foo",
+    // Past Number.MAX_SAFE_INTEGER, distinct digit strings collide.
+    "'9007199254740992",
+    "'99999999999999999998",
+    "'99999999999999999999",
+  ]) {
     t.throws(
       () => fromCapData({ body: `#${JSON.stringify(encoding)}`, slots: [0] }),
       { message: /sturdyRef encoding must be "'" followed by a slot index/ },

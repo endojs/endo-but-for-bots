@@ -13,21 +13,31 @@ import { Fail } from '@endo/errors';
 import { makeMarshal } from './marshal.js';
 
 /**
- * @import {RemotableMethodName} from '@endo/pass-style';
+ * @import {RemotableMethodName, SturdyRef} from '@endo/pass-style';
+ */
+
+/**
+ * The parts of the realm's `SturdyRef` constructor the membrane uses.
+ *
+ * @typedef {object} SturdyRefPowers
+ * @property {new (handler: {
+ *   enliven: (sturdyRef: SturdyRef) => unknown,
+ * }) => SturdyRef} SturdyRef
+ * @property {(sturdyRef: SturdyRef) => Promise<unknown>} enliven
  */
 
 const { fromEntries, freeze } = Object;
 const { apply } = Reflect;
 
-/** @type {{ SturdyRef: any, enliven: Function } | undefined} */
+/** @type {SturdyRefPowers | undefined} */
 let sturdyRefPowers;
 
 /**
- * Captures the realm's `SturdyRef` constructor and its `enliven` once, so
- * that a later reassignment of `globalThis.SturdyRef` or of
- * `SturdyRef.enliven` cannot change what the membrane mints or calls.
+ * Captures the realm's `SturdyRef` constructor and its `enliven` once.
  * Called only after `passStyleOf` has recognized a SturdyRef, so the
  * realm's `SturdyRef` exists by then.
+ *
+ * @returns {SturdyRefPowers}
  */
 const getSturdyRefPowers = () => {
   if (sturdyRefPowers === undefined) {
@@ -142,8 +152,9 @@ const makeConverter = (mirrorConverter = undefined) => {
               const mineIf = passBack(yours);
               // As with promises, pass both the fulfillment and the
               // rejection, so that neither crosses the membrane unwrapped.
-              // Calling `enliven` inside `E.when` routes a synchronous throw
-              // through the rejection path too.
+              // Calling `enliven` inside `E.when` also routes a synchronous
+              // throw through the rejection path, should an adopted realm
+              // `SturdyRef` not defer its handler the way ours does.
               return new Promise((yourResolve, yourReject) => {
                 E.when(
                   E.when(undefined, () => apply(enliven, SturdyRef, [mineIf])),
