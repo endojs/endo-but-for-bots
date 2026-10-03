@@ -7,7 +7,7 @@
 /** @import { EndoMount, EndoMountControl, FilePowers, MountNameChange } from './types.js' */
 
 import { E } from '@endo/eventual-send';
-import { q } from '@endo/errors';
+import { makeError, q, X } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { makePromiseKit } from '@endo/promise-kit';
 import { encodeBase64 } from '@endo/base64';
@@ -220,24 +220,31 @@ export const getEntryPhysicalPath = entry =>
 harden(getEntryPhysicalPath);
 
 /**
- * Host-private `canonical(segments)` hook for `makeTreeReadPowers` over a
- * daemon-backed mount (designs/agent-confined-application-makers.md § The tree
- * `ReadPowers`).  The public `EndoMount` exposes no physical path, so only the
- * daemon can supply this hook.
+ * Whether a `realPath` failure means the path does not exist, on either the
+ * Node (`code`) or the Rust/XS (message) file powers.
  *
- * The hook takes the segments of a location below the tree root (the mount's
- * current directory), mints a mount entry for them, reads its physical path
- * with `getEntryPhysicalPath`, and resolves that through `realPath` under the
- * mount's confinement.  A path that resolves under the tree root returns its
- * physical segments relative to that root, so every `node_modules` path that
- * reaches one package directory canonicalizes to one location.  A path that
- * does not exist returns its own segments, as the Node `canonical` returns the
- * logical location when there is no real path.  A path whose physical form is
- * outside the tree root is refused as an unsupported layout, so a link out of
- * the root is never read as a missing dependency.
+ * @param {unknown} error
+ */
+const isAbsentPathError = error => {
+  const { code, message } =
+    /** @type {{ code?: unknown, message?: unknown }} */ (Object(error));
+  if (code === 'ENOENT' || code === 'ENOTDIR') {
+    return true;
+  }
+  return (
+    typeof message === 'string' &&
+    /ENOENT|ENOTDIR|No such file or directory|Not a directory/.test(message)
+  );
+};
+
+/**
+ * Host-private `canonical(segments)` hook for `makeTreeReadPowers` over a
+ * daemon-backed mount.  Returns the physical segments, relative to the tree
+ * root, of a location below it; the logical segments of a location that does
+ * not exist; and refuses a location that resolves outside the tree root.
  *
  * Returns `undefined` for a value the daemon did not mint as a mount (for
- * example a snapshot tree), whose identity `canonical` is already correct.
+ * example a snapshot tree).
  *
  * @param {unknown} mount
  * @returns {((segments: string[]) => Promise<string[]>) | undefined}
@@ -247,27 +254,27 @@ export const makeMountCanonical = mount => {
   if (record === undefined) {
     return undefined;
   }
-  const { currentDir, entry, realPath } = record;
+  const { currentDir, physicalPathOf, realPath } = record;
   /** @param {string[]} segments */
   const canonical = async segments => {
     await null;
-    const physicalPath = getEntryPhysicalPath(entry(harden([...segments])));
-    if (physicalPath === undefined) {
-      throw new Error('Mount did not mint a physical entry');
-    }
+    const physicalPath = physicalPathOf(harden([...segments]));
     let resolved;
     try {
       resolved = await realPath(physicalPath);
-    } catch {
-      return harden([...segments]);
+    } catch (error) {
+      if (isAbsentPathError(error)) {
+        return harden([...segments]);
+      }
+      throw error;
     }
     const treeRoot = await realPath(currentDir);
     if (resolved === treeRoot) {
       return harden([]);
     }
     if (!resolved.startsWith(`${treeRoot}/`)) {
-      throw new Error(
-        `Unsupported layout: ${q(
+      throw makeError(
+        X`Unsupported layout: ${q(
           segments.length === 0 ? '.' : segments.join('/'),
         )} resolves outside the mount root`,
       );
@@ -1536,9 +1543,12 @@ const makeMountExo = ctx => {
       currentDir,
       confinementRoot,
       readOnly,
-      // Host-private: `makeMountCanonical` mints entries and resolves their
-      // physical form through these.
-      entry,
+      // Host-private: `makeMountCanonical` resolves the physical form of a
+      // location below the current directory through these.
+      physicalPathOf: segments =>
+        resolveFromRoot(
+          normalizeSegments(currentSegments, segments, deniedSegments),
+        ),
       realPath: path => filePowers.realPath(path),
     }),
   );

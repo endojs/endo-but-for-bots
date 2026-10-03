@@ -425,6 +425,25 @@ test('mount canonical refuses a link that resolves outside the tree root', async
   });
 });
 
+test('mount canonical returns a missing location and reports a link loop', async testContext => {
+  const directory = makeLinkedFixture(testContext);
+  symlinkSync('loop', join(directory, 'node_modules', 'loop'));
+
+  const mount = makeMount({ rootPath: directory, readOnly: true, filePowers });
+  const canonical = makeMountCanonical(mount);
+  if (canonical === undefined) {
+    throw Error('Expected a canonical hook for a daemon-minted mount');
+  }
+  testContext.deepEqual(await canonical(['node_modules', 'absent']), [
+    'node_modules',
+    'absent',
+  ]);
+  // A symlink loop is not a missing dependency.
+  await testContext.throwsAsync(() => canonical(['node_modules', 'loop']), {
+    code: 'ELOOP',
+  });
+});
+
 test('mount canonical is refused once the mount is revoked', async testContext => {
   const directory = makeLinkedFixture(testContext);
   const { mount, control } = makeRevocableMount({
