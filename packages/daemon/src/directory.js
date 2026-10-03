@@ -614,6 +614,7 @@ export const makeDirectoryMaker = ({
 
     /** @type {EndoDirectory['makeDirectory']} */
     const makeDirectory = async directoryPetNamePath => {
+      petNamePathFrom(directoryPetNamePath);
       const { value: newDirectory, id } = await formulateDirectory();
       pinTransient(id);
       try {

@@ -8144,6 +8144,23 @@ testNeedsNodeWorker(
   },
 );
 
+test('makeDirectory refuses a malformed name before formulating', async t => {
+  const { host, config } = await prepareHost(t);
+  const guest = await E(host).provideGuest(['refuse-dir-guest']);
+  const countFormulas = () =>
+    openTestDb(config.statePath).listFormulas().length;
+  const countBefore = countFormulas();
+
+  await t.throwsAsync(E(guest).makeDirectory(/** @type {any} */ ('notes')), {
+    message: /a string is not a pet-name path/,
+  });
+  await t.throwsAsync(E(host).makeDirectory(['@main']), {
+    instanceOf: Error,
+  });
+
+  t.is(countFormulas(), countBefore);
+});
+
 test('makeUnconfinedFromTree refuses a bare-string powers name before staging', async t => {
   const { host, config } = await prepareHost(t);
 
