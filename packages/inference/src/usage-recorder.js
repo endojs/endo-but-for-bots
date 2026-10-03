@@ -12,37 +12,15 @@ import {
 
 /** @import { InferRequest, InferResult, InferenceBackend, UsageRecord, UsageSink } from './types.js' */
 
+const textEncoder = new TextEncoder();
+
 /**
- * The UTF-8 encoded length of `text`, counted without encoding it. A lone
- * surrogate counts as the three bytes of the U+FFFD replacement character
- * the WHATWG UTF-8 encoder (https://encoding.spec.whatwg.org/#utf-8-encoder)
- * writes for it, as `TextEncoder` does.
+ * The UTF-8 encoded length of `text`. A lone surrogate counts as the three
+ * bytes of the U+FFFD replacement character the encoder writes for it.
  *
  * @param {string} text
  */
-const utf8ByteLength = text => {
-  let bytes = 0;
-  for (let i = 0; i < text.length; i += 1) {
-    const unit = text.charCodeAt(i);
-    if (unit < 0x80) {
-      bytes += 1;
-    } else if (unit < 0x800) {
-      bytes += 2;
-    } else if (
-      unit >= 0xd800 &&
-      unit <= 0xdbff &&
-      i + 1 < text.length &&
-      text.charCodeAt(i + 1) >= 0xdc00 &&
-      text.charCodeAt(i + 1) <= 0xdfff
-    ) {
-      bytes += 4;
-      i += 1;
-    } else {
-      bytes += 3;
-    }
-  }
-  return bytes;
-};
+const utf8ByteLength = text => textEncoder.encode(text).length;
 
 /**
  * Wraps a backend so that each classified result becomes one usage record
