@@ -135,7 +135,7 @@ import { getUnredactedStackString } from './unredacted-stack.js';
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { ReadableBlobRange, SnapshotTree } from '@endo/platform/fs/lite/types' */
 /** @import { ArchiveTreeMethods } from './tar-checkin.js' */
-/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoAgent, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, RequestedTreeLayout, ReadableBlobFormula, ReadableNameHub, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
+/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoAgent, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, RequestedTreeLayout, TreeLayout, ReadableBlobFormula, ReadableNameHub, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
 
 /**
  * @typedef {{ kind: 'bearer', token: string } | { kind: 'basic', username: string, password: string }} GitCredentialMaterial
@@ -2303,73 +2303,27 @@ const makeDaemonCore = async (
   };
 
   /**
-   * The layout each live `make-from-tree` incarnation ran as, keyed by the
-   * formula identifier.  This is a live fact, not formula state: every
-   * incarnation detects (or checks) its tree's layout again.
+   * Run a tree whose layout is resolved in a worker.
    *
-   * @type {Map<string, string>}
-   */
-  const treeLayoutRunningAs = new Map();
-
-  /**
-   * Load a source-only tree (ReadableTree or Mount) into a worker and
-   * invoke its entry `make(powers, context, { env })`.  Mirrors
-   * {@link makeArchive} but the source comes from a tree capability
-   * rather than a ZIP blob.
-   *
-   * The `archive` layout keeps its existing route.  The `node_modules`
-   * layouts are captured here, in the daemon, into transient archive bytes
-   * that the worker's `makeArchive` method runs, so the worker receives
-   * only archive bytes (designs/agent-confined-application-makers.md).
-   *
-   * @param {string} id
+   * @param {Exclude<TreeLayout, 'package'>} runningAs
+   * @param {string | undefined} entry
    * @param {string} workerId
-   * @param {string} powersId
-   * @param {string} treeId
+   * @param {any} workerDaemonFacet
+   * @param {Promise<unknown>} treeP
+   * @param {Promise<unknown>} powersP
    * @param {Record<string, string> | undefined} env
    * @param {Context} context
-   * @param {string} [cancelWithWorker]
-   * @param {RequestedTreeLayout} [layout]
-   * @param {string} [entry]
    */
-  const makeFromTree = async (
-    id,
+  const runTreeAs = async (
+    runningAs,
+    entry,
     workerId,
-    powersId,
-    treeId,
+    workerDaemonFacet,
+    treeP,
+    powersP,
     env,
     context,
-    cancelWithWorker,
-    layout = 'archive',
-    entry = undefined,
   ) => {
-    context.thisDiesIfThatDies(workerId);
-    context.thisDiesIfThatDies(powersId);
-    context.thisDiesIfThatDies(treeId);
-    if (cancelWithWorker) {
-      context.thisDiesIfThatDies(cancelWithWorker);
-    }
-
-    const worker = await provide(
-      /** @type {FormulaIdentifier} */ (workerId),
-      'worker',
-    );
-    const workerDaemonFacet = workerDaemonFacets.get(worker);
-    assert(workerDaemonFacet, 'Cannot make caplet with non-worker');
-    const treeP = provide(/** @type {FormulaIdentifier} */ (treeId));
-    const powersP = provide(/** @type {FormulaIdentifier} */ (powersId));
-
-    const runningAs = await resolveTreeLayout(treeP, layout);
-    if (entry !== undefined && runningAs !== 'node-modules-scan') {
-      throw makeError(
-        X`makeFromTree entry ${q(entry)} applies only to the "node-modules-scan" layout, but the tree runs as ${q(runningAs)}`,
-      );
-    }
-    treeLayoutRunningAs.set(id, runningAs);
-    context.onCancel(() => {
-      treeLayoutRunningAs.delete(id);
-    });
-
     if (runningAs !== 'archive') {
       const { captureNodeModulesArchive } =
         await import('./capture-node-modules.js');
@@ -2425,6 +2379,80 @@ const makeDaemonCore = async (
       /** @type {any} */ (makeFarContext(context)),
       env,
     );
+  };
+
+  /**
+   * The layout each live `make-from-tree` incarnation ran as, keyed by the
+   * formula identifier.
+   *
+   * @type {Map<string, Exclude<TreeLayout, 'package'>>}
+   */
+  const treeLayoutRunningAs = new Map();
+
+  /**
+   * Load a source-only tree (ReadableTree or Mount) into a worker and
+   * invoke its entry `make(powers, context, { env })`.  Mirrors
+   * {@link makeArchive} but the source comes from a tree capability
+   * rather than a ZIP blob.
+   *
+   * @param {string} id
+   * @param {string} workerId
+   * @param {string} powersId
+   * @param {string} treeId
+   * @param {Record<string, string> | undefined} env
+   * @param {Context} context
+   * @param {string} [cancelWithWorker]
+   * @param {RequestedTreeLayout} [layout]
+   * @param {string} [entry]
+   */
+  const makeFromTree = async (
+    id,
+    workerId,
+    powersId,
+    treeId,
+    env,
+    context,
+    cancelWithWorker,
+    layout = 'archive',
+    entry = undefined,
+  ) => {
+    context.thisDiesIfThatDies(workerId);
+    context.thisDiesIfThatDies(powersId);
+    context.thisDiesIfThatDies(treeId);
+    if (cancelWithWorker) {
+      context.thisDiesIfThatDies(cancelWithWorker);
+    }
+
+    const worker = await provide(
+      /** @type {FormulaIdentifier} */ (workerId),
+      'worker',
+    );
+    const workerDaemonFacet = workerDaemonFacets.get(worker);
+    assert(workerDaemonFacet, 'Cannot make caplet with non-worker');
+    const treeP = provide(/** @type {FormulaIdentifier} */ (treeId));
+    const powersP = provide(/** @type {FormulaIdentifier} */ (powersId));
+
+    const runningAs = await resolveTreeLayout(treeP, layout);
+    if (entry !== undefined && runningAs !== 'node-modules-scan') {
+      throw makeError(
+        X`makeFromTree entry ${q(entry)} applies only to the "node-modules-scan" layout, but the tree runs as ${q(runningAs)}`,
+      );
+    }
+    const value = await runTreeAs(
+      runningAs,
+      entry,
+      workerId,
+      workerDaemonFacet,
+      treeP,
+      powersP,
+      env,
+      context,
+    );
+    treeLayoutRunningAs.set(id, runningAs);
+    context.onCancel(() => {
+      treeLayoutRunningAs.delete(id);
+    });
+    return value;
   };
 
   /**
