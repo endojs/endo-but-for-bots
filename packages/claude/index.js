@@ -1,4 +1,6 @@
 // @ts-check
+// reexport-policy-exempt: this is the package's own entry point, not a
+// compatibility shim; its re-exports are the public API.
 //
 // `@endo/claude`: confined `claude -p` inference for an Endo guest from a Claude
 // subscription, whose only capability surface is the MCP projection of one guest
@@ -45,6 +47,10 @@ export { INFER_RESULT_TYPES } from './src/results.js';
 // `@endo/agent-mcp-stdio`, composed with this package's argv, environment, and
 // launch (designs/endo-guest-stdio-mcp.md § How the confinement properties
 // change, shape 1).
-export { runConfinedTurn, readClaudeVersion } from './src/confined-turn.js';
+export {
+  runConfinedTurn,
+  readClaudeVersion,
+  makeGuestConnect,
+} from './src/confined-turn.js';
 export { makeLaunch, resultFromStream } from './src/launch.js';
 export { makeSpawnFilesPreparer } from './src/spawn-files.js';

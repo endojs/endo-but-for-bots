@@ -12,6 +12,7 @@ import {
   makeRelayTransport,
   startGuestBroker,
 } from '../src/broker.js';
+import { resolveScopedGuest } from '../src/server.js';
 
 const FORMULA_ID = 'ab'.repeat(32);
 const OTHER_ID = 'cd'.repeat(32);
@@ -33,10 +34,13 @@ const makeFake = (name, methods) =>
 /**
  * @param {string} label
  * @param {unknown[][]} calls
+ * @param {string} [formulaNumber] - the number the guest names itself by.
  */
-const makeFakeGuest = (label, calls) =>
+const makeFakeGuest = (label, calls, formulaNumber = '00'.repeat(32)) =>
   makeFake('EndoGuest', {
     help: () => `help for ${label}`,
+    identify: name =>
+      name === '@agent' ? `${formulaNumber}:${NODE}` : undefined,
     has: () => false,
     list: () => {
       calls.push([label, 'list']);
@@ -62,8 +66,8 @@ const makeFakeConnection = () => {
   const calls = [];
   const closed = makePromiseKit();
   const guests = {
-    [FORMULA_ID]: makeFakeGuest('mine', calls),
-    [OTHER_ID]: makeFakeGuest('other', calls),
+    [FORMULA_ID]: makeFakeGuest('mine', calls, FORMULA_ID),
+    [OTHER_ID]: makeFakeGuest('other', calls, OTHER_ID),
   };
   const host = makeFake('EndoHost', {
     identify: name =>
@@ -258,4 +262,105 @@ test('close removes the broker socket and directory', async t => {
   t.true(fs.existsSync(broker.socketPath));
   await broker.close();
   t.false(fs.existsSync(broker.socketPath.replace(/\/[^/]+$/, '')));
+});
+
+/**
+ * A session on a daemon-issued guest socket: its bootstrap is the guest, and
+ * there is no host to call.
+ *
+ * @param {string} formulaNumber - the guest the socket was issued for.
+ */
+const makeFakeGuestConnection = formulaNumber => {
+  /** @type {unknown[][]} */
+  const calls = [];
+  const closed = makePromiseKit();
+  return {
+    calls,
+    connection: harden({
+      guest: makeFakeGuest('scoped', calls, formulaNumber),
+      closed: closed.promise,
+      close: () => {},
+    }),
+  };
+};
+
+test('a broker over a guest-scoped connection serves that guest with no host', async t => {
+  const { calls, connection } = makeFakeGuestConnection(FORMULA_ID);
+  t.false('host' in connection);
+  const broker = await startGuestBroker({
+    connection,
+    formulaId: FORMULA_ID,
+    version: '0.0.0-test',
+  });
+  t.teardown(() => broker.close());
+
+  const child = spawnAsClaudeWould(await broker.transport());
+  const exited = new Promise(resolve => child.on('exit', resolve));
+  const client = makeClient(child);
+  await client.request('initialize', {
+    protocolVersion: '2025-06-18',
+    capabilities: {},
+    clientInfo: { name: 'scripted-client', version: '0' },
+  });
+  const called = await client.request('tools/call', {
+    name: 'list',
+    arguments: {},
+  });
+  t.falsy(called.result.isError);
+  t.true(JSON.stringify(called.result).includes('scoped-name'));
+  child.stdin.end();
+  t.is(await exited, 0);
+  t.deepEqual(calls, [['scoped', 'list']]);
+});
+
+test('a broker refuses a guest socket issued for a different guest', async t => {
+  const { connection } = makeFakeGuestConnection(OTHER_ID);
+  await t.throwsAsync(
+    startGuestBroker({ connection, formulaId: FORMULA_ID, version: '0' }),
+    { message: /does not speak for formula/ },
+  );
+  // The qualified form names the same guest as the bare number.
+  const broker = await startGuestBroker({
+    connection,
+    formulaId: `${OTHER_ID}:${NODE}`,
+    version: '0',
+  });
+  await broker.close();
+  t.pass();
+});
+
+test('a broker refuses a guest socket whose guest lives on a different node', async t => {
+  const { connection } = makeFakeGuestConnection(FORMULA_ID);
+  await t.throwsAsync(
+    startGuestBroker({
+      connection,
+      formulaId: `${FORMULA_ID}:${'34'.repeat(32)}`,
+      version: '0',
+    }),
+    { message: /does not speak for formula/ },
+  );
+});
+
+test('resolveScopedGuest refuses a malformed formula id with a discriminated error', async t => {
+  const guest = makeFakeGuest('guest', [], FORMULA_ID);
+  const error = await t.throwsAsync(resolveScopedGuest(guest, 'not-an-id'), {
+    message: /does not resolve to a guest/,
+  });
+  t.is(/** @type {any} */ (error).reason, 'invalid-formula-id');
+});
+
+test('a broker refuses a guest socket whose bootstrap is not a guest', async t => {
+  const closed = makePromiseKit();
+  const connection = harden({
+    guest: makeFake('EndoHost', {
+      identify: () => `${FORMULA_ID}:${NODE}`,
+      lookupById: () => {},
+    }),
+    closed: closed.promise,
+    close: () => {},
+  });
+  await t.throwsAsync(
+    startGuestBroker({ connection, formulaId: FORMULA_ID, version: '0' }),
+    { message: /does not resolve to a guest facet/ },
+  );
 });

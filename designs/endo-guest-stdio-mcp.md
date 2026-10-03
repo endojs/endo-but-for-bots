@@ -21,10 +21,13 @@ implemented. It is a two-process broker: `startGuestBroker` holds the daemon
 connection outside the confined tree and serves one guest on a private Unix
 socket, and the claude-spawned `relay.mjs` starts under `env -i`. `@endo/claude`'s
 `runConfinedTurn` composes these with the confinement argv, the constructed
-environment, and the stream-json launch. Still to be built are the kernel-level
-slice that makes the daemon socket structurally unreachable
-([endo-posix-sandbox](endo-posix-sandbox.md)) and the daemon-issued
-guest-scoped bootstrap that would replace the root-host `lookupById`.
+environment, and the stream-json launch. The daemon-issued guest-scoped bootstrap is
+also implemented: `EndoBootstrap.guestBootstrapPath(id)` serves one local guest
+on its own `0700`-directory Unix socket whose CapTP bootstrap (export offset 0)
+is the guest facet itself, and `runConfinedTurn` connects the broker there
+(`connectToGuestBootstrap`) instead of to the root host. Still to be built is
+the kernel-level slice that makes the daemon socket structurally unreachable
+([endo-posix-sandbox](endo-posix-sandbox.md)).
 
 The design's 64-hex formula id is the daemon's formula *number*; the daemon's
 full identifier is `<number>:<node>`. The server accepts either form and
@@ -827,12 +830,24 @@ positive-confinement test. An implementation is accepted only when these pass.
   hands each session a bootstrap **already scoped to the one guest** (the ocapn
   offset-0 gateway brought forward over the daemon UDS: a guest-scoped agent rather
   than the host root), so the connection resolves only this guest and exposes no host
-  authority. Remaining question: schedule — is this daemon obligation taken up now
-  (the cleanest confined shape) or does the confined deployment first ride the
-  harness-owned broker holding a host-root connection it narrows to one facet? Both
-  keep the "always dispatch through the one guest" contract; they differ only in
-  whether the narrowing is enforced by the daemon (scoped bootstrap) or by the
-  harness (broker).
+  authority. **Resolved (endo-but-for-bots#1371 follow-up):** taken up now, over
+  CapTP on the daemon UDS rather than waiting for ocapn's domain-socket transport.
+  `EndoBootstrap.guestBootstrapPath(id)` (root authority) serves one local guest on
+  its own socket in a `0700` directory beside the daemon socket; that socket's
+  bootstrap (export offset 0) *is* the guest facet, so a session on it reaches that
+  guest and no host. The broker keeps its contract (`startGuestBroker({ connection,
+  formulaId, version })`): given a guest-scoped connection it checks that the facet
+  names itself (`@agent`) by the configured formula number and carries the guest
+  interface, and given a root-host connection it still narrows by `lookupById`.
+  Issuing is the one step that holds host authority, so an operator can issue once
+  and hand each turn only the socket path. Canceling the guest (`cancel`, or
+  collection under `ENDO_GC=1`) revokes its socket: the listener closes, the
+  pathname is removed, and open sessions end. Removing a guest's last pet name
+  revokes nothing while formula collection is off (the default), because the guest
+  is then neither collected nor canceled; an operator who wants the socket gone
+  cancels the guest. Not
+  yet built: re-issuing automatically after a restart, and serving guest sockets
+  from the Go and Rust supervisors.
 - **`claude`'s `--mcp-config` intake (resolved, PR #1226).** Pinned now, not
   deferred: `claude`'s `--mcp-config` is variadic and accepts a JSON file path or an
   inline JSON string, but the carrier is a **file *path* backed by an anonymous pipe /

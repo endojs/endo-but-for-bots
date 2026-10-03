@@ -134,7 +134,7 @@ import { getUnredactedStackString } from './unredacted-stack.js';
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { ReadableBlobRange, SnapshotTree } from '@endo/platform/fs/lite/types' */
 /** @import { ArchiveTreeMethods } from './tar-checkin.js' */
-/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoAgent, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableNameHub, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
+/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoAgent, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, GuestPathIssuer, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableNameHub, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
 
 /**
  * @typedef {{ kind: 'bearer', token: string } | { kind: 'basic', username: string, password: string }} GitCredentialMaterial
@@ -468,6 +468,8 @@ const RESOLVED_VALUE_NAME = /** @type {PetName} */ ('value');
  * @param {(bytes: Uint8Array) => Uint8Array} args.signBytes - Sign bytes with the daemon's root Ed25519 key.
  * @param {boolean} [args.gcEnabled] - Enable garbage collection of worker daemons.
  * @param {'locked' | 'node'} [args.defaultWorkerKind] - Default kind for newly formulated workers (defaults to 'node').
+ * @param {GuestPathIssuer} [args.guestPathIssuer] - Serves one guest on its
+ *   own socket; absent where the platform cannot serve Unix sockets.
  *
  * @example
  * ```js
@@ -492,6 +494,7 @@ const makeDaemonCore = async (
     signBytes,
     gcEnabled = true,
     defaultWorkerKind = 'node',
+    guestPathIssuer = undefined,
   },
 ) => {
   const {
@@ -688,6 +691,13 @@ const makeDaemonCore = async (
    * @type {Map<FormulaIdentifier, Formula>}
    */
   const formulaForId = new Map();
+
+  /**
+   * Guest controllers whose cancellation already revokes their bootstrap
+   * socket, so a repeated `guestBootstrapPath` request adds no listener.
+   * @type {WeakSet<Controller>}
+   */
+  const guestPathRevocationControllers = new WeakSet();
 
   /**
    * Publishes `{ add: formulaNumber, node }` when a formula is
@@ -1050,6 +1060,16 @@ const makeDaemonCore = async (
         collectedIds,
         collectedFormulaTypes,
       );
+
+      // A collected guest's own socket goes with it: the listener closes,
+      // the pathname is removed, and its open connections end.
+      if (guestPathIssuer !== undefined) {
+        for (const [id, type] of collectedFormulaTypes) {
+          if (type === 'guest') {
+            guestPathIssuer.revoke(parseId(id).number, cancelReason);
+          }
+        }
+      }
     });
   };
 
@@ -4275,6 +4295,56 @@ const makeDaemonCore = async (
               },
               host: () => provide(hostId, 'host'),
               leastAuthority: () => provide(leastAuthorityId, 'guest'),
+              guestBootstrapPath: async inputId => {
+                // A daemon that cannot serve guest sockets says so with
+                // `undefined`, so a client need not match error text.
+                if (guestPathIssuer === undefined) {
+                  return undefined;
+                }
+                // A bare formula number names a formula on this node.
+                const id = /** @type {FormulaIdentifier} */ (
+                  inputId.includes(':')
+                    ? inputId
+                    : formatId({
+                        number: /** @type {FormulaNumber} */ (inputId),
+                        node: localNodeNumber,
+                      })
+                );
+                assertValidId(id);
+                if (!isLocalId(id) || (await getTypeForId(id)) !== 'guest') {
+                  throw makeError(X`Formula ${q(id)} is not a local guest`);
+                }
+                const guest = await provide(id, 'guest');
+                const { number } = parseId(id);
+                const socketPath = await guestPathIssuer.issue(number, guest, {
+                  capTpConnectionRegistrar,
+                });
+                // A guest collected while its socket was being issued may
+                // have been swept before the issuer knew of the socket, so
+                // its revocation missed it: revoke here instead. A guest
+                // collected after this check finds its socket and revokes it.
+                // Look the controller up rather than provide it, since
+                // providing a collected guest would reincarnate it from its
+                // not-yet-deleted formula.
+                const controller = controllerForId.get(id);
+                if (controller === undefined || !formulaForId.has(id)) {
+                  const reason = makeError(
+                    X`Guest ${q(id)} was collected while its socket was issued`,
+                  );
+                  guestPathIssuer.revoke(number, reason);
+                  throw reason;
+                }
+                // Canceling the guest revokes its socket, whether or not
+                // formula collection is enabled (ENDO_GC). One listener per
+                // guest incarnation suffices for repeated requests.
+                if (!guestPathRevocationControllers.has(controller)) {
+                  guestPathRevocationControllers.add(controller);
+                  controller.context.cancelled.catch(reason => {
+                    guestPathIssuer.revoke(number, reason);
+                  });
+                }
+                return socketPath;
+              },
               greeter: async () => localGreeter,
               gateway: async () => localGateway,
               nodeId: () => localNodeNumber,
@@ -8453,6 +8523,7 @@ const makeDaemonCore = async (
  * @param {Specials} args.specials - Special formula generators.
  * @param {boolean} [args.gcEnabled] - Enable garbage collection.
  * @param {'locked' | 'node'} [args.defaultWorkerKind] - Default kind for newly formulated workers.
+ * @param {GuestPathIssuer} [args.guestPathIssuer] - Backs `EndoBootstrap.guestBootstrapPath`.
  * @returns {Promise<{
  *   endoBootstrap: FarRef<EndoBootstrap>,
  *   capTpConnectionRegistrar: CapTpConnectionRegistrar,
@@ -8483,6 +8554,7 @@ const provideEndoBootstrap = async (
     specials,
     gcEnabled,
     defaultWorkerKind,
+    guestPathIssuer,
   },
 ) => {
   const { persistence: persistencePowers } = powers;
@@ -8501,6 +8573,7 @@ const provideEndoBootstrap = async (
     signBytes: rootKeypair.sign,
     gcEnabled,
     defaultWorkerKind,
+    guestPathIssuer,
   });
   const { capTpConnectionRegistrar, traceAggregator, inboundErrorOrigin } =
     daemonCore;
@@ -8556,6 +8629,8 @@ const provideEndoBootstrap = async (
  * @param {object} [options]
  * @param {boolean} [options.gcEnabled] - Enable garbage collection of worker daemons.
  * @param {'locked' | 'node'} [options.defaultWorkerKind] - Default kind for newly formulated workers.
+ * @param {GuestPathIssuer} [options.guestPathIssuer] - Serves one guest on its
+ *   own socket, backing `EndoBootstrap.guestBootstrapPath`.
  *
  * @example
  * ```js
@@ -8576,7 +8651,7 @@ export const makeDaemon = async (
   specials = {},
   options = {},
 ) => {
-  const { gcEnabled, defaultWorkerKind } = options;
+  const { gcEnabled, defaultWorkerKind, guestPathIssuer } = options;
   const { promise: gracePeriodCancelled, reject: cancelGracePeriod } =
     /** @type {PromiseKit<never>} */ (makePromiseKit());
 
@@ -8604,6 +8679,7 @@ export const makeDaemon = async (
     specials,
     gcEnabled,
     defaultWorkerKind,
+    guestPathIssuer,
   });
 
   await Promise.allSettled([
