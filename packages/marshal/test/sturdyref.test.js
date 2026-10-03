@@ -287,6 +287,29 @@ test('the dot-membrane passes a SturdyRef as a membraned SturdyRef', async t => 
   });
 });
 
+test('the dot-membrane passes a synchronous enliven throw across', async t => {
+  const secret = Far('secret', { reveal: () => 'mine' });
+  const sturdyRef = new SturdyRef(
+    harden({
+      enliven: () => {
+        throw secret;
+      },
+    }),
+  );
+  const { proxy, revoke } = makeDotMembraneKit(
+    Far('Holder', { get: () => sturdyRef }),
+  );
+  const yourRef = await proxy.get();
+  const reason = await SturdyRef.enliven(yourRef).then(
+    () => t.fail('enliven should reject'),
+    r => r,
+  );
+  t.not(reason, secret);
+  t.is(passStyleOf(reason), 'remotable');
+  t.is(await reason.reveal(), 'mine');
+  revoke('done');
+});
+
 test('smallcaps rejects a non-canonical sturdyRef index', t => {
   const { sturdyRef } = makeSturdyRef('Ivan');
   const { fromCapData } = makeMarshal(undefined, () => sturdyRef, {

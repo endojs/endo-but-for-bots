@@ -16,7 +16,26 @@ import { makeMarshal } from './marshal.js';
  * @import {RemotableMethodName} from '@endo/pass-style';
  */
 
-const { fromEntries } = Object;
+const { fromEntries, freeze } = Object;
+const { apply } = Reflect;
+
+/** @type {{ SturdyRef: any, enliven: Function } | undefined} */
+let sturdyRefPowers;
+
+/**
+ * Captures the realm's `SturdyRef` constructor and its `enliven` once, so
+ * that a later reassignment of `globalThis.SturdyRef` or of
+ * `SturdyRef.enliven` cannot change what the membrane mints or calls.
+ * Called only after `passStyleOf` has recognized a SturdyRef, so the
+ * realm's `SturdyRef` exists by then.
+ */
+const getSturdyRefPowers = () => {
+  if (sturdyRefPowers === undefined) {
+    const { SturdyRef } = /** @type {any} */ (globalThis);
+    sturdyRefPowers = freeze({ SturdyRef, enliven: SturdyRef.enliven });
+  }
+  return sturdyRefPowers;
+};
 
 // TODO(erights): Add Converter type
 /** @param {any} [mirrorConverter] */
@@ -112,8 +131,7 @@ const makeConverter = (mirrorConverter = undefined) => {
       case 'sturdyRef': {
         // Passing a SturdyRef makes a SturdyRef on your side whose handler
         // enlivens mine and passes the live result across the membrane.
-        // `passStyleOf` recognized `mine`, so the realm's `SturdyRef` exists.
-        const { SturdyRef } = /** @type {any} */ (globalThis);
+        const { SturdyRef, enliven } = getSturdyRefPowers();
         yours = new SturdyRef(
           harden({
             enliven: () => {
@@ -124,9 +142,11 @@ const makeConverter = (mirrorConverter = undefined) => {
               const mineIf = passBack(yours);
               // As with promises, pass both the fulfillment and the
               // rejection, so that neither crosses the membrane unwrapped.
+              // Calling `enliven` inside `E.when` routes a synchronous throw
+              // through the rejection path too.
               return new Promise((yourResolve, yourReject) => {
                 E.when(
-                  SturdyRef.enliven(mineIf),
+                  E.when(undefined, () => apply(enliven, SturdyRef, [mineIf])),
                   myFulfillment => yourResolve(pass(myFulfillment)),
                   myReason => yourReject(pass(myReason)),
                 )
@@ -143,6 +163,8 @@ const makeConverter = (mirrorConverter = undefined) => {
             },
           }),
         );
+        passStyleOf(yours) === 'sturdyRef' ||
+          Fail`internal: the realm's SturdyRef made a non-sturdyRef: ${yours}`;
         break;
       }
       default: {
