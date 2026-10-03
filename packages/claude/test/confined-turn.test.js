@@ -324,6 +324,21 @@ test('any other issue failure does not fall back to the root connection', async 
   await t.throwsAsync(connect(), { message: 'Unknown guest' });
 });
 
+test('an argument-guard failure naming guestBootstrapPath does not fall back to the root connection', async t => {
+  const message =
+    'In "guestBootstrapPath" method of (Endo): arg 0: number 123 - Must be a string';
+  const connect = makeGuestConnect({
+    formulaId: FORMULA_ID,
+    issue: async () => {
+      throw Error(message);
+    },
+    connectToRoot: async () => {
+      throw Error('unexpected root connection');
+    },
+  });
+  await t.throwsAsync(connect(), { message });
+});
+
 test('a default turn whose root socket is unreachable fails before any spawn', async t => {
   const parentDir = fs.mkdtempSync('/tmp/ect-');
   t.teardown(() => fs.rmSync(parentDir, { recursive: true, force: true }));
