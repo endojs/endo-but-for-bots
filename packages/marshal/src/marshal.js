@@ -29,6 +29,7 @@ import {
 const { defineProperties, hasOwn } = Object;
 const { isArray } = Array;
 const { ownKeys } = Reflect;
+const { isSafeInteger } = Number;
 
 /** @type {ConvertValToSlot<any>} */
 const defaultValToSlotFn = x => x;
@@ -426,11 +427,12 @@ export const makeMarshal = (
       assert(stringEncoding.charAt(0) === "'");
       // A SturdyRef encoding carries no iface, and `Number` alone would
       // accept "", " 0", "0x0", and "0e0" as slot 0, so require one
-      // canonical decimal index.
+      // canonical decimal index, within the range where distinct digit
+      // strings stay distinct numbers.
       const digits = stringEncoding.slice(1);
-      /^(?:0|[1-9][0-9]*)$/.test(digits) ||
-        Fail`sturdyRef encoding must be "'" followed by a slot index: ${q(stringEncoding)}`;
       const index = Number(digits);
+      (/^(?:0|[1-9][0-9]*)$/.test(digits) && isSafeInteger(index)) ||
+        Fail`sturdyRef encoding must be "'" followed by a slot index: ${q(stringEncoding)}`;
       return /** @type {SturdyRef} */ (decodeSlotCommon({ index }));
     };
 
