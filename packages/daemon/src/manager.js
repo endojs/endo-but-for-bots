@@ -46,7 +46,10 @@ import {
   tarEndMarker,
 } from '@endo/tar/writer.js';
 import { checkinTarTree } from './tar-checkin.js';
-import { resolveTreeLayout } from './tree-layout.js';
+import {
+  assertEntryAppliesToLayout,
+  resolveTreeLayout,
+} from './tree-layout.js';
 import { makeEndoRegistry, makeRegistryTable } from './registry.js';
 import { makeDirectoryMaker, makeReadOnlyDirectoryView } from './directory.js';
 import { makeContentDataPlaneRegistry } from './content-data-plane.js';
@@ -2446,11 +2449,7 @@ const makeDaemonCore = async (
     const powersP = provide(/** @type {FormulaIdentifier} */ (powersId));
 
     const runningAs = await resolveTreeLayout(treeP, layout);
-    if (entry !== undefined && runningAs !== 'node-modules-scan') {
-      throw makeError(
-        X`makeFromTree entry ${q(entry)} applies only to the "node-modules-scan" layout, but the tree runs as ${q(runningAs)}`,
-      );
-    }
+    assertEntryAppliesToLayout(entry, runningAs);
     const value = await runTreeAs(
       runningAs,
       entry,

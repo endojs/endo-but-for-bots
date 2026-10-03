@@ -43,7 +43,11 @@ import {
 } from './interfaces.js';
 import { hostHelp, makeHelp } from './help-text.js';
 import { assertValidTreeEntryName, getMountBacking } from './mount.js';
-import { resolveTreeLayout, treeKindForFormulaType } from './tree-layout.js';
+import {
+  assertEntryAppliesToLayout,
+  resolveTreeLayout,
+  treeKindForFormulaType,
+} from './tree-layout.js';
 
 /**
  * @param {string} name
@@ -1833,11 +1837,7 @@ export const makeHostMaker = ({
         provide(/** @type {FormulaIdentifier} */ (treeId)),
         layout,
       );
-      if (entry !== undefined && runningAs !== 'node-modules-scan') {
-        throw makeError(
-          X`makeFromTree entry ${q(entry)} applies only to the "node-modules-scan" layout, but the tree runs as ${q(runningAs)}`,
-        );
-      }
+      assertEntryAppliesToLayout(entry, runningAs);
 
       const {
         tasks,

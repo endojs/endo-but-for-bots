@@ -272,14 +272,16 @@ export const makeMountCanonical = mount => {
     if (resolved === treeRoot) {
       return harden([]);
     }
-    if (!resolved.startsWith(`${treeRoot}/`)) {
+    // A root of `/` already ends in the separator.
+    const rootPrefix = treeRoot.endsWith('/') ? treeRoot : `${treeRoot}/`;
+    if (!resolved.startsWith(rootPrefix)) {
       throw makeError(
         X`Unsupported layout: ${q(
           segments.length === 0 ? '.' : segments.join('/'),
         )} resolves outside the mount root`,
       );
     }
-    return harden(resolved.slice(treeRoot.length + 1).split('/'));
+    return harden(resolved.slice(rootPrefix.length).split('/'));
   };
   return harden(canonical);
 };

@@ -7,6 +7,7 @@ import '@endo/init/debug.js';
 import fs, {
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -166,6 +167,37 @@ test('node-modules-with-map refuses a compartment with no location', async testC
   await testContext.throwsAsync(
     () => captureNodeModules(tree, { layout: 'node-modules-with-map' }),
     { message: /is missing its location/ },
+  );
+});
+
+test('node-modules-with-map refuses a map that names no compartments', async testContext => {
+  const directory = makeFixture(testContext, "export default 'mapped';\n");
+  writeFileSync(
+    join(directory, 'compartment-map.json'),
+    JSON.stringify({
+      tags: [],
+      entry: { compartment: 'file:///app/', module: './mapped.js' },
+      compartments: {},
+    }),
+  );
+  await testContext.throwsAsync(
+    () =>
+      captureNodeModules(makeLocalTree(directory), {
+        layout: 'node-modules-with-map',
+      }),
+    { message: /names no compartments/ },
+  );
+});
+
+test('node-modules-scan refuses an empty entry rather than skip the root export', async testContext => {
+  const directory = makeFixture(testContext, "export default 'scan';\n");
+  await testContext.throwsAsync(
+    () =>
+      captureNodeModules(makeLocalTree(directory), {
+        layout: 'node-modules-scan',
+        entry: '',
+      }),
+    { message: /Entry must name a module/ },
   );
 });
 
@@ -390,6 +422,27 @@ test('mount canonical maps a sub-mount entry relative to its own root', async te
   testContext.deepEqual(await canonical(['middle', 'node_modules', 'shared']), [
     'shared',
   ]);
+});
+
+test('mount canonical maps entries below a mount of the filesystem root', async testContext => {
+  const directory = makeLinkedFixture(testContext);
+  const mount = makeMount({ rootPath: '/', readOnly: true, filePowers });
+  const canonical = makeMountCanonical(mount);
+  if (canonical === undefined) {
+    throw Error('Expected a canonical hook for a daemon-minted mount');
+  }
+  const physical = realpathSync(join(directory, 'node_modules', 'shared'));
+  testContext.deepEqual(
+    await canonical([
+      ...directory.split('/').filter(segment => segment !== ''),
+      'node_modules',
+      'middle',
+      'node_modules',
+      'shared',
+    ]),
+    physical.split('/').filter(segment => segment !== ''),
+  );
+  testContext.deepEqual(await canonical([]), []);
 });
 
 test('mount canonical refuses a link that resolves outside the tree root', async testContext => {

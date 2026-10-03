@@ -56,6 +56,9 @@ const assertMapLocationsUnderRoot = (
       X`Compartment map ${q(mapLocation)} is missing its compartments map`,
     );
   }
+  if (Object.keys(allegedCompartmentMap.compartments).length === 0) {
+    throw makeError(X`Compartment map ${q(mapLocation)} names no compartments`);
+  }
 
   for (const [compartmentName, allegedDescriptor] of Object.entries(
     allegedCompartmentMap.compartments,
@@ -134,6 +137,11 @@ const mapTree = async (tree, options) => {
     assertMapLocationsUnderRoot(allegedCompartmentMap, root, mapLocation);
     compartmentMap = allegedCompartmentMap;
   } else if (layout === 'node-modules-scan') {
+    if (entry === '') {
+      throw makeError(
+        X`Entry must name a module; omit entry to run the root package's "." export`,
+      );
+    }
     const moduleLocation =
       entry === undefined ? root : new URL(entry, root).href;
     if (!moduleLocation.startsWith(root)) {

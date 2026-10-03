@@ -189,3 +189,28 @@ export const resolveTreeLayout = async (tree, requested) => {
   return requested;
 };
 harden(resolveTreeLayout);
+
+/**
+ * Assert that a `makeFromTree` `entry` applies to the layout a tree runs as.
+ * Only `node-modules-scan` takes an entry, and an empty entry names no
+ * module: omit `entry` to run the root package's `"."` export.
+ *
+ * @param {string | undefined} entry
+ * @param {Exclude<TreeLayout, 'package'>} runningAs
+ */
+export const assertEntryAppliesToLayout = (entry, runningAs) => {
+  if (entry === undefined) {
+    return;
+  }
+  if (runningAs !== 'node-modules-scan') {
+    throw makeError(
+      X`makeFromTree entry ${q(entry)} applies only to the "node-modules-scan" layout, but the tree runs as ${q(runningAs)}`,
+    );
+  }
+  if (entry === '') {
+    throw makeError(
+      X`makeFromTree entry must name a module; omit entry to run the root package's "." export`,
+    );
+  }
+};
+harden(assertEntryAppliesToLayout);

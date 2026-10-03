@@ -5,6 +5,7 @@ import '@endo/init/debug.js';
 import test from 'ava';
 
 import {
+  assertEntryAppliesToLayout,
   detectTreeLayout,
   requestedTreeLayouts,
   resolveTreeLayout,
@@ -210,4 +211,17 @@ test('resolveTreeLayout refuses package and unknown layouts', async t => {
     () => resolveTreeLayout(tree, /** @type {any} */ ('zip')),
     { message: /Unknown makeFromTree layout "zip"/ },
   );
+});
+
+test('assertEntryAppliesToLayout admits an entry only for node-modules-scan', t => {
+  t.notThrows(() => assertEntryAppliesToLayout(undefined, 'archive'));
+  t.notThrows(() =>
+    assertEntryAppliesToLayout('./main.js', 'node-modules-scan'),
+  );
+  t.throws(() => assertEntryAppliesToLayout('./main.js', 'archive'), {
+    message: /applies only to the "node-modules-scan" layout/,
+  });
+  t.throws(() => assertEntryAppliesToLayout('', 'node-modules-scan'), {
+    message: /entry must name a module/,
+  });
 });
