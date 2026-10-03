@@ -57,21 +57,6 @@ import { PINNED_CLI_VERSION } from './argv.js';
 /** @import { DaemonConnection, GuestConnection } from '@endo/agent-mcp-stdio' */
 
 /**
- * Whether `error` says the daemon cannot issue guest sockets at all (a
- * daemon without a guest path issuer, such as on win32).
- * Only the daemon-owned refusal text counts: a loose match on the method
- * name would also catch argument-guard failures and silently widen the
- * harness to full host authority.
- *
- * @param {unknown} error
- * @returns {boolean}
- */
-const isGuestBootstrapUnsupported = error => {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.includes('does not serve guest-scoped bootstraps');
-};
-
-/**
  * The default harness connection: a session on `guestSocketPath`, or, when
  * absent, on a guest socket issued for `formulaId` over the root socket
  * (`issue` closes that root session before it returns). A daemon that cannot
@@ -107,12 +92,10 @@ export const makeGuestConnect = ({
         temp: os.tmpdir(),
       },
     };
-    /** @type {string} */
-    let socketPath;
-    try {
-      socketPath = await issue({ formulaId, ...where });
-    } catch (error) {
-      if (!isGuestBootstrapUnsupported(error)) throw error;
+    // Only a daemon that serves no guest sockets answers `undefined`; any
+    // failure rejects instead, so it cannot widen the harness to the host.
+    const socketPath = await issue({ formulaId, ...where });
+    if (socketPath === undefined) {
       return connectToRoot(where);
     }
     return connectTo({ socketPath });

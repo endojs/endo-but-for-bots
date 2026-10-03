@@ -118,7 +118,12 @@ socket** (`EndoBootstrap.guestBootstrapPath`), whose bootstrap is the one guest
 facet, so the harness holds no host. An operator issues that socket once
 (`issueGuestBootstrapPath` from `@endo/agent-mcp-stdio`) and passes its path as
 `guestSocketPath`; without one, the turn issues it over the root daemon socket
-and closes that root session before the broker starts. It then starts
+and closes that root session before the broker starts. Only a daemon that
+serves no guest sockets (one that predates `guestBootstrapPath`, or one on a
+platform without Unix sockets) gets the root connection instead, which holds
+the whole host's authority; any other failure to issue fails the turn.
+`makeGuestConnect` is that default connection, exported for a harness that
+composes its own turn. It then starts
 `@endo/agent-mcp-stdio`'s `startGuestBroker` for the one guest. It then
 runs `make(...)` with concrete seams: `makeSpawnFilesPreparer` writes the `0600`
 `--mcp-config` / `--settings` / credential files, whose `apiKeyHelper` is
