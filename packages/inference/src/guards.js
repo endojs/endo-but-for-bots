@@ -3,9 +3,12 @@
 import { M } from '@endo/patterns';
 
 /**
- * The largest delay a host timer honors. Node and the HTML timer steps
- * (WebIDL `long`) turn any longer delay, `Infinity` included, into about
- * 1 ms, so a wall-clock limit above it would trip at once.
+ * The largest delay a host timer honors. Node replaces any longer delay,
+ * `Infinity` included, with 1 ms. HTML passes the delay through a WebIDL
+ * `long` (https://webidl.spec.whatwg.org/#abstract-opdef-converttoint),
+ * which maps `Infinity` to 0 and wraps other values modulo 2 ** 32, so a
+ * longer delay fires early or at once
+ * (https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#timer-initialisation-steps).
  */
 export const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 
