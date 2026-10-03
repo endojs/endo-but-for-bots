@@ -132,10 +132,12 @@ export const setGlobalObjectMutableProperties = (
   for (const [name, intrinsicName] of entries(universalPropertyNames)) {
     if (hasOwn(intrinsics, intrinsicName)) {
       const value = intrinsics[intrinsicName];
-      const descriptor = getOwnPropertyDescriptor(globalObject, name);
       if (
         hasOwn(firstWinsPropertyNames, name) &&
-        isFirstWinsDescriptor(descriptor, value)
+        isFirstWinsDescriptor(
+          getOwnPropertyDescriptor(globalObject, name),
+          value,
+        )
       ) {
         // The shim already locked the start compartment's binding to the very
         // intrinsic we would install, so leave it. A child compartment gets
