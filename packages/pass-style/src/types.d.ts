@@ -43,7 +43,7 @@ export type PrimitiveStyle = AtomStyle;
 export type ContainerStyle = 'copyRecord' | 'copyArray' | 'tagged';
 
 export type PassStyle =
-  AtomStyle | ContainerStyle | 'remotable' | 'error' | 'promise' | 'parcel';
+  AtomStyle | ContainerStyle | 'remotable' | 'error' | 'promise' | 'sturdyRef';
 
 export type PassStyleMarker = 'tagged' | 'remotable';
 
@@ -142,7 +142,7 @@ export type PassStyleOf = {
   (p: Promise<any>): 'promise';
   (p: Error): 'error';
   (p: CopyTagged): 'tagged';
-  (p: ParcelObject): 'parcel';
+  (p: ParcelObject): 'sturdyRef';
   (p: readonly any[]): 'copyArray';
   // A `Uint8Array` is also `Iterable<number>`; place its byteArray
   // overload before the Iterable-as-remotable fallback so the more
