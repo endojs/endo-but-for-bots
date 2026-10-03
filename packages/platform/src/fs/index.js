@@ -47,5 +47,3 @@ export {
 } from './search.js';
 
 export { makeMaybeRealPath, isPathWithin } from './confinement.js';
-
-export { makeTreeReadPowers } from './tree-read-powers.js';

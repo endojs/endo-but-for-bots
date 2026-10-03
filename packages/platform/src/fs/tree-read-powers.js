@@ -34,7 +34,7 @@ const encodedSeparatorPattern = /%(?:2f|5c|00)/i;
 /**
  * Validate one raw (still percent-encoded) path segment and return its decoded
  * form. Refuses empty, `.`, and `..` segments, and any segment that names or
- * encodes a separator.
+ * encodes a separator or a NUL byte, whether raw or percent-encoded.
  *
  * @param {string} raw
  * @param {string} location
@@ -60,9 +60,13 @@ const decodeSegment = (raw, location) => {
       X`Relative path segment ${q(segment)} in tree location ${q(location)}`,
     );
   }
-  if (segment.includes('/') || segment.includes('\\')) {
+  if (
+    segment.includes('/') ||
+    segment.includes('\\') ||
+    segment.includes('\0')
+  ) {
     throw makeError(
-      X`Separator in path segment ${q(segment)} of ${q(location)}`,
+      X`Separator or NUL in path segment ${q(segment)} of ${q(location)}`,
     );
   }
   return segment;
@@ -157,36 +161,89 @@ export const makeTreeReadPowers = (tree, options = {}) => {
     return collectBytes(entry);
   };
 
-  /** @param {string} location */
+  /**
+   * @param {string} location
+   * @returns {Promise<Uint8Array>}
+   */
   const read = async location => {
     const segments = toSegments(location);
     return readSegments(segments);
   };
 
-  /** @param {string} location */
+  /**
+   * Decide, after a lookup of `segments` has failed, whether the location is
+   * absent: some segment is missing, or a segment before the last names a
+   * file rather than a directory. Returns false when every segment is
+   * present, so the caller surfaces the lookup's own error.
+   *
+   * @param {string[]} segments
+   * @returns {Promise<boolean>}
+   */
+  const isAbsent = async segments => {
+    await null;
+    /** @type {ERef<ReadableTree>} */
+    let node = tree;
+    for (const [index, segment] of segments.entries()) {
+      // eslint-disable-next-line no-await-in-loop
+      if (!(await E(node).has(segment))) {
+        return true;
+      }
+      if (index === segments.length - 1) {
+        return false;
+      }
+      /** @type {unknown} */
+      let child;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        child = await E(node).lookup(segment);
+      } catch (error) {
+        // The entry may have been removed since `has` answered.
+        // eslint-disable-next-line no-await-in-loop
+        if (!(await E(node).has(segment))) {
+          return true;
+        }
+        throw error;
+      }
+      // A file names no children, so the rest of the path is absent.
+      // eslint-disable-next-line no-await-in-loop, no-underscore-dangle
+      const methods = await E(/** @type {any} */ (child)).__getMethodNames__();
+      if (!methods.includes('has') || !methods.includes('lookup')) {
+        return true;
+      }
+      node = /** @type {ERef<ReadableTree>} */ (child);
+    }
+    return false;
+  };
+
+  /**
+   * @param {string} location
+   * @returns {Promise<Uint8Array | undefined>}
+   */
   const maybeRead = async location => {
     await null;
     const segments = toSegments(location);
     if (segments.length === 0) {
       return undefined;
     }
-    // Walk one segment at a time so a missing intermediate directory reads
-    // as absent rather than surfacing the tree's lookup error.
-    /** @type {ERef<ReadableTree>} */
-    let node = tree;
-    for (const segment of segments) {
-      // eslint-disable-next-line no-await-in-loop
-      const present = await E(node).has(segment);
-      if (!present) {
+    // One atomic lookup, as `read` does, so a tree that changes underneath
+    // cannot split a check from its use. Only a failed lookup pays for the
+    // walk that tells a missing entry from any other error.
+    let entry;
+    try {
+      entry = await E(tree).lookup(segments);
+    } catch (error) {
+      if (await isAbsent(segments)) {
         return undefined;
       }
-      // eslint-disable-next-line no-await-in-loop
-      node = /** @type {ReadableTree} */ (await E(node).lookup(segment));
+      throw error;
     }
-    return collectBytes(node);
+    return collectBytes(entry);
   };
 
-  /** @param {string} location */
+  /**
+   * @param {string} location
+   * @returns {Promise<string>}
+   */
   const canonical = async location => {
     await null;
     const segments = toSegments(location);
@@ -198,19 +255,30 @@ export const makeTreeReadPowers = (tree, options = {}) => {
       throw makeError(X`canonical hook must return an array of segments`);
     }
     for (const segment of mapped) {
+      if (typeof segment !== 'string') {
+        throw makeError(
+          X`canonical hook returned a non-string segment ${q(segment)}`,
+        );
+      }
       // The hook's result is held to the same rule as any location.
       decodeSegment(encodeURIComponent(segment), location);
     }
     return toLocation(mapped, location.endsWith('/'));
   };
 
-  /** @param {string} location */
+  /**
+   * @param {string} location
+   * @returns {string}
+   */
   const fileURLToPath = location => {
     const segments = toSegments(location);
     return `${rootPath}${segments.join('/')}`;
   };
 
-  /** @param {string} path */
+  /**
+   * @param {string} path
+   * @returns {URL}
+   */
   const pathToFileURL = path => {
     if (typeof path !== 'string' || !path.startsWith(rootPath)) {
       throw makeError(X`Path ${q(path)} is not under root ${q(rootPath)}`);

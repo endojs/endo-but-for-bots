@@ -33,6 +33,7 @@
     },
     "./fs/node": "./src/fs-node/index.js",
     "./fs/search": "./src/fs/search.js",
+    "./fs/tree-read-powers": "./src/fs/tree-read-powers.js",
     "./fs/search.types": {
       "types": "./src/fs/search-types-index.d.ts"
     },

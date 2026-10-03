@@ -19,16 +19,16 @@ const makeFixture = t => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'tree-read-powers-'));
   t.teardown(() => fs.rmSync(parent, { recursive: true, force: true }));
   fs.writeFileSync(path.join(parent, 'outside'), 'secret');
-  const dir = path.join(parent, 'app');
-  fs.mkdirSync(path.join(dir, 'node_modules', 'dep'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'package.json'), '{"name":"app"}');
-  fs.writeFileSync(path.join(dir, 'main.js'), 'export default 1;');
+  const appPath = path.join(parent, 'app');
+  fs.mkdirSync(path.join(appPath, 'node_modules', 'dep'), { recursive: true });
+  fs.writeFileSync(path.join(appPath, 'package.json'), '{"name":"app"}');
+  fs.writeFileSync(path.join(appPath, 'main.js'), 'export default 1;');
   fs.writeFileSync(
-    path.join(dir, 'node_modules', 'dep', 'index.js'),
+    path.join(appPath, 'node_modules', 'dep', 'index.js'),
     'export default 2;',
   );
-  fs.writeFileSync(path.join(dir, 'a b.js'), 'spaced');
-  return dir;
+  fs.writeFileSync(path.join(appPath, 'a b.js'), 'spaced');
+  return appPath;
 };
 
 // Wrap a tree so the test can see whether any lookup reached it.
@@ -101,6 +101,51 @@ test('maybeRead returns undefined for a missing entry', async t => {
   );
 });
 
+test('maybeRead returns undefined when an intermediate segment is a file', async t => {
+  const powers = makeTreeReadPowers(makeLocalTree(makeFixture(t)));
+  t.is(await powers.maybeRead('file:///app/main.js/package.json'), undefined);
+  t.is(
+    await powers.maybeRead('file:///app/package.json/node_modules/x/y.js'),
+    undefined,
+  );
+});
+
+test('maybeRead returns undefined for an entry removed during the lookup', async t => {
+  const appPath = makeFixture(t);
+  const tree = makeLocalTree(appPath);
+  // The entry is present when asked, then gone when looked up.
+  const racing = harden({
+    has: (...names) => E(tree).has(...names),
+    list: (...names) => E(tree).list(...names),
+    lookup: async name => {
+      fs.rmSync(path.join(appPath, 'main.js'), { force: true });
+      return E(tree).lookup(name);
+    },
+  });
+  const powers = makeTreeReadPowers(racing);
+  t.is(await powers.maybeRead('file:///app/main.js'), undefined);
+});
+
+test('maybeRead surfaces a lookup error for an entry that is present', async t => {
+  const tree = makeLocalTree(makeFixture(t));
+  const failing = harden({
+    has: (...names) => E(tree).has(...names),
+    list: (...names) => E(tree).list(...names),
+    lookup: async () => {
+      throw Error('backend unavailable');
+    },
+  });
+  const powers = makeTreeReadPowers(failing);
+  await t.throwsAsync(() => powers.maybeRead('file:///app/main.js'), {
+    message: 'backend unavailable',
+  });
+});
+
+test('the package exports makeTreeReadPowers by its own path', async t => {
+  const exported = await import('@endo/platform/fs/tree-read-powers');
+  t.is(exported.makeTreeReadPowers, makeTreeReadPowers);
+});
+
 const escapes = [
   'file:///app/../outside',
   'file:///app/node_modules/../../outside',
@@ -111,13 +156,15 @@ const escapes = [
   'file:///app/node_modules%2f..%2f..%2foutside',
   'file:///app/node_modules%5C..%5Coutside',
   'file:///app/main.js%00',
+  'file:///app/main.js\u0000',
+  'file:///app/node_modules\u0000/dep/index.js',
   'file:///app/node_modules\\..\\..\\outside',
   'file:///outside',
   'https://example.com/app/main.js',
 ];
 
 for (const location of escapes) {
-  test(`segment confinement refuses ${location} before any lookup`, async t => {
+  test(`segment confinement refuses ${JSON.stringify(location)} before any lookup`, async t => {
     const { spy, calls } = makeSpyTree(makeLocalTree(makeFixture(t)));
     const powers = makeTreeReadPowers(spy);
     await t.throwsAsync(() => powers.read(location));
@@ -186,5 +233,15 @@ test('canonical refuses a hook result that is not an array', async t => {
   });
   await t.throwsAsync(() => powers.canonical('file:///app/main.js'), {
     message: /canonical hook must return an array of segments/,
+  });
+});
+
+test('canonical refuses a hook result with a non-string segment', async t => {
+  const powers = makeTreeReadPowers(makeLocalTree(makeFixture(t)), {
+    // @ts-expect-error deliberately not a string segment
+    canonical: () => ['node_modules', 42],
+  });
+  await t.throwsAsync(() => powers.canonical('file:///app/main.js'), {
+    message: /non-string segment/,
   });
 });
