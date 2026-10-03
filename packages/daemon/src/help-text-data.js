@@ -146,7 +146,7 @@ export const helpTextEntries = harden([
       cancel:
         'cancel(petNameOrPath, reason?) -> Promise<void>\nCancel a value, triggering cleanup and releasing resources.\nCancellation propagates to dependent values.',
       guestBootstrapPath:
-        'guestBootstrapPath(id) -> Promise<string>\nServe one local guest on its own private Unix socket and return the path.\nA connection to that socket bootstraps to the guest facet itself, so it\nreaches that guest and nothing else: no host, no enumeration of other\nformulas. Issuing again for the same guest returns the same path. The socket\nlives until the daemon stops. The id is a guest formula identifier or a bare\nformula number on this node.',
+        'guestBootstrapPath(id) -> Promise<string | undefined>\nServe one local guest on its own private Unix socket and return the path.\nA connection to that socket bootstraps to the guest facet itself, so it\nreaches that guest and nothing else: no host, no enumeration of other\nformulas. Issuing again for the same guest returns the same path. The socket\nlives until the daemon stops or the guest is collected; collection also\ncloses the connections made on it. The id is a guest formula identifier or a\nbare formula number on this node. A daemon that serves no guest sockets, such\nas on Windows, returns `undefined`.',
       greeter:
         'greeter() -> Promise<EndoGreeter>\nGet the greeter for accepting network connections.',
       gateway:

@@ -116,4 +116,59 @@ testNodeDaemon('a guest bootstrap path refuses a non-guest', async t => {
   await t.throwsAsync(() => E(root).guestBootstrapPath(valueId), {
     message: /is not a local guest/,
   });
+  // A well-formed id on another node, an unknown number, and a malformed id.
+  await t.throwsAsync(
+    () => E(root).guestBootstrapPath(`${'a'.repeat(64)}:${'b'.repeat(64)}`),
+    { message: /is not a local guest/ },
+  );
+  await t.throwsAsync(() => E(root).guestBootstrapPath('c'.repeat(64)));
+  await t.throwsAsync(() => E(root).guestBootstrapPath('not-a-formula-id'));
+});
+
+testNodeDaemon('removing a guest revokes its bootstrap path', async t => {
+  const config = makeConfig('gb-revoke');
+  const { cancelled, cancel } = makeCancelKit();
+  cancelled.catch(() => {});
+  await purge(config);
+  await start(config);
+  t.teardown(async () => {
+    await stop(config).catch(() => {});
+    cancel(Error('teardown'));
+  });
+
+  const root = await connect(config.sockPath, cancelled);
+  const host = E(root).host();
+  await E(host).provideGuest('doomed', { agentName: 'doomed-agent' });
+  const guestId = /** @type {string} */ (
+    await E(host).identify('doomed-agent')
+  );
+  const guestPath = await E(root).guestBootstrapPath(guestId);
+  const scoped = await connect(guestPath, cancelled);
+  t.is(await E(scoped).identify('@agent'), guestId);
+
+  await E(host).remove('doomed');
+  await E(host).remove('doomed-agent');
+
+  // Collection runs after the removal settles; wait for the pathname to go.
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const gone = await fs.stat(guestPath).then(
+      () => false,
+      () => true,
+    );
+    if (gone) break;
+    if (Date.now() > deadline) {
+      t.fail('the guest socket outlived its guest');
+      return;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  await t.throwsAsync(() => connect(guestPath, cancelled));
+  // The open connection was closed with the collection as its reason.
+  await t.throwsAsync(() => E(scoped).identify('@agent'), {
+    any: true,
+    message: /collected/,
+  });
 });

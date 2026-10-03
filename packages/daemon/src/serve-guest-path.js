@@ -8,13 +8,16 @@
 // exactly one guest instead connects to a socket this module serves for that
 // guest: the CapTP bootstrap (export offset 0) on that socket IS the guest
 // facet, so the connection reaches that guest and nothing else.
+// Revoking a guest's socket, as when the guest formula is collected, closes
+// the listener, removes the pathname, and ends every connection made on it.
 
 import harden from '@endo/harden';
 import { makeError, q, X } from '@endo/errors';
+import { makePromiseKit } from '@endo/promise-kit';
 import { servePrivatePath } from './serve-private-path.js';
 
 /** @import { FarRef } from '@endo/eventual-send' */
-/** @import { SocketPowers } from './types.js' */
+/** @import { CapTpConnectionRegistrar, SocketPowers } from './types.js' */
 
 // Darwin's sun_path holds 104 bytes including the terminator; Linux holds 108.
 const MAX_SOCKET_PATH_LENGTH = 103;
@@ -46,6 +49,8 @@ export const makeGuestPathIssuer = ({
 }) => {
   /** @type {Map<string, Promise<string>>} */
   const issuedByNumber = new Map();
+  /** @type {Map<string, (reason: Error) => void>} */
+  const revokeByNumber = new Map();
   /** @type {Map<string, string>} */
   const numberByName = new Map();
   /** @type {Promise<void> | undefined} */
@@ -60,11 +65,29 @@ export const makeGuestPathIssuer = ({
   })();
 
   /**
+   * @param {string} formulaNumber
+   * @param {string} name
+   */
+  const forget = (formulaNumber, name) => {
+    issuedByNumber.delete(formulaNumber);
+    revokeByNumber.delete(formulaNumber);
+    numberByName.delete(name);
+  };
+
+  /**
    * @param {string} formulaNumber - the guest's 64-hex formula number.
    * @param {FarRef<unknown> | object} guest - the guest facet to bootstrap to.
+   * @param {object} [options]
+   * @param {CapTpConnectionRegistrar} [options.capTpConnectionRegistrar] -
+   *   registers each connection with the daemon's residence tracker, as the
+   *   root socket's connections are.
    * @returns {Promise<string>} the socket path.
    */
-  const issue = (formulaNumber, guest) => {
+  const issue = (
+    formulaNumber,
+    guest,
+    { capTpConnectionRegistrar = undefined } = {},
+  ) => {
     const prior = issuedByNumber.get(formulaNumber);
     if (prior !== undefined) {
       return prior;
@@ -83,6 +106,23 @@ export const makeGuestPathIssuer = ({
       );
     }
     numberByName.set(name, formulaNumber);
+    const { promise: revoked, reject: rejectRevoked } =
+      /** @type {import('@endo/promise-kit').PromiseKit<never>} */ (
+        makePromiseKit()
+      );
+    revoked.catch(() => {});
+    let isRevoked = false;
+    /** @param {Error} reason */
+    const revokeThis = reason => {
+      isRevoked = true;
+      rejectRevoked(reason);
+    };
+    revokeByNumber.set(formulaNumber, revokeThis);
+    // Either the daemon stopping or the guest's revocation ends the service.
+    const guestCancelled = /** @type {Promise<never>} */ (
+      Promise.race([cancelled, revoked])
+    );
+    guestCancelled.catch(() => {});
     const issued = (async () => {
       if (directoryReady === undefined) {
         const making = makePrivateDirectory(directory);
@@ -101,24 +141,45 @@ export const makeGuestPathIssuer = ({
         {
           servePath,
           connectionNumbers,
-          cancelled,
+          cancelled: guestCancelled,
           exitWithError: reportError,
+          capTpConnectionRegistrar,
           marshalSaveError,
         },
       );
-      stopped.catch(reportError);
+      stopped.catch(error => {
+        // Revocation is a deliberate stop, not a failure to report.
+        if (!isRevoked) reportError(error);
+      });
       await started;
       return socketPath;
     })();
     issuedByNumber.set(formulaNumber, issued);
     // A failed issue may be retried.
-    issued.catch(() => {
-      issuedByNumber.delete(formulaNumber);
-      numberByName.delete(name);
+    issued.catch(error => {
+      if (issuedByNumber.get(formulaNumber) === issued) {
+        forget(formulaNumber, name);
+      }
+      revokeThis(error);
     });
     return issued;
   };
 
-  return harden({ issue });
+  /**
+   * Stop serving a guest's socket: refuse new connections, remove the
+   * pathname, and close the connections already made. A guest that holds no
+   * socket is ignored.
+   *
+   * @param {string} formulaNumber
+   * @param {Error} reason - delivered to the guest's open connections.
+   */
+  const revoke = (formulaNumber, reason) => {
+    const revokeGuest = revokeByNumber.get(formulaNumber);
+    if (revokeGuest === undefined) return;
+    forget(formulaNumber, `${formulaNumber.slice(0, SOCKET_NAME_DIGITS)}.sock`);
+    revokeGuest(reason);
+  };
+
+  return harden({ issue, revoke });
 };
 harden(makeGuestPathIssuer);

@@ -33,6 +33,8 @@ const makeHarness = ({
   const madeDirectories = [];
   /** @type {Error[]} */
   const reported = [];
+  /** @type {Promise<never>[]} */
+  const cancellations = [];
   const cancelled = /** @type {Promise<never>} */ (new Promise(() => {}));
   const issuer = makeGuestPathIssuer({
     directory,
@@ -42,8 +44,14 @@ const makeHarness = ({
       return makePrivateDirectory(privateDirectory);
     },
     servePath: /** @type {any} */ (
-      async (/** @type {{ path: string }} */ { path }) => {
+      async (
+        /** @type {{ path: string, cancelled: Promise<never> }} */ {
+          path,
+          cancelled: serviceCancelled,
+        },
+      ) => {
         served.push(path);
+        cancellations.push(serviceCancelled);
         return servePath(path);
       }
     ),
@@ -52,7 +60,7 @@ const makeHarness = ({
       reported.push(error);
     },
   });
-  return { issuer, served, madeDirectories, reported };
+  return { issuer, served, madeDirectories, reported, cancellations };
 };
 
 test('a guest socket is named by a prefix of its formula number', async t => {
@@ -150,4 +158,33 @@ test('a failed issue releases its name so it may be retried', async t => {
   const socketPath = await issuer.issue(numberB, {});
   t.is(socketPath, `/run/guests/${'a'.repeat(24)}.sock`);
   t.is(served.length, 2);
+});
+
+test('revoking a guest cancels its socket service with the reason', async t => {
+  const { issuer, cancellations, reported } = makeHarness();
+  await issuer.issue(numberA, {});
+  await issuer.issue(numberC, {});
+  const reason = Error('collected');
+  issuer.revoke(numberA, reason);
+  await t.throwsAsync(cancellations[0], { is: reason });
+  // The other guest's service is untouched.
+  const pending = Symbol('pending');
+  t.is(await Promise.race([cancellations[1], pending]), pending);
+  // A revocation is a deliberate stop, not an error to report.
+  await null;
+  t.deepEqual(reported, []);
+});
+
+test('a revoked guest no longer holds its socket name', async t => {
+  const { issuer, served } = makeHarness();
+  const first = await issuer.issue(numberA, {});
+  issuer.revoke(numberA, Error('collected'));
+  // The shared prefix is free for another guest after revocation.
+  t.is(await issuer.issue(numberB, {}), first);
+  t.is(served.length, 2);
+});
+
+test('revoking a guest that holds no socket does nothing', t => {
+  const { issuer } = makeHarness();
+  t.notThrows(() => issuer.revoke(numberA, Error('collected')));
 });

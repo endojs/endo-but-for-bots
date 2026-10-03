@@ -1053,6 +1053,16 @@ const makeDaemonCore = async (
         collectedIds,
         collectedFormulaTypes,
       );
+
+      // A collected guest's own socket goes with it: the listener closes,
+      // the pathname is removed, and its open connections end.
+      if (guestPathIssuer !== undefined) {
+        for (const [id, type] of collectedFormulaTypes) {
+          if (type === 'guest') {
+            guestPathIssuer.revoke(parseId(id).number, cancelReason);
+          }
+        }
+      }
     });
   };
 
@@ -4279,10 +4289,10 @@ const makeDaemonCore = async (
               host: () => provide(hostId, 'host'),
               leastAuthority: () => provide(leastAuthorityId, 'guest'),
               guestBootstrapPath: async inputId => {
+                // A daemon that cannot serve guest sockets says so with
+                // `undefined`, so a client need not match error text.
                 if (guestPathIssuer === undefined) {
-                  throw makeError(
-                    X`This daemon does not serve guest-scoped bootstraps`,
-                  );
+                  return undefined;
                 }
                 // A bare formula number names a formula on this node.
                 const id = /** @type {FormulaIdentifier} */ (
@@ -4298,7 +4308,9 @@ const makeDaemonCore = async (
                   throw makeError(X`Formula ${q(id)} is not a local guest`);
                 }
                 const guest = await provide(id, 'guest');
-                return guestPathIssuer.issue(parseId(id).number, guest);
+                return guestPathIssuer.issue(parseId(id).number, guest, {
+                  capTpConnectionRegistrar,
+                });
               },
               greeter: async () => localGreeter,
               gateway: async () => localGateway,
