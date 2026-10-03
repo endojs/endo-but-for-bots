@@ -3648,7 +3648,15 @@ export const make = (hostPowers, _context, { env } = {}) => {
             [`session-agent-${parentId}`, subagentPetName(name)],
           );
         } catch (error) {
-          await releaseSession(childId).catch(() => undefined);
+          try {
+            await releaseSession(childId);
+          } catch (rollbackError) {
+            throw new AggregateError(
+              [error, rollbackError],
+              `Binding subagent "${name}" failed, and releasing it failed too`,
+              { cause: rollbackError },
+            );
+          }
           throw error;
         }
         return harden({ name });
