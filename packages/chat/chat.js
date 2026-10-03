@@ -31,7 +31,7 @@ import { createChannelHeader } from '@endo/space-channel/channel-header.js';
 // `@endo/space-channel/outliner-component.js`; this is now the live outliner).
 import { createShareModal } from '@endo/space-channel/share-modal.js';
 import { outlinerComponent } from './outliner-component.js';
-import { assembleMentionSend } from './mention-send.js';
+import { assembleMentionSend, mentionChannelEdgeName } from './mention-send.js';
 import { inboxComponent } from './inbox-component.js';
 import { inventoryComponent } from './inventory-component.js';
 import { channelListComponent } from './channel-list.js';
@@ -1508,7 +1508,7 @@ const bodyComponent = (
         // Machine-readable metadata for the agent loop to parse.
         // The agent creates a pre-bound channelReply tool from this,
         // so the LLM only needs to produce reply text — no exec code.
-        const edgeName = channelPetName;
+        const edgeName = mentionChannelEdgeName(channelPetName);
         const instructions =
           `\n\n[channel-reply-info: edge=${edgeName} ` +
           `join=${petName} replyTo=${replyToNum}]\n` +

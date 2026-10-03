@@ -3,6 +3,18 @@
 import harden from '@endo/harden';
 
 /**
+ * The edge name under which a mention notification embeds its channel.
+ * An edge name is a single name and may not contain `/`, so a channel
+ * reached by a slash-joined mention token is labeled by its leaf segment.
+ *
+ * @param {string} channelPetName
+ * @returns {string}
+ */
+export const mentionChannelEdgeName = channelPetName =>
+  /** @type {string} */ (channelPetName.split('/').at(-1));
+harden(mentionChannelEdgeName);
+
+/**
  * Assemble the `send()` arguments for a channel-mention notification.
  *
  * Structure: "You were mentioned in " [channel] ":\n\n"
@@ -22,7 +34,7 @@ export const assembleMentionSend = ({
   recap,
   instructions,
 }) => {
-  const edgeName = channelPetName;
+  const edgeName = mentionChannelEdgeName(channelPetName);
   /** @type {string[]} */
   const strings = [`You were mentioned in `];
   /** @type {string[]} */
@@ -36,9 +48,13 @@ export const assembleMentionSend = ({
     //   strings[0] ref[0] strings[1] ref[1] ... strings[n]
     strings.push(`:\n\n${recap.strings[0]}`);
     const usedEdgeNames = new Set([edgeName]);
-    for (let ri = 0; ri < recap.edgeNames.length; ri += 1) {
+    for (
+      let recapIndex = 0;
+      recapIndex < recap.edgeNames.length;
+      recapIndex += 1
+    ) {
       // Ensure edge name uniqueness across the message
-      const baseEdge = recap.edgeNames[ri];
+      const baseEdge = recap.edgeNames[recapIndex];
       let recapEdge = baseEdge;
       if (usedEdgeNames.has(recapEdge)) {
         recapEdge = `${baseEdge}-author`;
@@ -48,8 +64,8 @@ export const assembleMentionSend = ({
       }
       usedEdgeNames.add(recapEdge);
       edgeNames.push(recapEdge);
-      petNamePaths.push(recap.petNames[ri].split('/'));
-      strings.push(recap.strings[ri + 1] || '');
+      petNamePaths.push(recap.petNames[recapIndex].split('/'));
+      strings.push(recap.strings[recapIndex + 1] || '');
     }
     strings[strings.length - 1] += instructions;
   } else if (recap.strings.length > 0 && recap.strings[0]) {
