@@ -693,6 +693,13 @@ const makeDaemonCore = async (
   const formulaForId = new Map();
 
   /**
+   * Guest controllers whose cancellation already revokes their bootstrap
+   * socket, so a repeated `guestBootstrapPath` request adds no listener.
+   * @type {WeakSet<Controller>}
+   */
+  const guestPathRevocationControllers = new WeakSet();
+
+  /**
    * Publishes `{ add: formulaNumber, node }` when a formula is
    * added and `{ remove: formulaNumber, node }` when collected.
    * Used by `followRetentionSet` to stream retention changes to
@@ -4312,22 +4319,29 @@ const makeDaemonCore = async (
                 const socketPath = await guestPathIssuer.issue(number, guest, {
                   capTpConnectionRegistrar,
                 });
-                // Cancelling the guest revokes its socket, whether or not
-                // formula collection is enabled (ENDO_GC). Revoking twice is
-                // harmless, so a repeated request may register again.
-                provideController(id).context.cancelled.catch(reason => {
-                  guestPathIssuer.revoke(number, reason);
-                });
                 // A guest collected while its socket was being issued may
                 // have been swept before the issuer knew of the socket, so
                 // its revocation missed it: revoke here instead. A guest
                 // collected after this check finds its socket and revokes it.
-                if (!formulaForId.has(id)) {
+                // Look the controller up rather than provide it, since
+                // providing a collected guest would reincarnate it from its
+                // not-yet-deleted formula.
+                const controller = controllerForId.get(id);
+                if (controller === undefined || !formulaForId.has(id)) {
                   const reason = makeError(
                     X`Guest ${q(id)} was collected while its socket was issued`,
                   );
                   guestPathIssuer.revoke(number, reason);
                   throw reason;
+                }
+                // Canceling the guest revokes its socket, whether or not
+                // formula collection is enabled (ENDO_GC). One listener per
+                // guest incarnation suffices for repeated requests.
+                if (!guestPathRevocationControllers.has(controller)) {
+                  guestPathRevocationControllers.add(controller);
+                  controller.context.cancelled.catch(reason => {
+                    guestPathIssuer.revoke(number, reason);
+                  });
                 }
                 return socketPath;
               },
