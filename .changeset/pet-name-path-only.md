@@ -35,7 +35,7 @@
 The daemon's Exo surface (host, guest, directory, mail, channel, and inspector methods) now accepts only a pet-name path, an array of path components.
 A bare string is rejected with a `TypeError` asking the caller to retry with an array; a string is never split on a delimiter.
 The argument guards `NamePathArgumentShape` and `NamePathsArgumentShape` admit a string only so that the method can raise that `TypeError`.
-Write `lookup(['counter'])`, not `lookup('counter')`, and `lookup(['subdir', 'value'])`, not `lookup('subdir/value')`.
+Write `lookup(['subdir', 'value'])`, not `lookup('subdir/value')`.
 The `adopt` method's edge name is a message label, not a path, and stays a string.
 
 Migration:

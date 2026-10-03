@@ -53,7 +53,6 @@ export const assembleMentionSend = ({
       recapIndex < recap.edgeNames.length;
       recapIndex += 1
     ) {
-      // Ensure edge name uniqueness across the message
       const baseEdge = recap.edgeNames[recapIndex];
       let recapEdge = baseEdge;
       if (usedEdgeNames.has(recapEdge)) {
@@ -69,7 +68,6 @@ export const assembleMentionSend = ({
     }
     strings[strings.length - 1] += instructions;
   } else if (recap.strings.length > 0 && recap.strings[0]) {
-    // Recap text but no embedded refs
     strings.push(`:\n\n${recap.strings[0]}${instructions}`);
   } else {
     strings.push(instructions);
