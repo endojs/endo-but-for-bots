@@ -172,3 +172,53 @@ testNodeDaemon('removing a guest revokes its bootstrap path', async t => {
     message: /collected/,
   });
 });
+
+testNodeDaemon(
+  'a guest removed while its path is issued leaves no socket',
+  async t => {
+    const config = makeConfig('gb-race');
+    const { cancelled, cancel } = makeCancelKit();
+    cancelled.catch(() => {});
+    await purge(config);
+    await start(config);
+    t.teardown(async () => {
+      await stop(config).catch(() => {});
+      cancel(Error('teardown'));
+    });
+
+    const root = await connect(config.sockPath, cancelled);
+    const host = E(root).host();
+    await E(host).provideGuest('raced', { agentName: 'raced-agent' });
+    const guestId = /** @type {string} */ (
+      await E(host).identify('raced-agent')
+    );
+
+    // Issue and collect at once: whichever wins, no socket outlives the guest.
+    const [issued] = await Promise.allSettled([
+      E(root).guestBootstrapPath(guestId),
+      E(host).remove('raced'),
+      E(host).remove('raced-agent'),
+    ]);
+    if (issued.status === 'rejected') {
+      t.pass('the issue failed closed');
+      return;
+    }
+    const guestPath = issued.value;
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      // eslint-disable-next-line no-await-in-loop
+      const gone = await fs.stat(guestPath).then(
+        () => false,
+        () => true,
+      );
+      if (gone) break;
+      if (Date.now() > deadline) {
+        t.fail('the guest socket outlived its guest');
+        return;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    await t.throwsAsync(() => connect(guestPath, cancelled));
+  },
+);

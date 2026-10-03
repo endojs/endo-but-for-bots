@@ -4308,9 +4308,22 @@ const makeDaemonCore = async (
                   throw makeError(X`Formula ${q(id)} is not a local guest`);
                 }
                 const guest = await provide(id, 'guest');
-                return guestPathIssuer.issue(parseId(id).number, guest, {
+                const { number } = parseId(id);
+                const socketPath = await guestPathIssuer.issue(number, guest, {
                   capTpConnectionRegistrar,
                 });
+                // A guest collected while its socket was being issued may
+                // have been swept before the issuer knew of the socket, so
+                // its revocation missed it: revoke here instead. A guest
+                // collected after this check finds its socket and revokes it.
+                if (!formulaForId.has(id)) {
+                  const reason = makeError(
+                    X`Guest ${q(id)} was collected while its socket was issued`,
+                  );
+                  guestPathIssuer.revoke(number, reason);
+                  throw reason;
+                }
+                return socketPath;
               },
               greeter: async () => localGreeter,
               gateway: async () => localGateway,
