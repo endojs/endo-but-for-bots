@@ -987,6 +987,14 @@ be linked here once it exists. Pull request:
       `promptOrigin` backstop label, have no structural check (no taint
       tracking). Gate 8 tests the factory's existing call paths, but a new call
       path is unverified until gate 8 is extended to it (Decision 9).
+- [ ] The phase-2 backends take a `maxBudgetUsd` maker option, forwarded as
+      `--max-budget-usd` (CLI) or `maxBudgetUsd` (SDK). It is a fourth,
+      per-backend ceiling outside `InferLimits`: the Claude Code binary
+      enforces it, not the limit enforcer, and the backend checks only that it
+      is a positive finite number. It is distinct from the admission-time
+      `budget-exhausted` refusal. No row of the pinned failure-shape table
+      names a mid-turn budget trip yet, so a trip reports `unavailable` until
+      gate 3 captures its shape against the pinned binary.
 - [ ] The secret manager's owning-principal column, needed before guests'
       credentials are partitioned from the operator's catalog. Guest
       bring-your-own-credential does not wait on it (Decision 11).

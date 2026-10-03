@@ -125,7 +125,11 @@ an inherited `ANTHROPIC_API_KEY` cannot silently bypass the pool.
 [`@endo/inference`](../inference/README.md) seam. Each is made over **one**
 `CredentialSource`; choosing a credential is choosing which backend instance to
 hold. Neither depends on `@endo/claude-sandbox`; OS containment composes on top
-of them.
+of them. They sit beside the phase-1 `make()` provider in [Usage](#usage),
+which this change leaves unchanged: its result tags (`pool-exhausted`,
+`bridge-down`, `facet-threw`, `nonzero-exit`, `parse-error`) are the
+phase-1 vocabulary, which the design collapses into `unavailable` when it
+reshapes that provider onto this seam.
 
 | Subpath                                   | Export                                                                                                                                                                                                                                                                       |
 | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -142,8 +146,9 @@ nothing, not even `acquire()`, on a mismatch. Both backends acquire the
 credential before any other work, map a refusal to the
 matching tag, enforce the wall-clock, output-byte, and turn limits through the
 `@endo/inference` limit enforcer (the CLI backend kills the process group), and
-release the grant on every path. The projection's `formulaIdentifier` is never
-forwarded to the provider. Wrap an unsliced backend in the `@endo/inference`
+release the grant on every path. An optional `maxBudgetUsd` is a separate
+ceiling that the Claude Code binary enforces, not the limit enforcer. The
+projection's `formulaIdentifier` is never forwarded to the provider. Wrap an unsliced backend in the `@endo/inference`
 prompt-origin gate, and record usage with its usage recorder.
 
 ## Known gaps (prerequisites)
