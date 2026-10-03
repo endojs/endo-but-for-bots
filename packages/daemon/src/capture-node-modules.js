@@ -3,7 +3,9 @@
 /** @import { CaptureResult, FileUrlString, PackageCompartmentMapDescriptor, ReadPowers } from '@endo/compartment-mapper' */
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { ReadableTree } from '@endo/platform/fs/lite/types' */
+/** @import { TreeLayout } from './types.js' */
 
+import { makeArchiveFromMap } from '@endo/compartment-mapper/archive-lite.js';
 import { captureFromMap } from '@endo/compartment-mapper/capture-lite.js';
 import { defaultParserForLanguage } from '@endo/compartment-mapper/import-parsers.js';
 import { mapNodeModules } from '@endo/compartment-mapper/node-modules.js';
@@ -17,14 +19,16 @@ import { makeMountCanonical } from './mount.js';
 const defaultRoot = 'file:///app/';
 
 /**
- * @typedef {'node-modules-with-map' | 'node-modules-scan'} NodeModulesLayout
+ * @typedef {Extract<TreeLayout, 'node-modules-with-map' | 'node-modules-scan'>} NodeModulesLayout
  */
 
 /**
  * @typedef {object} CaptureNodeModulesOptions
  * @property {NodeModulesLayout} layout
  * @property {string} [entry]
- * @property {string} [root]
+ * @property {string} [root] A directory URL; a missing trailing slash is
+ *   supplied, so a sibling such as `file:///app-other/` is never under
+ *   `file:///app`.
  */
 
 /**
@@ -84,7 +88,7 @@ const assertMapLocationsUnderRoot = (
 };
 
 /**
- * Capture a Node-style package graph from a `ReadableTree` or `Mount`.
+ * Map a Node-style package graph in a `ReadableTree` or `Mount`.
  *
  * `node-modules-with-map` reads a package compartment map from the tree root;
  * its compartment locations continue to name the original package directories
@@ -96,11 +100,14 @@ const assertMapLocationsUnderRoot = (
  *
  * @param {ERef<ReadableTree>} tree
  * @param {CaptureNodeModulesOptions} options
- * @returns {Promise<CaptureResult>}
+ * @returns {Promise<{ readPowers: ReadPowers, compartmentMap: PackageCompartmentMapDescriptor }>}
  */
-export const captureNodeModules = async (tree, options) => {
+const mapTree = async (tree, options) => {
   await null;
-  const { layout, entry, root = defaultRoot } = options;
+  const { layout, entry, root: allegedRoot = defaultRoot } = options;
+  // Every containment check below is a prefix match, so the root must end
+  // in a separator.
+  const root = allegedRoot.endsWith('/') ? allegedRoot : `${allegedRoot}/`;
   // A mount the daemon backs canonicalizes package directories through its
   // physical paths, so a package reached through more than one
   // `node_modules` path loads as one compartment.  Any other tree (a
@@ -163,8 +170,41 @@ export const captureNodeModules = async (tree, options) => {
     throw makeError(X`Unsupported node_modules layout ${q(layout)}`);
   }
 
+  return { readPowers, compartmentMap };
+};
+
+/**
+ * Capture a Node-style package graph from a `ReadableTree` or `Mount`
+ * (see `mapTree` for the layouts).
+ *
+ * @param {ERef<ReadableTree>} tree
+ * @param {CaptureNodeModulesOptions} options
+ * @returns {Promise<CaptureResult>}
+ */
+export const captureNodeModules = async (tree, options) => {
+  const { readPowers, compartmentMap } = await mapTree(tree, options);
   return captureFromMap(readPowers, compartmentMap, {
     parserForLanguage: defaultParserForLanguage,
   });
 };
 harden(captureNodeModules);
+
+/**
+ * Capture a Node-style package graph from a `ReadableTree` or `Mount` into
+ * source-only compartment-mapper archive bytes, which a worker's
+ * `makeArchive` method runs.  A module the map names but the tree cannot
+ * read fails the capture.
+ *
+ * @param {ERef<ReadableTree>} tree
+ * @param {CaptureNodeModulesOptions} options
+ * @returns {Promise<Uint8Array>}
+ */
+export const captureNodeModulesArchive = async (tree, options) => {
+  const { readPowers, compartmentMap } = await mapTree(tree, options);
+  // The import-side parsers keep original source; the archive-side parsers
+  // precompile to `pre-*-json` formats, which the XS archive loader skips.
+  return makeArchiveFromMap(readPowers, compartmentMap, {
+    parserForLanguage: defaultParserForLanguage,
+  });
+};
+harden(captureNodeModulesArchive);

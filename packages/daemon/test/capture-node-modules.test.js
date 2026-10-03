@@ -18,9 +18,13 @@ import { mapNodeModules } from '@endo/compartment-mapper/node-modules.js';
 import { makeTreeReadPowers } from '@endo/platform/fs/lite';
 import { makeLocalTree } from '@endo/platform/fs/node';
 import { decodeUtf8 } from '@endo/utf8/decode.js';
+import { ZipReader } from '@endo/zip/reader.js';
 import test from 'ava';
 
-import { captureNodeModules } from '../src/capture-node-modules.js';
+import {
+  captureNodeModules,
+  captureNodeModulesArchive,
+} from '../src/capture-node-modules.js';
 import { makeFilePowers } from '../src/manager-node-powers.js';
 import {
   makeMount,
@@ -162,6 +166,37 @@ test('node-modules-scan maps the root package export before capture', async test
   testContext.is(
     sourceText(capture, 'tree-dependency', './index.js'),
     "export const value = 'captured dependency';\n",
+  );
+});
+
+test('node-modules-scan archives only source parsers the XS loader runs', async testContext => {
+  const entrySource =
+    "import { value } from 'tree-dependency';\nexport default 'scanned: ' + value;\n";
+  const directory = makeFixture(testContext, entrySource);
+  const archiveBytes = await captureNodeModulesArchive(
+    makeLocalTree(directory),
+    { layout: 'node-modules-scan' },
+  );
+
+  const archive = new ZipReader(archiveBytes);
+  const compartmentMap = JSON.parse(
+    decodeUtf8(archive.read('compartment-map.json')),
+  );
+  const parsers = Object.values(compartmentMap.compartments).flatMap(
+    compartment =>
+      Object.values(compartment.modules)
+        .filter(module => 'parser' in module)
+        .map(module => module.parser),
+  );
+  testContext.true(parsers.length > 0);
+  for (const parser of parsers) {
+    testContext.true(['mjs', 'cjs', 'json'].includes(parser), parser);
+  }
+  const { compartment, module } = compartmentMap.entry;
+  const { location } = compartmentMap.compartments[compartment].modules[module];
+  testContext.is(
+    decodeUtf8(archive.read(`${compartment}/${location}`)),
+    entrySource,
   );
 });
 

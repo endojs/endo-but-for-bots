@@ -530,6 +530,15 @@ export type MakeFromTreeFormula = {
   tree: FormulaIdentifier;
   env?: Record<string, string>;
   cancelWithWorker?: FormulaIdentifier;
+  /**
+   * The requested layout: the caller's `layout`, or `'detect'` when it was
+   * omitted.  Each incarnation detects or checks the layout it runs as.
+   * Absent on formulas from before layouts were recorded, which run as
+   * `'archive'`.
+   */
+  layout?: RequestedTreeLayout;
+  /** A module path within the root package, for `'node-modules-scan'`. */
+  entry?: string;
   // TODO formula slots
 };
 
@@ -1638,6 +1647,29 @@ export type MakeCapletOptions = {
   workerTrustedShims?: string[];
 };
 
+/**
+ * How `makeFromTree` reads a tree.  `'archive'`: `compartment-map.json` at
+ * the root with archive paths.  `'node-modules-with-map'`: a
+ * `compartment-map.json` whose compartment locations are under the root.
+ * `'node-modules-scan'`: `package.json` at the root with `node_modules` in
+ * situ.  `'package'`: reserved for `makeFromPackage`, refused until built.
+ */
+export type TreeLayout =
+  'archive' | 'node-modules-with-map' | 'node-modules-scan' | 'package';
+
+/** A tree layout, or `'detect'` to detect it at each incarnation. */
+export type RequestedTreeLayout = TreeLayout | 'detect';
+
+export type MakeFromTreeOptions = MakeCapletOptions & {
+  /** Defaults to `'detect'`. */
+  layout?: RequestedTreeLayout;
+  /**
+   * A module path within the root package, which bypasses its `"."`
+   * export.  Applies only to the `'node-modules-scan'` layout.
+   */
+  entry?: string;
+};
+
 export interface EndoPeer {
   provide: (id: string) => Promise<unknown>;
 }
@@ -2086,10 +2118,17 @@ export interface EndoHost extends EndoAgent {
     archiveName: string | string[],
     options?: MakeCapletOptions,
   ): Promise<unknown>;
+  /**
+   * Make a confined caplet from a ReadableTree or Mount.  The formula keeps
+   * a live reference to the tree; each incarnation reads the tree as it is
+   * then, so a snapshot replays the same application and a mount replays
+   * its current contents.  `options.layout` defaults to `'detect'`.  A tree
+   * that matches no layout is rejected and nothing is formulated.
+   */
   makeFromTree(
     workerPetName: string | string[] | undefined,
     treeName: string | string[],
-    options?: MakeCapletOptions,
+    options?: MakeFromTreeOptions,
   ): Promise<unknown>;
   /**
    * Materialise a ReadableTree or Mount into a new scratch mount
@@ -2898,6 +2937,8 @@ export interface DaemonCore {
     env?: Record<string, string>,
     trustedShims?: string[],
     workerLabel?: string,
+    layout?: RequestedTreeLayout,
+    entry?: string,
   ) => FormulateResult<unknown>;
 
   formulateDirectory: (

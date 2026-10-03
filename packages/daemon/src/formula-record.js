@@ -28,10 +28,15 @@
  *   `scratch-mount` formula, resolved host-side via `getMountHostPath`.
  *   A `scratch-mount` formula does not carry its path on disk (the daemon
  *   derives it from the formula number), so the host supplies it here.
+ * @param {string} [options.treeKind] For a `make-from-tree` formula, the
+ *   kind of tree it holds (`snapshot` or `mount`).
+ * @param {string} [options.treeLayoutRunningAs] For a `make-from-tree`
+ *   formula, the layout its current incarnation ran as; omitted when it has
+ *   no live incarnation.
  * @returns {FormulaRecord}
  */
 export const makeFormulaRecord = (formula, number, options = {}) => {
-  const { mountHostPath } = options;
+  const { mountHostPath, treeKind, treeLayoutRunningAs } = options;
   /** @type {Record<string, FormulaProperty>} */
   const properties = {};
 
@@ -148,6 +153,19 @@ export const makeFormulaRecord = (formula, number, options = {}) => {
     }
     case 'make-from-tree': {
       properties.tree = { kind: 'reference', identifier: formula.tree };
+      properties.layout = {
+        kind: 'literal',
+        value: formula.layout ?? 'archive',
+      };
+      if (formula.entry !== undefined) {
+        properties.entry = { kind: 'literal', value: formula.entry };
+      }
+      if (treeKind !== undefined) {
+        properties.treeKind = { kind: 'literal', value: treeKind };
+      }
+      if (treeLayoutRunningAs !== undefined) {
+        properties.runningAs = { kind: 'literal', value: treeLayoutRunningAs };
+      }
       properties.powers = { kind: 'reference', identifier: formula.powers };
       properties.worker = { kind: 'reference', identifier: formula.worker };
       break;
