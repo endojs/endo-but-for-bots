@@ -1,11 +1,12 @@
 // @ts-check
 
 import { Fail } from '@endo/errors';
+import { E } from '@endo/eventual-send';
 import { mustMatch } from '@endo/patterns';
 
-import { InferLimitsShape, InferResultShape } from './guards.js';
+import { ClassifiedResultShape, InferLimitsShape } from './guards.js';
 
-/** @import { InferLimits, InferResult, LimitEnforcer, LimitTimers } from './types.js' */
+/** @import { ClassifiedResult, InferLimits, LimitEnforcer, LimitTimers } from './types.js' */
 
 /**
  * Enforces one turn's `InferLimits` inside a provider plugin. The plugin
@@ -19,52 +20,75 @@ import { InferLimitsShape, InferResultShape } from './guards.js';
  * the turn ends by itself, after which nothing trips.
  *
  * @param {object} options
- * @param {InferLimits} options.limits
+ * @param {InferLimits} options.limits  `maxWallClockMs` is at most
+ *   `MAX_TIMER_DELAY_MS`, and `maxOutputBytes` and `maxTurns` are positive
+ *   safe integers.
  * @param {LimitTimers} options.timers
  * @param {() => void} options.terminate  ends the provider process; it may
  *   run from the wall-clock timer callback or from the `cancelled`
  *   rejection reaction, where a throw would be uncaught, so the enforcer
- *   catches and drops any throw from it. The recorded outcome stands.
- * @param {PromiseLike<unknown>} [options.cancelled]  rejects to cancel the turn.
+ *   catches a throw from it and hands it to `reportTerminateError`. The
+ *   recorded outcome stands.
+ * @param {(error: unknown) => void} [options.reportTerminateError]  learns
+ *   that the provider process may still be running.
+ * @param {PromiseLike<unknown>} [options.cancelled]  rejects to cancel the
+ *   turn. It is adopted as a promise, so a thenable whose `then` throws
+ *   cancels the turn rather than failing construction.
  * @returns {LimitEnforcer}
  */
-export const makeLimitEnforcer = ({ limits, timers, terminate, cancelled }) => {
+export const makeLimitEnforcer = ({
+  limits,
+  timers,
+  terminate,
+  reportTerminateError = () => {},
+  cancelled,
+}) => {
   mustMatch(harden(limits), InferLimitsShape, 'limits');
   const { maxWallClockMs, maxOutputBytes, maxTurns } = limits;
+  Number.isSafeInteger(maxOutputBytes) ||
+    Fail`maxOutputBytes must be a safe integer: ${maxOutputBytes}`;
+  Number.isSafeInteger(maxTurns) ||
+    Fail`maxTurns must be a safe integer: ${maxTurns}`;
 
-  /** @type {InferResult | undefined} */
+  /** @type {ClassifiedResult | undefined} */
   let outcome;
   let stopped = false;
   let outputBytes = 0;
   let turns = 0;
+  /** @type {unknown} */
+  let timer;
 
   const stop = () => {
     stopped = true;
     timers.clearTimeout(timer);
   };
 
-  /** @param {InferResult} result */
+  /** @param {ClassifiedResult} result */
   const abort = result => {
     if (stopped) return;
-    mustMatch(result, InferResultShape, 'abort result');
+    mustMatch(result, ClassifiedResultShape, 'abort result');
     outcome = result;
     stop();
     try {
       terminate();
-    } catch {
+    } catch (error) {
       // The outcome is already recorded; a failed signal must not escape
       // into a timer callback or rejection reaction and crash the host.
+      reportTerminateError(error);
     }
   };
 
-  const timer = timers.setTimeout(
+  // Subscribe before arming the timer, so nothing can throw once it is armed.
+  if (cancelled !== undefined) {
+    void E.when(cancelled, undefined, () =>
+      abort(harden({ type: 'cancelled' })),
+    );
+  }
+
+  timer = timers.setTimeout(
     () => abort(harden({ type: 'limit-exceeded', which: 'wall-clock' })),
     maxWallClockMs,
   );
-
-  if (cancelled !== undefined) {
-    cancelled.then(undefined, () => abort(harden({ type: 'cancelled' })));
-  }
 
   /**
    * @param {number} byteCount
@@ -101,32 +125,37 @@ harden(makeLimitEnforcer);
 
 /**
  * Makes the `terminate` a process-spawning plugin hands the limit enforcer:
- * it signals the whole process group of a child spawned with
- * `detached: true`, so helpers the child started die with it. A group that
- * is already gone is not an error. A pid that is not a positive integer is
- * refused, since negating it would not name the child's group.
+ * it signals the whole process group of one child spawned with
+ * `detached: true`, so helpers the child started die with it. The child's
+ * pid is bound when the killer is made, so the killer can signal that group
+ * and no other. A group that is already gone is not an error.
  * Windows has no POSIX process groups, so on `win32` the child itself is
  * signalled instead of its negated pid.
  *
  * @param {object} powers
  * @param {(pid: number, signal: string) => unknown} powers.kill  such as
  *   `process.kill`.
+ * @param {number | undefined} powers.pid  the child's pid, such as
+ *   `child.pid`; `undefined` (the spawn failed) makes a killer that signals
+ *   nothing. Any other value must be an integer in `[2, 2 ** 31 - 1]`:
+ *   negating `0` or `1` would name the caller's own group or every process.
  * @param {string} [powers.signal]
  * @param {string} [powers.platform]  such as `process.platform`.
- * @returns {(pid: number | undefined) => boolean} whether a signal was sent
+ * @returns {() => boolean} whether a signal was sent
  */
 export const makeProcessGroupKiller = ({
   kill,
+  pid,
   signal = 'SIGKILL',
   platform,
 }) => {
+  if (pid !== undefined) {
+    (Number.isInteger(pid) && pid > 1 && pid <= 2 ** 31 - 1) ||
+      Fail`pid must be an integer from 2 to 2 ** 31 - 1: ${pid}`;
+  }
   const groupKill = platform !== 'win32';
-  /** @param {number | undefined} pid */
-  const killProcessGroup = pid => {
+  const killProcessGroup = () => {
     if (pid === undefined) return false;
-    // `kill(-0)` would signal the caller's own process group.
-    (Number.isSafeInteger(pid) && pid > 0) ||
-      Fail`pid must be a positive integer: ${pid}`;
     try {
       kill(groupKill ? -pid : pid, signal);
       return true;

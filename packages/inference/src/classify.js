@@ -87,7 +87,11 @@ export const makeShapeClassifier = table => {
     } catch {
       return result;
     }
-    if (typeof delay === 'number' && Number.isFinite(delay) && delay >= 0) {
+    if (
+      typeof delay === 'number' &&
+      delay >= 0 &&
+      delay <= Number.MAX_SAFE_INTEGER
+    ) {
       return /** @type {ClassifiedResult} */ (
         harden({ ...result, retryAfterMs: delay })
       );

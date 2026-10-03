@@ -32,9 +32,9 @@ export type InferRequest = {
   /**
    * Admitted as any string, so that a missing or unknown origin reaches the
    * prompt-origin gate and becomes `needs-containment` instead of a guard
-   * rejection.
+   * rejection. The meaningful values are those of `PromptOrigin`.
    */
-  promptOrigin?: PromptOrigin | string;
+  promptOrigin?: string;
   guest: GuestToolProjection;
   limits: InferLimits;
   model?: string;
@@ -67,6 +67,10 @@ export type BudgetExhaustedResult = {
 export type LimitExceededResult = { type: 'limit-exceeded'; which: LimitName };
 export type CancelledResult = { type: 'cancelled' };
 export type NeedsContainmentResult = { type: 'needs-containment' };
+/**
+ * `detail` is display text and is copied into the usage record, so a plugin
+ * must not put secret material or raw provider error text in it.
+ */
 export type UnavailableResult = { type: 'unavailable'; detail: string };
 
 export type InferResult =
@@ -185,13 +189,15 @@ export type ShapeClassifier = {
 
 export type LimitTimers = {
   setTimeout: (callback: () => void, delayMs: number) => unknown;
+  // `any`, not `unknown`: the host's own `clearTimeout` takes a narrower
+  // handle type and must still be assignable here.
   clearTimeout: (handle: any) => void;
 };
 
 export type LimitEnforcer = {
   countOutputBytes: (byteCount: number) => boolean;
   countTurn: () => boolean;
-  abort: (result: InferResult) => void;
-  outcome: () => InferResult | undefined;
+  abort: (result: ClassifiedResult) => void;
+  outcome: () => ClassifiedResult | undefined;
   stop: () => void;
 };

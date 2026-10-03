@@ -26,8 +26,9 @@ A provider may join at any of these layers.
    provider response or the running process:
    - `@endo/inference/limits.js`: `makeLimitEnforcer` enforces wall clock,
      output bytes, and turn count, and turns cancellation into `cancelled`.
-     `makeProcessGroupKiller` is the `terminate` for a plugin that spawns a
-     detached child.
+     `maxWallClockMs` is at most `MAX_TIMER_DELAY_MS` (`2 ** 31 - 1`), the
+     longest delay a host timer honors. `makeProcessGroupKiller` makes the
+     `terminate` for one detached child, bound to that child's pid.
    - `@endo/inference/classify.js`: `makeShapeClassifier` maps a raw response
      to a result tag through a table pinned per exact provider version. An
      unknown version or an unrecognized response does not classify, so the
@@ -38,12 +39,18 @@ A provider may join at any of these layers.
    interface, acting only on the request and the classified result:
    - `@endo/inference/prompt-origin-gate.js`: `makePromptOriginGate` refuses
      any request whose `promptOrigin` is not `root-authored` with
-     `needs-containment`, before the wrapped backend is called. Wrap every
-     backend whose turns run without OS containment in it.
+     `needs-containment`, before the wrapped backend is called. It is a
+     tripwire, not an attenuator: `promptOrigin` is a label the caller
+     writes. Containment rests on who is given a backend, so a
+     guest-influenced path must never hold an uncontained backend; wrap
+     every such backend in the gate so that a routing defect surfaces.
    - `@endo/inference/usage-recorder.js`: `makeUsageRecorder` hands one usage
      record per turn to the deployment's usage sink. The deployment passes the
      backend's credential `secretIdentifier` at construction; the sink adds the run id
      and cost estimate.
+
+Both enrichers call the wrapped backend directly, so it must be a local
+(near) object, not a remote reference.
 
 Admission is not an enricher. It belongs to the credential source, which the
 plugin calls before it starts any provider process.

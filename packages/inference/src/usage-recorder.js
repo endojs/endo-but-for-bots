@@ -4,19 +4,45 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { mustMatch } from '@endo/patterns';
 
-import { InferResultShape, InferenceBackendInterface } from './guards.js';
+import {
+  BackendDescriptionShape,
+  InferResultShape,
+  InferenceBackendInterface,
+} from './guards.js';
 
 /** @import { InferRequest, InferResult, InferenceBackend, UsageRecord, UsageSink } from './types.js' */
 
-const textEncoder = new TextEncoder();
-
 /**
- * The UTF-8 encoded length of `text`. A lone surrogate counts as the three
- * bytes of the replacement character the encoder writes for it.
+ * The UTF-8 encoded length of `text`, counted without encoding it. A lone
+ * surrogate counts as the three bytes of the U+FFFD replacement character
+ * the WHATWG UTF-8 encoder (https://encoding.spec.whatwg.org/#utf-8-encoder)
+ * writes for it, as `TextEncoder` does.
  *
  * @param {string} text
  */
-const utf8ByteLength = text => textEncoder.encode(text).length;
+const utf8ByteLength = text => {
+  let bytes = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const unit = text.charCodeAt(i);
+    if (unit < 0x80) {
+      bytes += 1;
+    } else if (unit < 0x800) {
+      bytes += 2;
+    } else if (
+      unit >= 0xd800 &&
+      unit <= 0xdbff &&
+      i + 1 < text.length &&
+      text.charCodeAt(i + 1) >= 0xdc00 &&
+      text.charCodeAt(i + 1) <= 0xdfff
+    ) {
+      bytes += 4;
+      i += 1;
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
+};
 
 /**
  * Wraps a backend so that each classified result becomes one usage record
@@ -31,12 +57,16 @@ const utf8ByteLength = text => textEncoder.encode(text).length;
  * credential, passes that credential's `secretIdentifier` at construction. The sink
  * adds the run id and cost estimate when it writes.
  *
- * A wrapped backend that rejects breaks the `infer` contract; the rejection
- * propagates and no record is written, because there is no classified result
- * to record. So does a result that does not match `InferResultShape`,
- * since the wrapped backend need not be guarded itself.
+ * The wrapped backend's `describe()` is read before the turn starts, so a
+ * throwing `describe()` rejects `infer` without starting a turn rather than
+ * discarding the result of one that ran. A wrapped backend that rejects
+ * breaks the `infer` contract; the rejection propagates and no record is
+ * written, because there is no classified result to record. So does a
+ * description or result outside its shape, since the wrapped backend need
+ * not be guarded itself.
  *
- * @param {InferenceBackend} backend
+ * @param {InferenceBackend} backend  a local (near) backend: `describe()` is
+ *   a synchronous call.
  * @param {object} options
  * @param {string} options.secretIdentifier  the secret manager's identifier for the
  *   backend's credential, never its bytes.
@@ -60,11 +90,13 @@ export const makeUsageRecorder = (
      * @returns {Promise<InferResult>}
      */
     async infer(request) {
+      const description = backend.describe();
+      mustMatch(harden(description), BackendDescriptionShape, 'description');
+      const { provider, kind, version } = description;
       const startedAt = now();
       const result = await backend.infer(request);
       mustMatch(harden(result), InferResultShape, 'backend result');
       const latencyMs = Math.max(0, now() - startedAt);
-      const { provider, kind, version } = backend.describe();
 
       /** @type {UsageRecord} */
       const record = {

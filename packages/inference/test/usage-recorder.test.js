@@ -250,3 +250,42 @@ test('describe passes through to the wrapped backend', t => {
   });
   t.deepEqual(recorder.describe(), description);
 });
+
+test('a throwing describe rejects before the turn starts', async t => {
+  let calls = 0;
+  /** @type {any} */
+  const unguarded = harden({
+    describe: () => {
+      throw Error('no description');
+    },
+    infer: async () => {
+      calls += 1;
+      return harden({ type: 'ok', text: 'x' });
+    },
+  });
+  const { records, sink } = makeSink();
+  const recorder = makeUsageRecorder(unguarded, {
+    secretIdentifier: 'secret:a',
+    sink,
+    now: makeSteppingClock(),
+  });
+  await t.throwsAsync(() => recorder.infer(makeRequest()), {
+    message: 'no description',
+  });
+  await settle();
+  t.is(calls, 0, 'no turn ran, so no result was discarded');
+  t.is(records.length, 0);
+});
+
+test('a clock that steps backward records zero latency', async t => {
+  const { backend } = makeRecordingBackend(harden({ type: 'needs-auth' }));
+  const { records, sink } = makeSink();
+  const recorder = makeUsageRecorder(backend, {
+    secretIdentifier: 'secret:a',
+    sink,
+    now: makeSteppingClock(1000, -250),
+  });
+  await recorder.infer(makeRequest());
+  await settle();
+  t.is(records[0].latencyMs, 0);
+});

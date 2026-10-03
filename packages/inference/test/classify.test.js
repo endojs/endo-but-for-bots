@@ -131,6 +131,35 @@ test('a retry-later row carries the refill time it reads', t => {
     { type: 'rate-limited' },
     'a nonsensical refill time is dropped',
   );
+  t.deepEqual(
+    classifier.classify('2.1.278', {
+      type: 'result',
+      subtype: 'rate_limited',
+      retry_after_ms: 0,
+    }),
+    { type: 'rate-limited', retryAfterMs: 0 },
+    'an immediate retry is kept',
+  );
+  for (const retryAfter of [NaN, Infinity]) {
+    t.deepEqual(
+      classifier.classify('2.1.278', {
+        type: 'result',
+        subtype: 'rate_limited',
+        retry_after_ms: retryAfter,
+      }),
+      { type: 'rate-limited' },
+      String(retryAfter),
+    );
+  }
+});
+
+test('an empty table classifies nothing', t => {
+  const classifier = makeShapeClassifier(harden({}));
+  t.deepEqual(classifier.versions(), []);
+  t.is(classifier.classify('2.1.278', { type: 'result' }), undefined);
+  const noRows = makeShapeClassifier(harden({ '2.1.278': [] }));
+  t.deepEqual(noRows.versions(), ['2.1.278']);
+  t.is(noRows.classify('2.1.278', { type: 'result' }), undefined);
 });
 
 test('the table may not write ok or needs-containment', t => {
@@ -207,5 +236,14 @@ test('an admission refusal maps to the tag of the same name', t => {
   });
   t.throws(() =>
     admissionRefusalResult(/** @type {any} */ ({ reason: 'needs-auth' })),
+  );
+  t.throws(
+    () =>
+      admissionRefusalResult({
+        reason: 'rate-limited',
+        retryAfterMs: Infinity,
+      }),
+    undefined,
+    'a refill time must be finite, as the classifier requires',
   );
 });

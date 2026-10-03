@@ -2,6 +2,7 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
+import { MAX_TIMER_DELAY_MS } from '../src/guards.js';
 import { makeLimitEnforcer, makeProcessGroupKiller } from '../src/limits.js';
 
 /** A manual clock: timers fire only when the test calls `fire()`. */
@@ -20,9 +21,9 @@ const makeManualTimers = () => {
       pending.set(next, callback);
       return next;
     },
-    /** @param {number} handle */
+    /** @param {unknown} handle */
     clearTimeout: handle => {
-      pending.delete(handle);
+      pending.delete(/** @type {number} */ (handle));
     },
     fire: () => {
       const callbacks = [...pending.values()];
@@ -112,11 +113,17 @@ test('abort records the plugin result first and later causes are ignored', t => 
   timers.fire();
   t.deepEqual(enforcer.outcome(), { type: 'needs-auth' });
   t.is(terminations(), 1);
-  t.throws(() =>
-    setup().enforcer.abort(
-      /** @type {any} */ (harden({ type: 'bridge-down' })),
-    ),
-  );
+  for (const result of [
+    { type: 'bridge-down' },
+    { type: 'ok', text: 'done' },
+    { type: 'needs-containment' },
+  ]) {
+    t.throws(
+      () => setup().enforcer.abort(/** @type {any} */ (harden(result))),
+      undefined,
+      result.type,
+    );
+  }
 });
 
 test('stop ends enforcement without terminating', t => {
@@ -150,9 +157,98 @@ test('output byte counts must be non-negative safe integers', t => {
   t.throws(() => enforcer.countOutputBytes(NaN));
   t.throws(() => enforcer.countOutputBytes(-1));
   t.throws(() => enforcer.countOutputBytes(1.5));
+  t.true(enforcer.countOutputBytes(0));
+  t.true(enforcer.countOutputBytes(-0));
   t.true(enforcer.countOutputBytes(10));
   t.false(enforcer.countOutputBytes(1));
   t.is(terminations(), 1);
+});
+
+test('wall-clock limits beyond the host timer range are refused', t => {
+  const timers = makeManualTimers();
+  for (const maxWallClockMs of [Infinity, 3e9, MAX_TIMER_DELAY_MS + 1]) {
+    t.throws(
+      () =>
+        makeLimitEnforcer({
+          limits: harden({ maxWallClockMs, maxOutputBytes: 1, maxTurns: 1 }),
+          timers,
+          terminate: () => {},
+        }),
+      undefined,
+      String(maxWallClockMs),
+    );
+  }
+  t.is(timers.pending.size, 0, 'no timer is armed for a refused limit');
+  makeLimitEnforcer({
+    limits: harden({
+      maxWallClockMs: MAX_TIMER_DELAY_MS,
+      maxOutputBytes: 1,
+      maxTurns: 1,
+    }),
+    timers,
+    terminate: () => {},
+  }).stop();
+  t.pass();
+});
+
+test('the longest admitted wall-clock limit does not trip early on real timers', async t => {
+  let terminations = 0;
+  const enforcer = makeLimitEnforcer({
+    limits: harden({
+      maxWallClockMs: MAX_TIMER_DELAY_MS,
+      maxOutputBytes: 1,
+      maxTurns: 1,
+    }),
+    timers: harden({ setTimeout, clearTimeout }),
+    terminate: () => {
+      terminations += 1;
+    },
+  });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  t.is(enforcer.outcome(), undefined);
+  t.is(terminations, 0);
+  enforcer.stop();
+});
+
+test('turn and byte limits must be safe integers', t => {
+  for (const badLimits of [
+    { maxWallClockMs: 1, maxOutputBytes: 1.5, maxTurns: 1 },
+    { maxWallClockMs: 1, maxOutputBytes: 1, maxTurns: 1.5 },
+    { maxWallClockMs: 1, maxOutputBytes: Infinity, maxTurns: 1 },
+  ]) {
+    t.throws(() =>
+      makeLimitEnforcer({
+        limits: harden(badLimits),
+        timers: makeManualTimers(),
+        terminate: () => {},
+      }),
+    );
+  }
+});
+
+test('a throwing cancellation thenable cancels rather than leaking a timer', async t => {
+  const timers = makeManualTimers();
+  let terminations = 0;
+  const enforcer = makeLimitEnforcer({
+    limits,
+    timers,
+    terminate: () => {
+      terminations += 1;
+    },
+    cancelled: /** @type {PromiseLike<unknown>} */ (
+      harden({
+        then: () => {
+          throw Error('broken thenable');
+        },
+      })
+    ),
+  });
+  await null;
+  await null;
+  await null;
+  t.deepEqual(enforcer.outcome(), { type: 'cancelled' });
+  t.is(terminations, 1);
+  t.is(timers.pending.size, 0);
 });
 
 test('limits are checked at construction', t => {
@@ -169,31 +265,35 @@ test('limits are checked at construction', t => {
   );
 });
 
-test('the process group killer signals the negated pid', t => {
+test('the process group killer signals the negated pid it was made for', t => {
   /** @type {Array<[number, string]>} */
   const calls = [];
   const killProcessGroup = makeProcessGroupKiller({
     kill: (pid, signal) => {
       calls.push([pid, signal]);
     },
+    pid: 1234,
   });
-  t.true(killProcessGroup(1234));
-  t.false(killProcessGroup(undefined));
+  t.true(killProcessGroup());
   t.deepEqual(calls, [[-1234, 'SIGKILL']]);
+  t.false(makeProcessGroupKiller({ kill: () => {}, pid: undefined })());
 });
 
 test('the process group killer refuses a pid that names no child group', t => {
   /** @type {number[]} */
   const calls = [];
-  const killProcessGroup = makeProcessGroupKiller({
-    kill: pid => {
-      calls.push(pid);
-    },
-  });
-  for (const pid of [0, -1234, 1.5, NaN]) {
-    t.throws(() => killProcessGroup(pid), {
-      message: /pid must be a positive integer/,
-    });
+  for (const pid of [0, 1, -1234, 1.5, NaN, 2 ** 31]) {
+    t.throws(
+      () =>
+        makeProcessGroupKiller({
+          kill: target => {
+            calls.push(target);
+          },
+          pid,
+        }),
+      { message: /pid must be an integer from 2/ },
+      String(pid),
+    );
   }
   t.deepEqual(calls, []);
 });
@@ -203,14 +303,16 @@ test('the process group killer tolerates a group that is already gone', t => {
     kill: () => {
       throw Object.assign(Error('no such process'), { code: 'ESRCH' });
     },
+    pid: 1234,
   });
-  t.false(gone(1234));
+  t.false(gone());
   const denied = makeProcessGroupKiller({
     kill: () => {
       throw Object.assign(Error('not permitted'), { code: 'EPERM' });
     },
+    pid: 1234,
   });
-  t.throws(() => denied(1234), { message: 'not permitted' });
+  t.throws(() => denied(), { message: 'not permitted' });
 });
 
 test('the process group killer signals the pid itself on win32', t => {
@@ -218,9 +320,10 @@ test('the process group killer signals the pid itself on win32', t => {
   const calls = [];
   const killProcessGroup = makeProcessGroupKiller({
     kill: (pid, signal) => calls.push([pid, signal]),
+    pid: 1234,
     platform: 'win32',
   });
-  t.true(killProcessGroup(1234));
+  t.true(killProcessGroup());
   t.deepEqual(calls, [[1234, 'SIGKILL']]);
 });
 
@@ -229,13 +332,18 @@ test('a throwing terminate does not escape abort', t => {
     setTimeout: () => undefined,
     clearTimeout: () => {},
   });
+  /** @type {unknown[]} */
+  const reported = [];
   const enforcer = makeLimitEnforcer({
     limits: harden({ maxWallClockMs: 1000, maxOutputBytes: 10, maxTurns: 1 }),
     timers,
     terminate: () => {
       throw Object.assign(Error('not permitted'), { code: 'EPERM' });
     },
+    reportTerminateError: error => reported.push(error),
   });
   t.notThrows(() => enforcer.abort(harden({ type: 'cancelled' })));
   t.deepEqual(enforcer.outcome(), { type: 'cancelled' });
+  t.is(reported.length, 1);
+  t.is(/** @type {Error} */ (reported[0]).message, 'not permitted');
 });

@@ -11,9 +11,11 @@ import {
   AdmissionRefusalShape,
   ClassifiedResultShape,
   CredentialSourceInterface,
+  INFER_RESULT_TYPES,
   InferLimitsShape,
   InferRequestShape,
   InferResultShape,
+  InferResultTypeShape,
   InferenceBackendInterface,
   UsageRecordShape,
 } from '../src/guards.js';
@@ -47,6 +49,14 @@ test('every tag of the taxonomy matches InferResultShape', t => {
   }
 });
 
+test('the tag list names exactly the tags of InferResultShape', t => {
+  const tags = [...new Set(everyResult.map(({ type }) => type))].sort();
+  t.deepEqual(tags, [...INFER_RESULT_TYPES].sort());
+  for (const tag of tags) {
+    t.true(matches(tag, InferResultTypeShape), tag);
+  }
+});
+
 test('retired and malformed tags do not match InferResultShape', t => {
   const rejected = harden([
     { type: 'bridge-down' },
@@ -59,6 +69,8 @@ test('retired and malformed tags do not match InferResultShape', t => {
     { type: 'limit-exceeded', which: 'budget' },
     { type: 'usage-exhausted', resetAt: 1 },
     { type: 'rate-limited', retryAfterMs: -1 },
+    { type: 'rate-limited', retryAfterMs: Infinity },
+    { type: 'ok', text: 'x', usage: { outputTokens: Infinity } },
     { type: 'ok' },
     { type: 'ok', text: 'x', usage: { costUsd: 0.08 } },
   ]);
@@ -82,6 +94,19 @@ test('limits must be positive numbers', t => {
   t.false(matches(harden({ ...good, maxWallClockMs: -5 }), InferLimitsShape));
   t.false(matches(harden({ ...good, maxOutputBytes: '1' }), InferLimitsShape));
   t.false(matches(harden({ ...good, maxTurns: NaN }), InferLimitsShape));
+  for (const maxWallClockMs of [Infinity, 3e9, 2 ** 31]) {
+    t.false(
+      matches(harden({ ...good, maxWallClockMs }), InferLimitsShape),
+      String(maxWallClockMs),
+    );
+  }
+  t.true(
+    matches(harden({ ...good, maxWallClockMs: 2 ** 31 - 1 }), InferLimitsShape),
+  );
+  t.false(matches(harden({ ...good, maxTurns: Infinity }), InferLimitsShape));
+  t.false(
+    matches(harden({ ...good, maxOutputBytes: Infinity }), InferLimitsShape),
+  );
   t.false(
     matches(
       harden({ wallClockMs: 1, outputBytes: 1, maxTurns: 1 }),

@@ -2,14 +2,32 @@
 
 import { M } from '@endo/patterns';
 
-const NonNegativeNumberShape = M.and(M.number(), M.gte(0));
-const PositiveNumberShape = M.and(M.number(), M.gt(0));
+/**
+ * The largest delay a host timer honors. Node and the HTML timer steps
+ * (WebIDL `long`) turn any longer delay, `Infinity` included, into about
+ * 1 ms, so a wall-clock limit above it would trip at once.
+ */
+export const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+
+// Patterns cannot say "integer" of a number, so counts are bounded to finite
+// values here and the limit enforcer checks integrality where it counts.
+const NonNegativeNumberShape = M.and(
+  M.number(),
+  M.gte(0),
+  M.lte(Number.MAX_SAFE_INTEGER),
+);
+const PositiveNumberShape = M.and(
+  M.number(),
+  M.gt(0),
+  M.lte(Number.MAX_SAFE_INTEGER),
+);
+const TimerDelayShape = M.and(M.number(), M.gt(0), M.lte(MAX_TIMER_DELAY_MS));
 
 // Every record of the seam is closed (the `{}` rest pattern of
 // `M.splitRecord`), so that, for example, no request can carry a credential.
 
 export const InferLimitsShape = harden({
-  maxWallClockMs: PositiveNumberShape,
+  maxWallClockMs: TimerDelayShape,
   maxOutputBytes: PositiveNumberShape,
   maxTurns: PositiveNumberShape,
 });
@@ -79,6 +97,25 @@ export const RETRY_LATER_TYPES = harden(
 );
 
 /** Every tag except `ok` and `needs-containment`: the classifier's range. */
+export const CLASSIFIED_RESULT_TYPES = harden(
+  /** @type {const} */ ([
+    'needs-auth',
+    ...RETRY_LATER_TYPES,
+    'limit-exceeded',
+    'cancelled',
+    'unavailable',
+  ]),
+);
+
+/** Every tag of the taxonomy. */
+export const INFER_RESULT_TYPES = harden(
+  /** @type {const} */ ([
+    'ok',
+    ...CLASSIFIED_RESULT_TYPES,
+    'needs-containment',
+  ]),
+);
+
 export const ClassifiedResultShape = M.or(
   harden(/** @type {const} */ ({ type: 'needs-auth' })),
   ...RETRY_LATER_TYPES.map(type =>
@@ -137,17 +174,7 @@ export const CredentialSourceInterface = M.interface('CredentialSource', {
   ),
 });
 
-export const InferResultTypeShape = M.or(
-  'ok',
-  'needs-auth',
-  'usage-exhausted',
-  'rate-limited',
-  'budget-exhausted',
-  'limit-exceeded',
-  'cancelled',
-  'needs-containment',
-  'unavailable',
-);
+export const InferResultTypeShape = M.or(...INFER_RESULT_TYPES);
 
 export const UsageRecordShape = M.splitRecord(
   {
