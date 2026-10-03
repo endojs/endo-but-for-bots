@@ -36,6 +36,9 @@ const makeStub = () => {
         namePathFrom(workerNamePath);
       }
       namePathFrom(resultNamePath);
+      /** @type {unknown[]} */ (edgeNames).forEach(edgeName =>
+        namePathFrom(edgeName),
+      );
       return 42;
     },
   };
@@ -104,4 +107,25 @@ test('evaluate refuses a non-path workerNamePath before dispatch', async t => {
     run({ workerNamePath: 7, source: '1', resultNamePath: ['one'] }),
   );
   t.deepEqual(calls, []);
+});
+
+test('evaluate wraps each endowment pet name as a one-segment path', async t => {
+  const { calls, run } = makeStub();
+  const result = await run({
+    source: 'counter + 1',
+    codeNames: ['counter', 'repo'],
+    edgeNames: ['my-counter', 'repo-cap'],
+    resultNamePath: ['answer'],
+  });
+  t.is(result, 42);
+  t.deepEqual(calls, [
+    [
+      undefined,
+      'counter + 1',
+      ['counter', 'repo'],
+      [['my-counter'], ['repo-cap']],
+      ['answer'],
+    ],
+  ]);
+  t.true(Object.isFrozen(calls[0][3]));
 });

@@ -20,7 +20,7 @@ export const codeToolDefs = harden([
     summary:
       'Evaluate JavaScript code directly. Arguments: ' +
       'workerNamePath (string[] path components, or undefined), source (string), ' +
-      'codeNames (string[]), edgeNames (string[]), ' +
+      'codeNames (string[]), edgeNames (string[], one pet name per endowment), ' +
       'resultNamePath (string[], path components).',
     // workerNamePath + codeNames + edgeNames are optional in the dispatcher
     // (codeNames/edgeNames default to [] and workerNamePath accepts the

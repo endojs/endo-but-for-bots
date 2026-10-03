@@ -379,7 +379,7 @@ export const makeExecuteTool = powers => {
           parts.push(helpText);
         } catch {
           parts.push(
-            `Capability at "${petNamePath}" does not implement help().`,
+            `Capability at "${[petNamePath].flat().join('/')}" does not implement help().`,
           );
         }
         try {
@@ -494,7 +494,9 @@ export const makeExecuteTool = powers => {
           workerNamePath,
           source,
           harden(codeNames),
-          harden(edgeNames),
+          // Each endowment pet name is a single name, never split on a
+          // delimiter; the daemon takes it as a one-segment path.
+          harden(edgeNames.map(edgeName => [edgeName])),
           resultNamePath,
         );
       }

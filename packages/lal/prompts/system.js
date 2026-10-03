@@ -99,7 +99,7 @@ expects to review the code and choose which capabilities to bind.
 
 Example — propose a program that reads a file from a directory:
 \`\`\`
-define("E(dir).readText('config.json')", {
+define("E(dir).readText(['config.json'])", {
   "dir": {"label": "Directory containing config.json"}
 })
 \`\`\`
