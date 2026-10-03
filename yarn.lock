@@ -2671,6 +2671,8 @@ __metadata:
     "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/promise-kit": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    ava: "catalog:dev"
     eslint: "catalog:dev"
   languageName: unknown
   linkType: soft
