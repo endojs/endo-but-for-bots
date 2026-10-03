@@ -325,7 +325,11 @@ export const spawnWorkerLoop = async (
   // tools and `claim` has nothing to match, so the inbox loop below behaves
   // exactly as it did before.
   const delegations = makeSubagentDelegations(
-    harden({ powers, ...(timers ? { timers } : {}) }),
+    harden({
+      powers,
+      ...(timers ? { timers } : {}),
+      ...(spawner ? { verifyBinding: name => E(spawner).verify(name) } : {}),
+    }),
   );
   if (spawner) {
     for (const [name, tool] of makeSubagentTools({

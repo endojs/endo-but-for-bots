@@ -70,6 +70,9 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
     async has(...petNamePath) {
       return names.has(petNamePath.join('/'));
     },
+    async identify(...petNamePath) {
+      return names.get(petNamePath.join('/'));
+    },
     async locate(...petNamePath) {
       const id = names.get(petNamePath.join('/'));
       return id === undefined ? undefined : `endo://node/${id}?type=handle`;
@@ -597,6 +600,35 @@ test("the spawner binds and drops the parent's top-level edge to its subagent", 
 
   await spawner.stop('c');
   t.false(names.has('profile-for-p/subagent.c'));
+});
+
+test("verify confirms the parent's edge by formula identity, not by name", async t => {
+  const { hostAgent, names } = makeFakeHost();
+  const spawner = makeSubagentSpawner({
+    provideContext: async () =>
+      harden({
+        hostAgent,
+        providerLocator: provisionOptions.providerLocator,
+        hostAgentLocator: provisionOptions.hostAgentLocator,
+      }),
+    parentName: 'p',
+    driverSpecifier: provisionOptions.driverSpecifier,
+    spawnerSpecifier: provisionOptions.spawnerSpecifier,
+    depth: 1,
+    maxDepth: 1,
+  });
+
+  t.false(await spawner.verify('c'));
+  await spawner.spawn('c');
+  t.true(await spawner.verify('c'));
+
+  // The parent rebinds `subagent.c` to a correspondent's handle, as `adopt`
+  // or `store` would let it. The name still resolves, but not to the child.
+  names.set('profile-for-p/subagent.c', 'mallory-id');
+  t.false(await spawner.verify('c'));
+
+  await spawner.stop('c');
+  t.false(await spawner.verify('c'));
 });
 
 test('a subagent the parent cannot be given a name for is released', async t => {

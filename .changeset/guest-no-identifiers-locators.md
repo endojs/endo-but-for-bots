@@ -26,7 +26,7 @@ A guest's own `copy` and `move` cannot traverse a path through another guest it 
 
 `@endo/agent-mcp-stdio` drops the corresponding guest tools.
 `@endo/agentry` binds code-mode grants into its guest with `host.copy` rather than `guest.storeIdentifier`.
-`@endo/fae` and `@endo/floot` delegate to subagents by pet name: a session factory's or subagent spawner's `spawn()` returns `{ name }` instead of `{ name, locator }`, the spawner binds the parent's `subagent.<name>` edge itself, and `@endo/fae` replaces `SUBAGENT_DIRECTORY` and `isSameFormula` with `SUBAGENT_PET_NAME_PREFIX` and `subagentPetName`.
+`@endo/fae` and `@endo/floot` delegate to subagents by pet name: a session factory's or subagent spawner's `spawn()` returns `{ name }` instead of `{ name, locator }`, the spawner binds the parent's `subagent.<name>` edge itself, and `@endo/fae` replaces `SUBAGENT_DIRECTORY` and `isSameFormula` with `SUBAGENT_PET_NAME_PREFIX` and `subagentPetName`. `SubagentSpawner` gains `verify(name)`, which confirms by formula identity that the parent's `subagent.<name>` still names the spawned subagent, and an ask is refused when it does not.
 `@endo/lal` drops the `locate` tool, reports `fromNames` and `toNames` in `listMessages`, types `InboxMessage` as `GuestMessage`, and its mock powers drop `identify` and `locate`.
 `@endo/cli`'s `inbox` command names a guest's correspondents from `fromNames` and `toNames`.
 `@endo/jaine`'s factory `make` accepts `{ env }` and reads `JAINE_FACTORY_AGENT_NAME` from it; its factory binds providers into an agent with `host.copy`, and its router detects its own mail by `@self` among `fromNames`.

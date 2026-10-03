@@ -219,6 +219,48 @@ test('askSubagent resolves with the reply the subagent mails back', async t => {
   t.deepEqual(answer.edgeNames, []);
 });
 
+test('an ask refuses a subagent name that was rebound to someone else', async t => {
+  const mailbox = makeMailbox({
+    names: { 'subagent.helper': CHILD },
+  });
+  const { timers } = makeManualTimers();
+  /** @type {string[]} */
+  const verified = [];
+  const delegations = makeSubagentDelegations({
+    powers: mailbox.powers,
+    timers,
+    verifyBinding: async name => {
+      verified.push(name);
+      return false;
+    },
+  });
+
+  await t.throwsAsync(
+    delegations.ask({ name: 'helper', task: 'do it', timeoutSeconds: 30 }),
+    { message: /no longer names the subagent/ },
+  );
+  t.deepEqual(verified, ['helper']);
+  // Nothing was sent to whatever the name now reaches.
+  t.is(mailbox.stream.length, 0);
+  // The slot is released, so a respawned subagent can be asked again.
+  const retry = makeSubagentDelegations({
+    powers: mailbox.powers,
+    timers,
+    verifyBinding: async () => true,
+  });
+  const answerP = retry.ask({
+    name: 'helper',
+    task: 'do it',
+    timeoutSeconds: 30,
+  });
+  await mailbox.whenSent();
+  retry.claim(mailbox.stream[0]);
+  retry.claim(
+    mailbox.deliverReply({ from: CHILD, replyTo: 'out-1', text: 'done' }),
+  );
+  t.is((await answerP).text, 'done');
+});
+
 test('a reply reports the capabilities it carried', async t => {
   const mailbox = makeMailbox({
     names: { 'subagent.helper': CHILD },

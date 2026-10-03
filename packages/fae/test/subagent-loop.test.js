@@ -248,6 +248,7 @@ const stubSpawner = Far('SubagentSpawner', {
   spawn: async name => harden({ name }),
   stop: async () => {},
   list: async () => harden(['helper']),
+  verify: async name => name === 'helper',
   help: () => 'stub',
 });
 

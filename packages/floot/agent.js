@@ -1015,7 +1015,11 @@ export const makeStreamingAgent = async (
   // Delegation state is per session and lives beside the inbox loop that feeds
   // it: `claim` below is the only reader of the mailbox stream.
   const delegations = makeSubagentDelegations(
-    harden({ powers, ...(timers ? { timers } : {}) }),
+    harden({
+      powers,
+      ...(timers ? { timers } : {}),
+      ...(spawner ? { verifyBinding: name => E(spawner).verify(name) } : {}),
+    }),
   );
   const settledMail = new Set();
   const toolRegistry = makeFlootToolRegistry(powers, {
@@ -3667,6 +3671,24 @@ export const make = (hostPowers, _context, { env } = {}) => {
         return harden(names);
       },
 
+      /** @param {string} name */
+      async verify(name) {
+        assertSubagentName(name);
+        await null;
+        const entry = (await listSubagents()).find(
+          session => session.subagentName === name,
+        );
+        if (!entry) return false;
+        const [childId, boundId] = await Promise.all([
+          E(getHost()).identify(`session-${entry.id}`),
+          E(getHost()).identify(
+            `session-agent-${parentId}`,
+            subagentPetName(name),
+          ),
+        ]);
+        return childId !== undefined && childId === boundId;
+      },
+
       /** @param {string} [methodName]  */
       help(methodName) {
         if (methodName === 'spawn') {
@@ -3677,6 +3699,9 @@ export const make = (hostPowers, _context, { env } = {}) => {
         }
         if (methodName === 'list') {
           return 'list() — Names of this session’s live subagents.';
+        }
+        if (methodName === 'verify') {
+          return "verify(name) — Whether the parent's subagent.<name> still names this session's subagent.";
         }
         return 'Subagent spawner: create, list, and release sessions recorded as subagents of one parent session.';
       },

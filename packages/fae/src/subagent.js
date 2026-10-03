@@ -228,6 +228,7 @@ export const SubagentSpawnerInterface = M.interface('SubagentSpawner', {
   spawn: M.callWhen(M.string()).optional(M.record()).returns(M.record()),
   stop: M.callWhen(M.string()).returns(M.undefined()),
   list: M.callWhen().returns(M.arrayOf(M.string())),
+  verify: M.callWhen(M.string()).returns(M.boolean()),
   help: M.call().optional(M.string()).returns(M.string()),
 });
 // eslint-disable-next-line @endo/no-harden-pattern-maker
@@ -268,10 +269,16 @@ harden(SubagentSpawnerInterface);
  * @param {object} options
  * @param {any} options.powers - The parent agent's guest powers.
  * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
+ * @param {(name: string) => Promise<boolean>} [options.verifyBinding] - Asks
+ *   whoever wrote the `subagent.<name>` edge whether it still names the
+ *   subagent spawned under it. Matching replies by pet name is only as good as
+ *   that name, and the same agent can rebind it with `store` or `adopt`, so an
+ *   ask confirms the binding by formula identity before it sends.
  */
 export const makeSubagentDelegations = ({
   powers,
   timers = { setTimeout, clearTimeout },
+  verifyBinding,
 }) => {
   /** @type {Map<string, PendingDelegation>} */
   const pendingByName = new Map();
@@ -473,6 +480,13 @@ export const makeSubagentDelegations = ({
     try {
       (await E(powers).has(petName)) ||
         Fail`No subagent named ${q(name)} — spawn it first`;
+      // A correspondent who talks the model into `adopt`ing its own handle as
+      // `subagent.<name>` would otherwise receive the ask and have its answer
+      // taken for the subagent's. `replyTo` binds a reply to the recipient of
+      // the ask, so checking the recipient before the send covers the reply.
+      verifyBinding === undefined ||
+        (await verifyBinding(name)) ||
+        Fail`The pet name ${q(petName)} no longer names the subagent spawned as ${q(name)}; stop and respawn it`;
     } catch (error) {
       forget(delegation);
       throw error;

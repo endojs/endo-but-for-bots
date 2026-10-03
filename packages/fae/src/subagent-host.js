@@ -616,6 +616,17 @@ export const makeSubagentSpawner = ({
       return harden(await listNames(hostAgent));
     },
 
+    /** @param {string} name */
+    async verify(name) {
+      assertSubagentName(name);
+      const { hostAgent } = await provideContext();
+      const [childId, boundId] = await Promise.all([
+        E(hostAgent).identify(subagentAgentName(parentName, name)),
+        E(hostAgent).identify(parentProfileName, subagentPetName(name)),
+      ]);
+      return childId !== undefined && childId === boundId;
+    },
+
     /** @param {string} [methodName] */
     help(methodName) {
       if (methodName === 'spawn') {
@@ -626,6 +637,9 @@ export const makeSubagentSpawner = ({
       }
       if (methodName === 'list') {
         return 'list() — Names of this agent’s live subagents.';
+      }
+      if (methodName === 'verify') {
+        return "verify(name) — Whether the parent's subagent.<name> still names the subagent spawned as name.";
       }
       return 'Subagent spawner: create, list, and release agents named beneath one parent agent.';
     },
