@@ -23,11 +23,11 @@ import { constantProperties, universalPropertyNames } from './permits.js';
  * start-compartment binding stays non-writable and non-configurable; a child
  * compartment's binding is writable and configurable as usual.
  *
- * `SturdyRef` is deliberately the only entry. Admitting another would take
- * three coordinated edits: its entry in `universalPropertyNames` (permits.js),
- * its entry here, and a shape guard like `assertSturdyRefShape` (intrinsics.js)
- * called from `repairIntrinsics`. Generalize those into permit data only when
- * a second first-wins global actually arrives.
+ * An entry here reaches every compartment, including one built with no
+ * endowments to confine untrusted code, so its value must confer no authority.
+ * `SturdyRef` qualifies: it only constructs, brand-checks, and dispatches to a
+ * handler the caller already holds. A shape check alone does not establish
+ * this.
  */
 const firstWinsPropertyNames = freeze({
   __proto__: null,

@@ -1,10 +1,7 @@
 // Stands in for the `@endo/sturdyref` shim having installed `SturdyRef`
 // before `lockdown`. It has the same shape as the shim's constructor (a class
 // with `enliven` and `isSturdyRef` statics and a `SturdyRef` toStringTag) and
-// the same non-writable, non-configurable global descriptor. Like the real
-// shim before `lockdown`, it freezes the constructor, its prototype and its
-// statics, and leaves hardening of the shared intrinsics above them to
-// `lockdown`.
+// the same non-writable, non-configurable global descriptor.
 
 const { defineProperty, freeze } = Object;
 const { apply } = Reflect;
