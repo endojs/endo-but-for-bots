@@ -73,13 +73,19 @@ const makeWorld = () => {
       if (!capsById.has(id)) throw Error(`unknown formula id ${id}`);
       return capsById.get(id);
     },
-    async provideMount(mountPath, name, opts) {
+    async provideMount(mountPath, namePath, opts) {
+      // The daemon refuses a bare pet-name string; so does this fake.
+      if (!Array.isArray(namePath)) {
+        throw TypeError(
+          `expected a pet-name path, got ${JSON.stringify(namePath)}`,
+        );
+      }
       const cap = harden({
         kind: 'daemon-mount',
         mountPath,
         readOnly: !!opts?.readOnly,
       });
-      hostNames.set(name, cap);
+      hostNames.set(namePath.join('/'), cap);
       return cap;
     },
   });
