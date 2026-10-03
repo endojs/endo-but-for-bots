@@ -356,12 +356,15 @@
  * `formatLocator`/`parseLocator` URI helpers in `@endo/daemon`, which
  * use the word `Locator` for the addressable URI form.
  *
- * A secret arrives as a string when it is printable ASCII, so a locator
- * keyed by friendly names matches. A secret whose bytes are not all
- * ASCII (e.g. a Spritely Goblins 24-byte random) arrives as a fresh copy
- * of its raw bytes; a string-keyed locator simply misses it.
+ * A secret arrives as a string when every byte is in the ASCII range
+ * (0x00 through 0x7f, control characters included), so a locator keyed
+ * by friendly names matches. A secret with any byte above 0x7f (e.g. a
+ * Spritely Goblins 24-byte random) arrives as a fresh copy of its raw
+ * bytes; a string-keyed locator simply misses it.
  *
- * The method signature keeps a string-keyed `Map` assignable.
+ * The broader parameter type accepts both shapes so that a
+ * `Map<string, unknown>`, whose `get` takes only a string key, remains
+ * assignable to `NonceLocator`.
  *
  * @typedef {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} NonceLocator
  */

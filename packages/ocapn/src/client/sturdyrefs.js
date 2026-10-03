@@ -296,8 +296,8 @@ export const enlivenSturdyRef = async (
  * @property {(secretBytes: Uint8Array) => Promise<any | undefined>} lookup
  *   Async look up a locally-held capability by the on-wire secret
  *   bytes. Calls through to the injected locator with either the
- *   ASCII-decoded string (for printable secrets) or the raw bytes (for
- *   non-printable secrets like Spritely Goblins' 24-byte randoms).
+ *   ASCII-decoded string (when every byte is 0x7f or below) or the raw
+ *   bytes (otherwise, as for Spritely Goblins' 24-byte randoms).
  */
 
 /**
