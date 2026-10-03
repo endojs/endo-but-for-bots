@@ -296,7 +296,7 @@ test('a daemon that serves no guest sockets gets the root connection', async t =
     formulaId: FORMULA_ID,
     issue: async () => {
       steps.push(['issue']);
-      throw Error('This daemon does not serve guest-scoped bootstraps');
+      return undefined;
     },
     connectTo: async () => {
       steps.push(['connect']);
