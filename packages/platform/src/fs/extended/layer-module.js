@@ -21,11 +21,11 @@
  * NOT minted here: clients that want it should chain
  *
  *   await E(host).evaluate(
- *     '@node',
+ *     ['@node'],
  *     'await E(layer).asFilesystem()',
  *     ['layer'],
- *     [layerPetName],
- *     composedViewPetName,
+ *     [[layerPetName]],
+ *     [composedViewPetName],
  *   );
  *
  * so the composed view re-derives from the layer on restart.
