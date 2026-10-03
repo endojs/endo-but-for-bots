@@ -8,8 +8,10 @@
 // exactly one guest instead connects to a socket this module serves for that
 // guest: the CapTP bootstrap (export offset 0) on that socket IS the guest
 // facet, so the connection reaches that guest and nothing else.
-// Revoking a guest's socket, as when the guest formula is collected, closes
-// the listener, removes the pathname, and ends every connection made on it.
+// Revoking a guest's socket, as when the guest is cancelled or collected,
+// closes the listener, removes the pathname, and ends every connection made
+// on it. With formula collection off (no ENDO_GC=1), dropping a guest's last
+// pet name neither collects nor cancels it, so its socket stays served.
 
 import harden from '@endo/harden';
 import { makeError, q, X } from '@endo/errors';
@@ -158,7 +160,14 @@ export const makeGuestPathIssuer = ({
         // failures to report.
         if (!isRevoked && !isDaemonCancelled) reportError(error);
       });
-      await started;
+      try {
+        await started;
+      } catch (error) {
+        // The caller receives a startup failure, so the service need not
+        // report it too; the flag is set before `stopped` reports.
+        isRevoked = true;
+        throw error;
+      }
       return socketPath;
     })();
     issuedByNumber.set(formulaNumber, issued);
@@ -183,6 +192,8 @@ export const makeGuestPathIssuer = ({
   const revoke = (formulaNumber, reason) => {
     const revokeGuest = revokeByNumber.get(formulaNumber);
     if (revokeGuest === undefined) return;
+    // The name is freed now, but the listener removes the pathname later, as
+    // its service stops; a same-prefix issue in between may find it present.
     forget(formulaNumber, `${formulaNumber.slice(0, SOCKET_NAME_DIGITS)}.sock`);
     revokeGuest(reason);
   };
