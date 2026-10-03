@@ -1729,9 +1729,10 @@ export const makeHostMaker = ({
      * @param {NamePath} scratchPetNamePath
      */
     const stageTreeInternal = async (treeName, scratchPetNamePath) => {
-      // provideScratchMount validates the scratch name/path and stores it
-      // through the directory, so a path nests the scratch mount.
-      const scratchNamePath = namePathFrom(scratchPetNamePath);
+      // Refuse a scratch path whose leaf is not a pet name before any
+      // snapshot is taken; provideScratchMount then stores it through the
+      // directory, so a path nests the scratch mount.
+      const { namePath: scratchNamePath } = petNamePathFrom(scratchPetNamePath);
       const treeNamePath = namePathFrom(/** @type {NamePath} */ (treeName));
       // Use identify + provide instead of a lookup chain to keep the
       // source invariant (so Mount sub-node wrapping doesn't confuse

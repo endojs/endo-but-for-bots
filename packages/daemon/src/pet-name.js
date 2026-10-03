@@ -189,8 +189,12 @@ const loneSurrogatePattern =
 /**
  * Percent-encodes one segment. `encodeURIComponent` throws on a lone
  * surrogate, which a valid name may contain, so each lone surrogate is
- * written as `%uXXXX` instead. `encodeURIComponent` never emits `%u`, so
- * the encoding stays injective.
+ * written as `%uXXXX` instead. The encoding stays injective because:
+ * `encodeURIComponent` emits `%` only followed by two hex digits, so never
+ * `%u`; a lone surrogate (U+D800–U+DFFF) always has exactly four hex digits,
+ * so each `%uXXXX` token is fixed-width; and a name contains no `/`, so the
+ * `%2F` joiner in {@link namePathLabel} cannot arise inside an encoded
+ * segment, which writes a literal `%` as `%25`.
  *
  * @param {string} segment
  * @returns {string}

@@ -8219,6 +8219,19 @@ const prepareRefuseTree = async (t, label) => {
 const listScratchNames = async host =>
   (await E(host).list()).filter(name => name.startsWith('scratch-'));
 
+test('stageTree refuses a special-name scratch leaf before reaching the tree', async t => {
+  const host = await prepareRefuseTree(t, 'refuse-stage-special');
+  // The scratch path is checked first, so even a missing tree reports the
+  // bad scratch leaf rather than taking a snapshot or resolving the tree.
+  await t.throwsAsync(E(host).stageTree(['no-such-tree'], ['@agent']), {
+    message: /Invalid pet name "@agent"/,
+  });
+  await t.throwsAsync(E(host).stageTree(['refuse-stage-special'], ['@agent']), {
+    message: /Invalid pet name "@agent"/,
+  });
+  t.deepEqual(await listScratchNames(host), []);
+});
+
 test('makeUnconfinedFromTree refuses an unknown special powers name before staging', async t => {
   const host = await prepareRefuseTree(t, 'refuse-powers-special');
   await t.throwsAsync(

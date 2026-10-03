@@ -401,7 +401,7 @@ const loneSurrogateNameArb = fc
 
 const labelNameArb = fc.oneof(nameArb, loneSurrogateNameArb);
 
-test('namePathLabel is injective and yields a valid name', t => {
+test('namePathLabel is injective, and is a valid name when no longer than 255', t => {
   fc.assert(
     fc.property(
       fc.array(labelNameArb, { minLength: 1, maxLength: 4 }),
