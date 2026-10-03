@@ -3075,7 +3075,7 @@ export interface DaemonCore {
   formulateInvitation: (
     invitingAgentId: FormulaIdentifier,
     invitingHandleId: FormulaIdentifier,
-    guestName: NamePath,
+    guestNamePath: NamePath,
     deferredTasks: DeferredTasks<InvitationDeferredTaskParams>,
   ) => FormulateResult<Invitation>;
 

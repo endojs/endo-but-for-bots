@@ -5293,13 +5293,13 @@ const makeDaemonCore = async (
    * guest inviter gains no network authority.
    * @param {FormulaIdentifier} invitingAgentId
    * @param {FormulaIdentifier} invitingHandleId
-   * @param {NamePath} guestName
+   * @param {NamePath} guestNamePath
    * @param {DeferredTasks<InvitationDeferredTaskParams>} deferredTasks
    */
   const formulateInvitation = async (
     invitingAgentId,
     invitingHandleId,
-    guestName,
+    guestNamePath,
     deferredTasks,
   ) => {
     return /** @type {FormulateResult<Invitation>} */ (
@@ -5320,7 +5320,7 @@ const makeDaemonCore = async (
           type: 'invitation',
           invitingAgent: invitingAgentId,
           invitingHandle: invitingHandleId,
-          guestName,
+          guestName: guestNamePath,
         };
 
         return formulate(invitationNumber, formula);
@@ -7485,13 +7485,13 @@ const makeDaemonCore = async (
    *   `EndoHost` (`EndoHost.invite`, source-compatible) or an `EndoGuest`.
    * @param {FormulaIdentifier} invitingHandleId - the inviting agent's handle,
    *   which the locator's `from` names, so an acceptor binds that agent.
-   * @param {NamePath} guestName
+   * @param {NamePath} guestNamePath
    */
   const makeInvitation = async (
     id,
     invitingAgentId,
     invitingHandleId,
-    guestName,
+    guestNamePath,
   ) => {
     const invitingAgent = /** @type {EndoAgent} */ (
       await provide(invitingAgentId)
@@ -7499,9 +7499,9 @@ const makeDaemonCore = async (
     // Network mediation goes through the internal broker, never the inviting
     // agent, so the same implementation serves a host or a guest inviter.
     const networkBroker = await makeInvitationNetworkBroker();
-    // The invitation persists the name (or directory path) the redeemed
-    // guest should be stored under.
-    const guestNamePath = namePathFrom(guestName);
+    // The invitation persists the pet-name path the redeemed guest should be
+    // stored under.
+    namePathFrom(guestNamePath);
 
     // Serialize accept()/cancel() on THIS invitation so its single-use check
     // and the consuming mutation run atomically with respect to each other.
