@@ -8,6 +8,17 @@ import { InferLimitsShape, InferResultShape } from './guards.js';
 /** @import { InferLimits, InferResult, LimitEnforcer, LimitTimers } from './types.js' */
 
 /**
+ * Listens for `cancelled` through a holder `stop()` empties, so that a
+ * long-lived `cancelled` shared by many turns retains none of them.
+ *
+ * @param {PromiseLike<unknown>} cancelled
+ * @param {{ onCancel?: () => void }} holder
+ */
+const listenForCancellation = (cancelled, holder) => {
+  cancelled.then(undefined, () => holder.onCancel?.());
+};
+
+/**
  * Enforces one turn's `InferLimits` inside a provider plugin. The plugin
  * reports output bytes and model turns as it observes them; the enforcer
  * calls `terminate` exactly once, on the first limit reached, on
@@ -29,6 +40,12 @@ import { InferLimitsShape, InferResultShape } from './guards.js';
 export const makeLimitEnforcer = ({ limits, timers, terminate, cancelled }) => {
   mustMatch(harden(limits), InferLimitsShape, 'limits');
   const { maxWallClockMs, maxOutputBytes, maxTurns } = limits;
+  // Counts are whole; a fractional or infinite ceiling is a caller defect,
+  // raised before the plugin acquires anything.
+  Number.isInteger(maxTurns) ||
+    Fail`limits.maxTurns must be an integer: ${maxTurns}`;
+  Number.isInteger(maxOutputBytes) ||
+    Fail`limits.maxOutputBytes must be an integer: ${maxOutputBytes}`;
 
   /** @type {InferResult | undefined} */
   let outcome;
@@ -36,8 +53,12 @@ export const makeLimitEnforcer = ({ limits, timers, terminate, cancelled }) => {
   let outputBytes = 0;
   let turns = 0;
 
+  /** @type {{ onCancel?: () => void }} */
+  const cancellation = {};
+
   const stop = () => {
     stopped = true;
+    cancellation.onCancel = undefined;
     timers.clearTimeout(timer);
   };
 
@@ -56,7 +77,8 @@ export const makeLimitEnforcer = ({ limits, timers, terminate, cancelled }) => {
   );
 
   if (cancelled !== undefined) {
-    cancelled.then(undefined, () => abort(harden({ type: 'cancelled' })));
+    cancellation.onCancel = () => abort(harden({ type: 'cancelled' }));
+    listenForCancellation(cancelled, cancellation);
   }
 
   /**

@@ -183,6 +183,41 @@ test('a wall-clock limit Node would clamp to 1 ms is refused', t => {
   }
 });
 
+test('a fractional or infinite count ceiling is refused', t => {
+  for (const ceiling of [
+    { maxTurns: 1.5 },
+    { maxTurns: Infinity },
+    { maxOutputBytes: 0.5 },
+    { maxOutputBytes: Infinity },
+  ]) {
+    t.throws(
+      () =>
+        makeLimitEnforcer({
+          limits: harden({ ...limits, ...ceiling }),
+          timers: makeManualTimers(),
+          terminate: () => {},
+        }),
+      { message: /must be an integer/ },
+    );
+  }
+});
+
+test('a cancellation after stop does not trip the enforcer', async t => {
+  /** @type {(reason: unknown) => void} */
+  let cancel = () => {};
+  /** @type {Promise<never>} */
+  const cancelled = new Promise((_resolve, reject) => {
+    cancel = reject;
+  });
+  const { enforcer, terminations } = setup(cancelled);
+  enforcer.stop();
+  cancel(Error('cancelled late'));
+  await cancelled.catch(() => {});
+  await null;
+  t.is(enforcer.outcome(), undefined);
+  t.is(terminations(), 0);
+});
+
 test('the process group killer signals the negated pid', t => {
   /** @type {Array<[number, string]>} */
   const calls = [];
