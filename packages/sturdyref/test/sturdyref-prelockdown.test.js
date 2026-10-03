@@ -82,9 +82,8 @@ test('refs made after lockdown work and are frozen', async t => {
   t.is(await enliven(ref), 'live');
 });
 
-test('a child compartment sees the same constructor if SES shares it', t => {
-  // Without SES's `SturdyRef` permit, a child compartment has no SturdyRef;
-  // with it, the child receives this very constructor.
-  const { SturdyRef: childSturdyRef } = new Compartment().globalThis;
-  t.true(childSturdyRef === undefined || childSturdyRef === Installed);
+test('a child compartment sees the same constructor', t => {
+  // SES admits a pre-lockdown SturdyRef as a shared intrinsic.
+  t.is(new Compartment().globalThis.SturdyRef, Installed);
+  t.is(new Compartment().evaluate('SturdyRef'), Installed);
 });
