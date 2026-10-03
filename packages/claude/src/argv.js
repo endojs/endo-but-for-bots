@@ -8,18 +8,23 @@
 //
 //   - the pinned CLI version whose flag semantics were last measured live
 //     (2.1.280; the design's original measurement was 2.1.232);
-//   - the seven presence-required flags the harness refuses to spawn without;
-//   - the per-spawn path flags `--settings` and `--mcp-config`, each exactly
-//     once with a value (a repeat could substitute another file), and the
-//     allow/deny lists `--allowedTools` / `--disallowedTools`, each at most once
-//     with a value;
+//   - the nine presence-required flags the harness refuses to spawn without,
+//     with the three boolean ones (`--bare`, `--strict-mcp-config`,
+//     `--disable-slash-commands`) each standing alone, never in a value slot;
+//   - the per-spawn flags `--settings`, `--mcp-config`, `--allowedTools`, and
+//     `--disallowedTools`, each exactly once with a non-empty value (a repeat
+//     could substitute another file or list);
+//   - that `--model`, `--max-turns`, and `--output-format` carry a value that is
+//     not flag-shaped, so none can swallow a required flag as its value;
+//   - that no bare `--` end-of-options token appears, since every token after
+//     it would be parsed as a positional;
 //   - that no `--flag=value` token appears, since 2.1.280 parses that spelling
 //     as the same option and a duplicate check over exact tokens would miss it;
 //   - the value assertion that `--tools` and `--setting-sources` each carry
 //     exactly the empty string (presence-only is the `"alg":"none"` shape),
 //     and that `--permission-mode` / `--permission-prompts` carry `dontAsk` /
 //     `none`, each exactly once;
-//   - that no bare token follows the value of any of those flags, since
+//   - that no bare token follows the value of any of those eight value flags, since
 //     `--tools` and `--mcp-config` are variadic in 2.1.280 and would absorb it;
 //   - `buildArgv`, which emits the prompt at NO index (it is delivered on stdin),
 //     so the construction invariant holds by construction.
@@ -36,14 +41,17 @@ import { KNOWN_BUILTIN_TOOLS } from './tool-permissions.js';
 export const PINNED_CLI_VERSION = '2.1.280';
 
 /**
- * The seven flags whose PRESENCE the harness asserts before every spawn
+ * The nine flags whose PRESENCE the harness asserts before every spawn
  * (§ Design Decision 1). Three close the discovery surfaces (`--bare` closes
  * CLAUDE.md/hooks/keychain; `--strict-mcp-config` closes MCP auto-discovery;
  * `--setting-sources` closes the discovered settings layers); `--mcp-config` names
  * the only MCP servers; `--tools` empties
  * the built-in set; `--disable-slash-commands` closes the `/skill-name` surface
  * `--bare` leaves resolving and `--tools ""` does not reach; `--settings` carries
- * the `enabledPlugins` key that disables the builtin plugins `--bare` still loads.
+ * the `enabledPlugins` key that disables the builtin plugins `--bare` still loads;
+ * `--allowedTools` is the capability grant and `--disallowedTools` the belt deny
+ * set. `--permission-mode` and `--permission-prompts` are also mandatory, but
+ * through `PINNED_VALUE_FLAGS`, which asserts their value as well.
  */
 export const REQUIRED_FLAGS = harden([
   '--bare',
@@ -52,6 +60,19 @@ export const REQUIRED_FLAGS = harden([
   '--setting-sources',
   '--settings',
   '--tools',
+  '--disable-slash-commands',
+  '--allowedTools',
+  '--disallowedTools',
+]);
+
+/**
+ * The required flags that take no value. Each must appear exactly once and not
+ * directly after a value-taking flag, where the CLI would read it as that flag's
+ * value and never see it as an option (`--model --bare` omits `--bare`).
+ */
+const PRESENCE_ONLY_FLAGS = harden([
+  '--bare',
+  '--strict-mcp-config',
   '--disable-slash-commands',
 ]);
 
@@ -80,16 +101,35 @@ const PINNED_VALUE_FLAGS = harden({
  * Flags whose value varies per spawn, so it cannot be value-pinned, but which
  * carry confinement: `--settings` carries `enabledPlugins` and the credential,
  * `--mcp-config` names the only MCP servers, `--allowedTools` is the capability
- * grant, and `--disallowedTools` is the belt deny set. Each may appear at most
- * once and must carry a value, since a repeat could substitute another file or
- * list. `--settings` and `--mcp-config` are also required, so each appears
- * exactly once.
+ * grant, and `--disallowedTools` is the belt deny set. All four are required
+ * and each must appear exactly once with a non-empty value, since a repeat could
+ * substitute another file or list and an empty path names no file.
  */
 const SINGLE_OCCURRENCE_FLAGS = harden([
   '--settings',
   '--mcp-config',
   '--allowedTools',
   '--disallowedTools',
+]);
+
+/**
+ * Value-taking flags that carry no confinement but could hide a required
+ * presence-only flag in their value slot. Their value must not be flag-shaped.
+ */
+const UNCHECKED_VALUE_FLAGS = harden([
+  '--model',
+  '--max-turns',
+  '--output-format',
+]);
+
+/**
+ * Every flag `buildArgv` emits with a value. The token after one of these is a
+ * value, never an option.
+ */
+const VALUE_FLAGS = harden([
+  ...Object.keys(PINNED_VALUE_FLAGS),
+  ...SINGLE_OCCURRENCE_FLAGS,
+  ...UNCHECKED_VALUE_FLAGS,
 ]);
 
 /**
@@ -188,8 +228,8 @@ export const buildArgv = spec => {
 harden(buildArgv);
 
 /**
- * The seven-flag spawn-refusal predicate (§ Design Decision 1). Throws unless
- * all seven required flags are present.
+ * The nine-flag spawn-refusal predicate (§ Design Decision 1). Throws unless
+ * all nine required flags are present.
  *
  * @param {readonly string[]} argv
  */
@@ -205,11 +245,51 @@ export const assertRequiredFlags = argv => {
 harden(assertRequiredFlags);
 
 /**
+ * Throw if `flag` occurs again after index `at`. Any repeat is refused, so
+ * which occurrence the CLI would honor does not matter.
+ *
+ * @param {readonly string[]} argv
+ * @param {string} flag
+ * @param {number} at index of the first occurrence of `flag` in `argv`
+ */
+const assertNoRepeat = (argv, flag, at) => {
+  if (argv.indexOf(flag, at + 1) !== -1) {
+    throw makeError(X`confinement: flag ${q(flag)} appears more than once`);
+  }
+};
+
+/**
+ * `--bare`, `--strict-mcp-config`, and `--disable-slash-commands` each appear
+ * exactly once, standing alone: the token before each must not be a
+ * value-taking flag, which would consume it as a value.
+ *
+ * @param {readonly string[]} argv
+ */
+export const assertPresenceOnlyFlags = argv => {
+  for (const flag of PRESENCE_ONLY_FLAGS) {
+    const at = argv.indexOf(flag);
+    if (at === -1) {
+      throw makeError(
+        X`confinement: required flag ${q(flag)} missing from claude argv`,
+      );
+    }
+    if (at > 0 && VALUE_FLAGS.includes(argv[at - 1])) {
+      throw makeError(
+        X`confinement: flag ${q(flag)} is the value of ${q(argv[at - 1])}`,
+      );
+    }
+    assertNoRepeat(argv, flag, at);
+  }
+};
+harden(assertPresenceOnlyFlags);
+
+/**
  * `claude --help` (2.1.280) documents `--tools <tools...>` and
  * `--mcp-config <configs...>` as variadic: one occurrence absorbs every
  * following bare token, so `--tools "" Bash` yields `"tools":["Bash"]` and
  * `--mcp-config legit.json attacker.json` loads both files. The token after a
- * checked flag's value must therefore be absent or another `--` flag.
+ * checked flag's value must therefore be absent or another `--` flag (a bare
+ * `--` end-of-options token counts as a bare token).
  *
  * @param {readonly string[]} argv
  * @param {string} flag
@@ -217,7 +297,10 @@ harden(assertRequiredFlags);
  */
 const assertNoTrailingBareToken = (argv, flag, at) => {
   const next = argv[at + 2];
-  if (next !== undefined && !next.startsWith('--')) {
+  if (
+    next !== undefined &&
+    (typeof next !== 'string' || next === '--' || !next.startsWith('--'))
+  ) {
     throw makeError(
       X`confinement: bare token ${q(next)} follows the value of ${q(flag)}`,
     );
@@ -246,41 +329,82 @@ export const assertPinnedValueFlags = argv => {
       );
     }
     assertNoTrailingBareToken(argv, flag, at);
-    if (argv.indexOf(flag, at + 1) !== -1) {
-      throw makeError(X`confinement: flag ${q(flag)} appears more than once`);
-    }
+    assertNoRepeat(argv, flag, at);
   }
 };
 harden(assertPinnedValueFlags);
 
 /**
+ * @param {readonly string[]} argv
+ * @param {string} flag
+ * @param {number} at index of `flag` in `argv`
+ */
+const assertNonEmptyValue = (argv, flag, at) => {
+  const value = argv[at + 1];
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.startsWith('-')
+  ) {
+    throw makeError(
+      X`confinement: flag ${q(flag)} must carry a value, got ${q(value)}`,
+    );
+  }
+};
+
+/**
  * `--settings`, `--mcp-config`, `--allowedTools`, and `--disallowedTools` each
- * appear at most once, so a trailing occurrence cannot substitute an
- * attacker-chosen file or list. Each occurrence must carry a value that is not
+ * appear exactly once, so a trailing occurrence cannot substitute an
+ * attacker-chosen file or list. Each must carry a non-empty value that is not
  * itself flag-shaped, so a dangling flag cannot swallow the next flag as its
- * value. No bare token may follow the value, so a variadic flag cannot absorb a
- * second file or list.
+ * value and an empty path cannot drop the settings file. No bare token may
+ * follow the value, so a variadic flag cannot absorb a second file or list.
  *
  * @param {readonly string[]} argv
  */
 export const assertSingleOccurrenceFlags = argv => {
   for (const flag of SINGLE_OCCURRENCE_FLAGS) {
     const at = argv.indexOf(flag);
-    if (at !== -1) {
-      const value = argv[at + 1];
-      if (typeof value !== 'string' || value.startsWith('-')) {
-        throw makeError(
-          X`confinement: flag ${q(flag)} must carry a value, got ${q(value)}`,
-        );
-      }
-      assertNoTrailingBareToken(argv, flag, at);
-      if (argv.indexOf(flag, at + 1) !== -1) {
-        throw makeError(X`confinement: flag ${q(flag)} appears more than once`);
-      }
+    if (at === -1) {
+      throw makeError(
+        X`confinement: required flag ${q(flag)} missing from claude argv`,
+      );
     }
+    assertNonEmptyValue(argv, flag, at);
+    assertNoTrailingBareToken(argv, flag, at);
+    assertNoRepeat(argv, flag, at);
   }
 };
 harden(assertSingleOccurrenceFlags);
+
+/**
+ * `--model`, `--max-turns`, and `--output-format` carry no confinement, but
+ * each must carry a value that is not flag-shaped, so it cannot consume a
+ * required flag as its value.
+ *
+ * @param {readonly string[]} argv
+ */
+export const assertUncheckedFlagValues = argv => {
+  argv.forEach((token, at) => {
+    if (UNCHECKED_VALUE_FLAGS.includes(token)) {
+      assertNonEmptyValue(argv, token, at);
+    }
+  });
+};
+harden(assertUncheckedFlagValues);
+
+/**
+ * No bare `--` may appear. Option parsers read every token after it as a
+ * positional, and `buildArgv` emits no positional at all.
+ *
+ * @param {readonly string[]} argv
+ */
+export const assertNoEndOfOptions = argv => {
+  if (argv.includes('--')) {
+    throw makeError(X`confinement: end-of-options token "--" is refused`);
+  }
+};
+harden(assertNoEndOfOptions);
 
 /**
  * No token may spell an option as `--flag=value`. 2.1.280 parses
@@ -324,11 +448,13 @@ harden(assertNoTranscriptResume);
 
 /**
  * The full structural confinement gate over an argv (version-independent):
- * required flags present, pinned-value flags (including the empty-value
- * `--tools` and `--setting-sources`) each appear once with their value,
- * `--settings`, `--mcp-config`, `--allowedTools`, and `--disallowedTools` each at
- * most once with a value, no bare token after any of those flags' values, no
- * `--flag=value` token, no transcript resume.
+ * required flags present, the three presence-only flags each once and outside
+ * any value slot, pinned-value flags (including the empty-value `--tools` and
+ * `--setting-sources`) each once with their value, `--settings`,
+ * `--mcp-config`, `--allowedTools`, and `--disallowedTools` each once with a
+ * non-empty value, no bare token after any of those eight flags' values,
+ * `--model` / `--max-turns` / `--output-format` values not flag-shaped, no
+ * `--flag=value` token, no bare `--`, no transcript resume.
  * `buildArgv` output always passes this; the property tests feed it arbitrary
  * argvs.
  *
@@ -341,7 +467,10 @@ export const assertConfinedArgv = argv => {
   assertRequiredFlags(argv);
   assertPinnedValueFlags(argv);
   assertSingleOccurrenceFlags(argv);
+  assertPresenceOnlyFlags(argv);
+  assertUncheckedFlagValues(argv);
   assertNoInlineFlagValues(argv);
+  assertNoEndOfOptions(argv);
   assertNoTranscriptResume(argv);
 };
 harden(assertConfinedArgv);

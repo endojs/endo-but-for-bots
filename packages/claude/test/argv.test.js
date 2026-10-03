@@ -22,7 +22,7 @@ const spec = () => ({
   maxTurns: 16,
 });
 
-test('buildArgv emits all seven required flags, empty-value flags, and never --resume', t => {
+test('buildArgv emits all nine required flags, empty-value flags, and never --resume', t => {
   const argv = buildArgv(spec());
   assertConfinedArgv(argv); // does not throw
   for (const flag of REQUIRED_FLAGS) t.true(argv.includes(flag), flag);
@@ -138,8 +138,13 @@ test('property: any bare token after a checked flag value is refused', t => {
         '--permission-prompts',
         '--settings',
         '--mcp-config',
+        '--allowedTools',
+        '--disallowedTools',
       ),
-      fc.string().filter(s => !s.startsWith('--')),
+      fc.oneof(
+        fc.constant('--'),
+        fc.string().filter(s => !s.startsWith('--')),
+      ),
       (flag, bare) => {
         const argv = conformingArgv();
         argv.splice(argv.indexOf(flag) + 2, 0, bare);
@@ -187,11 +192,11 @@ test('property: any repeat of --settings or --mcp-config is refused', t => {
   );
 });
 
-// property: seven-flag spawn-refusal predicate
+// property: nine-flag spawn-refusal predicate
 
 const conformingArgv = () => [...buildArgv(spec())];
 
-test('property: dropping any of the seven required flags refuses', t => {
+test('property: dropping any of the nine required flags refuses', t => {
   fc.assert(
     fc.property(
       fc.subarray([...REQUIRED_FLAGS], {
@@ -303,6 +308,102 @@ test('property: an --flag=value token for any checked flag is refused', t => {
         const at = position % (argv.length + 1);
         argv.splice(at, 0, `${flag}=${value}`);
         t.throws(() => assertConfinedArgv(argv));
+      },
+    ),
+  );
+});
+
+test('an empty --settings, --mcp-config, --allowedTools, or --disallowedTools value is refused', t => {
+  for (const flag of [
+    '--settings',
+    '--mcp-config',
+    '--allowedTools',
+    '--disallowedTools',
+  ]) {
+    const argv = conformingArgv();
+    argv[argv.indexOf(flag) + 1] = '';
+    t.throws(
+      () => assertConfinedArgv(argv),
+      { message: /must carry a value/ },
+      flag,
+    );
+  }
+});
+
+test('an argv without --allowedTools or --disallowedTools is refused', t => {
+  for (const flag of ['--allowedTools', '--disallowedTools']) {
+    const argv = conformingArgv();
+    argv.splice(argv.indexOf(flag), 2);
+    t.throws(() => assertConfinedArgv(argv), { message: /missing/ }, flag);
+  }
+});
+
+test('a bare -- end-of-options token is refused anywhere', t => {
+  // After `--`, an option parser reads `/tmp/attacker.json` as a positional.
+  const trailing = conformingArgv();
+  trailing.splice(
+    trailing.indexOf('--mcp-config') + 2,
+    0,
+    '--',
+    '/tmp/attacker.json',
+  );
+  t.throws(() => assertConfinedArgv(trailing), { message: /bare token/ });
+
+  const atEnd = [...conformingArgv(), '--', 'prompt text'];
+  t.throws(() => assertConfinedArgv(atEnd), { message: /end-of-options/ });
+});
+
+test('a presence-only flag in another flag value slot is refused', t => {
+  for (const flag of [
+    '--bare',
+    '--strict-mcp-config',
+    '--disable-slash-commands',
+  ]) {
+    for (const host of ['--model', '--max-turns', '--output-format']) {
+      // Drop the standalone flag and hide it as `host`'s value instead.
+      const argv = conformingArgv();
+      argv.splice(argv.indexOf(flag), 1);
+      argv.push(host, flag);
+      t.throws(() => assertConfinedArgv(argv), undefined, `${host} ${flag}`);
+    }
+    const repeated = [...conformingArgv(), flag];
+    t.throws(
+      () => assertConfinedArgv(repeated),
+      { message: /more than once/ },
+      flag,
+    );
+  }
+});
+
+test('a flag-shaped --model, --max-turns, or --output-format value is refused', t => {
+  for (const flag of ['--model', '--max-turns', '--output-format']) {
+    const argv = conformingArgv();
+    argv.splice(argv.indexOf(flag) + 1, 0, '--verbose');
+    t.throws(
+      () => assertConfinedArgv(argv),
+      { message: /must carry a value/ },
+      flag,
+    );
+  }
+});
+
+test('property: a repeat carrying the identical value is refused too', t => {
+  fc.assert(
+    fc.property(
+      fc.constantFrom(
+        '--tools',
+        '--setting-sources',
+        '--permission-mode',
+        '--permission-prompts',
+        '--settings',
+        '--mcp-config',
+        '--allowedTools',
+        '--disallowedTools',
+      ),
+      flag => {
+        const argv = conformingArgv();
+        argv.push(flag, argv[argv.indexOf(flag) + 1]);
+        t.throws(() => assertConfinedArgv(argv), { message: /more than once/ });
       },
     ),
   );
