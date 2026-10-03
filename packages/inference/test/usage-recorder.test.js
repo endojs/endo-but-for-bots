@@ -342,3 +342,40 @@ test('a clock that steps backward records zero latency', async t => {
   await settle();
   t.is(records[0].latencyMs, 0);
 });
+
+test('a clock that fails after the turn keeps the result and reports', async t => {
+  /** @type {InferResult} */
+  const result = harden({ type: 'needs-auth' });
+  /** @param {() => number} lateRead */
+  const runWith = async lateRead => {
+    const { backend } = makeRecordingBackend(result);
+    const { records, sink } = makeSink();
+    /** @type {unknown[]} */
+    const errors = [];
+    let reads = 0;
+    const recorder = makeUsageRecorder(backend, {
+      secretIdentifier: 'secret:a',
+      sink,
+      now: () => {
+        reads += 1;
+        return reads === 1 ? 1000 : lateRead();
+      },
+      reportSinkError: error => errors.push(error),
+    });
+    const passed = await recorder.infer(makeRequest());
+    await settle();
+    return { passed, records, errors };
+  };
+  const outcomes = await Promise.all([
+    runWith(() => {
+      throw Error('clock broke');
+    }),
+    runWith(() => NaN),
+    runWith(() => Infinity),
+  ]);
+  for (const { passed, records, errors } of outcomes) {
+    t.deepEqual(passed, result);
+    t.is(records.length, 0);
+    t.is(errors.length, 1);
+  }
+});

@@ -1,5 +1,6 @@
 // @ts-check
 
+import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { mustMatch } from '@endo/patterns';
@@ -41,7 +42,9 @@ const utf8ByteLength = text => textEncoder.encode(text).length;
  * breaks the `infer` contract; the rejection propagates and no record is
  * written, because there is no classified result to record. So does a
  * description or result outside its shape, since the wrapped backend need
- * not be guarded itself.
+ * not be guarded itself. A clock that throws or reads a non-finite time
+ * after the turn ran loses only the record, reported to `reportSinkError`;
+ * the result still passes through.
  *
  * @param {InferenceBackend} backend  a local (near) backend: `describe()` is
  *   a synchronous call.
@@ -74,7 +77,19 @@ export const makeUsageRecorder = (
       const startedAt = now();
       const result = await backend.infer(request);
       mustMatch(harden(result), InferResultShape, 'backend result');
-      const latencyMs = Math.max(0, now() - startedAt);
+      let latencyMs;
+      try {
+        latencyMs = Math.max(0, now() - startedAt);
+        Number.isFinite(latencyMs) ||
+          Fail`clock read a non-finite latency: ${latencyMs}`;
+      } catch (error) {
+        try {
+          reportSinkError(error);
+        } catch {
+          // A throwing reporter must not discard the turn's result.
+        }
+        return result;
+      }
 
       /** @type {UsageRecord} */
       const record = {
