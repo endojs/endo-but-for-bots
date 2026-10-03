@@ -22,6 +22,12 @@ export const CREDENTIAL_ENVIRONMENT_KEYS = harden([
   'ANTHROPIC_BASE_URL',
 ]);
 
+/** The credential variables that authenticate rather than route. */
+const AUTHENTICATING_KEYS = harden([
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_API_KEY',
+]);
+
 /**
  * Settings that turn off Claude Code behavior a single confined turn has no
  * use for: background network traffic, self-update, and auto-memory.
@@ -44,7 +50,8 @@ const assertNonEmptyString = (name, value) => {
 /**
  * Builds the confined process's whole environment. The credential variables
  * come only from the grant, and only the ones in
- * `CREDENTIAL_ENVIRONMENT_KEYS`. A grant carrying anything else throws:
+ * `CREDENTIAL_ENVIRONMENT_KEYS`, and at least one of them must authenticate.
+ * A grant carrying anything else throws:
  * `CLAUDE_CODE_OAUTH_TOKEN`, for example, is ignored under `--bare`, so a
  * source delivering it is misconfigured and the turn would run
  * unauthenticated.
@@ -68,8 +75,10 @@ export const buildConstructedEnvironment = ({
     assertNonEmptyString(key, value);
     credentials[key] = value;
   }
-  Object.keys(credentials).length > 0 ||
-    Fail`credential source delivered no credential variable`;
+  // `ANTHROPIC_BASE_URL` only routes; on its own the turn would run
+  // unauthenticated.
+  AUTHENTICATING_KEYS.some(key => key in credentials) ||
+    Fail`credential source delivered no authenticating variable`;
   return harden({
     PATH: pathValue,
     HOME: configDirectory,

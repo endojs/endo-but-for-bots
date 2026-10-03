@@ -149,8 +149,14 @@ export type ClaudeCliBackendOptions = {
   credentialSource: ERef<CredentialSource>;
   /** The pinned `claude` binary. */
   executablePath: string;
-  /** The pinned binary's exact version; it selects response-shape rows. */
+  /**
+   * The pinned binary's exact version. Each turn compares it with
+   * `getVersion()` before acquiring the credential, and it selects
+   * response-shape rows.
+   */
   version: string;
+  /** Reads the binary's actual version, as `claude --version` reports it. */
+  getVersion: () => string | Promise<string>;
   stdioProjection: (
     guest: GuestToolProjection,
   ) => StdioProjection | Promise<StdioProjection>;
@@ -177,8 +183,14 @@ export type ClaudeSdkBackendOptions = {
   query: SdkQuery;
   /** The pinned `claude` binary the SDK drives. */
   executablePath: string;
-  /** The pinned binary's exact version; it selects response-shape rows. */
+  /**
+   * The pinned binary's exact version. Each turn compares it with
+   * `getVersion()` before acquiring the credential, and it selects
+   * response-shape rows.
+   */
   version: string;
+  /** Reads the binary's actual version, as `claude --version` reports it. */
+  getVersion: () => string | Promise<string>;
   makeScratchDirectory: () => Promise<ScratchDirectory>;
   timers: LimitTimers;
   pathValue: string;

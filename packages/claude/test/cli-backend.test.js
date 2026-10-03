@@ -2,6 +2,7 @@
 // spell-out-exempt: `argv` and `CLAUDE_CONFIG_DIR` are names in Claude Code's own config and environment.
 
 import test from '@endo/ses-ava/prepare-endo.js';
+import { Far } from '@endo/far';
 import { M } from '@endo/patterns';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 
@@ -34,17 +35,24 @@ const VERSION = '2.1.268';
  * @param {ShapeTable} [options.responseShapes]
  * @param {boolean} [options.permissionPromptsNone]
  * @param {ReturnType<typeof makeMemoryScratch>} [options.scratch]
+ * @param {() => string | Promise<string>} [options.getVersion]
+ * @param {any} [options.credentialSource]  overrides `source`
  */
 const makeHarness = (script, options = {}) => {
-  const { source = makeCredentialSource(), responseShapes } = options;
+  const {
+    source = makeCredentialSource(),
+    responseShapes,
+    getVersion = () => VERSION,
+  } = options;
   const fake = makeFakeSpawn(script);
   const scratch = options.scratch ?? makeMemoryScratch();
   const manualTimers = makeManualTimers();
   const projections = { launched: 0, closed: 0 };
   const backend = makeClaudeCliBackend({
-    credentialSource: source.credentialSource,
+    credentialSource: options.credentialSource ?? source.credentialSource,
     executablePath: '/opt/claude/bin/claude',
     version: VERSION,
+    getVersion,
     stdioProjection: () => {
       projections.launched += 1;
       return harden({
@@ -163,6 +171,40 @@ test('a refused admission maps to its tag and starts no process', async t => {
   t.is(fake.spawns.length, 0);
   t.is(scratch.state.made, 0);
   t.is(source.counts.released, 0, 'a refusal holds nothing to release');
+});
+
+for (const [label, getVersion] of [
+  ['an upgraded binary', () => '2.1.269'],
+  ['a near-miss version', () => `${VERSION} `],
+  ['a failed version read', () => Promise.reject(Error('no such file'))],
+]) {
+  test(`${label} fails closed before the credential is acquired`, async t => {
+    const { backend, fake, scratch, source } = makeHarness(
+      {},
+      { getVersion: /** @type {() => Promise<string>} */ (getVersion) },
+    );
+    const result = await backend.infer(makeRequest());
+    t.is(result.type, 'unavailable');
+    t.regex(/** @type {any} */ (result).detail, /^version check failed: /);
+    t.is(source.counts.acquired, 0, 'no credential is acquired');
+    t.is(fake.spawns.length, 0, 'no process starts');
+    t.is(scratch.state.made, 0);
+  });
+}
+
+test('a malformed admission is unavailable and never leaks its values', async t => {
+  const credentialSource = Far('LooseCredentialSource', {
+    acquire: async () =>
+      harden({
+        type: 'granted',
+        environment: { ANTHROPIC_AUTH_TOKEN: CREDENTIAL },
+      }),
+  });
+  const { backend, fake } = makeHarness({}, { credentialSource });
+  const result = await backend.infer(makeRequest());
+  t.is(result.type, 'unavailable');
+  t.false(JSON.stringify(result).includes(CREDENTIAL));
+  t.is(fake.spawns.length, 0);
 });
 
 test('a credential source that rejects is unavailable and starts no process', async t => {
@@ -342,7 +384,7 @@ test('a binary that cannot spawn is unavailable', async t => {
 
 test('a grant delivering an ignored credential variable fails closed', async t => {
   const source = makeCredentialSource({
-    env: { CLAUDE_CODE_OAUTH_TOKEN: CREDENTIAL },
+    environment: { CLAUDE_CODE_OAUTH_TOKEN: CREDENTIAL },
   });
   const { backend, fake, scratch } = makeHarness({}, { source });
   const result = await backend.infer(makeRequest());

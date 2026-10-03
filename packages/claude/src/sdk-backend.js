@@ -9,13 +9,18 @@
 // on the SDK, and tests run with no binary and no credential.
 
 import { E } from '@endo/eventual-send';
+import { M, matches } from '@endo/patterns';
 import { makeExo } from '@endo/exo';
-import { InferenceBackendInterface } from '@endo/inference/guards.js';
+import {
+  CredentialGrantShape,
+  CredentialRefusalShape,
+  InferenceBackendInterface,
+} from '@endo/inference/guards.js';
 import { makeLimitEnforcer } from '@endo/inference/limits.js';
 import { admissionRefusalResult } from '@endo/inference/classify.js';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 
-import { buildSdkOptions } from './confinement-options.js';
+import { buildSdkOptions, checkPinnedVersion } from './confinement-options.js';
 import { buildConstructedEnvironment } from './constructed-environment.js';
 import {
   CLAUDE_CODE_RESPONSE_SHAPES,
@@ -24,6 +29,8 @@ import {
   unavailable,
 } from './response-shapes.js';
 import { makeClaudeStreamReducer } from './stream-reducer.js';
+
+const AdmissionShape = M.or(CredentialGrantShape, CredentialRefusalShape);
 
 /** @import { InferRequest, InferResult, InferenceBackend } from '@endo/inference/types.js' */
 /** @import { ClaudeCodeResponse, ClaudeSdkBackendOptions, ScratchDirectory } from './backends.types.js' */
@@ -67,6 +74,7 @@ export const makeClaudeSdkBackend = ({
   query,
   executablePath,
   version,
+  getVersion,
   makeScratchDirectory,
   timers,
   pathValue,
@@ -83,8 +91,21 @@ export const makeClaudeSdkBackend = ({
   const infer = async request => {
     const { prompt, guest, limits, model, cancelled } = request;
 
+    const versionFailure = await checkPinnedVersion(getVersion, version);
+    if (versionFailure !== undefined) {
+      return unavailable(`version check failed: ${versionFailure}`);
+    }
+
     const admission = await E(credentialSource)
       .acquire()
+      .then(grant => {
+        // Checked with `matches`, not `mustMatch`, so that a malformed grant's
+        // values (a credential among them) never reach the error detail.
+        if (!matches(grant, AdmissionShape)) {
+          throw Error('malformed admission');
+        }
+        return grant;
+      })
       .catch(error =>
         harden({
           type: /** @type {const} */ ('failed'),
@@ -97,7 +118,7 @@ export const makeClaudeSdkBackend = ({
     if (admission.type === 'refused') {
       return admissionRefusalResult(admission.admission);
     }
-    const { env: credentialEnvironment, release } = admission;
+    const { environment: credentialEnvironment, release } = admission;
 
     const abortController = new AbortController();
     const enforcer = makeLimitEnforcer({

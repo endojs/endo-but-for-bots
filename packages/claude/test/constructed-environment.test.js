@@ -64,9 +64,27 @@ test('a grant may deliver only the supported credential variables', t => {
     });
   }
   t.throws(() => buildConstructedEnvironment(spec({})), {
-    message: /no credential variable/,
+    message: /no authenticating variable/,
   });
   t.throws(() => buildConstructedEnvironment(spec({ ANTHROPIC_API_KEY: '' })));
+});
+
+test('a routing variable alone does not authenticate', t => {
+  t.throws(
+    () =>
+      buildConstructedEnvironment(
+        spec({ ANTHROPIC_BASE_URL: 'http://127.0.0.1:4000' }),
+      ),
+    { message: /no authenticating variable/ },
+  );
+  t.notThrows(() =>
+    buildConstructedEnvironment(
+      spec({
+        ANTHROPIC_API_KEY: 'key',
+        ANTHROPIC_BASE_URL: 'http://127.0.0.1:4000',
+      }),
+    ),
+  );
 });
 
 test('a refused variable is named but its value is not', t => {

@@ -5,11 +5,15 @@ import { M } from '@endo/patterns';
 const NonNegativeNumberShape = M.and(M.number(), M.gte(0));
 const PositiveNumberShape = M.and(M.number(), M.gt(0));
 
+// The largest delay a host `setTimeout` honors. Node clamps a larger delay,
+// `Infinity` included, to 1 ms, which would trip the wall clock at once.
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+
 // Every record of the seam is closed (the `{}` rest pattern of
 // `M.splitRecord`), so that, for example, no request can carry a credential.
 
 export const InferLimitsShape = harden({
-  maxWallClockMs: PositiveNumberShape,
+  maxWallClockMs: M.and(M.number(), M.gt(0), M.lte(MAX_TIMER_DELAY_MS)),
   maxOutputBytes: PositiveNumberShape,
   maxTurns: PositiveNumberShape,
 });
@@ -127,7 +131,7 @@ export const AdmissionRefusalShape = M.splitRecord(
 
 export const CredentialGrantShape = harden({
   type: /** @type {const} */ ('granted'),
-  env: M.recordOf(M.string(), M.string()),
+  environment: M.recordOf(M.string(), M.string()),
   release: M.remotable('release'),
 });
 harden(CredentialGrantShape);

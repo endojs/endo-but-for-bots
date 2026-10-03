@@ -169,6 +169,20 @@ test('limits are checked at construction', t => {
   );
 });
 
+test('a wall-clock limit Node would clamp to 1 ms is refused', t => {
+  for (const maxWallClockMs of [2 ** 31, Infinity]) {
+    t.throws(
+      () =>
+        makeLimitEnforcer({
+          limits: harden({ ...limits, maxWallClockMs }),
+          timers: makeManualTimers(),
+          terminate: () => {},
+        }),
+      { message: /maxWallClockMs/ },
+    );
+  }
+});
+
 test('the process group killer signals the negated pid', t => {
   /** @type {Array<[number, string]>} */
   const calls = [];

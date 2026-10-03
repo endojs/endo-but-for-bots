@@ -8,7 +8,11 @@
 import { Fail, q } from '@endo/errors';
 import { renderAllowedTools } from '@endo/agent-tools/adapters/mcp.js';
 
-import { assertConfinedArgv, buildConfinementFlags } from './argv.js';
+import {
+  assertConfinedArgv,
+  assertPinnedVersion,
+  buildConfinementFlags,
+} from './argv.js';
 import {
   KNOWN_BUILTIN_TOOLS,
   isAdmissibleServerName,
@@ -47,6 +51,17 @@ const assertTurnCeiling = maxTurns => {
 };
 
 /**
+ * @param {number | undefined} maxBudgetUsd
+ */
+const assertBudgetCeiling = maxBudgetUsd => {
+  maxBudgetUsd === undefined ||
+    (typeof maxBudgetUsd === 'number' &&
+      Number.isFinite(maxBudgetUsd) &&
+      maxBudgetUsd > 0) ||
+    Fail`maxBudgetUsd must be a positive finite number, got ${q(maxBudgetUsd)}`;
+};
+
+/**
  * Builds the argv (after the binary name) for one confined `claude -p` turn.
  * The prompt is not an argument: it goes on stdin, so it never appears in
  * `/proc/<pid>/cmdline` and cannot be swallowed by a variadic flag. The
@@ -71,6 +86,7 @@ export const buildCliArguments = ({
   (typeof settingsPath === 'string' && settingsPath !== '') ||
     Fail`settingsPath must be a non-empty string`;
   assertTurnCeiling(maxTurns);
+  assertBudgetCeiling(maxBudgetUsd);
   if (model !== undefined) {
     // A model value beginning with `-` would read as a flag.
     /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/.test(model) ||
@@ -98,10 +114,6 @@ export const buildCliArguments = ({
     argv.push('--model', model);
   }
   if (maxBudgetUsd !== undefined) {
-    (typeof maxBudgetUsd === 'number' &&
-      Number.isFinite(maxBudgetUsd) &&
-      maxBudgetUsd > 0) ||
-      Fail`maxBudgetUsd must be a positive finite number, got ${q(maxBudgetUsd)}`;
     argv.push('--max-budget-usd', String(maxBudgetUsd));
   }
   harden(argv);
@@ -131,6 +143,7 @@ export const buildSdkOptions = ({
   maxBudgetUsd,
 }) => {
   assertTurnCeiling(maxTurns);
+  assertBudgetCeiling(maxBudgetUsd);
   const allowList = confinedAllowList(serverName, toolNames);
   // Not `harden`ed, unlike the CLI argv: `harden` is transitive and would
   // freeze the in-process MCP server instance and the abort controller, which
@@ -161,3 +174,22 @@ export const buildSdkOptions = ({
   };
 };
 harden(buildSdkOptions);
+
+/**
+ * Checks the binary a turn would run against the version the confinement
+ * recipe was measured on. An upgraded binary may have changed the flag
+ * semantics, so it must not receive a credential.
+ *
+ * @param {() => string | Promise<string>} getVersion
+ * @param {string} pinnedVersion
+ * @returns {Promise<string | undefined>} why the turn may not run, if it may not
+ */
+export const checkPinnedVersion = async (getVersion, pinnedVersion) => {
+  try {
+    assertPinnedVersion(await getVersion(), pinnedVersion);
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+};
+harden(checkPinnedVersion);

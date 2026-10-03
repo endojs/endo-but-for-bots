@@ -61,16 +61,16 @@ export const makeRequest = ({
   });
 
 /**
- * A credential source that grants `env` (or refuses with `refusal`, or
+ * A credential source that grants `environment` (or refuses with `refusal`, or
  * rejects with `failure`) and counts acquisitions and releases.
  *
  * @param {object} [options]
- * @param {Record<string, string>} [options.env]
+ * @param {Record<string, string>} [options.environment]
  * @param {CredentialRefusal['admission']} [options.refusal]
  * @param {Error} [options.failure]
  */
 export const makeCredentialSource = ({
-  env = { ANTHROPIC_AUTH_TOKEN: CREDENTIAL },
+  environment = { ANTHROPIC_AUTH_TOKEN: CREDENTIAL },
   refusal,
   failure,
 } = {}) => {
@@ -90,7 +90,7 @@ export const makeCredentialSource = ({
         }
         return harden({
           type: 'granted',
-          env: harden({ ...env }),
+          environment: harden({ ...environment }),
           release: Far('release', () => {
             counts.released += 1;
           }),

@@ -110,7 +110,7 @@ export type AdmissionRefusal = {
 
 export type CredentialGrant = {
   type: 'granted';
-  env: Record<string, string>;
+  environment: Record<string, string>;
   release: () => void;
 };
 

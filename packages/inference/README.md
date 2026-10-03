@@ -16,7 +16,7 @@ A provider may join at any of these layers.
    `InferenceBackendInterface` (`describe()`, and `infer(request)`, which
    never rejects for any outcome of a turn), its request, result, and
    usage-record shapes, and the `CredentialSourceInterface` (`acquire()`
-   returns a grant carrying an `env` and a `release`, or a refusal carrying an
+   returns a grant carrying an `environment` and a `release`, or a refusal carrying an
    `AdmissionRefusal`). Every record is closed, so a request cannot carry a
    credential.
 2. **Provider plugins.** Not here. A plugin is a maker that returns an

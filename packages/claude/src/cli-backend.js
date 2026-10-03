@@ -11,8 +11,13 @@
 
 import { concatBytes } from '@endo/bytes/concat.js';
 import { E } from '@endo/eventual-send';
+import { M, matches } from '@endo/patterns';
 import { makeExo } from '@endo/exo';
-import { InferenceBackendInterface } from '@endo/inference/guards.js';
+import {
+  CredentialGrantShape,
+  CredentialRefusalShape,
+  InferenceBackendInterface,
+} from '@endo/inference/guards.js';
 import {
   makeLimitEnforcer,
   makeProcessGroupKiller,
@@ -21,7 +26,10 @@ import { admissionRefusalResult } from '@endo/inference/classify.js';
 import { decodeUtf8 } from '@endo/utf8/decode.js';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 
-import { buildCliArguments } from './confinement-options.js';
+import {
+  buildCliArguments,
+  checkPinnedVersion,
+} from './confinement-options.js';
 import { buildConstructedEnvironment } from './constructed-environment.js';
 import { renderMcpConfig, serializeMcpConfig } from './mcp-config.js';
 import {
@@ -32,6 +40,8 @@ import {
   unavailable,
 } from './response-shapes.js';
 import { makeClaudeStreamReducer } from './stream-reducer.js';
+
+const AdmissionShape = M.or(CredentialGrantShape, CredentialRefusalShape);
 
 /** @import { InferRequest, InferResult, InferenceBackend } from '@endo/inference/types.js' */
 /** @import { ChildProcessLike, ClaudeCliBackendOptions, ScratchDirectory, StdioProjection } from './backends.types.js' */
@@ -90,6 +100,7 @@ export const makeClaudeCliBackend = ({
   credentialSource,
   executablePath,
   version,
+  getVersion,
   stdioProjection,
   spawn,
   makeScratchDirectory,
@@ -111,8 +122,21 @@ export const makeClaudeCliBackend = ({
   const infer = async request => {
     const { prompt, guest, limits, model, cancelled } = request;
 
+    const versionFailure = await checkPinnedVersion(getVersion, version);
+    if (versionFailure !== undefined) {
+      return unavailable(`version check failed: ${versionFailure}`);
+    }
+
     const admission = await E(credentialSource)
       .acquire()
+      .then(grant => {
+        // Checked with `matches`, not `mustMatch`, so that a malformed grant's
+        // values (a credential among them) never reach the error detail.
+        if (!matches(grant, AdmissionShape)) {
+          throw Error('malformed admission');
+        }
+        return grant;
+      })
       .catch(error =>
         harden({
           type: /** @type {const} */ ('failed'),
@@ -125,7 +149,7 @@ export const makeClaudeCliBackend = ({
     if (admission.type === 'refused') {
       return admissionRefusalResult(admission.admission);
     }
-    const { env: credentialEnvironment, release } = admission;
+    const { environment: credentialEnvironment, release } = admission;
 
     /** @type {ChildProcessLike | undefined} */
     let child;

@@ -47,6 +47,7 @@ const success = {
  * @param {ReturnType<typeof makeCredentialSource>} [options.source]
  * @param {ShapeTable} [options.responseShapes]
  * @param {ReturnType<typeof makeMemoryScratch>} [options.scratch]
+ * @param {() => string | Promise<string>} [options.getVersion]
  */
 const makeHarness = (query, options = {}) => {
   const { source = makeCredentialSource(), responseShapes } = options;
@@ -57,6 +58,7 @@ const makeHarness = (query, options = {}) => {
     query,
     executablePath: '/opt/claude/bin/claude',
     version: VERSION,
+    getVersion: options.getVersion ?? (() => VERSION),
     makeScratchDirectory: scratch.makeScratchDirectory,
     timers: manualTimers.timers,
     pathValue: '/opt/claude/bin',
@@ -148,6 +150,19 @@ test('a refused admission maps to its tag and never queries', async t => {
   const { backend } = makeHarness(query, { source });
   t.deepEqual(await backend.infer(makeRequest()), { type: 'rate-limited' });
   t.is(calls.length, 0);
+});
+
+test('a binary off the pinned version fails closed and never queries', async t => {
+  const { query, calls } = replay([success]);
+  const { backend, source, scratch } = makeHarness(query, {
+    getVersion: () => '2.1.269',
+  });
+  const result = await backend.infer(makeRequest());
+  t.is(result.type, 'unavailable');
+  t.regex(/** @type {any} */ (result).detail, /^version check failed: /);
+  t.is(source.counts.acquired, 0);
+  t.is(calls.length, 0);
+  t.is(scratch.state.made, 0);
 });
 
 test('a credential source that rejects is unavailable and never queries', async t => {

@@ -36,6 +36,7 @@ const makeBackend = async t => {
     credentialSource: source.credentialSource,
     executablePath: fakeClaude,
     version: 'fake',
+    getVersion: () => 'fake',
     stdioProjection: () => harden({ command: '/opt/endo/bin/relay' }),
     spawn: /** @type {any} */ (spawn),
     makeScratchDirectory: makeNodeScratchDirectoryMaker({ parentDirectory }),

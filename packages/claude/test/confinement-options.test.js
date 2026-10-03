@@ -99,11 +99,25 @@ test('the allow-list is exactly the pinned catalog', t => {
   t.throws(() => confinedAllowList('guest', ['constructor']));
 });
 
-test('a budget ceiling becomes --max-budget-usd, as in the SDK options', t => {
+test('a budget ceiling is validated alike for the CLI and the SDK', t => {
   t.false(buildCliArguments(cliSpec()).includes('--max-budget-usd'));
   const argv = buildCliArguments({ ...cliSpec(), maxBudgetUsd: 0.25 });
   t.is(argv[argv.indexOf('--max-budget-usd') + 1], '0.25');
+  const sdkSpec = {
+    serverName: 'endo',
+    toolNames: ['readText'],
+    mcpServer: harden({ kind: 'server' }),
+    maxTurns: 3,
+    workingDirectory: '/scratch/turn',
+    environment: { PATH: '/bin' },
+    executablePath: '/opt/claude/bin/claude',
+    abortController: new AbortController(),
+  };
+  t.is(buildSdkOptions({ ...sdkSpec, maxBudgetUsd: 0.25 }).maxBudgetUsd, 0.25);
   for (const maxBudgetUsd of [0, -1, Number.NaN, Infinity]) {
     t.throws(() => buildCliArguments({ ...cliSpec(), maxBudgetUsd }));
+    t.throws(() => buildSdkOptions({ ...sdkSpec, maxBudgetUsd }), {
+      message: /maxBudgetUsd/,
+    });
   }
 });

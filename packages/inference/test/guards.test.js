@@ -90,6 +90,20 @@ test('limits must be positive numbers', t => {
   );
 });
 
+test('the wall-clock limit stays within what a host timer honors', t => {
+  const good = { maxWallClockMs: 1, maxOutputBytes: 1, maxTurns: 1 };
+  const largest = 2 ** 31 - 1;
+  t.true(
+    matches(harden({ ...good, maxWallClockMs: largest }), InferLimitsShape),
+  );
+  for (const maxWallClockMs of [2 ** 31, Infinity]) {
+    t.false(
+      matches(harden({ ...good, maxWallClockMs }), InferLimitsShape),
+      `${maxWallClockMs}`,
+    );
+  }
+});
+
 test('a request admits a missing or unknown prompt origin', t => {
   t.true(matches(makeRequest(), InferRequestShape));
   t.true(
@@ -159,7 +173,7 @@ test('credential source interface admits a grant or a refusal', async t => {
   const outcomes = [
     harden({
       type: 'granted',
-      env: { TOKEN: 'lease' },
+      environment: { TOKEN: 'lease' },
       release: Far('release', () => {}),
     }),
     harden({
@@ -182,7 +196,7 @@ test('credential source interface admits a grant or a refusal', async t => {
       acquire: async () =>
         harden({
           type: 'granted',
-          env: { TOKEN: 7 },
+          environment: { TOKEN: 7 },
           release: Far('release', () => {}),
         }),
     }),
