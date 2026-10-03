@@ -237,8 +237,10 @@ export declare function makeGitRemoteTool(
 ): ToolRecord[];
 
 /**
- * The slice of `EndoShell` exposed to an LLM: `exec` (allowlisted, argv-only
- * command execution) and `inspect` (report the policy bounds). The allowlist,
+ * The slice of `EndoShell` exposed to an LLM: `exec` (grammar-matched,
+ * argv-only command execution) and `inspect` (report the granted command
+ * grammars, usage lines, and bounds). `attenuate` is granter-facing and
+ * deliberately excluded from the tool surface. The command grammars,
  * sanitized env, timeout, and output cap are all enforced inside the `Shell`
  * exo, so this surface adds no authority beyond what the capability already
  * carries.
@@ -252,6 +254,14 @@ export type RejectPatternEntry = RegExp | { pattern: RegExp; reason?: string };
 export type RejectFlagEntry = string | { flag: string; reason?: string };
 
 export interface ShellToolOptions {
+  /**
+   * The granted command grammars (the same passable data the granter put in
+   * the shell policy or `attenuate` call). When present, each grammar's
+   * rendered usage line is embedded in the `exec` tool description and a
+   * non-matching argv is rejected tool-side before the round trip; the
+   * capability's own grammar check remains the boundary.
+   */
+  commands?: readonly import('@endo/exo-shell').ShellCommandGrammar[];
   /**
    * Advisory command-string veto patterns applied in the tool layer before the
    * call reaches `Shell.exec`. Hardening advice, not the boundary.

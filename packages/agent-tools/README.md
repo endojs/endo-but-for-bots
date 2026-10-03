@@ -226,6 +226,13 @@ import { makeShellTool } from '@endo/agent-tools/json-tools/shell.js';
 import { makeHttpTool } from '@endo/agent-tools/json-tools/http.js';
 ```
 
+`makeShellTool(shellCap, { commands })` emits `exec` and `inspect` records
+for a `@endo/exo-shell` Shell; `attenuate` is granter-facing and deliberately
+not a tool. Pass the granted command grammars as `commands` to embed their
+rendered usage lines in the `exec` tool description and reject a non-matching
+argv tool-side before the round trip; the capability's own grammar check
+remains the boundary.
+
 `makeTool` produces a `ToolRecord` with a JSON-schema `parameters`, the same
 schema as `inputSchema`, and an `invoke(args)` function.
 `toPiAgentTool` maps that record to the optional Pi `AgentTool` contract and

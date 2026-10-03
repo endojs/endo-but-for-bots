@@ -157,7 +157,13 @@ const makeFakeShell = () => {
     },
     inspect: async () =>
       harden({
-        allowedCommands: ['echo'],
+        commands: [
+          {
+            program: 'echo',
+            args: [{ kind: 'rest', name: 'words', type: 'string' }],
+          },
+        ],
+        usage: ['echo [<words> ...]'],
         timeoutMs: 1000,
         maxOutputBytes: 1024,
       }),
@@ -197,6 +203,72 @@ test('advisory rejectPatterns vetoes before the capability is called', async t =
     { message: /no removals/ },
   );
   t.is(calls.length, 0, 'the vetoed command never reached the capability');
+});
+
+test('granted grammars surface as usage lines in the exec tool description', t => {
+  const byName = {};
+  for (const tool of makeShellTool(inertShell, {
+    commands: [
+      {
+        program: 'find',
+        args: [
+          { kind: 'slot', name: 'root', type: 'path' },
+          { kind: 'literal', value: '-name' },
+          { kind: 'slot', name: 'pattern', type: 'string' },
+        ],
+      },
+    ],
+  })) {
+    byName[tool.name] = tool;
+  }
+  t.true(
+    byName.exec.description.includes('Accepted command forms:'),
+    'the description names the grammar section',
+  );
+  t.true(
+    byName.exec.description.includes('find <root:path> -name <pattern>'),
+    'the rendered usage line is embedded',
+  );
+});
+
+test('tool-side grammar pre-match rejects find -exec before the capability', async t => {
+  const { shell, calls } = makeFakeShell();
+  const byName = {};
+  for (const tool of makeShellTool(/** @type {any} */ (shell), {
+    commands: [
+      {
+        program: 'find',
+        args: [
+          { kind: 'slot', name: 'root', type: 'path' },
+          { kind: 'literal', value: '-name' },
+          { kind: 'slot', name: 'pattern', type: 'string' },
+        ],
+      },
+    ],
+  })) {
+    byName[tool.name] = tool;
+  }
+  await t.throwsAsync(
+    () =>
+      byName.exec.invoke({
+        command: 'find',
+        args: ['docs', '-name', '*.md', '-exec', 'sh', '-c', 'evil', ';'],
+      }),
+    { message: /does not match a granted command grammar/ },
+  );
+  t.is(calls.length, 0, 'the non-matching argv never reached the capability');
+  const ok = await byName.exec.invoke({
+    command: 'find',
+    args: ['docs', '-name', '*.md'],
+  });
+  t.is(/** @type {any} */ (ok).stdout, 'ran');
+  t.is(calls.length, 1);
+});
+
+test('makeShellTool validates the commands option up front', t => {
+  t.throws(() => makeShellTool(inertShell, { commands: [] }), {
+    message: /non-empty array/,
+  });
 });
 
 test('advisory rejectFlags vetoes a forbidden flag', async t => {

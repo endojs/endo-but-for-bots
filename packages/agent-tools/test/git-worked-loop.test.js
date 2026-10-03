@@ -106,9 +106,9 @@ const provisionHostWorkspace = async (t, remoteRoot, { identity } = {}) => {
 };
 
 /**
- * Provision a real, allowlisted `Shell` over the workspace worktree for the
- * build step. `node` is the only allowed command; the spawner is a genuine
- * child-process spawner.
+ * Provision a real `Shell` over the workspace worktree for the build step.
+ * The granted grammars admit only `node -e <code>` and `node <script:path>
+ * [<scriptArgs> ...]`; the spawner is a genuine child-process spawner.
  *
  * @param {string} root
  */
@@ -116,7 +116,24 @@ const provisionWorkspaceShell = root =>
   makeShell({
     cwd: root,
     policy: harden({
-      allowedCommands: harden(['node']),
+      commands: harden([
+        {
+          program: 'node',
+          description: 'Evaluate an inline build expression',
+          args: [
+            { kind: 'options', options: ['-e'] },
+            { kind: 'slot', name: 'code', type: 'string' },
+          ],
+        },
+        {
+          program: 'node',
+          description: 'Run a worktree script',
+          args: [
+            { kind: 'slot', name: 'script', type: 'path' },
+            { kind: 'rest', name: 'scriptArgs', type: 'string' },
+          ],
+        },
+      ]),
       timeoutMs: 30_000,
       maxOutputBytes: 1_000_000,
       env: harden({ PATH: process.env.PATH || '' }),
