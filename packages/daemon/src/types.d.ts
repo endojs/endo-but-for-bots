@@ -1230,7 +1230,7 @@ export interface Mail {
   adopt(
     messageNumber: bigint,
     edgeName: string,
-    petName: string[],
+    petNamePath: string[],
   ): Promise<void>;
   dismiss(messageNumber: bigint): Promise<void>;
   dismissAll(): Promise<void>;
@@ -1722,9 +1722,12 @@ export interface EndoGuest extends EndoAgent {
   ): Promise<void>;
   storeBlob(
     readerRef: ERef<PassableBytesReader>,
-    petName?: string[],
+    petNamePath?: string[],
   ): Promise<unknown>;
-  storeValue<T extends Passable>(value: T, petName: string[]): Promise<void>;
+  storeValue<T extends Passable>(
+    value: T,
+    petNamePath: string[],
+  ): Promise<void>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
   sendValue: Mail['sendValue'];
   /**
@@ -1866,17 +1869,20 @@ export interface EndoHost extends EndoAgent {
   ): Promise<void>;
   storeBlob(
     readerRef: ERef<PassableBytesReader>,
-    petName: string[],
+    petNamePath: string[],
   ): Promise<FarRef<EndoReadable>>;
-  storeValue<T extends Passable>(value: T, petName: string[]): Promise<void>;
-  storeTree(remoteTree: unknown, petName: string[]): Promise<unknown>;
+  storeValue<T extends Passable>(
+    value: T,
+    petNamePath: string[],
+  ): Promise<void>;
+  storeTree(remoteTree: unknown, petNamePath: string[]): Promise<unknown>;
   provideMount(
     path: string,
-    petName: string[],
+    petNamePath: string[],
     opts?: { readOnly?: boolean; deniedSegments?: string[] },
   ): Promise<EndoMount>;
   provideScratchMount(
-    petName: string[],
+    petNamePath: string[],
     opts?: { readOnly?: boolean; deniedSegments?: string[] },
   ): Promise<EndoMount>;
   /**
@@ -1900,22 +1906,22 @@ export interface EndoHost extends EndoAgent {
   ): Promise<EndoMount>;
   provideGit(
     mountCap: EndoMount,
-    petName: string[],
+    petNamePath: string[],
     options: GitProvisionOptions & { allowHistoryRewrite: true },
   ): Promise<HistoryRewriteEndoGit>;
   provideGit(
     mountCap: EndoMount,
-    petName: string[],
+    petNamePath: string[],
     options?: GitProvisionOptions & { allowHistoryRewrite?: false },
   ): Promise<ReadWriteEndoGit>;
   provideGit(
     mountCap: EndoMount,
-    petName: string[],
+    petNamePath: string[],
     options: GitProvisionOptions & { allowHistoryRewrite: boolean },
   ): Promise<ReadWriteEndoGit | HistoryRewriteEndoGit>;
   provideGit(
     mountCap: EndoMount,
-    petName: string[],
+    petNamePath: string[],
     options?: GitProvisionOptions,
   ): Promise<ReadWriteEndoGit | HistoryRewriteEndoGit>;
   /**
@@ -1928,18 +1934,18 @@ export interface EndoHost extends EndoAgent {
    */
   provideShell(
     mountCap: EndoMount,
-    petName: string[],
+    petNamePath: string[],
     policy: ShellPolicy,
   ): Promise<EndoShell>;
   /**
    * Mint a confined outbound-HTTP `HttpClient`, persist its formula, and bind
-   * the use-facing client to `petName`. Unlike `provideShell` / `provideGit`
+   * the use-facing client to `petNamePath`. Unlike `provideShell` / `provideGit`
    * it takes no mount cap — the Network tier is rooted in a host-owned `fetch`
    * seam, not the mount. The policy-bearing `HttpClientControl` is retained
    * host-side, reachable via `getHttpClientControl`.
    */
   provideHttpClient(
-    petName: string[],
+    petNamePath: string[],
     policy: HttpClientPolicy,
   ): Promise<HttpClient>;
   /**
@@ -1949,7 +1955,7 @@ export interface EndoHost extends EndoAgent {
   getHttpClientControl(clientCap: HttpClient): Promise<HttpClientControl>;
   /**
    * Mint a `GitRemote` capability bound to `gitCap`, persist its
-   * formula, and bind it to `petName`.  The remote enforces the
+   * formula, and bind it to `petNamePath`.  The remote enforces the
    * supplied policy (allowed directions, refspecs, force-push, etc.)
    * against every operation.  Host-only; not exposed to guests.  The
    * guest holds the returned exo (which exposes `fetch`/`pull`/`push`
@@ -1959,7 +1965,7 @@ export interface EndoHost extends EndoAgent {
    */
   provideGitRemote(
     gitCap: unknown,
-    petName: string[],
+    petNamePath: string[],
     opts: {
       name: string;
       url: string;
@@ -1998,24 +2004,24 @@ export interface EndoHost extends EndoAgent {
   }): Promise<{ git: ReadWriteEndoGit; remote: GitRemote }>;
   /**
    * Mint a bearer-token `GitCredential` capability scoped to
-   * `audience` (a URL origin) and bind it to `petName`.  Material
+   * `audience` (a URL origin) and bind it to `petNamePath`.  Material
    * lives in a daemon-process-local map; daemon restart routes the
    * cap through `makeUnavailableGitCredential` (durable identity,
    * ephemeral material).  Host-only; not exposed to guests.  Guests
    * receive only the `audience()` view of the resulting capability.
    */
   provideBearerCredential(
-    petName: string[],
+    petNamePath: string[],
     options: { audience: string; token: string },
   ): Promise<unknown>;
   /**
    * Mint a basic-auth `GitCredential` capability scoped to `audience`
-   * and bind it to `petName`.  Same material-residency contract as
+   * and bind it to `petNamePath`.  Same material-residency contract as
    * `provideBearerCredential`: host-only, daemon-process-local
    * material, audience-gated transport use.
    */
   provideBasicCredential(
-    petName: string[],
+    petNamePath: string[],
     options: { audience: string; username: string; password: string },
   ): Promise<unknown>;
   /**
@@ -2044,8 +2050,14 @@ export interface EndoHost extends EndoAgent {
    * attenuated guest or narrower powers object instead.
    */
   provideHostPath(cap: unknown): Promise<string>;
-  provideGuest(petName?: string[], opts?: MakeAgentOptions): Promise<EndoGuest>;
-  provideHost(petName?: string[], opts?: MakeAgentOptions): Promise<EndoHost>;
+  provideGuest(
+    petNamePath?: string[],
+    opts?: MakeAgentOptions,
+  ): Promise<EndoGuest>;
+  provideHost(
+    petNamePath?: string[],
+    opts?: MakeAgentOptions,
+  ): Promise<EndoHost>;
   makeDirectory(petNamePath: string[]): Promise<EndoDirectory>;
   provideWorker(petNamePath: string[]): Promise<EndoWorker>;
   evaluate(
@@ -2096,9 +2108,12 @@ export interface EndoHost extends EndoAgent {
   addPeerInfo(peerInfo: PeerInfo): Promise<void>;
   listKnownPeers(): Promise<PeerInfo[]>;
   followPeerChanges(): AsyncGenerator<PetStoreNameChange, undefined, undefined>;
-  makeChannel(petName: string[], proposedName: string): Promise<EndoChannel>;
+  makeChannel(
+    petNamePath: string[],
+    proposedName: string,
+  ): Promise<EndoChannel>;
   makeTimer(
-    petName: string[],
+    petNamePath: string[],
     intervalMs: number,
     label?: string,
   ): Promise<unknown>;
