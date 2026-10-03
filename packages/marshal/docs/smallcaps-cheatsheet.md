@@ -21,6 +21,7 @@ An example-based summary of the Smallcaps encoding of the OCapN [Abstract Syntax
 | error            | Error         | `TypeError(msg)`      | `{"#error":<msg>,"name":"TypeError"}` |
 
 * The `-0` encoding is defined as above, but not yet implemented in JS.
+* The sturdyRef row is an Endo extension, not part of the OCapN Abstract Syntax, which has no SturdyRef passable.
 * In JS, passable symbols are in transition from JavaScript symbols to their own representation
 * The number after `"$"`, `"&"`, or `"'"` (for remotable/Target, promise/Promise, or sturdyRef/SturdyRef) is an index into a separate slots array.
 * ***Special strings*** begin with any of the `!"#$%&'()*+,-` characters.
