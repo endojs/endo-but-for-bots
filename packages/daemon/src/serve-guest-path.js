@@ -55,6 +55,12 @@ export const makeGuestPathIssuer = ({
   const numberByName = new Map();
   /** @type {Promise<void> | undefined} */
   let directoryReady;
+  // Registered before any service races `cancelled`, so the flag is set
+  // before a stopped service reports.
+  let isDaemonCancelled = false;
+  cancelled.catch(() => {
+    isDaemonCancelled = true;
+  });
 
   const connectionNumbers = (function* generateNumbers() {
     let n = 0;
@@ -148,8 +154,9 @@ export const makeGuestPathIssuer = ({
         },
       );
       stopped.catch(error => {
-        // Revocation is a deliberate stop, not a failure to report.
-        if (!isRevoked) reportError(error);
+        // Revocation and daemon cancellation are deliberate stops, not
+        // failures to report.
+        if (!isRevoked && !isDaemonCancelled) reportError(error);
       });
       await started;
       return socketPath;
