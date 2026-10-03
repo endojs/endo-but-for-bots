@@ -29,12 +29,7 @@ export const SYSTEM_DIRECTORIES = harden([
   '/libx32',
 ]);
 
-/**
- * `/etc` entries `claude`, `node`, and `/bin/sh` read: name resolution, TLS
- * roots, the user database, and the dynamic linker's cache. A symlinked entry
- * (`/etc/resolv.conf` into `/run/systemd/resolve`) is bound from its target, so
- * `/run` itself stays unbound.
- */
+/** `/etc` entries for name resolution, TLS roots, users, and `ld.so.cache`. */
 export const SYSTEM_ETC_ENTRIES = harden([
   '/etc/alternatives',
   '/etc/ca-certificates',
@@ -117,6 +112,40 @@ const assertAbsolute = (value, label) => {
 };
 
 /**
+ * @param {string} outer
+ * @param {string} inner
+ */
+const isWithin = (outer, inner) => {
+  const relative = path.relative(outer, inner);
+  return (
+    relative === '' ||
+    (relative !== '..' &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative))
+  );
+};
+
+/**
+ * A later bind shadows an earlier one at or beneath its path, so a writable
+ * grant that overlaps a read-only one in either direction would decide which
+ * of the two wins by argv order. Refuse any overlap instead.
+ *
+ * @param {ReadonlyArray<string>} readOnlyPaths
+ * @param {ReadonlyArray<string>} writablePaths
+ */
+const assertDisjointGrants = (readOnlyPaths, writablePaths) => {
+  for (const readOnly of readOnlyPaths) {
+    for (const writable of writablePaths) {
+      if (isWithin(readOnly, writable) || isWithin(writable, readOnly)) {
+        throw makeError(
+          X`bwrap slice: read-only path ${q(readOnly)} overlaps writable path ${q(writable)}`,
+        );
+      }
+    }
+  }
+};
+
+/**
  * The `bwrap` argv for one command. Mount order matters: `bwrap` applies
  * mounts in argv order, so the `/tmp` and HOME tmpfs come before the granted
  * binds, which may live beneath either.
@@ -151,6 +180,7 @@ export const assembleBwrapArgv = ({
   ]) {
     assertAbsolute(value, label);
   }
+  assertDisjointGrants(readOnlyPaths, writablePaths);
   /** @type {string[]} */
   // `--disable-userns` stops the confined tree from creating a nested user
   // namespace to regain capabilities; it needs an explicit `--unshare-user`.
@@ -211,6 +241,10 @@ export const makeBwrapSpawn = ({
   home,
 }) => {
   assertAbsolute(bwrapPath, 'bwrapPath');
+  for (const granted of [...readOnlyPaths, ...writablePaths]) {
+    assertAbsolute(granted, 'granted path');
+  }
+  assertDisjointGrants(readOnlyPaths, writablePaths);
   /**
    * @param {string} command
    * @param {readonly string[]} commandArguments

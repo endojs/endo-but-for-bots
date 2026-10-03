@@ -105,6 +105,43 @@ test('a relative path is refused', t => {
   });
 });
 
+test('overlapping read-only and writable grants are refused', t => {
+  for (const [readOnly, writable] of [
+    ['/tmp/turn/work', '/tmp/turn/work'],
+    ['/tmp/turn/work/tools', '/tmp/turn/work'],
+    ['/tmp/turn', '/tmp/turn/work'],
+  ]) {
+    t.throws(
+      () =>
+        assembleBwrapArgv({
+          ...baseOptions,
+          readOnlyPaths: [readOnly],
+          writablePaths: [writable],
+        }),
+      { message: /bwrap slice: read-only path .* overlaps writable path/ },
+    );
+    t.throws(
+      () =>
+        makeBwrapSpawn({
+          spawn: /** @type {any} */ (() => {}),
+          bwrapPath: '/usr/bin/bwrap',
+          systemMounts: baseOptions.systemMounts,
+          readOnlyPaths: [readOnly],
+          writablePaths: [writable],
+        }),
+      { message: /overlaps writable path/ },
+    );
+  }
+  // A sibling sharing a name prefix does not overlap.
+  t.notThrows(() =>
+    assembleBwrapArgv({
+      ...baseOptions,
+      readOnlyPaths: ['/tmp/turn/work-tools'],
+      writablePaths: ['/tmp/turn/work'],
+    }),
+  );
+});
+
 test('resolveSystemMounts recreates top-level symlinks and binds /etc targets', async t => {
   const symlinks = { '/bin': 'usr/bin', '/lib64': 'usr/lib64' };
   const directories = ['/usr', '/lib'];
