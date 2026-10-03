@@ -7,6 +7,11 @@
 // server is handed to the SDK in process, so no stdio server, socket, or
 // nonce exists. The SDK's `query` is injected: this package does not depend
 // on the SDK, and tests run with no binary and no credential.
+//
+// Confinement parity with the CLI's `--bare` is not established: no live
+// probe has measured whether the SDK options exclude project and user
+// memory, hooks, skills, and ambient MCP servers (the design's § Observed
+// versus documented).
 
 import { E } from '@endo/eventual-send';
 import { M, matches } from '@endo/patterns';
@@ -45,23 +50,41 @@ const messageOf = error =>
 /**
  * The UTF-8 length of `message` as JSON. Values `JSON.stringify` refuses
  * still count, so that no message slips past the output-bytes ceiling: a
- * bigint counts as its decimal digits and a repeated object as a short
- * marker.
+ * bigint counts as its decimal digits and a cycle as a short marker. As in
+ * `JSON.stringify`, only an object that is its own ancestor is a cycle; an
+ * object shared by siblings counts in full each time.
  *
  * @param {unknown} message
  * @returns {number}
  */
 const serializedByteCount = message => {
-  const seen = new WeakSet();
+  /** @type {object[]} */
+  const ancestors = [];
   const text =
-    JSON.stringify(message, (_key, value) => {
-      if (typeof value === 'bigint') return `${value}`;
-      if (typeof value === 'object' && value !== null) {
-        if (seen.has(value)) return '[Repeated]';
-        seen.add(value);
-      }
-      return value;
-    }) ?? '';
+    JSON.stringify(
+      message,
+      /**
+       * @this {unknown}
+       * @param {string} _key
+       * @param {unknown} value
+       */
+      function replacer(_key, value) {
+        // `this` is the object holding `value`; whatever the stack holds
+        // above it belongs to a finished branch.
+        while (
+          ancestors.length > 0 &&
+          ancestors[ancestors.length - 1] !== this
+        ) {
+          ancestors.pop();
+        }
+        if (typeof value === 'bigint') return `${value}`;
+        if (typeof value === 'object' && value !== null) {
+          if (ancestors.includes(value)) return '[Circular]';
+          ancestors.push(value);
+        }
+        return value;
+      },
+    ) ?? '';
   return encodeUtf8(text).length;
 };
 
@@ -98,19 +121,24 @@ export const makeClaudeSdkBackend = ({
 
     const admission = await E(credentialSource)
       .acquire()
-      .then(grant => {
-        // Checked with `matches`, not `mustMatch`, so that a malformed grant's
-        // values (a credential among them) never reach the error detail.
-        if (!matches(grant, AdmissionShape)) {
-          throw Error('malformed admission');
-        }
-        return grant;
-      })
-      .catch(error =>
-        harden({
-          type: /** @type {const} */ ('failed'),
-          detail: messageOf(error),
-        }),
+      .then(
+        grant =>
+          // Checked with `matches`, not `mustMatch`, so that a malformed
+          // grant's values (a credential among them) never reach the detail.
+          matches(grant, AdmissionShape)
+            ? grant
+            : harden({
+                type: /** @type {const} */ ('failed'),
+                detail: 'malformed admission',
+              }),
+        // The rejection's message is not forwarded: a source's error may
+        // carry the very credential it failed to deliver, and the detail
+        // reaches the usage record.
+        () =>
+          harden({
+            type: /** @type {const} */ ('failed'),
+            detail: 'acquire rejected',
+          }),
       );
     if (admission.type === 'failed') {
       return unavailable(`credential source failed: ${admission.detail}`);

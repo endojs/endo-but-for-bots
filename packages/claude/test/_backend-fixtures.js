@@ -179,6 +179,8 @@ export const makeFakeSpawn = script => {
   const spawns = [];
   /** @type {{ pid: number, signal: string }[]} */
   const kills = [];
+  /** @type {((name: string, ...values: any[]) => void)[]} */
+  const emitters = [];
   let nextPid = 4000;
 
   /** @type {Spawn} */
@@ -200,6 +202,7 @@ export const makeFakeSpawn = script => {
     ) => {
       for (const listener of listeners[name]) listener(...values);
     };
+    emitters.push(emit);
     const run = async () => {
       await null;
       if (script.spawnError !== undefined) {
@@ -246,7 +249,7 @@ export const makeFakeSpawn = script => {
   const kill = (pid, signal) => {
     kills.push({ pid, signal });
   };
-  return { spawn, kill, spawns, kills };
+  return { spawn, kill, spawns, kills, emitters };
 };
 
 /**

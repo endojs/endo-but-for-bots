@@ -212,7 +212,7 @@ test('a credential source that rejects is unavailable and starts no process', as
   const { backend, fake, scratch } = makeHarness({}, { source });
   t.deepEqual(await backend.infer(makeRequest()), {
     type: 'unavailable',
-    detail: 'credential source failed: vault sealed',
+    detail: 'credential source failed: acquire rejected',
   });
   t.is(fake.spawns.length, 0);
   t.is(scratch.state.made, 0);
@@ -271,6 +271,16 @@ test('a hung process is ended by the wall clock', async t => {
   t.deepEqual(await resultP, { type: 'limit-exceeded', which: 'wall-clock' });
   t.is(fake.kills.length, 1);
   t.is(source.counts.released, 1);
+});
+
+test('an exit after a killed turn returns starts no grace timer', async t => {
+  const { backend, fake, manualTimers } = makeHarness({ hang: true });
+  const resultP = backend.infer(makeRequest());
+  await settle();
+  manualTimers.fire();
+  t.deepEqual(await resultP, { type: 'limit-exceeded', which: 'wall-clock' });
+  fake.emitters[0]('exit', null, 'SIGKILL');
+  t.is(manualTimers.pending.size, 0);
 });
 
 test('cancellation kills a running turn', async t => {

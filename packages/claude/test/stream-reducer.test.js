@@ -67,6 +67,17 @@ test('a message id that returns after another message is a new turn', t => {
   t.is(reduction.turns, 3);
 });
 
+test('one id replayed across a tool result is a new turn', t => {
+  const toolResult = line({
+    type: 'user',
+    message: { content: [{ type: 'tool_result', content: 'ok' }] },
+  });
+  const reduction = reduce(
+    `${assistant('m1', 'a')}${toolResult}${assistant('m1', 'b')}${toolResult}${assistant('m1', 'c')}`,
+  );
+  t.is(reduction.turns, 3);
+});
+
 test('assistant events without a message id each count as a turn', t => {
   const anonymous = line({
     type: 'assistant',

@@ -70,23 +70,32 @@ const EXIT_DRAIN_GRACE_MS = 1000;
  * split across two chunks decodes intact.
  */
 const makeLineDecoder = () => {
-  let pending = new Uint8Array(0);
+  // Only each new chunk is searched for a newline, and the chunks of an
+  // unfinished line are joined once, so a long line costs linear time.
+  /** @type {Uint8Array[]} */
+  let pending = [];
   return harden({
     /**
      * @param {Uint8Array} bytes
      * @returns {string} the complete lines `bytes` finished
      */
     push: bytes => {
-      const buffered = concatBytes([pending, bytes]);
-      let end = buffered.length;
-      while (end > 0 && buffered[end - 1] !== NEWLINE) end -= 1;
-      pending = buffered.slice(end);
-      return decodeUtf8(buffered.subarray(0, end));
+      let end = bytes.length;
+      while (end > 0 && bytes[end - 1] !== NEWLINE) end -= 1;
+      if (end === 0) {
+        pending.push(bytes);
+        return '';
+      }
+      const lines = decodeUtf8(
+        concatBytes([...pending, bytes.subarray(0, end)]),
+      );
+      pending = end < bytes.length ? [bytes.slice(end)] : [];
+      return lines;
     },
     /** @returns {string} whatever followed the last newline */
     flush: () => {
-      const rest = decodeUtf8(pending);
-      pending = new Uint8Array(0);
+      const rest = decodeUtf8(concatBytes(pending));
+      pending = [];
       return rest;
     },
   });
@@ -129,19 +138,24 @@ export const makeClaudeCliBackend = ({
 
     const admission = await E(credentialSource)
       .acquire()
-      .then(grant => {
-        // Checked with `matches`, not `mustMatch`, so that a malformed grant's
-        // values (a credential among them) never reach the error detail.
-        if (!matches(grant, AdmissionShape)) {
-          throw Error('malformed admission');
-        }
-        return grant;
-      })
-      .catch(error =>
-        harden({
-          type: /** @type {const} */ ('failed'),
-          detail: messageOf(error),
-        }),
+      .then(
+        grant =>
+          // Checked with `matches`, not `mustMatch`, so that a malformed
+          // grant's values (a credential among them) never reach the detail.
+          matches(grant, AdmissionShape)
+            ? grant
+            : harden({
+                type: /** @type {const} */ ('failed'),
+                detail: 'malformed admission',
+              }),
+        // The rejection's message is not forwarded: a source's error may
+        // carry the very credential it failed to deliver, and the detail
+        // reaches the usage record.
+        () =>
+          harden({
+            type: /** @type {const} */ ('failed'),
+            detail: 'acquire rejected',
+          }),
       );
     if (admission.type === 'failed') {
       return unavailable(`credential source failed: ${admission.detail}`);
@@ -169,6 +183,9 @@ export const makeClaudeCliBackend = ({
     });
     /** @type {unknown} */
     let exitGraceTimer;
+    // Set once `infer` returns, so that a late `exit` from a killed process
+    // cannot start a grace timer that nothing would clear.
+    let settled = false;
     /** @type {ScratchDirectory | undefined} */
     let scratch;
     /** @type {StdioProjection | undefined} */
@@ -200,7 +217,7 @@ export const makeClaudeCliBackend = ({
         maxBudgetUsd,
         permissionPromptsNone,
       });
-      const env = buildConstructedEnvironment({
+      const environment = buildConstructedEnvironment({
         configDirectory: scratch.configDirectory,
         pathValue,
         credentialEnvironment,
@@ -219,7 +236,7 @@ export const makeClaudeCliBackend = ({
         // A fresh copy: Node's spawn writes into `options.env` (it adds
         // NODE_V8_COVERAGE when the parent has it), which throws on a frozen
         // record.
-        env: { ...env },
+        env: { ...environment },
         stdio: ['pipe', 'pipe', 'pipe'],
         detached: true,
       });
@@ -238,6 +255,7 @@ export const makeClaudeCliBackend = ({
         // `claude` itself exits, so `close` may never come. Give the pipes a
         // grace period to drain after `exit`, then settle and reap the group.
         spawned.on('exit', (exitCode, signal) => {
+          if (settled) return;
           exitGraceTimer = timers.setTimeout(() => {
             exitGraceTimer = undefined;
             try {
@@ -302,6 +320,7 @@ export const makeClaudeCliBackend = ({
       );
     } finally {
       enforcer.stop();
+      settled = true;
       if (exitGraceTimer !== undefined) timers.clearTimeout(exitGraceTimer);
       const cleanups = [
         () => E(release)(),

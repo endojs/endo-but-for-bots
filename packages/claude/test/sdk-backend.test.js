@@ -171,7 +171,7 @@ test('a credential source that rejects is unavailable and never queries', async 
   const { backend, scratch } = makeHarness(query, { source });
   t.deepEqual(await backend.infer(makeRequest()), {
     type: 'unavailable',
-    detail: 'credential source failed: vault sealed',
+    detail: 'credential source failed: acquire rejected',
   });
   t.is(calls.length, 0);
   t.is(scratch.state.made, 0);
@@ -310,6 +310,19 @@ test('a message JSON cannot serialize still counts toward the byte limit', async
     type: 'ok',
     text: 'stored',
   });
+});
+
+test('an object shared by siblings counts in full each time', async t => {
+  const shared = { padding: 'x'.repeat(1000) };
+  const { query } = replay([
+    { ...assistant('message-1', 'x'), first: shared, second: shared },
+    success,
+  ]);
+  const { backend } = makeHarness(query);
+  t.deepEqual(
+    await backend.infer(makeRequest({ limits: { maxOutputBytes: 1500 } })),
+    { type: 'limit-exceeded', which: 'output-bytes' },
+  );
 });
 
 test('a projection failure during setup is unavailable, not thrown', async t => {

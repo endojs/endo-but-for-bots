@@ -105,16 +105,18 @@ export const makeClaudeStreamReducer = () => {
     }
     if (event.type === 'assistant') {
       accumulatedText += assistantText(event);
-      // One model turn may arrive as several events sharing a message id.
-      // Only the message in progress continues: an id that returns after a
-      // different message is a new turn, so a stream that replays one id
-      // across turns cannot slip under `maxTurns`.
+      // One model turn may arrive as several consecutive events sharing a
+      // message id. Only the message in progress continues: an id that
+      // returns after any other event (a different message, or the tool
+      // result that a further turn needs as input) is a new turn, so a stream
+      // that replays one id across turns cannot slip under `maxTurns`.
       const id = isRecord(event.message) ? event.message.id : undefined;
       if (id !== undefined && id === currentMessageId) return false;
       currentMessageId = id;
       turns += 1;
       return true;
     }
+    currentMessageId = undefined;
     if (event.type === 'result') {
       const origin = isRecord(event.origin) ? event.origin : {};
       if (origin.kind !== 'task-notification') results.push(event);

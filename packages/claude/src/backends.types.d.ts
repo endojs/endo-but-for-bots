@@ -140,7 +140,7 @@ export type SdkOptionsSpec = {
 export type ConstructedEnvironmentSpec = {
   configDirectory: string;
   pathValue: string;
-  /** The `env` of a granted `acquire()`. */
+  /** The `environment` of a granted `acquire()`. */
   credentialEnvironment: Record<string, string>;
   lang?: string;
 };
