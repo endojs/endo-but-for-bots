@@ -74,8 +74,9 @@ const namesFileLocations = compartmentMap => {
 
 /**
  * Read a file at the root of a tree as text, or `undefined` when the tree
- * cannot read it.  Only `lookup` and `text` are used, the surface every
- * tree `makeFromTree` accepts shares.
+ * has no such entry.  Only `has`, `lookup` and `text` are used, the surface
+ * every tree `makeFromTree` accepts shares.  Any failure other than absence,
+ * including an entry that is not a file, propagates.
  *
  * @param {ERef<any>} tree
  * @param {string} name
@@ -83,28 +84,11 @@ const namesFileLocations = compartmentMap => {
  */
 const maybeReadRootText = async (tree, name) => {
   await null;
-  try {
-    const blob = await E(tree).lookup(name);
-    return await E(blob).text();
-  } catch {
+  if (!(await E(tree).has(name))) {
     return undefined;
   }
-};
-
-/**
- * Whether a tree can look up an entry at its root.
- *
- * @param {ERef<any>} tree
- * @param {string} name
- */
-const rootEntryExists = async (tree, name) => {
-  await null;
-  try {
-    await E(tree).lookup(name);
-    return true;
-  } catch {
-    return false;
-  }
+  const blob = await E(tree).lookup(name);
+  return E(blob).text();
 };
 
 /**
@@ -133,9 +117,8 @@ export const detectTreeLayout = async tree => {
     'found neither compartment-map.json (layouts "archive", "node-modules-with-map") nor package.json (layout "node-modules-scan") at its root';
   if ((await maybeReadRootText(tree, 'package.json')) !== undefined) {
     const plugAndPlay =
-      (await rootEntryExists(tree, '.pnp.cjs')) ||
-      (await rootEntryExists(tree, '.pnp.js'));
-    if (plugAndPlay && !(await rootEntryExists(tree, 'node_modules'))) {
+      (await E(tree).has('.pnp.cjs')) || (await E(tree).has('.pnp.js'));
+    if (plugAndPlay && !(await E(tree).has('node_modules'))) {
       throw makeError(
         `Tree matches no makeFromTree layout: it is a Yarn Plug'n'Play install with no node_modules; ${lookedFor}`,
       );
