@@ -277,6 +277,38 @@ test('a throwing describe rejects before the turn starts', async t => {
   t.is(records.length, 0);
 });
 
+test('a description outside its shape rejects before the turn starts', async t => {
+  for (const description of [
+    { provider: 'p' },
+    { provider: 1, kind: 'k' },
+    { provider: 'p', kind: 'k', secret: 's' },
+  ]) {
+    let calls = 0;
+    /** @type {any} */
+    const unguarded = harden({
+      describe: () => harden(description),
+      infer: async () => {
+        calls += 1;
+        return harden({ type: 'ok', text: 'x' });
+      },
+    });
+    const { records, sink } = makeSink();
+    const recorder = makeUsageRecorder(unguarded, {
+      secretIdentifier: 'secret:a',
+      sink,
+      now: makeSteppingClock(),
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => recorder.infer(makeRequest()), {
+      message: /description/,
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await settle();
+    t.is(calls, 0, JSON.stringify(description));
+    t.is(records.length, 0);
+  }
+});
+
 test('a throwing sink-error reporter does not escape', async t => {
   const { backend } = makeRecordingBackend(harden({ type: 'ok', text: 'x' }));
   let reports = 0;

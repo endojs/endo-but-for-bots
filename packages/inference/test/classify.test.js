@@ -140,7 +140,9 @@ test('a retry-later row carries the refill time it reads', t => {
     { type: 'rate-limited', retryAfterMs: 0 },
     'an immediate retry is kept',
   );
-  for (const retryAfter of [NaN, Infinity]) {
+  // A finite delay past the safe-integer range is the case that tells the
+  // explicit bound apart from a bare `Number.isFinite` check.
+  for (const retryAfter of [NaN, Infinity, Number.MAX_SAFE_INTEGER + 100]) {
     t.deepEqual(
       classifier.classify('2.1.278', {
         type: 'result',
