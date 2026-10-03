@@ -885,6 +885,9 @@ const provisionPresetObjects = async (
  * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
  * @param {Map<string, any>} [options.extraTools] - Session-specific tools
  *   the factory built (see `makeFlootToolRegistry`).
+ * @param {(petName: string) => Promise<string | undefined>} [options.locateStoredTool]
+ *   Reads a stored caplet tool's locator on the host side (see
+ *   `makeFlootToolRegistry`).
  * @param {string} [options.hostedContinuity] - The hosted backend's declared
  *   continuity. A `'transcript'` backend keeps its own record of every
  *   delivered prompt and streamed reply (a CLI resuming its transcript), so an
@@ -918,6 +921,7 @@ export const makeStreamingAgent = async (
     maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS,
     extraTools,
     hostedContinuity,
+    locateStoredTool,
   } = {},
 ) => {
   const retainsDeliveredTurns = hostedContinuity === 'transcript';
@@ -1025,6 +1029,7 @@ export const makeStreamingAgent = async (
   const toolRegistry = makeFlootToolRegistry(powers, {
     settledMail,
     ...(extraTools ? { extraTools } : {}),
+    ...(locateStoredTool ? { locateStoredTool } : {}),
     ...(spawner ? { spawner, delegations } : {}),
     ...(accountOracle
       ? {
@@ -3027,6 +3032,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
           sessionPrompt,
           harden({
             maxToolRounds,
+            // The session guest has no `locate`, so its stored caplet tools
+            // are located through the host's name for its agent.
+            locateStoredTool: petName =>
+              E(host).locate(agentName, 'tools', petName),
             ...(extraTools.size > 0 ? { extraTools } : {}),
             ...(hostedContinuity ? { hostedContinuity } : {}),
             ...(sessionDepth < maxSubagentDepth

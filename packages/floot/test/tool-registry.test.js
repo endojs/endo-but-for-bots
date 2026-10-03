@@ -58,7 +58,6 @@ test('subagent tools appear only when the session was given a spawner', async t 
     lookup: async () => {
       throw Error('no stored tools');
     },
-    locate: async () => undefined,
     listMessages: async () => harden([]),
   });
   const plain = await makeFlootToolRegistry(powers).snapshot();
@@ -88,7 +87,6 @@ test('accountStatus appears only when an oracle was endowed, and renders provena
     lookup: async () => {
       throw Error('no stored tools');
     },
-    locate: async () => undefined,
     listMessages: async () => harden([]),
   });
   const plain = await makeFlootToolRegistry(powers).snapshot();
@@ -156,7 +154,7 @@ test('accountStatus appears only when an oracle was endowed, and renders provena
   t.regex(report, /No list price is configured/);
 });
 
-test('a stored caplet tool is located with the path as separate name arguments', async t => {
+test('a stored caplet tool is located on the host side, not through the session guest', async t => {
   const stored = Far('FaeTool', {
     schema: () =>
       harden({
@@ -176,26 +174,48 @@ test('a stored caplet tool is located with the path as separate name arguments',
       t.deepEqual(path, ['tools', 'weather'], 'lookup accepts a path array');
       return stored;
     },
-    // The daemon's guard is `M.call().rest(NamePathShape)`, so an array
-    // argument is rejected outright — unlike `lookup`. Enforce that here, or
-    // the only session shape that exercises it (one with a caplet tool) goes
-    // untested and every turn in such a session fails in production.
-    locate: async (...path) => {
-      t.deepEqual(path, ['tools', 'weather']);
-      return 'endo://node/formula?type=lookup';
-    },
+    // A session's powers is an `EndoGuest`, which has no `locate`; the mock
+    // omits it so a regression that calls it fails here rather than in every
+    // turn of a production session with a caplet tool.
     listMessages: async () => harden([]),
   });
-  const snapshot = await makeFlootToolRegistry(powers).snapshot();
+  const snapshot = await makeFlootToolRegistry(powers, {
+    locateStoredTool: async petName => {
+      t.is(petName, 'weather');
+      return 'endo://node/formula?type=lookup';
+    },
+  }).snapshot();
   t.true(snapshot.names.includes('weather'));
   t.true(snapshot.toolSetId.includes('endo://node/formula'));
   t.is(await snapshot.execute('weather', harden({})), 'sunny');
 });
 
+test('listMessages reports a guest message sender by its pet names', async t => {
+  const powers = Far('SessionPowers', {
+    list: async () => harden([]),
+    listMessages: async () =>
+      harden([
+        {
+          number: 1n,
+          type: 'package',
+          fromNames: ['alice'],
+          toNames: ['@self'],
+          strings: ['hello'],
+          names: [],
+        },
+      ]),
+  });
+  const snapshot = await makeFlootToolRegistry(powers).snapshot();
+  const [summary] = JSON.parse(
+    await snapshot.execute('listMessages', harden({})),
+  );
+  t.deepEqual(summary.from, ['alice']);
+  t.is(summary.text, 'hello');
+});
+
 test('extra tools join the pinned catalog and cannot shadow a built-in', async t => {
   const powers = Far('Powers', {
     list: () => harden([]),
-    locate: () => 'test-locator',
   });
   const extra = harden({
     schema: () =>
