@@ -14,6 +14,10 @@ export type McpServer = unknown;
  * not forward to its provider.
  */
 export type GuestToolProjection = {
+  /**
+   * Must be a remotable function, made with `Far('buildMcpServer', ...)`:
+   * the guard requires `M.remotable`, which a bare closure does not pass.
+   */
   buildMcpServer: () => McpServer;
   toolNames: readonly string[];
   formulaIdentifier: string;
@@ -38,7 +42,11 @@ export type InferRequest = {
   guest: GuestToolProjection;
   limits: InferLimits;
   model?: string;
-  /** Rejects to cancel the turn; never fulfills. */
+  /**
+   * Rejects to cancel the turn; never fulfills. Must be a genuine promise:
+   * the guard requires `M.promise()`, which a bare thenable does not pass.
+   * Typed `PromiseLike` because that is what the guard's inferred type is.
+   */
   cancelled: PromiseLike<unknown>;
 };
 
@@ -115,6 +123,10 @@ export type AdmissionRefusal = {
 export type CredentialGrant = {
   type: 'granted';
   env: Record<string, string>;
+  /**
+   * Must be a remotable function, made with `Far('release', ...)`: the guard
+   * requires `M.remotable`, which a bare closure does not pass.
+   */
   release: () => void;
 };
 

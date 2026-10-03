@@ -32,8 +32,10 @@ import { ClassifiedResultShape, InferLimitsShape } from './guards.js';
  * @param {(error: unknown) => void} [options.reportTerminateError]  learns
  *   that the provider process may still be running.
  * @param {PromiseLike<unknown>} [options.cancelled]  rejects to cancel the
- *   turn. It is adopted as a promise, so a thenable whose `then` throws
- *   cancels the turn rather than failing construction.
+ *   turn. `InferenceBackendInterface` admits only a genuine promise here;
+ *   the enforcer still adopts it through `E.when`, so a direct caller's
+ *   thenable whose `then` throws cancels the turn rather than failing
+ *   construction.
  * @returns {LimitEnforcer}
  */
 export const makeLimitEnforcer = ({
