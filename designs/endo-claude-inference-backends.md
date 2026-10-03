@@ -10,7 +10,12 @@
 
 ## Status
 
-Design only; nothing in this repository changes. This document amends
+Phases 1 and 2 are built, in review: `@endo/inference`
+([#1403](https://github.com/endojs/endo-but-for-bots/pull/1403)) and the
+`@endo/claude` CLI and Agent SDK backends
+([#1412](https://github.com/endojs/endo-but-for-bots/pull/1412)).
+The later phases remain design.
+This document amends
 [endo-claude](endo-claude.md) where the experiments contradicted or settled it,
 and leaves that design standing for the parts the experiments did not reach. It
 does not revive the closed amendment in
@@ -924,7 +929,10 @@ be linked here once it exists. Pull request:
    gate 8 on the canary, then gate 5, then pick the default Claude backend and
    update this document's Status with the measured comparison. Gate 8 needs the
    factory ([#1102](https://github.com/endojs/endo-but-for-bots/pull/1102),
-   still open). If #1102 is not ready, gates 2–5 proceed without it and gate 8
+   closed with changes requested, so no factory design is current).
+   That closure does not touch the `InferenceBackend` seam phases 1 and 2
+   build on.
+   Until a factory lands, gates 2–5 proceed without it and gate 8
    runs once it lands; until then the root backend keeps Decision 9's
    restriction to the root operator's direct prompts.
 5. **Broker delivery.** Claude as an `@endo/hosted-agent` provider: a loopback

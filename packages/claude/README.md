@@ -148,8 +148,14 @@ matching tag, enforce the wall-clock, output-byte, and turn limits through the
 `@endo/inference` limit enforcer (the CLI backend kills the process group), and
 release the grant on every path. An optional `maxBudgetUsd` is a separate
 ceiling that the Claude Code binary enforces, not the limit enforcer. The
-projection's `formulaIdentifier` is never forwarded to the provider. Wrap an unsliced backend in the `@endo/inference`
-prompt-origin gate, and record usage with its usage recorder.
+projection's `formulaIdentifier` is never forwarded to the provider.
+The wall clock and cancellation bound every wait in the turn, the version check
+and the credential wait included, so a party that never answers cannot hold a
+turn open.
+A failure detail names an error by its code or class, never by its message,
+which may quote the credential.
+Wrap an unsliced backend in the `@endo/inference` prompt-origin gate, and record
+usage with its usage recorder.
 
 ## Known gaps (prerequisites)
 
