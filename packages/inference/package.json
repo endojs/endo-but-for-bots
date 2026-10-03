@@ -1,0 +1,79 @@
+{
+  "name": "@endo/inference",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Provider-neutral seam for one confined inference turn: the guarded InferenceBackend and CredentialSource interfaces, the limit-enforcer and pinned-table classifier libraries a provider plugin calls, and the prompt-origin gate and usage recorder enrichers.",
+  "keywords": [
+    "endo",
+    "inference",
+    "exo",
+    "ocap"
+  ],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/endojs/endo/blob/master/packages/inference/README.md",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/inference"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "types": "./types-index.types.d.ts",
+  "exports": {
+    "./guards.js": "./src/guards.js",
+    "./limits.js": "./src/limits.js",
+    "./classify.js": "./src/classify.js",
+    "./prompt-origin-gate.js": "./src/prompt-origin-gate.js",
+    "./usage-recorder.js": "./src/usage-recorder.js",
+    "./types.js": {
+      "types": "./types-index.types.d.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "cover": "c8 ava",
+    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "yarn lint:eslint --fix",
+    "lint:eslint": "eslint '**/*.js'",
+    "lint:types": "tsc",
+    "prepack": "tsc --build tsconfig.build.json",
+    "postpack": "git clean -fX -e node_modules/",
+    "test": "ava",
+    "test:xs": "exit 0"
+  },
+  "dependencies": {
+    "@endo/errors": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
+    "@endo/exo": "workspace:^",
+    "@endo/patterns": "workspace:^",
+    "@endo/utf8": "workspace:^"
+  },
+  "devDependencies": {
+    "@endo/far": "workspace:^",
+    "@endo/init": "workspace:^",
+    "@endo/ses-ava": "workspace:^",
+    "ava": "catalog:dev",
+    "c8": "catalog:dev",
+    "eslint": "catalog:dev",
+    "typescript": "catalog:dev"
+  },
+  "files": [
+    "./*.d.ts",
+    "LICENSE*",
+    "SECURITY*",
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.js"
+    ],
+    "timeout": "2m"
+  }
+}

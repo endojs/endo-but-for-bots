@@ -1,0 +1,89 @@
+// @ts-check
+
+import { E } from '@endo/eventual-send';
+import { makeExo } from '@endo/exo';
+import { mustMatch } from '@endo/patterns';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+
+import { InferResultShape, InferenceBackendInterface } from './guards.js';
+
+/** @import { InferRequest, InferResult, InferenceBackend, UsageRecord, UsageSink } from './types.js' */
+
+/**
+ * Wraps a backend so that each classified result becomes one usage record
+ * handed to the deployment's usage sink. The result passes through
+ * unchanged.
+ *
+ * The recorder fills only what it observes: provider, backend kind, and
+ * version from the wrapped backend's `describe()`; prompt origin and formula
+ * identifier from the request; latency around `infer`; and the tag, turns,
+ * bytes, and token usage from the result. It cannot see inside the
+ * credential source, so the deployment, which makes one backend per
+ * credential, passes that credential's `secretId` at construction. The sink
+ * adds the run id and cost estimate when it writes.
+ *
+ * A wrapped backend that rejects breaks the `infer` contract; the rejection
+ * propagates and no record is written, because there is no classified result
+ * to record. So does a result that does not match `InferResultShape`,
+ * since the wrapped backend need not be guarded itself.
+ *
+ * @param {InferenceBackend} backend
+ * @param {object} options
+ * @param {string} options.secretId  the secret manager's identifier for the
+ *   backend's credential, never its bytes.
+ * @param {UsageSink} options.sink
+ * @param {() => number} options.now  milliseconds, such as `Date.now`.
+ * @param {(error: unknown) => void} [options.reportSinkError]  the sink owns
+ *   durability; a failed write is reported here and does not affect the
+ *   turn's result.
+ * @returns {InferenceBackend}
+ */
+export const makeUsageRecorder = (
+  backend,
+  { secretId, sink, now, reportSinkError = () => {} },
+) =>
+  makeExo('UsageRecorder', InferenceBackendInterface, {
+    describe() {
+      return backend.describe();
+    },
+    /**
+     * @param {InferRequest} request
+     * @returns {Promise<InferResult>}
+     */
+    async infer(request) {
+      const startedAt = now();
+      const result = await backend.infer(request);
+      mustMatch(harden(result), InferResultShape, 'backend result');
+      const latencyMs = Math.max(0, now() - startedAt);
+      const { provider, kind, version } = backend.describe();
+
+      /** @type {UsageRecord} */
+      const record = {
+        provider,
+        backendKind: kind,
+        secretId,
+        formulaIdentifier: request.guest.formulaIdentifier,
+        latencyMs,
+        resultType: result.type,
+      };
+      if (version !== undefined) record.backendVersion = version;
+      if (request.promptOrigin !== undefined) {
+        record.promptOrigin = request.promptOrigin;
+      }
+      if (result.type === 'unavailable') record.detail = result.detail;
+      if (result.type === 'limit-exceeded') record.detail = result.which;
+      if (result.type === 'ok') {
+        record.outputBytes = encodeUtf8(result.text).length;
+        if (result.usage !== undefined) {
+          record.usage = result.usage;
+          if (result.usage.turns !== undefined) {
+            record.turns = result.usage.turns;
+          }
+        }
+      }
+
+      E(sink).write(harden(record)).catch(reportSinkError);
+      return result;
+    },
+  });
+harden(makeUsageRecorder);

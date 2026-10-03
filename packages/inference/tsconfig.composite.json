@@ -6,12 +6,6 @@
   },
   "references": [
     {
-      "path": "../agent-tools/tsconfig.composite.json"
-    },
-    {
-      "path": "../bytes/tsconfig.composite.json"
-    },
-    {
       "path": "../errors/tsconfig.composite.json"
     },
     {
@@ -19,12 +13,6 @@
     },
     {
       "path": "../exo/tsconfig.composite.json"
-    },
-    {
-      "path": "../inference/tsconfig.composite.json"
-    },
-    {
-      "path": "../pass-style/tsconfig.composite.json"
     },
     {
       "path": "../patterns/tsconfig.composite.json"

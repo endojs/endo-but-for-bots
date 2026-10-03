@@ -5,12 +5,17 @@
 | **Created** | 2026-09-28 |
 | **Author** | kriscendobot (prompted) |
 | **Updated** | 2026-09-30 (revised per [review 5348050214](https://github.com/endojs/endo-but-for-bots/pull/1357#pullrequestreview-5348050214) and the design-panel rounds on PR #1357; Decision 11 settled per [review comment 4149077338](https://github.com/endojs/endo-but-for-bots/pull/1357#discussion_r4149077338)) |
-| **Status** | Draft, awaiting production evidence |
+| **Status** | In progress: phases 1 and 2 built and in review; later phases are design |
 | **Source** | Back-filled from the minion.town Claude CLI and Agent SDK experiments (kriscendobot/minion.town#105, kriscendobot/minion.town#106) and the production observations listed in § Evidence |
 
 ## Status
 
-Design only; nothing in this repository changes. This document amends
+Phases 1 and 2 are built, in review: `@endo/inference`
+([#1403](https://github.com/endojs/endo-but-for-bots/pull/1403)) and the
+`@endo/claude` CLI and Agent SDK backends
+([#1412](https://github.com/endojs/endo-but-for-bots/pull/1412)).
+The later phases remain design.
+This document amends
 [endo-claude](endo-claude.md) where the experiments contradicted or settled it,
 and leaves that design standing for the parts the experiments did not reach. It
 does not revive the closed amendment in
@@ -549,8 +554,14 @@ for designs that span several owners:
      credential in the grant's `env` as `ANTHROPIC_AUTH_TOKEN` (the path
      observed with a short-lived access token; the stored `setup-token` itself
      has not yet run through `--bare`). With built-ins removed the model
-     cannot read it, but the binary holds it. This is a documented residual,
-     acceptable only for a single-principal deployment (Decision 9).
+     cannot read it, but the binary holds it, and so does every stdio MCP
+     server the binary spawns, the guest's projection server included: that
+     server inherits the binary's whole environment (observed on 2.1.278 and
+     2.1.280,
+     [#1369](https://github.com/endojs/endo-but-for-bots/pull/1369) Gap 2).
+     This is a documented residual, acceptable only for a single-principal
+     deployment (Decision 9); the target delivery, which puts only a lease
+     token in that environment, closes both.
    - **Not `CLAUDE_CODE_OAUTH_TOKEN`.** `--bare` ignores it (observed,
      § Subscription credentials under `--bare`). `@endo/claude-sandbox`
      currently materializes exactly that variable in its slice under a
@@ -924,7 +935,10 @@ be linked here once it exists. Pull request:
    gate 8 on the canary, then gate 5, then pick the default Claude backend and
    update this document's Status with the measured comparison. Gate 8 needs the
    factory ([#1102](https://github.com/endojs/endo-but-for-bots/pull/1102),
-   still open). If #1102 is not ready, gates 2–5 proceed without it and gate 8
+   closed with changes requested, so no factory design is current).
+   That closure does not touch the `InferenceBackend` seam phases 1 and 2
+   build on.
+   Until a factory lands, gates 2–5 proceed without it and gate 8
    runs once it lands; until then the root backend keeps Decision 9's
    restriction to the root operator's direct prompts.
 5. **Broker delivery.** Claude as an `@endo/hosted-agent` provider: a loopback
@@ -987,6 +1001,14 @@ be linked here once it exists. Pull request:
       `promptOrigin` backstop label, have no structural check (no taint
       tracking). Gate 8 tests the factory's existing call paths, but a new call
       path is unverified until gate 8 is extended to it (Decision 9).
+- [ ] The phase-2 backends take a `maxBudgetUsd` maker option, forwarded as
+      `--max-budget-usd` (CLI) or `maxBudgetUsd` (SDK). It is a fourth,
+      per-backend ceiling outside `InferLimits`: the Claude Code binary
+      enforces it, not the limit enforcer, and the backend checks only that it
+      is a positive finite number. It is distinct from the admission-time
+      `budget-exhausted` refusal. No row of the pinned failure-shape table
+      names a mid-turn budget trip yet, so a trip reports `unavailable` until
+      gate 3 captures its shape against the pinned binary.
 - [ ] The secret manager's owning-principal column, needed before guests'
       credentials are partitioned from the operator's catalog. Guest
       bring-your-own-credential does not wait on it (Decision 11).

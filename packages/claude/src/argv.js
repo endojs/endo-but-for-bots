@@ -65,44 +65,43 @@ const FORBIDDEN_FLAGS = harden(['--resume', '--continue', '-r', '-c']);
  */
 
 /**
- * Build the confined `claude -p` argv from harness-owned tokens ONLY. The prompt
- * is NOT a parameter and appears at no index — it is delivered on stdin — so a
- * prompt can never be swallowed by an adjacent variadic flag.
+ * The confinement core shared by every confined `claude -p` argv: the five
+ * presence-required flags with their exact values, the generated MCP config and
+ * settings files, and the deny/allow tool lists. `buildArgv` and the inference
+ * backend's `buildCliArguments` (`confinement-options.js`) both compose this
+ * one recipe and append only their output-mode and limit flags, so a change to
+ * the confinement flags lands in exactly one place.
  *
- * Variadic flag values (`--mcp-config`, `--allowedTools`, `--disallowedTools`)
- * are emitted as a SINGLE comma-joined token each, so there is no multi-token
- * value run for a following positional to be swallowed into.
+ * Variadic flag values (`--allowedTools`, `--disallowedTools`) are emitted as a
+ * SINGLE comma-joined token each, so there is no multi-token value run for a
+ * following positional to be swallowed into.
  *
- * @param {ArgvSpec} spec
- * @returns {readonly string[]}
+ * It takes the confinement fields of an `ArgvSpec`; `model` and `maxTurns`
+ * are the callers' own flags and are not read here.
+ *
+ * @param {object} spec
+ * @param {string} spec.mcpConfigPath
+ * @param {string} spec.settingsPath
+ * @param {readonly string[]} spec.allowList
+ * @param {readonly string[]} [spec.disallowedTools]
+ * @returns {string[]}
  */
-export const buildArgv = spec => {
-  const {
-    mcpConfigPath,
-    settingsPath,
-    allowList,
-    model,
-    maxTurns,
-    disallowedTools = KNOWN_BUILTIN_TOOLS,
-  } = spec;
-
+export const buildConfinementFlags = ({
+  mcpConfigPath,
+  settingsPath,
+  allowList,
+  disallowedTools = KNOWN_BUILTIN_TOOLS,
+}) => {
   if (typeof mcpConfigPath !== 'string' || mcpConfigPath.length === 0) {
-    throw makeError(X`buildArgv: mcpConfigPath must be a non-empty string`);
+    throw makeError(X`mcpConfigPath must be a non-empty string`);
   }
   if (typeof settingsPath !== 'string' || settingsPath.length === 0) {
-    throw makeError(X`buildArgv: settingsPath must be a non-empty string`);
+    throw makeError(X`settingsPath must be a non-empty string`);
   }
   if (!Array.isArray(allowList) || allowList.length === 0) {
-    throw makeError(X`buildArgv: allowList must be a non-empty array`);
+    throw makeError(X`allowList must be a non-empty array`);
   }
-  if (typeof model !== 'string' || model.length === 0) {
-    throw makeError(X`buildArgv: model must be a non-empty string`);
-  }
-  if (!Number.isInteger(maxTurns) || maxTurns <= 0) {
-    throw makeError(X`buildArgv: maxTurns must be a positive integer`);
-  }
-
-  const argv = harden([
+  return [
     '--bare',
     '--mcp-config',
     mcpConfigPath,
@@ -118,6 +117,33 @@ export const buildArgv = spec => {
     [...disallowedTools].join(','),
     '--allowedTools',
     [...allowList].join(','),
+  ];
+};
+harden(buildConfinementFlags);
+
+/**
+ * Build the confined `claude -p` argv from harness-owned tokens ONLY. The prompt
+ * is NOT a parameter and appears at no index — it is delivered on stdin — so a
+ * prompt can never be swallowed by an adjacent variadic flag.
+ *
+ * The confinement flags come from `buildConfinementFlags`; this function
+ * appends only the model, the turn ceiling, and `-p`.
+ *
+ * @param {ArgvSpec} spec
+ * @returns {readonly string[]}
+ */
+export const buildArgv = spec => {
+  const { model, maxTurns } = spec;
+
+  if (typeof model !== 'string' || model.length === 0) {
+    throw makeError(X`buildArgv: model must be a non-empty string`);
+  }
+  if (!Number.isInteger(maxTurns) || maxTurns <= 0) {
+    throw makeError(X`buildArgv: maxTurns must be a positive integer`);
+  }
+
+  const argv = harden([
+    ...buildConfinementFlags(spec),
     '--model',
     model,
     '--max-turns',
