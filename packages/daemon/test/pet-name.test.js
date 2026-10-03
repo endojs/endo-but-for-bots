@@ -274,7 +274,7 @@ test('petNamePathFrom rejects an empty path', t => {
 
 // --- properties of namePathFrom and petNamePathFrom ---
 
-// Any string, including ones containing `/`, `@`, `\0`, and lone surrogates.
+// No string, however delimiter-like, may be split into a path.
 const anyStringArb = fc.string({ unit: 'binary', maxLength: 300 });
 
 const petNameArb = fc

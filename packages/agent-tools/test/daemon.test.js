@@ -94,7 +94,7 @@ test('makeDaemonEvaluate hardens the paths it passes to the daemon', async t => 
   t.true(Object.isFrozen(resultNamePath));
 });
 
-// Any string, including ones containing `/`, `@`, `\0`, and lone surrogates.
+// No string, however delimiter-like, may be split into a path.
 const anyStringArb = fc.string({ unit: 'binary', maxLength: 64 });
 
 const makeRecordingEvaluate = () => {

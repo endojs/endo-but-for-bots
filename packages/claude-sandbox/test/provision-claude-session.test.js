@@ -1,6 +1,7 @@
 // @ts-check
 import '@endo/init';
 import test from 'ava';
+import { namePathFrom } from '@endo/daemon/pet-name.js';
 
 import {
   provisionClaudeSession,
@@ -9,15 +10,9 @@ import {
 
 const keyFor = names => (Array.isArray(names) ? names.join('/') : names);
 
-// The daemon refuses a bare pet-name string; the fake does too, so a
-// regression to a string argument fails here rather than in production.
-const assertNamePath = namePath => {
-  if (!Array.isArray(namePath)) {
-    throw TypeError(
-      `expected a pet-name path, got ${JSON.stringify(namePath)}`,
-    );
-  }
-};
+// The daemon refuses a bare pet-name string; the fake validates with the
+// daemon's own `namePathFrom`, so a regression to a string argument fails here
+// rather than in production.
 
 /**
  * A mock `@agent` host that records the calls provisionClaudeSession makes and
@@ -36,8 +31,8 @@ const makeRecordingHost = () => {
       names.delete(keyFor(path));
     },
     async evaluate(_main, source, codeNames, petNames, resultName) {
-      petNames.forEach(assertNamePath);
-      assertNamePath(resultName);
+      petNames.forEach(namePathFrom);
+      namePathFrom(resultName);
       evaluateCalls.push({
         source,
         codeNames,
@@ -47,7 +42,7 @@ const makeRecordingHost = () => {
       names.add(keyFor(resultName));
     },
     async provideMount(path, name, options) {
-      assertNamePath(name);
+      namePathFrom(name);
       provideMountCalls.push({ path, name, options });
       names.add(keyFor(name));
       return harden({ kind: 'mount', path, name });
