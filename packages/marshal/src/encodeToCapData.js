@@ -25,17 +25,20 @@ import { X, Fail, q } from '@endo/errors';
 /**
  * Like `passStyleOf(val) === 'sturdyRef'`, but returns false rather than
  * throwing for a value that is not passable, since capdata tolerates
- * whatever `convertSlotToVal` returns for a 'slot'. Built directly on
- * `passStyleOf` (an existing `@endo/marshal` dependency) rather than
- * `@endo/sturdyref`'s own `isSturdyRef`, since `@endo/marshal` deliberately
- * keeps `@endo/sturdyref` as a devDependency only, used from test files.
+ * whatever `convertSlotToVal` returns for a 'slot'. A SturdyRef is always
+ * frozen, so an unfrozen value (such as an unhardened presence) is rejected
+ * without calling `passStyleOf`, and without allocating the error that
+ * `passStyleOf` would throw for it.
  *
  * @param {unknown} val
  * @returns {val is SturdyRef}
  */
-const isSturdyRef = val => {
+const isPassableSturdyRef = val => {
+  if (typeof val !== 'object' || val === null || !isFrozen(val)) {
+    return false;
+  }
   try {
-    return passStyleOf(val) === 'sturdyRef';
+    return passStyleOf(/** @type {Passable} */ (val)) === 'sturdyRef';
   } catch {
     return false;
   }
@@ -50,6 +53,7 @@ const {
   entries,
   fromEntries,
   freeze,
+  isFrozen,
   hasOwn,
 } = Object;
 
@@ -101,7 +105,8 @@ const dontEncodeRemotableToCapData = rem => Fail`remotable unexpected: ${rem}`;
 
 const dontEncodePromiseToCapData = prom => Fail`promise unexpected: ${prom}`;
 
-const dontEncodeSturdyRefToCapData = ref => Fail`sturdyRef unexpected: ${ref}`;
+const dontEncodeSturdyRefToCapData = sturdyRef =>
+  Fail`sturdyRef unexpected: ${sturdyRef}`;
 
 const dontEncodeErrorToCapData = err => Fail`error object unexpected: ${err}`;
 
@@ -441,7 +446,7 @@ export const makeDecodeFromCapData = (decodeOptions = {}) => {
           // a 'slot'. The slot cache is keyed only by index, so without this
           // check a SturdyRef decoded under a 'sturdyRef' tag could be
           // reused under a 'slot' tag for the same index.
-          !isSturdyRef(decoded) ||
+          !isPassableSturdyRef(decoded) ||
             Fail`a sturdyRef cannot be decoded as a slot: ${decoded}`;
           return decoded;
         }
@@ -456,7 +461,7 @@ export const makeDecodeFromCapData = (decodeOptions = {}) => {
           if (passStyleOf(decoded) === 'sturdyRef') {
             return decoded;
           }
-          throw Fail`internal: decodeSturdyRefFromCapData option must return a sturdyRef: ${decoded}`;
+          throw Fail`a sturdyRef encoding must decode to a sturdyRef: ${decoded}`;
         }
         case 'error': {
           const decoded = decodeErrorFromCapData(
