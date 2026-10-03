@@ -290,8 +290,6 @@ jobs:
 
       # The @endo/claude bwrap slice: fail rather than skip, since this job
       # installs bubblewrap and lifts the user-namespace restriction.
-      # @endo/claude has no sandbox driver; it shares this job only for the
-      # bubblewrap provisioning above.
       - name: Run claude bwrap slice tests
         env:
           ENDO_CLAUDE_REQUIRE_BWRAP: '1'
