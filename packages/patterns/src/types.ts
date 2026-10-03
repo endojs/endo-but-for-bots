@@ -73,8 +73,8 @@ export type { FullCompare } from '@endo/marshal';
  *    contain more than one key.
  */
 export type Key = Exclude<
-  Passable<RemotableObject | RemotableBrand<any, any>, never>,
-  Error | Promise<any> | SturdyRef
+  Passable<RemotableObject | RemotableBrand<any, any>, never, never>,
+  Error | Promise<any>
 >;
 
 export type ScalarKey = Atom | RemotableObject | RemotableBrand<any, any>;

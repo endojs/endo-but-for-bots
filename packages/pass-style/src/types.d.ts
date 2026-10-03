@@ -42,7 +42,7 @@ export type PrimitiveStyle = AtomStyle;
 export type ContainerStyle = 'copyRecord' | 'copyArray' | 'tagged';
 
 export type PassStyle =
-  AtomStyle | ContainerStyle | 'remotable' | 'error' | 'promise' | 'parcel';
+  AtomStyle | ContainerStyle | 'remotable' | 'error' | 'promise' | 'sturdyRef';
 
 export type PassStyleMarker = 'tagged' | 'remotable';
 
@@ -60,10 +60,6 @@ export type ExtractStyle<P extends PassStyled<any, any>> = P[typeof PASS_STYLE];
 
 export type PassByCopy = Atom | Error | CopyArray | CopyRecord | CopyTagged;
 
-/**
- * Excludes `ParcelObject`, which is passed by identity but, like its
- * exclusion from `PassableCap`, has no marshal slot representation yet.
- */
 export type PassByRef =
   | RemotableObject
   | RemotableBrand<any, any>
@@ -88,9 +84,6 @@ export type PassByRef =
  *     remote interaction.
  *   * As a special case to support system observability, error objects are
  *     Passable (PassStyle 'error').
- *   * Parcels (PassStyle 'parcel') are Passable by identity, like
- *     PassableCaps, but are not PassableCaps: marshal has no slot
- *     representation for them yet.
  *
  * A Passable is essentially a pass-by-copy superstructure with a
  * pass-by-reference
@@ -100,24 +93,32 @@ export type PassByRef =
 export type Passable<
   PC extends PassableCap = PassableCap,
   E extends Error = Error,
-> = void | Atom | Container<PC, E> | PC | E | ParcelObject;
+  PO extends ParcelObject = ParcelObject,
+> = void | Atom | Container<PC, E, PO> | PC | E | PO;
 
-export type Container<PC extends PassableCap, E extends Error> =
-  | CopyArrayInterface<PC, E>
-  | CopyRecordInterface<PC, E>
-  | CopyTaggedInterface<PC, E>;
+export type Container<
+  PC extends PassableCap,
+  E extends Error,
+  PO extends ParcelObject = ParcelObject,
+> =
+  | CopyArrayInterface<PC, E, PO>
+  | CopyRecordInterface<PC, E, PO>
+  | CopyTaggedInterface<PC, E, PO>;
 export interface CopyArrayInterface<
   PC extends PassableCap,
   E extends Error,
-> extends CopyArray<Passable<PC, E>> {}
+  PO extends ParcelObject = ParcelObject,
+> extends CopyArray<Passable<PC, E, PO>> {}
 export interface CopyRecordInterface<
   PC extends PassableCap,
   E extends Error,
-> extends CopyRecord<Passable<PC, E>> {}
+  PO extends ParcelObject = ParcelObject,
+> extends CopyRecord<Passable<PC, E, PO>> {}
 export interface CopyTaggedInterface<
   PC extends PassableCap,
   E extends Error,
-> extends CopyTagged<string, Passable<PC, E>> {}
+  PO extends ParcelObject = ParcelObject,
+> extends CopyTagged<string, Passable<PC, E, PO>> {}
 
 export type PassStyleOf = {
   (p: undefined): 'undefined';
@@ -130,7 +131,7 @@ export type PassStyleOf = {
   (p: Promise<any>): 'promise';
   (p: Error): 'error';
   (p: CopyTagged): 'tagged';
-  (p: ParcelObject): 'parcel';
+  (p: ParcelObject): 'sturdyRef';
   (p: readonly any[]): 'copyArray';
   // A `Uint8Array` is also `Iterable<number>`; place its byteArray
   // overload before the Iterable-as-remotable fallback so the more
@@ -193,13 +194,15 @@ export type RemotableObject<I extends InterfaceSpec = string> = PassStyled<
 export type RemotableMethodName = PropertyKey;
 
 /**
- * A Parcel is passable, analogous to a presence: it has object identity and
- * no data. This mirrors the `Parcel` type of `@endo/parcel`, which
- * pass-style cannot import without a dependency cycle; `types.test-d.ts`
- * checks that the two stay in step.
+ * A ParcelObject is passable, analogous to a presence: it has object identity and
+ * no data. `passStyleOf` returns `'sturdyRef'` for a value that the realm's
+ * `ParcelObject.isParcelObject` brand check accepts (see `@endo/sturdyref`). The ref
+ * is frozen, has no own properties, and inherits only `constructor` and
+ * `Symbol.toStringTag` from `ParcelObject.prototype`. What it refers to is known
+ * only to the handler it was constructed with.
  */
 export interface ParcelObject {
-  readonly [Symbol.toStringTag]: 'Parcel';
+  readonly [Symbol.toStringTag]: 'ParcelObject';
 }
 
 /**
