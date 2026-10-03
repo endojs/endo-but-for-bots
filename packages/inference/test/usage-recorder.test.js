@@ -277,6 +277,27 @@ test('a throwing describe rejects before the turn starts', async t => {
   t.is(records.length, 0);
 });
 
+test('a throwing sink-error reporter does not escape', async t => {
+  const { backend } = makeRecordingBackend(harden({ type: 'ok', text: 'x' }));
+  let reports = 0;
+  const recorder = makeUsageRecorder(backend, {
+    secretIdentifier: 'secret:a',
+    sink: harden({
+      write: () => {
+        throw Error('ledger offline');
+      },
+    }),
+    now: makeSteppingClock(),
+    reportSinkError: () => {
+      reports += 1;
+      throw Error('reporter broken');
+    },
+  });
+  t.deepEqual(await recorder.infer(makeRequest()), { type: 'ok', text: 'x' });
+  await settle();
+  t.is(reports, 1);
+});
+
 test('a clock that steps backward records zero latency', async t => {
   const { backend } = makeRecordingBackend(harden({ type: 'needs-auth' }));
   const { records, sink } = makeSink();

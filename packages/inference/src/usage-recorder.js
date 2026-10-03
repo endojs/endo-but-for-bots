@@ -52,7 +52,7 @@ const utf8ByteLength = text => textEncoder.encode(text).length;
  * @param {() => number} options.now  milliseconds, such as `Date.now`.
  * @param {(error: unknown) => void} [options.reportSinkError]  the sink owns
  *   durability; a failed write is reported here and does not affect the
- *   turn's result.
+ *   turn's result. A throw from this reporter is swallowed.
  * @returns {InferenceBackend}
  */
 export const makeUsageRecorder = (
@@ -101,7 +101,15 @@ export const makeUsageRecorder = (
         }
       }
 
-      E(sink).write(harden(record)).catch(reportSinkError);
+      E(sink)
+        .write(harden(record))
+        .catch(error => {
+          try {
+            reportSinkError(error);
+          } catch {
+            // A throwing reporter must not become an unhandled rejection.
+          }
+        });
       return result;
     },
   });
