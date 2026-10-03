@@ -9,9 +9,13 @@ import url from 'node:url';
 import test from 'ava';
 import { fc } from '@fast-check/ava';
 import { E } from '@endo/eventual-send';
+import { makeLoopback } from '@endo/captp';
+import { Far } from '@endo/far';
 
 import { makeLocalTree } from '../src/fs-node/local-tree.js';
 import { makeTreeReadPowers } from '../src/fs/tree-read-powers.js';
+
+/** @import { MaybeReadPowers } from '@endo/compartment-mapper' */
 
 const decoder = new TextDecoder();
 
@@ -166,7 +170,11 @@ const escapes = [
   'file:///app/node_modules/../../outside',
   'file:///app/%2e%2e/outside',
   'file:///app/./main.js',
-  'file:///app//main.js',
+  'file:///app/.\t./outside',
+  'file:///app/.\n./outside',
+  'file:///app/.\r./outside',
+  'file:///app/main.js\t',
+  'file:///app/\uD800.js',
   'file:///app/node_modules%2F..%2F..%2Foutside',
   'file:///app/node_modules%2f..%2f..%2foutside',
   'file:///app/node_modules%5C..%5Coutside',
@@ -230,7 +238,9 @@ test('maybeRead returns undefined for a directory, and read refuses it', async t
 test('scoped and punctuated package names keep their spelling', async t => {
   const tree = makeLocalTree(makeFixture(t));
   const plain = makeTreeReadPowers(tree);
-  const hooked = makeTreeReadPowers(tree, { canonical: segments => segments });
+  const hooked = makeTreeReadPowers(tree, {
+    canonicalSegments: segments => segments,
+  });
   const locations = [
     'file:///app/node_modules/@scope/p+q/',
     'file:///app/node_modules/@scope/p+q/index.js',
@@ -254,7 +264,7 @@ test('canonical reads a hook result once, ignoring a map override', async t => {
   const powers = makeTreeReadPowers(makeLocalTree(makeFixture(t)), {
     // Under lockdown `map` is a read-only inherited property, so the override
     // is defined rather than assigned.
-    canonical: () =>
+    canonicalSegments: () =>
       Object.defineProperty(['ok'], 'map', {
         value: () => ['..', 'outside'],
       }),
@@ -262,7 +272,7 @@ test('canonical reads a hook result once, ignoring a map override', async t => {
   t.is(await powers.canonical('file:///app/main.js'), 'file:///app/ok');
   let reads = 0;
   const shifty = makeTreeReadPowers(makeLocalTree(makeFixture(t)), {
-    canonical: () => {
+    canonicalSegments: () => {
       const result = ['ok'];
       Object.defineProperty(result, 0, {
         get: () => {
@@ -325,6 +335,10 @@ const pathFragment = fc.constantFrom(
   '%00',
   '\\',
   '\0',
+  '\t',
+  '\n',
+  '\r',
+  '.\t.',
   '/',
   'main.js',
   'node_modules',
@@ -341,7 +355,8 @@ const isSafeSegment = segment =>
   segment !== '..' &&
   !segment.includes('/') &&
   !segment.includes('\\') &&
-  !segment.includes('\0');
+  // eslint-disable-next-line no-control-regex
+  !/[\u0000-\u001f\u007f]/.test(segment);
 
 test('every lookup names only validated segments, for any composed location', async t => {
   const appPath = makeFixture(t);
@@ -412,7 +427,7 @@ posixTest(
     const tree = makeLocalTree(makeFixture(t));
     const plain = makeTreeReadPowers(tree);
     const hooked = makeTreeReadPowers(tree, {
-      canonical: segments => segments,
+      canonicalSegments: segments => segments,
     });
     await fc.assert(
       fc.asyncProperty(
@@ -552,7 +567,7 @@ test('canonical defaults to the identity on segments', async t => {
 test('canonical applies the hook and confines its result', async t => {
   const tree = makeLocalTree(makeFixture(t));
   const powers = makeTreeReadPowers(tree, {
-    canonical: segments =>
+    canonicalSegments: segments =>
       segments[0] === 'linked'
         ? ['node_modules', ...segments.slice(1)]
         : segments,
@@ -562,7 +577,7 @@ test('canonical applies the hook and confines its result', async t => {
     'file:///app/node_modules/dep/',
   );
   const escaping = makeTreeReadPowers(tree, {
-    canonical: () => ['..', 'outside'],
+    canonicalSegments: () => ['..', 'outside'],
   });
   await t.throwsAsync(() => escaping.canonical('file:///app/main.js'), {
     message: /Relative path segment/,
@@ -595,7 +610,7 @@ test('the tree root and non-string locations are refused', async t => {
 test('canonical refuses a hook result that is not an array', async t => {
   const powers = makeTreeReadPowers(makeLocalTree(makeFixture(t)), {
     // @ts-expect-error deliberately not an array
-    canonical: () => 'node_modules',
+    canonicalSegments: () => 'node_modules',
   });
   await t.throwsAsync(() => powers.canonical('file:///app/main.js'), {
     message: /canonical hook must return an array of segments/,
@@ -605,7 +620,7 @@ test('canonical refuses a hook result that is not an array', async t => {
 test('canonical refuses a hook result with a non-string segment', async t => {
   const powers = makeTreeReadPowers(makeLocalTree(makeFixture(t)), {
     // @ts-expect-error deliberately not a string segment
-    canonical: () => ['node_modules', 42],
+    canonicalSegments: () => ['node_modules', 42],
   });
   await t.throwsAsync(() => powers.canonical('file:///app/main.js'), {
     message: /non-string segment/,
@@ -639,7 +654,7 @@ test('the root refuses malformed and separator escapes', t => {
 
 test('a lone surrogate is refused as a tree error, not a URIError', async t => {
   const powers = makeTreeReadPowers(makeLocalTree(makeFixture(t)), {
-    canonical: () => ['\uD800'],
+    canonicalSegments: () => ['\uD800'],
   });
   const error = await t.throwsAsync(() =>
     powers.canonical('file:///app/main.js'),
@@ -649,4 +664,147 @@ test('a lone surrogate is refused as a tree error, not a URIError', async t => {
   t.throws(() => powers.pathToFileURL('/app/\uD800'), {
     message: /Unencodable path segment/,
   });
+});
+
+test('the returned powers satisfy the compartment-mapper contract', t => {
+  /** @type {MaybeReadPowers<string>} */
+  const powers = makeTreeReadPowers(makeLocalTree(makeFixture(t)));
+  t.is(typeof powers.maybeRead, 'function');
+});
+
+test('read and maybeRead work against a tree in another vat', async t => {
+  const { makeFar } = makeLoopback('tree-read-powers');
+  const tree = await makeFar(makeLocalTree(makeFixture(t)));
+  const powers = makeTreeReadPowers(tree);
+  t.is(
+    decoder.decode(await powers.read('file:///app/node_modules/dep/index.js')),
+    'export default 2;',
+  );
+  t.is(
+    decoder.decode(await powers.maybeRead('file:///app/main.js')),
+    'export default 1;',
+  );
+  t.is(await powers.maybeRead('file:///app/missing.js'), undefined);
+  t.is(await powers.maybeRead('file:///app/main.js/x'), undefined);
+  t.is(await powers.maybeRead('file:///app/lib'), undefined);
+});
+
+test('every segment array passed to a lookup is frozen', async t => {
+  const { spy, calls } = makeSpyTree(makeLocalTree(makeFixture(t)));
+  const powers = makeTreeReadPowers(spy);
+  await powers.read('file:///app/lib/index.js');
+  await powers.maybeRead('file:///app/main.js');
+  await powers.maybeRead('file:///app/lib/missing.js');
+  const arrays = calls
+    .filter(([method, names]) => method === 'lookup' && Array.isArray(names))
+    .map(([, names]) => names);
+  t.true(arrays.length > 0);
+  for (const names of arrays) {
+    t.true(Object.isFrozen(names));
+  }
+});
+
+test('a lone surrogate in a location is refused before any lookup', async t => {
+  const { spy, calls } = makeSpyTree(makeLocalTree(makeFixture(t)));
+  const powers = makeTreeReadPowers(spy);
+  const location = 'file:///app/\uD800.js';
+  await t.throwsAsync(() => powers.read(location), {
+    message: /Unencodable path segment/,
+  });
+  await t.throwsAsync(() => powers.maybeRead(location), {
+    message: /Unencodable path segment/,
+  });
+  t.throws(() => powers.fileURLToPath(location), {
+    message: /Unencodable path segment/,
+  });
+  t.deepEqual(calls, []);
+});
+
+test('raw tab, LF, and CR in a location are refused', async t => {
+  const { spy, calls } = makeSpyTree(makeLocalTree(makeFixture(t)));
+  const powers = makeTreeReadPowers(spy);
+  for (const location of [
+    'file:///app/.\t./x',
+    'file:///app/ma\nin.js',
+    'file:///app/main.js\r',
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => powers.read(location), {
+      message: /Unsupported characters/,
+    });
+  }
+  t.deepEqual(calls, []);
+});
+
+test('empty segments collapse, as Node reads them', async t => {
+  const { spy, calls } = makeSpyTree(makeLocalTree(makeFixture(t)));
+  const powers = makeTreeReadPowers(spy);
+  t.is(
+    decoder.decode(await powers.read('file:///app/lib//index.js')),
+    'export default 3;',
+  );
+  t.is(
+    decoder.decode(await powers.maybeRead('file:///app//main.js')),
+    'export default 1;',
+  );
+  t.is(await powers.maybeRead('file:///app/lib//missing.js'), undefined);
+  t.is(
+    await powers.canonical('file:///app/lib//index.js'),
+    'file:///app/lib/index.js',
+  );
+  t.is(powers.fileURLToPath('file:///app/lib//index.js'), '/app/lib/index.js');
+  t.is(
+    powers.pathToFileURL('/app/lib//index.js').href,
+    'file:///app/lib/index.js',
+  );
+  for (const [, names] of calls) {
+    const segments = Array.isArray(names) ? names : [names];
+    t.false(segments.includes(''));
+  }
+});
+
+test('an escaped percent sign names a literal segment', async t => {
+  const { spy, calls } = makeSpyTree(makeLocalTree(makeFixture(t)));
+  const powers = makeTreeReadPowers(spy);
+  t.is(await powers.maybeRead('file:///app/a%252fb'), undefined);
+  t.deepEqual(calls[0], ['lookup', ['a%2fb']]);
+});
+
+test('a canonical hook may name the root but not an empty segment', async t => {
+  const tree = makeLocalTree(makeFixture(t));
+  const rooted = makeTreeReadPowers(tree, { canonicalSegments: () => [] });
+  t.is(await rooted.canonical('file:///app/main.js'), 'file:///app/');
+  const empty = makeTreeReadPowers(tree, {
+    canonicalSegments: () => ['lib', ''],
+  });
+  await t.throwsAsync(() => empty.canonical('file:///app/main.js'), {
+    message: /empty segment/,
+  });
+});
+
+test('an entry with kind() is classified by kind', async t => {
+  const local = makeLocalTree(makeFixture(t));
+  const file = await E(local).lookup('main.js');
+  // A directory that also offers a byte reader is still a directory.
+  const directory = Far('directory', {
+    kind: async () => 'directory',
+    streamBase64: (...args) => E(file).streamBase64(...args),
+  });
+  const plainFile = Far('file', {
+    kind: async () => 'file',
+    streamBase64: (...args) => E(file).streamBase64(...args),
+  });
+  const tree = harden({
+    has: async name => name === 'd' || name === 'f',
+    list: async () => ['d', 'f'],
+    lookup: async names => {
+      const [name] = Array.isArray(names) ? names : [names];
+      if (name === 'd') return directory;
+      if (name === 'f') return plainFile;
+      throw Error('missing');
+    },
+  });
+  const powers = makeTreeReadPowers(tree);
+  t.is(await powers.maybeRead('file:///app/d'), undefined);
+  t.is(decoder.decode(await powers.read('file:///app/f')), 'export default 1;');
 });

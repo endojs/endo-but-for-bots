@@ -17,6 +17,8 @@
  * search for a `node_modules` directory can climb past the root and find
  * nothing there.
  *
+ * The module needs a host `URL` global, which Node and browsers provide.
+ *
  * This module is a dedicated subpath rather than a re-export of
  * `@endo/platform/fs/lite`, so a caller that only needs trees does not pull in
  * the compartment-mapper contract, and a capture host does not pull in the
@@ -30,25 +32,33 @@ import { collectBytes } from './extended/helpers.js';
 
 /**
  * @import { ERef } from '@endo/eventual-send';
- * @import { MaybeReadPowers } from '@endo/compartment-mapper';
- * @import { ReadableTree } from './types.js';
+ * @import { ReadableTree, TreeReadPowers } from './types.js';
  */
 
 const defaultRoot = 'file:///app/';
 
 /**
- * Percent-encoded forms of the path separators and of the NUL byte. A segment
- * carrying one of them would decode into a separator that the split did not
- * see, so it is refused in its raw form.
+ * Percent-encoded forms of the path separators and of the NUL byte, refused in
+ * the root. A location's segments need no such check: `decodeSegment` refuses
+ * a separator or NUL after decoding, which catches both spellings.
  */
 const encodedSeparatorPattern = /%(?:2f|5c|00)/i;
+
+/**
+ * Raw C0 controls and DEL. The URL parser strips tab, LF, and CR, so a
+ * location carrying them would name one file to the parser and another to
+ * the tree.
+ */
+// eslint-disable-next-line no-control-regex
+const controlPattern = /[\u0000-\u001f\u007f]/;
 
 /**
  * Characters that `encodeURIComponent` escapes but that Node's
  * `pathToFileURL` leaves alone. This follows Node, not the WHATWG path
  * percent-encode set: Node escapes characters such as `[`, `]`, `^`, `|`, and
- * `~` that WHATWG would leave alone. The tests pin the expected encodings, so
- * a change in Node's escaping shows up as a failure.
+ * `~` that WHATWG would leave alone. The pinned encodings were confirmed on
+ * Node 22 and 24, the versions CI runs; the tests pin them, so a change in
+ * Node's escaping shows up as a failure.
  */
 const pathSafeEscapes = /%(?:24|26|2B|2C|3A|3B|3D|40)/g;
 
@@ -75,22 +85,15 @@ const encodeSegment = segment => {
 
 /**
  * Validate one raw (still percent-encoded) path segment and return its decoded
- * form. Refuses empty, `.`, and `..` segments, and any segment that names or
- * encodes a separator or a NUL byte, whether raw or percent-encoded.
+ * form. Refuses `.` and `..` segments, any segment that names or encodes a
+ * separator or a NUL byte, and any segment with no UTF-8 encoding (a lone
+ * surrogate, raw or decoded).
  *
  * @param {string} raw
  * @param {string} location
  * @returns {string}
  */
 const decodeSegment = (raw, location) => {
-  if (raw === '') {
-    throw makeError(X`Empty path segment in tree location ${q(location)}`);
-  }
-  if (encodedSeparatorPattern.test(raw)) {
-    throw makeError(
-      X`Encoded separator in tree location segment ${q(raw)} of ${q(location)}`,
-    );
-  }
   let segment;
   try {
     segment = decodeURIComponent(raw);
@@ -102,6 +105,8 @@ const decodeSegment = (raw, location) => {
       X`Relative path segment ${q(segment)} in tree location ${q(location)}`,
     );
   }
+  // The one guard against separators: it sees the decoded segment, so it
+  // catches a raw `\\` and the `%2f`, `%5c`, and `%00` escapes alike.
   if (
     segment.includes('/') ||
     segment.includes('\\') ||
@@ -111,6 +116,9 @@ const decodeSegment = (raw, location) => {
       X`Separator or NUL in path segment ${q(segment)} of ${q(location)}`,
     );
   }
+  // `decodeURIComponent` leaves a raw lone surrogate alone, so check that the
+  // segment has an encoding, as `canonical` and `pathToFileURL` need.
+  encodeSegment(segment);
   return segment;
 };
 
@@ -147,8 +155,10 @@ const assertRoot = root => {
 };
 
 /**
- * A file has a byte reader; a directory does not. The one test of which kind
- * an entry is, shared by `read`, `maybeRead`, and the absence walk.
+ * Whether an entry is a file rather than a directory, decided as
+ * `checkinTree` does: by `kind()` when the entry has it, and otherwise by
+ * whether it has a byte reader. The one test shared by `read`, `maybeRead`,
+ * and the absence walk.
  *
  * @param {unknown} entry
  * @returns {Promise<boolean>}
@@ -156,6 +166,9 @@ const assertRoot = root => {
 const isFile = async entry => {
   // eslint-disable-next-line no-underscore-dangle
   const methods = await E(/** @type {any} */ (entry)).__getMethodNames__();
+  if (methods.includes('kind')) {
+    return (await E(/** @type {any} */ (entry)).kind()) === 'file';
+  }
   return methods.includes('streamBase64');
 };
 
@@ -165,7 +178,7 @@ const isFile = async entry => {
  *   at; must end in `/`.
  * @property {(
  *   segments: readonly string[],
- * ) => readonly string[] | Promise<readonly string[]>} [canonical]
+ * ) => readonly string[] | Promise<readonly string[]>} [canonicalSegments]
  *   - map the decoded segments of a location under the root to the decoded
  *   segments of its canonical location under the same root. The hook receives
  *   a hardened copy and may return a new array (an empty array names the root
@@ -180,15 +193,6 @@ const isFile = async entry => {
  */
 
 /**
- * Compartment-mapper `MaybeReadPowers` with the path codec it makes optional,
- * so `tsc` checks the result against the contract it is passed to.
- *
- * @typedef {MaybeReadPowers<string> &
- *   Required<Pick<MaybeReadPowers<string>, 'fileURLToPath' | 'pathToFileURL'>>
- * } TreeReadPowers
- */
-
-/**
  * Make compartment-mapper `ReadPowers` (`read`, `maybeRead`, `canonical`,
  * `fileURLToPath`, `pathToFileURL`) over a `ReadableTree`. To read a `Mount`,
  * pass `mount.readOnly()` or `await mount.snapshot()`.
@@ -198,11 +202,15 @@ const isFile = async entry => {
  * @returns {TreeReadPowers} the hardened read powers
  */
 export const makeTreeReadPowers = (tree, options = {}) => {
-  const { root = defaultRoot, canonical: canonicalSegments } = options;
+  const { root = defaultRoot, canonicalSegments } = options;
   assertRoot(root);
   const rootPath = decodeURIComponent(new URL(root).pathname);
 
   /**
+   * Not `isPathWithin` from `confinement.js`: that compares realpaths with
+   * no trailing `/`, so it would count `file:///app` as within
+   * `file:///app/`, and this root is a URL whose last character is `/`.
+   *
    * @param {unknown} location
    * @returns {location is string}
    */
@@ -210,36 +218,40 @@ export const makeTreeReadPowers = (tree, options = {}) => {
     typeof location === 'string' && location.startsWith(root);
 
   /**
-   * Parse a location into validated, decoded segments below the root.
+   * Parse a location into validated, decoded segments below the root. Empty
+   * segments collapse, as Node's `fs` reads `lib//index.js` as
+   * `lib/index.js`. The result is hardened here, rather than relying on
+   * `E` to harden it in transit, so a tree cannot change the segments
+   * between validation and use, in this vat or another.
    *
    * @param {string} location
-   * @returns {string[]}
+   * @returns {readonly string[]}
    */
   const toSegments = location => {
     if (typeof location !== 'string') {
       throw makeError(X`Tree location must be a string, got ${q(location)}`);
     }
-    if (!location.startsWith(root)) {
+    if (!isUnderRoot(location)) {
       throw makeError(
         X`Tree location ${q(location)} is not under root ${q(root)}`,
       );
     }
     const rest = location.slice(root.length);
-    if (rest.includes('?') || rest.includes('#') || rest.includes('\\')) {
+    if (rest.includes('?') || rest.includes('#') || controlPattern.test(rest)) {
       throw makeError(
         X`Unsupported characters in tree location ${q(location)}`,
       );
     }
-    if (rest === '') {
-      return [];
-    }
-    // A trailing slash names a directory; its segments are those before it.
-    const body = rest.endsWith('/') ? rest.slice(0, -1) : rest;
-    return body.split('/').map(raw => decodeSegment(raw, location));
+    return harden(
+      rest
+        .split('/')
+        .filter(raw => raw !== '')
+        .map(raw => decodeSegment(raw, location)),
+    );
   };
 
   /**
-   * @param {string[]} segments
+   * @param {readonly string[]} segments
    * @param {boolean} directory
    */
   const toLocation = (segments, directory) =>
@@ -248,7 +260,7 @@ export const makeTreeReadPowers = (tree, options = {}) => {
     }`;
 
   /**
-   * @param {string[]} segments
+   * @param {readonly string[]} segments
    */
   const readSegments = async segments => {
     if (segments.length === 0) {
@@ -286,7 +298,12 @@ export const makeTreeReadPowers = (tree, options = {}) => {
    * throws there. Here such a path is absent: a tree has no ENOTDIR, and the
    * compartment mapper probes candidates that may pass through a file.
    *
-   * @param {string[]} segments
+   * Over CapTP this walk costs dependent round trips per segment, but only a
+   * failed lookup pays for it. A single `has(...segments)` cannot replace it:
+   * not every tree answers `has` for a whole path (the Node `makeLocalTree`
+   * checks only the first name).
+   *
+   * @param {readonly string[]} segments
    * @returns {Promise<boolean>}
    */
   const isAbsent = async segments => {
@@ -401,7 +418,11 @@ export const makeTreeReadPowers = (tree, options = {}) => {
           X`canonical hook returned a non-string segment ${q(segment)}`,
         );
       }
-      // The hook's result is held to the same rule as any location.
+      // The hook's result is held to the same rule as any location, and
+      // an empty segment, which a location collapses, is refused outright.
+      if (segment === '') {
+        throw makeError(X`canonical hook returned an empty segment`);
+      }
       decodeSegment(encodeSegment(segment), location);
     }
     return toLocation(/** @type {string[]} */ (snapshot), directory);
@@ -412,7 +433,7 @@ export const makeTreeReadPowers = (tree, options = {}) => {
    * @returns {string}
    */
   const fileURLToPath = url => {
-    const location = url instanceof URL ? url.href : url;
+    const location = typeof url === 'string' ? url : url.href;
     const segments = toSegments(location);
     return `${rootPath}${segments.join('/')}${
       segments.length > 0 && location.endsWith('/') ? '/' : ''
@@ -428,10 +449,12 @@ export const makeTreeReadPowers = (tree, options = {}) => {
       throw makeError(X`Path ${q(path)} is not under root ${q(rootPath)}`);
     }
     const location = toLocation(
-      path
-        .slice(rootPath.length)
-        .split('/')
-        .filter(segment => segment !== ''),
+      harden(
+        path
+          .slice(rootPath.length)
+          .split('/')
+          .filter(segment => segment !== ''),
+      ),
       path.endsWith('/'),
     );
     toSegments(location);
