@@ -155,7 +155,11 @@ export const runMultiplayerSuite = ({ test, network }) => {
     );
     closed.catch(() => {});
     const bootstrap = getBootstrap();
-    return { host: E(bootstrap).host() };
+    // A test that never awaits `host` can finish before the answer arrives; the
+    // teardown disconnect then rejects it ("Termination requested") unobserved.
+    const host = E(bootstrap).host();
+    host.catch(() => {});
+    return { host };
   };
 
   const prepareHostWithGcAndNetwork = async t => {

@@ -121,7 +121,11 @@ const provisionHostContext = async t => {
     // delete races the same background packing (see `removeRepoTree`).
     await removeRepoTree(root);
   });
-  return { host: E(getBootstrap()).host(), config };
+  // A test that never awaits `host` can finish before the answer arrives; the
+  // teardown disconnect then rejects it ("Termination requested") unobserved.
+  const host = E(getBootstrap()).host();
+  host.catch(() => {});
+  return { host, config };
 };
 
 /**

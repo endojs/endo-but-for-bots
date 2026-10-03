@@ -101,7 +101,11 @@ const makeHost = async (config, cancelled) => {
   const bootstrap = getBootstrap();
   /** @param {Error} err */
   const getErrorId = err => inboundErrorIds.get(err);
-  return { host: E(bootstrap).host(), getErrorId };
+  // A test that never awaits `host` can finish before the answer arrives; the
+  // teardown disconnect then rejects it ("Termination requested") unobserved.
+  const host = E(bootstrap).host();
+  host.catch(() => {});
+  return { host, getErrorId };
 };
 
 test.beforeEach(t => {
