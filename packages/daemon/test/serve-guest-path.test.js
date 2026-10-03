@@ -19,13 +19,15 @@ const noConnections = async () => [];
 /**
  * @param {object} [options]
  * @param {string} [options.directory]
- * @param {(path: string) => Promise<unknown>} [options.servePath]
+ * @param {(path: string, cancelled: Promise<never>) => Promise<unknown>} [options.servePath]
  * @param {(directory: string) => Promise<void>} [options.makePrivateDirectory]
+ * @param {Promise<never>} [options.cancelled] - the daemon's cancellation.
  */
 const makeHarness = ({
   directory = '/run/guests',
   servePath = noConnections,
   makePrivateDirectory = async () => {},
+  cancelled = /** @type {Promise<never>} */ (new Promise(() => {})),
 } = {}) => {
   /** @type {string[]} */
   const served = [];
@@ -35,7 +37,6 @@ const makeHarness = ({
   const reported = [];
   /** @type {Promise<never>[]} */
   const cancellations = [];
-  const cancelled = /** @type {Promise<never>} */ (new Promise(() => {}));
   const issuer = makeGuestPathIssuer({
     directory,
     socketPathFor: name => `${directory}/${name}`,
@@ -52,7 +53,7 @@ const makeHarness = ({
       ) => {
         served.push(path);
         cancellations.push(serviceCancelled);
-        return servePath(path);
+        return servePath(path, serviceCancelled);
       }
     ),
     cancelled,
@@ -187,4 +188,48 @@ test('a revoked guest no longer holds its socket name', async t => {
 test('revoking a guest that holds no socket does nothing', t => {
   const { issuer } = makeHarness();
   t.notThrows(() => issuer.revoke(numberA, Error('collected')));
+});
+
+// A listener whose connection stream ends with its service's cancellation, as
+// a real listener's does.
+/**
+ * @param {string} _path
+ * @param {Promise<never>} serviceCancelled
+ */
+const endsWithCancellation = async (_path, serviceCancelled) => ({
+  [Symbol.asyncIterator]: () => ({ next: () => serviceCancelled }),
+});
+
+test('daemon cancellation stops guest sockets without reporting an error', async t => {
+  /** @type {(reason: Error) => void} */
+  let cancel = () => {};
+  const cancelled = /** @type {Promise<never>} */ (
+    new Promise((_resolve, reject) => {
+      cancel = reject;
+    })
+  );
+  const { issuer, cancellations, reported } = makeHarness({
+    servePath: endsWithCancellation,
+    cancelled,
+  });
+  await issuer.issue(numberA, {});
+  await issuer.issue(numberC, {});
+  const reason = Error('daemon stopping');
+  cancel(reason);
+  await t.throwsAsync(cancellations[0], { is: reason });
+  await t.throwsAsync(cancellations[1], { is: reason });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  t.deepEqual(reported, []);
+});
+
+test('a guest socket that fails while serving reports the error', async t => {
+  const failure = Error('listener failed');
+  const { issuer, reported } = makeHarness({
+    servePath: async () => ({
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.reject(failure) }),
+    }),
+  });
+  await issuer.issue(numberA, {});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  t.deepEqual(reported, [failure]);
 });
