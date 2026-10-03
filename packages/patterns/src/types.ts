@@ -10,6 +10,7 @@ import type {
   PassStyle,
   Atom,
   RemotableObject,
+  SturdyRef,
 } from '@endo/pass-style';
 import type {
   PartialCompare,
@@ -72,7 +73,7 @@ export type { FullCompare } from '@endo/marshal';
  *    contain more than one key.
  */
 export type Key = Exclude<
-  Passable<RemotableObject | RemotableBrand<any, any>, never>,
+  Passable<RemotableObject | RemotableBrand<any, any>, never, never>,
   Error | Promise<any>
 >;
 
@@ -128,7 +129,7 @@ export type GetRankCover = (
  * We hope the "Shape" metaphor helps remind us of this type-like imprecision
  * of Patterns.
  */
-export type Pattern = Exclude<Passable, Error | Promise<any>>;
+export type Pattern = Exclude<Passable, Error | Promise<any> | SturdyRef>;
 
 // CAVEAT: We use a string constant rather than a `unique symbol` here to
 // avoid declaration-emit issues that have appeared in downstream packages

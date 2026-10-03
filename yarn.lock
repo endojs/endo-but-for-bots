@@ -2773,6 +2773,7 @@ __metadata:
     "@endo/nat": "workspace:^"
     "@endo/pass-style": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/sturdyref": "workspace:^"
     "@fast-check/ava": "catalog:dev"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
@@ -3060,6 +3061,7 @@ __metadata:
     "@endo/memoize": "workspace:^"
     "@endo/pass-style": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/sturdyref": "workspace:^"
     "@fast-check/ava": "catalog:dev"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
@@ -3530,7 +3532,6 @@ __metadata:
   dependencies:
     "@endo/harden": "workspace:^"
     "@endo/init": "workspace:^"
-    "@endo/pass-style": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"

@@ -28,6 +28,23 @@ export const exampleBob = Far('bob', {});
 export const exampleCarol = Far('carol', {});
 
 /**
+ * Make SturdyRefs to serve as leaves, if the realm has a `SturdyRef`.
+ * Pass-style does not depend on `@endo/sturdyref`, so this senses the
+ * global the shim installs, the way `passStyleOf` does.
+ *
+ * @returns {Passable[]}
+ */
+const makeExampleSturdyRefs = () => {
+  const { SturdyRef } = /** @type {any} */ (globalThis);
+  if (typeof SturdyRef !== 'function') {
+    return [];
+  }
+  return ['dave', 'erin'].map(
+    label => new SturdyRef(harden({ enliven: () => Far(label, {}) })),
+  );
+};
+
+/**
  * @template {Passable} T
  * @template {Passable} U
  * @typedef {[T, U?] | [T[], U[]?] | [Record<string, T>, Record<string, U>?] | [CopyTagged<string, T | T[] | Record<string, T>>, CopyTagged<string, U | U[] | Record<string, U>>?]} LiftedInput
@@ -45,7 +62,9 @@ export const exampleCarol = Far('carol', {});
  * @template [LiftingDetail=unknown]
  * @param {typeof import('@fast-check/ava').fc} fc
  * @param {object} [options]
- * @param {Array<'byteArray'>} [options.excludePassStyles]
+ * @param {Array<'byteArray' | 'sturdyRef'>} [options.excludePassStyles]
+ *   `sturdyRef` leaves appear only where the realm has a `SturdyRef`, and
+ *   are not keys, so they appear only in `arbPassable`.
  * @param {<T extends Passable>(input: LiftedInput<T, Lifted>, detail: LiftingDetail) => T | Lifted} [options.lift]
  * @param {Arbitrary<LiftingDetail>} [options.arbLiftingDetail]
  * @param {(leaves: (Arbitrary<Passable>)[]) => (Arbitrary<Key>)[]} [options.transformKeyableLeaves] for refining types without introducing a (pass-style, patterns) import cycle
@@ -137,8 +156,15 @@ export const makeArbitraries = (
 
   const arbKeyLeaf = fc.oneof(...keyableLeaves);
 
+  const exampleSturdyRefs = excludePassStyles.includes('sturdyRef')
+    ? []
+    : makeExampleSturdyRefs();
+
   const arbLeaf = fc.oneof(
     ...keyableLeaves,
+    ...(exampleSturdyRefs.length > 0
+      ? [fc.constantFrom(...exampleSturdyRefs)]
+      : []),
     arbString.map(
       s => Error(s),
       v => (v instanceof Error ? v.message : reject('not an Error')),

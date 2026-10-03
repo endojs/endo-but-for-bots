@@ -1,4 +1,6 @@
 // @ts-nocheck
+// Install the realm's SturdyRef so the arbitraries generate SturdyRefs.
+import '@endo/sturdyref/shim.js';
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';

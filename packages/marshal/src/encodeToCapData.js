@@ -19,8 +19,30 @@ import { thawedBytes, frozenBytes } from '@endo/immutable-arraybuffer';
 import { encodeHex, decodeHex } from '@endo/hex';
 import { X, Fail, q } from '@endo/errors';
 
-/** @import {Passable, RemotableObject} from '@endo/pass-style' */
+/** @import {Passable, RemotableObject, SturdyRef} from '@endo/pass-style' */
 /** @import {Encoding, EncodingUnion} from './types.js' */
+
+/**
+ * Like `passStyleOf(val) === 'sturdyRef'`, but returns false rather than
+ * throwing for a value that is not passable, since capdata tolerates
+ * whatever `convertSlotToVal` returns for a 'slot'. A SturdyRef is always
+ * frozen, so an unfrozen value (such as an unhardened presence) is rejected
+ * without calling `passStyleOf`, and without allocating the error that
+ * `passStyleOf` would throw for it.
+ *
+ * @param {unknown} val
+ * @returns {val is SturdyRef}
+ */
+const isPassableSturdyRef = val => {
+  if (typeof val !== 'object' || val === null || !isFrozen(val)) {
+    return false;
+  }
+  try {
+    return passStyleOf(/** @type {Passable} */ (val)) === 'sturdyRef';
+  } catch {
+    return false;
+  }
+};
 
 const { ownKeys } = Reflect;
 const { isArray } = Array;
@@ -31,6 +53,7 @@ const {
   entries,
   fromEntries,
   freeze,
+  isFrozen,
   hasOwn,
 } = Object;
 
@@ -69,6 +92,10 @@ const qclassMatches = (encoded, qclass) =>
  *   encodeRecur: (p: Passable) => Encoding
  * ) => Encoding} [encodePromiseToCapData]
  * @property {(
+ *   sturdyRef: SturdyRef,
+ *   encodeRecur: (p: Passable) => Encoding
+ * ) => Encoding} [encodeSturdyRefToCapData]
+ * @property {(
  *   error: Error,
  *   encodeRecur: (p: Passable) => Encoding
  * ) => Encoding} [encodeErrorToCapData]
@@ -77,6 +104,9 @@ const qclassMatches = (encoded, qclass) =>
 const dontEncodeRemotableToCapData = rem => Fail`remotable unexpected: ${rem}`;
 
 const dontEncodePromiseToCapData = prom => Fail`promise unexpected: ${prom}`;
+
+const dontEncodeSturdyRefToCapData = sturdyRef =>
+  Fail`sturdyRef unexpected: ${sturdyRef}`;
 
 const dontEncodeErrorToCapData = err => Fail`error object unexpected: ${err}`;
 
@@ -88,6 +118,7 @@ export const makeEncodeToCapData = (encodeOptions = {}) => {
   const {
     encodeRemotableToCapData = dontEncodeRemotableToCapData,
     encodePromiseToCapData = dontEncodePromiseToCapData,
+    encodeSturdyRefToCapData = dontEncodeSturdyRefToCapData,
     encodeErrorToCapData = dontEncodeErrorToCapData,
   } = encodeOptions;
 
@@ -231,6 +262,18 @@ export const makeEncodeToCapData = (encodeOptions = {}) => {
           'slot',
         )}: ${encoded}`;
       }
+      case 'sturdyRef': {
+        const encoded = encodeSturdyRefToCapData(
+          passable,
+          encodeToCapDataRecur,
+        );
+        if (qclassMatches(encoded, 'sturdyRef')) {
+          return encoded;
+        }
+        throw Fail`internal: SturdyRef encoding must be an object with ${q(
+          QCLASS,
+        )} ${q('sturdyRef')}: ${encoded}`;
+      }
       case 'error': {
         const encoded = encodeErrorToCapData(passable, encodeToCapDataRecur);
         if (qclassMatches(encoded, 'error')) {
@@ -280,6 +323,10 @@ harden(makeEncodeToCapData);
  *   decodeRecur: (e: Encoding) => Passable
  * ) => (Promise|RemotableObject)} [decodePromiseFromCapData]
  * @property {(
+ *   encodedSturdyRef: Encoding,
+ *   decodeRecur: (e: Encoding) => Passable
+ * ) => SturdyRef} [decodeSturdyRefFromCapData]
+ * @property {(
  *   encodedError: Encoding,
  *   decodeRecur: (e: Encoding) => Passable
  * ) => Error} [decodeErrorFromCapData]
@@ -287,6 +334,8 @@ harden(makeEncodeToCapData);
 
 const dontDecodeRemotableOrPromiseFromCapData = slotEncoding =>
   Fail`remotable or promise unexpected: ${slotEncoding}`;
+const dontDecodeSturdyRefFromCapData = sturdyRefEncoding =>
+  Fail`sturdyRef unexpected: ${sturdyRefEncoding}`;
 const dontDecodeErrorFromCapData = errorEncoding =>
   Fail`error unexpected: ${errorEncoding}`;
 
@@ -307,6 +356,7 @@ export const makeDecodeFromCapData = (decodeOptions = {}) => {
   const {
     decodeRemotableFromCapData = dontDecodeRemotableOrPromiseFromCapData,
     decodePromiseFromCapData = dontDecodeRemotableOrPromiseFromCapData,
+    decodeSturdyRefFromCapData = dontDecodeSturdyRefFromCapData,
     decodeErrorFromCapData = dontDecodeErrorFromCapData,
   } = decodeOptions;
 
@@ -389,7 +439,26 @@ export const makeDecodeFromCapData = (decodeOptions = {}) => {
           // a promise or a remotable, since that would break some
           // capdata clients. We are deprecating capdata, and these clients
           // will need to update before switching to smallcaps.
+          // It does reject a SturdyRef, which no capdata client expects in
+          // a 'slot'. The slot cache is keyed only by index, so without this
+          // check a SturdyRef decoded under a 'sturdyRef' tag could be
+          // reused under a 'slot' tag for the same index.
+          !isPassableSturdyRef(decoded) ||
+            Fail`a sturdyRef cannot be decoded as a slot: ${decoded}`;
           return decoded;
+        }
+        case 'sturdyRef': {
+          // Unlike a 'slot', a 'sturdyRef' names its kind, so the decoder
+          // checks that the result is a SturdyRef. The 'slot' case above
+          // checks the converse.
+          const decoded = decodeSturdyRefFromCapData(
+            jsonEncoded,
+            decodeFromCapData,
+          );
+          if (passStyleOf(decoded) === 'sturdyRef') {
+            return decoded;
+          }
+          throw Fail`a sturdyRef encoding must decode to a sturdyRef: ${decoded}`;
         }
         case 'error': {
           const decoded = decodeErrorFromCapData(

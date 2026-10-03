@@ -13,10 +13,42 @@ import { Fail } from '@endo/errors';
 import { makeMarshal } from './marshal.js';
 
 /**
- * @import {RemotableMethodName} from '@endo/pass-style';
+ * @import {RemotableMethodName, SturdyRef} from '@endo/pass-style';
  */
 
-const { fromEntries } = Object;
+/**
+ * The parts of the realm's `SturdyRef` constructor the membrane uses.
+ *
+ * @typedef {object} SturdyRefPowers
+ * @property {new (handler: {
+ *   enliven: (sturdyRef: SturdyRef) => unknown,
+ * }) => SturdyRef} SturdyRef
+ * @property {(sturdyRef: SturdyRef) => Promise<unknown>} enliven
+ */
+
+const { fromEntries, freeze } = Object;
+const { apply } = Reflect;
+
+/** @type {SturdyRefPowers | undefined} */
+let sturdyRefPowers;
+
+/**
+ * Captures the realm's `SturdyRef` constructor and its `enliven` once.
+ * Called only after `passStyleOf` has recognized a SturdyRef, so the
+ * realm's `SturdyRef` exists by then. The shim installs
+ * `globalThis.SturdyRef` first-wins and never replaces it, and pass-style
+ * captures its brand check from the same global, so the constructor read
+ * here makes refs that pass-style recognizes.
+ *
+ * @returns {SturdyRefPowers}
+ */
+const getSturdyRefPowers = () => {
+  if (sturdyRefPowers === undefined) {
+    const { SturdyRef } = /** @type {any} */ (globalThis);
+    sturdyRefPowers = freeze({ SturdyRef, enliven: SturdyRef.enliven });
+  }
+  return sturdyRefPowers;
+};
 
 // TODO(erights): Add Converter type
 /** @param {any} [mirrorConverter] */
@@ -107,6 +139,50 @@ const makeConverter = (mirrorConverter = undefined) => {
           ]);
           yours = Far(iface, fromEntries(yourMethods));
         }
+        break;
+      }
+      case 'sturdyRef': {
+        // Passing a SturdyRef makes a SturdyRef on your side whose handler
+        // enlivens mine and passes the live result across the membrane.
+        const { SturdyRef, enliven } = getSturdyRefPowers();
+        yours = new SturdyRef(
+          harden({
+            enliven: () => {
+              // As with promises, pass both the fulfillment and the
+              // rejection, so that neither crosses the membrane unwrapped.
+              // Calling `passBack` and `enliven` inside `E.when` also routes
+              // a synchronous throw, including the one `passBack` makes once
+              // the membrane is revoked, through the rejection path, should
+              // an adopted realm `SturdyRef` not defer its handler the way
+              // ours does.
+              return new Promise((yourResolve, yourReject) => {
+                E.when(
+                  E.when(undefined, () => {
+                    // As with remotables, use mineIf so that enlivening fails
+                    // once the membrane is revoked. This gives the correct
+                    // error behavior, but may not actually enable mine to be
+                    // gc'ed, depending on the JS engine.
+                    const mineIf = passBack(yours);
+                    return apply(enliven, SturdyRef, [mineIf]);
+                  }),
+                  myFulfillment => yourResolve(pass(myFulfillment)),
+                  myReason => yourReject(pass(myReason)),
+                )
+                  .catch(metaReason =>
+                    // This can happen if myFulfillment or myReason is not
+                    // passable.
+                    yourReject(pass(metaReason)),
+                  )
+                  .catch(metaMetaReason =>
+                    // In case metaReason itself doesn't pass
+                    yourReject(metaMetaReason),
+                  );
+              });
+            },
+          }),
+        );
+        passStyleOf(yours) === 'sturdyRef' ||
+          Fail`internal: the realm's SturdyRef made a non-sturdyRef: ${yours}`;
         break;
       }
       default: {

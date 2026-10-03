@@ -439,7 +439,8 @@ const makePatternKit = () => {
         );
       }
       case 'error':
-      case 'promise': {
+      case 'promise':
+      case 'sturdyRef': {
         return reject && reject`A ${q(kind)} cannot be a pattern`;
       }
       default: {
@@ -501,6 +502,9 @@ const makePatternKit = () => {
       }
       case 'error': {
         return reject && reject`errors cannot be patterns: ${patt}`;
+      }
+      case 'sturdyRef': {
+        return reject && reject`SturdyRefs cannot be patterns: ${patt}`;
       }
       case 'undefined':
       case 'null':
