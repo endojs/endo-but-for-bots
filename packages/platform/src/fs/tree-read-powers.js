@@ -49,10 +49,18 @@ const pathSafeEscapes = /%(?:24|26|2B|2C|3A|3B|3D|40)/g;
  * @param {string} segment
  * @returns {string}
  */
-const encodeSegment = segment =>
-  encodeURIComponent(segment)
+const encodeSegment = segment => {
+  let encoded;
+  try {
+    encoded = encodeURIComponent(segment);
+  } catch {
+    // A lone surrogate has no UTF-8 encoding.
+    throw makeError(X`Unencodable path segment ${q(segment)}`);
+  }
+  return encoded
     .replace(pathSafeEscapes, decodeURIComponent)
     .replace(/~/g, '%7E');
+};
 
 /**
  * Validate one raw (still percent-encoded) path segment and return its decoded
@@ -108,6 +116,13 @@ const assertRoot = root => {
   ) {
     throw makeError(
       X`Tree read powers root must be a file: URL ending in "/", got ${q(root)}`,
+    );
+  }
+  // Every escape in the root must be well formed and must not encode a
+  // separator or NUL.
+  if (encodedSeparatorPattern.test(root) || /%(?![0-9a-f]{2})/i.test(root)) {
+    throw makeError(
+      X`Tree read powers root has a malformed or separator escape: ${q(root)}`,
     );
   }
   // A root that the URL parser would rewrite (a `.` or `..` segment, plain
@@ -292,7 +307,15 @@ export const makeTreeReadPowers = (tree, options = {}) => {
     try {
       entry = await E(tree).lookup(segments);
     } catch (error) {
-      if (await isAbsent(segments)) {
+      let absent;
+      try {
+        absent = await isAbsent(segments);
+      } catch {
+        // The walk failing says nothing about absence; keep the lookup's
+        // own error.
+        throw error;
+      }
+      if (absent) {
         return undefined;
       }
       throw error;
@@ -338,7 +361,7 @@ export const makeTreeReadPowers = (tree, options = {}) => {
         );
       }
       // The hook's result is held to the same rule as any location.
-      decodeSegment(encodeURIComponent(segment), location);
+      decodeSegment(encodeSegment(segment), location);
     }
     return toLocation(
       /** @type {string[]} */ (snapshot),

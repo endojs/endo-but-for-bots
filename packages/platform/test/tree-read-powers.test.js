@@ -471,3 +471,42 @@ test('canonical refuses a hook result with a non-string segment', async t => {
     message: /non-string segment/,
   });
 });
+
+test('maybeRead keeps the lookup error when the absence walk fails', async t => {
+  const failing = harden({
+    has: async () => {
+      throw Error('walk failed');
+    },
+    list: async () => [],
+    lookup: async () => {
+      throw Error('backend unavailable');
+    },
+  });
+  const powers = makeTreeReadPowers(failing);
+  await t.throwsAsync(() => powers.maybeRead('file:///app/main.js'), {
+    message: 'backend unavailable',
+  });
+});
+
+test('the root refuses malformed and separator escapes', t => {
+  const tree = makeLocalTree(makeFixture(t));
+  for (const root of ['file:///a%zz/', 'file:///a%2Fb/', 'file:///a%/']) {
+    t.throws(() => makeTreeReadPowers(tree, { root }), {
+      message: /malformed or separator escape/,
+    });
+  }
+});
+
+test('a lone surrogate is refused as a tree error, not a URIError', async t => {
+  const powers = makeTreeReadPowers(makeLocalTree(makeFixture(t)), {
+    canonical: () => ['\uD800'],
+  });
+  const error = await t.throwsAsync(() =>
+    powers.canonical('file:///app/main.js'),
+  );
+  t.false(error instanceof URIError);
+  t.regex(error.message, /Unencodable path segment/);
+  t.throws(() => powers.pathToFileURL('/app/\uD800'), {
+    message: /Unencodable path segment/,
+  });
+});

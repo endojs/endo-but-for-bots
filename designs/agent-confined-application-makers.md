@@ -151,7 +151,7 @@ the mount first and passes the snapshot.
 
 ### The tree `ReadPowers`
 
-A new `makeTreeReadPowers(tree, { root })` in `@endo/platform/fs/tree-read-powers` turns a
+A new `makeTreeReadPowers(tree, { root, canonical })` in `@endo/platform/fs/tree-read-powers` turns a
 `ReadableTree` or `Mount` into compartment-mapper `ReadPowers`:
 
 - `read(location)` accepts only `file:` URLs under a synthetic root
@@ -163,10 +163,12 @@ A new `makeTreeReadPowers(tree, { root })` in `@endo/platform/fs/tree-read-power
   Node's `maybeRead` treats `EISDIR`), and for a location outside the root,
   which `mapNodeModules` needs to probe `node_modules` directories and to
   climb past the root when an optional dependency is absent.
-- `canonical` collapses every path that reaches one package directory to a
-  single location, as the stock Node `canonical` does with `realpath`.
-  `mapNodeModules` relies on this to build one compartment for a package
-  reached through more than one `node_modules` path; without it, such a
+- `canonical` should collapse every path that reaches one package directory
+  to a single location, as the stock Node `canonical` does with `realpath`.
+  The Phase 1 default is the identity and does not collapse anything; the
+  collapsing comes from a hook. `mapNodeModules` relies on this to build one
+  compartment for a package reached through more than one `node_modules`
+  path; without it, such a
   package would load twice and break identity-sensitive code (`instanceof`,
   module-level singletons). `makeTreeReadPowers` takes an optional
   `canonical(segments)` hook and defaults to the identity. The public
