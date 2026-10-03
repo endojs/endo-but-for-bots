@@ -131,7 +131,11 @@ const makeHost = async (config, cancelled) => {
     cancelled,
   );
   const bootstrap = getBootstrap();
-  return { host: E(bootstrap).host() };
+  // A test that never awaits `host` can finish before the answer arrives; the
+  // teardown disconnect then rejects it ("Termination requested") unobserved.
+  const host = E(bootstrap).host();
+  host.catch(() => {});
+  return { host };
 };
 
 /** @param {import('ava').ExecutionContext<any>} t */
