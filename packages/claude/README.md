@@ -25,22 +25,43 @@ Naively, "run `claude -p` with `--allowedTools` naming the guest's tools" is
 Code startup that load *before and outside* the tool-permission system:
 `CLAUDE.md` memory, hooks, `settings.json` layers, and MCP auto-discovery.
 Closing every surface takes a combination, asserted before **every** spawn
-(measured on Claude Code **2.1.232**):
+(designed against Claude Code **2.1.232**; the pin is **2.1.280**, re-checked
+live as described under [Known gaps](#known-gaps-prerequisites)):
 
-| Flag | What it closes |
+| Confinement mechanism | What it closes |
 | --- | --- |
 | `--bare` | `CLAUDE.md`, hooks, LSP, plugin sync, auto-memory, keychain — and narrows Anthropic auth to `ANTHROPIC_API_KEY` / an `apiKeyHelper`. Does **not** close MCP auto-discovery or settings layers. |
 | `--strict-mcp-config` | MCP auto-discovery (`.mcp.json`, `~/.claude/`). |
 | `--setting-sources ""` | the discovered user/project/local `settings.json` layers. |
 | `--tools ""` | the built-in tool set — deny **by construction**, so a future built-in is denied without a harness edit. |
 | `--disable-slash-commands` | the `/skill-name` surface `--bare` leaves resolving and `--tools ""` cannot reach. |
+| `--permission-mode dontAsk` | sets the permission mode to `dontAsk`, which denies any tool not on the allow-list, so a tool that leaks past the other layers is refused. Without it, 2.1.280's `init` reports `permissionMode: "default"`. |
+| `--permission-prompts none` | prompting: anything that would ask is denied (new in 2.1.280). |
+| `enabledPlugins` in `--settings` | the builtin plugins `agents-md` and `telemetry`, which `init` lists even under `--bare`. |
 | never `--resume` / `--continue` | both restore the full prior transcript across the confinement boundary. |
 
-The harness **refuses to spawn** unless all five presence flags appear, `--tools`
-and `--setting-sources` each carry exactly the empty string (a non-empty value
-re-opens the surface — the `"alg":"none"` shape), and `claude --version` equals
-the pinned version (an upgraded CLI may have changed the flag semantics the
-confinement rests on).
+The harness **refuses to spawn** unless `claude --version` equals the pin (an
+upgraded CLI may have changed the flag semantics the confinement rests on) and
+the argv passes `assertConfinedArgv`:
+
+- Nine flags are present: `--bare`, `--strict-mcp-config`, and
+  `--disable-slash-commands`, each standing alone and never as another flag's
+  value; `--setting-sources` and `--tools`, each carrying exactly the empty
+  string (a non-empty value re-opens the surface, the `"alg":"none"` shape);
+  and `--settings`, `--mcp-config`, `--allowedTools`, and `--disallowedTools`,
+  each carrying a non-empty value.
+- `--permission-mode` and `--permission-prompts` are present with their pinned
+  values.
+- Every one of these flags appears exactly once. Any repeat is refused, even
+  one carrying the same value, so which occurrence the CLI would honor does not
+  matter.
+- No bare token follows the value of any of the eight value-carrying flags.
+  2.1.280 documents `--tools` and `--mcp-config` as variadic; measured live,
+  `--tools "" Bash` re-opens `Bash` and `--mcp-config legit.json attacker.json`
+  loads both files.
+- No `--flag=value` token appears (2.1.280 parses it as the space-separated
+  form, so it would escape the repeat check), and no bare `--` appears (every
+  token after it would be read as a positional).
 
 ## The allow-list is generated, pruned, and pinned
 
@@ -168,16 +189,23 @@ This increment is honest about what it does **not** yet do:
   `--mcp-config` path. The spawn files are `0600` files in a `0700` directory,
   removed on every exit path, until a live check shows that the pinned CLI reads
   `--settings` only once.
-- **A live negative-and-positive confinement test** against a real `claude -p`:
-  no built-in runs, no `/skill-name` resolves, no other MCP server is reachable,
-  an unanchored `mcp__*` grants nothing — *and* the guest's tools do invoke, an
-  anchored `mcp__endo__read*` glob is honored, a planted `settings.json` has no
-  effect, and the pooled `apiKeyHelper` is the consumed credential. The DI unit
-  tests cannot catch a wrong-flag gap; this is version-specific and re-run on any
-  CLI bump.
+- **A scripted live negative-and-positive confinement test** against a real
+  `claude -p`: no built-in runs, no `/skill-name` resolves, no other MCP server
+  is reachable, an unanchored `mcp__*` grants nothing — *and* the guest's tools
+  do invoke, an anchored `mcp__endo__read*` glob is honored, a planted
+  `settings.json` has no effect, and the pooled `apiKeyHelper` is the consumed
+  credential. The DI unit tests cannot catch a wrong-flag gap; this is
+  version-specific and re-run on any CLI bump. The 2.1.280 pin rests on a
+  manual re-run against a scratch daemon, which verified the `init` surface,
+  the process environments and sockets, refusal of a smuggled id and a pruned
+  tool, and the positive path. The evidence is in
+  [#1406](https://github.com/endojs/endo-but-for-bots/pull/1406).
+- **The written `settings.json` is not checked at spawn.** `assertConfinedArgv`
+  checks the argv before every spawn, but nothing re-reads the generated
+  `--settings` file to confirm `enabledPlugins` and the other keys.
 - **The credential path under `--bare`** (the DD5 residual), answered by a
   live turn on Claude Code 2.1.280: a subscription OAuth access token
-  (`sk-ant-oat…`) is **not** accepted through an `apiKeyHelper` (`claude`
+  (`sk-ant-oat...`) is **not** accepted through an `apiKeyHelper` (`claude`
   presents it as an API key and gets `401`). The spawn files therefore present
   such a token as `ANTHROPIC_AUTH_TOKEN` in the `--settings` file's `env` key,
   never in the spawn environment. `claude` still holds it in memory, the same
