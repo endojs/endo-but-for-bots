@@ -306,9 +306,19 @@ test('a daemon that serves no guest sockets gets the root connection', async t =
       steps.push(['root', env.ENDO_SOCK]);
       return /** @type {any} */ (rootConnection);
     },
+    warn: message => {
+      steps.push(['warn', message]);
+    },
   });
   t.is(await connect(), rootConnection);
-  t.deepEqual(steps, [['issue'], ['root', DAEMON_SOCK]]);
+  t.deepEqual(steps, [
+    ['issue'],
+    [
+      'warn',
+      `Endo daemon serves no guest sockets; the confined turn for ${FORMULA_ID} connects with host authority`,
+    ],
+    ['root', DAEMON_SOCK],
+  ]);
 });
 
 test('any other issue failure does not fall back to the root connection', async t => {

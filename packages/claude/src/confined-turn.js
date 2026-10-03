@@ -61,8 +61,8 @@ import { PINNED_CLI_VERSION } from './argv.js';
  * absent, on a guest socket issued for `formulaId` over the root socket
  * (`issue` closes that root session before it returns). A daemon that cannot
  * issue guest sockets gets the root connection (`connectToRoot`) instead, as
- * before guest-scoped bootstraps existed; an explicit `guestSocketPath` never
- * falls back.
+ * before guest-scoped bootstraps existed, and `warn` reports that widening to
+ * host authority; an explicit `guestSocketPath` never falls back.
  *
  * @param {object} options
  * @param {string} options.formulaId
@@ -70,6 +70,8 @@ import { PINNED_CLI_VERSION } from './argv.js';
  * @param {typeof issueGuestBootstrapPath} [options.issue]
  * @param {typeof connectToGuestBootstrap} [options.connectTo]
  * @param {typeof connectToDaemon} [options.connectToRoot]
+ * @param {(message: string) => void} [options.warn] - told when the turn
+ *   falls back to the root connection; defaults to standard error.
  * @returns {() => Promise<GuestConnection | DaemonConnection>}
  */
 export const makeGuestConnect = ({
@@ -78,6 +80,7 @@ export const makeGuestConnect = ({
   issue = issueGuestBootstrapPath,
   connectTo = connectToGuestBootstrap,
   connectToRoot = connectToDaemon,
+  warn = message => console.warn(message),
 }) => {
   return async () => {
     if (guestSocketPath !== undefined) {
@@ -96,6 +99,9 @@ export const makeGuestConnect = ({
     // failure rejects instead, so it cannot widen the harness to the host.
     const socketPath = await issue({ formulaId, ...where });
     if (socketPath === undefined) {
+      warn(
+        `Endo daemon serves no guest sockets; the confined turn for ${formulaId} connects with host authority`,
+      );
       return connectToRoot(where);
     }
     return connectTo({ socketPath });
