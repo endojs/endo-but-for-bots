@@ -8,5 +8,6 @@ The confined turn now reaches its guest through a daemon-issued guest socket rat
 `@endo/claude`'s `runConfinedTurn` takes an optional `guestSocketPath` (and `endo-claude-turn` a `--guest-socket` flag); without one it issues the socket over the root daemon socket and closes that root session before the broker starts.
 `@endo/claude` also exports `makeGuestConnect`, the default harness connection.
 Without a guest socket path, the turn falls back to the root connection, which holds full host authority, only when the daemon serves no guest sockets.
+That fallback is reported on standard error (or to `makeGuestConnect`'s `warn` option), so the widening to host authority is observable.
 `issueGuestBootstrapPath` then resolves to `undefined`: either the daemon's bootstrap lacks `guestBootstrapPath` in its `__getMethodNames__()` (it predates this change) or the daemon answers `undefined` (it serves no Unix sockets).
 Any other failure is reported, never answered with the root connection.
