@@ -9,7 +9,11 @@
  * Every location is a `file:` URL under a synthetic root (`file:///app/` by
  * default). The path below the root is split into segments, and each segment
  * is validated before any lookup, so a compartment map or a `package.json`
- * cannot name a file outside the tree.
+ * cannot name a file outside the tree. A location outside the root names
+ * nothing in the tree: `maybeRead` answers `undefined` for it, `canonical`
+ * returns it unchanged, and `read` refuses it, so the compartment mapper's
+ * search for a `node_modules` directory can climb past the root and find
+ * nothing there.
  */
 
 import harden from '@endo/harden';
@@ -30,6 +34,25 @@ const defaultRoot = 'file:///app/';
  * see, so it is refused in its raw form.
  */
 const encodedSeparatorPattern = /%(?:2f|5c|00)/i;
+
+/**
+ * Characters that `encodeURIComponent` escapes but that Node's
+ * `pathToFileURL` (and the WHATWG path percent-encode set) leave alone.
+ */
+const pathSafeEscapes = /%(?:24|26|2B|2C|3A|3B|3D|40)/g;
+
+/**
+ * Percent-encode one decoded segment as Node's `pathToFileURL` does, so a
+ * location built here names a compartment the same way
+ * `@endo/platform/fs/node` does.
+ *
+ * @param {string} segment
+ * @returns {string}
+ */
+const encodeSegment = segment =>
+  encodeURIComponent(segment)
+    .replace(pathSafeEscapes, decodeURIComponent)
+    .replace(/~/g, '%7E');
 
 /**
  * Validate one raw (still percent-encoded) path segment and return its decoded
@@ -87,6 +110,14 @@ const assertRoot = root => {
       X`Tree read powers root must be a file: URL ending in "/", got ${q(root)}`,
     );
   }
+  // A root that the URL parser would rewrite (a `.` or `..` segment, plain
+  // or encoded, or an unencoded character) would not survive the
+  // `fileURLToPath`/`pathToFileURL` round trip.
+  if (new URL(root).href !== root) {
+    throw makeError(
+      X`Tree read powers root must be normalized, got ${q(root)}`,
+    );
+  }
 };
 
 /**
@@ -94,10 +125,15 @@ const assertRoot = root => {
  * @property {string} [root] - the synthetic `file:` URL the tree is mounted
  *   at; must end in `/`.
  * @property {(segments: string[]) => string[] | Promise<string[]>} [canonical]
- *   - map the segments of a location to the segments of its canonical
- *   location. Defaults to the identity. The daemon supplies one for a mount so
- *   that a package reached through more than one `node_modules` path loads as
- *   one compartment.
+ *   - map the decoded segments of a location under the root to the decoded
+ *   segments of its canonical location under the same root. The hook receives
+ *   a hardened copy and may return a new array (an empty array names the root
+ *   itself); each returned segment is held to the same rule as a location's
+ *   segments, so the hook cannot name anything outside the tree. A trailing
+ *   `/` on the location is carried over to the result. Defaults to the
+ *   identity, which returns the location unchanged. The daemon supplies one
+ *   for a mount so that a package reached through more than one
+ *   `node_modules` path loads as one compartment.
  */
 
 /**
@@ -110,7 +146,14 @@ const assertRoot = root => {
 export const makeTreeReadPowers = (tree, options = {}) => {
   const { root = defaultRoot, canonical: canonicalSegments } = options;
   assertRoot(root);
-  const rootPath = new URL(root).pathname;
+  const rootPath = decodeURIComponent(new URL(root).pathname);
+
+  /**
+   * @param {unknown} location
+   * @returns {location is string}
+   */
+  const isUnderRoot = location =>
+    typeof location === 'string' && location.startsWith(root);
 
   /**
    * Parse a location into validated, decoded segments below the root.
@@ -146,9 +189,20 @@ export const makeTreeReadPowers = (tree, options = {}) => {
    * @param {boolean} directory
    */
   const toLocation = (segments, directory) =>
-    `${root}${segments.map(encodeURIComponent).join('/')}${
+    `${root}${segments.map(encodeSegment).join('/')}${
       directory && segments.length > 0 ? '/' : ''
     }`;
+
+  /**
+   * A file has a byte reader; a directory does not.
+   *
+   * @param {unknown} entry
+   */
+  const isFile = async entry => {
+    // eslint-disable-next-line no-underscore-dangle
+    const methods = await E(/** @type {any} */ (entry)).__getMethodNames__();
+    return methods.includes('streamBase64');
+  };
 
   /**
    * @param {string[]} segments
@@ -158,6 +212,9 @@ export const makeTreeReadPowers = (tree, options = {}) => {
       throw makeError(X`Cannot read the tree root as a file`);
     }
     const entry = await E(tree).lookup(segments);
+    if (!(await isFile(entry))) {
+      throw makeError(X`Tree location ${q(segments.join('/'))} is not a file`);
+    }
     return collectBytes(entry);
   };
 
@@ -221,6 +278,9 @@ export const makeTreeReadPowers = (tree, options = {}) => {
    */
   const maybeRead = async location => {
     await null;
+    if (typeof location === 'string' && !isUnderRoot(location)) {
+      return undefined;
+    }
     const segments = toSegments(location);
     if (segments.length === 0) {
       return undefined;
@@ -237,6 +297,10 @@ export const makeTreeReadPowers = (tree, options = {}) => {
       }
       throw error;
     }
+    // A directory is absent as a file, as Node's `maybeRead` treats EISDIR.
+    if (!(await isFile(entry))) {
+      return undefined;
+    }
     return collectBytes(entry);
   };
 
@@ -246,15 +310,28 @@ export const makeTreeReadPowers = (tree, options = {}) => {
    */
   const canonical = async location => {
     await null;
+    if (typeof location === 'string' && !isUnderRoot(location)) {
+      return location;
+    }
     const segments = toSegments(location);
     if (canonicalSegments === undefined) {
-      return toLocation(segments, location.endsWith('/'));
+      return location;
     }
     const mapped = await canonicalSegments(harden([...segments]));
     if (!Array.isArray(mapped)) {
       throw makeError(X`canonical hook must return an array of segments`);
     }
-    for (const segment of mapped) {
+    // Read the hook's result once, by index, into an array of our own, so a
+    // getter, an iterator, or a `map` override cannot answer validation and
+    // serialization differently.
+    /** @type {unknown[]} */
+    const snapshot = [];
+    const { length } = mapped;
+    for (let index = 0; index < length; index += 1) {
+      snapshot.push(mapped[index]);
+    }
+    harden(snapshot);
+    for (const segment of snapshot) {
       if (typeof segment !== 'string') {
         throw makeError(
           X`canonical hook returned a non-string segment ${q(segment)}`,
@@ -263,7 +340,10 @@ export const makeTreeReadPowers = (tree, options = {}) => {
       // The hook's result is held to the same rule as any location.
       decodeSegment(encodeURIComponent(segment), location);
     }
-    return toLocation(mapped, location.endsWith('/'));
+    return toLocation(
+      /** @type {string[]} */ (snapshot),
+      location.endsWith('/'),
+    );
   };
 
   /**
@@ -272,7 +352,9 @@ export const makeTreeReadPowers = (tree, options = {}) => {
    */
   const fileURLToPath = location => {
     const segments = toSegments(location);
-    return `${rootPath}${segments.join('/')}`;
+    return `${rootPath}${segments.join('/')}${
+      segments.length > 0 && location.endsWith('/') ? '/' : ''
+    }`;
   };
 
   /**

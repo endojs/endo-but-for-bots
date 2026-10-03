@@ -4,8 +4,10 @@ import '@endo/init/debug.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import url from 'node:url';
 
 import test from 'ava';
+import { fc } from '@fast-check/ava';
 import { E } from '@endo/eventual-send';
 
 import { makeLocalTree } from '../src/fs-node/local-tree.js';
@@ -28,6 +30,15 @@ const makeFixture = t => {
     'export default 2;',
   );
   fs.writeFileSync(path.join(appPath, 'a b.js'), 'spaced');
+  fs.mkdirSync(path.join(appPath, 'lib'));
+  fs.writeFileSync(path.join(appPath, 'lib', 'index.js'), 'export default 3;');
+  fs.mkdirSync(path.join(appPath, 'node_modules', '@scope', 'p+q'), {
+    recursive: true,
+  });
+  fs.writeFileSync(
+    path.join(appPath, 'node_modules', '@scope', 'p+q', 'index.js'),
+    'export default 4;',
+  );
   return appPath;
 };
 
@@ -159,8 +170,6 @@ const escapes = [
   'file:///app/main.js\u0000',
   'file:///app/node_modules\u0000/dep/index.js',
   'file:///app/node_modules\\..\\..\\outside',
-  'file:///outside',
-  'https://example.com/app/main.js',
 ];
 
 for (const location of escapes) {
@@ -173,6 +182,223 @@ for (const location of escapes) {
     t.deepEqual(calls, []);
   });
 }
+
+// A location outside the root names nothing in the tree, so the compartment
+// mapper's climb past the root for a missing optional dependency finds
+// nothing rather than failing the capture.
+const outsideRoot = [
+  'file:///outside',
+  'file:///node_modules/missing/package.json',
+  'https://example.com/app/main.js',
+];
+
+for (const location of outsideRoot) {
+  test(`a location outside the root is absent: ${JSON.stringify(location)}`, async t => {
+    const { spy, calls } = makeSpyTree(makeLocalTree(makeFixture(t)));
+    const powers = makeTreeReadPowers(spy);
+    await t.throwsAsync(() => powers.read(location), {
+      message: /not under root/,
+    });
+    t.is(await powers.maybeRead(location), undefined);
+    t.is(await powers.canonical(location), location);
+    t.deepEqual(calls, []);
+  });
+}
+
+test('maybeRead returns undefined for a directory, and read refuses it', async t => {
+  const powers = makeTreeReadPowers(makeLocalTree(makeFixture(t)));
+  // `import './lib'` probes the bare candidate before `lib/index.js`.
+  t.is(await powers.maybeRead('file:///app/lib'), undefined);
+  t.is(await powers.maybeRead('file:///app/node_modules/dep/'), undefined);
+  t.is(
+    decoder.decode(
+      /** @type {Uint8Array} */ (
+        await powers.maybeRead('file:///app/lib/index.js')
+      ),
+    ),
+    'export default 3;',
+  );
+  await t.throwsAsync(() => powers.read('file:///app/lib'), {
+    message: /is not a file/,
+  });
+});
+
+test('scoped and punctuated package names keep their spelling', async t => {
+  const tree = makeLocalTree(makeFixture(t));
+  const plain = makeTreeReadPowers(tree);
+  const hooked = makeTreeReadPowers(tree, { canonical: segments => segments });
+  const locations = [
+    'file:///app/node_modules/@scope/p+q/',
+    'file:///app/node_modules/@scope/p+q/index.js',
+    "file:///app/a$b&c,d;e=f:g@h!i'j(k)l*m/",
+  ];
+  t.deepEqual(await Promise.all(locations.map(plain.canonical)), locations);
+  t.deepEqual(await Promise.all(locations.map(hooked.canonical)), locations);
+  t.is(
+    decoder.decode(
+      await plain.read('file:///app/node_modules/@scope/p+q/index.js'),
+    ),
+    'export default 4;',
+  );
+  t.is(
+    plain.pathToFileURL('/app/node_modules/@scope/p+q/').href,
+    'file:///app/node_modules/@scope/p+q/',
+  );
+});
+
+test('canonical reads a hook result once, ignoring a map override', async t => {
+  const powers = makeTreeReadPowers(makeLocalTree(makeFixture(t)), {
+    // Under lockdown `map` is a read-only inherited property, so the override
+    // is defined rather than assigned.
+    canonical: () =>
+      Object.defineProperty(['ok'], 'map', {
+        value: () => ['..', 'outside'],
+      }),
+  });
+  t.is(await powers.canonical('file:///app/main.js'), 'file:///app/ok');
+  let reads = 0;
+  const shifty = makeTreeReadPowers(makeLocalTree(makeFixture(t)), {
+    canonical: () => {
+      const result = ['ok'];
+      Object.defineProperty(result, 0, {
+        get: () => {
+          reads += 1;
+          return reads === 1 ? 'ok' : '..';
+        },
+      });
+      return result;
+    },
+  });
+  t.is(await shifty.canonical('file:///app/main.js'), 'file:///app/ok');
+  t.is(reads, 1);
+});
+
+test('the root must be normalized', t => {
+  const tree = makeLocalTree(makeFixture(t));
+  for (const root of [
+    'file:///a/../b/',
+    'file:///app/./',
+    'file:///app/%2e%2e/',
+    'file:///my app/',
+  ]) {
+    t.throws(() => makeTreeReadPowers(tree, { root }), {
+      message: /must be normalized/,
+    });
+  }
+});
+
+test('fileURLToPath keeps a trailing slash and decodes an encoded root', t => {
+  const tree = makeLocalTree(makeFixture(t));
+  const powers = makeTreeReadPowers(tree, { root: 'file:///my%20app/' });
+  t.is(powers.fileURLToPath('file:///my%20app/dep/'), '/my app/dep/');
+  t.is(powers.fileURLToPath('file:///my%20app/a%20b.js'), '/my app/a b.js');
+  t.is(
+    powers.pathToFileURL('/my app/a b.js').href,
+    'file:///my%20app/a%20b.js',
+  );
+  t.is(
+    powers.fileURLToPath('file:///my%20app/dep/'),
+    url.fileURLToPath('file:///my%20app/dep/'),
+  );
+});
+
+// Fragments a hostile compartment map might compose into a location: plain
+// and encoded traversal, separators, NUL, empty segments, and benign names.
+const pathFragment = fc.constantFrom(
+  '',
+  '.',
+  '..',
+  '%2e',
+  '%2E%2e',
+  '.%2e',
+  '%2f',
+  '%2F',
+  '%5c',
+  '%5C',
+  '%00',
+  '\\',
+  '\0',
+  '/',
+  'main.js',
+  'node_modules',
+  'dep',
+  'index.js',
+  'a%20b.js',
+  '..%2f..%2foutside',
+);
+
+const isSafeSegment = segment =>
+  typeof segment === 'string' &&
+  segment !== '' &&
+  segment !== '.' &&
+  segment !== '..' &&
+  !segment.includes('/') &&
+  !segment.includes('\\') &&
+  !segment.includes('\0');
+
+test('every lookup names only validated segments, for any composed location', async t => {
+  const appPath = makeFixture(t);
+  await fc.assert(
+    fc.asyncProperty(fc.array(pathFragment, { maxLength: 6 }), async parts => {
+      const { spy, calls } = makeSpyTree(makeLocalTree(appPath));
+      const powers = makeTreeReadPowers(spy);
+      const location = `file:///app/${parts.join('/')}`;
+      await Promise.allSettled([
+        powers.read(location),
+        powers.maybeRead(location),
+        powers.canonical(location),
+      ]);
+      for (const [, names] of calls) {
+        const segments = Array.isArray(names) ? names.flat() : [names];
+        if (!segments.every(isSafeSegment)) {
+          return false;
+        }
+      }
+      // A traversal segment anywhere refuses the location before any lookup.
+      const raw = parts.join('/').split('/');
+      const traverses = raw.some(segment =>
+        ['.', '..', '%2e', '%2E%2e', '.%2e'].includes(segment),
+      );
+      return !traverses || calls.length === 0;
+    }),
+  );
+  t.pass();
+});
+
+// Segments drawn from a safe alphabet that exercises every escaping rule.
+const safeSegment = fc
+  .string({
+    unit: fc.constantFrom(
+      ...'aZ09-_.~!$&\'()*+,;=:@ %#?[]^`{|}"<>é'.split(''),
+      '\t',
+    ),
+    minLength: 1,
+    maxLength: 8,
+  })
+  .filter(segment => segment !== '.' && segment !== '..');
+
+test('the path codec agrees with Node and canonical is the identity', async t => {
+  const tree = makeLocalTree(makeFixture(t));
+  const plain = makeTreeReadPowers(tree);
+  const hooked = makeTreeReadPowers(tree, { canonical: segments => segments });
+  await fc.assert(
+    fc.asyncProperty(
+      fc.array(safeSegment, { minLength: 1, maxLength: 4 }),
+      fc.boolean(),
+      async (segments, directory) => {
+        const filePath = `/app/${segments.join('/')}${directory ? '/' : ''}`;
+        const href = plain.pathToFileURL(filePath).href;
+        return (
+          href === url.pathToFileURL(filePath).href &&
+          plain.fileURLToPath(href) === filePath &&
+          (await plain.canonical(href)) === href &&
+          (await hooked.canonical(href)) === href
+        );
+      },
+    ),
+  );
+  t.pass();
+});
 
 test('canonical defaults to the identity', async t => {
   const powers = makeTreeReadPowers(makeLocalTree(makeFixture(t)));
