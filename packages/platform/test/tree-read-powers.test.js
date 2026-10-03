@@ -320,7 +320,8 @@ posixTest(
 );
 
 // Fragments a hostile compartment map might compose into a location: plain
-// and encoded traversal, separators, NUL, empty segments, and benign names.
+// and encoded traversal, separators, NUL, raw and encoded controls, empty
+// segments, and benign names.
 const pathFragment = fc.constantFrom(
   '',
   '.',
@@ -339,6 +340,13 @@ const pathFragment = fc.constantFrom(
   '\n',
   '\r',
   '.\t.',
+  '%09',
+  '%0a',
+  '%0D',
+  '%1f',
+  '%7F',
+  'a%0Ab.js',
+  '.%09.',
   '/',
   'main.js',
   'node_modules',
@@ -390,10 +398,7 @@ test('every lookup names only validated segments, for any composed location', as
 // Segments drawn from a safe alphabet that exercises every escaping rule.
 const safeSegment = fc
   .string({
-    unit: fc.constantFrom(
-      ...'aZ09-_.~!$&\'()*+,;=:@ %#?[]^`{|}"<>é'.split(''),
-      '\t',
-    ),
+    unit: fc.constantFrom(...'aZ09-_.~!$&\'()*+,;=:@ %#?[]^`{|}"<>é'.split('')),
     minLength: 1,
     maxLength: 8,
   })
@@ -475,7 +480,6 @@ const pinnedEncodings = [
   ['#', '%23'],
   ['?', '%3F'],
   [' ', '%20'],
-  ['\t', '%09'],
   ['é', '%C3%A9'],
   ['$', '$'],
   ['&', '&'],
@@ -689,6 +693,8 @@ test('read and maybeRead work against a tree in another vat', async t => {
   t.is(await powers.maybeRead('file:///app/lib'), undefined);
 });
 
+// `E()` hardens its arguments as well, so this pins what a tree observes,
+// not the `harden` calls in `toSegments` and `pathToFileURL` themselves.
 test('every segment array passed to a lookup is frozen', async t => {
   const { spy, calls } = makeSpyTree(makeLocalTree(makeFixture(t)));
   const powers = makeTreeReadPowers(spy);
@@ -734,6 +740,68 @@ test('raw tab, LF, and CR in a location are refused', async t => {
     });
   }
   t.deepEqual(calls, []);
+});
+
+test('the canonical hook receives frozen segments', async t => {
+  /** @type {unknown[]} */
+  const received = [];
+  const powers = makeTreeReadPowers(makeLocalTree(makeFixture(t)), {
+    canonicalSegments: segments => {
+      received.push(segments);
+      return segments;
+    },
+  });
+  await powers.canonical('file:///app/lib/index.js');
+  t.is(received.length, 1);
+  t.true(Object.isFrozen(received[0]));
+});
+
+test('percent-encoded controls in a location are refused', async t => {
+  const { spy, calls } = makeSpyTree(makeLocalTree(makeFixture(t)));
+  const powers = makeTreeReadPowers(spy);
+  for (const location of [
+    'file:///app/a%09b.js',
+    'file:///app/a%0Ab.js',
+    'file:///app/main.js%0d',
+    'file:///app/a%1fb.js',
+    'file:///app/a%7Fb.js',
+    'file:///app/.%09./x',
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => powers.read(location), {
+      message: /Control character/,
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => powers.maybeRead(location), {
+      message: /Control character/,
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => powers.canonical(location), {
+      message: /Control character/,
+    });
+    t.throws(() => powers.fileURLToPath(location), {
+      message: /Control character/,
+    });
+  }
+  // A path carrying a control is refused rather than encoded, though Node's
+  // `pathToFileURL` would write `%09`.
+  t.throws(() => powers.pathToFileURL('/app/a\tb.js'), {
+    message: /Control character/,
+  });
+  t.deepEqual(calls, []);
+});
+
+test('a canonical hook may not return a control character', async t => {
+  const tree = makeLocalTree(makeFixture(t));
+  for (const segment of ['a\nb', '\t', 'x\u007f']) {
+    const powers = makeTreeReadPowers(tree, {
+      canonicalSegments: () => ['lib', segment],
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => powers.canonical('file:///app/main.js'), {
+      message: /Control character/,
+    });
+  }
 });
 
 test('empty segments collapse, as Node reads them', async t => {
@@ -807,4 +875,30 @@ test('an entry with kind() is classified by kind', async t => {
   const powers = makeTreeReadPowers(tree);
   t.is(await powers.maybeRead('file:///app/d'), undefined);
   t.is(decoder.decode(await powers.read('file:///app/f')), 'export default 1;');
+});
+
+test('an entry without kind() is a directory exactly when it has list', async t => {
+  const local = makeLocalTree(makeFixture(t));
+  const file = await E(local).lookup('main.js');
+  const streamBase64 = (...args) => E(file).streamBase64(...args);
+  // A list makes a directory even beside a byte reader, as `checkinTree`
+  // decides.
+  const both = Far('both', { list: async () => [], streamBase64 });
+  const reader = Far('reader', { streamBase64 });
+  const tree = harden({
+    has: async name => name === 'both' || name === 'reader',
+    list: async () => ['both', 'reader'],
+    lookup: async names => {
+      const [name] = Array.isArray(names) ? names : [names];
+      if (name === 'both') return both;
+      if (name === 'reader') return reader;
+      throw Error('missing');
+    },
+  });
+  const powers = makeTreeReadPowers(tree);
+  t.is(await powers.maybeRead('file:///app/both'), undefined);
+  t.is(
+    decoder.decode(await powers.read('file:///app/reader')),
+    'export default 1;',
+  );
 });

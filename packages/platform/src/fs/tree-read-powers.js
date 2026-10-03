@@ -4,9 +4,11 @@
  * Compartment-mapper `ReadPowers` over a `ReadableTree`, so an application can
  * be captured from a tree the caller holds rather than from the host
  * filesystem (designs/agent-confined-application-makers.md § The tree
- * `ReadPowers`). A caller holding a `Mount` passes `mount.readOnly()` or
- * `await mount.snapshot()`, so the read powers never hold a write-capable
- * reference.
+ * `ReadPowers`). The read powers only ever call `lookup`, `has`, `kind`, and
+ * byte readers, but they cannot tell a read-only tree from a write-capable
+ * one: a `Directory` or `Mount` satisfies `ReadableTree` structurally. Keeping
+ * write authority out is the caller's obligation: a caller holding a `Mount`
+ * must pass `mount.readOnly()` or `await mount.snapshot()`, not the mount.
  *
  * Every location is a `file:` URL under a synthetic root (`file:///app/` by
  * default). The path below the root is split into segments, and each segment
@@ -16,6 +18,11 @@
  * returns it unchanged, and `read` refuses it, so the compartment mapper's
  * search for a `node_modules` directory can climb past the root and find
  * nothing there.
+ *
+ * A location under the root that the codec cannot represent is refused
+ * rather than read, where Node's `read` and `maybeRead` would read or answer:
+ * a malformed escape, a `?` or a raw `#`, a `.` or `..` segment, a separator
+ * or NUL inside a segment, and a C0 control or DEL, raw or percent-encoded.
  *
  * The module needs a host `URL` global, which Node and browsers provide.
  *
@@ -29,6 +36,7 @@ import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
 import { makeError, X, q } from '@endo/errors';
 import { collectBytes } from './extended/helpers.js';
+import { isDirectoryEntry } from './entry-kind.js';
 
 /**
  * @import { ERef } from '@endo/eventual-send';
@@ -45,9 +53,11 @@ const defaultRoot = 'file:///app/';
 const encodedSeparatorPattern = /%(?:2f|5c|00)/i;
 
 /**
- * Raw C0 controls and DEL. The URL parser strips tab, LF, and CR, so a
- * location carrying them would name one file to the parser and another to
- * the tree.
+ * C0 controls and DEL. The WHATWG URL parser's "remove all ASCII tab or
+ * newline" step strips raw tab, LF, and CR, so a location carrying them would
+ * name one file to the parser and another to the tree. `toSegments` tests the
+ * raw location and `decodeSegment` tests each decoded segment, so the
+ * percent-encoded forms are refused too.
  */
 // eslint-disable-next-line no-control-regex
 const controlPattern = /[\u0000-\u001f\u007f]/;
@@ -57,8 +67,9 @@ const controlPattern = /[\u0000-\u001f\u007f]/;
  * `pathToFileURL` leaves alone. This follows Node, not the WHATWG path
  * percent-encode set: Node escapes characters such as `[`, `]`, `^`, `|`, and
  * `~` that WHATWG would leave alone. The pinned encodings were confirmed on
- * Node 22 and 24, the versions CI runs; the tests pin them, so a change in
- * Node's escaping shows up as a failure.
+ * Node 22 and 24, the versions CI runs. They are unverified on Node 20,
+ * which `engines` still allows; the tests pin them, so a change in Node's
+ * escaping shows up as a failure on any version the tests run on.
  */
 const pathSafeEscapes = /%(?:24|26|2B|2C|3A|3B|3D|40)/g;
 
@@ -86,8 +97,8 @@ const encodeSegment = segment => {
 /**
  * Validate one raw (still percent-encoded) path segment and return its decoded
  * form. Refuses `.` and `..` segments, any segment that names or encodes a
- * separator or a NUL byte, and any segment with no UTF-8 encoding (a lone
- * surrogate, raw or decoded).
+ * separator, a NUL byte, or another C0 control or DEL, and any segment with
+ * no UTF-8 encoding (a lone surrogate, raw or decoded).
  *
  * @param {string} raw
  * @param {string} location
@@ -114,6 +125,13 @@ const decodeSegment = (raw, location) => {
   ) {
     throw makeError(
       X`Separator or NUL in path segment ${q(segment)} of ${q(location)}`,
+    );
+  }
+  // The decoded segment, so `%09`, `%0a`, `%0d`, and `%7f` are refused as
+  // their raw forms are.
+  if (controlPattern.test(segment)) {
+    throw makeError(
+      X`Control character in path segment ${q(segment)} of ${q(location)}`,
     );
   }
   // `decodeURIComponent` leaves a raw lone surrogate alone, so check that the
@@ -155,21 +173,16 @@ const assertRoot = root => {
 };
 
 /**
- * Whether an entry is a file rather than a directory, decided as
- * `checkinTree` does: by `kind()` when the entry has it, and otherwise by
- * whether it has a byte reader. The one test shared by `read`, `maybeRead`,
- * and the absence walk.
+ * Whether an entry is a file rather than a directory, decided by the same
+ * `isDirectoryEntry` that `checkinTree` and `checkoutTree` use. The one test
+ * shared by `read`, `maybeRead`, and the absence walk.
  *
  * @param {unknown} entry
  * @returns {Promise<boolean>}
  */
 const isFile = async entry => {
-  // eslint-disable-next-line no-underscore-dangle
-  const methods = await E(/** @type {any} */ (entry)).__getMethodNames__();
-  if (methods.includes('kind')) {
-    return (await E(/** @type {any} */ (entry)).kind()) === 'file';
-  }
-  return methods.includes('streamBase64');
+  const directory = await isDirectoryEntry(entry);
+  return !directory;
 };
 
 /**
@@ -194,10 +207,12 @@ const isFile = async entry => {
 
 /**
  * Make compartment-mapper `ReadPowers` (`read`, `maybeRead`, `canonical`,
- * `fileURLToPath`, `pathToFileURL`) over a `ReadableTree`. To read a `Mount`,
- * pass `mount.readOnly()` or `await mount.snapshot()`.
+ * `fileURLToPath`, `pathToFileURL`) over a `ReadableTree`. Nothing here
+ * checks that the tree is read-only: to read a `Mount`, the caller must pass
+ * `mount.readOnly()` or `await mount.snapshot()`.
  *
- * @param {ERef<ReadableTree>} tree - a read-only tree reference
+ * @param {ERef<ReadableTree>} tree - a tree reference the caller has made
+ *   read-only
  * @param {TreeReadPowersOptions} [options]
  * @returns {TreeReadPowers} the hardened read powers
  */

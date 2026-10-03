@@ -4,6 +4,7 @@
 import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+import { isDirectoryEntry } from './entry-kind.js';
 
 /** @import { TreeWriter, SnapshotTree } from './types.js' */
 
@@ -34,13 +35,7 @@ export const checkoutTree = async (tree, writer, options = {}) => {
       if (kindProtocol) {
         isTree = (await E(child).kind()) === 'directory';
       } else {
-        // Older ReadableTree / ReadableBlob capabilities need method
-        // introspection to avoid a noisy missing-method send.
-        // eslint-disable-next-line no-underscore-dangle
-        const methods = await E(child).__getMethodNames__();
-        isTree = methods.includes('kind')
-          ? (await E(child).kind()) === 'directory'
-          : methods.includes('list');
+        isTree = await isDirectoryEntry(child);
       }
       if (isTree) {
         await walk(child, childPath, kindProtocol);
