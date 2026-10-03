@@ -368,7 +368,7 @@ export type GitProvisionOptions = {
  * construction inputs and are never revealed by `Shell.inspect()`.
  */
 export type ShellPolicy = {
-  allowedCommands: string[];
+  commands: import('@endo/exo-shell').ShellCommandGrammar[];
   timeoutMs: number;
   maxOutputBytes: number;
   env?: Record<string, string>;
@@ -397,7 +397,8 @@ export type ShellFormula = {
  */
 export interface EndoShell {
   inspect(): Promise<{
-    allowedCommands: string[];
+    commands: import('@endo/exo-shell').ShellCommandGrammar[];
+    usage: string[];
     timeoutMs: number;
     maxOutputBytes: number;
   }>;
@@ -406,6 +407,10 @@ export interface EndoShell {
     args: string[],
     options?: { timeoutMs?: number },
   ): Promise<ShellResult>;
+  attenuate(
+    commands: import('@endo/exo-shell').ShellCommandGrammar[],
+    options?: { timeoutMs?: number },
+  ): Promise<EndoShell>;
 }
 
 export type ShellDeferredTaskParams = {
