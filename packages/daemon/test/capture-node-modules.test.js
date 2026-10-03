@@ -103,6 +103,89 @@ const sourceText = (capture, compartmentName, moduleSpecifier) => {
   return decodeUtf8(moduleSource.bytes);
 };
 
+/**
+ * Write a pre-generated compartment map naming one compartment location.
+ *
+ * @param {ExecutionContext} testContext
+ * @param {unknown} location
+ */
+const makeMapFixture = (testContext, location) => {
+  const directory = makeFixture(testContext, "export default 'mapped';\n");
+  writeFileSync(
+    join(directory, 'compartment-map.json'),
+    JSON.stringify({
+      tags: [],
+      entry: { compartment: 'file:///app/', module: './mapped.js' },
+      compartments: {
+        'file:///app/': {
+          name: 'tree-application',
+          label: 'tree-application',
+          location,
+          modules: {},
+        },
+      },
+    }),
+  );
+  return makeLocalTree(directory);
+};
+
+test('node-modules-with-map refuses a compartment location outside the root', async testContext => {
+  await null;
+  for (const location of [
+    'file:///outside/',
+    'file:///app/../outside/',
+    'file:///app-other/',
+  ]) {
+    const tree = makeMapFixture(testContext, location);
+    // eslint-disable-next-line no-await-in-loop
+    await testContext.throwsAsync(
+      () => captureNodeModules(tree, { layout: 'node-modules-with-map' }),
+      { message: /location .* is not under tree root "file:\/\/\/app\/"/ },
+      location,
+    );
+  }
+});
+
+test('node-modules-with-map normalizes a root without a trailing slash', async testContext => {
+  const tree = makeMapFixture(testContext, 'file:///app-other/');
+  await testContext.throwsAsync(
+    () =>
+      captureNodeModules(tree, {
+        layout: 'node-modules-with-map',
+        root: 'file:///app',
+      }),
+    {
+      message:
+        /location "file:\/\/\/app-other\/" is not under tree root "file:\/\/\/app\/"/,
+    },
+  );
+});
+
+test('node-modules-with-map refuses a compartment with no location', async testContext => {
+  const tree = makeMapFixture(testContext, undefined);
+  await testContext.throwsAsync(
+    () => captureNodeModules(tree, { layout: 'node-modules-with-map' }),
+    { message: /is missing its location/ },
+  );
+});
+
+test('node-modules-scan refuses an entry outside a root without a trailing slash', async testContext => {
+  const directory = makeFixture(testContext, "export default 'scan';\n");
+  const tree = makeLocalTree(directory);
+  await testContext.throwsAsync(
+    () =>
+      captureNodeModules(tree, {
+        layout: 'node-modules-scan',
+        root: 'file:///app',
+        entry: '../app-other/x.js',
+      }),
+    {
+      message:
+        /Entry location "file:\/\/\/app-other\/x.js" is not under tree root "file:\/\/\/app\/"/,
+    },
+  );
+});
+
 test('node-modules-with-map captures the map entry and in-place sources', async testContext => {
   const entrySource =
     "import { value } from 'tree-dependency';\nexport default 'mapped: ' + value;\n";

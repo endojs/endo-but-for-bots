@@ -8243,7 +8243,7 @@ test('makeFromTree refuses a package.json that names a file outside the tree', a
   await t.throwsAsync(
     () =>
       E(host).makeFromTree(undefined, 'outside-tree', { powersName: '@none' }),
-    { message: /outside|not under|\.\./ },
+    { message: /"\.\.\/outside\.js" must not traverse behind an empty path/ },
   );
 });
 
