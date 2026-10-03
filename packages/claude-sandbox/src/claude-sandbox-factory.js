@@ -273,7 +273,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
   // A lone name becomes a one-segment path; a path passes through. Strings
   // are never split on a delimiter.
   /** @param {string | string[]} name */
-  const toPath = name => (typeof name === 'string' ? [name] : name);
+  const namePathOf = name => (typeof name === 'string' ? [name] : name);
   const backend =
     env.CLAUDE_SANDBOX_BACKEND ||
     process.env.CLAUDE_SANDBOX_BACKEND ||
@@ -405,11 +405,11 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         ['@agent'],
         underNamespace(sandboxFactoryName),
         underNamespace(fsMounterName),
-        toPath(filesystemName),
+        namePathOf(filesystemName),
       ];
       if (credentialsName) {
         codeNames.push('credentials');
-        petNames.push(toPath(credentialsName));
+        petNames.push(namePathOf(credentialsName));
       }
       await E(hostAgent).evaluate(
         ['@main'],
@@ -441,7 +441,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         }),
       };
       if (resultName !== undefined) {
-        options.resultName = toPath(resultName);
+        options.resultName = namePathOf(resultName);
       }
       const client = await E(hostAgent).makeUnconfined(
         ['@main'],
@@ -458,7 +458,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
       // (which would strand a live orphan behind an error reply) — hence
       // `allSettled`, matching the catch path below.
       await Promise.allSettled(
-        toCleanup.map(n => E(hostAgent).remove(...toPath(n))),
+        toCleanup.map(n => E(hostAgent).remove(...namePathOf(n))),
       );
 
       return harden({
@@ -469,7 +469,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
       });
     } catch (error) {
       await Promise.allSettled(
-        toCleanup.map(n => E(hostAgent).remove(...toPath(n))),
+        toCleanup.map(n => E(hostAgent).remove(...namePathOf(n))),
       );
       throw error;
     }
