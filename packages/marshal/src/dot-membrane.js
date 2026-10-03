@@ -35,7 +35,10 @@ let sturdyRefPowers;
 /**
  * Captures the realm's `SturdyRef` constructor and its `enliven` once.
  * Called only after `passStyleOf` has recognized a SturdyRef, so the
- * realm's `SturdyRef` exists by then.
+ * realm's `SturdyRef` exists by then. The shim installs
+ * `globalThis.SturdyRef` first-wins and never replaces it, and pass-style
+ * captures its brand check from the same global, so the constructor read
+ * here makes refs that pass-style recognizes.
  *
  * @returns {SturdyRefPowers}
  */
@@ -145,19 +148,23 @@ const makeConverter = (mirrorConverter = undefined) => {
         yours = new SturdyRef(
           harden({
             enliven: () => {
-              // As with remotables, use mineIf so that enlivening fails once
-              // the membrane is revoked. This gives the correct error
-              // behavior, but may not actually enable mine to be gc'ed,
-              // depending on the JS engine.
-              const mineIf = passBack(yours);
               // As with promises, pass both the fulfillment and the
               // rejection, so that neither crosses the membrane unwrapped.
-              // Calling `enliven` inside `E.when` also routes a synchronous
-              // throw through the rejection path, should an adopted realm
-              // `SturdyRef` not defer its handler the way ours does.
+              // Calling `passBack` and `enliven` inside `E.when` also routes
+              // a synchronous throw, including the one `passBack` makes once
+              // the membrane is revoked, through the rejection path, should
+              // an adopted realm `SturdyRef` not defer its handler the way
+              // ours does.
               return new Promise((yourResolve, yourReject) => {
                 E.when(
-                  E.when(undefined, () => apply(enliven, SturdyRef, [mineIf])),
+                  E.when(undefined, () => {
+                    // As with remotables, use mineIf so that enlivening fails
+                    // once the membrane is revoked. This gives the correct
+                    // error behavior, but may not actually enable mine to be
+                    // gc'ed, depending on the JS engine.
+                    const mineIf = passBack(yours);
+                    return apply(enliven, SturdyRef, [mineIf]);
+                  }),
                   myFulfillment => yourResolve(pass(myFulfillment)),
                   myReason => yourReject(pass(myReason)),
                 )
