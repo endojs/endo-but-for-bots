@@ -182,7 +182,8 @@ harden(resolveGuest);
 /**
  * Accept the facet a daemon-issued guest socket bootstraps to, as the guest
  * named by a formula id. The facet must name itself by that formula number
- * (`@agent`), so a socket issued for a different guest is refused.
+ * (`@agent`), and by that node too when the formula id is qualified, so a
+ * socket issued for a different guest is refused.
  *
  * @param {unknown} guest - the guest socket's bootstrap.
  * @param {string} formulaId
@@ -192,7 +193,9 @@ export const resolveScopedGuest = async (guest, formulaId) => {
   let expected;
   let selfId;
   try {
-    expected = isValidNumber(formulaId) ? formulaId : parseId(formulaId).number;
+    expected = isValidNumber(formulaId)
+      ? { number: formulaId, node: undefined }
+      : parseId(formulaId);
     selfId = await E(/** @type {any} */ (guest)).identify('@agent');
   } catch (cause) {
     throw makeServerConstructionError(
@@ -203,11 +206,15 @@ export const resolveScopedGuest = async (guest, formulaId) => {
   }
   let actual;
   try {
-    actual = parseId(String(selfId)).number;
+    actual = parseId(String(selfId));
   } catch {
     actual = undefined;
   }
-  if (actual !== expected) {
+  if (
+    actual === undefined ||
+    actual.number !== expected.number ||
+    (expected.node !== undefined && actual.node !== expected.node)
+  ) {
     throw makeServerConstructionError(
       'invalid-formula-id',
       `The guest socket does not speak for formula ${formulaId}`,
