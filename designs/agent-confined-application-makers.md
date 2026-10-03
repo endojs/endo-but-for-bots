@@ -122,8 +122,10 @@ This choice gives three properties:
   (`packTreeIntoArchiveBytes`, then the worker's `makeArchive`), and the new
   layouts follow that route on every worker kind. A new worker method would need a second XS bridge. The bus XS
   worker's `makeArchive` is still a stub (`bus-worker-xs-facet.js`,
-  [worker-rust-xs](worker-rust-xs.md) § Known Gaps); this design adds no new
-  XS gap.
+  [worker-rust-xs](worker-rust-xs.md) § Known Gaps). The capture itself runs
+  in the daemon, though, and adds one XS gap on the supervisor side (Design
+  decision 7): an XS daemon supervisor refuses the `node_modules` layouts
+  until a later phase lets it capture them.
 - **The tree stays live.** Every layout of `makeFromTree` keeps a live tree
   reference, as the archive layout does today, so reincarnation reads the tree
   as it is then. A caller who wants a fixed application passes a snapshot (an
@@ -318,7 +320,13 @@ Capture errors surface as an `isError` result, and a rejected option
 1. `makeTreeReadPowers` in `@endo/platform/fs`, with segment-confinement tests.
 2. Daemon capture for `node-modules-with-map` and `node-modules-scan`,
    including the daemon's `canonical` hook for mounts; `EndoHost.makeFromTree`
-   gains `layout` and `entry`.
+   gains `layout` and `entry`. The capture runs on a Node daemon supervisor
+   only; an XS supervisor refuses the `node_modules` layouts with a diagnosis
+   and keeps running the `'archive'` layout (Design decision 7).
+   Phase 2 is done when the § Test plan's Node-versus-XS worker evidence lands
+   under a Node supervisor.
+   - Phase 2b: `node_modules` capture under an XS daemon supervisor, which
+     closes the gap Phase 2 leaves open.
 3. `EndoHost.makeFromBundle`, and `makeArchive`'s refusal of precompiled archives.
 4. A caplet-preparation helper factored out of the host's `prepareMakeCaplet`;
    `EndoGuest.makeArchive`, `makeFromTree`, and `makeFromBundle` on it, bounded
@@ -393,3 +401,12 @@ Capture errors surface as an `isError` result, and a rejected option
    already invite other parties and accept invitations as themselves
    (`EndoGuest.invite`, `EndoGuest.accept`), and guest-made guests belong to
    that line of work.
+7. The `node_modules` layouts run on a Node daemon supervisor only, until
+   Phase 2b. Capture needs `@endo/compartment-mapper`, which the XS daemon
+   bundle (`scripts/bundle-bus-daemon-rust-xs.mjs`) excludes. The daemon
+   therefore receives `captureNodeModulesArchive` as a host tool power, like
+   `git` and the shell, and an XS supervisor, which has no such power, refuses
+   those layouts with a diagnosis (`host-tool-powers.js`). The worker kind is
+   independent of this: a Node supervisor captures for Node and XS workers
+   alike. Closing the gap needs either a compartment-mapper capture path that
+   the XS bundle can carry or a capture service the XS supervisor can call.

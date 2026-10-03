@@ -18,6 +18,7 @@ import {
   NameOrPathShape,
   NamesOrPathsShape,
 } from './type-guards.js';
+import { requestedTreeLayouts } from './tree-layout.js';
 
 // #region Patterns
 
@@ -41,14 +42,23 @@ const MessageNumberShape = M.bigint();
 // Environment variables as string-to-string record
 const EnvShape = M.recordOf(M.string(), M.string());
 
+// Options shared by makeUnconfined, makeArchive, and makeFromTree
+const capletOptionShapes = harden({
+  powersName: NameOrPathShape,
+  resultName: NameOrPathShape,
+  env: EnvShape,
+  workerTrustedShims: M.arrayOf(M.string()),
+});
+
 // Options for makeUnconfined and makeArchive
-const MakeCapletOptionsShape = M.splitRecord(
+const MakeCapletOptionsShape = M.splitRecord({}, capletOptionShapes);
+
+const MakeFromTreeOptionsShape = M.splitRecord(
   {},
   {
-    powersName: NameOrPathShape,
-    resultName: NameOrPathShape,
-    env: EnvShape,
-    workerTrustedShims: M.arrayOf(M.string()),
+    ...capletOptionShapes,
+    layout: M.or(...requestedTreeLayouts),
+    entry: M.string(),
   },
 );
 
@@ -519,9 +529,10 @@ export const HostInterface = M.interface('EndoHost', {
     .returns(M.promise()),
   // Make a caplet from a ReadableTree or Mount laid out as a
   // compartment-mapper archive (compartment-map.json at root plus
-  // modules at their referenced paths).
+  // modules at their referenced paths), as node_modules in situ with a
+  // pre-generated map, or as node_modules in situ to scan.
   makeFromTree: M.call(M.or(NameOrPathShape, M.undefined()), NameOrPathShape)
-    .optional(MakeCapletOptionsShape)
+    .optional(MakeFromTreeOptionsShape)
     .returns(M.promise()),
   // Materialise a readable tree into a new scratch mount.
   stageTree: M.call(NameOrPathShape, NameOrPathShape).returns(M.promise()),

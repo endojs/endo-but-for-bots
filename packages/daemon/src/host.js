@@ -43,6 +43,11 @@ import {
 } from './interfaces.js';
 import { hostHelp, makeHelp } from './help-text.js';
 import { assertValidTreeEntryName, getMountBacking } from './mount.js';
+import {
+  assertEntryAppliesToLayout,
+  resolveTreeLayout,
+  treeKindForFormulaType,
+} from './tree-layout.js';
 
 /**
  * @param {string} name
@@ -300,6 +305,7 @@ harden(normalizeHttpClientPolicy);
  * @param {DaemonCore['formulateFromTree']} args.formulateFromTree
  * @param {(id: FormulaIdentifier) => string} args.getScratchMountPath
  * @param {(id: FormulaIdentifier) => string} args.getMountHostPath
+ * @param {DaemonCore['getTreeLayoutRunningAs']} [args.getTreeLayoutRunningAs]
  * @param {HostToolPowers['gitClone']} [args.gitClone]
  * @param {(ref: unknown) => FormulaIdentifier | undefined} args.getIdForRef
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
@@ -386,6 +392,8 @@ export const makeHostMaker = ({
   getMountHostPath = /** @param {FormulaIdentifier} _id */ _id => {
     throw makeError(X`getMountHostPath not wired into makeHostMaker`);
   },
+  getTreeLayoutRunningAs = /** @param {FormulaIdentifier} _id */ _id =>
+    undefined,
   // Cloning a remote runs the host's `git`, so the implementation is
   // injected from the daemon core's host tool powers rather than
   // imported here: a static `@endo/git` import would put nine `node:`
@@ -1820,6 +1828,17 @@ export const makeHostMaker = ({
         throw new TypeError(`Unknown pet name for tree: ${q(treeName)}`);
       }
 
+      // Check the tree's layout before formulating, so a tree that matches
+      // no layout (or a refused one) formulates nothing.  The formula
+      // records only the requested layout; each incarnation detects again.
+      const layout = options?.layout ?? 'detect';
+      const entry = options?.entry;
+      const runningAs = await resolveTreeLayout(
+        provide(/** @type {FormulaIdentifier} */ (treeId)),
+        layout,
+      );
+      assertEntryAppliesToLayout(entry, runningAs);
+
       const {
         tasks,
         workerId,
@@ -1847,6 +1866,8 @@ export const makeHostMaker = ({
         env,
         workerTrustedShims,
         workerLabel,
+        layout,
+        entry,
       );
       return value;
     };
@@ -2355,7 +2376,39 @@ export const makeHostMaker = ({
           /** @type {FormulaIdentifier} */ (identifier),
         );
       }
-      return makeFormulaRecord(formula, number, { mountHostPath });
+      // A make-from-tree record reports which kind of tree it holds and
+      // the layout its current incarnation ran as, a live fact that is not
+      // formula state.
+      let treeKind;
+      let treeLayoutRunningAs;
+      if (formula.type === 'make-from-tree') {
+        let treeFormula;
+        try {
+          treeFormula = await getFormulaForId(formula.tree);
+        } catch (err) {
+          // A tree formula that no longer exists leaves the kind
+          // unknown; any other read failure (a corrupt formula, say) is
+          // reported against the tree it came from.
+          if (!(err instanceof ReferenceError)) {
+            throw makeError(
+              X`getFormula could not read the tree formula ${q(formula.tree)} of ${q(identifier)}`,
+              undefined,
+              { cause: /** @type {Error} */ (err) },
+            );
+          }
+        }
+        if (treeFormula !== undefined) {
+          treeKind = treeKindForFormulaType(treeFormula.type);
+        }
+        treeLayoutRunningAs = getTreeLayoutRunningAs(
+          /** @type {FormulaIdentifier} */ (identifier),
+        );
+      }
+      return makeFormulaRecord(formula, number, {
+        mountHostPath,
+        treeKind,
+        treeLayoutRunningAs,
+      });
     };
 
     const { reverseIdentify } = specialStore;

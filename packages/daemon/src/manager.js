@@ -46,6 +46,10 @@ import {
   tarEndMarker,
 } from '@endo/tar/writer.js';
 import { checkinTarTree } from './tar-checkin.js';
+import {
+  assertEntryAppliesToLayout,
+  resolveTreeLayout,
+} from './tree-layout.js';
 import { makeEndoRegistry, makeRegistryTable } from './registry.js';
 import { makeDirectoryMaker, makeReadOnlyDirectoryView } from './directory.js';
 import { makeContentDataPlaneRegistry } from './content-data-plane.js';
@@ -134,7 +138,7 @@ import { getUnredactedStackString } from './unredacted-stack.js';
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { ReadableBlobRange, SnapshotTree } from '@endo/platform/fs/lite/types' */
 /** @import { ArchiveTreeMethods } from './tar-checkin.js' */
-/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoAgent, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableNameHub, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
+/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoAgent, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, RequestedTreeLayout, TreeLayout, ReadableBlobFormula, ReadableNameHub, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
 
 /**
  * @typedef {{ kind: 'bearer', token: string } | { kind: 'basic', username: string, password: string }} GitCredentialMaterial
@@ -508,8 +512,15 @@ const makeDaemonCore = async (
   // injects the implementations rather than the daemon core importing
   // them, so the core stays free of `node:` builtins; a supervisor that
   // cannot spawn gets stand-ins that refuse.
-  const { gitClone, makeNativeGitBackend, makeHostSpawner } =
-    provideHostToolPowers(hostTools);
+  // `makeFromTree`'s `node_modules` layouts need
+  // `@endo/compartment-mapper`, which the XS bundle excludes, so the
+  // capture is injected the same way.
+  const {
+    gitClone,
+    makeNativeGitBackend,
+    makeHostSpawner,
+    captureNodeModulesArchive,
+  } = provideHostToolPowers(hostTools);
   const contentStore = persistencePowers.makeContentStore();
   const secretStoreKey = await persistencePowers.provideSecretStoreKey();
   const secretBackend = makeEncryptedFileSecretBackend({
@@ -2230,6 +2241,7 @@ const makeDaemonCore = async (
    * @param {string} specifier
    * @param {Record<string, string>} env
    * @param {Context} context
+   * @param {FormulaIdentifier} [cancelWithWorker]
    */
   const makeUnconfined = async (
     workerId,
@@ -2301,41 +2313,44 @@ const makeDaemonCore = async (
   };
 
   /**
-   * Load a source-only tree (ReadableTree or Mount) into a worker and
-   * invoke its entry `make(powers, context, { env })`.  Mirrors
-   * {@link makeArchive} but the source comes from a tree capability
-   * rather than a ZIP blob.
+   * Run a tree whose layout is resolved in a worker.
    *
+   * @param {Exclude<TreeLayout, 'package'>} runningAs
+   * @param {string | undefined} entry
    * @param {string} workerId
-   * @param {string} powersId
-   * @param {string} treeId
+   * @param {any} workerDaemonFacet
+   * @param {Promise<unknown>} treeP
+   * @param {Promise<unknown>} powersP
    * @param {Record<string, string> | undefined} env
    * @param {Context} context
-   * @param {string} [cancelWithWorker]
    */
-  const makeFromTree = async (
+  const runTreeAs = async (
+    runningAs,
+    entry,
     workerId,
-    powersId,
-    treeId,
+    workerDaemonFacet,
+    treeP,
+    powersP,
     env,
     context,
-    cancelWithWorker,
   ) => {
-    context.thisDiesIfThatDies(workerId);
-    context.thisDiesIfThatDies(powersId);
-    context.thisDiesIfThatDies(treeId);
-    if (cancelWithWorker) {
-      context.thisDiesIfThatDies(cancelWithWorker);
+    if (runningAs !== 'archive') {
+      const archiveBytes = await captureNodeModulesArchive(
+        /** @type {any} */ (treeP),
+        {
+          layout: runningAs,
+          ...(entry !== undefined ? { entry } : {}),
+        },
+      );
+      // eslint-disable-next-line no-use-before-define
+      const transientBlob = makeBytesBlob(archiveBytes);
+      return E(/** @type {any} */ (workerDaemonFacet)).makeArchive(
+        /** @type {any} */ (transientBlob),
+        /** @type {any} */ (powersP),
+        /** @type {any} */ (makeFarContext(context)),
+        env,
+      );
     }
-
-    const worker = await provide(
-      /** @type {FormulaIdentifier} */ (workerId),
-      'worker',
-    );
-    const workerDaemonFacet = workerDaemonFacets.get(worker);
-    assert(workerDaemonFacet, 'Cannot make caplet with non-worker');
-    const treeP = provide(/** @type {FormulaIdentifier} */ (treeId));
-    const powersP = provide(/** @type {FormulaIdentifier} */ (powersId));
 
     // XS (locked) workers cannot run @endo/compartment-mapper's
     // parseArchive themselves yet, so the daemon walks the tree
@@ -2372,6 +2387,83 @@ const makeDaemonCore = async (
       /** @type {any} */ (makeFarContext(context)),
       env,
     );
+  };
+
+  /**
+   * The layout each live `make-from-tree` incarnation ran as, keyed by the
+   * formula identifier.
+   *
+   * @type {Map<string, Exclude<TreeLayout, 'package'>>}
+   */
+  const treeLayoutRunningAs = new Map();
+
+  /**
+   * Load a source-only tree (ReadableTree or Mount) into a worker and
+   * invoke its entry `make(powers, context, { env })`.  Mirrors
+   * {@link makeArchive} but the source comes from a tree capability
+   * rather than a ZIP blob.
+   *
+   * @param {string} id
+   * @param {string} workerId
+   * @param {string} powersId
+   * @param {string} treeId
+   * @param {Record<string, string> | undefined} env
+   * @param {Context} context
+   * @param {string} [cancelWithWorker]
+   * @param {RequestedTreeLayout} [layout]
+   * @param {string} [entry]
+   */
+  const makeFromTree = async (
+    id,
+    workerId,
+    powersId,
+    treeId,
+    env,
+    context,
+    cancelWithWorker,
+    layout = 'archive',
+    entry = undefined,
+  ) => {
+    context.thisDiesIfThatDies(workerId);
+    context.thisDiesIfThatDies(powersId);
+    context.thisDiesIfThatDies(treeId);
+    if (cancelWithWorker) {
+      context.thisDiesIfThatDies(cancelWithWorker);
+    }
+    // Register the cleanup before the first await: a context canceled
+    // while the worker runs accepts no further `onCancel` hooks, so a
+    // hook registered afterward would leave an entry nothing deletes.
+    let incarnationCanceled = false;
+    context.onCancel(() => {
+      incarnationCanceled = true;
+      treeLayoutRunningAs.delete(id);
+    });
+
+    const worker = await provide(
+      /** @type {FormulaIdentifier} */ (workerId),
+      'worker',
+    );
+    const workerDaemonFacet = workerDaemonFacets.get(worker);
+    assert(workerDaemonFacet, 'Cannot make caplet with non-worker');
+    const treeP = provide(/** @type {FormulaIdentifier} */ (treeId));
+    const powersP = provide(/** @type {FormulaIdentifier} */ (powersId));
+
+    const runningAs = await resolveTreeLayout(treeP, layout);
+    assertEntryAppliesToLayout(entry, runningAs);
+    const value = await runTreeAs(
+      runningAs,
+      entry,
+      workerId,
+      workerDaemonFacet,
+      treeP,
+      powersP,
+      env,
+      context,
+    );
+    if (!incarnationCanceled) {
+      treeLayoutRunningAs.set(id, runningAs);
+    }
+    return value;
   };
 
   /**
@@ -3852,11 +3944,24 @@ const makeDaemonCore = async (
         tree: treeId,
         env = {},
         cancelWithWorker,
+        layout,
+        entry,
       },
       context,
+      id,
     ) =>
       // eslint-disable-next-line no-use-before-define
-      makeFromTree(workerId, powersId, treeId, env, context, cancelWithWorker),
+      makeFromTree(
+        id,
+        workerId,
+        powersId,
+        treeId,
+        env,
+        context,
+        cancelWithWorker,
+        layout,
+        entry,
+      ),
     host: async (formula, context, id) => {
       const {
         hostHandle: hostHandleId,
@@ -4698,6 +4803,7 @@ const makeDaemonCore = async (
    *
    * @param {FormulaNumber} formulaNumber
    * @param {Formula} formula
+   * @param {NodeNumber} [nodeNumber]
    * @returns {Promise<FormulaIdentifier>}
    */
   const formulateLazy = async (
@@ -6448,6 +6554,8 @@ const makeDaemonCore = async (
     env = {},
     trustedShims = undefined,
     workerLabel = undefined,
+    layout = 'detect',
+    entry = undefined,
   ) => {
     return withFormulaGraphLock(async () => {
       // Pass workerKind=undefined so the worker inherits the daemon's
@@ -6473,6 +6581,8 @@ const makeDaemonCore = async (
         powers: powersId,
         tree: treeId,
         env,
+        layout,
+        ...(entry !== undefined ? { entry } : {}),
         ...(originalWorkerId ? { cancelWithWorker: originalWorkerId } : {}),
       };
       return formulate(capletFormulaNumber, formula);
@@ -8250,6 +8360,7 @@ const makeDaemonCore = async (
     followRetentionPaths,
     getScratchMountPath,
     getMountHostPath,
+    getTreeLayoutRunningAs: id => treeLayoutRunningAs.get(id),
     getIdForRef,
     traceAggregator,
     secretManager,

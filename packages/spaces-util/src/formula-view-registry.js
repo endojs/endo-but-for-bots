@@ -160,8 +160,17 @@ const REGISTRY = {
   },
   'make-from-tree': {
     header: 'Make-from-tree',
-    helpText: 'Code loaded from a readable tree.',
-    propertyList: ['tree', 'powers', 'worker'],
+    helpText:
+      'Code captured from a readable tree or mount at each incarnation; the layout it requested and the layout it runs as.',
+    propertyList: [
+      'tree',
+      'treeKind',
+      'layout',
+      'runningAs',
+      'entry',
+      'powers',
+      'worker',
+    ],
   },
   peer: {
     header: 'Peer',
