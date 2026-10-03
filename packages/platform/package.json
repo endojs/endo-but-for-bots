@@ -102,6 +102,7 @@
   },
   "devDependencies": {
     "@endo/captp": "workspace:^",
+    "@endo/compartment-mapper": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "@fast-check/ava": "catalog:dev",

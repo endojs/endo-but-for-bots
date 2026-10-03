@@ -15,6 +15,10 @@ import { makeTreeReadPowers } from '../src/fs/tree-read-powers.js';
 
 const decoder = new TextDecoder();
 
+// The comparisons against Node's own `url.fileURLToPath` and `pathToFileURL`
+// use driveless POSIX paths, which those functions refuse on Windows.
+const posixTest = process.platform === 'win32' ? test.skip : test;
+
 // A tree with a package, a nested `node_modules` dependency, and a file
 // beside the tree root that no location may reach.
 const makeFixture = t => {
@@ -287,20 +291,23 @@ test('the root must be normalized', t => {
   }
 });
 
-test('fileURLToPath keeps a trailing slash and decodes an encoded root', t => {
-  const tree = makeLocalTree(makeFixture(t));
-  const powers = makeTreeReadPowers(tree, { root: 'file:///my%20app/' });
-  t.is(powers.fileURLToPath('file:///my%20app/dep/'), '/my app/dep/');
-  t.is(powers.fileURLToPath('file:///my%20app/a%20b.js'), '/my app/a b.js');
-  t.is(
-    powers.pathToFileURL('/my app/a b.js').href,
-    'file:///my%20app/a%20b.js',
-  );
-  t.is(
-    powers.fileURLToPath('file:///my%20app/dep/'),
-    url.fileURLToPath('file:///my%20app/dep/'),
-  );
-});
+posixTest(
+  'fileURLToPath keeps a trailing slash and decodes an encoded root',
+  t => {
+    const tree = makeLocalTree(makeFixture(t));
+    const powers = makeTreeReadPowers(tree, { root: 'file:///my%20app/' });
+    t.is(powers.fileURLToPath('file:///my%20app/dep/'), '/my app/dep/');
+    t.is(powers.fileURLToPath('file:///my%20app/a%20b.js'), '/my app/a b.js');
+    t.is(
+      powers.pathToFileURL('/my app/a b.js').href,
+      'file:///my%20app/a%20b.js',
+    );
+    t.is(
+      powers.fileURLToPath('file:///my%20app/dep/'),
+      url.fileURLToPath('file:///my%20app/dep/'),
+    );
+  },
+);
 
 // Fragments a hostile compartment map might compose into a location: plain
 // and encoded traversal, separators, NUL, empty segments, and benign names.
@@ -377,30 +384,163 @@ const safeSegment = fc
   })
   .filter(segment => segment !== '.' && segment !== '..');
 
-test('the path codec agrees with Node and canonical is the identity', async t => {
-  const tree = makeLocalTree(makeFixture(t));
-  const plain = makeTreeReadPowers(tree);
-  const hooked = makeTreeReadPowers(tree, { canonical: segments => segments });
-  await fc.assert(
-    fc.asyncProperty(
-      fc.array(safeSegment, { minLength: 1, maxLength: 4 }),
-      fc.boolean(),
-      async (segments, directory) => {
-        const filePath = `/app/${segments.join('/')}${directory ? '/' : ''}`;
-        const href = plain.pathToFileURL(filePath).href;
-        return (
-          href === url.pathToFileURL(filePath).href &&
-          plain.fileURLToPath(href) === filePath &&
-          (await plain.canonical(href)) === href &&
-          (await hooked.canonical(href)) === href
-        );
-      },
-    ),
-  );
-  t.pass();
+// Spell a segment with any of its characters percent-encoded, in either hex
+// case, so the property sees the non-canonical spellings a map could carry.
+const respell = (segment, mask, upper) => {
+  const encoder = new TextEncoder();
+  return [...segment]
+    .map((character, index) => {
+      if (mask.length === 0 || !mask[index % mask.length]) {
+        // The prefix keeps a lone `.` from reading as a relative segment.
+        return url
+          .pathToFileURL(`/x${character}`)
+          .href.slice('file:///x'.length);
+      }
+      return [...encoder.encode(character)]
+        .map(byte => {
+          const hex = byte.toString(16).padStart(2, '0');
+          return `%${upper ? hex.toUpperCase() : hex}`;
+        })
+        .join('');
+    })
+    .join('');
+};
+
+posixTest(
+  'the path codec agrees with Node and canonical normalizes spelling',
+  async t => {
+    const tree = makeLocalTree(makeFixture(t));
+    const plain = makeTreeReadPowers(tree);
+    const hooked = makeTreeReadPowers(tree, {
+      canonical: segments => segments,
+    });
+    await fc.assert(
+      fc.asyncProperty(
+        fc.array(safeSegment, { minLength: 1, maxLength: 4 }),
+        fc.boolean(),
+        fc.array(fc.boolean(), { maxLength: 8 }),
+        fc.boolean(),
+        async (segments, directory, mask, upper) => {
+          const filePath = `/app/${segments.join('/')}${directory ? '/' : ''}`;
+          const href = plain.pathToFileURL(filePath).href;
+          const respelled = `file:///app/${segments
+            .map(segment => respell(segment, mask, upper))
+            .join('/')}${directory ? '/' : ''}`;
+          return (
+            href === url.pathToFileURL(filePath).href &&
+            plain.fileURLToPath(href) === filePath &&
+            plain.fileURLToPath(respelled) === filePath &&
+            (await plain.canonical(href)) === href &&
+            (await hooked.canonical(href)) === href &&
+            (await plain.canonical(respelled)) === href &&
+            (await hooked.canonical(respelled)) === href
+          );
+        },
+      ),
+    );
+    t.pass();
+  },
+);
+
+// Node's `pathToFileURL` escaping, pinned so a change in Node shows up here
+// rather than silently moving the property above.
+const pinnedEncodings = [
+  ['[', '%5B'],
+  [']', '%5D'],
+  ['^', '%5E'],
+  ['|', '%7C'],
+  ['~', '%7E'],
+  ['`', '%60'],
+  ['{', '%7B'],
+  ['}', '%7D'],
+  ['"', '%22'],
+  ['<', '%3C'],
+  ['>', '%3E'],
+  ['%', '%25'],
+  ['#', '%23'],
+  ['?', '%3F'],
+  [' ', '%20'],
+  ['\t', '%09'],
+  ['é', '%C3%A9'],
+  ['$', '$'],
+  ['&', '&'],
+  ['+', '+'],
+  [',', ','],
+  [';', ';'],
+  ['=', '='],
+  [':', ':'],
+  ['@', '@'],
+  ['!', '!'],
+  ["'", "'"],
+  ['(', '('],
+  [')', ')'],
+  ['*', '*'],
+];
+
+test('the path codec escapes each character as pinned', t => {
+  const powers = makeTreeReadPowers(makeLocalTree(makeFixture(t)));
+  for (const [character, encoded] of pinnedEncodings) {
+    t.is(
+      powers.pathToFileURL(`/app/x${character}`).href,
+      `file:///app/x${encoded}`,
+      JSON.stringify(character),
+    );
+  }
 });
 
-test('canonical defaults to the identity', async t => {
+posixTest('the pinned encodings match Node', t => {
+  for (const [character, encoded] of pinnedEncodings) {
+    t.is(
+      url.pathToFileURL(`/app/x${character}`).href,
+      `file:///app/x${encoded}`,
+      JSON.stringify(character),
+    );
+  }
+});
+
+test('canonical gives one spelling to every spelling of a location', async t => {
+  const powers = makeTreeReadPowers(makeLocalTree(makeFixture(t)));
+  t.is(await powers.canonical('file:///app/m%61in.js'), 'file:///app/main.js');
+  t.is(
+    await powers.canonical('file:///app/node_modules/%64ep/'),
+    'file:///app/node_modules/dep/',
+  );
+  t.is(await powers.canonical('file:///app/a%7eb'), 'file:///app/a%7Eb');
+});
+
+test('a trailing slash never names a file', async t => {
+  const powers = makeTreeReadPowers(makeLocalTree(makeFixture(t)));
+  await t.throwsAsync(() => powers.read('file:///app/main.js/'), {
+    message: /names a directory/,
+  });
+  t.is(await powers.maybeRead('file:///app/main.js/'), undefined);
+  t.is(await powers.maybeRead('file:///app/lib/index.js/'), undefined);
+});
+
+test('fileURLToPath accepts a URL', t => {
+  const powers = makeTreeReadPowers(makeLocalTree(makeFixture(t)));
+  t.is(powers.fileURLToPath(new URL('file:///app/a%20b.js')), '/app/a b.js');
+  t.is(
+    powers.fileURLToPath(powers.pathToFileURL('/app/node_modules/dep/')),
+    '/app/node_modules/dep/',
+  );
+});
+
+test('maybeRead of a present file makes one lookup and no has', async t => {
+  const { spy, calls } = makeSpyTree(makeLocalTree(makeFixture(t)));
+  const powers = makeTreeReadPowers(spy);
+  t.is(
+    decoder.decode(
+      /** @type {Uint8Array} */ (
+        await powers.maybeRead('file:///app/node_modules/dep/index.js')
+      ),
+    ),
+    'export default 2;',
+  );
+  t.deepEqual(calls, [['lookup', ['node_modules', 'dep', 'index.js']]]);
+});
+
+test('canonical defaults to the identity on segments', async t => {
   const powers = makeTreeReadPowers(makeLocalTree(makeFixture(t)));
   t.is(
     await powers.canonical('file:///app/node_modules/dep/'),
