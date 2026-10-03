@@ -4,6 +4,7 @@
 import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+import { isDirectoryEntry } from './entry-kind.js';
 
 /** @import { SnapshotStore } from './types.js' */
 
@@ -57,13 +58,7 @@ export const checkinTree = async (remoteTree, store, options = {}) => {
       if (kindProtocol) {
         childIsTree = (await E(child).kind()) === 'directory';
       } else {
-        // Older ReadableTree / ReadableBlob capabilities need method
-        // introspection to avoid a noisy missing-method send.
-        // eslint-disable-next-line no-underscore-dangle
-        const methods = await E(child).__getMethodNames__();
-        childIsTree = methods.includes('kind')
-          ? (await E(child).kind()) === 'directory'
-          : methods.includes('list');
+        childIsTree = await isDirectoryEntry(child);
       }
       const result = await checkinNode(
         child,

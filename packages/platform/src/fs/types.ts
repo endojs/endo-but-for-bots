@@ -81,6 +81,21 @@ export interface ReadableTree {
 }
 
 /**
+ * The compartment-mapper read powers that `makeTreeReadPowers` returns. A
+ * structural copy of `MaybeReadPowers` with the path codec it makes optional,
+ * kept here so the published types do not depend on
+ * `@endo/compartment-mapper`, which is only a devDependency. A test checks
+ * that this shape is assignable to `MaybeReadPowers`.
+ */
+export interface TreeReadPowers {
+  read: (location: string) => Promise<Uint8Array>;
+  maybeRead: (location: string) => Promise<Uint8Array | undefined>;
+  canonical: (location: string) => Promise<string>;
+  fileURLToPath: (url: URL | string) => string;
+  pathToFileURL: (path: string) => URL;
+}
+
+/**
  * A remotable byte source accepted by `Directory.write()`.
  *
  * The streaming protocol only needs `streamBase64`; optional reader metadata

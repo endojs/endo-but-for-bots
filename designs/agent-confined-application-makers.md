@@ -151,23 +151,34 @@ the mount first and passes the snapshot.
 
 ### The tree `ReadPowers`
 
-A new `makeTreeReadPowers(tree, { root })` in `@endo/platform/fs` turns a
-`ReadableTree` or `Mount` into compartment-mapper `ReadPowers`:
+A new `makeTreeReadPowers(tree, { root, canonicalSegments })` in
+`@endo/platform/fs/tree-read-powers` turns a `ReadableTree` into
+compartment-mapper `ReadPowers`. A write-capable `Directory` or `Mount`
+satisfies `ReadableTree` structurally, so the read powers cannot refuse one;
+keeping write authority out is the caller's obligation, and a caller holding a
+`Mount` must pass `mount.readOnly()` or `await mount.snapshot()`:
 
 - `read(location)` accepts only `file:` URLs under a synthetic root
   (`file:///app/` by default), maps the path segments to `E(tree).lookup(...)`,
   and returns the bytes.
-- It rejects `..`, empty, and percent-encoded separator segments before any
-  lookup, so a map or a `package.json` cannot name a file outside the tree.
-- `maybeRead` returns `undefined` for a missing entry, which `mapNodeModules`
-  needs to probe `node_modules` directories.
-- `canonical` collapses every path that reaches one package directory to a
-  single location, as the stock Node `canonical` does with `realpath`.
-  `mapNodeModules` relies on this to build one compartment for a package
-  reached through more than one `node_modules` path; without it, such a
-  package would load twice and break identity-sensitive code (`instanceof`,
-  module-level singletons). `makeTreeReadPowers` takes an optional
-  `canonical(segments)` hook and defaults to the identity. The public
+- It rejects `.`, `..`, separator, NUL, and control-character segments,
+  plain or percent-encoded, before any lookup, so a map or a `package.json`
+  cannot name a file outside the tree. Empty segments collapse, as Node's
+  `fs` reads `lib//index.js`.
+- `maybeRead` returns `undefined` for a missing entry, for a directory (as
+  Node's `maybeRead` treats `EISDIR`), and for a location outside the root,
+  which `mapNodeModules` needs to probe `node_modules` directories and to
+  climb past the root when an optional dependency is absent.
+- `canonical` should collapse every path that reaches one package directory
+  to a single location, as the stock Node `canonical` does with `realpath`.
+  `mapNodeModules` relies on that collapsing to build one compartment for a
+  package reached through more than one `node_modules` path; without it,
+  such a package would load twice and break identity-sensitive code
+  (`instanceof`, module-level singletons). The Phase 1 default is the
+  identity on decoded segments: it gives every spelling of a location one
+  normal spelling, but it does not collapse distinct paths; that collapsing
+  comes from a hook. `makeTreeReadPowers` takes an optional
+  `canonicalSegments(segments)` hook and defaults to the identity. The public
   `EndoMount` exo (`MountInterface`) exposes no physical path, and this design
   does not add one: the mount's physical-path accessors (`getMountBacking`,
   `getEntryPhysicalPath` in `../packages/daemon/src/mount.js`) are host-private.
@@ -315,9 +326,10 @@ Capture errors surface as an `isError` result, and a rejected option
 
 ## Phased implementation
 
-1. `makeTreeReadPowers` in `@endo/platform/fs`, with segment-confinement tests.
+1. `makeTreeReadPowers` in `@endo/platform/fs/tree-read-powers`, with
+   segment-confinement tests.
 2. Daemon capture for `node-modules-with-map` and `node-modules-scan`,
-   including the daemon's `canonical` hook for mounts; `EndoHost.makeFromTree`
+   including the daemon's `canonicalSegments` hook for mounts; `EndoHost.makeFromTree`
    gains `layout` and `entry`.
 3. `EndoHost.makeFromBundle`, and `makeArchive`'s refusal of precompiled archives.
 4. A caplet-preparation helper factored out of the host's `prepareMakeCaplet`;

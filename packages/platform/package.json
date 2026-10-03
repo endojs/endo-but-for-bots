@@ -33,6 +33,7 @@
     },
     "./fs/node": "./src/fs-node/index.js",
     "./fs/search": "./src/fs/search.js",
+    "./fs/tree-read-powers": "./src/fs/tree-read-powers.js",
     "./fs/search.types": {
       "types": "./src/fs/search-types-index.d.ts"
     },
@@ -101,8 +102,10 @@
   },
   "devDependencies": {
     "@endo/captp": "workspace:^",
+    "@endo/compartment-mapper": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/ses-ava": "workspace:^",
+    "@fast-check/ava": "catalog:dev",
     "ava": "catalog:dev",
     "eslint": "catalog:dev",
     "expect-type": "^1.4.0",

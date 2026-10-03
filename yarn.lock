@@ -3106,6 +3106,7 @@ __metadata:
   dependencies:
     "@endo/base64": "workspace:^"
     "@endo/captp": "workspace:^"
+    "@endo/compartment-mapper": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
@@ -3122,6 +3123,7 @@ __metadata:
     "@endo/stream": "workspace:^"
     "@endo/stream-node": "workspace:^"
     "@endo/utf8": "workspace:^"
+    "@fast-check/ava": "catalog:dev"
     ava: "catalog:dev"
     eslint: "catalog:dev"
     expect-type: "npm:^1.4.0"
