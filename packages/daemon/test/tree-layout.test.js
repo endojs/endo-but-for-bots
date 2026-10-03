@@ -13,15 +13,13 @@ import {
 
 /**
  * A root-only tree over a record of entry names to text, offering the
- * `has`, `lookup` and `text` surface `detectTreeLayout` reads.  A `null` entry
+ * `lookup` and `text` surface `detectTreeLayout` reads.  A `null` entry
  * exists but cannot be read as text, as a directory.
  *
  * @param {Record<string, string | null>} entries
  */
 const makeFakeTree = entries =>
   harden({
-    /** @param {string} name */
-    has: async name => Object.hasOwn(entries, name),
     /** @param {string} name */
     lookup: async name => {
       if (!Object.hasOwn(entries, name)) {
@@ -157,7 +155,7 @@ test('detectTreeLayout rejects a tree that matches no layout', async t => {
   });
 });
 
-test('detectTreeLayout propagates failures other than absence', async t => {
+test('detectTreeLayout surfaces read and lookup failures', async t => {
   await null;
   // A root marker that exists but cannot be read as a file is an error, not
   // a missing marker.
@@ -172,10 +170,8 @@ test('detectTreeLayout propagates failures other than absence', async t => {
       ),
     { message: /Entry compartment-map\.json is not a file/ },
   );
+  // A value that is not a tree reports why its lookups failed.
   const failing = harden({
-    has: async () => {
-      throw Error('connection lost');
-    },
     lookup: async () => {
       throw Error('connection lost');
     },

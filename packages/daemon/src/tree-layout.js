@@ -73,21 +73,41 @@ const namesFileLocations = compartmentMap => {
 };
 
 /**
- * Read a file at the root of a tree as text, or `undefined` when the tree
- * has no such entry.  Only `has`, `lookup` and `text` are used, the surface
- * every tree `makeFromTree` accepts shares.  Any failure other than absence,
- * including an entry that is not a file, propagates.
+ * Look up an entry at the root of a tree, or `undefined` when the lookup
+ * fails.  Only `lookup` is called: some trees `makeFromTree` accepts offer no
+ * `has`, and trees report a missing name with differing errors, so a failed
+ * lookup reads as absent.  The failure is kept in `misses` so a tree that
+ * matches no layout reports why.
  *
  * @param {ERef<any>} tree
  * @param {string} name
- * @returns {Promise<string | undefined>}
+ * @param {unknown[]} misses
  */
-const maybeReadRootText = async (tree, name) => {
+const maybeLookupRoot = async (tree, name, misses) => {
   await null;
-  if (!(await E(tree).has(name))) {
+  try {
+    return await E(tree).lookup(name);
+  } catch (error) {
+    misses.push(error);
     return undefined;
   }
-  const blob = await E(tree).lookup(name);
+};
+
+/**
+ * Read a file at the root of a tree as text, or `undefined` when its lookup
+ * fails.  A failure to read an entry that exists, such as a directory with
+ * the file's name, propagates.
+ *
+ * @param {ERef<any>} tree
+ * @param {string} name
+ * @param {unknown[]} misses
+ * @returns {Promise<string | undefined>}
+ */
+const maybeReadRootText = async (tree, name, misses) => {
+  const blob = await maybeLookupRoot(tree, name, misses);
+  if (blob === undefined) {
+    return undefined;
+  }
   return E(blob).text();
 };
 
@@ -99,7 +119,9 @@ const maybeReadRootText = async (tree, name) => {
  * @returns {Promise<Exclude<TreeLayout, 'package'>>}
  */
 export const detectTreeLayout = async tree => {
-  const mapText = await maybeReadRootText(tree, 'compartment-map.json');
+  /** @type {unknown[]} */
+  const misses = [];
+  const mapText = await maybeReadRootText(tree, 'compartment-map.json', misses);
   if (mapText !== undefined) {
     let compartmentMap;
     try {
@@ -115,17 +137,28 @@ export const detectTreeLayout = async tree => {
   }
   const lookedFor =
     'found neither compartment-map.json (layouts "archive", "node-modules-with-map") nor package.json (layout "node-modules-scan") at its root';
-  if ((await maybeReadRootText(tree, 'package.json')) !== undefined) {
+  if ((await maybeReadRootText(tree, 'package.json', misses)) !== undefined) {
     const plugAndPlay =
-      (await E(tree).has('.pnp.cjs')) || (await E(tree).has('.pnp.js'));
-    if (plugAndPlay && !(await E(tree).has('node_modules'))) {
+      (await maybeLookupRoot(tree, '.pnp.cjs', [])) !== undefined ||
+      (await maybeLookupRoot(tree, '.pnp.js', [])) !== undefined;
+    if (
+      plugAndPlay &&
+      (await maybeLookupRoot(tree, 'node_modules', [])) === undefined
+    ) {
       throw makeError(
         `Tree matches no makeFromTree layout: it is a Yarn Plug'n'Play install with no node_modules; ${lookedFor}`,
       );
     }
     return 'node-modules-scan';
   }
-  throw makeError(`Tree matches no makeFromTree layout: ${lookedFor}`);
+  const failures = misses
+    .map(error => String(/** @type {any} */ (error)?.message ?? error))
+    .join('; ');
+  throw makeError(
+    `Tree matches no makeFromTree layout: ${lookedFor}; its lookups failed: ${failures}`,
+    undefined,
+    { cause: /** @type {Error | undefined} */ (misses[0]) },
+  );
 };
 harden(detectTreeLayout);
 
