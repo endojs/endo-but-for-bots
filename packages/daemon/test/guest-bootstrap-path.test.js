@@ -174,6 +174,50 @@ testNodeDaemon('removing a guest revokes its bootstrap path', async t => {
 });
 
 testNodeDaemon(
+  'cancelling a guest revokes its bootstrap path without collection',
+  async t => {
+    const config = { ...makeConfig('gb-cancel'), gcEnabled: false };
+    const { cancelled, cancel } = makeCancelKit();
+    cancelled.catch(() => {});
+    await purge(config);
+    await start(config);
+    t.teardown(async () => {
+      await stop(config).catch(() => {});
+      cancel(Error('teardown'));
+    });
+
+    const root = await connect(config.sockPath, cancelled);
+    const host = E(root).host();
+    await E(host).provideGuest('cancelled', { agentName: 'cancelled-agent' });
+    const guestId = /** @type {string} */ (
+      await E(host).identify('cancelled-agent')
+    );
+    const guestPath = await E(root).guestBootstrapPath(guestId);
+    const scoped = await connect(guestPath, cancelled);
+    t.is(await E(scoped).identify('@agent'), guestId);
+
+    await E(host).cancel('cancelled-agent', Error('guest cancelled'));
+
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      // eslint-disable-next-line no-await-in-loop
+      const gone = await fs.stat(guestPath).then(
+        () => false,
+        () => true,
+      );
+      if (gone) break;
+      if (Date.now() > deadline) {
+        t.fail('the guest socket outlived its cancellation');
+        return;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    await t.throwsAsync(() => connect(guestPath, cancelled));
+  },
+);
+
+testNodeDaemon(
   'a guest removed while its path is issued leaves no socket',
   async t => {
     const config = makeConfig('gb-race');
