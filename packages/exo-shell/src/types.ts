@@ -1,8 +1,7 @@
 export type ShellSlotType = 'string' | 'path';
 
 export type ShellOptionMember =
-  | string
-  | { prefix: string; type: ShellSlotType; name?: string };
+  string | { prefix: string; type: ShellSlotType; name?: string };
 
 export type ShellCommandElement =
   | { kind: 'literal'; value: string }

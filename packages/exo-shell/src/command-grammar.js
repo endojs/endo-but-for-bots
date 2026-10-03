@@ -356,10 +356,7 @@ harden(normalizeShellCommandGrammar);
  * @param {string} [label]
  * @returns {ShellCommandGrammar[]}
  */
-export const normalizeShellCommandGrammars = (
-  commands,
-  label = 'commands',
-) => {
+export const normalizeShellCommandGrammars = (commands, label = 'commands') => {
   if (!Array.isArray(commands) || commands.length === 0) {
     throw makeError(
       X`${q(label)} must be a non-empty array of command grammars`,

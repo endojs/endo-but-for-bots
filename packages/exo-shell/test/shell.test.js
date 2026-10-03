@@ -277,10 +277,9 @@ test('normalization rejects malformed grammars up front', t => {
   t.throws(() => normalizeShellCommandGrammars([]), {
     message: /non-empty array/,
   });
-  t.throws(
-    () => normalizeShellCommandGrammars([{ program: '', args: [] }]),
-    { message: /non-empty string/ },
-  );
+  t.throws(() => normalizeShellCommandGrammars([{ program: '', args: [] }]), {
+    message: /non-empty string/,
+  });
   t.throws(
     () =>
       normalizeShellCommandGrammars([
@@ -290,9 +289,7 @@ test('normalization rejects malformed grammars up front', t => {
   );
   t.throws(
     () =>
-      normalizeShellCommandGrammars([
-        { program: 'x', args: [], extra: true },
-      ]),
+      normalizeShellCommandGrammars([{ program: 'x', args: [], extra: true }]),
     { message: /unrecognized property/ },
   );
 });
