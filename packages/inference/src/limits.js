@@ -87,10 +87,17 @@ export const makeLimitEnforcer = ({
     );
   }
 
-  timer = timers.setTimeout(
-    () => abort(harden({ type: 'limit-exceeded', which: 'wall-clock' })),
-    maxWallClockMs,
-  );
+  try {
+    timer = timers.setTimeout(
+      () => abort(harden({ type: 'limit-exceeded', which: 'wall-clock' })),
+      maxWallClockMs,
+    );
+  } catch (error) {
+    // The caller never receives this enforcer, so the cancellation reaction
+    // already subscribed above must not terminate anything.
+    stopped = true;
+    throw error;
+  }
 
   /**
    * @param {number} byteCount

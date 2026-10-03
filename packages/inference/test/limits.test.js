@@ -375,3 +375,33 @@ test('a throwing terminate does not escape abort', t => {
   t.is(reported.length, 1);
   t.is(/** @type {Error} */ (reported[0]).message, 'not permitted');
 });
+
+test('a failed construction disarms the cancellation it subscribed', async t => {
+  /** @type {(reason: unknown) => void} */
+  let cancel = () => {};
+  /** @type {Promise<never>} */
+  const cancelled = new Promise((_resolve, reject) => {
+    cancel = reject;
+  });
+  let terminations = 0;
+  t.throws(
+    () =>
+      makeLimitEnforcer({
+        limits,
+        timers: harden({
+          setTimeout: () => {
+            throw Error('no timers');
+          },
+          clearTimeout: () => {},
+        }),
+        terminate: () => {
+          terminations += 1;
+        },
+        cancelled,
+      }),
+    { message: 'no timers' },
+  );
+  cancel(Error('caller cancelled'));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  t.is(terminations, 0);
+});
