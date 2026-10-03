@@ -270,7 +270,7 @@ test('EndoMountFile diverges from PlatformFileInterface by named extensions only
   // (`help` is now part of the platform File contract, not an extension.)
   const { mount, rootPath } = makeConfiguredMount(t);
   fs.writeFileSync(path.join(rootPath, 'a.txt'), 'x');
-  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('a.txt'));
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup(['a.txt']));
   const methods = // eslint-disable-next-line no-underscore-dangle
     (await E(/** @type {any} */ (file)).__getMethodNames__()).filter(
       name => !name.startsWith('__'),
@@ -497,7 +497,9 @@ test('EndoMount.readOnly().lookup recursively returns structural views', async t
   await E(mount).makeDirectory(['sub']);
   await E(mount).writeText(['sub', 'leaf.txt'], 'leaf-data');
   const view = await E(mount).readOnly();
-  const subView = /** @type {ReadableTreeView} */ (await E(view).lookup('sub'));
+  const subView = /** @type {ReadableTreeView} */ (
+    await E(view).lookup(['sub'])
+  );
   // eslint-disable-next-line no-underscore-dangle
   const subMethods = await E(/** @type {any} */ (subView)).__getMethodNames__();
   t.deepEqual(
@@ -521,7 +523,9 @@ test('EndoMount.readOnly().lookup recursively returns structural views', async t
 test('EndoMountFile exposes every method on PlatformFileInterface', async t => {
   const { mount } = makeConfiguredMount(t);
   await E(mount).writeText(['file.txt'], 'data');
-  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('file.txt'));
+  const file = /** @type {EndoMountFile} */ (
+    await E(mount).lookup(['file.txt'])
+  );
   // eslint-disable-next-line no-underscore-dangle
   const methods = await E(/** @type {any} */ (file)).__getMethodNames__();
   for (const name of PLATFORM_FILE_METHODS) {
@@ -535,7 +539,9 @@ test('EndoMountFile exposes every method on PlatformFileInterface', async t => {
 test('EndoMountFile.readOnly() returns a structural ReadableBlob view', async t => {
   const { mount } = makeConfiguredMount(t);
   await E(mount).writeText(['file.txt'], 'rb-data');
-  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('file.txt'));
+  const file = /** @type {EndoMountFile} */ (
+    await E(mount).lookup(['file.txt'])
+  );
   const view = await E(file).readOnly();
   // eslint-disable-next-line no-underscore-dangle
   const methods = await E(/** @type {any} */ (view)).__getMethodNames__();

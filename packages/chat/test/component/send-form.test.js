@@ -79,11 +79,14 @@ const setup = ({
   names = ['alice', 'bob', 'charlie'],
   getChannelRef,
   getConversationPetName,
+  showValue = () => {},
 } = {}) => {
   const { $input, $menu, $error, $sendButton, $chatBar } =
     createElements(testDocument);
 
-  const { powers, sentMessages, addName, setValue } = makeMockPowers({ names });
+  const { powers, sentMessages, calls, addName, setValue } = makeMockPowers({
+    names,
+  });
 
   /** @type {import('@endo/spaces-util/send-form.js').SendFormState[]} */
   const stateChanges = [];
@@ -97,7 +100,7 @@ const setup = ({
     E,
     iterateReader,
     powers,
-    showValue: () => {},
+    showValue,
     onStateChange: state => {
       stateChanges.push(state);
     },
@@ -114,10 +117,24 @@ const setup = ({
     component,
     powers,
     sentMessages,
+    calls,
     stateChanges,
     addName,
     setValue,
   };
+};
+
+/**
+ * Append a pet-name token to the input, as the autocomplete does on accept.
+ * @param {HTMLElement} $input
+ * @param {string} petName
+ */
+const appendToken = ($input, petName) => {
+  const $token = testDocument.createElement('span');
+  $token.className = 'chat-token';
+  $token.dataset.petName = petName;
+  $token.dataset.edgeName = petName;
+  $input.appendChild($token);
 };
 
 test.afterEach(() => {
@@ -280,6 +297,65 @@ test.serial(
     t.is(ctx.$error.textContent, '', 'no error surfaced');
 
     t.teardown(() => ctx.component.dispose());
+  },
+);
+
+test.serial(
+  'an embedded slash-joined mention token is split into a pet-name path on send',
+  async t => {
+    const context = setup();
+
+    appendToken(context.$input, 'bob');
+    context.$input.appendChild(testDocument.createTextNode(' see '));
+    appendToken(context.$input, 'feature/foo');
+
+    context.$sendButton.click();
+    await waitFor(() => context.sentMessages.length > 0);
+
+    t.is(context.sentMessages.length, 1, 'one message sent');
+    t.deepEqual(
+      context.sentMessages[0].to,
+      ['bob'],
+      'leading token is recipient',
+    );
+    t.deepEqual(
+      context.sentMessages[0].petNames,
+      [['feature', 'foo']],
+      'the embedded mention token is split on "/"',
+    );
+
+    t.teardown(() => context.component.dispose());
+  },
+);
+
+test.serial(
+  'a lone slash-joined token is shown as a pet-name path',
+  async t => {
+    /** @type {unknown[][]} */
+    const shown = [];
+    const context = setup({
+      showValue: (...args) => {
+        shown.push(args);
+      },
+    });
+    context.setValue('feature/foo', 'value');
+
+    appendToken(context.$input, 'feature/foo');
+
+    context.$sendButton.click();
+    await waitFor(() => shown.length > 0 || context.$error.textContent !== '');
+
+    const identifyCall = context.calls.find(c => c.method === 'identify');
+    t.deepEqual(
+      identifyCall && identifyCall.args,
+      ['feature', 'foo'],
+      'identify receives the path segments',
+    );
+    t.is(shown.length, 1, 'the value modal opened');
+    t.deepEqual(shown[0][2], ['feature', 'foo'], 'the path is split');
+    t.is(context.sentMessages.length, 0, 'nothing sent');
+
+    t.teardown(() => context.component.dispose());
   },
 );
 

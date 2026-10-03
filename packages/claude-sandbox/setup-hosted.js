@@ -119,7 +119,7 @@ const provisionCredentials = async (
     // working (on the old secret) until they are re-provisioned.
     let existingKind = 'apiKey';
     try {
-      const existing = /** @type {any} */ (await E(hostAgent).lookup(name));
+      const existing = /** @type {any} */ (await E(hostAgent).lookup([name]));
       existingKind = await E(existing).kind();
     } catch {
       // A credential too old to report its kind predates `oauthToken`.
@@ -135,9 +135,9 @@ const provisionCredentials = async (
     await E(hostAgent).remove(name);
   }
   const credentialsFile = await persistKeyToSidecar(name, apiKey);
-  await E(hostAgent).makeUnconfined('@main', credentialsModuleSpecifier, {
-    powersName: '@none',
-    resultName: name,
+  await E(hostAgent).makeUnconfined(['@main'], credentialsModuleSpecifier, {
+    powersName: ['@none'],
+    resultName: [name],
     env: harden({
       CREDENTIALS_FILE: credentialsFile,
       CREDENTIALS_KIND: kind,
@@ -224,8 +224,8 @@ export const main = async hostAgent => {
   if (await E(hostAgent).has(...backendPath)) {
     await E(hostAgent).remove(...backendPath);
   }
-  await E(hostAgent).makeUnconfined('@main', backendModuleSpecifier, {
-    powersName: '@agent',
+  await E(hostAgent).makeUnconfined(['@main'], backendModuleSpecifier, {
+    powersName: ['@agent'],
     resultName: backendPath,
     env: harden({
       CLAUDE_CLIENT_NAME: clientName,

@@ -531,23 +531,23 @@ const setupDaemon = async () => {
         model: modelName,
         authToken: process.env.LAL_AUTH_TOKEN,
       }),
-      providerName,
+      [providerName],
     );
 
     const providerId = /** @type {string} */ (
       await E(host).identify(providerName)
     );
-    await E(host).provideGuest(factoryGuestName, {
+    await E(host).provideGuest([factoryGuestName], {
       introducedNames: harden({ '@agent': 'host-agent' }),
-      agentName: factoryAgentName,
+      agentName: [factoryAgentName],
     });
-    const factoryPowers = await E(host).lookup(factoryAgentName);
-    await E(factoryPowers).storeIdentifier('llm-provider', providerId);
-    await E(host).makeUnconfined('@main', factorySpecifier, {
-      powersName: factoryAgentName,
-      resultName: factoryName,
+    const factoryPowers = await E(host).lookup([factoryAgentName]);
+    await E(factoryPowers).storeIdentifier(['llm-provider'], providerId);
+    await E(host).makeUnconfined(['@main'], factorySpecifier, {
+      powersName: [factoryAgentName],
+      resultName: [factoryName],
     });
-    const factory = await E(host).lookup(factoryName);
+    const factory = await E(host).lookup([factoryName]);
     factoriesByModel.set(modelName, factory);
     console.log(`[smoke] factory ready for model "${modelName}"`);
   }
@@ -555,14 +555,14 @@ const setupDaemon = async () => {
   // Shared tools — every per-test agent reaches them via `@tool-name`
   // adoption, so we only register them once.  The filesystem-rooted
   // `read-file` tool is created per-test (it needs a per-test FAE_CWD).
-  await E(host).makeUnconfined('@main', greetSpecifier, {
-    resultName: 'greet-tool',
+  await E(host).makeUnconfined(['@main'], greetSpecifier, {
+    resultName: ['greet-tool'],
   });
-  await E(host).makeUnconfined('@main', mathSpecifier, {
-    resultName: 'math-tool',
+  await E(host).makeUnconfined(['@main'], mathSpecifier, {
+    resultName: ['math-tool'],
   });
-  await E(host).makeUnconfined('@main', timestampSpecifier, {
-    resultName: 'timestamp-tool',
+  await E(host).makeUnconfined(['@main'], timestampSpecifier, {
+    resultName: ['timestamp-tool'],
   });
 
   shared = { host, factoriesByModel, cancel, cancelled };
@@ -1067,8 +1067,8 @@ const readFileMacro = test.macro({
       // The tool's petname is unique per test so adoption picks it up by
       // name rather than colliding with siblings.
       const toolName = `read-file-${t.context.agentName}`;
-      await E(shared.host).makeUnconfined('@main', readFileSpecifier, {
-        resultName: toolName,
+      await E(shared.host).makeUnconfined(['@main'], readFileSpecifier, {
+        resultName: [toolName],
         env: harden({ FAE_CWD: t.context.cwd }),
       });
 

@@ -8,9 +8,16 @@
  */
 
 import { M } from '@endo/patterns';
-import { NamePathShape, NameOrPathShape } from '@endo/daemon/type-guards.js';
+import {
+  NamePathShape,
+  NamePathArgumentShape,
+} from '@endo/daemon/type-guards.js';
 
 /** @import { LalToolDef } from './index.js' */
+
+// A mount or readable tree takes a slash-delimited file path string; a
+// daemon directory refuses a string and takes an array of path components.
+const FileNameShape = M.or(M.string(), NamePathShape);
 
 /** @type {LalToolDef[]} */
 export const fsToolDefs = harden([
@@ -25,20 +32,22 @@ export const fsToolDefs = harden([
     name: 'readText',
     summary:
       'Read text content from a capability (ReadableTree, WritableTree, etc.). ' +
-      'Arguments: petNameOrPath, fileName (string).',
+      'Arguments: petNamePath, fileName (a path string for a mount or tree, ' +
+      'or a string[] path for a daemon directory).',
     params: M.splitRecord({
-      petNameOrPath: NameOrPathShape,
-      fileName: M.string(),
+      petNamePath: NamePathArgumentShape,
+      fileName: FileNameShape,
     }),
   },
   {
     name: 'writeText',
     summary:
       'Write text content to a capability (WritableTree, etc.). ' +
-      'Arguments: petNameOrPath, fileName (string), content (string).',
+      'Arguments: petNamePath, fileName (a path string for a mount or tree, ' +
+      'or a string[] path for a daemon directory), content (string).',
     params: M.splitRecord({
-      petNameOrPath: NameOrPathShape,
-      fileName: M.string(),
+      petNamePath: NamePathArgumentShape,
+      fileName: FileNameShape,
       content: M.string(),
     }),
   },
@@ -50,11 +59,12 @@ export const fsToolDefs = harden([
       'uniquely-matching `oldText` with `newText`; pass several edits to apply ' +
       'them in one call (they must not overlap). Line endings and a leading BOM ' +
       'are preserved, and a unified diff of the change is returned. ' +
-      'Arguments: petNameOrPath, fileName (string), edits (array of ' +
+      'Arguments: petNamePath, fileName (a path string for a mount or tree, ' +
+      'or a string[] path for a daemon directory), edits (array of ' +
       '{ oldText, newText }).',
     params: M.splitRecord({
-      petNameOrPath: NameOrPathShape,
-      fileName: M.string(),
+      petNamePath: NamePathArgumentShape,
+      fileName: FileNameShape,
       edits: M.arrayOf(
         M.splitRecord({
           oldText: M.string(),
@@ -76,11 +86,11 @@ export const fsToolDefs = harden([
       'Set followSymlinks to sweep through links as well (`rg -L`) — expect ' +
       'a much larger result set, since in a workspace checkout every ' +
       'node_modules link points back into the tree. ' +
-      'Arguments: petNameOrPath, pattern (string), ' +
+      'Arguments: petNamePath, pattern (string), ' +
       'followSymlinks (optional boolean).',
     params: M.splitRecord(
       {
-        petNameOrPath: NameOrPathShape,
+        petNamePath: NamePathArgumentShape,
         pattern: M.string(),
       },
       {
@@ -95,12 +105,12 @@ export const fsToolDefs = harden([
       'using an ECMAScript regular-expression source with no flags. Optionally ' +
       'restrict files with a glob pattern and cap the number of results. ' +
       'Returns { file, line, text } records with 1-based line numbers. ' +
-      'Arguments: petNameOrPath, pattern (string), glob (optional string), ' +
+      'Arguments: petNamePath, pattern (string), glob (optional string), ' +
       'maxResults (optional positive number), ' +
       'followSymlinks (optional boolean).',
     params: M.splitRecord(
       {
-        petNameOrPath: NameOrPathShape,
+        petNamePath: NamePathArgumentShape,
         pattern: M.string(),
       },
       {

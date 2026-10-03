@@ -8,7 +8,10 @@
  */
 
 import { M } from '@endo/patterns';
-import { NamePathShape, NameOrPathShape } from '@endo/daemon/type-guards.js';
+import {
+  NamePathShape,
+  NamePathArgumentShape,
+} from '@endo/daemon/type-guards.js';
 
 /** @import { LalToolDef } from './index.js' */
 
@@ -38,7 +41,7 @@ export const metaToolDefs = harden([
     name: 'inspect',
     summary:
       'Look up a capability by pet name and call its help() method to learn how to use it. ' +
-      'Argument: petNameOrPath.',
-    params: M.splitRecord({ petNameOrPath: NameOrPathShape }),
+      'Argument: petNamePath.',
+    params: M.splitRecord({ petNamePath: NamePathArgumentShape }),
   },
 ]);

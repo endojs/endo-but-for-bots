@@ -36,7 +36,7 @@ import { E } from '@endo/eventual-send';
  * @property {() => Promise<string[]>} list
  * @property {(name: string) => Promise<string | undefined>} locate
  * @property {(id: string) => Promise<string[]>} reverseIdentify
- * @property {(name: string) => Promise<unknown>} lookup
+ * @property {(petNamePath: string[]) => Promise<unknown>} lookup
  */
 
 /**
@@ -1073,7 +1073,7 @@ export const renderGraph = (
           if (!node) return;
           try {
             await Promise.race([
-              E(/** @type {GraphPowers} */ (powers)).lookup(name),
+              E(/** @type {GraphPowers} */ (powers)).lookup([name]),
               new Promise((_resolve, reject) =>
                 setTimeout(
                   () => reject(new Error('timeout')),
@@ -1101,7 +1101,7 @@ export const renderGraph = (
           try {
             const agentPowers = await E(
               /** @type {GraphPowers} */ (powers),
-            ).lookup(name);
+            ).lookup([name]);
             const messages = /** @type {unknown[]} */ (
               await E(/** @type {any} */ (agentPowers)).listMessages()
             );

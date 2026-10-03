@@ -12,7 +12,7 @@ import {
   SecretImporterInterface,
   SecretManagerDirectoryInterface,
 } from './interfaces.js';
-import { assertPetName } from './pet-name.js';
+import { assertPetName, namePathFrom } from './pet-name.js';
 
 /** @import { SecretAdmin, SecretAuditEvent, SecretBlob, SecretRecord, SecretSummary } from './types.js' */
 
@@ -639,7 +639,16 @@ export const makeSecretManager = ({
     });
 
     const lookup = async path => {
-      const names = Array.isArray(path) ? path : [path];
+      // Keep this module's fixed error codes: `namePathFrom` quotes its input,
+      // and a delimited string such as `use/<grantId>` would echo the grant.
+      if (typeof path === 'string') throw fixedError('PATH_MUST_BE_ARRAY');
+      /** @type {string[]} */
+      let names;
+      try {
+        names = namePathFrom(path);
+      } catch {
+        throw fixedError('UNKNOWN_PATH');
+      }
       if (names.length === 1 && names[0] === 'create') return importer;
       if (names.length === 1 && names[0] === 'catalog') return catalog;
       if (names.length === 1 && names[0] === 'audit') return auditReader;

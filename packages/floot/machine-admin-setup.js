@@ -125,7 +125,7 @@ const grantLocator = async (
       return false;
     }
     const locator = await E(agent).locate(sourceName);
-    await E(factoryHost).storeLocator(grantName, locator);
+    await E(factoryHost).storeLocator([grantName], locator);
     console.error(`Floot: granted ${grantName} to the factory host.`);
     return true;
   } catch (err) {
@@ -290,19 +290,19 @@ export const grantDeployFactory = async (
           await E(agent).remove(stray);
         }
       }
-      await E(agent).provideGuest(handleName, { agentName: powersName });
+      await E(agent).provideGuest([handleName], { agentName: [powersName] });
     }
   }
-  const powersRef = revived ? powersPath : powersName;
+  const powersRef = revived ? powersPath : [powersName];
   const connectionPowers = await E(agent).lookup(powersRef);
 
   // The service binding heals every boot; the workflow setup keeps the
   // service's formula identity, so this is normally a same-id no-op.
-  await E(connectionPowers).storeValue(service, 'service');
+  await E(connectionPowers).storeValue(service, ['service']);
 
   /** @type {string[]} */
   let factoryIds = (await E(connectionPowers).has('factory-ids'))
-    ? [...(await E(connectionPowers).lookup('factory-ids'))]
+    ? [...(await E(connectionPowers).lookup(['factory-ids']))]
     : [];
   const newest =
     factoryIds.length > 0 ? factoryIds[factoryIds.length - 1] : undefined;
@@ -314,7 +314,7 @@ export const grantDeployFactory = async (
       harden({ chart: chartKey, endowments }),
     );
     factoryIds = [...factoryIds, fid];
-    await E(connectionPowers).storeValue(harden(factoryIds), 'factory-ids');
+    await E(connectionPowers).storeValue(harden(factoryIds), ['factory-ids']);
     console.error(`Floot: minted ${grantName} (${chartKey}) as ${fid}.`);
   }
 
@@ -324,7 +324,7 @@ export const grantDeployFactory = async (
   if (await E(agent).has(...connectionPath)) {
     await E(agent).remove(...connectionPath);
   }
-  await E(agent).makeUnconfined('@main', specifier, {
+  await E(agent).makeUnconfined(['@main'], specifier, {
     powersName: powersRef,
     resultName: connectionPath,
   });
@@ -339,7 +339,7 @@ export const grantDeployFactory = async (
   }
 
   await E(factoryHost).storeLocator(
-    grantName,
+    [grantName],
     await E(agent).locate(...connectionPath),
   );
   return harden({ chartKey, fid: factoryIds[factoryIds.length - 1] });
@@ -382,10 +382,10 @@ export const grantDeployFactories = async (agent, { dir, factoryHost }) => {
         return false;
       }
     }
-    service = await E(agent).lookup(WORKFLOW_SERVICE_NAME);
+    service = await E(agent).lookup([WORKFLOW_SERVICE_NAME]);
     endowments = harden({
-      performer: await E(agent).lookup(NIXOS_CONTROLLER_NAME),
-      operator: await E(agent).lookup('@self'),
+      performer: await E(agent).lookup([NIXOS_CONTROLLER_NAME]),
+      operator: await E(agent).lookup(['@self']),
     });
   } catch (err) {
     console.error(

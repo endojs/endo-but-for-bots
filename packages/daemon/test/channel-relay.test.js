@@ -170,9 +170,9 @@ const prepareHostWithWsRelay = async (t, relayUrl, relayDomain) => {
   const servicePath = path.join(dirname, 'src', 'networks', 'ws-relay.js');
   const serviceLocation = url.pathToFileURL(servicePath).href;
 
-  await E(host).makeUnconfined('@main', serviceLocation, {
-    powersName: '@agent',
-    resultName: 'ws-relay-network',
+  await E(host).makeUnconfined(['@main'], serviceLocation, {
+    powersName: ['@agent'],
+    resultName: ['ws-relay-network'],
     env: {
       WS_RELAY_URL: relayUrl,
       WS_RELAY_DOMAIN: relayDomain,
@@ -229,7 +229,7 @@ test.serial(
       await E(hostB).addPeerInfo(await E(hostA).getPeerInfo());
 
       // --- Host A: create channel and invitation ---
-      const channel = await E(hostA).makeChannel('test-channel', 'Alice');
+      const channel = await E(hostA).makeChannel(['test-channel'], 'Alice');
       await E(channel).post(['Welcome!'], [], []);
       await E(channel).createInvitation('Bob');
 
@@ -242,13 +242,12 @@ test.serial(
       );
 
       // --- Host B: adopt channel from locator ---
-      await E(hostB).adoptFromLocator(
-        /** @type {string} */ (locator),
+      await E(hostB).adoptFromLocator(/** @type {string} */ (locator), [
         'remote-channel',
-      );
+      ]);
 
       // --- Host B: look up the remote channel and join ---
-      const remoteChannel = await E(hostB).lookup('remote-channel');
+      const remoteChannel = await E(hostB).lookup(['remote-channel']);
       t.truthy(remoteChannel, 'remote channel should be resolvable');
 
       const creatorName = await E(remoteChannel).getProposedName();
@@ -297,9 +296,9 @@ test.serial(
       await E(hostB).addPeerInfo(await E(hostA).getPeerInfo());
 
       // Host A creates channel and invitation
-      await E(hostA).makeChannel('test-channel', 'Alice');
+      await E(hostA).makeChannel(['test-channel'], 'Alice');
       await E(hostA)
-        .lookup('test-channel')
+        .lookup(['test-channel'])
         .then(ch => E(ch).createInvitation('Carol'));
 
       // Generate locator
@@ -326,7 +325,7 @@ test.serial(
       const formulaId = `${formulaNumber}:${nodeNumber}`;
       await E(hostB).storeIdentifier(['wrong-name-channel'], formulaId);
 
-      const remoteChannel = await E(hostB).lookup('wrong-name-channel');
+      const remoteChannel = await E(hostB).lookup(['wrong-name-channel']);
 
       // The fallback claims the first unclaimed invitation regardless of
       // the proposed name, so this succeeds.
@@ -365,16 +364,15 @@ test.serial(
       await E(hostB).addPeerInfo(await E(hostA).getPeerInfo());
 
       // Host A creates channel
-      const channel = await E(hostA).makeChannel('chat-room', 'Alice');
+      const channel = await E(hostA).makeChannel(['chat-room'], 'Alice');
       await E(channel).createInvitation('Bob');
 
       // Host B adopts and joins
       const locator = await E(hostA).locateWithHints('chat-room');
-      await E(hostB).adoptFromLocator(
-        /** @type {string} */ (locator),
+      await E(hostB).adoptFromLocator(/** @type {string} */ (locator), [
         'remote-chat',
-      );
-      const remoteChannel = await E(hostB).lookup('remote-chat');
+      ]);
+      const remoteChannel = await E(hostB).lookup(['remote-chat']);
       const bobMember = await E(remoteChannel).join('Bob');
 
       // Follow messages from Bob's side
@@ -427,7 +425,7 @@ test.serial(
       await E(hostA).addPeerInfo(await E(hostB).getPeerInfo());
 
       // Host A creates a simple value
-      await E(hostA).evaluate('@main', '"shared value"', [], [], ['my-val']);
+      await E(hostA).evaluate(['@main'], '"shared value"', [], [], ['my-val']);
 
       // Host A generates locator (includes connection hints)
       const locator = await E(hostA).locateWithHints('my-val');
@@ -444,13 +442,12 @@ test.serial(
 
       // Host B uses adoptFromLocator — this should register peer info
       // and allow B to reach A's node
-      await E(hostB).adoptFromLocator(
-        /** @type {string} */ (locator),
+      await E(hostB).adoptFromLocator(/** @type {string} */ (locator), [
         'remote-val',
-      );
+      ]);
 
       // Host B should now be able to look up the remote value
-      const value = await E(hostB).lookup('remote-val');
+      const value = await E(hostB).lookup(['remote-val']);
       t.is(value, 'shared value', 'remote value should be accessible');
     } finally {
       await relay.teardown();

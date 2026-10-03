@@ -17,6 +17,14 @@ import { UNSETTLED_TOOL_RESULT } from '../src/hosted-turn.js';
 import { makeReplyChannel } from '../src/stream.js';
 import { makeFlootToolRegistry } from '../src/tool-registry.js';
 
+// Daemon pet-name paths arrive as arrays; key the fake stores by joined path.
+const petKey = path => {
+  if (!Array.isArray(path) || !path.every(part => typeof part === 'string')) {
+    throw TypeError(`not a pet-name path: ${JSON.stringify(path)}`);
+  }
+  return path.join('/');
+};
+
 const makeFakePowers = () => {
   const store = new Map();
   const nameOf = petName =>
@@ -299,7 +307,8 @@ test('resolveSharedWorkspaceHostPath resolves a git workspace worktree', async t
   });
   const guest = Far('Guest', {
     has: async name => name === 'workspace',
-    lookup: async name => {
+    lookup: async path => {
+      const name = petKey(path);
       if (name !== 'workspace') throw Error('missing');
       return workspace;
     },
@@ -317,7 +326,8 @@ test('resolveSharedWorkspaceHostPath resolves a git workspace worktree', async t
   // name resolves by that name.
   const named = Far('Guest', {
     has: async name => name === 'project',
-    lookup: async name => {
+    lookup: async path => {
+      const name = petKey(path);
       if (name !== 'project') throw Error('missing');
       return workspace;
     },

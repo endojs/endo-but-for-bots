@@ -35,6 +35,10 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
   /** @type {Map<string, string[]>} */
   const dependents = new Map();
 
+  /** Pet-name paths arrive as arrays; the fake keys them by slash-joined path. */
+  const keyOf = namePath =>
+    Array.isArray(namePath) ? namePath.join('/') : namePath;
+
   const bind = name => {
     nextId += 1;
     const id = `${name}-id-${nextId}`;
@@ -69,9 +73,10 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
       return id === undefined ? undefined : `endo://node/${id}?type=handle`;
     },
     async provideGuest(name, options = {}) {
+      name = keyOf(name);
       onStep({ op: 'provideGuest', name });
       bind(name);
-      if (options.agentName) bind(options.agentName);
+      if (options.agentName) bind(keyOf(options.agentName));
       return Far('Guest', {
         async storeLocator() {
           return undefined;
@@ -79,12 +84,14 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
       });
     },
     async makeUnconfined(_worker, _specifier, options = {}) {
-      onStep({ op: 'makeUnconfined', name: options.resultName });
-      envs.set(options.resultName, options.env);
-      bind(options.resultName);
-      const siblings = dependents.get(options.powersName) || [];
-      siblings.push(options.resultName);
-      dependents.set(options.powersName, siblings);
+      const resultName = keyOf(options.resultName);
+      const powersName = keyOf(options.powersName);
+      onStep({ op: 'makeUnconfined', name: resultName });
+      envs.set(resultName, options.env);
+      bind(resultName);
+      const siblings = dependents.get(powersName) || [];
+      siblings.push(resultName);
+      dependents.set(powersName, siblings);
       return Far('Caplet', {});
     },
     async copy(from, to) {
@@ -93,7 +100,8 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
         /** @type {string} */ (names.get(from.join('/'))),
       );
     },
-    async cancel(name) {
+    async cancel(namePath) {
+      const name = keyOf(namePath);
       cancelled.push(name);
       cascadeFrom(name);
     },

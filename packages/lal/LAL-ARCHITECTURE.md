@@ -102,7 +102,7 @@ make()
   │
   ├─ createProvider(env)              # LLM provider from env vars
   ├─ Initialize transcript with system prompt
-  ├─ E(powers).send('@host', [...])   # greeting with call to action
+  ├─ E(powers).send(['@host'], [...]) # greeting with call to action
   ├─ E(powers).locate('@self')        # Get own locator
   └─ runAgent()                       # Enter message-following loop
 ```
@@ -190,7 +190,7 @@ const executeTool = async (name, args) => {
   switch (name) {
     case 'help':     return E(powers).help(args.methodName);
     case 'list':     return E(powers).list(...args.petNamePath);
-    case 'lookup':   return E(powers).lookup(args.petNameOrPath);
+    case 'lookup':   return E(powers).lookup(args.petNamePath);
     case 'evaluate': /* direct code execution */
     // ...
     default: throw new Error(`Unknown tool: ${name}`);
@@ -245,7 +245,7 @@ This handles Endo-specific types:
 
 `Guest.evaluate` executes code directly and returns the result. There is no
 proposal/grant workflow — the `evaluate` tool call blocks until the code
-finishes and the result is stored under `resultName`.
+finishes and the result is stored under `resultNamePath`.
 
 ```
 Lal
@@ -329,7 +329,7 @@ Messages arrive as `InboxMessage` (alias for `StampedMessage`) objects with:
 ### Outbound Messages
 
 ```javascript
-await E(powers).send(recipientName, strings, edgeNames, petNames);
+await E(powers).send(recipientNamePath, strings, edgeNames, petNamePaths);
 ```
 
 Messages are sent as packages with interleaved text and capability references.
@@ -337,7 +337,7 @@ Messages are sent as packages with interleaved text and capability references.
 ### Requests
 
 ```javascript
-await E(powers).request(recipientName, description, responseName);
+await E(powers).request(recipientNamePath, description, responseNamePath);
 ```
 
 Requests are a special message type where Lal asks another agent for a
@@ -425,13 +425,13 @@ Lal is provisioned as a guest caplet inside the Endo daemon:
 ### Setup (`setup.js`)
 
 ```
-E(agent).provideGuest('lal', { introducedNames: {}, agentName: 'profile-for-lal' })
+E(agent).provideGuest(['lal'], { introducedNames: {}, agentName: ['profile-for-lal'] })
     │
-    ├─ E(guest).storeValue(config, 'lal-config')   # Persist config
+    ├─ E(guest).storeValue(config, ['lal-config'])   # Persist config
     │
-    └─ E(agent).makeUnconfined('@main', 'agent.js', {
-         powersName: 'profile-for-lal',
-         resultName: 'controller-for-lal',
+    └─ E(agent).makeUnconfined(['@main'], 'agent.js', {
+         powersName: ['profile-for-lal'],
+         resultName: ['controller-for-lal'],
          env: { LAL_HOST, LAL_AUTH_TOKEN, LAL_MODEL }
        })
 ```
@@ -490,10 +490,10 @@ A complete request lifecycle:
    b. E(powers).listMessages() → [...messages]
    c. chat(transcript) → LLM calls evaluate(source: "E(counter).increment()",
       codeNames: ["counter"], edgeNames: ["my-counter"],
-      resultName: "increment-result")
+      resultNamePath: ["increment-result"])
    d. E(powers).evaluate(...) → code executes, result returned
-   e. chat(transcript) → LLM calls lookup("increment-result")
-   f. chat(transcript) → LLM calls send("@host", ["The counter is now 42"], [], [])
+   e. chat(transcript) → LLM calls lookup(["increment-result"])
+   f. chat(transcript) → LLM calls send(["@host"], ["The counter is now 42"], [], [])
    g. chat(transcript) → LLM calls dismiss("+5")
    h. chat(transcript) → LLM returns no tool calls
    i. Loop exits

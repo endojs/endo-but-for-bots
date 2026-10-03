@@ -100,7 +100,7 @@ make()
   ├─ Register 8 built-in tools       # list, lookup, store, remove,
   │                                   # adoptTool, send, listMessages, dismiss
   ├─ initializeIntroducedTools()      # Move pre-installed tools → tools/
-  ├─ E(powers).send('HOST', [...])    # Announce readiness
+  ├─ E(powers).send(['HOST'], [...])  # Announce readiness
   ├─ E(powers).identify('SELF')      # Get own formula ID
   └─ runAgent()                       # Enter message-following loop
 ```
@@ -402,11 +402,11 @@ Fae is provisioned as a guest caplet inside the Endo daemon:
 ### Without tools (`setup.js`)
 
 ```
-E(agent).provideGuest('fae', { introducedNames: {}, agentName: 'profile-for-fae' })
+E(agent).provideGuest(['fae'], { introducedNames: {}, agentName: ['profile-for-fae'] })
     │
-    └─ E(agent).makeUnconfined('MAIN', 'agent.js', {
-         powersName: 'profile-for-fae',
-         resultName: 'controller-for-fae',
+    └─ E(agent).makeUnconfined(['MAIN'], 'agent.js', {
+         powersName: ['profile-for-fae'],
+         resultName: ['controller-for-fae'],
          env: { LAL_HOST, LAL_AUTH_TOKEN, LAL_MODEL }
        })
 ```
@@ -451,7 +451,7 @@ A complete request lifecycle:
    c. executeTool('timestamp', {}) → "2026-02-20T10:30:00.000Z"
    d. transcript.push({ role: 'tool', content: '...', tool_call_id: '...' })
    e. chat(transcript, toolSchemas) → LLM returns tool_call: send({recipient:'HOST', ...})
-   f. E(powers).send('HOST', ['The current time is ...'], [], [])
+   f. E(powers).send(['HOST'], ['The current time is ...'], [], [])
    g. transcript.push(toolResult)
    h. chat(transcript, toolSchemas) → LLM returns tool_call: dismiss({messageNumber: 5})
    i. E(powers).dismiss(5n)

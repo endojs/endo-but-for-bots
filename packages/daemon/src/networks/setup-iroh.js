@@ -9,7 +9,7 @@ import { E } from '@endo/eventual-send';
 // The worker resolves this export from the active @endo/daemon package when it
 // revives the network service.
 const irohSpecifier = '@endo/daemon/iroh.js';
-const irohWorker = 'iroh-worker';
+const irohWorker = harden(['iroh-worker']);
 
 /**
  * Install the iroh network module into the daemon and register it under
@@ -29,8 +29,8 @@ export const main = async powers => {
   }
   await E(powers).provideWorker(irohWorker);
   await E(powers).makeUnconfined(irohWorker, irohSpecifier, {
-    powersName: '@agent',
-    resultName: 'network-service-iroh',
+    powersName: ['@agent'],
+    resultName: ['network-service-iroh'],
   });
 
   await E(powers).move(['network-service-iroh'], ['@nets', 'iroh']);

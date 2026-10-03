@@ -52,8 +52,8 @@ export const main = async hostAgent => {
   //    `provideHostPath` / `provideScratchMount` surface the factory needs
   //    to bridge granted Mount caps into the kernel's bind-mount surface.
   if (!(await E(hostAgent).has(SANDBOX_DIR, 'sandbox-factory'))) {
-    await E(hostAgent).makeUnconfined('@main', sandboxSpecifier, {
-      powersName: '@agent',
+    await E(hostAgent).makeUnconfined(['@main'], sandboxSpecifier, {
+      powersName: ['@agent'],
       resultName: [SANDBOX_DIR, 'sandbox-factory'],
     });
     console.log(`Minted ${SANDBOX_DIR}/sandbox-factory`);
@@ -95,8 +95,8 @@ export const main = async hostAgent => {
         mounterEnv[key] = /** @type {string} */ (value);
       }
     }
-    await E(hostAgent).makeUnconfined('@main', mountCapletSpecifier, {
-      powersName: '@none',
+    await E(hostAgent).makeUnconfined(['@main'], mountCapletSpecifier, {
+      powersName: ['@none'],
       resultName: [SANDBOX_DIR, 'fs-mounter'],
       env: harden(mounterEnv),
     });

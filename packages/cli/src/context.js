@@ -75,7 +75,7 @@ export const withEndoAgent = (agentNamePath, { os, process }, callback) =>
       const agent =
         agentNamePath === undefined
           ? host
-          : E(host).lookup(...parsePetNamePath(agentNamePath));
+          : E(host).lookup(parsePetNamePath(agentNamePath));
       await callback({
         cancel,
         cancelled,

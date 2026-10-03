@@ -294,10 +294,10 @@ mint new agents, and run arbitrary code. Treat this access with great care:
   agent unless the user explicitly tells you to.
 
 Operating the daemon — reach the host in exec with
-\`const endo = await E(powers).lookup('endo')\`, then:
-- \`E(endo).list()\` shows the names in the daemon's namespace; \`E(endo).lookup(name)\`
+\`const endo = await E(powers).lookup(['endo'])\`, then:
+- \`E(endo).list()\` shows the names in the daemon's namespace; \`E(endo).lookup([name])\`
   retrieves one as a live capability.
-- \`E(endo).makeDirectory(name)\` creates a sub-namespace; \`E(endo).move(['a'], ['b'])\`
+- \`E(endo).makeDirectory([name])\` creates a sub-namespace; \`E(endo).move(['a'], ['b'])\`
   and \`E(endo).copy(['a'], ['b'])\` take path ARRAYS; \`E(endo).remove(name)\` drops a name.
 - \`E(endo).evaluate(...)\` runs code in a worker — use it to build new caplets or
   one-off tools.
@@ -308,7 +308,7 @@ Operating the daemon — reach the host in exec with
 Your petstore also contains "endo-src" — a READ-ONLY mount of the Endo
 codebase you run inside. Use it to understand the capabilities you operate
 before acting through "endo". In exec, look it up and read from it:
-- \`const src = await E(powers).lookup('endo-src')\`
+- \`const src = await E(powers).lookup(['endo-src'])\`
 - \`E(src).list()\` lists the root; one segment per argument goes deeper:
   \`E(src).list('packages', 'daemon')\`.
 - \`E(src).readText(path)\` reads a file. A path is an array of segments —
@@ -354,7 +354,7 @@ You ALSO administer this machine's operating system. It runs NixOS. Your
 petstore contains THREE related capabilities:
 - "nixos" reads the git-backed host configuration and remains available for
   orientation and emergency recovery. Reach it with
-  \`const nixos = await E(powers).lookup('nixos')\`. Use \`getSystemInfo()\`,
+  \`const nixos = await E(powers).lookup(['nixos'])\`. Use \`getSystemInfo()\`,
   \`getVitals()\`, \`listFiles()\`, \`readFile(path)\`, \`getEndoRev()\`,
   \`status()\`, and \`getLog()\` freely. Its raw stage/build/apply/rollback
   methods are ROOT-EQUIVALENT escape hatches: do NOT use them for an ordinary
@@ -374,7 +374,7 @@ yourself.
 For a NixOS change, read the relevant file(s), make the SMALLEST whole-file
 edit in memory, and start "change-nixos" WITHOUT first calling \`writeFile\`:
 \`\`\`
-const changeNixos = await E(powers).lookup('change-nixos');
+const changeNixos = await E(powers).lookup(['change-nixos']);
 const { runId } = await E(changeNixos).start({
   params: {
     title: 'commit-message-grade title',
@@ -413,8 +413,8 @@ Set up the work area ONCE — skip this if "endo-work" is already in the host's
 names, because re-running mints a fresh scratch mount and rebinds the names,
 orphaning the earlier work area and its commits:
 \`\`\`
-const endo = await E(powers).lookup('endo');
-const credential = await E(endo).lookup('forgejo-credential');
+const endo = await E(powers).lookup(['endo']);
+const credential = await E(endo).lookup(['forgejo-credential']);
 // The forge's https origin is the credential's audience; this repository's
 // mirror is floot/endo.git under it.
 const url = \`\${await E(credential).audience()}/floot/endo.git\`;
@@ -423,14 +423,14 @@ if (!url.startsWith('https:')) {
   return \`The forge at \${url} is not served over https; nothing here can push to it.\`;
 }
 const identity = { authorName: 'Floot', authorEmail: 'floot@goooooo.ooo' };
-const mount = await E(endo).provideScratchMount('endo-work-mount');
+const mount = await E(endo).provideScratchMount(['endo-work-mount']);
 await E(endo).provideGitClone({
   destMount: mount,
   endpoint: { url, credential },
   identity,
 });
-const git = await E(endo).provideGit(mount, 'endo-work', { identity });
-await E(endo).provideGitRemote(git, 'endo-work-origin', {
+const git = await E(endo).provideGit(mount, ['endo-work'], { identity });
+await E(endo).provideGitRemote(git, ['endo-work-origin'], {
   name: 'origin', url, credential,
   allowedDirections: ['push'], allowedBranches: ['agent'],
 });
@@ -457,8 +457,8 @@ Edit at \`/mnt/endo-work\` with your normal file tools, then stage and commit
 THROUGH THE GIT capability — it carries the author identity from the clone,
 which in-sandbox \`git commit\` does not:
 \`\`\`
-const endo = await E(powers).lookup('endo');
-const git = await E(endo).lookup('endo-work');
+const endo = await E(powers).lookup(['endo']);
+const git = await E(endo).lookup(['endo-work']);
 const branches = await E(git).branches();
 if (branches.some(b => b.name === 'agent')) await E(git).switchBranch('agent');
 else await E(git).createBranch('agent', { switchAfterCreate: true });
@@ -473,9 +473,9 @@ when it lists something.
 For a one-line change, or when no disk is attached, edit through the MOUNT
 capability instead and commit the same way:
 \`\`\`
-const endo = await E(powers).lookup('endo');
-const mount = await E(endo).lookup('endo-work-mount');
-const git = await E(endo).lookup('endo-work');
+const endo = await E(powers).lookup(['endo']);
+const mount = await E(endo).lookup(['endo-work-mount']);
+const git = await E(endo).lookup(['endo-work']);
 const file = 'packages/floot/agent.js';
 const entry = await E(mount).entry(file);   // the one call that splits on "/"
 const before = await E(mount).readText(entry);
@@ -489,12 +489,12 @@ Mount paths are arrays of segments — \`E(mount).readText(['packages', 'floot',
 Push, then PROPOSE the pushed revision through "deploy-endo". Do not call
 \`stageRev\`, \`build\`, or \`apply\` yourself:
 \`\`\`
-const endo = await E(powers).lookup('endo');
-const result = await E(await E(endo).lookup('endo-work-origin')).push({
+const endo = await E(powers).lookup(['endo']);
+const result = await E(await E(endo).lookup(['endo-work-origin'])).push({
   source: 'refs/heads/agent', destination: 'refs/heads/agent',
 });
-const head = await E(await E(endo).lookup('endo-work')).revParse('HEAD');
-const deployEndo = await E(powers).lookup('deploy-endo');
+const head = await E(await E(endo).lookup(['endo-work'])).revParse('HEAD');
+const deployEndo = await E(powers).lookup(['deploy-endo']);
 const { runId } = await E(deployEndo).start({
   params: {
     title: 'commit-message-grade title',
@@ -773,7 +773,7 @@ const provisionPresetObjects = async (
       for (const tmp of [gitTmp, scratchTmp]) {
         if (await E(host).has(tmp)) await E(host).remove(tmp);
       }
-      const mount = await E(host).provideScratchMount(scratchTmp);
+      const mount = await E(host).provideScratchMount([scratchTmp]);
       // provideGit requires an existing worktree, but a fresh scratch mount is
       // an empty dir — git-init it first. The factory is an unconfined,
       // fully-privileged host caplet, so resolving the host path and running
@@ -782,7 +782,7 @@ const provisionPresetObjects = async (
       // location).
       const repoRoot = await E(host).provideHostPath(mount);
       await initGitRepo(repoRoot);
-      await E(host).provideGit(mount, gitTmp);
+      await E(host).provideGit(mount, [gitTmp]);
       await E(host).move([gitTmp], [agentName, obj.petName]);
       await E(host).remove(scratchTmp);
     } else if (obj.kind === 'host-powers') {
@@ -813,7 +813,7 @@ const provisionPresetObjects = async (
       } else {
         const mountTmp = `_floot-codemount-${id}`;
         if (await E(host).has(mountTmp)) await E(host).remove(mountTmp);
-        await E(host).provideMount(codePath, mountTmp, { readOnly: true });
+        await E(host).provideMount(codePath, [mountTmp], { readOnly: true });
         await E(host).move([mountTmp], [agentName, obj.petName]);
       }
     } else {
@@ -980,7 +980,7 @@ export const makeStreamingAgent = async (
     if (recorded) {
       usage = recorded;
     } else if (await E(powers).has(USAGE_NAME)) {
-      const stored = /** @type {any} */ (await E(powers).lookup(USAGE_NAME));
+      const stored = /** @type {any} */ (await E(powers).lookup([USAGE_NAME]));
       usage = {
         inputTokens: Number(stored?.inputTokens) || 0,
         outputTokens: Number(stored?.outputTokens) || 0,
@@ -1001,7 +1001,7 @@ export const makeStreamingAgent = async (
       .then(async () => {
         await null;
         if (await E(powers).has(USAGE_NAME)) await E(powers).remove(USAGE_NAME);
-        await E(powers).storeValue(snapshot, USAGE_NAME);
+        await E(powers).storeValue(snapshot, [USAGE_NAME]);
       })
       .catch(error => {
         console.error(
@@ -2137,7 +2137,7 @@ export const resolveSharedWorkspaceHostPath = async (
 ) => {
   try {
     if (!(await E(sessionGuest).has(petName))) return undefined;
-    const workspace = await E(sessionGuest).lookup(petName);
+    const workspace = await E(sessionGuest).lookup([petName]);
     // eslint-disable-next-line no-underscore-dangle
     const methods = await E(workspace).__getMethodNames__();
     if (!methods.includes('worktree')) return undefined;
@@ -2179,7 +2179,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
   const getProviderConfig = () => {
     if (!providerConfigP) {
       providerConfigP = E(powers)
-        .lookup('llm-provider')
+        .lookup(['llm-provider'])
         .catch(error => {
           providerConfigP = undefined;
           throw error;
@@ -2214,7 +2214,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
       const providerName =
         env?.FLOOT_CONTAINER_MOUNT_BRIDGE || 'container-mount-bridge';
       if (!(await E(powers).has(providerName))) return undefined;
-      const provider = await E(powers).lookup(providerName);
+      const provider = await E(powers).lookup([providerName]);
       try {
         // Introspect rather than duck-type: a failed CapTP call per method
         // is noise, and a provider without the pair cannot bridge anyway.
@@ -2251,7 +2251,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
         for (const name of [...new Set(configuredBackendNames)]) {
           // eslint-disable-next-line @jessie.js/safe-await-separator
           if (await E(powers).has(name)) {
-            const factory = await E(powers).lookup(name);
+            const factory = await E(powers).lookup([name]);
 
             const descriptor = assertHostedBackendDescriptor(
               await E(factory).describe(),
@@ -2290,7 +2290,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           accountOracleP = undefined;
           return undefined;
         }
-        return E(powers).lookup(accountOracleName);
+        return E(powers).lookup([accountOracleName]);
       })().catch(error => {
         accountOracleP = undefined;
         throw error;
@@ -2309,7 +2309,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
   const getAssetServer = async () => {
     try {
       if (await E(powers).has(assetServerName)) {
-        const assetServer = await E(powers).lookup(assetServerName);
+        const assetServer = await E(powers).lookup([assetServerName]);
         return assetServer;
       }
     } catch {
@@ -2355,7 +2355,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
       getAssetServer,
       getWorkspace: async () => {
         if (await E(sessionGuest).has(workspaceObject.petName)) {
-          return E(sessionGuest).lookup(workspaceObject.petName);
+          return E(sessionGuest).lookup([workspaceObject.petName]);
         }
         return undefined;
       },
@@ -2707,7 +2707,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           .sort();
         if (journalNames.length > 0) {
           const latestName = journalNames.at(-1);
-          const stored = await E(powers).lookup(latestName);
+          const stored = await E(powers).lookup([latestName]);
           if (
             stored?.version !== 1 ||
             !Array.isArray(stored.sessions) ||
@@ -2721,7 +2721,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           registry = [...stored.sessions];
           registrySequence = stored.sequence + 1n;
         } else if (await E(powers).has(REGISTRY_BACKUP_NAME)) {
-          const stored = await E(powers).lookup(REGISTRY_BACKUP_NAME);
+          const stored = await E(powers).lookup([REGISTRY_BACKUP_NAME]);
           if (!Array.isArray(stored)) {
             throw Error('Floot legacy registry backup is corrupt');
           }
@@ -2730,13 +2730,13 @@ export const make = (hostPowers, _context, { env } = {}) => {
           // releasing that recovery root or exposing the registry in memory.
           await E(powers).storeValue(
             harden({ version: 1, sequence: 0n, sessions: stored }),
-            `${REGISTRY_PREFIX}${'0'.repeat(20)}`,
+            [`${REGISTRY_PREFIX}${'0'.repeat(20)}`],
           );
           await retireRegistryBackup();
           registry = [...stored];
           registrySequence = 1n;
         } else if (await E(powers).has(REGISTRY_NAME)) {
-          const stored = await E(powers).lookup(REGISTRY_NAME);
+          const stored = await E(powers).lookup([REGISTRY_NAME]);
           registry = Array.isArray(stored) ? [...stored] : [];
         } else {
           registry = [];
@@ -2781,7 +2781,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           sequence,
           sessions: harden([...(registry || [])]),
         }),
-        name,
+        [name],
       );
       await retireRegistryBackup();
       // Append-only was never meant to be unbounded: every lifecycle
@@ -2826,7 +2826,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           voicePrefs = {};
           return voicePrefs;
         }
-        const record = await E(powers).lookup(VOICE_PREFS_NAME);
+        const record = await E(powers).lookup([VOICE_PREFS_NAME]);
         voicePrefs = sanitizeVoicePrefs(record);
         return voicePrefs;
       })().catch(error => {
@@ -2848,7 +2848,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
     const result = voicePrefsWrite.then(async () => {
       const current = await loadVoicePrefs();
       const next = { ...current, ...patch };
-      await E(powers).storeValue(harden({ ...next }), VOICE_PREFS_NAME);
+      await E(powers).storeValue(harden({ ...next }), [VOICE_PREFS_NAME]);
       voicePrefs = next;
       return harden({ ...next });
     });
@@ -2880,8 +2880,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
         // control methods. So we pass an explicit agentName and look the
         // controlling *agent* up by that name to get the full guest facet for
         // the session's powers (the same agent fae runs its driver against).
-        await E(host).provideGuest(handleName, { agentName });
-        const sessionGuest = await E(host).lookup(agentName);
+        await E(host).provideGuest([handleName], { agentName: [agentName] });
+        const sessionGuest = await E(host).lookup([agentName]);
         // Introduce the user to the session under the petname "user" so the
         // agent can mail them directly (send/reply target "user"). The factory
         // host's own "@host" is the user — the @agent that provisioned the

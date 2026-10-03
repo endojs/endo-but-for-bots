@@ -36,14 +36,14 @@ test('a fresh inventory gets a dedicated guest, the service, and its pin', async
   await main(agent);
 
   t.deepEqual(calls.guests, [
-    { handleName: 'workflow-powers', agentName: 'workflow-agent' },
+    { handleName: ['workflow-powers'], agentName: ['workflow-agent'] },
   ]);
   t.is(calls.unconfined.length, 1);
   const [provisioned] = calls.unconfined;
   t.is(provisioned.workerName, undefined);
   t.true(provisioned.specifier.endsWith('/src/index.js'));
-  t.is(provisioned.powersName, 'workflow-agent');
-  t.is(provisioned.resultName, 'workflow-service');
+  t.deepEqual(provisioned.powersName, ['workflow-agent']);
+  t.deepEqual(provisioned.resultName, ['workflow-service']);
   t.deepEqual(calls.copies, [
     { from: ['workflow-service'], to: ['@pins', 'workflow-service'] },
   ]);

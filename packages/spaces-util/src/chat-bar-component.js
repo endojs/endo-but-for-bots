@@ -1675,7 +1675,7 @@ export const chatBarComponent = (
         powers,
         onSubmit: async data => {
           // Call E(powers).evaluate()
-          // Split dot-notation pet names into paths for the evaluate API
+          // Split each typed pet name into a pet-name path for the evaluate API
           const codeNames = data.endowments.map(e => e.codeName);
           const petNamePaths = data.endowments.map(e => e.petName.split('/'));
           const resultNamePath = data.resultName
@@ -1684,7 +1684,7 @@ export const chatBarComponent = (
           const workerName = data.workerName || '@main';
 
           await E(powers).evaluate(
-            workerName,
+            workerName.split('/'),
             data.source,
             codeNames,
             petNamePaths,
@@ -1784,9 +1784,14 @@ export const chatBarComponent = (
         onSubmit: async data => {
           await E(powers).endow(
             data.messageNumber,
-            data.bindings,
-            data.workerName,
-            data.resultName,
+            Object.fromEntries(
+              Object.entries(data.bindings).map(([codeName, petName]) => [
+                codeName,
+                petName.split('/'),
+              ]),
+            ),
+            data.workerName.split('/'),
+            data.resultName ? data.resultName.split('/') : undefined,
           );
         },
         onClose: () => {

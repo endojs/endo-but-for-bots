@@ -63,7 +63,7 @@ export const makeEndoPetstoreBackend = powers => {
         const nodes = await Promise.all(
           ctNames.map(name =>
             E(powers)
-              .lookup(name)
+              .lookup([name])
               .then(
                 node => /** @type {ConversationNode} */ (node),
                 () => null,
@@ -120,7 +120,7 @@ export const makeEndoPetstoreBackend = powers => {
       // Fall back to a direct lookup and cache the result.
       try {
         const node = /** @type {ConversationNode} */ (
-          await E(powers).lookup(`${CT_PREFIX}${id}`)
+          await E(powers).lookup([`${CT_PREFIX}${id}`])
         );
         if (node && typeof node.id === 'string') {
           map.set(node.id, node);

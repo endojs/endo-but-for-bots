@@ -186,17 +186,19 @@ export const makeExecuteTool = powers => {
         // eslint-disable-next-line no-shadow
         const { name: lookupName } = args;
         if (lookupName !== undefined) {
+          // Pass the name through unsplit, as `lookup` does: the daemon
+          // refuses a bare string with a hint to retry with an array.
           const capability = await E(powers).lookup(lookupName);
           return E(capability).list();
         }
         return E(powers).list();
       }
       case 'lookup': {
-        const { petNameOrPath } = args;
-        if (petNameOrPath === undefined) {
-          throw new Error('petNameOrPath is required');
+        const { petNamePath } = args;
+        if (petNamePath === undefined) {
+          throw new Error('petNamePath is required');
         }
-        return E(powers).lookup(petNameOrPath);
+        return E(powers).lookup(petNamePath);
       }
       case 'remove': {
         const { petNamePath } = args;
@@ -249,11 +251,11 @@ export const makeExecuteTool = powers => {
         );
       }
       case 'resolve': {
-        const { messageNumber, petNameOrPath } = args;
-        if (messageNumber === undefined || petNameOrPath === undefined) {
-          throw new Error('messageNumber and petNameOrPath are required');
+        const { messageNumber, petNamePath } = args;
+        if (messageNumber === undefined || petNamePath === undefined) {
+          throw new Error('messageNumber and petNamePath are required');
         }
-        return E(powers).resolve(messageNumber, petNameOrPath);
+        return E(powers).resolve(messageNumber, petNamePath);
       }
       case 'reject': {
         const { messageNumber, reason } = args;
@@ -263,15 +265,17 @@ export const makeExecuteTool = powers => {
         return E(powers).reject(messageNumber, reason);
       }
       case 'adopt': {
-        const { messageNumber, edgeName, petName } = args;
+        const { messageNumber, edgeName, petNamePath } = args;
         if (
           messageNumber === undefined ||
           edgeName === undefined ||
-          petName === undefined
+          petNamePath === undefined
         ) {
-          throw new Error('messageNumber, edgeName, and petName are required');
+          throw new Error(
+            'messageNumber, edgeName, and petNamePath are required',
+          );
         }
-        return E(powers).adopt(messageNumber, edgeName, petName);
+        return E(powers).adopt(messageNumber, edgeName, petNamePath);
       }
       case 'dismiss': {
         const { messageNumber } = args;
@@ -281,50 +285,59 @@ export const makeExecuteTool = powers => {
         return E(powers).dismiss(messageNumber);
       }
       case 'request': {
-        const { recipientName, description, responseName } = args;
-        if (recipientName === undefined || description === undefined) {
-          throw new Error('recipientName and description are required');
+        const { recipientNamePath, description, responseNamePath } = args;
+        if (recipientNamePath === undefined || description === undefined) {
+          throw new Error('recipientNamePath and description are required');
         }
-        return E(powers).request(recipientName, description, responseName);
+        return E(powers).request(
+          recipientNamePath,
+          description,
+          responseNamePath,
+        );
       }
       case 'send': {
-        const { recipientName, strings, edgeNames, petNames } = args;
+        const { recipientNamePath, strings, edgeNames, petNamePaths } = args;
         if (
-          recipientName === undefined ||
+          recipientNamePath === undefined ||
           !strings ||
           !edgeNames ||
-          !petNames
+          !petNamePaths
         ) {
           throw new Error(
-            'recipientName, strings, edgeNames, and petNames are required',
+            'recipientNamePath, strings, edgeNames, and petNamePaths are required',
           );
         }
-        return E(powers).send(recipientName, strings, edgeNames, petNames);
+        return E(powers).send(
+          recipientNamePath,
+          strings,
+          edgeNames,
+          petNamePaths,
+        );
       }
       case 'reply': {
-        const { messageNumber, strings, edgeNames, petNames } = args;
+        const { messageNumber, strings, edgeNames, petNamePaths } = args;
         if (
           messageNumber === undefined ||
           !strings ||
           !edgeNames ||
-          !petNames
+          !petNamePaths
         ) {
           throw new Error(
-            'messageNumber, strings, edgeNames, and petNames are required',
+            'messageNumber, strings, edgeNames, and petNamePaths are required',
           );
         }
-        return E(powers).reply(messageNumber, strings, edgeNames, petNames);
+        return E(powers).reply(messageNumber, strings, edgeNames, petNamePaths);
       }
       case 'editMessage': {
-        const { messageNumber, strings, edgeNames, petNames, done } = args;
+        const { messageNumber, strings, edgeNames, petNamePaths, done } = args;
         if (
           messageNumber === undefined ||
           !strings ||
           !edgeNames ||
-          !petNames
+          !petNamePaths
         ) {
           throw new Error(
-            'messageNumber, strings, edgeNames, and petNames are required',
+            'messageNumber, strings, edgeNames, and petNamePaths are required',
           );
         }
         const options = done === undefined ? undefined : harden({ done });
@@ -332,7 +345,7 @@ export const makeExecuteTool = powers => {
           messageNumber,
           strings,
           edgeNames,
-          petNames,
+          petNamePaths,
           options,
         );
       }
@@ -355,18 +368,18 @@ export const makeExecuteTool = powers => {
 
       // Capability operations
       case 'inspect': {
-        const { petNameOrPath } = args;
-        if (petNameOrPath === undefined) {
-          throw new Error('petNameOrPath is required');
+        const { petNamePath } = args;
+        if (petNamePath === undefined) {
+          throw new Error('petNamePath is required');
         }
-        const capability = await E(powers).lookup(petNameOrPath);
+        const capability = await E(powers).lookup(petNamePath);
         const parts = [];
         try {
           const helpText = await E(capability).help();
           parts.push(helpText);
         } catch {
           parts.push(
-            `Capability at "${petNameOrPath}" does not implement help().`,
+            `Capability at "${[petNamePath].flat().join('/')}" does not implement help().`,
           );
         }
         try {
@@ -379,33 +392,33 @@ export const makeExecuteTool = powers => {
         return parts.join('\n');
       }
       case 'readText': {
-        const { petNameOrPath, fileName } = args;
-        if (petNameOrPath === undefined || fileName === undefined) {
-          throw new Error('petNameOrPath and fileName are required');
+        const { petNamePath, fileName } = args;
+        if (petNamePath === undefined || fileName === undefined) {
+          throw new Error('petNamePath and fileName are required');
         }
-        const capability = await E(powers).lookup(petNameOrPath);
+        const capability = await E(powers).lookup(petNamePath);
         return E(capability).readText(fileName);
       }
       case 'writeText': {
-        const { petNameOrPath, fileName, content } = args;
+        const { petNamePath, fileName, content } = args;
         if (
-          petNameOrPath === undefined ||
+          petNamePath === undefined ||
           fileName === undefined ||
           content === undefined
         ) {
-          throw new Error('petNameOrPath, fileName, and content are required');
+          throw new Error('petNamePath, fileName, and content are required');
         }
-        const capability = await E(powers).lookup(petNameOrPath);
+        const capability = await E(powers).lookup(petNamePath);
         return E(capability).writeText(fileName, content);
       }
       case 'editText': {
-        const { petNameOrPath, fileName, edits } = args;
+        const { petNamePath, fileName, edits } = args;
         if (
-          petNameOrPath === undefined ||
+          petNamePath === undefined ||
           fileName === undefined ||
           edits === undefined
         ) {
-          throw new Error('petNameOrPath, fileName, and edits are required');
+          throw new Error('petNamePath, fileName, and edits are required');
         }
         // Read-modify-write through the tree capability. `applyEdits` is
         // synchronous, so nothing interleaves *within* the transform, but the
@@ -415,19 +428,21 @@ export const makeExecuteTool = powers => {
         // (last-writer-wins). The capability serializes each individual
         // writeText, not the read-modify-write pair; a caller needing
         // atomicity must serialize at a higher level.
-        const capability = await E(powers).lookup(petNameOrPath);
+        const capability = await E(powers).lookup(petNamePath);
         const original = await E(capability).readText(fileName);
         const {
           content: updated,
           diff,
           applied,
-        } = applyEdits(original, edits, { fileName });
+        } = applyEdits(original, edits, {
+          fileName: Array.isArray(fileName) ? fileName.join('/') : fileName,
+        });
         await E(capability).writeText(fileName, updated);
         return harden({ applied, diff });
       }
       case 'glob': {
-        const { petNameOrPath, pattern, followSymlinks } = args;
-        const capability = await E(powers).lookup(petNameOrPath);
+        const { petNamePath, pattern, followSymlinks } = args;
+        const capability = await E(powers).lookup(petNamePath);
         // Omit the options record entirely when the tool call carried no
         // option, so a capability predating the parameter still answers.
         return followSymlinks === undefined
@@ -435,9 +450,8 @@ export const makeExecuteTool = powers => {
           : E(capability).glob(pattern, harden({ followSymlinks }));
       }
       case 'grep': {
-        const { petNameOrPath, pattern, glob, maxResults, followSymlinks } =
-          args;
-        const capability = await E(powers).lookup(petNameOrPath);
+        const { petNamePath, pattern, glob, maxResults, followSymlinks } = args;
+        const capability = await E(powers).lookup(petNamePath);
         const options =
           maxResults === undefined && followSymlinks === undefined
             ? undefined
@@ -458,30 +472,32 @@ export const makeExecuteTool = powers => {
       // Code evaluation
       case 'evaluate': {
         const {
-          workerName: rawWorkerName,
+          workerNamePath: rawWorkerNamePath,
           source,
           codeNames = [],
           edgeNames = [],
-          resultName,
+          resultNamePath,
         } = args;
         if (source === undefined) {
           throw new Error('source is required');
         }
-        if (resultName === undefined) {
-          throw new Error('resultName is required');
+        if (resultNamePath === undefined) {
+          throw new Error('resultNamePath is required');
         }
         // With SmallCaps decode, `"#undefined"` arrives as JS `undefined`
         // already. The string `"undefined"` is not a SmallCaps constant
         // so it passes through as-is; treat it as the literal undefined
-        // sentinel the LLM may emit when it lacks a workerName.
-        const workerName =
-          rawWorkerName === 'undefined' ? undefined : rawWorkerName;
+        // sentinel the LLM may emit when it lacks a workerNamePath.
+        const workerNamePath =
+          rawWorkerNamePath === 'undefined' ? undefined : rawWorkerNamePath;
         return E(powers).evaluate(
-          workerName,
+          workerNamePath,
           source,
           harden(codeNames),
-          harden(edgeNames),
-          resultName,
+          // Each endowment pet name is a single name, never split on a
+          // delimiter; the daemon takes it as a one-segment path.
+          harden(edgeNames.map(edgeName => [edgeName])),
+          resultNamePath,
         );
       }
 

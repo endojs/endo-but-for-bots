@@ -37,7 +37,7 @@ const makeStub = files => {
     },
   };
   const powers = {
-    lookup(_petNameOrPath) {
+    lookup(_petNamePath) {
       return Promise.resolve(capability);
     },
   };
@@ -57,7 +57,7 @@ const makeStub = files => {
 test('editText applies a single edit through readText/writeText', async t => {
   const { run, read } = makeStub({ 'a.txt': 'hello world\n' });
   const result = await run('editText', {
-    petNameOrPath: 'workspace',
+    petNamePath: 'workspace',
     fileName: 'a.txt',
     edits: [{ oldText: 'world', newText: 'there' }],
   });
@@ -72,7 +72,7 @@ test('editText applies a batch of edits in one call', async t => {
     'code.js': 'const a = 1;\nconst b = 2;\n',
   });
   const result = await run('editText', {
-    petNameOrPath: ['dir', 'code.js'],
+    petNamePath: ['dir', 'code.js'],
     fileName: 'code.js',
     edits: [
       { oldText: 'a = 1', newText: 'a = 10' },
@@ -88,7 +88,7 @@ test('editText rejects a non-unique oldText without writing', async t => {
   await t.throwsAsync(
     () =>
       run('editText', {
-        petNameOrPath: 'workspace',
+        petNamePath: 'workspace',
         fileName: 'dup.txt',
         edits: [{ oldText: 'x', newText: 'y' }],
       }),
@@ -102,7 +102,7 @@ test('editText validates that edits is an array of oldText/newText records', asy
   await t.throwsAsync(
     () =>
       run('editText', {
-        petNameOrPath: 'workspace',
+        petNamePath: 'workspace',
         fileName: 'a.txt',
         edits: [{ oldText: 'hi' }],
       }),

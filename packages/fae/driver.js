@@ -45,11 +45,11 @@ export const make = async (powers, context, { env } = {}) => {
   const startLoop = async () => {
     const storedConfig =
       /** @type {{ host: string, model: string, authToken?: string }} */ (
-        await E(powers).lookup('llm-provider')
+        await E(powers).lookup(['llm-provider'])
       );
-    const agentPowers = await E(powers).lookup('agent');
+    const agentPowers = await E(powers).lookup(['agent']);
     const spawner = (await E(powers).has('subagent-spawner'))
-      ? await E(powers).lookup('subagent-spawner')
+      ? await E(powers).lookup(['subagent-spawner'])
       : undefined;
     // The token comes from the `SecretBlob` when one was delegated, so the
     // stored config carries no credential. Handing the loop a thunk rather

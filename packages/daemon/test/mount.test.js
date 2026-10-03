@@ -207,7 +207,7 @@ test('readOnly() blob view exposes named reads over the live file', async t => {
     return decodeUtf8(out);
   };
 
-  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('f.txt'));
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup(['f.txt']));
   const view = await E(file).readOnly();
 
   const hash1 = await E(view).sha256();
@@ -232,7 +232,7 @@ test('EndoMountFile.byteRange attenuates to a read-only byte-interval view', asy
   const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['f.txt'], 'hello world\n'); // 12 bytes
-  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('f.txt'));
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup(['f.txt']));
 
   // range returns a ReadableBlob view (no write surface), not an EndoMountFile.
   const hello = await E(file).byteRange(0n, 5n);
@@ -271,7 +271,7 @@ test('EndoMountFile byteRange view is LIVE: it observes the file changing under 
   const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['f.txt'], 'hello world');
-  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('f.txt'));
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup(['f.txt']));
 
   // A view over bytes [6, 11): the sixth-onward word.
   const tail = await E(file).byteRange(6n, 11n);
@@ -289,7 +289,7 @@ test('EndoMountFile.textRange attenuates to a line-interval view (LF, terminal-L
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
 
   await E(mount).writeText(['lf.txt'], 'a\nb\nc\n');
-  const lf = /** @type {EndoMountFile} */ (await E(mount).lookup('lf.txt'));
+  const lf = /** @type {EndoMountFile} */ (await E(mount).lookup(['lf.txt']));
   t.is(await E(await E(lf).textRange(0, 2)).text(), 'a\nb');
   t.is(
     await E(await E(lf).textRange(0, 100)).text(),
@@ -299,7 +299,9 @@ test('EndoMountFile.textRange attenuates to a line-interval view (LF, terminal-L
   t.is(await E(await E(lf).textRange(1, 1)).text(), '', 'empty interval');
 
   await E(mount).writeText(['term.txt'], 'a\nb\n');
-  const term = /** @type {EndoMountFile} */ (await E(mount).lookup('term.txt'));
+  const term = /** @type {EndoMountFile} */ (
+    await E(mount).lookup(['term.txt'])
+  );
   t.is(
     await E(await E(term).textRange(2, 3)).text(),
     '',
@@ -307,7 +309,9 @@ test('EndoMountFile.textRange attenuates to a line-interval view (LF, terminal-L
   );
 
   await E(mount).writeText(['crlf.txt'], 'x\r\ny\r\n');
-  const crlf = /** @type {EndoMountFile} */ (await E(mount).lookup('crlf.txt'));
+  const crlf = /** @type {EndoMountFile} */ (
+    await E(mount).lookup(['crlf.txt'])
+  );
   t.is(
     await E(await E(crlf).textRange(0, 1)).text(),
     'x\r',
@@ -316,7 +320,7 @@ test('EndoMountFile.textRange attenuates to a line-interval view (LF, terminal-L
 
   // Composition: a byte range's textRange, and a line range's byteRange.
   await E(mount).writeText(['doc.txt'], 'one\ntwo\nthree\n');
-  const doc = /** @type {EndoMountFile} */ (await E(mount).lookup('doc.txt'));
+  const doc = /** @type {EndoMountFile} */ (await E(mount).lookup(['doc.txt']));
   const firstEight = await E(doc).byteRange(0n, 8n); // 'one\ntwo\n'
   t.is(await E(await E(firstEight).textRange(0, 1)).text(), 'one');
   const twoLines = await E(doc).textRange(0, 2); // 'one\ntwo'
@@ -327,7 +331,7 @@ test('the read-only view (readOnly()) also carries byteRange / textRange', async
   const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['f.txt'], 'alpha\nbeta\n');
-  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('f.txt'));
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup(['f.txt']));
   const view = await E(file).readOnly();
   t.is(await E(await E(view).byteRange(0n, 5n)).text(), 'alpha');
   t.is(await E(await E(view).textRange(1, 2)).text(), 'beta');
@@ -584,7 +588,7 @@ test('read-only mount rejects makeFile', async t => {
 test('read-only mount rejects makeDirectory', async t => {
   const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: true, filePowers });
-  await t.throwsAsync(() => E(mount).makeDirectory('nope'), {
+  await t.throwsAsync(() => E(mount).makeDirectory(['nope']), {
     message: /read-only/,
   });
 });
@@ -629,9 +633,9 @@ test('readOnly() called on an already-read-only mount returns a working view', a
 test('subView confines `..` to the sub-root (cannot reach siblings or mount root)', async t => {
   const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
-  await E(mount).makeDirectory('sub');
+  await E(mount).makeDirectory(['sub']);
   await E(mount).writeText(['sub', 'inside.txt'], 'in');
-  await E(mount).writeText('secret.txt', 'top');
+  await E(mount).writeText(['secret.txt'], 'top');
 
   const view = await E(mount).subView('sub');
   t.true(await E(view).has('inside.txt'), 'in-view path is visible');
@@ -644,7 +648,7 @@ test('subView confines `..` to the sub-root (cannot reach siblings or mount root
   // Contrast: a plain lookup sub-handle shares the mount confinement root,
   // so it DOES reach the sibling via `..` — which is exactly why subView
   // (a real confinement shift) is needed for attenuation.
-  const handle = /** @type {EndoMount} */ (await E(mount).lookup('sub'));
+  const handle = /** @type {EndoMount} */ (await E(mount).lookup(['sub']));
   t.true(
     await E(handle).has('..', 'secret.txt'),
     'lookup sub-handle shares the mount root by design',
@@ -654,7 +658,7 @@ test('subView confines `..` to the sub-root (cannot reach siblings or mount root
 test('subView of a file throws ENOTDIR', async t => {
   const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
-  await E(mount).writeText('a.txt', 'x');
+  await E(mount).writeText(['a.txt'], 'x');
   await t.throwsAsync(() => E(mount).subView('a.txt'), { message: /ENOTDIR/ });
 });
 
@@ -665,8 +669,8 @@ test('subView rejects a parent-minted entry (own identity domain)', async t => {
   // sub-view root, which would be authority/identity confusion).
   const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
-  await E(mount).makeDirectory('sub');
-  await E(mount).writeText('secret.txt', 'top');
+  await E(mount).makeDirectory(['sub']);
+  await E(mount).writeText(['secret.txt'], 'top');
   await E(mount).writeText(['sub', 'secret.txt'], 'inner');
 
   const parentEntry = await E(mount).entry('secret.txt');
@@ -697,7 +701,7 @@ test('lookup of a present file returns an EndoMountFile with text/json', async t
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   fs.writeFileSync(path.join(rootPath, 'value.json'), '{"a":1}');
   const file = /** @type {EndoMountFile} */ (
-    await E(mount).lookup('value.json')
+    await E(mount).lookup(['value.json'])
   );
   t.is(await E(file).text(), '{"a":1}');
   t.deepEqual(await E(file).json(), { a: 1 });
@@ -735,7 +739,9 @@ test('EndoMountFile.append extends the file content', async t => {
   const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['log.txt'], 'one\n');
-  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('log.txt'));
+  const file = /** @type {EndoMountFile} */ (
+    await E(mount).lookup(['log.txt'])
+  );
   await E(file).append('two\n');
   t.is(fs.readFileSync(path.join(rootPath, 'log.txt'), 'utf8'), 'one\ntwo\n');
 });
@@ -744,7 +750,7 @@ test('EndoMountFile.writeText replaces the file content', async t => {
   const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['v.txt'], 'old');
-  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('v.txt'));
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup(['v.txt']));
   await E(file).writeText('new');
   t.is(fs.readFileSync(path.join(rootPath, 'v.txt'), 'utf8'), 'new');
 });
@@ -753,7 +759,7 @@ test('EndoMountFile.stat returns a record for a present file', async t => {
   const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['s.txt'], 'x');
-  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('s.txt'));
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup(['s.txt']));
   const st = await E(file).stat();
   // Pin the realigned bigint/ns `Stat` shape (this PR's whole point), not just
   // truthiness: a regression to the old `{ sizeBytes: number, modifiedMs }`
@@ -768,7 +774,7 @@ test('EndoMountFile.snapshot throws when no snapshotFile was wired in', async t 
   const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['s.txt'], 'x');
-  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('s.txt'));
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup(['s.txt']));
   await t.throwsAsync(() => E(file).snapshot(), {
     message: /snapshot.* not available/,
   });
@@ -778,7 +784,7 @@ test('EndoMountFile from a read-only mount rejects writeText / append', async t 
   const rootPath = makeTemporaryRoot(t);
   fs.writeFileSync(path.join(rootPath, 'r.txt'), 'x');
   const mount = makeMount({ rootPath, readOnly: true, filePowers });
-  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('r.txt'));
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup(['r.txt']));
   await t.throwsAsync(() => E(file).writeText('new'), { message: /read-only/ });
   await t.throwsAsync(() => E(file).append('more'), { message: /read-only/ });
 });
@@ -868,7 +874,7 @@ test('write of a live file handle onto its own backing path preserves content', 
   const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['b.txt'], 'still here');
-  const handle = await E(mount).lookup('b.txt');
+  const handle = await E(mount).lookup(['b.txt']);
   await E(mount).write(['b.txt'], handle);
   t.is(
     fs.readFileSync(path.join(rootPath, 'b.txt'), 'utf8'),
@@ -1098,7 +1104,7 @@ test('EndoMountFile.snapshot returns a usable file snapshot when wired', async t
     snapshotFile,
   });
   await E(mount).writeText(['s.txt'], 'snapshot-me');
-  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('s.txt'));
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup(['s.txt']));
   const blob = /** @type {ReadableBlobView} */ (
     /** @type {unknown} */ (await E(file).snapshot())
   );
@@ -1117,7 +1123,7 @@ test('EndoMountFile.writeBytes is reachable through the read-only-rejection bran
   const rootPath = makeTemporaryRoot(t);
   fs.writeFileSync(path.join(rootPath, 'r.bin'), '');
   const mount = makeMount({ rootPath, readOnly: true, filePowers });
-  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('r.bin'));
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup(['r.bin']));
   async function* iter() {
     yield new Uint8Array([1]);
   }
@@ -1134,7 +1140,9 @@ test('readOnly() narrows to a ReadableTree view that recursively narrows file lo
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['a.txt'], 'hi');
   const view = await E(mount).readOnly();
-  const file = /** @type {ReadableBlobView} */ (await E(view).lookup('a.txt'));
+  const file = /** @type {ReadableBlobView} */ (
+    await E(view).lookup(['a.txt'])
+  );
   // eslint-disable-next-line no-underscore-dangle
   const methods = await E(/** @type {any} */ (file)).__getMethodNames__();
   // The view-of-a-file is a ReadableBlob, not an EndoMountFile.

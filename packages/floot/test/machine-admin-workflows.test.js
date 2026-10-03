@@ -53,8 +53,8 @@ test('machine-admin prompt routes ordinary deploys through durable runs', t => {
   t.true(
     systemPrompt.includes('NORMAL DEPLOYS MUST GO THROUGH A WORKFLOW FACTORY'),
   );
-  t.true(systemPrompt.includes("lookup('deploy-endo')"));
-  t.true(systemPrompt.includes("lookup('change-nixos')"));
+  t.true(systemPrompt.includes("lookup(['deploy-endo'])"));
+  t.true(systemPrompt.includes("lookup(['change-nixos'])"));
   t.true(systemPrompt.includes('E(deployEndo).start'));
   t.true(systemPrompt.includes('E(changeNixos).start'));
   t.true(systemPrompt.includes("approval form to the OWNER'S INBOX"));
@@ -74,8 +74,8 @@ test('machine-admin prompt re-reaches a run through its connection, not by name 
   t.false(systemPrompt.includes('storeValue(run'));
   // The connection scopes observation to its own factory's runs; the pinned
   // service would hand the session control over every run on the daemon.
-  t.false(systemPrompt.includes("lookup('@pins')"));
-  t.false(systemPrompt.includes("lookup('workflow-service')"));
+  t.false(systemPrompt.includes("lookup(['@pins'])"));
+  t.false(systemPrompt.includes("lookup(['workflow-service'])"));
   t.true(systemPrompt.includes('E(deployEndo).status(runId)'));
   t.true(systemPrompt.includes('E(deployEndo).explain(runId)'));
   t.true(systemPrompt.includes('E(deployEndo).journal(runId'));
@@ -132,7 +132,9 @@ test('machine-admin prompt sets up a remote this tree can construct and push thr
   );
   // The git the session commits through is minted separately from the clone
   // and takes its own identity; without it commits are attributed to Endo.
-  t.true(systemPrompt.includes("provideGit(mount, 'endo-work', { identity })"));
+  t.true(
+    systemPrompt.includes("provideGit(mount, ['endo-work'], { identity })"),
+  );
   // The clone's own capabilities can be stored by name; the prompt must not
   // claim otherwise.
   t.false(systemPrompt.includes('cannot store by name'));

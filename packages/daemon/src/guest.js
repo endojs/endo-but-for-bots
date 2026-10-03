@@ -15,7 +15,7 @@ import {
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { idFromLocator } from './locator.js';
 
-/** @import { Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, InvitationDeferredTaskParams, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, InvitationDeferredTaskParams, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NamePath, NodeNumber, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 import { GuestInterface } from './interfaces.js';
 import { guestHelp, makeHelp } from './help-text.js';
 
@@ -213,23 +213,23 @@ export const makeGuestMaker = ({
     } = mailbox;
 
     /**
-     * @param {NameOrPath | undefined} workerName
+     * @param {NamePath | undefined} workerNamePath
      * @param {DeferredTasks<WorkerDeferredTaskParams>['push']} deferTask
      */
-    const prepareWorkerFormulation = async (workerName, deferTask) => {
-      if (workerName === undefined) {
+    const prepareWorkerFormulation = async (workerNamePath, deferTask) => {
+      if (workerNamePath === undefined) {
         return undefined;
       }
-      const workerNamePath = namePathFrom(workerName);
+      const workerPath = namePathFrom(workerNamePath);
       // A single segment resolves against the guest's own pet store; a
       // path resolves through the directory.
       const workerId = /** @type {FormulaIdentifier | undefined} */ (
-        workerNamePath.length === 1
-          ? specialStore.identifyLocal(workerNamePath[0])
-          : await E(directory).identify(...workerNamePath)
+        workerPath.length === 1
+          ? specialStore.identifyLocal(workerPath[0])
+          : await E(directory).identify(...workerPath)
       );
       if (workerId === undefined) {
-        const { namePath, petName } = assertPetNamePath(workerNamePath);
+        const { namePath, petName } = assertPetNamePath(workerPath);
         deferTask(identifiers =>
           namePath.length === 1
             ? specialStore.storeIdentifier(petName, identifiers.workerId)
@@ -243,19 +243,19 @@ export const makeGuestMaker = ({
     /**
      * Evaluate code directly in a worker, constrained only by reachable
      * capabilities in the guest's namespace.
-     * @param {NameOrPath | undefined} workerName
+     * @param {NamePath | undefined} workerNamePath
      * @param {string} source
      * @param {Array<string>} codeNames
-     * @param {NamesOrPaths} petNamesOrPaths
-     * @param {NameOrPath} [resultName]
+     * @param {NamePath[]} petNamePaths
+     * @param {NamePath} [resultNamePath]
      * @returns {Promise<unknown>}
      */
     const evaluate = async (
-      workerName,
+      workerNamePath,
       source,
       codeNames,
-      petNamesOrPaths,
-      resultName,
+      petNamePaths,
+      resultNamePath,
     ) => {
       if (!Array.isArray(codeNames)) {
         throw new Error('Evaluator requires an array of code names');
@@ -265,33 +265,36 @@ export const makeGuestMaker = ({
           throw new Error(`Invalid endowment name: ${q(codeName)}`);
         }
       }
-      if (petNamesOrPaths.length !== codeNames.length) {
+      if (petNamePaths.length !== codeNames.length) {
         throw new Error('Evaluator requires one pet name for each code name');
       }
 
       /** @type {DeferredTasks<EvalDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
 
-      const workerId = await prepareWorkerFormulation(workerName, tasks.push);
+      const workerId = await prepareWorkerFormulation(
+        workerNamePath,
+        tasks.push,
+      );
 
       /** @type {(FormulaIdentifier | NamePath)[]} */
-      const endowmentFormulaIdsOrPaths = petNamesOrPaths.map(petNameOrPath => {
-        const petNamePath = namePathFrom(petNameOrPath);
-        if (petNamePath.length === 1) {
-          const id = specialStore.identifyLocal(petNamePath[0]);
+      const endowmentFormulaIdsOrPaths = petNamePaths.map(petNamePath => {
+        const namePath = namePathFrom(petNamePath);
+        if (namePath.length === 1) {
+          const id = specialStore.identifyLocal(namePath[0]);
           if (id === undefined) {
-            throw new Error(`Unknown pet name ${q(petNamePath[0])}`);
+            throw new Error(`Unknown pet name ${q(namePath[0])}`);
           }
           return /** @type {FormulaIdentifier} */ (id);
         }
 
-        return petNamePath;
+        return namePath;
       });
 
-      if (resultName !== undefined) {
-        const { namePath: resultNamePath } = petNamePathFrom(resultName);
+      if (resultNamePath !== undefined) {
+        const { namePath: resultPath } = petNamePathFrom(resultNamePath);
         tasks.push(identifiers =>
-          E(directory).storeIdentifier(resultNamePath, identifiers.evalId),
+          E(directory).storeIdentifier(resultPath, identifiers.evalId),
         );
       }
 
@@ -302,9 +305,9 @@ export const makeGuestMaker = ({
         endowmentFormulaIdsOrPaths,
         tasks,
         workerId,
-        resultName === undefined ? pinTransient : undefined,
+        resultNamePath === undefined ? pinTransient : undefined,
       );
-      if (resultName === undefined) {
+      if (resultNamePath === undefined) {
         try {
           return await value;
         } finally {
@@ -318,23 +321,23 @@ export const makeGuestMaker = ({
     const define = (source, slots) => mailboxDefine(source, slots);
 
     /** @type {EndoGuest['form']} */
-    const form = (recipientName, description, fields) =>
-      mailboxForm(recipientName, description, fields);
+    const form = (recipientNamePath, description, fields) =>
+      mailboxForm(recipientNamePath, description, fields);
 
     /** @type {EndoGuest['submit']} */
     const submit = (messageNumber, values) =>
       mailboxSubmit(messageNumber, values);
 
     /** @type {EndoGuest['sendValue']} */
-    const sendValue = (messageNumber, petNameOrPath) =>
-      mailboxSendValue(messageNumber, petNameOrPath);
+    const sendValue = (messageNumber, petNamePath) =>
+      mailboxSendValue(messageNumber, petNamePath);
 
     /** @type {EndoGuest['storeBlob']} */
-    const storeBlob = async (readerRef, petName) => {
-      if (petName === undefined) {
+    const storeBlob = async (readerRef, petNamePath) => {
+      if (petNamePath === undefined) {
         throw new TypeError('storeBlob requires a pet name');
       }
-      const { namePath } = petNamePathFrom(petName);
+      const { namePath } = petNamePathFrom(petNamePath);
 
       /** @type {DeferredTasks<ReadableBlobDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
@@ -347,8 +350,8 @@ export const makeGuestMaker = ({
     };
 
     /** @type {EndoGuest['storeValue']} */
-    const storeValue = async (value, petName) => {
-      const { namePath } = petNamePathFrom(petName);
+    const storeValue = async (value, petNamePath) => {
+      const { namePath } = petNamePathFrom(petNamePath);
       /** @type {DeferredTasks<MarshalDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
       tasks.push(identifiers =>
@@ -363,7 +366,7 @@ export const makeGuestMaker = ({
      * `EndoHost.invite`'s implementation (`formulateInvitation`): the resulting
      * invitation's locator `from` names *this guest's* handle, so an acceptor
      * binds this guest rather than the top host. The invitation id is retained
-     * under `correspondentName` in this guest's own pet store so it survives a
+     * under `correspondentNamePath` in this guest's own pet store so it survives a
      * restart,
      * and acceptance overwrites that slot with the accepted handle (consume
      * once). Network mediation is supplied internally by the daemon inside the
@@ -377,11 +380,12 @@ export const makeGuestMaker = ({
      * addresses even with an empty `@nets`. That disclosure is inherent to
      * issuing a redeemable invitation and grants no authority to act on the
      * addresses.
-     * @param {NameOrPath} correspondentName
+     * @param {NamePath} correspondentNamePath
      */
-    const invite = async correspondentName => {
-      const { namePath, petName: correspondentPetName } =
-        petNamePathFrom(correspondentName);
+    const invite = async correspondentNamePath => {
+      const { namePath, petName: correspondentPetName } = petNamePathFrom(
+        correspondentNamePath,
+      );
       /** @type {DeferredTasks<InvitationDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
       tasks.push(identifiers =>
@@ -395,7 +399,7 @@ export const makeGuestMaker = ({
       const { value } = await formulateInvitation(
         guestId,
         handleId,
-        correspondentName,
+        correspondentNamePath,
         tasks,
       );
       return value;
@@ -406,7 +410,7 @@ export const makeGuestMaker = ({
      * relationship to the calling guest — no replacement guest is minted on the
      * acceptor side. The guest accepts *as itself*: its own `@self` handle is
      * the identity presented to the inviter, and the inviter's handle is bound
-     * reciprocally under `correspondentName`, a pet name this guest chooses in
+     * reciprocally under `correspondentNamePath`, a pet name this guest chooses in
      * its own directory (a path nests under a directory that must already
      * exist). The inviter independently chooses its own pet name for this
      * guest, so the two names may differ.
@@ -425,17 +429,17 @@ export const makeGuestMaker = ({
      * empty `@nets` (the default) still accepts same-daemon peers but leaves the
      * guest undialable across daemons (the anonymizing-persona default).
      * @param {string} invitationLocator
-     * @param {NameOrPath} correspondentName
+     * @param {NamePath} correspondentNamePath
      */
-    const accept = async (invitationLocator, correspondentName) => {
-      const { namePath } = petNamePathFrom(correspondentName);
+    const accept = async (invitationLocator, correspondentNamePath) => {
+      const { namePath } = petNamePathFrom(correspondentNamePath);
       return acceptInvitation({
         invitationLocator,
         acceptingHandleId: handleId,
         acceptingNetworksDirectoryId: networksDirectoryId,
         bindCorrespondent: async remoteHandleLocator => {
           await null;
-          // Snapshot whatever `correspondentName` held before this speculative
+          // Snapshot whatever `correspondentNamePath` held before this speculative
           // bind so a rejected invitation can restore it rather than clobber a
           // pre-existing correspondent bound under the same name.
           const priorLocator = await E(directory).locate(...namePath);

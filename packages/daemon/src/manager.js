@@ -60,7 +60,6 @@ import { makeSecretManager } from './secret-manager.js';
 import { provideHostToolPowers } from './host-tool-powers.js';
 import { makeRemoteControlProvider } from './remote-control.js';
 import {
-  assertName,
   assertNamePath,
   assertNames,
   assertPetName,
@@ -134,7 +133,7 @@ import { getUnredactedStackString } from './unredacted-stack.js';
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { ReadableBlobRange, SnapshotTree } from '@endo/platform/fs/lite/types' */
 /** @import { ArchiveTreeMethods } from './tar-checkin.js' */
-/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoAgent, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableNameHub, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
+/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoAgent, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableNameHub, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
 
 /**
  * @typedef {{ kind: 'bearer', token: string } | { kind: 'basic', username: string, password: string }} GitCredentialMaterial
@@ -318,18 +317,12 @@ const makeInspector = (type, number, record) =>
     `Inspector (${type} ${number})`,
     InspectorInterface,
     /** @type {any} */ ({
-      lookup: async petNameOrPath => {
-        /** @type {string} */
-        let petName;
-        if (Array.isArray(petNameOrPath)) {
-          if (petNameOrPath.length !== 1) {
-            throw Error('Inspector.lookup(path) requires path length of 1');
-          }
-          petName = petNameOrPath[0];
-        } else {
-          petName = petNameOrPath;
+      lookup: async petNamePath => {
+        const namePath = namePathFrom(petNamePath);
+        if (namePath.length !== 1) {
+          throw Error('Inspector.lookup(path) requires path length of 1');
         }
-        assertName(petName);
+        const [petName] = namePath;
         if (!Object.hasOwn(record, petName)) {
           return undefined;
         }
@@ -2385,9 +2378,9 @@ const makeDaemonCore = async (
    * @returns {Promise<Uint8Array>}
    */
   const packTreeIntoArchiveBytes = async treeP => {
-    const mapBlob = await E(/** @type {any} */ (treeP)).lookup(
+    const mapBlob = await E(/** @type {any} */ (treeP)).lookup([
       'compartment-map.json',
-    );
+    ]);
     const mapText = await E(/** @type {any} */ (mapBlob)).text();
     let compartmentMap;
     try {
@@ -2786,10 +2779,10 @@ const makeDaemonCore = async (
     let mailHub;
 
     /**
-     * @param {string | string[]} petNameOrPath
+     * @param {string[]} petNamePath
      */
-    const lookup = petNameOrPath => {
-      const namePath = namePathFrom(petNameOrPath);
+    const lookup = petNamePath => {
+      const namePath = namePathFrom(petNamePath);
       const [headName, ...tailNames] = namePath;
       if (tailNames.length === 0) {
         const id = identifyMessage(headName);
@@ -2799,13 +2792,13 @@ const makeDaemonCore = async (
         return provide(/** @type {FormulaIdentifier} */ (id), 'message');
       }
       return tailNames.reduce(
-        (directory, petName) => E(directory).lookup(petName),
-        lookup(headName),
+        (directory, petName) => E(directory).lookup([petName]),
+        lookup([headName]),
       );
     };
 
-    const maybeLookup = petNameOrPath => {
-      const namePath = namePathFrom(petNameOrPath);
+    const maybeLookup = petNamePath => {
+      const namePath = namePathFrom(petNamePath);
       const [headName, ...tailNames] = namePath;
       const id = identifyMessage(headName);
       if (id === undefined) {
@@ -2815,7 +2808,7 @@ const makeDaemonCore = async (
       return tailNames.reduce(
         (directory, petName) =>
           /** @type {Promise<NameHub>} */ (
-            /** @type {unknown} */ (E(directory).lookup(petName))
+            /** @type {unknown} */ (E(directory).lookup([petName]))
           ),
         /** @type {Promise<NameHub>} */ (/** @type {unknown} */ (value)),
       );
@@ -2901,7 +2894,7 @@ const makeDaemonCore = async (
     };
 
     const listValues = async () => {
-      const values = listMessageNames().map(name => lookup(name));
+      const values = listMessageNames().map(name => lookup([name]));
       return harden(values);
     };
 
@@ -3201,10 +3194,10 @@ const makeDaemonCore = async (
     }
 
     /**
-     * @param {string | string[]} petNameOrPath
+     * @param {string[]} petNamePath
      */
-    const lookup = petNameOrPath => {
-      const namePath = namePathFrom(petNameOrPath);
+    const lookup = petNamePath => {
+      const namePath = namePathFrom(petNamePath);
       const [headName, ...tailNames] = namePath;
       if (tailNames.length === 0) {
         if (idByName.has(headName)) {
@@ -3239,20 +3232,20 @@ const makeDaemonCore = async (
         throw new TypeError(`Unknown message name: ${q(headName)}`);
       }
       return tailNames.reduce(
-        (directory, petName) => E(directory).lookup(petName),
-        lookup(headName),
+        (directory, petName) => E(directory).lookup([petName]),
+        lookup([headName]),
       );
     };
 
-    const maybeLookup = petNameOrPath => {
-      const namePath = namePathFrom(petNameOrPath);
+    const maybeLookup = petNamePath => {
+      const namePath = namePathFrom(petNamePath);
       const [headName, ...tailNames] = namePath;
       if (tailNames.length === 0) {
         if (!idByName.has(headName) && !valueByName.has(headName)) {
           return undefined;
         }
       }
-      return lookup(petNameOrPath);
+      return lookup(petNamePath);
     };
 
     /**
@@ -3340,7 +3333,7 @@ const makeDaemonCore = async (
     };
 
     const listValues = async () => {
-      const values = orderedNames.map(name => lookup(name));
+      const values = orderedNames.map(name => lookup([name]));
       return harden(values);
     };
 
@@ -4565,7 +4558,12 @@ const makeDaemonCore = async (
         /** @type {FormulaIdentifier} */ (
           invitingHandleId ?? legacyInvitingHandleId
         ),
-        /** @type {import('./types.js').NameOrPath} */ (guestName),
+        // Records minted before pet-name paths became array-only may hold
+        // `guestName` as a bare string; revive them as a one-segment path
+        // rather than refusing stored daemon data.
+        /** @type {NamePath} */ (
+          typeof guestName === 'string' ? [guestName] : guestName
+        ),
       ),
     timer: async ({ intervalMs, label: timerLabel }, context) => {
       const interval = Number(intervalMs) || 60_000;
@@ -5295,13 +5293,13 @@ const makeDaemonCore = async (
    * guest inviter gains no network authority.
    * @param {FormulaIdentifier} invitingAgentId
    * @param {FormulaIdentifier} invitingHandleId
-   * @param {NameOrPath} guestName
+   * @param {NamePath} guestNamePath
    * @param {DeferredTasks<InvitationDeferredTaskParams>} deferredTasks
    */
   const formulateInvitation = async (
     invitingAgentId,
     invitingHandleId,
-    guestName,
+    guestNamePath,
     deferredTasks,
   ) => {
     return /** @type {FormulateResult<Invitation>} */ (
@@ -5322,7 +5320,7 @@ const makeDaemonCore = async (
           type: 'invitation',
           invitingAgent: invitingAgentId,
           invitingHandle: invitingHandleId,
-          guestName,
+          guestName: guestNamePath,
         };
 
         return formulate(invitationNumber, formula);
@@ -6648,7 +6646,7 @@ const makeDaemonCore = async (
     const entries = await Promise.all(
       names.map(async name => ({
         name,
-        share: await E(planesDirectory).lookup(name),
+        share: await E(planesDirectory).lookup([name]),
       })),
     );
     return contentDataPlaneRegistry.getAllContentSources(entries, identity);
@@ -7487,13 +7485,13 @@ const makeDaemonCore = async (
    *   `EndoHost` (`EndoHost.invite`, source-compatible) or an `EndoGuest`.
    * @param {FormulaIdentifier} invitingHandleId - the inviting agent's handle,
    *   which the locator's `from` names, so an acceptor binds that agent.
-   * @param {import('./types.js').NameOrPath} guestName
+   * @param {NamePath} guestNamePath
    */
   const makeInvitation = async (
     id,
     invitingAgentId,
     invitingHandleId,
-    guestName,
+    guestNamePath,
   ) => {
     const invitingAgent = /** @type {EndoAgent} */ (
       await provide(invitingAgentId)
@@ -7501,9 +7499,9 @@ const makeDaemonCore = async (
     // Network mediation goes through the internal broker, never the inviting
     // agent, so the same implementation serves a host or a guest inviter.
     const networkBroker = await makeInvitationNetworkBroker();
-    // The invitation persists the name (or directory path) the redeemed
-    // guest should be stored under.
-    const guestNamePath = namePathFrom(guestName);
+    // The invitation persists the pet-name path the redeemed guest should be
+    // stored under.
+    namePathFrom(guestNamePath);
 
     // Serialize accept()/cancel() on THIS invitation so its single-use check
     // and the consuming mutation run atomically with respect to each other.
@@ -8277,24 +8275,17 @@ const makeDaemonCore = async (
     const petStore = await provideStoreController(petStoreId);
 
     /**
-     * @param {string | readonly string[]} petNameOrPath - The pet name to inspect.
+     * @param {unknown} petNamePath - A one-segment path naming the value to
+     * inspect; `namePathFrom` refuses a bare string.
      * @returns {Promise<KnownEndoInspectors[string]>} An
      * inspector for the value of the given pet name.
      */
-    const lookup = async petNameOrPath => {
-      /** @type {string} */
-      let petName;
-      if (typeof petNameOrPath !== 'string') {
-        if (petNameOrPath.length !== 1) {
-          throw Error(
-            'PetStoreInspector.lookup(path) requires path length of 1',
-          );
-        }
-        petName = petNameOrPath[0];
-      } else {
-        petName = petNameOrPath;
+    const lookup = async petNamePath => {
+      const namePath = namePathFrom(petNamePath);
+      if (namePath.length !== 1) {
+        throw Error('PetStoreInspector.lookup(path) requires path length of 1');
       }
-      assertName(petName);
+      const [petName] = namePath;
       const id = /** @type {FormulaIdentifier | undefined} */ (
         petStore.identifyLocal(petName)
       );

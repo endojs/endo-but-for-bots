@@ -34,6 +34,21 @@ const sameMessageNumber = (left, right) =>
 const messageNumberKey = value => String(normalizeMessageNumber(value));
 
 /**
+ * Mirror the daemon's `namePathFrom`: a bare string is not a pet-name path.
+ *
+ * @param {unknown} petNamePath
+ * @returns {string[]}
+ */
+const mockNamePath = petNamePath => {
+  if (!Array.isArray(petNamePath)) {
+    throw TypeError(
+      `Invalid pet-name path ${JSON.stringify(petNamePath)}: try again with an array of path components`,
+    );
+  }
+  return petNamePath;
+};
+
+/**
  * Create mock guest powers for the Lal or Fae agent.
  *
  * Pass `attachments` to make `lookupById` resolve to real refs and let
@@ -60,7 +75,7 @@ export function makeMockPowers(options = {}) {
   /** @type {Map<string, { promise: Promise<unknown>, resolve: (value?: unknown) => void }>} */
   const dismissWaiters = new Map();
 
-  /** @type {Array<{ recipient: string, strings: string[], edgeNames: string[], petNames: string[], replyTo?: string }>} */
+  /** @type {Array<{ recipient: string, strings: string[], edgeNames: string[], petNamePaths: string[], replyTo?: string }>} */
   const sent = [];
   /** @type {Array<{ messageNumber: string, edgeName: string, petName: string }>} */
   const adoptions = [];
@@ -151,10 +166,8 @@ export function makeMockPowers(options = {}) {
       return Promise.resolve([...names].sort());
     },
 
-    lookup(petNameOrPath) {
-      const path = Array.isArray(petNameOrPath)
-        ? petNameOrPath
-        : [petNameOrPath];
+    lookup(petNamePath) {
+      const path = mockNamePath(petNamePath);
       const key = path.join('/');
       const v = directory.get(key);
       if (v === undefined) {
@@ -211,7 +224,7 @@ export function makeMockPowers(options = {}) {
       );
     },
 
-    resolve(messageNumber, _petNameOrPath) {
+    resolve(messageNumber, _petNamePath) {
       return Promise.resolve();
     },
 
@@ -219,10 +232,8 @@ export function makeMockPowers(options = {}) {
       return Promise.resolve();
     },
 
-    adopt(messageNumber, edgeName, petNameOrPath) {
-      const path = Array.isArray(petNameOrPath)
-        ? petNameOrPath
-        : [petNameOrPath];
+    adopt(messageNumber, edgeName, petNamePath) {
+      const path = mockNamePath(petNamePath);
       const key = path.join('/');
       // If we have a real ref for this edge, install it; otherwise
       // fall back to a placeholder so tests that don't care about the
@@ -285,21 +296,23 @@ export function makeMockPowers(options = {}) {
       });
     },
 
-    send(recipientName, strings, edgeNames, petNames) {
+    send(recipientName, strings, edgeNames, petNamePaths) {
       const record = {
         recipient: Array.isArray(recipientName)
           ? recipientName.join('/')
           : recipientName,
         strings,
         edgeNames,
-        petNames: petNames.map(p => (Array.isArray(p) ? p.join('/') : p)),
+        petNamePaths: petNamePaths.map(p =>
+          Array.isArray(p) ? p.join('/') : p,
+        ),
       };
       sent.push(record);
       resolveNextSend(record);
       return Promise.resolve();
     },
 
-    reply(messageNumber, strings, edgeNames, petNames) {
+    reply(messageNumber, strings, edgeNames, petNamePaths) {
       // Find the parent message to determine the other party
       const parent = messages.find(m =>
         sameMessageNumber(m.number, messageNumber),
@@ -313,7 +326,9 @@ export function makeMockPowers(options = {}) {
         recipient: recipientName,
         strings,
         edgeNames,
-        petNames: petNames.map(p => (Array.isArray(p) ? p.join('/') : p)),
+        petNamePaths: petNamePaths.map(p =>
+          Array.isArray(p) ? p.join('/') : p,
+        ),
         replyTo: parent ? parent.messageId : undefined,
       };
       sent.push(record);

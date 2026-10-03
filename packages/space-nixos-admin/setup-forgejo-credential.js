@@ -44,7 +44,7 @@ const existingCredentialController = async (agent, audience) => {
   await null;
   let controller;
   try {
-    const credential = await E(agent).lookup(CREDENTIAL_NAME);
+    const credential = await E(agent).lookup([CREDENTIAL_NAME]);
     controller = await E(agent).getGitCredentialController(credential);
   } catch {
     return undefined;

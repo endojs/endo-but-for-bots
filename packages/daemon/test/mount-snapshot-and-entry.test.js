@@ -105,7 +105,7 @@ test('snapshot round-trips a binary (non-UTF8) file via streamBase64', async t =
   const snapshot = /** @type {ReadableTreeView} */ (
     /** @type {unknown} */ (await E(mount).snapshot())
   );
-  const snapshotBlob = await E(snapshot).lookup('binary.dat');
+  const snapshotBlob = await E(snapshot).lookup(['binary.dat']);
 
   // Drive the bytes reader and reassemble the bytes.
   const chunks = [];
@@ -152,10 +152,10 @@ test('snapshot of a mount with an internal symlink follows the link into confine
   // Through the symlink-named entry in the snapshot, the leaf is
   // reachable with the linked-through content (no host-path leak).
   const linked = /** @type {ReadableTreeView} */ (
-    await E(snapshot).lookup('via-link')
+    await E(snapshot).lookup(['via-link'])
   );
   const leaf = /** @type {ReadableBlobView} */ (
-    await E(linked).lookup('leaf.txt')
+    await E(linked).lookup(['leaf.txt'])
   );
   t.is(await E(leaf).text(), 'real');
 });

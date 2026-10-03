@@ -71,7 +71,7 @@ test('default deny: naming a restricted segment in a path throws', async t => {
   await t.throwsAsync(() => E(mount).readText(['.ssh', 'id_rsa']), {
     message: /Access denied: .* is a restricted path/,
   });
-  await t.throwsAsync(() => E(mount).lookup('.aws'), {
+  await t.throwsAsync(() => E(mount).lookup(['.aws']), {
     message: /Access denied/,
   });
   await t.throwsAsync(() => E(mount).list('.ssh'), {
@@ -88,10 +88,10 @@ test('default deny: naming a restricted segment in a path throws', async t => {
 test('default deny: matching is case-insensitive', async t => {
   const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
-  await t.throwsAsync(() => E(mount).lookup('.SSH'), {
+  await t.throwsAsync(() => E(mount).lookup(['.SSH']), {
     message: /Access denied/,
   });
-  await t.throwsAsync(() => E(mount).lookup('.Env'), {
+  await t.throwsAsync(() => E(mount).lookup(['.Env']), {
     message: /Access denied/,
   });
 });
@@ -184,7 +184,7 @@ test('override: a custom set replaces the default (custom names denied)', async 
     filePowers,
     deniedSegments: ['secret'],
   });
-  await t.throwsAsync(() => E(mount).lookup('secret'), {
+  await t.throwsAsync(() => E(mount).lookup(['secret']), {
     message: /Access denied/,
   });
 });
@@ -226,11 +226,11 @@ test('override: callers extend the default by spreading defaultDeniedSegments', 
     deniedSegments: [...defaultDeniedSegments, 'extra'],
   });
   // The extension denies `extra`...
-  await t.throwsAsync(() => E(mount).lookup('extra'), {
+  await t.throwsAsync(() => E(mount).lookup(['extra']), {
     message: /Access denied/,
   });
   // ...while the spread preserved the defaults.
-  await t.throwsAsync(() => E(mount).lookup('.ssh'), {
+  await t.throwsAsync(() => E(mount).lookup(['.ssh']), {
     message: /Access denied/,
   });
 });
@@ -261,7 +261,7 @@ test('revocation: control.revoke() trips the root mount', async t => {
   await t.throwsAsync(() => E(mount).writeText(['b.txt'], 'x'), {
     message: /Mount has been revoked/,
   });
-  await t.throwsAsync(() => E(mount).lookup('a.txt'), {
+  await t.throwsAsync(() => E(mount).lookup(['a.txt']), {
     message: /Mount has been revoked/,
   });
 });
@@ -293,7 +293,9 @@ test('revocation: propagates to a file handle opened before revoke', async t => 
     filePowers,
   });
   await E(mount).writeText(['file.txt'], 'contents');
-  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('file.txt'));
+  const file = /** @type {EndoMountFile} */ (
+    await E(mount).lookup(['file.txt'])
+  );
   t.is(await E(file).text(), 'contents');
 
   E(control).revoke();
@@ -314,7 +316,9 @@ test('revocation: a range of a mount file view revokes with it', async t => {
     filePowers,
   });
   await E(mount).writeText(['file.txt'], 'hello world');
-  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('file.txt'));
+  const file = /** @type {EndoMountFile} */ (
+    await E(mount).lookup(['file.txt'])
+  );
   // Attenuate to a byte range *before* revoking; the derived view reads through
   // the same live file, so it must revoke together with its origin.
   const range = await E(file).byteRange(0n, 5n);
@@ -350,7 +354,7 @@ test('revocation: a base64 file stream refuses on a revoked mount', async t => {
     filePowers,
   });
   await E(mount).writeText(['file.txt'], 'streaming-contents');
-  const file = await E(mount).lookup('file.txt');
+  const file = await E(mount).lookup(['file.txt']);
 
   E(control).revoke();
 
@@ -481,12 +485,12 @@ test('deny and revocation are both active on a revocable mount', async t => {
     deniedSegments: [...defaultDeniedSegments, 'vault'],
   });
   // Deny is enforced while live: both a default segment...
-  await t.throwsAsync(() => E(mount).lookup('.ssh'), {
+  await t.throwsAsync(() => E(mount).lookup(['.ssh']), {
     message: /Access denied/,
   });
   // ...and the novel segment unique to this custom set, which the defaults
   // alone would not deny.
-  await t.throwsAsync(() => E(mount).lookup('vault'), {
+  await t.throwsAsync(() => E(mount).lookup(['vault']), {
     message: /Access denied/,
   });
   t.is(await E(mount).readText(['README.md']), '# readme');
@@ -498,7 +502,7 @@ test('deny and revocation are both active on a revocable mount', async t => {
   await t.throwsAsync(() => E(mount).readText(['README.md']), {
     message: /Mount has been revoked/,
   });
-  await t.throwsAsync(() => E(mount).lookup('.ssh'), {
+  await t.throwsAsync(() => E(mount).lookup(['.ssh']), {
     message: /Access denied|Mount has been revoked/,
   });
 });

@@ -11,7 +11,7 @@
  */
 
 import { M } from '@endo/patterns';
-import { NameOrPathShape } from '@endo/daemon/type-guards.js';
+import { NamePathArgumentShape } from '@endo/daemon/type-guards.js';
 
 /** @import { LalToolDef } from './index.js' */
 
@@ -31,10 +31,10 @@ export const mailToolDefs = harden([
     name: 'resolve',
     summary:
       'Respond to a request message by providing a named value. ' +
-      'Arguments: messageNumber (BigInt encoded as "+N", e.g. "+5"), petNameOrPath.',
+      'Arguments: messageNumber (BigInt encoded as "+N", e.g. "+5"), petNamePath.',
     params: M.splitRecord({
       messageNumber: MessageNumberShape,
-      petNameOrPath: NameOrPathShape,
+      petNamePath: NamePathArgumentShape,
     }),
   },
   {
@@ -58,23 +58,23 @@ export const mailToolDefs = harden([
     name: 'request',
     summary:
       'Send a request to another agent asking for a capability. ' +
-      'Arguments: recipientName, description (string), optional responseName.',
+      'Arguments: recipientNamePath, description (string), optional responseNamePath.',
     params: M.splitRecord(
-      { recipientName: NameOrPathShape, description: M.string() },
-      { responseName: NameOrPathShape },
+      { recipientNamePath: NamePathArgumentShape, description: M.string() },
+      { responseNamePath: NamePathArgumentShape },
     ),
   },
   {
     name: 'send',
     summary:
       'Send a package message with values to another agent. ' +
-      'Arguments: recipientName, strings (string[]), edgeNames (string[]), petNames. ' +
-      'For text-only messages: send("@host", ["text"], [], []).',
+      'Arguments: recipientNamePath, strings (string[]), edgeNames (string[]), petNamePaths. ' +
+      'For text-only messages: send(["@host"], ["text"], [], []).',
     params: M.splitRecord({
-      recipientName: NameOrPathShape,
+      recipientNamePath: NamePathArgumentShape,
       strings: M.arrayOf(M.string()),
       edgeNames: M.arrayOf(M.string()),
-      petNames: M.arrayOf(NameOrPathShape),
+      petNamePaths: M.arrayOf(NamePathArgumentShape),
     }),
   },
   {
@@ -82,12 +82,12 @@ export const mailToolDefs = harden([
     summary:
       'Reply to a message in your inbox, threading the response to the original message. ' +
       'Use this instead of send() when responding to a received message. ' +
-      'Arguments: messageNumber (BigInt encoded as "+N", e.g. "+3"), strings (string[]), edgeNames (string[]), petNames.',
+      'Arguments: messageNumber (BigInt encoded as "+N", e.g. "+3"), strings (string[]), edgeNames (string[]), petNamePaths.',
     params: M.splitRecord({
       messageNumber: MessageNumberShape,
       strings: M.arrayOf(M.string()),
       edgeNames: M.arrayOf(M.string()),
-      petNames: M.arrayOf(NameOrPathShape),
+      petNamePaths: M.arrayOf(NamePathArgumentShape),
     }),
   },
 
@@ -124,16 +124,12 @@ settled.`,
           items: { type: 'string' },
           description: 'Labels for the values being sent.',
         },
-        petNames: {
+        petNamePaths: {
           type: 'array',
-          items: {
-            oneOf: [
-              { type: 'string' },
-              { type: 'array', items: { type: 'string' } },
-            ],
-          },
+          items: { type: 'array', items: { type: 'string' }, minItems: 1 },
           description:
-            'Pet names of values to include (same length as edgeNames).',
+            'Pet-name paths of the values to include (same length as edgeNames). ' +
+            'Each is an array of path segments, e.g. ["counter"] or ["dir", "counter"].',
         },
         done: {
           type: 'boolean',
@@ -141,7 +137,7 @@ settled.`,
             'Defaults to true. Pass false to mark this revision as a partial submission.',
         },
       },
-      required: ['messageNumber', 'strings', 'edgeNames', 'petNames'],
+      required: ['messageNumber', 'strings', 'edgeNames', 'petNamePaths'],
     },
   },
 

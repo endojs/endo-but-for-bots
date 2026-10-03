@@ -258,7 +258,7 @@ export const makeContainerMountBridge = (
       try {
         const mountCap = await E(hostAgent).provideMount(
           mountPoint,
-          mountNameFor(key),
+          [mountNameFor(key)],
           harden({ readOnly }),
         );
         bridges.set(key, harden({ mountCap, handle, mountPoint, capId, mode }));

@@ -51,9 +51,9 @@ export const makeWorkflowTools = (powers, { settled = new Set() } = {}) => {
         if (message.type !== 'request')
           throw Error('Expected a request message');
         const name = `workflow-answer-${number}`;
-        await E(powers).storeValue(harden(value), name);
-        await E(powers).resolve(message.number, name);
-        await E(powers).storeValue(true, `workflow-settled-${number}`);
+        await E(powers).storeValue(harden(value), [name]);
+        await E(powers).resolve(message.number, [name]);
+        await E(powers).storeValue(true, [`workflow-settled-${number}`]);
         settled.add(number);
         return 'Request answered.';
       },
@@ -71,7 +71,7 @@ export const makeWorkflowTools = (powers, { settled = new Set() } = {}) => {
         if (message.type !== 'request')
           throw Error('Expected a request message');
         await E(powers).reject(message.number, reason);
-        await E(powers).storeValue(true, `workflow-settled-${number}`);
+        await E(powers).storeValue(true, [`workflow-settled-${number}`]);
         settled.add(number);
         return 'Request rejected.';
       },
@@ -100,7 +100,7 @@ export const makeWorkflowTools = (powers, { settled = new Set() } = {}) => {
           typed[field.name] = value;
         }
         await E(powers).submit(message.number, harden(typed));
-        await E(powers).storeValue(true, `workflow-settled-${number}`);
+        await E(powers).storeValue(true, [`workflow-settled-${number}`]);
         settled.add(number);
         return 'Form submitted.';
       },
@@ -132,14 +132,14 @@ export const makeWorkflowTools = (powers, { settled = new Set() } = {}) => {
         if (!/^[1-9][0-9]*$/.test(rounds) || BigInt(rounds) > 0xffff_ffffn)
           throw Error('Invalid review budget');
         if (!design.trim()) throw Error('The agreed design must not be empty');
-        const factory = await E(powers).lookup('dev-review');
+        const factory = await E(powers).lookup(['dev-review']);
         const result = await E(factory).start(
           harden({
             requestId: name,
             params: { title, summary: design, base, rounds: BigInt(rounds) },
           }),
         );
-        await E(powers).storeValue(harden({ runId: result.runId }), receipt);
+        await E(powers).storeValue(harden({ runId: result.runId }), [receipt]);
         return `Design handed off. Run ${result.runId}, stored as ${receipt}. You will be notified when review is ready or needs attention.`;
       },
     ),
@@ -154,8 +154,8 @@ export const makeWorkflowTools = (powers, { settled = new Set() } = {}) => {
       async ({ name }) => {
         if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test(name))
           throw Error('Invalid handoff name');
-        const { runId } = await E(powers).lookup(`review-${name}`);
-        const connection = await E(powers).lookup('dev-review');
+        const { runId } = await E(powers).lookup([`review-${name}`]);
+        const connection = await E(powers).lookup(['dev-review']);
         const explanation = await E(connection).status(runId);
         return JSON.stringify(explanation, (_key, value) =>
           typeof value === 'bigint' ? String(value) : value,
@@ -166,7 +166,7 @@ export const makeWorkflowTools = (powers, { settled = new Set() } = {}) => {
   const namedRun = async name => {
     if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test(name))
       throw Error('Invalid handoff name');
-    return E(powers).lookup(`review-${name}`);
+    return E(powers).lookup([`review-${name}`]);
   };
   tools.set(
     'setReviewBudget',
@@ -182,7 +182,7 @@ export const makeWorkflowTools = (powers, { settled = new Set() } = {}) => {
         )
           throw Error('Invalid remaining budget');
         const { runId } = await namedRun(name);
-        await E(await E(powers).lookup('dev-review')).setRemaining(
+        await E(await E(powers).lookup(['dev-review'])).setRemaining(
           runId,
           BigInt(remaining),
         );
@@ -199,7 +199,7 @@ export const makeWorkflowTools = (powers, { settled = new Set() } = {}) => {
       ['name', 'reason'],
       async ({ name, reason }) => {
         const { runId } = await namedRun(name);
-        await E(await E(powers).lookup('dev-review')).cancel(runId, reason);
+        await E(await E(powers).lookup(['dev-review'])).cancel(runId, reason);
         return 'Cancellation requested.';
       },
     ),

@@ -146,11 +146,12 @@ submission produces a new `value` message in the reply chain.
 
 `packages/daemon/src/interfaces.js`
 
-Guest and Host `form()` guard:
+Guest and Host `form()` guard (since the pet-name-path-only change, the
+recipient is an array of path components; a bare string is refused):
 
 ```js
 form: M.call(
-  NameOrPathShape,       // recipientName
+  NamePathArgumentShape, // recipientNamePath
   M.string(),            // description
   M.arrayOf(M.record()), // fields
 )

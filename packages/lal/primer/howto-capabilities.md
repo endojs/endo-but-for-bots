@@ -15,7 +15,7 @@ Before using an unfamiliar capability, inspect it:
 Inspection reveals the capability's methods and, if it
 supports `help()`, a description of what it does.
 
-As an agent, use `inspect("my-capability")` for the same
+As an agent, use `inspect(["my-capability"])` for the same
 information.
 
 ## Viewing and Editing Content

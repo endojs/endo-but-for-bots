@@ -140,7 +140,7 @@ isFresh('cross-supervisor: Node→Rust pet name round-trip', async t => {
 
   // 1. Node supervisor writes a pet name pointing to a stored value.
   await runWith(config, undefined, async ({ host }) => {
-    await E(host).storeValue('hello-from-node', 'greeting');
+    await E(host).storeValue('hello-from-node', ['greeting']);
     const value = await E(host).lookup(['greeting']);
     t.is(value, 'hello-from-node');
   });
@@ -165,7 +165,7 @@ isFresh('cross-supervisor: Rust→Node pet name round-trip', async t => {
     config,
     /** @type {string} */ (process.env.ENDO_BIN),
     async ({ host }) => {
-      await E(host).storeValue('hello-from-rust', 'greeting');
+      await E(host).storeValue('hello-from-rust', ['greeting']);
       const value = await E(host).lookup(['greeting']);
       t.is(value, 'hello-from-rust');
     },
@@ -186,7 +186,7 @@ isFresh(
 
     // 1. Node writes "first".
     await runWith(config, undefined, async ({ host }) => {
-      await E(host).storeValue('first-on-node', 'first');
+      await E(host).storeValue('first-on-node', ['first']);
     });
 
     // 2. Rust opens the same state, reads "first", writes "second".
@@ -196,7 +196,7 @@ isFresh(
       async ({ host }) => {
         const seen = await E(host).lookup(['first']);
         t.is(seen, 'first-on-node');
-        await E(host).storeValue('second-on-rust', 'second');
+        await E(host).storeValue('second-on-rust', ['second']);
       },
     );
 

@@ -132,7 +132,7 @@ const commands = {
     /** @type {any} */
     let target = host;
     if (agentName) {
-      target = await E(host).lookup(agentName);
+      target = await E(host).lookup([agentName]);
     }
     const messages = /** @type {any[]} */ (await E(target).listMessages());
     if (messages.length === 0) {
@@ -175,7 +175,7 @@ const commands = {
     /** @type {any} */
     let target = host;
     if (agentName) {
-      target = await E(host).lookup(agentName);
+      target = await E(host).lookup([agentName]);
     }
     const petNames = /** @type {string[]} */ (await E(target).list());
     if (petNames.length === 0) {
@@ -196,9 +196,9 @@ const commands = {
     /** @type {any} */
     let target = host;
     if (agentName) {
-      target = await E(host).lookup(agentName);
+      target = await E(host).lookup([agentName]);
     }
-    const value = await E(target).lookup(name);
+    const value = await E(target).lookup([name]);
     // Try to get method names for introspection
     try {
       // eslint-disable-next-line no-underscore-dangle
@@ -219,7 +219,7 @@ const commands = {
       console.error('Usage: channel-messages <name> [count]');
       process.exit(1);
     }
-    const channel = await E(host).lookup(channelName);
+    const channel = await E(host).lookup([channelName]);
     const messages = /** @type {any[]} */ (await E(channel).listMessages());
 
     // Build member name lookup
@@ -259,7 +259,7 @@ const commands = {
       console.error('Usage: channel-members <name>');
       process.exit(1);
     }
-    const channel = await E(host).lookup(channelName);
+    const channel = await E(host).lookup([channelName]);
 
     // Admin info
     try {
@@ -309,7 +309,7 @@ const commands = {
       );
       process.exit(1);
     }
-    const channel = await E(host).lookup(channelName);
+    const channel = await E(host).lookup([channelName]);
     if (asMember) {
       const memberHandle = await E(channel).join(asMember);
       await E(memberHandle).post([text], [], [], replyTo);
@@ -330,7 +330,7 @@ const commands = {
       );
       process.exit(1);
     }
-    const channel = await E(host).lookup(channelName);
+    const channel = await E(host).lookup([channelName]);
     const order = sortOrder || '1';
     const moveStrings = [order, newParent];
     await E(channel).post(moveStrings, [], [], msgNumber, [], 'move');
@@ -356,7 +356,7 @@ const commands = {
       console.error('Usage: agent-inbox <agent-profile-name> [count]');
       process.exit(1);
     }
-    const agentPowers = await E(host).lookup(agentName);
+    const agentPowers = await E(host).lookup([agentName]);
     const messages = /** @type {any[]} */ (await E(agentPowers).listMessages());
     const count = countStr ? parseInt(countStr, 10) : messages.length;
     const shown = messages.slice(-count);
@@ -378,7 +378,7 @@ const commands = {
     const skipFromIdx = filterParts.indexOf('--skip-from');
     const skipFrom = skipFromIdx >= 0 ? filterParts[skipFromIdx + 1] : null;
 
-    const channel = await E(host).lookup(channelName);
+    const channel = await E(host).lookup([channelName]);
 
     // Build member name lookup
     /** @type {Map<string, string>} */

@@ -201,9 +201,9 @@ const prepareHostWithWsRelay = async (
   const servicePath = path.join(dirname, 'src', 'networks', 'ws-relay.js');
   const serviceLocation = url.pathToFileURL(servicePath).href;
 
-  await E(host).makeUnconfined('@main', serviceLocation, {
-    powersName: '@agent',
-    resultName: 'ws-relay-network',
+  await E(host).makeUnconfined(['@main'], serviceLocation, {
+    powersName: ['@agent'],
+    resultName: ['ws-relay-network'],
     env: {
       WS_RELAY_URL: relayUrl,
       WS_RELAY_DOMAIN: relayDomain,
@@ -260,7 +260,13 @@ test.serial(
       await E(hostA).addPeerInfo(await E(hostB).getPeerInfo());
 
       // Create a value on B
-      await E(hostB).evaluate('@main', '"hello from B"', [], [], ['greeting']);
+      await E(hostB).evaluate(
+        ['@main'],
+        '"hello from B"',
+        [],
+        [],
+        ['greeting'],
+      );
       const greetingLocator = await E(hostB).locate('greeting');
 
       // Write the locator into A's namespace (out-of-band introduction)
@@ -293,7 +299,7 @@ test.serial('round-trip remotable identity over ws-relay', async t => {
 
     // Create an echoer remotable on B
     await E(hostB).evaluate(
-      '@main',
+      ['@main'],
       'Far("Echoer", { echo: value => value })',
       [],
       [],
@@ -304,7 +310,7 @@ test.serial('round-trip remotable identity over ws-relay', async t => {
 
     // Send a Far token through the echoer and verify identity is preserved
     const survived = await E(hostA).evaluate(
-      '@main',
+      ['@main'],
       `
         const token = Far('Token', {});
         E(echoer).echo(token).then(alleged =>
@@ -312,7 +318,7 @@ test.serial('round-trip remotable identity over ws-relay', async t => {
         );
       `,
       ['echoer'],
-      ['echoer'],
+      [['echoer']],
     );
     t.assert(survived);
   } finally {
@@ -338,7 +344,7 @@ test.serial('bidirectional connection over ws-relay', async t => {
     await E(hostB).addPeerInfo(await E(hostA).getPeerInfo());
 
     // Create value on A, read from B
-    await E(hostA).evaluate('@main', '42', [], [], ['answer']);
+    await E(hostA).evaluate(['@main'], '42', [], [], ['answer']);
     const answerLocator = await E(hostA).locate('answer');
     await E(hostB).storeLocator(['remote-answer'], answerLocator);
     const answerValue = await E(hostB).lookup(['remote-answer']);
@@ -346,7 +352,7 @@ test.serial('bidirectional connection over ws-relay', async t => {
 
     // Now also have A know about B and read B's value
     await E(hostA).addPeerInfo(await E(hostB).getPeerInfo());
-    await E(hostB).evaluate('@main', '"from B"', [], [], ['msg']);
+    await E(hostB).evaluate(['@main'], '"from B"', [], [], ['msg']);
     const msgLocator = await E(hostB).locate('msg');
     await E(hostA).storeLocator(['remote-msg'], msgLocator);
     const msgValue = await E(hostA).lookup(['remote-msg']);
@@ -377,7 +383,7 @@ test.serial(
         addresses: [bogusAddress],
       });
 
-      await E(hostA).evaluate('@main', '1', [], [], ['one']);
+      await E(hostA).evaluate(['@main'], '1', [], [], ['one']);
       const oneLocator = /** @type {string} */ (await E(hostA).locate('one'));
       // Rewrite the locator to point at the bogus node, preserving the
       // `@`-delimited URL-encoded path-component format:

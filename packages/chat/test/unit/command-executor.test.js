@@ -278,7 +278,25 @@ test('execute resolve command', async t => {
 
   t.true(result.success);
   t.is(result.message, 'Request #10 resolved');
-  t.deepEqual(ctx.calls[0].args, [10n, 'answer']);
+  t.deepEqual(ctx.calls[0].args, [10n, ['answer']]);
+});
+
+test('execute resolve command splits a typed slash into a pet-name path', async t => {
+  const context = createMockContext();
+  const executor = createCommandExecutor({
+    powers: context.powers,
+    showValue: v => context.showValueCalls.push(v),
+    showMessage: m => context.showMessageCalls.push(m),
+    showError: e => context.showErrorCalls.push(e),
+  });
+
+  const result = await executor.execute('resolve', {
+    messageNumber: 10,
+    petName: 'feature/foo',
+  });
+
+  t.true(result.success);
+  t.deepEqual(context.calls[0].args, [10n, ['feature', 'foo']]);
 });
 
 test('execute reject command', async t => {
@@ -320,11 +338,37 @@ test('execute js command', async t => {
   t.is(result.message, 'Result saved as "answer"');
   t.is(result.value, 'eval-result');
   t.deepEqual(ctx.calls[0].args, [
-    '@main',
+    ['@main'],
     '1 + 1',
     ['x'],
     [['my-value']],
     ['answer'],
+  ]);
+});
+
+test('execute js command splits a typed slash in each name into a pet-name path', async t => {
+  const context = createMockContext();
+  const executor = createCommandExecutor({
+    powers: context.powers,
+    showValue: v => context.showValueCalls.push(v),
+    showMessage: m => context.showMessageCalls.push(m),
+    showError: e => context.showErrorCalls.push(e),
+  });
+
+  const result = await executor.execute('js', {
+    source: '1 + 1',
+    endowments: [{ codeName: 'x', petName: 'feature/foo' }],
+    resultName: 'feature/bar',
+    workerName: '@main',
+  });
+
+  t.true(result.success);
+  t.deepEqual(context.calls[0].args, [
+    ['@main'],
+    '1 + 1',
+    ['x'],
+    [['feature', 'foo']],
+    ['feature', 'bar'],
   ]);
 });
 

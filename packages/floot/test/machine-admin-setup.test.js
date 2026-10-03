@@ -21,13 +21,19 @@ import {
 const REV = 'f83f0430cfeb5968563f60f171d58f88d087c1b4';
 const PREVIOUS = '59aba752de8ebbbcb485015e9159dcb6d16856e6';
 
-const toPath = nameOrPath =>
-  typeof nameOrPath === 'string' ? [nameOrPath] : [...nameOrPath];
+// Like the daemon's `namePathFrom`, refuse a bare string: a pet-name path
+// argument must be an array of path components.
+const toPath = namePath => {
+  if (!Array.isArray(namePath)) {
+    throw TypeError(`Invalid pet-name path ${JSON.stringify(namePath)}`);
+  }
+  return [...namePath];
+};
 
 // The daemon's `has`, `locate`, and `remove` are varargs of segments, while
-// `lookup` (like `EndoHost.lookup`'s `M.call(NameOrPathShape)` guard) takes
-// exactly one name-or-path — spreading a path into it throws, which is the
-// regression this fake exists to catch.
+// `lookup` (like `EndoHost.lookup`'s `M.call(NamePathArgumentShape)` guard)
+// takes exactly one pet-name path — spreading a path into it throws, which is
+// the regression this fake exists to catch.
 const varargsPath = args =>
   args.length === 1 && Array.isArray(args[0]) ? [...args[0]] : [...args];
 const singlePath = args => {
@@ -121,15 +127,17 @@ const makeFakeRoot = () => {
     },
     provideGuest: async (handleName, { agentName }) => {
       calls.provideGuest += 1;
-      if (names.has(handleName)) {
+      const handleKey = key(toPath(handleName));
+      const agentKey = key(toPath(agentName));
+      if (names.has(handleKey)) {
         // The daemon resolves an existing name to what it holds — the mail
         // handle — not to the guest agent.
-        return names.get(handleName);
+        return names.get(handleKey);
       }
       const { store } = makeStore();
-      guests.set(agentName, store);
-      names.set(handleName, Far('FakeHandle', {}));
-      names.set(agentName, store);
+      guests.set(agentKey, store);
+      names.set(handleKey, Far('FakeHandle', {}));
+      names.set(agentKey, store);
       return store;
     },
     makeUnconfined: async (
@@ -143,7 +151,8 @@ const makeFakeRoot = () => {
         nextMakeUnconfinedFailure = undefined;
         throw failure;
       }
-      if (workerName !== '@main') throw Error('expected the @main worker');
+      if (key(toPath(workerName)) !== '@main')
+        throw Error('expected the @main worker');
       if (!specifier.endsWith('/deploy-connection.js')) {
         throw Error(`unexpected caplet module ${specifier}`);
       }
@@ -188,7 +197,7 @@ const makeFactoryHost = () => {
       grants.delete(varargsPath(args).join('/'));
     },
     storeLocator: async (name, locator) => {
-      grants.set(name, locator);
+      grants.set(toPath(name).join('/'), locator);
     },
   });
   return { host, grants };
@@ -465,7 +474,7 @@ test('a crash between minting the powers guest and tucking it away heals on the 
   const orphanedGuest = root.get(
     'profile-for-floot-deploy-endo-factory-handle',
   );
-  const fidsBefore = await E(orphanedGuest).lookup('factory-ids');
+  const fidsBefore = await E(orphanedGuest).lookup(['factory-ids']);
   t.is(fidsBefore.length, 1);
 
   // The next run adopts the existing guest by its agent name rather than
@@ -481,7 +490,7 @@ test('a crash between minting the powers guest and tucking it away heals on the 
     factoryHost.grants.get('deploy-endo-factory'),
   );
   t.is((await E(connection).describe()).fid, fidsBefore[0]);
-  t.deepEqual(await E(orphanedGuest).lookup('factory-ids'), fidsBefore);
+  t.deepEqual(await E(orphanedGuest).lookup(['factory-ids']), fidsBefore);
 });
 
 test('stray names from a crash inside guest provisioning are cleared before minting', async t => {
@@ -555,7 +564,7 @@ test('a transient service failure skips the grant for one boot instead of mintin
   // no second factory is minted behind the same connection.
   hiccup = true;
   await provision(root, factoryHost);
-  t.deepEqual(await E(guest).lookup('factory-ids'), [fid]);
+  t.deepEqual(await E(guest).lookup(['factory-ids']), [fid]);
   t.is(
     root.resolveLocator(factoryHost.grants.get('deploy-endo-factory')),
     connection,
@@ -563,7 +572,7 @@ test('a transient service failure skips the grant for one boot instead of mintin
 
   // The next boot re-binds as usual, still over the one factory.
   await provision(root, factoryHost);
-  t.deepEqual(await E(guest).lookup('factory-ids'), [fid]);
+  t.deepEqual(await E(guest).lookup(['factory-ids']), [fid]);
   t.not(
     root.resolveLocator(factoryHost.grants.get('deploy-endo-factory')),
     connection,

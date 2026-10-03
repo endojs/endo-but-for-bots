@@ -96,10 +96,10 @@ test.serial('host-shell formula streams stdout and resolves exit', async t => {
   const { host } = await prepareHost(t);
 
   const proc = /** @type {ShellProcess} */ (
-    await E(host).makeUnconfined('@node', shellModuleHref, {
-      powersName: '@none',
+    await E(host).makeUnconfined(['@node'], shellModuleHref, {
+      powersName: ['@none'],
       env: { command: 'echo', args: JSON.stringify(['hello-from-formula']) },
-      resultName: 'greeter',
+      resultName: ['greeter'],
     })
   );
 
@@ -113,10 +113,10 @@ test.serial('host-shell formula round-trips stdin to stdout', async t => {
   const { host } = await prepareHost(t);
 
   const proc = /** @type {ShellProcess} */ (
-    await E(host).makeUnconfined('@node', shellModuleHref, {
-      powersName: '@none',
+    await E(host).makeUnconfined(['@node'], shellModuleHref, {
+      powersName: ['@none'],
       env: { command: 'cat' },
-      resultName: 'echoer',
+      resultName: ['echoer'],
     })
   );
 
@@ -135,13 +135,13 @@ test.serial('host-shell formula reports a non-zero exit code', async t => {
   const { host } = await prepareHost(t);
 
   const proc = /** @type {ShellProcess} */ (
-    await E(host).makeUnconfined('@node', shellModuleHref, {
-      powersName: '@none',
+    await E(host).makeUnconfined(['@node'], shellModuleHref, {
+      powersName: ['@none'],
       env: {
         command: 'echo to-stderr 1>&2; exit 7',
         shell: 'true',
       },
-      resultName: 'failer',
+      resultName: ['failer'],
     })
   );
 
@@ -154,10 +154,10 @@ test.serial('host-shell formula preserves output read after exit', async t => {
   const { host } = await prepareHost(t);
 
   const proc = /** @type {ShellProcess} */ (
-    await E(host).makeUnconfined('@node', shellModuleHref, {
-      powersName: '@none',
+    await E(host).makeUnconfined(['@node'], shellModuleHref, {
+      powersName: ['@none'],
       env: { command: 'echo', args: JSON.stringify(['read-after-exit']) },
-      resultName: 'late-reader',
+      resultName: ['late-reader'],
     })
   );
 
@@ -173,10 +173,10 @@ test.serial('host-shell formula does not shell-interpret args', async t => {
   const { host } = await prepareHost(t);
 
   const proc = /** @type {ShellProcess} */ (
-    await E(host).makeUnconfined('@node', shellModuleHref, {
-      powersName: '@none',
+    await E(host).makeUnconfined(['@node'], shellModuleHref, {
+      powersName: ['@none'],
       env: { command: 'echo', args: JSON.stringify(['a; echo PWNED']) },
-      resultName: 'no-injection',
+      resultName: ['no-injection'],
     })
   );
 
@@ -198,13 +198,13 @@ test.serial('host-shell formula withholds worker secrets', async t => {
   const { host } = await prepareHost(t);
 
   const proc = /** @type {ShellProcess} */ (
-    await E(host).makeUnconfined('@node', shellModuleHref, {
-      powersName: '@none',
+    await E(host).makeUnconfined(['@node'], shellModuleHref, {
+      powersName: ['@none'],
       env: {
         command: 'printenv',
         args: JSON.stringify(['HOST_SHELL_DAEMON_SECRET']),
       },
-      resultName: 'secret-probe',
+      resultName: ['secret-probe'],
     })
   );
 
@@ -217,8 +217,8 @@ test.serial("host-shell formula honors stdout:'ignore'", async t => {
   const { host } = await prepareHost(t);
 
   const proc = /** @type {ShellProcess} */ (
-    await E(host).makeUnconfined('@node', shellModuleHref, {
-      powersName: '@none',
+    await E(host).makeUnconfined(['@node'], shellModuleHref, {
+      powersName: ['@none'],
       // Far past the host's buffer high-water; with 'ignore' the fd goes to
       // the null device, so the child runs to completion without anyone
       // draining stdout across CapTP.
@@ -227,7 +227,7 @@ test.serial("host-shell formula honors stdout:'ignore'", async t => {
         args: JSON.stringify(['100000']),
         stdout: 'ignore',
       },
-      resultName: 'discarder',
+      resultName: ['discarder'],
     })
   );
 
@@ -240,10 +240,10 @@ test.serial('host-shell formula kills the child over CapTP', async t => {
   const { host } = await prepareHost(t);
 
   const proc = /** @type {ShellProcess} */ (
-    await E(host).makeUnconfined('@node', shellModuleHref, {
-      powersName: '@none',
+    await E(host).makeUnconfined(['@node'], shellModuleHref, {
+      powersName: ['@none'],
       env: { command: 'sleep', args: JSON.stringify(['30']) },
-      resultName: 'sleeper',
+      resultName: ['sleeper'],
     })
   );
 
@@ -256,10 +256,10 @@ test.serial('cancelling the formula terminates the child process', async t => {
   const { host } = await prepareHost(t);
 
   const proc = /** @type {ShellProcess} */ (
-    await E(host).makeUnconfined('@node', shellModuleHref, {
-      powersName: '@none',
+    await E(host).makeUnconfined(['@node'], shellModuleHref, {
+      powersName: ['@none'],
       env: { command: 'sleep', args: JSON.stringify(['30']) },
-      resultName: 'long-runner',
+      resultName: ['long-runner'],
     })
   );
 
@@ -269,7 +269,7 @@ test.serial('cancelling the formula terminates the child process', async t => {
 
   // Revoking the capability cancels the formula's context, which must tear
   // the child down rather than leaving it orphaned.
-  await E(host).cancel('long-runner');
+  await E(host).cancel(['long-runner']);
   for (let i = 0; i < 100 && isAlive(pid); i += 1) {
     // eslint-disable-next-line no-await-in-loop
     await delay(100);

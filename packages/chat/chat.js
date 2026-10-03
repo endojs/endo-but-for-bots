@@ -11,7 +11,7 @@
  * @typedef {object} ChannelMethods
  * @property {() => Promise<string>} getProposedName
  * @property {(proposedName: string) => Promise<unknown>} join
- * @property {(strings: string[], names: string[], petNamesOrPaths: string[], replyTo: string | undefined, resolvedIds: string[]) => Promise<unknown>} post
+ * @property {(strings: string[], names: string[], petNamePaths: string[][], replyTo: string | undefined, resolvedIds: string[]) => Promise<unknown>} post
  * @property {(displayName: string) => Promise<unknown>} createInvitation
  * @property {() => Promise<unknown>} listMessages
  * @property {() => Promise<unknown>} getMembers
@@ -31,6 +31,7 @@ import { createChannelHeader } from '@endo/space-channel/channel-header.js';
 // `@endo/space-channel/outliner-component.js`; this is now the live outliner).
 import { createShareModal } from '@endo/space-channel/share-modal.js';
 import { outlinerComponent } from './outliner-component.js';
+import { assembleMentionSend, mentionChannelEdgeName } from './mention-send.js';
 import { inboxComponent } from './inbox-component.js';
 import { inventoryComponent } from './inventory-component.js';
 import { channelListComponent } from './channel-list.js';
@@ -386,7 +387,7 @@ const bodyComponent = (
     /** @type {unknown} */
     let powers = rootPowers;
     for (const name of profilePath) {
-      powers = E(/** @type {ERef<EndoHost>} */ (powers)).lookup(name);
+      powers = E(/** @type {ERef<EndoHost>} */ (powers)).lookup([name]);
     }
     return powers;
   };
@@ -399,7 +400,7 @@ const bodyComponent = (
       const currentPowers = await resolvePowers();
       const targetPowers = await E(
         /** @type {ERef<EndoHost>} */ (currentPowers),
-      ).lookup(hostName);
+      ).lookup([hostName]);
 
       // Verify the target has the minimum required interface for a profile
       // by checking if it responds to identify() - a lightweight check
@@ -545,7 +546,7 @@ const bodyComponent = (
         }
 
         E(/** @type {ERef<EndoHost>} */ (resolvedPowers))
-          .lookup(activeSpaceInfo.channelPetName)
+          .lookup([activeSpaceInfo.channelPetName])
           .then(async channelRef => {
             // Determine if we're the channel admin or a joiner.
             // If the channel's proposed name matches our space's proposed name,
@@ -644,17 +645,17 @@ const bodyComponent = (
 
               // Create channel under current persona
               await E(
-                /** @type {{ makeChannel: (petName: string, proposedName: string) => Promise<unknown> }} */ (
+                /** @type {{ makeChannel: (petNamePath: string[], proposedName: string) => Promise<unknown> }} */ (
                   resolvedPowers
                 ),
-              ).makeChannel(channelName, forkDisplayName);
+              ).makeChannel([channelName], forkDisplayName);
 
               // Look up the new channel to post heritage
               const newChannelRef = await E(
-                /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
+                /** @type {{ lookup: (petNamePath: string[]) => Promise<unknown> }} */ (
                   resolvedPowers
                 ),
-              ).lookup(channelName);
+              ).lookup([channelName]);
 
               // Re-post heritage messages in order
               for (let i = 0; i < heritageChain.length; i += 1) {
@@ -851,7 +852,7 @@ const bodyComponent = (
 
         // Look up and connect to new channel
         E(/** @type {ERef<EndoHost>} */ (resolvedPowers))
-          .lookup(channelPetName)
+          .lookup([channelPetName])
           .then(async channelRef => {
             const channelCreatorName = await E(
               /** @type {ChannelMethods} */ (channelRef),
@@ -936,16 +937,16 @@ const bodyComponent = (
               await null; // safe-await-separator
 
               await E(
-                /** @type {{ makeChannel: (petName: string, proposedName: string) => Promise<unknown> }} */ (
+                /** @type {{ makeChannel: (petNamePath: string[], proposedName: string) => Promise<unknown> }} */ (
                   resolvedPowers
                 ),
-              ).makeChannel(channelName, forkDisplayName);
+              ).makeChannel([channelName], forkDisplayName);
 
               const newChannelRef = await E(
-                /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
+                /** @type {{ lookup: (petNamePath: string[]) => Promise<unknown> }} */ (
                   resolvedPowers
                 ),
-              ).lookup(channelName);
+              ).lookup([channelName]);
 
               for (let i = 0; i < heritageChain.length; i += 1) {
                 const msg = heritageChain[i];
@@ -1086,11 +1087,11 @@ const bodyComponent = (
           const channelName = `note-${Date.now()}`;
           const displayName = activeSpaceInfo.proposedName || 'Untitled';
           E(
-            /** @type {{ makeChannel: (petName: string, proposedName: string) => Promise<unknown> }} */ (
+            /** @type {{ makeChannel: (petNamePath: string[], proposedName: string) => Promise<unknown> }} */ (
               resolvedPowers
             ),
           )
-            .makeChannel(channelName, displayName)
+            .makeChannel([channelName], displayName)
             .then(() => switchChannel(channelName))
             .catch(window.reportError);
         });
@@ -1221,10 +1222,10 @@ const bodyComponent = (
             if (!petName) return false;
             try {
               await E(
-                /** @type {{ adopt: (n: bigint, edge: string, pet: string) => Promise<void> }} */ (
+                /** @type {{ adopt: (n: bigint, edge: string, pet: string[]) => Promise<void> }} */ (
                   resolvedPowers
                 ),
-              ).adopt(number, name, petName);
+              ).adopt(number, name, petName.split('/'));
               window.alert(
                 `Adopted \u201C${name}\u201D as \u201C${petName}\u201D`,
               );
@@ -1245,15 +1246,15 @@ const bodyComponent = (
             try {
               // Adopt the channel reference
               await E(
-                /** @type {{ adopt: (n: bigint, edge: string, pet: string) => Promise<void> }} */ (
+                /** @type {{ adopt: (n: bigint, edge: string, pet: string[]) => Promise<void> }} */ (
                   resolvedPowers
                 ),
-              ).adopt(number, name, localName);
+              ).adopt(number, name, localName.split('/'));
 
               // Look up and join the channel
               const channelRef = await E(
                 /** @type {ERef<EndoHost>} */ (resolvedPowers),
-              ).lookup(localName);
+              ).lookup(localName.split('/'));
               const displayName =
                 window.prompt('Your display name in this channel:', 'Guest') ||
                 'Guest';
@@ -1507,53 +1508,23 @@ const bodyComponent = (
         // Machine-readable metadata for the agent loop to parse.
         // The agent creates a pre-bound channelReply tool from this,
         // so the LLM only needs to produce reply text — no exec code.
-        const edgeName = channelPetName;
+        const edgeName = mentionChannelEdgeName(channelPetName);
         const instructions =
           `\n\n[channel-reply-info: edge=${edgeName} ` +
           `join=${petName} replyTo=${replyToNum}]\n` +
           `Use channelReply to respond.`;
 
-        // Assemble the final send() arrays.
-        // Structure: "You were mentioned in " [channel] ":\n\n"
-        //   [author1] ": msg1\n  " [author2] ": msg2\n\n..."
-        // The channel is always the first embedded reference.
-        /** @type {string[]} */
-        const sendStrings = [`You were mentioned in `];
-        /** @type {string[]} */
-        const sendEdgeNames = [edgeName];
-        /** @type {string[]} */
-        const sendPetNames = [channelPetName];
-
-        if (recap.edgeNames.length > 0) {
-          // String after the channel ref: separator + recap
-          // lead-in. recap.strings is interleaved as:
-          //   strings[0] ref[0] strings[1] ref[1] ... strings[n]
-          sendStrings.push(`:\n\n${recap.strings[0]}`);
-          const usedEdgeNames = new Set([edgeName]);
-          for (let ri = 0; ri < recap.edgeNames.length; ri += 1) {
-            // Ensure edge name uniqueness across the message
-            let recapEdge = recap.edgeNames[ri];
-            if (usedEdgeNames.has(recapEdge)) {
-              recapEdge = `${recapEdge}-author`;
-            }
-            usedEdgeNames.add(recapEdge);
-            sendEdgeNames.push(recapEdge);
-            sendPetNames.push(recap.petNames[ri]);
-            sendStrings.push(recap.strings[ri + 1] || '');
-          }
-          sendStrings[sendStrings.length - 1] += instructions;
-        } else if (recap.strings.length > 0 && recap.strings[0]) {
-          // Recap text but no embedded refs
-          sendStrings.push(`:\n\n${recap.strings[0]}${instructions}`);
-        } else {
-          sendStrings.push(instructions);
-        }
+        const {
+          strings: sendStrings,
+          edgeNames: sendEdgeNames,
+          petNamePaths,
+        } = assembleMentionSend({ channelPetName, recap, instructions });
 
         await E(/** @type {ERef<EndoHost>} */ (resolvedPowers)).send(
-          petName,
+          petName.split('/'),
           sendStrings,
           sendEdgeNames,
-          sendPetNames,
+          petNamePaths,
         );
       };
 
@@ -1593,7 +1564,7 @@ const bodyComponent = (
                 try {
                   const id = await E(
                     /** @type {ERef<EndoHost>} */ (resolvedPowers),
-                  ).identify(petName);
+                  ).identify(...petName.split('/'));
                   isValid = Boolean(id);
                 } catch {
                   // Not a valid pet name

@@ -113,9 +113,9 @@ export const makeWorkerFacet = ({ cancel }) => {
         // Read the compartment map from the tree root.  Tree 'lookup'
         // returns a blob Exo (ReadableTree) or MountFile Exo (Mount);
         // both expose `.text()`.
-        const mapBlob = await E(/** @type {any} */ (treeP)).lookup(
+        const mapBlob = await E(/** @type {any} */ (treeP)).lookup([
           'compartment-map.json',
-        );
+        ]);
         const mapText = await E(/** @type {any} */ (mapBlob)).text();
         /** @type {{ compartments: Record<string, any> }} */
         const compartmentMap = JSON.parse(mapText);

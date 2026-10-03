@@ -141,21 +141,35 @@ export const assertPetNamePath = path => {
 };
 
 /**
- * Normalizes a name or path to a path and validates it.
- * @param {string | string[]} nameOrPath
+ * Validates a pet-name path argument: an array of path components.
+ *
+ * A bare string is refused rather than treated as a one-segment path, so
+ * that a caller (typically an agent) that passed a delimited string such as
+ * `'dir/name'` learns that the invocation was invalid and retries with an
+ * array of path components such as `['dir', 'name']`.
+ *
+ * @param {unknown} namePath
  * @returns {NamePath}
  */
-export const namePathFrom = nameOrPath => {
-  const path = typeof nameOrPath === 'string' ? [nameOrPath] : nameOrPath;
-  assertNamePath(path);
-  return /** @type {NamePath} */ (path);
+export const namePathFrom = namePath => {
+  if (typeof namePath === 'string') {
+    // Suggest wrapping the string only when the result would be valid.
+    const example = isName(namePath)
+      ? `${q([namePath])} or ${q(['directory', 'name'])}`
+      : q(['directory', 'name']);
+    throw new TypeError(
+      `Invalid pet-name path ${q(namePath)}: a string is not a pet-name path and is never split on a delimiter; try again with an array of path components, for example ${example}`,
+    );
+  }
+  assertNamePath(/** @type {string[]} */ (namePath));
+  return /** @type {NamePath} */ (namePath);
 };
 
 /**
- * Coerces a name or path to a validated **pet-name path**: a name path
+ * Validates a **pet-name path**: a name path
  * whose final segment is a pet name (the others may be any name). This is
  * the canonical validator for a store target — a place a new value is
- * named — combining {@link namePathFrom} (coerce + validate each segment)
+ * named — combining {@link namePathFrom} (refuse a string, validate each segment)
  * with {@link assertPetNamePath} (require a pet-name leaf). Returns the
  * full path, the prefix path (all but the last segment), and the final
  * pet name.
@@ -163,8 +177,47 @@ export const namePathFrom = nameOrPath => {
  * Use {@link namePathFrom} instead when the leaf may be a special name
  * (e.g. resolving an existing `@main` worker or `@agent` powers).
  *
- * @param {string | string[]} nameOrPath
+ * @param {unknown} namePath
  * @returns {{ namePath: NamePath, prefixPath: NamePath, petName: PetName }}
  */
-export const petNamePathFrom = nameOrPath =>
-  assertPetNamePath(namePathFrom(nameOrPath));
+export const petNamePathFrom = namePath =>
+  assertPetNamePath(namePathFrom(namePath));
+
+const loneSurrogatePattern =
+  /([\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF])/;
+
+/**
+ * Percent-encodes one segment. `encodeURIComponent` throws on a lone
+ * surrogate, which a valid name may contain, so each lone surrogate is
+ * written as `%uXXXX` instead. The encoding stays injective because:
+ * `encodeURIComponent` emits `%` only followed by two hex digits, so never
+ * `%u`; a lone surrogate (U+D800–U+DFFF) always has exactly four hex digits,
+ * so each `%uXXXX` token is fixed-width; and a name contains no `/`, so the
+ * `%2F` joiner in {@link namePathLabel} cannot arise inside an encoded
+ * segment, which writes a literal `%` as `%25`.
+ *
+ * @param {string} segment
+ * @returns {string}
+ */
+const encodeNameSegment = segment =>
+  segment
+    .split(loneSurrogatePattern)
+    .map((part, index) =>
+      index % 2 === 1
+        ? `%u${part.charCodeAt(0).toString(16).toUpperCase()}`
+        : encodeURIComponent(part),
+    )
+    .join('');
+
+/**
+ * Encodes a name path as a single string, for deriving one pet name from a
+ * whole path. Each segment is percent-encoded and the segments are joined
+ * with `%2F`, so distinct paths always yield distinct labels:
+ * `['team-a', 'bob']` is `team-a%2Fbob` and `['team', 'a-bob']` is
+ * `team%2Fa-bob`. A one-segment path of ordinary characters is unchanged.
+ *
+ * @param {NamePath} namePath
+ * @returns {string}
+ */
+export const namePathLabel = namePath =>
+  namePath.map(encodeNameSegment).join('%2F');

@@ -17,10 +17,10 @@
  * the Node worker it runs in (which is where the real `fetch` power lives - the
  * plugin is unconfined; the capability it mints is confined):
  *
- * - `E(powers).lookup('fetch-store')` -> a writable virtual-file-system
+ * - `E(powers).lookup(['fetch-store'])` -> a writable virtual-file-system
  *   directory backing the durable policy store (`./store.js`). The backing may
  *   be a host directory, an in-memory tree, a daemon mount, or a database.
- * - `E(powers).lookup('fetch-policy-authority')` (optional) -> the referral
+ * - `E(powers).lookup(['fetch-policy-authority'])` (optional) -> the referral
  *   target for trust-on-first-bind decisions, passed through as
  *   `makeHttpClientAndControl`'s `policyAuthority`. When the lookup fails the
  *   plugin runs without one: `tofu-prompt` / `tofu-attenuator` modes are
@@ -118,7 +118,7 @@ const parseOptionalOriginList = value => {
 const lookupOptional = async (powers, name) => {
   await null;
   try {
-    return await E(powers).lookup(name);
+    return await E(powers).lookup([name]);
   } catch (_error) {
     return undefined;
   }
@@ -143,7 +143,7 @@ const lookupOptional = async (powers, name) => {
  * @returns {Promise<FetchServiceExo>}
  */
 export const make = async (powers, _context, { env = {}, fetch, now } = {}) => {
-  const storeDirectory = await E(powers).lookup('fetch-store');
+  const storeDirectory = await E(powers).lookup(['fetch-store']);
   const policyAuthority = await lookupOptional(
     powers,
     'fetch-policy-authority',

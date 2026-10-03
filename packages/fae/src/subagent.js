@@ -623,7 +623,7 @@ export const makeSubagentTools = ({
       // The parent binds the subagent under its own authority, so the spawner
       // never needs write access to this agent's pet store.
       if (!(await E(powers).has(SUBAGENT_DIRECTORY))) {
-        await E(powers).makeDirectory(SUBAGENT_DIRECTORY);
+        await E(powers).makeDirectory([SUBAGENT_DIRECTORY]);
       }
       await E(powers).storeLocator([SUBAGENT_DIRECTORY, name], locator);
       return `Spawned subagent "${name}". Ask it something with askSubagent.`;

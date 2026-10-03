@@ -491,7 +491,7 @@ export const makePetstoreAuditJournal = (
     const entries = [];
     for (const name of selected) {
       // eslint-disable-next-line no-await-in-loop
-      entries.push(await E(powers).lookup(name));
+      entries.push(await E(powers).lookup([name]));
     }
     return harden(entries);
   };
@@ -501,7 +501,7 @@ export const makePetstoreAuditJournal = (
     if (await E(powers).has(name)) {
       throw makeError(X`audit journal sequence already exists: ${q(name)}`);
     }
-    await E(powers).storeValue(entry, name);
+    await E(powers).storeValue(entry, [name]);
   };
   let anchorBytes = 0;
   const readHead = async () => {
@@ -520,7 +520,7 @@ export const makePetstoreAuditJournal = (
     let last;
     for (const name of selected) {
       // eslint-disable-next-line no-await-in-loop
-      last = await E(anchorPowers).lookup(name);
+      last = await E(anchorPowers).lookup([name]);
       anchorBytes += new TextEncoder().encode(
         canonicalAuditJson(last),
       ).byteLength;
@@ -532,7 +532,7 @@ export const makePetstoreAuditJournal = (
   const writeHead = async head => {
     const name = headName(head.sequence);
     if (await E(anchorPowers).has(name)) {
-      const existing = await E(anchorPowers).lookup(name);
+      const existing = await E(anchorPowers).lookup([name]);
       if (canonicalAuditJson(existing) === canonicalAuditJson(head)) return;
       throw makeError(X`audit journal head already exists: ${q(name)}`);
     }
@@ -546,7 +546,7 @@ export const makePetstoreAuditJournal = (
     }
     anchorBytes + headBytes <= maxAnchorBytes ||
       Fail`audit anchor store exceeded ${maxAnchorBytes} bytes`;
-    await E(anchorPowers).storeValue(head, name);
+    await E(anchorPowers).storeValue(head, [name]);
     anchorBytes += headBytes;
   };
   return makeAuditJournal({

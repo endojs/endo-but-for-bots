@@ -369,7 +369,7 @@ export const useConversation = powers => {
               setActiveNarrative('Reformatting response...');
 
               await E(/** @type {any} */ (powers)).send(
-                'fae',
+                ['fae'],
                 [
                   `FORMAT_ERROR: ${parsed.parseError}\n\nHere is your previous response that failed to parse:\n${text}`,
                 ],
@@ -424,7 +424,7 @@ export const useConversation = powers => {
 
         // Send to fae agent via the well-known "fae" petname
         // written into this profile's pet store at space creation time.
-        await E(/** @type {any} */ (powers)).send('fae', [text], [], []);
+        await E(/** @type {any} */ (powers)).send(['fae'], [text], [], []);
       } catch (err) {
         console.error('[whylip] send error:', err);
         setSending(false);

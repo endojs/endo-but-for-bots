@@ -92,7 +92,7 @@ export const makeCommand = async ({
     if (importPath !== undefined) {
       // makeUnconfined is unconditionally Node-scoped; default to
       // the host's @node worker when no other worker is named.
-      const unconfinedWorkerName = workerPath ?? '@node';
+      const unconfinedWorkerName = workerPath ?? ['@node'];
       resultP = E(agent).makeUnconfined(
         unconfinedWorkerName,
         url.pathToFileURL(path.resolve(importPath)).href,

@@ -27,7 +27,7 @@ npm install @endo/exo-zip
 ```js
 import { zip } from '@endo/exo-zip';
 
-const tree = await E(agent).lookup('release');
+const tree = await E(agent).lookup(['release']);
 const bytes = await zip(tree);
 ```
 

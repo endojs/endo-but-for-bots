@@ -15,8 +15,8 @@ import {
 } from '@endo/platform/fs/lite';
 import {
   NamePathShape,
-  NameOrPathShape,
-  NamesOrPathsShape,
+  NamePathArgumentShape,
+  NamePathsArgumentShape,
 } from './type-guards.js';
 
 // #region Patterns
@@ -45,8 +45,8 @@ const EnvShape = M.recordOf(M.string(), M.string());
 const MakeCapletOptionsShape = M.splitRecord(
   {},
   {
-    powersName: NameOrPathShape,
-    resultName: NameOrPathShape,
+    powersName: NamePathArgumentShape,
+    resultName: NamePathArgumentShape,
     env: EnvShape,
     workerTrustedShims: M.arrayOf(M.string()),
   },
@@ -55,12 +55,12 @@ const MakeCapletOptionsShape = M.splitRecord(
 // Shared method guard for evaluate (used by both Host and Guest)
 // Both execute directly in a worker, differing only in namespace
 const EvaluateMethodGuard = M.call(
-  M.or(NameOrPathShape, M.undefined()),
+  M.or(NamePathArgumentShape, M.undefined()),
   M.string(),
   M.arrayOf(M.string()),
-  NamesOrPathsShape,
+  NamePathsArgumentShape,
 )
-  .optional(NameOrPathShape)
+  .optional(NamePathArgumentShape)
   .returns(M.promise());
 
 // #region Interfaces
@@ -99,6 +99,11 @@ export const ReadableNameHubInterface = M.interface('ReadableNameHub', {
 // where the hub returns `M.remotable()` — the exo awaits before wrapping the
 // reader).
 export const nameHubMethodGuards = harden({
+  // `lookup` / `maybeLookup` keep the platform's string-or-array
+  // `NameOrPathShape` here: those guards are shared with trees outside the
+  // daemon, so narrowing them is a separate breaking change. The daemon's
+  // implementations still refuse a bare string through `namePathFrom`, with
+  // the same retry hint as the `NamePathArgumentShape` methods below.
   ...readableNameHubMethodGuards,
   identify: M.call().rest(NamePathShape).returns(M.promise()),
   locate: M.call().rest(NamePathShape).returns(M.promise()),
@@ -109,8 +114,8 @@ export const nameHubMethodGuards = harden({
   listLocators: M.call().rest(NamePathShape).returns(M.promise()),
   followNameChanges: M.call().returns(M.remotable()),
   reverseLookup: M.call(M.any()).returns(M.promise()),
-  storeIdentifier: M.call(NameOrPathShape, IdShape).returns(M.promise()),
-  storeLocator: M.call(NameOrPathShape, IdShape).returns(M.promise()),
+  storeIdentifier: M.call(NamePathArgumentShape, IdShape).returns(M.promise()),
+  storeLocator: M.call(NamePathArgumentShape, IdShape).returns(M.promise()),
   remove: M.call().rest(NamePathShape).returns(M.promise()),
   move: M.call(NamePathShape, NamePathShape).returns(M.promise()),
   copy: M.call(NamePathShape, NamePathShape).returns(M.promise()),
@@ -209,7 +214,7 @@ export const SecretManagerDirectoryInterface = M.interface(
     // would forward a non-string path segment straight into the SQLite bind
     // layer, surfacing a driver TypeError instead of this module's fixed
     // error codes.
-    lookup: M.call(NameOrPathShape).returns(M.promise()),
+    lookup: M.call(NamePathArgumentShape).returns(M.promise()),
   },
 );
 
@@ -268,27 +273,31 @@ export const GuestInterface = M.interface('EndoGuest', {
   // Subscribe to messages (returns iterator ref)
   followMessages: M.call().returns(M.promise()),
   // Respond to a request with a formula identifier
-  resolve: M.call(MessageNumberShape, NameOrPathShape).returns(M.promise()),
+  resolve: M.call(MessageNumberShape, NamePathArgumentShape).returns(
+    M.promise(),
+  ),
   // Decline a request
   reject: M.call(MessageNumberShape).optional(M.string()).returns(M.promise()),
   // Adopt a reference from an incoming message
-  adopt: M.call(MessageNumberShape, NameOrPathShape, NameOrPathShape).returns(
-    M.promise(),
-  ),
+  adopt: M.call(
+    MessageNumberShape,
+    EdgeNameShape,
+    NamePathArgumentShape,
+  ).returns(M.promise()),
   // Remove a message from inbox
   dismiss: M.call(MessageNumberShape).returns(M.promise()),
   // Remove all messages from inbox
   dismissAll: M.call().returns(M.promise()),
   // Send a request and wait for response
-  request: M.call(NameOrPathShape, M.string())
-    .optional(NameOrPathShape)
+  request: M.call(NamePathArgumentShape, M.string())
+    .optional(NamePathArgumentShape)
     .returns(M.promise()),
   // Send a package message
   send: M.call(
-    NameOrPathShape,
+    NamePathArgumentShape,
     M.arrayOf(M.string()),
     EdgeNamesShape,
-    NamesOrPathsShape,
+    NamePathsArgumentShape,
   )
     .optional(MessageNumberShape)
     .returns(M.promise()),
@@ -297,14 +306,14 @@ export const GuestInterface = M.interface('EndoGuest', {
     MessageNumberShape,
     M.arrayOf(M.string()),
     EdgeNamesShape,
-    NamesOrPathsShape,
+    NamePathsArgumentShape,
   ).returns(M.promise()),
   // Edit a message the caller previously sent
   editMessage: M.call(
     MessageNumberShape,
     M.arrayOf(M.string()),
     EdgeNamesShape,
-    NamesOrPathsShape,
+    NamePathsArgumentShape,
   )
     .optional(M.splitRecord({}, { done: M.boolean() }))
     .returns(M.promise()),
@@ -317,16 +326,16 @@ export const GuestInterface = M.interface('EndoGuest', {
   ).returns(M.promise()),
   // Send a form to a recipient
   form: M.call(
-    NameOrPathShape, // recipientName
+    NamePathArgumentShape, // recipientNamePath
     M.string(), // description
     M.arrayOf(M.record()), // fields
   ).returns(M.promise()),
   // Store a blob
   storeBlob: M.call(M.remotable())
-    .optional(NameOrPathShape)
+    .optional(NamePathArgumentShape)
     .returns(M.promise()),
   // Store a passable value
-  storeValue: M.call(M.any(), NameOrPathShape).returns(M.promise()),
+  storeValue: M.call(M.any(), NamePathArgumentShape).returns(M.promise()),
   // Submit values for a form
   submit: M.call(
     MessageNumberShape, // messageNumber
@@ -335,16 +344,16 @@ export const GuestInterface = M.interface('EndoGuest', {
   // Send a retained value as a reply
   sendValue: M.call(
     MessageNumberShape, // messageNumber
-    NameOrPathShape, // petNameOrPath
+    NamePathArgumentShape, // petNamePath
   ).returns(M.promise()),
   // Internal: deliver a message
   deliver: M.call(M.record()).returns(),
   // Evaluate code directly in a worker
   evaluate: EvaluateMethodGuard,
   // Mint a guest-owned invitation (network mediation stays internal)
-  invite: M.call(NameOrPathShape).returns(M.promise()),
+  invite: M.call(NamePathArgumentShape).returns(M.promise()),
   // Redeem an invitation into this guest (accepts as itself; no minted guest)
-  accept: M.call(LocatorShape, NameOrPathShape).returns(M.promise()),
+  accept: M.call(LocatorShape, NamePathArgumentShape).returns(M.promise()),
 });
 
 export const HostInterface = M.interface('EndoHost', {
@@ -367,43 +376,47 @@ export const HostInterface = M.interface('EndoHost', {
   handle: M.call().returns(M.remotable()),
   listMessages: M.call().returns(M.promise()),
   followMessages: M.call().returns(M.promise()),
-  resolve: M.call(MessageNumberShape, NameOrPathShape).returns(M.promise()),
-  reject: M.call(MessageNumberShape).optional(M.string()).returns(M.promise()),
-  adopt: M.call(MessageNumberShape, NameOrPathShape, NameOrPathShape).returns(
+  resolve: M.call(MessageNumberShape, NamePathArgumentShape).returns(
     M.promise(),
   ),
+  reject: M.call(MessageNumberShape).optional(M.string()).returns(M.promise()),
+  adopt: M.call(
+    MessageNumberShape,
+    EdgeNameShape,
+    NamePathArgumentShape,
+  ).returns(M.promise()),
   dismiss: M.call(MessageNumberShape).returns(M.promise()),
   dismissAll: M.call().returns(M.promise()),
-  request: M.call(NameOrPathShape, M.string())
-    .optional(NameOrPathShape)
+  request: M.call(NamePathArgumentShape, M.string())
+    .optional(NamePathArgumentShape)
     .returns(M.promise()),
   send: M.call(
-    NameOrPathShape,
+    NamePathArgumentShape,
     M.arrayOf(M.string()),
     EdgeNamesShape,
-    NamesOrPathsShape,
+    NamePathsArgumentShape,
   )
     .optional(MessageNumberShape)
     .returns(M.promise()),
   deliver: M.call(M.record()).returns(),
   // Send a form to a recipient
   form: M.call(
-    NameOrPathShape, // recipientName
+    NamePathArgumentShape, // recipientNamePath
     M.string(), // description
     M.arrayOf(M.record()), // fields
   ).returns(M.promise()),
   // Host
   // Store a blob
   storeBlob: M.call(M.remotable())
-    .optional(NameOrPathShape)
+    .optional(NamePathArgumentShape)
     .returns(M.promise()),
   // Store a passable value
-  storeValue: M.call(M.any(), NameOrPathShape).returns(M.promise()),
+  storeValue: M.call(M.any(), NamePathArgumentShape).returns(M.promise()),
   // Check in a remote readable-tree Exo, storing content-addressed
-  storeTree: M.call(M.remotable(), NameOrPathShape).returns(M.promise()),
+  storeTree: M.call(M.remotable(), NamePathArgumentShape).returns(M.promise()),
   // Mount an external directory. `deniedSegments` replaces the mount's
   // default restricted-segment set (an empty array disables denial).
-  provideMount: M.call(M.string(), NameOrPathShape)
+  provideMount: M.call(M.string(), NamePathArgumentShape)
     .optional(
       M.splitRecord(
         {},
@@ -413,7 +426,7 @@ export const HostInterface = M.interface('EndoHost', {
     .returns(M.promise()),
   // Create a daemon-managed scratch mount. `deniedSegments` replaces the
   // mount's default restricted-segment set (an empty array disables denial).
-  provideScratchMount: M.call(NameOrPathShape)
+  provideScratchMount: M.call(NamePathArgumentShape)
     .optional(
       M.splitRecord(
         {},
@@ -423,16 +436,16 @@ export const HostInterface = M.interface('EndoHost', {
     .returns(M.promise()),
   // Mint a sub-mount rooted at a subdirectory of an existing mount
   provideSubMount: M.call(
-    NameOrPathShape,
+    NamePathArgumentShape,
     M.arrayOf(M.string()),
-    NameOrPathShape,
+    NamePathArgumentShape,
   )
     .optional(M.splitRecord({}, { readOnly: M.boolean() }))
     .returns(M.promise()),
   // Derive a local Git capability from an authorized mount.  The optional
   // `identity` pins the formula-owned, guest-immutable commit author/committer;
   // omitted, commits default to `Endo <endo@invalid.local>`.
-  provideGit: M.callWhen(M.remotable(), NameOrPathShape)
+  provideGit: M.callWhen(M.remotable(), NamePathArgumentShape)
     .optional(
       M.splitRecord(
         {},
@@ -449,13 +462,13 @@ export const HostInterface = M.interface('EndoHost', {
   // Derive an allowlisted command-execution Shell from a writable mount.
   provideShell: M.callWhen(
     M.remotable(),
-    NameOrPathShape,
+    NamePathArgumentShape,
     M.recordOf(M.string(), M.any()),
   ).returns(M.remotable('Shell')),
   // Mint a confined outbound-HTTP client from a host-owned `fetch` seam. No
   // mount arg: the Network tier is rooted in the fetch seam, not a mount.
   provideHttpClient: M.callWhen(
-    NameOrPathShape,
+    NamePathArgumentShape,
     M.recordOf(M.string(), M.any()),
   ).returns(M.remotable('HttpClient')),
   // Host-side control facet for a daemon-minted HttpClient cap (policy
@@ -467,7 +480,7 @@ export const HostInterface = M.interface('EndoHost', {
   // policy-bound endpoint and (optional) credential.
   provideGitRemote: M.callWhen(
     M.remotable(),
-    NameOrPathShape,
+    NamePathArgumentShape,
     M.recordOf(M.string(), M.any()),
   ).returns(M.remotable('GitRemote')),
   // Host-only constructive clone. The endpoint is a repo-less remote
@@ -477,11 +490,11 @@ export const HostInterface = M.interface('EndoHost', {
   ),
   // Mint daemon-private Git credential capabilities.
   provideBearerCredential: M.callWhen(
-    NameOrPathShape,
+    NamePathArgumentShape,
     M.recordOf(M.string(), M.any()),
   ).returns(M.remotable('BearerCredential')),
   provideBasicCredential: M.callWhen(
-    NameOrPathShape,
+    NamePathArgumentShape,
     M.recordOf(M.string(), M.any()),
   ).returns(M.remotable('BasicCredential')),
   // Host-side controllers for daemon-minted credential / remote caps.
@@ -499,48 +512,58 @@ export const HostInterface = M.interface('EndoHost', {
   provideHostPath: M.call(M.any()).returns(M.promise()),
   // Provide a guest
   provideGuest: M.call()
-    .optional(NameOrPathShape, M.record())
+    .optional(NamePathArgumentShape, M.record())
     .returns(M.promise()),
   // Provide a host
   provideHost: M.call()
-    .optional(NameOrPathShape, M.record())
+    .optional(NamePathArgumentShape, M.record())
     .returns(M.promise()),
   // Provide a worker
-  provideWorker: M.call(NameOrPathShape).returns(M.promise()),
+  provideWorker: M.call(NamePathArgumentShape).returns(M.promise()),
   // Evaluate code directly in a worker
   evaluate: EvaluateMethodGuard,
   // Make an unconfined caplet
-  makeUnconfined: M.call(M.or(NameOrPathShape, M.undefined()), M.string())
+  makeUnconfined: M.call(M.or(NamePathArgumentShape, M.undefined()), M.string())
     .optional(MakeCapletOptionsShape)
     .returns(M.promise()),
   // Make a caplet from a source-only ZIP archive
-  makeArchive: M.call(M.or(NameOrPathShape, M.undefined()), NameOrPathShape)
+  makeArchive: M.call(
+    M.or(NamePathArgumentShape, M.undefined()),
+    NamePathArgumentShape,
+  )
     .optional(MakeCapletOptionsShape)
     .returns(M.promise()),
   // Make a caplet from a ReadableTree or Mount laid out as a
   // compartment-mapper archive (compartment-map.json at root plus
   // modules at their referenced paths).
-  makeFromTree: M.call(M.or(NameOrPathShape, M.undefined()), NameOrPathShape)
+  makeFromTree: M.call(
+    M.or(NamePathArgumentShape, M.undefined()),
+    NamePathArgumentShape,
+  )
     .optional(MakeCapletOptionsShape)
     .returns(M.promise()),
   // Materialise a readable tree into a new scratch mount.
-  stageTree: M.call(NameOrPathShape, NameOrPathShape).returns(M.promise()),
+  stageTree: M.call(NamePathArgumentShape, NamePathArgumentShape).returns(
+    M.promise(),
+  ),
   // Stage a readable tree and run its entry module as an unconfined
   // Node caplet.
   makeUnconfinedFromTree: M.call(
-    M.or(NameOrPathShape, M.undefined()),
-    NameOrPathShape,
+    M.or(NamePathArgumentShape, M.undefined()),
+    NamePathArgumentShape,
   )
     .optional(MakeCapletOptionsShape)
     .returns(M.promise()),
   // Create a channel
-  makeChannel: M.call(NameOrPathShape, M.string()).returns(M.promise()),
+  makeChannel: M.call(NamePathArgumentShape, M.string()).returns(M.promise()),
   // Create a timer
-  makeTimer: M.call(NameOrPathShape, M.number())
+  makeTimer: M.call(NamePathArgumentShape, M.number())
     .optional(M.string())
     .returns(M.promise()),
   // Cancel a value
-  cancel: M.call(NameOrPathShape).optional(M.error()).returns(M.promise()),
+  cancel: M.call(NamePathArgumentShape)
+    .optional(M.error())
+    .returns(M.promise()),
   // Get the greeter
   greeter: M.call().returns(M.promise()),
   // Get the gateway
@@ -558,24 +581,26 @@ export const HostInterface = M.interface('EndoHost', {
   // Locate a formula with connection hints.
   locateWithHints: M.call().rest(NamePathShape).returns(M.promise()),
   // Adopt a value from a locator with connection hints
-  adoptFromLocator: M.call(LocatorShape, NameOrPathShape).returns(M.promise()),
+  adoptFromLocator: M.call(LocatorShape, NamePathArgumentShape).returns(
+    M.promise(),
+  ),
   // Create an invitation
-  invite: M.call(NameOrPathShape).returns(M.promise()),
+  invite: M.call(NamePathArgumentShape).returns(M.promise()),
   // Accept an invitation
-  accept: M.call(LocatorShape, NameOrPathShape).returns(M.promise()),
+  accept: M.call(LocatorShape, NamePathArgumentShape).returns(M.promise()),
   // Reply to a message
   reply: M.call(
     MessageNumberShape,
     M.arrayOf(M.string()),
     EdgeNamesShape,
-    NamesOrPathsShape,
+    NamePathsArgumentShape,
   ).returns(M.promise()),
   // Edit a message the caller previously sent
   editMessage: M.call(
     MessageNumberShape,
     M.arrayOf(M.string()),
     EdgeNamesShape,
-    NamesOrPathsShape,
+    NamePathsArgumentShape,
   )
     .optional(M.splitRecord({}, { done: M.boolean() }))
     .returns(M.promise()),
@@ -587,8 +612,8 @@ export const HostInterface = M.interface('EndoHost', {
     M.record(), // bindings
   )
     .optional(
-      M.or(NameOrPathShape, M.undefined()), // workerName
-      NameOrPathShape, // resultName
+      M.or(NamePathArgumentShape, M.undefined()), // workerNamePath
+      NamePathArgumentShape, // resultNamePath
     )
     .returns(M.promise()),
   // Submit values for a form
@@ -599,7 +624,7 @@ export const HostInterface = M.interface('EndoHost', {
   // Send a retained value as a reply
   sendValue: M.call(
     MessageNumberShape, // messageNumber
-    NameOrPathShape, // petNameOrPath
+    NamePathArgumentShape, // petNamePath
   ).returns(M.promise()),
   // Access the privileged diagnostics facet: formula records, the
   // formula dependency graph, and the error-trace aggregator. Grouped
@@ -635,7 +660,7 @@ export const DiagnosticsInterface = M.interface('EndoDiagnostics', {
 
 export const ChannelInterface = M.interface('EndoChannel', {
   help: M.call().optional(M.string()).returns(M.string()),
-  post: M.call(M.arrayOf(M.string()), EdgeNamesShape, NamesOrPathsShape)
+  post: M.call(M.arrayOf(M.string()), EdgeNamesShape, NamePathsArgumentShape)
     .optional(
       M.or(M.string(), M.undefined()),
       M.arrayOf(IdShape),
@@ -659,7 +684,7 @@ export const ChannelInterface = M.interface('EndoChannel', {
 
 export const ChannelMemberInterface = M.interface('EndoChannelMember', {
   help: M.call().optional(M.string()).returns(M.string()),
-  post: M.call(M.arrayOf(M.string()), EdgeNamesShape, NamesOrPathsShape)
+  post: M.call(M.arrayOf(M.string()), EdgeNamesShape, NamePathsArgumentShape)
     .optional(
       M.or(M.string(), M.undefined()),
       M.arrayOf(IdShape),
@@ -701,12 +726,12 @@ export const InvitationInterface = M.interface('EndoInvitation', {
 });
 
 export const InspectorHubInterface = M.interface('EndoInspectorHub', {
-  lookup: M.call(NameOrPathShape).returns(M.promise()),
+  lookup: M.call(NamePathArgumentShape).returns(M.promise()),
   list: M.call().returns(M.array()),
 });
 
 export const InspectorInterface = M.interface('EndoInspector', {
-  lookup: M.call(NameOrPathShape).returns(M.promise()),
+  lookup: M.call(NamePathArgumentShape).returns(M.promise()),
   list: M.call().returns(M.array()),
 });
 
@@ -821,7 +846,8 @@ export const MountInterface = M.interface('EndoMount', {
   // promise boundary here even though the shared name-hub record is broader.
   // It resolves to the same typed file/tree union as `lookup`, plus undefined.
   // `maybeLookup` is the `ReadableNameHub` primitive (lookup-or-undefined).
-  // Widened from the shared `NameOrPathShape` contract to `PathArgShape` so the
+  // Widened from `@endo/platform`'s fs `NameOrPathShape` contract (not the
+  // daemon's removed shape of that name) to `PathArgShape` so the
   // mount accepts a `MountEntry` cap as the path argument, exactly like
   // `lookup`. See designs/fs-interface-consolidation.md § C1.
   maybeLookup: M.call(PathArgShape).returns(M.promise()),

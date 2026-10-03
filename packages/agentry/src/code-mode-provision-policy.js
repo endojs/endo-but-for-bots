@@ -260,7 +260,7 @@ const requireStringArray = (value, label) => {
 /**
  * @param {unknown} value
  * @param {string} label
- * @returns {string | string[]}
+ * @returns {string[]}
  */
 const normalizeCredentialPetNamePath = (value, label) => {
   const segments =
@@ -268,7 +268,7 @@ const normalizeCredentialPetNamePath = (value, label) => {
   if (segments.length === 0 || !segments.every(isPetName)) {
     throw makeError(X`${q(label)} must be a valid host-side pet name or path`);
   }
-  return typeof value === 'string' ? segments[0] : harden([...segments]);
+  return harden([...segments]);
 };
 
 /**

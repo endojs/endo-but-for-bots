@@ -1763,10 +1763,10 @@ export const createAddSpaceModal = ({
     try {
       // Create the host: handle points to powers, agentName points to the agent
       await E(
-        /** @type {{ provideHost: (name: string, opts: { agentName: string }) => Promise<void> }} */ (
+        /** @type {{ provideHost: (name: string[], opts: { agentName: string[] }) => Promise<void> }} */ (
           powers
         ),
-      ).provideHost(name, { agentName: finalAgentName });
+      ).provideHost([name], { agentName: [finalAgentName] });
 
       // Create the space pointing to the agent (not the handle)
       await onSubmit({
@@ -1849,10 +1849,10 @@ export const createAddSpaceModal = ({
         let personaPowers = powers;
         for (const segment of selectedPath) {
           personaPowers = await E(
-            /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
+            /** @type {{ lookup: (petNamePath: string[]) => Promise<unknown> }} */ (
               personaPowers
             ),
-          ).lookup(segment);
+          ).lookup([segment]);
         }
 
         // Create channel inside persona's store
@@ -1927,20 +1927,20 @@ export const createAddSpaceModal = ({
       }
 
       await E(
-        /** @type {{ provideHost: (name: string, opts: { agentName: string, introducedNames?: Record<string, string> }) => Promise<void> }} */ (
+        /** @type {{ provideHost: (name: string[], opts: { agentName: string[], introducedNames?: Record<string, string> }) => Promise<void> }} */ (
           powers
         ),
-      ).provideHost(spaceName, {
-        agentName: newAgentName,
+      ).provideHost([spaceName], {
+        agentName: [newAgentName],
         ...(Object.keys(introducedNames).length > 0 ? { introducedNames } : {}),
       });
 
       // 2. Get the persona's powers
       const personaPowers = await E(
-        /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
+        /** @type {{ lookup: (petNamePath: string[]) => Promise<unknown> }} */ (
           powers
         ),
-      ).lookup(newAgentName);
+      ).lookup([newAgentName]);
 
       // 3. Create channel inside persona's store
       await E(
@@ -2054,26 +2054,26 @@ export const createAddSpaceModal = ({
         // 1. Create persona (host)
         const personaAgentName = `persona-for-${spaceName}`;
         await E(
-          /** @type {{ provideHost: (name: string, opts: { agentName: string }) => Promise<void> }} */ (
+          /** @type {{ provideHost: (name: string[], opts: { agentName: string[] }) => Promise<void> }} */ (
             powers
           ),
-        ).provideHost(spaceName, { agentName: personaAgentName });
+        ).provideHost([spaceName], { agentName: [personaAgentName] });
 
         // 2. Get persona's powers
         const personaPowers = await E(
-          /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
+          /** @type {{ lookup: (petNamePath: string[]) => Promise<unknown> }} */ (
             powers
           ),
-        ).lookup(personaAgentName);
+        ).lookup([personaAgentName]);
 
         // 3. Write the channel locator into the persona's pet store.
         //    Pass the original endo:// locator so the system can drop
         //    bare-identifier support in the future.
         await E(
-          /** @type {{ storeLocator: (name: string | string[], id: string) => Promise<void> }} */ (
+          /** @type {{ storeLocator: (name: string[], id: string) => Promise<void> }} */ (
             personaPowers
           ),
-        ).storeLocator('general', locator);
+        ).storeLocator(['general'], locator);
 
         // 4. Create space config
         // Use the view mode from the locator if provided, else default chat.
@@ -2146,20 +2146,20 @@ export const createAddSpaceModal = ({
         let personaPowers = powers;
         for (const segment of space.profilePath) {
           personaPowers = await E(
-            /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
+            /** @type {{ lookup: (petNamePath: string[]) => Promise<unknown> }} */ (
               personaPowers
             ),
-          ).lookup(segment);
+          ).lookup([segment]);
         }
 
         // Write the channel locator into the persona's pet store.
         // Pass the original endo:// locator so the system can drop
         // bare-identifier support in the future.
         await E(
-          /** @type {{ storeLocator: (name: string | string[], id: string) => Promise<void> }} */ (
+          /** @type {{ storeLocator: (name: string[], id: string) => Promise<void> }} */ (
             personaPowers
           ),
-        ).storeLocator('general', locator);
+        ).storeLocator(['general'], locator);
 
         // No new space needed — the existing space already renders the channel
         hide();
@@ -2212,10 +2212,10 @@ export const createAddSpaceModal = ({
 
       // Look up the fae-factory and create an agent with the whylip prompt.
       const faeFactory = await E(
-        /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
+        /** @type {{ lookup: (petNamePath: string[]) => Promise<unknown> }} */ (
           powers
         ),
-      ).lookup(factoryPetName);
+      ).lookup([factoryPetName]);
 
       const agentProfileName = /** @type {string} */ (
         await E(
@@ -2242,24 +2242,24 @@ export const createAddSpaceModal = ({
 
       // Create the whylip host profile.
       await E(
-        /** @type {{ provideHost: (name: string, opts: { agentName: string }) => Promise<void> }} */ (
+        /** @type {{ provideHost: (name: string[], opts: { agentName: string[] }) => Promise<void> }} */ (
           powers
         ),
-      ).provideHost(name, { agentName: finalAgentName });
+      ).provideHost([name], { agentName: [finalAgentName] });
 
       // Write the fae agent reference into the whylip host's pet store
       // under the well-known name "fae".
       const whylipPowers = await E(
-        /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
+        /** @type {{ lookup: (namePath: string[]) => Promise<unknown> }} */ (
           powers
         ),
-      ).lookup(finalAgentName);
+      ).lookup([finalAgentName]);
 
       await E(
-        /** @type {{ storeLocator: (name: string | string[], id: string) => Promise<void> }} */ (
+        /** @type {{ storeLocator: (name: string[], id: string) => Promise<void> }} */ (
           whylipPowers
         ),
-      ).storeLocator('fae', agentLocator);
+      ).storeLocator(['fae'], agentLocator);
 
       await onSubmit({
         name,

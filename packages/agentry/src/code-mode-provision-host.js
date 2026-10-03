@@ -26,7 +26,7 @@ import { registerProvisionedGuest } from './code-mode-grants.js';
 export class EndoCredentialUnavailableError extends Error {
   /**
    * @param {string} remoteName
-   * @param {string | string[]} credentialPetName
+   * @param {string[]} credentialPetName
    */
   constructor(remoteName, credentialPetName) {
     super(
@@ -516,7 +516,7 @@ const realizeProvisionResources = async (
     // Identifier sharing preserves the controller alias and binds the exact
     // same retained formula into the guest under its simple lexical pet name.
     // eslint-disable-next-line no-await-in-loop
-    await E(guest).storeIdentifier(guestName, id);
+    await E(guest).storeIdentifier([guestName], id);
   }
 
   registerProvisionedGuest(guest);

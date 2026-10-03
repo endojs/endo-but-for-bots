@@ -115,9 +115,9 @@ create paths are therefore mailbox-based and **host-rooted**:
   operator's names are durable). The client is stored under `resultName`.
 
 Delivery dictates rooting: a `reply` / `send` can only attach a cap **by pet
-name** (`Mail.reply(number, strings, edgeNames, petNamesOrPaths)`), so a session
+name** (`Mail.reply(number, strings, edgeNames, petNamePaths)`), so a session
 handed back through the mailbox is necessarily host-rooted — there is no
-caller-held cap to drop. Destroy a session with `E(host).remove(name)`. A
+caller-held cap to drop. Destroy a session with `E(host).remove(...namePath)`. A
 peer-initiated destroy message — so a peer can tear down its own session without
 operator action (e.g. by `send`ing a "remove" request, or by unnaming the
 client after the peer adopts so the peer's retention becomes the only root) — is
@@ -457,8 +457,8 @@ just recorded the object.
 
 **Fixed: each session is now a first-class `claude-client` formula.**
 The factory formulates the session via
-`E(hostAgent).makeUnconfined('@main', claude-client-module.js, { resultName,
-powersName: '@agent', env })`, so the stored `ClaudeClient` has a real daemon
+`E(hostAgent).makeUnconfined(['@main'], claude-client-module.js, { resultName,
+powersName: ['@agent'], env })`, so the stored `ClaudeClient` has a real daemon
 identity and reincarnates across restarts.
 
 Because an `@endo/sandbox` slice (`makeExo('SandboxHandle', …)` minted inside

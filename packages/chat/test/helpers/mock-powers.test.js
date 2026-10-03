@@ -23,7 +23,7 @@ test('mock powers lookup returns value', async t => {
   const values = new Map([['foo', 42]]);
   const { powers } = makeMockPowers({ values });
 
-  const result = await E(powers).lookup('foo');
+  const result = await E(powers).lookup(['foo']);
   t.is(result, 42);
 });
 
@@ -31,14 +31,14 @@ test('mock powers lookup with path', async t => {
   const values = new Map([['dir/subdir/name', 'nested-value']]);
   const { powers } = makeMockPowers({ values });
 
-  const result = await E(powers).lookup('dir', 'subdir', 'name');
+  const result = await E(powers).lookup(['dir', 'subdir', 'name']);
   t.is(result, 'nested-value');
 });
 
 test('mock powers lookup throws for missing value', async t => {
   const { powers } = makeMockPowers();
 
-  await t.throwsAsync(() => E(powers).lookup('nonexistent'), {
+  await t.throwsAsync(() => E(powers).lookup(['nonexistent']), {
     message: /Not found/,
   });
 });
@@ -77,14 +77,14 @@ test('mock powers followNameChanges yields added names', async t => {
 test('mock powers send records messages', async t => {
   const { powers, sentMessages } = makeMockPowers();
 
-  await E(powers).send('alice', ['hello ', '!'], ['attachment'], ['file']);
+  await E(powers).send(['alice'], ['hello ', '!'], ['attachment'], [['file']]);
 
   t.is(sentMessages.length, 1);
   t.deepEqual(sentMessages[0], {
-    to: 'alice',
+    to: ['alice'],
     strings: ['hello ', '!'],
     edgeNames: ['attachment'],
-    petNames: ['file'],
+    petNames: [['file']],
   });
 });
 
@@ -93,7 +93,7 @@ test('mock powers storeValue adds name and value', async t => {
 
   await E(powers).storeValue({ data: 'test' }, ['new', 'name']);
 
-  const result = await E(powers).lookup('new', 'name');
+  const result = await E(powers).lookup(['new', 'name']);
   t.deepEqual(result, { data: 'test' });
 });
 

@@ -10,7 +10,7 @@
  * Structural shape of the channel exo ref the send form talks to via `E()`.
  *
  * @typedef {object} SendFormChannelRef
- * @property {(strings: string[], names: string[], petNamesOrPaths: string[], replyTo: string | undefined, resolvedIds: string[], replyType?: string) => Promise<unknown>} post
+ * @property {(strings: string[], names: string[], petNamePaths: string[][], replyTo: string | undefined, resolvedIds: string[], replyType?: string) => Promise<unknown>} post
  * @property {() => Promise<{ policies: HopPolicy[], states: HopState[] } | undefined>} getHopInfo
  * @property {() => Promise<unknown>} followHeatEvents
  * @property {() => Promise<unknown>} getHeatConfig
@@ -606,10 +606,7 @@ export const sendFormComponent = ({
         petNames.length > 0
           ? Promise.all(
               petNames.map(async petName => {
-                const petPath = petName.split('/');
-                const id = await E(powers).identify(
-                  .../** @type {[string, ...string[]]} */ (petPath),
-                );
+                const id = await E(powers).identify(...petName.split('/'));
                 return id || '';
               }),
             )
@@ -624,7 +621,7 @@ export const sendFormComponent = ({
             ? E(/** @type {SendFormChannelRef} */ (channelRef)).post(
                 messageStrings,
                 edgeNames,
-                petNames,
+                petNames.map(petName => petName.split('/')),
                 replyTo,
                 ids,
                 sendReplyType,
@@ -632,7 +629,7 @@ export const sendFormComponent = ({
             : E(/** @type {SendFormChannelRef} */ (channelRef)).post(
                 messageStrings,
                 edgeNames,
-                petNames,
+                petNames.map(petName => petName.split('/')),
                 replyTo,
                 ids,
               ),
@@ -691,14 +688,18 @@ export const sendFormComponent = ({
       // The daemon treats a recipient STRING as a single pet-name segment
       // (namePathFrom does not split on "/"), so a nested recipient like
       // `floot/controller-profile/session-…` must be handed over as a path
-      // array or it fails with `Invalid name`. Mirror the `identify` calls
-      // below, which already split on "/".
+      // array or it fails with `Invalid name`.
       const conversationRecipient =
         typeof conversationPetName === 'string'
           ? conversationPetName.split('/')
           : conversationPetName;
       E(powers)
-        .send(conversationRecipient, messageStrings, edgeNames, petNames)
+        .send(
+          conversationRecipient,
+          messageStrings,
+          edgeNames,
+          petNames.map(petName => petName.split('/')),
+        )
         .then(
           () => {
             // `lastRecipient` is consumed downstream as a string — token
@@ -791,7 +792,12 @@ export const sendFormComponent = ({
     // `floot/controller-profile/session-…`) resolve — the daemon validates a
     // recipient string as a single name segment and rejects embedded "/".
     E(powers)
-      .send(to.split('/'), messageStrings, messageEdgeNames, messagePetNames)
+      .send(
+        to.split('/'),
+        messageStrings,
+        messageEdgeNames,
+        messagePetNames.map(petName => petName.split('/')),
+      )
       .then(
         () => {
           lastRecipient = to;

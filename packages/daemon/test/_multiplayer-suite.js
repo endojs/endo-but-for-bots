@@ -164,15 +164,15 @@ export const runMultiplayerSuite = ({ test, network }) => {
     });
     const { host } = await makeHost(config, cancelled);
 
-    await E(host).storeValue(network.listenAddr, network.listenAddrName);
+    await E(host).storeValue(network.listenAddr, [network.listenAddrName]);
     const servicePath = path.join(dirname, network.modulePath);
     const serviceLocation = url.pathToFileURL(servicePath).href;
     const networkService = await E(host).makeUnconfined(
-      '@main',
+      ['@main'],
       serviceLocation,
       {
-        powersName: '@agent',
-        resultName: 'test-network',
+        powersName: ['@agent'],
+        resultName: ['test-network'],
       },
     );
     await networkService;
@@ -204,7 +204,7 @@ export const runMultiplayerSuite = ({ test, network }) => {
       const { host, config } = await prepareHostWithGcAndNetwork(t);
 
       // Create a guest.
-      await E(host).provideGuest('my-guest', { agentName: 'my-agent' });
+      await E(host).provideGuest(['my-guest'], { agentName: ['my-agent'] });
 
       // Verify the guest formula exists.
       const guestId = await E(host).identify('my-agent');
@@ -236,17 +236,17 @@ export const runMultiplayerSuite = ({ test, network }) => {
     const { host: hostB } = await prepareHostWithGcAndNetwork(t);
 
     // Establish invite/accept.
-    const invitation = await E(hostA).invite('bob');
+    const invitation = await E(hostA).invite(['bob']);
     const invitationLocator = await E(invitation).locate();
-    await E(hostB).accept(invitationLocator, 'alice');
+    await E(hostB).accept(invitationLocator, ['alice']);
 
     // Create a value on A.
-    await E(hostA).evaluate('@main', '"shared-value"', [], [], ['shared']);
+    await E(hostA).evaluate(['@main'], '"shared-value"', [], [], ['shared']);
     const sharedLocator = await E(hostA).locate('shared');
     const sharedId = idFromLocator(sharedLocator);
 
     // Send it to bob.
-    await E(hostA).send('bob', ['Here'], ['shared'], ['shared']);
+    await E(hostA).send(['bob'], ['Here'], ['shared'], [['shared']]);
 
     // The value should remain alive on A (bob references it via mail).
     t.true(
@@ -266,9 +266,9 @@ export const runMultiplayerSuite = ({ test, network }) => {
       const { host: hostB } = await prepareHostWithGcAndNetwork(t);
 
       // Establish invite/accept.
-      const invitation = await E(hostA).invite('bob');
+      const invitation = await E(hostA).invite(['bob']);
       const invitationLocator = await E(invitation).locate();
-      await E(hostB).accept(invitationLocator, 'alice');
+      await E(hostB).accept(invitationLocator, ['alice']);
 
       const bobNames = await E(hostA).list();
       t.true(bobNames.includes('bob'), 'bob exists on A after accept');
@@ -287,12 +287,12 @@ export const runMultiplayerSuite = ({ test, network }) => {
       await prepareHostWithGcAndNetwork(t);
 
     // Establish invite/accept.
-    const invitation = await E(hostA).invite('bob');
+    const invitation = await E(hostA).invite(['bob']);
     const invitationLocator = await E(invitation).locate();
-    await E(hostB).accept(invitationLocator, 'alice');
+    await E(hostB).accept(invitationLocator, ['alice']);
 
     // Create a local-only value on A (not shared with B).
-    await E(hostA).storeValue({ local: true }, 'local-only');
+    await E(hostA).storeValue({ local: true }, ['local-only']);
     const localLocator = await E(hostA).locate('local-only');
     const localId = idFromLocator(localLocator);
     t.true(formulaExistsInDb(configA.statePath, localId), 'local value exists');
@@ -326,7 +326,7 @@ export const runMultiplayerSuite = ({ test, network }) => {
       await E(hostB).addPeerInfo(await E(hostA).getPeerInfo());
 
       // Create a value on A and share it with B.
-      await E(hostA).evaluate('@main', '"important"', [], [], ['data']);
+      await E(hostA).evaluate(['@main'], '"important"', [], [], ['data']);
       const dataLocator = await E(hostA).locate('data');
       const dataId = idFromLocator(dataLocator);
 
@@ -372,12 +372,12 @@ export const runMultiplayerSuite = ({ test, network }) => {
     const { host: hostB } = await prepareHostWithGcAndNetwork(t);
 
     // Establish invite/accept.
-    const invitation = await E(hostA).invite('bob');
+    const invitation = await E(hostA).invite(['bob']);
     const invitationLocator = await E(invitation).locate();
-    await E(hostB).accept(invitationLocator, 'alice');
+    await E(hostB).accept(invitationLocator, ['alice']);
 
     // Send a message.
-    await E(hostA).send('bob', ['Before restart'], [], []);
+    await E(hostA).send(['bob'], ['Before restart'], [], []);
 
     // Verify B received it.
     const messagesBefore = await E(hostB).listMessages();
@@ -406,8 +406,8 @@ export const runMultiplayerSuite = ({ test, network }) => {
     const { host: hostB } = await prepareHostWithGcAndNetwork(t);
 
     // The inviter is a guest on A, driven only through its guest facet.
-    const guestA = await E(hostA).provideGuest('guest-handle', {
-      agentName: 'guest-agent',
+    const guestA = await E(hostA).provideGuest(['guest-handle'], {
+      agentName: ['guest-agent'],
     });
 
     // Guest-safety: the guest can invite but holds no network administration.
@@ -423,7 +423,7 @@ export const runMultiplayerSuite = ({ test, network }) => {
     );
 
     // The guest mints and locates the invitation.
-    const invitation = await E(guestA).invite('bob');
+    const invitation = await E(guestA).invite(['bob']);
     const invitationLocator = await E(invitation).locate();
 
     // The locator `from` names the inviting guest's handle, not the top host's.
@@ -442,7 +442,7 @@ export const runMultiplayerSuite = ({ test, network }) => {
     );
 
     // The top host on B accepts.
-    await E(hostB).accept(invitationLocator, 'alice');
+    await E(hostB).accept(invitationLocator, ['alice']);
 
     // Both pet stores received the opposite handle.
     const bobId = await E(guestA).identify('bob');
@@ -459,18 +459,18 @@ export const runMultiplayerSuite = ({ test, network }) => {
     );
 
     // Neither bound handle carries host-only methods.
-    const boundOnB = await E(hostB).lookup('alice');
+    const boundOnB = await E(hostB).lookup(['alice']);
     await t.throwsAsync(
       () => E(boundOnB).addPeerInfo({ node: 'x', addresses: [] }),
       undefined,
       "acceptor's handle has no addPeerInfo",
     );
     await t.throwsAsync(
-      () => E(boundOnB).invite('x'),
+      () => E(boundOnB).invite(['x']),
       undefined,
       "acceptor's handle has no invite",
     );
-    const boundOnA = await E(guestA).lookup('bob');
+    const boundOnA = await E(guestA).lookup(['bob']);
     await t.throwsAsync(
       () => E(boundOnA).addPeerInfo({ node: 'x', addresses: [] }),
       undefined,
@@ -479,7 +479,7 @@ export const runMultiplayerSuite = ({ test, network }) => {
 
     // A replayed invitation fails cleanly (single-use).
     await t.throwsAsync(
-      () => E(hostB).accept(invitationLocator, 'alice-again'),
+      () => E(hostB).accept(invitationLocator, ['alice-again']),
       undefined,
       'replayed invitation is rejected',
     );
@@ -497,15 +497,15 @@ export const runMultiplayerSuite = ({ test, network }) => {
     // network already did so, so reset the name to the ephemeral-port sentinel
     // before minting the guest's network, or it would try to bind the host
     // network's live port (EADDRINUSE).
-    await E(host).storeValue(network.listenAddr, network.listenAddrName);
+    await E(host).storeValue(network.listenAddr, [network.listenAddrName]);
     const servicePath = path.join(dirname, network.modulePath);
     const serviceLocation = url.pathToFileURL(servicePath).href;
     const guestNetwork = await E(host).makeUnconfined(
-      '@main',
+      ['@main'],
       serviceLocation,
       {
-        powersName: '@agent',
-        resultName: 'guest-network',
+        powersName: ['@agent'],
+        resultName: ['guest-network'],
       },
     );
     await guestNetwork;
@@ -527,11 +527,11 @@ export const runMultiplayerSuite = ({ test, network }) => {
       const { host: hostA } = await prepareHostWithGcAndNetwork(t);
       const { host: hostB } = await prepareHostWithGcAndNetwork(t);
 
-      const guestA = await E(hostA).provideGuest('guest-a-handle', {
-        agentName: 'guest-a-agent',
+      const guestA = await E(hostA).provideGuest(['guest-a-handle'], {
+        agentName: ['guest-a-agent'],
       });
-      const guestB = await E(hostB).provideGuest('guest-b-handle', {
-        agentName: 'guest-b-agent',
+      const guestB = await E(hostB).provideGuest(['guest-b-handle'], {
+        agentName: ['guest-b-agent'],
       });
 
       // Populate the acceptor guest's `@nets` so the inviter's daemon can dial
@@ -539,9 +539,9 @@ export const runMultiplayerSuite = ({ test, network }) => {
       await giveGuestOwnNetwork(hostB, 'guest-b-agent');
 
       // The inviting guest mints; the accepting guest redeems into itself.
-      const invitation = await E(guestA).invite('to-b');
+      const invitation = await E(guestA).invite(['to-b']);
       const invitationLocator = await E(invitation).locate();
-      await E(guestB).accept(invitationLocator, 'to-a');
+      await E(guestB).accept(invitationLocator, ['to-a']);
 
       // Reciprocal binding, each guest under its own chosen pet name.
       const toBId = await E(guestA).identify('to-b');
@@ -574,8 +574,8 @@ export const runMultiplayerSuite = ({ test, network }) => {
       t.is(await E(guestB).identify('@pins', 'guest-to-a'), undefined);
 
       // Bidirectional mail proves both dialing directions established.
-      await E(guestA).send('to-b', ['Hello from A'], [], []);
-      await E(guestB).send('to-a', ['Hello from B'], [], []);
+      await E(guestA).send(['to-b'], ['Hello from A'], [], []);
+      await E(guestB).send(['to-a'], ['Hello from B'], [], []);
 
       await waitForCondition(async () => {
         const messages = /** @type {any[]} */ (await E(guestB).listMessages());
@@ -595,7 +595,7 @@ export const runMultiplayerSuite = ({ test, network }) => {
 
       // Single-use survives CapTP: the replayed accept is rejected.
       await t.throwsAsync(
-        () => E(guestB).accept(invitationLocator, 'to-a-again'),
+        () => E(guestB).accept(invitationLocator, ['to-a-again']),
         undefined,
         'replayed invitation is rejected',
       );
@@ -632,9 +632,9 @@ export const runMultiplayerSuite = ({ test, network }) => {
       const { host: hostC } = await prepareHostWithGcAndNetwork(t);
 
       // C mints an invitation; A consumes it, so it is spent. B never meets C.
-      const invC = await E(hostC).invite('bob');
+      const invC = await E(hostC).invite(['bob']);
       const spentCLocator = await E(invC).locate();
-      await E(hostA).accept(spentCLocator, 'from-c'); // consumes invC
+      await E(hostA).accept(spentCLocator, ['from-c']); // consumes invC
 
       const cPeerInfo = /** @type {import('../src/types.js').PeerInfo} */ (
         await E(hostC).getPeerInfo()
@@ -652,7 +652,7 @@ export const runMultiplayerSuite = ({ test, network }) => {
       // C's addresses, so B speculatively registers C as a peer, dials C, and
       // calls accept — which rejects (single-use, already spent).
       await t.throwsAsync(
-        () => E(hostB).accept(spentCLocator, 'carol'),
+        () => E(hostB).accept(spentCLocator, ['carol']),
         undefined,
         'a spent invitation is rejected',
       );
@@ -678,13 +678,13 @@ export const runMultiplayerSuite = ({ test, network }) => {
       const { host: hostA } = await prepareHostWithGcAndNetwork(t);
       const { host: hostB } = await prepareHostWithGcAndNetwork(t);
 
-      const inv1 = await E(hostA).invite('bob1');
-      const inv2 = await E(hostA).invite('bob2');
+      const inv1 = await E(hostA).invite(['bob1']);
+      const inv2 = await E(hostA).invite(['bob2']);
       const loc1 = await E(inv1).locate();
       const loc2 = await E(inv2).locate();
 
       // First accept: B learns A's daemon at its real address.
-      await E(hostB).accept(loc1, 'alice1');
+      await E(hostB).accept(loc1, ['alice1']);
       const aNode = parseId(idFromLocator(loc1)).node;
       const peersAfterFirst =
         /** @type {import('../src/types.js').PeerInfo[]} */ (
@@ -700,7 +700,7 @@ export const runMultiplayerSuite = ({ test, network }) => {
       // re-registration and keep A's real route (the accept still proves out
       // over the existing route).
       const forgedLoc2 = withHints(loc2, ['tcp:203.0.113.7:65000']);
-      await E(hostB).accept(forgedLoc2, 'alice2');
+      await E(hostB).accept(forgedLoc2, ['alice2']);
 
       const peersAfterSecond =
         /** @type {import('../src/types.js').PeerInfo[]} */ (
@@ -740,11 +740,11 @@ export const runMultiplayerSuite = ({ test, network }) => {
     'same-daemon accept writes no peer route with reachable @nets on both sides (guards load-bearing)',
     async t => {
       const { host } = await prepareHostWithGcAndNetwork(t);
-      const guestA = await E(host).provideGuest('guest-a-handle', {
-        agentName: 'guest-a-agent',
+      const guestA = await E(host).provideGuest(['guest-a-handle'], {
+        agentName: ['guest-a-agent'],
       });
-      const guestB = await E(host).provideGuest('guest-b-handle', {
-        agentName: 'guest-b-agent',
+      const guestB = await E(host).provideGuest(['guest-b-handle'], {
+        agentName: ['guest-b-agent'],
       });
 
       // Give the accepting guest a reachable `@nets` so its handle locator
@@ -753,7 +753,7 @@ export const runMultiplayerSuite = ({ test, network }) => {
       // peer write from firing.
       await giveGuestOwnNetwork(host, 'guest-b-agent');
 
-      const invitation = await E(guestA).invite('to-b');
+      const invitation = await E(guestA).invite(['to-b']);
       const invitationLocator = await E(invitation).locate();
       // The daemon has a network, so the invitation carries connection hints;
       // this is what makes the acceptor-side `peerKey !== localNodeNumber` skip
@@ -764,7 +764,7 @@ export const runMultiplayerSuite = ({ test, network }) => {
         'the invitation carries connection hints (daemon has a reachable network)',
       );
 
-      await E(guestB).accept(invitationLocator, 'to-a');
+      await E(guestB).accept(invitationLocator, ['to-a']);
 
       // Reciprocal binding still succeeds same-daemon.
       t.truthy(await E(guestA).identify('to-b'));
@@ -793,13 +793,13 @@ export const runMultiplayerSuite = ({ test, network }) => {
       const { host: hostB } = await prepareHostWithGcAndNetwork(t);
       const { host: hostC } = await prepareHostWithGcAndNetwork(t);
 
-      const guestA = await E(hostA).provideGuest('guest-handle', {
-        agentName: 'guest-agent',
+      const guestA = await E(hostA).provideGuest(['guest-handle'], {
+        agentName: ['guest-agent'],
       });
 
       // Two independent pending invitations from the same guest.
-      const inv1 = await E(guestA).invite('peer1');
-      const inv2 = await E(guestA).invite('peer2');
+      const inv1 = await E(guestA).invite(['peer1']);
+      const inv2 = await E(guestA).invite(['peer2']);
       const locator1 = await E(inv1).locate();
       const locator2 = await E(inv2).locate();
 
@@ -808,13 +808,13 @@ export const runMultiplayerSuite = ({ test, network }) => {
 
       // The canceled invitation can no longer be redeemed.
       await t.throwsAsync(
-        () => E(hostB).accept(locator1, 'from-peer1'),
+        () => E(hostB).accept(locator1, ['from-peer1']),
         undefined,
         'canceled invitation is not redeemable',
       );
 
       // The sibling invitation is untouched and still redeemable.
-      await E(hostC).accept(locator2, 'from-peer2');
+      await E(hostC).accept(locator2, ['from-peer2']);
       t.truthy(
         await E(guestA).identify('peer2'),
         'sibling invitation still redeemed and bound',
@@ -843,12 +843,12 @@ export const runMultiplayerSuite = ({ test, network }) => {
       const { host: hostB } = await prepareHostWithGcAndNetwork(t);
       const { host: hostC } = await prepareHostWithGcAndNetwork(t);
 
-      const invitation = await E(hostA).invite('bob');
+      const invitation = await E(hostA).invite(['bob']);
       const locator = await E(invitation).locate();
 
       const results = await Promise.allSettled([
-        E(hostB).accept(locator, 'alice'),
-        E(hostC).accept(locator, 'alice'),
+        E(hostB).accept(locator, ['alice']),
+        E(hostC).accept(locator, ['alice']),
       ]);
       const fulfilled = results.filter(r => r.status === 'fulfilled');
       const rejected = results.filter(r => r.status === 'rejected');
@@ -874,20 +874,20 @@ export const runMultiplayerSuite = ({ test, network }) => {
       const { host: hostB } = await prepareHostWithGcAndNetwork(t);
       const { host: hostC } = await prepareHostWithGcAndNetwork(t);
 
-      const inv1 = await E(hostA).invite('bob');
+      const inv1 = await E(hostA).invite(['bob']);
       const locator1 = await E(inv1).locate();
       // Re-mint under the same name; this rebinds 'bob' and supersedes inv1.
-      const inv2 = await E(hostA).invite('bob');
+      const inv2 = await E(hostA).invite(['bob']);
       const locator2 = await E(inv2).locate();
 
       await t.throwsAsync(
-        () => E(hostB).accept(locator1, 'alice'),
+        () => E(hostB).accept(locator1, ['alice']),
         undefined,
         'the superseded invitation is rejected',
       );
 
       // The current invitation still redeems cleanly.
-      await E(hostC).accept(locator2, 'carol');
+      await E(hostC).accept(locator2, ['carol']);
       t.truthy(
         await E(hostA).identify('bob'),
         'the current invitation redeemed and bound its acceptor',
@@ -910,11 +910,11 @@ export const runMultiplayerSuite = ({ test, network }) => {
       const { host: hostA } = await prepareHostWithGcAndNetwork(t);
       const { host: hostB } = await prepareHostWithGcAndNetwork(t);
 
-      const invitation = await E(hostA).invite('bob');
+      const invitation = await E(hostA).invite(['bob']);
       const locator = await E(invitation).locate();
 
       const [acceptResult] = await Promise.allSettled([
-        E(hostB).accept(locator, 'alice'),
+        E(hostB).accept(locator, ['alice']),
         E(invitation).cancel(),
       ]);
 
@@ -936,7 +936,7 @@ export const runMultiplayerSuite = ({ test, network }) => {
           'cancel winning the race leaves the name unbound',
         );
         await t.throwsAsync(
-          () => E(hostB).accept(locator, 'alice'),
+          () => E(hostB).accept(locator, ['alice']),
           undefined,
           'a canceled invitation is not redeemable even after a lost accept race',
         );
@@ -953,10 +953,10 @@ export const runMultiplayerSuite = ({ test, network }) => {
       const { host: hostA } = await prepareHostWithGcAndNetwork(t);
       const { host: hostB } = await prepareHostWithGcAndNetwork(t);
 
-      const invitation = await E(hostA).invite('bob');
+      const invitation = await E(hostA).invite(['bob']);
       const locator = await E(invitation).locate();
 
-      await E(hostB).accept(locator, 'alice');
+      await E(hostB).accept(locator, ['alice']);
       const boundBefore = await E(hostA).identify('bob');
       t.truthy(boundBefore, 'the invitation was accepted and bound');
 
@@ -978,15 +978,15 @@ export const runMultiplayerSuite = ({ test, network }) => {
     const { host: hostC } = await prepareHostWithGcAndNetwork(t);
 
     // A invites B and C.
-    const invB = await E(hostA).invite('bob');
-    const invC = await E(hostA).invite('carol');
-    await E(hostB).accept(await E(invB).locate(), 'alice');
-    await E(hostC).accept(await E(invC).locate(), 'alice');
+    const invB = await E(hostA).invite(['bob']);
+    const invC = await E(hostA).invite(['carol']);
+    await E(hostB).accept(await E(invB).locate(), ['alice']);
+    await E(hostC).accept(await E(invC).locate(), ['alice']);
 
     // A sends to both.
-    await E(hostA).evaluate('@main', '"for-all"', [], [], ['shared']);
-    await E(hostA).send('bob', ['Hi Bob'], ['shared'], ['shared']);
-    await E(hostA).send('carol', ['Hi Carol'], ['shared'], ['shared']);
+    await E(hostA).evaluate(['@main'], '"for-all"', [], [], ['shared']);
+    await E(hostA).send(['bob'], ['Hi Bob'], ['shared'], [['shared']]);
+    await E(hostA).send(['carol'], ['Hi Carol'], ['shared'], [['shared']]);
 
     // Both receive.
     const bobMsgs = await E(hostB).listMessages();
@@ -1004,8 +1004,14 @@ export const runMultiplayerSuite = ({ test, network }) => {
     await stop(configB);
 
     // A can still communicate with C while B is partitioned.
-    await E(hostA).evaluate('@main', '"after-partition"', [], [], ['new-val']);
-    await E(hostA).send('carol', ['Still here'], ['new-val'], ['new-val']);
+    await E(hostA).evaluate(
+      ['@main'],
+      '"after-partition"',
+      [],
+      [],
+      ['new-val'],
+    );
+    await E(hostA).send(['carol'], ['Still here'], ['new-val'], [['new-val']]);
 
     const carolMsgs2 = await E(hostC).listMessages();
     t.true(

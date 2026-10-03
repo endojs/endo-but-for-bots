@@ -76,7 +76,7 @@ import { createProfilePopup } from './profile-popup.js';
  * methods invoked via `E(channel).method(...)` across the channel components.
  *
  * @typedef {object} ChannelRef
- * @property {(strings: string[], names: string[], petNamesOrPaths: string[], replyTo: string | undefined, resolvedIds: string[], replyType: string | undefined) => Promise<unknown>} post
+ * @property {(strings: string[], names: string[], petNamePaths: string[][], replyTo: string | undefined, resolvedIds: string[], replyType: string | undefined) => Promise<unknown>} post
  * @property {() => Promise<string>} getProposedName
  * @property {(memberId: string) => Promise<ChannelMemberInfo | undefined>} getMember
  * @property {() => Promise<unknown>} followMessages

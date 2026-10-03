@@ -154,7 +154,7 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
   const powers = Far('Powers', {
     listMessages: async () => harden([...received]),
     resolve: async (number, name) => {
-      resolved.push({ number, value: store.get(name) });
+      resolved.push({ number, value: store.get(nameOf(name)) });
     },
     reject: async (number, reason) => {
       resolved.push({ number, reason });

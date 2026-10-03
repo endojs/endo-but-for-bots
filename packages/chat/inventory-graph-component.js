@@ -26,7 +26,7 @@ export const inventoryGraphComponent = (
   /** @type {unknown} */
   let resolvedPowers = rootPowers;
   for (const name of profilePath) {
-    resolvedPowers = E(/** @type {any} */ (resolvedPowers)).lookup(name);
+    resolvedPowers = E(/** @type {any} */ (resolvedPowers)).lookup([name]);
   }
 
   return mountInventoryGraph($parent, {

@@ -11,7 +11,10 @@
  */
 
 import { M } from '@endo/patterns';
-import { NamePathShape, NameOrPathShape } from '@endo/daemon/type-guards.js';
+import {
+  NamePathShape,
+  NamePathArgumentShape,
+} from '@endo/daemon/type-guards.js';
 
 /** @import { LalToolDef } from './index.js' */
 
@@ -33,15 +36,15 @@ export const petnamesToolDefs = harden([
       'List contents of your directory or any capability you have a pet name for. ' +
       'With no arguments, lists pet names in your root directory. ' +
       'With a name, looks up that capability and calls list() on it. ' +
-      'Optional argument: name (string or string[]).',
-    params: M.splitRecord({}, { name: NameOrPathShape }),
+      'Optional argument: name (string[], path components).',
+    params: M.splitRecord({}, { name: NamePathArgumentShape }),
   },
   {
     name: 'lookup',
     summary:
       'Resolve a pet name or path to its value. Returns the value stored under that name. ' +
-      'Argument: petNameOrPath (string or string[]).',
-    params: M.splitRecord({ petNameOrPath: NameOrPathShape }),
+      'Argument: petNamePath (string[], path components).',
+    params: M.splitRecord({ petNamePath: NamePathArgumentShape }),
   },
   {
     name: 'remove',
@@ -68,11 +71,11 @@ export const petnamesToolDefs = harden([
     name: 'adopt',
     summary:
       'Adopt a value from an incoming package message, giving it a pet name. ' +
-      'Arguments: messageNumber (BigInt encoded as "+N", e.g. "+5"), edgeName, petName.',
+      'Arguments: messageNumber (BigInt encoded as "+N", e.g. "+5"), edgeName, petNamePath.',
     params: M.splitRecord({
       messageNumber: MessageNumberShape,
-      edgeName: NameOrPathShape,
-      petName: NameOrPathShape,
+      edgeName: M.string(),
+      petNamePath: NamePathArgumentShape,
     }),
   },
 ]);

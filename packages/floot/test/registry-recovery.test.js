@@ -5,6 +5,14 @@ import { Far } from '@endo/far';
 
 import { make } from '../agent.js';
 
+// Daemon pet-name paths arrive as arrays; key the fake stores by joined path.
+const petKey = path => {
+  if (!Array.isArray(path) || !path.every(part => typeof part === 'string')) {
+    throw TypeError(`not a pet-name path: ${JSON.stringify(path)}`);
+  }
+  return path.join('/');
+};
+
 const backupName = 'floot-sessions-backup';
 const journalName = 'floot-sessions-v1-00000000000000000000';
 const entries = harden([{ id: 'saved', title: 'Saved', createdAt: 1 }]);
@@ -36,15 +44,17 @@ const makeHost = (
 ) =>
   Far('RegistryHost', {
     list: () => harden([...store.keys()]),
-    has: name => store.has(name),
-    lookup: name => store.get(name),
-    storeValue: (value, name) => {
+    has: (...path) => store.has(petKey(path)),
+    lookup: path => store.get(petKey(path)),
+    storeValue: (value, path) => {
+      const name = petKey(path);
       beforeStore(name);
       if (store.has(name)) throw Error('Name already exists');
       store.set(name, value);
       afterStore(name);
     },
-    remove: name => {
+    remove: (...path) => {
+      const name = petKey(path);
       beforeRemove(name);
       store.delete(name);
     },

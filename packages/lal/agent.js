@@ -150,7 +150,7 @@ export const make = (guestPowers, _context) => {
   // Send the configuration form to HOST for adding agents.
   const runManager = async () => {
     await E(powers).form(
-      '@host',
+      ['@host'],
       'Add an agent',
       harden([
         { name: 'name', label: 'Agent name' },
@@ -177,7 +177,7 @@ export const make = (guestPowers, _context) => {
     );
 
     // Resolve the host agent reference for provideGuest calls.
-    const agent = await E(powers).lookup('host-agent');
+    const agent = await E(powers).lookup(['host-agent']);
     const selfLocator = await E(powers).locate('@self');
     const activeWorkers = new Map();
 
@@ -185,7 +185,7 @@ export const make = (guestPowers, _context) => {
     // Stored once in the host namespace; each sub-guest gets a reference.
     const primerDirPath = new URL('./primer', import.meta.url).pathname;
     const localPrimerTree = makeLocalTree(primerDirPath);
-    await E(agent).storeTree(localPrimerTree, 'lal-primer');
+    await E(agent).storeTree(localPrimerTree, ['lal-primer']);
     const primerTreeId = await E(agent).identify('lal-primer');
     console.log(`[lal] Primer tree checked in (${primerTreeId})`);
 
@@ -196,7 +196,7 @@ export const make = (guestPowers, _context) => {
     const provisionPrimer = async guest => {
       const hasPrimer = await E(guest).has('primer');
       if (!hasPrimer) {
-        await E(guest).storeIdentifier('primer', primerTreeId);
+        await E(guest).storeIdentifier(['primer'], primerTreeId);
         console.log('[lal] Primer provisioned for guest');
       }
     };
@@ -258,10 +258,10 @@ export const make = (guestPowers, _context) => {
             // "Formula already exists".
             let guest;
             if (await E(agent).has(name)) {
-              guest = await E(agent).lookup(name);
+              guest = await E(agent).lookup([name]);
             } else {
-              guest = await E(agent).provideGuest(name, {
-                agentName: `profile-for-${name}`,
+              guest = await E(agent).provideGuest([name], {
+                agentName: [`profile-for-${name}`],
               });
             }
 

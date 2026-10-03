@@ -45,7 +45,7 @@ export const runInboxLoop = async ({ powers, getCancelled, runOneRound }) => {
     'You have new mail. Check your messages and respond appropriately.';
   // Announce ourselves with a call to action.
   await E(powers).send(
-    '@host',
+    ['@host'],
     [
       "Hello! I'm ready to help.\n\n" +
         'Send me a message to get started — in Chat, type ' +

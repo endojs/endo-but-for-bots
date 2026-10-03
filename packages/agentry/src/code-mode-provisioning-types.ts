@@ -81,7 +81,8 @@ export type EndoProvisionSpec = {
 };
 
 export type NormalizedGitRemoteSpec = NormalizedRemotePolicy & {
-  credential?: string | string[];
+  /** Host-side pet-name path; a manifest string is one path component. */
+  credential?: string[];
 };
 
 export type EndoProvisionPolicy = {

@@ -12,6 +12,7 @@ import {
   ChannelMemberInterface,
 } from './interfaces.js';
 import { makeHelp } from './help-text.js';
+import { namePathFrom } from './pet-name.js';
 
 /** @import { Context, EndoChannel, EndoChannelMember, ChannelMessage, FormulaIdentifier, FormulaNumber, PetName, Provide, StoreController, Topic } from './types.js' */
 
@@ -741,12 +742,15 @@ export const makeChannelMaker = ({
         post: async (
           strings,
           names,
-          petNamesOrPaths,
+          petNamePaths,
           replyTo,
           resolvedIds,
           replyType,
         ) => {
           checkAccess();
+          // The guard admits strings only so this can refuse them with a
+          // retry hint; channels identify values by `resolvedIds`.
+          petNamePaths.forEach(namePathFrom);
           const now = Date.now();
           checkPostRate(now);
           const ids = /** @type {FormulaIdentifier[]} */ (resolvedIds || []);
@@ -1020,11 +1024,14 @@ export const makeChannelMaker = ({
           post: async (
             strings,
             names,
-            petNamesOrPaths,
+            petNamePaths,
             replyTo,
             resolvedIds,
             replyType,
           ) => {
+            // The guard admits strings only so this can refuse them with a
+            // retry hint; channels identify values by `resolvedIds`.
+            petNamePaths.forEach(namePathFrom);
             const ids = /** @type {FormulaIdentifier[]} */ (resolvedIds || []);
             await postInternal(
               adminMemberId,

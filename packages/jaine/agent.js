@@ -419,7 +419,7 @@ export const spawnWorkerLoop = async (
 
     for (const chName of channelNames) {
       try {
-        const ch = await E(powers).lookup(chName);
+        const ch = await E(powers).lookup([chName]);
         const member = await E(ch).join('jaine');
         const channelId = await E(powers).identify(chName);
 
@@ -459,7 +459,7 @@ export const spawnWorkerLoop = async (
       )
     : null;
 
-  await E(powers).send('@host', ['Jaine agent ready.'], [], []);
+  await E(powers).send(['@host'], ['Jaine agent ready.'], [], []);
 
   const messageIterator = iterateReader(E(powers).followMessages());
   while (true) {
@@ -628,7 +628,7 @@ const handleMention = async (
   // Pre-adopt the channel reference before anything else
   const chRefName = `ch-${messageNumber}`;
   try {
-    await E(powers).adopt(msgNum, mentionInfo.edge, chRefName);
+    await E(powers).adopt(msgNum, mentionInfo.edge, [chRefName]);
     console.log(`[jaine] Pre-adopted channel as ${chRefName}`);
   } catch (adoptErr) {
     console.error(
@@ -641,7 +641,7 @@ const handleMention = async (
   /** @type {object} */
   let member;
   try {
-    const ch = await E(powers).lookup(chRefName);
+    const ch = await E(powers).lookup([chRefName]);
     member = await E(ch).join(mentionInfo.join);
   } catch (joinErr) {
     console.error(
@@ -897,7 +897,7 @@ export const make = (guestPowers, _context) => {
      */
     async createAgent(name, options = {}) {
       const { systemPrompt: agentPrompt, pin = false } = options;
-      const hostAgent = await E(powers).lookup('host-agent');
+      const hostAgent = await E(powers).lookup(['host-agent']);
       const guestName = name;
       const agentName = `profile-for-${name}`;
       const driverHandleName = `${name}-driver-handle`;
@@ -907,28 +907,30 @@ export const make = (guestPowers, _context) => {
       // Create agent guest
       const hasAgent = await E(hostAgent).has(guestName);
       if (!hasAgent) {
-        await E(hostAgent).provideGuest(guestName, { agentName });
+        await E(hostAgent).provideGuest([guestName], {
+          agentName: [agentName],
+        });
       }
 
       // Create driver guest
       const hasDriver = await E(hostAgent).has(driverHandleName);
       if (!hasDriver) {
-        await E(hostAgent).provideGuest(driverHandleName, {
-          agentName: driverProfileName,
+        await E(hostAgent).provideGuest([driverHandleName], {
+          agentName: [driverProfileName],
         });
       }
 
       // Write provider + agent refs into driver namespace
-      const driverPowers = await E(hostAgent).lookup(driverProfileName);
+      const driverPowers = await E(hostAgent).lookup([driverProfileName]);
       const providerId = await E(powers).identify('llm-provider');
-      await E(driverPowers).storeIdentifier('llm-provider', providerId);
+      await E(driverPowers).storeIdentifier(['llm-provider'], providerId);
 
       // Propagate fast provider if configured
       try {
         const fastProviderId = await E(powers).identify('llm-provider-fast');
         if (fastProviderId) {
           await E(driverPowers).storeIdentifier(
-            'llm-provider-fast',
+            ['llm-provider-fast'],
             fastProviderId,
           );
         }
@@ -939,7 +941,7 @@ export const make = (guestPowers, _context) => {
       // eslint-disable-next-line no-unused-vars
       const agentLocator = await E(hostAgent).locate(agentName);
       const agentId = await E(hostAgent).identify(agentName);
-      await E(driverPowers).storeIdentifier('agent', agentId);
+      await E(driverPowers).storeIdentifier(['agent'], agentId);
 
       // Launch driver
       /** @type {Record<string, string>} */
@@ -950,9 +952,9 @@ export const make = (guestPowers, _context) => {
       const driverResultName = `${name}-driver`;
       const hasDriverAlready = await E(hostAgent).has(driverResultName);
       if (!hasDriverAlready) {
-        await E(hostAgent).makeUnconfined('@main', driverSpecifier, {
-          powersName: driverProfileName,
-          resultName: driverResultName,
+        await E(hostAgent).makeUnconfined(['@main'], driverSpecifier, {
+          powersName: [driverProfileName],
+          resultName: [driverResultName],
           env,
         });
       } else {

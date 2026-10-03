@@ -127,15 +127,15 @@ const provideAccountOracle = async (agent, { dir, provider, factoryHost }) => {
       // A run that died between the oracle's launch and the moves below
       // left its powers guest top-level; find it wherever it is.
       const oraclePowers = await E(agent).lookup(
-        (await E(agent).has(...powersPath)) ? powersPath : powersName,
+        (await E(agent).has(...powersPath)) ? powersPath : [powersName],
       );
       await E(oraclePowers).storeLocator(
-        'account-profile',
+        ['account-profile'],
         await E(agent).locate(...profileNamePath),
       );
     }
     await E(factoryHost).storeLocator(
-      'account-oracle',
+      ['account-oracle'],
       await E(agent).locate(...oraclePath),
     );
     // Finish the moves a run that died after the launch left undone — only
@@ -178,22 +178,22 @@ const provideAccountOracle = async (agent, { dir, provider, factoryHost }) => {
         await E(agent).remove(stray);
       }
     }
-    await E(agent).provideGuest(handleName, { agentName: powersName });
+    await E(agent).provideGuest([handleName], { agentName: [powersName] });
   }
-  const oracleGuest = await E(agent).lookup(powersName);
+  const oracleGuest = await E(agent).lookup([powersName]);
   await E(oracleGuest).storeLocator(
-    'account-profile',
+    ['account-profile'],
     await E(agent).locate(...profileNamePath),
   );
-  await E(agent).makeUnconfined('@main', accountOracleSpecifier, {
-    powersName,
+  await E(agent).makeUnconfined(['@main'], accountOracleSpecifier, {
+    powersName: [powersName],
     resultName: oraclePath,
     env: harden({ ACCOUNT_PROVIDER_ID: provider }),
   });
   await E(agent).move([handleName], [dir, 'account-oracle-handle']);
   await E(agent).move([powersName], powersPath);
   await E(factoryHost).storeLocator(
-    'account-oracle',
+    ['account-oracle'],
     await E(agent).locate(...oraclePath),
   );
   console.log(`Floot account oracle created at "${dir}/account-oracle".`);
@@ -310,11 +310,11 @@ export const main = async agent => {
           await E(agent).remove(stray);
         }
       }
-      await E(agent).provideHost(guestName, { agentName });
+      await E(agent).provideHost([guestName], { agentName: [agentName] });
     }
   }
   const factoryHost = await E(agent).lookup(
-    revived ? controllerProfilePath : agentName,
+    revived ? controllerProfilePath : [agentName],
   );
 
   // 2. Put the auth token in the daemon's secret manager and hand the factory
@@ -359,9 +359,9 @@ export const main = async agent => {
     [dir, 'llm-provider'],
   );
   const providerLocator = await E(agent).locate(dir, 'llm-provider');
-  await E(factoryHost).storeLocator('llm-provider', providerLocator);
+  await E(factoryHost).storeLocator(['llm-provider'], providerLocator);
   if (authSecretLocator) {
-    await E(factoryHost).storeLocator(AUTH_SECRET_PETNAME, authSecretLocator);
+    await E(factoryHost).storeLocator([AUTH_SECRET_PETNAME], authSecretLocator);
   } else if (await E(factoryHost).has(AUTH_SECRET_PETNAME)) {
     // Do not leave a stale blob reachable beside a fallback plaintext token:
     // the factory prefers the capability, so a stale one would win silently.
@@ -388,8 +388,8 @@ export const main = async agent => {
   if (await E(agent).has(...pinPath)) {
     await E(agent).remove(...pinPath);
   }
-  await E(agent).makeUnconfined('@main', flootFactorySpecifier, {
-    powersName: revived ? controllerProfilePath : agentName,
+  await E(agent).makeUnconfined(['@main'], flootFactorySpecifier, {
+    powersName: revived ? controllerProfilePath : [agentName],
     resultName: controllerPath,
     env: factoryEnv,
   });

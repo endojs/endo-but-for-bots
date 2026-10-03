@@ -66,7 +66,7 @@ export const main = async agent => {
   };
   const alreadyInstalled = await E(agent).has('controller-for-nixos-admin');
   if (alreadyInstalled) {
-    const controller = await E(agent).lookup('controller-for-nixos-admin');
+    const controller = await E(agent).lookup(['controller-for-nixos-admin']);
     const actual = await E(controller).getConfig();
     const mismatches = Object.entries(expected)
       .filter(([name, value]) => actual?.[name] !== value)
@@ -81,8 +81,8 @@ export const main = async agent => {
     return;
   }
 
-  await E(agent).makeUnconfined('@main', capletSpecifier, {
-    resultName: 'controller-for-nixos-admin',
+  await E(agent).makeUnconfined(['@main'], capletSpecifier, {
+    resultName: ['controller-for-nixos-admin'],
     env: {
       ENDO_NIXOS_CONFIG_DIR: env.ENDO_NIXOS_CONFIG_DIR || '',
       ENDO_NIXOS_DIR: env.ENDO_NIXOS_DIR || '',

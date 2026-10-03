@@ -27,8 +27,8 @@ export const main = async (agent, name) => {
     return;
   }
 
-  await E(agent).makeUnconfined('@node', moduleSpecifier, {
-    resultName: name,
+  await E(agent).makeUnconfined(['@node'], moduleSpecifier, {
+    resultName: [name],
   });
 
   console.log(`Created in-memory Filesystem as ${name}`);

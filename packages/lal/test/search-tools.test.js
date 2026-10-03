@@ -34,8 +34,17 @@ const makeStub = () => {
     },
   };
   const powers = {
-    lookup(petNameOrPath) {
-      calls.push(['lookup', petNameOrPath]);
+    // Refuse a bare string as the daemon's `namePathFrom` does, so a dispatch
+    // that forwards an unwrapped string fails here as it would in production.
+    lookup(petNamePath) {
+      calls.push(['lookup', petNamePath]);
+      if (!Array.isArray(petNamePath)) {
+        return Promise.reject(
+          TypeError(
+            `Invalid pet-name path ${JSON.stringify(petNamePath)}: try again with an array of path components`,
+          ),
+        );
+      }
       return Promise.resolve(capability);
     },
   };
@@ -52,12 +61,12 @@ const makeStub = () => {
 test('glob delegates to the named capability', async t => {
   const { calls, run } = makeStub();
   const result = await run('glob', {
-    petNameOrPath: 'workspace',
+    petNamePath: ['workspace'],
     pattern: 'src/**/*.js',
   });
   t.deepEqual(result, ['src/a.js', 'src/b.js']);
   t.deepEqual(calls, [
-    ['lookup', 'workspace'],
+    ['lookup', ['workspace']],
     ['glob', 'src/**/*.js'],
   ]);
 });
@@ -65,7 +74,7 @@ test('glob delegates to the named capability', async t => {
 test('grep searches all files when no glob is supplied', async t => {
   const { calls, run } = makeStub();
   const result = await run('grep', {
-    petNameOrPath: ['spaces', 'workspace'],
+    petNamePath: ['spaces', 'workspace'],
     pattern: 'TODO',
   });
   t.deepEqual(result, [
@@ -80,12 +89,12 @@ test('grep searches all files when no glob is supplied', async t => {
 test('grep with a glob uses the fused glorp surface', async t => {
   const { calls, run } = makeStub();
   await run('grep', {
-    petNameOrPath: 'workspace',
+    petNamePath: ['workspace'],
     pattern: 'TODO',
     glob: 'src/**/*.js',
   });
   t.deepEqual(calls, [
-    ['lookup', 'workspace'],
+    ['lookup', ['workspace']],
     ['glorp', 'src/**/*.js', 'TODO', undefined],
   ]);
 });
@@ -93,12 +102,12 @@ test('grep with a glob uses the fused glorp surface', async t => {
 test('grep forwards maxResults', async t => {
   const { calls, run } = makeStub();
   await run('grep', {
-    petNameOrPath: 'workspace',
+    petNamePath: ['workspace'],
     pattern: 'TODO',
     maxResults: 7,
   });
   t.deepEqual(calls, [
-    ['lookup', 'workspace'],
+    ['lookup', ['workspace']],
     ['grep', 'TODO', undefined, { maxResults: 7 }],
   ]);
 });
@@ -106,13 +115,13 @@ test('grep forwards maxResults', async t => {
 test('grep with a glob forwards maxResults to the fused glorp surface', async t => {
   const { calls, run } = makeStub();
   await run('grep', {
-    petNameOrPath: 'workspace',
+    petNamePath: ['workspace'],
     pattern: 'TODO',
     glob: 'src/**/*.js',
     maxResults: 7,
   });
   t.deepEqual(calls, [
-    ['lookup', 'workspace'],
+    ['lookup', ['workspace']],
     ['glorp', 'src/**/*.js', 'TODO', { maxResults: 7 }],
   ]);
 });
@@ -122,7 +131,7 @@ test('grep validates optional argument shapes before dispatch', async t => {
   await t.throwsAsync(
     () =>
       run('grep', {
-        petNameOrPath: 'workspace',
+        petNamePath: ['workspace'],
         pattern: 'TODO',
         maxResults: 'many',
       }),
@@ -150,7 +159,7 @@ test('grep rejects out-of-range maxResults before dispatch', async t => {
     await t.throwsAsync(
       () =>
         run('grep', {
-          petNameOrPath: 'workspace',
+          petNamePath: ['workspace'],
           pattern: 'TODO',
           maxResults,
         }),
@@ -171,14 +180,14 @@ test('glob passes special-character patterns through verbatim', async t => {
     const { calls, run } = makeStub();
     // eslint-disable-next-line no-await-in-loop
     const result = await run('glob', {
-      petNameOrPath: 'workspace',
+      petNamePath: ['workspace'],
       pattern,
     });
     t.deepEqual(result, ['src/a.js', 'src/b.js']);
     t.deepEqual(
       calls,
       [
-        ['lookup', 'workspace'],
+        ['lookup', ['workspace']],
         ['glob', pattern],
       ],
       `glob(${pattern}) should reach the capability verbatim`,
@@ -189,12 +198,12 @@ test('glob passes special-character patterns through verbatim', async t => {
 test('grep passes a special-character regexp and glob filter through verbatim', async t => {
   const { calls, run } = makeStub();
   await run('grep', {
-    petNameOrPath: 'workspace',
+    petNamePath: ['workspace'],
     pattern: '(foo|bar)',
     glob: '*.js',
   });
   t.deepEqual(calls, [
-    ['lookup', 'workspace'],
+    ['lookup', ['workspace']],
     ['glorp', '*.js', '(foo|bar)', undefined],
   ]);
 });
@@ -206,19 +215,19 @@ test('grep passes a special-character regexp and glob filter through verbatim', 
 test('glob forwards followSymlinks as an options record', async t => {
   const { calls, run } = makeStub();
   await run('glob', {
-    petNameOrPath: 'workspace',
+    petNamePath: ['workspace'],
     pattern: 'src/**/*.js',
     followSymlinks: true,
   });
   t.deepEqual(calls, [
-    ['lookup', 'workspace'],
+    ['lookup', ['workspace']],
     ['glob', 'src/**/*.js', { followSymlinks: true }],
   ]);
 });
 
 test('glob omits the options record when followSymlinks is absent', async t => {
   const { calls, run } = makeStub();
-  await run('glob', { petNameOrPath: 'workspace', pattern: 'src/**' });
+  await run('glob', { petNamePath: ['workspace'], pattern: 'src/**' });
   // One argument, not `(pattern, {})`: a capability predating the parameter
   // must still answer a plain glob.
   t.deepEqual(calls[1], ['glob', 'src/**']);
@@ -227,12 +236,12 @@ test('glob omits the options record when followSymlinks is absent', async t => {
 test('grep forwards followSymlinks to the whole-tree walk', async t => {
   const { calls, run } = makeStub();
   await run('grep', {
-    petNameOrPath: 'workspace',
+    petNamePath: ['workspace'],
     pattern: 'TODO',
     followSymlinks: true,
   });
   t.deepEqual(calls, [
-    ['lookup', 'workspace'],
+    ['lookup', ['workspace']],
     ['grep', 'TODO', undefined, { followSymlinks: true }],
   ]);
 });
@@ -240,14 +249,14 @@ test('grep forwards followSymlinks to the whole-tree walk', async t => {
 test('grep with a glob forwards followSymlinks to the fused glorp surface', async t => {
   const { calls, run } = makeStub();
   await run('grep', {
-    petNameOrPath: 'workspace',
+    petNamePath: ['workspace'],
     pattern: 'TODO',
     glob: 'src/**/*.js',
     maxResults: 5,
     followSymlinks: true,
   });
   t.deepEqual(calls, [
-    ['lookup', 'workspace'],
+    ['lookup', ['workspace']],
     ['glorp', 'src/**/*.js', 'TODO', { maxResults: 5, followSymlinks: true }],
   ]);
 });
@@ -257,11 +266,43 @@ test('a non-boolean followSymlinks is rejected before dispatch', async t => {
   await t.throwsAsync(
     () =>
       run('glob', {
-        petNameOrPath: 'workspace',
+        petNamePath: ['workspace'],
         pattern: 'src/**',
         followSymlinks: 'yes',
       }),
     { message: /glob args/ },
   );
   t.deepEqual(calls, []);
+});
+
+test('dispatch forwards a bare-string petNamePath to the refusing lookup', async t => {
+  const cases = /** @type {Array<[string, any]>} */ ([
+    ['lookup', { petNamePath: 'workspace' }],
+    ['list', { name: 'workspace' }],
+    ['readText', { petNamePath: 'workspace', fileName: 'a.txt' }],
+    ['writeText', { petNamePath: 'workspace', fileName: 'a.txt', content: '' }],
+    [
+      'editText',
+      {
+        petNamePath: 'workspace',
+        fileName: 'a.txt',
+        edits: [{ oldText: 'a', newText: 'b' }],
+      },
+    ],
+    ['glob', { petNamePath: 'workspace', pattern: 'src/**' }],
+    ['grep', { petNamePath: 'workspace', pattern: 'TODO' }],
+    ['grep', { petNamePath: 'workspace', pattern: 'TODO', glob: 'src/**' }],
+  ]);
+  // The tool schema admits a string so that the lookup can refuse it with a
+  // hint; dispatch must forward it unwrapped rather than coerce it.
+  await Promise.all(
+    cases.map(async ([name, args]) => {
+      const { calls, run } = makeStub();
+      await t.throwsAsync(() => run(name, args), {
+        instanceOf: TypeError,
+        message: /try again with an array of path components/,
+      });
+      t.deepEqual(calls, [['lookup', 'workspace']], name);
+    }),
+  );
 });

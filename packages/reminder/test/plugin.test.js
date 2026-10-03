@@ -28,8 +28,9 @@ const makePowers = async () => {
   });
 
   const powers = Far('Powers', {
-    /** @param {string} name */
-    lookup(name) {
+    /** @param {string[]} namePath */
+    lookup(namePath) {
+      const name = namePath.join('/');
       if (name === 'reminder-store') return storeRoot;
       if (name === 'reminder-recipient') return recipient;
       throw Error(`unknown power ${name}`);

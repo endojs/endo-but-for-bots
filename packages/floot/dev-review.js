@@ -250,34 +250,34 @@ export const provisionDevReview = async ({
   const projectPowersName = `review-project-${projectName}`;
   const readerName = `review-reader-${projectName}`;
   const resolverName = `review-resolver-${projectName}`;
-  await E(host).storeValue(project, projectPowersName);
+  await E(host).storeValue(project, [projectPowersName]);
   await E(host).makeUnconfined(
-    '@main',
+    ['@main'],
     new URL('./review-reader.js', import.meta.url).href,
-    { powersName: projectPowersName, resultName: readerName },
+    { powersName: [projectPowersName], resultName: [readerName] },
   );
-  const reader = await E(host).lookup(readerName);
-  await E(developer).storeValue(project, projectName);
+  const reader = await E(host).lookup([readerName]);
+  await E(developer).storeValue(project, [projectName]);
   await E(host).makeUnconfined(
-    '@main',
+    ['@main'],
     new URL('./review-project.js', import.meta.url).href,
-    { powersName: readerName, resultName: resolverName },
+    { powersName: [readerName], resultName: [resolverName] },
   );
-  const resolver = await E(host).lookup(resolverName);
+  const resolver = await E(host).lookup([resolverName]);
   const endowments = {
     project: resolver,
-    developer: await E(developer).lookup('@self'),
+    developer: await E(developer).lookup(['@self']),
     operator,
-    initiator: await E(initiator).lookup('@self'),
+    initiator: await E(initiator).lookup(['@self']),
   };
   const names = [];
   for (const [index, reviewer] of reviewers.entries()) {
     // eslint-disable-next-line no-await-in-loop
-    await E(reviewer).storeValue(reader, projectName);
+    await E(reviewer).storeValue(reader, [projectName]);
     const name = `reviewer-${index}`;
     names.push(name);
     // eslint-disable-next-line no-await-in-loop
-    endowments[name] = await E(reviewer).lookup('@self');
+    endowments[name] = await E(reviewer).lookup(['@self']);
   }
   const result = await E(service).makeFactory(
     harden({
@@ -288,21 +288,20 @@ export const provisionDevReview = async ({
   );
   const connectionPowersName = `review-connection-powers-${projectName}`;
   const connectionName = `review-connection-${projectName}`;
-  await E(host).provideGuest(`review-connection-handle-${projectName}`, {
-    agentName: connectionPowersName,
+  await E(host).provideGuest([`review-connection-handle-${projectName}`], {
+    agentName: [connectionPowersName],
   });
-  const connectionPowers = await E(host).lookup(connectionPowersName);
-  await E(connectionPowers).storeValue(service, 'service');
-  await E(connectionPowers).storeValue(result.fid, 'factory-id');
+  const connectionPowers = await E(host).lookup([connectionPowersName]);
+  await E(connectionPowers).storeValue(service, ['service']);
+  await E(connectionPowers).storeValue(result.fid, ['factory-id']);
   await E(host).makeUnconfined(
-    '@main',
+    ['@main'],
     new URL('./review-connection.js', import.meta.url).href,
-    { powersName: connectionPowersName, resultName: connectionName },
+    { powersName: [connectionPowersName], resultName: [connectionName] },
   );
-  await E(initiator).storeValue(
-    await E(host).lookup(connectionName),
+  await E(initiator).storeValue(await E(host).lookup([connectionName]), [
     'dev-review',
-  );
+  ]);
   return result;
 };
 harden(provisionDevReview);

@@ -87,9 +87,9 @@ export const makeClaudeSessionProvisioner = (
     powers.makeFilesystem ||
     (async (name, directory) => {
       await mkdir(directory, { recursive: true });
-      await E(hostAgent).makeUnconfined('@main', nodeFsModuleSpecifier, {
-        powersName: '@none',
-        resultName: name,
+      await E(hostAgent).makeUnconfined(['@main'], nodeFsModuleSpecifier, {
+        powersName: ['@none'],
+        resultName: [name],
         env: harden({ ENDO_FS_ROOT: directory }),
       });
     });
@@ -208,7 +208,7 @@ export const makeClaudeSessionProvisioner = (
         const { clientPath } = namesFor(sessionId);
         await inFlight.get(sessionId)?.catch(() => {});
         if (!(await E(hostAgent).has(...clientPath))) return undefined;
-        return E(hostAgent).lookup(...clientPath);
+        return E(hostAgent).lookup(clientPath);
       },
       /**
        * Stop the session's live incarnation without deleting it: the daemon

@@ -199,9 +199,9 @@ test.serial('agent replies to channel mention (not inbox)', async t => {
 
   // 1. Create a channel
   t.log('Creating channel...');
-  await E(host).makeChannel('test-channel', 'TestAdmin');
+  await E(host).makeChannel(['test-channel'], 'TestAdmin');
   /** @type {any} */
-  const channel = await E(host).lookup('test-channel');
+  const channel = await E(host).lookup(['test-channel']);
   const adminMemberId = await E(channel).getMemberId();
   t.truthy(adminMemberId, 'admin has a memberId');
 
@@ -213,7 +213,7 @@ test.serial('agent replies to channel mention (not inbox)', async t => {
       model: llmConfig.model,
       authToken: llmConfig.authToken,
     }),
-    'llm-provider',
+    ['llm-provider'],
   );
 
   // 3. Create fae factory and agent
@@ -222,14 +222,14 @@ test.serial('agent replies to channel mention (not inbox)', async t => {
   const factoryGuestName = 'fae-factory-handle';
   const factoryAgentName = 'profile-for-fae-factory';
 
-  await E(host).provideGuest(factoryGuestName, {
+  await E(host).provideGuest([factoryGuestName], {
     introducedNames: harden({ '@agent': 'host-agent' }),
-    agentName: factoryAgentName,
+    agentName: [factoryAgentName],
   });
 
   // Write provider ref into factory's namespace
   /** @type {any} */
-  const factoryPowers = await E(host).lookup(factoryAgentName);
+  const factoryPowers = await E(host).lookup([factoryAgentName]);
   const providerId = await E(host).identify('llm-provider');
   await E(factoryPowers).write(
     'llm-provider',
@@ -237,13 +237,13 @@ test.serial('agent replies to channel mention (not inbox)', async t => {
   );
 
   // Launch factory caplet
-  await E(host).makeUnconfined('@main', faeFactorySpecifier, {
-    powersName: factoryAgentName,
-    resultName: 'fae-factory',
+  await E(host).makeUnconfined(['@main'], faeFactorySpecifier, {
+    powersName: [factoryAgentName],
+    resultName: ['fae-factory'],
   });
 
   /** @type {any} */
-  const factory = await E(host).lookup('fae-factory');
+  const factory = await E(host).lookup(['fae-factory']);
   t.truthy(factory, 'fae factory exists');
 
   // 4. Create a fae agent
@@ -288,7 +288,7 @@ test.serial('agent replies to channel mention (not inbox)', async t => {
         `Author references above are informational only.`,
     ],
     ['test-channel'],
-    ['test-channel'],
+    [['test-channel']],
   );
 
   // 8. Wait for the agent to post in the channel

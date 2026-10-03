@@ -1,12 +1,6 @@
-import type {
-  Name,
-  EndoGuest,
-  NamePath,
-  NameOrPath,
-  StampedMessage,
-} from '@endo/daemon';
+import type { Name, EndoGuest, NamePath, StampedMessage } from '@endo/daemon';
 
-export type { NameOrPath };
+export type { NamePath };
 
 /**
  * Arguments passed into the tool dispatcher in `agent.js`. pi-agent-core
@@ -18,28 +12,32 @@ export type { NameOrPath };
  */
 export type ToolCallArgs = {
   methodName?: string;
+  // Pet-name path fields carry their pre-validation shape:
+  // `NamePathArgumentShape` admits a bare string so that the daemon's
+  // `namePathFrom` can refuse it with a retry hint, rather than the guard
+  // rejecting it opaquely.
   // `name` is the optional argument to the `list` tool when called against a
   // capability other than the guest's own root directory.
-  name?: NameOrPath;
-  petNamePath?: NamePath;
-  petNameOrPath?: NameOrPath;
+  name?: NamePath | string;
+  petNamePath?: NamePath | string;
   fromPath?: NamePath;
   toPath?: NamePath;
   messageNumber?: number | bigint;
   reason?: string;
-  edgeName?: NameOrPath;
-  petName?: NameOrPath;
-  recipientName?: NameOrPath;
+  edgeName?: string;
+  recipientNamePath?: NamePath | string;
   description?: string;
-  responseName?: NameOrPath;
+  responseNamePath?: NamePath | string;
   strings?: string[];
   edgeNames?: Name[];
-  petNames?: NameOrPath[];
-  workerName?: string;
+  petNamePaths?: (NamePath | string)[];
+  // The dispatcher also maps the LLM's literal `'undefined'` sentinel to
+  // absent before forwarding any other string for the daemon to refuse.
+  workerNamePath?: NamePath | string;
   source?: string;
   codeNames?: string[];
-  resultName?: NameOrPath;
-  fileName?: string;
+  resultNamePath?: NamePath | string;
+  fileName?: string | NamePath;
   content?: string;
   // Arguments to the `glob`/`grep` search tools: a glob or regexp `pattern`,
   // an optional `glob` filter restricting `grep` to matching paths, an

@@ -138,7 +138,7 @@ test.serial('evaluate rejection produces a worker trace record', async t => {
 
   // Force a rejection inside a worker.
   const rejection = await t.throwsAsync(
-    E(host).evaluate('@main', 'throw new Error("boom-from-eval")', [], []),
+    E(host).evaluate(['@main'], 'throw new Error("boom-from-eval")', [], []),
   );
   t.truthy(rejection);
   const errorId = getErrorId(/** @type {Error} */ (rejection));
@@ -168,7 +168,7 @@ test.serial('@daemon stub records cover daemon-internal errors', async t => {
   // Look up a name that does not exist; this rejection originates in
   // the daemon, not in any worker, so the trace facet should record a
   // stub under the @daemon synthetic worker.
-  const rejection = await t.throwsAsync(E(host).lookup('does-not-exist'));
+  const rejection = await t.throwsAsync(E(host).lookup(['does-not-exist']));
   t.truthy(rejection);
   const errorId = getErrorId(/** @type {Error} */ (rejection));
   if (errorId === undefined) {
@@ -193,7 +193,7 @@ test.serial('recent() lists multiple worker emissions', async t => {
     await t
       .throwsAsync(
         E(host).evaluate(
-          '@main',
+          ['@main'],
           `throw new Error(${JSON.stringify(message)})`,
           [],
           [],
@@ -215,7 +215,7 @@ test.serial('clear() drops all aggregated records', async t => {
   const { cancelled, config } = await prepareConfig(t);
   const { host } = await makeHost(config, cancelled);
   await t
-    .throwsAsync(E(host).evaluate('@main', 'throw new Error("zap")', [], []))
+    .throwsAsync(E(host).evaluate(['@main'], 'throw new Error("zap")', [], []))
     .catch(() => {});
   const traces = await E(E(host).diagnostics()).traces();
   /** @type {{ workers: number, totalRecords: number, bytes: number,
@@ -244,10 +244,14 @@ test.serial(
     await E(host).provideWorker(['wA']);
     await E(host).provideWorker(['wB']);
     await t
-      .throwsAsync(E(host).evaluate('wA', 'throw new Error("from-A")', [], []))
+      .throwsAsync(
+        E(host).evaluate(['wA'], 'throw new Error("from-A")', [], []),
+      )
       .catch(() => {});
     await t
-      .throwsAsync(E(host).evaluate('wB', 'throw new Error("from-B")', [], []))
+      .throwsAsync(
+        E(host).evaluate(['wB'], 'throw new Error("from-B")', [], []),
+      )
       .catch(() => {});
     const traces = await E(E(host).diagnostics()).traces();
     const recent = await E(traces).recent({ limit: 16 });

@@ -17,7 +17,7 @@ import { resolveErrorTrace } from './error-trace.js';
  *
  * @typedef {object} CommandChannelRef
  * @property {() => Promise<Array<{ number: bigint }>>} listMessages
- * @property {(strings: string[], names: string[], petNamesOrPaths: string[], replyTo: string | undefined, resolvedIds: string[]) => Promise<unknown>} post
+ * @property {(strings: string[], names: string[], petNamePaths: string[][], replyTo: string | undefined, resolvedIds: string[]) => Promise<unknown>} post
  * @property {(proposedName: string) => Promise<[unknown, { setHeatConfig: (config: unknown) => Promise<unknown> }]>} createInvitation
  */
 
@@ -160,7 +160,7 @@ export const createCommandExecutor = ({
           const { messageNumber, petName } = params;
           await E(powers).resolve(
             BigInt(/** @type {number} */ (messageNumber)),
-            String(petName),
+            String(petName).split('/'),
           );
           return {
             success: true,
@@ -193,17 +193,14 @@ export const createCommandExecutor = ({
             // Resolve pet names to formula IDs for the channel
             const resolvedIds = await Promise.all(
               petNames.map(async petName => {
-                const petPath = petName.split('/');
-                const id = await E(powers).identify(
-                  .../** @type {[string, ...string[]]} */ (petPath),
-                );
+                const id = await E(powers).identify(...petName.split('/'));
                 return id || '';
               }),
             );
             await E(/** @type {CommandChannelRef} */ (channelRef)).post(
               strings,
               edgeNames,
-              petNames,
+              petNames.map(petName => petName.split('/')),
               String(messageNumber),
               resolvedIds,
             );
@@ -218,7 +215,7 @@ export const createCommandExecutor = ({
             BigInt(/** @type {number} */ (messageNumber)),
             strings,
             edgeNames,
-            petNames,
+            petNames.map(petName => petName.split('/')),
           );
           return {
             success: true,
@@ -281,18 +278,18 @@ export const createCommandExecutor = ({
             resultName,
             workerName = '@main',
           } = params;
-          /** @type {Record<string, string>} */
+          /** @type {Record<string, string[]>} */
           const bindings = {};
           for (const pair of /** @type {Array<{codeName: string, petName: string}>} */ (
             bindingPairs
           )) {
-            bindings[pair.codeName] = pair.petName;
+            bindings[pair.codeName] = String(pair.petName).split('/');
           }
           await E(powers).endow(
             BigInt(/** @type {number} */ (messageNumber)),
             bindings,
-            String(workerName),
-            resultName ? String(resultName) : undefined,
+            String(workerName).split('/'),
+            resultName ? String(resultName).split('/') : undefined,
           );
           return {
             success: true,
@@ -313,11 +310,11 @@ export const createCommandExecutor = ({
             /** @type {Array<{codeName: string, petName: string}>} */ (
               endowments
             ).map(e => e.codeName);
-          // Split dot-notation pet names into paths for the evaluate API
+          // Split each typed name into a pet-name path for the evaluate API
           const petNamePaths =
             /** @type {Array<{codeName: string, petName: string}>} */ (
               endowments
-            ).map(e => e.petName.split('/'));
+            ).map(e => String(e.petName).split('/'));
           const resultPath = resultName
             ? String(resultName).split('/')
             : undefined;
@@ -325,7 +322,7 @@ export const createCommandExecutor = ({
           let result;
           try {
             result = await E(powers).evaluate(
-              String(workerName),
+              String(workerName).split('/'),
               String(source),
               codeNames,
               petNamePaths,
@@ -622,7 +619,9 @@ export const createCommandExecutor = ({
 
           // Inbox mode: use host invite
           console.log(`[Chat] Creating invitation for "${guestName}"...`);
-          const invitation = await E(powers).invite(String(guestName));
+          const invitation = await E(powers).invite(
+            String(guestName).split('/'),
+          );
 
           if (delivery === 'inventory') {
             console.log(
@@ -650,7 +649,10 @@ export const createCommandExecutor = ({
           console.log(
             `[Chat] Accepting invitation for "${guestName}" from ${String(locator).slice(0, 40)}...`,
           );
-          const accepted = E(powers).accept(String(locator), String(guestName));
+          const accepted = E(powers).accept(
+            String(locator),
+            String(guestName).split('/'),
+          );
           /** @type {ReturnType<typeof setTimeout> | undefined} */
           let timeoutId;
           const timeout = new Promise((_, reject) => {
@@ -704,7 +706,10 @@ export const createCommandExecutor = ({
           const { locator, petName } = params;
           const petNameStr = String(petName);
           console.log(`[Chat] Adopting from locator as "${petNameStr}"...`);
-          await E(powers).adoptFromLocator(String(locator), petNameStr);
+          await E(powers).adoptFromLocator(
+            String(locator),
+            petNameStr.split('/'),
+          );
           return {
             success: true,
             message: `Adopted as "${petNameStr}" from locator`,
@@ -728,11 +733,11 @@ export const createCommandExecutor = ({
             };
           }
 
-          await E(powers).storeValue(effectiveHostPort, 'tcp-listen-addr');
+          await E(powers).storeValue(effectiveHostPort, ['tcp-listen-addr']);
           console.log(`[Chat] /network: loading module ${effectiveModulePath}`);
-          await E(powers).makeUnconfined('@main', effectiveModulePath, {
-            powersName: '@agent',
-            resultName: 'network-service',
+          await E(powers).makeUnconfined(['@main'], effectiveModulePath, {
+            powersName: ['@agent'],
+            resultName: ['network-service'],
           });
           console.log(`[Chat] /network: moving to NETS.tcp`);
           await E(powers).move(['network-service'], ['@nets', 'tcp']);
@@ -765,13 +770,13 @@ export const createCommandExecutor = ({
           // OS pick an ephemeral port; the transport persists the
           // resolved `host:port` back to `ocapn-listen-addr` so it
           // stays stable across restarts.
-          await E(powers).storeValue(effectiveHostPort, 'ocapn-listen-addr');
+          await E(powers).storeValue(effectiveHostPort, ['ocapn-listen-addr']);
           console.log(
             `[Chat] /network-ocapn: loading module ${effectiveModulePath}`,
           );
-          await E(powers).makeUnconfined('@main', effectiveModulePath, {
-            powersName: '@agent',
-            resultName: 'network-service-ocapn',
+          await E(powers).makeUnconfined(['@main'], effectiveModulePath, {
+            powersName: ['@agent'],
+            resultName: ['network-service-ocapn'],
           });
           console.log(`[Chat] /network-ocapn: moving to @nets/ocapn`);
           await E(powers).move(['network-service-ocapn'], ['@nets', 'ocapn']);
@@ -803,8 +808,8 @@ export const createCommandExecutor = ({
           // resolves peers through iroh discovery and relays) so there is no
           // request/resolve step like the TCP network.
           await E(powers).makeUnconfined(undefined, effectiveModulePath, {
-            powersName: '@agent',
-            resultName: 'network-service-iroh',
+            powersName: ['@agent'],
+            resultName: ['network-service-iroh'],
           });
           console.log(`[Chat] /network-iroh: moving to @nets/iroh`);
           await E(powers).move(['network-service-iroh'], ['@nets', 'iroh']);
@@ -843,8 +848,8 @@ export const createCommandExecutor = ({
             `[Chat] /network-ws-relay: connecting to relay ${relayUrl} (domain=${relayDomain})`,
           );
           await E(powers).makeUnconfined(undefined, effectiveModulePath, {
-            powersName: '@agent',
-            resultName: 'network-service-ws-relay',
+            powersName: ['@agent'],
+            resultName: ['network-service-ws-relay'],
             env: {
               WS_RELAY_URL: relayUrl,
               WS_RELAY_DOMAIN: relayDomain,
@@ -874,8 +879,8 @@ export const createCommandExecutor = ({
         case 'mkhost':
         case 'host': {
           const { handleName, agentName } = params;
-          await E(powers).provideHost(String(handleName), {
-            agentName: String(agentName),
+          await E(powers).provideHost(String(handleName).split('/'), {
+            agentName: String(agentName).split('/'),
           });
           return { success: true, message: `Host "${agentName}" created` };
         }
@@ -883,8 +888,8 @@ export const createCommandExecutor = ({
         case 'mkguest':
         case 'guest': {
           const { handleName, agentName } = params;
-          await E(powers).provideGuest(String(handleName), {
-            agentName: String(agentName),
+          await E(powers).provideGuest(String(handleName).split('/'), {
+            agentName: String(agentName).split('/'),
           });
           return { success: true, message: `Guest "${agentName}" created` };
         }

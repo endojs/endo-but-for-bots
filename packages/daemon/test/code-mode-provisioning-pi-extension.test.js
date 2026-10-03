@@ -156,7 +156,7 @@ test.serial(
       );
     const readResult = await evaluate.execute(
       'read',
-      { source: 'E(workspace).readText("README.md")' },
+      { source: 'E(workspace).readText(["README.md"])' },
       undefined,
       undefined,
     );
@@ -165,7 +165,7 @@ test.serial(
     await evaluate.execute(
       'write',
       {
-        source: 'E(workspace).writeText("created-by-pi.txt", "retained\\n")',
+        source: 'E(workspace).writeText(["created-by-pi.txt"], "retained\\n")',
       },
       undefined,
       undefined,
@@ -242,7 +242,7 @@ test.serial(
     ];
     t.true(await E(host).has(...persistence.guestHandlePath));
     const retainedGuest = await E(host).lookup(guestAgentPath);
-    t.is(await E(retainedGuest).lookup('answer'), 42);
+    t.is(await E(retainedGuest).lookup(['answer']), 42);
 
     const resumeEntry = {
       type: 'custom',
@@ -262,7 +262,7 @@ test.serial(
     const resumedEvaluate = /** @type {typeof evaluate} */ (resumed.tools[0]);
     const resumedRead = await resumedEvaluate.execute(
       'resumed-read',
-      { source: 'E(workspace).readText("created-by-pi.txt")' },
+      { source: 'E(workspace).readText(["created-by-pi.txt"])' },
       undefined,
       undefined,
     );

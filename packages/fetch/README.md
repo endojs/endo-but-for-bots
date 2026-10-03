@@ -36,9 +36,9 @@ something must hold the real `fetch` power; the capability it mints is confined.
 granted at provisioning; it holds no ambient authority beyond the Node worker it
 runs in.
 
-- `E(powers).lookup('fetch-store')` → a writable virtual-file-system
+- `E(powers).lookup(['fetch-store'])` → a writable virtual-file-system
   **directory** backing the durable store.
-- `E(powers).lookup('fetch-policy-authority')` (**optional**) → the referral
+- `E(powers).lookup(['fetch-policy-authority'])` (**optional**) → the referral
   target for trust-on-first-bind decisions (`tofu-prompt` / `tofu-attenuator`
   modes). When the lookup fails, the plugin runs without one: those modes are
   unavailable and unknown origins fail closed (strict behavior). It is resolved

@@ -111,7 +111,7 @@ test('a pending message without an id renders as an ordinary bubble', t => {
 test('tokenizing never loses or reorders source text', t => {
   const source = [
     '// fetch the host',
-    "const endo = await E(powers).lookup('endo');",
+    "const endo = await E(powers).lookup(['endo']);",
     // Fixtures are JavaScript source, so `${…}` here is the subject under test.
     // eslint-disable-next-line no-template-curly-in-string
     'const names = /^@/.test(x) ? 1_000 : `n=${x}`;',

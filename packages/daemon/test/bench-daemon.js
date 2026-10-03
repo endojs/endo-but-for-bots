@@ -95,7 +95,7 @@ const runBenchmarks = async (variant, config, cancelled) => {
         'provideWorker',
         async () => {
           workerIdx += 1;
-          await E(host).provideWorker(`bench-worker-${workerIdx}`);
+          await E(host).provideWorker([`bench-worker-${workerIdx}`]);
         },
         5,
       ),
@@ -111,11 +111,11 @@ const runBenchmarks = async (variant, config, cancelled) => {
         async () => {
           coldIdx += 1;
           await E(host).evaluate(
-            `cold-${coldIdx}`,
+            [`cold-${coldIdx}`],
             '"hello"',
             [],
             [],
-            `cold-result-${coldIdx}`,
+            [`cold-result-${coldIdx}`],
           );
         },
         3,
@@ -126,12 +126,12 @@ const runBenchmarks = async (variant, config, cancelled) => {
   // ---- evaluate (warm: reuse same worker) ----
   {
     const warmWorkerName = 'bench-warm-worker';
-    await E(host).provideWorker(warmWorkerName);
+    await E(host).provideWorker([warmWorkerName]);
     results.push(
       await bench(
         'eval_warm',
         async () => {
-          await E(host).evaluate(warmWorkerName, '1+1', [], []);
+          await E(host).evaluate([warmWorkerName], '1+1', [], []);
         },
         20,
       ),
@@ -141,12 +141,12 @@ const runBenchmarks = async (variant, config, cancelled) => {
   // ---- evaluate with string result ----
   {
     const strWorker = 'bench-str-worker';
-    await E(host).provideWorker(strWorker);
+    await E(host).provideWorker([strWorker]);
     results.push(
       await bench(
         'eval_string_result',
         async () => {
-          await E(host).evaluate(strWorker, '"x".repeat(1000)', [], []);
+          await E(host).evaluate([strWorker], '"x".repeat(1000)', [], []);
         },
         10,
       ),
@@ -173,8 +173,8 @@ const runBenchmarks = async (variant, config, cancelled) => {
         async () => {
           storeIdx += 1;
           const name = `bench-val-${storeIdx}`;
-          await E(host).storeValue(`value-${storeIdx}`, name);
-          await E(host).lookup(name);
+          await E(host).storeValue(`value-${storeIdx}`, [name]);
+          await E(host).lookup([name]);
         },
         10,
       ),
@@ -190,8 +190,8 @@ const runBenchmarks = async (variant, config, cancelled) => {
         async () => {
           cancelIdx += 1;
           const name = `cancel-worker-${cancelIdx}`;
-          await E(host).provideWorker(name);
-          await E(host).cancel(name);
+          await E(host).provideWorker([name]);
+          await E(host).cancel([name]);
         },
         3,
       ),
@@ -207,14 +207,14 @@ const runBenchmarks = async (variant, config, cancelled) => {
         async () => {
           recycleIdx += 1;
           const name = `recycle-worker-${recycleIdx}`;
-          await E(host).provideWorker(name);
+          await E(host).provideWorker([name]);
           // Evaluate to ensure worker is fully up.
-          await E(host).evaluate(name, '1+1', [], []);
-          await E(host).cancel(name);
+          await E(host).evaluate([name], '1+1', [], []);
+          await E(host).cancel([name]);
           // Re-provision with a new name (cancelled workers can't be reused).
           const newName = `recycle-worker-${recycleIdx}-b`;
-          await E(host).provideWorker(newName);
-          await E(host).evaluate(newName, '1+1', [], []);
+          await E(host).provideWorker([newName]);
+          await E(host).evaluate([newName], '1+1', [], []);
         },
         3,
       ),

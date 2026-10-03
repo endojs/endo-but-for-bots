@@ -70,13 +70,13 @@ export const main = async agent => {
 
   // A dedicated agent whose pet store holds the service's runs and whose
   // mailbox carries its asks.
-  await E(agent).provideGuest(POWERS_HANDLE_NAME, {
-    agentName: POWERS_AGENT_NAME,
+  await E(agent).provideGuest([POWERS_HANDLE_NAME], {
+    agentName: [POWERS_AGENT_NAME],
   });
 
   await E(agent).makeUnconfined(undefined, serviceSpecifier, {
-    powersName: POWERS_AGENT_NAME,
-    resultName: SERVICE_NAME,
+    powersName: [POWERS_AGENT_NAME],
+    resultName: [SERVICE_NAME],
   });
 
   await E(agent).copy([SERVICE_NAME], ['@pins', SERVICE_NAME]);

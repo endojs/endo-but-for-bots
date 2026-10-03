@@ -115,7 +115,7 @@ const makeMockPowers = () => {
         number: formMessageNumber,
       });
     },
-    async lookup(name) {
+    async lookup([name]) {
       if (name === 'host-agent') return powers.hostAgent;
       throw new Error(`unknown lookup: ${name}`);
     },
@@ -162,7 +162,7 @@ const makeMockHostAgent = () => {
   const stored = new Map();
   return {
     hostAgent: {
-      async storeValue(value, name) {
+      async storeValue(value, [name]) {
         stored.set(name, value);
       },
     },

@@ -3,9 +3,9 @@ import { Far } from '@endo/pass-style';
 
 export const make = powers => {
   const counter = E(powers).request(
-    '@host',
+    ['@host'],
     'a counter, suitable for doubling',
-    'my-counter',
+    ['my-counter'],
   );
   return Far('Doubler', {
     async incr() {

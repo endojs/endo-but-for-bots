@@ -7,6 +7,14 @@ import { Far } from '@endo/far';
 
 import { make } from '../agent.js';
 
+// Daemon pet-name paths arrive as arrays; key the fake stores by joined path.
+const petKey = path => {
+  if (!Array.isArray(path) || !path.every(part => typeof part === 'string')) {
+    throw TypeError(`not a pet-name path: ${JSON.stringify(path)}`);
+  }
+  return path.join('/');
+};
+
 test('factory facets retain disconnected turns, commit history, and provision delegation tools', async t => {
   t.timeout(5000);
   const inbox = makeBufferedReader();
@@ -24,12 +32,14 @@ test('factory facets retain disconnected turns, commit history, and provision de
     }),
   );
   const guest = Far('TestGuest', {
-    has: name => store.has(name),
-    lookup: name => store.get(name),
-    storeValue: (value, name) => {
+    has: (...path) => store.has(petKey(path)),
+    lookup: path => store.get(petKey(path)),
+    storeValue: (value, path) => {
+      const name = petKey(path);
       store.set(name, value);
     },
-    remove: name => {
+    remove: (...path) => {
+      const name = petKey(path);
       store.delete(name);
     },
     list: prefix => harden(prefix === 'tools' ? [] : [...store.keys()]),
@@ -109,16 +119,19 @@ test('factory facets retain disconnected turns, commit history, and provision de
   hostStore.set('session-agent-one', guest);
   const host = Far('TestHost', {
     list: () => harden([...hostStore.keys()]),
-    has: name => hostStore.has(name),
-    lookup: name => {
+    has: (...path) => hostStore.has(petKey(path)),
+    lookup: path => {
+      const name = petKey(path);
       lookups.push(name);
       return hostStore.get(name);
     },
     provideGuest: () => undefined,
-    storeValue: (value, name) => {
+    storeValue: (value, path) => {
+      const name = petKey(path);
       hostStore.set(name, value);
     },
-    remove: name => {
+    remove: (...path) => {
+      const name = petKey(path);
       hostStore.delete(name);
     },
   });

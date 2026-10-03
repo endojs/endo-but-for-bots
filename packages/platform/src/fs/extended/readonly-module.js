@@ -14,9 +14,9 @@
  *
  * Usage from a host:
  *
- *   await E(host).makeUnconfined('@node', moduleUrl, {
- *     powersName: '@agent',
- *     resultName: 'tmp-ro',
+ *   await E(host).makeUnconfined(['@node'], moduleUrl, {
+ *     powersName: ['@agent'],
+ *     resultName: ['tmp-ro'],
  *     env: { SOURCE_NAME: 'tmp' },          // or 'a/b/c'
  *   });
  *
@@ -51,9 +51,9 @@ export const make = async (powers, _context, opts = {}) => {
   }
   // Pipeline the walk so a deep `lookup` chain costs one CapTP
   // round trip per segment, not two (lookup + then resolve).
-  let capPromise = E(powers).lookup(segments[0]);
+  let capPromise = E(powers).lookup([segments[0]]);
   for (let i = 1; i < segments.length; i += 1) {
-    capPromise = E(capPromise).lookup(segments[i]);
+    capPromise = E(capPromise).lookup([segments[i]]);
   }
   const source = await capPromise;
   return readOnly(source);

@@ -143,7 +143,7 @@ test('content-store blob is reclaimed when its only formula is collected', async
   const readerRef = bytesReaderFromIterator([
     new TextEncoder().encode('blob-content'),
   ]);
-  const blob = await E(host).storeBlob(readerRef, 'lonely-blob');
+  const blob = await E(host).storeBlob(readerRef, ['lonely-blob']);
   const sha256 = await E(blob).sha256();
 
   const filePath = contentPathOf(config.statePath, sha256);
@@ -163,14 +163,12 @@ test('content-store blob survives when a sibling formula still references the sa
 
   const bytes = new TextEncoder().encode('shared-content');
 
-  const blobA = await E(host).storeBlob(
-    bytesReaderFromIterator([bytes]),
+  const blobA = await E(host).storeBlob(bytesReaderFromIterator([bytes]), [
     'twin-a',
-  );
-  const blobB = await E(host).storeBlob(
-    bytesReaderFromIterator([bytes]),
+  ]);
+  const blobB = await E(host).storeBlob(bytesReaderFromIterator([bytes]), [
     'twin-b',
-  );
+  ]);
 
   const shaA = await E(blobA).sha256();
   const shaB = await E(blobB).sha256();
@@ -208,7 +206,7 @@ test('scratch-mount backing directory is reclaimed when its formula is collected
   const { cancelled, config } = await prepareConfig(t);
   const { host } = await makeHost(config, cancelled);
 
-  await E(host).provideScratchMount('throwaway-scratch');
+  await E(host).provideScratchMount(['throwaway-scratch']);
   const scratch = await E(host).lookup(['throwaway-scratch']);
   await E(scratch).writeText(['draft.txt'], 'pending');
 
@@ -245,7 +243,7 @@ test('content-store blob from a readable-tree formula is reclaimed when the tree
     has: async (/** @type {string} */ name) => name === 'only.txt',
   });
 
-  await E(host).storeTree(remoteTree, 'lonely-tree');
+  await E(host).storeTree(remoteTree, ['lonely-tree']);
   const tree = await E(host).lookup(['lonely-tree']);
   const sha256 = await E(tree).sha256();
 
@@ -308,7 +306,7 @@ test('readable-tree collection reclaims transitively-referenced child blob hashe
     'b.txt': new TextEncoder().encode('beta-payload'),
   });
 
-  await E(host).storeTree(remoteTree, 'leafy-tree');
+  await E(host).storeTree(remoteTree, ['leafy-tree']);
   const tree = await E(host).lookup(['leafy-tree']);
   const rootSha256 = await E(tree).sha256();
 
@@ -355,7 +353,7 @@ test('readable-tree collection preserves a child blob hash that a surviving read
   // sha256, so both formulas reference the same content-store hash.
   const sharedBlob = await E(host).storeBlob(
     bytesReaderFromIterator([sharedBytes]),
-    'shared-leaf-blob',
+    ['shared-leaf-blob'],
   );
   const sharedSha256 = await E(sharedBlob).sha256();
 
@@ -364,7 +362,7 @@ test('readable-tree collection preserves a child blob hash that a surviving read
     'unique.txt': new TextEncoder().encode('unique-to-tree'),
   });
 
-  await E(host).storeTree(remoteTree, 'shared-leaf-tree');
+  await E(host).storeTree(remoteTree, ['shared-leaf-tree']);
   const tree = await E(host).lookup(['shared-leaf-tree']);
   const rootSha256 = await E(tree).sha256();
 
@@ -417,7 +415,7 @@ test('readable-tree collection walks nested subtrees and reclaims grandchild has
     { sub: innerTree },
   );
 
-  await E(host).storeTree(outerTree, 'nested-tree');
+  await E(host).storeTree(outerTree, ['nested-tree']);
   const tree = await E(host).lookup(['nested-tree']);
   const rootSha256 = await E(tree).sha256();
 

@@ -171,7 +171,7 @@ export const provisionFaeAgent = async ({
   const build = async () => {
     await null;
     // 1. The agent's own guest: inbox, pet store, tools.
-    await E(hostAgent).provideGuest(name, { agentName: profileName });
+    await E(hostAgent).provideGuest([name], { agentName: [profileName] });
 
     // 2. A spawner caplet, unless this agent is at the delegation bound. It is
     //    a durable formula rather than a live object so that a revived driver
@@ -179,20 +179,23 @@ export const provisionFaeAgent = async ({
     /** @type {string | undefined} */
     let spawnerLocator;
     if (depth < maxDepth) {
-      const spawnerGuest = await E(hostAgent).provideGuest(spawnerHandleName, {
-        agentName: spawnerProfileName,
-      });
-      await E(spawnerGuest).storeLocator('llm-provider', providerLocator);
-      await E(spawnerGuest).storeLocator('host-agent', hostAgentLocator);
+      const spawnerGuest = await E(hostAgent).provideGuest(
+        [spawnerHandleName],
+        {
+          agentName: [spawnerProfileName],
+        },
+      );
+      await E(spawnerGuest).storeLocator(['llm-provider'], providerLocator);
+      await E(spawnerGuest).storeLocator(['host-agent'], hostAgentLocator);
       if (authSecretLocator !== undefined) {
         await E(spawnerGuest).storeLocator(
-          AUTH_SECRET_PETNAME,
+          [AUTH_SECRET_PETNAME],
           authSecretLocator,
         );
       }
-      await E(hostAgent).makeUnconfined('@main', spawnerSpecifier, {
-        powersName: spawnerProfileName,
-        resultName: spawnerResultName,
+      await E(hostAgent).makeUnconfined(['@main'], spawnerSpecifier, {
+        powersName: [spawnerProfileName],
+        resultName: [spawnerResultName],
         env: harden({
           SUBAGENT_PARENT: name,
           SUBAGENT_DEPTH: `${depth + 1}`,
@@ -211,24 +214,27 @@ export const provisionFaeAgent = async ({
     // 3. The driver's own guest holds capability references to everything the
     //    inbox loop needs, so the driver formula itself carries no
     //    configuration.
-    const driverGuest = await E(hostAgent).provideGuest(driverHandleName, {
-      agentName: driverProfileName,
+    const driverGuest = await E(hostAgent).provideGuest([driverHandleName], {
+      agentName: [driverProfileName],
     });
-    await E(driverGuest).storeLocator('llm-provider', providerLocator);
+    await E(driverGuest).storeLocator(['llm-provider'], providerLocator);
     await E(driverGuest).storeLocator(
-      'agent',
+      ['agent'],
       /** @type {string} */ (await E(hostAgent).locate(profileName)),
     );
     if (spawnerLocator !== undefined) {
-      await E(driverGuest).storeLocator('subagent-spawner', spawnerLocator);
+      await E(driverGuest).storeLocator(['subagent-spawner'], spawnerLocator);
     }
     if (authSecretLocator !== undefined) {
-      await E(driverGuest).storeLocator(AUTH_SECRET_PETNAME, authSecretLocator);
+      await E(driverGuest).storeLocator(
+        [AUTH_SECRET_PETNAME],
+        authSecretLocator,
+      );
     }
 
-    await E(hostAgent).makeUnconfined('@main', driverSpecifier, {
-      powersName: driverProfileName,
-      resultName: driverResultName,
+    await E(hostAgent).makeUnconfined(['@main'], driverSpecifier, {
+      powersName: [driverProfileName],
+      resultName: [driverResultName],
       env: harden({
         FAE_SYSTEM_PROMPT: systemPrompt || '',
         FAE_SUBAGENT_PROMPT: delegatedPrompt || '',

@@ -200,7 +200,51 @@ test.serial(
     await waitFor(() => calls.some(c => c.method === 'storeValue'));
     const storeCall = calls.find(c => c.method === 'storeValue');
     t.truthy(storeCall, 'storeValue invoked');
-    t.deepEqual(storeCall.args[1], ['my', 'value'], 'path split on /');
+    t.deepEqual(
+      storeCall.args[1],
+      ['my/value'],
+      'a slash stays inside one segment',
+    );
+  },
+);
+
+test.serial(
+  'Rename keeps the item in its directory and takes the new name as one segment',
+  async t => {
+    const { $actions, api, calls } = setup();
+    t.teardown(() => api.dismissValue());
+
+    // A named value inside a directory -> "Rename to:" name action.
+    await api.showValue(harden({ a: 1 }), undefined, ['team', 'old']);
+    await waitFor(() => !!$actions.querySelector('.value-name-input'));
+
+    t.is(
+      $actions.querySelector('.value-name-form label').textContent,
+      'Rename to:',
+      'label reflects the rename action',
+    );
+    const $input = $actions.querySelector('.value-name-input');
+    t.is($input.value, 'old', 'defaults to the last segment');
+
+    $input.value = 'new/name';
+    $input.dispatchEvent(new globalThis.Event('input', { bubbles: true }));
+    await waitFor(() => $input.value === 'new/name');
+
+    $actions
+      .querySelector('.value-name-form button')
+      .dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+
+    await waitFor(() => calls.some(c => c.method === 'move'));
+    const moveCall = calls.find(c => c.method === 'move');
+    t.truthy(moveCall, 'move invoked');
+    t.deepEqual(
+      moveCall.args,
+      [
+        ['team', 'old'],
+        ['team', 'new/name'],
+      ],
+      'the item stays in its directory and a slash stays inside one segment',
+    );
   },
 );
 

@@ -37,12 +37,12 @@ in your own directory and can provide them via
 codeNames/edgeNames:
 
 ```
-evaluate('@main', "E(counter).increment()", ["counter"], ["my-counter"], "increment-result")
+evaluate(["@main"], "E(counter).increment()", ["counter"], ["my-counter"], ["increment-result"])
 ```
 
-`evaluate()` executes the code directly and stores the result under resultName.
+`evaluate()` executes the code directly and stores the result under resultNamePath.
 You can send results back to the user with a reply, or a message to `@host`,
-using the resultName.
+using the resultNamePath.
 
 The codeNames array lists variable names used in your source
 code. The edgeNames array lists the pet names from YOUR
@@ -143,6 +143,6 @@ directory):
 1. Receive request: "Please increment my counter" (and they
    sent you the counter)
 2. `adopt()` the counter from the message
-3. `evaluate(undefined, "E(counter).increment()", ["counter"], ["my-counter"], "increment-result")`
-4. `lookup("increment-result")` then `reply()` to deliver it
+3. `evaluate(undefined, "E(counter).increment()", ["counter"], ["my-counter"], ["increment-result"])`
+4. `lookup(["increment-result"])` then `reply()` to deliver it
    back

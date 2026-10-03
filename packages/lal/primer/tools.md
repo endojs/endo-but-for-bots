@@ -9,7 +9,7 @@
 - `list(name?)` — List your directory, or list contents of any
   capability by pet name
 - `has(petNamePath)` — Check if a name exists
-- `lookup(petNameOrPath)` — Get a value by name from your directory
+- `lookup(petNamePath)` — Get a value by name from your directory
 - `remove(petNamePath)` — Remove a name
 - `move(fromPath, toPath)` — Rename/move a reference
 - `copy(fromPath, toPath)` — Copy a reference
@@ -21,16 +21,16 @@
   received messages). Each message has a messageId (unique
   identifier) and optionally a replyTo (messageId of the parent
   message). Use these to understand conversation threading.
-- `adopt(messageNumber, edgeName, petName)` — Adopt a value
+- `adopt(messageNumber, edgeName, petNamePath)` — Adopt a value
   from a message
 - `dismiss(messageNumber)` — Remove a message from inbox
-- `request(recipientName, description, responseName?)` — Request
+- `request(recipientNamePath, description, responseNamePath?)` — Request
   a capability
-- `resolve(messageNumber, petNameOrPath)` — Respond to a request
+- `resolve(messageNumber, petNamePath)` — Respond to a request
 - `reject(messageNumber, reason?)` — Decline a request
-- `reply(messageNumber, strings, edgeNames, petNames)` — Reply
+- `reply(messageNumber, strings, edgeNames, petNamePaths)` — Reply
   to a message (PREFERRED for responses)
-- `send(recipientName, strings, edgeNames, petNames)` — Send a
+- `send(recipientNamePath, strings, edgeNames, petNamePaths)` — Send a
   NEW message (only for initiating conversations)
 
 ## Identity
@@ -46,23 +46,26 @@
 
 ## Capability Operations
 
-- `inspect(petNameOrPath)` — Call `help()` on a capability and
+- `inspect(petNamePath)` — Call `help()` on a capability and
   list its methods. IMPORTANT: Always call `inspect()` before
   using `evaluate()` on an unfamiliar capability. The response
   includes method signatures with argument types. Do NOT guess
   method names or argument shapes — read the help text first.
-- `readText(petNameOrPath, fileName)` — Read text content from a
+- `readText(petNamePath, fileName)` — Read text content from a
   capability (ReadableTree, WritableTree, etc.)
-- `writeText(petNameOrPath, fileName, content)` — Write text
+- `writeText(petNamePath, fileName, content)` — Write text
   content to a capability (WritableTree, etc.)
-- `editText(petNameOrPath, fileName, edits)` — Apply unique-match text
+- `editText(petNamePath, fileName, edits)` — Apply unique-match text
   replacements and return a unified diff
-- `glob(petNameOrPath, pattern, followSymlinks?)` — Find paths recursively
+- For these three tools, `fileName` is a path string such as
+  `"src/a.js"` for a mounted tree, and an array of path components such
+  as `["a.txt"]` for a directory made with `makeDirectory`
+- `glob(petNamePath, pattern, followSymlinks?)` — Find paths recursively
   within a search-capable filesystem capability (`*` is segment-local and `**`
   crosses segments; `?` is literal). `**` reports a directory symlink but does
   not descend through it; name the path in a segment to reach through one, or
   set `followSymlinks` to sweep through all of them
-- `grep(petNameOrPath, pattern, glob?, maxResults?, followSymlinks?)` — Search
+- `grep(petNamePath, pattern, glob?, maxResults?, followSymlinks?)` — Search
   file contents with a flagless ECMAScript regular expression, optionally
   restricting the file set with a glob
 
@@ -70,7 +73,7 @@
 
 - `define(source, slots)` — Propose code with named slots for the
   host to fill (PREFERRED)
-- `evaluate(workerName?, source, codeNames, edgeNames, resultName)`
+- `evaluate(workerNamePath?, source, codeNames, edgeNames, resultNamePath)`
   — Evaluate code directly using your own capabilities
 
 ## Prefer Direct Tools Over Code
@@ -79,14 +82,14 @@ IMPORTANT: Always prefer direct tool calls over `evaluate()` or
 `define()`. Many tasks can be accomplished without code execution:
 
 - Use `list()` to enumerate names in your directory or any capability
-- Use `list("capName")` to list contents of a ReadableTree or
+- Use `list(["capName"])` to list contents of a ReadableTree or
   WritableTree capability
-- Use `readText("capName", "file.txt")` to read text from a
+- Use `readText(["capName"], "file.txt")` to read text from a
   capability
-- Use `writeText("capName", "file.txt", content)` to write text
+- Use `writeText(["capName"], "file.txt", content)` to write text
   to a capability
-- Use `glob("capName", "src/**/*.js")` and
-  `grep("capName", "TODO", "src/**/*.js")` to search a mounted workspace
+- Use `glob(["capName"], "src/**/*.js")` and
+  `grep(["capName"], "TODO", "src/**/*.js")` to search a mounted workspace
 - Use `lookup()` to inspect values
 - Use `has()` to check existence
 - Use `inspect()` to discover a capability's methods and

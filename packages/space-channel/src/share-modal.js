@@ -78,7 +78,7 @@ const resolvePersonaPowers = async (rootPowers, profilePath) => {
   /** @type {unknown} */
   let powers = rootPowers;
   for (const name of profilePath) {
-    powers = E(/** @type {any} */ (powers)).lookup(name);
+    powers = E(/** @type {any} */ (powers)).lookup([name]);
   }
   return powers;
 };
@@ -656,10 +656,10 @@ export const createShareModal = $container => {
     ).makeChannel(channelPetName, displayName);
 
     const newChannelRef = await E(
-      /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
+      /** @type {{ lookup: (petNamePath: string[]) => Promise<unknown> }} */ (
         powers
       ),
-    ).lookup(channelPetName);
+    ).lookup([channelPetName]);
 
     // Post heritage chain into the new channel.
     for (let i = 0; i < heritageChain.length; i += 1) {
@@ -680,10 +680,10 @@ export const createShareModal = $container => {
         target.profilePath,
       );
       const targetChannelRef = await E(
-        /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
+        /** @type {{ lookup: (petNamePath: string[]) => Promise<unknown> }} */ (
           targetPersonaPowers
         ),
-      ).lookup(targetChannelPetName);
+      ).lookup([targetChannelPetName]);
 
       await E(
         /** @type {{ post: (...args: unknown[]) => Promise<unknown> }} */ (
@@ -692,7 +692,7 @@ export const createShareModal = $container => {
       ).post(
         ['Shared thread: ', ''],
         [channelPetName],
-        [channelPetName],
+        [[channelPetName]],
         undefined,
         [],
       );
@@ -707,10 +707,10 @@ export const createShareModal = $container => {
               rootPowers
             ),
           ).send(
-            agentPetName,
+            [agentPetName],
             ['A thread was shared with you: ', ''],
             [channelPetName],
-            [channelPetName],
+            [[channelPetName]],
           );
         } catch {
           // Agent inbox notification is best-effort.

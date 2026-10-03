@@ -779,7 +779,7 @@ export type SandboxDriver = {
  */
 export type SandboxPowers = ERef<{
   /** Mint a writable scratch mount. */
-  provideScratchMount(petName: string): Promise<MountCap>;
+  provideScratchMount(petNamePath: string[]): Promise<MountCap>;
   /**
    * Resolve a `Mount` capability to a host filesystem path. The
    * factory calls this for every granted mount before assembling the

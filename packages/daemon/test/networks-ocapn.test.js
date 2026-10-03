@@ -202,7 +202,7 @@ test('OCapN-Noise transport conforms to the EndoNetwork interface', async t => {
   // stays stable across restarts.
   t.deepEqual(
     storedValues.map(entry => entry.name),
-    ['ocapn-listen-addr'],
+    [['ocapn-listen-addr']],
   );
   t.regex(storedValues[0].value, /^127\.0\.0\.1:\d+$/);
 

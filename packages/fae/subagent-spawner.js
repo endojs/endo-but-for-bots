@@ -72,7 +72,7 @@ export const make = async (powers, _context, { env } = {}) => {
       contextP = (async () => {
         const [hostAgent, providerLocator, hostAgentLocator, hasAuthSecret] =
           await Promise.all([
-            E(powers).lookup('host-agent'),
+            E(powers).lookup(['host-agent']),
             E(powers).locate('llm-provider'),
             E(powers).locate('host-agent'),
             E(powers).has(AUTH_SECRET_PETNAME),

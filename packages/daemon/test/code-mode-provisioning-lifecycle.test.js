@@ -64,7 +64,7 @@ test.serial(
       ['tools', 'calendar-handle'],
       { agentName: ['tools', 'calendar'] },
     );
-    await E(originalCalendar).storeValue('original', 'value');
+    await E(originalCalendar).storeValue('original', ['value']);
     const originalCalendarId = await E(host).identify('tools', 'calendar');
     const localRemote = fixture.trackSession(
       await provisionEndoCodeMode({
@@ -107,15 +107,15 @@ test.serial(
     t.true(Object.isFrozen(localRemote.persistence));
 
     const workspaceMount = /** @type {EndoMount} */ (
-      await E(localRemote.powers).lookup('workspace')
+      await E(localRemote.powers).lookup(['workspace'])
     );
-    t.is(await E(workspaceMount).readText('README.md'), 'initial\n');
+    t.is(await E(workspaceMount).readText(['README.md']), 'initial\n');
     const localGit = /** @type {ReadWriteEndoGit} */ (
-      await E(localRemote.powers).lookup('git')
+      await E(localRemote.powers).lookup(['git'])
     );
     await E(localGit).status();
     const origin = /** @type {GitRemote} */ (
-      await E(localRemote.powers).lookup('origin')
+      await E(localRemote.powers).lookup(['origin'])
     );
     const originPolicy = await E(origin).inspect();
     t.deepEqual(
@@ -126,8 +126,8 @@ test.serial(
       ],
     );
     t.is(originPolicy.defaultPullRef, 'refs/heads/main');
-    const calendar = await E(localRemote.powers).lookup('calendar');
-    t.is(await E(calendar).lookup('value'), 'original');
+    const calendar = await E(localRemote.powers).lookup(['calendar']);
+    t.is(await E(calendar).lookup(['value']), 'original');
 
     const readOnlySession = fixture.trackSession(
       await provisionEndoCodeMode({
@@ -139,7 +139,7 @@ test.serial(
       }),
     );
     const readOnlyGit = /** @type {ReadOnlyEndoGit} */ (
-      await E(readOnlySession.powers).lookup('git')
+      await E(readOnlySession.powers).lookup(['git'])
     );
     t.true(Array.isArray((await E(readOnlyGit).status()).entries));
     // eslint-disable-next-line no-underscore-dangle
@@ -176,14 +176,14 @@ test.serial(
       ['answer'],
     );
     t.is(answer, 42);
-    t.is(await E(localRemote.powers).lookup('answer'), 42);
+    t.is(await E(localRemote.powers).lookup(['answer']), 42);
     t.is(await E(host).identify('answer'), undefined);
 
     const reboundCalendar = await E(host).provideGuest(
       ['tools', 'calendar-rebound-handle'],
       { agentName: ['tools', 'calendar-rebound'] },
     );
-    await E(reboundCalendar).storeValue('rebound', 'value');
+    await E(reboundCalendar).storeValue('rebound', ['value']);
     const reboundCalendarId = await E(host).identify(
       'tools',
       'calendar-rebound',
@@ -199,9 +199,11 @@ test.serial(
     );
     t.is(await E(reconnected.powers).identify('git'), guestGitId);
     t.is(await E(reconnected.powers).identify('calendar'), originalCalendarId);
-    const reconnectedCalendar = await E(reconnected.powers).lookup('calendar');
-    t.is(await E(reconnectedCalendar).lookup('value'), 'original');
-    t.is(await E(reconnected.powers).lookup('answer'), 42);
+    const reconnectedCalendar = await E(reconnected.powers).lookup([
+      'calendar',
+    ]);
+    t.is(await E(reconnectedCalendar).lookup(['value']), 'original');
+    t.is(await E(reconnected.powers).lookup(['answer']), 42);
 
     await fixture.restartDaemon();
     const restartedHost = await fixture.connectHost('provision-host-restart');
@@ -213,8 +215,8 @@ test.serial(
     );
     t.is(await E(recovered.powers).identify('git'), guestGitId);
     t.is(await E(recovered.powers).identify('calendar'), originalCalendarId);
-    const recoveredCalendar = await E(recovered.powers).lookup('calendar');
-    t.is(await E(recoveredCalendar).lookup('value'), 'original');
+    const recoveredCalendar = await E(recovered.powers).lookup(['calendar']);
+    t.is(await E(recoveredCalendar).lookup(['value']), 'original');
     t.is(
       await E(restartedHost).identify(
         ...controllerPath,
@@ -224,9 +226,9 @@ test.serial(
       ),
       controllerWorkspaceId,
     );
-    t.is(await E(recovered.powers).lookup('answer'), 42);
+    t.is(await E(recovered.powers).lookup(['answer']), 42);
     const recoveredOrigin = /** @type {GitRemote} */ (
-      await E(recovered.powers).lookup('origin')
+      await E(recovered.powers).lookup(['origin'])
     );
     t.is(
       (await E(recoveredOrigin).inspect()).defaultPullRef,
@@ -313,7 +315,7 @@ test.serial(
     );
 
     const origin = /** @type {GitRemote} */ (
-      await E(session.powers).lookup('origin')
+      await E(session.powers).lookup(['origin'])
     );
     const originPolicy = await E(origin).inspect();
     t.is(originPolicy.url, new URL(`file://${bareRemote}`).href);
@@ -326,7 +328,7 @@ test.serial(
     // is reachable through the guest.
     t.is(await E(session.powers).identify('persistence'), undefined);
     t.is(await E(session.powers).identify('remotes'), undefined);
-    await t.throwsAsync(() => E(session.powers).lookup('persistence'));
+    await t.throwsAsync(() => E(session.powers).lookup(['persistence']));
 
     const controllerPath = session.persistence.guestHandlePath.slice(0, -1);
     // The remote is namespaced under its own container, a sibling of — never
@@ -387,7 +389,7 @@ test.serial(
     const host = await fixture.connectHost('nested-git-host');
     const guest = await realizeEndoProvisionOnHost(host, persistence);
     const nestedGit = /** @type {ReadOnlyEndoGit} */ (
-      await E(guest).lookup('nested')
+      await E(guest).lookup(['nested'])
     );
     const { entries: rows } = await E(nestedGit).status();
     t.deepEqual(
@@ -406,7 +408,7 @@ test.serial(
       }),
     );
     const recoveredGit = /** @type {ReadOnlyEndoGit} */ (
-      await E(recovered.powers).lookup('nested')
+      await E(recovered.powers).lookup(['nested'])
     );
     const { entries: recoveredRows } = await E(recoveredGit).status();
     t.deepEqual(
@@ -426,7 +428,7 @@ test.serial(
     const original = await E(host).provideGuest(['tools', 'counter-handle'], {
       agentName: ['tools', 'counter'],
     });
-    await E(original).storeValue('original', 'value');
+    await E(original).storeValue('original', ['value']);
     const parent = fixture.trackSession(
       await provisionEndoCodeMode({
         harness: 'test',
@@ -456,7 +458,7 @@ test.serial(
       ['tools', 'counter-rebound-handle'],
       { agentName: ['tools', 'counter-rebound'] },
     );
-    await E(rebound).storeValue('rebound', 'value');
+    await E(rebound).storeValue('rebound', ['value']);
     const reboundId = await E(host).identify('tools', 'counter-rebound');
     await E(host).storeIdentifier(['tools', 'counter'], reboundId);
 
@@ -493,7 +495,7 @@ test.serial(
     t.is(childControllerId, originalId);
     t.is(childGuestId, originalId);
     t.not(childGuestId, reboundId);
-    const childCounter = await E(child.powers).lookup('counter');
-    t.is(await E(childCounter).lookup('value'), 'original');
+    const childCounter = await E(child.powers).lookup(['counter']);
+    t.is(await E(childCounter).lookup(['value']), 'original');
   },
 );

@@ -40,7 +40,7 @@ const nodeFsModuleHref = pathToFileURL(
 // unname path never call them).
 const mintStub = (host, resultPath) =>
   E(host).evaluate(
-    '@main',
+    ['@main'],
     `Far('stub', { help: () => 'stub' })`,
     harden([]),
     harden([]),
@@ -196,8 +196,8 @@ test.serial(
 
     const workspaceDir = path.join(dirname, 'tmp', 'form-path', 'workspace');
     mkdirSync(workspaceDir, { recursive: true });
-    await E(host).makeUnconfined('@main', nodeFsModuleHref, {
-      resultName: 'project-fs',
+    await E(host).makeUnconfined(['@main'], nodeFsModuleHref, {
+      resultName: ['project-fs'],
       env: harden({ ENDO_FS_ROOT: workspaceDir }),
     });
 
@@ -253,7 +253,7 @@ test.serial(
     }
     t.true(stored, 'submission stored the ClaudeClient under its pet name');
 
-    const client = await E(host).lookup('form-client');
+    const client = await E(host).lookup(['form-client']);
     const status = await E(client).status();
     t.regex(status.sessionId, /^form-client-/);
     t.is(status.terminated, false);
@@ -283,10 +283,10 @@ const daemonNetworkHref = pathToFileURL(
 // Install the loopback-TCP network on a host so it can be introduced to peers
 // (mirrors the daemon test's `prepareHostWithTestNetwork`).
 const installTestNetwork = async host => {
-  await E(host).storeValue('127.0.0.1:0', 'tcp-listen-addr');
-  const network = await E(host).makeUnconfined('@main', daemonNetworkHref, {
-    powersName: '@agent',
-    resultName: 'test-network',
+  await E(host).storeValue('127.0.0.1:0', ['tcp-listen-addr']);
+  const network = await E(host).makeUnconfined(['@main'], daemonNetworkHref, {
+    powersName: ['@agent'],
+    resultName: ['test-network'],
   });
   await network;
   await E(host).move(['test-network'], ['@nets', 'tcp']);
@@ -328,34 +328,34 @@ test.serial(
     // The Filesystem cap lives on the PEER — remote to the host.
     const peerWorkspace = path.join(dirname, 'tmp', 'xpeer-peer', 'workspace');
     mkdirSync(peerWorkspace, { recursive: true });
-    await E(peer).makeUnconfined('@main', nodeFsModuleHref, {
-      resultName: 'project-fs',
+    await E(peer).makeUnconfined(['@main'], nodeFsModuleHref, {
+      resultName: ['project-fs'],
       env: harden({ ENDO_FS_ROOT: peerWorkspace }),
     });
 
     // A bare remote presence cannot be marshalled into a new formula: the
     // host has no formula id for a cap it only received as a CapTP argument.
-    const fsPresence = await E(peer).lookup('project-fs');
+    const fsPresence = await E(peer).lookup(['project-fs']);
     await t.throwsAsync(
-      () => E(host).storeValue(fsPresence, 'remote-fs-by-value'),
+      () => E(host).storeValue(fsPresence, ['remote-fs-by-value']),
       { message: /No corresponding formula/ },
       'storeValue cannot capture a bare remote presence',
     );
 
     // Establish a mailbox relationship: the sender (peer) invites, the
     // recipient (host) accepts. Now the peer can `send` packages to the host.
-    const invitation = await E(peer).invite('sandbox-host');
+    const invitation = await E(peer).invite(['sandbox-host']);
     const invitationLocator = await E(invitation).locate();
-    await E(host).accept(invitationLocator, 'remote-peer');
+    await E(host).accept(invitationLocator, ['remote-peer']);
 
     // The peer sends its own Filesystem cap as a package (named in the peer's
     // namespace). The host adopts it by edge name, which marks it as a
     // tracked import (`thisDiesIfThatDies`) under a host name.
     await E(peer).send(
-      'sandbox-host',
+      ['sandbox-host'],
       ['here is my workspace'],
       ['filesystem'],
-      ['project-fs'],
+      [['project-fs']],
     );
     const messages = /** @type {any[]} */ (await E(host).listMessages());
     const pkg = messages.find(
@@ -367,11 +367,11 @@ test.serial(
     // The adopted cap is endowable *by name* into an eval worker, which
     // invokes a method on it across the mesh.
     const reachedRemoteCap = await E(host).evaluate(
-      '@main',
+      ['@main'],
       'E(fs).__getMethodNames__().then(ns => Array.isArray(ns) && ns.length > 0)',
       harden(['fs']),
       harden(['remote-fs']),
-      'probe-result',
+      ['probe-result'],
     );
     t.true(
       reachedRemoteCap,
@@ -399,8 +399,8 @@ test.serial(
     // The workspace Filesystem lives on the peer.
     const peerWorkspace = path.join(dirname, 'tmp', 'pkg-peer', 'workspace');
     mkdirSync(peerWorkspace, { recursive: true });
-    await E(peer).makeUnconfined('@main', nodeFsModuleHref, {
-      resultName: 'project-fs',
+    await E(peer).makeUnconfined(['@main'], nodeFsModuleHref, {
+      resultName: ['project-fs'],
       env: harden({ ENDO_FS_ROOT: peerWorkspace }),
     });
 
@@ -411,15 +411,15 @@ test.serial(
 
     // Mailbox relationship: the peer (sender) invites, the host (recipient)
     // accepts. Now the peer can `send` packages to the host.
-    const invitation = await E(peer).invite('sandbox-host');
+    const invitation = await E(peer).invite(['sandbox-host']);
     const invitationLocator = await E(invitation).locate();
-    await E(host).accept(invitationLocator, 'remote-peer');
+    await E(host).accept(invitationLocator, ['remote-peer']);
 
     // The peer sends its Filesystem cap + a JSON config as a package. The
     // config is marked `kind: 'claude-sandbox-session'` so the factory's host
     // loop recognises it (and ignores unrelated filesystem-edged traffic).
     await E(peer).send(
-      'sandbox-host',
+      ['sandbox-host'],
       [
         JSON.stringify({
           kind: 'claude-sandbox-session',
@@ -429,7 +429,7 @@ test.serial(
         }),
       ],
       ['filesystem'],
-      ['project-fs'],
+      [['project-fs']],
     );
 
     // The factory replies with a package carrying the `client` edge. Poll the

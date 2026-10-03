@@ -27,7 +27,7 @@ const makeHost = () => {
   const guestBindings = new Map();
   const guest = {
     storeIdentifier: async (name, id) => {
-      guestBindings.set(name, id);
+      guestBindings.set(pathKey(name), id);
     },
   };
 

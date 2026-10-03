@@ -84,7 +84,7 @@ Scenes are fully self-contained HTML documents running inside a sandboxed iframe
 
 ```
 User input
-  → Whylip host sends to "fae" petname (E(powers).send('fae', ...))
+  → Whylip host sends to "fae" petname (E(powers).send(['fae'], ...))
   → Fae agent receives message, assembles context from ConversationTree
   → LLM responds with JSON { narrative, scene }
   → Fae replies via endo messaging

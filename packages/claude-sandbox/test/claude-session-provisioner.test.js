@@ -22,7 +22,7 @@ const makeRecordingHost = () => {
     async has(...path) {
       return names.has(keyFor(path));
     },
-    async lookup(...path) {
+    async lookup(path) {
       return names.get(keyFor(path));
     },
     async remove(...path) {

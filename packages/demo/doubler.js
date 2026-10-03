@@ -14,9 +14,9 @@ import { M } from '@endo/patterns';
 export const make = powers => {
   console.log('tryna request'); // 🎈
   const myCounter = E(powers).request(
-    '@host',
+    ['@host'],
     'a counter, suitable for doubling',
-    'my-counter',
+    ['my-counter'],
   );
   console.log('made request'); // 🤡
 

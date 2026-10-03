@@ -30,7 +30,7 @@ export const managementComponent = (
   /** @type {unknown} */
   let resolvedPowers = rootPowers;
   for (const name of profilePath) {
-    resolvedPowers = E(/** @type {any} */ (resolvedPowers)).lookup(name);
+    resolvedPowers = E(/** @type {any} */ (resolvedPowers)).lookup([name]);
   }
 
   const $mount = $parent.ownerDocument.createElement('div');

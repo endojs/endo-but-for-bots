@@ -123,17 +123,17 @@ test.serial(
     await unpackFixtureTree(sourceDir, treeDir);
 
     // 2. Make an endo-fs Filesystem cap rooted at treeDir.
-    await E(host).makeUnconfined('@node', nodeFsModuleHref, {
-      powersName: '@none',
+    await E(host).makeUnconfined(['@node'], nodeFsModuleHref, {
+      powersName: ['@none'],
       env: { ENDO_FS_ROOT: treeDir },
-      resultName: 'workspace-fs',
+      resultName: ['workspace-fs'],
     });
 
     // 3. Adapt that Filesystem to make-from-tree's shape via the
     //    new tree-view module.
-    await E(host).makeUnconfined('@node', treeViewModuleHref, {
-      powersName: 'workspace-fs',
-      resultName: 'tree-view',
+    await E(host).makeUnconfined(['@node'], treeViewModuleHref, {
+      powersName: ['workspace-fs'],
+      resultName: ['tree-view'],
     });
 
     // 4. Run the program through the existing make-from-tree
@@ -142,8 +142,8 @@ test.serial(
     //    for the worker name selects the host's default worker
     //    (`@node` here); the host method's signature is
     //    `(workerName?, treeName, opts)`.
-    const exo = await E(host).makeFromTree(undefined, 'tree-view', {
-      powersName: '@none',
+    const exo = await E(host).makeFromTree(undefined, ['tree-view'], {
+      powersName: ['@none'],
       env: { HELLO: 'endo-fs-exec' },
     });
 
@@ -163,20 +163,20 @@ test.serial(
     const rootDir = path.join(config.statePath, '..', 'tree-fixture-rooted');
     await unpackFixtureTree(sourceDir, path.join(rootDir, 'apps', 'widget'));
 
-    await E(host).makeUnconfined('@node', nodeFsModuleHref, {
-      powersName: '@none',
+    await E(host).makeUnconfined(['@node'], nodeFsModuleHref, {
+      powersName: ['@none'],
       env: { ENDO_FS_ROOT: rootDir },
-      resultName: 'workspace-fs',
+      resultName: ['workspace-fs'],
     });
 
-    await E(host).makeUnconfined('@node', treeViewModuleHref, {
-      powersName: 'workspace-fs',
+    await E(host).makeUnconfined(['@node'], treeViewModuleHref, {
+      powersName: ['workspace-fs'],
       env: { ENDO_FS_TREE_LOCATION: 'apps/widget' },
-      resultName: 'widget-tree',
+      resultName: ['widget-tree'],
     });
 
-    const exo = await E(host).makeFromTree(undefined, 'widget-tree', {
-      powersName: '@none',
+    const exo = await E(host).makeFromTree(undefined, ['widget-tree'], {
+      powersName: ['@none'],
       env: { WHO: 'widget' },
     });
 

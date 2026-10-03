@@ -108,7 +108,7 @@ const buildSessionPowersSource = (
       if (name !== ${JSON.stringify(mountName)}) {
         throw Error('claude-sandbox session powers: provideMount restricted to this session workspace Mount name');
       }
-      return E(agent).provideMount(path, name);
+      return E(agent).provideMount(path, [name]);
     },
     // Scoped teardown: remove *only* this session's workspace Mount pet name
     // (which provideMount registered at the host root) so it does not leak a
@@ -267,9 +267,13 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
   // provisioner (factory.js) to the factory's own directory.
   const sandboxNamespace =
     env.SANDBOX_NAMESPACE || process.env.SANDBOX_NAMESPACE || '';
-  /** @param {string} name @returns {string | string[]} */
+  /** @param {string} name @returns {string[]} */
   const underNamespace = name =>
-    sandboxNamespace ? [sandboxNamespace, name] : name;
+    sandboxNamespace ? [sandboxNamespace, name] : [name];
+  // A lone name becomes a one-segment path; a path passes through. Strings
+  // are never split on a delimiter.
+  /** @param {string | string[]} name */
+  const namePathOf = name => (typeof name === 'string' ? [name] : name);
   const backend =
     env.CLAUDE_SANDBOX_BACKEND ||
     process.env.CLAUDE_SANDBOX_BACKEND ||
@@ -303,7 +307,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
   let hostAgentP;
   const getHostAgent = () => {
     if (hostAgentP === undefined) {
-      hostAgentP = E(powers).lookup('host-agent');
+      hostAgentP = E(powers).lookup(['host-agent']);
     }
     return hostAgentP;
   };
@@ -398,17 +402,17 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
       toCleanup = [powersName, ...removeNames];
       const codeNames = ['agent', 'sandboxFactory', 'fsMounter', 'filesystem'];
       const petNames = [
-        '@agent',
+        ['@agent'],
         underNamespace(sandboxFactoryName),
         underNamespace(fsMounterName),
-        filesystemName,
+        namePathOf(filesystemName),
       ];
       if (credentialsName) {
         codeNames.push('credentials');
-        petNames.push(credentialsName);
+        petNames.push(namePathOf(credentialsName));
       }
       await E(hostAgent).evaluate(
-        '@main',
+        ['@main'],
         buildSessionPowersSource(
           hostMountPoint,
           workspacePetName,
@@ -416,12 +420,12 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         ),
         harden(codeNames),
         harden(petNames),
-        powersName,
+        [powersName],
       );
 
       /** @type {Record<string, any>} */
       const options = {
-        powersName,
+        powersName: [powersName],
         env: harden({
           SESSION_ID: sessionId,
           CREATED_AT: new Date().toISOString(),
@@ -437,10 +441,10 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         }),
       };
       if (resultName !== undefined) {
-        options.resultName = resultName;
+        options.resultName = namePathOf(resultName);
       }
       const client = await E(hostAgent).makeUnconfined(
-        '@main',
+        ['@main'],
         clientModuleSpecifier,
         harden(options),
       );
@@ -453,7 +457,9 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
       // `remove` must not turn a completed session into a reported failure
       // (which would strand a live orphan behind an error reply) — hence
       // `allSettled`, matching the catch path below.
-      await Promise.allSettled(toCleanup.map(n => E(hostAgent).remove(n)));
+      await Promise.allSettled(
+        toCleanup.map(n => E(hostAgent).remove(...namePathOf(n))),
+      );
 
       return harden({
         client,
@@ -462,7 +468,9 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         rootfsLabel: rootfsLabel(parsedRootfs),
       });
     } catch (error) {
-      await Promise.allSettled(toCleanup.map(n => E(hostAgent).remove(n)));
+      await Promise.allSettled(
+        toCleanup.map(n => E(hostAgent).remove(...namePathOf(n))),
+      );
       throw error;
     }
   };
@@ -498,12 +506,12 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
     const removeNames = [];
     try {
       // adopt = thisDiesIfThatDies import edge + a host name the powers endow.
-      await E(hostAgent).adopt(msg.number, 'filesystem', fsTmp);
+      await E(hostAgent).adopt(msg.number, 'filesystem', [fsTmp]);
       removeNames.push(fsTmp);
       let credentialsName = null;
       if (Array.isArray(msg.names) && msg.names.includes('credentials')) {
         const credTmp = `${tag}-credcap`;
-        await E(hostAgent).adopt(msg.number, 'credentials', credTmp);
+        await E(hostAgent).adopt(msg.number, 'credentials', [credTmp]);
         removeNames.push(credTmp);
         credentialsName = credTmp;
       }
@@ -671,7 +679,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
   const seenFormReplies = new Set();
 
   const runFactory = async () => {
-    await E(powers).form('@host', FORM_DESCRIPTION, FORM_FIELDS);
+    await E(powers).form(['@host'], FORM_DESCRIPTION, FORM_FIELDS);
 
     const selfId = await E(powers).locate('@self');
 

@@ -436,7 +436,7 @@ export const makeAccountJournal = ({
     read: async () => {
       const names = await listNames();
       if (names.length === 0) return undefined;
-      return E(powers).lookup(names[names.length - 1]);
+      return E(powers).lookup([names[names.length - 1]]);
     },
     /** @param {any} snapshot */
     write: async snapshot => {
@@ -445,7 +445,7 @@ export const makeAccountJournal = ({
         const last = names[names.length - 1];
         const sequence = last ? BigInt(last.slice(prefix.length)) + 1n : 0n;
         const name = `${prefix}${`${sequence}`.padStart(sequenceWidth, '0')}`;
-        await E(powers).storeValue(snapshot, name);
+        await E(powers).storeValue(snapshot, [name]);
         // Trim only after the new snapshot is durable, so the journal is never
         // momentarily empty.
         for (const stale of names.slice(0, Math.max(0, names.length - keep))) {

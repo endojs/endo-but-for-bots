@@ -176,16 +176,18 @@ export const makeEvaluateTool = host => {
       const codeNames = Object.keys(
         /** @type {Record<string, string>} */ (endowments),
       );
-      const petNames = Object.values(
+      // Each endowment pet name and the worker name are single names,
+      // wrapped as one-segment pet-name paths.
+      const petNamePaths = Object.values(
         /** @type {Record<string, string>} */ (endowments),
-      );
+      ).map(petName => [petName]);
       const resultPath = resultName ? [resultName] : undefined;
       const result = await E(host).evaluate(
-        workerName,
+        harden([workerName]),
         source,
-        codeNames,
-        petNames,
-        resultPath,
+        harden(codeNames),
+        harden(petNamePaths),
+        resultPath && harden(resultPath),
       );
       if (result === undefined) {
         return 'undefined';
@@ -877,7 +879,8 @@ export const makeStoreTool = host => {
       if (petName === undefined) {
         throw new Error('petName is required');
       }
-      await E(host).storeValue(value, petName);
+      // One segment, never split on a delimiter.
+      await E(host).storeValue(value, [petName]);
       return `Stored value under "${petName}"`;
     },
     help() {
@@ -1418,7 +1421,7 @@ export const makeAdoptTool = host => {
       if (messageNumber === undefined || !edgeName || !petName) {
         throw new Error('messageNumber, edgeName, and petName are required');
       }
-      await E(host).adopt(BigInt(messageNumber), edgeName, petName);
+      await E(host).adopt(BigInt(messageNumber), edgeName, [petName]);
       return `Adopted "${edgeName}" from message #${messageNumber} as "${petName}".`;
     },
     help() {
@@ -1483,8 +1486,8 @@ export const makeExecTool = powers => {
         'it came. A remote capability is described by its method names.\n\n' +
         'Example — adopt a channel, join it, and post a reply:\n' +
         '```\n' +
-        'await E(powers).adopt(13n, "danzone", "my-channel");\n' +
-        'const channel = await E(powers).lookup("my-channel");\n' +
+        'await E(powers).adopt(13n, "danzone", ["my-channel"]);\n' +
+        'const channel = await E(powers).lookup(["my-channel"]);\n' +
         'const member = await E(channel).join("fae");\n' +
         'await E(member).post(["Hello from fae!"], [], []);\n' +
         'return "Posted to channel";\n' +
@@ -1606,7 +1609,7 @@ export const makeReadChannelTool = powers => {
       if (!channelName) {
         throw new Error('channelName is required');
       }
-      const channel = await E(powers).lookup(channelName);
+      const channel = await E(powers).lookup([channelName]);
       const rawMessages = await E(channel).listMessages();
       const messages = /** @type {any[]} */ (rawMessages);
 

@@ -26,19 +26,19 @@ export const make = async (powers, context, { env } = {}) => {
   const startLoop = async () => {
     const providerConfig =
       /** @type {{ host: string, model: string, authToken: string }} */ (
-        await E(powers).lookup('llm-provider')
+        await E(powers).lookup(['llm-provider'])
       );
     /** @type {{ host: string, model: string, authToken: string } | null} */
     let fastProviderConfig = null;
     try {
       fastProviderConfig =
         /** @type {{ host: string, model: string, authToken: string }} */ (
-          await E(powers).lookup('llm-provider-fast')
+          await E(powers).lookup(['llm-provider-fast'])
         );
     } catch {
       // No fast provider configured — router will use the main provider.
     }
-    const agentPowers = await E(powers).lookup('agent');
+    const agentPowers = await E(powers).lookup(['agent']);
     await spawnWorkerLoop(
       agentPowers,
       context,

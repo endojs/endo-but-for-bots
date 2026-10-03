@@ -48,20 +48,23 @@ const makeMockPowers = ({ afterList = noop, beforeLookup = noop } = {}) => {
       await afterList();
       return names;
     },
-    /** @param {string} name */
-    async lookup(name) {
+    /** @param {string[]} path */
+    async lookup(path) {
       counts.lookup += 1;
+      if (!Array.isArray(path)) throw new Error('pet-name path required');
+      const [name] = path;
       await beforeLookup();
       if (!store.has(name)) throw new Error(`unknown petname ${name}`);
       return store.get(name);
     },
     /**
      * @param {unknown} value
-     * @param {string | string[]} pathOrName
+     * @param {string[]} path
      */
-    async storeValue(value, pathOrName) {
+    async storeValue(value, path) {
       counts.storeValue += 1;
-      const name = Array.isArray(pathOrName) ? pathOrName[0] : pathOrName;
+      if (!Array.isArray(path)) throw new Error('pet-name path required');
+      const [name] = path;
       store.set(name, value);
     },
   };

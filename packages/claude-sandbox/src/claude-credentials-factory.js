@@ -333,8 +333,8 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
   const seenFormReplies = new Set();
 
   const runFactory = async () => {
-    await E(powers).form('@host', FORM_DESCRIPTION, FORM_FIELDS);
-    const hostAgent = await E(powers).lookup('host-agent');
+    await E(powers).form(['@host'], FORM_DESCRIPTION, FORM_FIELDS);
+    const hostAgent = await E(powers).lookup(['host-agent']);
     const selfId = await E(powers).locate('@self');
 
     /** @type {string | undefined} */
@@ -387,7 +387,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
             // Test path: bypass daemon-formulated minting and the
             // sidecar file. The exo holds the bytes in memory only.
             const credentials = makeCredentialsExo(apiKey, kind);
-            await E(hostAgent).storeValue(credentials, name);
+            await E(hostAgent).storeValue(credentials, [name]);
           } else {
             // Production path: write key bytes to a 0600 sidecar
             // file and reference *the path* (not the bytes) from
@@ -395,11 +395,11 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
             // reincarnation.
             const credentialsFile = await persistKeyToSidecar(name, apiKey);
             await E(hostAgent).makeUnconfined(
-              '@main',
+              ['@main'],
               CREDENTIALS_MODULE_SPECIFIER,
               {
-                powersName: '@none',
-                resultName: name,
+                powersName: ['@none'],
+                resultName: [name],
                 env: harden({
                   CREDENTIALS_FILE: credentialsFile,
                   CREDENTIALS_KIND: kind,

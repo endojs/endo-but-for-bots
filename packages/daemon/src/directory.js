@@ -158,7 +158,7 @@ export const makeDirectoryMaker = ({
       /** @type {any} */
       let directory = value;
       for (const petName of tailNames) {
-        directory = E(directory).lookup(petName);
+        directory = E(directory).lookup([petName]);
       }
       return /** @type {Promise<unknown>} */ (directory);
     };
@@ -176,7 +176,7 @@ export const makeDirectoryMaker = ({
       return tailNames.reduce(
         (directory, petName) =>
           /** @type {Promise<NameHub>} */ (
-            /** @type {unknown} */ (E(directory).lookup(petName))
+            /** @type {unknown} */ (E(directory).lookup([petName]))
           ),
         /** @type {Promise<NameHub>} */ (/** @type {unknown} */ (value)),
       );
@@ -297,7 +297,7 @@ export const makeDirectoryMaker = ({
       const names = controller.list();
       const values = names.map(name => {
         try {
-          return lookup(name);
+          return lookup([name]);
         } catch (error) {
           return Promise.reject(error);
         }
@@ -583,7 +583,7 @@ export const makeDirectoryMaker = ({
 
     /**
      * Store a formula identifier at a pet name path (internal).
-     * @param {string | string[]} petNamePath
+     * @param {string[]} petNamePath
      * @param {string} id
      */
     const storeIdentifier = async (petNamePath, id) => {
@@ -599,7 +599,7 @@ export const makeDirectoryMaker = ({
 
     /**
      * Store a locator (endo:// URL) at a pet name path.
-     * @param {string | string[]} petNamePath
+     * @param {string[]} petNamePath
      * @param {string} locator
      */
     const storeLocator = async (petNamePath, locator) => {
@@ -614,6 +614,7 @@ export const makeDirectoryMaker = ({
 
     /** @type {EndoDirectory['makeDirectory']} */
     const makeDirectory = async directoryPetNamePath => {
+      petNamePathFrom(directoryPetNamePath);
       const { value: newDirectory, id } = await formulateDirectory();
       pinTransient(id);
       try {
@@ -625,19 +626,19 @@ export const makeDirectoryMaker = ({
     };
 
     /** @type {EndoDirectory['readText']} */
-    const readText = async petNameOrPath => {
-      const namePath = namePathFrom(petNameOrPath);
+    const readText = async petNamePath => {
+      const namePath = namePathFrom(petNamePath);
       if (namePath.length < 2) {
         const blob = await lookup(namePath);
         return E(/** @type {any} */ (blob)).text();
       }
       const { hub, name } = await lookupTailNameHub(namePath);
-      return E(/** @type {any} */ (hub)).readText(name);
+      return E(/** @type {any} */ (hub)).readText([name]);
     };
 
     /** @type {EndoDirectory['maybeReadText']} */
-    const maybeReadText = async petNameOrPath => {
-      const namePath = namePathFrom(petNameOrPath);
+    const maybeReadText = async petNamePath => {
+      const namePath = namePathFrom(petNamePath);
       if (namePath.length < 2) {
         const blob = await maybeLookup(namePath);
         if (blob === undefined || blob === null) {
@@ -646,14 +647,14 @@ export const makeDirectoryMaker = ({
         return E(/** @type {any} */ (blob)).text();
       }
       const { hub, name } = await lookupTailNameHub(namePath);
-      return E(/** @type {any} */ (hub)).maybeReadText(name);
+      return E(/** @type {any} */ (hub)).maybeReadText([name]);
     };
 
     /** @type {EndoDirectory['writeText']} */
-    const writeText = async (petNameOrPath, content) => {
+    const writeText = async (petNamePath, content) => {
       // Coerce for branching only; the store funnels through this
       // directory's own storeIdentifier, which enforces a pet-name leaf.
-      const namePath = namePathFrom(petNameOrPath);
+      const namePath = namePathFrom(petNamePath);
       if (namePath.length < 2) {
         const bytes = encodeUtf8(content);
         const readerRef = bytesReaderFromIterator([bytes]);
@@ -666,7 +667,7 @@ export const makeDirectoryMaker = ({
         return;
       }
       const { hub, name } = await lookupTailNameHub(namePath);
-      await E(/** @type {any} */ (hub)).writeText(name, content);
+      await E(/** @type {any} */ (hub)).writeText([name], content);
     };
 
     /** @type {EndoDirectory & ContentLocatable} */
