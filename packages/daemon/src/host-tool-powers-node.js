@@ -8,12 +8,15 @@
  * stand-ins that refuse.
  *
  * Only this module and the Node powers factories that call it import
- * `@endo/git` and `@endo/host-spawner`, which keeps their `node:`
- * builtins off the XS daemon bundle's compartment graph.
+ * `@endo/git`, `@endo/host-spawner`, and (through
+ * `capture-node-modules.js`) `@endo/compartment-mapper`, which keeps
+ * them off the XS daemon bundle's compartment graph.
  */
 
 import { gitClone, makeNativeGitBackend } from '@endo/git';
 import { makeHostSpawner } from '@endo/host-spawner';
+
+import { captureNodeModulesArchive } from './capture-node-modules.js';
 
 /** @import { HostToolPowers } from './types.js' */
 
@@ -25,5 +28,6 @@ export const makeNodeHostToolPowers = () =>
     gitClone,
     makeNativeGitBackend,
     makeHostSpawner,
+    captureNodeModulesArchive,
   });
 harden(makeNodeHostToolPowers);

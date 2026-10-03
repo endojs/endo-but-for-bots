@@ -8089,122 +8089,166 @@ const formulaProperties = async (host, petName) => {
   return /** @type {Record<string, any>} */ (record.properties);
 };
 
-test('makeFromTree detects and runs a hoisted node_modules tree', async t => {
-  const { host, config } = await prepareHost(t);
-  const root = writeTreeFixture(config, 'tree-hoisted', hoistedTreeFiles());
-  await E(host).provideMount(root, 'hoisted-tree', { readOnly: true });
+// The `node_modules` layouts capture the tree with
+// `@endo/compartment-mapper`, which the XS manager's bundle excludes, so
+// only a Node manager supplies the capture (see `host-tool-powers.js`).
+// Under the XS manager these layouts refuse instead, as the next test pins.
+const testNeedsNodeModulesCapture =
+  process.env.ENDO_BIN && !process.env.ENDO_MANAGER_NODE ? test.skip : test;
+const testOnXsManager =
+  process.env.ENDO_BIN && !process.env.ENDO_MANAGER_NODE ? test : test.skip;
 
-  const app = await E(host).makeFromTree(undefined, 'hoisted-tree', {
-    powersName: '@none',
-    resultName: 'hoisted-app',
-    env: { WHO: 'npm' },
-  });
-  // The root package's conditional "." export resolves through `import`.
-  t.is(await E(app).greet(), 'hello from node_modules npm');
+testOnXsManager(
+  'makeFromTree refuses node_modules layouts on the XS manager',
+  async t => {
+    const { host, config } = await prepareHost(t);
+    const root = writeTreeFixture(
+      config,
+      'tree-xs-refusal',
+      hoistedTreeFiles(),
+    );
+    await E(host).provideMount(root, 'xs-refusal-tree', { readOnly: true });
 
-  const properties = await formulaProperties(host, 'hoisted-app');
-  t.deepEqual(properties.layout, { kind: 'literal', value: 'detect' });
-  t.deepEqual(properties.runningAs, {
-    kind: 'literal',
-    value: 'node-modules-scan',
-  });
-  t.deepEqual(properties.treeKind, { kind: 'literal', value: 'mount' });
-});
+    await t.throwsAsync(
+      () =>
+        E(host).makeFromTree(undefined, 'xs-refusal-tree', {
+          powersName: '@none',
+        }),
+      {
+        message: /"captureNodeModulesArchive" is unavailable.*"archive" layout/,
+      },
+    );
+  },
+);
 
-test('makeFromTree loads a package reached through two in-root links once', async t => {
-  const { host, config } = await prepareHost(t);
-  // Yarn `nodeLinker: pnpm` and pnpm's isolated layout link each
-  // `node_modules/<name>` into an in-root store.
-  const root = writeTreeFixture(config, 'tree-linked', {
-    'package.json': packageJson({
-      name: 'linked-application',
-      main: './main.js',
-      dependencies: { shared: '1.0.0', wrapper: '1.0.0' },
-    }),
-    'main.js': `/* global Far */
+testNeedsNodeModulesCapture(
+  'makeFromTree detects and runs a hoisted node_modules tree',
+  async t => {
+    const { host, config } = await prepareHost(t);
+    const root = writeTreeFixture(config, 'tree-hoisted', hoistedTreeFiles());
+    await E(host).provideMount(root, 'hoisted-tree', { readOnly: true });
+
+    const app = await E(host).makeFromTree(undefined, 'hoisted-tree', {
+      powersName: '@none',
+      resultName: 'hoisted-app',
+      env: { WHO: 'npm' },
+    });
+    // The root package's conditional "." export resolves through `import`.
+    t.is(await E(app).greet(), 'hello from node_modules npm');
+
+    const properties = await formulaProperties(host, 'hoisted-app');
+    t.deepEqual(properties.layout, { kind: 'literal', value: 'detect' });
+    t.deepEqual(properties.runningAs, {
+      kind: 'literal',
+      value: 'node-modules-scan',
+    });
+    t.deepEqual(properties.treeKind, { kind: 'literal', value: 'mount' });
+  },
+);
+
+testNeedsNodeModulesCapture(
+  'makeFromTree loads a package reached through two in-root links once',
+  async t => {
+    const { host, config } = await prepareHost(t);
+    // Yarn `nodeLinker: pnpm` and pnpm's isolated layout link each
+    // `node_modules/<name>` into an in-root store.
+    const root = writeTreeFixture(config, 'tree-linked', {
+      'package.json': packageJson({
+        name: 'linked-application',
+        main: './main.js',
+        dependencies: { shared: '1.0.0', wrapper: '1.0.0' },
+      }),
+      'main.js': `/* global Far */
 import { token as direct } from 'shared';
 import { token as wrapped } from 'wrapper';
 export const make = () => Far('Linked', { same: () => direct === wrapped });
 `,
-    'node_modules/.store/shared-1/package/package.json': packageJson({
-      name: 'shared',
-      main: './index.js',
-    }),
-    'node_modules/.store/shared-1/package/index.js':
-      'export const token = Object.freeze({});\n',
-    'node_modules/.store/wrapper-1/package/package.json': packageJson({
-      name: 'wrapper',
-      main: './index.js',
-      dependencies: { shared: '1.0.0' },
-    }),
-    'node_modules/.store/wrapper-1/package/index.js':
-      "export { token } from 'shared';\n",
-    'node_modules/.store/wrapper-1/package/node_modules/shared': {
-      link: '../../../shared-1/package',
-    },
-    'node_modules/shared': { link: '.store/shared-1/package' },
-    'node_modules/wrapper': { link: '.store/wrapper-1/package' },
-  });
-  await E(host).provideMount(root, 'linked-tree', { readOnly: true });
+      'node_modules/.store/shared-1/package/package.json': packageJson({
+        name: 'shared',
+        main: './index.js',
+      }),
+      'node_modules/.store/shared-1/package/index.js':
+        'export const token = Object.freeze({});\n',
+      'node_modules/.store/wrapper-1/package/package.json': packageJson({
+        name: 'wrapper',
+        main: './index.js',
+        dependencies: { shared: '1.0.0' },
+      }),
+      'node_modules/.store/wrapper-1/package/index.js':
+        "export { token } from 'shared';\n",
+      'node_modules/.store/wrapper-1/package/node_modules/shared': {
+        link: '../../../shared-1/package',
+      },
+      'node_modules/shared': { link: '.store/shared-1/package' },
+      'node_modules/wrapper': { link: '.store/wrapper-1/package' },
+    });
+    await E(host).provideMount(root, 'linked-tree', { readOnly: true });
 
-  const app = await E(host).makeFromTree(undefined, 'linked-tree', {
-    powersName: '@none',
-  });
-  t.true(await E(app).same());
-});
+    const app = await E(host).makeFromTree(undefined, 'linked-tree', {
+      powersName: '@none',
+    });
+    t.true(await E(app).same());
+  },
+);
 
-test('makeFromTree runs a pre-generated map over node_modules', async t => {
-  const { host, config } = await prepareHost(t);
-  const root = writeTreeFixture(config, 'tree-with-map', hoistedTreeFiles());
-  const readPowers = /** @type {any} */ (
-    makeTreeReadPowers(makeLocalTree(root), { root: 'file:///app/' })
-  );
-  const compartmentMap = await mapNodeModules(
-    readPowers,
-    'file:///app/main.js',
-  );
-  fs.writeFileSync(
-    path.join(root, 'compartment-map.json'),
-    JSON.stringify(compartmentMap),
-  );
-  await E(host).provideMount(root, 'map-tree', { readOnly: true });
+testNeedsNodeModulesCapture(
+  'makeFromTree runs a pre-generated map over node_modules',
+  async t => {
+    const { host, config } = await prepareHost(t);
+    const root = writeTreeFixture(config, 'tree-with-map', hoistedTreeFiles());
+    const readPowers = /** @type {any} */ (
+      makeTreeReadPowers(makeLocalTree(root), { root: 'file:///app/' })
+    );
+    const compartmentMap = await mapNodeModules(
+      readPowers,
+      'file:///app/main.js',
+    );
+    fs.writeFileSync(
+      path.join(root, 'compartment-map.json'),
+      JSON.stringify(compartmentMap),
+    );
+    await E(host).provideMount(root, 'map-tree', { readOnly: true });
 
-  const detected = await E(host).makeFromTree(undefined, 'map-tree', {
-    powersName: '@none',
-    resultName: 'map-app',
-    env: { WHO: 'detected' },
-  });
-  t.is(await E(detected).greet(), 'hello from node_modules detected');
-  const properties = await formulaProperties(host, 'map-app');
-  t.deepEqual(properties.runningAs, {
-    kind: 'literal',
-    value: 'node-modules-with-map',
-  });
+    const detected = await E(host).makeFromTree(undefined, 'map-tree', {
+      powersName: '@none',
+      resultName: 'map-app',
+      env: { WHO: 'detected' },
+    });
+    t.is(await E(detected).greet(), 'hello from node_modules detected');
+    const properties = await formulaProperties(host, 'map-app');
+    t.deepEqual(properties.runningAs, {
+      kind: 'literal',
+      value: 'node-modules-with-map',
+    });
 
-  const explicit = await E(host).makeFromTree(undefined, 'map-tree', {
-    powersName: '@none',
-    layout: 'node-modules-with-map',
-    env: { WHO: 'explicit' },
-  });
-  t.is(await E(explicit).greet(), 'hello from node_modules explicit');
-});
+    const explicit = await E(host).makeFromTree(undefined, 'map-tree', {
+      powersName: '@none',
+      layout: 'node-modules-with-map',
+      env: { WHO: 'explicit' },
+    });
+    t.is(await E(explicit).greet(), 'hello from node_modules explicit');
+  },
+);
 
-test('makeFromTree entry names a module within the root package', async t => {
-  const { host, config } = await prepareHost(t);
-  const root = writeTreeFixture(config, 'tree-entry', {
-    ...hoistedTreeFiles(),
-    'alternate.js': greeterSource('entry'),
-  });
-  await E(host).provideMount(root, 'entry-tree', { readOnly: true });
+testNeedsNodeModulesCapture(
+  'makeFromTree entry names a module within the root package',
+  async t => {
+    const { host, config } = await prepareHost(t);
+    const root = writeTreeFixture(config, 'tree-entry', {
+      ...hoistedTreeFiles(),
+      'alternate.js': greeterSource('entry'),
+    });
+    await E(host).provideMount(root, 'entry-tree', { readOnly: true });
 
-  const app = await E(host).makeFromTree(undefined, 'entry-tree', {
-    powersName: '@none',
-    layout: 'node-modules-scan',
-    entry: './alternate.js',
-    env: { WHO: 'chosen' },
-  });
-  t.is(await E(app).greet(), 'entry from node_modules chosen');
-});
+    const app = await E(host).makeFromTree(undefined, 'entry-tree', {
+      powersName: '@none',
+      layout: 'node-modules-scan',
+      entry: './alternate.js',
+      env: { WHO: 'chosen' },
+    });
+    t.is(await E(app).greet(), 'entry from node_modules chosen');
+  },
+);
 
 test('makeFromTree rejects a Yarn Plug-n-Play tree and formulates nothing', async t => {
   const { host, config } = await prepareHost(t);
@@ -8226,26 +8270,37 @@ test('makeFromTree rejects a Yarn Plug-n-Play tree and formulates nothing', asyn
   t.false(await E(host).has('pnp-app'));
 });
 
-test('makeFromTree refuses a package.json that names a file outside the tree', async t => {
-  const { host, config } = await prepareHost(t);
-  const root = writeTreeFixture(config, 'tree-outside/app', {
-    'package.json': packageJson({
-      name: 'escaping-application',
-      exports: '../outside.js',
-    }),
-  });
-  fs.writeFileSync(
-    path.join(root, '..', 'outside.js'),
-    'export const make = () => 1;\n',
-  );
-  await E(host).provideMount(root, 'outside-tree', { readOnly: true });
+testNeedsNodeModulesCapture(
+  'makeFromTree refuses a package.json that names a file outside the tree',
+  async t => {
+    const { host, config } = await prepareHost(t);
+    const root = writeTreeFixture(config, 'tree-outside/app', {
+      'package.json': packageJson({
+        name: 'escaping-application',
+        exports: '../outside.js',
+      }),
+    });
+    fs.writeFileSync(
+      path.join(root, '..', 'outside.js'),
+      'export const make = () => 1;\n',
+    );
+    await E(host).provideMount(root, 'outside-tree', { readOnly: true });
 
-  await t.throwsAsync(
-    () =>
-      E(host).makeFromTree(undefined, 'outside-tree', { powersName: '@none' }),
-    { message: /"\.\.\/outside\.js" must not traverse behind an empty path/ },
-  );
-});
+    await t.throwsAsync(
+      () =>
+        E(host).makeFromTree(undefined, 'outside-tree', {
+          powersName: '@none',
+          resultName: 'outside-app',
+        }),
+      { message: /"\.\.\/outside\.js" must not traverse behind an empty path/ },
+    );
+    // The layout check passed, so the formula exists, but its incarnation
+    // failed in the capture: no layout is recorded as running.
+    const properties = await formulaProperties(host, 'outside-app');
+    t.deepEqual(properties.layout, { kind: 'literal', value: 'detect' });
+    t.is(properties.runningAs, undefined);
+  },
+);
 
 test('makeFromTree refuses mismatched layout options', async t => {
   const { host, config } = await prepareHost(t);
@@ -8288,53 +8343,56 @@ test('makeFromTree refuses mismatched layout options', async t => {
   );
 });
 
-test('makeFromTree reincarnates a mount as changed and a snapshot as made', async t => {
-  const { cancelled, config } = await prepareConfig(t);
-  const root = writeTreeFixture(config, 'tree-live', hoistedTreeFiles());
+testNeedsNodeModulesCapture(
+  'makeFromTree reincarnates a mount as changed and a snapshot as made',
+  async t => {
+    const { cancelled, config } = await prepareConfig(t);
+    const root = writeTreeFixture(config, 'tree-live', hoistedTreeFiles());
 
-  {
-    const { host } = await makeHost(config, cancelled);
-    await E(host).provideMount(root, 'live-tree', { readOnly: true });
-    const mount = await E(host).lookup('live-tree');
-    await E(host).storeTree(await E(mount).snapshot(), 'snapshot-tree');
+    {
+      const { host } = await makeHost(config, cancelled);
+      await E(host).provideMount(root, 'live-tree', { readOnly: true });
+      const mount = await E(host).lookup('live-tree');
+      await E(host).storeTree(await E(mount).snapshot(), 'snapshot-tree');
 
-    const live = await E(host).makeFromTree(undefined, 'live-tree', {
-      powersName: '@none',
-      resultName: 'live-app',
-      env: { WHO: 'mount' },
-    });
-    t.is(await E(live).greet(), 'hello from node_modules mount');
-    const fixed = await E(host).makeFromTree(undefined, 'snapshot-tree', {
-      powersName: '@none',
-      resultName: 'fixed-app',
-      env: { WHO: 'snapshot' },
-    });
-    t.is(await E(fixed).greet(), 'hello from node_modules snapshot');
-    const fixedProperties = await formulaProperties(host, 'fixed-app');
-    t.deepEqual(fixedProperties.treeKind, {
-      kind: 'literal',
-      value: 'snapshot',
-    });
-  }
+      const live = await E(host).makeFromTree(undefined, 'live-tree', {
+        powersName: '@none',
+        resultName: 'live-app',
+        env: { WHO: 'mount' },
+      });
+      t.is(await E(live).greet(), 'hello from node_modules mount');
+      const fixed = await E(host).makeFromTree(undefined, 'snapshot-tree', {
+        powersName: '@none',
+        resultName: 'fixed-app',
+        env: { WHO: 'snapshot' },
+      });
+      t.is(await E(fixed).greet(), 'hello from node_modules snapshot');
+      const fixedProperties = await formulaProperties(host, 'fixed-app');
+      t.deepEqual(fixedProperties.treeKind, {
+        kind: 'literal',
+        value: 'snapshot',
+      });
+    }
 
-  fs.writeFileSync(path.join(root, 'main.js'), greeterSource('changed'));
-  await restart(config);
+    fs.writeFileSync(path.join(root, 'main.js'), greeterSource('changed'));
+    await restart(config);
 
-  {
-    const { host } = await makeHost(config, cancelled);
-    const live = await E(host).lookup('live-app');
-    t.is(await E(live).greet(), 'changed from node_modules mount');
-    const fixed = await E(host).lookup('fixed-app');
-    t.is(await E(fixed).greet(), 'hello from node_modules snapshot');
+    {
+      const { host } = await makeHost(config, cancelled);
+      const live = await E(host).lookup('live-app');
+      t.is(await E(live).greet(), 'changed from node_modules mount');
+      const fixed = await E(host).lookup('fixed-app');
+      t.is(await E(fixed).greet(), 'hello from node_modules snapshot');
 
-    const properties = await formulaProperties(host, 'live-app');
-    t.deepEqual(properties.layout, { kind: 'literal', value: 'detect' });
-    t.deepEqual(properties.runningAs, {
-      kind: 'literal',
-      value: 'node-modules-scan',
-    });
-  }
-});
+      const properties = await formulaProperties(host, 'live-app');
+      t.deepEqual(properties.layout, { kind: 'literal', value: 'detect' });
+      t.deepEqual(properties.runningAs, {
+        kind: 'literal',
+        value: 'node-modules-scan',
+      });
+    }
+  },
+);
 
 test('Phase 6: host.lookup("@node") resolves to a worker', async t => {
   const { host } = await prepareHost(t);

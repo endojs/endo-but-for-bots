@@ -37,6 +37,14 @@ test('every tool refuses when the supervisor supplied none', t => {
   }
 });
 
+test('node_modules capture refuses when the supervisor supplied none', async t => {
+  const tools = provideLoosely({});
+  await t.throwsAsync(async () => tools.captureNodeModulesArchive(), {
+    message:
+      /no host tool powers.*"captureNodeModulesArchive".*node_modules tree.*"archive" layout/,
+  });
+});
+
 test('a supplied tool passes through untouched', t => {
   const gitClone = () => 'cloned';
   const tools = provideLoosely({ gitClone: /** @type {any} */ (gitClone) });

@@ -509,8 +509,15 @@ const makeDaemonCore = async (
   // injects the implementations rather than the daemon core importing
   // them, so the core stays free of `node:` builtins; a supervisor that
   // cannot spawn gets stand-ins that refuse.
-  const { gitClone, makeNativeGitBackend, makeHostSpawner } =
-    provideHostToolPowers(hostTools);
+  // `makeFromTree`'s `node_modules` layouts need
+  // `@endo/compartment-mapper`, which the XS bundle excludes, so the
+  // capture is injected the same way.
+  const {
+    gitClone,
+    makeNativeGitBackend,
+    makeHostSpawner,
+    captureNodeModulesArchive,
+  } = provideHostToolPowers(hostTools);
   const contentStore = persistencePowers.makeContentStore();
   const secretStoreKey = await persistencePowers.provideSecretStoreKey();
   const secretBackend = makeEncryptedFileSecretBackend({
@@ -2325,8 +2332,6 @@ const makeDaemonCore = async (
     context,
   ) => {
     if (runningAs !== 'archive') {
-      const { captureNodeModulesArchive } =
-        await import('./capture-node-modules.js');
       const archiveBytes = await captureNodeModulesArchive(
         /** @type {any} */ (treeP),
         {
@@ -2422,6 +2427,14 @@ const makeDaemonCore = async (
     if (cancelWithWorker) {
       context.thisDiesIfThatDies(cancelWithWorker);
     }
+    // Register the cleanup before the first await: a context cancelled
+    // while the worker runs accepts no further `onCancel` hooks, so a
+    // hook registered afterward would leave an entry nothing deletes.
+    let incarnationCancelled = false;
+    context.onCancel(() => {
+      incarnationCancelled = true;
+      treeLayoutRunningAs.delete(id);
+    });
 
     const worker = await provide(
       /** @type {FormulaIdentifier} */ (workerId),
@@ -2448,10 +2461,9 @@ const makeDaemonCore = async (
       env,
       context,
     );
-    treeLayoutRunningAs.set(id, runningAs);
-    context.onCancel(() => {
-      treeLayoutRunningAs.delete(id);
-    });
+    if (!incarnationCancelled) {
+      treeLayoutRunningAs.set(id, runningAs);
+    }
     return value;
   };
 

@@ -2782,6 +2782,7 @@ export type HostToolPowers = {
   gitClone: typeof import('@endo/git').gitClone;
   makeNativeGitBackend: typeof import('@endo/git').makeNativeGitBackend;
   makeHostSpawner: typeof import('@endo/host-spawner').makeHostSpawner;
+  captureNodeModulesArchive: typeof import('./capture-node-modules.js').captureNodeModulesArchive;
 };
 
 export type DaemonicPowers = {
@@ -2803,7 +2804,8 @@ export type DaemonicPowers = {
   };
   /**
    * Absent on a supervisor that cannot spawn host processes (the XS
-   * one). `git` and `shell` formulas then refuse with a diagnosis.
+   * one). `git` and `shell` formulas, and `makeFromTree`'s
+   * `node_modules` layouts, then refuse with a diagnosis.
    */
   hostTools?: Partial<HostToolPowers>;
 };
@@ -3194,6 +3196,14 @@ export interface DaemonCore {
    * public surface.
    */
   getMountHostPath: (id: FormulaIdentifier) => string;
+
+  /**
+   * Privileged accessor that returns the layout a live `make-from-tree`
+   * incarnation ran as, or `undefined` when none is live.  The daemon
+   * hands this to `makeHostMaker` so `getFormula` can report it as
+   * `runningAs`; it is a live fact, not formula state.
+   */
+  getTreeLayoutRunningAs: (id: FormulaIdentifier) => string | undefined;
 
   getTypeForId: (id: FormulaIdentifier) => Promise<string>;
 
