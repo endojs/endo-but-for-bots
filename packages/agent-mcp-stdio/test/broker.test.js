@@ -329,6 +329,18 @@ test('a broker refuses a guest socket issued for a different guest', async t => 
   t.pass();
 });
 
+test('a broker refuses a guest socket whose guest lives on a different node', async t => {
+  const { connection } = makeFakeGuestConnection(FORMULA_ID);
+  await t.throwsAsync(
+    startGuestBroker({
+      connection,
+      formulaId: `${FORMULA_ID}:${'34'.repeat(32)}`,
+      version: '0',
+    }),
+    { message: /does not speak for formula/ },
+  );
+});
+
 test('resolveScopedGuest refuses a malformed formula id with a discriminated error', async t => {
   const guest = makeFakeGuest('guest', [], FORMULA_ID);
   const error = await t.throwsAsync(resolveScopedGuest(guest, 'not-an-id'), {
