@@ -1225,14 +1225,20 @@ export type MakeDirectoryNode = (
 ) => EndoDirectory & ContentLocatable & GuestPathOperations;
 
 /**
- * The `move` and `copy` a guest (or a directory's guest facet) exposes. They
- * recover a directory from its guest facet but never amplify a guest to its
- * directory, so a name bound to another guest does not open that guest's
- * namespace.
+ * The multi-segment path operations a guest (or a directory's guest facet)
+ * exposes. They recover a directory from its guest facet but never amplify a
+ * guest to its directory, so a name bound to another guest does not open that
+ * guest's namespace. Same-realm only: daemon code reaches these as plain
+ * properties of a directory node, and no exo or interface guard exposes them
+ * under these names.
  */
 export interface GuestPathOperations {
   guestMove: EndoDirectory['move'];
   guestCopy: EndoDirectory['copy'];
+  guestRemove: EndoDirectory['remove'];
+  guestReadText: EndoDirectory['readText'];
+  guestMaybeReadText: EndoDirectory['maybeReadText'];
+  guestWriteText: EndoDirectory['writeText'];
 }
 
 export interface Mail {

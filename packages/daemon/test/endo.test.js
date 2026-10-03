@@ -3694,12 +3694,19 @@ test('a guest cannot copy or move through another guest it names', async t => {
       E(namer).move(['peer', 'vault', 'deep'], ['stolen']),
     'nested rename': () =>
       E(namer).move(['peer', 'vault', 'deep'], ['peer', 'vault', 'moved']),
+    'remove from': () => E(namer).remove('peer', 'secret'),
+    'nested remove from': () => E(namer).remove('peer', 'vault', 'deep'),
+    'facet remove from': () => E(shelf).remove('peer', 'secret'),
+    'read text from': () => E(namer).readText(['peer', 'secret']),
+    'maybe read text from': () => E(namer).maybeReadText(['peer', 'secret']),
+    'write text into': () => E(namer).writeText(['peer', 'planted'], 'x'),
+    'facet write text into': () => E(shelf).writeText(['peer', 'planted'], 'x'),
   };
   for (const [label, attempt] of Object.entries(refusals)) {
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(
       attempt,
-      { message: /target has no method|Cannot move or copy through/u },
+      { message: /target has no method|Cannot traverse a path through/u },
       label,
     );
   }
@@ -3714,6 +3721,36 @@ test('a guest cannot copy or move through another guest it names', async t => {
   // A host still traverses into its own guest.
   await E(host).copy(['named-agent', 'secret'], ['namer-agent', 'given']);
   t.is(await E(namer).lookup('given'), 42);
+});
+
+test('a guest path operation through a directory it holds grants no more than its facet', async t => {
+  // A directory the guest holds a name for is walked as a directory, so its
+  // path operations reach the same entries as the directory's guest facet,
+  // and a directory copied out of it is narrowed by the guest's `lookup`.
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest', {
+    agentName: 'guest-agent',
+  });
+  await E(host).makeDirectory(['granted']);
+  await E(host).makeDirectory(['granted', 'inner']);
+  await E(host).storeValue(42, ['granted', 'answer']);
+  await E(host).writeText(['granted', 'note'], 'hello');
+  await E(host).copy(['granted'], ['guest-agent', 'granted']);
+
+  await E(guest).copy(['granted', 'inner'], ['inner']);
+  const inner = await E(guest).lookup('inner');
+  // eslint-disable-next-line no-underscore-dangle
+  const methods = new Set(await E(inner).__getMethodNames__());
+  t.true(methods.has('lookup'));
+  for (const method of directoryDesignationMethods) {
+    t.false(methods.has(method), `copied directory lacks ${method}`);
+  }
+
+  t.is(await E(guest).readText(['granted', 'note']), 'hello');
+  await E(guest).writeText(['granted', 'reply'], 'hi');
+  t.is(await E(host).readText(['granted', 'reply']), 'hi');
+  await E(guest).remove('granted', 'answer');
+  t.false(await E(host).has('granted', 'answer'));
 });
 
 test('a directory resolving a guest request arrives as its facet', async t => {

@@ -21,7 +21,7 @@ The mailbox hub a guest looks up as `@mail`, and each message hub under it, like
 Channels are outside this scope: a channel message still carries `ids` to every member, guests included.
 A guest's `evaluate` resolves every endowment, even a single pet name, by a lookup through the guest, so a directory endowment arrives as its `EndoGuestDirectory` facet.
 A host can still traverse a pet-name path into its own guest (for example, `host.copy(['answer'], ['guest-agent', 'answer'])`) to bind a value there.
-A guest's own `copy` and `move` cannot traverse a path through another guest it names.
+A guest's own multi-segment path operations (`copy`, `move`, `remove`, `readText`, `maybeReadText`, `writeText`) cannot traverse a path through another guest it names.
 `@endo/daemon` exports the `GuestMessage`, `GuestMessageRevision`, `GuestNameChange`, and `EndoGuestDirectory` types.
 
 `@endo/agent-mcp-stdio` drops the corresponding guest tools.

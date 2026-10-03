@@ -55,7 +55,7 @@ const guestFacetMakers = new WeakMap();
 // `amplifyNameHub` recovers their directories, but `amplifyNameHub` amplifies
 // a guest exo too. This map holds facets only, so `unwrapGuestFacet` recovers
 // a directory from a facet while leaving a guest exo opaque, which a guest's
-// own `reverseLookup`, `move`, and `copy` rely on.
+// own `reverseLookup` and path operations rely on.
 
 /** @type {WeakMap<object, object>} */
 const directoriesByGuestFacet = new WeakMap();
@@ -749,13 +749,33 @@ export const makeDirectoryMaker = ({
       storeIdentifierThrough(amplifyNameHub, petNamePath, id);
 
     /**
-     * `move` and `copy`, reaching the hub at the prefix of each path through
-     * `lookupHub`, which must yield a hub with `identify` and
-     * `storeIdentifier`.
+     * `move`, `copy`, `remove`, `readText`, `maybeReadText`, and `writeText`,
+     * reaching the hub at the prefix of each path through `lookupHub`, which
+     * must yield a hub with `identify` and `storeIdentifier`.
      *
      * @param {(prefixPath: Name[]) => Promise<NameHub>} lookupHub
      */
-    const makeMoveCopy = lookupHub => {
+    const makePathOperations = lookupHub => {
+      /**
+       * @param {Name[]} namePath
+       * @returns {Promise<{ hub: NameHub, name: Name }>}
+       */
+      const lookupTailHub = async namePath => ({
+        hub: await lookupHub(namePath.slice(0, -1)),
+        name: namePath[namePath.length - 1],
+      });
+
+      /** @type {EndoDirectory['remove']} */
+      const removeAt = async (...petNamePath) => {
+        const { prefixPath, petName } = assertPetNamePath(petNamePath);
+        await null;
+        if (prefixPath.length === 0) {
+          await controller.remove(petName);
+          return;
+        }
+        await E(await lookupHub(prefixPath)).remove(petName);
+      };
+
       /** @param {string[]} petNamePath */
       const identifyAt = async petNamePath => {
         const { prefixPath, petName } = petNamePathFrom(petNamePath);
@@ -812,7 +832,7 @@ export const makeDirectoryMaker = ({
         // First write to the "to" hub so that the original name is preserved on
         // the "from" hub in case of failure.
         await storeIdentifierAt(toPath, id);
-        await remove(...fromPath);
+        await removeAt(...fromPath);
       };
 
       /** @type {EndoDirectory['copy']} */
@@ -826,22 +846,84 @@ export const makeDirectoryMaker = ({
         await storeIdentifierAt(toPath, id);
       };
 
-      return { move, copy };
+      /** @type {EndoDirectory['readText']} */
+      const readText = async petNameOrPath => {
+        const namePath = namePathFrom(petNameOrPath);
+        if (namePath.length < 2) {
+          const blob = await lookup(namePath);
+          return E(/** @type {any} */ (blob)).text();
+        }
+        const { hub, name } = await lookupTailHub(namePath);
+        return E(/** @type {any} */ (hub)).readText(name);
+      };
+
+      /** @type {EndoDirectory['maybeReadText']} */
+      const maybeReadText = async petNameOrPath => {
+        const namePath = namePathFrom(petNameOrPath);
+        if (namePath.length < 2) {
+          const blob = await maybeLookup(namePath);
+          if (blob === undefined || blob === null) {
+            return undefined;
+          }
+          return E(/** @type {any} */ (blob)).text();
+        }
+        const { hub, name } = await lookupTailHub(namePath);
+        return E(/** @type {any} */ (hub)).maybeReadText(name);
+      };
+
+      /** @type {EndoDirectory['writeText']} */
+      const writeText = async (petNameOrPath, content) => {
+        // Coerce for branching only; the store funnels through this
+        // directory's own storeIdentifier, which enforces a pet-name leaf.
+        const namePath = namePathFrom(petNameOrPath);
+        if (namePath.length < 2) {
+          const bytes = encodeUtf8(content);
+          const readerRef = bytesReaderFromIterator([bytes]);
+          /** @type {DeferredTasks<ReadableBlobDeferredTaskParams>} */
+          const tasks = makeDeferredTasks();
+          tasks.push(identifiers =>
+            storeIdentifier(namePath, identifiers.readableBlobId),
+          );
+          await formulateReadableBlob(/** @type {any} */ (readerRef), tasks);
+          return;
+        }
+        const { hub, name } = await lookupTailHub(namePath);
+        await E(/** @type {any} */ (hub)).writeText(name, content);
+      };
+
+      return {
+        move,
+        copy,
+        remove: removeAt,
+        readText,
+        maybeReadText,
+        writeText,
+      };
     };
 
-    const { move, copy } = makeMoveCopy(
-      async prefixPath =>
-        /** @type {NameHub} */ (amplifyNameHub(await lookup(prefixPath))),
-    );
+    const { move, copy, readText, maybeReadText, writeText } =
+      makePathOperations(
+        async prefixPath =>
+          /** @type {NameHub} */ (amplifyNameHub(await lookup(prefixPath))),
+      );
 
     /**
-     * The hub at `prefixPath` for a guest's own `move` and `copy`. The path
+     * The hub at `prefixPath` for a guest's own path operations (`move`,
+     * `copy`, `remove`, `readText`, `maybeReadText`, `writeText`). The path
      * is walked one name at a time from this directory, and every hub along
      * it must be a directory: a guest facet is recovered as its directory,
      * and a guest is refused. Refusing at each step, rather than only at the
      * prefix's last hub, keeps a path from passing through another guest's
      * own `lookup`, whose guest facets would otherwise be recovered as that
      * guest's directories.
+     *
+     * Every hub reached this way is one the guest already holds through its
+     * own pet names, so the walk grants nothing the hub's guest facet does
+     * not: that facet's own `lookup`, `copy`, `move`, `remove`, and text
+     * methods reach the same entries. Formula identifiers read by `identify`
+     * here pass only from one store to another inside the daemon and never
+     * reach the guest, and a value copied out is narrowed again by the
+     * guest's own `lookup`.
      *
      * @param {Name[]} prefixPath
      * @returns {Promise<NameHub>}
@@ -856,7 +938,7 @@ export const makeDirectoryMaker = ({
         const unwrapped = /** @type {NameHub} */ (unwrapGuestFacet(next));
         if (unwrapped === next && amplifyNameHub(next) !== next) {
           throw new TypeError(
-            `Cannot move or copy through another agent: ${q(name)}`,
+            `Cannot traverse a path through another agent: ${q(name)}`,
           );
         }
         hub = unwrapped;
@@ -864,12 +946,18 @@ export const makeDirectoryMaker = ({
       return hub;
     };
 
-    // A guest's own `move` and `copy` recover a directory from its guest
+    // A guest's own path operations recover a directory from its guest
     // facet but never amplify a guest: a name bound to another guest must not
-    // open that guest's directory to `identify` or `storeIdentifier`, at any
-    // depth.
-    const { move: guestMove, copy: guestCopy } =
-      makeMoveCopy(lookupGuestOwnHub);
+    // open that guest's directory to `identify`, `storeIdentifier`, `remove`,
+    // or its text methods, at any depth.
+    const {
+      move: guestMove,
+      copy: guestCopy,
+      remove: guestRemove,
+      readText: guestReadText,
+      maybeReadText: guestMaybeReadText,
+      writeText: guestWriteText,
+    } = makePathOperations(lookupGuestOwnHub);
 
     /**
      * Store a locator (endo:// URL) at a pet name path.
@@ -896,51 +984,6 @@ export const makeDirectoryMaker = ({
         unpinTransient(id);
       }
       return newDirectory;
-    };
-
-    /** @type {EndoDirectory['readText']} */
-    const readText = async petNameOrPath => {
-      const namePath = namePathFrom(petNameOrPath);
-      if (namePath.length < 2) {
-        const blob = await lookup(namePath);
-        return E(/** @type {any} */ (blob)).text();
-      }
-      const { hub, name } = await lookupTailNameHub(namePath);
-      return E(/** @type {any} */ (hub)).readText(name);
-    };
-
-    /** @type {EndoDirectory['maybeReadText']} */
-    const maybeReadText = async petNameOrPath => {
-      const namePath = namePathFrom(petNameOrPath);
-      if (namePath.length < 2) {
-        const blob = await maybeLookup(namePath);
-        if (blob === undefined || blob === null) {
-          return undefined;
-        }
-        return E(/** @type {any} */ (blob)).text();
-      }
-      const { hub, name } = await lookupTailNameHub(namePath);
-      return E(/** @type {any} */ (hub)).maybeReadText(name);
-    };
-
-    /** @type {EndoDirectory['writeText']} */
-    const writeText = async (petNameOrPath, content) => {
-      // Coerce for branching only; the store funnels through this
-      // directory's own storeIdentifier, which enforces a pet-name leaf.
-      const namePath = namePathFrom(petNameOrPath);
-      if (namePath.length < 2) {
-        const bytes = encodeUtf8(content);
-        const readerRef = bytesReaderFromIterator([bytes]);
-        /** @type {DeferredTasks<ReadableBlobDeferredTaskParams>} */
-        const tasks = makeDeferredTasks();
-        tasks.push(identifiers =>
-          storeIdentifier(namePath, identifiers.readableBlobId),
-        );
-        await formulateReadableBlob(/** @type {any} */ (readerRef), tasks);
-        return;
-      }
-      const { hub, name } = await lookupTailNameHub(namePath);
-      await E(/** @type {any} */ (hub)).writeText(name, content);
     };
 
     /** @type {EndoDirectory & ContentLocatable & GuestPathOperations} */
@@ -970,6 +1013,10 @@ export const makeDirectoryMaker = ({
       copy,
       guestMove,
       guestCopy,
+      guestRemove,
+      guestReadText,
+      guestMaybeReadText,
+      guestWriteText,
       makeDirectory,
       readText,
       maybeReadText,
@@ -1148,13 +1195,13 @@ export const makeDirectoryMaker = ({
           maybeLookup: petNamePath =>
             forGuest(directory.maybeLookup(petNamePath)),
           reverseLookup: value => reverseLookup(unwrapGuestFacet(value)),
-          remove,
+          remove: directory.guestRemove,
           move: directory.guestMove,
           copy: directory.guestCopy,
           makeDirectory: petNamePath => forGuest(makeDirectory(petNamePath)),
-          readText: directory.readText,
-          maybeReadText: directory.maybeReadText,
-          writeText: directory.writeText,
+          readText: directory.guestReadText,
+          maybeReadText: directory.guestMaybeReadText,
+          writeText: directory.guestWriteText,
           // Unlike the directory's own view, this view's lookups yield guest
           // facets, so a directory reached through it is narrowed too.
           readOnly: async () => {
