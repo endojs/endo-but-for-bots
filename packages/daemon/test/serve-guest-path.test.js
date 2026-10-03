@@ -143,7 +143,7 @@ test('a failed private directory is made again by the next issue', async t => {
 
 test('a failed issue releases its name so it may be retried', async t => {
   let fail = true;
-  const { issuer, served } = makeHarness({
+  const { issuer, served, reported } = makeHarness({
     servePath: async () => {
       if (fail) {
         throw Error('address in use');
@@ -154,6 +154,8 @@ test('a failed issue releases its name so it may be retried', async t => {
   await t.throwsAsync(() => issuer.issue(numberA, {}), {
     message: /address in use/,
   });
+  // The caller received the failure, so it is not reported again.
+  t.deepEqual(reported, []);
   // The failed issue no longer holds the shared prefix either.
   fail = false;
   const socketPath = await issuer.issue(numberB, {});
