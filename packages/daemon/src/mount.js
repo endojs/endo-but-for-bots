@@ -220,6 +220,65 @@ export const getEntryPhysicalPath = entry =>
 harden(getEntryPhysicalPath);
 
 /**
+ * Host-private `canonical(segments)` hook for `makeTreeReadPowers` over a
+ * daemon-backed mount (designs/agent-confined-application-makers.md § The tree
+ * `ReadPowers`).  The public `EndoMount` exposes no physical path, so only the
+ * daemon can supply this hook.
+ *
+ * The hook takes the segments of a location below the tree root (the mount's
+ * current directory), mints a mount entry for them, reads its physical path
+ * with `getEntryPhysicalPath`, and resolves that through `realPath` under the
+ * mount's confinement.  A path that resolves under the tree root returns its
+ * physical segments relative to that root, so every `node_modules` path that
+ * reaches one package directory canonicalizes to one location.  A path that
+ * does not exist returns its own segments, as the Node `canonical` returns the
+ * logical location when there is no real path.  A path whose physical form is
+ * outside the tree root is refused as an unsupported layout, so a link out of
+ * the root is never read as a missing dependency.
+ *
+ * Returns `undefined` for a value the daemon did not mint as a mount (for
+ * example a snapshot tree), whose identity `canonical` is already correct.
+ *
+ * @param {unknown} mount
+ * @returns {((segments: string[]) => Promise<string[]>) | undefined}
+ */
+export const makeMountCanonical = mount => {
+  const record = mountRecords.get(/** @type {object} */ (mount));
+  if (record === undefined) {
+    return undefined;
+  }
+  const { currentDir, entry, realPath } = record;
+  /** @param {string[]} segments */
+  const canonical = async segments => {
+    await null;
+    const physicalPath = getEntryPhysicalPath(entry(harden([...segments])));
+    if (physicalPath === undefined) {
+      throw new Error('Mount did not mint a physical entry');
+    }
+    let resolved;
+    try {
+      resolved = await realPath(physicalPath);
+    } catch {
+      return harden([...segments]);
+    }
+    const treeRoot = await realPath(currentDir);
+    if (resolved === treeRoot) {
+      return harden([]);
+    }
+    if (!resolved.startsWith(`${treeRoot}/`)) {
+      throw new Error(
+        `Unsupported layout: ${q(
+          segments.length === 0 ? '.' : segments.join('/'),
+        )} resolves outside the mount root`,
+      );
+    }
+    return harden(resolved.slice(treeRoot.length + 1).split('/'));
+  };
+  return harden(canonical);
+};
+harden(makeMountCanonical);
+
+/**
  * The default defense-in-depth deny set: segment names that a mount refuses
  * to resolve, list, or surface through a change stream, matched
  * case-insensitively. These are the well-known homedir credential and
@@ -1472,7 +1531,16 @@ const makeMountExo = ctx => {
 
   mountRecords.set(
     exo,
-    harden({ rootId, currentDir, confinementRoot, readOnly }),
+    harden({
+      rootId,
+      currentDir,
+      confinementRoot,
+      readOnly,
+      // Host-private: `makeMountCanonical` mints entries and resolves their
+      // physical form through these.
+      entry,
+      realPath: path => filePowers.realPath(path),
+    }),
   );
   // `MountInterface` is the canonical CapTP contract and `makeExo` checks the
   // implementation against it above.

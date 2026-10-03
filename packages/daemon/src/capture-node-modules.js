@@ -12,6 +12,8 @@ import harden from '@endo/harden';
 import { makeTreeReadPowers } from '@endo/platform/fs/lite';
 import { decodeUtf8 } from '@endo/utf8/decode.js';
 
+import { makeMountCanonical } from './mount.js';
+
 const defaultRoot = 'file:///app/';
 
 /**
@@ -89,6 +91,8 @@ const assertMapLocationsUnderRoot = (
  * under the synthetic root. `node-modules-scan` maps the root package (or an
  * explicit module path within it) through the ordinary Node `node_modules`
  * algorithm before capturing. Both layouts retain original source bytes.
+ * When `tree` is a daemon-minted mount, package directories are
+ * canonicalized through the mount's physical paths (`makeMountCanonical`).
  *
  * @param {ERef<ReadableTree>} tree
  * @param {CaptureNodeModulesOptions} options
@@ -97,8 +101,15 @@ const assertMapLocationsUnderRoot = (
 export const captureNodeModules = async (tree, options) => {
   await null;
   const { layout, entry, root = defaultRoot } = options;
+  // A mount the daemon backs canonicalizes package directories through its
+  // physical paths, so a package reached through more than one
+  // `node_modules` path loads as one compartment.  Any other tree (a
+  // snapshot stores no links) keeps the identity.
+  const canonical = makeMountCanonical(await tree);
   /** @type {ReadPowers} */
-  const readPowers = /** @type {any} */ (makeTreeReadPowers(tree, { root }));
+  const readPowers = /** @type {any} */ (
+    makeTreeReadPowers(tree, { root, canonical })
+  );
 
   /** @type {PackageCompartmentMapDescriptor} */
   let compartmentMap;
