@@ -286,3 +286,26 @@ test('the dot-membrane passes a SturdyRef as a membraned SturdyRef', async t => 
     message: /Revoked: done/,
   });
 });
+
+test('smallcaps rejects a non-canonical sturdyRef index', t => {
+  const { sturdyRef } = makeSturdyRef('Ivan');
+  const { fromCapData } = makeMarshal(undefined, () => sturdyRef, {
+    serializeBodyFormat: 'smallcaps',
+  });
+  for (const encoding of ["'", "' 0", "'0x0", "'0e0", "'00", "'3.Foo"]) {
+    t.throws(
+      () => fromCapData({ body: `#${JSON.stringify(encoding)}`, slots: [0] }),
+      { message: /sturdyRef encoding must be "'" followed by a slot index/ },
+      encoding,
+    );
+  }
+});
+
+test('smallcaps still escapes a plain string that starts with "\'"', t => {
+  const { toCapData, fromCapData } = makeMarshal(undefined, undefined, {
+    serializeBodyFormat: 'smallcaps',
+  });
+  const capData = toCapData("'0");
+  t.deepEqual(capData, { body: `#"!'0"`, slots: [] });
+  t.is(fromCapData(capData), "'0");
+});

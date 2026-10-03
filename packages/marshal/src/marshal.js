@@ -424,7 +424,13 @@ export const makeMarshal = (
      */
     const decodeSturdyRefFromSmallcaps = (stringEncoding, _decodeRecur) => {
       assert(stringEncoding.charAt(0) === "'");
-      const index = Number(stringEncoding.slice(1));
+      // A SturdyRef encoding carries no iface, and `Number` alone would
+      // accept "", " 0", "0x0", and "0e0" as slot 0, so require one
+      // canonical decimal index.
+      const digits = stringEncoding.slice(1);
+      /^(?:0|[1-9][0-9]*)$/.test(digits) ||
+        Fail`sturdyRef encoding must be "'" followed by a slot index: ${q(stringEncoding)}`;
+      const index = Number(digits);
       return /** @type {SturdyRef} */ (decodeSlotCommon({ index }));
     };
 
