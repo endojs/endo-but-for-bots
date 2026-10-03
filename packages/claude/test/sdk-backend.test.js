@@ -226,6 +226,61 @@ test('the wall clock aborts a query that never finishes', async t => {
   t.deepEqual(await resultP, { type: 'limit-exceeded', which: 'wall-clock' });
 });
 
+test('the wall clock ends a query that ignores the abort', async t => {
+  let returned = false;
+  /** @type {SdkQuery} */
+  const query = () =>
+    harden({
+      [Symbol.asyncIterator]: () => ({
+        next: () => new Promise(() => {}),
+        return: async () => {
+          returned = true;
+          return { done: true, value: undefined };
+        },
+      }),
+    });
+  const { backend, manualTimers, source } = makeHarness(query);
+  const resultP = backend.infer(makeRequest());
+  await settle();
+  manualTimers.fire();
+  t.deepEqual(await resultP, { type: 'limit-exceeded', which: 'wall-clock' });
+  t.is(source.counts.released, 1);
+  await settle();
+  t.true(returned);
+});
+
+test('the wall clock ends a guest projection that never settles', async t => {
+  const { guest } = makeProjection();
+  const { query, calls } = replay([success]);
+  const { backend, manualTimers, source, scratch } = makeHarness(query);
+  const resultP = backend.infer(
+    makeRequest({
+      guest: harden({
+        ...guest,
+        buildMcpServer: Far('buildMcpServer', () => new Promise(() => {})),
+      }),
+    }),
+  );
+  await settle();
+  manualTimers.fire();
+  t.deepEqual(await resultP, { type: 'limit-exceeded', which: 'wall-clock' });
+  t.is(calls.length, 0);
+  t.is(source.counts.released, 1);
+  t.is(scratch.state.removed, 1);
+});
+
+test('the wall clock ends a version check that never settles', async t => {
+  const { query } = replay([success]);
+  const { backend, manualTimers, source } = makeHarness(query, {
+    getVersion: () => new Promise(() => {}),
+  });
+  const resultP = backend.infer(makeRequest());
+  await settle();
+  manualTimers.fire();
+  t.deepEqual(await resultP, { type: 'limit-exceeded', which: 'wall-clock' });
+  t.is(source.counts.acquired, 0);
+});
+
 test("the SDK's own turn ceiling maps to limit-exceeded", async t => {
   const { query } = replay([
     { type: 'result', subtype: 'error_max_turns', is_error: true },
@@ -241,13 +296,14 @@ test('a query that throws is unavailable unless a pinned row matches', async t =
   /** @type {SdkQuery} */
   // eslint-disable-next-line require-yield
   const query = async function* failingQuery() {
-    throw Error('Claude Code process exited with code 1');
+    throw Error(`Claude Code process exited with code 1 (${CREDENTIAL})`);
   };
   const { backend, source } = makeHarness(query);
-  t.deepEqual(await backend.infer(makeRequest()), {
-    type: 'unavailable',
-    detail: 'turn failed: Claude Code process exited with code 1',
-  });
+  t.deepEqual(
+    await backend.infer(makeRequest()),
+    { type: 'unavailable', detail: 'turn failed: Error' },
+    'the message, which may quote the credential, stays out of the detail',
+  );
   t.is(source.counts.released, 1);
 
   const responseShapes = shapeTable({
@@ -334,14 +390,14 @@ test('a projection failure during setup is unavailable, not thrown', async t => 
       guest: harden({
         ...guest,
         buildMcpServer: Far('buildMcpServer', () => {
-          throw Error('mcp server build failed');
+          throw Error(`mcp server build failed near ${CREDENTIAL}`);
         }),
       }),
     }),
   );
   t.deepEqual(result, {
     type: 'unavailable',
-    detail: 'turn setup failed: mcp server build failed',
+    detail: 'turn setup failed: Error',
   });
   t.is(calls.length, 0);
 });

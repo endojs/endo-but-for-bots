@@ -11,13 +11,8 @@
 
 import { concatBytes } from '@endo/bytes/concat.js';
 import { E } from '@endo/eventual-send';
-import { M, matches } from '@endo/patterns';
 import { makeExo } from '@endo/exo';
-import {
-  CredentialGrantShape,
-  CredentialRefusalShape,
-  InferenceBackendInterface,
-} from '@endo/inference/guards.js';
+import { InferenceBackendInterface } from '@endo/inference/guards.js';
 import {
   makeLimitEnforcer,
   makeProcessGroupKiller,
@@ -40,18 +35,14 @@ import {
   unavailable,
 } from './response-shapes.js';
 import { makeClaudeStreamReducer } from './stream-reducer.js';
-
-const AdmissionShape = M.or(CredentialGrantShape, CredentialRefusalShape);
+import {
+  acquireAdmission,
+  errorCategory,
+  makeTerminationRace,
+} from './turn-guard.js';
 
 /** @import { InferRequest, InferResult, InferenceBackend } from '@endo/inference/types.js' */
 /** @import { ChildProcessLike, ClaudeCliBackendOptions, ScratchDirectory, StdioProjection } from './backends.types.js' */
-
-/**
- * @param {unknown} error
- * @returns {string}
- */
-const messageOf = error =>
-  error instanceof Error ? error.message : String(error);
 
 /**
  * @param {Uint8Array | string} chunk
@@ -131,44 +122,11 @@ export const makeClaudeCliBackend = ({
   const infer = async request => {
     const { prompt, guest, limits, model, cancelled } = request;
 
-    const versionFailure = await checkPinnedVersion(getVersion, version);
-    if (versionFailure !== undefined) {
-      return unavailable(`version check failed: ${versionFailure}`);
-    }
-
-    const admission = await E(credentialSource)
-      .acquire()
-      .then(
-        grant =>
-          // Checked with `matches`, not `mustMatch`, so that a malformed
-          // grant's values (a credential among them) never reach the detail.
-          matches(grant, AdmissionShape)
-            ? grant
-            : harden({
-                type: /** @type {const} */ ('failed'),
-                detail: 'malformed admission',
-              }),
-        // The rejection's message is not forwarded: a source's error may
-        // carry the very credential it failed to deliver, and the detail
-        // reaches the usage record.
-        () =>
-          harden({
-            type: /** @type {const} */ ('failed'),
-            detail: 'acquire rejected',
-          }),
-      );
-    if (admission.type === 'failed') {
-      return unavailable(`credential source failed: ${admission.detail}`);
-    }
-    if (admission.type === 'refused') {
-      return admissionRefusalResult(admission.admission);
-    }
-    const { environment: credentialEnvironment, release } = admission;
-
+    const { signalTerminated, untilTerminated } = makeTerminationRace();
     /** @type {ChildProcessLike | undefined} */
     let child;
-    /** @type {() => void} */
-    let onTerminate = () => {};
+    // Built before anything is awaited, so the wall clock and cancellation
+    // also bound the version check and the wait for a credential.
     const enforcer = makeLimitEnforcer({
       limits,
       timers,
@@ -177,7 +135,9 @@ export const makeClaudeCliBackend = ({
         try {
           if (child !== undefined) killProcessGroup(child.pid);
         } finally {
-          onTerminate();
+          // A killed group can leave a grandchild holding stdout open, so a
+          // limit or cancellation settles without waiting for `close`.
+          signalTerminated();
         }
       },
     });
@@ -190,23 +150,53 @@ export const makeClaudeCliBackend = ({
     let scratch;
     /** @type {StdioProjection | undefined} */
     let projection;
+    /** @type {(() => unknown) | undefined} */
+    let release;
     try {
-      scratch = await makeScratchDirectory();
-      projection = await stdioProjection(guest);
-      const mcpConfigPath = await scratch.writeFile(
-        'mcp-config.json',
-        serializeMcpConfig(
-          renderMcpConfig({
-            serverName,
-            transport: {
-              kind: 'stdio',
-              command: projection.command,
-              args: [...(projection.commandArguments ?? [])],
-            },
-          }),
+      const versionFailure = await untilTerminated(
+        checkPinnedVersion(getVersion, version),
+      );
+      if (versionFailure !== undefined) {
+        return unavailable(`version check failed: ${versionFailure}`);
+      }
+
+      const admission = await untilTerminated(
+        acquireAdmission(credentialSource),
+        late => late.type === 'granted' && E(late.release)(),
+      );
+      if (admission.type === 'failed') {
+        return unavailable(`credential source failed: ${admission.detail}`);
+      }
+      if (admission.type === 'refused') {
+        return admissionRefusalResult(admission.admission);
+      }
+      const { environment: credentialEnvironment } = admission;
+      release = () => E(admission.release)();
+
+      scratch = await untilTerminated(makeScratchDirectory(), late =>
+        late.remove(),
+      );
+      projection = await untilTerminated(stdioProjection(guest), late =>
+        late.close?.(),
+      );
+      const mcpConfigPath = await untilTerminated(
+        scratch.writeFile(
+          'mcp-config.json',
+          serializeMcpConfig(
+            renderMcpConfig({
+              serverName,
+              transport: {
+                kind: 'stdio',
+                command: projection.command,
+                args: [...(projection.commandArguments ?? [])],
+              },
+            }),
+          ),
         ),
       );
-      const settingsPath = await scratch.writeFile('settings.json', '{}');
+      const settingsPath = await untilTerminated(
+        scratch.writeFile('settings.json', '{}'),
+      );
       const argv = buildCliArguments({
         mcpConfigPath,
         settingsPath,
@@ -242,12 +232,11 @@ export const makeClaudeCliBackend = ({
       });
       child = spawned;
 
-      /** @type {Promise<{ exitCode: number | null, signal: string | null } | { spawnError: string } | undefined>} */
+      /** @type {Promise<{ exitCode: number | null, signal: string | null } | { spawnError: string }>} */
       const ended = new Promise(resolve => {
-        // A killed group can leave a grandchild holding stdout open, so a
-        // limit or cancellation settles without waiting for `close`.
-        onTerminate = () => resolve(undefined);
-        spawned.on('error', error => resolve({ spawnError: error.message }));
+        spawned.on('error', error =>
+          resolve({ spawnError: errorCategory(error) }),
+        );
         spawned.on('close', (exitCode, signal) =>
           resolve({ exitCode, signal }),
         );
@@ -295,10 +284,7 @@ export const makeClaudeCliBackend = ({
       spawned.stdin?.write(prompt);
       spawned.stdin?.end();
 
-      const exit = await ended;
-      if (exit === undefined) {
-        return enforcer.outcome() ?? unavailable('turn terminated');
-      }
+      const exit = await untilTerminated(ended);
       if ('spawnError' in exit) {
         return (
           enforcer.outcome() ?? unavailable(`spawn failed: ${exit.spawnError}`)
@@ -316,21 +302,21 @@ export const makeClaudeCliBackend = ({
     } catch (error) {
       return (
         enforcer.outcome() ??
-        unavailable(`turn setup failed: ${messageOf(error)}`)
+        unavailable(`turn setup failed: ${errorCategory(error)}`)
       );
     } finally {
       enforcer.stop();
       settled = true;
       if (exitGraceTimer !== undefined) timers.clearTimeout(exitGraceTimer);
       const cleanups = [
-        () => E(release)(),
+        release,
         () => projection?.close?.(),
         () => scratch?.remove(),
       ];
       for (const cleanup of cleanups) {
         try {
           // eslint-disable-next-line no-await-in-loop
-          await cleanup();
+          await cleanup?.();
         } catch {
           // A cleanup failure must not replace the turn's result.
         }

@@ -206,7 +206,10 @@ export const makeFakeSpawn = script => {
     const run = async () => {
       await null;
       if (script.spawnError !== undefined) {
-        emit('error', Error(script.spawnError));
+        emit(
+          'error',
+          Object.assign(Error('spawn failed'), { code: script.spawnError }),
+        );
         return;
       }
       for (const chunk of script.stdout ?? []) {

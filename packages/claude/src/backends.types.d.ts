@@ -142,7 +142,8 @@ export type ConstructedEnvironmentSpec = {
   pathValue: string;
   /** The `environment` of a granted `acquire()`. */
   credentialEnvironment: Record<string, string>;
-  lang?: string;
+  /** The `LANG` and `LC_ALL` value; `C.UTF-8` by default. */
+  language?: string;
 };
 
 export type ClaudeCliBackendOptions = {
@@ -205,6 +206,8 @@ export type TurnOutcomeSpec = {
   classify: (response: ClaudeCodeResponse) => ClassifiedResult | undefined;
   /** The response to classify when the stream has no usable terminal event. */
   fallbackResponse?: ClaudeCodeResponse;
+  /** How a `thrown` fallback is named in the detail, in place of its message. */
+  thrownCategory?: string;
   /** A CLI success also requires a zero exit. */
   exitCode?: number | null;
 };

@@ -115,6 +115,7 @@ export const turnOutcome = ({
   reduction,
   classify,
   fallbackResponse,
+  thrownCategory,
   exitCode,
 }) => {
   if (limitOutcome !== undefined) return limitOutcome;
@@ -139,7 +140,12 @@ export const turnOutcome = ({
       return unavailable(`malformed stream: ${detail}`);
     case 'missing':
       if (fallbackResponse?.source === 'thrown') {
-        return unavailable(`turn failed: ${fallbackResponse.message}`);
+        // The message stays out of the detail: it may quote a credential.
+        return unavailable(
+          thrownCategory === undefined
+            ? 'turn failed'
+            : `turn failed: ${thrownCategory}`,
+        );
       }
       return unavailable(
         exitCode === undefined

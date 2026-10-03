@@ -76,6 +76,9 @@ const FORBIDDEN_FLAGS = harden(['--resume', '--continue', '-r', '-c']);
  * SINGLE comma-joined token each, so there is no multi-token value run for a
  * following positional to be swallowed into.
  *
+ * It takes the confinement fields of an `ArgvSpec`; `model` and `maxTurns`
+ * are the callers' own flags and are not read here.
+ *
  * @param {object} spec
  * @param {string} spec.mcpConfigPath
  * @param {string} spec.settingsPath

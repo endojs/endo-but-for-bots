@@ -129,6 +129,8 @@ harden(buildCliArguments);
  * label and never reaches the provider.
  *
  * @param {SdkOptionsSpec} spec
+ * @returns {Record<string, unknown>} the `options` of one Agent SDK `query`
+ *   call
  */
 export const buildSdkOptions = ({
   serverName,

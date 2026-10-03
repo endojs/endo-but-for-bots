@@ -305,7 +305,12 @@ test('cancellation before the spawn starts no process', async t => {
     type: 'cancelled',
   });
   t.is(fake.spawns.length, 0);
-  t.is(source.counts.released, 1);
+  await settle();
+  t.is(
+    source.counts.released,
+    source.counts.acquired,
+    'a grant that arrives after the cancellation is released',
+  );
 });
 
 test('an unpinned failure is unavailable, never needs-auth', async t => {
@@ -390,6 +395,41 @@ test('a binary that cannot spawn is unavailable', async t => {
     detail: 'spawn failed: ENOENT',
   });
   t.is(source.counts.released, 1);
+});
+
+test('a credential holding a NUL fails setup without reaching the detail', async t => {
+  const { backend, fake, source } = makeHarness(
+    {},
+    {
+      source: makeCredentialSource({
+        environment: { ANTHROPIC_API_KEY: `${CREDENTIAL}\0x` },
+      }),
+    },
+  );
+  const result = await backend.infer(makeRequest());
+  t.deepEqual(result, {
+    type: 'unavailable',
+    detail: 'turn setup failed: Error',
+  });
+  t.false(JSON.stringify(result).includes(CREDENTIAL));
+  t.is(fake.spawns.length, 0);
+  t.is(source.counts.released, 1);
+});
+
+test('the wall clock ends a wait for a credential that never comes', async t => {
+  const { backend, fake, manualTimers } = makeHarness(
+    {},
+    {
+      credentialSource: Far('NeverSource', {
+        acquire: () => new Promise(() => {}),
+      }),
+    },
+  );
+  const resultP = backend.infer(makeRequest());
+  await settle();
+  manualTimers.fire();
+  t.deepEqual(await resultP, { type: 'limit-exceeded', which: 'wall-clock' });
+  t.is(fake.spawns.length, 0);
 });
 
 test('a grant delivering an ignored credential variable fails closed', async t => {

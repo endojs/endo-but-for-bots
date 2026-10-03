@@ -95,3 +95,20 @@ test('a refused variable is named but its value is not', t => {
   );
   t.false(error?.message.includes('secret-bytes'));
 });
+
+test('a credential holding a NUL is refused without quoting it', t => {
+  const error = t.throws(() =>
+    buildConstructedEnvironment(spec({ ANTHROPIC_API_KEY: 'sk-secret\0x' })),
+  );
+  t.regex(error?.message ?? '', /must not contain a NUL/);
+  t.false(error?.message.includes('sk-secret'));
+});
+
+test('the locale variables take the given language', t => {
+  const env = buildConstructedEnvironment({
+    ...spec(),
+    language: 'en_US.UTF-8',
+  });
+  t.is(env.LANG, 'en_US.UTF-8');
+  t.is(env.LC_ALL, 'en_US.UTF-8');
+});

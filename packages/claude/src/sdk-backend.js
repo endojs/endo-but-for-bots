@@ -14,13 +14,8 @@
 // versus documented).
 
 import { E } from '@endo/eventual-send';
-import { M, matches } from '@endo/patterns';
 import { makeExo } from '@endo/exo';
-import {
-  CredentialGrantShape,
-  CredentialRefusalShape,
-  InferenceBackendInterface,
-} from '@endo/inference/guards.js';
+import { InferenceBackendInterface } from '@endo/inference/guards.js';
 import { makeLimitEnforcer } from '@endo/inference/limits.js';
 import { admissionRefusalResult } from '@endo/inference/classify.js';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
@@ -34,8 +29,11 @@ import {
   unavailable,
 } from './response-shapes.js';
 import { makeClaudeStreamReducer } from './stream-reducer.js';
-
-const AdmissionShape = M.or(CredentialGrantShape, CredentialRefusalShape);
+import {
+  acquireAdmission,
+  errorCategory,
+  makeTerminationRace,
+} from './turn-guard.js';
 
 /** @import { InferRequest, InferResult, InferenceBackend } from '@endo/inference/types.js' */
 /** @import { ClaudeCodeResponse, ClaudeSdkBackendOptions, ScratchDirectory } from './backends.types.js' */
@@ -114,53 +112,51 @@ export const makeClaudeSdkBackend = ({
   const infer = async request => {
     const { prompt, guest, limits, model, cancelled } = request;
 
-    const versionFailure = await checkPinnedVersion(getVersion, version);
-    if (versionFailure !== undefined) {
-      return unavailable(`version check failed: ${versionFailure}`);
-    }
-
-    const admission = await E(credentialSource)
-      .acquire()
-      .then(
-        grant =>
-          // Checked with `matches`, not `mustMatch`, so that a malformed
-          // grant's values (a credential among them) never reach the detail.
-          matches(grant, AdmissionShape)
-            ? grant
-            : harden({
-                type: /** @type {const} */ ('failed'),
-                detail: 'malformed admission',
-              }),
-        // The rejection's message is not forwarded: a source's error may
-        // carry the very credential it failed to deliver, and the detail
-        // reaches the usage record.
-        () =>
-          harden({
-            type: /** @type {const} */ ('failed'),
-            detail: 'acquire rejected',
-          }),
-      );
-    if (admission.type === 'failed') {
-      return unavailable(`credential source failed: ${admission.detail}`);
-    }
-    if (admission.type === 'refused') {
-      return admissionRefusalResult(admission.admission);
-    }
-    const { environment: credentialEnvironment, release } = admission;
-
+    const { signalTerminated, untilTerminated } = makeTerminationRace();
     const abortController = new AbortController();
+    // Built before anything is awaited, so the wall clock and cancellation
+    // also bound the version check and the wait for a credential.
     const enforcer = makeLimitEnforcer({
       limits,
       timers,
       cancelled,
-      terminate: () => abortController.abort(),
+      terminate: () => {
+        try {
+          abortController.abort();
+        } finally {
+          signalTerminated();
+        }
+      },
     });
-    const reducer = makeClaudeStreamReducer();
+    /** @type {(() => unknown) | undefined} */
+    let release;
     /** @type {ScratchDirectory | undefined} */
     let scratch;
     try {
-      scratch = await makeScratchDirectory();
-      const mcpServer = await guest.buildMcpServer();
+      const versionFailure = await untilTerminated(
+        checkPinnedVersion(getVersion, version),
+      );
+      if (versionFailure !== undefined) {
+        return unavailable(`version check failed: ${versionFailure}`);
+      }
+
+      const admission = await untilTerminated(
+        acquireAdmission(credentialSource),
+        late => late.type === 'granted' && E(late.release)(),
+      );
+      if (admission.type === 'failed') {
+        return unavailable(`credential source failed: ${admission.detail}`);
+      }
+      if (admission.type === 'refused') {
+        return admissionRefusalResult(admission.admission);
+      }
+      const { environment: credentialEnvironment } = admission;
+      release = () => E(admission.release)();
+
+      scratch = await untilTerminated(makeScratchDirectory(), late =>
+        late.remove(),
+      );
+      const mcpServer = await untilTerminated(guest.buildMcpServer());
       const options = buildSdkOptions({
         serverName,
         toolNames: guest.toolNames,
@@ -181,34 +177,57 @@ export const makeClaudeSdkBackend = ({
       const limitOutcome = enforcer.outcome();
       if (limitOutcome !== undefined) return limitOutcome;
 
+      const reducer = makeClaudeStreamReducer();
       /** @type {ClaudeCodeResponse | undefined} */
       let thrown;
+      /** @type {string | undefined} */
+      let thrownCategory;
+      /** @type {AsyncIterator<unknown> | undefined} */
+      let messages;
       try {
-        for await (const message of query({ prompt, options })) {
-          if (!enforcer.countOutputBytes(serializedByteCount(message))) break;
-          if (reducer.pushEvent(message) && !enforcer.countTurn()) break;
+        messages = query({ prompt, options })[Symbol.asyncIterator]();
+        for (;;) {
+          // Raced, not awaited alone: an SDK that ignores the abort signal
+          // must not hold the turn open past its limits.
+          // eslint-disable-next-line no-await-in-loop
+          const step = await untilTerminated(messages.next());
+          if (step.done) break;
+          if (!enforcer.countOutputBytes(serializedByteCount(step.value))) {
+            break;
+          }
+          if (reducer.pushEvent(step.value) && !enforcer.countTurn()) break;
         }
       } catch (error) {
+        // The message is kept only for the response-shape table; the detail
+        // names the error by category.
         thrown = harden({ source: 'thrown', message: messageOf(error) });
+        thrownCategory = errorCategory(error);
+      } finally {
+        // Not awaited, for the same reason the loop is raced.
+        const finished = messages;
+        Promise.resolve()
+          .then(() => finished?.return?.())
+          .catch(() => {});
       }
       return turnOutcome({
         limitOutcome: enforcer.outcome(),
         reduction: reducer.finish(),
         classify,
         fallbackResponse: thrown,
+        thrownCategory,
       });
     } catch (error) {
       return (
         enforcer.outcome() ??
-        unavailable(`turn setup failed: ${messageOf(error)}`)
+        unavailable(`turn setup failed: ${errorCategory(error)}`)
       );
     } finally {
       enforcer.stop();
-      const cleanups = [() => E(release)(), () => scratch?.remove()];
+      const cleanups = [release, () => scratch?.remove()];
       for (const cleanup of cleanups) {
         try {
           // eslint-disable-next-line no-await-in-loop
-          await cleanup();
+          await cleanup?.();
         } catch {
           // A cleanup failure must not replace the turn's result.
         }

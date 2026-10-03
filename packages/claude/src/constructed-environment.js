@@ -63,7 +63,7 @@ export const buildConstructedEnvironment = ({
   configDirectory,
   pathValue,
   credentialEnvironment,
-  lang = 'C.UTF-8',
+  language = 'C.UTF-8',
 }) => {
   assertNonEmptyString('configDirectory', configDirectory);
   assertNonEmptyString('pathValue', pathValue);
@@ -73,6 +73,10 @@ export const buildConstructedEnvironment = ({
     CREDENTIAL_ENVIRONMENT_KEYS.includes(key) ||
       Fail`credential source delivered unsupported variable ${q(key)}`;
     assertNonEmptyString(key, value);
+    // A NUL makes `spawn` throw an error that quotes the value; reject it
+    // here without quoting, so the credential never reaches a detail.
+    !value.includes('\0') ||
+      Fail`credential variable ${q(key)} must not contain a NUL`;
     credentials[key] = value;
   }
   // `ANTHROPIC_BASE_URL` only routes; on its own the turn would run
@@ -84,8 +88,8 @@ export const buildConstructedEnvironment = ({
     HOME: configDirectory,
     CLAUDE_CONFIG_DIR: configDirectory,
     TMPDIR: configDirectory,
-    LANG: lang,
-    LC_ALL: lang,
+    LANG: language,
+    LC_ALL: language,
     ...QUIET_SETTINGS,
     ...credentials,
   });
