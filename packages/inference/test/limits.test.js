@@ -218,6 +218,58 @@ test('a cancellation after stop does not trip the enforcer', async t => {
   t.is(terminations(), 0);
 });
 
+/**
+ * The engine's collector, forced on when the run did not pass `--expose-gc`.
+ *
+ * @returns {Promise<(() => void) | undefined>}
+ */
+const detectEngineGC = async () => {
+  const { default: vm } = await import('node:vm');
+  const exposed = vm.runInNewContext(`typeof gc === 'function' && gc`);
+  if (exposed) return exposed;
+  const { default: v8 } = await import('node:v8');
+  v8.setFlagsFromString('--expose_gc');
+  return vm.runInNewContext('gc');
+};
+
+test('a stopped enforcer is not retained by a long-lived cancellation', async t => {
+  const gc = await detectEngineGC();
+  if (gc === undefined) {
+    t.pass('no engine collector');
+    return;
+  }
+  // Shared by many turns and never settled, like a session-wide signal.
+  /** @type {Promise<never>} */
+  const cancelled = new Promise(() => {});
+  // A function of its own, so no loop scope keeps the last turn alive.
+  const runStoppedTurn = () => {
+    const terminate = () => {};
+    makeLimitEnforcer({
+      limits,
+      timers: makeManualTimers(),
+      terminate,
+      cancelled,
+    }).stop();
+    return new WeakRef(terminate);
+  };
+  /** @type {WeakRef<() => void>[]} */
+  const terminations = [];
+  for (let index = 0; index < 8; index += 1) {
+    terminations.push(runStoppedTurn());
+  }
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setImmediate(resolve));
+    gc();
+    if (terminations.every(ref => ref.deref() === undefined)) break;
+  }
+  t.true(
+    terminations.every(ref => ref.deref() === undefined),
+    'every stopped turn is collectable while cancelled stays pending',
+  );
+  t.truthy(cancelled);
+});
+
 test('the process group killer signals the negated pid', t => {
   /** @type {Array<[number, string]>} */
   const calls = [];
