@@ -238,9 +238,9 @@ export const waitUntilTrue = async (fn, timeoutMs = 10_000, delayMs = 20) => {
 /**
  * @param {object} options
  * @param {string} options.debugLabel
- * @param {() => Map<string, any>} [options.makeDefaultSwissnumTable]
+ * @param {() => NonceLocator} [options.makeDefaultSwissnumTable]
  *   Build a locator. Named for historical compatibility with the test
- *   suite; returns a `Map<string, any>` that serves as the locator.
+ *   suite; a `Map<string, any>` serves as the locator.
  * @param {boolean} [options.verbose]
  * @param {object} [options.clientOptions]
  * @param {number} [options.writeLatencyMs]
