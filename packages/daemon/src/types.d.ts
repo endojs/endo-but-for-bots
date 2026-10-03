@@ -2459,8 +2459,11 @@ export type EndoBootstrap = {
   terminate: () => Promise<void>;
   host: () => Promise<EndoHost>;
   leastAuthority: () => Promise<EndoGuest>;
-  /** Serve one local guest on its own socket; resolves to the socket path. */
-  guestBootstrapPath: (id: string) => Promise<string>;
+  /**
+   * Serve one local guest on its own socket; resolves to the socket path, or
+   * to `undefined` where this daemon serves no guest sockets.
+   */
+  guestBootstrapPath: (id: string) => Promise<string | undefined>;
   greeter: () => Promise<EndoGreeter>;
   gateway: () => Promise<EndoGateway>;
   nodeId: () => string;
@@ -2608,7 +2611,13 @@ export type CapTpConnectionRegistrar = (args: {
 
 /** Serves one guest on its own socket (`serve-guest-path.js`). */
 export type GuestPathIssuer = {
-  issue: (formulaNumber: string, guest: unknown) => Promise<string>;
+  issue: (
+    formulaNumber: string,
+    guest: unknown,
+    options?: { capTpConnectionRegistrar?: CapTpConnectionRegistrar },
+  ) => Promise<string>;
+  /** Close a guest's socket and the connections made on it. */
+  revoke: (formulaNumber: string, reason: Error) => void;
 };
 
 export type NetworkPowers = SocketPowers & {
