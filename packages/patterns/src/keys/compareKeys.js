@@ -189,7 +189,12 @@ export const compareKeys = (left, right) => {
       // until encountering a property disproving that hypothesis.
       let result = 0;
       for (let i = 0; i < leftValues.length; i += 1) {
-        const comp = compareKeys(leftValues[i], rightValues[i]);
+        // `Key` excludes a SturdyRef only at top level, since `Passable`
+        // does not parameterize it the way it does promises and errors.
+        const comp = compareKeys(
+          /** @type {Key} */ (leftValues[i]),
+          /** @type {Key} */ (rightValues[i]),
+        );
         if (Number.isNaN(comp)) {
           return NaN;
         }
