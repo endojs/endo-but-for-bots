@@ -1252,7 +1252,7 @@ export const makeDaemonicPowers = async ({
  * @param {SocketPowers['servePath']} powers.servePath
  * @param {string} powers.daemonSocketPath - the daemon's own socket.
  * @param {Promise<never>} powers.cancelled
- * @param {(err: Error, errorId?: string) => void} [powers.marshalSaveError]
+ * @param {(error: Error, errorId?: string) => void} [powers.marshalSaveError]
  * @returns {GuestPathIssuer | undefined}
  */
 export const makeNodeGuestPathIssuer = ({

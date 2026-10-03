@@ -123,7 +123,7 @@ serves no guest sockets (one that predates `guestBootstrapPath`, or one on a
 platform without Unix sockets) gets the root connection instead, which holds
 the whole host's authority; any other failure to issue fails the turn.
 `makeGuestConnect` is that default connection, exported for a harness that
-composes its own turn. It then starts
+composes its own turn. `runConfinedTurn` then starts
 `@endo/agent-mcp-stdio`'s `startGuestBroker` for the one guest. It then
 runs `make(...)` with concrete seams: `makeSpawnFilesPreparer` writes the `0600`
 `--mcp-config` / `--settings` / credential files, whose `apiKeyHelper` is

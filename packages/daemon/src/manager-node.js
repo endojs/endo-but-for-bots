@@ -153,7 +153,7 @@ const main = async () => {
   await daemonicPersistencePowers.initializePersistence();
   await killStaleWorkers();
 
-  /** @type {((err: Error, errorId?: string) => void) | undefined} */
+  /** @type {((error: Error, errorId?: string) => void) | undefined} */
   let guestMarshalSaveError;
   const guestPathIssuer = makeNodeGuestPathIssuer({
     fs,
@@ -161,7 +161,8 @@ const main = async () => {
     servePath: networkPowers.servePath,
     daemonSocketPath: sockPath,
     cancelled,
-    marshalSaveError: (err, errorId) => guestMarshalSaveError?.(err, errorId),
+    marshalSaveError: (error, errorId) =>
+      guestMarshalSaveError?.(error, errorId),
   });
 
   const {
