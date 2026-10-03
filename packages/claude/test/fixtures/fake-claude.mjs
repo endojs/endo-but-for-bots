@@ -10,18 +10,24 @@
 //     merged with the entry's `env`, as Claude Code 2.1.278/2.1.280 do;
 //   - it drives MCP (initialize, tools/list, one tools/call) as the model would.
 //
-// The prompt on stdin is JSON: { "tool": "<name>", "arguments": { ... } }.
+// The prompt on stdin is JSON: { "tool": "<name>", "arguments": { ... },
+// "probe": [<absolute path>, ...] }. For each probed path it reports whether
+// the path exists and whether a unix-socket connect to it succeeds.
 // It reports what it observed — its own environment and descriptors, and the
 // MCP child's environment read from /proc — as the terminal `result` of a
 // `stream-json` transcript.
 
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
+import path from 'node:path';
 import process from 'node:process';
 
 const argv = process.argv.slice(2);
 if (argv[0] === '--version') {
-  process.stdout.write(`${process.env.FAKE_CLAUDE_VERSION ?? '2.1.232'} (Claude Code)\n`);
+  process.stdout.write(
+    `${process.env.FAKE_CLAUDE_VERSION ?? '2.1.232'} (Claude Code)\n`,
+  );
   process.exit(0);
 }
 
@@ -56,6 +62,30 @@ const environNames = pid => {
     .split('\0')
     .filter(Boolean)
     .map(entry => entry.split('=')[0]);
+};
+
+/** @param {string} socketPath */
+const tryConnect = socketPath =>
+  new Promise(resolve => {
+    const socket = net.connect(socketPath);
+    socket.once('connect', () => {
+      socket.destroy();
+      resolve('connected');
+    });
+    socket.once('error', (/** @type {any} */ error) =>
+      resolve(error.code ?? error.message),
+    );
+  });
+
+/** @param {string} file */
+const tryWrite = file => {
+  try {
+    fs.writeFileSync(file, 'probe');
+    fs.rmSync(file);
+    return 'written';
+  } catch (/** @type {any} */ error) {
+    return error.code ?? error.message;
+  }
 };
 
 const readStdin = async () => {
@@ -101,7 +131,9 @@ const main = async () => {
     const id = nextId;
     return new Promise(resolve => {
       waiting.set(id, resolve);
-      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+      child.stdin.write(
+        `${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`,
+      );
     });
   };
 
@@ -116,7 +148,10 @@ const main = async () => {
   const mcpChildEnviron = environNames(Number(child.pid));
   let mcpChildEnvironText;
   if (process.platform === 'linux') {
-    mcpChildEnvironText = fs.readFileSync(`/proc/${child.pid}/environ`, 'utf-8');
+    mcpChildEnvironText = fs.readFileSync(
+      `/proc/${child.pid}/environ`,
+      'utf-8',
+    );
   }
   const list = await request('tools/list');
   const toolName = `mcp__${serverName}__${instruction.tool}`;
@@ -128,6 +163,15 @@ const main = async () => {
     : { refused: toolName };
   child.stdin.end();
   await new Promise(resolve => child.on('exit', resolve));
+
+  const probed = instruction.probe ?? [];
+  const connects = await Promise.all(probed.map(tryConnect));
+  const probes = Object.fromEntries(
+    probed.map((probedPath, index) => [
+      probedPath,
+      { exists: fs.existsSync(probedPath), connect: connects[index] },
+    ]),
+  );
 
   const report = {
     serverInfo: init.result?.serverInfo,
@@ -146,8 +190,22 @@ const main = async () => {
         : mcpChildEnvironText.includes(key),
     mcpConfigText,
     cwd: process.cwd(),
+    probes,
+    home: process.env.HOME,
+    homeWrite:
+      process.env.HOME === undefined
+        ? undefined
+        : tryWrite(path.join(process.env.HOME, 'probe')),
+    spawnDirectoryWrite: tryWrite(
+      path.join(path.dirname(flag('--settings')), 'probe'),
+    ),
   };
-  emit({ type: 'system', subtype: 'init', tools: allowed, mcp_servers: [serverName] });
+  emit({
+    type: 'system',
+    subtype: 'init',
+    tools: allowed,
+    mcp_servers: [serverName],
+  });
   emit({
     type: 'result',
     subtype: 'success',

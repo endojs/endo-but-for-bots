@@ -282,6 +282,19 @@ jobs:
       - name: Run sandbox driver tests
         run: yarn workspace @endo/sandbox run test:drivers
 
+      # Ubuntu 24.04 runners restrict unprivileged user namespaces through
+      # AppArmor, so bwrap cannot set up its uid map. Lifted only after the
+      # sandbox driver tests, whose bwrap cases skip under the restriction.
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      # The @endo/claude bwrap slice: fail rather than skip, since this job
+      # installs bubblewrap and lifts the user-namespace restriction.
+      - name: Run claude bwrap slice tests
+        env:
+          ENDO_CLAUDE_REQUIRE_BWRAP: '1'
+        run: yarn workspace @endo/claude exec ava test/bwrap-slice.test.js test/confined-turn.test.js
+
   test-async-hooks:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-async-hooks']) }}

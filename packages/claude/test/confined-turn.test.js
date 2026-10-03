@@ -1,7 +1,11 @@
 // @ts-check
 
 import test from '@endo/ses-ava/prepare-endo.js';
+import childProcess from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
@@ -10,6 +14,11 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { runConfinedTurn } from '../src/confined-turn.js';
 import { ALLOWED_ENV_KEYS } from '../src/child-env.js';
 import { resultFromStream } from '../src/launch.js';
+import {
+  assembleBwrapArgv,
+  resolveSystemMounts,
+  DEFAULT_SCRATCH_HOME,
+} from '../src/bwrap-slice.js';
 
 const FAKE_CLAUDE = fileURLToPath(
   new URL('fixtures/fake-claude.mjs', import.meta.url),
@@ -116,6 +125,7 @@ const turn = async (overrides = {}) => {
     connect: daemon.connect,
     parentDir,
     onStderr: chunk => process.stderr.write(chunk),
+    sandbox: false,
     ...overrides,
   });
   const leftovers = fs.readdirSync(parentDir);
@@ -207,6 +217,12 @@ test('an unpinned claude version refuses to spawn', async t => {
   });
 });
 
+test('omitting the sandbox refuses to run instead of dropping the slice', async t => {
+  await t.throwsAsync(turn({ sandbox: undefined }), {
+    message: /sandbox must be/,
+  });
+});
+
 test('resultFromStream maps terminal outcomes', t => {
   t.deepEqual(
     resultFromStream(
@@ -238,4 +254,241 @@ test('resultFromStream maps terminal outcomes', t => {
     resultFromStream({ outcome: { type: 'api-error', status: 500 } }, 0),
     { type: 'nonzero-exit', code: 1 },
   );
+});
+
+/**
+ * A listening unix socket standing in for the daemon's, outside every
+ * directory the slice grants.
+ */
+const listenLikeDaemon = async () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'endo-claude-turn-daemon-'),
+  );
+  const socketPath = path.join(directory, 'endo.sock');
+  const server = net.createServer(socket => socket.end());
+  await new Promise(resolve => server.listen(socketPath, () => resolve(null)));
+  const close = async () => {
+    await new Promise(resolve => server.close(() => resolve(null)));
+    fs.rmSync(directory, { recursive: true, force: true });
+  };
+  return { directory, socketPath, close };
+};
+
+/** @param {string[]} probe */
+const probePrompt = probe =>
+  JSON.stringify({ tool: 'list', arguments: {}, probe });
+
+/**
+ * Re-run a recorded `bwrap` argv's command directly, so the sandbox wiring is
+ * observable on a host without `bwrap`.
+ *
+ * @param {unknown[][]} recorded
+ */
+const makeRecordingSpawn = recorded =>
+  /** @type {any} */ (
+    (
+      /** @type {string} */ command,
+      /** @type {string[]} */ bwrapArguments,
+      /** @type {any} */ options,
+    ) => {
+      recorded.push([command, bwrapArguments]);
+      const separator = bwrapArguments.indexOf('--');
+      return childProcess.spawn(
+        bwrapArguments[separator + 1],
+        bwrapArguments.slice(separator + 2),
+        options,
+      );
+    }
+  );
+
+test('the daemon-socket probe detects a reachable socket without the slice', async t => {
+  const daemonSocket = await listenLikeDaemon();
+  try {
+    const { result } = await turn({
+      prompt: probePrompt([daemonSocket.socketPath]),
+    });
+    t.is(result.type, 'ok', JSON.stringify(result));
+    const report = JSON.parse(/** @type {any} */ (result).text);
+    t.deepEqual(report.probes[daemonSocket.socketPath], {
+      exists: true,
+      connect: 'connected',
+    });
+  } finally {
+    await daemonSocket.close();
+  }
+});
+
+test('the sandbox wraps claude in bwrap, granting the broker and spawn directories', async t => {
+  /** @type {unknown[][]} */
+  const recorded = [];
+  const { result } = await turn({
+    spawn: makeRecordingSpawn(recorded),
+    sandbox: { bwrapPath: '/usr/bin/bwrap' },
+  });
+  t.is(result.type, 'ok', JSON.stringify(result));
+  const report = JSON.parse(/** @type {any} */ (result).text);
+
+  t.is(recorded.length, 1);
+  const [[command, bwrapArguments]] = /** @type {[string, string[]][]} */ (
+    recorded
+  );
+  t.is(command, '/usr/bin/bwrap');
+  const separator = bwrapArguments.indexOf('--');
+  t.is(bwrapArguments[separator + 1], fs.realpathSync(FAKE_CLAUDE));
+
+  /** @param {string} flag */
+  const sourcesOf = flag =>
+    bwrapArguments
+      .slice(0, separator)
+      .flatMap((value, index) =>
+        value === flag ? [bwrapArguments[index + 1]] : [],
+      );
+  const readOnly = sourcesOf('--ro-bind');
+  const writable = sourcesOf('--bind');
+
+  const settingsPath = report.argv[report.argv.indexOf('--settings') + 1];
+  const spawnDirectory = path.dirname(settingsPath);
+  const { mcpServers } = JSON.parse(report.mcpConfigText);
+  // The one server entry's only array value is the relay's argument list.
+  const relayArguments = /** @type {string[]} */ (
+    Object.values(Object.values(mcpServers)[0]).find(Array.isArray)
+  );
+  const brokerSocket = relayArguments[relayArguments.length - 1];
+  t.true(readOnly.includes(spawnDirectory), 'spawn directory granted');
+  t.true(readOnly.includes(path.dirname(brokerSocket)), 'broker granted');
+  t.true(readOnly.includes(relayArguments[2]), 'relay script granted');
+  // `report.cwd` is the canonical path (`/private/tmp/...` on macOS).
+  t.is(writable.length, 1, 'only the work directory is writable');
+  t.true(report.cwd.endsWith(writable[0]));
+
+  // No grant covers the whole turn directory, which holds every spawn's files.
+  const turnDirectory = path.dirname(writable[0]);
+  t.is(path.dirname(spawnDirectory), turnDirectory);
+  t.false([...readOnly, ...writable].includes(turnDirectory));
+});
+
+test('the sandbox runs a symlinked claudePath by its real path', async t => {
+  const linkDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'endo-claude-turn-link-'),
+  );
+  t.teardown(() => fs.rmSync(linkDirectory, { recursive: true, force: true }));
+  const claudeLink = path.join(linkDirectory, 'claude');
+  fs.symlinkSync(FAKE_CLAUDE, claudeLink);
+  /** @type {unknown[][]} */
+  const recorded = [];
+  const { result } = await turn({
+    claudePath: claudeLink,
+    spawn: makeRecordingSpawn(recorded),
+    sandbox: { bwrapPath: '/usr/bin/bwrap' },
+  });
+  t.is(result.type, 'ok', JSON.stringify(result));
+  const [[, bwrapArguments]] = /** @type {[string, string[]][]} */ (recorded);
+  const separator = bwrapArguments.indexOf('--');
+  const realClaude = fs.realpathSync(FAKE_CLAUDE);
+  t.is(bwrapArguments[separator + 1], realClaude);
+  const granted = bwrapArguments.slice(0, separator);
+  t.true(granted.includes(realClaude));
+  t.false(
+    granted.includes(path.dirname(realClaude)),
+    'the directory around a lone binary is not granted',
+  );
+  t.false(granted.includes(claudeLink), 'the link itself is not bound');
+});
+
+test('the sandbox grants a package-installed claude its package directory', async t => {
+  const packageDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'endo-claude-turn-package-'),
+  );
+  t.teardown(() =>
+    fs.rmSync(packageDirectory, { recursive: true, force: true }),
+  );
+  fs.writeFileSync(path.join(packageDirectory, 'package.json'), '{}');
+  const claudeScript = path.join(packageDirectory, 'cli.mjs');
+  fs.copyFileSync(FAKE_CLAUDE, claudeScript);
+  fs.chmodSync(claudeScript, 0o755);
+  /** @type {unknown[][]} */
+  const recorded = [];
+  const { result } = await turn({
+    claudePath: claudeScript,
+    spawn: makeRecordingSpawn(recorded),
+    sandbox: { bwrapPath: '/usr/bin/bwrap' },
+  });
+  t.is(result.type, 'ok', JSON.stringify(result));
+  const [[, bwrapArguments]] = /** @type {[string, string[]][]} */ (recorded);
+  const separator = bwrapArguments.indexOf('--');
+  const granted = bwrapArguments.slice(0, separator);
+  t.true(granted.includes(fs.realpathSync(packageDirectory)));
+});
+
+/** Find a `bwrap` that can create the slice's namespaces on this host. */
+const findWorkingBwrap = async () => {
+  const candidates = [
+    ...(process.env.PATH ?? '').split(':').filter(Boolean),
+    '/usr/bin',
+    '/bin',
+  ].map(directory => path.join(directory, 'bwrap'));
+  const bwrapPath = candidates.find(candidate => fs.existsSync(candidate));
+  if (bwrapPath === undefined) return { reason: 'bwrap is not installed' };
+  const systemMounts = await resolveSystemMounts();
+  const probe = childProcess.spawnSync(
+    bwrapPath,
+    assembleBwrapArgv({
+      systemMounts,
+      readOnlyPaths: [],
+      writablePaths: [],
+      cwd: '/',
+      command: '/bin/sh',
+      commandArguments: ['-c', 'true'],
+    }),
+    { encoding: 'utf-8', timeout: 30_000 },
+  );
+  if (probe.status !== 0) {
+    return {
+      reason: `bwrap cannot create the slice here: ${probe.stderr || probe.error?.message || probe.status}`,
+    };
+  }
+  return { bwrapPath };
+};
+
+test('inside the bwrap slice the daemon socket has no path', async t => {
+  const { bwrapPath, reason } = await findWorkingBwrap();
+  if (bwrapPath === undefined) {
+    if (process.env.ENDO_CLAUDE_REQUIRE_BWRAP === '1') {
+      t.fail(`ENDO_CLAUDE_REQUIRE_BWRAP=1 but ${reason}`);
+    } else {
+      t.log(`skipped: ${reason}`);
+      t.pass();
+    }
+    return;
+  }
+  const daemonSocket = await listenLikeDaemon();
+  try {
+    const { daemon, result } = await turn({
+      prompt: probePrompt([daemonSocket.socketPath, daemonSocket.directory]),
+      sandbox: { bwrapPath },
+    });
+    t.is(result.type, 'ok', JSON.stringify(result));
+    const report = JSON.parse(/** @type {any} */ (result).text);
+
+    // The broker is reachable: the one guest's tool ran.
+    t.true(JSON.stringify(report.call.result).includes('mine-name'));
+    t.deepEqual(daemon.calls, [
+      ['host', 'lookupById', FORMULA_ID],
+      ['mine', 'list'],
+    ]);
+
+    // The daemon socket and its directory do not exist inside the slice.
+    t.deepEqual(report.probes[daemonSocket.socketPath], {
+      exists: false,
+      connect: 'ENOENT',
+    });
+    t.false(report.probes[daemonSocket.directory].exists);
+
+    // A writable scratch HOME; read-only spawn files.
+    t.is(report.home, DEFAULT_SCRATCH_HOME);
+    t.is(report.homeWrite, 'written');
+    t.is(report.spawnDirectoryWrite, 'EROFS');
+  } finally {
+    await daemonSocket.close();
+  }
 });

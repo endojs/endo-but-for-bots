@@ -245,7 +245,9 @@ available only where it is not. Stated honestly, per property:
   arbitrary domain socket on the shared host, this design is forfeit** (maintainer,
   PR #1226): a `claude` that can reach the daemon socket itself is not confined at
   all. So the socket must be **structurally out of the slice's reach**, not merely
-  "present but relied on not to be misused." This has a direct consequence for a
+  "present but relied on not to be misused." (`@endo/claude`'s `bwrap`
+  slice, `packages/claude/src/bwrap-slice.js`, is the current realization for
+  the confined shape; it shares the host network.) This has a direct consequence for a
   claude-**spawned**, in-slice stdio server: because that server lives inside
   `claude`'s slice, a server that itself opened the daemon connection would require
   the socket to be mounted **into** the slice — which grants `claude` the same reach

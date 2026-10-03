@@ -5,10 +5,13 @@
 //
 //   endo-claude-turn --formula-id <64-hex> --model <model> \
 //     --claude <absolute path> --credential-file <path> \
+//     (--bwrap <absolute path> | --unconfined) \
 //     [--pinned-cli-version <version>] < prompt
 //
 // The credential is read from a file, never from argv or the environment; the
-// prompt is read from stdin. The tagged result is written to stdout as JSON.
+// prompt is read from stdin. With `--bwrap`, `claude` runs inside the bwrap
+// slice; `--unconfined` runs it without the slice, and one of the two is
+// required. The tagged result is written to stdout as JSON.
 import '@endo/init';
 
 import fs from 'node:fs';
@@ -23,6 +26,8 @@ const { values } = parseArgs({
     claude: { type: 'string' },
     'credential-file': { type: 'string' },
     'pinned-cli-version': { type: 'string' },
+    bwrap: { type: 'string' },
+    unconfined: { type: 'boolean' },
   },
   strict: true,
 });
@@ -31,6 +36,12 @@ const required = ['formula-id', 'model', 'claude', 'credential-file'];
 const missing = required.filter(name => values[name] === undefined);
 if (missing.length > 0) {
   process.stderr.write(`endo-claude-turn: missing --${missing.join(', --')}\n`);
+  process.exit(2);
+}
+if ((values.bwrap === undefined) === (values.unconfined !== true)) {
+  process.stderr.write(
+    'endo-claude-turn: pass exactly one of --bwrap, --unconfined\n',
+  );
   process.exit(2);
 }
 
@@ -48,6 +59,7 @@ runConfinedTurn({
   ...(values['pinned-cli-version'] === undefined
     ? {}
     : { pinnedCliVersion: values['pinned-cli-version'] }),
+  sandbox: values.bwrap === undefined ? false : { bwrapPath: values.bwrap },
 }).then(
   result => {
     process.stdout.write(`${JSON.stringify(result)}\n`, () =>

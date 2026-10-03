@@ -20,6 +20,7 @@ export type {
   McpTransport,
   PinnedCatalog,
   PoolExhausted,
+  SliceMount,
   SpawnFiles,
   StdioTransport,
   Subscription,

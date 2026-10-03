@@ -86,6 +86,15 @@ export interface SpawnFiles {
   cleanup: () => Promise<void>;
 }
 
+/** One mount in the `bwrap` slice (`src/bwrap-slice.js`). */
+export interface SliceMount {
+  kind: 'ro-bind' | 'bind' | 'symlink';
+  /** The host path, or the link text of a symlink. */
+  source: string;
+  /** The path inside the slice. */
+  target: string;
+}
+
 export interface HarnessOptions {
   pinnedModels: string[];
   defaultModel?: string;

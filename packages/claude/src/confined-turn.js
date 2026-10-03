@@ -20,11 +20,12 @@
 // `apiKeyHelper`. The relay is spawned with an empty environment, so nothing
 // `claude` holds in its own environment reaches it.
 //
-// This module is the harness side only. Kernel-level confinement of the
-// `claude` tree (the `@endo/claude-sandbox` / `@endo/sandbox` slice that makes
-// the daemon socket structurally unreachable) wraps `claudePath`; the slice
-// must bind the broker directory and the per-spawn directory, and supply a
-// scratch home, since the constructed environment carries no HOME.
+// With `sandbox`, `claude` runs inside the `bwrap` slice of `bwrap-slice.js`,
+// which binds the broker directory and that spawn's files directory, supplies
+// a scratch HOME, and leaves the daemon socket without a path. The caller must
+// choose: `sandbox: false` leaves the confinement to the harness-side shape
+// alone, and omitting `sandbox` is an error, so the slice is never dropped
+// silently.
 
 import childProcess from 'node:child_process';
 import fs from 'node:fs/promises';
@@ -33,16 +34,22 @@ import path from 'node:path';
 
 import { E } from '@endo/eventual-send';
 import { makeError, X } from '@endo/errors';
-import { connectToDaemon, startGuestBroker } from '@endo/agent-mcp-stdio';
+import {
+  connectToDaemon,
+  startGuestBroker,
+  RELAY_PATH,
+} from '@endo/agent-mcp-stdio';
 
 import { make } from './harness.js';
 import { makeLaunch } from './launch.js';
 import { makeSpawnFilesPreparer } from './spawn-files.js';
+import { makeBwrapSpawn, resolveSystemMounts } from './bwrap-slice.js';
 import { PINNED_CLI_VERSION } from './argv.js';
 
 /** @import { SpawnOptions, ChildProcess } from 'node:child_process' */
 /** @import { InferResult } from './claude.types.js' */
 /** @import { DaemonConnection } from '@endo/agent-mcp-stdio' */
+/** @import { SliceMount } from './claude.types.js' */
 
 /**
  * Read `claude --version` (for example `2.1.232 (Claude Code)`) under the
@@ -105,6 +112,11 @@ const defaultPathValue = nodePath =>
  * @param {(chunk: Buffer) => void} [options.onStderr] - the confined child's
  *   stderr, for diagnostics.
  * @param {(command: string, args: readonly string[], options: SpawnOptions) => ChildProcess} [options.spawn]
+ * @param {{ bwrapPath: string, home?: string, systemMounts?: ReadonlyArray<SliceMount> } | false} options.sandbox
+ *   - required: run `claude` inside the `bwrap` slice, where `bwrapPath` is
+ *   absolute, `home` is the scratch HOME inside it, and `systemMounts`
+ *   defaults to this host's `resolveSystemMounts()`; or `false` to run
+ *   `claude` unconfined, which only a prompt no guest can influence may use.
  * @returns {Promise<InferResult>}
  */
 export const runConfinedTurn = async ({
@@ -134,9 +146,15 @@ export const runConfinedTurn = async ({
   cancelled,
   onStderr,
   spawn = childProcess.spawn,
+  sandbox,
 }) => {
   if (typeof claudePath !== 'string' || !path.isAbsolute(claudePath)) {
     throw makeError(X`runConfinedTurn: claudePath must be absolute`);
+  }
+  if (sandbox !== false && typeof sandbox?.bwrapPath !== 'string') {
+    throw makeError(
+      X`runConfinedTurn: sandbox must be { bwrapPath } or an explicit false`,
+    );
   }
   if (typeof credential !== 'string' || credential.length === 0) {
     throw makeError(X`runConfinedTurn: credential must be a non-empty string`);
@@ -145,7 +163,7 @@ export const runConfinedTurn = async ({
   const turnDir = await fs.mkdtemp(path.join(parentDir, 'endo-claude-turn-'));
   /** @type {DaemonConnection | undefined} */
   let connection;
-  /** @type {{ close: () => Promise<void> } | undefined} */
+  /** @type {{ socketPath: string, close: () => Promise<void> } | undefined} */
   let broker;
   try {
     await fs.chmod(turnDir, 0o700);
@@ -178,6 +196,77 @@ export const runConfinedTurn = async ({
       },
     });
 
+    const prepareSpawnFiles = makeSpawnFilesPreparer({
+      parentDir: turnDir,
+      pathValue,
+      credentialFor: async sessionTag => {
+        const found = bySession.get(sessionTag);
+        if (found === undefined) {
+          throw makeError(X`no credential acquired for this spawn`);
+        }
+        return found;
+      },
+    });
+
+    const unsandboxedLaunch = makeLaunch({
+      spawn,
+      claudePath,
+      cwd: workDir,
+      onStderr,
+    });
+    /** @type {ReturnType<typeof makeLaunch>} */
+    let launch = unsandboxedLaunch;
+    if (sandbox !== false) {
+      const systemMounts =
+        sandbox.systemMounts ?? (await resolveSystemMounts());
+      // Inside the slice `claude` is run by its real path, so a symlinked
+      // install (`/usr/local/bin/claude -> .../cli.js`) still resolves its
+      // siblings from the installation directory it is granted. Only a
+      // package directory (one holding `package.json`) is granted whole; a
+      // binary in a shared directory such as `/usr/local/bin` is granted alone.
+      // Narrower grants are not viable: the package loads modules, vendored
+      // binaries, and WebAssembly lazily by paths only known at run time, and
+      // that set changes between `claude` releases. The grant is read-only and
+      // holds only the package's own files, none of the daemon's state.
+      const realClaudePath = await fs.realpath(claudePath);
+      const claudeDirectory = path.dirname(realClaudePath);
+      const isPackageDirectory = await fs
+        .access(path.join(claudeDirectory, 'package.json'))
+        .then(
+          () => true,
+          () => false,
+        );
+      const claudeGrant = isPackageDirectory ? claudeDirectory : realClaudePath;
+      const toolPaths = [claudeGrant, nodePath, envCommand];
+      launch = async spec => {
+        // The spawn files (`--settings`, `--mcp-config`) share one directory.
+        const settingsIndex = spec.argv.indexOf('--settings');
+        const settingsPath =
+          settingsIndex < 0 ? undefined : spec.argv[settingsIndex + 1];
+        if (broker === undefined || settingsPath === undefined) {
+          throw makeError(X`sandbox: no broker or spawn files for this spawn`);
+        }
+        return makeLaunch({
+          spawn: makeBwrapSpawn({
+            spawn,
+            bwrapPath: sandbox.bwrapPath,
+            systemMounts,
+            readOnlyPaths: [
+              ...toolPaths,
+              RELAY_PATH,
+              path.dirname(broker.socketPath),
+              path.dirname(settingsPath),
+            ],
+            writablePaths: [workDir],
+            home: sandbox.home,
+          }),
+          claudePath: realClaudePath,
+          cwd: workDir,
+          onStderr,
+        })(spec);
+      };
+    }
+
     let tagCount = 0;
     const provider = make(
       {
@@ -205,18 +294,8 @@ export const runConfinedTurn = async ({
           tagCount += 1;
           return `${path.basename(turnDir)}-${tagCount}`;
         },
-        prepareSpawnFiles: makeSpawnFilesPreparer({
-          parentDir: turnDir,
-          pathValue,
-          credentialFor: async sessionTag => {
-            const found = bySession.get(sessionTag);
-            if (found === undefined) {
-              throw makeError(X`no credential acquired for this spawn`);
-            }
-            return found;
-          },
-        }),
-        launch: makeLaunch({ spawn, claudePath, cwd: workDir, onStderr }),
+        prepareSpawnFiles,
+        launch,
         ...(limits === undefined ? {} : { limits }),
       },
     );

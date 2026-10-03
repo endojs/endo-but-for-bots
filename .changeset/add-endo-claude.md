@@ -34,6 +34,21 @@ plus a DD8 hardened/passable result taxonomy. The `@endo/agent-tools` MCP
 adapter has since landed, so this package now reuses its allow-list renderer and
 no longer carries the temporary stdio shim. The confined
 `@endo/agent-mcp-stdio` hosting seam, a live negative-and-positive confinement
-test against a real `claude -p`, the DD6 `@endo/sandbox` slice network profile,
-and the credential-path / entitlement verifications remain named prerequisites
-(package README, design Known Gaps).
+test against a real `claude -p`, a network profile for the DD6 slice (the
+`bwrap` slice shares the host network), and the credential-path / entitlement
+verifications remain named prerequisites (package README, design Known Gaps).
+
+`runConfinedTurn` requires a `sandbox` option, and `endo-claude-turn` a
+matching `--bwrap <path>` flag: `sandbox: { bwrapPath }` runs the confined
+`claude` inside a `bwrap` slice, and only an explicit `sandbox: false`
+(`--unconfined`) runs it without one.
+Inside the slice the daemon socket has no path: `claude` sees only the system
+directories, its own installation, the guest's broker socket, its spawn files,
+and a writable working directory, with a scratch `HOME`.
+`claude`'s directory is granted only when it is a package holding
+`package.json`; a lone binary is granted alone.
+Nested user namespaces are disabled inside the slice.
+The network namespace is still shared with the host.
+The slice's building blocks (`makeBwrapSpawn`, `assembleBwrapArgv`,
+`resolveSystemMounts`) and the `SliceMount` type are exported for deployment
+companions.
