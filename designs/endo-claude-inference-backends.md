@@ -5,7 +5,7 @@
 | **Created** | 2026-09-28 |
 | **Author** | kriscendobot (prompted) |
 | **Updated** | 2026-09-30 (revised per [review 5348050214](https://github.com/endojs/endo-but-for-bots/pull/1357#pullrequestreview-5348050214) and the design-panel rounds on PR #1357; Decision 11 settled per [review comment 4149077338](https://github.com/endojs/endo-but-for-bots/pull/1357#discussion_r4149077338)) |
-| **Status** | Draft, awaiting production evidence |
+| **Status** | In progress: phases 1 and 2 built and in review; later phases are design |
 | **Source** | Back-filled from the minion.town Claude CLI and Agent SDK experiments (kriscendobot/minion.town#105, kriscendobot/minion.town#106) and the production observations listed in § Evidence |
 
 ## Status
@@ -554,8 +554,14 @@ for designs that span several owners:
      credential in the grant's `env` as `ANTHROPIC_AUTH_TOKEN` (the path
      observed with a short-lived access token; the stored `setup-token` itself
      has not yet run through `--bare`). With built-ins removed the model
-     cannot read it, but the binary holds it. This is a documented residual,
-     acceptable only for a single-principal deployment (Decision 9).
+     cannot read it, but the binary holds it, and so does every stdio MCP
+     server the binary spawns, the guest's projection server included: that
+     server inherits the binary's whole environment (observed on 2.1.278 and
+     2.1.280,
+     [#1369](https://github.com/endojs/endo-but-for-bots/pull/1369) Gap 2).
+     This is a documented residual, acceptable only for a single-principal
+     deployment (Decision 9); the target delivery, which puts only a lease
+     token in that environment, closes both.
    - **Not `CLAUDE_CODE_OAUTH_TOKEN`.** `--bare` ignores it (observed,
      § Subscription credentials under `--bare`). `@endo/claude-sandbox`
      currently materializes exactly that variable in its slice under a

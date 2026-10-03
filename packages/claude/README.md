@@ -154,6 +154,16 @@ and the credential wait included, so a party that never answers cannot hold a
 turn open.
 A failure detail names an error by its code or class, never by its message,
 which may quote the credential.
+
+These backends put the credential in the process environment on purpose, which
+the `make()` provider's `FORBIDDEN_ENV_KEYS` tripwire forbids for its own child.
+That tripwire guards a pooled child against bypassing the pool with an inherited
+key; a backend here is made over one `CredentialSource`, so the grant *is* the
+admission and no pool exists to bypass. The cost is the interim-delivery
+residual of the design's Decision 5: the binary holds the credential, and so
+does the guest's stdio MCP server, which inherits the binary's environment
+([#1369](https://github.com/endojs/endo-but-for-bots/pull/1369) Gap 2). Use
+this delivery only for a single-principal deployment.
 Wrap an unsliced backend in the `@endo/inference` prompt-origin gate, and record
 usage with its usage recorder.
 
