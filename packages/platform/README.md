@@ -17,8 +17,9 @@ depends on the seam it needs without pulling a host graph it does not.
   content-store powers below).
 - `@endo/platform/fs/extended` — the extended filesystem backends.
 - `@endo/platform/fs/tree-read-powers` — `makeTreeReadPowers`, the
-  compartment-mapper `ReadPowers` over a `ReadableTree` or `Mount`, confined
-  to a synthetic `file:` root.
+  compartment-mapper `ReadPowers` over a `ReadableTree`, confined to a
+  synthetic `file:` root. Pass a `Mount` as `mount.readOnly()` or
+  `await mount.snapshot()`.
 - `@endo/platform/proc` and `@endo/platform/exo-fs` — process and
   exo-filesystem helpers.
 

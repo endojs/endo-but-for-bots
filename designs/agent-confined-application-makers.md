@@ -151,8 +151,11 @@ the mount first and passes the snapshot.
 
 ### The tree `ReadPowers`
 
-A new `makeTreeReadPowers(tree, { root, canonical })` in `@endo/platform/fs/tree-read-powers` turns a
-`ReadableTree` or `Mount` into compartment-mapper `ReadPowers`:
+A new `makeTreeReadPowers(tree, { root, canonical })` in
+`@endo/platform/fs/tree-read-powers` turns a `ReadableTree` into
+compartment-mapper `ReadPowers`. A caller holding a `Mount` passes
+`mount.readOnly()` or `await mount.snapshot()`, so the read powers never hold
+a write-capable reference:
 
 - `read(location)` accepts only `file:` URLs under a synthetic root
   (`file:///app/` by default), maps the path segments to `E(tree).lookup(...)`,
@@ -165,8 +168,9 @@ A new `makeTreeReadPowers(tree, { root, canonical })` in `@endo/platform/fs/tree
   climb past the root when an optional dependency is absent.
 - `canonical` should collapse every path that reaches one package directory
   to a single location, as the stock Node `canonical` does with `realpath`.
-  The Phase 1 default is the identity and does not collapse anything; the
-  collapsing comes from a hook. `mapNodeModules` relies on this to build one
+  The Phase 1 default is the identity on decoded segments: it gives every
+  spelling of a location one normal spelling, but it does not collapse
+  distinct paths; that collapsing comes from a hook. `mapNodeModules` relies on this to build one
   compartment for a package reached through more than one `node_modules`
   path; without it, such a
   package would load twice and break identity-sensitive code (`instanceof`,
@@ -319,7 +323,8 @@ Capture errors surface as an `isError` result, and a rejected option
 
 ## Phased implementation
 
-1. `makeTreeReadPowers` in `@endo/platform/fs/tree-read-powers`, with segment-confinement tests.
+1. `makeTreeReadPowers` in `@endo/platform/fs/tree-read-powers`, with
+   segment-confinement tests.
 2. Daemon capture for `node-modules-with-map` and `node-modules-scan`,
    including the daemon's `canonical` hook for mounts; `EndoHost.makeFromTree`
    gains `layout` and `entry`.
