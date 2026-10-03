@@ -25,17 +25,20 @@ import { X, Fail, q } from '@endo/errors';
 /**
  * Like `passStyleOf(val) === 'sturdyRef'`, but returns false rather than
  * throwing for a value that is not passable, since capdata tolerates
- * whatever `convertSlotToVal` returns for a 'slot'. Built directly on
- * `passStyleOf` (an existing `@endo/marshal` dependency) rather than
- * `@endo/sturdyref`'s own `isSturdyRef`, since `@endo/marshal` deliberately
- * keeps `@endo/sturdyref` as a devDependency only, used from test files.
+ * whatever `convertSlotToVal` returns for a 'slot'. A SturdyRef is always
+ * frozen, so an unfrozen value (such as an unhardened presence) is rejected
+ * without calling `passStyleOf`, and without allocating the error that
+ * `passStyleOf` would throw for it.
  *
  * @param {unknown} val
  * @returns {val is SturdyRef}
  */
 const isPassableSturdyRef = val => {
+  if (typeof val !== 'object' || val === null || !isFrozen(val)) {
+    return false;
+  }
   try {
-    return passStyleOf(val) === 'sturdyRef';
+    return passStyleOf(/** @type {Passable} */ (val)) === 'sturdyRef';
   } catch {
     return false;
   }
@@ -50,6 +53,7 @@ const {
   entries,
   fromEntries,
   freeze,
+  isFrozen,
   hasOwn,
 } = Object;
 
@@ -454,7 +458,7 @@ export const makeDecodeFromCapData = (decodeOptions = {}) => {
           if (passStyleOf(decoded) === 'sturdyRef') {
             return decoded;
           }
-          throw Fail`internal: decodeSturdyRefFromCapData option must return a sturdyRef: ${decoded}`;
+          throw Fail`a sturdyRef encoding must decode to a sturdyRef: ${decoded}`;
         }
         case 'error': {
           const decoded = decodeErrorFromCapData(

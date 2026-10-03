@@ -1,6 +1,7 @@
 // Install the realm's SturdyRef before anything below can make one.
 import '@endo/sturdyref/shim.js';
 import test from '@endo/ses-ava/test.js';
+import { fc } from '@fast-check/ava';
 
 import harden from '@endo/harden';
 import { Far, passStyleOf } from '@endo/pass-style';
@@ -95,7 +96,7 @@ for (const serializeBodyFormat of /** @type {const} */ ([
         ? '{"@qclass":"sturdyRef","index":0}'
         : `#"'0"`;
     t.throws(() => fromCapData({ body, slots: ['x'] }), {
-      message: /must return a sturdyRef/,
+      message: /must decode to a sturdyRef/,
     });
   });
 }
@@ -121,7 +122,7 @@ test('a slot decoded as a remotable cannot be reused as a sturdyRef', t => {
   t.throws(
     () => fromCapData({ body: `#["$0.Alleged: Eve","'0"]`, slots: [0] }),
     {
-      message: /must return a sturdyRef/,
+      message: /must decode to a sturdyRef/,
     },
   );
 });
@@ -155,7 +156,7 @@ test('a slot decoded as a remotable cannot be reused as a sturdyRef', t => {
       });
       const body = `#[${smallcapsEncodings[first]},${smallcapsEncodings[second]}]`;
       t.throws(() => fromCapData({ body, slots: [0] }), {
-        message: new RegExp(`must return a ${second}`),
+        message: new RegExp(`must decode to a ${second}`),
       });
     });
   }
@@ -194,7 +195,7 @@ test('capdata cannot reuse a plain slot as a sturdyRef', t => {
     { '@qclass': 'sturdyRef', index: 0 },
   ]);
   t.throws(() => fromCapData({ body, slots: [0] }), {
-    message: /must return a sturdyRef/,
+    message: /must decode to a sturdyRef/,
   });
 });
 
@@ -229,8 +230,33 @@ test('the default converters carry a SturdyRef as its own slot', t => {
 
 test('decodeToJustin renders a sturdyRef', t => {
   const body = { '@qclass': 'sturdyRef', index: 0 };
-  t.is(decodeToJustin(harden(body)), 'sturdyRef(0)');
-  t.is(decodeToJustin(harden(body), false, ['o-1']), 'sturdyRefToVal("o-1")');
+  t.is(decodeToJustin(harden(body)), 'sturdyRefSlot(0)');
+  t.is(decodeToJustin(harden(body), false, ['o-1']), 'slotToSturdyRef("o-1")');
+});
+
+test('decodeToJustin renders a sturdyRef that evaluates back', t => {
+  const { sturdyRef } = makeSturdyRef('Judy');
+  const slots = ['o-1'];
+  const body = harden({
+    '@qclass': 'sturdyRef',
+    index: 0,
+  });
+  const compartment = new Compartment({
+    slotToSturdyRef: slot => (slot === 'o-1' ? sturdyRef : undefined),
+    sturdyRefSlot: index => slots[index],
+  });
+  t.is(
+    compartment.evaluate(`(${decodeToJustin(body, false, slots)})`),
+    sturdyRef,
+  );
+  t.is(compartment.evaluate(`(${decodeToJustin(body)})`), 'o-1');
+});
+
+test('decodeToJustin rejects an iface on a sturdyRef', t => {
+  const body = harden({ '@qclass': 'sturdyRef', index: 0, iface: 'x' });
+  t.throws(() => decodeToJustin(body), {
+    message: /unexpected encoded sturdyRef property "iface"/,
+  });
 });
 
 test('encodePassable round-trips a SturdyRef', t => {
@@ -310,6 +336,101 @@ test('smallcaps rejects a non-canonical sturdyRef index', t => {
       encoding,
     );
   }
+});
+
+test('smallcaps accepts a sturdyRef index up to MAX_SAFE_INTEGER', t => {
+  const { sturdyRef } = makeSturdyRef('Ken');
+  const { fromCapData } = makeMarshal(undefined, () => sturdyRef, {
+    serializeBodyFormat: 'smallcaps',
+  });
+  t.is(
+    fromCapData({ body: `#"'${Number.MAX_SAFE_INTEGER}"`, slots: [0] }),
+    sturdyRef,
+  );
+});
+
+test('smallcaps decodes the sturdyRef slot each canonical index names', t => {
+  fc.assert(
+    fc.property(fc.nat({ max: Number.MAX_SAFE_INTEGER }), index => {
+      const { sturdyRef } = makeSturdyRef('Leo');
+      /** @type {unknown[]} */
+      const seen = [];
+      const { fromCapData } = makeMarshal(
+        undefined,
+        slot => {
+          seen.push(slot);
+          return sturdyRef;
+        },
+        { serializeBodyFormat: 'smallcaps' },
+      );
+      // A sparse slots array, so a large index costs nothing.
+      const slots = [];
+      slots[Math.min(index, 2 ** 32 - 2)] = 'the slot';
+      const decoded = fromCapData({ body: `#"'${index}"`, slots });
+      t.is(decoded, sturdyRef);
+      t.deepEqual(seen, [index <= 2 ** 32 - 2 ? 'the slot' : undefined]);
+    }),
+  );
+});
+
+test('smallcaps rejects every non-canonical sturdyRef index', t => {
+  const { sturdyRef } = makeSturdyRef('Mia');
+  const { fromCapData } = makeMarshal(undefined, () => sturdyRef, {
+    serializeBodyFormat: 'smallcaps',
+  });
+  fc.assert(
+    fc.property(fc.string(), digits => {
+      fc.pre(
+        !/^(?:0|[1-9][0-9]*)$/.test(digits) ||
+          !Number.isSafeInteger(Number(digits)),
+      );
+      t.throws(
+        () =>
+          fromCapData({ body: `#${JSON.stringify(`'${digits}`)}`, slots: [0] }),
+        { message: /sturdyRef encoding must be "'" followed by a slot index/ },
+      );
+    }),
+  );
+});
+
+test('the dot-membrane passes a synchronous enliven throw across', async t => {
+  const secret = Far('secret', { reveal: () => 'mine' });
+  const sturdyRef = new SturdyRef(
+    harden({
+      enliven: () => {
+        throw secret;
+      },
+    }),
+  );
+  const { proxy, revoke } = makeDotMembraneKit(
+    Far('Holder', { get: () => sturdyRef }),
+  );
+  const yourRef = await proxy.get();
+  const reason = await SturdyRef.enliven(yourRef).then(
+    () => t.fail('enliven should reject'),
+    r => r,
+  );
+  t.not(reason, secret);
+  t.is(await reason.reveal(), 'mine');
+  revoke('done');
+});
+
+test('the dot-membrane keeps a SturdyRef identity both ways', async t => {
+  const { sturdyRef } = makeSturdyRef('Nina');
+  const { proxy, revoke } = makeDotMembraneKit(
+    Far('Holder', {
+      get: () => sturdyRef,
+      getBoth: () => harden([sturdyRef, sturdyRef]),
+      isMine: ref => ref === sturdyRef,
+    }),
+  );
+  const yourRef = await proxy.get();
+  t.is(await proxy.get(), yourRef);
+  const [first, second] = await proxy.getBoth();
+  t.is(first, yourRef);
+  t.is(second, yourRef);
+  t.true(await proxy.isMine(yourRef));
+  revoke('done');
 });
 
 test('smallcaps still escapes a plain string that starts with "\'"', t => {

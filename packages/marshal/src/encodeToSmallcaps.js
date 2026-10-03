@@ -421,7 +421,7 @@ export const makeDecodeFromSmallcaps = (decodeOptions = {}) => {
             );
             // @ts-ignore XXX SmallCapsEncoding
             if (passStyleOf(result) !== 'remotable') {
-              Fail`internal: decodeRemotableFromSmallcaps option must return a remotable: ${result}`;
+              Fail`a remotable encoding must decode to a remotable: ${result}`;
             }
             return result;
           }
@@ -431,7 +431,7 @@ export const makeDecodeFromSmallcaps = (decodeOptions = {}) => {
               decodeFromSmallcaps,
             );
             if (passStyleOf(result) !== 'promise') {
-              Fail`internal: decodePromiseFromSmallcaps option must return a promise: ${result}`;
+              Fail`a promise encoding must decode to a promise: ${result}`;
             }
             return result;
           }
@@ -441,7 +441,7 @@ export const makeDecodeFromSmallcaps = (decodeOptions = {}) => {
               decodeFromSmallcaps,
             );
             if (passStyleOf(result) !== 'sturdyRef') {
-              Fail`internal: decodeSturdyRefFromSmallcaps option must return a sturdyRef: ${result}`;
+              Fail`a sturdyRef encoding must decode to a sturdyRef: ${result}`;
             }
             return result;
           }

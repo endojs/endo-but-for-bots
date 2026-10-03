@@ -427,8 +427,13 @@ export const makeMarshal = (
       assert(stringEncoding.charAt(0) === "'");
       // A SturdyRef encoding carries no iface, and `Number` alone would
       // accept "", " 0", "0x0", and "0e0" as slot 0, so require one
-      // canonical decimal index, within the range where distinct digit
-      // strings stay distinct numbers.
+      // canonical decimal index. `isSafeInteger` rejects digit strings too
+      // long to parse exactly; the index is then bounded by the slots
+      // array, as for "$" and "&". Those two keep their lenient `Number`
+      // parse for compatibility with existing senders, while "'" has no
+      // legacy senders and can be strict from the start. Every spelling of
+      // an index parses to the same cache key, so the leniency cannot alias
+      // two slots.
       const digits = stringEncoding.slice(1);
       const index = Number(digits);
       (/^(?:0|[1-9][0-9]*)$/.test(digits) && isSafeInteger(index)) ||
