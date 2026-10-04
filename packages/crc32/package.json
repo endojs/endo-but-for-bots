@@ -46,7 +46,7 @@
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
-    "prettier": "^3.9.8",
+    "prettier": "^3.9.9",
     "typescript": "catalog:dev"
   },
   "files": [
