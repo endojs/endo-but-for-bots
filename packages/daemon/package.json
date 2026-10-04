@@ -99,7 +99,7 @@
     "@endo/zip": "workspace:^",
     "better-sqlite3": "^12.0.0",
     "ses": "workspace:^",
-    "ws": "^8.21.3"
+    "ws": "^8.22.0"
   },
   "optionalDependencies": {
     "@number0/iroh": "^1.1.0"

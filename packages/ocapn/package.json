@@ -65,7 +65,7 @@
     "@endo/utf8": "workspace:^",
     "@noble/curves": "^2.4.0",
     "@noble/hashes": "^2.4.0",
-    "ws": "^8.21.3"
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@endo/chacha12": "workspace:^",
