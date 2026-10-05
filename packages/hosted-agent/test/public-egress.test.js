@@ -318,6 +318,42 @@ test('absolute deadlines close idle tunnels and connection count is bounded', as
   t.true(kit.sockets[0].socket.destroyed);
 });
 
+test('omitted lifetime allowance admits work beyond the finite profile ceiling', async t => {
+  t.timeout(30_000);
+  const kit = setup(t);
+  await E(kit.endpoint).resolvePublic('registry.example');
+  for (let index = 1; index < 65_537; index += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await E(kit.endpoint).resolvePublic('registry.example');
+  }
+  t.is(kit.lookups.length, 65_537);
+});
+
+test('explicit undefined omits the lifetime cap and malformed finite caps are rejected', async t => {
+  const kit = setup(t, { maxRequests: undefined });
+  await E(kit.endpoint).resolvePublic('registry.example');
+  t.is(kit.lookups.length, 1);
+  for (const maxRequests of [null, 0, -1, 1.5, Infinity, NaN, 65_537, '2']) {
+    t.throws(() => setup(t, { maxRequests }), {
+      message: /Invalid public egress limits/,
+    });
+  }
+});
+
+test('explicit lifetime allowance still bounds combined DNS and connection work', async t => {
+  const kit = setup(t, { maxRequests: 2 });
+  await E(kit.endpoint).resolvePublic('registry.example');
+  await E(kit.endpoint).open('registry.example', 443);
+  await t.throwsAsync(E(kit.endpoint).resolvePublic('registry.example'), {
+    message: /quota/,
+  });
+  await t.throwsAsync(E(kit.endpoint).open('registry.example', 443), {
+    message: /quota/,
+  });
+  t.is(kit.lookups.length, 2);
+  t.is(kit.connects.length, 1);
+});
+
 test('revocation rejects a stalled write even if its socket callback never returns', async t => {
   t.timeout(2000);
   /** @type {() => void} */

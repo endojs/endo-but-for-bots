@@ -78,7 +78,7 @@ const { atob, btoa } = globalThis;
  * @param {readonly string[]} [options.localAddresses]
  * @param {()=>readonly string[]} [options.getLocalAddresses] Live host addresses; previously observed addresses remain denied.
  * @param {number} [options.maxConnections] At most 64 simultaneous sockets/resolutions.
- * @param {number} [options.maxRequests] At most 65536 connections per generation.
+ * @param {number} [options.maxRequests] Optional finite allowance of at most 65536 resolutions/connections per egress instance; omitted means no lifetime connection cap.
  * @param {bigint} [options.maxBytes] Aggregate bidirectional payload quota.
  * @param {number} [options.timeoutMs] Absolute lifetime, at most ten minutes.
  * @param {number} [options.dnsTimeoutMs] Resolver response deadline, at most thirty seconds.
@@ -93,7 +93,7 @@ export const makePublicEgress = ({
       (items || []).map(item => item.address),
     ),
   maxConnections = 8,
-  maxRequests = 1024,
+  maxRequests,
   maxBytes = 2n * 1024n ** 3n,
   timeoutMs = 600_000,
   dnsTimeoutMs = 5000,
@@ -102,9 +102,10 @@ export const makePublicEgress = ({
   (Number.isInteger(maxConnections) &&
     maxConnections > 0 &&
     maxConnections <= 64 &&
-    Number.isInteger(maxRequests) &&
-    maxRequests > 0 &&
-    maxRequests <= 65_536 &&
+    (maxRequests === undefined ||
+      (Number.isInteger(maxRequests) &&
+        maxRequests > 0 &&
+        maxRequests <= 65_536)) &&
     typeof maxBytes === 'bigint' &&
     maxBytes > 0n &&
     Number.isInteger(timeoutMs) &&
@@ -170,6 +171,13 @@ export const makePublicEgress = ({
   let disposed = false;
   let requests = 0;
   let bytes = 0n;
+  const admitRequest = () => {
+    (active.size < maxConnections &&
+      (maxRequests === undefined || requests < maxRequests)) ||
+      Fail`Public egress connection quota exhausted`;
+    // Do not accumulate an unbounded counter when no lifetime cap was chosen.
+    if (maxRequests !== undefined) requests += 1;
+  };
   const dispose = () => {
     disposed = true;
     for (const close of active) close();
@@ -192,9 +200,7 @@ export const makePublicEgress = ({
         (!disposed && policy === 'public-internet') ||
           Fail`Public egress is disabled`;
         assertHostname(hostname);
-        (active.size < maxConnections && requests < maxRequests) ||
-          Fail`Public egress connection quota exhausted`;
-        requests += 1;
+        admitRequest();
         let stopped = false;
         let rejectStopped;
         const stoppedP = new Promise((_resolve, reject) => {
@@ -238,9 +244,7 @@ export const makePublicEgress = ({
           port === 443 ||
           Fail`Only public HTTP and HTTPS ports are supported`;
         assertHostname(hostname);
-        (active.size < maxConnections && requests < maxRequests) ||
-          Fail`Public egress connection quota exhausted`;
-        requests += 1;
+        admitRequest();
         /** @type {Socket | undefined} */
         let socket;
         let closed = false;
