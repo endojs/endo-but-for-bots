@@ -94,7 +94,7 @@
     "test": "ava",
     "test:hermes": "./scripts/hermes-test.sh",
     "test:types": "tsc --project tsconfig.test-types.json",
-    "test:xs": "xst dist/ses.umd.js test/_lockdown-safe.js",
+    "test:xs": "xst dist/ses.umd.js test/_lockdown-safe.js && xst test/_sturdyref-shim-first.js dist/ses.umd.js test/_sturdyref-xs-smoke.js",
     "postpack": "git clean -fX -e node_modules/"
   },
   "dependencies": {
