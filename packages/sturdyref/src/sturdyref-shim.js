@@ -41,6 +41,10 @@ import harden from '@endo/harden';
 
 const { defineProperty, freeze } = Object;
 const { apply } = Reflect;
+// Captured at module evaluation, so that once SES shares the constructor with
+// every compartment, its behavior does not late-bind to the start
+// compartment's globals, which stay writable after `lockdown`.
+const { Promise, TypeError, WeakMap } = globalThis;
 
 const symbolForHarden = Symbol.for('harden');
 

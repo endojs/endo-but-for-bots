@@ -5,12 +5,61 @@ import {
   defineProperty,
   entries,
   freeze,
+  getOwnPropertyDescriptor,
   hasOwn,
+  is,
   unscopablesSymbol,
 } from './commons.js';
 import { makeEvalFunction } from './make-eval-function.js';
 import { makeFunctionConstructor } from './make-function-constructor.js';
 import { constantProperties, universalPropertyNames } from './permits.js';
+
+/**
+ * Universal globals that a shim may install before `lockdown`, locked
+ * first-wins, and that `lockdown` then leaves in place rather than redefining.
+ * Every other universal global keeps the fail-closed behavior: a pre-lockdown
+ * non-configurable binding makes `lockdown` throw.
+ * So after `lockdown`, these are the only universal globals whose
+ * start-compartment binding stays non-writable and non-configurable; a child
+ * compartment's binding is writable and configurable as usual.
+ *
+ * An entry here reaches every compartment, including one built with no
+ * endowments to confine untrusted code, so its value must confer no authority.
+ * `SturdyRef` qualifies only because the `@endo/sturdyref` shim constructs,
+ * brand-checks, and dispatches to a handler the caller already holds. Nothing
+ * here enforces that: `sampleSturdyRef` in `intrinsics.js` is a misconfiguration
+ * guard, not an authority boundary, so any change to the shim's authority
+ * reaches every compartment.
+ * `lockdown` validates each entry with its own name-specific check before
+ * sampling it (for `SturdyRef`, `sampleSturdyRef`), so a new entry needs a new
+ * check alongside it.
+ */
+const firstWinsPropertyNames = freeze({
+  __proto__: null,
+  SturdyRef: true, // Shimmed by `@endo/sturdyref`.
+});
+
+/**
+ * Whether a pre-existing global binding is exactly the first-wins shape a shim
+ * installs: a non-writable, non-enumerable, non-configurable data property
+ * whose value is the intrinsic `lockdown` would install. Any other shape falls
+ * through to the ordinary redefinition, which throws on a non-configurable
+ * binding, so a misconfigured shim fails loudly.
+ * The value comparison is a real check, not a formality: a shape check that
+ * reenters user code (for example a Proxy trap) can re-point the binding to a
+ * different locked value after `lockdown` sampled the intrinsic, and this
+ * comparison is what keeps `lockdown` from leaving that value in place.
+ *
+ * @param {PropertyDescriptor | undefined} descriptor
+ * @param {unknown} value
+ */
+const isFirstWinsDescriptor = (descriptor, value) =>
+  descriptor !== undefined &&
+  hasOwn(descriptor, 'value') &&
+  is(descriptor.value, value) &&
+  descriptor.writable === false &&
+  descriptor.enumerable === false &&
+  descriptor.configurable === false;
 
 /**
  * The host's ordinary global object is not provided by a `with` block, so
@@ -88,11 +137,32 @@ export const setGlobalObjectMutableProperties = (
 ) => {
   for (const [name, intrinsicName] of entries(universalPropertyNames)) {
     if (hasOwn(intrinsics, intrinsicName)) {
+      const value = intrinsics[intrinsicName];
+      let locked = false;
+      if (hasOwn(firstWinsPropertyNames, name)) {
+        const descriptor = getOwnPropertyDescriptor(globalObject, name);
+        if (isFirstWinsDescriptor(descriptor, value)) {
+          // The shim already locked the start compartment's binding to the very
+          // intrinsic we would install, so leave it. A child compartment gets
+          // the same value from its own call to this function, where its fresh
+          // global object has no such binding yet.
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+        // A binding whose value is no longer the intrinsic `lockdown` sampled
+        // was re-pointed while `lockdown` ran (for example by a Proxy trap
+        // reentered during the shape check). Restore the sampled value with
+        // the first-wins lock, so the re-pointing cannot leave the start
+        // compartment's binding open to a later rebind.
+        locked =
+          descriptor !== undefined &&
+          !(hasOwn(descriptor, 'value') && is(descriptor.value, value));
+      }
       defineProperty(globalObject, name, {
-        value: intrinsics[intrinsicName],
-        writable: true,
+        value,
+        writable: !locked,
         enumerable: false,
-        configurable: true,
+        configurable: !locked,
       });
     }
   }
