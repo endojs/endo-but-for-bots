@@ -7,7 +7,9 @@
 
 import test from 'ava';
 
-globalThis.harden = o => o;
+// Through an untyped alias: a direct `globalThis.harden = ...` in a JS file
+// redeclares the global `harden` type for the repository-wide type check.
+/** @type {any} */ (globalThis).harden = o => o;
 
 const { provideSturdyRef } = await import('../src/sturdyref-shim.js');
 const { isSturdyRef } = await import('../src/sturdyref-pony.js');

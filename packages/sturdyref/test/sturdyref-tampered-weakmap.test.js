@@ -13,13 +13,17 @@ test('tampering with WeakMap.prototype after import reaches nothing', async t =>
   const ref = makeSturdyRef(handler);
 
   const seen = [];
-  const { get, has, set } = WeakMap.prototype;
-  WeakMap.prototype.get = function tamperedGet(key) {
+  // Tamper through an untyped alias: a direct `WeakMap.prototype.get = ...`
+  // in a JS file declares a member on the global `WeakMap` type for every
+  // file in the repository-wide type check.
+  const weakMapPrototype = /** @type {any} */ (WeakMap.prototype);
+  const { get, has, set } = weakMapPrototype;
+  weakMapPrototype.get = function tamperedGet(key) {
     seen.push(this);
     return Reflect.apply(get, this, [key]);
   };
-  WeakMap.prototype.has = () => true;
-  WeakMap.prototype.set = function tamperedSet(key, value) {
+  weakMapPrototype.has = () => true;
+  weakMapPrototype.set = function tamperedSet(key, value) {
     seen.push(this);
     return Reflect.apply(set, this, [key, value]);
   };
@@ -32,7 +36,7 @@ test('tampering with WeakMap.prototype after import reaches nothing', async t =>
     freshIsBranded = isSturdyRef(makeSturdyRef(handler));
     forgedIsBranded = isSturdyRef({});
   } finally {
-    Object.assign(WeakMap.prototype, { get, has, set });
+    Object.assign(weakMapPrototype, { get, has, set });
   }
   t.is(enlivened, 'live');
   t.true(freshIsBranded);

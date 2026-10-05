@@ -11,14 +11,19 @@ import { makeSturdyRef, enliven, isSturdyRef } from '../src/sturdyref-pony.js';
 
 test('replacing WeakMap and Promise.prototype.then after import reaches nothing', async t => {
   const leaked = [];
+  // Tamper through untyped aliases: a direct `Promise.prototype.then = ...`
+  // or `globalThis.WeakMap = ...` in a JS file redeclares the global type for
+  // every file in the repository-wide type check.
+  const global = /** @type {any} */ (globalThis);
+  const promisePrototype = /** @type {any} */ (Promise.prototype);
   const OriginalWeakMap = WeakMap;
-  const { then } = Promise.prototype;
-  globalThis.WeakMap = function LeakyWeakMap(...args) {
+  const { then } = promisePrototype;
+  global.WeakMap = function LeakyWeakMap(...args) {
     const map = new OriginalWeakMap(...args);
     leaked.push(map);
     return map;
   };
-  Promise.prototype.then = function tamperedThen(onFulfilled, onRejected) {
+  promisePrototype.then = function tamperedThen(onFulfilled, onRejected) {
     leaked.push(onFulfilled);
     return Reflect.apply(then, this, [onFulfilled, onRejected]);
   };
@@ -29,8 +34,8 @@ test('replacing WeakMap and Promise.prototype.then after import reaches nothing'
     ref = makeSturdyRef({ enliven: () => 'live' });
     pending = enliven(ref);
   } finally {
-    globalThis.WeakMap = OriginalWeakMap;
-    Promise.prototype.then = then;
+    global.WeakMap = OriginalWeakMap;
+    promisePrototype.then = then;
   }
   t.is(await pending, 'live');
   t.true(isSturdyRef(ref));
