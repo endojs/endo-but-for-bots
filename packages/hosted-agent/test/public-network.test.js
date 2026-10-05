@@ -20,6 +20,8 @@ test('shared network environment preserves local inference bypass', t => {
     HTTPS_PROXY: network.proxyUrl,
     http_proxy: network.proxyUrl,
     https_proxy: network.proxyUrl,
+    YARN_HTTP_PROXY: network.proxyUrl,
+    YARN_HTTPS_PROXY: network.proxyUrl,
     NO_PROXY: '127.0.0.1',
     no_proxy: '127.0.0.1',
   });
