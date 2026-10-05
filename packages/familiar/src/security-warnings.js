@@ -8,7 +8,10 @@
  * the rationale.
  */
 
+import harden from '@endo/harden';
+
 export const SECURITY_WARNINGS_CHANNEL = 'familiar:security-warnings';
+harden(SECURITY_WARNINGS_CHANNEL);
 
 /**
  * @typedef {object} WebContentsLike
@@ -44,6 +47,7 @@ export const isChatPageUrl = (url, chatPageUrl) => {
   const expected = pageIdentity(chatPageUrl);
   return expected !== undefined && pageIdentity(url) === expected;
 };
+harden(isChatPageUrl);
 
 /**
  * Send `warnings` to the renderer of `webContents` now (if its page has
@@ -69,3 +73,4 @@ export const deliverSecurityWarnings = (webContents, warnings, chatPageUrl) => {
     send();
   }
 };
+harden(deliverSecurityWarnings);
