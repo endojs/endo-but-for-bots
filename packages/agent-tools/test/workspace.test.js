@@ -1,4 +1,5 @@
 // @ts-check
+// prefer-endo-primitives-exempt: inert grants are never invoked in catalog tests.
 
 // Establish a SES perimeter (provides the `harden` global).
 // eslint-disable-next-line import/order
@@ -11,6 +12,7 @@ import {
   makeWorkspaceTools,
   provisionWorkspaceTools,
 } from '../src/workspace.js';
+import { concatDistinctTools } from '../src/catalog.js';
 
 /**
  * The provisioning adapter composes its catalog purely from the tool makers'
@@ -77,7 +79,7 @@ test('a filesystem grant composes the file tools; readOnly drops the write slice
 
 test('a remote grant composes the push tier', t => {
   const names = nameSet(makeWorkspaceTools({ remote: grant('GitRemote') }));
-  for (const method of ['inspect', 'fetch', 'pull', 'push']) {
+  for (const method of ['inspectGitRemote', 'fetch', 'pull', 'push']) {
     t.true(names.has(method), `remote tool "${method}" present`);
   }
 });
@@ -85,7 +87,22 @@ test('a remote grant composes the push tier', t => {
 test('a shell grant composes the command tools', t => {
   const names = nameSet(makeWorkspaceTools({ shell: grant('Shell') }));
   t.true(names.has('exec'));
-  t.true(names.has('inspect'));
+  t.true(names.has('inspectShell'));
+});
+
+test('a read-only workspace rejects a shell grant', t => {
+  t.throws(
+    () =>
+      makeWorkspaceTools({
+        readOnly: true,
+        shell: grant('Shell'),
+      }),
+    {
+      instanceOf: TypeError,
+      message:
+        'makeWorkspaceTools: readOnly cannot be combined with a shell grant',
+    },
+  );
 });
 
 test('grants compose into one flat catalog with distinct names', t => {
@@ -99,19 +116,51 @@ test('grants compose into one flat catalog with distinct names', t => {
   t.is(catalog.length, nameSet(catalog).size, 'no name is repeated');
 });
 
-test('a shell + remote catalog fails closed on the shared "inspect" name', t => {
-  // Both makeShellTool and makeGitRemoteTool emit a bounds-legibility `inspect`
-  // tool. A flat catalog with two identically-named tools is ambiguous the
-  // moment a harness dispatches by name, so composition rejects it rather than
-  // silently shadowing one. (Surfaced by the worked-loop composition; the fix
-  // is to reconcile the two makers' `inspect` naming — see the PR follow-ups.)
-  const error = t.throws(() =>
-    makeWorkspaceTools({ shell: grant('Shell'), remote: grant('GitRemote') }),
+test('a shell + remote catalog explicitly qualifies both inspect tools', t => {
+  const catalog = makeWorkspaceTools({
+    shell: grant('Shell'),
+    remote: grant('GitRemote'),
+  });
+  const names = nameSet(catalog);
+  t.is(catalog.length, names.size, 'the combined catalog is unambiguous');
+  t.true(names.has('inspectShell'));
+  t.true(names.has('inspectGitRemote'));
+  t.false(names.has('inspect'));
+});
+
+test('the catalog fails closed when two groups emit the same tool name', t => {
+  /** @param {string} name */
+  const record = name =>
+    /** @type {any} */ (harden({ name, invoke: async () => undefined }));
+  t.throws(
+    () =>
+      concatDistinctTools([
+        { group: 'first', records: [record('inspect')] },
+        { group: 'second', records: [record('inspect')] },
+      ]),
+    {
+      message:
+        /agent-tool catalog name collision: "inspect" is emitted by both the "first" and "second" tool groups/,
+    },
   );
-  t.regex(error.message, /name collision/);
-  t.regex(error.message, /inspect/);
-  t.regex(error.message, /shell/);
-  t.regex(error.message, /gitRemote/);
+});
+
+test('a group names table disambiguates an otherwise colliding tool', t => {
+  /** @param {string} name */
+  const record = name =>
+    /** @type {any} */ (harden({ name, invoke: async () => undefined }));
+  const catalog = concatDistinctTools([
+    { group: 'first', records: [record('inspect')] },
+    {
+      group: 'second',
+      records: [record('inspect')],
+      names: new Map([['inspect', 'inspectSecond']]),
+    },
+  ]);
+  t.deepEqual(
+    catalog.map(({ name }) => name),
+    ['inspect', 'inspectSecond'],
+  );
 });
 
 test('provisionWorkspaceTools passes an explicit filesystem straight through', async t => {
@@ -130,4 +179,26 @@ test('provisionWorkspaceTools passes an explicit filesystem straight through', a
 test('provisionWorkspaceTools with no grants derives nothing', async t => {
   const catalog = await provisionWorkspaceTools();
   t.deepEqual(catalog, []);
+});
+
+test('each qualified inspect name reaches its own capability', async t => {
+  await null;
+  const tools = makeWorkspaceTools({
+    // Partial stand-ins: only the `inspect` method these calls reach.
+    remote: /** @type {any} */ (
+      Far('GitRemote', { inspect: () => harden({ from: 'remote' }) })
+    ),
+    shell: /** @type {any} */ (
+      Far('Shell', { inspect: () => harden({ from: 'shell' }) })
+    ),
+  });
+  const byName = new Map(tools.map(record => [record.name, record]));
+  const inspectShell = byName.get('inspectShell');
+  const inspectGitRemote = byName.get('inspectGitRemote');
+  if (inspectShell === undefined || inspectGitRemote === undefined) {
+    t.fail('both qualified inspect tools are present');
+    return;
+  }
+  t.deepEqual(await inspectShell.invoke({}), { from: 'shell' });
+  t.deepEqual(await inspectGitRemote.invoke({}), { from: 'remote' });
 });

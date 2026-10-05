@@ -13,6 +13,11 @@ Each surface is opt-in via its own subpath export.
 - `@endo/agentry/define-agent` — `defineAgent(config)`, which returns a maker
   function: the powerless definition is the closure, and calling the returned
   maker with a powers handle is the powered stage.
+- `@endo/agentry/workspace-agent` — `defineWorkspaceAgent(config)`, which
+  returns an async maker: calling the returned maker with an explicit set of
+  already-granted filesystem, Git, GitRemote, and Shell capabilities
+  (`workspaceGrants`) is the powered stage, and it installs their Pi tool
+  projections.
 - `@endo/agentry/harness` — the code-mode-independent primitives the harness is
   built from: `makeEnvCredentials` (the single reader of `process.env`),
   `resolveModel`/`defineModels`, and `makePiAgent`. `@endo/lal` imports these
@@ -64,6 +69,47 @@ const makeAgent = defineAgent({
 ```
 
 `actions`/`skills`/`cwd` are deferred.
+
+## Explicit workspace agent
+
+`defineWorkspaceAgent` composes only the capabilities the caller supplies. It
+does not enumerate or probe a guest petstore for additional authority. The
+workspace grants are the agent's only tool source: a `tools` entry in the
+config or make options, or tools returned by an `endow` hook, throw rather than
+being silently replaced. An `endow` hook may still supply `getApiKey`, and
+whatever that hook reads to do so is the caller's authority, not the harness's.
+The hook is called with the make options minus the provisioned tools, so it
+never holds the granted capabilities' closures:
+
+```js
+import { defineWorkspaceAgent } from '@endo/agentry/workspace-agent';
+
+const makeAgent = defineWorkspaceAgent({ model, instructions });
+const agent = await makeAgent({
+  workspaceGrants: { git, remote, shell },
+  credentials,
+});
+```
+
+In the composed catalog, the Shell grant's standalone `inspect` record always
+appears as `inspectShell`, and the GitRemote grant's as `inspectGitRemote`,
+whether or not the other grant is present. The underlying capability-specific
+makers retain their existing names.
+
+`workspaceGrants.readOnly` only drops the file tools' write slice
+(`mountWriteText`). It does not attenuate the other grants: a `git` grant still
+carries `add` and `commit`, a `shell` grant still carries `exec`, and the
+worktree Filesystem those grants reach stays writable. For a read-only agent,
+pass only read-only capabilities, for example a `readOnly(fs)` filesystem and
+no `git`, `remote`, or `shell` grant.
+
+`workspaceGrants` is not the code-mode `grants` record of
+`@endo/agentry/code-mode-provisioning`. Code-mode `grants` are host pet-name
+paths that trusted provisioning resolves once and binds as opaque code-mode
+capabilities; the agent reaches them only through code it evaluates.
+`workspaceGrants` are capability references the caller already
+holds and passes directly, and each one is projected as a JSON tool record. The
+two share no resolution step, and neither consults the other.
 
 ## Credential seam
 

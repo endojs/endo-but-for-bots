@@ -23,22 +23,67 @@
 
 export const shellDeclarations = harden({
   shell: {
-    aux: `type ShellResult = {
+    aux: `type ShellCommandGrammar = {
+    program: string;
+    argumentVector: readonly ShellCommandElement[];
+    description?: string;
+};
+type ShellResult = {
     stdout: string;
     stderr: string;
     exitCode: number | null;
     signal: string | null;
     truncated: boolean;
+};
+type ShellInspectResult = {
+    commands: readonly ShellCommandGrammar[];
+    usage: readonly string[];
+    timeoutMs: number;
+    maxOutputBytes: number;
+};
+type ShellSlotType = 'string' | 'relative-path';
+type ShellOptionMember = string | {
+    prefix: string;
+    type: ShellSlotType;
+    name?: string;
+};
+type ShellCommandElement = {
+    kind: 'literal';
+    value: string;
+} | {
+    kind: 'slot';
+    name: string;
+    type: ShellSlotType;
+    prefix?: string;
+    optional?: boolean;
+    description?: string;
+} | {
+    kind: 'options';
+    options: readonly ShellOptionMember[];
+    optional?: boolean;
+    repeat?: boolean;
+    name?: string;
+    description?: string;
+} | {
+    kind: 'group';
+    elements: readonly ShellCommandElement[];
+    optional?: boolean;
+    repeat?: boolean;
+    description?: string;
+} | {
+    kind: 'rest';
+    name: string;
+    type: ShellSlotType;
+    description?: string;
 };`,
     body: `{
-    exec: (command: string, args: readonly string[], options?: {
+    attenuate: (commands: readonly ShellCommandGrammar[], options?: {
+        timeoutMs?: number;
+    }) => Promise<typeof shell>;
+    exec: (command: string, argumentVector: readonly string[], options?: {
         timeoutMs?: number;
     }) => Promise<ShellResult>;
-    inspect: () => Promise<{
-        allowedCommands: readonly string[];
-        timeoutMs: number;
-        maxOutputBytes: number;
-    }>;
+    inspect: () => Promise<ShellInspectResult>;
 }`,
   },
 });

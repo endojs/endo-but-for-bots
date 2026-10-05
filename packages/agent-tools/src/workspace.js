@@ -20,6 +20,7 @@ import { makeGitMountTools } from './json-tools/git-mount.js';
 import { makeGitRemoteTool } from './json-tools/git-remote.js';
 import { makeShellTool } from './json-tools/shell.js';
 import { makeMountFsTools } from './json-tools/fs.js';
+import { concatDistinctTools } from './catalog.js';
 
 /**
  * Capability-based provisioning for one agent workspace: the thin adapter that
@@ -46,40 +47,11 @@ import { makeMountFsTools } from './json-tools/fs.js';
  *   argument crosses this seam.
  *
  * The catalog is a flat array with unique tool names, so a harness may index it
- * by name without ambiguity.
+ * by name without ambiguity. The two generic `inspect` records are qualified at
+ * this composition boundary as `inspectGitRemote` and `inspectShell`. Their
+ * individual makers keep their established names, while a combined workspace
+ * catalog remains unambiguous.
  */
-
-/**
- * Concatenate tool-group record arrays into one catalog, failing closed if two
- * groups would emit the same tool name. A catalog with two identically-named
- * tools is ambiguous the moment a harness dispatches by name, so the collision
- * is an error at composition time rather than a silent shadow. (Known overlap:
- * both `makeShellTool` and `makeGitRemoteTool` emit a bounds-legibility
- * `inspect`; grant at most one of `shell` / `remote` to a single catalog until
- * that tool-layer naming is reconciled.)
- *
- * @param {{ group: string, records: ToolRecord[] }[]} groups
- * @returns {ToolRecord[]}
- */
-const concatDistinctTools = groups => {
-  /** @type {ToolRecord[]} */
-  const catalog = [];
-  /** @type {Map<string, string>} */
-  const sourceByName = new Map();
-  for (const { group, records } of groups) {
-    for (const record of records) {
-      const priorGroup = sourceByName.get(record.name);
-      if (priorGroup !== undefined) {
-        throw new Error(
-          `agent-tool catalog name collision: "${record.name}" is emitted by both the "${priorGroup}" and "${group}" tool groups; grant only one to a single catalog, or disambiguate the tool names before composing`,
-        );
-      }
-      sourceByName.set(record.name, group);
-      catalog.push(record);
-    }
-  }
-  return harden(catalog);
-};
 
 /**
  * Compose the agent-tool catalog from a set of already-held capabilities.
@@ -100,7 +72,15 @@ export const makeWorkspaceTools = ({
   maxChars,
   shellOptions,
 } = {}) => {
-  /** @type {{ group: string, records: ToolRecord[] }[]} */
+  // `readOnly` describes a workspace whose exposed authority is limited to
+  // reads. A Shell grant can execute commands with its own authority, so the
+  // two cannot describe the same workspace safely.
+  if (readOnly && shell !== undefined) {
+    throw TypeError(
+      'makeWorkspaceTools: readOnly cannot be combined with a shell grant',
+    );
+  }
+  /** @type {{ group: string, records: ToolRecord[], names?: Map<string, string> }[]} */
   const groups = [];
   if (filesystem !== undefined) {
     groups.push({
@@ -116,12 +96,17 @@ export const makeWorkspaceTools = ({
     groups.push({ group: 'gitMount', records: makeGitMountTools(git) });
   }
   if (remote !== undefined) {
-    groups.push({ group: 'gitRemote', records: makeGitRemoteTool(remote) });
+    groups.push({
+      group: 'gitRemote',
+      records: makeGitRemoteTool(remote),
+      names: new Map([['inspect', 'inspectGitRemote']]),
+    });
   }
   if (shell !== undefined) {
     groups.push({
       group: 'shell',
       records: makeShellTool(shell, shellOptions),
+      names: new Map([['inspect', 'inspectShell']]),
     });
   }
   return concatDistinctTools(groups);

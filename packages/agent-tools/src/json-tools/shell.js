@@ -1,18 +1,24 @@
 // @ts-check
 /// <reference types="ses"/>
+// spell-out-exempt: interoperates with the existing argGuards tool protocol.
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { InterfaceGuard, Pattern } from '@endo/patterns' */
 /** @import { ShellToolCapability, ToolRecord, RejectPatternEntry, RejectFlagEntry, ShellToolOptions } from '../types.js' */
 
-/** @typedef {Record<keyof ShellToolCapability, (...args: unknown[]) => Promise<unknown>>} ShellToolDispatch */
+/** @typedef {Record<keyof ShellToolCapability, (...argumentVector: unknown[]) => Promise<unknown>>} ShellToolDispatch */
 
 import { E } from '@endo/eventual-send';
 import {
   getInterfaceGuardPayload,
   getMethodGuardPayload,
 } from '@endo/patterns';
-import { ShellInterface } from '@endo/exo-shell';
+import {
+  ShellInterface,
+  formatShellCommandUsage,
+  matchShellCommand,
+  normalizeShellCommandGrammars,
+} from '@endo/exo-shell';
 
 import { makeTool } from '../tool.js';
 
@@ -21,13 +27,14 @@ import { makeTool } from '../tool.js';
  * entries.  Ported from the prior agent framework's command-tool policy
  * (`rejectPatterns` / `rejectFlags`).  These run in the tool layer,
  * *before* the call reaches `Shell.exec`, and are hardening advice — not the
- * boundary.  The boundary is the formula-owned allowlist enforced inside the
- * `Shell` exo (design § Shell capability); an allowlisted child is still an
- * ordinary host process, so the veto is defense-in-depth, not confinement.
+ * boundary.  The boundary is the formula-owned command grammars enforced
+ * inside the `Shell` exo (design § Command grammars); a granted child is
+ * still an ordinary host process, so the veto is defense-in-depth, not
+ * confinement.
  *
  * @param {RejectPatternEntry[]} rejectPatterns
  * @param {RejectFlagEntry[]} rejectFlags
- * @returns {(command: string, args: string[]) => void}
+ * @returns {(command: string, argumentVector: string[]) => void}
  */
 const makeAdvisoryVeto = (rejectPatterns, rejectFlags) => {
   /** @type {Map<string, string | undefined>} */
@@ -39,8 +46,8 @@ const makeAdvisoryVeto = (rejectPatterns, rejectFlags) => {
       forbiddenFlags.set(entry.flag, entry.reason);
     }
   }
-  return harden((command, args) => {
-    const tokens = harden([command, ...args]);
+  return harden((command, argumentVector) => {
+    const tokens = harden([command, ...argumentVector]);
     for (const entry of rejectPatterns) {
       const pattern = entry instanceof RegExp ? entry : entry.pattern;
       const reason = entry instanceof RegExp ? undefined : entry.reason;
@@ -75,22 +82,26 @@ const makeAdvisoryVeto = (rejectPatterns, rejectFlags) => {
 const shellToolSchemas = harden({
   exec: {
     description:
-      'Run an allowlisted command with a structured argv (no shell string, ' +
-      'no interpolation). Returns { stdout, stderr, exitCode, signal, ' +
-      'truncated }; a non-zero exitCode is data, not an error.',
+      'Run a command with a structured argv (no shell string, no ' +
+      'interpolation). The argv must match one of the granted command ' +
+      'grammars; call inspect for their usage lines. Returns { stdout, ' +
+      'stderr, exitCode, signal, truncated }; a non-zero exitCode is data, ' +
+      'not an error.',
     parameters: {
       type: 'object',
       properties: {
         command: {
           type: 'string',
           description:
-            'The program to run (argv[0]); must be in the shell allowlist.',
+            'The program to run (argv[0]); must be the program of a ' +
+            'granted command grammar.',
         },
-        args: {
+        argumentVector: {
           type: 'array',
           items: { type: 'string' },
           description:
-            'Arguments passed to the program, one array element each.',
+            'Arguments passed to the program, one array element each; ' +
+            'the vector must match a granted command grammar.',
         },
         options: {
           // Open object (no `additionalProperties: false`) to match the
@@ -108,14 +119,14 @@ const shellToolSchemas = harden({
           description: 'Optional per-call execution options.',
         },
       },
-      required: ['command', 'args'],
+      required: ['command', 'argumentVector'],
       additionalProperties: false,
     },
   },
   inspect: {
     description:
-      'Report the shell policy bounds: the command allowlist, timeout, and ' +
-      'output cap. Reveals no host path.',
+      'Report the shell bounds: the granted command grammars with their ' +
+      'usage lines, the timeout, and the output cap. Reveals no host path.',
     parameters: {
       type: 'object',
       properties: {},
@@ -131,7 +142,7 @@ const shellToolMethods = harden(
 );
 
 /**
- * Positional arg guards for a method, required first and then optional.
+ * Positional argument guards for a method, required first and then optional.
  *
  * @param {string} method
  * @returns {Pattern[]}
@@ -147,25 +158,41 @@ const positionalArgGuards = method => {
 };
 
 /**
- * Build agent-tool records for a live `Shell` capability.
+ * Build agent-tool records for a live `Shell` capability: `exec` and
+ * `inspect` only — `attenuate` is granter-facing and deliberately not a tool.
  *
  * @param {ERef<ShellToolCapability>} shellCap
  * @param {ShellToolOptions} [options]
- *   Advisory reject entries ported from the prior agent framework's
- *   command-tool policy closures.
+ *   `commands` is the granted command-grammar array (passable data the
+ *   granter already holds); when present, each grammar's rendered usage line
+ *   is embedded in the `exec` tool description — the agent reads the accepted
+ *   command forms up front instead of probing for them — and a non-matching
+ *   argv is rejected tool-side with those usage lines before the round trip
+ *   to the capability (the capability's own grammar check remains the
+ *   boundary).
+ *   `rejectPatterns` / `rejectFlags` are advisory reject entries ported from
+ *   the prior agent framework's command-tool policy closures.
  *   They veto a command string *before* it reaches `Shell.exec`; they are not
- *   the boundary (the formula-owned allowlist is). `rejectPatterns` /
- *   `rejectFlags` default to empty (unlike that prior policy, which shipped a
- *   curated `DANGEROUS_PATTERNS` set); a caller wanting advisory vetoes must
- *   pass them.
+ *   the boundary (the formula-owned command grammars are). They default to
+ *   empty (unlike that prior policy, which shipped a curated
+ *   `DANGEROUS_PATTERNS` set); a caller wanting advisory vetoes must pass
+ *   them.
  * @returns {ToolRecord[]}
  */
 export const makeShellTool = (shellCap, options = {}) => {
-  const { rejectPatterns = [], rejectFlags = [] } = options;
+  const { rejectPatterns = [], rejectFlags = [], commands } = options;
   const veto = makeAdvisoryVeto(
     harden([...rejectPatterns]),
     harden([...rejectFlags]),
   );
+  const grammars =
+    commands === undefined
+      ? undefined
+      : normalizeShellCommandGrammars(commands);
+  const usage =
+    grammars === undefined
+      ? undefined
+      : harden(grammars.map(formatShellCommandUsage));
 
   const records = shellToolMethods.map(method => {
     const schema = shellToolSchemas[method];
@@ -175,17 +202,41 @@ export const makeShellTool = (shellCap, options = {}) => {
         schema.parameters
       ).properties || {},
     );
+    const description =
+      method === 'exec' && usage !== undefined
+        ? `${schema.description} Accepted command forms:\n${usage
+            .map(line => `  ${line}`)
+            .join('\n')}`
+        : schema.description;
     return makeTool({
       name: method,
-      description: schema.description,
+      description,
       parameters: schema.parameters,
       argGuards,
       execute: async argsRecord => {
         if (method === 'exec') {
           const command = /** @type {string} */ (argsRecord.command);
-          const args = /** @type {string[]} */ (argsRecord.args);
+          const argumentVector = /** @type {string[]} */ (
+            argsRecord.argumentVector
+          );
+          // Tool-side grammar pre-match: a better error before the round
+          // trip; the capability's own check remains the boundary.
+          if (
+            grammars !== undefined &&
+            !grammars.some(grammar =>
+              matchShellCommand(grammar, command, argumentVector),
+            )
+          ) {
+            throw new Error(
+              `Command does not match a granted command grammar; usage:\n${(
+                usage || []
+              )
+                .map(line => `  ${line}`)
+                .join('\n')}`,
+            );
+          }
           // Advisory veto before the call reaches the exo.
-          veto(command, args);
+          veto(command, argumentVector);
         }
         const positional = paramNames.map(paramName => argsRecord[paramName]);
         while (
