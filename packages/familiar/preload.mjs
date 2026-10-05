@@ -30,8 +30,13 @@ ipcRenderer.on(
   'familiar:security-warnings',
   (/** @type {unknown} */ _event, /** @type {string[]} */ warnings) => {
     latestSecurityWarnings = warnings;
+    // One throwing subscriber must not starve the others.
     for (const callback of securityWarningSubscribers) {
-      callback(warnings);
+      try {
+        callback(warnings);
+      } catch (error) {
+        console.error(error);
+      }
     }
   },
 );

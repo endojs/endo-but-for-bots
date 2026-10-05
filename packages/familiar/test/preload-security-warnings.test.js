@@ -111,3 +111,30 @@ test('every subscriber receives later warnings after the replay', async t => {
   t.deepEqual(first, [['a'], ['a', 'b']]);
   t.deepEqual(second, [['a'], ['a', 'b']]);
 });
+
+test('a throwing subscriber does not starve the others', async t => {
+  const { familiar, receive } = await loadPreload(t);
+  /** @type {string[][]} */
+  const got = [];
+  familiar.onSecurityWarnings(() => {
+    throw Error('subscriber failure');
+  });
+  familiar.onSecurityWarnings((/** @type {string[]} */ w) => got.push(w));
+
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    receive(['a']);
+  } finally {
+    console.error = originalError;
+  }
+  t.deepEqual(got, [['a']]);
+});
+
+test('onSecurityWarnings returns nothing across the bridge', async t => {
+  const { familiar } = await loadPreload(t);
+  t.is(
+    familiar.onSecurityWarnings(() => {}),
+    undefined,
+  );
+});

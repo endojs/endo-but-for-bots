@@ -1,22 +1,11 @@
 // @ts-check
 
 /**
- * Delivery of startup security warnings to the Chat renderer.
- *
- * The exfiltration-defense verification runs after the window is created
- * but usually before its page has loaded, and `webContents.send` drops a
- * message when no renderer is listening yet.  Any reload (a daemon restart
- * re-runs `loadURL`) also discards whatever the previous page had shown.
- * So the warnings are sent on every `did-finish-load`, and immediately when
- * the page has already finished loading.
- *
- * The listener outlives the first page, and the navigation guard lets the
- * window navigate to `localhttp:` weblets, which get the same preload
- * bridge, and it lets the window navigate to any `file:` page.  The
- * warnings describe which defense failed, so they go only to the Chat page
- * itself: the exact URL `electron-main.js` loads (the Chat dist
- * `index.html`, or the loopback Vite dev server on its pinned port),
- * ignoring only the query and the configuration fragment.
+ * Delivers startup security warnings to the Chat renderer on every load of
+ * the Chat page, never to a `localhttp:` weblet or other page in the same
+ * window.  Sends immediately if the page has already loaded, and again on
+ * each `did-finish-load`.  See designs/familiar-localhttp-protocol.md for
+ * the rationale.
  */
 
 export const SECURITY_WARNINGS_CHANNEL = 'familiar:security-warnings';

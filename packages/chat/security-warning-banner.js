@@ -8,11 +8,9 @@ import harden from '@endo/harden';
 // notification").  The warnings say that a layer of the exfiltration defense
 // could not be confirmed; the banner is non-blocking and dismissible.
 //
-// The app replaces `document.body` wholesale when it (re)connects, so the
-// banner keeps its own state and `mount()` re-inserts it afterwards.  A
-// dismissal lasts until the Familiar reports a warning not seen before.  The
-// banner sits above the reconnect overlay (z-index 9999), since a reconnect is
-// when the warnings matter most.
+// Call `mount()` after each replacement of `document.body`.  A dismissal lasts
+// until the Familiar reports a warning not seen before.  The banner stays above
+// the reconnect overlay.
 
 export const SECURITY_WARNING_BANNER_ID = 'familiar-security-warnings';
 
@@ -42,12 +40,18 @@ const normalizeWarnings = warnings => {
 };
 
 /**
+ * @typedef {object} SecurityWarningBanner
+ * @property {(next: unknown) => void} show replace the displayed warnings
+ * @property {() => void} mount re-insert the banner after a body replacement
+ */
+
+/**
  * One banner per page: its dismissal state outlives the body replacements
  * that `mount()` repairs.  The document is a parameter, not the global, so
  * tests can drive the banner against a DOM fixture.
  *
  * @param {Document} document
- * @returns {{ show: (next: unknown) => void, mount: () => void }}
+ * @returns {SecurityWarningBanner}
  */
 export const makeSecurityWarningBanner = document => {
   /** @type {string[]} */

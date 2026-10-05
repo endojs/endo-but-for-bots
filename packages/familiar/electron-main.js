@@ -18,6 +18,7 @@
 
 import os from 'os';
 import path from 'path';
+import { pathToFileURL } from 'url';
 // @ts-ignore Electron is not typed in this project
 import { app, BrowserWindow, Menu, ipcMain, screen } from 'electron';
 
@@ -67,7 +68,7 @@ const vitePort = 5173;
 // vulnerable to integrity attacks.
 const chatPageUrl = isDevMode
   ? `http://127.0.0.1:${vitePort}/`
-  : `file://${resourcePaths.chatDistPath}`;
+  : pathToFileURL(resourcePaths.chatDistPath).href;
 
 /** @type {string | undefined} */
 let gatewayAddress;
