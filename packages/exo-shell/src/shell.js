@@ -80,7 +80,7 @@ const drainBounded = async (stream, maxBytes, onFailure) => {
  * and invisible on this surface).  The exo enforces the guest-facing bounds:
  * allowlist-before-spawn, argv-only (no shell string), the policy's sanitized
  * env (carried by the spawner's defaults plus `policy.env`), a per-stream
- * output cap, and a timeout that narrows-only per call.  `cwd` and the env
+ * output cap, and a default timeout that a holder can override per call. `cwd` and the env
  * passlist are host-private and never surface through `inspect()`.
  *
  * A read-only mount cannot bound a child process's OS-level write authority, so
@@ -114,7 +114,7 @@ export const makeShell = ({
   }
   const {
     allowedCommands,
-    timeoutMs: policyTimeoutMs,
+    timeoutMs: defaultTimeoutMs,
     maxOutputBytes,
     env = {},
   } = policy;
@@ -128,9 +128,9 @@ export const makeShell = ({
     );
   }
   if (
-    !Number.isInteger(policyTimeoutMs) ||
-    policyTimeoutMs <= 0 ||
-    policyTimeoutMs > 0x7fff_ffff
+    !Number.isInteger(defaultTimeoutMs) ||
+    defaultTimeoutMs <= 0 ||
+    defaultTimeoutMs > 0x7fff_ffff
   ) {
     throw makeError(X`makeShell: policy.timeoutMs must be a positive integer`);
   }
@@ -161,7 +161,7 @@ export const makeShell = ({
     async inspect() {
       return harden({
         allowedCommands: allowedList,
-        timeoutMs: policyTimeoutMs,
+        timeoutMs: defaultTimeoutMs,
         maxOutputBytes,
       });
     },
@@ -177,7 +177,7 @@ export const makeShell = ({
           X`Shell.exec: command ${q(command)} is not in the allowlist`,
         );
       }
-      // A per-call timeout may only narrow the policy value, never widen it.
+      // The policy supplies the default, not a ceiling on a holder's request.
       const requested = options.timeoutMs;
       if (
         requested !== undefined &&
@@ -189,10 +189,7 @@ export const makeShell = ({
           X`Shell.exec: timeoutMs must be a positive timer-range integer`,
         );
       }
-      const effectiveTimeoutMs =
-        requested !== undefined
-          ? Math.min(policyTimeoutMs, requested)
-          : policyTimeoutMs;
+      const effectiveTimeoutMs = requested ?? defaultTimeoutMs;
 
       // Argv only — the program name is argv[0], never a shell string, and
       // `shell: false` forbids the spawner from wrapping it in `/bin/sh -c`.

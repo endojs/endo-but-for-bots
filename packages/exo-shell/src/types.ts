@@ -1,5 +1,6 @@
 export type ShellPolicy = {
   allowedCommands: readonly string[];
+  /** Default invocation timeout in milliseconds; a caller may override it. */
   timeoutMs: number;
   maxOutputBytes: number;
   env?: Record<string, string>;
@@ -8,6 +9,7 @@ export type ShellPolicy = {
 
 export type ShellInspectResult = {
   allowedCommands: readonly string[];
+  /** Default invocation timeout in milliseconds, not a maximum. */
   timeoutMs: number;
   maxOutputBytes: number;
 };
@@ -47,6 +49,9 @@ export type EndoShell = {
   exec: (
     command: string,
     args: readonly string[],
-    options?: { timeoutMs?: number },
+    options?: {
+      /** Override the default with a positive integer up to 2**31 - 1 ms. */
+      timeoutMs?: number;
+    },
   ) => Promise<ShellResult>;
 };

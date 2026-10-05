@@ -202,20 +202,81 @@ test('makeShell rejects a non-positive killGraceMs', t => {
   );
 });
 
-test('a per-call timeout may only narrow the policy, never widen it', async t => {
-  const { spawner } = makeFakeSpawner(() => ({ hang: true }));
+test('the policy timeout is a default; per-call overrides reach the engine unchanged', async t => {
+  const { spawner, calls } = makeFakeSpawner(() => ({}));
   const shell = makeShell({
     cwd: '/repo',
-    policy: harden({ ...basePolicy, timeoutMs: 40 }),
+    policy: harden({ ...basePolicy, timeoutMs: 600_000 }),
     spawner,
   });
-  // A widening request (10_000) is ignored — the policy's 40ms still fires.
-  const start = Date.now();
-  await t.throwsAsync(shell.exec('node', ['-e', '1'], { timeoutMs: 10_000 }), {
+  const inspected = await shell.inspect();
+  t.is(inspected.timeoutMs, 600_000);
+  await shell.exec('echo', []);
+  await shell.exec('echo', [], { timeoutMs: 100 });
+  await shell.exec('echo', [], { timeoutMs: 900_000 });
+  t.deepEqual(
+    calls.map(call => call.opts.timeoutMs),
+    [600_000, 100, 900_000],
+  );
+});
+
+test('a shorter per-call timeout still terminates a hanging command', async t => {
+  t.timeout(2000);
+  const { spawner, calls, killLog } = makeFakeSpawner(() => ({ hang: true }));
+  const shell = makeShell({ cwd: '/repo', policy: basePolicy, spawner });
+  await t.throwsAsync(shell.exec('node', [], { timeoutMs: 20 }), {
     message: /timed out/,
   });
-  const elapsedMs = Date.now() - start;
-  t.true(elapsedMs < 5000, 'the widening per-call timeout did not take effect');
+  t.is(calls[0].opts.timeoutMs, 20);
+  t.deepEqual(killLog, ['SIGTERM']);
+});
+
+test('a longer per-call timeout keeps a command alive beyond the default', async t => {
+  t.timeout(3000);
+  /** @type {string[]} */
+  const signals = [];
+  /** @type {(status: { code: number | null, signal: string | null }) => void} */
+  let finish = () => {};
+  /** @type {Promise<{ code: number | null, signal: string | null }>} */
+  const exit = new Promise(resolve => {
+    finish = resolve;
+  });
+  t.teardown(() => finish({ code: null, signal: 'SIGKILL' }));
+  const spawner = harden(async () =>
+    harden({
+      pid: 123,
+      wait: () => exit,
+      /** @param {string | number} [signal] */
+      kill: async (signal = 'SIGTERM') => {
+        signals.push(String(signal));
+        finish({ code: null, signal: String(signal) });
+      },
+    }),
+  );
+  const shell = makeShell({
+    cwd: '/repo',
+    policy: harden({ ...basePolicy, timeoutMs: 20 }),
+    spawner,
+  });
+  // Observe failures immediately, including when run against the old clamp.
+  const outcome = shell.exec('echo', [], { timeoutMs: 2000 }).then(
+    result => ({ result }),
+    error => ({ error }),
+  );
+  await new Promise(resolve => {
+    setTimeout(resolve, 80);
+  });
+  t.deepEqual(signals, []);
+  finish({ code: 0, signal: null });
+  t.deepEqual(await outcome, {
+    result: {
+      stdout: '',
+      stderr: '',
+      exitCode: 0,
+      signal: null,
+      truncated: false,
+    },
+  });
 });
 
 test('inspect reveals the policy bounds but no host path (cwd/env/searchPath)', async t => {

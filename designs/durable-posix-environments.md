@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-10-01 |
-| **Updated** | 2026-10-05 |
+| **Updated** | 2026-10-06 |
 | **Author** | kumavis (prompted) |
 | **Status** | Initial implementation complete; Tokyo acceptance passed |
 
@@ -294,8 +294,20 @@ The rebuilt listener `ae762fb2f2edb7946d4e41c0d1b02201a9ddd97ba86aef0657bc496dfc
 contains the correction but is not activated; this is explicitly a partial rollout.
 The fresh visible Luna session `muvcjeso-28ooeb-0` received the unchanged recipe
 once, completed cold clone, immutable install and type build, and reached tests.
-Its host worker remained healthy around 130–310 MiB RSS after dependency traffic;
-this interim observation does not yet establish whole-suite completion.
+Its host worker remained healthy around 130–310 MiB RSS after dependency traffic.
+The first non-daemon graph command exceeded its 600-second invocation timeout.
+The agent then independently inspected task coverage and installed signed Debian
+prerequisites into native HOME, but first-turn compaction failed with
+`Compaction needs an older completed user turn` before Electron setup and daemon batches.
+All 18 tool calls have results; the failed turn settled normally, and the private
+admin acknowledged an idle, non-interrupted stop while preserving the session and HOME.
+Its complete tool transcript is retained privately; unattended whole-suite completion
+is still unverified.
+The user subsequently authorized per-invocation timeout overrides, longer or shorter,
+while keeping ten minutes as the development preset's default.
+The shared Shell no longer silently clamps the requested timeout to that default.
+Positive native-timer-range validation, admission-inclusive deadlines, termination
+escalation, cancellation and output ceilings remain unchanged.
 
 A separate, smaller CapTP bookkeeping leak remains a follow-up: a disposable
 probe sent 1,000 bootstrap questions and matching drops, then observed 1,000
@@ -315,7 +327,8 @@ The interrupted test session and native HOME remain for investigation, with no
 running test containers; its environment is inactive but marked interrupted.
 Unattended whole-suite acceptance is therefore still unverified.
 Private receipts: `/var/lib/endo/endo-autonomous-suite-20261005/` and
-`/var/lib/endo/endo-autonomous-suite-2-20261005/`.
+`/var/lib/endo/endo-autonomous-suite-2-20261005/`, with the third trial in
+`/var/lib/endo/endo-autonomous-suite-3-20261005/`.
 
 ### Earlier slice history (superseded by the current status above)
 
@@ -629,7 +642,8 @@ The first adapter settles these parts of the buffered contract:
   timeout failures reject rather than reporting partial output as successful execution.
 - The per-stream Shell bound truncates capture and drains the rest.
   The factory's separate native safety ceiling can terminate execution and reject it.
-- The deadline starts before admission and can only narrow the policy deadline.
+- The deadline starts before admission; `options.timeoutMs` overrides the policy's
+  default invocation timeout, longer or shorter, within the native timer range.
   TERM, KILL, and a bounded wait reach late-admitted handles; a bounded rejection
   does not assert native cleanup or permit unproven resource reuse.
 - No remote PID is disclosed or used for cancellation.
