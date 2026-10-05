@@ -3,6 +3,8 @@ import '@endo/init/debug.js';
 
 import test from 'ava';
 
+/** @import { ExecutionContext } from 'ava' */
+
 import { createDOM } from '../helpers/dom-setup.js';
 import {
   makeSecurityWarningBanner,
@@ -13,7 +15,7 @@ import {
 /**
  * A fresh happy-dom document, typed as the DOM `Document` the module expects.
  *
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  * @returns {Document}
  */
 const setupDocument = t => {
@@ -127,6 +129,28 @@ test.serial('a dismissal holds until a new warning arrives', t => {
 
   banner.show(['first', 'second']);
   t.deepEqual(itemsOf(document), ['first', 'second']);
+});
+
+test.serial('an empty payload in between does not undo a dismissal', t => {
+  const document = setupDocument(t);
+  const banner = makeSecurityWarningBanner(document);
+  banner.show(['first']);
+  /** @type {any} */ (bannerOf(document)).querySelector('button').click();
+
+  banner.show([]);
+  banner.show(['first']);
+  t.is(bannerOf(document), null);
+});
+
+test.serial('the banner sits above the reconnect overlay', t => {
+  const document = setupDocument(t);
+  const banner = makeSecurityWarningBanner(document);
+  banner.show(['warned']);
+  const zIndex = Number(
+    /** @type {HTMLElement} */ (bannerOf(document)).style.zIndex,
+  );
+  // The reconnect overlay in main.js uses z-index 9999.
+  t.true(zIndex > 9999);
 });
 
 test.serial('connects to the Familiar preload channel', t => {

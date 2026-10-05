@@ -10,7 +10,9 @@ import harden from '@endo/harden';
 //
 // The app replaces `document.body` wholesale when it (re)connects, so the
 // banner keeps its own state and `mount()` re-inserts it afterwards.  A
-// dismissal lasts until the Familiar reports a warning not seen before.
+// dismissal lasts until the Familiar reports a warning not seen before.  The
+// banner sits above the reconnect overlay (z-index 9999), since a reconnect is
+// when the warnings matter most.
 
 export const SECURITY_WARNING_BANNER_ID = 'familiar-security-warnings';
 
@@ -45,6 +47,9 @@ const normalizeWarnings = warnings => {
 export const makeSecurityWarningBanner = document => {
   /** @type {string[]} */
   let warnings = [];
+  /** Every warning shown so far, so a repeat does not undo a dismissal. */
+  /** @type {Set<string>} */
+  const seen = new Set();
   let dismissed = false;
   /** @type {HTMLElement | undefined} */
   let element;
@@ -69,7 +74,7 @@ export const makeSecurityWarningBanner = document => {
       top: 0;
       left: 0;
       right: 0;
-      z-index: 9998;
+      z-index: 10000;
       display: flex;
       align-items: flex-start;
       gap: 12px;
@@ -129,8 +134,11 @@ export const makeSecurityWarningBanner = document => {
      */
     show: next => {
       const normalized = normalizeWarnings(next);
-      if (normalized.some(warning => !warnings.includes(warning))) {
+      if (normalized.some(warning => !seen.has(warning))) {
         dismissed = false;
+      }
+      for (const warning of normalized) {
+        seen.add(warning);
       }
       warnings = normalized;
       render();

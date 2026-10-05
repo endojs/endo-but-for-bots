@@ -86,7 +86,6 @@ const isElectronMode =
   window.location.protocol === 'file:' ||
   /** @type {any} */ (window).familiar !== undefined;
 
-// Startup security warnings from the Familiar (none outside Electron).
 const securityWarningBanner = makeSecurityWarningBanner(document);
 connectSecurityWarnings(
   /** @type {any} */ (window).familiar,
@@ -351,4 +350,5 @@ async function connectAndRun() {
 connectAndRun().catch(error => {
   console.error('Application error:', error);
   document.body.innerHTML = `<h1>❌ Application Error</h1><pre>${/** @type {Error} */ (error).message}</pre>`;
+  securityWarningBanner.mount();
 });

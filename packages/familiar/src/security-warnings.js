@@ -9,6 +9,11 @@
  * re-runs `loadURL`) also discards whatever the previous page had shown.
  * So the warnings are sent on every `did-finish-load`, and immediately when
  * the page has already finished loading.
+ *
+ * The listener outlives the first page, and the navigation guard lets the
+ * window navigate to `localhttp:` weblets, which get the same preload
+ * bridge.  The warnings describe which defense failed, so they go only to
+ * the Chat page itself: a `file:` page, or the loopback Vite dev server.
  */
 
 export const SECURITY_WARNINGS_CHANNEL = 'familiar:security-warnings';
@@ -17,13 +22,34 @@ export const SECURITY_WARNINGS_CHANNEL = 'familiar:security-warnings';
  * @typedef {object} WebContentsLike
  * @property {(channel: string, ...args: unknown[]) => void} send
  * @property {() => boolean} isLoading
+ * @property {() => string} getURL
  * @property {(event: 'did-finish-load', listener: () => void) => void} on
  */
 
 /**
+ * Whether `url` is the Chat page, as loaded by `electron-main.js`.
+ *
+ * @param {string} url
+ * @returns {boolean}
+ */
+export const isChatPageUrl = url => {
+  /** @type {URL} */
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol === 'file:') {
+    return true;
+  }
+  return parsed.protocol === 'http:' && parsed.hostname === '127.0.0.1';
+};
+
+/**
  * Send `warnings` to the renderer of `webContents` now (if its page has
- * loaded) and again after every subsequent page load.  Does nothing when
- * there are no warnings.
+ * loaded) and again after every subsequent load of the Chat page.  Does
+ * nothing when there are no warnings.
  *
  * @param {WebContentsLike} webContents
  * @param {string[]} warnings
@@ -33,7 +59,11 @@ export const deliverSecurityWarnings = (webContents, warnings) => {
     return;
   }
   const payload = [...warnings];
-  const send = () => webContents.send(SECURITY_WARNINGS_CHANNEL, payload);
+  const send = () => {
+    if (isChatPageUrl(webContents.getURL())) {
+      webContents.send(SECURITY_WARNINGS_CHANNEL, payload);
+    }
+  };
   webContents.on('did-finish-load', send);
   if (!webContents.isLoading()) {
     send();

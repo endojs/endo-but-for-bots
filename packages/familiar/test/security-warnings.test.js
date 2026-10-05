@@ -4,11 +4,18 @@ import test from 'ava';
 
 import {
   deliverSecurityWarnings,
+  isChatPageUrl,
   SECURITY_WARNINGS_CHANNEL,
 } from '../src/security-warnings.js';
 
-/** @param {boolean} loading */
-const makeFakeWebContents = loading => {
+const chatUrl = 'file:///app/dist/index.html#gateway=x';
+
+/**
+ * @param {boolean} loading
+ * @param {string} [initialUrl]
+ */
+const makeFakeWebContents = (loading, initialUrl = chatUrl) => {
+  let url = initialUrl;
   /** @type {Array<[string, unknown[]]>} */
   const sent = [];
   /** @type {Array<() => void>} */
@@ -23,6 +30,7 @@ const makeFakeWebContents = loading => {
         sent.push([channel, args]);
       },
       isLoading: () => loading,
+      getURL: () => url,
       /**
        * @param {string} event
        * @param {() => void} listener
@@ -32,7 +40,9 @@ const makeFakeWebContents = loading => {
       },
     },
     sent,
-    finishLoad: () => {
+    /** @param {string} [nextUrl] */
+    finishLoad: (nextUrl = url) => {
+      url = nextUrl;
       for (const listener of loadListeners) listener();
     },
   };
@@ -62,6 +72,37 @@ test('sends nothing when there are no warnings', t => {
   deliverSecurityWarnings(webContents, []);
   finishLoad();
   t.deepEqual(sent, []);
+});
+
+test('stops at a page other than Chat and resumes on return', t => {
+  const { webContents, sent, finishLoad } = makeFakeWebContents(false);
+  deliverSecurityWarnings(webContents, ['a']);
+  t.is(sent.length, 1);
+
+  finishLoad('localhttp://weblet-1/index.html');
+  t.is(sent.length, 1, 'a weblet does not receive the warnings');
+
+  finishLoad(chatUrl);
+  t.is(sent.length, 2);
+});
+
+test('sends nothing when the first page is not Chat', t => {
+  const { webContents, sent } = makeFakeWebContents(
+    false,
+    'localhttp://weblet-1/',
+  );
+  deliverSecurityWarnings(webContents, ['a']);
+  t.deepEqual(sent, []);
+});
+
+test('isChatPageUrl accepts only the file: and loopback dev pages', t => {
+  t.true(isChatPageUrl('file:///app/dist/index.html'));
+  t.true(isChatPageUrl('http://127.0.0.1:5173/#gateway=x'));
+  t.false(isChatPageUrl('localhttp://weblet-1/'));
+  t.false(isChatPageUrl('https://example.com/'));
+  t.false(isChatPageUrl('http://example.com/'));
+  t.false(isChatPageUrl('about:blank'));
+  t.false(isChatPageUrl(''));
 });
 
 test('the channel matches the preload subscription', async t => {

@@ -510,19 +510,28 @@ server without Electron), `window.familiar` is undefined and no banner
 appears.
 
 ```js
-// In preload.js, expose a new IPC channel:
+// In preload.mjs, keep the latest warnings and replay them to a late
+// subscriber:
+let latest;
+const subscribers = new Set();
+ipcRenderer.on('familiar:security-warnings', (_event, warnings) => {
+  latest = warnings;
+  for (const callback of subscribers) callback(warnings);
+});
 contextBridge.exposeInMainWorld('familiar', {
   // ... existing methods ...
-  onSecurityWarnings: callback =>
-    ipcRenderer.on('familiar:security-warnings', (_event, warnings) =>
-      callback(warnings)),
+  onSecurityWarnings: callback => {
+    subscribers.add(callback);
+    if (latest !== undefined) callback(latest);
+  },
 });
 
-// In electron-main.js, after verification:
+// In electron-main.js, after verification.  deliverSecurityWarnings
+// (src/security-warnings.js) sends on every did-finish-load of the Chat
+// page, so a page that is still loading or reloads still gets them, and a
+// localhttp: weblet loaded into the same window does not:
 const warnings = await verifyExfiltrationDefenses();
-if (warnings.length > 0) {
-  mainWindow.webContents.send('familiar:security-warnings', warnings);
-}
+deliverSecurityWarnings(mainWindow.webContents, warnings);
 ```
 
 #### Research needed
