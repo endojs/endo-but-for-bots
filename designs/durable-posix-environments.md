@@ -256,6 +256,31 @@ test batching and a mistaken AVA matcher argument.
 This run establishes that the slice can install prerequisites and execute the
 JavaScript suites, not that a single autonomous turn completes the whole task.
 
+### Unattended test-run follow-up
+
+Two fresh Floot/Fae `gpt-5.6-luna` sessions received the same previously tested
+recipe on 2026-10-05, with no corrective prompts during either attempt.
+The first ended with a provider `server_is_overloaded` error before checkout/tests.
+The second corrected its `sh`/`pipefail` mistake, cloned revision `6b853c646`,
+retried transient Yarn connection resets, completed immutable installation and
+`build:types`, and started the non-daemon JavaScript test graph.
+It did not reach whole-lane completion or the daemon batches.
+
+At 22:34:55 JST, a host Endo worker exhausted its V8 heap and aborted.
+This is a host-runtime failure, not a test assertion or established compaction failure.
+The underlying allocation cause is not yet known.
+The test container continued after its controlling worker died; the operator
+verified its ownership and native HOME mounts, then stopped that exact container.
+Partial logs and crash diagnostics were archived privately before daemon recovery.
+After restart, the transcript retains 12 tool calls and 11 results, with the
+turn explicitly `outcome-unknown`; no exit/result was manufactured or task replayed.
+Original session IDs remain present, and daemon/gateway health passes.
+The interrupted test session and native HOME remain for investigation, with no
+running test containers; its environment is inactive but marked interrupted.
+Unattended whole-suite acceptance is therefore still unverified.
+Private receipts: `/var/lib/endo/endo-autonomous-suite-20261005/` and
+`/var/lib/endo/endo-autonomous-suite-2-20261005/`.
+
 ### Earlier slice history (superseded by the current status above)
 
 Implementation is authorized; the first slice removes the misleading dynamic
