@@ -62,6 +62,13 @@ configureCommandLineFlags();
 
 const vitePort = 5173;
 
+// The Chat page: the Vite dev server in dev mode, else the built Chat dist.
+// Use 127.0.0.1 instead of localhost to avoid DNS resolution, which is
+// vulnerable to integrity attacks.
+const chatPageUrl = isDevMode
+  ? `http://127.0.0.1:${vitePort}/`
+  : `file://${resourcePaths.chatDistPath}`;
+
 /** @type {string | undefined} */
 let gatewayAddress;
 
@@ -152,15 +159,13 @@ const createWindow = () => {
 
   if (isDevMode) {
     // In dev mode, load from Vite dev server.
-    // Use 127.0.0.1 instead of localhost to avoid DNS resolution, which
-    // is vulnerable to integrity attacks.
-    const devUrl = `http://127.0.0.1:${vitePort}#${fragment}`;
+    const devUrl = `${chatPageUrl}#${fragment}`;
     logger.log(`[Familiar] Loading dev URL: ${devUrl}`);
     win.loadURL(devUrl);
     win.webContents.openDevTools();
   } else {
     // In production mode, load the built Chat dist
-    const fileUrl = `file://${resourcePaths.chatDistPath}#${fragment}`;
+    const fileUrl = `${chatPageUrl}#${fragment}`;
     logger.log(`[Familiar] Loading file URL: ${fileUrl}`);
     win.loadURL(fileUrl);
   }
@@ -200,11 +205,7 @@ const handleRestartDaemon = async win => {
       // Pass config as a URL fragment (anchor) rather than a query string so
       // the agent ID is never sent on the wire in an HTTP request.
       const fragment = `gateway=${gatewayAddress}&agent=${agentId}`;
-      if (isDevMode) {
-        win.loadURL(`http://127.0.0.1:${vitePort}#${fragment}`);
-      } else {
-        win.loadURL(`file://${resourcePaths.chatDistPath}#${fragment}`);
-      }
+      win.loadURL(`${chatPageUrl}#${fragment}`);
     }
   } catch (error) {
     logger.error('[Familiar] Failed to restart daemon:', error);
@@ -231,11 +232,7 @@ const handlePurgeDaemon = async win => {
       // Pass config as a URL fragment (anchor) rather than a query string so
       // the agent ID is never sent on the wire in an HTTP request.
       const fragment = `gateway=${gatewayAddress}&agent=${agentId}`;
-      if (isDevMode) {
-        win.loadURL(`http://127.0.0.1:${vitePort}#${fragment}`);
-      } else {
-        win.loadURL(`file://${resourcePaths.chatDistPath}#${fragment}`);
-      }
+      win.loadURL(`${chatPageUrl}#${fragment}`);
     }
   } catch (error) {
     logger.error('[Familiar] Failed to purge daemon:', error);
@@ -304,14 +301,14 @@ const main = async () => {
     logger.warn('[Familiar] Security warnings:', warnings);
   }
   if (mainWindow && !mainWindow.isDestroyed()) {
-    deliverSecurityWarnings(mainWindow.webContents, warnings);
+    deliverSecurityWarnings(mainWindow.webContents, warnings, chatPageUrl);
   }
 
   // macOS: recreate window when dock icon is clicked
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       mainWindow = createWindow();
-      deliverSecurityWarnings(mainWindow.webContents, warnings);
+      deliverSecurityWarnings(mainWindow.webContents, warnings, chatPageUrl);
     }
   });
 

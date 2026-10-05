@@ -12,8 +12,11 @@
  *
  * The listener outlives the first page, and the navigation guard lets the
  * window navigate to `localhttp:` weblets, which get the same preload
- * bridge.  The warnings describe which defense failed, so they go only to
- * the Chat page itself: a `file:` page, or the loopback Vite dev server.
+ * bridge, and it lets the window navigate to any `file:` page.  The
+ * warnings describe which defense failed, so they go only to the Chat page
+ * itself: the exact URL `electron-main.js` loads (the Chat dist
+ * `index.html`, or the loopback Vite dev server on its pinned port),
+ * ignoring only the query and the configuration fragment.
  */
 
 export const SECURITY_WARNINGS_CHANNEL = 'familiar:security-warnings';
@@ -27,23 +30,30 @@ export const SECURITY_WARNINGS_CHANNEL = 'familiar:security-warnings';
  */
 
 /**
- * Whether `url` is the Chat page, as loaded by `electron-main.js`.
+ * @param {string} url
+ * @returns {string | undefined} the URL without its query and fragment
+ */
+const pageIdentity = url => {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Whether `url` is the Chat page at `chatPageUrl`, the URL
+ * `electron-main.js` loads into the window.  The query and fragment may
+ * differ; the protocol, host, port, and path must not.
  *
  * @param {string} url
+ * @param {string} chatPageUrl
  * @returns {boolean}
  */
-export const isChatPageUrl = url => {
-  /** @type {URL} */
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol === 'file:') {
-    return true;
-  }
-  return parsed.protocol === 'http:' && parsed.hostname === '127.0.0.1';
+export const isChatPageUrl = (url, chatPageUrl) => {
+  const expected = pageIdentity(chatPageUrl);
+  return expected !== undefined && pageIdentity(url) === expected;
 };
 
 /**
@@ -53,14 +63,15 @@ export const isChatPageUrl = url => {
  *
  * @param {WebContentsLike} webContents
  * @param {string[]} warnings
+ * @param {string} chatPageUrl - the Chat page URL, as for `isChatPageUrl`
  */
-export const deliverSecurityWarnings = (webContents, warnings) => {
+export const deliverSecurityWarnings = (webContents, warnings, chatPageUrl) => {
   if (warnings.length === 0) {
     return;
   }
   const payload = [...warnings];
   const send = () => {
-    if (isChatPageUrl(webContents.getURL())) {
+    if (isChatPageUrl(webContents.getURL(), chatPageUrl)) {
       webContents.send(SECURITY_WARNINGS_CHANNEL, payload);
     }
   };

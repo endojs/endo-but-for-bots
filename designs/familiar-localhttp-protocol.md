@@ -528,10 +528,11 @@ contextBridge.exposeInMainWorld('familiar', {
 
 // In electron-main.js, after verification.  deliverSecurityWarnings
 // (src/security-warnings.js) sends on every did-finish-load of the Chat
-// page, so a page that is still loading or reloads still gets them, and a
-// localhttp: weblet loaded into the same window does not:
+// page, so a page that is still loading or reloads still gets them.  It
+// matches the exact Chat page URL (ignoring the fragment), so a localhttp:
+// weblet or any other file: page loaded into the same window does not:
 const warnings = await verifyExfiltrationDefenses();
-deliverSecurityWarnings(mainWindow.webContents, warnings);
+deliverSecurityWarnings(mainWindow.webContents, warnings, chatPageUrl);
 ```
 
 #### Research needed

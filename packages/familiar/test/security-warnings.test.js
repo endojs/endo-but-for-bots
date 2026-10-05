@@ -8,7 +8,8 @@ import {
   SECURITY_WARNINGS_CHANNEL,
 } from '../src/security-warnings.js';
 
-const chatUrl = 'file:///app/dist/index.html#gateway=x';
+const chatPageUrl = 'file:///app/dist/index.html';
+const chatUrl = `${chatPageUrl}#gateway=x`;
 
 /**
  * @param {boolean} loading
@@ -50,7 +51,7 @@ const makeFakeWebContents = (loading, initialUrl = chatUrl) => {
 
 test('waits for a loading page before sending', t => {
   const { webContents, sent, finishLoad } = makeFakeWebContents(true);
-  deliverSecurityWarnings(webContents, ['DNS is leaking.']);
+  deliverSecurityWarnings(webContents, ['DNS is leaking.'], chatPageUrl);
   t.deepEqual(sent, [], 'not sent into a page that is still loading');
 
   finishLoad();
@@ -59,7 +60,7 @@ test('waits for a loading page before sending', t => {
 
 test('sends at once to a loaded page and again on reload', t => {
   const { webContents, sent, finishLoad } = makeFakeWebContents(false);
-  deliverSecurityWarnings(webContents, ['a', 'b']);
+  deliverSecurityWarnings(webContents, ['a', 'b'], chatPageUrl);
   t.is(sent.length, 1);
 
   finishLoad();
@@ -69,14 +70,14 @@ test('sends at once to a loaded page and again on reload', t => {
 
 test('sends nothing when there are no warnings', t => {
   const { webContents, sent, finishLoad } = makeFakeWebContents(false);
-  deliverSecurityWarnings(webContents, []);
+  deliverSecurityWarnings(webContents, [], chatPageUrl);
   finishLoad();
   t.deepEqual(sent, []);
 });
 
 test('stops at a page other than Chat and resumes on return', t => {
   const { webContents, sent, finishLoad } = makeFakeWebContents(false);
-  deliverSecurityWarnings(webContents, ['a']);
+  deliverSecurityWarnings(webContents, ['a'], chatPageUrl);
   t.is(sent.length, 1);
 
   finishLoad('localhttp://weblet-1/index.html');
@@ -91,18 +92,47 @@ test('sends nothing when the first page is not Chat', t => {
     false,
     'localhttp://weblet-1/',
   );
-  deliverSecurityWarnings(webContents, ['a']);
+  deliverSecurityWarnings(webContents, ['a'], chatPageUrl);
   t.deepEqual(sent, []);
 });
 
-test('isChatPageUrl accepts only the file: and loopback dev pages', t => {
-  t.true(isChatPageUrl('file:///app/dist/index.html'));
-  t.true(isChatPageUrl('http://127.0.0.1:5173/#gateway=x'));
-  t.false(isChatPageUrl('localhttp://weblet-1/'));
-  t.false(isChatPageUrl('https://example.com/'));
-  t.false(isChatPageUrl('http://example.com/'));
-  t.false(isChatPageUrl('about:blank'));
-  t.false(isChatPageUrl(''));
+test('stops at a foreign file: page', t => {
+  const { webContents, sent, finishLoad } = makeFakeWebContents(false);
+  deliverSecurityWarnings(webContents, ['a'], chatPageUrl);
+  t.is(sent.length, 1);
+
+  finishLoad('file:///tmp/evil.html');
+  t.is(sent.length, 1, 'another local page does not receive the warnings');
+});
+
+test('isChatPageUrl accepts only the exact Chat dist page', t => {
+  t.true(isChatPageUrl('file:///app/dist/index.html', chatPageUrl));
+  t.true(isChatPageUrl('file:///app/dist/index.html#gateway=x', chatPageUrl));
+  t.true(isChatPageUrl('file:///app/dist/index.html?a=b', chatPageUrl));
+  t.false(isChatPageUrl('file:///tmp/evil.html', chatPageUrl));
+  t.false(isChatPageUrl('file:///app/dist/', chatPageUrl));
+  t.false(isChatPageUrl('file:///app/dist/index.html/x', chatPageUrl));
+  t.false(isChatPageUrl('http://127.0.0.1:5173/', chatPageUrl));
+  t.false(isChatPageUrl('localhttp://weblet-1/', chatPageUrl));
+  t.false(isChatPageUrl('about:blank', chatPageUrl));
+  t.false(isChatPageUrl('', chatPageUrl));
+});
+
+test('isChatPageUrl pins the dev server to its port', t => {
+  const devPageUrl = 'http://127.0.0.1:5173/';
+  t.true(isChatPageUrl('http://127.0.0.1:5173/#gateway=x', devPageUrl));
+  t.true(isChatPageUrl('http://127.0.0.1:5173#gateway=x', devPageUrl));
+  t.false(isChatPageUrl('http://127.0.0.1:5174/#gateway=x', devPageUrl));
+  t.false(isChatPageUrl('http://127.0.0.1/', devPageUrl));
+  t.false(isChatPageUrl('http://127.0.0.1:5173/other.html', devPageUrl));
+  t.false(isChatPageUrl('https://127.0.0.1:5173/', devPageUrl));
+  t.false(isChatPageUrl('http://localhost:5173/', devPageUrl));
+  t.false(isChatPageUrl('file:///app/dist/index.html', devPageUrl));
+});
+
+test('isChatPageUrl rejects everything when the Chat URL is malformed', t => {
+  t.false(isChatPageUrl('', ''));
+  t.false(isChatPageUrl('file:///app/dist/index.html', 'not a url'));
 });
 
 test('the channel matches the preload subscription', async t => {
