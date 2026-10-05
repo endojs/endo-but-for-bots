@@ -37,7 +37,12 @@ The current directive and recent complete native tool groups stay verbatim;
 summary-only older tool excerpts are explicitly bounded, with full originals
 retained in the existing journal/tree.
 Automatic first-turn, repeated compaction, cold reconstruction and failed
-publication fixtures pass; live deployment/acceptance of this follow-up is pending.
+publication fixtures pass. Tokyo generation 200 (app `69d7ef537`, host `04b95a7`)
+also passes live Luna first-turn acceptance: eight successful tool rounds,
+two automatic checkpoints, then cold daemon restart and context-only recall
+without new tools or summarization. Explicit native stop preceded restart;
+the disposable session/allocation were removed after private evidence export.
+The original eight sessions, Secrets and workspaces remain unchanged.
 The [durable POSIX design](../../designs/durable-posix-environments.md) records
 the policy and OpenCode comparison; older hold/no-producer statements below are
 historical and superseded for the direct Fae paths.

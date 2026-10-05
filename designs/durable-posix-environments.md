@@ -15,9 +15,10 @@ app `854a4c5aae573b669692fd132bcd30cbb0cc3926`, host
 Generation 195 added the DNS and request-body follow-up below.
 Generation 196 added safe stream-failure diagnostics on 2026-10-05.
 Generation 197 added the dependency-install networking repairs described below.
-Tokyo now runs generation 199, app `c302d7ec300ecc509454862efa5d369f415ed35a`,
-host `198927919b9c99a90dbcfcb0e2ac457fb079404e`, with the host-side CapTP
-answer-release correction and per-invocation Shell timeout overrides described below.
+Tokyo now runs generation 200, app `69d7ef537de40b99e3823998b105a955fb246baf`,
+host `04b95a754af32d67e1f9c554a45e7e2b24f60793`, with the host-side CapTP
+answer-release correction, per-invocation Shell timeout overrides and shared
+first-turn compaction described below.
 The Floot development preset publishes only the common
 Shell as `shell` in inventory and exposes structured `runCommand`/`inspectShell`
 tools, distinct from JavaScript `exec`. Only Fae inference backends select it;
@@ -458,8 +459,27 @@ Floot's first-turn fixture executes eight effects, compacts twice and reconstruc
 without replay; refused checkpoint publication prevents continuation dispatch.
 Standalone inbox reconstruction preserves the selected checkpoint, original
 effects, admission receipt and cleared occupancy reading.
-This October 6 change is locally validated; deployment and live first-turn
-acceptance remain pending.
+This October 6 change is deployed on Tokyo generation 200. A fresh network-off
+development session through Codex's `gpt-5.6-luna` ran eight commands, each emitting
+34,023 characters and appending a distinct marker, in separate tool rounds.
+Its first user turn published two automatic checkpoints and finished with eight
+successful calls/results; no three-user-message gate or operator compaction was
+used. Both summaries used the requested Markdown handoff and carried the exact
+paths, command order, completed effects and no-rerun constraint forward.
+After explicit idle native stop and a cold daemon restart, context-only recall
+named all eight markers, the saved native HOME file and their completed status,
+with no tools or additional checkpoint. The hydrated seed evidence was unchanged.
+Startup deliberately remints the controller over the retained profile, so the
+test recorded an explicit one-time adoption after checking both controller
+formulas, the unchanged profile/inventory and exact pre-restart evidence digest.
+The admin identity and creation timestamp were first observed after restart;
+this is conversation-continuity evidence, not independent native-admin identity
+continuity or unplanned-crash recovery proof.
+Private evidence was verified before deleting only this disposable session and
+disposing its allocation. The original eight sessions, Secrets and workspaces
+were preserved. Receipts remain under
+`/var/lib/endo/fae-compaction-acceptance-20261006/`; no helper was registered as a
+daemon formula. Unattended whole-suite completion remains unverified.
 
 The inspected [OpenCode implementation](https://github.com/kumavis/opencode/blob/af032b9fbc293cd19283e16f6a7f8effe296c065/packages/opencode/src/session/compaction.ts)
 uses a budgeted recent tail, within-turn splitting and bounded prose tool excerpts
