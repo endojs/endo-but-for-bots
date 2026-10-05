@@ -81,6 +81,106 @@ function assertImmutableArrayBufferViewMatrix(expected) {
     expected.immutableBufferTag,
     expected.environment + ': immutable buffer implementation shape',
   );
+
+  // Immutable buffer read accessors report a fixed, non-resizable shape.
+  assert.sameValue(
+    immutableBuffer.byteLength,
+    mutableBuffer.byteLength,
+    expected.environment + ': immutable buffer reports its byteLength',
+  );
+  assert.sameValue(
+    immutableBuffer.maxByteLength,
+    immutableBuffer.byteLength,
+    expected.environment + ': immutable buffer maxByteLength equals byteLength',
+  );
+  assert.sameValue(
+    immutableBuffer.resizable,
+    false,
+    expected.environment + ': immutable buffer is not resizable',
+  );
+  assert.sameValue(
+    immutableBuffer.detached,
+    false,
+    expected.environment + ': immutable buffer is not detached',
+  );
+
+  // The mutating ArrayBuffer methods reject an immutable receiver.
+  assert.throws(
+    TypeError,
+    function () {
+      immutableBuffer.resize(immutableBuffer.byteLength + 4);
+    },
+    expected.environment + ': immutable buffer rejects resize',
+  );
+  assert.throws(
+    TypeError,
+    function () {
+      immutableBuffer.transfer();
+    },
+    expected.environment + ': immutable buffer rejects transfer',
+  );
+  assert.throws(
+    TypeError,
+    function () {
+      immutableBuffer.transferToFixedLength();
+    },
+    expected.environment + ': immutable buffer rejects transferToFixedLength',
+  );
+
+  // `slice` on an immutable buffer produces a genuine, mutable copy.
+  var immutableSlice = immutableBuffer.slice(0);
+  assert.sameValue(
+    immutableSlice.immutable,
+    false,
+    expected.environment + ': slice of an immutable buffer is mutable',
+  );
+  assert.sameValue(
+    Object.prototype.toString.call(immutableSlice),
+    '[object ArrayBuffer]',
+    expected.environment + ': slice of an immutable buffer is genuine',
+  );
+  assert.sameValue(
+    immutableSlice.byteLength,
+    immutableBuffer.byteLength,
+    expected.environment + ': slice of an immutable buffer copies the length',
+  );
+  assert.sameValue(
+    new Uint8Array(immutableSlice)[1],
+    24,
+    expected.environment + ': slice of an immutable buffer copies the bytes',
+  );
+
+  // `transferToImmutable` yields an immutable buffer and detaches its source.
+  assert.sameValue(
+    typeof ArrayBuffer.prototype.transferToImmutable,
+    'function',
+    expected.environment +
+      ': transferToImmutable is present, genuine or emulated',
+  );
+  var transferSource = new ArrayBuffer(4);
+  new Uint8Array(transferSource).set([5, 6, 7, 8]);
+  var transferred = transferSource.transferToImmutable();
+  assert.sameValue(
+    transferred.immutable,
+    true,
+    expected.environment + ': transferToImmutable yields an immutable buffer',
+  );
+  assert.sameValue(
+    Object.prototype.toString.call(transferred),
+    expected.immutableBufferTag,
+    expected.environment + ': transferToImmutable result implementation shape',
+  );
+  assert.sameValue(
+    transferSource.detached,
+    true,
+    expected.environment + ': transferToImmutable detaches its source',
+  );
+  assert.sameValue(
+    new Uint8Array(transferred).at(0),
+    5,
+    expected.environment + ': transferToImmutable preserves the bytes',
+  );
+
   assert.sameValue(
     ArrayBuffer.isView(immutableArrayView),
     !expected.immutableArrayViewIsEmulated,
@@ -112,6 +212,62 @@ function assertImmutableArrayBufferViewMatrix(expected) {
       immutableArrayView.set([99], 1);
     },
     expected.environment + ': immutable array view rejects method writes',
+  );
+
+  // The mutating TypedArray methods reject an immutable-backed view.
+  assert.throws(
+    TypeError,
+    function () {
+      immutableArrayView.copyWithin(0, 1);
+    },
+    expected.environment + ': immutable array view rejects copyWithin',
+  );
+  assert.throws(
+    TypeError,
+    function () {
+      immutableArrayView.fill(0);
+    },
+    expected.environment + ': immutable array view rejects fill',
+  );
+  assert.throws(
+    TypeError,
+    function () {
+      immutableArrayView.reverse();
+    },
+    expected.environment + ': immutable array view rejects reverse',
+  );
+  assert.throws(
+    TypeError,
+    function () {
+      immutableArrayView.sort();
+    },
+    expected.environment + ': immutable array view rejects sort',
+  );
+
+  // `subarray` stays backed by the immutable buffer and stays read-only.
+  var immutableSubarray = immutableArrayView.subarray(1, 3);
+  assert.sameValue(
+    immutableSubarray.buffer.immutable,
+    true,
+    expected.environment +
+      ': subarray of an immutable view stays immutable-backed',
+  );
+  assert.sameValue(
+    ArrayBuffer.isView(immutableSubarray),
+    !expected.immutableArrayViewIsEmulated,
+    expected.environment + ': subarray of an immutable view genuineness',
+  );
+  assert.sameValue(
+    immutableSubarray.at(0),
+    24,
+    expected.environment + ': subarray of an immutable view reads through',
+  );
+  assert.throws(
+    TypeError,
+    function () {
+      immutableSubarray.fill(0);
+    },
+    expected.environment + ': subarray of an immutable view rejects writes',
   );
 
   var immutableDataView = new DataView(immutableBuffer);
@@ -151,5 +307,28 @@ function assertImmutableArrayBufferViewMatrix(expected) {
       immutableDataView.setUint8(1, 99);
     },
     expected.environment + ': immutable DataView rejects writes',
+  );
+
+  // Non-Uint8 DataView accessors read through but reject writes.
+  var expectedInt16 =
+    (immutableDataView.getUint8(0) << 8) | immutableDataView.getUint8(1);
+  assert.sameValue(
+    immutableDataView.getInt16(0),
+    expectedInt16,
+    expected.environment + ': immutable DataView reads Int16',
+  );
+  assert.throws(
+    TypeError,
+    function () {
+      immutableDataView.setInt16(0, 0);
+    },
+    expected.environment + ': immutable DataView rejects Int16 writes',
+  );
+  assert.throws(
+    TypeError,
+    function () {
+      immutableDataView.setFloat32(0, 1.5);
+    },
+    expected.environment + ': immutable DataView rejects Float32 writes',
   );
 }
