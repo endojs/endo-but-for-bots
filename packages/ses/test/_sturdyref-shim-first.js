@@ -8,6 +8,8 @@
 
 const { defineProperty, freeze } = Object;
 const { apply } = Reflect;
+// Captured at module evaluation, as the real shim does.
+const { Promise, TypeError, WeakMap } = globalThis;
 
 const handlers = new WeakMap();
 
