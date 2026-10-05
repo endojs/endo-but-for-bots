@@ -340,6 +340,7 @@ test('relative-path is lexical and does not claim symlink confinement', async t 
   await fs.promises.mkdir(workspace);
   await fs.promises.writeFile(outside, 'outside');
   await fs.promises.symlink(outside, path.join(workspace, 'link'));
+  const outsideRealPath = await fs.promises.realpath(outside);
 
   const catGrammar = normalizeShellCommandGrammars(
     agentCommandGrammarExamples,
@@ -355,7 +356,7 @@ test('relative-path is lexical and does not claim symlink confinement', async t 
   );
   t.is(
     await fs.promises.realpath(path.join(workspace, 'link')),
-    outside,
+    outsideRealPath,
     'the filesystem target is outside; only a sandbox namespace confines it',
   );
 });
