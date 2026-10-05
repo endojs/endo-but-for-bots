@@ -141,6 +141,14 @@ test('Shell and separate byte streams cross a CapTP membrane', async t => {
   t.true(f.stdinClosed());
 });
 
+test('a longer Shell timeout reaches a remote slice without a policy clamp', async t => {
+  t.timeout(3000);
+  const f = await fixture(t, { remote: true });
+  const result = await E(f.shell).exec('echo', [], { timeoutMs: 900_000 });
+  t.is(result.exitCode, 0);
+  t.is(f.calls[0].options.timeoutMs, 900_000);
+});
+
 test('Sandbox reader failure stays a Shell failure and terminates the process', async t => {
   t.timeout(3000);
   const f = await fixture(t, { readerFailure: true });

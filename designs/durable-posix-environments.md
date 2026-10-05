@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-10-01 |
-| **Updated** | 2026-10-05 |
+| **Updated** | 2026-10-06 |
 | **Author** | kumavis (prompted) |
 | **Status** | Initial implementation complete; Tokyo acceptance passed |
 
@@ -14,9 +14,10 @@ app `854a4c5aae573b669692fd132bcd30cbb0cc3926`, host
 `1f2a4bdc027089096a6cea27d549903e527c2b6b`.
 Generation 195 added the DNS and request-body follow-up below.
 Generation 196 added safe stream-failure diagnostics on 2026-10-05.
-Tokyo now runs generation 197, app `5079916db715d368bb6bc4e1d9b6b6ac5a4d96ad`,
-host `f7021d6a1cf8686eea412cdd2ae3fbe9458d6efc`, with the dependency-install
-networking repairs described below.
+Generation 197 added the dependency-install networking repairs described below.
+Tokyo now runs generation 199, app `c302d7ec300ecc509454862efa5d369f415ed35a`,
+host `198927919b9c99a90dbcfcb0e2ac457fb079404e`, with the host-side CapTP
+answer-release correction and per-invocation Shell timeout overrides described below.
 The Floot development preset publishes only the common
 Shell as `shell` in inventory and exposes structured `runCommand`/`inspectShell`
 tools, distinct from JavaScript `exec`. Only Fae inference backends select it;
@@ -268,8 +269,62 @@ It did not reach whole-lane completion or the daemon batches.
 
 At 22:34:55 JST, a host Endo worker exhausted its V8 heap and aborted.
 This is a host-runtime failure, not a test assertion or established compaction failure.
-The underlying allocation cause is not yet known.
-The test container continued after its controlling worker died; the operator
+Follow-up reproduced a CapTP answer-retention defect: answers are stored under
+the peer's `q-N` question ID, but `CTP_DROP` deleted the reversed `q+N` key.
+Downloaded base64 chunks therefore remained reachable after their questions
+were collected, despite `gcImports: true` on both transport ends.
+The correction preserves export-slot accounting and deletes the original answer key.
+Protocol tests cover bootstrap/call pipelining before and after a drop; a forced-GC
+test proves streamed copy-record answers become collectible.
+The complete CapTP suite passes 40 tests in each of three runtime configurations;
+27 private-pipe, worker and public-egress tests also pass.
+An identical synthetic private-pipe soak with a 256 MiB heap previously exhausted
+memory around 144 MiB transferred; after the fix, 384 MiB completes with 7–8 MiB
+live heap after forced collection.
+This establishes a matching leak mechanism, not complete attribution of every
+allocation in the Tokyo crash.
+The isolated upstream fix and regressions are on
+[Endo PR #3370](https://github.com/endojs/endo/pull/3370), based on upstream master,
+not the hosted-agent branch.
+Its 14 package tests pass in all three runtime configurations; two package type
+errors are verified unchanged on the base, and GitHub CI stops before tests on
+an existing mismatched `configstore` lockfile resolution.
+Generation 198 deploys the host-side fix without changing retained owners or images.
+The rebuilt listener `ae762fb2f2edb7946d4e41c0d1b02201a9ddd97ba86aef0657bc496dfc01c413`
+contains the correction but is not activated; this is explicitly a partial rollout.
+The fresh visible Luna session `muvcjeso-28ooeb-0` received the unchanged recipe
+once, completed cold clone, immutable install and type build, and reached tests.
+Its host worker remained healthy around 130–310 MiB RSS after dependency traffic.
+The first non-daemon graph command exceeded its 600-second invocation timeout.
+The agent then independently inspected task coverage and installed signed Debian
+prerequisites into native HOME, but first-turn compaction failed with
+`Compaction needs an older completed user turn` before Electron setup and daemon batches.
+All 18 tool calls have results; the failed turn settled normally, and the private
+admin acknowledged an idle, non-interrupted stop while preserving the session and HOME.
+Its complete tool transcript is retained privately; unattended whole-suite completion
+is still unverified.
+The user subsequently authorized per-invocation timeout overrides, longer or shorter,
+while keeping ten minutes as the development preset's default.
+The shared Shell no longer silently clamps the requested timeout to that default.
+Positive native-timer-range validation, admission-inclusive deadlines, termination
+escalation, cancellation and output ceilings remain unchanged.
+Generation 199 passed a live network-off Podman check: a three-second command completed
+with a ten-second override over a two-second test default; omission and a 100 ms override
+both reported timeout failures.
+The normal development Shell still reports its 600,000 ms default.
+The test's private admin acknowledged stop and disposal before only its own bindings
+were removed; the existing trial workspace and session remain intact.
+Private receipts: `/var/lib/endo/shell-timeout-acceptance-20261006/`.
+
+A separate, smaller CapTP bookkeeping leak remains a follow-up: a disposable
+probe sent 1,000 bootstrap questions and matching drops, then observed 1,000
+numeric `q-N` reference-count entries still retained.
+Receive accounting uses the original question ID while drop accounting removes
+the reversed ID; this is distinct from the large answer-payload retention fixed here.
+Potential interaction with local question-ID collisions still needs protocol research.
+Do not expand the answer-release PR or the native-recovery design on that assumption.
+In interrupted attempt 2, the test container continued after its controlling
+worker died; the operator
 verified its ownership and native HOME mounts, then stopped that exact container.
 Partial logs and crash diagnostics were archived privately before daemon recovery.
 After restart, the transcript retains 12 tool calls and 11 results, with the
@@ -279,7 +334,8 @@ The interrupted test session and native HOME remain for investigation, with no
 running test containers; its environment is inactive but marked interrupted.
 Unattended whole-suite acceptance is therefore still unverified.
 Private receipts: `/var/lib/endo/endo-autonomous-suite-20261005/` and
-`/var/lib/endo/endo-autonomous-suite-2-20261005/`.
+`/var/lib/endo/endo-autonomous-suite-2-20261005/`, with the third trial in
+`/var/lib/endo/endo-autonomous-suite-3-20261005/`.
 
 ### Earlier slice history (superseded by the current status above)
 
@@ -593,7 +649,8 @@ The first adapter settles these parts of the buffered contract:
   timeout failures reject rather than reporting partial output as successful execution.
 - The per-stream Shell bound truncates capture and drains the rest.
   The factory's separate native safety ceiling can terminate execution and reject it.
-- The deadline starts before admission and can only narrow the policy deadline.
+- The deadline starts before admission; `options.timeoutMs` overrides the policy's
+  default invocation timeout, longer or shorter, within the native timer range.
   TERM, KILL, and a bounded wait reach late-admitted handles; a bounded rejection
   does not assert native cleanup or permit unproven resource reuse.
 - No remote PID is disclosed or used for cancellation.

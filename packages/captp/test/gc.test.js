@@ -1,3 +1,6 @@
+// @ts-check
+
+import harden from '@endo/harden';
 import test from '@endo/ses-ava/test.js';
 
 import { Far } from '@endo/marshal';
@@ -48,3 +51,39 @@ test('test loopback gc', async t => {
   t.is(nearDropped, nearRecvDrop);
   t.is(farDropped, farRecvDrop);
 });
+
+test.serial(
+  'collected questions release their streamed copy-record answers',
+  async t => {
+    t.timeout(10_000);
+    /** @type {WeakRef<object>[]} */
+    const records = [];
+    const local = Far('stream', {
+      read() {
+        const record = harden({ payload: 'x'.repeat(8192) });
+        records.push(new WeakRef(record));
+        return record;
+      },
+    });
+    const { makeFar, getFarStats } = makeLoopback(
+      'stream-gc',
+      { gcImports: true },
+      { gcImports: true },
+    );
+    const gcAndFinalize = await makeGcAndFinalize(detectEngineGC());
+    const consume = async () => {
+      const remote = await makeFar(local);
+      for (let i = 0; i < 64; i += 1) {
+        // Discard each received record and its question promise.
+        // eslint-disable-next-line no-await-in-loop
+        await E(remote).read();
+      }
+    };
+    await consume();
+    await gcAndFinalize();
+    await gcAndFinalize();
+    t.is(records.length, 64);
+    t.true(Number(getFarStats().gc.DROPPED) >= 64);
+    t.true(records.every(ref => ref.deref() === undefined));
+  },
+);
