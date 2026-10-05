@@ -30,6 +30,18 @@ the main [architecture audit](ARCHITECTURE-AUDIT.md) retains detailed evidence.
 
 ## Current work, 2026-10-01
 
+October 6 follow-up: shared direct-provider Fae compaction now selects completed
+protocol groups within a turn, including the first, instead of requiring three
+user messages and keeping two entire turns regardless of size.
+The current directive and recent complete native tool groups stay verbatim;
+summary-only older tool excerpts are explicitly bounded, with full originals
+retained in the existing journal/tree.
+Automatic first-turn, repeated compaction, cold reconstruction and failed
+publication fixtures pass; live deployment/acceptance of this follow-up is pending.
+The [durable POSIX design](../../designs/durable-posix-environments.md) records
+the policy and OpenCode comparison; older hold/no-producer statements below are
+historical and superseded for the direct Fae paths.
+
 FA-14 is fixed in source and locally validated through the existing journal,
 evidence reconciliation, provider context, stream fold and history presentation.
 Native explicit status and actual host rejection retain the canonical optional

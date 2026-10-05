@@ -420,8 +420,13 @@ remains Floot's only conversation authority.
 Pool selection is locally tested; live acceptance is not yet claimed.
 Automatic environment GC is a recorded design gap, not implementation scope for
 this PR; cleanup remains explicit on the administration facet.
-Shared Fae compaction now selects only older completed turns and retains the last
-two user turns, their complete tool groups and backend-specific context verbatim.
+Shared Fae compaction selects completed protocol groups rather than requiring
+three user turns or retaining the last two turns regardless of their size.
+It can compact between settled tool rounds inside the first user turn.
+The latest user directive stays verbatim, exactly once in continuation context.
+Recent groups are selected against half the available headroom after system
+instructions, tool schemas and that directive; their calls, results and native
+opaque context stay together and unchanged.
 Standalone checkpoints live in the existing conversation tree; Floot checkpoints
 live in its journal, not another transcript store.
 Publication checks the captured source head/frontier and provider identity before
@@ -437,14 +442,37 @@ No model size is invented when metadata is absent.
 Planning uses last-request occupancy and a conservative wire-byte heuristic
 (including tool schemas and opaque context), with 30% headroom.
 This can compact early; it is not a tokenizer or a provider-sized token estimate.
-An oversized recent tail or one large unfinished turn fails explicitly instead
-of dropping evidence.
+The summary request is separately budgeted, tools disabled, using portable
+role/call/result/failure data rather than replaying old encrypted reasoning.
+When necessary, old tool-output excerpts are shortened with explicit omission
+markers, keeping both ends; full durable results are never changed.
+An oversized settled group may be summarized as a whole rather than split.
+Unknown or unresolved outcomes refuse compaction; oversized instructions,
+schemas or non-tool summary input fail explicitly before inference dispatch.
 Original history remains available; restart restores the checkpoint without
 repeating summarization or tool effects.
-Focused tests cover forced compaction/continuation and factory reconstruction,
-unknown capacity, malformed summaries, recent opaque context, cancelled/stale
-publication and ambiguous checkpoint writes.
-Live pool/compaction acceptance is not yet claimed.
+Focused tests cover automatic first-turn and repeated compaction, parallel tools,
+bounded summary requests, recent opaque context, unknown capacity, invalid or
+non-reducing summaries, cancellation, stale publication and ambiguous writes.
+Floot's first-turn fixture executes eight effects, compacts twice and reconstructs
+without replay; refused checkpoint publication prevents continuation dispatch.
+Standalone inbox reconstruction preserves the selected checkpoint, original
+effects, admission receipt and cleared occupancy reading.
+This October 6 change is locally validated; deployment and live first-turn
+acceptance remain pending.
+
+The inspected [OpenCode implementation](https://github.com/kumavis/opencode/blob/af032b9fbc293cd19283e16f6a7f8effe296c065/packages/opencode/src/session/compaction.ts)
+uses a budgeted recent tail, within-turn splitting and bounded prose tool excerpts
+for summarization, then publishes its checkpoint before returning to inference.
+Fae adopts those principles, not OpenCode's separate persistence/pruning machinery:
+Endo's existing owners still require complete settled protocol groups and retain
+the original evidence.
+Its summary prompt likewise asks for an anchored Markdown handoff: goal,
+constraints/decisions, progress (done, underway, blockers/failures), next steps,
+and paths/references, with explicit preservation of still-relevant earlier
+summary facts and exact commands, paths and identifiers.
+This is model-authored continuation text, not a new durable state schema or
+system instruction; section headings are guidance rather than a dispatch gate.
 The shared credential-free listener worker now accepts a closed network-only
 bootstrap with only a public-egress endpoint, and publishes `ManagedNetworkV1`
 readiness without creating or reporting an inference HTTP endpoint.

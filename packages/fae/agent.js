@@ -497,12 +497,7 @@ export const spawnWorkerLoop = async (
           // capacity guarantee. A router's previous served model is not.
           windowTokens: providerConfig.contextLength ?? 0,
           usedTokens: reading?.context?.usedTokens ?? 0,
-          force:
-            forceCompaction &&
-            !forced &&
-            Number(
-              providerContext.filter(item => item.role === 'user').length,
-            ) >= 3,
+          force: forceCompaction && !forced,
         });
         if (plan) {
           const checkpoint = await summarizeContext(

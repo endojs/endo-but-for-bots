@@ -1109,10 +1109,7 @@ export const makeStreamingAgent = async (
           tools: tools.providerSchemas,
           windowTokens: contextLength ?? 0,
           usedTokens: lastRequestContext?.usedTokens ?? 0,
-          force:
-            forceCompaction &&
-            !forced &&
-            context.filter(item => item.role === 'user').length >= 3,
+          force: forceCompaction && !forced,
         });
         if (plan) {
           writer.setPhase('compacting context');
