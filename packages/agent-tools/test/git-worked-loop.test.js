@@ -57,8 +57,8 @@ const readableToAsyncIterable = stream => {
  * @type {import('@endo/host-spawner').Spawner}
  */
 const realSpawner = async (argv, opts = {}) => {
-  const [command, ...args] = argv;
-  const child = spawn(command, args, {
+  const [command, ...argumentVector] = argv;
+  const child = spawn(command, argumentVector, {
     cwd: opts.cwd,
     // Node's coverage plumbing mutates the child's `env` object (it adds
     // `NODE_V8_COVERAGE` when the parent runs under c8), so hand `spawn` a
@@ -107,8 +107,9 @@ const provisionHostWorkspace = async (t, remoteRoot, { identity } = {}) => {
 
 /**
  * Provision a real `Shell` over the workspace worktree for the build step.
- * The granted grammars admit only `node -e <code>` and `node <script:path>
- * [<scriptArgs> ...]`; the spawner is a genuine child-process spawner.
+ * The granted grammars admit only `node -e <code>` and
+ * `node <script:relative-path> [<scriptArgs> ...]`; the spawner is a genuine
+ * child-process spawner.
  *
  * @param {string} root
  */
@@ -120,7 +121,7 @@ const provisionWorkspaceShell = root =>
         {
           program: 'node',
           description: 'Evaluate an inline build expression',
-          args: [
+          argumentVector: [
             { kind: 'options', options: ['-e'] },
             { kind: 'slot', name: 'code', type: 'string' },
           ],
@@ -128,8 +129,8 @@ const provisionWorkspaceShell = root =>
         {
           program: 'node',
           description: 'Run a worktree script',
-          args: [
-            { kind: 'slot', name: 'script', type: 'path' },
+          argumentVector: [
+            { kind: 'slot', name: 'script', type: 'relative-path' },
             { kind: 'rest', name: 'scriptArgs', type: 'string' },
           ],
         },
@@ -217,7 +218,7 @@ test('the version-controlled-filesystem loop closes end to end through provision
   const build = /** @type {{ stdout: string, exitCode: number }} */ (
     await tools('exec').invoke({
       command: 'node',
-      args: [
+      argumentVector: [
         '-e',
         'process.stdout.write(require("fs").readFileSync("README.md","utf8"))',
       ],

@@ -23,15 +23,14 @@ import { makeError, q, X } from '@endo/errors';
  * *argument language*, not just `argv[0]` (design § Command grammars).
  */
 
-const SLOT_TYPES = harden(['string', 'path']);
+const SLOT_TYPES = harden(['string', 'relative-path']);
 
 /**
  * A slot value (a free token, or the remainder after a prefix) must be a
- * non-empty NUL-free string that cannot read as an option token.  `path`
- * additionally confines the value lexically to the granted worktree: no
- * absolute path, no `..` segment.  (Under the host engine this bounds the
- * request, not the started child's OS authority — design § The honest
- * boundary.)
+ * non-empty NUL-free string that cannot read as an option token.
+ * `relative-path` additionally rejects absolute paths and `..` segments. It
+ * is a lexical argv constraint, not a claim that symlinks stay inside the
+ * workspace (design § Path semantics and the honest boundary).
  *
  * @param {ShellSlotType} type
  * @param {string} value
@@ -47,7 +46,7 @@ const valueMatchesType = (type, value) => {
   if (value.startsWith('-')) {
     return false;
   }
-  if (type === 'path') {
+  if (type === 'relative-path') {
     if (value.startsWith('/')) {
       return false;
     }
@@ -321,17 +320,19 @@ const normalizeElement = (label, element, position) => {
 export const normalizeShellCommandGrammar = (grammar, label = 'command') => {
   const record = assertRecordKeys(label, grammar, [
     'program',
-    'args',
+    'argumentVector',
     'description',
   ]);
   const program = assertToken(`${label}.program`, record.program);
-  if (!Array.isArray(record.args)) {
-    throw makeError(X`${q(label)}.args must be an array of grammar elements`);
+  if (!Array.isArray(record.argumentVector)) {
+    throw makeError(
+      X`${q(label)}.argumentVector must be an array of grammar elements`,
+    );
   }
-  const { length } = record.args;
-  const args = harden(
-    record.args.map((element, i) =>
-      normalizeElement(`${label}.args[${i}]`, element, {
+  const { length } = record.argumentVector;
+  const argumentVector = harden(
+    record.argumentVector.map((element, i) =>
+      normalizeElement(`${label}.argumentVector[${i}]`, element, {
         topLevel: true,
         last: i === length - 1,
       }),
@@ -343,7 +344,7 @@ export const normalizeShellCommandGrammar = (grammar, label = 'command') => {
   );
   return harden({
     program,
-    args,
+    argumentVector,
     ...(description !== undefined && { description }),
   });
 };
@@ -519,31 +520,34 @@ const advance = (element, tokens, positions) => {
 };
 
 /**
- * Does `[command, ...args]` belong to the grammar's accepted language?
- * `command` must equal `program` exactly, and `args` must be fully consumed
+ * Does `[command, ...argumentVector]` belong to the grammar's accepted language?
+ * `command` must equal `program` exactly, and `argumentVector` must be fully consumed
  * by the element sequence.
  *
  * @param {ShellCommandGrammar} grammar
  * @param {string} command
- * @param {readonly string[]} args
+ * @param {readonly string[]} argumentVector
  * @returns {boolean}
  */
-export const matchShellCommand = (grammar, command, args) => {
+export const matchShellCommand = (grammar, command, argumentVector) => {
   if (command !== grammar.program) {
     return false;
   }
-  if (!Array.isArray(args) || !args.every(arg => typeof arg === 'string')) {
+  if (
+    !Array.isArray(argumentVector) ||
+    !argumentVector.every(argument => typeof argument === 'string')
+  ) {
     return false;
   }
   /** @type {ReadonlySet<number>} */
   let frontier = new Set([0]);
-  for (const element of grammar.args) {
-    frontier = advance(element, args, frontier);
+  for (const element of grammar.argumentVector) {
+    frontier = advance(element, argumentVector, frontier);
     if (frontier.size === 0) {
       return false;
     }
   }
-  return frontier.has(args.length);
+  return frontier.has(argumentVector.length);
 };
 harden(matchShellCommand);
 
@@ -552,7 +556,7 @@ harden(matchShellCommand);
  * @returns {string}
  */
 const renderSlotName = ({ name, type }) =>
-  type === 'path' ? `<${name}:path>` : `<${name}>`;
+  type === 'relative-path' ? `<${name}:relative-path>` : `<${name}>`;
 
 /**
  * @param {ShellOptionMember} member
@@ -609,7 +613,8 @@ const renderElement = element => {
 
 /**
  * Render one deterministic usage line for a grammar, e.g.
- * `grep [-r | -n | -i | --]... <pattern> [<paths:path> ...]`.  Exposed by
+ * `grep [-r | -n | -i]... -- <pattern> <path:relative-path>
+ * [<morePaths:relative-path> ...]`. Exposed by
  * `inspect()` and embedded in agent-facing tool descriptions, so the accepted
  * language is legible up front rather than discovered by rejection.
  *
@@ -617,5 +622,5 @@ const renderElement = element => {
  * @returns {string}
  */
 export const formatShellCommandUsage = grammar =>
-  [grammar.program, ...grammar.args.map(renderElement)].join(' ');
+  [grammar.program, ...grammar.argumentVector.map(renderElement)].join(' ');
 harden(formatShellCommandUsage);

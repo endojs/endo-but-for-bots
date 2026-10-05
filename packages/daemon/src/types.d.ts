@@ -391,9 +391,10 @@ export type ShellFormula = {
 
 /**
  * Public `Shell` capability surface, minted by `EndoHost.provideShell` and
- * `DaemonCore.formulateShell`.  Argv-only (`exec(command, args[])`); there is
- * deliberately no shell-string mode.  `inspect()` reveals the policy bounds but
- * never the host working directory, env passlist, or search path.
+ * `DaemonCore.formulateShell`.  Argv-only
+ * (`exec(command, argumentVector[])`); there is deliberately no shell-string
+ * mode.  `inspect()` reveals the policy bounds but never the host working
+ * directory, env passlist, or search path.
  */
 export interface EndoShell {
   inspect(): Promise<{
@@ -404,7 +405,7 @@ export interface EndoShell {
   }>;
   exec(
     command: string,
-    args: string[],
+    argumentVector: string[],
     options?: { timeoutMs?: number },
   ): Promise<ShellResult>;
   attenuate(

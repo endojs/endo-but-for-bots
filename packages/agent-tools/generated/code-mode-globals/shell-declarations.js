@@ -25,7 +25,7 @@ export const shellDeclarations = harden({
   shell: {
     aux: `type ShellCommandGrammar = {
     program: string;
-    args: readonly ShellCommandElement[];
+    argumentVector: readonly ShellCommandElement[];
     description?: string;
 };
 type ShellResult = {
@@ -41,7 +41,7 @@ type ShellInspectResult = {
     timeoutMs: number;
     maxOutputBytes: number;
 };
-type ShellSlotType = 'string' | 'path';
+type ShellSlotType = 'string' | 'relative-path';
 type ShellOptionMember = string | {
     prefix: string;
     type: ShellSlotType;
@@ -80,7 +80,7 @@ type ShellCommandElement = {
     attenuate: (commands: readonly ShellCommandGrammar[], options?: {
         timeoutMs?: number;
     }) => Promise<typeof shell>;
-    exec: (command: string, args: readonly string[], options?: {
+    exec: (command: string, argumentVector: readonly string[], options?: {
         timeoutMs?: number;
     }) => Promise<ShellResult>;
     inspect: () => Promise<ShellInspectResult>;

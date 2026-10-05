@@ -1,4 +1,5 @@
 // @ts-check
+// prefer-endo-primitives-exempt: inert grants are never invoked in catalog tests.
 
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/pass-style';

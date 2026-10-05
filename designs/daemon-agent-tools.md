@@ -114,7 +114,7 @@ What this document owns is the remainder:
 | Group | 2026-03 sketch | Reconciled backing | Status |
 |---|---|---|---|
 | Filesystem | `Dir` from [daemon-capability-filesystem](daemon-capability-filesystem.md) | `Filesystem` (`@endo/platform/fs/extended`) via `mountAsFilesystem(mount)` for the live worktree and `Git.filesystemAt(ref)` for history | read tool landed (#523); list / edit / stat landed (#614) |
-| Shell | `makeShell({ cwd, allowedCommands, … })` from a raw path | `Shell` capability derived from a writable `EndoMount`, executing through the `Spawner` seam (§ Shell Capability) | capability + `makeShellTool` landed (#615, host-spawner engine); sandbox engine (Phase 2c) remaining |
+| Shell | `makeShell({ cwd, allowedCommands, ... })` from a raw path | `Shell` capability derived from a writable `EndoMount`, executing through the `Spawner` seam (§ Shell Capability) | capability + `makeShellTool` landed (#615, host-spawner engine); sandbox engine (Phase 2c) remaining |
 | Git (local) | `Git` exo over a repository path string | `Git` over `EndoMount` via `provideGit(mountCap, petName)` ([daemon-git-capability](daemon-git-capability.md)) | capability landed (#364); facet-derived catalogs landed (`makeGitTool`); mount-bridged `status` / `add` landed (#616), with conflict checkout added in Phase 6 |
 | Git (remote) | deliberately omitted ("network access is a separate capability") | `GitRemote` = `Git` + bounded HTTPS transport + non-extractable credential ([daemon-git-remotes](daemon-git-remotes.md)) | capability landed (#365, #368); `makeGitRemoteTool` landed (#705) |
 | Network (HTTP) | not in sketch (network excluded from `Git`, Design Decision 3) | `HttpClient` / `HttpClientControl` from `@endo/exo-http-client` over the `@endo/http-confine` core, granted standalone from an injected `fetch` seam (not mount-derived) | capability landed (#566); `makeHttpTool` landed (#661); plugin provisioning tracked in [endo-fetch](endo-fetch.md) |
@@ -220,19 +220,21 @@ const shell = await E(host).provideShell(worktree, 'repo-shell', {
     {
       program: 'grep',
       description: 'Search tracked files for a fixed pattern',
-      args: [
+      argumentVector: [
         { kind: 'options', optional: true, repeat: true,
-          options: ['-r', '-n', '-l', '-i', '--'] },
+          options: ['-r', '-n', '-l', '-i'] },
+        { kind: 'literal', value: '--' },
         { kind: 'slot', name: 'pattern', type: 'string' },
-        { kind: 'rest', name: 'paths', type: 'path' },
+        { kind: 'slot', name: 'path', type: 'relative-path' },
+        { kind: 'rest', name: 'morePaths', type: 'relative-path' },
       ],
     },
     {
-      program: 'node',
-      description: 'Run a worktree script',
-      args: [
-        { kind: 'slot', name: 'script', type: 'path' },
-        { kind: 'rest', name: 'scriptArgs', type: 'string' },
+      program: 'printf',
+      description: 'Print strings with a fixed, non-evaluated format',
+      argumentVector: [
+        { kind: 'literal', value: '%s\\n' },
+        { kind: 'rest', name: 'words', type: 'string' },
       ],
     },
   ],
@@ -292,7 +294,7 @@ interface Shell {
   }>;
   exec(
     command: string,
-    args: string[],
+    argumentVector: string[],
     options?: { timeoutMs?: number },
   ): Promise<ShellResult>;
   attenuate(
@@ -302,12 +304,12 @@ interface Shell {
 }
 ```
 
-- **Argv arrays only.** `(command, args[])`, never a shell string; no
+- **Argv arrays only.** `(command, argumentVector[])`, never a shell string; no
   shell interpolation on the guest surface (the `shell: true` mode that
   `@endo/host-shell` and genie's host spawner expose for operators is
   deliberately absent here). This is the sketch's Design Decision 4,
   kept verbatim.
-- **Grammar match before spawn.** `[command, ...args]` must match one of
+- **Grammar match before spawn.** `[command, ...argumentVector]` must match one of
   the policy's command grammars (§ Command grammars) or `exec` throws —
   with the usage lines in the error — before anything is spawned. Policy
   closures in the genie style (`rejectPatterns`, `rejectFlags` — see
@@ -333,7 +335,7 @@ interface Shell {
 A command-name allowlist cannot attenuate a POSIX command: the argument
 language is where the authority lives. Allowlisting `find` grants
 arbitrary execution through `-exec`; `sed` has GNU `e`, `awk` has
-`system()`, `git` has `-c core.sshCommand=…`. So the unit of grant is
+`system()`, `git` has `-c core.sshCommand=...`. So the unit of grant is
 not a command name but a **command grammar**: a passable (copyable,
 pass-style data) expression that describes the accepted argument
 strings and interpolates them into an argv array — never a shell
@@ -346,7 +348,7 @@ passes over the wire to `attenuate` — no closures, no patterns objects,
 no `RegExp`.
 
 ```ts
-type ShellSlotType = 'string' | 'path';
+type ShellSlotType = 'string' | 'relative-path';
 
 type ShellCommandElement =
   // A fixed argv token.
@@ -364,7 +366,7 @@ type ShellCommandElement =
       optional?: boolean; repeat?: boolean;
       name?: string; description?: string }
   // A sequence matched as a unit, e.g. an optional flag-value pair
-  // `[-n <count>]` or a repeatable `[--include <path>]…`.
+  // `[-n <count>]` or a repeatable `[--include <path>]...`.
   | { kind: 'group'; elements: ShellCommandElement[];
       optional?: boolean; repeat?: boolean; description?: string }
   // Zero or more trailing typed tokens; only valid as the final
@@ -374,7 +376,7 @@ type ShellCommandElement =
 
 type ShellCommandGrammar = {
   program: string; // argv[0], a fixed literal
-  args: ShellCommandElement[];
+  argumentVector: ShellCommandElement[];
   description?: string;
 };
 ```
@@ -382,22 +384,24 @@ type ShellCommandGrammar = {
 **Slot types.** Every slot value must be a non-empty string with no NUL
 and no leading `-` — a free slot can never inject an option token; a
 flag the grammar means to admit is spelled as a `literal` or an
-`options` member. `path` additionally confines the value to the granted
-worktree lexically: no absolute path, no `..` segment. (Under the host
-engine this bounds the *request*, not the child — see § The honest
-boundary.) A grammar needing a dash-leading positional value (say a
+`options` member. `relative-path` additionally rejects absolute paths and
+`..` segments. This is a lexical argv constraint, not a claim about where a
+symlink resolves. (Under the host engine this bounds the *request*, not the
+child — see § Path semantics and the honest boundary.) A grammar needing a
+dash-leading positional value (say a
 `grep` pattern) puts a `--` literal before the slot, exactly as a
 careful script would.
 
-**Matching.** `exec(command, args)` matches `command` against
-`program` and `args` against the element sequence with a frontier-set
+**Matching.** `exec(command, argumentVector)` matches `command` against
+`program` and `argumentVector` against the element sequence with a frontier-set
 automaton (each element maps a set of token positions to a set of
 successor positions; optional/repeat/group fall out naturally; cost is
-O(elements × tokens)). No match → structured rejection carrying the
+O(elements x tokens)). No match -> structured rejection carrying the
 rendered usage lines, before any spawn.
 
 **Usage rendering.** Each grammar renders to one deterministic usage
-line — `grep [-r | -n | -l | -i | --]... <pattern> [<paths:path> ...]`
+line — `grep [-r | -n | -l | -i]... -- <pattern>
+<path:relative-path> [<morePaths:relative-path> ...]`
 — exposed by `inspect()` and embedded in the agent-facing tool
 description, so the accepted language is legible to the agent up front
 rather than discovered by rejection.
@@ -413,20 +417,100 @@ chain; `maxOutputBytes` is inherited. Attenuation chains, and exposing
 construction.
 
 **What this fixes, honestly stated.** With grammars, "grant `find`"
-can mean `find <root:path> -name <pattern>` with no `-exec` in the
+can mean `find <root:relative-path> -name <pattern>` with no `-exec` in the
 language — the delegation hole is closed *at the argument level*,
 which a name allowlist could never do. What it does not change: a
 started child's OS authority (§ The honest boundary). A grammar whose
-language still reaches an interpreter (`node <script:path>` where the
+language still reaches an interpreter (`node <script:relative-path>` where the
 agent can also write files) still delegates; composing grants remains
 the granter's judgment call, and the usage line makes what was granted
 reviewable.
+
+#### Examples suitable for an agent
+
+"Suitable" is the conjunction of an argv grammar and an execution engine. The
+grammar stops unlisted argument forms; the engine stops an admitted process
+from reaching ambient resources.
+
+| Command form | Grammar shape | Required engine |
+|---|---|---|
+| `printf '%s\\n' <words>...` | fixed format literal plus `string` rest | host or sandbox; no path or evaluator slot |
+| `git status --short --branch` | all literals | sandbox for an untrusted repository because Git reads repository configuration |
+| `cat -- <source> [<more>...]` | delimiter, required `relative-path`, then path rest | sandbox; a lexical path can name a host-escaping symlink |
+| `grep [-n \| -l \| -i]... -- <pattern> <path> [<more>...]` | closed option union, delimiter, string slot, required path plus rest | sandbox for the same symlink reason |
+| `find <root> -type f -name <pattern>` | path slot and fixed predicates | sandbox; `-exec`, `-ok`, and `-delete` are outside the argv language |
+| `sha256sum -- <path> [<more>...]` | delimiter, required path plus rest | sandbox; byte-oriented workspace observation |
+
+These are not safe on a host merely because a grammar can spell them: `node
+<script>`, `npm`, `make`, `awk`, GNU `sed` with `e`, `find -exec`, and Git forms
+that invoke hooks, helpers, or transports. Each reaches another evaluator. A
+sandbox can bound that evaluator to its filesystem and network profile; a
+grammar cannot erase the delegation.
+
+The package examples file carries copyable record forms for this catalog, and
+the table-driven tests pin both admitted and rejected argvs. The list is a
+review catalog, not a claim that every installation has the named binary or
+identical command semantics.
+
+#### Path semantics and allowed prefixes
+
+The passable matcher has no filesystem authority. It therefore cannot express
+"follow symlinks and admit the target only when it is below one of these
+prefixes." `inside/link` matches `relative-path` even if a host filesystem
+resolves it to `/outside/secret`.
+
+The sandbox engine supplies the strong form by construction: its mount
+namespace is the allowed-prefix set, and a symlink cannot resolve to an
+unmounted host path. Calling `realpath` before a host spawn would still leave a
+check/use race. A host-engine path grant would need race-resistant,
+handle-relative opening and a way to pass the opened handle to the child.
+Adding a `confined-path` spelling before that mechanism exists would overstate
+the boundary. Until then, do not give a path-bearing host Shell to an untrusted
+agent.
+
+#### Pipeline and process-graph grammar
+
+Command grammar and process composition are separate policy dimensions.
+`Shell.exec` currently accepts one argv and returns capped, buffered text; it
+does not expose stdin, file redirects, pipelines, or process substitution.
+Consequently `cat` plus a Filesystem write is not an object-capability copy:
+the round trip is capped, UTF-8 text rather than a byte stream.
+
+A future pipeline API should accept a second passable grammar for the plan:
+
+```ts
+type ShellPipelinePlan = {
+  stages: Array<{ command: string; argumentVector: string[] }>;
+  stdin?: { kind: 'workspace-file'; path: string };
+  stdout?: {
+    kind: 'capture' | 'workspace-file';
+    path?: string;
+    mode?: 'replace' | 'append';
+  };
+};
+```
+
+Every stage is independently checked against the Shell's command grammars; the
+plan policy separately caps stage count and admits only named input/output
+topologies. Stages built by one Shell share its private workspace identity.
+Cross-Shell composition is valid only when the engine proves the workspace
+identities equal, or when every stage is declared and verified to perform no
+file I/O. The latter needs effect metadata that the current grammar does not
+have.
+
+This plan can eventually express byte-preserving object-capability copy as
+`cat -- <source>` with a `workspace-file` output. It must be implemented over
+spawner byte streams, not `/bin/sh -c`. Process substitution is a general
+process graph rather than argv interpolation and is deliberately deferred
+until the pipeline plan exists. In the current milestone, use the Filesystem
+capability for copy and keep shell redirects absent rather than claiming that
+the command grammar confines them.
 
 ### Execution engine: the `Spawner` seam
 
 The shell formula's implementation executes through the `Spawner`
 interface genie already ships (`packages/genie/src/tools/spawner.js`):
-`spawn(argv, opts) → ProcessLike`, where `ProcessLike` mirrors
+`spawn(argv, opts) -> ProcessLike`, where `ProcessLike` mirrors
 `DriverProcess` from `@endo/sandbox/types.d.ts`. Two engines exist in
 tree today:
 
@@ -536,7 +620,7 @@ to have a guest petstore name.
 
 The network tier grants the same control / client split but is **not
 daemon-provisioned** (redirected 2026-07-13; the earlier host-method
-sketch `provideHttpClient(name, { allowedOrigins, policyMode, … })` is
+sketch `provideHttpClient(name, { allowedOrigins, policyMode, ... })` is
 superseded): per [endo-fetch](endo-fetch.md), the unconfined `@endo/fetch`
 base supplies unfettered `Fetch` only to the provisioning integration, which
 endows it plus a state directory to `@endo/confined-fetch`. The confined
@@ -699,8 +783,8 @@ pure confinement core) and `@endo/exo-http-client` (the `HttpClient` /
   lifted for it, this item is met through code mode instead.
 - [x] Run the worked reference flow of
   [daemon-git-next-steps](daemon-git-next-steps.md) § Open Work as the
-  acceptance test: branch → edit via file tools → status / diff / commit
-  via git tools → push via the remote tool → inspect the pushed ref via
+  acceptance test: branch -> edit via file tools -> status / diff / commit
+  via git tools -> push via the remote tool -> inspect the pushed ref via
   `filesystemAt` — with a shell-tool build step (`npm test`) in the
   middle. That single pass demonstrates the M3 pillar. Landed in #707 as
   `packages/agent-tools/test/git-worked-loop.test.js`, which drives the

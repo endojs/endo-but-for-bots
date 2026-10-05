@@ -1,11 +1,12 @@
 // @ts-check
 /// <reference types="ses"/>
+// spell-out-exempt: interoperates with the existing argGuards tool protocol.
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { InterfaceGuard, Pattern } from '@endo/patterns' */
 /** @import { ShellToolCapability, ToolRecord, RejectPatternEntry, RejectFlagEntry, ShellToolOptions } from '../types.js' */
 
-/** @typedef {Record<keyof ShellToolCapability, (...args: unknown[]) => Promise<unknown>>} ShellToolDispatch */
+/** @typedef {Record<keyof ShellToolCapability, (...argumentVector: unknown[]) => Promise<unknown>>} ShellToolDispatch */
 
 import { E } from '@endo/eventual-send';
 import {
@@ -33,7 +34,7 @@ import { makeTool } from '../tool.js';
  *
  * @param {RejectPatternEntry[]} rejectPatterns
  * @param {RejectFlagEntry[]} rejectFlags
- * @returns {(command: string, args: string[]) => void}
+ * @returns {(command: string, argumentVector: string[]) => void}
  */
 const makeAdvisoryVeto = (rejectPatterns, rejectFlags) => {
   /** @type {Map<string, string | undefined>} */
@@ -45,8 +46,8 @@ const makeAdvisoryVeto = (rejectPatterns, rejectFlags) => {
       forbiddenFlags.set(entry.flag, entry.reason);
     }
   }
-  return harden((command, args) => {
-    const tokens = harden([command, ...args]);
+  return harden((command, argumentVector) => {
+    const tokens = harden([command, ...argumentVector]);
     for (const entry of rejectPatterns) {
       const pattern = entry instanceof RegExp ? entry : entry.pattern;
       const reason = entry instanceof RegExp ? undefined : entry.reason;
@@ -95,7 +96,7 @@ const shellToolSchemas = harden({
             'The program to run (argv[0]); must be the program of a ' +
             'granted command grammar.',
         },
-        args: {
+        argumentVector: {
           type: 'array',
           items: { type: 'string' },
           description:
@@ -118,7 +119,7 @@ const shellToolSchemas = harden({
           description: 'Optional per-call execution options.',
         },
       },
-      required: ['command', 'args'],
+      required: ['command', 'argumentVector'],
       additionalProperties: false,
     },
   },
@@ -141,7 +142,7 @@ const shellToolMethods = harden(
 );
 
 /**
- * Positional arg guards for a method, required first and then optional.
+ * Positional argument guards for a method, required first and then optional.
  *
  * @param {string} method
  * @returns {Pattern[]}
@@ -215,12 +216,16 @@ export const makeShellTool = (shellCap, options = {}) => {
       execute: async argsRecord => {
         if (method === 'exec') {
           const command = /** @type {string} */ (argsRecord.command);
-          const args = /** @type {string[]} */ (argsRecord.args);
+          const argumentVector = /** @type {string[]} */ (
+            argsRecord.argumentVector
+          );
           // Tool-side grammar pre-match: a better error before the round
           // trip; the capability's own check remains the boundary.
           if (
             grammars !== undefined &&
-            !grammars.some(grammar => matchShellCommand(grammar, command, args))
+            !grammars.some(grammar =>
+              matchShellCommand(grammar, command, argumentVector),
+            )
           ) {
             throw new Error(
               `Command does not match a granted command grammar; usage:\n${(
@@ -231,7 +236,7 @@ export const makeShellTool = (shellCap, options = {}) => {
             );
           }
           // Advisory veto before the call reaches the exo.
-          veto(command, args);
+          veto(command, argumentVector);
         }
         const positional = paramNames.map(paramName => argsRecord[paramName]);
         while (

@@ -1,8 +1,9 @@
 // @ts-check
 
 // Establish a SES perimeter (provides the `harden` global).
-// eslint-disable-next-line import/order
 import '@endo/init/debug.js';
+
+/** @import { ShellCommandGrammar, ShellPolicy } from '../src/types.js' */
 
 import test from 'ava';
 import fs from 'node:fs';
@@ -16,6 +17,7 @@ import {
 } from '@endo/patterns';
 import { makeHostSpawner } from '@endo/host-spawner';
 
+import { agentCommandGrammarExamples } from '../examples/agent-command-grammars.js';
 import { makeShell } from '../src/shell.js';
 import { ShellInterface } from '../src/interfaces.js';
 import {
@@ -94,27 +96,27 @@ const bytes = s => new TextEncoder().encode(s);
 /**
  * `echo <anything that is not an option token>...`
  *
- * @type {import('../src/types.js').ShellCommandGrammar}
+ * @type {ShellCommandGrammar}
  */
 const echoGrammar = harden({
   program: 'echo',
-  args: [{ kind: 'rest', name: 'words', type: 'string' }],
+  argumentVector: [{ kind: 'rest', name: 'words', type: 'string' }],
 });
 
 /**
  * `node -e <code>` — the only `node` form the base grant admits.
  *
- * @type {import('../src/types.js').ShellCommandGrammar}
+ * @type {ShellCommandGrammar}
  */
 const nodeEvalGrammar = harden({
   program: 'node',
-  args: [
+  argumentVector: [
     { kind: 'options', options: ['-e'] },
     { kind: 'slot', name: 'code', type: 'string' },
   ],
 });
 
-/** @type {import('../src/types.js').ShellPolicy} */
+/** @type {ShellPolicy} */
 const basePolicy = harden({
   commands: [echoGrammar, nodeEvalGrammar],
   timeoutMs: 1000,
@@ -130,10 +132,12 @@ test('a rest element is rejected anywhere but the final top-level position', t =
       normalizeShellCommandGrammars([
         {
           program: 'git',
-          args: [
+          argumentVector: [
             {
               kind: 'group',
-              elements: [{ kind: 'rest', name: 'inner', type: 'path' }],
+              elements: [
+                { kind: 'rest', name: 'inner', type: 'relative-path' },
+              ],
             },
           ],
         },
@@ -145,8 +149,8 @@ test('a rest element is rejected anywhere but the final top-level position', t =
       normalizeShellCommandGrammars([
         {
           program: 'git',
-          args: [
-            { kind: 'rest', name: 'early', type: 'path' },
+          argumentVector: [
+            { kind: 'rest', name: 'early', type: 'relative-path' },
             { kind: 'literal', value: 'tail' },
           ],
         },
@@ -159,7 +163,7 @@ test('matchShellCommand accepts and rejects per element kind', t => {
   const grammar = normalizeShellCommandGrammars([
     {
       program: 'git',
-      args: [
+      argumentVector: [
         { kind: 'literal', value: 'log' },
         {
           kind: 'options',
@@ -172,13 +176,14 @@ test('matchShellCommand accepts and rejects per element kind', t => {
           optional: true,
           elements: [
             { kind: 'literal', value: '--' },
-            { kind: 'slot', name: 'path', type: 'path' },
+            { kind: 'slot', name: 'path', type: 'relative-path' },
           ],
         },
       ],
     },
   ])[0];
-  const ok = args => matchShellCommand(grammar, 'git', harden(args));
+  const ok = argumentVector =>
+    matchShellCommand(grammar, 'git', harden(argumentVector));
   t.true(ok(['log']));
   t.true(ok(['log', '--oneline']));
   t.true(ok(['log', '--max-count=5', '--oneline']));
@@ -202,9 +207,9 @@ test('a repeated group matches flag-value pairs and requires progress', t => {
   const grammar = normalizeShellCommandGrammars([
     {
       program: 'tar',
-      args: [
+      argumentVector: [
         { kind: 'literal', value: '-tf' },
-        { kind: 'slot', name: 'archive', type: 'path' },
+        { kind: 'slot', name: 'archive', type: 'relative-path' },
         {
           kind: 'group',
           optional: true,
@@ -217,7 +222,8 @@ test('a repeated group matches flag-value pairs and requires progress', t => {
       ],
     },
   ])[0];
-  const ok = args => matchShellCommand(grammar, 'tar', harden(args));
+  const ok = argumentVector =>
+    matchShellCommand(grammar, 'tar', harden(argumentVector));
   t.true(ok(['-tf', 'out.tar']));
   t.true(ok(['-tf', 'out.tar', '--exclude', 'a', '--exclude', 'b']));
   t.false(ok(['-tf', 'out.tar', '--exclude']), 'a dangling flag is rejected');
@@ -228,10 +234,10 @@ test('string slots cannot be occupied by option tokens or NUL-bearing strings', 
   const grammar = normalizeShellCommandGrammars([
     {
       program: 'grep',
-      args: [
+      argumentVector: [
         { kind: 'literal', value: '--' },
         { kind: 'slot', name: 'pattern', type: 'string' },
-        { kind: 'rest', name: 'paths', type: 'path' },
+        { kind: 'rest', name: 'paths', type: 'relative-path' },
       ],
     },
   ])[0];
@@ -254,7 +260,7 @@ test('formatShellCommandUsage renders a deterministic usage line', t => {
   const [grammar] = normalizeShellCommandGrammars([
     {
       program: 'grep',
-      args: [
+      argumentVector: [
         {
           kind: 'options',
           optional: true,
@@ -263,13 +269,94 @@ test('formatShellCommandUsage renders a deterministic usage line', t => {
         },
         { kind: 'literal', value: '--' },
         { kind: 'slot', name: 'pattern', type: 'string' },
-        { kind: 'rest', name: 'paths', type: 'path' },
+        { kind: 'rest', name: 'paths', type: 'relative-path' },
       ],
     },
   ]);
   t.is(
     formatShellCommandUsage(grammar),
-    'grep [-r | -n | --include=<string>]... -- <pattern> [<paths:path> ...]',
+    'grep [-r | -n | --include=<string>]... -- <pattern> [<paths:relative-path> ...]',
+  );
+});
+
+test('agent command grammar examples close their named argv delegation paths', t => {
+  const grammars = normalizeShellCommandGrammars(agentCommandGrammarExamples);
+  const byProgram = new Map(
+    grammars.map(grammar => [grammar.program, grammar]),
+  );
+  const matchesExample = (program, argumentVector) => {
+    const grammar = byProgram.get(program);
+    if (grammar === undefined) {
+      throw Error(`missing example grammar for ${program}`);
+    }
+    return matchShellCommand(grammar, program, harden(argumentVector));
+  };
+
+  t.true(matchesExample('printf', ['%s\\n', 'hello', 'world']));
+  t.false(matchesExample('printf', ['%d', '1']), 'format is fixed');
+
+  t.true(matchesExample('git', ['status', '--short', '--branch']));
+  t.false(
+    matchesExample('git', ['-c', 'core.pager=sh', 'status']),
+    'configuration injection is outside the language',
+  );
+
+  t.true(matchesExample('cat', ['--', 'src/index.js']));
+  t.false(matchesExample('cat', ['--', '../secret']), 'traversal rejected');
+  t.false(matchesExample('cat', ['--']), 'at least one source is required');
+
+  t.true(matchesExample('grep', ['-n', '-i', '--', 'TODO', 'src']));
+  t.false(
+    matchesExample('grep', ['-R', '--', 'TODO', 'src']),
+    'unlisted option rejected',
+  );
+
+  t.true(matchesExample('find', ['src', '-type', 'f', '-name', '*.js']));
+  t.false(
+    matchesExample('find', [
+      'src',
+      '-type',
+      'f',
+      '-name',
+      '*.js',
+      '-exec',
+      'sh',
+      ';',
+    ]),
+    'command execution is outside the language',
+  );
+
+  t.true(matchesExample('sha256sum', ['--', 'README.md']));
+  t.false(matchesExample('sha256sum', ['--', '/etc/passwd']));
+});
+
+test('relative-path is lexical and does not claim symlink confinement', async t => {
+  const parent = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'exo-shell-path-boundary-'),
+  );
+  t.teardown(() => fs.promises.rm(parent, { recursive: true, force: true }));
+  const workspace = path.join(parent, 'workspace');
+  const outside = path.join(parent, 'outside.txt');
+  await fs.promises.mkdir(workspace);
+  await fs.promises.writeFile(outside, 'outside');
+  await fs.promises.symlink(outside, path.join(workspace, 'link'));
+
+  const catGrammar = normalizeShellCommandGrammars(
+    agentCommandGrammarExamples,
+  ).find(grammar => grammar.program === 'cat');
+  t.truthy(catGrammar);
+  t.true(
+    matchShellCommand(
+      /** @type {ShellCommandGrammar} */ (catGrammar),
+      'cat',
+      harden(['--', 'link']),
+    ),
+    'the lexical token matches',
+  );
+  t.is(
+    await fs.promises.realpath(path.join(workspace, 'link')),
+    outside,
+    'the filesystem target is outside; only a sandbox namespace confines it',
   );
 });
 
@@ -277,19 +364,24 @@ test('normalization rejects malformed grammars up front', t => {
   t.throws(() => normalizeShellCommandGrammars([]), {
     message: /non-empty array/,
   });
-  t.throws(() => normalizeShellCommandGrammars([{ program: '', args: [] }]), {
-    message: /non-empty string/,
-  });
+  t.throws(
+    () => normalizeShellCommandGrammars([{ program: '', argumentVector: [] }]),
+    {
+      message: /non-empty string/,
+    },
+  );
   t.throws(
     () =>
       normalizeShellCommandGrammars([
-        { program: 'x', args: [{ kind: 'mystery' }] },
+        { program: 'x', argumentVector: [{ kind: 'mystery' }] },
       ]),
     { message: /kind must be one of/ },
   );
   t.throws(
     () =>
-      normalizeShellCommandGrammars([{ program: 'x', args: [], extra: true }]),
+      normalizeShellCommandGrammars([
+        { program: 'x', argumentVector: [], extra: true },
+      ]),
     { message: /unrecognized property/ },
   );
 });
@@ -318,12 +410,12 @@ test('find without -exec in its grammar cannot be asked to exec (adversarial)', 
   const shell = makeShell({
     cwd: '/repo',
     policy: harden({
-      /** @type {import('../src/types.js').ShellCommandGrammar[]} */
+      /** @type {ShellCommandGrammar[]} */
       commands: [
         {
           program: 'find',
-          args: [
-            { kind: 'slot', name: 'root', type: 'path' },
+          argumentVector: [
+            { kind: 'slot', name: 'root', type: 'relative-path' },
             { kind: 'literal', value: '-name' },
             { kind: 'slot', name: 'pattern', type: 'string' },
           ],
@@ -486,10 +578,10 @@ test('attenuate narrows the accepted language; the parent still enforces its own
   // Narrow `echo <words>...` down to exactly `echo ok`.
   const narrowed = await shell.attenuate(
     harden(
-      /** @type {import('../src/types.js').ShellCommandGrammar[]} */ ([
+      /** @type {ShellCommandGrammar[]} */ ([
         {
           program: 'echo',
-          args: [{ kind: 'literal', value: 'ok' }],
+          argumentVector: [{ kind: 'literal', value: 'ok' }],
         },
       ]),
     ),
@@ -512,10 +604,12 @@ test('attenuate cannot widen: a grammar outside the parent language runs nothing
   // still runs on delegation, so nothing outside the root grant can spawn.
   const widened = await shell.attenuate(
     harden(
-      /** @type {import('../src/types.js').ShellCommandGrammar[]} */ ([
+      /** @type {ShellCommandGrammar[]} */ ([
         {
           program: 'rm',
-          args: [{ kind: 'rest', name: 'paths', type: 'path' }],
+          argumentVector: [
+            { kind: 'rest', name: 'paths', type: 'relative-path' },
+          ],
         },
       ]),
     ),
@@ -567,7 +661,7 @@ test('inspect reveals the grammars and usage but no host path (cwd/env/searchPat
   const shell = makeShell({
     cwd: '/very/secret/host/path',
     policy: harden({
-      /** @type {import('../src/types.js').ShellCommandGrammar[]} */
+      /** @type {ShellCommandGrammar[]} */
       commands: [echoGrammar],
       timeoutMs: 1000,
       maxOutputBytes: 2048,
@@ -641,13 +735,13 @@ test('host engine: the child sees only the policy env, never the host process en
   const shell = makeShell({
     cwd: root,
     policy: harden({
-      /** @type {import('../src/types.js').ShellCommandGrammar[]} */
+      /** @type {ShellCommandGrammar[]} */
       commands: [
         {
           program: 'printenv',
-          args: [{ kind: 'slot', name: 'variable', type: 'string' }],
+          argumentVector: [{ kind: 'slot', name: 'variable', type: 'string' }],
         },
-        { program: 'pwd', args: [] },
+        { program: 'pwd', argumentVector: [] },
       ],
       timeoutMs: 10_000,
       maxOutputBytes: 65_536,

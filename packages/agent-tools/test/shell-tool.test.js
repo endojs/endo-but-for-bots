@@ -1,4 +1,5 @@
 // @ts-check
+// spell-out-exempt: validates the existing argGuards tool protocol.
 
 // Establish a SES perimeter (provides the `harden` global).
 // eslint-disable-next-line import/order
@@ -94,24 +95,24 @@ test('makeShellTool emits exec and inspect tool records', t => {
 
 // --- divergence gate: hand-authored schema ⟷ runtime guard ------------------
 
-/** Candidate args records for the exec tool. */
+/** Candidate argumentVector records for the exec tool. */
 const execRecords = harden([
   {},
   { command: 'echo' },
-  { args: ['x'] },
-  { command: 'echo', args: [] },
-  { command: 'echo', args: ['a', 'b'] },
-  { command: 42, args: [] },
-  { command: 'echo', args: 'not-an-array' },
-  { command: 'echo', args: [1, 2] },
-  { command: 'echo', args: [], options: {} },
-  { command: 'echo', args: [], options: { timeoutMs: 100 } },
-  { command: 'echo', args: [], options: { timeoutMs: 'soon' } },
-  { command: 'echo', args: [], options: { bogus: true } },
-  { command: 'echo', args: [], extra: 'x' },
+  { argumentVector: ['x'] },
+  { command: 'echo', argumentVector: [] },
+  { command: 'echo', argumentVector: ['a', 'b'] },
+  { command: 42, argumentVector: [] },
+  { command: 'echo', argumentVector: 'not-an-array' },
+  { command: 'echo', argumentVector: [1, 2] },
+  { command: 'echo', argumentVector: [], options: {} },
+  { command: 'echo', argumentVector: [], options: { timeoutMs: 100 } },
+  { command: 'echo', argumentVector: [], options: { timeoutMs: 'soon' } },
+  { command: 'echo', argumentVector: [], options: { bogus: true } },
+  { command: 'echo', argumentVector: [], extra: 'x' },
 ]);
 
-/** Candidate args records for the inspect tool. */
+/** Candidate argumentVector records for the inspect tool. */
 const inspectRecords = harden([{}, { anything: 1 }]);
 
 const checkAgreement = (t, tool, records) => {
@@ -145,8 +146,8 @@ const makeFakeShell = () => {
   /** @type {any[]} */
   const calls = [];
   const shell = Far('FakeShell', {
-    exec: async (command, args, options) => {
-      calls.push({ command, args, options });
+    exec: async (command, argumentVector, options) => {
+      calls.push({ command, argumentVector, options });
       return harden({
         stdout: 'ran',
         stderr: '',
@@ -160,7 +161,7 @@ const makeFakeShell = () => {
         commands: [
           {
             program: 'echo',
-            args: [{ kind: 'rest', name: 'words', type: 'string' }],
+            argumentVector: [{ kind: 'rest', name: 'words', type: 'string' }],
           },
         ],
         usage: ['echo [<words> ...]'],
@@ -171,7 +172,7 @@ const makeFakeShell = () => {
   return { shell, calls };
 };
 
-test('exec tool forwards command/args/options to the capability', async t => {
+test('exec tool forwards command/argumentVector/options to the capability', async t => {
   const { shell, calls } = makeFakeShell();
   const byName = {};
   for (const tool of makeShellTool(/** @type {any} */ (shell))) {
@@ -179,13 +180,13 @@ test('exec tool forwards command/args/options to the capability', async t => {
   }
   const result = await byName.exec.invoke({
     command: 'echo',
-    args: ['hello'],
+    argumentVector: ['hello'],
     options: { timeoutMs: 500 },
   });
   t.is(/** @type {any} */ (result).stdout, 'ran');
   t.deepEqual(calls[0], {
     command: 'echo',
-    args: ['hello'],
+    argumentVector: ['hello'],
     options: { timeoutMs: 500 },
   });
 });
@@ -199,7 +200,7 @@ test('advisory rejectPatterns vetoes before the capability is called', async t =
     byName[tool.name] = tool;
   }
   await t.throwsAsync(
-    () => byName.exec.invoke({ command: 'rm', args: ['-rf', '/'] }),
+    () => byName.exec.invoke({ command: 'rm', argumentVector: ['-rf', '/'] }),
     { message: /no removals/ },
   );
   t.is(calls.length, 0, 'the vetoed command never reached the capability');
@@ -211,8 +212,8 @@ test('granted grammars surface as usage lines in the exec tool description', t =
     commands: [
       {
         program: 'find',
-        args: [
-          { kind: 'slot', name: 'root', type: 'path' },
+        argumentVector: [
+          { kind: 'slot', name: 'root', type: 'relative-path' },
           { kind: 'literal', value: '-name' },
           { kind: 'slot', name: 'pattern', type: 'string' },
         ],
@@ -226,7 +227,9 @@ test('granted grammars surface as usage lines in the exec tool description', t =
     'the description names the grammar section',
   );
   t.true(
-    byName.exec.description.includes('find <root:path> -name <pattern>'),
+    byName.exec.description.includes(
+      'find <root:relative-path> -name <pattern>',
+    ),
     'the rendered usage line is embedded',
   );
 });
@@ -238,8 +241,8 @@ test('tool-side grammar pre-match rejects find -exec before the capability', asy
     commands: [
       {
         program: 'find',
-        args: [
-          { kind: 'slot', name: 'root', type: 'path' },
+        argumentVector: [
+          { kind: 'slot', name: 'root', type: 'relative-path' },
           { kind: 'literal', value: '-name' },
           { kind: 'slot', name: 'pattern', type: 'string' },
         ],
@@ -252,14 +255,23 @@ test('tool-side grammar pre-match rejects find -exec before the capability', asy
     () =>
       byName.exec.invoke({
         command: 'find',
-        args: ['docs', '-name', '*.md', '-exec', 'sh', '-c', 'evil', ';'],
+        argumentVector: [
+          'docs',
+          '-name',
+          '*.md',
+          '-exec',
+          'sh',
+          '-c',
+          'evil',
+          ';',
+        ],
       }),
     { message: /does not match a granted command grammar/ },
   );
   t.is(calls.length, 0, 'the non-matching argv never reached the capability');
   const ok = await byName.exec.invoke({
     command: 'find',
-    args: ['docs', '-name', '*.md'],
+    argumentVector: ['docs', '-name', '*.md'],
   });
   t.is(/** @type {any} */ (ok).stdout, 'ran');
   t.is(calls.length, 1);
@@ -280,7 +292,8 @@ test('advisory rejectFlags vetoes a forbidden flag', async t => {
     byName[tool.name] = tool;
   }
   await t.throwsAsync(
-    () => byName.exec.invoke({ command: 'sed', args: ['-i', 's/a/b/'] }),
+    () =>
+      byName.exec.invoke({ command: 'sed', argumentVector: ['-i', 's/a/b/'] }),
     { message: /no in-place edits/ },
   );
 });

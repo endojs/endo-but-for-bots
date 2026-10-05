@@ -5,7 +5,7 @@ import { M } from '@endo/patterns';
 
 // #region Shape primitives
 
-const ShellSlotTypeShape = M.or('string', 'path');
+const ShellSlotTypeShape = M.or('string', 'relative-path');
 
 /**
  * One member of an options union: an exact flag token (`'-r'`) or a prefix
@@ -66,7 +66,7 @@ const ShellCommandElementShape = M.or(
 export const ShellCommandGrammarShape = M.splitRecord(
   {
     program: M.string(),
-    args: M.arrayOf(ShellCommandElementShape),
+    argumentVector: M.arrayOf(ShellCommandElementShape),
   },
   { description: M.string() },
   harden({}),
@@ -125,7 +125,7 @@ const AttenuateOptionsShape = M.splitRecord(
 
 /**
  * Runtime guard for the `Shell` exo.  `exec` takes an argv split into
- * `(command, args[])` — never a shell string — matching the design's Decision
+ * `(command, argumentVector[])` — never a shell string — matching the design's Decision
  * 4 (argv arrays only; no shell interpolation on the guest surface).
  * `attenuate` takes passable command grammars and returns a derived `Shell`
  * that can only narrow (it delegates to its parent, so every ancestor's

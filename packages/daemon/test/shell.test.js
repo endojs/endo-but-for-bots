@@ -91,12 +91,12 @@ const basePolicy = normalizeShellPolicy({
   commands: [
     {
       program: 'printenv',
-      args: [{ kind: 'slot', name: 'variable', type: 'string' }],
+      argumentVector: [{ kind: 'slot', name: 'variable', type: 'string' }],
     },
-    { program: 'pwd', args: [] },
+    { program: 'pwd', argumentVector: [] },
     {
       program: 'printf',
-      args: [
+      argumentVector: [
         { kind: 'slot', name: 'format', type: 'string' },
         { kind: 'rest', name: 'values', type: 'string' },
       ],
@@ -212,7 +212,7 @@ test('provideShell composition: omitted searchPath is baked before reincarnation
     }
   });
   const persistedPolicy = normalizeShellPolicy({
-    commands: [{ program: command, args: [] }],
+    commands: [{ program: command, argumentVector: [] }],
     timeoutMs: 10_000,
     maxOutputBytes: 65_536,
     env: { CI: 'true' },
@@ -239,7 +239,7 @@ test('provideShell composition: a real child that traps SIGTERM is force-killed 
       commands: harden([
         {
           program: 'node',
-          args: [
+          argumentVector: [
             { kind: 'options', options: ['-e'] },
             { kind: 'slot', name: 'code', type: 'string' },
           ],

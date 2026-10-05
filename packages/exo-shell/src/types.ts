@@ -1,4 +1,4 @@
-export type ShellSlotType = 'string' | 'path';
+export type ShellSlotType = 'string' | 'relative-path';
 
 export type ShellOptionMember =
   string | { prefix: string; type: ShellSlotType; name?: string };
@@ -38,7 +38,7 @@ export type ShellCommandElement =
  */
 export type ShellCommandGrammar = {
   program: string;
-  args: readonly ShellCommandElement[];
+  argumentVector: readonly ShellCommandElement[];
   description?: string;
 };
 
@@ -86,7 +86,7 @@ export type EndoShell = {
   inspect: () => Promise<ShellInspectResult>;
   exec: (
     command: string,
-    args: readonly string[],
+    argumentVector: readonly string[],
     options?: { timeoutMs?: number },
   ) => Promise<ShellResult>;
   attenuate: (

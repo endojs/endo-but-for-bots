@@ -1,4 +1,5 @@
 // @ts-check
+// prefer-endo-primitives-exempt: inert grants are never invoked in catalog tests.
 
 // Establish a SES perimeter (provides the `harden` global).
 // eslint-disable-next-line import/order

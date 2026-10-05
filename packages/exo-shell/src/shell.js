@@ -88,7 +88,7 @@ const drainBounded = async (stream, maxBytes) => {
  * @param {readonly ShellCommandGrammar[]} state.commands
  * @param {number} state.timeoutMs
  * @param {number} state.maxOutputBytes
- * @param {(command: string, args: readonly string[], timeoutMs: number) =>
+ * @param {(command: string, argumentVector: readonly string[], timeoutMs: number) =>
  *   Promise<import('./types.js').ShellResult>} state.run
  * @returns {EndoShell}
  */
@@ -107,15 +107,17 @@ const makeShellFacet = ({ commands, timeoutMs, maxOutputBytes, run }) => {
 
     /**
      * @param {string} command
-     * @param {readonly string[]} args
+     * @param {readonly string[]} argumentVector
      * @param {{ timeoutMs?: number }} [options]
      */
-    async exec(command, args, options = {}) {
+    async exec(command, argumentVector, options = {}) {
       if (
-        !commands.some(grammar => matchShellCommand(grammar, command, args))
+        !commands.some(grammar =>
+          matchShellCommand(grammar, command, argumentVector),
+        )
       ) {
         throw makeError(
-          X`Shell.exec: argv ${q([command, ...args])} matches no granted command grammar; usage: ${q(usage)}`,
+          X`Shell.exec: argv ${q([command, ...argumentVector])} matches no granted command grammar; usage: ${q(usage)}`,
         );
       }
       // A per-call timeout may only narrow this facet's value, never widen it.
@@ -124,7 +126,7 @@ const makeShellFacet = ({ commands, timeoutMs, maxOutputBytes, run }) => {
         requested !== undefined && requested > 0
           ? Math.min(timeoutMs, requested)
           : timeoutMs;
-      return run(command, args, effectiveTimeoutMs);
+      return run(command, argumentVector, effectiveTimeoutMs);
     },
 
     /**
@@ -159,8 +161,8 @@ const makeShellFacet = ({ commands, timeoutMs, maxOutputBytes, run }) => {
         commands: normalized,
         timeoutMs: narrowedTimeoutMs,
         maxOutputBytes,
-        run: (command, args, effectiveTimeoutMs) =>
-          exo.exec(command, args, { timeoutMs: effectiveTimeoutMs }),
+        run: (command, argumentVector, effectiveTimeoutMs) =>
+          exo.exec(command, argumentVector, { timeoutMs: effectiveTimeoutMs }),
       });
     },
   });
@@ -231,13 +233,13 @@ export const makeShell = ({
 
   /**
    * @param {string} command
-   * @param {readonly string[]} args
+   * @param {readonly string[]} argumentVector
    * @param {number} effectiveTimeoutMs
    */
-  const run = async (command, args, effectiveTimeoutMs) => {
+  const run = async (command, argumentVector, effectiveTimeoutMs) => {
     // Argv only — the program name is argv[0], never a shell string, and
     // `shell: false` forbids the spawner from wrapping it in `/bin/sh -c`.
-    const argv = harden([command, ...args]);
+    const argv = harden([command, ...argumentVector]);
     const proc = await spawner(argv, {
       cwd,
       env: childEnv,
