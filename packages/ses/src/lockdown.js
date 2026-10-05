@@ -31,7 +31,7 @@ import {
   getPrototypeOf,
 } from './commons.js';
 import { makeHardener } from './make-hardener.js';
-import { makeIntrinsicsCollector } from './intrinsics.js';
+import { makeIntrinsicsCollector, sampleSturdyRef } from './intrinsics.js';
 import removeUnpermittedIntrinsics from './permits-intrinsics.js';
 import tameFunctionConstructors from './tame-function-constructors.js';
 import tameDateConstructor from './tame-date-constructor.js';
@@ -349,7 +349,7 @@ export const repairIntrinsics = (options = {}) => {
   const markVirtualizedNativeFunction = tameFunctionToString();
 
   const { addIntrinsics, completePrototypes, finalIntrinsics } =
-    makeIntrinsicsCollector(reporter);
+    makeIntrinsicsCollector(reporter, sampleSturdyRef(globalThis));
 
   const tamedHarden = tameHarden(safeHarden, __hardenTaming__);
   addIntrinsics({ harden: tamedHarden });
