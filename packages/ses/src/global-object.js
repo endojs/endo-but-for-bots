@@ -138,25 +138,31 @@ export const setGlobalObjectMutableProperties = (
   for (const [name, intrinsicName] of entries(universalPropertyNames)) {
     if (hasOwn(intrinsics, intrinsicName)) {
       const value = intrinsics[intrinsicName];
-      if (
-        hasOwn(firstWinsPropertyNames, name) &&
-        isFirstWinsDescriptor(
-          getOwnPropertyDescriptor(globalObject, name),
-          value,
-        )
-      ) {
-        // The shim already locked the start compartment's binding to the very
-        // intrinsic we would install, so leave it. A child compartment gets
-        // the same value from its own call to this function, where its fresh
-        // global object has no such binding yet.
-        // eslint-disable-next-line no-continue
-        continue;
+      let locked = false;
+      if (hasOwn(firstWinsPropertyNames, name)) {
+        const descriptor = getOwnPropertyDescriptor(globalObject, name);
+        if (isFirstWinsDescriptor(descriptor, value)) {
+          // The shim already locked the start compartment's binding to the very
+          // intrinsic we would install, so leave it. A child compartment gets
+          // the same value from its own call to this function, where its fresh
+          // global object has no such binding yet.
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+        // A binding whose value is no longer the intrinsic `lockdown` sampled
+        // was re-pointed while `lockdown` ran (for example by a Proxy trap
+        // reentered during the shape check). Restore the sampled value with
+        // the first-wins lock, so the re-pointing cannot leave the start
+        // compartment's binding open to a later rebind.
+        locked =
+          descriptor !== undefined &&
+          !(hasOwn(descriptor, 'value') && is(descriptor.value, value));
       }
       defineProperty(globalObject, name, {
         value,
-        writable: true,
+        writable: !locked,
         enumerable: false,
-        configurable: true,
+        configurable: !locked,
       });
     }
   }
