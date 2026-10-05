@@ -41,7 +41,7 @@ import {
 } from './agent-interface.js';
 
 /** @import { ToolDeclaration, CatalogWarning } from '@endo/agent-tools/adapters/mcp.js' */
-/** @import { DaemonConnection, GuestConnection, ServerConstructionReason } from './types.js' */
+/** @import { DaemonConnection, ServerConstructionReason } from './types.js' */
 
 /**
  * @param {ServerConstructionReason} reason
@@ -101,17 +101,27 @@ export const readFormulaId = env => {
 harden(readFormulaId);
 
 /**
- * Refuse a facet that does not carry the guest interface or that carries host
- * authority.
+ * Resolve a formula id to a guest facet at a root host, refusing anything that
+ * does not carry the guest interface or that carries host authority.
  *
- * @param {unknown} guest
- * @param {string} formulaId - for the error message.
+ * @param {unknown} host - the bootstrap root host (or a remote presence of it).
+ * @param {string} formulaId
  * @returns {Promise<unknown>}
  */
-const assertGuestFacet = async (guest, formulaId) => {
+export const resolveGuest = async (host, formulaId) => {
+  let guest;
   let methodNames;
   let interfaceGuard;
   try {
+    let id = formulaId;
+    if (isValidNumber(formulaId)) {
+      // Qualify a bare formula number with the local node, read from the
+      // host's own identifier.
+      const hostId = await E(/** @type {any} */ (host)).identify('@agent');
+      const { node } = parseId(String(hostId));
+      id = formatId(/** @type {any} */ ({ number: formulaId, node }));
+    }
+    guest = await E(/** @type {any} */ (host)).lookupById(id);
     // eslint-disable-next-line no-underscore-dangle
     methodNames = await E(/** @type {any} */ (guest)).__getMethodNames__();
     // eslint-disable-next-line no-underscore-dangle
@@ -147,82 +157,7 @@ const assertGuestFacet = async (guest, formulaId) => {
   }
   return guest;
 };
-
-/**
- * Resolve a formula id to a guest facet at a root host, refusing anything that
- * does not carry the guest interface or that carries host authority.
- *
- * @param {unknown} host - the bootstrap root host (or a remote presence of it).
- * @param {string} formulaId
- * @returns {Promise<unknown>}
- */
-export const resolveGuest = async (host, formulaId) => {
-  let guest;
-  try {
-    let id = formulaId;
-    if (isValidNumber(formulaId)) {
-      // Qualify a bare formula number with the local node, read from the
-      // host's own identifier.
-      const hostId = await E(/** @type {any} */ (host)).identify('@agent');
-      const { node } = parseId(String(hostId));
-      id = formatId(/** @type {any} */ ({ number: formulaId, node }));
-    }
-    guest = await E(/** @type {any} */ (host)).lookupById(id);
-  } catch (cause) {
-    throw makeServerConstructionError(
-      'invalid-formula-id',
-      `Formula ${formulaId} does not resolve to a guest`,
-      { cause },
-    );
-  }
-  return assertGuestFacet(guest, formulaId);
-};
 harden(resolveGuest);
-
-/**
- * Accept the facet a daemon-issued guest socket bootstraps to, as the guest
- * named by a formula id. The facet must name itself by that formula number
- * (`@agent`), and by that node too when the formula id is qualified, so a
- * socket issued for a different guest is refused.
- *
- * @param {unknown} guest - the guest socket's bootstrap.
- * @param {string} formulaId
- * @returns {Promise<unknown>}
- */
-export const resolveScopedGuest = async (guest, formulaId) => {
-  let expected;
-  let selfId;
-  try {
-    expected = isValidNumber(formulaId)
-      ? { number: formulaId, node: undefined }
-      : parseId(formulaId);
-    selfId = await E(/** @type {any} */ (guest)).identify('@agent');
-  } catch (cause) {
-    throw makeServerConstructionError(
-      'invalid-formula-id',
-      `Formula ${formulaId} does not resolve to a guest`,
-      { cause },
-    );
-  }
-  let actual;
-  try {
-    actual = parseId(String(selfId));
-  } catch {
-    actual = undefined;
-  }
-  if (
-    actual === undefined ||
-    actual.number !== expected.number ||
-    (expected.node !== undefined && actual.node !== expected.node)
-  ) {
-    throw makeServerConstructionError(
-      'invalid-formula-id',
-      `The guest socket does not speak for formula ${formulaId}`,
-    );
-  }
-  return assertGuestFacet(guest, formulaId);
-};
-harden(resolveScopedGuest);
 
 /**
  * Bind the static guest-agent catalog to one resolved guest facet.
@@ -255,12 +190,20 @@ export const makeGuestMcpServer = ({
 harden(makeGuestMcpServer);
 
 /**
- * Open an Endo client session on a socket.
+ * Open a daemon session with the ordinary Endo client, as `endo` does.
  *
- * @param {string} socketPath
+ * @param {object} powers
+ * @param {Record<string, string | undefined>} powers.env
+ * @param {string} powers.platform
+ * @param {{ user: string, home: string, temp: string }} powers.info
+ * @returns {Promise<DaemonConnection>}
  */
-const openClient = async socketPath => {
-  const { makeEndoClient } = await import('@endo/daemon');
+export const connectToDaemon = async ({ env, platform, info }) => {
+  const [{ makeEndoClient }, { whereEndoSock }] = await Promise.all([
+    import('@endo/daemon'),
+    import('@endo/where'),
+  ]);
+  const sockPath = whereEndoSock(platform, env, info);
   /** @type {(reason: Error) => void} */
   let cancel = () => {};
   /** @type {Promise<never>} */
@@ -270,101 +213,19 @@ const openClient = async socketPath => {
   cancelled.catch(() => {});
   const { getBootstrap, closed } = await makeEndoClient(
     'endo-mcp-stdio',
-    socketPath,
+    sockPath,
     cancelled,
     undefined,
     { onReject: () => {} },
   );
-  return {
-    bootstrap: getBootstrap(),
+  const host = E(/** @type {any} */ (getBootstrap())).host();
+  return harden({
+    host,
     closed,
     close: (reason = Error('normal termination')) => cancel(reason),
-  };
-};
-
-/**
- * @param {object} powers
- * @param {Record<string, string | undefined>} powers.env
- * @param {string} powers.platform
- * @param {{ user: string, home: string, temp: string }} powers.info
- */
-const whereDaemonSocket = async ({ env, platform, info }) => {
-  const { whereEndoSock } = await import('@endo/where');
-  return whereEndoSock(platform, env, info);
-};
-
-/**
- * Open a daemon session with the ordinary Endo client, as `endo` does.
- *
- * @param {object} powers
- * @param {Record<string, string | undefined>} powers.env
- * @param {string} powers.platform
- * @param {{ user: string, home: string, temp: string }} powers.info
- * @returns {Promise<DaemonConnection>}
- */
-export const connectToDaemon = async powers => {
-  const { bootstrap, closed, close } = await openClient(
-    await whereDaemonSocket(powers),
-  );
-  const host = E(/** @type {any} */ (bootstrap)).host();
-  return harden({ host, closed, close });
+  });
 };
 harden(connectToDaemon);
-
-/**
- * Open a session on a daemon-issued guest socket
- * (`EndoBootstrap.guestBootstrapPath`). The socket's bootstrap is the one
- * guest facet, so the session reaches that guest and carries no host.
- *
- * @param {object} options
- * @param {string} options.socketPath - the guest socket.
- * @returns {Promise<GuestConnection>}
- */
-export const connectToGuestBootstrap = async ({ socketPath }) => {
-  const { bootstrap, closed, close } = await openClient(socketPath);
-  return harden({ guest: bootstrap, closed, close });
-};
-harden(connectToGuestBootstrap);
-
-/**
- * Ask the daemon, over its root socket, to serve one guest on its own socket,
- * and return that socket's path. The root session is closed before this
- * resolves; this is the step that holds host authority, so an operator may run
- * it once and hand a turn only the returned path.
- *
- * Resolves to `undefined` when the daemon serves no guest sockets: one that
- * predates `guestBootstrapPath` (its bootstrap's `__getMethodNames__()` lacks
- * the method) or one that answers `undefined` (a platform without Unix
- * sockets). Every other failure rejects.
- *
- * @param {object} powers
- * @param {string} powers.formulaId - the guest's formula id or number.
- * @param {Record<string, string | undefined>} powers.env
- * @param {string} powers.platform
- * @param {{ user: string, home: string, temp: string }} powers.info
- * @returns {Promise<string | undefined>}
- */
-export const issueGuestBootstrapPath = async ({ formulaId, ...where }) => {
-  const { bootstrap, closed, close } = await openClient(
-    await whereDaemonSocket(where),
-  );
-  Promise.resolve(closed).catch(() => {});
-  try {
-    const methodNames = /** @type {string[]} */ (
-      // eslint-disable-next-line no-underscore-dangle
-      await E(/** @type {any} */ (bootstrap)).__getMethodNames__()
-    );
-    if (!methodNames.includes('guestBootstrapPath')) {
-      return undefined;
-    }
-    return await E(/** @type {any} */ (bootstrap)).guestBootstrapPath(
-      formulaId,
-    );
-  } finally {
-    close();
-  }
-};
-harden(issueGuestBootstrapPath);
 
 /**
  * Construct the single-tenant server: validate the catalog and the formula

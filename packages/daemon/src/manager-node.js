@@ -21,7 +21,6 @@ import {
   makeNetworkPowers,
   makeDaemonicPowers,
   makeCryptoPowers,
-  makeNodeGuestPathIssuer,
   gunzip,
 } from './manager-node-powers.js';
 import { startWsGateway } from './ws-gateway.js';
@@ -153,18 +152,6 @@ const main = async () => {
   await daemonicPersistencePowers.initializePersistence();
   await killStaleWorkers();
 
-  /** @type {((error: Error, errorId?: string) => void) | undefined} */
-  let guestMarshalSaveError;
-  const guestPathIssuer = makeNodeGuestPathIssuer({
-    fs,
-    path,
-    servePath: networkPowers.servePath,
-    daemonSocketPath: sockPath,
-    cancelled,
-    marshalSaveError: (error, errorId) =>
-      guestMarshalSaveError?.(error, errorId),
-  });
-
   const {
     endoBootstrap,
     cancelGracePeriod,
@@ -176,9 +163,8 @@ const main = async () => {
     cancel,
     cancelled,
     {},
-    { gcEnabled, guestPathIssuer },
+    { gcEnabled },
   );
-  guestMarshalSaveError = marshalSaveError;
 
   /** @param {Error} error */
   const exitWithError = error => {

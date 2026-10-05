@@ -5,21 +5,14 @@
 // The confined shape end to end (designs/endo-guest-stdio-mcp.md § How the
 // confinement properties change, shape 1; designs/endo-claude.md):
 //
-//   runConfinedTurn({ formulaId, credential, prompt, model, claudePath,
-//                     guestSocketPath })
+//   runConfinedTurn({ formulaId, credential, prompt, model, claudePath })
 //
 //   harness process (this module)             confined `claude -p --bare`
 //   ─────────────────────────────             ───────────────────────────
-//   guest socket session (makeEndoClient)     env: PATH, LANG, LC_ALL,
-//   └ bootstrap IS the one guest                   ENDO_CLAUDE_SESSION_TAG only
+//   daemon connection (makeEndoClient)        env: PATH, LANG, LC_ALL,
+//   └ lookupById(formulaId) → one guest            ENDO_CLAUDE_SESSION_TAG only
 //   broker: that guest's static catalog  ◄──  relay (env -i node relay.mjs)
 //   on a 0600 socket in a 0700 dir              stdio ⇄ broker socket
-//
-// The harness connects to a daemon-issued guest socket
-// (`EndoBootstrap.guestBootstrapPath`), whose CapTP bootstrap is the guest
-// facet itself, so the harness holds no host. An operator issues that socket
-// once and passes its path as `guestSocketPath`; without one, the turn issues it
-// over the root socket and closes that root session before the broker starts.
 //
 // The daemon connection, its socket path, and the formula id stay in the
 // harness process. The confined tree is given only the broker socket (pinned
@@ -40,12 +33,7 @@ import path from 'node:path';
 
 import { E } from '@endo/eventual-send';
 import { makeError, X } from '@endo/errors';
-import {
-  connectToDaemon,
-  connectToGuestBootstrap,
-  issueGuestBootstrapPath,
-  startGuestBroker,
-} from '@endo/agent-mcp-stdio';
+import { connectToDaemon, startGuestBroker } from '@endo/agent-mcp-stdio';
 
 import { make } from './harness.js';
 import { makeLaunch } from './launch.js';
@@ -54,60 +42,7 @@ import { PINNED_CLI_VERSION } from './argv.js';
 
 /** @import { SpawnOptions, ChildProcess } from 'node:child_process' */
 /** @import { InferResult } from './claude.types.js' */
-/** @import { DaemonConnection, GuestConnection } from '@endo/agent-mcp-stdio' */
-
-/**
- * The default harness connection: a session on `guestSocketPath`, or, when
- * absent, on a guest socket issued for `formulaId` over the root socket
- * (`issue` closes that root session before it returns). A daemon that cannot
- * issue guest sockets gets the root connection (`connectToRoot`) instead, as
- * before guest-scoped bootstraps existed, and `warn` reports that widening to
- * host authority; an explicit `guestSocketPath` never falls back.
- *
- * @param {object} options
- * @param {string} options.formulaId
- * @param {string} [options.guestSocketPath]
- * @param {typeof issueGuestBootstrapPath} [options.issue]
- * @param {typeof connectToGuestBootstrap} [options.connectTo]
- * @param {typeof connectToDaemon} [options.connectToRoot]
- * @param {(message: string) => void} [options.warn] - told when the turn
- *   falls back to the root connection; defaults to standard error.
- * @returns {() => Promise<GuestConnection | DaemonConnection>}
- */
-export const makeGuestConnect = ({
-  formulaId,
-  guestSocketPath,
-  issue = issueGuestBootstrapPath,
-  connectTo = connectToGuestBootstrap,
-  connectToRoot = connectToDaemon,
-  warn = message => console.warn(message),
-}) => {
-  return async () => {
-    if (guestSocketPath !== undefined) {
-      return connectTo({ socketPath: guestSocketPath });
-    }
-    const where = {
-      env: process.env,
-      platform: process.platform,
-      info: {
-        user: os.userInfo().username,
-        home: os.homedir(),
-        temp: os.tmpdir(),
-      },
-    };
-    // Only a daemon that serves no guest sockets answers `undefined`; any
-    // failure rejects instead, so it cannot widen the harness to the host.
-    const socketPath = await issue({ formulaId, ...where });
-    if (socketPath === undefined) {
-      warn(
-        `Endo daemon serves no guest sockets; the confined turn for ${formulaId} connects with host authority`,
-      );
-      return connectToRoot(where);
-    }
-    return connectTo({ socketPath });
-  };
-};
-harden(makeGuestConnect);
+/** @import { DaemonConnection } from '@endo/agent-mcp-stdio' */
 
 /**
  * Read `claude --version` (for example `2.1.232 (Claude Code)`) under the
@@ -157,12 +92,9 @@ const defaultPathValue = nodePath =>
  * @param {string} options.claudePath - absolute path of the pinned `claude`.
  * @param {string[]} [options.pinnedModels] - defaults to `[model]`.
  * @param {string} [options.pinnedCliVersion]
- * @param {string} [options.guestSocketPath] - a daemon-issued guest socket for
- *   `formulaId` (`EndoBootstrap.guestBootstrapPath`). When absent, the default
- *   `connect` issues one over this process's `ENDO_SOCK` / default socket.
- * @param {() => Promise<GuestConnection | DaemonConnection>} [options.connect]
- *   opens the harness-owned connection; defaults to a session on the guest
- *   socket, which carries no host.
+ * @param {() => Promise<DaemonConnection>} [options.connect] - opens the
+ *   harness-owned daemon connection; defaults to the ordinary Endo client over
+ *   this process's `ENDO_SOCK` / default socket.
  * @param {string} [options.version] - reported as the MCP server version.
  * @param {string} [options.parentDir]
  * @param {string} [options.nodePath] - the `node` the relay runs under.
@@ -183,8 +115,16 @@ export const runConfinedTurn = async ({
   claudePath,
   pinnedModels = [model],
   pinnedCliVersion = PINNED_CLI_VERSION,
-  guestSocketPath,
-  connect = makeGuestConnect({ formulaId, guestSocketPath }),
+  connect = () =>
+    connectToDaemon({
+      env: process.env,
+      platform: process.platform,
+      info: {
+        user: os.userInfo().username,
+        home: os.homedir(),
+        temp: os.tmpdir(),
+      },
+    }),
   version = '0.0.0',
   parentDir = os.tmpdir(),
   nodePath = process.execPath,
@@ -203,7 +143,7 @@ export const runConfinedTurn = async ({
   }
 
   const turnDir = await fs.mkdtemp(path.join(parentDir, 'endo-claude-turn-'));
-  /** @type {GuestConnection | DaemonConnection | undefined} */
+  /** @type {DaemonConnection | undefined} */
   let connection;
   /** @type {{ close: () => Promise<void> } | undefined} */
   let broker;

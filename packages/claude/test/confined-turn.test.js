@@ -7,7 +7,7 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
 
-import { makeGuestConnect, runConfinedTurn } from '../src/confined-turn.js';
+import { runConfinedTurn } from '../src/confined-turn.js';
 import { ALLOWED_ENV_KEYS } from '../src/child-env.js';
 import { resultFromStream } from '../src/launch.js';
 
@@ -41,13 +41,10 @@ const makeFake = (name, methods) =>
 /**
  * @param {string} label
  * @param {unknown[][]} calls
- * @param {string} [formulaNumber] - the number the guest names itself by.
  */
-const makeFakeGuest = (label, calls, formulaNumber = '00'.repeat(32)) =>
+const makeFakeGuest = (label, calls) =>
   makeFake('EndoGuest', {
     help: () => `help for ${label}`,
-    identify: name =>
-      name === '@agent' ? `${formulaNumber}:${NODE}` : undefined,
     has: () => false,
     list: () => {
       calls.push([label, 'list']);
@@ -193,178 +190,6 @@ test('the confined process has no daemon socket and no credential in its MCP chi
   // merged its whole environment into the spawn.
   t.deepEqual(report.mcpChildEnviron, []);
   t.false(report.mcpChildHasCredential);
-});
-
-test('a confined turn over a daemon-issued guest socket holds no host', async t => {
-  /** @type {unknown[][]} */
-  const calls = [];
-  let closes = 0;
-  const closed = makePromiseKit();
-  const { result, leftovers } = await turn({
-    connect: async () =>
-      harden({
-        guest: makeFakeGuest('scoped', calls, FORMULA_ID),
-        closed: closed.promise,
-        close: () => {
-          closes += 1;
-        },
-      }),
-  });
-  t.is(result.type, 'ok', JSON.stringify(result));
-  const report = JSON.parse(/** @type {any} */ (result).text);
-  t.true(JSON.stringify(report.call.result).includes('scoped-name'));
-  t.deepEqual(calls, [['scoped', 'list']]);
-  t.is(closes, 1);
-  t.deepEqual(leftovers, []);
-});
-
-test('by default a turn connects to its guest socket, not the root socket', async t => {
-  const parentDir = fs.mkdtempSync('/tmp/ect-');
-  t.teardown(() => fs.rmSync(parentDir, { recursive: true, force: true }));
-  const guestSocketPath = `${parentDir}/absent-guest.sock`;
-  const error = await t.throwsAsync(
-    runConfinedTurn({
-      formulaId: FORMULA_ID,
-      credential: CREDENTIAL,
-      prompt: '{}',
-      model: MODEL,
-      claudePath: FAKE_CLAUDE,
-      guestSocketPath,
-      parentDir,
-    }),
-  );
-  t.true(String(error?.message).includes(guestSocketPath));
-  t.false(String(error?.message).includes(DAEMON_SOCK));
-  t.deepEqual(fs.readdirSync(parentDir), []);
-});
-
-test('without a guest socket the default connect issues one over the root socket first', async t => {
-  /** @type {unknown[][]} */
-  const steps = [];
-  const issuedPath = '/run/user/4242/endo/captp0-guests/abababab.sock';
-  const connection = harden({
-    guest: {},
-    closed: new Promise(() => {}),
-    close: () => {},
-  });
-  const connect = makeGuestConnect({
-    formulaId: FORMULA_ID,
-    issue: async ({ formulaId, env }) => {
-      steps.push(['issue', formulaId, env.ENDO_SOCK]);
-      return issuedPath;
-    },
-    connectTo: async ({ socketPath }) => {
-      steps.push(['connect', socketPath]);
-      return /** @type {any} */ (connection);
-    },
-  });
-  t.is(await connect(), connection);
-  t.deepEqual(steps, [
-    ['issue', FORMULA_ID, DAEMON_SOCK],
-    ['connect', issuedPath],
-  ]);
-});
-
-test('with a guest socket the default connect issues nothing', async t => {
-  /** @type {unknown[][]} */
-  const steps = [];
-  const connect = makeGuestConnect({
-    formulaId: FORMULA_ID,
-    guestSocketPath: '/given/guest.sock',
-    issue: async () => {
-      steps.push(['issue']);
-      return '/unexpected.sock';
-    },
-    connectTo: async ({ socketPath }) => {
-      steps.push(['connect', socketPath]);
-      return /** @type {any} */ (harden({ guest: {} }));
-    },
-  });
-  await connect();
-  t.deepEqual(steps, [['connect', '/given/guest.sock']]);
-});
-
-test('a daemon that serves no guest sockets gets the root connection', async t => {
-  /** @type {unknown[][]} */
-  const steps = [];
-  const rootConnection = harden({
-    host: {},
-    closed: new Promise(() => {}),
-    close: () => {},
-  });
-  const connect = makeGuestConnect({
-    formulaId: FORMULA_ID,
-    issue: async () => {
-      steps.push(['issue']);
-      return undefined;
-    },
-    connectTo: async () => {
-      steps.push(['connect']);
-      return /** @type {any} */ (harden({ guest: {} }));
-    },
-    connectToRoot: async ({ env }) => {
-      steps.push(['root', env.ENDO_SOCK]);
-      return /** @type {any} */ (rootConnection);
-    },
-    warn: message => {
-      steps.push(['warn', message]);
-    },
-  });
-  t.is(await connect(), rootConnection);
-  t.deepEqual(steps, [
-    ['issue'],
-    [
-      'warn',
-      `Endo daemon serves no guest sockets; the confined turn for ${FORMULA_ID} connects with host authority`,
-    ],
-    ['root', DAEMON_SOCK],
-  ]);
-});
-
-test('any other issue failure does not fall back to the root connection', async t => {
-  const connect = makeGuestConnect({
-    formulaId: FORMULA_ID,
-    issue: async () => {
-      throw Error('Unknown guest');
-    },
-    connectToRoot: async () => {
-      throw Error('unexpected root connection');
-    },
-  });
-  await t.throwsAsync(connect(), { message: 'Unknown guest' });
-});
-
-test('an argument-guard failure naming guestBootstrapPath does not fall back to the root connection', async t => {
-  const message =
-    'In "guestBootstrapPath" method of (Endo): arg 0: number 123 - Must be a string';
-  const connect = makeGuestConnect({
-    formulaId: FORMULA_ID,
-    issue: async () => {
-      throw Error(message);
-    },
-    connectToRoot: async () => {
-      throw Error('unexpected root connection');
-    },
-  });
-  await t.throwsAsync(connect(), { message });
-});
-
-test('a default turn whose root socket is unreachable fails before any spawn', async t => {
-  const parentDir = fs.mkdtempSync('/tmp/ect-');
-  t.teardown(() => fs.rmSync(parentDir, { recursive: true, force: true }));
-  const error = await t.throwsAsync(
-    runConfinedTurn({
-      formulaId: FORMULA_ID,
-      credential: CREDENTIAL,
-      prompt: '{}',
-      model: MODEL,
-      claudePath: FAKE_CLAUDE,
-      parentDir,
-    }),
-  );
-  // The issue went to the root socket, since no guest socket was given.
-  t.true(String(error?.message).includes(DAEMON_SOCK));
-  t.deepEqual(fs.readdirSync(parentDir), []);
 });
 
 test('a formula that is not a guest fails closed before any spawn', async t => {

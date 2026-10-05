@@ -105,26 +105,15 @@ const result = await runConfinedTurn({
   prompt,               // delivered on stdin
   model: 'claude-sonnet-4-5',
   claudePath: '/usr/local/bin/claude', // the pinned binary, or a sandbox wrapper
-  guestSocketPath,        // optional: a daemon-issued guest socket
 });
 ```
 
 The `endo-claude-turn` bin does the same thing. It takes `--formula-id`,
-`--model`, `--claude`, `--credential-file`, and optionally `--guest-socket`,
-reads the prompt from stdin, and writes the tagged result as JSON.
+`--model`, `--claude`, and `--credential-file`, reads the prompt from stdin,
+and writes the tagged result as JSON.
 
-`runConfinedTurn` connects the harness process to a daemon-issued **guest
-socket** (`EndoBootstrap.guestBootstrapPath`), whose bootstrap is the one guest
-facet, so the harness holds no host. An operator issues that socket once
-(`issueGuestBootstrapPath` from `@endo/agent-mcp-stdio`) and passes its path as
-`guestSocketPath`; without one, the turn issues it over the root daemon socket
-and closes that root session before the broker starts. Only a daemon that
-serves no guest sockets (one that predates `guestBootstrapPath`, or one on a
-platform without Unix sockets) gets the root connection instead, which holds
-the whole host's authority; any other failure to issue fails the turn.
-`makeGuestConnect` is that default connection, exported for a harness that
-composes its own turn. `runConfinedTurn` then starts
-`@endo/agent-mcp-stdio`'s `startGuestBroker` for the one guest. It then
+`runConfinedTurn` opens the ordinary daemon client in the harness process and
+starts `@endo/agent-mcp-stdio`'s `startGuestBroker` for the one guest. It then
 runs `make(...)` with concrete seams: `makeSpawnFilesPreparer` writes the `0600`
 `--mcp-config` / `--settings` / credential files, whose `apiKeyHelper` is
 `/bin/cat` of the credential file, and `makeLaunch` spawns `claude` directly
@@ -135,8 +124,8 @@ launch seam parses `--output-format stream-json --verbose` with
 malformed stream is a `parse-error`, or a `nonzero-exit` if the process failed.
 `error_max_turns` maps to `limit-exceeded: max-turns`, and a rate-limit result
 maps to `rate-limited`, with `retryAfterMs` taken from the last
-`rate_limit_event`. Every exit path closes the broker, the daemon connection
-(the guest session, or the root session after a fallback), and the files.
+`rate_limit_event`. Every exit path closes the broker, the daemon session, and
+the files.
 
 ## Two transports
 

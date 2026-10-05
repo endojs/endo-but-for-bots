@@ -34,14 +34,8 @@ In the **confined** shape a harness-owned process outside the slice holds the
 connection and binds the resolved facet with `makeGuestMcpServer`.
 
 `startGuestBroker({ connection, formulaId, version })` is that harness-owned
-process's half. Over a connection the caller already holds, it resolves the one
-guest. The preferred connection is `connectToGuestBootstrap({ socketPath })` on a
-daemon-issued guest socket (`EndoBootstrap.guestBootstrapPath`, or
-`issueGuestBootstrapPath` here): that socket's bootstrap is the guest facet
-itself, so the session carries no host, and the broker accepts it only if the
-guest names itself by the configured formula number. A root-host connection
-(`connectToDaemon`) still works; the broker then narrows it with `lookupById`.
-The broker then serves the static catalog as newline-delimited JSON-RPC on
+process's half. Over a daemon connection the caller already holds, it resolves
+the one guest, then serves the static catalog as newline-delimited JSON-RPC on
 a `0600` Unix socket in a `0700` per-inference directory, with a fresh MCP
 session per connection. Its `transport()` names the claude-spawned half:
 `src/relay.mjs`, a plain-Node byte pipe between stdio and that socket, launched

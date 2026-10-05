@@ -5,13 +5,10 @@ export {
   FORMULA_ID_ENV,
   SERVER_LABEL,
   connectToDaemon,
-  connectToGuestBootstrap,
   constructGuestMcpServer,
-  issueGuestBootstrapPath,
   makeGuestMcpServer,
   readFormulaId,
   resolveGuest,
-  resolveScopedGuest,
 } from './src/server.js';
 export {
   hostOnlyMethods,
