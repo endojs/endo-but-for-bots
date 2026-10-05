@@ -1,0 +1,56 @@
+// Stands in for the `@endo/sturdyref` shim having installed `SturdyRef`
+// before `lockdown`. It has the same shape as the shim's constructor (a class
+// with `enliven` and `isSturdyRef` statics and a `SturdyRef` toStringTag) and
+// the same non-writable, non-configurable global descriptor.
+// It is a copy because `@endo/sturdyref` depends on `ses`. The real shim is
+// checked against this permit in
+// `packages/sturdyref/test/sturdyref-prelockdown.test.js`; keep them in step.
+
+const { defineProperty, freeze } = Object;
+const { apply } = Reflect;
+
+const handlers = new WeakMap();
+
+class SturdyRef {
+  constructor(handler) {
+    const { enliven } = handler;
+    if (typeof enliven !== 'function') {
+      throw TypeError('SturdyRef handler must have an enliven method');
+    }
+    freeze(this);
+    handlers.set(this, { handler, enliven });
+  }
+
+  static isSturdyRef(value) {
+    return handlers.has(value);
+  }
+
+  static enliven(ref) {
+    return Promise.resolve().then(() => {
+      const entry = handlers.get(ref);
+      if (entry === undefined) {
+        throw TypeError('SturdyRef.enliven expects a SturdyRef');
+      }
+      return apply(entry.enliven, entry.handler, [ref]);
+    });
+  }
+}
+
+defineProperty(SturdyRef.prototype, Symbol.toStringTag, {
+  value: 'SturdyRef',
+  writable: false,
+  enumerable: false,
+  configurable: false,
+});
+
+freeze(SturdyRef.enliven);
+freeze(SturdyRef.isSturdyRef);
+freeze(SturdyRef.prototype);
+freeze(SturdyRef);
+
+defineProperty(globalThis, 'SturdyRef', {
+  value: SturdyRef,
+  enumerable: false,
+  writable: false,
+  configurable: false,
+});
