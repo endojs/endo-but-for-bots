@@ -137,6 +137,10 @@ export const universalPropertyNames = {
   harden: 'harden',
 
   HandledPromise: 'HandledPromise', // TODO: Until Promise.delegate (see below).
+
+  // Shimmed by `@endo/sturdyref`. Present only if the shim installed it before
+  // `lockdown`; see the `SturdyRef` permit below.
+  SturdyRef: 'SturdyRef',
 };
 
 /**
@@ -1740,6 +1744,27 @@ export const permitted = {
     getSendOnly: fn,
     prototype: '%PromisePrototype%',
     resolve: fn,
+  },
+
+  // Shimmed by `@endo/sturdyref`. Like `HandledPromise`, a shared intrinsic
+  // only when shimmed before `lockdown`. Confers no authority: it only wraps
+  // handlers and runs hooks the caller already holds.
+  // Unlike `HandledPromise`, whose shim assigns an ordinary writable,
+  // configurable global, this shim locks its binding first-wins so eval twins
+  // converge on one constructor. That binding is why `lockdown` exempts it from
+  // redefinition, and `SturdyRef` being a name an application may already use
+  // is why `lockdown` checks its shape. Its instances are not yet passable;
+  // see layer 3 (#1392).
+  SturdyRef: {
+    '[[Proto]]': '%FunctionPrototype%',
+    enliven: fn,
+    isSturdyRef: fn,
+    prototype: '%SturdyRefPrototype%',
+  },
+
+  '%SturdyRefPrototype%': {
+    constructor: 'SturdyRef',
+    '@@toStringTag': 'string',
   },
 
   // https://github.com/tc39/proposal-source-phase-imports?tab=readme-ov-file#js-module-source

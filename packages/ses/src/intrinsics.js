@@ -64,12 +64,28 @@ function initProperties(obj, descs) {
 }
 
 // sampleGlobals creates an intrinsics object, suitable for
-// interinsicsCollector.addIntrinsics, from the named properties of a global
+// intrinsicsCollector.addIntrinsics, from the named properties of a global
 // object.
-function sampleGlobals(globalObject, newPropertyNames) {
+// An intrinsic named in `presampled` takes its value from there instead of a
+// fresh read of the global object; an `undefined` value there means absent.
+/**
+ * @param {any} globalObject
+ * @param {Record<string, string>} newPropertyNames
+ * @param {Record<string, unknown>} [presampled]
+ */
+function sampleGlobals(
+  globalObject,
+  newPropertyNames,
+  presampled = { __proto__: null },
+) {
   const newIntrinsics = { __proto__: null };
   for (const [globalName, intrinsicName] of entries(newPropertyNames)) {
-    if (hasOwn(globalObject, globalName)) {
+    if (hasOwn(presampled, intrinsicName)) {
+      const value = presampled[intrinsicName];
+      if (value !== undefined) {
+        newIntrinsics[intrinsicName] = value;
+      }
+    } else if (hasOwn(globalObject, globalName)) {
       newIntrinsics[intrinsicName] = globalObject[globalName];
     }
   }
@@ -77,9 +93,90 @@ function sampleGlobals(globalObject, newPropertyNames) {
 }
 
 /**
- * @param {Reporter} reporter
+ * The `SturdyRef` permit admits any function under that global name, but SES
+ * shares it with every compartment only because the `@endo/sturdyref` shim
+ * confers no authority. Before admitting it, check for the shim's identifying
+ * statics, `enliven` and `isSturdyRef`, as own data properties holding
+ * functions, and for an own non-writable, non-configurable `prototype` data
+ * property holding an object, as every class constructor has and an arrow,
+ * bound, or plain function lacks. The shim's
+ * own `isSturdyRefConstructor` reads its statics by `[[Get]]`, so it also
+ * accepts inherited or accessor statics; this check is stricter, and reads the
+ * global binding and each property by descriptor, without running a getter,
+ * refusing an accessor global. Unlike other universal globals, which `lockdown`
+ * simply overwrites when configurable, an accessor `SturdyRef` throws even when
+ * configurable: its getter could return a different value on each read.
+ *
+ * This is a misconfiguration guard, not an authority boundary: it catches an
+ * unrelated application `SturdyRef` global or a broken shim, but any
+ * constructor with those two statics passes, whatever it closes over.
+ *
+ * Returns the validated value as a record for `makeIntrinsicsCollector`, which
+ * admits exactly that value rather than reading the global again: reading the
+ * candidate's properties can run a Proxy trap that re-points the global.
+ *
+ * @param {object} globalObject
+ * @returns {{ SturdyRef: unknown }}
  */
-export const makeIntrinsicsCollector = reporter => {
+export const sampleSturdyRef = globalObject => {
+  if (!hasOwn(globalObject, 'SturdyRef')) {
+    return freeze({ __proto__: null, SturdyRef: undefined });
+  }
+  // Read the binding by descriptor so no getter runs.
+  const binding = getOwnPropertyDescriptor(globalObject, 'SturdyRef');
+  if (binding === undefined || !hasOwn(binding, 'value')) {
+    throw TypeError(
+      'lockdown expected globalThis.SturdyRef to be a data property, not an accessor',
+    );
+  }
+  const candidate = binding.value;
+  /**
+   * @param {string} name
+   * @param {(value: unknown) => boolean} predicate
+   */
+  const hasOwnData = (name, predicate) => {
+    const descriptor = getOwnPropertyDescriptor(candidate, name);
+    return (
+      descriptor !== undefined &&
+      hasOwn(descriptor, 'value') &&
+      predicate(descriptor.value)
+    );
+  };
+  // A class constructor's `prototype` is non-writable and non-configurable.
+  // Requiring that pins the value: a Proxy candidate must then report the same
+  // `prototype` to `completePrototypes`, which reads it by `[[Get]]`, as it
+  // reported here by descriptor.
+  const isLockedPrototype = () => {
+    const descriptor = getOwnPropertyDescriptor(candidate, 'prototype');
+    return (
+      descriptor !== undefined &&
+      descriptor.writable === false &&
+      descriptor.configurable === false
+    );
+  };
+  if (
+    typeof candidate !== 'function' ||
+    !hasOwnData('enliven', isFunction) ||
+    !hasOwnData('isSturdyRef', isFunction) ||
+    !hasOwnData('prototype', value => !isPrimitive(value)) ||
+    !isLockedPrototype()
+  ) {
+    throw TypeError(
+      'lockdown expected globalThis.SturdyRef to be the @endo/sturdyref constructor, with a prototype and enliven and isSturdyRef statics',
+    );
+  }
+  return freeze({ __proto__: null, SturdyRef: candidate });
+};
+
+/**
+ * @param {Reporter} reporter
+ * @param {Record<string, unknown>} [presampled] universal intrinsics already
+ * validated, admitted as given rather than read again from `globalThis`.
+ */
+export const makeIntrinsicsCollector = (
+  reporter,
+  presampled = { __proto__: null },
+) => {
   /** @type {Record<any, any>} */
   const intrinsics = create(null);
   let pseudoNatives;
@@ -163,7 +260,7 @@ export const makeIntrinsicsCollector = reporter => {
   freeze(intrinsicsCollector);
 
   addIntrinsics(constantProperties);
-  addIntrinsics(sampleGlobals(globalThis, universalPropertyNames));
+  addIntrinsics(sampleGlobals(globalThis, universalPropertyNames, presampled));
 
   return intrinsicsCollector;
 };
