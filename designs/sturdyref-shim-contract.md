@@ -191,8 +191,15 @@ first-wins mechanics:
 - **The `@endo/pass-style` dependency is dropped.** #774 minted each token
   with `Far('SturdyRef', {})`. That makes layer 1 depend on layer 3 and
   classifies refs as remotables, which is a claim layer 3 must make, not
-  layer 1. At layer 1, `passStyleOf(ref)` rejects a SturdyRef, the same way it
-  rejects any other frozen, non-passable object.
+  layer 1. At layer 1, `passStyleOf(ref)` rejects a SturdyRef, but not for a
+  generic reason. A ref has no own keys, so it passes the remotable
+  duck-type check in `packages/pass-style/src/remotable.js` vacuously, and
+  is rejected only one step later, because `SturdyRef.prototype` carries no
+  `PASS_STYLE` tag. A ref is therefore one property away from classifying as
+  a remotable. Layer 1 must not put `PASS_STYLE` on `SturdyRef.prototype`,
+  and a layer-1 test pins the rejection so that adding the tag by accident
+  fails the build. Whether and how a ref becomes passable is layer 3's
+  decision, made deliberately.
 
 ### Child Compartments (Reconciling #774's "Withheld" Property with Layer 2)
 
@@ -212,7 +219,7 @@ the next section.
 Dropping the withholding moves a risk rather than removing it. Once layer 2
 propagates `SturdyRef`, a guest can call `new SturdyRef(evilHandler)`, and the
 result passes `SturdyRef.isSturdyRef`. If a host or a CapTP enlivened such a
-ref, the guest's hook would run in the host's turn with the host's ref as its
+ref, the guest's hook would run in the host's turn with that ref as its
 argument. The brand check cannot prevent that: it proves "built by this
 realm's constructor", never "built by a party I trust".
 
@@ -240,7 +247,7 @@ table in [`packages/ses/src/permits.js`](../packages/ses/src/permits.js),
 looked up in the permitted intrinsics, never by copying the start
 compartment's `globalThis`. So a `SturdyRef` with no entry in that table
 should be absent from child compartments however it was installed. This is
-believed, to be confirmed by the layer-1 build's test, and it is a default,
+an expectation that the layer-1 build's test must confirm, and it is a default,
 not a security property. Layer 2 adds the permit and the
 pre-`repairIntrinsics` install ordering, following `HandledPromise`, and
 propagates the global.
@@ -259,13 +266,15 @@ confined guests by construction" in #774's `sturdyref-shim.js` is removed.
 |---|---|
 | installed after lockdown: hardened and functioning | kept; now covers the constructor and statics |
 | locators are objects, not strings | dropped (there is no locator); replaced by *capture is handler-defined* |
-| no location: passStyleOf-opaque, leaks no locator | rewritten: frozen, no own keys, handler unreachable; `passStyleOf` rejects |
+| no location: passStyleOf-opaque, leaks no locator | rewritten: frozen, no own keys, handler unreachable; `passStyleOf` rejects, and `SturdyRef.prototype` has no `PASS_STYLE` property |
 | no identification: same locator mints distinct refs | kept, keyed on the same handler |
 | withheld from child compartments | becomes a characterization test that layer 2 flips (see above) |
 | first-wins: selections converge on one mapping | kept: a twin's ref passes `isSturdyRef` and `enliven` in the other twin |
 | malformed pre-existing global is rejected | kept, with the new shape check |
 | *(new)* | installed before lockdown: `lockdown()` does not throw (no prior harden installed); afterward `globalThis.SturdyRef` is still the installed constructor, and it and its prototype are frozen. (SES leaves an unpermitted start-compartment global in place and does not reject it; checking against a SES permit waits for layer 2, which adds one.) |
 | *(new)* | enliven dispatches to the hook in a later turn; enlivening one ref twice runs the hook twice and yields both results (no cached settlement); hook throw → rejection; non-ref → `TypeError` rejection; handler without `enliven` throws at construction; call without `new` throws; an object created with `Object.create(SturdyRef.prototype)` fails `isSturdyRef` |
+| *(new)* | the hook runs as `enliven.call(handler, ref)`: inside it, `this === handler` and the argument is the ref |
+| *(new)* | `handler.enliven` is read once, at construction: replacing it on the handler afterward does not change what an existing ref's enliven dispatches to (pins the provisional answer to Open question 3; if the maintainer chooses read-on-every-call, this row flips) |
 
 ### Disposition of the Withdrawn HandledPromise-Enliven Vision
 
@@ -352,6 +361,13 @@ in the table, and revives it through the bootstrap / nonce locator (layers
 data, and the handler is a function over it. This subsumes `@endo/ocapn`'s
 `ocapn-sturdyref` tagged record. Finding a ref in the table is also the
 CapTP's provenance check (see [Provenance](#provenance)).
+
+The table maps ref to data, but layer 5 also needs the inverse, data to an
+existing ref, if exporting the same target twice is to yield the same ref.
+Layer 1 gives refs no identity of their own (two refs built from one handler
+are distinct), and marshal dedups repeated values within a message by object
+identity, so mint-time interning is a layer-5 decision that this layer
+deliberately does not make.
 
 Only the minting CapTP holds the table, so only it can serialize the ref.
 Construct, brand, and dispatch are enough for layers 3 and 4, and for a CapTP
