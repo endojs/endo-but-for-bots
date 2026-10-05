@@ -15,9 +15,9 @@ app `854a4c5aae573b669692fd132bcd30cbb0cc3926`, host
 Generation 195 added the DNS and request-body follow-up below.
 Generation 196 added safe stream-failure diagnostics on 2026-10-05.
 Generation 197 added the dependency-install networking repairs described below.
-Tokyo now runs generation 198, app `eccd599dbdca078306c26b182fbf1846bb18aa0b`,
-host `a5ae8d0afeb31a1030f0a4ed6bcb7fcec6ba061f`, with the host-side CapTP
-answer-release correction described in the unattended follow-up.
+Tokyo now runs generation 199, app `c302d7ec300ecc509454862efa5d369f415ed35a`,
+host `198927919b9c99a90dbcfcb0e2ac457fb079404e`, with the host-side CapTP
+answer-release correction and per-invocation Shell timeout overrides described below.
 The Floot development preset publishes only the common
 Shell as `shell` in inventory and exposes structured `runCommand`/`inspectShell`
 tools, distinct from JavaScript `exec`. Only Fae inference backends select it;
@@ -308,6 +308,13 @@ while keeping ten minutes as the development preset's default.
 The shared Shell no longer silently clamps the requested timeout to that default.
 Positive native-timer-range validation, admission-inclusive deadlines, termination
 escalation, cancellation and output ceilings remain unchanged.
+Generation 199 passed a live network-off Podman check: a three-second command completed
+with a ten-second override over a two-second test default; omission and a 100 ms override
+both reported timeout failures.
+The normal development Shell still reports its 600,000 ms default.
+The test's private admin acknowledged stop and disposal before only its own bindings
+were removed; the existing trial workspace and session remain intact.
+Private receipts: `/var/lib/endo/shell-timeout-acceptance-20261006/`.
 
 A separate, smaller CapTP bookkeeping leak remains a follow-up: a disposable
 probe sent 1,000 bootstrap questions and matching drops, then observed 1,000
