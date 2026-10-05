@@ -42,6 +42,10 @@ const normalizeWarnings = warnings => {
 };
 
 /**
+ * One banner per page: its dismissal state outlives the body replacements
+ * that `mount()` repairs.  The document is a parameter, not the global, so
+ * tests can drive the banner against a DOM fixture.
+ *
  * @param {Document} document
  * @returns {{ show: (next: unknown) => void, mount: () => void }}
  */

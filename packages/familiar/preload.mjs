@@ -22,6 +22,10 @@ import { contextBridge, ipcRenderer } from 'electron';
 let latestSecurityWarnings;
 /** @type {Set<(warnings: string[]) => void>} */
 const securityWarningSubscribers = new Set();
+// The channel name repeats SECURITY_WARNINGS_CHANNEL from
+// src/security-warnings.js rather than importing it: the preload test
+// evaluates this file from a data: URL, where a relative import cannot
+// resolve.  The test checks the two names agree.
 ipcRenderer.on(
   'familiar:security-warnings',
   (/** @type {unknown} */ _event, /** @type {string[]} */ warnings) => {

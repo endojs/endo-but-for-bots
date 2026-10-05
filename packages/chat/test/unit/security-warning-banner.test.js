@@ -142,6 +142,19 @@ test.serial('an empty payload in between does not undo a dismissal', t => {
   t.is(bannerOf(document), null);
 });
 
+test.serial(
+  'a disjoint warning set after a dismissal replaces the old one',
+  t => {
+    const document = setupDocument(t);
+    const banner = makeSecurityWarningBanner(document);
+    banner.show(['first']);
+    /** @type {any} */ (bannerOf(document)).querySelector('button').click();
+
+    banner.show(['third']);
+    t.deepEqual(itemsOf(document), ['third']);
+  },
+);
+
 test.serial('the banner sits above the reconnect overlay', t => {
   const document = setupDocument(t);
   const banner = makeSecurityWarningBanner(document);
