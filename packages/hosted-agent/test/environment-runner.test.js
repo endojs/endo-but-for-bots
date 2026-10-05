@@ -278,6 +278,8 @@ test('network-only worker has no inference grant and only generated resolver bin
   const launch = f.getLaunch();
   t.is(launch.networkRef, 'only-network');
   t.is(launch.env.HTTPS_PROXY, 'http://127.0.0.1:23457');
+  t.is(launch.env.YARN_HTTP_PROXY, launch.env.HTTP_PROXY);
+  t.is(launch.env.YARN_HTTPS_PROXY, launch.env.HTTPS_PROXY);
   t.deepEqual(launch.mounts.at(-1), {
     hostPath: '/private/generated/resolv.conf',
     innerPath: '/etc/resolv.conf',
