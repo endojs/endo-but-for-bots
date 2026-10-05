@@ -268,7 +268,20 @@ It did not reach whole-lane completion or the daemon batches.
 
 At 22:34:55 JST, a host Endo worker exhausted its V8 heap and aborted.
 This is a host-runtime failure, not a test assertion or established compaction failure.
-The underlying allocation cause is not yet known.
+Follow-up reproduced a CapTP answer-retention defect: answers are stored under
+the peer's `q-N` question ID, but `CTP_DROP` deleted the reversed `q+N` key.
+Downloaded base64 chunks therefore remained reachable after their questions
+were collected, despite `gcImports: true` on both transport ends.
+The correction preserves export-slot accounting and deletes the original answer key.
+Protocol tests cover bootstrap/call pipelining before and after a drop; a forced-GC
+test proves streamed copy-record answers become collectible.
+The complete CapTP suite passes 40 tests in each of three runtime configurations;
+27 private-pipe, worker and public-egress tests also pass.
+An identical synthetic private-pipe soak with a 256 MiB heap previously exhausted
+memory around 144 MiB transferred; after the fix, 384 MiB completes with 7–8 MiB
+live heap after forced collection.
+This establishes a matching leak mechanism, not complete attribution of every
+allocation in the Tokyo crash; deployment and a fresh unattended run remain next.
 The test container continued after its controlling worker died; the operator
 verified its ownership and native HOME mounts, then stopped that exact container.
 Partial logs and crash diagnostics were archived privately before daemon recovery.
