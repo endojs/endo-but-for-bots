@@ -1,14 +1,18 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { makeOpenRouterProvider } from '@endo/lal/providers/index.js';
 import { E } from '@endo/eventual-send';
+import { Far } from '@endo/far';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
 // Internal adapter conformance: exercise real translation and journal wiring.
 // eslint-disable-next-line import/no-relative-packages
 import { makeClaudeClient } from '../../claude-sandbox/src/claude-client.js';
+// eslint-disable-next-line import/no-relative-packages
+import { makeSubscriptionResponsesProvider } from '../../lal/providers/subscription-responses.js';
 // eslint-disable-next-line import/no-relative-packages
 import { translateClaudeTurn } from '../../claude-sandbox/src/claude-hosted-events.js';
 import {
@@ -1996,6 +2000,87 @@ test('end-of-turn compaction restores retained tools and final answer exactly on
   t.is(nativeExecutions, 1);
   t.is(replayExecutions, 0);
 });
+
+for (const event of [
+  { type: 'error', code: 'invalid_encrypted_content' },
+  {
+    type: 'response.failed',
+    response: { error: { code: 'server_error' } },
+  },
+  {
+    type: 'response.incomplete',
+    response: { incomplete_details: { reason: 'max_output_tokens' } },
+  },
+]) {
+  test(`Responses ${event.type} details remain durable without replay`, async t => {
+    t.timeout(10_000);
+    const f = fixture();
+    let requests = 0;
+    let revoked = 0;
+    const provideProvider = () =>
+      makeSubscriptionResponsesProvider({
+        model: 'test-luna',
+        sessionId: 'durable-error-test',
+        subscription: Far('TestSubscription', {
+          describe: async () => harden({ models: ['test-luna'] }),
+          openEndpoint: async () =>
+            Far('TestEndpoint', {
+              requestByteStream: async () => {
+                requests += 1;
+                const bytes = new TextEncoder().encode(
+                  `data: ${JSON.stringify({ ...event, message: 'PRIVATE_PROMPT' })}\n\n`,
+                );
+                return harden({
+                  status: 200,
+                  contentType: 'text/event-stream',
+                  reader: bytesReaderFromIterator([bytes][Symbol.iterator]()),
+                });
+              },
+              revoke: async () => {
+                revoked += 1;
+              },
+            }),
+        }),
+      });
+    /** @type {RuntimeConfig} */
+    const spec = { kind: 'provider', provideProvider };
+    const agent = await makeStreamingAgent(f.powers, undefined, spec, 'Test', {
+      journalPowers: f.powers,
+    });
+    t.teardown(() => agent.shutdown());
+    const error = await t.throwsAsync(
+      agent.converse('Do the work', makeReplyChannel().writer),
+      { message: /Subscription inference ended unsuccessfully/ },
+    );
+    const before = await agent.getTurns();
+    t.is(before[0].state, 'failed');
+    t.is(before[0].error, error.message);
+    t.regex(
+      before[0].error,
+      /code=invalid_encrypted_content|code=server_error|reason=max_output_tokens/,
+    );
+    t.false(before[0].error.includes('PRIVATE_PROMPT'));
+    await agent.shutdown();
+    const revived = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      spec,
+      'Test',
+      {
+        journalPowers: f.powers,
+      },
+    );
+    t.teardown(() => revived.shutdown());
+    t.deepEqual(await revived.getTurns(), before);
+    t.true(
+      (await revived.getHistory()).some(row =>
+        String(row.content).includes(error.message),
+      ),
+    );
+    t.is(requests, 1);
+    t.is(revoked, 1);
+  });
+}
 
 for (const failure of ['empty', 'HTTP 503']) {
   test(`OpenRouter ${failure} remains a failed turn with usage after reconstruction`, async t => {

@@ -221,6 +221,110 @@ test('subscription item completion retains native context when terminal output i
   ]);
 });
 
+/** @type {Array<[string, any, string]>} */
+const diagnosticCases = [
+  [
+    'top-level error',
+    {
+      type: 'error',
+      code: 'invalid_encrypted_content',
+      param: 'input[12].encrypted_content',
+      message: 'Private echoed prompt and encrypted context',
+    },
+    'Subscription inference ended unsuccessfully (error; code=invalid_encrypted_content, param=input[12].encrypted_content) Retained reasoning could not be validated.',
+  ],
+  [
+    'nested error',
+    {
+      type: 'error',
+      error: { code: 429, type: 'rate_limit_error', message: 'Private body' },
+    },
+    'Subscription inference ended unsuccessfully (error; code=429, type=rate_limit_error)',
+  ],
+  [
+    'failed response',
+    {
+      type: 'response.failed',
+      response: {
+        error: { code: 'server_error', message: 'Private provider response' },
+      },
+    },
+    'Subscription inference ended unsuccessfully (response.failed; code=server_error) Provider reported a server error.',
+  ],
+  [
+    'incomplete response',
+    {
+      type: 'response.incomplete',
+      response: { incomplete_details: { reason: 'max_output_tokens' } },
+    },
+    'Subscription inference ended unsuccessfully (response.incomplete; reason=max_output_tokens) Output token limit reached.',
+  ],
+];
+for (const [label, event, expected] of diagnosticCases) {
+  test(`subscription Responses retains safe ${label} diagnostics`, async t => {
+    const subject = fixture([event]);
+    t.teardown(() => subject.provider.dispose());
+    await t.throwsAsync(
+      subject.provider.chat([{ role: 'user', content: 'Hello' }], []),
+      { message: expected },
+    );
+    t.is(subject.requests.length, 1);
+    t.is(subject.revocations(), 1);
+  });
+}
+
+for (const bad of [
+  'sk_test_secret',
+  'bearer_secret',
+  'eyJhbGciOiJIUzI1NiJ9',
+  'a'.repeat(1024),
+  'error\nforged log',
+  '\u001b[31merror',
+  { toString: 'Do not coerce' },
+  ['server_error'],
+  -1,
+  100_000,
+]) {
+  test(`subscription Responses omits unsafe error fields ${JSON.stringify(bad).slice(0, 60)}`, async t => {
+    const subject = fixture([
+      {
+        type: 'response.incomplete',
+        response: {
+          error: {
+            code: bad,
+            type: bad,
+            param: bad,
+            message: 'PRIVATE_PROMPT',
+          },
+          incomplete_details: { reason: bad },
+          id: 'PRIVATE_REQUEST_ID',
+        },
+      },
+    ]);
+    t.teardown(() => subject.provider.dispose());
+    await t.throwsAsync(
+      subject.provider.chat([{ role: 'user', content: 'Hello' }], []),
+      {
+        message:
+          'Subscription inference ended unsuccessfully (response.incomplete)',
+      },
+    );
+    t.is(subject.revocations(), 1);
+  });
+}
+
+test('subscription Responses does not interpret inherited explanation names', async t => {
+  const subject = fixture([{ type: 'error', code: 'constructor' }]);
+  t.teardown(() => subject.provider.dispose());
+  await t.throwsAsync(
+    subject.provider.chat([{ role: 'user', content: 'Hello' }], []),
+    {
+      message:
+        'Subscription inference ended unsuccessfully (error; code=constructor)',
+    },
+  );
+});
+
 /** @type {Array<[string, any[], RegExp]>} */
 const refusals = [
   [

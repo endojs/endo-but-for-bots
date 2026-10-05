@@ -12,6 +12,70 @@ import { M, mustMatch } from '@endo/patterns';
 // A transport bound matching the Codex broker, not a model context limit.
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const reasoningEffortPattern = /^[a-z][a-z0-9_-]{0,63}$/;
+/** @type {Record<string, string>} */
+const FAILURE_EXPLANATIONS = harden({
+  invalid_encrypted_content: 'Retained reasoning could not be validated.',
+  context_length_exceeded: 'Input exceeds the model context window.',
+  rate_limit_exceeded: 'Provider rate limit reached.',
+  usage_limit_reached: 'Provider usage limit reached.',
+  server_error: 'Provider reported a server error.',
+  max_output_tokens: 'Output token limit reached.',
+  content_filter: 'Provider content filter stopped the response.',
+});
+
+/**
+ * Error events are provider data, not trusted diagnostics. Retain only bounded
+ * symbolic fields and schema paths, never free prose, request ids or a dumped
+ * response. In particular, a message may echo input or encrypted context.
+ * The broker screens its own credential before handing us any stream bytes.
+ * @param {any} event
+ */
+const responseFailure = event => {
+  const error =
+    event.type === 'error' ? (event.error ?? event) : event.response?.error;
+  const symbolic = value =>
+    typeof value === 'string' &&
+    /^[a-z]{1,16}(?:_[a-z]{1,16}){0,5}$/.test(value) &&
+    !/(?:^|_)(?:sk|pk|rk|gsk|hf|ghp|gho|ghs|ghu|glpat|xox[a-z]?|bearer)(?:_|$)/i.test(
+      value,
+    )
+      ? value
+      : undefined;
+  const code =
+    typeof error?.code === 'number' &&
+    Number.isInteger(error.code) &&
+    Number(error.code) >= 0 &&
+    Number(error.code) <= 99_999
+      ? `${error.code}`
+      : symbolic(error?.code);
+  const type = error === event ? undefined : symbolic(error?.type);
+  const reason = symbolic(event.response?.incomplete_details?.reason);
+  const rawParam = error?.param;
+  const param =
+    typeof rawParam === 'string' &&
+    rawParam.length <= 128 &&
+    rawParam.split('.').length <= 6 &&
+    rawParam.split('.').every(part => {
+      const match = /^([a-z_]+)(?:\[[0-9]{1,5}\])?$/.exec(part);
+      return match && symbolic(match[1]) !== undefined;
+    })
+      ? rawParam
+      : undefined;
+  const facts = Object.entries({ code, type, param, reason })
+    .filter(([, value]) => value !== undefined)
+    .map(([name, value]) => `${name}=${value}`);
+  const explanationKey = code ?? reason;
+  const explanation =
+    explanationKey !== undefined &&
+    Object.hasOwn(FAILURE_EXPLANATIONS, explanationKey)
+      ? FAILURE_EXPLANATIONS[explanationKey]
+      : undefined;
+  return Error(
+    `Subscription inference ended unsuccessfully (${event.type}${
+      facts.length ? `; ${facts.join(', ')}` : ''
+    })${explanation ? ` ${explanation}` : ''}`,
+  );
+};
 
 /** @param {any} call */
 const assertCall = call => {
@@ -449,9 +513,7 @@ export const makeSubscriptionResponsesProvider = ({
             event.type,
           )
         ) {
-          throw Error(
-            `Subscription inference ended unsuccessfully (${event.type})`,
-          );
+          throw responseFailure(event);
         }
         if (
           event.type === 'response.output_item.added' ||
