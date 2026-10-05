@@ -95,11 +95,11 @@ export const makeSecurityWarningBanner = document => {
       font-size: 13px;
     `;
 
-    const body = document.createElement('div');
-    body.style.flex = '1';
+    const content = document.createElement('div');
+    content.style.flex = '1';
     const title = document.createElement('strong');
     title.textContent = 'Security warning';
-    body.appendChild(title);
+    content.appendChild(title);
     const list = document.createElement('ul');
     list.style.margin = '4px 0 0';
     list.style.paddingLeft = '20px';
@@ -108,15 +108,15 @@ export const makeSecurityWarningBanner = document => {
       item.textContent = warning;
       list.appendChild(item);
     }
-    body.appendChild(list);
-    banner.appendChild(body);
+    content.appendChild(list);
+    banner.appendChild(content);
 
-    const dismiss = document.createElement('button');
-    dismiss.type = 'button';
-    dismiss.className = 'security-warning-dismiss';
-    dismiss.setAttribute('aria-label', 'Dismiss security warning');
-    dismiss.textContent = '×';
-    dismiss.style.cssText = `
+    const dismissButton = document.createElement('button');
+    dismissButton.type = 'button';
+    dismissButton.className = 'security-warning-dismiss';
+    dismissButton.setAttribute('aria-label', 'Dismiss security warning');
+    dismissButton.textContent = '×';
+    dismissButton.style.cssText = `
       border: none;
       background: transparent;
       color: inherit;
@@ -124,11 +124,11 @@ export const makeSecurityWarningBanner = document => {
       line-height: 1;
       cursor: pointer;
     `;
-    dismiss.addEventListener('click', () => {
+    dismissButton.addEventListener('click', () => {
       dismissed = true;
       remove();
     });
-    banner.appendChild(dismiss);
+    banner.appendChild(dismissButton);
 
     document.body.prepend(banner);
     element = banner;
