@@ -516,7 +516,14 @@ let latest;
 const subscribers = new Set();
 ipcRenderer.on('familiar:security-warnings', (_event, warnings) => {
   latest = warnings;
-  for (const callback of subscribers) callback(warnings);
+  // One throwing subscriber must not starve the others.
+  for (const callback of subscribers) {
+    try {
+      callback(warnings);
+    } catch (error) {
+      console.error(error);
+    }
+  }
 });
 contextBridge.exposeInMainWorld('familiar', {
   // ... existing methods ...
