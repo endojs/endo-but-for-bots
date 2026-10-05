@@ -116,6 +116,7 @@ if (!gateway || !agent) {
     <h1>Gateway not configured</h1>
     <p>Run via <code>yarn dev</code> (Vite) or the Familiar app.</p>
   `;
+  securityWarningBanner.mount();
   throw new Error('Gateway not configured');
 }
 sessionStorage.removeItem('endo-dev-attempted');

@@ -43,6 +43,7 @@ const normalizeWarnings = warnings => {
 
 /**
  * @param {Document} document
+ * @returns {{ show: (next: unknown) => void, mount: () => void }}
  */
 export const makeSecurityWarningBanner = document => {
   /** @type {string[]} */
