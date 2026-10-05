@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-10-01 |
-| **Updated** | 2026-10-02 |
+| **Updated** | 2026-10-05 |
 | **Author** | kumavis (prompted) |
 | **Status** | Initial implementation complete; Tokyo acceptance passed |
 
@@ -12,9 +12,10 @@
 2026-10-02: initial implementation passed Tokyo acceptance on generation 194,
 app `854a4c5aae573b669692fd132bcd30cbb0cc3926`, host
 `1f2a4bdc027089096a6cea27d549903e527c2b6b`.
-Tokyo now runs generation 195, app `a5d46b544aeaa173f5b20e2337618642cdb048a4`,
-host `2a8b02f6c7a781f479b29eac2c991e685ed10477`, with the DNS and request-body
-follow-up below.
+Generation 195 added the DNS and request-body follow-up below.
+Tokyo now runs generation 196, app `48fe2f9111c3b3b46896038cf640bdc591beb221`,
+host `669c98b091721c5d93960e2eac66b78d81195028`, with safe stream-failure
+diagnostics added on 2026-10-05.
 The Floot development preset publishes only the common
 Shell as `shell` in inventory and exposes structured `runCommand`/`inspectShell`
 tools, distinct from JavaScript `exec`. Only Fae inference backends select it;
@@ -115,6 +116,34 @@ Internet-off denied the Rust URL with curl exit 6; public-only returned HTTP 200
 The dedicated test session, native storage and factory/profile were disposed.
 Existing sessions, installations, Secrets and renewal owners were preserved.
 Private receipts and logs: `/var/lib/endo/dns-body-acceptance-20261002/`.
+
+### User-trial follow-up: durable stream-failure diagnostics
+
+The original Codex/Fae development session completed two later requests after
+the admission repair, then failed before tools on a provider SSE `error` event.
+The adapter had retained only the event type, losing its diagnostic fields.
+The exact original cause cannot be recovered from those records.
+The existing failed-turn journal now receives bounded symbolic error code/type,
+schema parameter paths and incomplete-response reasons, with fixed explanations
+for common failures, through the same error string as the UI and worker log.
+Free provider prose, request identifiers and dumped responses are not retained:
+they may echo prompts, credentials or opaque context.
+Missing or unsafe fields leave the generic failure intact.
+No new journal, storage format, retry mechanism or public API was introduced.
+
+The adapter suite passes 49 tests and journal integration passes 80.
+Three real-adapter failures survive fresh agent reconstruction with their
+diagnostic text. Each fixture makes one subscription request and revokes its
+endpoint once; reconstruction makes no additional request.
+Lal types, formatting and changed-file ESLint pass; root docs has zero errors.
+Standalone Floot typechecking still reports 21 existing errors outside changed
+files; these focused gates are not a whole-repository green claim.
+Generation 196 passed deployed offline SSE diagnostics and one real
+`gpt-5.6-luna` Floot smoke turn, without tools.
+The dedicated session/factory/profile were removed.
+Original sessions, installed tools, workspaces, Secrets and renewal owners were
+preserved; no failed user task was replayed.
+Private receipts and logs: `/var/lib/endo/stream-error-acceptance-20261005/`.
 
 ### Earlier slice history (superseded by the current status above)
 
