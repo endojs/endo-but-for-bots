@@ -82,9 +82,30 @@ test('refs made after lockdown work and are frozen', async t => {
   t.is(await enliven(ref), 'live');
 });
 
-test('a child compartment sees the same constructor if SES shares it', t => {
-  // Without SES's `SturdyRef` permit, a child compartment has no SturdyRef;
-  // with it, the child receives this very constructor.
-  const { SturdyRef: childSturdyRef } = new Compartment().globalThis;
-  t.true(childSturdyRef === undefined || childSturdyRef === Installed);
+test('a child compartment sees the same constructor', t => {
+  // SES admits a pre-lockdown SturdyRef as a shared intrinsic.
+  t.is(new Compartment().globalThis.SturdyRef, Installed);
+  t.is(new Compartment().evaluate('SturdyRef'), Installed);
+});
+
+test('replacing the start compartment Promise does not reach a child', async t => {
+  // The start compartment's `Promise` stays writable after lockdown, and the
+  // constructor is shared with every compartment, so it must not late-bind it.
+  const child = new Compartment();
+  const ref = new Installed({ enliven: () => 'live' });
+  const { Promise: OriginalPromise } = globalThis;
+  let result;
+  globalThis.Promise = {
+    resolve: () => {
+      throw Error('enliven late-bound the start compartment Promise');
+    },
+  };
+  try {
+    result = child.globalThis.SturdyRef.enliven(ref);
+  } finally {
+    globalThis.Promise = OriginalPromise;
+  }
+  t.true(result instanceof OriginalPromise);
+  const value = await result;
+  t.is(value, 'live');
 });
