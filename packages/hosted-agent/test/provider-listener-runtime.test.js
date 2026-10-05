@@ -29,7 +29,11 @@ const limits = harden({
 });
 
 /** @param {any} t */
-const fixture = async (t, publicNetwork = false) => {
+const fixture = async (
+  t,
+  publicNetwork = false,
+  checkNetworkLimits = false,
+) => {
   const stateDirectory = await mkdtemp(
     join(tmpdir(), 'provider-runtime-test-'),
   );
@@ -80,7 +84,7 @@ const fixture = async (t, publicNetwork = false) => {
         [
           '--input-type=module',
           '-e',
-          `import {startProviderListenerWorker} from ${JSON.stringify(new URL('../src/provider-worker.js', import.meta.url).href)}; await startProviderListenerWorker({input:process.stdin,output:process.stdout,makeNetworkListeners:async()=>harden({evidence:{policy:'public-internet',proxyUrl:'http://127.0.0.1:23457',dnsHost:'127.0.0.53'},dispose:async()=>{}})});`,
+          `import {startProviderListenerWorker} from ${JSON.stringify(new URL('../src/provider-worker.js', import.meta.url).href)}; import {E} from ${JSON.stringify(import.meta.resolve('@endo/eventual-send'))}; await startProviderListenerWorker({input:process.stdin,output:process.stdout,makeNetworkListeners:async({endpoint,limits})=>{${checkNetworkLimits ? 'await E(endpoint).configured(limits);' : ''}return harden({evidence:{policy:'public-internet',proxyUrl:'http://127.0.0.1:23457',dnsHost:'127.0.0.53'},dispose:async()=>{}})}});`,
         ],
         { stdio: ['pipe', 'pipe', 'pipe'] },
       );
@@ -140,12 +144,23 @@ test.serial(
   'network-only worker carries egress but no inference listener or authority',
   async t => {
     t.timeout(5000);
-    const f = await fixture(t, true);
+    const f = await fixture(t, true, true);
     const kit = makePodmanProviderListenerRuntimeKit(f.options);
     t.teardown(kit.close);
     const runtime = await kit.open();
     const worker = await runtime.startKit({
-      network: { endpoint: Far('public egress only', {}) },
+      network: {
+        endpoint: Far('public egress only', {
+          configured: settings => {
+            t.deepEqual(settings, {
+              maxConnections: 1024,
+              timeoutMs: 86_400_000,
+              maxUploadBytes: 1024n ** 4n,
+              maxDownloadBytes: 1024n ** 4n,
+            });
+          },
+        }),
+      },
     }).value;
     const evidence = await worker.observe();
     t.false(Object.hasOwn(evidence, 'endpoint'));

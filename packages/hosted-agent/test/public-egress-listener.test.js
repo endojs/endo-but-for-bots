@@ -42,6 +42,23 @@ const exchange = async (t, url, bytes) => {
   });
 };
 
+test('proxy accepts generous operator budgets without old concurrency or deadline ceilings', async t => {
+  const server = await listener(t, Far('Unused egress', {}), {
+    maxConnections: 2048,
+    timeoutMs: 86_400_000,
+    maxUploadBytes: 1024n ** 4n,
+    maxDownloadBytes: 1024n ** 4n,
+  });
+  t.regex(server.url, /^http:\/\/127\.0\.0\.1:/);
+  await t.throwsAsync(
+    makePublicEgressListener({
+      endpoint: Far('Unused egress', {}),
+      timeoutMs: 0x8000_0000,
+    }),
+    { message: /Invalid public proxy configuration/ },
+  );
+});
+
 test.serial(
   'HTTP forwarding rebuilds authority/framing and strips proxy and hop headers',
   async t => {

@@ -15,6 +15,10 @@ const world = (
     endpointGate = undefined,
     forceCompaction = false,
     development = false,
+    contextLength = 128_000,
+    responseOutput = undefined,
+    shellOutput = 'ok',
+    refuseCheckpoint = false,
   } = {},
 ) => {
   t.timeout(10_000);
@@ -23,6 +27,7 @@ const world = (
   const inboxes = [];
   let cliCreates = 0;
   let guestCreates = 0;
+  let checkpointRefusals = 0;
   const subscription = Far('Pool', {
     describe: () => harden({ models: ['luna'] }),
     openEndpoint: async spec => {
@@ -36,7 +41,7 @@ const world = (
         requestByteStream: request => {
           const body = JSON.parse(request.body);
           requests.push(body);
-          const output = [
+          const output = responseOutput?.(body, requests.length) ?? [
             {
               type: 'reasoning',
               encrypted_content: `opaque-${requests.length}`,
@@ -83,7 +88,7 @@ const world = (
                 default: true,
                 defaultReasoningEffort: 'high',
                 reasoningEfforts: ['high'],
-                contextLength: 128_000,
+                contextLength,
               },
             ],
           },
@@ -106,6 +111,14 @@ const world = (
     lookup: name => store.get(name),
     list: () => harden([...store.keys()]),
     storeValue: (value, name) => {
+      if (
+        refuseCheckpoint &&
+        value.type === 'transcript-record' &&
+        value.kind === 'compaction'
+      ) {
+        checkpointRefusals += 1;
+        throw Error('checkpoint write refused');
+      }
       store.set(name, value);
     },
     remove: name => {
@@ -126,7 +139,7 @@ const world = (
         Far('Shell', {
           exec: () =>
             harden({
-              stdout: 'ok',
+              stdout: shellOutput,
               stderr: '',
               exitCode: 0,
               signal: null,
@@ -197,6 +210,7 @@ const world = (
     cliCreates: () => cliCreates,
     guestCreates: () => guestCreates,
     environments: () => environments,
+    checkpointRefusals: () => checkpointRefusals,
   };
 };
 
@@ -291,25 +305,20 @@ test('Fae Codex compaction is journal-owned, preserves opaque tail, and restores
   });
   const { id } = await E(session).getInfo();
   const old = 'completed old work '.repeat(500);
-  for (const input of [old, 'recent', 'continue']) {
+  for (const input of [old, 'continue']) {
     const turn = await E(session).startTurn(input);
     await E(turn).whenFinished();
+    t.is((await E(turn).getStatus()).error, null);
+    t.is((await E(session).getTurns()).at(-1).state, 'completed');
   }
-  t.is(subject.requests.length, 4);
-  t.is(subject.requests[2].tools?.length ?? 0, 0);
-  t.true(
-    subject.requests[2].input.some(
-      item => item.encrypted_content === 'opaque-1',
-    ),
+  t.is(subject.requests.length, 3);
+  t.is(subject.requests[1].tools?.length ?? 0, 0);
+  t.false(
+    JSON.stringify(subject.requests[1].input).includes('encrypted_content'),
   );
-  t.false(JSON.stringify(subject.requests[3].input).includes(old));
-  t.true(
-    subject.requests[3].input.some(
-      item => item.encrypted_content === 'opaque-2',
-    ),
-  );
+  t.false(JSON.stringify(subject.requests[2].input).includes(old));
   t.is(
-    subject.requests[3].input.filter(
+    subject.requests[2].input.filter(
       item =>
         item.role === 'user' &&
         (item.content === 'continue' ||
@@ -324,15 +333,146 @@ test('Fae Codex compaction is journal-owned, preserves opaque tail, and restores
   const restored = await E(factory).getSession(id);
   const recall = await E(restored).startTurn('recall after compaction');
   await E(recall).whenFinished();
-  t.is(subject.requests.length, 5);
-  t.false(JSON.stringify(subject.requests[4].input).includes(old));
+  t.is((await E(recall).getStatus()).error, null);
+  t.is(subject.requests.length, 4);
+  t.false(JSON.stringify(subject.requests[3].input).includes(old));
   t.true(
-    subject.requests[4].input.some(
-      item => item.encrypted_content === 'opaque-2',
+    subject.requests[3].input.some(
+      item => item.encrypted_content === 'opaque-3',
     ),
   );
   await E(factory).deleteSession(id);
   await subject.close();
+});
+
+test('automatic first-turn compaction preserves complete recent tools and cold restoration without replaying effects', async t => {
+  let effects = 0;
+  const subject = world(t, {
+    development: true,
+    contextLength: 120_000,
+    shellOutput: 'test log\n'.repeat(1500),
+    responseOutput: (request, ordinal) => {
+      if (!request.tools?.length || effects >= 8) return undefined;
+      effects += 1;
+      return [
+        { type: 'reasoning', encrypted_content: `opaque-${ordinal}` },
+        {
+          type: 'function_call',
+          call_id: `call-${effects}`,
+          name: 'runCommand',
+          arguments: JSON.stringify({
+            command: 'sh',
+            args: ['-c', 'run tests'],
+          }),
+        },
+      ];
+    },
+  });
+  const session = await E(subject.factory).createSession({
+    presetId: 'development',
+    backendId: 'fae-codex',
+    modelId: 'luna',
+    networkPolicy: 'off',
+  });
+  const { id } = await E(session).getInfo();
+  const directive =
+    'Install dependencies and run all tests. Failures are fine.';
+  const turn = await E(session).startTurn(directive);
+  await E(turn).whenFinished();
+  t.is((await E(turn).getStatus()).error, null);
+  const [record] = await E(session).getTurns();
+  t.is(record.state, 'completed');
+  t.is(record.tools.length, 8);
+  t.is(
+    record.tools.filter(
+      tool => tool.result !== undefined || tool.resultRef !== undefined,
+    ).length,
+    8,
+  );
+  const compacted = subject.requests.findIndex(
+    request => !request.tools?.length,
+  );
+  t.true(compacted > 0);
+  const continuation = subject.requests[compacted + 1].input;
+  const calls = continuation.filter(item => item.type === 'function_call');
+  t.true(Number(calls.length) > 0);
+  for (const call of calls)
+    t.true(
+      continuation.some(
+        item =>
+          item.type === 'function_call_output' && item.call_id === call.call_id,
+      ),
+    );
+  t.true(continuation.some(item => item.encrypted_content));
+  t.is(
+    continuation.filter(
+      item => item.role === 'user' && item.content === directive,
+    ).length,
+    1,
+  );
+  t.false(
+    JSON.stringify(subject.requests[compacted].input).includes(
+      'encrypted_content',
+    ),
+  );
+  const requestCount = subject.requests.length;
+  const factory = await subject.restart(false);
+  const restored = await E(factory).getSession(id);
+  const recall = await E(restored).startTurn('recall');
+  await E(recall).whenFinished();
+  t.is((await E(recall).getStatus()).error, null);
+  t.is(subject.requests.length, requestCount + 1);
+  t.is(effects, 8);
+  t.true(
+    subject.requests
+      .at(-1)
+      .input.some(item => item.encrypted_content === `opaque-${requestCount}`),
+  );
+  await E(factory).deleteSession(id);
+  await subject.close();
+});
+
+test('failed first-turn checkpoint publication cannot dispatch continuation', async t => {
+  const subject = world(t, {
+    development: true,
+    forceCompaction: true,
+    refuseCheckpoint: true,
+    shellOutput: 'completed effect '.repeat(1000),
+    responseOutput: request =>
+      request.tools?.length
+        ? [
+            {
+              type: 'function_call',
+              call_id: 'once',
+              name: 'runCommand',
+              arguments: JSON.stringify({
+                command: 'sh',
+                args: ['-c', 'one effect'],
+              }),
+            },
+          ]
+        : undefined,
+  });
+  const session = await E(subject.factory).createSession({
+    presetId: 'development',
+    backendId: 'fae-codex',
+    modelId: 'luna',
+    networkPolicy: 'off',
+  });
+  const turn = await E(session).startTurn('work');
+  await E(turn).whenFinished();
+  t.regex((await E(turn).getStatus()).error, /uncertain storage operation/);
+  t.is(subject.checkpointRefusals(), 1);
+  t.is(subject.requests.length, 2); // One effect and summary; no continuation.
+  t.true(Number(subject.requests[0].tools.length) > 0);
+  t.is(subject.requests[1].tools?.length ?? 0, 0);
+  // Storage is deliberately poisoned; preserve the ambiguous journal rather
+  // than pretending deletion/reconstruction could prove the write did not land.
+  const cleanup = await t.throwsAsync(subject.close(), {
+    instanceOf: AggregateError,
+    message: /factory disposal failed/,
+  });
+  t.true(cleanup.errors.some(error => /uncertain storage/.test(error.message)));
 });
 
 test('shutdown retains late endpoint cleanup and never sends a cancelled request', async t => {

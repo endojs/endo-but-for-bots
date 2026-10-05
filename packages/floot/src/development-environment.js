@@ -1,6 +1,7 @@
 // @ts-check
 import { E } from '@endo/eventual-send';
 import { makeShellTool } from '@endo/agent-tools/json-tools/shell.js';
+import { DEFAULT_WORKLOAD_LIMITS } from '@endo/hosted-agent/workload-limits.js';
 
 export const DEVELOPMENT_PRESET_ID = 'development';
 harden(DEVELOPMENT_PRESET_ID);
@@ -16,7 +17,7 @@ harden(environmentAdminName);
  * Keep private admin rooted before publishing only Shell in the model's
  * inventory. A failed/partial publication remains manually inspectable; do
  * not replace its recipe, replay commands, or delete an unknown allocation.
- * @param {{host:any,guest:any,agentName:string,id:string,networkPolicy:string}} options
+ * @param {{host:any,guest:any,agentName:string,id:string,networkPolicy:string,shellTimeoutMs?:number,shellOutputBytes?:number}} options
  */
 export const provideDevelopmentEnvironment = async ({
   host,
@@ -24,6 +25,8 @@ export const provideDevelopmentEnvironment = async ({
   agentName,
   id,
   networkPolicy,
+  shellTimeoutMs = DEFAULT_WORKLOAD_LIMITS.shellTimeoutMs,
+  shellOutputBytes = DEFAULT_WORKLOAD_LIMITS.shellOutputBytes,
 }) => {
   if (await E(guest).has('shell')) {
     await lookupEnvironmentAdmin(host, id, { required: true });
@@ -58,8 +61,8 @@ export const provideDevelopmentEnvironment = async ({
             'rustc',
             'rustup',
           ],
-          timeoutMs: 600_000,
-          maxOutputBytes: 1024 * 1024,
+          timeoutMs: shellTimeoutMs,
+          maxOutputBytes: shellOutputBytes,
         },
         networkPolicy,
       }),
@@ -74,7 +77,11 @@ export const provideDevelopmentEnvironment = async ({
 };
 harden(provideDevelopmentEnvironment);
 
-/** @param {any} host @param {string} id @param {{required?: boolean, checkGuest?: boolean}} [options] */
+/**
+ * @param {any} host @param {string} id @param {{required?: boolean, checkGuest?: boolean}} [options]
+ * @param id
+ * @param options
+ */
 export const lookupEnvironmentAdmin = async (host, id, options = {}) => {
   const name = environmentAdminName(id);
   if (await E(host).has(name)) return E(host).lookup(name);

@@ -2,6 +2,10 @@
 
 import { Fail } from '@endo/errors';
 
+/** Finite runaway-loop guard, not a provider or model-context limit. */
+export const DEFAULT_MAX_TOOL_ROUNDS = 1024;
+harden(DEFAULT_MAX_TOOL_ROUNDS);
+
 /**
  * Run the provider/tool state machine shared by FAE and Floot.
  *

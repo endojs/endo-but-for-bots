@@ -8,6 +8,7 @@ import { makeError } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { addUsage } from '@endo/hosted-agent/token-usage.js';
+import { DEFAULT_WORKLOAD_LIMITS } from '@endo/hosted-agent/workload-limits.js';
 import {
   assertTranscriptRecord,
   encodeTranscriptRecord,
@@ -75,7 +76,7 @@ harden(UNSETTLED_TOOL_RESULT);
  * material goes next; it is not an output ceiling on the backend, whose own
  * queue is bounded by credit where it is delivered.
  */
-const MAX_RETAINED_CHARS = 16 * 1024 * 1024;
+const MAX_RETAINED_CHARS = DEFAULT_WORKLOAD_LIMITS.transcriptChars;
 
 /**
  * Fail a turn with what the backend already did with it. A backend whose

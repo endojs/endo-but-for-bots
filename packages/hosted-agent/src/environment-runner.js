@@ -18,12 +18,16 @@ import { readRuntimeConfig } from '@endo/sandbox/runtime-config.js';
 import { makeOwnedNativeService } from '@endo/sandbox/owned-native-service.js';
 import { makeResourceRegistry } from '@endo/sandbox/resource-registry.js';
 import { assertPrivateDirectory } from '@endo/sandbox/private-directory.js';
-import { makeSandboxSpawner } from '@endo/sandbox/spawner.js';
+import {
+  makeSandboxSpawner,
+  DEFAULT_PROCESS_OUTPUT_BYTE_LIMIT,
+} from '@endo/sandbox/spawner.js';
+import { readWorkloadBytes } from './workload-limits.js';
 import { makeStateStorageOperations } from './session-state-storage.js';
 import { makeDefaultMounter } from './workspace-projection.js';
 import { readMounterEnv } from './session-plan.js';
 import { makePodmanProviderListenerRuntimeKit } from './provider-listener-runtime.js';
-import { makePublicEgress } from './public-egress.js';
+import { makePublicEgress, readPublicEgressLimits } from './public-egress.js';
 import {
   makePublicNetworkEnvironment,
   assertPublicNetworkEvidence,
@@ -92,6 +96,12 @@ export const makeEnvironmentRunnerKit = (
     reportError = error => console.error('Environment cleanup pending', error),
   } = {},
 ) => {
+  const egressLimits = readPublicEgressLimits(env);
+  const outputByteLimit = readWorkloadBytes(
+    env,
+    'ENDO_ENVIRONMENT_PROCESS_OUTPUT_BYTES',
+    DEFAULT_PROCESS_OUTPUT_BYTE_LIMIT,
+  );
   /^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$/.test(config.imageRef) ||
     Fail`Environment image must be digest-pinned`;
   let closing = false;
@@ -189,7 +199,10 @@ export const makeEnvironmentRunnerKit = (
             spawner: async (argv, options) => {
               assertOpen();
               slice || Fail`Environment has not been opened`;
-              return makeSandboxSpawner(slice)(argv, options);
+              return makeSandboxSpawner(slice, { outputByteLimit })(
+                argv,
+                options,
+              );
             },
           });
           const controller = makeExo(
@@ -255,7 +268,10 @@ export const makeEnvironmentRunnerKit = (
                       Fail`Public internet is not enabled by the environment operator`;
                     const network = await listener.open();
                     assertOpen();
-                    egress = makeEgress({ policy: 'public-internet' });
+                    egress = makeEgress({
+                      policy: 'public-internet',
+                      ...egressLimits,
+                    });
                     worker = network.startKit({
                       network: { endpoint: egress.endpoint },
                     });

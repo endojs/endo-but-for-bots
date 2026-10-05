@@ -21,6 +21,7 @@ import { makeEagerReader } from './eager-reader.js';
 import { makeResourceRegistry } from './resource-registry.js';
 import { resolveLimits } from './limits.js';
 import { validateGeneratedFiles } from './generated-files.js';
+import { DEFAULT_PROCESS_OUTPUT_BYTE_LIMIT } from './spawner.js';
 
 /** @import { MakeSandboxFactoryInput, SandboxFactory, SandboxMakeOpts, SandboxDriver, BackendProbe, MountSpec, SliceSpec, MountCap, MountMode, SandboxHandle, ProcessHandle, SpawnOpts, DriverProcess, RootfsSpec, TerminationSignal } from './types.js' */
 /** @import { NativeSandboxMakeOpts, NativeSandboxHandle, MakeSandboxFactoryKitInput } from './native-factory-types.js' */
@@ -187,7 +188,6 @@ Methods:
 
 const KILL_GRACE_MS = 1000;
 const DRAIN_GRACE_MS = 250;
-const DEFAULT_BYTE_LIMIT = 16n * 1024n * 1024n;
 /**
  * Resolve after a bounded delay without keeping the daemon alive solely for
  * the timer.
@@ -973,7 +973,7 @@ export const makeSandboxFactoryKit = (
               ),
           {
             label,
-            byteLimit: byteLimit ?? DEFAULT_BYTE_LIMIT,
+            byteLimit: byteLimit ?? DEFAULT_PROCESS_OUTPUT_BYTE_LIMIT,
             onFailure: error => onReaderFailure(error, label),
           },
         );

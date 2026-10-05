@@ -281,6 +281,33 @@ test('aggregate byte quota revokes all tunnels and chunk encodings are bounded',
   });
 });
 
+test('default public egress admits 1024 concurrent tunnels, then refuses runaway admission', async t => {
+  t.timeout(30_000);
+  const kit = setup(t);
+  await Promise.all(
+    Array.from({ length: 1024 }, () =>
+      E(kit.endpoint).open('registry.example', 443),
+    ),
+  );
+  t.is(kit.connects.length, 1024);
+  await t.throwsAsync(E(kit.endpoint).open('registry.example', 443), {
+    message: /quota/,
+  });
+});
+
+test('explicit concurrency above the former 64 ceiling is configurable', async t => {
+  const kit = setup(t, { maxConnections: 128, timeoutMs: 86_400_000 });
+  await Promise.all(
+    Array.from({ length: 128 }, () =>
+      E(kit.endpoint).open('registry.example', 443),
+    ),
+  );
+  t.is(kit.connects.length, 128);
+  await t.throwsAsync(E(kit.endpoint).open('registry.example', 443), {
+    message: /quota/,
+  });
+});
+
 test('expired noncancellable DNS retains admission until it settles', async t => {
   t.timeout(2000);
   /** @type {(value:any)=>void} */
@@ -333,7 +360,16 @@ test('explicit undefined omits the lifetime cap and malformed finite caps are re
   const kit = setup(t, { maxRequests: undefined });
   await E(kit.endpoint).resolvePublic('registry.example');
   t.is(kit.lookups.length, 1);
-  for (const maxRequests of [null, 0, -1, 1.5, Infinity, NaN, 65_537, '2']) {
+  for (const maxRequests of [
+    null,
+    0,
+    -1,
+    1.5,
+    Infinity,
+    NaN,
+    0x1_0000_0000,
+    '2',
+  ]) {
     t.throws(() => setup(t, { maxRequests }), {
       message: /Invalid public egress limits/,
     });

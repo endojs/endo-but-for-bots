@@ -18,7 +18,7 @@ import { assertProviderKind } from './config.js';
 
 /**
  * Environment parsing belongs to setup; Secrets resolution precedes this call.
- * @param {{ provider?: string, model?: string, apiKey?: string }} config
+ * @param {{ provider?: string, model?: string, apiKey?: string, requestTimeoutMs?: number }} config
  * @returns {StreamingProvider}
  */
 export const createStreamingProvider = config => {
@@ -26,12 +26,22 @@ export const createStreamingProvider = config => {
     key === 'provider' ||
       key === 'model' ||
       key === 'apiKey' ||
+      key === 'requestTimeoutMs' ||
       Fail`Unexpected Floot provider configuration field ${q(key)}`;
   }
-  const { provider = 'anthropic', model, apiKey = '' } = config;
+  const {
+    provider = 'anthropic',
+    model,
+    apiKey = '',
+    requestTimeoutMs,
+  } = config;
   assertProviderKind(provider);
   if (provider === 'openrouter') {
-    return makeOpenRouterProvider({ apiKey, model: model || '' });
+    return makeOpenRouterProvider({
+      apiKey,
+      model: model || '',
+      requestTimeoutMs,
+    });
   }
   apiKey || Fail`Anthropic API key is required`;
   return makeStreamingAnthropicProvider({

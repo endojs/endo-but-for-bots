@@ -6,6 +6,7 @@ import { isIP } from 'node:net';
 
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
+import { DEFAULT_WORKLOAD_LIMITS } from './workload-limits.js';
 
 /** @import { RemoteInfo } from 'node:dgram' */
 
@@ -155,7 +156,7 @@ export const makePublicDnsListener = async ({
   endpoint,
   host = '127.0.0.53',
   port = 53,
-  maxPending = 16,
+  maxPending = DEFAULT_WORKLOAD_LIMITS.networkConnections,
 }) => {
   (isIP(host) === 4 &&
     Number.isInteger(port) &&
@@ -163,7 +164,7 @@ export const makePublicDnsListener = async ({
     port <= 65_535 &&
     Number.isInteger(maxPending) &&
     maxPending > 0 &&
-    maxPending <= 64) ||
+    maxPending <= 0xffff_ffff) ||
     Fail`Invalid DNS listener options`;
   const socket = createSocket('udp4');
   let closed = false;

@@ -155,8 +155,11 @@ The voice id encodes its path: `en_GB-alba-medium` → `en/en_GB/alba/medium/`.
    A daemon that runs it from `ENDO_EXTRA` forwards only `ENDO_`-prefixed
    variables, so every knob is also read as `ENDO_FLOOT_*` and the key as
    `ENDO_FLOOT_AUTH_TOKEN`.
-   `FLOOT_MAX_TOOL_ROUNDS` (default 48) caps the provider calls one turn may
-   make before Floot gives up with its tool-step fallback.
+   `FLOOT_MAX_TOOL_ROUNDS` (default 1024, shared with standalone Fae) caps
+   direct-provider rounds before the tool-step fallback. Each round is a model
+   response plus all requested tool results; parallel calls share one round.
+   It is a finite runaway-loop guard, not a model context limit. Hosted CLI
+   backends have their own loops and do not use this setting.
 
 3. **Provision the voice caplets.** Ensure `uv`, `piper`, and a voice model are
    present, then:

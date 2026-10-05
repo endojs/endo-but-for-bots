@@ -3,7 +3,11 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
 
 import { makeTurnJournal } from '../src/turn-journal.js';
-import { transcriptIndex } from '../src/journal-transcript.js';
+import {
+  encodeJournalTranscript,
+  transcriptIndex,
+} from '../src/journal-transcript.js';
+import { encodeJournalPresentation } from '../src/journal-presentation.js';
 
 const fixture = () => {
   const values = new Map();
@@ -41,6 +45,138 @@ const fixture = () => {
 const options = harden({ input: 'go', backendId: 'opencode', modelId: 'free' });
 const message = content =>
   harden({ kind: 'message', role: 'assistant', content });
+
+test('reconstruction accepts archived checkpoint and thinking anchors above 65k', async t => {
+  t.timeout(20_000);
+  const { powers, values, writes } = fixture();
+  const ordinal = 65_536;
+  const payload = encodeJournalTranscript(message('prior answer'));
+  const checkpointPayload = encodeJournalTranscript({
+    kind: 'compaction',
+    summary: 'retained context',
+    retainedTail: [],
+  });
+  const transcript = Array.from({ length: ordinal + 1 }, (_, index) => ({
+    ordinal: `${index}`,
+    sequence: `${index + 3}`,
+    kind: index === ordinal ? 'compaction' : 'message',
+    payload: index === ordinal ? checkpointPayload : payload,
+  }));
+  const checkpoint = {
+    turnId: '1',
+    sequence: `${ordinal + 3}`,
+    ordinal: `${ordinal}`,
+    chunk: '0',
+  };
+  const blocks = [
+    {
+      id: 'thinking-1',
+      text: 'Public preview',
+      startedAt: 1,
+      endedAt: 2,
+      truncated: false,
+      beforeTranscriptOrdinal: `${transcript.length}`,
+    },
+  ];
+  // Seed the same immutable snapshot/archive shapes the writer publishes,
+  // without taking 1024 growing snapshots while constructing a long turn.
+  values.set(
+    'floot-turn-archive-00000000000000000000',
+    harden({
+      version: 3,
+      records: [
+        {
+          ...options,
+          turnId: '1',
+          dispatchState: 'possibly-dispatched',
+          state: 'completed',
+          terminal: true,
+          tools: [],
+          activity: [],
+          transcript,
+          transcriptChars: ordinal * payload.length + checkpointPayload.length,
+          transcriptComplete: true,
+          transcriptEndSequence: `${ordinal + 4}`,
+          presentation: {
+            payload: encodeJournalPresentation(blocks, transcript.length),
+          },
+        },
+      ],
+    }),
+  );
+  values.set(
+    'floot-turn-snapshot-00000000000000065541',
+    harden({
+      version: 3,
+      through: `${ordinal + 5}`,
+      records: [],
+      archivedTurns: 1,
+      archiveChunks: 1,
+      archivedCheckpoint: checkpoint,
+    }),
+  );
+  const journal = makeTurnJournal(powers, {
+    maxChars: 1,
+    maxRecords: 1,
+    maxContentChars: 1,
+  });
+  const view = await journal.readView();
+  t.deepEqual(view.archivedCheckpoint, checkpoint);
+  const page = await journal.listArchivedPage();
+  t.is(page.records[0].transcript[ordinal].payload, checkpointPayload);
+  t.deepEqual(JSON.parse(page.records[0].presentation.payload), blocks);
+  t.is(writes.length, 0, 'lowered admission settings never rewrite replay');
+});
+
+test('default transcript admission crosses the former 16 Mi character budget', async t => {
+  const { powers } = fixture();
+  const journal = makeTurnJournal(powers);
+  const id = await journal.begin(options);
+  await journal.dispatch(id);
+  const large = message('x'.repeat(9 * 1024 * 1024));
+  await journal.recordTranscript(id, '0', large);
+  await journal.recordTranscript(id, '1', large);
+  const saved = await journal.get(id);
+  t.true(Number(saved.transcriptChars) > 16 * 1024 * 1024);
+  t.deepEqual(
+    await makeTurnJournal(powers).readTranscriptRecord(id, '1'),
+    large,
+  );
+});
+
+test('count and content overrides refuse new writes without invalidating saved evidence', async t => {
+  const { powers, writes } = fixture();
+  const journal = makeTurnJournal(powers, {
+    maxRecords: 2,
+    maxContentChars: 10_000,
+  });
+  const id = await journal.begin(options);
+  await journal.dispatch(id);
+  const large = message('x'.repeat(9000));
+  const before = writes.length;
+  await t.throwsAsync(
+    journal.recordTranscript(id, '0', message('x'.repeat(10_001))),
+    { message: /content bound/ },
+  );
+  t.is(writes.length, before);
+  await journal.recordTranscript(id, '0', large);
+  await journal.recordTranscript(id, '1', message('small'));
+  const full = writes.length;
+  await t.throwsAsync(journal.recordTranscript(id, '2', message('extra')), {
+    message: /count bound/,
+  });
+  t.is(writes.length, full);
+  // New low admission settings do not reject, truncate or rewrite old records.
+  const revived = makeTurnJournal(powers, {
+    maxRecords: 1,
+    maxChars: 1,
+    maxContentChars: 1,
+  });
+  t.deepEqual(await revived.readTranscriptRecord(id, '0'), large);
+  await revived.recordTranscript(id, '0', large);
+  t.is((await revived.get(id)).transcript.length, 2);
+  t.is(writes.length, full);
+});
 
 test('completion seals the exact frontier and survives a snapshot', async t => {
   const { powers, values, writes } = fixture();
@@ -151,7 +287,7 @@ test('transcript rejects invalid input before storing content or events', async 
 
 test('transcript aggregate bound is retained across snapshot reconstruction', async t => {
   const { powers, writes } = fixture();
-  const journal = makeTurnJournal(powers);
+  const journal = makeTurnJournal(powers, { maxChars: 16 * 1024 * 1024 });
   const id = await journal.begin(options);
   await journal.dispatch(id);
   const large = message('x'.repeat(8 * 1024 * 1024));
@@ -168,7 +304,10 @@ test('transcript aggregate bound is retained across snapshot reconstruction', as
   await revived.recordTranscript(id, '0', large);
   t.is((await revived.get(id)).transcript.length, 63);
   t.is(writes.length, count);
-  t.throws(() => transcriptIndex('65536', 65_536), { message: /count bound/ });
+  t.is(transcriptIndex('65536', 65_536), 65_536);
+  t.throws(() => transcriptIndex('4294967295', 0xffff_ffff), {
+    message: /count bound/,
+  });
   t.is(transcriptIndex('65535', 65_536), 65_535);
 });
 

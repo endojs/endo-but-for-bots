@@ -4,6 +4,10 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
 import {
+  planContextCompaction,
+  summarizeContext,
+} from '@endo/lal/providers/index.js';
+import {
   makeConversationTree,
   makeMemoryBackend,
   makeEndoPetstoreBackend,
@@ -233,6 +237,56 @@ test('a missing latest usage reading invalidates older observations', async t =>
   });
   const latest = await conversation.append(old.id, [], { providerUsage: null });
   t.is(await conversation.getLatestUsage(latest.id), null);
+});
+
+test('first-turn checkpoint selects durable protocol context without erasing admission or original effects', async t => {
+  const f = makeFixture();
+  const conversation = await f.restore();
+  const directive = { role: 'user', content: 'run the suite' };
+  const user = await conversation.append(
+    conversation.getLeafId(),
+    [directive],
+    { inboundNumber: 12n },
+  );
+  const messages = [
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{ id: 'test', function: { name: 'exec', arguments: '{}' } }],
+      responsesOutput: {
+        model: 'luna',
+        items: [{ type: 'reasoning', encrypted_content: 'original opaque' }],
+      },
+    },
+    {
+      role: 'tool',
+      tool_call_id: 'test',
+      content: 'large test log '.repeat(3000),
+      failed: true,
+    },
+  ];
+  const result = await conversation.append(user.id, messages);
+  const checkpoint = await summarizeContext(
+    planContextCompaction(await conversation.getContext(result.id), {
+      windowTokens: 12_000,
+    }),
+    async () => ({
+      message: {
+        role: 'assistant',
+        content: 'Tests ran and failed; inspect the retained log.',
+      },
+    }),
+  );
+  const selected = await conversation.appendCheckpoint(
+    result.id,
+    checkpoint.summary,
+    checkpoint.retained,
+  );
+  const restored = await f.restore();
+  t.deepEqual(await restored.getContext(selected.id), checkpoint.context);
+  t.true(restored.hasAdmission(12n));
+  t.deepEqual((await f.tree.getNode(result.id)).messages, messages);
+  t.is(await restored.getLatestUsage(selected.id), undefined);
 });
 
 test('an ambiguous checkpoint node write keeps the active turn fenced', async t => {

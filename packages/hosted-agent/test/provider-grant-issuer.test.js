@@ -686,8 +686,9 @@ test('unsupported public policy and unexpected off egress fail closed', async t 
 
 test('request deadlines are independent of session lifetime', async t => {
   for (const [requestTimeoutMs, expected] of [
-    [undefined, 120_000],
+    [undefined, 3_600_000],
     [600_000, 600_000],
+    [86_400_000, 86_400_000],
   ]) {
     const f = fixture({ requestTimeoutMs });
     t.teardown(f.issuer.dispose);
@@ -719,7 +720,7 @@ test('invalid host request deadlines are refused', t => {
     1.5,
     NaN,
     Infinity,
-    600_001,
+    0x8000_0000,
     '600000',
   ]) {
     t.throws(() => fixture({ requestTimeoutMs }), {
@@ -1583,7 +1584,10 @@ test('a scope that pins a model is issued only if an account it may be served fr
     },
   });
   t.teardown(() => issuer.dispose());
-  /** @param {string} model @param {string} [subscription] */
+  /**
+   * @param {string} model @param {string} [subscription]
+   * @param subscription
+   */
   const issue = (model, subscription) =>
     issuer.issueKit({
       ...spec,

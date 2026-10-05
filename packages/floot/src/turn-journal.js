@@ -11,6 +11,7 @@ import {
 } from './context-evidence.js';
 import {
   assertTranscriptBudget,
+  DEFAULT_TRANSCRIPT_LIMITS,
   encodeJournalTranscript,
   transcriptIndex,
 } from './journal-transcript.js';
@@ -40,8 +41,8 @@ const SNAPSHOT_VERSION = 3;
  *
  * `MAX_CONTENT_CHARS` bounds one content value. A value is one JSON document
  * the daemon holds whole while it is marshalled to storage and back, so this
- * is the same 16 Mi figure the bounded readers use for a resident frame — a
- * storage-value bound, not an output ceiling: a tool result larger than this
+ * is a configurable workload guard separate from the native wire readers — a
+ * storage-value bound, not a model output ceiling: a tool result larger than this
  * is refused at the call, which fails one tool call rather than the session.
  *
  * `RETAINED_TURNS` bounds the settled part of the record map. Older settled turns are moved
@@ -66,7 +67,8 @@ const MAX_EVENT_SIZE = 131_072;
 const PREVIEW_CHARS = 8192;
 /** How many distinct serving models one turn may record. */
 const MAX_SERVED_BY = 16;
-const MAX_CONTENT_CHARS = 16 * 1024 * 1024;
+// Replay checks the structural signed-length profile, never a lowered budget.
+const MAX_CONTENT_CHARS = 0x7fff_ffff;
 const RETAINED_TURNS = 256;
 const SNAPSHOT_EVERY = 64;
 const ARCHIVE_CHUNK_TURNS = 256;
@@ -263,8 +265,21 @@ const assertTranscriptKind = entry => {
  * and `floot-turn-archive-<n>` for settled turns beyond the retained window.
  *
  * @param {any} powers
+ * @param {{ maxChars?: number, maxRecords?: number, maxContentChars?: number }} [limits]
  */
-export const makeTurnJournal = powers => {
+export const makeTurnJournal = (powers, limits = {}) => {
+  const { maxChars, maxRecords, maxContentChars } = {
+    ...DEFAULT_TRANSCRIPT_LIMITS,
+    ...limits,
+  };
+  for (const [value, upper] of [
+    [maxChars, 0xffff_ffff],
+    [maxRecords, 0xffff_ffff],
+    [maxContentChars, 0x7fff_ffff],
+  ]) {
+    (Number.isInteger(value) && value > 0 && value <= upper) ||
+      Fail`Invalid turn journal workload limit`;
+  }
   /** @type {Map<string, any>} */
   const records = new Map();
   let next = 1n;
@@ -579,8 +594,8 @@ export const makeTurnJournal = powers => {
         typeof checkpoint.chunk === 'string' &&
         /^(0|[1-9][0-9]*)$/.test(checkpoint.chunk) &&
         typeof checkpoint.ordinal === 'string' &&
-        /^(0|[1-9][0-9]{0,4})$/.test(checkpoint.ordinal) &&
-        Number(checkpoint.ordinal) < 65_536 &&
+        /^(0|[1-9][0-9]{0,9})$/.test(checkpoint.ordinal) &&
+        Number(checkpoint.ordinal) < 0xffff_ffff &&
         BigInt(checkpoint.chunk) < BigInt(archiveChunks) &&
         BigInt(checkpoint.turnId) < BigInt(checkpoint.sequence) &&
         BigInt(checkpoint.sequence) <= through) ||
@@ -835,26 +850,26 @@ export const makeTurnJournal = powers => {
   };
 
   /**
-   * Cut each large text field to a preview and store the full text as its own
-   * value, referenced from the event. Content is written before the event
-   * that refers to it, so a crash between the two leaves an unreferenced
-   * value rather than a reference to nothing.
+   * Plan each large text field's preview and referenced value without writes.
+   * Admission, event size and schema validation must all finish before any
+   * content is stored: a refused event must not occupy its next content names.
    *
    * @param {any} event
    * @param {bigint} sequence
    */
-  const externalize = async (event, sequence) => {
+  const planExternalization = (event, sequence) => {
     const fields = CONTENT_FIELDS[event.type] || [];
     let result = event;
+    /** @type {{ name: string, text: string }[]} */
+    const contents = [];
     for (const field of fields) {
       const text = event[field];
       if (typeof text === 'string') {
-        text.length <= MAX_CONTENT_CHARS ||
-          Fail`Turn journal ${q(field)} exceeds the ${q(MAX_CONTENT_CHARS)}-character storage value bound`;
+        text.length <= maxContentChars ||
+          Fail`Turn journal ${q(field)} exceeds the ${q(maxContentChars)}-character storage value bound`;
         if (text.length > PREVIEW_CHARS) {
           const name = `${CONTENT_PREFIX}${pad(sequence)}-${field}`;
-          // eslint-disable-next-line no-await-in-loop
-          await store(text, name);
+          contents.push({ name, text });
           result = {
             ...result,
             [field]: text.slice(0, PREVIEW_CHARS),
@@ -863,18 +878,27 @@ export const makeTurnJournal = powers => {
         }
       }
     }
-    return result;
+    return harden({ event: result, contents });
   };
 
   /** @param {any} value */
   const write = async value => {
-    const event = harden(await externalize(copyData(value), next));
+    await null;
+    const { event, contents } = planExternalization(copyData(value), next);
     JSON.stringify(event).length <= MAX_EVENT_SIZE ||
       Fail`Turn journal event too large`;
     // Validate without mutating or copying the session's accumulated history.
     // The serialized operation retains this commit until storage acknowledges
     // the immutable event. No other operation can change its target meanwhile.
     const commit = prepare(event, next, false);
+    // Content precedes its referencing event, so an uncertain publication
+    // leaves an orphan rather than a dangling reference. Storage failures
+    // still poison this incarnation; only pure validation refusals are safe
+    // to retry at the same event sequence.
+    for (const { name, text } of contents) {
+      // eslint-disable-next-line no-await-in-loop
+      await store(text, name);
+    }
     await store(event, `${PREFIX}${pad(next)}`);
     commit();
     next += 1n;
@@ -882,7 +906,10 @@ export const makeTurnJournal = powers => {
     if (sinceSnapshot >= SNAPSHOT_EVERY) await snapshot();
   };
 
-  /** @param {bigint | number} index @param {boolean} [metadataOnly] */
+  /**
+   * @param {bigint | number} index @param {boolean} [metadataOnly]
+   * @param metadataOnly
+   */
   const readArchiveChunk = async (index, metadataOnly = false) => {
     const chunk = copyData(
       await E(powers).lookup(`${ARCHIVE_PREFIX}${pad(index)}`),
@@ -973,7 +1000,10 @@ export const makeTurnJournal = powers => {
   };
 
   return harden({
-    /** @param {string} turnId @param {unknown} blocks */
+    /**
+     * @param {string} turnId @param {unknown} blocks
+     * @param blocks
+     */
     recordPresentation: (turnId, blocks) =>
       serialized(async () => {
         const record = records.get(turnId);
@@ -989,7 +1019,10 @@ export const makeTurnJournal = powers => {
         }
         await write({ type: 'presentation', turnId, payload });
       }),
-    /** @param {string} turnId @param {string} count */
+    /**
+     * @param {string} turnId @param {string} count
+     * @param count
+     */
     completeTranscript: (turnId, count) =>
       serialized(async () => {
         const record = records.get(turnId);
@@ -1037,11 +1070,17 @@ export const makeTurnJournal = powers => {
             Fail`Conflicting transcript ordinal`;
           return;
         }
+        payload.length <= maxContentChars ||
+          Fail`Transcript content bound exceeded`;
         !record.terminal || Fail`Transcript record after terminal turn`;
         !record.transcriptComplete || Fail`Transcript already complete`;
         record.state === 'pending' ||
           Fail`Cannot append transcript for a recovered turn`;
-        assertTranscriptBudget((record.transcriptChars ?? 0) + payload.length);
+        index < maxRecords || Fail`Transcript record count bound exceeded`;
+        assertTranscriptBudget(
+          (record.transcriptChars ?? 0) + payload.length,
+          maxChars,
+        );
         await write({
           type: 'transcript-record',
           turnId,

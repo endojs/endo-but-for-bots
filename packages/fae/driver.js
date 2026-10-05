@@ -2,6 +2,7 @@
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
 import { parseLocator } from '@endo/daemon/locator.js';
+import { readFaeWorkloadConfig } from './src/workload-config.js';
 
 import { spawnWorkerLoop } from './agent.js';
 import { resolveAuthToken } from './src/credentials.js';
@@ -38,6 +39,8 @@ import { resolveAuthToken } from './src/credentials.js';
  * @returns {Promise<object>}
  */
 export const make = async (powers, context, { env } = {}) => {
+  const { subagentLimits, maxToolRounds, requestTimeoutMs } =
+    readFaeWorkloadConfig(env ?? {});
   const systemPrompt = env?.FAE_SYSTEM_PROMPT || undefined;
   // Written by this agent's parent, not by the operator, so the loop appends it
   // to the standing prompt rather than letting it take its place.
@@ -73,6 +76,9 @@ export const make = async (powers, context, { env } = {}) => {
       harden({
         forceCompaction: env?.FAE_FORCE_COMPACTION === 'true',
         providerIdentity,
+        subagentLimits,
+        maxToolRounds,
+        requestTimeoutMs,
         ...(spawner ? { spawner } : {}),
         ...(delegatedPrompt ? { delegatedPrompt } : {}),
         ...(sessionId === undefined

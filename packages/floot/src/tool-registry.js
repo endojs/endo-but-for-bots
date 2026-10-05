@@ -213,6 +213,7 @@ harden(makeEndoToolSet);
  * @param {object} [options]
  * @param {any} [options.spawner] - A `SubagentSpawner` capability.
  * @param {any} [options.delegations] - The session's delegation registry.
+ * @param {any} [options.subagentLimits] Operator delegation budgets.
  * @param {(refresh?: boolean) => Promise<any>} [options.readAccounts]
  * @param {Set<string>} [options.settledMail]
  * @param {Map<string, any>} [options.extraTools] - Tools the factory builds
@@ -224,7 +225,14 @@ harden(makeEndoToolSet);
  */
 export const makeFlootToolRegistry = (
   powers,
-  { spawner, delegations, readAccounts, settledMail, extraTools } = {},
+  {
+    spawner,
+    delegations,
+    subagentLimits,
+    readAccounts,
+    settledMail,
+    extraTools,
+  } = {},
 ) => {
   /** @type {Map<string, any>} */
   const builtins = new Map();
@@ -278,6 +286,7 @@ export const makeFlootToolRegistry = (
       powers,
       spawner,
       delegations,
+      limits: subagentLimits,
       // A Floot session dismisses every message it handles, a delegation reply
       // included, so telling the model to adopt from one would be a lie.
       retainsAttachments: false,

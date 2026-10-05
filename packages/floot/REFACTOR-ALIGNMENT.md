@@ -30,6 +30,39 @@ the main [architecture audit](ARCHITECTURE-AUDIT.md) retains detailed evidence.
 
 ## Current work, 2026-10-01
 
+October 6 follow-up: shared direct-provider Fae compaction now selects completed
+protocol groups within a turn, including the first, instead of requiring three
+user messages and keeping two entire turns regardless of size.
+The current directive and recent complete native tool groups stay verbatim;
+summary-only older tool excerpts are explicitly bounded, with full originals
+retained in the existing journal/tree.
+Automatic first-turn, repeated compaction, cold reconstruction and failed
+publication fixtures pass. Tokyo generation 200 (app `69d7ef537`, host `04b95a7`)
+also passes live Luna first-turn acceptance: eight successful tool rounds,
+two automatic checkpoints, then cold daemon restart and context-only recall
+without new tools or summarization. Explicit native stop preceded restart;
+the disposable session/allocation were removed after private evidence export.
+The original eight sessions, Secrets and workspaces remain unchanged.
+The fresh unattended October 6 Luna test run also verifies all 115 non-daemon
+package test tasks and all 109 daemon test files at the deployed revision, with
+three automatic checkpoints across 48 settled calls/results in one user turn.
+Eleven distinct assertion/fixture failures remain; no tests or source were changed.
+The agent saved its report/ledger, but its final chat reply reached the existing
+48-tool-step cap. Its aggregate count and some failure labels also need correction
+against the retained independent audit. Execution is verified, not a green repo
+or clean end-to-end assistant completion. After verified export/archive, only this
+new disposable session/allocation was removed; the original eight were preserved.
+The direct-provider runaway-loop guard is now shared with standalone Fae at
+1024 rounds in source (formerly Floot 48/Fae 32), with local exact-exhaustion,
+override and normal-completion-after-48 fixtures passing. A fresh live run on
+this default remains pending; the historical generation-200 result is unchanged.
+The POSIX design also records nearby workload bounds: per-turn retained transcript,
+public-egress concurrency/traffic/tunnel lifetime, shell output/timeouts,
+OpenRouter request timeout and subagent budgets. No other limits were changed.
+The [durable POSIX design](../../designs/durable-posix-environments.md) records
+the policy and OpenCode comparison; older hold/no-producer statements below are
+historical and superseded for the direct Fae paths.
+
 FA-14 is fixed in source and locally validated through the existing journal,
 evidence reconciliation, provider context, stream fold and history presentation.
 Native explicit status and actual host rejection retain the canonical optional

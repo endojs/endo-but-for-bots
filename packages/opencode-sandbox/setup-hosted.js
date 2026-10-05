@@ -56,6 +56,7 @@
 // storage owner minted over null powers) is the code between its steps here.
 
 import { E } from '@endo/eventual-send';
+import { readBrokerWorkloadEnv } from '@endo/hosted-agent/provider-broker-service.js';
 import {
   assertGuestRootsDisjoint,
   bindFlootBackend,
@@ -104,6 +105,7 @@ const backendModuleSpecifier = toCurrentSpecifier(
 export const main = async (hostAgent, { exec = undefined } = {}) => {
   await null;
   const { env } = process;
+  const workloadEnv = readBrokerWorkloadEnv(env);
 
   const credsName = env.ENDO_OPENCODE_CREDS_NAME || 'openrouter-auth';
   // The account authority this broker serves, the OpenRouter account's id
@@ -202,6 +204,7 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   // The broker's one exact powers dependency is the managed credential's
   // SecretBlob.
   await provideBrokerService(hostAgent, {
+    workloadEnv,
     label: LABEL,
     prefix: PREFIX,
     sandboxDir: SANDBOX_DIR,

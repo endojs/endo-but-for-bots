@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { makeProviderBrokerGrant } from './provider-broker.js';
 import { makeProviderFetchTransport } from './provider-transport.js';
 import { InferenceEndpointInterface } from './subscription-share.js';
+import { DEFAULT_WORKLOAD_LIMITS } from './workload-limits.js';
 
 /**
  * How many subscriptions a request may already have passed through when it
@@ -140,7 +141,7 @@ export const makeProviderBrokerGrantIssuer = ({
   secret,
   fetch,
   policy,
-  requestTimeoutMs = 120_000,
+  requestTimeoutMs = DEFAULT_WORKLOAD_LIMITS.inferenceTimeoutMs,
   imageDigest,
   accountRef,
   audit,
@@ -162,7 +163,7 @@ export const makeProviderBrokerGrantIssuer = ({
     Fail`Invalid provider grant issuer policy`;
   (Number.isInteger(requestTimeoutMs) &&
     requestTimeoutMs > 0 &&
-    requestTimeoutMs <= 600_000) ||
+    requestTimeoutMs <= 0x7fff_ffff) ||
     Fail`Invalid provider request deadline`;
   // `accountRef` is the account authority the grant reports and admits
   // sessions under; `policy.accountRef`, where the adapter sets it, is the
@@ -293,8 +294,9 @@ export const makeProviderBrokerGrantIssuer = ({
     /** @type {Array<{ dispose(): void }>} */
     const memberTransports = [];
     const declared = [...(await memberPool.members())];
-    /** @param {IssuerPoolMember} member
-     * @returns {BrokerGrantMember[]} */
+    /**
+     * @param {IssuerPoolMember} member
+      @returns {BrokerGrantMember[]} */
     const makeMember = member => {
       const { lifecycle } = member;
       lifecycle?.check();

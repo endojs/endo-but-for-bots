@@ -27,14 +27,17 @@ import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
-import { runAgenticTurn } from '@endo/fae/src/turn-engine.js';
+import {
+  DEFAULT_MAX_TOOL_ROUNDS,
+  runAgenticTurn,
+} from '@endo/fae/src/turn-engine.js';
 import {
   SubagentSpawnerInterface,
   assertSubagentName,
   isSameFormula,
   makeSubagentDelegations,
+  DEFAULT_SUBAGENT_LIMITS,
 } from '@endo/fae/src/subagent.js';
-import { DEFAULT_MAX_SUBAGENT_DEPTH } from '@endo/fae/src/subagent-host.js';
 import { resolveAuthToken } from '@endo/fae/src/credentials.js';
 import {
   makeSubscriptionResponsesProvider,
@@ -102,13 +105,13 @@ import {
 } from './src/private-turn-storage.js';
 import { makeSessionNetworkPolicy } from './src/network-policy.js';
 import { makeContainerMountRegistrar } from './src/container-mounts.js';
+import { DEFAULT_TRANSCRIPT_LIMITS } from './src/journal-transcript.js';
+import { readFlootWorkloadConfig } from './src/workload-config.js';
 
-// Cap the tool-call loop so a misbehaving model can't spin forever before it
-// produces a spoken reply. A safety ceiling, not a work budget: a coding turn
-// routinely takes dozens of tool rounds, and at 8 sessions bailed out mid-task
-// with the tool-step fallback. `FLOOT_MAX_TOOL_ROUNDS` overrides it per
-// deployment. The hosted backends run their own loops and never reach it.
-const DEFAULT_MAX_TOOL_ROUNDS = 48;
+// Direct-provider turns share Fae's finite runaway-loop guard. A round is one
+// model response and all of its tool results, not one individual tool call.
+// `FLOOT_MAX_TOOL_ROUNDS` overrides the default per deployment. Hosted CLI
+// backends run their own loops and never reach this guard.
 const AGENT_SHUTDOWN_TIMEOUT_MS = 30_000;
 
 const execFileAsync = promisify(execFile);
@@ -248,7 +251,9 @@ const FlootSessionInterface = M.interface('FlootSession', {
   getTurns: M.callWhen().returns(M.any()),
   getArchivedTurns: M.callWhen().returns(M.any()),
   getArchivedTurnsPage: M.callWhen().optional(M.string()).returns(M.record()),
-  getTurnContent: M.callWhen(M.record()).returns(M.string()),
+  getTurnContent: M.callWhen(M.record()).returns(
+    M.string({ stringLengthLimit: 0x7fff_ffff }),
+  ),
   getJournalStatus: M.callWhen().returns(M.any()),
   getNetworkPolicy: M.callWhen().returns(M.any()),
   setNetworkPolicy: M.callWhen(M.string()).returns(M.any()),
@@ -369,6 +374,7 @@ const hostedModelId = (backendId, modelId) => `${backendId}:${modelId}`;
  *   `code-mount` object kind (read-only). Absent when the daemon host has no
  *   source on disk; such objects are then skipped.
  * @param {string} [networkPolicy] Recorded development environment policy.
+ * @param {{ shellTimeoutMs: number, shellOutputBytes: number }} [shellLimits]
  */
 const provisionPresetObjects = async (
   host,
@@ -378,6 +384,7 @@ const provisionPresetObjects = async (
   objects,
   codePath,
   networkPolicy = 'off',
+  shellLimits = undefined,
 ) => {
   for (const obj of objects) {
     const alreadyPresent = await E(sessionGuest).has(obj.petName);
@@ -417,6 +424,7 @@ const provisionPresetObjects = async (
         agentName,
         id,
         networkPolicy,
+        ...shellLimits,
       });
     } else if (alreadyPresent) {
       // Idempotent: a revived session already has its provisioned objects.
@@ -519,6 +527,8 @@ const provisionPresetObjects = async (
  *   supply private storage not exposed to the session guest. Capability identity
  *   alone does not establish that confinement.
  * @param {number} [options.maxToolRounds] - Provider calls one turn may make
+ * @param {typeof DEFAULT_TRANSCRIPT_LIMITS} [options.transcriptLimits] Operator admission budgets.
+ * @param {typeof DEFAULT_SUBAGENT_LIMITS} [options.subagentLimits] Operator delegation budgets.
  *   before the tool-step fallback. Defaults to `DEFAULT_MAX_TOOL_ROUNDS`.
  * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
  * @param {Map<string, any>} [options.extraTools] - Session-specific tools
@@ -573,6 +583,8 @@ export const makeStreamingAgent = async (
     reasoningEffort,
     timers,
     maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS,
+    transcriptLimits = DEFAULT_TRANSCRIPT_LIMITS,
+    subagentLimits = DEFAULT_SUBAGENT_LIMITS,
     extraTools,
     contextLength,
     forceCompaction = false,
@@ -638,7 +650,7 @@ export const makeStreamingAgent = async (
   // so nothing reads its replies aloud.
   const effectivePrompt =
     systemPrompt || composePresetPrompt({ presetId: 'general' });
-  const turnJournal = makeTurnJournal(journalPowers);
+  const turnJournal = makeTurnJournal(journalPowers, transcriptLimits);
   // Validate persisted evidence before installing a backend or starting inbox work.
   await turnJournal.list();
   let activeJournalTurn;
@@ -778,13 +790,13 @@ export const makeStreamingAgent = async (
   // Delegation state is per session and lives beside the inbox loop that feeds
   // it: `claim` below is the only reader of the mailbox stream.
   const delegations = makeSubagentDelegations(
-    harden({ powers, ...(timers ? { timers } : {}) }),
+    harden({ powers, limits: subagentLimits, ...(timers ? { timers } : {}) }),
   );
   const settledMail = new Set();
   const toolRegistry = makeFlootToolRegistry(powers, {
     settledMail,
     ...(extraTools ? { extraTools } : {}),
-    ...(spawner ? { spawner, delegations } : {}),
+    ...(spawner ? { spawner, delegations, subagentLimits } : {}),
     ...(readAccounts
       ? {
           readAccounts: async refresh =>
@@ -956,6 +968,7 @@ export const makeStreamingAgent = async (
       let hosted;
       try {
         hosted = await runHostedTurn({
+          maxRetainedChars: transcriptLimits.maxChars,
           client: hostedClient,
           text: await hostedRecoveryText(text, turnId),
           writer,
@@ -1037,7 +1050,10 @@ export const makeStreamingAgent = async (
         inputRecorded = true;
       }
     };
-    /** @param {import('@endo/hosted-agent/transcript-records.js').TranscriptRecord} record */
+    /**
+     * @param {import('@endo/hosted-agent/transcript-records.js').TranscriptRecord} record
+     * @param expectedFrontier
+     */
     const recordProviderTranscript = async (
       record,
       expectedFrontier = undefined,
@@ -1109,10 +1125,7 @@ export const makeStreamingAgent = async (
           tools: tools.providerSchemas,
           windowTokens: contextLength ?? 0,
           usedTokens: lastRequestContext?.usedTokens ?? 0,
-          force:
-            forceCompaction &&
-            !forced &&
-            context.filter(item => item.role === 'user').length >= 3,
+          force: forceCompaction && !forced,
         });
         if (plan) {
           writer.setPhase('compacting context');
@@ -2022,12 +2035,14 @@ export const makeStreamingAgent = async (
     });
   };
 
-  /** @param {string} first @param {(records: any[]) => void} visit */
+  /**
+   * @param {string} first @param {(records: any[]) => void} visit
+   * @param visit
+   */
   const visitArchivedPages = async (first, visit) => {
     /** @type {string | null} */
     let cursor = first;
     while (cursor !== null) {
-      // eslint-disable-next-line no-await-in-loop
       const page = await turnJournal.listArchivedPage(cursor);
       visit(page.records);
       cursor = page.next;
@@ -2385,6 +2400,7 @@ export const make = async (
   // sessions (see the `code-mount` preset object). Resolved by the setup script
   // and passed through env; empty when the daemon host has no source on disk.
   const codePath = env?.FLOOT_CODE_PATH || undefined;
+  const workload = readFlootWorkloadConfig(env ?? {});
 
   // The factory runs with its own host powers, so it provisions session guests
   // directly — no introduced `host-agent` reference (that rehydrates as a
@@ -3287,6 +3303,7 @@ export const make = async (
         provider: cfg.provider,
         model: model || cfg.model,
         apiKey: token,
+        requestTimeoutMs: workload.requestTimeoutMs,
       }))().catch(error => {
       if (providersByModel.get(key)?.providerP === providerP) {
         providersByModel.delete(key);
@@ -4038,6 +4055,10 @@ export const make = async (
           preset.objects,
           codePath,
           networkPolicy,
+          {
+            shellTimeoutMs: workload.shellTimeoutMs,
+            shellOutputBytes: workload.shellOutputBytes,
+          },
         );
         // Session-scoped extra tools (the bounded workspace publisher for a
         // session with a git workspace). Threaded into the tool registry, so
@@ -4313,6 +4334,8 @@ export const make = async (
           sessionPrompt,
           harden({
             maxToolRounds,
+            transcriptLimits: workload.transcriptLimits,
+            subagentLimits: workload.subagentLimits,
             journalPowers,
             backendId: entry.backendId,
             nativeContextFormat,
@@ -5035,7 +5058,7 @@ export const make = async (
       for (const [journal, sessionId] of privateJournals) {
         if (sessionId === id) {
           // A failed/uncertain writer stays retained and blocks retirement.
-          // eslint-disable-next-line no-await-in-loop
+
           await E(journal).close();
           privateJournals.delete(journal);
         }
@@ -5065,6 +5088,7 @@ export const make = async (
    * session asked for it.
    *
    * @param {Record<string, any>} options
+   * @param inheritedInferenceRecipe
    * @returns {Promise<string>} the new session id
    */
   const provisionSession = async (options, inheritedInferenceRecipe) => {
@@ -5425,38 +5449,13 @@ export const make = async (
 
   // Layers of delegation a session tree may reach. 0 withholds the subagent
   // tools from every session.
-  const maxSubagentDepth = (() => {
-    const configured = env?.FLOOT_MAX_SUBAGENT_DEPTH;
-    if (configured === undefined || configured === '') {
-      return DEFAULT_MAX_SUBAGENT_DEPTH;
-    }
-    const value = Number(configured);
-    if (!Number.isInteger(value) || value < 0) {
-      throw Error(
-        `Invalid FLOOT_MAX_SUBAGENT_DEPTH ${JSON.stringify(configured)}`,
-      );
-    }
-    return value;
-  })();
+  const maxSubagentDepth = workload.maxSubagentDepth;
 
   // Provider calls one turn may make before the tool-step fallback. Read once
   // here, where a bad value is a deployment error the operator sees at
   // provisioning, rather than per session where it would surface as a failed
   // turn much later.
-  const maxToolRounds = (() => {
-    const configured = env?.FLOOT_MAX_TOOL_ROUNDS;
-    if (configured === undefined || configured === '') {
-      return DEFAULT_MAX_TOOL_ROUNDS;
-    }
-    const value = Number(configured);
-    if (!Number.isInteger(value) || value < 1) {
-      throw Error(
-        `Invalid FLOOT_MAX_TOOL_ROUNDS ${JSON.stringify(configured)}`,
-      );
-    }
-    return value;
-  })();
-  const MAX_SUBAGENTS_PER_SESSION = 8;
+  const maxToolRounds = workload.maxToolRounds;
 
   /**
    * The whole of the authority a session gets over the factory: create, list,
@@ -5485,19 +5484,20 @@ export const make = async (
         const { systemPrompt: childPrompt } = options;
         if (
           childPrompt !== undefined &&
-          (typeof childPrompt !== 'string' || childPrompt.length > 32_768)
+          (typeof childPrompt !== 'string' ||
+            childPrompt.length > workload.subagentLimits.maxTaskChars)
         ) {
           throw Error(
-            'Subagent system prompt must be a string of at most 32768 characters',
+            `Subagent system prompt must be a string of at most ${workload.subagentLimits.maxTaskChars} characters`,
           );
         }
         const siblings = await listSubagents();
         if (siblings.some(session => session.subagentName === name)) {
           throw Error(`Subagent "${name}" already exists.`);
         }
-        if (siblings.length >= MAX_SUBAGENTS_PER_SESSION) {
+        if (siblings.length >= workload.maxSubagents) {
           throw Error(
-            `Subagent limit of ${MAX_SUBAGENTS_PER_SESSION} reached; stop one first.`,
+            `Subagent limit of ${workload.maxSubagents} reached; stop one first.`,
           );
         }
         const parent = (registry || []).find(

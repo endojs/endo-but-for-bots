@@ -7,6 +7,8 @@
 import { E } from '@endo/eventual-send';
 
 import { AUTH_SECRET_PETNAME } from './src/credentials.js';
+import { selectFaeWorkloadEnv } from './src/subagent.js';
+import { readFaeWorkloadConfig } from './src/workload-config.js';
 
 const faeFactorySpecifier = new URL('agent.js', import.meta.url).href;
 
@@ -46,10 +48,13 @@ const resolveProvider = async (agent, providerName) => {
  * spawn a default "fae" agent instance for direct mailbox chat.
  *
  * @param {import('@endo/eventual-send').ERef<object>} agent
+ * @param {Record<string,string|undefined>} [env]
  */
-export const main = async agent => {
-  const providerName = process.env.PROVIDER_NAME || 'default';
-  const factoryName = process.env.FACTORY_NAME || 'fae-factory';
+export const main = async (agent, env = process.env) => {
+  const workloadEnv = selectFaeWorkloadEnv(env);
+  readFaeWorkloadConfig(workloadEnv);
+  const providerName = env.PROVIDER_NAME || 'default';
+  const factoryName = env.FACTORY_NAME || 'fae-factory';
   const guestName = `${factoryName}-handle`;
   const agentName = `profile-for-${guestName}`;
 
@@ -95,6 +100,7 @@ export const main = async agent => {
   await E(agent).makeUnconfined('@main', faeFactorySpecifier, {
     powersName: agentName,
     resultName: factoryName,
+    env: workloadEnv,
   });
 
   console.log(

@@ -56,10 +56,12 @@ export const encodeJournalPresentation = (value, transcriptCount) => {
           endedAt >= startedAt))) ||
       Fail`Invalid thinking timing`;
     (typeof beforeTranscriptOrdinal === 'string' &&
-      /^(0|[1-9][0-9]{0,4})$/.test(beforeTranscriptOrdinal)) ||
+      /^(0|[1-9][0-9]{0,9})$/.test(beforeTranscriptOrdinal)) ||
       Fail`Invalid thinking anchor`;
     const anchor = Number(beforeTranscriptOrdinal);
-    (anchor >= previous && anchor <= transcriptCount && anchor <= 65_536) ||
+    (anchor >= previous &&
+      anchor <= transcriptCount &&
+      anchor <= 0xffff_ffff) ||
       Fail`Invalid thinking anchor`;
     previous = anchor;
     return {

@@ -38,11 +38,18 @@ if (
 startProviderListenerWorker({
   input: process.stdin,
   output: process.stdout,
-  async makeNetworkListeners({ endpoint }) {
-    const dns = await makePublicDnsListener({ endpoint });
+  async makeNetworkListeners({ endpoint, limits }) {
+    const dns = await makePublicDnsListener({
+      endpoint,
+      maxPending: limits?.maxConnections,
+    });
     let proxy;
     try {
-      proxy = await makePublicEgressListener({ endpoint, host: '127.0.0.1' });
+      proxy = await makePublicEgressListener({
+        endpoint,
+        host: '127.0.0.1',
+        ...limits,
+      });
     } catch (error) {
       await dns.dispose();
       throw error;

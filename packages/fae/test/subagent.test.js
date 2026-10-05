@@ -406,6 +406,7 @@ test('the sets of closed asks and known subagents are bounded', async t => {
   const delegations = makeSubagentDelegations({
     powers: mailbox.powers,
     timers,
+    limits: { maxClosedAsks: 32, maxKnownSubagents: 32 },
   });
   /** @param {number} index */
   const childFor = index =>
@@ -522,6 +523,11 @@ test('ask rejects an out-of-range timeout and an oversized task', async t => {
   const delegations = makeSubagentDelegations({
     powers: mailbox.powers,
     timers,
+    limits: {
+      replyTimeoutSeconds: 300,
+      maxTimeoutSeconds: 3600,
+      maxTaskChars: 32_768,
+    },
   });
   await t.throwsAsync(
     delegations.ask({ name: 'helper', task: 'x', timeoutSeconds: 0 }),

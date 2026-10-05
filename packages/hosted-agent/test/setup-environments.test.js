@@ -61,6 +61,10 @@ test('environment setup persists null powers and bounded operator env, retains f
     ENDO_ENVIRONMENT_NETWORK_DIR: join(directory, 'network'),
     ENDO_ENVIRONMENT_PUBLIC_INTERNET: '1',
     ENDO_NINEP_SUDO: '1',
+    ENDO_PUBLIC_EGRESS_MAX_CONNECTIONS: '2048',
+    ENDO_PUBLIC_EGRESS_MAX_BYTES: '10995116277760',
+    ENDO_PUBLIC_EGRESS_TIMEOUT_MS: '172800000',
+    ENDO_ENVIRONMENT_PROCESS_OUTPUT_BYTES: '2147483648',
   });
   await main(host, env);
   await main(host, env);
@@ -74,6 +78,18 @@ test('environment setup persists null powers and bounded operator env, retains f
   t.false('CODEX_TOKEN' in stored.options.env);
   t.false('HTTP_PROXY' in stored.options.env);
   t.is(stored.options.env.ENDO_NINEP_SUDO, '1');
+  t.is(stored.options.env.ENDO_PUBLIC_EGRESS_MAX_CONNECTIONS, '2048');
+  t.is(stored.options.env.ENDO_PUBLIC_EGRESS_MAX_BYTES, '10995116277760');
+  t.is(stored.options.env.ENDO_PUBLIC_EGRESS_TIMEOUT_MS, '172800000');
+  t.is(stored.options.env.ENDO_ENVIRONMENT_PROCESS_OUTPUT_BYTES, '2147483648');
+  await t.throwsAsync(
+    main(host, { ...env, ENDO_PUBLIC_EGRESS_MAX_CONNECTIONS: '4096' }),
+    { message: /configuration changed/ },
+  );
+  await t.throwsAsync(
+    main(host, { ...env, ENDO_ENVIRONMENT_PROCESS_OUTPUT_BYTES: '0' }),
+    { message: /Invalid workload limit/ },
+  );
   t.true(String(stored.options.env.ENDO_SANDBOX_OWNER_ID).length <= 56);
   await t.throwsAsync(
     main(host, {

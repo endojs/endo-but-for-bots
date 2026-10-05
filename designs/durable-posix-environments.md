@@ -15,9 +15,29 @@ app `854a4c5aae573b669692fd132bcd30cbb0cc3926`, host
 Generation 195 added the DNS and request-body follow-up below.
 Generation 196 added safe stream-failure diagnostics on 2026-10-05.
 Generation 197 added the dependency-install networking repairs described below.
-Tokyo now runs generation 199, app `c302d7ec300ecc509454862efa5d369f415ed35a`,
-host `198927919b9c99a90dbcfcb0e2ac457fb079404e`, with the host-side CapTP
-answer-release correction and per-invocation Shell timeout overrides described below.
+Generation 200 ran app `69d7ef537de40b99e3823998b105a955fb246baf`,
+host `04b95a754af32d67e1f9c554a45e7e2b24f60793`, with the host-side CapTP
+answer-release correction, per-invocation Shell timeout overrides and shared
+first-turn compaction described below.
+An October 6 unattended Luna run now verifies execution of the scoped JavaScript
+test lane, with three automatic first-turn checkpoints. It is not an all-green
+repo or clean end-to-end response: eleven test failures remain, and the final
+chat response reached the 48-tool-step cap after the report was written.
+The shared direct-provider guard is now 1024 rounds in source, including
+standalone Fae (previously 32). Local tests cover exact exhaustion, explicit
+overrides and a normal final answer beyond the old 48-round cutoff. A round
+is one provider response plus its requested tools, not one individual call;
+the final answer also consumes a round. Generation 201 now deploys this default;
+a fresh unattended end-to-end response remains under test.
+The operational guards listed below now have generous defaults and explicit
+operator settings. Local tests and adversarial review cover their configuration
+and durable replay. Generation 201 is live with app
+`1bda964b842c080519b801d274ff4f0135a58346`, host
+`7d07e051ceeb63684910ce7b29c4b3bd2f257656`, and one rebuilt credential-free
+listener at `sha256:8602ffe7480daae287db41c8bf6e9068d5827174ed7883d66db4bb19cb0a6651`
+for the development runner and all three hosted brokers. Harness/base images
+are unchanged. The fresh unattended Luna CI retry is running, not yet completed
+acceptance evidence.
 The Floot development preset publishes only the common
 Shell as `shell` in inventory and exposes structured `runCommand`/`inspectShell`
 tools, distinct from JavaScript `exec`. Only Fae inference backends select it;
@@ -420,8 +440,13 @@ remains Floot's only conversation authority.
 Pool selection is locally tested; live acceptance is not yet claimed.
 Automatic environment GC is a recorded design gap, not implementation scope for
 this PR; cleanup remains explicit on the administration facet.
-Shared Fae compaction now selects only older completed turns and retains the last
-two user turns, their complete tool groups and backend-specific context verbatim.
+Shared Fae compaction selects completed protocol groups rather than requiring
+three user turns or retaining the last two turns regardless of their size.
+It can compact between settled tool rounds inside the first user turn.
+The latest user directive stays verbatim, exactly once in continuation context.
+Recent groups are selected against half the available headroom after system
+instructions, tool schemas and that directive; their calls, results and native
+opaque context stay together and unchanged.
 Standalone checkpoints live in the existing conversation tree; Floot checkpoints
 live in its journal, not another transcript store.
 Publication checks the captured source head/frontier and provider identity before
@@ -437,16 +462,207 @@ No model size is invented when metadata is absent.
 Planning uses last-request occupancy and a conservative wire-byte heuristic
 (including tool schemas and opaque context), with 30% headroom.
 This can compact early; it is not a tokenizer or a provider-sized token estimate.
-An oversized recent tail or one large unfinished turn fails explicitly instead
-of dropping evidence.
+The summary request is separately budgeted, tools disabled, using portable
+role/call/result/failure data rather than replaying old encrypted reasoning.
+When necessary, old tool-output excerpts are shortened with explicit omission
+markers, keeping both ends; full durable results are never changed.
+An oversized settled group may be summarized as a whole rather than split.
+Unknown or unresolved outcomes refuse compaction; oversized instructions,
+schemas or non-tool summary input fail explicitly before inference dispatch.
 Original history remains available; restart restores the checkpoint without
 repeating summarization or tool effects.
-Focused tests cover forced compaction/continuation and factory reconstruction,
-unknown capacity, malformed summaries, recent opaque context, cancelled/stale
-publication and ambiguous checkpoint writes.
-Live pool/compaction acceptance is not yet claimed.
+Focused tests cover automatic first-turn and repeated compaction, parallel tools,
+bounded summary requests, recent opaque context, unknown capacity, invalid or
+non-reducing summaries, cancellation, stale publication and ambiguous writes.
+Floot's first-turn fixture executes eight effects, compacts twice and reconstructs
+without replay; refused checkpoint publication prevents continuation dispatch.
+Standalone inbox reconstruction preserves the selected checkpoint, original
+effects, admission receipt and cleared occupancy reading.
+This October 6 change is deployed on Tokyo generation 200. A fresh network-off
+development session through Codex's `gpt-5.6-luna` ran eight commands, each emitting
+34,023 characters and appending a distinct marker, in separate tool rounds.
+Its first user turn published two automatic checkpoints and finished with eight
+successful calls/results; no three-user-message gate or operator compaction was
+used. Both summaries used the requested Markdown handoff and carried the exact
+paths, command order, completed effects and no-rerun constraint forward.
+After explicit idle native stop and a cold daemon restart, context-only recall
+named all eight markers, the saved native HOME file and their completed status,
+with no tools or additional checkpoint. The hydrated seed evidence was unchanged.
+Startup deliberately remints the controller over the retained profile, so the
+test recorded an explicit one-time adoption after checking both controller
+formulas, the unchanged profile/inventory and exact pre-restart evidence digest.
+The admin identity and creation timestamp were first observed after restart;
+this is conversation-continuity evidence, not independent native-admin identity
+continuity or unplanned-crash recovery proof.
+Private evidence was verified before deleting only this disposable session and
+disposing its allocation. The original eight sessions, Secrets and workspaces
+were preserved. Receipts remain under
+`/var/lib/endo/fae-compaction-acceptance-20261006/`; no helper was registered as a
+daemon formula. This bounded gate did not verify unattended whole-suite execution;
+the later full-lane verification below supersedes that limitation.
+
+The inspected [OpenCode implementation](https://github.com/kumavis/opencode/blob/af032b9fbc293cd19283e16f6a7f8effe296c065/packages/opencode/src/session/compaction.ts)
+uses a budgeted recent tail, within-turn splitting and bounded prose tool excerpts
+for summarization, then publishes its checkpoint before returning to inference.
+Fae adopts those principles, not OpenCode's separate persistence/pruning machinery:
+Endo's existing owners still require complete settled protocol groups and retain
+the original evidence.
+Its summary prompt likewise asks for an anchored Markdown handoff: goal,
+constraints/decisions, progress (done, underway, blockers/failures), next steps,
+and paths/references, with explicit preservation of still-relevant earlier
+summary facts and exact commands, paths and identifiers.
+This is model-authored continuation text, not a new durable state schema or
+system instruction; section headings are guidance rather than a dispatch gate.
+
+### Unattended JavaScript test-lane verification — 2026-10-06
+
+Fresh session `muvuozxr-fe6xx1-0` used Fae/Codex `gpt-5.6-luna`, high reasoning,
+the development preset and public internet on generation 200. One initial task
+asked it to execute, not fix, the JavaScript workspace lane at the exact deployed
+app revision. No coaching, corrective turn, manual compaction, source/test edit,
+signature bypass or privilege escalation was used. It selected explicit
+per-invocation timeouts while leaving the runners' own timeouts unchanged.
+The run lasted about 57 minutes and settled with **48 tool calls/results and
+three automatic checkpoints in its first user turn**.
+
+The agent corrected its `sh`/`pipefail` mistake and transient Yarn proxy resets,
+then completed immutable dependency installation and the root declaration build.
+It downloaded signed Debian dependencies into native HOME, extracted runtime
+libraries and `procps` without root, and used the locked Chromium/Electron recipes.
+The 13-minute non-daemon graph completed under its explicit 30-minute Shell
+override. Four initially blocked suites passed after these prerequisite repairs:
+Preact container (171), Preact social (34), Familiar (7), and Hosted Agent (826).
+Host worker memory stayed healthy; the earlier V8 heap failure did not recur.
+
+Independent checks, including adversarial review of the retained artifacts,
+establish the following coverage:
+
+| Gate | Verified result |
+|---|---|
+| Non-daemon graph | All 115 package test tasks and 125 build tasks terminal, no cache hits; test-task identities exactly match the in-scope package scripts |
+| Daemon files | Exact sorted manifest of 109 files; 108 non-core files executed once in five batches |
+| Core daemon titles | 268 unique source titles, including conditional Node aliases and `testShim`; disjoint a–f, g–m and complement title sets match the reporter exactly |
+| Core partitions | 65 passed; 89 passed; 110 passed and 4 failed; every complement exclusion, including `!j*`, present in actual invocation |
+| Daemon aggregate | 1,506 passed, 6 failed, 5 configured skips (four Node/Rust cross-supervisor and one network test) |
+| Checkout | Exact revision `69d7ef537de40b99e3823998b105a955fb246baf`; tracked source and lockfiles unchanged |
+
+Eleven unique failures remain: two Codex setup assertions, two Sandbox
+Podman-policy host-environment/proxy assertions, one OCapn API snapshot, and six
+daemon failures. The daemon failures are the archived/native Floot context
+restart fixtures, OpenCode backend owner/storage, Claude backend owner/storage,
+OpenCode broker secret retention, and `provideSubMount` capability validation.
+The retained broker fixtures still pass retired model configuration; the logs
+show that refusal explicitly. The OCapn failure is printed three times by its
+wrapper but represents one failing title. No failing assertion was suppressed
+or patched. Rust, XS, test262, lint and type-contract CI lanes were outside scope.
+
+The agent wrote its report, coverage ledger and per-task status file, and copied
+the short report to `/workspace/endo-test-run-report.md`. Its own aggregate count
+(1,384 daemon passes) is wrong: the independently checked aggregate is 1,506.
+It also mislabels one core failure and the Sandbox proxy assertions. Preserve
+that original report as evidence, but use the independent audit above as authority.
+After writing the files at tool step 48, the final chat output was the existing
+tool-step-limit warning. Thus **unattended test execution is verified; clean
+end-to-end assistant completion is not**. The round-cap/final-summary behavior
+and report accuracy remain follow-ups, not compaction failures. This run did not
+repeat the cold-restart gate; the separate eight-command test above covers it.
+
+Full hydrated tool evidence excludes credentials and opaque reasoning payloads.
+The exporter ends with an explicit completion receipt for 48 calls/results.
+The private archive contains 379 allowlisted regular log/JSON/report files,
+20,212,168 source bytes, compressed to 3,837,996 bytes, SHA-256
+`bba30483e1946a3e62e76a947a6d7e5113931b82beae86b92961bd02bf930ebb`.
+Each extracted member was independently checked against its recorded hash;
+the archive also compared equal to the live files before disposal.
+Receipts, the original reports and the independent audit remain under
+`/var/lib/endo/endo-autonomous-suite-4-20261006/`. No helper was installed as a
+daemon formula. Only the fresh test session and its owned native allocation were
+removed after positive settlement, export/archive verification and an acknowledged
+idle stop/disposal. The original eight sessions, their uncertainty evidence,
+Secrets, renewal owners and workspaces were preserved.
+
+### Nearby operational limits — 2026-10-06 source audit
+
+These are implementation choices, not provider/model limits. Following the
+operator's approval, defaults protect against runaway work, not normal high
+usage. They do not reserve memory, disk, provider tokens or quota. Prior Yarn
+resets are not proven to come from the old connection cap.
+
+| Limit | Current behavior | Source |
+|---|---|---|
+| Retained transcript per turn | 1,073,741,824 UTF-16 code units across encoded records and 1,048,576 records; each stored content value may use 268,435,456 code units. Exceeding admission refuses a new write. Compaction does not delete original tool evidence. | `FLOOT_MAX_TRANSCRIPT_CHARS`, `FLOOT_MAX_TRANSCRIPT_RECORDS`, `FLOOT_MAX_CONTENT_CHARS` |
+| Public network | 1,024 concurrent sockets/resolutions; 1 TiB aggregate upload/download per egress instance; 24-hour absolute tunnel lifetime. Proxy and DNS worker admission use the same concurrent default. There is still no default lifetime connection-count allowance. | `ENDO_PUBLIC_EGRESS_MAX_CONNECTIONS`, `ENDO_PUBLIC_EGRESS_MAX_BYTES`, `ENDO_PUBLIC_EGRESS_TIMEOUT_MS` |
+| Development Shell | 24-hour default invocation timeout, overridable per call. Each stream retains 16 MiB, then marks truncation and drains. The native process owner has a separate 1 GiB per-stream runaway-output guard. Keep large logs in native HOME and inspect pieces. | `FLOOT_SHELL_TIMEOUT_MS`, `FLOOT_SHELL_MAX_OUTPUT_BYTES`, `ENDO_ENVIRONMENT_PROCESS_OUTPUT_BYTES` (bigint bytes); low-level spawn also accepts `stdoutByteLimit`/`stderrByteLimit` |
+| Inference request | One-hour default for direct OpenRouter HTTP and hosted provider requests, not a whole-turn or token cap. | `FLOOT_PROVIDER_REQUEST_TIMEOUT_MS`, `FAE_PROVIDER_REQUEST_TIMEOUT_MS`, `LAL_REQUEST_TIMEOUT_MS`, `ENDO_PROVIDER_REQUEST_TIMEOUT_MS` |
+| Subagents | 1,024 live children per parent; depth 32; 24-hour default reply wait, with up to seven days per ask; 1 MiB task/prompt and 16 MiB reply preview. Closed-ask and known-agent interception sets each retain 65,536 entries. | `FLOOT_MAX_SUBAGENTS`, `FAE_MAX_SUBAGENTS`, `FLOOT_MAX_SUBAGENT_DEPTH`, `FAE_MAX_SUBAGENT_DEPTH`; suffix settings below |
+
+Subagent settings use either `FLOOT_` or `FAE_` followed by
+`SUBAGENT_TIMEOUT_SECONDS`, `SUBAGENT_MAX_TIMEOUT_SECONDS`,
+`SUBAGENT_MAX_TASK_CHARS`, `SUBAGENT_MAX_ANSWER_CHARS`,
+`SUBAGENT_MAX_CLOSED_ASKS`, or `SUBAGENT_MAX_KNOWN_SUBAGENTS`.
+The round budget uses `FLOOT_MAX_TOOL_ROUNDS`/`FAE_MAX_TOOL_ROUNDS` (1024).
+Malformed settings fail eagerly. Numeric upper bounds are timer/array domain
+constraints, not the former small workload ceilings; traffic uses bigint.
+Standalone Fae's flat derived pet names still fit Endo's 255-character format:
+short names permit more nesting, maximal 63-character names permit two levels.
+All owned names are preflighted before creating anything.
+
+Setup forwards only explicit allowlisted settings into retained Endo formula
+environments; Fae descendants inherit workload knobs without parent topology.
+Broker/environment construction changes require an acknowledged stop and
+deliberate retirement/reprovision, rather than silently ignoring settings on
+retained owners. Shell recipes already recorded for existing environments are
+not rewritten. New transcript limits apply to new writes, not replay or
+duplicate acknowledgements: lowering settings cannot invalidate saved evidence.
+Admission prevalidates all content fields and event schema/size before the first
+storage write; actual storage failures still retain uncertainty.
+Daemon mail text and formula-environment values use explicit structural text
+bounds, so the former implicit 100,000-character guards do not defeat larger
+task/prompt budgets. Names, paths, environment keys and capability guards are
+unchanged. A real daemon test covers 1 MiB send/reply/edit payloads and formula
+construction values, including latest-payload and formula restoration.
+Existing mail revision history is not restored after restart; this is a separate
+durability follow-up, not a new guarantee from raising workload limits.
+
+The full Floot and hosted-agent suites pass (832 and 833 tests respectively,
+with one hosted-agent skip); Fae passes 211 tests with two known failures, and
+LAL passes 157 with one skip. Focused native output/lifecycle tests pass 35.
+Changed-source ESLint has no errors, package typechecks and the root documentation
+build pass. The listener image and workload defaults are deployed on generation
+201. The fresh scoped JavaScript CI run through Floot is in progress.
+
+The coordinated listener cutover retired eight old test sessions under the
+operator's cull approval. Six completed supported deletion; the quarantined
+fixtures `muvad3xs-9e0c3k-1` and `muvcjeso-28ooeb-0` required explicit retirement,
+not recovery. Original private journals, registry snapshots, admin/guest handles
+and seven workspace references are archived on the retained profile under
+`retired-workload-20261006`. Six Secret entry identities are unchanged; renewal
+owners and development HOME were not disposed. No interrupted lifecycle was
+rewritten as idle or any old tool outcome marked successful.
+The old factory's registered disposal hook settled and its held facet confirmed
+closed before the operator appended an empty registry snapshot. Web admission
+was fenced; the old daemon cgroup, running Podman containers, conmon processes
+and 9P mounts were verified empty before replacements started. Receipts remain
+at `/var/lib/endo/workload-guards-20261006/`; helpers are connect-only, not formulas.
+The fresh run is session `muw2eab5-k0izgi-1`, with private receipts/logs under
+`/var/lib/endo/endo-autonomous-suite-5-20261006/`. It uses the exact app revision
+above and `gpt-5.6-luna`. Shell inspection confirms the 24-hour/16 MiB defaults;
+clone and initial public-network tool use succeeded. The temporary stopped
+image holder was removed after the activated generation protected the listener.
+
+Per-frame bounds, paged reads, model context/output limits, display-only thinking
+previews, DNS lookup timeouts and malformed-input/address validation have
+different purposes and remain unchanged. Larger operator workload budgets do
+not bypass public-address confinement or make unsupported native context valid.
+The direct Anthropic SDK's request policy is unchanged; the direct-provider
+timeout knobs above select OpenRouter HTTP requests. Listener-owner capacity is
+a separate operator resource setting (Tokyo currently explicitly sets 16 hosted
+sessions per broker); 1,024 subagents is not a reservation for 1,024 containers
+or concurrently admitted provider requests.
+
 The shared credential-free listener worker now accepts a closed network-only
-bootstrap with only a public-egress endpoint, and publishes `ManagedNetworkV1`
+bootstrap with a public-egress endpoint and optional copy-data operator limits,
+and publishes `ManagedNetworkV1`
 readiness without creating or reporting an inference HTTP endpoint.
 It reuses the same rootless isolated runtime, network observations, DNS/proxy
 listeners and retained cleanup; no fake provider grant or new sidecar framework.

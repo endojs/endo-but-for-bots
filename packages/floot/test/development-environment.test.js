@@ -80,11 +80,37 @@ test('development publication retains private admin, shares exact workspace, and
   t.is(f.publications.length, 1);
   t.is(f.publications[0].workspace, f.mount);
   t.is(f.publications[0].recipe.networkPolicy, 'public-internet');
+  t.is(f.publications[0].recipe.policy.timeoutMs, 86_400_000);
+  t.is(f.publications[0].recipe.policy.maxOutputBytes, 16 * 1024 * 1024);
   t.is(f.guestStore.get('shell'), f.shell);
   t.false(f.guestStore.has('environment-runner'));
   t.false(f.guestStore.has('admin'));
   t.true(f.hostStore.has('floot-environment-admin-test'));
   t.false(f.hostStore.has('floot-environment-shell-test'));
+});
+
+test('development shell limits are recorded in the recipe and never rewritten on revival', async t => {
+  const f = fixture();
+  const options = {
+    host: f.host,
+    guest: f.guest,
+    agentName: 'session-agent-test',
+    id: 'test',
+    networkPolicy: 'public-internet',
+  };
+  await provideDevelopmentEnvironment({
+    ...options,
+    shellTimeoutMs: 123_000,
+    shellOutputBytes: 4096,
+  });
+  await provideDevelopmentEnvironment({
+    ...options,
+    shellTimeoutMs: 456_000,
+    shellOutputBytes: 8192,
+  });
+  t.is(f.publications.length, 1);
+  t.is(f.publications[0].recipe.policy.timeoutMs, 123_000);
+  t.is(f.publications[0].recipe.policy.maxOutputBytes, 4096);
 });
 
 test('failed Shell publication retries the same allocation; missing private admin never acknowledges cleanup', async t => {

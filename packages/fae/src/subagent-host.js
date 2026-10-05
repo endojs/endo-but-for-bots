@@ -5,6 +5,8 @@
 import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
+import { DEFAULT_WORKLOAD_LIMITS } from '@endo/hosted-agent/workload-limits.js';
+import { readFaeWorkloadConfig } from './workload-config.js';
 
 import { AUTH_SECRET_PETNAME } from './credentials.js';
 import {
@@ -24,10 +26,12 @@ import {
  * raise it; the bound exists to keep a model from opening an unbounded tree of
  * daemon-resident conversations.
  */
-export const DEFAULT_MAX_SUBAGENT_DEPTH = 1;
+export const DEFAULT_MAX_SUBAGENT_DEPTH = DEFAULT_WORKLOAD_LIMITS.subagentDepth;
+harden(DEFAULT_MAX_SUBAGENT_DEPTH);
 
 /** Live subagents one parent may hold at a time. */
-export const DEFAULT_MAX_SUBAGENTS = 8;
+export const DEFAULT_MAX_SUBAGENTS = DEFAULT_WORKLOAD_LIMITS.subagents;
+harden(DEFAULT_MAX_SUBAGENTS);
 
 /**
  * @param {string} parentName
@@ -103,6 +107,8 @@ const profileNameFor = handleName => `profile-for-${handleName}`;
  * @param {string} options.spawnerSpecifier
  * @param {number} options.depth - Delegation depth of the agent being created.
  * @param {number} options.maxDepth
+ * @param {number} [options.maxSubagents]
+ * @param {Record<string,string>} [options.workloadEnv]
  * @param {string} [options.authSecretLocator] - `SecretBlob` holding the
  *   provider auth token. Absent only for tokenless providers.
  * @param {string} [options.systemPrompt] - Replaces the standing prompt. Only
@@ -123,11 +129,14 @@ export const provisionFaeAgent = async ({
   spawnerSpecifier,
   depth,
   maxDepth,
+  maxSubagents = DEFAULT_MAX_SUBAGENTS,
+  workloadEnv = {},
   authSecretLocator,
   systemPrompt,
   delegatedPrompt,
   pin = false,
 }) => {
+  readFaeWorkloadConfig(workloadEnv);
   const profileName = profileNameFor(name);
   const driverResultName = `${name}${DRIVER_SUFFIX}`;
   const driverHandleName = `${driverResultName}${HANDLE_SUFFIX}`;
@@ -158,6 +167,13 @@ export const provisionFaeAgent = async ({
     // operator's pre-existing pin by the same name would be silently dropped.
     ['@pins', driverResultName],
   ]);
+
+  // The recursive workload budget does not relax the daemon's flat pet-name
+  // format. Refuse an overlong derived name before even inspecting the host.
+  for (const segments of ownedNames) {
+    segments.every(segment => segment.length <= 255) ||
+      Fail`Derived Fae name exceeds the 255-character pet-name limit`;
+  }
 
   // `name` is the *host* name, which for a subagent carries the infix; the
   // caller validates the agent-level name it derived this from.
@@ -196,6 +212,8 @@ export const provisionFaeAgent = async ({
           SUBAGENT_PARENT: name,
           SUBAGENT_DEPTH: `${depth + 1}`,
           SUBAGENT_MAX_DEPTH: `${maxDepth}`,
+          SUBAGENT_MAX_COUNT: `${maxSubagents}`,
+          ...workloadEnv,
           // The operator's standing prompt, so every agent this spawner
           // creates inherits it rather than the stock one: a delegation must
           // not be a way out of the deployment's instructions.
@@ -231,6 +249,7 @@ export const provisionFaeAgent = async ({
       env: harden({
         FAE_SYSTEM_PROMPT: systemPrompt || '',
         FAE_SUBAGENT_PROMPT: delegatedPrompt || '',
+        ...workloadEnv,
       }),
     });
 
@@ -442,6 +461,7 @@ harden(releaseFaeAgent);
  * @param {number} options.depth - Depth of the agents this spawner creates.
  * @param {number} options.maxDepth
  * @param {number} [options.maxSubagents]
+ * @param {Record<string,string>} [options.workloadEnv]
  * @param {string} [options.systemPrompt] - The operator's standing prompt for
  *   the parent, which every subagent inherits as its own standing prompt; the
  *   parent model's instructions are appended beneath it.
@@ -454,8 +474,10 @@ export const makeSubagentSpawner = ({
   depth,
   maxDepth,
   maxSubagents = DEFAULT_MAX_SUBAGENTS,
+  workloadEnv = {},
   systemPrompt,
 }) => {
+  const { subagentLimits: limits } = readFaeWorkloadConfig(workloadEnv);
   // The parse the whole scheme rests on is "every segment matches
   // `agentNamePattern`, joined by the infix". The child segment is checked in
   // `spawn`; this is the only place the parent's own name — which arrives from
@@ -505,8 +527,9 @@ export const makeSubagentSpawner = ({
       return serially(async () => {
         const { systemPrompt: childPrompt } = options;
         childPrompt === undefined ||
-          (typeof childPrompt === 'string' && childPrompt.length <= 32_768) ||
-          Fail`Subagent system prompt must be a string of at most 32768 characters`;
+          (typeof childPrompt === 'string' &&
+            childPrompt.length <= limits.maxTaskChars) ||
+          Fail`Subagent system prompt must be a string of at most ${q(limits.maxTaskChars)} characters`;
         const {
           hostAgent,
           providerLocator,
@@ -525,6 +548,8 @@ export const makeSubagentSpawner = ({
           spawnerSpecifier,
           depth,
           maxDepth,
+          maxSubagents,
+          workloadEnv,
           authSecretLocator,
           systemPrompt,
           delegatedPrompt: childPrompt,

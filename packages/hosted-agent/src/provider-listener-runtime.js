@@ -26,6 +26,7 @@ import process from 'node:process';
 import { promisify } from 'node:util';
 
 import { makeProviderPipe } from './provider-pipe.js';
+import { readPublicEgressLimits } from './public-egress.js';
 
 /** @import { FileHandle } from 'node:fs/promises' */
 
@@ -97,6 +98,7 @@ export const makePodmanProviderListenerRuntimeKit = ({
   maxListeners = 16,
   publicInternet = false,
 }) => {
+  const egressLimits = readPublicEgressLimits(env);
   (/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(ownerId) &&
     /^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$/.test(imageRef)) ||
     Fail`Invalid provider runtime identity`;
@@ -339,6 +341,19 @@ export const makePodmanProviderListenerRuntimeKit = ({
     const { network } = configuration;
     if (Object.hasOwn(configuration, 'network'))
       mustMatch(harden(network), harden({ endpoint: M.remotable() }));
+    // Operator limits cross the private bootstrap, not the worker's environment
+    // or session input. Keep the credential-free image's ambient-env fence.
+    const workerNetwork =
+      network &&
+      harden({
+        ...network,
+        limits: {
+          maxConnections: egressLimits.maxConnections,
+          timeoutMs: egressLimits.timeoutMs,
+          maxUploadBytes: egressLimits.maxBytes,
+          maxDownloadBytes: egressLimits.maxBytes,
+        },
+      });
     !networkOnly ||
       network?.endpoint ||
       Fail`Network worker requires egress authority`;
@@ -487,11 +502,11 @@ export const makePodmanProviderListenerRuntimeKit = ({
         output: subprocess.stdin,
         bootstrap: harden(
           networkOnly
-            ? { network }
+            ? { network: workerNetwork }
             : {
                 endpoint,
                 limits,
-                ...(network ? { network } : {}),
+                ...(network ? { network: workerNetwork } : {}),
               },
         ),
       });

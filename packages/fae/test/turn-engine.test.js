@@ -3,7 +3,11 @@ import '@endo/init';
 
 import test from 'ava';
 
-import { runAgenticTurn } from '../src/turn-engine.js';
+import { DEFAULT_MAX_TOOL_ROUNDS, runAgenticTurn } from '../src/turn-engine.js';
+
+test('Fae and Floot share a 1024-round default', t => {
+  t.is(DEFAULT_MAX_TOOL_ROUNDS, 1024);
+});
 
 test('turn engine commits every complete tool step before the final answer', async t => {
   const trace = [];

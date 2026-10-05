@@ -4,6 +4,10 @@
  * Use createProvider(env) to get a provider for the current configuration.
  */
 
+import {
+  DEFAULT_WORKLOAD_LIMITS,
+  readWorkloadLimit,
+} from '@endo/hosted-agent/workload-limits.js';
 import { makeAnthropicProvider } from './anthropic.js';
 import { makeGeminiProvider } from './gemini.js';
 import { makeLlamaCppProvider } from './llamacpp.js';
@@ -31,7 +35,7 @@ import { detectProviderKind, resolveModelForHost } from './config.js';
  * - LAL_MAX_TOKENS: Max tokens for completion (llama.cpp only)
  * - LAL_MAX_MESSAGES: Truncate to last N messages (llama.cpp only)
  *
- * @param {{ LAL_HOST?: string, LAL_MODEL?: string, LAL_AUTH_TOKEN?: string, LAL_MAX_TOKENS?: string, LAL_MAX_MESSAGES?: string }} env
+ * @param {{ LAL_HOST?: string, LAL_MODEL?: string, LAL_AUTH_TOKEN?: string, LAL_MAX_TOKENS?: string, LAL_MAX_MESSAGES?: string, LAL_REQUEST_TIMEOUT_MS?: string }} env
  * @returns {Provider}
  */
 export const createProvider = env => {
@@ -43,6 +47,11 @@ export const createProvider = env => {
     return makeOpenRouterProvider({
       apiKey: env.LAL_AUTH_TOKEN || '',
       model: env.LAL_MODEL || '',
+      requestTimeoutMs: readWorkloadLimit(
+        env,
+        'LAL_REQUEST_TIMEOUT_MS',
+        DEFAULT_WORKLOAD_LIMITS.inferenceTimeoutMs,
+      ),
     });
   }
 

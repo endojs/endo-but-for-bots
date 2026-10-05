@@ -168,3 +168,21 @@ test('DNS binding collision rejects cleanly without a leaked socket', async t =>
     { code: 'EADDRINUSE' },
   );
 });
+
+test('DNS operator concurrency can exceed the former 64 ceiling', async t => {
+  const server = await makePublicDnsListener({
+    endpoint: resolver([]),
+    host: '127.0.0.1',
+    port: 0,
+    maxPending: 2048,
+  });
+  t.teardown(server.dispose);
+  t.true(server.port > 0);
+  await t.throwsAsync(
+    makePublicDnsListener({
+      endpoint: resolver([]),
+      maxPending: 0x1_0000_0000,
+    }),
+    { message: /Invalid DNS listener options/ },
+  );
+});

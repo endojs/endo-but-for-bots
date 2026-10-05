@@ -11,7 +11,7 @@ import { makeSandboxSpawner } from '../src/spawner.js';
 
 /**
  * @param {import('ava').ExecutionContext} t
- * @param {{ code?: number, readerFailure?: boolean, hang?: boolean, admission?: Promise<unknown>, stdinClosure?: Promise<unknown>, remote?: boolean }} [plan]
+ * @param {{ code?: number, readerFailure?: boolean, hang?: boolean, admission?: Promise<unknown>, stdinClosure?: Promise<unknown>, remote?: boolean, outputChunks?: number, outputByteLimit?: bigint }} [plan]
  */
 const fixture = async (t, plan = {}) => {
   const exit =
@@ -39,6 +39,8 @@ const fixture = async (t, plan = {}) => {
             yield bytes('hello ');
             if (plan.readerFailure) throw Error('broken stdout');
             yield bytes('world');
+            for (let index = 0; index < (plan.outputChunks ?? 0); index += 1)
+              yield new Uint8Array(64 * 1024);
           },
         }),
         stderr: harden({
@@ -79,6 +81,7 @@ const fixture = async (t, plan = {}) => {
     exit.resolve({ code: plan.code ?? 0, signal: null });
   const spawner = makeSandboxSpawner(
     plan.remote ? await makeLoopback('sandbox-spawner').makeFar(slice) : slice,
+    { outputByteLimit: plan.outputByteLimit },
   );
   const shell = makeShell({
     cwd: '/workspace',
@@ -124,6 +127,24 @@ test('Sandbox spawner refuses shell wrapping before admitting a command', async 
     message: /structured argv/,
   });
   t.is(f.calls.length, 0);
+});
+
+test('Shell truncates and drains output beyond the old native 16 MiB guard', async t => {
+  t.timeout(10_000);
+  const f = await fixture(t, { outputChunks: 272 });
+  const result = await E(f.shell).exec('echo', []);
+  t.is(result.stdout.length, 1024);
+  t.true(result.truncated);
+  t.is(result.exitCode, 0);
+  t.deepEqual(f.signals, []);
+});
+
+test('native output guard remains independently configurable', async t => {
+  const f = await fixture(t, { outputByteLimit: 4n });
+  await t.throwsAsync(E(f.shell).exec('echo', []), {
+    message: /byte limit|stdout|reader/,
+  });
+  t.true(f.signals.length > 0);
 });
 
 test('Shell and separate byte streams cross a CapTP membrane', async t => {

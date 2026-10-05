@@ -35,10 +35,14 @@ import {
   readAccountAuthority,
   readBrokerSettings,
   readSliceImageReference,
+  readProvisionedEnvironment,
   resolveFuturePath,
   resolvePinnedImageRef,
 } from './hosted-setup.js';
-import { BROKER_OWNER_PATTERN } from './provider-broker-service.js';
+import {
+  BROKER_OWNER_PATTERN,
+  readBrokerWorkloadEnv,
+} from './provider-broker-service.js';
 import {
   containsPath,
   isNormalizedAbsolutePath,
@@ -375,6 +379,7 @@ harden(assertGuestRootsDisjoint);
  * @param {string} spec.specifier The broker service's entrypoint.
  * @param {string[]} spec.powersPath The credential the broker reads.
  * @param {string} spec.temporary The alias name used only for the mint.
+ * @param {Record<string,string>} [spec.workloadEnv] Validated operator construction settings.
  */
 export const provideBrokerService = async (
   hostAgent,
@@ -395,11 +400,26 @@ export const provideBrokerService = async (
     specifier,
     powersPath,
     temporary,
+    workloadEnv = {},
   },
 ) => {
   await null;
+  const settingsEnv = readBrokerWorkloadEnv(workloadEnv);
   const brokerPath = [sandboxDir, 'broker-service'];
   if (existingBroker) {
+    const retained = await readProvisionedEnvironment(hostAgent, {
+      label,
+      namePath: brokerPath,
+      expectedSpecifier: specifier,
+    });
+    const recorded = readBrokerWorkloadEnv(retained.env);
+    for (const key of new Set([
+      ...Object.keys(recorded),
+      ...Object.keys(settingsEnv),
+    ])) {
+      recorded[key] === settingsEnv[key] ||
+        Fail`${b(label)} broker workload configuration changed at ${key}; stop and retire its retained owner before replacing it`;
+    }
     console.log(
       `Retaining ${label} broker service with its persisted configuration; its slice and listener images match the current pins.`,
     );
@@ -426,7 +446,7 @@ export const provideBrokerService = async (
       temporary,
       specifier,
       resultName: brokerPath,
-      env: { [configEnvName]: brokerConfig },
+      env: { [configEnvName]: brokerConfig, ...settingsEnv },
     });
     console.log(`Minted ${sandboxDir}/broker-service`);
   }
