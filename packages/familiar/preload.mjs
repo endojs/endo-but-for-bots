@@ -16,6 +16,22 @@
 // @ts-ignore Electron is not typed in this project
 import { contextBridge, ipcRenderer } from 'electron';
 
+// Warnings may arrive before the page subscribes, so the latest set is kept
+// and replayed to each subscriber.
+/** @type {string[] | undefined} */
+let latestSecurityWarnings;
+/** @type {Set<(warnings: string[]) => void>} */
+const securityWarningSubscribers = new Set();
+ipcRenderer.on(
+  'familiar:security-warnings',
+  (/** @type {unknown} */ _event, /** @type {string[]} */ warnings) => {
+    latestSecurityWarnings = warnings;
+    for (const callback of securityWarningSubscribers) {
+      callback(warnings);
+    }
+  },
+);
+
 contextBridge.exposeInMainWorld(
   'familiar',
   /** @type {object} */ ({
@@ -24,9 +40,11 @@ contextBridge.exposeInMainWorld(
     getVersion: () => ipcRenderer.invoke('familiar:get-version'),
     onSecurityWarnings: (
       /** @type {(warnings: string[]) => void} */ callback,
-    ) =>
-      ipcRenderer.on('familiar:security-warnings', (_event, warnings) =>
-        callback(warnings),
-      ),
+    ) => {
+      securityWarningSubscribers.add(callback);
+      if (latestSecurityWarnings !== undefined) {
+        callback(latestSecurityWarnings);
+      }
+    },
   }),
 );

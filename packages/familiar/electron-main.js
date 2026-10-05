@@ -31,6 +31,7 @@ import {
   installLocalhttpHandler,
 } from './src/protocol-handler.js';
 import { installNavigationGuard } from './src/navigation-guard.js';
+import { deliverSecurityWarnings } from './src/security-warnings.js';
 import {
   configureCommandLineFlags,
   installExfiltrationDefenses,
@@ -301,15 +302,16 @@ const main = async () => {
   const warnings = await verifyExfiltrationDefenses();
   if (warnings.length > 0) {
     logger.warn('[Familiar] Security warnings:', warnings);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('familiar:security-warnings', warnings);
-    }
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    deliverSecurityWarnings(mainWindow.webContents, warnings);
   }
 
   // macOS: recreate window when dock icon is clicked
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       mainWindow = createWindow();
+      deliverSecurityWarnings(mainWindow.webContents, warnings);
     }
   });
 

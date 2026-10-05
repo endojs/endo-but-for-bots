@@ -13,7 +13,14 @@
 - `packages/familiar/electron-main.js` — integrates all modules: registers
   scheme before app ready, installs handler and defenses after app ready,
   sends security warnings to renderer via IPC.
-- `packages/familiar/preload.js` — exposes `onSecurityWarnings` callback.
+- `packages/familiar/src/security-warnings.js` — delivers the warnings on
+  every page load, so a renderer that was still loading (or reloads after a
+  daemon restart) does not miss them.
+- `packages/familiar/preload.mjs` — exposes `onSecurityWarnings` callback,
+  replaying the latest warnings to a late subscriber.
+- `packages/chat/security-warning-banner.js` — renders the warnings from the
+  `familiar:security-warnings` IPC channel as a dismissible banner at the top
+  of the Chat UI; wired up in `packages/chat/main.js`.
 
 **Not yet implemented:**
 
@@ -21,8 +28,6 @@
   iframes (see `familiar-chat-weblet-hosting`).
 - MessagePort bridge — Chat-side WebSocket-to-MessagePort bridging for weblet
   CapTP connections.
-- Chat security warning banner — renderer-side display of warnings from the
-  `familiar:security-warnings` IPC channel.
 
 **Design deviations from implementation:**
 
@@ -544,7 +549,11 @@ if (warnings.length > 0) {
 - `packages/familiar/src/exfiltration-defense.js` — command-line flags, DNS
   poisoning, request interception, permission handler, runtime verification
   **(implemented)**
-- `packages/familiar/preload.js` — `onSecurityWarnings` IPC bridge
+- `packages/familiar/src/security-warnings.js` — warning delivery on page
+  load **(implemented)**
+- `packages/familiar/preload.mjs` — `onSecurityWarnings` IPC bridge
+  **(implemented)**
+- `packages/chat/security-warning-banner.js` — security warning banner
   **(implemented)**
 - `packages/chat/` — weblet iframe hosting: MessagePort creation, WebSocket
   bridging, port transfer to iframes **(not yet implemented)**
