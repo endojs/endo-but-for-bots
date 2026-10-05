@@ -2296,6 +2296,7 @@ __metadata:
   dependencies:
     "@electron/packager": "npm:^20.3.0"
     "@endo/compartment-mapper": "workspace:^"
+    "@endo/harden": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/where": "workspace:^"
     "@lavamoat/allow-scripts": "npm:^3.4.1"
