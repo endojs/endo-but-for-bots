@@ -13,9 +13,10 @@
 app `854a4c5aae573b669692fd132bcd30cbb0cc3926`, host
 `1f2a4bdc027089096a6cea27d549903e527c2b6b`.
 Generation 195 added the DNS and request-body follow-up below.
-Tokyo now runs generation 196, app `48fe2f9111c3b3b46896038cf640bdc591beb221`,
-host `669c98b091721c5d93960e2eac66b78d81195028`, with safe stream-failure
-diagnostics added on 2026-10-05.
+Generation 196 added safe stream-failure diagnostics on 2026-10-05.
+Tokyo now runs generation 197, app `5079916db715d368bb6bc4e1d9b6b6ac5a4d96ad`,
+host `f7021d6a1cf8686eea412cdd2ae3fbe9458d6efc`, with the dependency-install
+networking repairs described below.
 The Floot development preset publishes only the common
 Shell as `shell` in inventory and exposes structured `runCommand`/`inspectShell`
 tools, distinct from JavaScript `exec`. Only Fae inference backends select it;
@@ -144,6 +145,116 @@ The dedicated session/factory/profile were removed.
 Original sessions, installed tools, workspaces, Secrets and renewal owners were
 preserved; no failed user task was replayed.
 Private receipts and logs: `/var/lib/endo/stream-error-acceptance-20261005/`.
+
+### Repository tests inside the development slice
+
+A dedicated, operator-guided Floot/Fae session using `gpt-5.6-luna` cloned this branch into
+`/home/node/ebfb`, not the 9P workspace, and used the image's Node 22/Corepack.
+Two shared networking defects blocked Yarn installation before any test could run:
+
+- Yarn 4 does not use the ordinary `HTTP_PROXY`/`HTTPS_PROXY` environment settings.
+  The common sandbox environment now also supplies Yarn's own proxy settings,
+  derived from the same credential-free managed endpoint.
+- The egress object's default lifetime allowance stopped installation at exactly
+  1,024 cached packages and then refused later connections.
+  There is now no lifetime connection cap by default, and no unbounded admission
+  counter when it is omitted.
+  Explicit finite allowances remain available to trusted callers.
+  Concurrent connections, bytes, deadlines, public-address checks and revocation
+  remain bounded; this change does not permit private networking.
+
+Generation 197 preserved the slice's native HOME across explicit stop/restart.
+Without manual proxy overrides, the agent verified Yarn's managed proxy setting,
+fast-forwarded the clean tracked checkout and completed immutable installation
+in about 35 seconds.
+It then ran the whole Lal suite: 151 passed, one skipped because `LAL_HOST` was
+not set, zero failures.
+The broader JavaScript workspace run reached the Shell's ten-minute deadline.
+Smaller foreground tasks, complete HOME logs and bounded tool-result summaries
+let the agent continue without increasing test timeouts or sandbox privileges:
+
+- Signed Debian download-only resolution and HOME extraction supplied Chromium's
+  missing libraries: preact-container passed 171 tests and preact-social 34.
+- The locked Electron installer's explicit download, with normal checksum
+  verification and no global lifecycle-script enablement, let Familiar pass seven.
+- HOME extraction of `procps` supplied `pgrep`; hosted-agent then passed all 826.
+- The clean checkout initially failed three agent-tools declaration-freshness
+  tests, while the warm local tree passed.
+  Running the normal `build:types` prerequisite succeeded and the whole
+  agent-tools suite passed 231 tests.
+  Turbo's ordinary `build` graph alone does not provide those declarations.
+
+The final non-daemon graph completed with 238 of 240 build/test tasks successful,
+236 served from the same-revision Turbo cache; these are task counts, not test counts.
+Four assertions fail at the tested revision, in two suites:
+
+- Sandbox's two command-environment extensibility assertions use reflection that
+  SES's unsafe hardener deliberately replaces with a false result.
+  The same failures were reproduced locally.
+- Codex setup's two account-use expectations include `codex` but omit the
+  implemented `fae-codex` binding.
+
+All 109 daemon test files were exercised with the normal serial script and
+unchanged AVA timeouts.
+File batches cover 1–23, 25–60, 61–84 and 85–109 in the sorted manifest.
+The large `endo.test.js` file uses three exhaustive, non-overlapping title groups:
+case-insensitive `a*`–`f*`, `g*`–`m*`, and their complement.
+The completed logs record 1,506 passes, six failures and five skips.
+Pass counts in failing batches come from AVA reporter entries, since its failed
+summary does not print a pass total.
+No-matching-tests attempts and deadline-truncated attempts are excluded.
+The six daemon failures need fixture/assertion corrections:
+
+- The OpenCode owner/storage test expects activation to fail without Podman,
+  but its narrow error regex excludes `spawn podman ENOENT`.
+  This does not justify nested Podman or a host-engine socket.
+- Claude owner/storage and OpenCode credential-retention fixtures still supply
+  the retired broker `models` configuration.
+- The submount fixture uses a named host handle where it needs the host returned
+  by `provideHost()`.
+- Two archived/native-context fixtures append synthetic execution evidence
+  without persisting dispatch intent first.
+  The journal correctly refuses them; their restart assertions were not completed.
+
+No test assertions were changed to turn these failures green, and tracked
+source files in the test checkout remain unchanged.
+This is not a whole-repository green claim, nor coverage of the separate Rust,
+XS, test262, lint and type-contract lanes.
+Local hosted-agent regression tests pass 825 with one skip; types, changed-file
+lint and formatting pass.
+Private receipts and logs: `/var/lib/endo/endo-suite-acceptance-20261005/`.
+The helpers are one-shot/connect-only, never registered as daemon formulas.
+After all 18 attempts settled, the private archive preserved all 58 tool calls
+and results, complete test logs, the filename manifest and Turbo summaries.
+The exported tool records retain sequence, failure and dispatch metadata;
+opaque compaction/context payloads are not included in the export.
+The log archive was verified against the live files before cleanup.
+The dedicated session and factory/profile bindings were deleted, and the private
+environment admin acknowledged disposal before its last binding was removed.
+Its roughly 4 GB of native checkout/cache data was removed; helpers were moved
+recoverably into the private archive to prevent accidental reuse.
+Original sessions, Secrets, renewal owners and workspaces were untouched.
+Post-cleanup daemon and gateway health checks pass, with no running Podman slices.
+
+The run also exposed two context/inspection limitations outside the network repair:
+
+- Several large tool/log excerpts filled the conservative compaction headroom.
+  The initial policy keeps the newest two user turns verbatim and cannot compact
+  a large current/recent turn; it failed with
+  `Compaction needs an older completed user turn` on two attempts.
+  Smaller tasks with bounded output are the current operational workaround,
+  not proof of autonomous long-turn compaction.
+- A 117,897-character compaction journal payload could not be read through the
+  public Floot `getTurnContent` facet because its result uses the default
+  100k-character string guard.
+  The durable record was present before cleanup; only its kind/size metadata was
+  exported, not its opaque content.
+  The inspection guard must be aligned with the content-storage contract in a follow-up.
+
+The agent needed operator guidance for user-owned APT paths, bounded outputs,
+test batching and a mistaken AVA matcher argument.
+This run establishes that the slice can install prerequisites and execute the
+JavaScript suites, not that a single autonomous turn completes the whole task.
 
 ### Earlier slice history (superseded by the current status above)
 
