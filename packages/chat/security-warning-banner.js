@@ -9,8 +9,10 @@ import harden from '@endo/harden';
 // could not be confirmed; the banner is non-blocking and dismissible.
 //
 // Call `mount()` after each replacement of `document.body`.  A dismissal lasts
-// until the Familiar reports a warning not seen before.  The banner stays above
-// the reconnect overlay.
+// until the Familiar reports a warning not seen before, or until the Chat page
+// reloads: a daemon restart or purge reloads it after the Familiar re-checks
+// its defenses, and the banner then shows that fresh verdict.  The banner stays
+// above the reconnect overlay.
 
 export const SECURITY_WARNING_BANNER_ID = 'familiar-security-warnings';
 

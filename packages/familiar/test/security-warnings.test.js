@@ -6,6 +6,7 @@ import {
   chatFilePageUrl,
   deliverSecurityWarnings,
   isChatPageUrl,
+  makeSecurityWarningReporter,
   SECURITY_WARNINGS_CHANNEL,
 } from '../src/security-warnings.js';
 
@@ -152,4 +153,149 @@ test('the channel matches the preload subscription', async t => {
     'utf8',
   );
   t.true(preload.includes(`'${SECURITY_WARNINGS_CHANNEL}'`));
+});
+
+/**
+ * @param {string[][]} verdicts - what each successive verification returns
+ */
+const makeFakeVerifier = verdicts => {
+  let calls = 0;
+  return {
+    verifyDefenses: async () => {
+      const verdict = verdicts[Math.min(calls, verdicts.length - 1)];
+      calls += 1;
+      return verdict;
+    },
+    callCount: () => calls,
+  };
+};
+
+/** @param {ReturnType<typeof makeFakeWebContents>} fake */
+const makeFakeWindow = fake => {
+  let destroyed = false;
+  return {
+    window: {
+      isDestroyed: () => destroyed,
+      webContents: fake.webContents,
+    },
+    destroy: () => {
+      destroyed = true;
+    },
+  };
+};
+
+test('a recreated window gets a fresh verdict, not the launch result', async t => {
+  const { verifyDefenses, callCount } = makeFakeVerifier([
+    ['launch warning'],
+    ['later warning'],
+  ]);
+  const reporter = makeSecurityWarningReporter({ verifyDefenses, chatPageUrl });
+
+  const first = makeFakeWebContents(false);
+  await reporter.verifyAndWarn(makeFakeWindow(first).window);
+  t.deepEqual(first.sent, [[SECURITY_WARNINGS_CHANNEL, [['launch warning']]]]);
+
+  // The macOS `activate` path: a new window after the first was closed.
+  const second = makeFakeWebContents(false);
+  await reporter.verifyAndWarn(makeFakeWindow(second).window);
+  t.is(callCount(), 2, 'the defenses are verified again');
+  t.deepEqual(second.sent, [[SECURITY_WARNINGS_CHANNEL, [['later warning']]]]);
+});
+
+test('a reload after re-verification delivers the fresh verdict once', async t => {
+  const { verifyDefenses } = makeFakeVerifier([['stale'], ['fresh']]);
+  const reporter = makeSecurityWarningReporter({ verifyDefenses, chatPageUrl });
+  const fake = makeFakeWebContents(false);
+  const { window } = makeFakeWindow(fake);
+
+  await reporter.verifyAndWarn(window);
+  // A daemon restart or purge: re-verify, then reload the Chat page.
+  await reporter.verifyAndWarn(window);
+  fake.sent.length = 0;
+  fake.finishLoad();
+  t.deepEqual(
+    fake.sent,
+    [[SECURITY_WARNINGS_CHANNEL, [['fresh']]]],
+    'the reload gets the new verdict, sent once, never the launch snapshot',
+  );
+});
+
+test('a window that started clean still receives a later warning', async t => {
+  const { verifyDefenses } = makeFakeVerifier([[], ['DNS is leaking.']]);
+  const reporter = makeSecurityWarningReporter({ verifyDefenses, chatPageUrl });
+  const fake = makeFakeWebContents(false);
+  const { window } = makeFakeWindow(fake);
+
+  await reporter.verifyAndWarn(window);
+  t.deepEqual(fake.sent, []);
+
+  await reporter.verifyAndWarn(window);
+  fake.sent.length = 0;
+  fake.finishLoad();
+  t.deepEqual(fake.sent, [[SECURITY_WARNINGS_CHANNEL, [['DNS is leaking.']]]]);
+});
+
+test('a re-verification that comes back clean stops the warnings', async t => {
+  const { verifyDefenses } = makeFakeVerifier([['a'], []]);
+  const reporter = makeSecurityWarningReporter({ verifyDefenses, chatPageUrl });
+  const fake = makeFakeWebContents(false);
+  const { window } = makeFakeWindow(fake);
+
+  await reporter.verifyAndWarn(window);
+  await reporter.verifyAndWarn(window);
+  fake.sent.length = 0;
+  fake.finishLoad();
+  t.deepEqual(fake.sent, []);
+});
+
+test('the reporter logs non-empty verdicts and skips a destroyed window', async t => {
+  const { verifyDefenses } = makeFakeVerifier([['a']]);
+  /** @type {string[][]} */
+  const logged = [];
+  const reporter = makeSecurityWarningReporter({
+    verifyDefenses,
+    chatPageUrl,
+    onWarnings: warnings => logged.push(warnings),
+  });
+  const fake = makeFakeWebContents(false);
+  const { window, destroy } = makeFakeWindow(fake);
+  destroy();
+  await reporter.verifyAndWarn(window);
+  t.deepEqual(logged, [['a']]);
+  t.deepEqual(fake.sent, []);
+});
+
+/**
+ * The source of the named top-level arrow function in `electron-main.js`,
+ * up to the next top-level declaration.
+ *
+ * @param {string} source
+ * @param {string} name
+ */
+const topLevelBody = (source, name) => {
+  const start = source.indexOf(`const ${name} = `);
+  const end = source.indexOf('\nconst ', start + 1);
+  return source.slice(start, end);
+};
+
+test('electron-main re-verifies before every Chat reload and new window', async t => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(
+    new URL('../electron-main.js', import.meta.url),
+    'utf8',
+  );
+  for (const name of ['handleRestartDaemon', 'handlePurgeDaemon']) {
+    const body = topLevelBody(source, name);
+    const reverify = body.indexOf('reverifyBeforeReload(win)');
+    const reload = body.indexOf('win.loadURL(');
+    t.true(reverify > 0, `${name} re-verifies the defenses`);
+    t.true(reverify < reload, `${name} re-verifies before reloading`);
+  }
+  const activate = source.slice(source.indexOf("app.on('activate'"));
+  t.regex(
+    activate.slice(0, activate.indexOf('});')),
+    /createWindow\(\);\s*securityWarnings\.verifyAndWarn\(mainWindow\)/,
+    'a window recreated on activate is verified afresh',
+  );
+  t.notRegex(source, /deliverSecurityWarnings\(/, 'no snapshot replay');
 });

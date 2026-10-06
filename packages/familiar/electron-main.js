@@ -33,7 +33,7 @@ import {
 import { installNavigationGuard } from './src/navigation-guard.js';
 import {
   chatFilePageUrl,
-  deliverSecurityWarnings,
+  makeSecurityWarningReporter,
 } from './src/security-warnings.js';
 import {
   configureCommandLineFlags,
@@ -71,6 +71,30 @@ const vitePort = 5173;
 const chatPageUrl = isDevMode
   ? `http://127.0.0.1:${vitePort}/`
   : chatFilePageUrl(resourcePaths.chatDistPath);
+
+// Every new window and every daemon-restart or -purge reload of the Chat page
+// gets a fresh verdict; see makeSecurityWarningReporter.
+const securityWarnings = makeSecurityWarningReporter({
+  verifyDefenses: verifyExfiltrationDefenses,
+  chatPageUrl,
+  onWarnings: warnings =>
+    logger.warn('[Familiar] Security warnings:', warnings),
+});
+
+/**
+ * Re-verify the defenses for `win` before its Chat page reloads.  A failed
+ * verification is logged rather than thrown, so it cannot block the reload.
+ *
+ * @param {Electron.BrowserWindow} win
+ */
+const reverifyBeforeReload = async win => {
+  await null;
+  try {
+    await securityWarnings.verifyAndWarn(win);
+  } catch (error) {
+    logger.error('[Familiar] Security verification failed:', error);
+  }
+};
 
 /** @type {string | undefined} */
 let gatewayAddress;
@@ -205,6 +229,9 @@ const handleRestartDaemon = async win => {
     }
     agentId = await getAgentId();
     if (win && !win.isDestroyed()) {
+      await reverifyBeforeReload(win);
+    }
+    if (win && !win.isDestroyed()) {
       // Pass config as a URL fragment (anchor) rather than a query string so
       // the agent ID is never sent on the wire in an HTTP request.
       const fragment = `gateway=${gatewayAddress}&agent=${agentId}`;
@@ -231,6 +258,9 @@ const handlePurgeDaemon = async win => {
       gatewayAddress = await getGatewayAddress();
     }
     agentId = await getAgentId();
+    if (win && !win.isDestroyed()) {
+      await reverifyBeforeReload(win);
+    }
     if (win && !win.isDestroyed()) {
       // Pass config as a URL fragment (anchor) rather than a query string so
       // the agent ID is never sent on the wire in an HTTP request.
@@ -299,25 +329,13 @@ const main = async () => {
   ipcMain.handle('familiar:get-version', () => app.getVersion());
 
   // Step 7: Verify exfiltration defenses and notify renderer.
-  // The DNS canary checks mutable runtime state (resolver, VPN, network),
-  // so every window gets a fresh verdict rather than the startup snapshot.
-  /** @param {BrowserWindow} window */
-  const verifyAndWarn = async window => {
-    const warnings = await verifyExfiltrationDefenses();
-    if (warnings.length > 0) {
-      logger.warn('[Familiar] Security warnings:', warnings);
-    }
-    if (!window.isDestroyed()) {
-      deliverSecurityWarnings(window.webContents, warnings, chatPageUrl);
-    }
-  };
-  await verifyAndWarn(mainWindow);
+  await securityWarnings.verifyAndWarn(mainWindow);
 
   // macOS: recreate window when dock icon is clicked
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       mainWindow = createWindow();
-      verifyAndWarn(mainWindow).catch(error => {
+      securityWarnings.verifyAndWarn(mainWindow).catch(error => {
         logger.error('[Familiar] Security verification failed:', error);
       });
     }
