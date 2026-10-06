@@ -62,6 +62,26 @@ const readPid = async pidPath => {
   }
 };
 
+/**
+ * @param {string} pidPath
+ * @param {number} timeoutMs
+ */
+const waitForPid = async (pidPath, timeoutMs) => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const pid = await readPid(pidPath);
+    if (pid > 0) return pid;
+    if (Date.now() >= deadline) {
+      throw Error(`daemon did not record its pid at ${pidPath}`);
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => {
+      setTimeout(resolve, 100);
+    });
+  }
+};
+
 /** @param {string} ephemeralStatePath */
 const listWorkerPids = async ephemeralStatePath => {
   const workerDir = path.join(ephemeralStatePath, 'worker');
@@ -177,23 +197,42 @@ test.serial(
 
     // Launch the daemon from a short-lived child process, then let that child
     // exit — orphaning the (detached) daemon.
-    await new Promise((resolve, reject) => {
-      const launcher = fork(launcherPath, [JSON.stringify(config)], {
+    const launcherReadyPath = path.join(
+      config.ephemeralStatePath,
+      'orphan-launcher-ready.pid',
+    );
+    const launcher = fork(
+      launcherPath,
+      [JSON.stringify(config), launcherReadyPath],
+      {
         env: { ...process.env, ENDO_EXIT_WHEN_ORPHANED: '1' },
         stdio: 'ignore',
-      });
-      launcher.once('error', reject);
-      launcher.once('exit', code =>
-        code === 0
-          ? resolve(undefined)
-          : reject(Error(`launcher exited with code ${code}`)),
-      );
-    });
-
-    const daemonPid = await readPid(
-      path.join(config.ephemeralStatePath, 'endo.pid'),
+      },
     );
-    t.true(daemonPid > 0, 'daemon recorded its pid before its launcher exited');
+    // A failed wait below must not leak the launcher and its daemon.
+    t.teardown(() => launcher.kill('SIGTERM'));
+    const launcherExitPromise = new Promise((resolve, reject) => {
+      launcher.once('error', reject);
+      launcher.once('exit', (code, signal) => {
+        if (code === 0) {
+          resolve(undefined);
+        } else {
+          reject(Error(`launcher exited with code ${code}, signal ${signal}`));
+        }
+      });
+    });
+    await Promise.race([
+      waitForPid(launcherReadyPath, 60_000),
+      launcherExitPromise.then(() => {
+        throw Error('launcher exited before reporting ready');
+      }),
+    ]);
+    const daemonPid = await waitForPid(
+      path.join(config.ephemeralStatePath, 'endo.pid'),
+      10_000,
+    );
+    launcher.kill('SIGTERM');
+    await launcherExitPromise;
 
     // The orphan watch polls ~1s, then a graceful cancel with a bounded
     // force-exit; give generous headroom. Without the orphan-exit fix the
