@@ -8,6 +8,8 @@
  * the rationale.
  */
 
+import { pathToFileURL } from 'node:url';
+
 import harden from '@endo/harden';
 
 export const SECURITY_WARNINGS_CHANNEL = 'familiar:security-warnings';
@@ -33,6 +35,18 @@ const pageIdentity = url => {
     return undefined;
   }
 };
+
+/**
+ * The `file:` URL of the built Chat page at `chatDistPath`.  Unlike a
+ * `file://${path}` template, this percent-encodes characters such as a space,
+ * `#`, `?`, or `%` the way the URL that `webContents.getURL()` reports does,
+ * so `isChatPageUrl` still matches when the install path contains them.
+ *
+ * @param {string} chatDistPath
+ * @returns {string}
+ */
+export const chatFilePageUrl = chatDistPath => pathToFileURL(chatDistPath).href;
+harden(chatFilePageUrl);
 
 /**
  * Whether `url` is the Chat page at `chatPageUrl`, the URL

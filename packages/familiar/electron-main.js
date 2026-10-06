@@ -18,7 +18,6 @@
 
 import os from 'os';
 import path from 'path';
-import { pathToFileURL } from 'url';
 // @ts-ignore Electron is not typed in this project
 import { app, BrowserWindow, Menu, ipcMain, screen } from 'electron';
 
@@ -32,7 +31,10 @@ import {
   installLocalhttpHandler,
 } from './src/protocol-handler.js';
 import { installNavigationGuard } from './src/navigation-guard.js';
-import { deliverSecurityWarnings } from './src/security-warnings.js';
+import {
+  chatFilePageUrl,
+  deliverSecurityWarnings,
+} from './src/security-warnings.js';
 import {
   configureCommandLineFlags,
   installExfiltrationDefenses,
@@ -68,7 +70,7 @@ const vitePort = 5173;
 // vulnerable to integrity attacks.
 const chatPageUrl = isDevMode
   ? `http://127.0.0.1:${vitePort}/`
-  : pathToFileURL(resourcePaths.chatDistPath).href;
+  : chatFilePageUrl(resourcePaths.chatDistPath);
 
 /** @type {string | undefined} */
 let gatewayAddress;

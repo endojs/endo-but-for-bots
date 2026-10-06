@@ -3,6 +3,7 @@
 import test from 'ava';
 
 import {
+  chatFilePageUrl,
   deliverSecurityWarnings,
   isChatPageUrl,
   SECURITY_WARNINGS_CHANNEL,
@@ -133,6 +134,15 @@ test('isChatPageUrl pins the dev server to its port', t => {
 test('isChatPageUrl rejects everything when the Chat URL is malformed', t => {
   t.false(isChatPageUrl('', ''));
   t.false(isChatPageUrl('file:///app/dist/index.html', 'not a url'));
+});
+
+test('chatFilePageUrl matches the loaded Chat page for an install path needing escapes', t => {
+  const chatDistPath = '/opt/My App #2/100%/dist/index.html';
+  // What webContents.getURL() reports after loadURL(`${chatPageUrl}#...`).
+  const loaded = 'file:///opt/My%20App%20%232/100%25/dist/index.html#gateway=x';
+  t.true(isChatPageUrl(loaded, chatFilePageUrl(chatDistPath)));
+  // The template literal it replaced cuts the path at `#` and never matches.
+  t.false(isChatPageUrl(loaded, `file://${chatDistPath}`));
 });
 
 test('the channel matches the preload subscription', async t => {
