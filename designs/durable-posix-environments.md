@@ -15,7 +15,7 @@ app `854a4c5aae573b669692fd132bcd30cbb0cc3926`, host
 Generation 195 added the DNS and request-body follow-up below.
 Generation 196 added safe stream-failure diagnostics on 2026-10-05.
 Generation 197 added the dependency-install networking repairs described below.
-Tokyo now runs generation 200, app `69d7ef537de40b99e3823998b105a955fb246baf`,
+Generation 200 ran app `69d7ef537de40b99e3823998b105a955fb246baf`,
 host `04b95a754af32d67e1f9c554a45e7e2b24f60793`, with the host-side CapTP
 answer-release correction, per-invocation Shell timeout overrides and shared
 first-turn compaction described below.
@@ -27,12 +27,17 @@ The shared direct-provider guard is now 1024 rounds in source, including
 standalone Fae (previously 32). Local tests cover exact exhaustion, explicit
 overrides and a normal final answer beyond the old 48-round cutoff. A round
 is one provider response plus its requested tools, not one individual call;
-the final answer also consumes a round. Deployment and a fresh unattended
-end-to-end response on the new default remain unverified.
+the final answer also consumes a round. Generation 201 now deploys this default;
+a fresh unattended end-to-end response remains under test.
 The operational guards listed below now have generous defaults and explicit
 operator settings. Local tests and adversarial review cover their configuration
-and durable replay; deployment and the requested fresh unattended CI retry are
-in progress, not yet acceptance evidence.
+and durable replay. Generation 201 is live with app
+`1bda964b842c080519b801d274ff4f0135a58346`, host
+`7d07e051ceeb63684910ce7b29c4b3bd2f257656`, and one rebuilt credential-free
+listener at `sha256:8602ffe7480daae287db41c8bf6e9068d5827174ed7883d66db4bb19cb0a6651`
+for the development runner and all three hosted brokers. Harness/base images
+are unchanged. The fresh unattended Luna CI retry is running, not yet completed
+acceptance evidence.
 The Floot development preset publishes only the common
 Shell as `shell` in inventory and exposes structured `runCommand`/`inspectShell`
 tools, distinct from JavaScript `exec`. Only Fae inference backends select it;
@@ -623,8 +628,27 @@ The full Floot and hosted-agent suites pass (832 and 833 tests respectively,
 with one hosted-agent skip); Fae passes 211 tests with two known failures, and
 LAL passes 157 with one skip. Focused native output/lifecycle tests pass 35.
 Changed-source ESLint has no errors, package typechecks and the root documentation
-build pass. The larger limits still need the new listener image deployed and
-another scoped JavaScript CI run through Floot.
+build pass. The listener image and workload defaults are deployed on generation
+201. The fresh scoped JavaScript CI run through Floot is in progress.
+
+The coordinated listener cutover retired eight old test sessions under the
+operator's cull approval. Six completed supported deletion; the quarantined
+fixtures `muvad3xs-9e0c3k-1` and `muvcjeso-28ooeb-0` required explicit retirement,
+not recovery. Original private journals, registry snapshots, admin/guest handles
+and seven workspace references are archived on the retained profile under
+`retired-workload-20261006`. Six Secret entry identities are unchanged; renewal
+owners and development HOME were not disposed. No interrupted lifecycle was
+rewritten as idle or any old tool outcome marked successful.
+The old factory's registered disposal hook settled and its held facet confirmed
+closed before the operator appended an empty registry snapshot. Web admission
+was fenced; the old daemon cgroup, running Podman containers, conmon processes
+and 9P mounts were verified empty before replacements started. Receipts remain
+at `/var/lib/endo/workload-guards-20261006/`; helpers are connect-only, not formulas.
+The fresh run is session `muw2eab5-k0izgi-1`, with private receipts/logs under
+`/var/lib/endo/endo-autonomous-suite-5-20261006/`. It uses the exact app revision
+above and `gpt-5.6-luna`. Shell inspection confirms the 24-hour/16 MiB defaults;
+clone and initial public-network tool use succeeded. The temporary stopped
+image holder was removed after the activated generation protected the listener.
 
 Per-frame bounds, paged reads, model context/output limits, display-only thinking
 previews, DNS lookup timeouts and malformed-input/address validation have
