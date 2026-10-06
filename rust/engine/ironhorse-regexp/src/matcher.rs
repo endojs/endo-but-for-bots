@@ -2,7 +2,9 @@
 //! (`xsre.c`). It interprets the integer step stream the [`crate::compile`]
 //! pass emits, using an explicit state stack for backtracking, and meters
 //! `XS_REGEXP_METERING` per dispatched step — the matcher's consensus
-//! cost, and the number the parity suite pins bit-exact against the pin.
+//! cost, deterministic per release (Iron Horse's own frozen value; drift
+//! against the XS pin is advisory telemetry — XS-computron parity is a
+//! non-goal).
 //!
 //! The C engine keeps its backtrack states as a linked list threaded
 //! through the machine stack or `c_malloc`; the safe port keeps them in a

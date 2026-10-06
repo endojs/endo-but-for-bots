@@ -22,6 +22,16 @@ compares completion values and the raw 16.16 meter.
 Metering claims are decided by `computrons_agree` and the raw meter, never by
 result agreement alone.
 
+**Doctrine note (2026-09-15).** The XS oracle was this review's *measurement
+instrument*, so the metering entries below quantify deltas against XS. Read
+them under the accuracy-over-parity doctrine
+([ironhorse-engine § Metering](ironhorse-engine.md)): a metering defect is a
+defect in the fidelity of Iron Horse's **own** cost model (work performed but
+not charged, or charged without work) for which the XS delta was the
+evidence — it is **not** the delta itself. XS-computron parity is a non-goal,
+not a deferred goal; closing an entry means making Iron Horse's meter honest
+about the work, never making its number equal XS's.
+
 Each verdict recorded as still-open was then given to a second reviewer whose
 only instruction was to refute it.
 None of the 111 open verdicts was refuted outright; four were downgraded from
@@ -306,14 +316,13 @@ The rest are listed here as they stood.
 
 ### Snapshot migration and boot versioning
 
-8 open, 4 of them P1.
+7 open, 4 of them P1.
 
 - `F068` **P1** Do not use a considered `join` as the arguments-layout version (partial)
 - `F069` **P1** Encode the boot generation outside the legacy signature namespace
 - `F071` **P2** Keep legacy migration-fixture generators on the legacy signature
 - `F072` **P2** Treat a null `@@toPrimitive` method as absent
 - `F073` **P2** Preserve the pinned missing-key behavior
-- `F074` **P1** Make the new coercion tests enforce computron parity
 - `F078` **P1** Canonicalize intrinsic ordering for prototypes and namespaces too
 - `F079` **P2** Move a deleted-and-recreated intrinsic property to the end
 
@@ -424,12 +433,11 @@ The rest are listed here as they stood.
 
 ### String delete, boxing, ArrayBuffer slice and transfer
 
-10 open, 6 of them P1.
+9 open, 6 of them P1.
 
 - `F161` **P1** Route delete opcodes through String exotic `[[Delete]]`
 - `F162` **P1** Meter sloppy String, Symbol, and BigInt boxing
 - `F163` **P1** Calibrate each ArrayBuffer slice protocol branch
-- `F164` **P2** Make the slice suite enforce the project's meter-parity contract
 - `F165` **P1** Reject transfer of a petrified ArrayBuffer
 - `F166` **P1** Charge the transfer frame and result allocation
 - `F167` **P1** Release inaccessible backing chunks when detaching

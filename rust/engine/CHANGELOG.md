@@ -8,8 +8,8 @@ measurement tips, not the current engine.
 The current [acceptance status](README.md#acceptance-status) and
 [design Status](../../designs/ironhorse-engine.md#status) supersede these blocks
 as the navigation surface for today's acceptance claims.
-In particular, the historical “Stage-4 acceptance evidence” block records an
-unmet bar; “stage-7 child” there is orchestration numbering, not roadmap stage 7.
+In particular, the historical "Stage-4 acceptance evidence" block records an
+unmet bar; "stage-7 child" there is orchestration numbering, not roadmap stage 7.
 
 The stage-scoped curated corpora under `ironhorse-262/corpora/` are the
 bootstrap (stage-1 arithmetic/logic/control-flow; stage-2 var/loop/object;
@@ -51,7 +51,7 @@ determinism, the pin's exact libm choices, and the `±0`/integer-fold corners),
 and `JSON.stringify` over a top-level primitive. Metering is calibrated
 raw-exact against the pin: `Math`/`Number`/`parseInt`/`parseFloat` carry a zero
 native residual over the `RUN` opcode (their `xs*.c` bodies charge no
-`mxMeterSome`); a chunk-only String method (`slice`/`charAt`/…) carries zero,
+`mxMeterSome`); a chunk-only String method (`slice`/`charAt`/...) carries zero,
 while an `mxMeterSome`-calling String method (`concat`/`repeat`/`toCase`/`trim`/
 `startsWith`/`endsWith`/`includes`) and `Number.prototype.toString`(10) carry a
 measured `33280`-raw host residual; `JSON.stringify` of a primitive carries the
@@ -123,7 +123,7 @@ partial metering is unmodeled (`JSON.parse:syntax`). The curated
 
 One neighbouring **pre-existing** observation the parse child (or an object-
 literal child) should note: a *large/deep* nested **object literal**
-*construction* (e.g. `var v = {…}` with no JSON at all) accrues a sub-computron
+*construction* (e.g. `var v = {...}` with no JSON at all) accrues a sub-computron
 raw drift in Ironhorse vs the oracle that can occasionally tip one computron
 boundary — visible on the bare literal, independent of the JSON surface. The
 json-structured fuzz arm bounds depth/breadth to stay inside the
@@ -146,7 +146,7 @@ computron-exact, an entries-yield's `fxConstructArrayEntry` pair (a `2<<14` fram
 residual over the modeled two-element chunk; keys/values yields carry no
 residual), and `forEach`'s per-entry call frame (`2<<16` per live entry, over the
 callback body the nested dispatch meters; a Map's native frame is 8 raw units
-over a Set's — Map walks a key→value slot pair per entry, Set a single slot). The
+over a Set's — Map walks a key->value slot pair per entry, Set a single slot). The
 four collection dual-run sections agree bit-exactly with **zero divergence**,
 every skip named:
 `built-ins/Map total=144 covered=25 divergent=0 skipped=119`,
@@ -162,7 +162,7 @@ and shrink the address table back toward `mxTableMinLength`), computron-exact.
 The deferred collection paths are honest **named skips**: the
 copy-constructor iterable argument (`new Map([[k,v]])`), a WeakMap/WeakSet
 primitive key (a TypeError in XS), mid-iteration structural mutation, and the
-ES2025 Set combinators (`union`/`intersection`/…) — each self-names
+ES2025 Set combinators (`union`/`intersection`/...) — each self-names
 `Halt::Unsupported` rather than resolve to a wrong value or a computron
 divergence. The stage-3b **binary-data** child (3/9) binds `ArrayBuffer` as an
 intrinsic whose per-instance backing store lives in a side table like the exotic
@@ -205,7 +205,7 @@ drive the abstract `%TypedArray%` helpers and methods Ironhorse honestly skips),
 The deferred TypedArray paths are honest **named skips**: the from-iterable /
 from-array-like / source-TypedArray copy constructors, the BigInt-element
 read/write (BigInt coercion is a later increment), an object element value (needing
-`ToPrimitive`), the prototype methods (`set`/`subarray`/`fill`/`map`/… and the
+`ToPrimitive`), the prototype methods (`set`/`subarray`/`fill`/`map`/... and the
 statics `from`/`of`), and the resizable/species corners. The same child binds
 **`DataView`** — the endian-aware buffer view — with its view state (buffer
 reference + `byteOffset`/`size`) in a `data_views` side table. The construct
@@ -240,7 +240,7 @@ Array is built) and a call trampoline (`BIND_CALL_METERING` + `1<<14` per
 forwarded argument). **`Function.prototype.apply`** now forwards a real **dense
 Array** argument's elements (the array-read setup + per-element `mxGetIndex` +
 forward, `APPLY_ARRAY_BASE_METERING` + `APPLY_ARRAY_PER_ELEMENT_METERING`),
-graduating past the no-array subset. **`Symbol.prototype.toString`** →
+graduating past the no-array subset. **`Symbol.prototype.toString`** ->
 `Symbol(<description>)` (a primitive-symbol receiver boxing to
 `%Symbol.prototype%`), **`valueOf`**, the explicit **`String(symbol)`**
 coercion, and the **`Symbol.for`/`keyFor`** global registry (registry-interned
@@ -266,7 +266,7 @@ primitive `thisArg` self-names `Halt::Unsupported` rather than answer a
 `this`-dependent test wrongly (kept per the charter's "if calibratable within
 budget; else keep the honest named skip"). The stage-3b **object-statics +
 intern-table** child (5/9) lands the program-level cross-child dependency both
-child-1 and child-2 named: a **global runtime string→id intern table** (XS's
+child-1 and child-2 named: a **global runtime string->id intern table** (XS's
 `fxNewNameX`/`fxAt`) reconciled at one point with the XS compiler's program
 symbols and XS's boot-time default keys (`gxIDStrings`, carried in
 `ironhorse-vm::default_keys`). `intern_key` returns an already-interned name's id
@@ -279,7 +279,7 @@ bit-exact (result AND computron): **`Object.prototype.hasOwnProperty`** answers
 *any* string key soundly (own-only, no prototype walk — an own key true, a
 novel/inherited name false), **`Object.keys`** returns a fresh `Array` of an
 ordinary object's own enumerable string keys in creation order (metering
-calibrated raw-exact via the isolated `B(n)−A(n)` gap: a fixed native-body
+calibrated raw-exact via the isolated `B(n)-A(n)` gap: a fixed native-body
 residual + the result array's item chunk grown once + one `fxNewSlot` per key;
 confirmed key-name-length independent, XS referencing the interned key string),
 and **`Object.getOwnPropertyDescriptor`** yields the full data descriptor
@@ -370,7 +370,7 @@ The stage-4 **classes** child (2/8) lands **`new.target`** (the `XS_CODE_TARGET`
 opcode, which already decoded but had no semantics), bit-exact (result AND
 computron) against the pin. `new.target` reads the running frame's target
 constructor when the frame was entered as a construct (XS's `mxFrameHasTarget`
-→ `mxFrameTarget`) and `undefined` inside a plain call; Ironhorse reads it from the
+-> `mxFrameTarget`) and `undefined` inside a plain call; Ironhorse reads it from the
 frame's (`cur_target`, `cur_func`) pair — for a `new f()` the target IS the
 invoked constructor, since the covered grammar has no `Reflect.construct` /
 `super()` retargeting (both of which self-name elsewhere). The opcode is pure
@@ -519,7 +519,7 @@ bit-exact too. `built-ins/Promise` whole-tree dual-run grows to **`total=474
 covered=9 divergent=0`** (from 7 — the thenable-resolve and identity cases now
 covered), with the acceptance subtrees all `divergent=0`
 (`prototype/then covered=1`, `resolve covered=3`, `reject covered=1`,
-`all/race/allSettled/any/prototype/finally covered≤1`). The curated
+`all/race/allSettled/any/prototype/finally covered<=1`). The curated
 `stage4-async-promises.js` corpus (20 programs) is locked as the cargo bar
 `stage4_async_promises_corpus_is_bit_exact_against_oracle`, and the
 thenable-adoption allocation/drain path is exercised by an ordinary unit test
@@ -548,8 +548,8 @@ promise via `new_promise_instance` + `make_resolving_functions`, runs
 result promise (mirroring `START_GENERATOR`'s boundary split). `AWAIT` is a
 YIELD-shaped suspend reading a new `async_run_stack`, returning `Halt::Await`
 (per-suspend metering reuses `GENERATOR_YIELD_METERING` — the identical C code);
-`BRANCH_STATUS` now honors a threaded `resume_status` (fulfilled → branch by
-offset leaving the resolved value on the stack; rejected → `THROW_STATUS` unwind
+`BRANCH_STATUS` now honors a threaded `resume_status` (fulfilled -> branch by
+offset leaving the resolved value on the stack; rejected -> `THROW_STATUS` unwind
 to the innermost handler), with the generator path unchanged (it only ever
 resumes `NoStatus`). The shared prerequisite — the **5-slot native-reaction
 path** (`PromiseReaction.kind = AsyncAwait(inst)`, `promise_then_native` a
@@ -593,7 +593,7 @@ child on this now-unblocked substrate.
 
 The stage-4 **module machinery** child (5/8) lands the **static half** of
 `xsModule.c` as `ironhorse_vm::module` — module records, a module map with a static
-host resolve hook (specifier → module, no filesystem), module environments with
+host resolve hook (specifier -> module, no filesystem), module environments with
 **live indirect bindings**, **module namespace exotic objects**, **cyclic
 instantiate/evaluate ordering**, **TDZ on un-evaluated bindings**, and
 **`ModuleSource`** (the compile-only, bindings-reflection Compartment shape). The
@@ -610,7 +610,7 @@ it before the owner's body initializes it — the observable hazard in a cyclic
 graph, where the first-executed module reads a peer's not-yet-initialized live
 binding — is a `ReferenceError`. The namespace exotic object mirrors
 `fxModuleOwnKeys`: own **string** keys are the resolvable export names **sorted by
-code unit** (XS's `c_strcmp`), then the single symbol key `@@toStringTag` →
+code unit** (XS's `c_strcmp`), then the single symbol key `@@toStringTag` ->
 `"Module"`; `[[Set]]` always fails and the object is non-extensible.
 
 **Path achieved (recorded honestly).** The acceptance-focus's *preferred* path — a
@@ -743,7 +743,7 @@ binding, dynamic-import named skip).
 static half does not build. **Scope fold (recorded honestly):** Ironhorse models
 `Compartment` **host-side** (a Rust realm API matching XS's C-level compartment
 machinery), **not** as a guest-callable `Compartment` intrinsic — a guest
-`new Compartment().evaluate('…')` would need the interpreter to expose a native
+`new Compartment().evaluate('...')` would need the interpreter to expose a native
 constructor whose `evaluate` re-enters the compiler, a re-entrant compile seam
 that needs the oracle at run time (which `ironhorse-vm` deliberately does not link,
 `#![forbid(unsafe_code)]`), so a program that references the `Compartment`
@@ -863,7 +863,7 @@ note carries forward untouched and Miri is not implicated here.
 | 4b-5 closure (this child) | boot-bundle identical-run verdict + ses-xs-parity tally | below |
 
 **Boot-bundle identical-run verdict (`daemon-endor-architecture.md` § Unified
-runner).** The daemon boots `polyfills.js` → `host_aliases.js` → `ses_boot.js`
+runner).** The daemon boots `polyfills.js` -> `host_aliases.js` -> `ses_boot.js`
 (SES `lockdown()` + the HandledPromise shim). The first two are committed
 sources embedded by `rust/endo/xsnap/src/lib.rs`; `ses_boot.js` is **not
 committed** — it is a ~1 MB build artifact the daemon bundler (`rollup` over
@@ -895,7 +895,7 @@ sub-behavior against the pin):
 | `boot:unsupported:at` | the computed-`at` property opcode surface — where `host_aliases.js` now stops |
 | `boot:Reflect-intrinsic` | `Reflect.ownKeys(descs)` in the harden deep-freeze |
 | `boot:typed-array-from-iterable` | `new Uint8Array([...])` (the from-array form; the length form works) |
-| `boot:defineProperty-symbol-key` | `Object.defineProperty(Object, Symbol.for('harden'), …)` |
+| `boot:defineProperty-symbol-key` | `Object.defineProperty(Object, Symbol.for('harden'), ...)` |
 | `boot:class-instance-construction` | `new TextEncoder()` (class-body method dispatch on a constructed instance) |
 | `boot:ses-lockdown-bundle` | `ses_boot.js` — the uncommitted 70 KB HandledPromise bundle, generated by `yarn bundle:xs` (dual-run by `tests/stage4_ses_boot.rs` in the lane that generates it; it carries no `lockdown`, so the guest-`lockdown` gap it is named for was tracked by `ses-mode:lockdown-unimplemented` — a skip that no longer exists, `lockdown()` having landed as a guest-callable native) |
 
@@ -981,12 +981,12 @@ this closure point).**
 
 The stage-3 built-ins reach
 Ironhorse's intrinsics by name: the oracle's `symbols` atom (decoded by
-`ironhorse-vm::symbols`) carries the XS compiler's program-local id→name
-table, so a `Boolean`/`Object`/… reference relinks to Ironhorse's intrinsic
+`ironhorse-vm::symbols`) carries the XS compiler's program-local id->name
+table, so a `Boolean`/`Object`/... reference relinks to Ironhorse's intrinsic
 under the id that program assigned it (`ironhorse_vm::run_program_with_symbols`). Per the maintainer directive on PR #600
 (2026-07-03), the whole-section parity runs that succeed them draw from the
 monorepo's existing `packages/test262-runner` test262 subset — the same
-tree and convention that package already uses to prove XS↔Node HardenedJS
+tree and convention that package already uses to prove XS<->Node HardenedJS
 parity — rather than a separate pinned test262 submodule. The
 `endot-ih` runner (modules `ironhorse_262::{xst,test262}`) assembles each
 `language/` test the standard test262 way and dual-runs it, reporting an
@@ -1052,8 +1052,8 @@ Two halves, both `#![forbid(unsafe_code)]`:
 
 **Metering hooks carried through** (so child 9 can calibrate end to end):
 `Program::compile_meter_raw` is the regexp-compile component
-(`size × XS_PARSE_REGEXP_METERING`), and `MatchOutcome::match_meter_raw`
-is `steps × XS_REGEXP_METERING` — the matcher's per-step cost.
+(`size x XS_PARSE_REGEXP_METERING`), and `MatchOutcome::match_meter_raw`
+is `steps x XS_REGEXP_METERING` — the matcher's per-step cost.
 
 **Parity is pinned against XS** through the oracle shim's new
 `xs_oracle::regexp` entry point (which calls `fxCompileRegExp` +
@@ -1129,7 +1129,7 @@ whole-program run, not just the matcher:
   in `GET`/`SET_PROPERTY` over the side table.
 - **`String.prototype.{search,match,replace,split}`** via the
   `Symbol.{search,match,replace,split}` protocol to the RegExp workers:
-  `search` (index or −1), global and non-global `match`, string/function
+  `search` (index or -1), global and non-global `match`, string/function
   `replace` with the `$`-substitution grammar, and `split` (the sticky-splitter
   walk). Empty-match advancement and slicing operate on UTF-16 indices and
   honor the `u`/`v` code-point mode. Each carries its calibrated
@@ -1174,7 +1174,7 @@ dispatch loop.
 
 **Root cause and the commit that introduced it.** The interpreter only aborts a
 backward branch through the metering host (`check_meter`), but the fuzz entry
-`run_program` arms **no** metering host (`meter_host: None` → `check_meter`
+`run_program` arms **no** metering host (`meter_host: None` -> `check_meter`
 always `Continue`). The pre-existing "backward branch off the front"
 regression case `[16 80]` terminates only incidentally — its offset drives the
 pc out of bounds to a `Halt::Decode`. A branch that targets an **in-bounds**
@@ -1211,7 +1211,7 @@ finding lands a durable regression, and *where* depends on its shape:
 - A **source-level** result/completion divergence (a JS program where Ironhorse and
   the oracle disagree at run time) is minimized, fixed, and checked in as a
   test262 case under `../../packages/test262-runner/test262/test/ironhorse/regressions/` — `features:
-  [ironhorse-dual-run, …]`, the fuzz arm named in `info:`, the fix referenced.
+  [ironhorse-dual-run, ...]`, the fuzz arm named in `info:`, the fix referenced.
   `ironhorse-262/tests/regressions_dual_run.rs` then gates it forever (a re-opened
   divergence fails there). This is the portable, upstream-eligible home; see
   [`test/ironhorse/regressions/README.md`](../../packages/test262-runner/test262/test/ironhorse/regressions/README.md).
@@ -1229,7 +1229,7 @@ are generative instruments; only their minimized output is captured.
 ## Stage 5: the compiler port (`ironhorse-compile` coder, children 5–7)
 
 Stage 5 replaces the differential-oracle compiler with a pure-Rust one in
-XS's own shape (lexer → parser → scoper → **coder**), held to a
+XS's own shape (lexer -> parser -> scoper -> **coder**), held to a
 **byte-identical-bytecode** bar: `ironhorse_compile::compile(src)` must equal
 `xs_oracle::run(src).bytecode` byte for byte. Children 1–4 landed the
 lexer/parser/scoper; **child 5** lands the coder's emission framework and
@@ -1315,7 +1315,7 @@ byte-identical vs the oracle:
   `END*` becomes that `END*` inline; an `UNWIND_1` before an `END*` is
   dropped; a dead `END*` before the same `END*` is dropped; branch-to-next),
   the `fxStatementNodeCode` store-and-pop fusion (`SET_LOCAL`/`SET_CLOSURE`
-  + `POP` → `PULL_LOCAL`/`PULL_CLOSURE`), and XS's `mxExpressionNoValue`
+  + `POP` -> `PULL_LOCAL`/`PULL_CLOSURE`), and XS's `mxExpressionNoValue`
   increment/compound optimization. Together these make function bodies with
   **control flow** (loops, `if`/`else`, `switch`, labeled break, try-finally,
   `return` threaded to `END`) and **declarations** (`var`/`let`/`const`,
@@ -1343,7 +1343,7 @@ byte-identical vs the oracle:
   on creation. Parameters and locals, nested/multi-capture, arrow closures,
   and mutation of captured bindings all covered; arrow capture of
   `this`/`super`/`target` and the `arguments` object stay deferred.
-- Slice 19 — **named function expressions**: a `function g(){…}` value
+- Slice 19 — **named function expressions**: a `function g(){...}` value
   binds its own name `g` in a `const` slot of its scope, initialized to the
   running function (`CURRENT`), so the body can recurse by name. The Rust
   scoper folds XS's symbolScope into the function scope, so this is a
@@ -1355,7 +1355,7 @@ byte-identical vs the oracle:
   break/continue/return/throw, reusing the selector/alias/finalize/jump
   target machinery (shared with `try`). Non-declaring heads (plain
   reference / member / computed target), labeled break, nesting, and use
-  inside functions all covered; declaring heads (`for (let/const/var …)`),
+  inside functions all covered; declaring heads (`for (let/const/var ...)`),
   `using`, and `for await` stay deferred.
 - Slice 21 — **object-property name inference**: `fxObjectNodeCode`'s
   `NEW_PROPERTY`/`NEW_PROPERTY_AT` attribute carries `XS_NAME_FLAG` when the
@@ -1387,13 +1387,13 @@ byte-identical vs the oracle:
   it is relayed to `code_function` as a staged hint), and the `NEW_PROPERTY`
   attribute carries the `NAME | METHOD` (+ `GETTER`/`SETTER`) bits.
   Identifier and computed keys covered; `super` in a method body deferred.
-- Slice 28 — **declaring `for-in`/`for-of` heads**: `for (let/const x of …)`
+- Slice 28 — **declaring `for-in`/`for-of` heads**: `for (let/const x of ...)`
   binds a fresh per-iteration lexical in the loop's block scope — the scope
   header allocates the slot, a per-iteration `fxScopeCodeReset`
   (`RESET_LOCAL`/`RESET_CLOSURE`) refreshes it, the binding assigns via
   `LET_LOCAL`/`CONST_LOCAL`, and the scope unwinds it. `let`/`const`,
   `for-in`, nesting, and use inside functions covered; `for await` and
-  `using` heads stay deferred (`for (var …)` heads code correctly — the var
+  `using` heads stay deferred (`for (var ...)` heads code correctly — the var
   hoists out, leaving the loop block non-declaring).
 - Slice 29 — **the `arguments` object**: a function that references
   `arguments` carries a synthetic `arguments` `Var`; its scope header slots
@@ -1403,7 +1403,7 @@ byte-identical vs the oracle:
   `fxParamsBindingNodeBind`'s rule into the scoper — a sloppy function with
   `arguments` and a simple parameter list promotes each parameter to a
   closure slot so the mapped object can alias it, completing the
-  `arguments` surface (`function (a) { … arguments … }` now codes
+  `arguments` surface (`function (a) { ... arguments ... }` now codes
   `NEW_CLOSURE`/`VAR_CLOSURE`/`GET_CLOSURE` for the parameters).
 - Slice 31 — **object destructuring**: `fxObjectBindingNodeCodeAssign` —
   `TO_INSTANCE` the value into a temporary, then read each `PropertyBinding`
@@ -1451,7 +1451,7 @@ byte-identical vs the oracle:
   `YIELD_STAR` forwarding, `CHECK_INSTANCE`, and the loop/return/throw/normal
   sections with `CATCH`/`UNCATCH` + `BRANCH_CHAIN`/`COALESCE` completion
   routing), async variant awaiting each step. Completes generators/async.
-- Slice 39 — **`for await (… of …)`**: the `is_async` branch of the ported
+- Slice 39 — **`for await (... of ...)`**: the `is_async` branch of the ported
   `fxForInForOfNodeCode` (`AWAIT`/`THROW_STATUS` after each `next()`/
   `return()`) became reachable once async functions landed; pinned.
 - Slice 40 — **`super` in methods + arrow `this`/`super`/`target` capture**:
@@ -1480,7 +1480,7 @@ byte-identical vs the oracle:
   `symbolScope` binding the class name as a `const` closure visible in the
   body, plus the class body scope) and enters them in the bind pass (so the
   name slot lands in `RESERVE`); the coder codes the `symbolScope`
-  (`NEW_CLOSURE`), the `NAME` op, and the class→name `CONST_CLOSURE`. A
+  (`NEW_CLOSURE`), the `NAME` op, and the class->name `CONST_CLOSURE`. A
   class body that references its own name (the `USE_CLOSURE` retrieve path)
   is covered by the existing closure machinery.
 - Slice 44 — **computed-key class methods**: `fxClassNodeCode`'s
@@ -1536,7 +1536,7 @@ byte-identical vs the oracle:
   `super(...)` constructors, fields interleaved with methods and static
   fields, and name-inferring/`this`-referencing values, on named and anonymous
   derived classes.
-- Slice 50 — **static initializer blocks**: a `static { … }` block folds
+- Slice 50 — **static initializer blocks**: a `static { ... }` block folds
   into the same `constructorInit` field-init function as the static data
   fields, in source order — it runs its statements directly (no `this` /
   `NEW_PROPERTY`) with `this` bound to the constructor. Blocks mixed with
@@ -1560,7 +1560,7 @@ byte-identical vs the oracle:
   closure from the enclosing class frame after creation (`FUNCTION_ENVIRONMENT`
   / `ENVIRONMENT` + `STORE`). Field-collection order follows XS's two-pass
   `fxClassExpression` split — private methods/accessors first, then data
-  fields + `static { … }` blocks, both in source order. Byte-identical for
+  fields + `static { ... }` blocks, both in source order. Byte-identical for
   computed (instance/static, key expressions, name-inferring/`this` values),
   private fields, private methods/getters/setters (instance/static), and the
   cross-construct mix on base and derived-`super` classes. Deferred: a
@@ -1591,8 +1591,8 @@ These are the remaining child-6/7 surface.
 > `test result:` lines ok); curated corpora **1711/1711**; `compile-diff --
 > eval-code` twice byte-identical; stage-4 dual-run spot-checks EXIT=0, no
 > crash-aborts, all skips named — `built-ins/{Object 175/0 of 3127, Function
-> 40/0 of 511, Array 435/0 of 2625}` (Object/Array covered-counts shifted −1/−2
-> from the fix5-era 176/437 purely by the 8.2.3→8.3.1 oracle bump that landed in
+> 40/0 of 511, Array 435/0 of 2625}` (Object/Array covered-counts shifted -1/-2
+> from the fix5-era 176/437 purely by the 8.2.3->8.3.1 oracle bump that landed in
 > the tip after those spec numbers were written — a named-skip reshuffle,
 > divergent=0 throughout, NOT a regression). `#![forbid(unsafe_code)]` intact at
 > every engine-crate root, `xs-oracle` the sole seam. Full per-subtree table +
@@ -1634,33 +1634,33 @@ These are the remaining child-6/7 surface.
 > STAGE-5 BAR: NOT MET**, now held open by the **enclosing-function synthetic
 > capture-closure** fold (1 file: `arrow-function/arrow/binding-tests-3.js`).
 > **fix5 2/5 landed the tagged-template surface**: `expressions/tagged-template`
-> is now byte-clean (26 `endor-rejected` → **0**, 27/27 identical) — the tagged
+> is now byte-clean (26 `endor-rejected` -> **0**, 27/27 identical) — the tagged
 > branch of `fxTemplateNodeCode` (the `TEMPLATE_CACHE.#<tag>`-guarded frozen
 > template object, cooked/raw arrays, and the tag call) is ported into
 > `coder.rs`, with the illegal-escape cooked slot carried as the parser's
 > `mxStringErrorFlag` (bit 1) and emitted as `undefined`. The same slice cleaned
-> **`expressions/template-literal`** (13 `accept-disagree` → **0**): an untagged
+> **`expressions/template-literal`** (13 `accept-disagree` -> **0**): an untagged
 > template whose cooked value carries `mxStringErrorFlag` (a truncated/illegal
-> `\x`/`\u` escape, a bad `\u{…}` code point/separator, or a legacy octal in
+> `\x`/`\u` escape, a bad `\u{...}` code point/separator, or a legacy octal in
 > template position) is now a SyntaxError, matching `fxStringNodeCode` — while a
 > tagged template still accepts the same source. **fix5 3/5 closed three
 > lexer/parser validation gaps** (accept/reject parity, no codegen change):
-> **`comments/hashbang`** (6 `endor-rejected` → **0**) — a leading `#!`
+> **`comments/hashbang`** (6 `endor-rejected` -> **0**) — a leading `#!`
 > hashbang comment is skipped before the first token by `Lexer::skip_shebang`
 > (XS's `fxSkipShebang`), invoked from `Parser::new` for the program and
-> module goals; **`literals/string`** (10 `accept-disagree` → **0**) — a plain
+> module goals; **`literals/string`** (10 `accept-disagree` -> **0**) — a plain
 > string literal with a malformed `\x`/`\u` escape (`mxStringErrorFlag`) is
 > rejected in the parser's `String` primary case, and a legacy octal /
 > `\8`/`\9` (`mxStringLegacyFlag`) in a strict scope is rejected in the
-> scoper's `hoist_string` (XS's `fxStringNodeHoist` legacy→error upgrade),
+> scoper's `hoist_string` (XS's `fxStringNodeHoist` legacy->error upgrade),
 > once a later `"use strict"` prologue is known; **`statements/const`** (5
-> `accept-disagree` → **0**) — a `const`/`using` declaration with no
+> `accept-disagree` -> **0**) — a `const`/`using` declaration with no
 > initializer is a SyntaxError raised at code time by `fxDeclareNodeCode`
 > (endor's `code_declare` records it on a new coder error field that
-> `compile`/`compile_module` surface), so a `for (const x of/in …)` iteration
+> `compile`/`compile_module` surface), so a `for (const x of/in ...)` iteration
 > binding stays exempt. **fix5 4/5 closed the regexp-literal validation gap**
 > (accept/reject parity, no matcher change): **`literals/regexp`** (whole dir,
-> 82 `accept-disagree` → **0**). XS validates every regexp literal at COMPILE
+> 82 `accept-disagree` -> **0**). XS validates every regexp literal at COMPILE
 > time — its lexer runs `fxCompileRegExp` (`fxGetNextRegExp`), so a
 > syntactically invalid pattern or flag set is a parse-time SyntaxError. Endor
 > now mirrors that: `Lexer::read_regexp` runs the ported `ironhorse_regexp::compile`
@@ -1669,11 +1669,11 @@ These are the remaining child-6/7 surface.
 > captures, `\p`, inline modifiers, astral — whose SYNTAX the oracle accepts)
 > stands as accept, so accept/reject agrees without running an unported
 > matcher. The parser was extended to fully VALIDATE those surfaces before
-> bailing `Unsupported`: named captures `(?<name>…)` and `\k<name>` (XS's
+> bailing `Unsupported`: named captures `(?<name>...)` and `\k<name>` (XS's
 > two-pass `XS_REGEXP_N` re-parse, `fxCaptureNameParse` name validation with
 > `ID_Start`/`ID_Continue` + `\u`-escaped/astral names, `mxDuplicateCapture`,
 > and dangling-reference `mxInvalidReferenceName`), and the `u`/`v` grammar
-> (bare `{`/`]`/`}`, identity-escape and truncated `\x`/`\u{…}` rejection,
+> (bare `{`/`]`/`}`, identity-escape and truncated `\x`/`\u{...}` rejection,
 > quantified assertions). The `ID_Start`/`ID_Continue` tables moved to the leaf
 > `ironhorse-regexp::unicode` (single source of truth, re-exported by
 > `ironhorse-compile`). **fix5 4/5 slice 2 closed the two remaining module-goal
@@ -1681,13 +1681,13 @@ These are the remaining child-6/7 surface.
 > seam artifacts — the differential harness compiles every file as the
 > **script** goal for both engines, so a `flags: [module]` file's illegal-in-
 > script construct is a genuine script-goal disagreement): **`expressions/
-> import.meta`** (5 `accept-disagree` → **0**) and the `import(import.meta)`
-> case in **`expressions/dynamic-import`** (1 → **0**) — `import.meta` is an
+> import.meta`** (5 `accept-disagree` -> **0**) and the `import(import.meta)`
+> case in **`expressions/dynamic-import`** (1 -> **0**) — `import.meta` is an
 > early SyntaxError unless the goal is Module, which XS gates on `mxProgramFlag`
 > in `fxLiteralExpression`; endor now rejects it in `import_literal` when
 > `flags::PROGRAM` is set (the flag `parse_program` seeds and `PARSER_FLAGS`
 > preserves across nested functions, never set by `parse_module`).
-> **`module-code`** (1 `accept-disagree` → **0**, `early-dup-lables.js`) —
+> **`module-code`** (1 `accept-disagree` -> **0**, `early-dup-lables.js`) —
 > `ContainsDuplicateLabels` is enforced at code time by `fxLabelNodeCode`
 > (both the folded direct-chain check and the enclosing break-target-stack
 > walk); endor's `code_label` now mirrors both, reporting a `duplicate label`
@@ -1722,9 +1722,9 @@ These are the remaining child-6/7 surface.
 > skips named (`endor-aborted` is a named SKIP reason, not a crash):
 > `built-ins/Object` **175/0 of 3127** (2952 skipped by named reason),
 > `built-ins/Function` **40/0 of 511** (471 skipped), `built-ins/Array` **435/0
-> of 2625** (2190 skipped). The Object/Array covered-counts are −1/−2 below the
+> of 2625** (2190 skipped). The Object/Array covered-counts are -1/-2 below the
 > fix5-era 176/437 spec targets, entirely because the tip advanced the oracle
-> 8.2.3→8.3.1 AFTER those targets were written: 3 built-in test files that were
+> 8.2.3->8.3.1 AFTER those targets were written: 3 built-in test files that were
 > bit-exact against the 8.2.3 oracle now classify under a NAMED skip against the
 > 8.3.1 oracle (an unported built-in surface the newer engine meters differently)
 > — a named-skip reshuffle with **divergent=0 throughout**, not a regression and
@@ -2139,7 +2139,7 @@ harness abort.
 | ironhorse-rejected (oracle accepts, Ironhorse folds) | 0 |
 | oracle-rejected / accept-disagreement | 0 / 0 |
 
-…and the **module** goal (`ironhorse-262/corpora-modules`, `// ---`-delimited,
+...and the **module** goal (`ironhorse-262/corpora-modules`, `// ---`-delimited,
 gated by `module_corpora_byte_identity_no_divergence`):
 
 | metric | count |
@@ -2149,11 +2149,11 @@ gated by `module_corpora_byte_identity_no_divergence`):
 | divergent / ironhorse-rejected / accept-disagreement | 0 / 0 / 0 |
 
 The curated-corpus bar — `divergent == 0` **and** full accept/reject
-agreement — is **fully MET on both goals**. The module count grew `35 → 45`
+agreement — is **fully MET on both goals**. The module count grew `35 -> 45`
 when the dynamic-`import()` / `import.meta` node coders landed. The child-7
 build read `identical=1691 ironhorse-rejected=20`; the coder-reject fix child
-closed all 20 folds (→ `1711 / 0`), and the CESU-8 fix child had already
-closed the 60 string divergences (`identical=1631` → `1691` → `1711`).
+closed all 20 folds (-> `1711 / 0`), and the CESU-8 fix child had already
+closed the 60 string divergences (`identical=1631` -> `1691` -> `1711`).
 
 **Broadened real-test262 sweep (fix3-verify, 12 subtrees).** Re-running the
 ten subtrees the fix2-verify sweep measured and adding two fresh for exposure
@@ -2175,9 +2175,9 @@ OOMs the oracle (`compile-diff <subtree>`, the compiler byte-identity harness):
 | `statements/switch` | 105 | 36 | **0** | 0 | 69 | 0 |
 | `expressions/call` | 96 | 94 | **0** | 1 | 1 | 0 |
 
-fix3 drove `assignment` (2 → 0), `function` (2 → 0, and its 4 ironhorse-rejects →
-0), and `object` (1 → 0, and its 8 ironhorse-rejects → 0) fully byte-clean, and
-`class` from 113 → 62. The two fresh subtrees are byte-clean on `divergent` /
+fix3 drove `assignment` (2 -> 0), `function` (2 -> 0, and its 4 ironhorse-rejects ->
+0), and `object` (1 -> 0, and its 8 ironhorse-rejects -> 0) fully byte-clean, and
+`class` from 113 -> 62. The two fresh subtrees are byte-clean on `divergent` /
 `accept-disagree`; `expressions/call` carries **one** `ironhorse-rejected` on the
 single named fold `tco-call-args.js` (`coder panic: captured function name
 deferred` — a named-function-expression whose own name is captured as a
@@ -2185,11 +2185,11 @@ closure slot, `coder.rs` deferral), the only `ironhorse-rejected` in the sweep.
 
 **What fix2 closed vs the first broadened sweep.** The first sweep's Class A
 (NamedEvaluation in a destructuring default — the mis-emit flagged as
-kill-criterion evidence) is **CLOSED**: `for-of` (45 → 0), `try` (10 → 0),
+kill-criterion evidence) is **CLOSED**: `for-of` (45 -> 0), `try` (10 -> 0),
 and `assignment`'s destructuring divergences are gone; those subtrees are now
 byte-clean. Class E (missing early-errors) is **CLOSED**:
 **`accept-disagree` is now 0 on every subtree** (the 53 `class` / 2 `object`
-accept-disagreements → 0). The first sweep's Class B (async-generator
+accept-disagreements -> 0). The first sweep's Class B (async-generator
 `yield*` / async-gen method coding) is **CLOSED**: `async-generator` is
 byte-clean at `507/0`. The private-member **read**-path reject fold (first
 sweep's Class D, `1572 class` ironhorse-rejects) is **CLOSED** — those programs
@@ -2240,7 +2240,7 @@ kill-criterion evidence in this sweep. The classes:
 1. **Class α — closure-vs-local scope classification (a MIS-EMIT).** Ironhorse
    codes a binding with `new_local` / `let_local` / `const_local` /
    `var_local` where the oracle codes `new_closure` / `let_closure` /
-   `const_closure` / `var_closure` (opcodes 230↔228 family). The scoper does
+   `const_closure` / `var_closure` (opcodes 230<->228 family). The scoper does
    not promote a binding to a closure slot when a nested function captures
    it. Surfaces as: class-body bindings whose class has literal-named or
    numeric-keyed members (`class/elements/*literal-names*`,
@@ -2260,7 +2260,7 @@ kill-criterion evidence in this sweep. The classes:
    closed the **accessor-pair brand double-capture** sub-shape — a `get #x`/
    `set #x` pair now shares one brand closure (`fxScopeLookup` resolves both
    `symbolAccess` nodes to the first class-scope declare), dropping the
-   `private-accessor-name/*` divergences (`statements/class` 100 → 75). Two
+   `private-accessor-name/*` divergences (`statements/class` 100 -> 75). Two
    sub-shapes remain, **both scoper-structural** (Ironhorse still synthesizes the
    member-closure field-init function at code time rather than binding the
    field initializers inside a real `instanceInit` **function scope** the way
@@ -2290,7 +2290,7 @@ kill-criterion evidence in this sweep. The classes:
    `node->declaration` bit so synthesized slots — an injected `arguments`
    `Var`, a class's anonymous field-init closures — are not captured), so
    `assignment/S11.13.1_A6_T1,T2` (`eval("var x;")` in an IIFE) are now
-   byte-identical (`assignment` divergent 2 → 0). The **class field-initializer**
+   byte-identical (`assignment` divergent 2 -> 0). The **class field-initializer**
    sub-shape remains (the `class` direct-eval family — `elements/*direct-eval*`,
    `derived-cls-direct-eval-*`, `*-visible-to-direct-eval*`,
    `privatename-not-valid-eval-earlyerr-*`, `class` 62 divergences): the
@@ -2314,7 +2314,7 @@ kill-criterion evidence in this sweep. The classes:
    `fxStringToIndex` classification and always symbol-coded a string key. Now
    ported (`string_key_to_index` + `push_property_index`, both String
    branches — plain and the `get`/`set`/method form). `expressions/object`
-   divergent 1 → 0; the whole `object` subtree is byte-clean. (The earlier
+   divergent 1 -> 0; the whole `object` subtree is byte-clean. (The earlier
    note that `"1"` does *not* flip was wrong — disassembly against the pin
    shows the oracle DOES flip it, consistent with `fxStringToIndex("1")`.)
 5. **Class ε — class field-initializer scope/ordering (divergent, deferred).**
@@ -2323,7 +2323,7 @@ kill-criterion evidence in this sweep. The classes:
    reserves only `k` (the captured computed-key/private-brand closures),
    whereas XS binds a **real `instanceInit` function node** whose
    `scopeCount == scopeMaximum` = the captured closures **plus the peak
-   temporary depth** of the field-value expressions (`fxFunctionNodeBind` →
+   temporary depth** of the field-value expressions (`fxFunctionNodeBind` ->
    `binder->scopeMaximum`). Ironhorse models that real scope only for the
    **all-plain-data-field** class (the `class_field_init_inst` / `fi` path);
    for a computed-key / private / static class it falls to the `k`-only
@@ -2341,7 +2341,7 @@ kill-criterion evidence in this sweep. The classes:
    Both close together with the deferred larger scoper+coder fold that gives
    every instance/static field class a real field-init function scope (the
    Class γ field-init work). 2 of the `class` divergences (the third
-   field-init file, `intercalated-…`, is folded into Class α above).
+   field-init file, `intercalated-...`, is folded into Class α above).
 
 **Residual `ironhorse-rejected` — CLOSED.** The former loud fold (`coder panic:
 eval in a parameter default (parameter var-environment) deferred`, 8 `object`
@@ -2350,9 +2350,9 @@ ported it: a direct `eval` in a parameter default poisons the parameter scope
 (not the body), so `fxScopeCodingParams` publishes the parameters into a
 `with` and `fxScopeCodedBody` unwinds those frames with the two `WITHOUT` —
 keyed on the FUNCTION node's eval flag, not the body's. `statements/function`
-ironhorse-rejected 4 → 0 (subtree byte-clean), `expressions/object` ironhorse-rejected
-8 → 0. With fix3's δ child the whole `object` subtree is now byte-clean
-(divergent 1 → 0). On the twelve fix3-verify subtrees the **only** residual
+ironhorse-rejected 4 -> 0 (subtree byte-clean), `expressions/object` ironhorse-rejected
+8 -> 0. With fix3's δ child the whole `object` subtree is now byte-clean
+(divergent 1 -> 0). On the twelve fix3-verify subtrees the **only** residual
 `ironhorse-rejected` is the single named `tco-call-args.js` fold in
 `expressions/call` (`captured function name deferred`).
 
@@ -2378,13 +2378,13 @@ holds 62 fully-attributed byte divergences. The bar **IS MET** on the curated
 corpora (1711/1711), the module corpora (45/45), and eleven of the twelve
 broadened subtrees; `accept-disagree == 0` holds everywhere; the sole
 `ironhorse-rejected` is the one named `tco-call-args.js` fold. No unattributable
-divergence anywhere ⇒ **no new kill-criterion evidence**.
+divergence anywhere => **no new kill-criterion evidence**.
 
 **fix4 (the structural field-init fold) — Classes β + ε CLOSED, α interleave
 CLOSED.** The keystone deferred all through fix3 — the member-closure
 field-init function synthesized at code time — is gone. Every instance field
 initializer now binds inside a **real `instanceInit` function scope** and every
-static field value / `static { … }` block inside a real **`constructorInit`
+static field value / `static { ... }` block inside a real **`constructorInit`
 function scope**, both **created at hoist** (parented to the class body) so a
 field value's inner function/class chains through the field function: its outer
 captures promote to closures, a `this.#x` read resolves to the field function's
@@ -2398,10 +2398,10 @@ field order (the get/set accessor pair sharing one brand slot via the scoper's
 family: the nested-class RESERVE leak and the field-initializer brand-read
 index), **Class ε**'s `init-value-incremental` (temporary depth), and **Class
 α**'s `intercalated-static-non-static-computed-fields` interleave. Result
-(re-measured on the pin): `statements/class` divergent **62 → 25**,
-`expressions/class` **50 → 19**; the curated corpora stay **1711/1711
+(re-measured on the pin): `statements/class` divergent **62 -> 25**,
+`expressions/class` **50 -> 19**; the curated corpora stay **1711/1711
 divergent=0**, the module gate + `cargo test --workspace` stay green, and
-**no new `ironhorse-rejected`** (a `static { … }` block with its own lexical
+**no new `ironhorse-rejected`** (a `static { ... }` block with its own lexical
 declarations remains a loud, named coder fold — its field-function frame
 reservation is the residual class-tail work). New byte-identity fixtures
 (`coder_byte_identity.rs::class_field_init_function_scope`) pin the closed
@@ -2429,7 +2429,7 @@ closed the whole `class` direct-eval family — `elements/*direct-eval*`,
 `direct-eval-err-contains-{arguments,newtarget}`,
 `privatename-not-valid-eval-earlyerr-3` and their `expressions/class` mirrors,
 plus `static-field-init-with-this`'s eval half. Result (re-measured on the pin):
-`statements/class` divergent **25 → 5**, `expressions/class` **19 → 4**; the
+`statements/class` divergent **25 -> 5**, `expressions/class` **19 -> 4**; the
 curated corpora stay **1711/1711 divergent=0**, the module gate +
 `cargo test --workspace` (`--test-threads=1`) stay green, `#![forbid(unsafe_code)]`
 intact, and **no new `ironhorse-rejected`**. New byte-identity fixtures
@@ -2481,10 +2481,10 @@ remainders are closed:
   `scope-name-var-{close,open-strict,open-non-strict}` rejects (the same
   captured-self-name shape).
 
-Result (re-measured on the pin): **`statements/class` divergent 5 → 0**
-and **`expressions/class` 4 → 0** (both BAR MET), **`expressions/call`
+Result (re-measured on the pin): **`statements/class` divergent 5 -> 0**
+and **`expressions/class` 4 -> 0** (both BAR MET), **`expressions/call`
 0 divergent / 0 `ironhorse-rejected`** (the fold closed),
-**`expressions/function` 3 `ironhorse-rejected` → 0**. The curated corpora
+**`expressions/function` 3 `ironhorse-rejected` -> 0**. The curated corpora
 stay **1711/1711 divergent=0**, `cargo test --workspace`
 (`--test-threads=1`) EXIT=0, `#![forbid(unsafe_code)]` intact. New
 byte-identity fixtures pin every closed shape
@@ -2526,10 +2526,10 @@ whole-`language/` OOMs the oracle) — this round adds **`expressions/class`**
 
 **Every one of the 13 subtrees is byte-clean: `divergent == 0`,
 `ironhorse-rejected == 0`, `accept-disagree == 0`, EXIT=0.** Since the fix3-verify
-sweep, `statements/class` closed **62 → 0** (identical 3236 → 3298),
-`expressions/class` **50 → 0** (measured for the first time this round),
+sweep, `statements/class` closed **62 -> 0** (identical 3236 -> 3298),
+`expressions/class` **50 -> 0** (measured for the first time this round),
 `expressions/call`'s lone `tco-call-args.js` fold closed (`ironhorse-rejected`
-1 → 0, moved into `identical`). All `oracle-rejected` counts are
+1 -> 0, moved into `identical`). All `oracle-rejected` counts are
 accept-**agreements** (Ironhorse rejects the same files — `accept-disagree` is 0
 everywhere), so no `oracle-rejected` is a divergence.
 
@@ -2589,9 +2589,9 @@ hence NO new kill-criterion evidence.**
 The bar **IS MET** on: the curated corpora (**1711/1711**), the module corpora
 (**45/45**), and **all 13** swept subtrees — including the entire class surface
 (`statements/class` **0**, `expressions/class` **0**), which was the fix4
-target and is now byte-clean (62 + 50 → 0). `accept-disagree == 0` and
+target and is now byte-clean (62 + 50 -> 0). `accept-disagree == 0` and
 `ironhorse-rejected == 0` hold on **every** measured subtree. No unattributable
-divergence anywhere ⇒ **no new kill-criterion evidence**; the residual is one
+divergence anywhere => **no new kill-criterion evidence**; the residual is one
 named scoper fold, not a feasibility wall.
 
 **fix5 1/5 (the arrow receiver-capture-under-`eval` scope-slot fold) — 8 of 10
@@ -2617,7 +2617,7 @@ byte-identity fixtures pin the shape (`arrow_receiver_capture_under_eval`:
 body-lex-distinct, plain body eval, destructuring/rest/element-then-rest
 parameter var environments).
 
-Before → after (`compile-diff <subtree>`, oracle pin `48ee02d8`):
+Before -> after (`compile-diff <subtree>`, oracle pin `48ee02d8`):
 
 | subtree | divergent before | divergent after | accept-disagree before | accept-disagree after |
 | --- | ---: | ---: | ---: | ---: |
@@ -2626,7 +2626,7 @@ Before → after (`compile-diff <subtree>`, oracle pin `48ee02d8`):
 | `arguments-object` | 1 | 1 | 0 | 0 |
 
 The `eval-code` arrow trio (`direct/{new.target,super-call,super-prop}-arrow.js`)
-closed outright (3 → 0); `expressions/arrow-function` dropped 6 → 1. Curated
+closed outright (3 -> 0); `expressions/arrow-function` dropped 6 -> 1. Curated
 corpora stay **1711/1711**, `statements/class` + `expressions/class` stay
 **divergent=0**, `cargo test --workspace -- --test-threads=1` **EXIT=0**,
 `#![forbid(unsafe_code)]` intact. **`eval-code` is now fully byte-clean:
@@ -2671,7 +2671,7 @@ branch/swap/pop dance). The fix adds `code_chain_this`/`code_option_this`
 (structural mirrors) and the two dispatch arms; `optional-chain.js` is now
 byte-identical (392 = 392). Locked in `optional_call_reference_is_byte_identical`
 (bare-reference call, member-reference call, chained `a?.b?.()`, and a further
-`?.().c` continuation). `optional-chaining` divergent **1 → 0**.
+`?.().c` continuation). `optional-chaining` divergent **1 -> 0**.
 
 The subtree's **2 remaining `ironhorse-rejected`** (`call-expression.js`,
 `member-expression.js`) are a **separate deferred FEATURE, not this fold**:
@@ -2687,9 +2687,9 @@ not an optional-chaining change; attributed here, out of this slice's scope.
 **fix5 1/5 slice 1 continuation (the named-function-expression self-name publish
 under eval) — `arguments-object/10.5-1-s.js` CLOSED.** `(function fun(){
 eval("arguments = 10"); })(30)`: an `eval`-poisoned named function expression.
-XS declares the self-name `fxDefineNodeNew(…, XS_TOKEN_CONST)` — a **define
+XS declares the self-name `fxDefineNodeNew(..., XS_TOKEN_CONST)` — a **define
 entry whose declare token is `CONST`**, so `fxScopeCodingParams`' eval
-`with`-publish loop (`if ARG || VAR || CONST → STORE_1 node->index`) publishes
+`with`-publish loop (`if ARG || VAR || CONST -> STORE_1 node->index`) publishes
 it alongside the injected `arguments` `VAR`. Ironhorse models the self-name as the
 sole `Define` in a function param scope but only published `Arg`/`Var`/`Const`,
 emitting one `STORE_1` too few (Ironhorse 133 vs oracle 135). The fix
@@ -2704,7 +2704,7 @@ byte-clean: 260/260, `divergent=0 ironhorse-rejected=0 accept-disagree=0`, BAR M
 `expressions/arrow-function/arrow/binding-tests-3.js` (`function foo(){ return
 ()=>eval("this"); }`) is the last arrow divergence (arrow-function 326: 250
 identical, 1 divergent, 75 oracle-rejected; the divergence is
-`byte-length/ironhorse-shorter`, foo's body 71 → 61). It is **not** the self-name
+`byte-length/ironhorse-shorter`, foo's body 71 -> 61). It is **not** the self-name
 publish above, nor the receiver-capture-under-eval fold (both closed): it is the
 **enclosing-function synthetic capture-closure** mechanism. When an arrow with a
 direct `eval` (which may reference `this`/`arguments`) is created inside a
@@ -2745,7 +2745,7 @@ never set `flags::EVAL` at an `eval(...)` call. The three-part fix:
 2. **`coder.rs` `code_arguments_object`** — gate materialization on the function
    node's actual `mxArgumentsFlag` (`flags::ARGUMENTS` OR the scope's
    `direct_eval`), not the mere presence of the injected `Var` (which now also
-   exists for the eval-only enclosing function). Foo has neither ⇒
+   exists for the eval-only enclosing function). Foo has neither =>
    materialization-free; a directly-eval-poisoned or `arguments`-referencing
    function still materializes.
 3. **`coder.rs` `code_body` + `scoper.rs` `Scope::node_has_eval`** — key
@@ -2767,7 +2767,7 @@ ironhorse-rejected=0`; curated corpora 1711/1711; `cargo test --workspace` EXIT=
 Full 120-subtree re-enumeration is the fix6-verify 2/2 sibling's bar.
 
 **`using` (explicit resource management).** Re-confirmed: the oracle at the
-pin **rejects** `using x = a` (it lexes `using` as an identifier →
+pin **rejects** `using x = a` (it lexes `using` as an identifier ->
 `SyntaxError: missing ;`); Ironhorse rejects it identically (`missing ;`) at
 statement, block, and async-function-body position. Reject-**agreement**, no
 parser gap — ERM is simply not in the pinned grammar.
@@ -2807,8 +2807,8 @@ dual-run runner takes an explicit `Compiler` selection `{Oracle, Ironhorse}`:
 `ironhorse-compile`'s own output (the oracle is still consulted for the
 reference result). The default stays `Oracle` until the supervisor accepts
 stage 5 — later stages flip it with a one-line change and no runner
-surgery. The `Ironhorse` path is total over coder folds (`catch_unwind` → empty
-bytecode → a clean ironhorse-vm abort, never a harness panic). **Flipped in
+surgery. The `Ironhorse` path is total over coder folds (`catch_unwind` -> empty
+bytecode -> a clean ironhorse-vm abort, never a harness panic). **Flipped in
 stage 6 child 1** — see § Stage 6.
 
 ## Script goal vs. the oracle's eval framing: strict top-level `var` hoisting
@@ -2924,7 +2924,7 @@ proxy that reports `configurable: true` for a `var` binding and throws on
 `Object.freeze(globalThis)`, both artifacts). Across 25 probe programs covering
 the global-property, frozen-global, descriptor, lexical, and redeclaration
 surface, Ironhorse's Script goal agrees with node on every program this change
-concerns, including `'use strict'; var g=1; Object.freeze(globalThis); …` giving
+concerns, including `'use strict'; var g=1; Object.freeze(globalThis); ...` giving
 `TypeError:1:1` on both.
 
 Two disagreements in that probe were **pre-existing and unrelated** to the goal
@@ -3073,9 +3073,9 @@ the oracle's framing, so the two cases now attribute on their own. That fix is
 also why coverage ends one *above* the baseline.
 
 **Ratchet-floor impact (needs maintainer sign-off).** The sweep's covered count
-does drop, 1276 → 1270. Ten per-(case, mode) entries move in
+does drop, 1276 -> 1270. Ten per-(case, mode) entries move in
 `language/eval-code`; four are re-attributions between skips
-(`shared-test262-failure` / `abort-value-differs` → the new named skip), but six
+(`shared-test262-failure` / `abort-value-differs` -> the new named skip), but six
 move from **`pass` to the new skip**:
 
 | Case (strict variant), all `language/eval-code/indirect/` | In `covered.txt` |
@@ -3104,7 +3104,7 @@ had pinned the bug itself: the strict `writable:false` entry of
 the eval-framed oracle's `false`; it now pins both sides — Ironhorse's Script
 goal `true` (TypeError thrown, `x` kept) and the oracle's `false` — so the
 divergence is recorded rather than hidden. The remaining shift is advisory
-computron telemetry for strict variants (`computron-gap` 157 → 185 across the two
+computron telemetry for strict variants (`computron-gap` 157 -> 185 across the two
 directories: the hoisted access path costs differently from the oracle's
 frame-local path); the exact-metering corpus (`ironhorse-meter-exact`,
 sloppy-only by policy, no `"use strict"` sources) is unaffected.
@@ -3180,25 +3180,25 @@ children:
 The following text is preserved from the README at `96db92e23`.
 Its old gitlink and future-work descriptions are historical, not setup instructions.
 
-## Upstream moddable delta tracking (oracle bumped 8.2.3 → 8.3.1)
+## Upstream moddable delta tracking (oracle bumped 8.2.3 -> 8.3.1)
 
 The port is **oracle-locked**: every stage is byte-identity / four-valued
 differential against the XS built from the `c/moddable` pin. That pin was
 **`48ee02d8cfe0` = moddable 8.2.3** (2026-06-17) and is now
-**`23b4d6b0a65f` = moddable 8.3.1** (2026-07-07; intermediate bumps 8.2.3 →
-8.3 → 8.3.1), bumped by the **`port-xs-oracle-bump-8-3-1`** job. Both pins
+**`23b4d6b0a65f` = moddable 8.3.1** (2026-07-07; intermediate bumps 8.2.3 ->
+8.3 -> 8.3.1), bumped by the **`port-xs-oracle-bump-8-3-1`** job. Both pins
 sit *well past* the `8.0.1` gitlink (`5516726818`) endo vendors, so the port
 inherits every engine-semantics change up through 8.3.1 for free — implement a
 surface and it is measured against an oracle that already has those fixes.
 
 This table projects the engine-relevant `xs/sources` / `xs/includes` changes
-across `8.0.1 → 8.3.1` onto the port and records which side of the original
+across `8.0.1 -> 8.3.1` onto the port and records which side of the original
 **8.2.3 oracle** each fell on (kept as provenance) and its status now that the
 oracle is at 8.3.1. The bump **re-based the entire byte-identity bar** onto the
 8.3.1 oracle; the whole bar was re-measured green at the bump (stage-1 harness
 86/86; corpora compile-diff 1711/1711; `language/statements/for-await-of`
 1141/1141; `language/module-code` 35/35; module corpora incl. the new
-top-level-await cover). The only already-ported construct the 8.2.3 → 8.3.1
+top-level-await cover). The only already-ported construct the 8.2.3 -> 8.3.1
 range touched is item 2 (`for await` in a module body), now **mirrored**;
 every other post-8.2.3 item is a future VM-stage surface the port has not yet
 reached, measured against the **8.3.1** oracle from that stage on.
@@ -3209,8 +3209,8 @@ reached, measured against the **8.3.1** oracle from that stage on.
 | 2 | `for await` in a module body — `c41a35d165` | `xsSyntaxical.c` | **post-8.2.3** | `for_statement` (`parser/stmt.rs:693`) now sets `self.flags \|= flags::AWAITING;` (mirroring `parser->flags \|= mxAwaitingFlag`) right after pushing the `ForAwaitOf` node, so a top-level `for await` marks the enclosing module body awaiting — the module node's `root_flags` carry AWAITING and it compiles async, byte-identical to the 8.3.1 oracle. | **Mirrored** (this oracle bump). Load-bearing: covered by `corpora-modules/top-level-await.js`; reverting the line diverges (`ironhorse-shorter`, missing the async-module machinery) on that cover. |
 | 3 | Immutable ArrayBuffer proposal conformance — `0e1c47d81f` | `xsAll.h`, `xsAtomics.c`, `xsCommon.{c,h}`, `xsDataView.c`, `xsSnapshot.c` | **post-8.2.3** | `ArrayBuffer`/`DataView`/`Atomics` exist as keys; DataView runtime is partial, the immutability flag is not modeled. | **Follow-up:** buffer/typed-array layer must carry the immutable flag + conformance behavior across DataView/Atomics/snapshot; lands with the VM buffer stage, oracle now at 8.3.1. |
 | 4 | `ArrayBuffer.prototype.transfer*` do not use `@@species` — `36aa1485a4`, `eff30ae5ba` | `xsDataView.c` | **in-oracle** | `transfer`/`transferToFixedLength` are a recognized-but-unimplemented named skip (`array-buffer-transfer:unsupported`, `interp.rs:11926`) — no species lookup exists to be wrong. | **No action.** Auto-inherits the no-species behavior when `transfer` is implemented against the 8.2.3 oracle. |
-| 5 | `Array.from` / `Array.fromAsync` don't throw on `undefined` mapFn (#1645) — `d8baa8cdf7` | `xsArray.c` | **post-8.2.3** | Both are honest named skips today (`Array.from:iterator-protocol-metering`, `Array.fromAsync:async-iteration`). The change: `mapFn` is used only when `mxArgc > 1 && !mxIsUndefined(argv(1))` — `undefined` ⇒ no mapper (identity). | **Follow-up:** honor the `undefined`-mapper guard when these statics are implemented, oracle now at 8.3.1. |
-| 6 | Private property defined in a module namespace object — `a3da68e484` | `xsAll.h`, `xsModule.c`, `xsProperty.c` | **post-8.2.3** | Module coder + private fields both exist. The change: `fxDefine/Get/SetPrivateProperty` redirect a module `instance` to `mxModuleInstanceExports(instance)->value.reference` before walking properties. | **Follow-up:** mirror the module-instance → exports redirect in the private-property path once module-namespace + private-field interaction is exercised, oracle now at 8.3.1. |
+| 5 | `Array.from` / `Array.fromAsync` don't throw on `undefined` mapFn (#1645) — `d8baa8cdf7` | `xsArray.c` | **post-8.2.3** | Both are honest named skips today (`Array.from:iterator-protocol-metering`, `Array.fromAsync:async-iteration`). The change: `mapFn` is used only when `mxArgc > 1 && !mxIsUndefined(argv(1))` — `undefined` => no mapper (identity). | **Follow-up:** honor the `undefined`-mapper guard when these statics are implemented, oracle now at 8.3.1. |
+| 6 | Private property defined in a module namespace object — `a3da68e484` | `xsAll.h`, `xsModule.c`, `xsProperty.c` | **post-8.2.3** | Module coder + private fields both exist. The change: `fxDefine/Get/SetPrivateProperty` redirect a module `instance` to `mxModuleInstanceExports(instance)->value.reference` before walking properties. | **Follow-up:** mirror the module-instance -> exports redirect in the private-property path once module-namespace + private-field interaction is exercised, oracle now at 8.3.1. |
 | 7 | Native stack overflow reported natively, not as JS (#1635) + parser stack margin — `bc5a1ecfdb`, `82e80152a3`, `ebc286a46c`, `da87ebd954` | `xsMemory.c`, `xsSyntaxical.c` | **all in-oracle** | `ironhorse-vm` models overflow as `Halt::StackOverflow` = "an abort to the host, not a catchable `RangeError`" — exactly `bc5a1ecfdb`'s semantics. XS bounds its *native* recursion (`fxCheckCStack`, `fxCheckParserStack`) by a stack-address margin that varies with host, thread and build; ironhorse bounds the same recursions by deterministic counters (§ Native recursion budget and stack contract): the VM's `NATIVE_DEPTH_LIMIT`, the parser's `PARSER_STACK_BUDGET`, the scoper/coder `TREE_DEPTH_LIMIT`, and the regexp compiler's `MAX_NESTING_DEPTH`. | **Mirrored as counters.** The refusal shape agrees (host abort in the VM, `SyntaxError` "stack overflow" in the parser); the depth is a release-versioned contract rather than the oracle's host-dependent margin. |
 | 8 | `String.prototype.trim` optimization — `f5615ff3fb` | `xsString.c` | post-8.2.3 | behavior-neutral fast path. | **Optional / no action** — no observable semantics delta. |
 
@@ -3223,4 +3223,3 @@ because the oracle is behind — the oracle is now **8.3.1**, so each lands
 with, and is measured against, the 8.3.1 oracle at the stage that reaches it.
 No item below diverges from the *current* (8.3.1) oracle: the port matches
 8.3.1 today across every surface it has reached.
-

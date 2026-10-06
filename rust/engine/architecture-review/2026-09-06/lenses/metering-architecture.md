@@ -31,18 +31,18 @@ computron comparison advisory. The code delivers none of the four, and the gap i
 structural rather than cosmetic.
 
 *(a) No table.* `meter.rs` holds 6 primitive weights, all literally XS's
-(`CODE_METERING = 1 << 16`, `SLOT_ALLOCATION_METERING = 1 << 8`, …). Everything else is
-210 `pub const …_METERING: u64` in `interp.rs` (`ASYNC_INSTANCE_METERING = 414600`
+(`CODE_METERING = 1 << 16`, `SLOT_ALLOCATION_METERING = 1 << 8`, ...). Everything else is
+210 `pub const ..._METERING: u64` in `interp.rs` (`ASYNC_INSTANCE_METERING = 414600`
 :342, `DEFINE_PROPERTY_NEW_RESIDUAL_METERING = 622024` :452), each documented as
 "calibrated raw-exact against the pin `48ee02d8cfe0`" — i.e. back-fitted residuals of a
 2023-era C build. Some are explicitly C-build artifacts
 (`RESUMED_HANDLER_THROW_METERING`, :135–139: "a property of the COMPUTED-GOTO dispatch
-build … in a plain-`switch` build this surcharge would be WRONG"). Two more weights live
+build ... in a plain-`switch` build this surcharge would be WRONG"). Two more weights live
 in `ironhorse-regexp/src/opcode.rs:34,38` as XS constants with **no version string at
 all**, pre-weighted so the VM's table cannot re-weight regexp steps. One more lives in
 `ironhorse-compile/src/meter.rs:26` under a *different* release id. Provenance is
 heterogeneous inside one "frozen table": some entries are isolated-raw-gap
-calibrations against XS, some are self-described "advisory … directional" hand picks
+calibrations against XS, some are self-described "advisory ... directional" hand picks
 (:453–460). The design's per-opcode table does not exist at all: the loop charges a flat
 `CODE_METERING` for every opcode (:11365), while `cost.rs:312` already *knows* that
 `GET_PROPERTY` is `PropertyChain` and `OBJECT`/`ARRAY` are `AllocSize` — and feeds
@@ -57,7 +57,7 @@ a small fraction of the table. And no prior table is retained: a bump does not m
 outcomes addressable, it *bricks every existing snapshot* (`CostTableMismatch`).
 
 *(c) The meter models XS's data structures, not Ironhorse's.* `collection_find`
-(:34435) is `entries().iter().position(…)` — a linear scan — while the metering around it
+(:34435) is `entries().iter().position(...)` — a linear scan — while the metering around it
 faithfully reproduces XS's hash geometry, `mxTableThreshold`, and the `fxNewChunk(len*8)`
 rehash (`collection_table_resize` :34456–34490, including a "measured one-time `+8` raw"
 :34486). `Map.get`/`has` charge *nothing* proportional to size. Building an n-entry Map
@@ -200,7 +200,7 @@ enforced at the only production seam. `Halt::MeterAbort` is dead code there.
 (`interval != 0`) with `meter_host == None` should abort, not continue. Give
 `Interp::restore_snapshot_state` no way to yield a machine that reports armed state
 without a host — take the host as a parameter of the resume verb. Wire `set_crank_limit`
-through `rust/endo` per design § Metering's "`Machine` metering API … preserved verbatim"
+through `rust/endo` per design § Metering's "`Machine` metering API ... preserved verbatim"
 (none of `begin_metering`/`end_metering`/`current_meter`/`current_computrons`/`set_meter`/
 `run_promise_jobs_metered`/`set_crank_limit` exists there).
 
@@ -209,7 +209,7 @@ through `rust/endo` per design § Metering's "`Machine` metering API … preserv
 ### F4 — [high] The doctrine's recalibration mechanism is blocked by ~1,600 XS-parity CI gates
 **file:** `rust/engine/ironhorse-262/tests/corpus_conversion_equivalence.rs:64`
 **other sites:** `ironhorse-262/tests/regressions_dual_run.rs:64`; `ironhorse-262/src/xst.rs:473,497`; `ironhorse-fuzz/src/lib.rs:1722`; 15 `assert_eq!(out.computrons, N, "bit-exact computrons vs XS")` in `interp.rs:42233–42725`; 1,588 `.js` files under `packages/test262-runner/test262/test/ironhorse/` carrying `ironhorse-meter-exact`
-**confidence:** high · **novelty:** partially-known — sharpens store-seam-design-ledger item 10 ("metering doctrine drift … the constants are XS-derived"); the *blocking* consequence and the case count are new
+**confidence:** high · **novelty:** partially-known — sharpens store-seam-design-ledger item 10 ("metering doctrine drift ... the constants are XS-derived"); the *blocking* consequence and the case count are new
 
 **Claim.** XS computron equality is an enforced acceptance gate in CI for 1,588 test262
 cases and in every wired differential fuzz comparator, so recalibrating any weight —
@@ -237,12 +237,9 @@ boundaries") depends on being able to bump the table. Today the table is pinned 
 XS fork by the test suite while the design says that parity is a non-goal. This is not
 documentation drift: it is a build-system constraint on the engine's evolution.
 
-**Recommendation.** Decide, and make the code say it. Either (i) demote the meter-exact
-gate to an advisory report with a drift threshold (the design's stated position), keeping
-the parity data as the allocation-faithfulness canary it was meant to be; or (ii) amend
-the design to say XS parity *is* the current acceptance bar for this release and that
-`ironhorse-meter-1` means "XS 8.2.3-equivalent", making the future divergence an explicit
-`ironhorse-meter-2` project. Option (ii) is honest and cheap; the present state is neither.
+**Recommendation.** Demote the meter-exact gate to an advisory report with a
+drift threshold, keeping the parity data as the allocation-faithfulness canary
+it was meant to be.
 
 ---
 
@@ -289,7 +286,7 @@ describes, and unblocks F4 (a new table can coexist with the old parity corpus).
 **other sites:** `meter.rs:29`; `cost.rs:312–353` (`CostModel::opcode_work`), `cost.rs:360` (`builtin_work`); `designs/ironhorse-meter-opcode-cost-instrumentation.md:7` (Status: Not Started)
 **confidence:** high · **novelty:** partially-known (interp-06 / docs-ci maps); the `cost.rs`-knows-but-is-unused framing is new
 
-**Claim.** Design § Metering's table row 1 ("Bytecode dispatch → cost-table entry, **per
+**Claim.** Design § Metering's table row 1 ("Bytecode dispatch -> cost-table entry, **per
 opcode**") is unimplemented: the loop charges `CODE_METERING` for every opcode
 identically, and `cost.rs` already classifies opcodes by work shape but no weight derives
 from it.
@@ -360,7 +357,7 @@ of workloads, assert metered computrons grow at least as fast as a measured op c
 
 ### F8 — [high] Runtime compilation is entirely unmetered, and straight-line bytecode has no check points
 **file:** `rust/engine/ironhorse-vm/src/interp.rs:55`
-**other sites:** `interp.rs:8005–8081` (`eval_source`: `compile_source` → `parse_symbols` → `relink_program_symbols` → `install_intrinsic_bindings` → dispatch, with no `self.meter.` call); `ironhorse-compile/src/lib.rs:52` (`parse_computrons`, test-only); `ironhorse-compile/src/meter.rs:22`; `ironhorse-compile/src/lexer.rs:1223` (eager regexp compile per literal)
+**other sites:** `interp.rs:8005–8081` (`eval_source`: `compile_source` -> `parse_symbols` -> `relink_program_symbols` -> `install_intrinsic_bindings` -> dispatch, with no `self.meter.` call); `ironhorse-compile/src/lib.rs:52` (`parse_computrons`, test-only); `ironhorse-compile/src/meter.rs:22`; `ironhorse-compile/src/lexer.rs:1223` (eager regexp compile per literal)
 **confidence:** high · **novelty:** partially-known (compile-lexer / interp-01 leads); the compound "unmetered compile + no check point in straight-line code" vector is new
 
 **Claim.** `eval(src)` performs O(|src|) lexing, parsing, scoping, coding, symbol
@@ -390,7 +387,7 @@ straight-line program is never checked.
 **Impact.** A guest with a modest computron budget can spend unbounded host time and
 memory in the front end (the scoper has quadratic shapes; the lexer eagerly runs the full
 recursive regexp compiler per literal), then run a multi-megabyte straight-line program
-that no check point can interrupt. Design § Metering table row 4 ("Parse unit →
+that no check point can interrupt. Design § Metering table row 4 ("Parse unit ->
 cost-table entry") is unimplemented end to end.
 
 **Recommendation.** Add `parse_meter_raw: u64` to `CompiledSource`, charge it via
@@ -476,7 +473,7 @@ version string, recorded in `METR` and asserted by a digest test.
 
 **Claim.** The 2026-07-06 revision's "string-op weights re-based to UTF-16 code-unit
 length" landed only in `new_string_units`; JSON and `join` meter the same logical string
-by its UTF-8 byte length, so a CJK string costs 3× through one path and 1× through
+by its UTF-8 byte length, so a CJK string costs 3x through one path and 1x through
 another in the same release.
 
 **Evidence.**
@@ -506,7 +503,7 @@ on the built-in that reached it. It is also latent divergence risk: any future c
 
 **Recommendation.** Route every string-chunk charge through `tick_chunk_new` at
 code-unit granularity; delete the two hand-inlined copies. Add a test asserting that
-`JSON.parse('"…"')` and a literal of the same text meter identically.
+`JSON.parse('"..."')` and a literal of the same text meter identically.
 
 ---
 
@@ -593,7 +590,7 @@ architecture, **and build**".
 
 **Impact.** Also: `index` is never reset for the machine's lifetime and rides across
 snapshots, so a long-lived persistent worker accumulates toward the 2^64 raw ceiling
-(≈2.8 × 10^14 computrons) with no rollover policy; on wrap, `index < count` silently
+(≈2.8 x 10^14 computrons) with no rollover policy; on wrap, `index < count` silently
 suspends all checking until the index catches up.
 
 **Recommendation.** Use `saturating_add`/`saturating_sub` throughout (the compile-side
@@ -646,7 +643,7 @@ cadence, as `interp.rs:42150` already does for backward branches).
 
 **Claim.** `string_key_name` linearly scans the whole `symbol_ids` map cloning a `String`,
 and `is_symbol_key_id` scans every symbol key, both unmetered and both called per
-property on enumeration paths — so property enumeration is O(keys × interned names) at a
+property on enumeration paths — so property enumeration is O(keys x interned names) at a
 metered cost independent of the name table the guest grows.
 
 **Evidence.**
@@ -670,7 +667,7 @@ metered cost independent of the name table the guest grows.
 metered flat. Ironhorse's key space is capped at u16, which bounds the constant, but the
 constant is up to 65,535 map probes plus a `String` allocation per property creation.
 
-**Recommendation.** Maintain the reverse `id → name` index alongside `symbol_ids` (the
+**Recommendation.** Maintain the reverse `id -> name` index alongside `symbol_ids` (the
 `symbol_names: Vec<String>` already is one — `id_name` uses it) and make
 `string_key_name` an O(1) lookup; make `default_keys` a `HashSet<Box<str>>` keyed without
 an allocation, or precompute default-key membership as a bit per id at intern time.
@@ -818,7 +815,7 @@ These are real and should not be lost in a rewrite.
 turn the meter's weights into a *value*: one `CostTable` struct in one module, holding the
 6 primitive weights, the 210 residuals, the 2 regexp weights, the parse-token weight, and
 `DEFAULT_KEYS`, with `Meter` holding a `&'static CostTable` rather than reading module
-constants. Add a digest test (`sha256(table) == …`) so a weight edit without a version
+constants. Add a digest test (`sha256(table) == ...`) so a weight edit without a version
 bump is a red build, and a `CostTable::for_version(&str)` registry so the *previous* table
 stays addressable — which is what the design promises, what historic-block replay needs,
 and what turns a meter bump from "brick every snapshot" into "resume under the table that
