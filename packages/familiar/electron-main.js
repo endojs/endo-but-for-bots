@@ -298,20 +298,28 @@ const main = async () => {
   ipcMain.handle('familiar:purge-daemon', () => handlePurgeDaemon(mainWindow));
   ipcMain.handle('familiar:get-version', () => app.getVersion());
 
-  // Step 7: Verify exfiltration defenses and notify renderer
-  const warnings = await verifyExfiltrationDefenses();
-  if (warnings.length > 0) {
-    logger.warn('[Familiar] Security warnings:', warnings);
-  }
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    deliverSecurityWarnings(mainWindow.webContents, warnings, chatPageUrl);
-  }
+  // Step 7: Verify exfiltration defenses and notify renderer.
+  // The DNS canary checks mutable runtime state (resolver, VPN, network),
+  // so every window gets a fresh verdict rather than the startup snapshot.
+  /** @param {BrowserWindow} window */
+  const verifyAndWarn = async window => {
+    const warnings = await verifyExfiltrationDefenses();
+    if (warnings.length > 0) {
+      logger.warn('[Familiar] Security warnings:', warnings);
+    }
+    if (!window.isDestroyed()) {
+      deliverSecurityWarnings(window.webContents, warnings, chatPageUrl);
+    }
+  };
+  await verifyAndWarn(mainWindow);
 
   // macOS: recreate window when dock icon is clicked
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       mainWindow = createWindow();
-      deliverSecurityWarnings(mainWindow.webContents, warnings, chatPageUrl);
+      verifyAndWarn(mainWindow).catch(error => {
+        logger.error('[Familiar] Security verification failed:', error);
+      });
     }
   });
 
