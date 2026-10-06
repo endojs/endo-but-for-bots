@@ -40,6 +40,7 @@
     "generate-icons": "./scripts/generate-icons.sh"
   },
   "dependencies": {
+    "@endo/harden": "workspace:^",
     "@endo/where": "workspace:^",
     "electron": "^43.4.1"
   },

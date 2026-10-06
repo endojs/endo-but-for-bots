@@ -32,6 +32,10 @@ import {
 } from './src/protocol-handler.js';
 import { installNavigationGuard } from './src/navigation-guard.js';
 import {
+  chatFilePageUrl,
+  makeSecurityWarningReporter,
+} from './src/security-warnings.js';
+import {
   configureCommandLineFlags,
   installExfiltrationDefenses,
   verifyExfiltrationDefenses,
@@ -60,6 +64,37 @@ registerLocalhttpScheme();
 configureCommandLineFlags();
 
 const vitePort = 5173;
+
+// The Chat page: the Vite dev server in dev mode, else the built Chat dist.
+// Use 127.0.0.1 instead of localhost to avoid DNS resolution, which is
+// vulnerable to integrity attacks.
+const chatPageUrl = isDevMode
+  ? `http://127.0.0.1:${vitePort}/`
+  : chatFilePageUrl(resourcePaths.chatDistPath);
+
+// Every new window and every daemon-restart or -purge reload of the Chat page
+// gets a fresh verdict; see makeSecurityWarningReporter.
+const securityWarnings = makeSecurityWarningReporter({
+  verifyDefenses: verifyExfiltrationDefenses,
+  chatPageUrl,
+  onWarnings: warnings =>
+    logger.warn('[Familiar] Security warnings:', warnings),
+});
+
+/**
+ * Re-verify the defenses for `window` before its Chat page reloads.  A failed
+ * verification is logged rather than thrown, so it cannot block the reload.
+ *
+ * @param {Electron.BrowserWindow} window
+ */
+const reverifyBeforeReload = async window => {
+  await null;
+  try {
+    await securityWarnings.verifyAndWarn(window);
+  } catch (error) {
+    logger.error('[Familiar] Security verification failed:', error);
+  }
+};
 
 /** @type {string | undefined} */
 let gatewayAddress;
@@ -151,15 +186,13 @@ const createWindow = () => {
 
   if (isDevMode) {
     // In dev mode, load from Vite dev server.
-    // Use 127.0.0.1 instead of localhost to avoid DNS resolution, which
-    // is vulnerable to integrity attacks.
-    const devUrl = `http://127.0.0.1:${vitePort}#${fragment}`;
+    const devUrl = `${chatPageUrl}#${fragment}`;
     logger.log(`[Familiar] Loading dev URL: ${devUrl}`);
     win.loadURL(devUrl);
     win.webContents.openDevTools();
   } else {
     // In production mode, load the built Chat dist
-    const fileUrl = `file://${resourcePaths.chatDistPath}#${fragment}`;
+    const fileUrl = `${chatPageUrl}#${fragment}`;
     logger.log(`[Familiar] Loading file URL: ${fileUrl}`);
     win.loadURL(fileUrl);
   }
@@ -196,14 +229,13 @@ const handleRestartDaemon = async win => {
     }
     agentId = await getAgentId();
     if (win && !win.isDestroyed()) {
+      await reverifyBeforeReload(win);
+    }
+    if (win && !win.isDestroyed()) {
       // Pass config as a URL fragment (anchor) rather than a query string so
       // the agent ID is never sent on the wire in an HTTP request.
       const fragment = `gateway=${gatewayAddress}&agent=${agentId}`;
-      if (isDevMode) {
-        win.loadURL(`http://127.0.0.1:${vitePort}#${fragment}`);
-      } else {
-        win.loadURL(`file://${resourcePaths.chatDistPath}#${fragment}`);
-      }
+      win.loadURL(`${chatPageUrl}#${fragment}`);
     }
   } catch (error) {
     logger.error('[Familiar] Failed to restart daemon:', error);
@@ -227,14 +259,13 @@ const handlePurgeDaemon = async win => {
     }
     agentId = await getAgentId();
     if (win && !win.isDestroyed()) {
+      await reverifyBeforeReload(win);
+    }
+    if (win && !win.isDestroyed()) {
       // Pass config as a URL fragment (anchor) rather than a query string so
       // the agent ID is never sent on the wire in an HTTP request.
       const fragment = `gateway=${gatewayAddress}&agent=${agentId}`;
-      if (isDevMode) {
-        win.loadURL(`http://127.0.0.1:${vitePort}#${fragment}`);
-      } else {
-        win.loadURL(`file://${resourcePaths.chatDistPath}#${fragment}`);
-      }
+      win.loadURL(`${chatPageUrl}#${fragment}`);
     }
   } catch (error) {
     logger.error('[Familiar] Failed to purge daemon:', error);
@@ -297,19 +328,22 @@ const main = async () => {
   ipcMain.handle('familiar:purge-daemon', () => handlePurgeDaemon(mainWindow));
   ipcMain.handle('familiar:get-version', () => app.getVersion());
 
-  // Step 7: Verify exfiltration defenses and notify renderer
-  const warnings = await verifyExfiltrationDefenses();
-  if (warnings.length > 0) {
-    logger.warn('[Familiar] Security warnings:', warnings);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('familiar:security-warnings', warnings);
-    }
+  // Step 7: Verify exfiltration defenses and notify renderer.  A failed
+  // verification is logged rather than thrown, as at the other call sites,
+  // so it cannot abort startup.
+  try {
+    await securityWarnings.verifyAndWarn(mainWindow);
+  } catch (error) {
+    logger.error('[Familiar] Security verification failed:', error);
   }
 
   // macOS: recreate window when dock icon is clicked
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       mainWindow = createWindow();
+      securityWarnings.verifyAndWarn(mainWindow).catch(error => {
+        logger.error('[Familiar] Security verification failed:', error);
+      });
     }
   });
 

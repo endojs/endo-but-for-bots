@@ -17,6 +17,10 @@ import '@endo/init';
 
 import { connectToGateway } from './connection.js';
 import { make } from './chat.js';
+import {
+  makeSecurityWarningBanner,
+  connectSecurityWarnings,
+} from './security-warning-banner.js';
 
 // Whylip ships its own stylesheet. The `@endo/space-whylip` package does no
 // rendering and deliberately avoids a JS CSS side-effect import (so it stays
@@ -82,6 +86,12 @@ const isElectronMode =
   window.location.protocol === 'file:' ||
   /** @type {any} */ (window).familiar !== undefined;
 
+const securityWarningBanner = makeSecurityWarningBanner(document);
+connectSecurityWarnings(
+  /** @type {any} */ (window).familiar,
+  securityWarningBanner,
+);
+
 // Runtime config from the URL fragment.  Both the Vite dev plugin
 // (/dev redirect) and the Familiar (Electron) place the gateway address
 // and agent ID in the fragment so the bearer-token-like agent ID is
@@ -106,6 +116,7 @@ if (!gateway || !agent) {
     <h1>Gateway not configured</h1>
     <p>Run via <code>yarn dev</code> (Vite) or the Familiar app.</p>
   `;
+  securityWarningBanner.mount();
   throw new Error('Gateway not configured');
 }
 sessionStorage.removeItem('endo-dev-attempted');
@@ -293,6 +304,7 @@ async function connectAndRun() {
     <h1>Connecting to Endo Gateway…</h1>
     <p>Gateway: <code>${gateway}</code></p>
   `;
+  securityWarningBanner.mount();
 
   const connection = connectToGateway({
     gateway: String(gateway),
@@ -317,6 +329,8 @@ async function connectAndRun() {
   // Initialize the chat UI
   document.body.innerHTML = '';
   await make(powers);
+  // Replacing the body removes the banner, if one was showing.
+  securityWarningBanner.mount();
   console.log('[Chat] UI initialized successfully');
 
   // On disconnect, reconnect using the appropriate strategy.
@@ -337,4 +351,5 @@ async function connectAndRun() {
 connectAndRun().catch(error => {
   console.error('Application error:', error);
   document.body.innerHTML = `<h1>❌ Application Error</h1><pre>${/** @type {Error} */ (error).message}</pre>`;
+  securityWarningBanner.mount();
 });
