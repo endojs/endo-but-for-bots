@@ -37,8 +37,19 @@ export const connectToGateway = ({ gateway, agent }) => {
   // Match the page's security context: an HTTPS page (e.g. served over a
   // Tailscale cert) cannot open an insecure ws:// socket (mixed content), so
   // use wss:// there. Plain http/file origins keep ws://.
+  // A loopback gateway is the exception: browsers treat 127.0.0.1 / localhost
+  // as potentially trustworthy, so ws:// to it is not mixed content, and the
+  // daemon's gateway speaks plain ws. The Android Familiar serves the page
+  // from an https app origin and talks to the daemon on 127.0.0.1 this way.
+  const gatewayHost = gateway.replace(/:\d+$/, '').replace(/^\[(.*)\]$/, '$1');
+  const loopback =
+    gatewayHost === '127.0.0.1' ||
+    gatewayHost === 'localhost' ||
+    gatewayHost === '::1';
   const secure =
-    typeof window !== 'undefined' && window.location.protocol === 'https:';
+    typeof window !== 'undefined' &&
+    window.location.protocol === 'https:' &&
+    !loopback;
   const gatewayUrl = `${secure ? 'wss' : 'ws'}://${gateway}/`;
   console.log(`[Gateway] Connecting to ${gatewayUrl}...`);
 
