@@ -2352,6 +2352,7 @@ __metadata:
     "@endo/exo": "workspace:^"
     "@endo/exo-stream": "workspace:^"
     "@endo/far": "workspace:^"
+    "@endo/hosted-agent": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/lal": "workspace:^"
     "@endo/marshal": "workspace:^"
