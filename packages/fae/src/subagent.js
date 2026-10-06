@@ -7,6 +7,10 @@ import { E } from '@endo/eventual-send';
 import { M } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
 import { parseLocator } from '@endo/daemon/locator.js';
+import {
+  DEFAULT_WORKLOAD_LIMITS,
+  readWorkloadLimit,
+} from '@endo/hosted-agent/workload-limits.js';
 
 /**
  * @typedef {import('./tool-makers.js').ToolSchema} ToolSchema
@@ -75,9 +79,9 @@ export const reservedSubagentSuffixes = harden([
  * longest name derived from an agent is `profile-for-<name>-spawner-handle`,
  * 27 characters of decoration, and each level of delegation adds
  * `.sub.<name>`, 68 more. At 255 characters — `isValidName`'s cap — that
- * admits two levels; `DEFAULT_MAX_SUBAGENT_DEPTH` is 1. A deployment raising
- * the depth bound past 2 with maximal names would have `provideGuest` reject
- * a name mid-build.
+ * admits two levels with maximal names, even when the configured workload
+ * depth is larger. Shorter names allow deeper trees. Provisioning preflights
+ * every derived name before touching the host; depth never relaxes this format.
  */
 export const agentNamePattern = /^[a-z][a-z0-9-]{0,62}$/;
 harden(agentNamePattern);
@@ -110,10 +114,82 @@ export const assertAgentName = name => {
 harden(assertAgentName);
 
 const MIN_ASK_TIMEOUT_SECONDS = 1;
-const MAX_ASK_TIMEOUT_SECONDS = 3600;
-const DEFAULT_ASK_TIMEOUT_SECONDS = 300;
-const MAX_TASK_LENGTH = 32_768;
-const MAX_ANSWER_LENGTH = 262_144;
+export const DEFAULT_SUBAGENT_LIMITS = harden({
+  replyTimeoutSeconds: DEFAULT_WORKLOAD_LIMITS.subagentReplyTimeoutSeconds,
+  maxTimeoutSeconds: DEFAULT_WORKLOAD_LIMITS.subagentMaxReplyTimeoutSeconds,
+  maxTaskChars: DEFAULT_WORKLOAD_LIMITS.subagentTaskChars,
+  maxAnswerChars: DEFAULT_WORKLOAD_LIMITS.subagentAnswerChars,
+  maxClosedAsks: 65_536,
+  maxKnownSubagents: 65_536,
+});
+harden(DEFAULT_SUBAGENT_LIMITS);
+
+/** Explicit operator knobs shared by driver setup and the two harnesses. */
+export const SUBAGENT_LIMIT_SUFFIXES = harden({
+  replyTimeoutSeconds: 'SUBAGENT_TIMEOUT_SECONDS',
+  maxTimeoutSeconds: 'SUBAGENT_MAX_TIMEOUT_SECONDS',
+  maxTaskChars: 'SUBAGENT_MAX_TASK_CHARS',
+  maxAnswerChars: 'SUBAGENT_MAX_ANSWER_CHARS',
+  maxClosedAsks: 'SUBAGENT_MAX_CLOSED_ASKS',
+  maxKnownSubagents: 'SUBAGENT_MAX_KNOWN_SUBAGENTS',
+});
+harden(SUBAGENT_LIMIT_SUFFIXES);
+
+export const FAE_WORKLOAD_ENV_KEYS = harden([
+  'FAE_MAX_TOOL_ROUNDS',
+  'FAE_MAX_SUBAGENTS',
+  'FAE_MAX_SUBAGENT_DEPTH',
+  'FAE_PROVIDER_REQUEST_TIMEOUT_MS',
+  ...Object.values(SUBAGENT_LIMIT_SUFFIXES).map(suffix => `FAE_${suffix}`),
+]);
+harden(FAE_WORKLOAD_ENV_KEYS);
+
+/**
+ * Select only workload knobs, never topology, prompts or credentials.
+ * @param {Record<string,string|undefined>} env
+ */
+export const selectFaeWorkloadEnv = env =>
+  harden(
+    Object.fromEntries(
+      FAE_WORKLOAD_ENV_KEYS.filter(
+        name => env[name] !== undefined && env[name] !== '',
+      ).map(name => [name, /** @type {string} */ (env[name])]),
+    ),
+  );
+harden(selectFaeWorkloadEnv);
+
+/** @param {Partial<typeof DEFAULT_SUBAGENT_LIMITS>} [limits] */
+export const assertSubagentLimits = (limits = {}) => {
+  const settings = { ...DEFAULT_SUBAGENT_LIMITS, ...limits };
+  for (const value of Object.values(settings)) {
+    (Number.isInteger(value) && value > 0 && value <= 0x7fff_ffff) ||
+      Fail`Invalid subagent workload limit`;
+  }
+  (settings.replyTimeoutSeconds <= settings.maxTimeoutSeconds &&
+    settings.maxTimeoutSeconds <= Math.floor(0x7fff_ffff / 1000)) ||
+    Fail`Invalid subagent reply deadline`;
+  return harden(settings);
+};
+harden(assertSubagentLimits);
+
+/**
+ * @param {Record<string,string|undefined>} env
+ * @param {string} prefix
+ */
+export const readSubagentLimits = (env, prefix) =>
+  assertSubagentLimits(
+    Object.fromEntries(
+      Object.entries(SUBAGENT_LIMIT_SUFFIXES).map(([field, suffix]) => [
+        field,
+        readWorkloadLimit(
+          env,
+          `${prefix}_${suffix}`,
+          DEFAULT_SUBAGENT_LIMITS[field],
+        ),
+      ]),
+    ),
+  );
+harden(readSubagentLimits);
 
 /**
  * Closed asks — answered, or timed out — whose further replies are still worth
@@ -123,14 +199,12 @@ const MAX_ANSWER_LENGTH = 262_144;
  * closed ask is forgotten and a very late reply to it lands in the inbox as
  * ordinary mail.
  */
-const MAX_CLOSED_ASKS = 32;
 
 /**
  * Subagents this registry has put a question to, whose unsolicited mail it
  * consumes. Bounded the same way; a parent may hold at most
  * `DEFAULT_MAX_SUBAGENTS` at once, so eviction is a formality.
  */
-const MAX_KNOWN_SUBAGENTS = 32;
 
 /**
  * @param {unknown} name
@@ -266,11 +340,15 @@ harden(SubagentSpawnerInterface);
  * @param {object} options
  * @param {any} options.powers - The parent agent's guest powers.
  * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
+ * @param {Partial<typeof DEFAULT_SUBAGENT_LIMITS>} [options.limits]
  */
 export const makeSubagentDelegations = ({
   powers,
   timers = { setTimeout, clearTimeout },
+  limits = DEFAULT_SUBAGENT_LIMITS,
 }) => {
+  const { maxTimeoutSeconds, maxTaskChars, maxClosedAsks, maxKnownSubagents } =
+    assertSubagentLimits(limits);
   /** @type {Map<string, PendingDelegation>} */
   const pendingByName = new Map();
   /** @type {Map<string, PendingDelegation>} */
@@ -314,7 +392,7 @@ export const makeSubagentDelegations = ({
   /** @param {string} outboundId */
   const closeAsk = outboundId => {
     closedOutboundIds.add(outboundId);
-    while (closedOutboundIds.size > MAX_CLOSED_ASKS) {
+    while (closedOutboundIds.size > maxClosedAsks) {
       const [oldest] = closedOutboundIds;
       closedOutboundIds.delete(oldest);
     }
@@ -324,7 +402,7 @@ export const makeSubagentDelegations = ({
   const remember = recipient => {
     knownSubagents.delete(recipient);
     knownSubagents.add(recipient);
-    while (knownSubagents.size > MAX_KNOWN_SUBAGENTS) {
+    while (knownSubagents.size > maxKnownSubagents) {
       const [oldest] = knownSubagents;
       knownSubagents.delete(oldest);
     }
@@ -428,14 +506,12 @@ export const makeSubagentDelegations = ({
    */
   const ask = async ({ name, task, timeoutSeconds }) => {
     assertSubagentName(name);
-    (typeof task === 'string' &&
-      task !== '' &&
-      task.length <= MAX_TASK_LENGTH) ||
-      Fail`Subagent task must be a non-empty string of at most ${q(MAX_TASK_LENGTH)} characters`;
+    (typeof task === 'string' && task !== '' && task.length <= maxTaskChars) ||
+      Fail`Subagent task must be a non-empty string of at most ${q(maxTaskChars)} characters`;
     (Number.isInteger(timeoutSeconds) &&
       timeoutSeconds >= MIN_ASK_TIMEOUT_SECONDS &&
-      timeoutSeconds <= MAX_ASK_TIMEOUT_SECONDS) ||
-      Fail`Subagent timeout must be a whole number of seconds between ${q(MIN_ASK_TIMEOUT_SECONDS)} and ${q(MAX_ASK_TIMEOUT_SECONDS)}`;
+      timeoutSeconds <= maxTimeoutSeconds) ||
+      Fail`Subagent timeout must be a whole number of seconds between ${q(MIN_ASK_TIMEOUT_SECONDS)} and ${q(maxTimeoutSeconds)}`;
     !pendingByName.has(name) ||
       Fail`Subagent ${q(name)} already has a question in flight`;
     if (closedReason !== undefined) throw closedReason;
@@ -561,6 +637,7 @@ harden(makeSubagentDelegations);
  * @param {any} options.powers - The parent agent's guest powers.
  * @param {any} options.spawner - A `SubagentSpawner` capability.
  * @param {ReturnType<typeof makeSubagentDelegations>} options.delegations
+ * @param {Partial<typeof DEFAULT_SUBAGENT_LIMITS>} [options.limits]
  * @param {boolean} [options.retainsAttachments] - Whether a claimed reply stays
  *   in the inbox long enough to adopt what it carries. Both harnesses dismiss
  *   a claimed reply — a replayed one would start an exchange between two
@@ -574,7 +651,9 @@ export const makeSubagentTools = ({
   spawner,
   delegations,
   retainsAttachments = false,
+  limits = DEFAULT_SUBAGENT_LIMITS,
 }) => {
+  const { replyTimeoutSeconds, maxAnswerChars } = assertSubagentLimits(limits);
   /** @type {Map<string, FaeTool>} */
   const tools = new Map();
 
@@ -657,7 +736,7 @@ export const makeSubagentTools = ({
               },
               timeoutSeconds: {
                 type: 'integer',
-                description: `How long to wait for a reply (default ${DEFAULT_ASK_TIMEOUT_SECONDS}).`,
+                description: `How long to wait for a reply (default ${replyTimeoutSeconds}).`,
               },
             },
             required: ['name', 'task'],
@@ -671,12 +750,12 @@ export const makeSubagentTools = ({
         task,
         timeoutSeconds:
           timeoutSeconds === undefined
-            ? DEFAULT_ASK_TIMEOUT_SECONDS
+            ? replyTimeoutSeconds
             : Number(timeoutSeconds),
       });
       const text =
-        answer.text.length > MAX_ANSWER_LENGTH
-          ? `${answer.text.slice(0, MAX_ANSWER_LENGTH)}\n\n(truncated)`
+        answer.text.length > maxAnswerChars
+          ? `${answer.text.slice(0, maxAnswerChars)}\n\n(truncated)`
           : answer.text;
       if (answer.edgeNames.length === 0) return text;
       const edges = answer.edgeNames

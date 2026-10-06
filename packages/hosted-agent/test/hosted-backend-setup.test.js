@@ -37,6 +37,7 @@ const refuseInspect = async (file, args) => {
  */
 const makeFakeHost = ({ hostId = 'fake-host-id', failMint, failCopy } = {}) => {
   const bindings = new Map();
+  const formulas = new Map();
   /** @type {any[]} */
   const calls = [];
   const host = harden({
@@ -60,7 +61,21 @@ const makeFakeHost = ({ hostId = 'fake-host-id', failMint, failCopy } = {}) => {
       calls.push(['mint', worker, specifier, options]);
       if (failMint && failMint(specifier)) throw Error('mint failed');
       bindings.set(key(options.resultName), `minted-${specifier}`);
+      formulas.set(`minted-${specifier}`, { specifier, env: options.env });
     },
+    diagnostics: () =>
+      harden({
+        getFormula: async identifier => ({
+          type: 'make-unconfined',
+          properties: {
+            specifier: {
+              kind: 'literal',
+              value: formulas.get(identifier).specifier,
+            },
+          },
+        }),
+      }),
+    getFormulaEnvironment: async identifier => formulas.get(identifier).env,
     async lookup(...parts) {
       calls.push(['lookup', parts.flat()]);
       return harden({
@@ -400,6 +415,10 @@ test('a broker is minted over its credential with the identity in order, or reta
     specifier: 'file:///broker.js',
     powersPath: ['secrets', 'x-creds'],
     temporary: 'x-creds.broker-read',
+    workloadEnv: {
+      ENDO_PUBLIC_EGRESS_MAX_CONNECTIONS: '2048',
+      ENDO_PROVIDER_REQUEST_TIMEOUT_MS: '7200000',
+    },
   };
   await provideBrokerService(host, options);
   const config = JSON.parse(seen[0].X_BROKER_CONFIG);
@@ -433,7 +452,7 @@ test('a broker is minted over its credential with the identity in order, or reta
   t.like(mint[3], {
     powersName: 'x-creds.broker-read',
     resultName: ['x', 'broker-service'],
-    env: { X_BROKER_CONFIG: seen[0].X_BROKER_CONFIG },
+    env: { X_BROKER_CONFIG: seen[0].X_BROKER_CONFIG, ...options.workloadEnv },
   });
   t.deepEqual(calls[4][1], ['x', 'broker-service']);
   t.deepEqual(calls[5][1], options.brokerSettings);
@@ -447,6 +466,28 @@ test('a broker is minted over its credential with the identity in order, or reta
     ['lookup', 'configure'],
   );
   t.is(seen.length, 0);
+  calls.length = 0;
+  await t.throwsAsync(
+    provideBrokerService(host, {
+      ...options,
+      existingBroker: true,
+      workloadEnv: {},
+    }),
+    { message: /workload configuration changed/ },
+  );
+  t.is(calls.length, 0);
+  await t.throwsAsync(
+    provideBrokerService(host, {
+      ...options,
+      existingBroker: true,
+      workloadEnv: {
+        ...options.workloadEnv,
+        ENDO_PROVIDER_REQUEST_TIMEOUT_MS: 'NaN',
+      },
+    }),
+    { message: /Invalid workload limit/ },
+  );
+  t.is(calls.length, 0);
 });
 
 test('the backend caplet is minted beside the live one and swapped in; a failed mint leaves the live one', async t => {

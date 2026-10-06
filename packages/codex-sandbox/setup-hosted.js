@@ -16,6 +16,7 @@
  * @module
  */
 import { Fail, q } from '@endo/errors';
+import { readBrokerWorkloadEnv } from '@endo/hosted-agent/provider-broker-service.js';
 import { E } from '@endo/eventual-send';
 import { bindFlootBackend } from '@endo/hosted-agent/hosted-backend-setup.js';
 import {
@@ -120,6 +121,7 @@ export const main = async (host, { exec } = {}) => {
   await null;
   const { env } = process;
   if (env.ENDO_CODEX_ENABLE !== '1') return;
+  const workloadEnv = readBrokerWorkloadEnv(env);
   const runtime = await readNativeSandbox(host);
   const state = await readStateProvider(host);
   const ownerId =
@@ -414,6 +416,7 @@ export const main = async (host, { exec } = {}) => {
   }
   const brokerSettings = readBrokerSettings(env, 'ENDO_CODEX');
   const brokerEnv = harden({
+    ...workloadEnv,
     CODEX_BROKER_CONFIG: JSON.stringify({
       ownerId,
       directory: brokerDir,

@@ -7,6 +7,42 @@ import { lookup as lookupAddress } from 'node:dns/promises';
 import { BlockList, createConnection, isIP } from 'node:net';
 import { networkInterfaces } from 'node:os';
 
+import {
+  DEFAULT_WORKLOAD_LIMITS,
+  readWorkloadLimit,
+  readWorkloadBytes,
+} from './workload-limits.js';
+
+/** Persist only these operator settings into native owner formulas. */
+export const PUBLIC_EGRESS_ENV_KEYS = harden([
+  'ENDO_PUBLIC_EGRESS_MAX_CONNECTIONS',
+  'ENDO_PUBLIC_EGRESS_MAX_BYTES',
+  'ENDO_PUBLIC_EGRESS_TIMEOUT_MS',
+]);
+harden(PUBLIC_EGRESS_ENV_KEYS);
+
+/** @param {Record<string, string | undefined>} env */
+export const readPublicEgressLimits = env =>
+  harden({
+    maxConnections: readWorkloadLimit(
+      env,
+      'ENDO_PUBLIC_EGRESS_MAX_CONNECTIONS',
+      DEFAULT_WORKLOAD_LIMITS.networkConnections,
+      { max: 0xffff_ffff },
+    ),
+    maxBytes: readWorkloadBytes(
+      env,
+      'ENDO_PUBLIC_EGRESS_MAX_BYTES',
+      DEFAULT_WORKLOAD_LIMITS.networkBytes,
+    ),
+    timeoutMs: readWorkloadLimit(
+      env,
+      'ENDO_PUBLIC_EGRESS_TIMEOUT_MS',
+      DEFAULT_WORKLOAD_LIMITS.networkTunnelTimeoutMs,
+    ),
+  });
+harden(readPublicEgressLimits);
+
 /** @import { LookupAddress } from 'node:dns' */
 /** @import { Socket } from 'node:net' */
 
@@ -77,10 +113,10 @@ const { atob, btoa } = globalThis;
  * @param {(options:{host:string,family:number,port:number,highWaterMark:number})=>Socket} [options.connect]
  * @param {readonly string[]} [options.localAddresses]
  * @param {()=>readonly string[]} [options.getLocalAddresses] Live host addresses; previously observed addresses remain denied.
- * @param {number} [options.maxConnections] At most 64 simultaneous sockets/resolutions.
- * @param {number} [options.maxRequests] Optional finite allowance of at most 65536 resolutions/connections per egress instance; omitted means no lifetime connection cap.
+ * @param {number} [options.maxConnections] Simultaneous sockets/resolutions (uint32 admission counter).
+ * @param {number} [options.maxRequests] Optional uint32 lifetime allowance; omitted means no lifetime connection cap.
  * @param {bigint} [options.maxBytes] Aggregate bidirectional payload quota.
- * @param {number} [options.timeoutMs] Absolute lifetime, at most ten minutes.
+ * @param {number} [options.timeoutMs] Absolute tunnel lifetime within the signed 32-bit timer range.
  * @param {number} [options.dnsTimeoutMs] Resolver response deadline, at most thirty seconds.
  */
 export const makePublicEgress = ({
@@ -92,25 +128,25 @@ export const makePublicEgress = ({
     Object.values(networkInterfaces()).flatMap(items =>
       (items || []).map(item => item.address),
     ),
-  maxConnections = 8,
+  maxConnections = DEFAULT_WORKLOAD_LIMITS.networkConnections,
   maxRequests,
-  maxBytes = 2n * 1024n ** 3n,
-  timeoutMs = 600_000,
+  maxBytes = DEFAULT_WORKLOAD_LIMITS.networkBytes,
+  timeoutMs = DEFAULT_WORKLOAD_LIMITS.networkTunnelTimeoutMs,
   dnsTimeoutMs = 5000,
 }) => {
   ['off', 'public-internet'].includes(policy) || Fail`Invalid egress policy`;
   (Number.isInteger(maxConnections) &&
     maxConnections > 0 &&
-    maxConnections <= 64 &&
+    maxConnections <= 0xffff_ffff &&
     (maxRequests === undefined ||
       (Number.isInteger(maxRequests) &&
         maxRequests > 0 &&
-        maxRequests <= 65_536)) &&
+        maxRequests <= 0xffff_ffff)) &&
     typeof maxBytes === 'bigint' &&
     maxBytes > 0n &&
     Number.isInteger(timeoutMs) &&
     timeoutMs > 0 &&
-    timeoutMs <= 600_000 &&
+    timeoutMs <= 0x7fff_ffff &&
     Number.isInteger(dnsTimeoutMs) &&
     dnsTimeoutMs > 0 &&
     dnsTimeoutMs <= 30_000) ||

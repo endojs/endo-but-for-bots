@@ -82,7 +82,21 @@ export const startProviderListenerWorker = async ({
         allowed.every(key => Object.hasOwn(configuration, key))) ||
       Fail`Invalid provider worker bootstrap`;
     if (configuration.network !== undefined) {
-      mustMatch(configuration.network, harden({ endpoint: M.remotable() }));
+      mustMatch(
+        configuration.network,
+        M.splitRecord(
+          { endpoint: M.remotable() },
+          {
+            limits: harden({
+              maxConnections: M.number(),
+              timeoutMs: M.number(),
+              maxUploadBytes: M.bigint(),
+              maxDownloadBytes: M.bigint(),
+            }),
+          },
+          harden({}),
+        ),
+      );
       makeNetworkListeners || Fail`Provider worker does not support networking`;
       networkConfiguration = configuration.network;
     }

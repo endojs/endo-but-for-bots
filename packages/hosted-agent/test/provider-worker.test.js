@@ -14,6 +14,71 @@ import { build } from 'esbuild';
 import { makeProviderPipe } from '../src/provider-pipe.js';
 import { readHttpText, requestHttp } from './http-client.js';
 
+for (const placement of ['network', 'limits']) {
+  test(`private network bootstrap rejects extra authority in ${placement}`, async t => {
+    t.timeout(5000);
+    let activations = 0;
+    const worker = spawn(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `
+      import { startProviderListenerWorker } from ${JSON.stringify(new URL('../src/provider-worker.js', import.meta.url).href)};
+      import { E } from ${JSON.stringify(import.meta.resolve('@endo/eventual-send'))};
+      await startProviderListenerWorker({ input: process.stdin, output: process.stdout,
+        async makeNetworkListeners({endpoint}) {
+          await E(endpoint).activated();
+          return harden({ evidence: {}, dispose() {} });
+        }
+      });
+    `,
+      ],
+      {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    );
+    const finished = new Promise(resolve => worker.once('close', resolve));
+    const extra = { unexpectedAuthority: Far('must not be admitted', {}) };
+    const pipe = makeProviderPipe({
+      input: worker.stdout,
+      output: worker.stdin,
+      bootstrap: harden({
+        network: {
+          endpoint: Far('test network', {
+            activated() {
+              activations += 1;
+            },
+          }),
+          ...(placement === 'network' ? extra : {}),
+          limits: {
+            maxConnections: 1024,
+            timeoutMs: 86_400_000,
+            maxUploadBytes: 1024n ** 4n,
+            maxDownloadBytes: 1024n ** 4n,
+            ...(placement === 'limits' ? extra : {}),
+          },
+        },
+      }),
+    });
+    t.teardown(async () => {
+      pipe.close();
+      worker.kill();
+      await finished;
+    });
+    await t.throwsAsync(
+      (async () => {
+        const control = await pipe.getBootstrap();
+        await E(control).ready();
+        await E(control).activateNetwork();
+      })(),
+    );
+    await pipe.closed;
+    t.is(await finished, 0);
+    t.is(activations, 0);
+  });
+}
+
 for (const diagnosticsEnabled of [false, true]) {
   test.serial(
     `shared worker ${diagnosticsEnabled ? 'bundle' : 'source'} forwards HTTP over private capability pipes (diagnostics=${diagnosticsEnabled})`,
@@ -185,8 +250,8 @@ test.serial(
     import { startProviderListenerWorker } from ${JSON.stringify(new URL('../src/provider-worker.js', import.meta.url).href)};
     import { E } from ${JSON.stringify(import.meta.resolve('@endo/eventual-send'))};
     await startProviderListenerWorker({input:process.stdin,output:process.stdout,
-      async makeNetworkListeners({endpoint}) {
-        await E(endpoint).activated();
+      async makeNetworkListeners({endpoint,limits}) {
+        await E(endpoint).activated(limits);
         return harden({evidence:{policy:'test-only'},dispose:()=>E(endpoint).disposed()});
       }});
   `,
@@ -227,13 +292,25 @@ test.serial(
         },
         network: {
           endpoint: Far('test network lifecycle', {
-            activated() {
+            activated(limits) {
+              t.deepEqual(limits, {
+                maxConnections: 2048,
+                timeoutMs: 86_400_000,
+                maxUploadBytes: 1024n ** 4n,
+                maxDownloadBytes: 1024n ** 4n,
+              });
               activations += 1;
             },
             disposed() {
               disposals += 1;
             },
           }),
+          limits: {
+            maxConnections: 2048,
+            timeoutMs: 86_400_000,
+            maxUploadBytes: 1024n ** 4n,
+            maxDownloadBytes: 1024n ** 4n,
+          },
         },
       }),
     });

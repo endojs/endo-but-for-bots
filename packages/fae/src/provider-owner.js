@@ -1,6 +1,7 @@
 // @ts-check
 
 import { Fail } from '@endo/errors';
+import { DEFAULT_WORKLOAD_LIMITS } from '@endo/hosted-agent/workload-limits.js';
 import {
   createProvider,
   makeSubscriptionResponsesProvider,
@@ -28,6 +29,7 @@ import {
  * @param {() => Promise<string>} [options.provideAuthToken] - Secret resolver;
  *   absent only for tokenless or explicitly injected providers.
  * @param {(env: Record<string, string | undefined>) => any} [options.buildProvider]
+ * @param {number} [options.requestTimeoutMs]
  * @returns {{ forTurn(): Promise<any>, dispose(): Promise<void> }}
  */
 export const makeProviderOwner = ({
@@ -35,6 +37,7 @@ export const makeProviderOwner = ({
   sessionId,
   provideAuthToken,
   buildProvider = createProvider,
+  requestTimeoutMs = DEFAULT_WORKLOAD_LIMITS.inferenceTimeoutMs,
 }) => {
   !Object.hasOwn(config, 'authToken') ||
     Fail`Inline provider authToken is unsupported; use a Secrets resolver`;
@@ -102,6 +105,7 @@ export const makeProviderOwner = ({
         LAL_HOST: config.host,
         LAL_MODEL: config.model,
         LAL_AUTH_TOKEN: authToken,
+        LAL_REQUEST_TIMEOUT_MS: `${requestTimeoutMs}`,
       });
       cachedToken = authToken;
     }

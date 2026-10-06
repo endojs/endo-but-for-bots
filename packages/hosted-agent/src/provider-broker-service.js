@@ -46,7 +46,15 @@ import {
   makeSubscriptionPool,
   normalizeSubscriptionSet,
 } from './subscription-pool.js';
-import { makePublicEgress } from './public-egress.js';
+import {
+  makePublicEgress,
+  readPublicEgressLimits,
+  PUBLIC_EGRESS_ENV_KEYS,
+} from './public-egress.js';
+import {
+  DEFAULT_WORKLOAD_LIMITS,
+  readWorkloadLimit,
+} from './workload-limits.js';
 import { assertAccountAuthority } from './account-authority.js';
 
 /** @import { BrokerPolicy } from './provider-broker.js' */
@@ -59,10 +67,29 @@ const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,255}$/;
 // Per-request buffers and simultaneous operations bound host allocations.
 export const DEFAULT_MAX_REQUEST_BYTES = 8n * 1024n ** 2n;
 export const DEFAULT_MAX_RESPONSE_BYTES = 16n * 1024n ** 2n;
-export const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
+export const DEFAULT_REQUEST_TIMEOUT_MS =
+  DEFAULT_WORKLOAD_LIMITS.inferenceTimeoutMs;
 harden(DEFAULT_MAX_REQUEST_BYTES);
 harden(DEFAULT_MAX_RESPONSE_BYTES);
 harden(DEFAULT_REQUEST_TIMEOUT_MS);
+
+/** @param {Record<string,string|undefined>} env */
+export const readBrokerWorkloadEnv = env => {
+  readPublicEgressLimits(env);
+  readWorkloadLimit(
+    env,
+    'ENDO_PROVIDER_REQUEST_TIMEOUT_MS',
+    DEFAULT_REQUEST_TIMEOUT_MS,
+  );
+  return harden(
+    Object.fromEntries(
+      [...PUBLIC_EGRESS_ENV_KEYS, 'ENDO_PROVIDER_REQUEST_TIMEOUT_MS']
+        .filter(name => env[name] !== undefined && env[name] !== '')
+        .map(name => [name, /** @type {string} */ (env[name])]),
+    ),
+  );
+};
+harden(readBrokerWorkloadEnv);
 
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
 
@@ -166,6 +193,12 @@ export const makeProviderBrokerKit = ({
   runtimeKit,
   makeIssuer = makeProviderBrokerGrantIssuer,
 }) => {
+  const egressLimits = readPublicEgressLimits(env ?? {});
+  const requestTimeoutMs = readWorkloadLimit(
+    env ?? {},
+    'ENDO_PROVIDER_REQUEST_TIMEOUT_MS',
+    DEFAULT_REQUEST_TIMEOUT_MS,
+  );
   typeof publicInternet === 'boolean' ||
     Fail`Invalid public network configuration`;
   // An operator setting, not identity: `configure()` changes it later.
@@ -263,10 +296,10 @@ export const makeProviderBrokerKit = ({
         fetch: fetchAuthority,
         imageDigest,
         accountRef,
-        requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+        requestTimeoutMs,
         policy,
         makePublicNetwork: () =>
-          makePublicEgress({ policy: 'public-internet' }),
+          makePublicEgress({ policy: 'public-internet', ...egressLimits }),
         allowsPublicNetwork: () => publicAllowed,
         ...(audit === undefined ? {} : { audit }),
         ...(onDiagnostic === undefined ? {} : { onDiagnostic }),

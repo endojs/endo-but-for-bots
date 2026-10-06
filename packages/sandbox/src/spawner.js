@@ -16,6 +16,10 @@ const terminationSignals = harden([
   'SIGKILL',
 ]);
 
+/** Runaway output guard, independent of Shell's truncate-and-drain preview. */
+export const DEFAULT_PROCESS_OUTPUT_BYTE_LIMIT = 1024n ** 3n;
+harden(DEFAULT_PROCESS_OUTPUT_BYTE_LIMIT);
+
 /**
  * Adapt an already-granted slice to the local Spawner seam used by exo-shell.
  * Only argv and copy-data execution options cross the boundary. Native process
@@ -24,8 +28,14 @@ const terminationSignals = harden([
  * readers. The local adapter does not disclose or rely on a remote OS PID.
  *
  * @param {ERef<SandboxHandle>} slice
+ * @param {{ outputByteLimit?: bigint }} [limits] Trusted construction setting.
  */
-export const makeSandboxSpawner = slice => {
+export const makeSandboxSpawner = (
+  slice,
+  { outputByteLimit = DEFAULT_PROCESS_OUTPUT_BYTE_LIMIT } = {},
+) => {
+  (typeof outputByteLimit === 'bigint' && outputByteLimit > 0n) ||
+    Fail`Invalid sandbox output byte limit`;
   /**
    * @param {readonly string[]} argv
    * @param {{ cwd?: string, env?: Record<string, string>, shell?: boolean, timeoutMs?: number }} [options]
@@ -42,6 +52,8 @@ export const makeSandboxSpawner = slice => {
           : { timeoutMs: options.timeoutMs }),
         captureStdout: true,
         captureStderr: true,
+        stdoutByteLimit: outputByteLimit,
+        stderrByteLimit: outputByteLimit,
       }),
     );
     const stdout = iterateBytesReader(E(process).stdout());

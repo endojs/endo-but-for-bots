@@ -9,7 +9,7 @@ import { makePromiseKit } from './_promise-kit.js';
 
 /**
  * @param {import('ava').ExecutionContext} t
- * @param {{ existing?: boolean, schema?: boolean, stopped?: boolean,
+ * @param {{ existing?: boolean, schema?: boolean, stopped?: boolean, replyText?: string,
  *   beforeStore?: (value: any, name: string) => Promise<void>,
  *   afterStore?: (value: any, name: string) => Promise<void>,
  *   beforeRemove?: (name: string) => Promise<void>,
@@ -21,6 +21,7 @@ const makeWorld = (
     existing = true,
     schema = true,
     stopped = false,
+    replyText = 'reviewed',
     beforeStore = async () => {},
     afterStore = async () => {},
     beforeRemove = async () => {},
@@ -83,7 +84,7 @@ const makeWorld = (
           send: () => {
             sends += 1;
             const stream = makeBufferedReader();
-            stream.push(harden({ type: 'text-delta', text: 'reviewed' }));
+            stream.push(harden({ type: 'text-delta', text: replyText }));
             stream.push(harden({ type: 'end' }));
             t.teardown(() => stream.close());
             return stream.reader;
@@ -94,6 +95,7 @@ const makeWorld = (
         admin: Far('MigrationAdmin', { terminate: () => undefined }),
       });
     },
+    stop: () => undefined,
     destroy: () => undefined,
   });
   const hostStore = new Map(
@@ -165,6 +167,23 @@ const makeWorld = (
     counts: () => ({ sends, creates, guests }),
   };
 };
+
+test('session facet returns full retained content beyond the implicit string guard', async t => {
+  const replyText = 'x'.repeat(131_072);
+  const world = makeWorld(t, { replyText });
+  const session = await E(world.factory).getSession('one');
+  const turn = await E(session).startTurn('write a long answer');
+  await E(turn).whenFinished();
+  const [record] = await E(session).getTurns();
+  t.is(await E(session).getTurnContent(record.outputRef), replyText);
+  await E(session).emergencyStop();
+  const restoredFactory = make(world.host, undefined, {
+    env: { FLOOT_MAX_CONTENT_CHARS: '1' },
+  });
+  t.teardown(() => E(restoredFactory).deleteSession('one'));
+  const restored = await E(restoredFactory).getSession('one');
+  t.is(await E(restored).getTurnContent(record.outputRef), replyText);
+});
 
 test('terminal deletion retires journal data and schema, not unrelated namespaces', async t => {
   const world = makeWorld(t);

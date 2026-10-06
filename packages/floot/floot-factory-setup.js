@@ -55,6 +55,10 @@ import {
 } from '@endo/hosted-agent/account-bindings.js';
 
 import { assertProviderKind } from './providers/config.js';
+import {
+  FLOOT_WORKLOAD_ENV_KEYS,
+  readFlootWorkloadConfig,
+} from './src/workload-config.js';
 
 import {
   isNamePersisted,
@@ -294,13 +298,14 @@ export const main = async agent => {
   // otherwise and a bad value is rejected where the factory parses it.
   const factoryEnv = harden({
     FLOOT_CODE_PATH: codePath,
-    ...(env('FLOOT_MAX_TOOL_ROUNDS')
-      ? { FLOOT_MAX_TOOL_ROUNDS: env('FLOOT_MAX_TOOL_ROUNDS') }
-      : {}),
-    ...(env('FLOOT_MAX_SUBAGENT_DEPTH')
-      ? { FLOOT_MAX_SUBAGENT_DEPTH: env('FLOOT_MAX_SUBAGENT_DEPTH') }
-      : {}),
+    ...Object.fromEntries(
+      FLOOT_WORKLOAD_ENV_KEYS.filter(name => env(name) !== '').map(name => [
+        name,
+        env(name),
+      ]),
+    ),
   });
+  readFlootWorkloadConfig(factoryEnv);
 
   // 0. Ensure the floot/ directory exists (idempotent on re-provision).
   if (!(await E(agent).has(dir))) {

@@ -2,6 +2,7 @@
 /* global fetch, setTimeout, clearTimeout */
 
 import { boundedJson } from '@endo/hosted-agent/bounded-json.js';
+import { DEFAULT_WORKLOAD_LIMITS } from '@endo/hosted-agent/workload-limits.js';
 
 import { toOpenAICompatibleMessages } from './openai-compatible-messages.js';
 
@@ -36,7 +37,7 @@ const defaultSleep = (ms, signal) =>
  */
 const MAX_ATTEMPTS = 3;
 /** A request that outlives this is abandoned; it is repeated at most once. */
-const REQUEST_TIMEOUT_MS = 300_000;
+const REQUEST_TIMEOUT_MS = DEFAULT_WORKLOAD_LIMITS.inferenceTimeoutMs;
 /** The longest a `Retry-After` is honoured for. */
 const MAX_RETRY_AFTER_MS = 30_000;
 /**
@@ -200,6 +201,15 @@ export const makeOpenRouterProvider = ({
   log = line => console.error(line),
   now = Date.now,
 }) => {
+  if (
+    !Number.isInteger(requestTimeoutMs) ||
+    requestTimeoutMs <= 0 ||
+    requestTimeoutMs > 0x7fff_ffff
+  ) {
+    throw Error(
+      'OpenRouter request timeout must be a positive timer-range integer',
+    );
+  }
   if (!apiKey || !apiKey.trim()) throw Error('OpenRouter API key is required');
   if (!model || !model.includes('/')) {
     throw Error('OpenRouter model must include its organization prefix');

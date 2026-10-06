@@ -17,6 +17,7 @@
   "type": "module",
   "main": "src/hosted-backend.js",
   "exports": {
+    "./workload-limits.js": "./src/workload-limits.js",
     "./environment-runner.js": "./src/environment-runner.js",
     ".": "./src/hosted-backend.js",
     "./account.js": "./src/account.js",

@@ -592,7 +592,10 @@ test('a timeout is repeated once, not three times', async t => {
   };
   const world = scripted([timeout, timeout, () => ok()]);
   const error = await t.throwsAsync(() => world.provider.chat([], []));
-  t.regex(error.message, /did not answer within 300 seconds, after 2 attempts/);
+  t.regex(
+    error.message,
+    /did not answer within 3600 seconds, after 2 attempts/,
+  );
   t.is(world.requests(), 2);
   // A network failure is not a timeout, and gets the full three.
   const offline = () => {

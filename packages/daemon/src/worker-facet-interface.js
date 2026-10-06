@@ -28,8 +28,12 @@ import { M } from '@endo/patterns';
 // Formula identifiers are strings.
 const IdShape = M.string();
 
-// Environment records are string-to-string.
-const EnvShape = M.recordOf(M.string(), M.string());
+// Formula construction values may retain large harness prompts. Their workload
+// admission belongs to the setup boundary, not this structural worker guard.
+const EnvShape = M.recordOf(
+  M.string(),
+  M.string({ stringLengthLimit: 0x7fff_ffff }),
+);
 
 export const WorkerFacetForDaemonInterface = M.interface(
   'EndoWorkerFacetForDaemon',

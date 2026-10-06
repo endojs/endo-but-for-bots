@@ -3,6 +3,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
 
 import { makeTurnJournal } from '../src/turn-journal.js';
+import { encodeJournalPresentation } from '../src/journal-presentation.js';
 
 const fixture = () => {
   const store = new Map();
@@ -290,6 +291,26 @@ const thinkingBlock = harden({
   endedAt: 200,
   truncated: false,
   beforeTranscriptOrdinal: '0',
+});
+
+test('thinking anchors use transcript indexing, not the preview text budget', t => {
+  for (const anchor of [65_537, 1_048_576, 0xffff_ffff]) {
+    const blocks = [{ ...thinkingBlock, beforeTranscriptOrdinal: `${anchor}` }];
+    t.deepEqual(JSON.parse(encodeJournalPresentation(blocks, anchor)), blocks);
+    t.throws(() => encodeJournalPresentation(blocks, anchor - 1), {
+      message: /Invalid thinking anchor/,
+    });
+  }
+  for (const ordinal of ['4294967296', '065537', '1e6']) {
+    t.throws(
+      () =>
+        encodeJournalPresentation(
+          [{ ...thinkingBlock, beforeTranscriptOrdinal: ordinal }],
+          0xffff_ffff,
+        ),
+      { message: /Invalid thinking anchor/ },
+    );
+  }
 });
 
 test('thinking presentation is immutable, idempotent and survives replay and archives', async t => {
@@ -1012,7 +1033,7 @@ test('missing journal events fail closed instead of loading a newer suffix', asy
 
 test('invalid or excessive values never persist capabilities or partial events', async t => {
   const { powers, store } = fixture();
-  const journal = makeTurnJournal(powers);
+  const journal = makeTurnJournal(powers, { maxContentChars: 8192 });
   const id = await journal.begin(options);
   await journal.dispatch(id);
   await t.throwsAsync(
@@ -1042,7 +1063,7 @@ test('invalid or excessive values never persist capabilities or partial events',
     journal.append(id, {
       type: 'finish',
       state: 'completed',
-      output: 'x'.repeat(16 * 1024 * 1024 + 1),
+      output: 'x'.repeat(8193),
     }),
     { message: /storage value bound/ },
   );
@@ -1054,6 +1075,44 @@ test('invalid or excessive values never persist capabilities or partial events',
   });
   t.is((await journal.list())[0].state, 'completed');
 });
+
+for (const refusal of ['second-content', 'schema', 'event-size']) {
+  test(`externalized content is not published before ${refusal} validation`, async t => {
+    const { powers, store } = fixture();
+    const journal = makeTurnJournal(powers, { maxContentChars: 12_000 });
+    const id = await journal.begin(options);
+    await journal.dispatch(id);
+    const output = 'x'.repeat(9000);
+    const invalid = {
+      type: 'finish',
+      state: refusal === 'schema' ? 'invalid' : 'failed',
+      output,
+      ...(refusal === 'second-content' ? { error: 'y'.repeat(12_001) } : {}),
+      ...(refusal === 'event-size' ? { extra: 'z'.repeat(131_072) } : {}),
+    };
+    const before = [...store.entries()];
+    await t.throwsAsync(journal.append(id, invalid), {
+      message:
+        refusal === 'second-content'
+          ? /storage value bound/
+          : refusal === 'schema'
+            ? /Invalid terminal turn journal state/
+            : /event too large/,
+    });
+    t.deepEqual([...store.entries()], before);
+    // The refused append does not occupy its content names or poison its
+    // writer. A corrected event can still publish at the same sequence.
+    await journal.append(id, { type: 'finish', state: 'failed', output });
+    const saved = await journal.get(id);
+    t.is(saved.state, 'failed');
+    t.is(await journal.readContent(saved.outputRef), output);
+    const recovered = makeTurnJournal(powers, { maxContentChars: 1 });
+    t.is(
+      await recovered.readContent((await recovered.get(id)).outputRef),
+      output,
+    );
+  });
+}
 
 test('large text is stored by reference: the record keeps a preview, the content is readable', async t => {
   const { powers, store } = fixture();

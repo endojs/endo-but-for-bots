@@ -8,6 +8,7 @@ import { passableAsJustin, makeMarshal } from '@endo/marshal';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { Far } from '@endo/pass-style';
 import { makePromiseKit } from '@endo/promise-kit';
+import { DEFAULT_WORKLOAD_LIMITS } from '@endo/hosted-agent/workload-limits.js';
 import {
   planContextCompaction,
   summarizeContext,
@@ -46,12 +47,12 @@ import {
   isSameFormula,
   makeSubagentDelegations,
   makeSubagentTools,
+  DEFAULT_SUBAGENT_LIMITS,
+  selectFaeWorkloadEnv,
 } from './src/subagent.js';
-import {
-  DEFAULT_MAX_SUBAGENT_DEPTH,
-  provisionFaeAgent,
-} from './src/subagent-host.js';
+import { provisionFaeAgent } from './src/subagent-host.js';
 import { AUTH_SECRET_PETNAME } from './src/credentials.js';
+import { readFaeWorkloadConfig } from './src/workload-config.js';
 
 /** Same pattern as isSpecialName in packages/daemon/src/pet-name.js */
 const specialNamePattern = /^[A-Z][A-Z0-9-]{0,127}$/;
@@ -204,6 +205,9 @@ Example: if a message says "Here is @counter for you", adopt it:
  * @param {string} [options.sessionId] - Stable pool identity, required for subscriptions.
  * @param {boolean} [options.forceCompaction] Acceptance-only trigger.
  * @param {string} [options.providerIdentity] Locator of the exact retained provider recipe.
+ * @param {typeof DEFAULT_SUBAGENT_LIMITS} [options.subagentLimits]
+ * @param {number} [options.maxToolRounds]
+ * @param {number} [options.requestTimeoutMs]
  * @returns {Promise<void>}
  */
 export const spawnWorkerLoop = async (
@@ -219,6 +223,9 @@ export const spawnWorkerLoop = async (
     sessionId,
     forceCompaction = false,
     providerIdentity,
+    subagentLimits = DEFAULT_SUBAGENT_LIMITS,
+    maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS,
+    requestTimeoutMs = DEFAULT_WORKLOAD_LIMITS.inferenceTimeoutMs,
   } = {},
 ) => {
   /**
@@ -258,6 +265,7 @@ export const spawnWorkerLoop = async (
   const providerOwner = makeProviderOwner({
     config: providerConfig,
     sessionId,
+    requestTimeoutMs,
     ...(provideAuthToken ? { provideAuthToken } : {}),
   });
   const loopAbort = new AbortController();
@@ -377,13 +385,14 @@ export const spawnWorkerLoop = async (
   // tools and `claim` has nothing to match, so the inbox loop below behaves
   // exactly as it did before.
   const delegations = makeSubagentDelegations(
-    harden({ powers, ...(timers ? { timers } : {}) }),
+    harden({ powers, limits: subagentLimits, ...(timers ? { timers } : {}) }),
   );
   if (spawner) {
     for (const [name, tool] of makeSubagentTools({
       powers,
       spawner,
       delegations,
+      limits: subagentLimits,
       // The inbox loop dismisses every claimed reply (see below), so a reply's
       // attachments cannot be adopted afterwards; the tool must not say they
       // can.
@@ -484,7 +493,7 @@ export const spawnWorkerLoop = async (
     const outcome = await runAgenticTurn({
       leafId: leafNodeId,
       signal: loopAbort.signal,
-      maxRounds: DEFAULT_MAX_TOOL_ROUNDS,
+      maxRounds: maxToolRounds,
       getTools: round =>
         round === 0 ? firstTools : discoverTools(powers, localTools),
       getContext: async (currentLeafId, tools) => {
@@ -821,7 +830,7 @@ export const spawnWorkerLoop = async (
           throw senderVisible(
             Error(
               outcome.exhausted
-                ? `FAE turn exceeded ${DEFAULT_MAX_TOOL_ROUNDS} tool rounds`
+                ? `FAE turn exceeded ${maxToolRounds} tool rounds`
                 : 'FAE provider returned no assistant message',
             ),
           );
@@ -925,7 +934,7 @@ export const spawnWorkerLoop = async (
         if (stopping || loopAbort.signal.aborted) return;
         if (pendingTurns.length === 0) {
           if (pumpEnded) return;
-          // eslint-disable-next-line no-await-in-loop
+
           await new Promise(resolve => {
             wakeWorker = resolve;
           });
@@ -934,7 +943,6 @@ export const spawnWorkerLoop = async (
         }
         const message = pendingTurns.shift();
         try {
-          // eslint-disable-next-line no-await-in-loop
           await handleMessage(message);
         } catch (error) {
           // `handleMessage` already mails its own failures back to the sender;
@@ -1105,10 +1113,15 @@ const spawnerSpecifier = new URL('subagent-spawner.js', import.meta.url).href;
  *
  * @param {import('@endo/eventual-send').FarRef<object>} guestPowers
  * @param {Promise<object> | object | undefined} _context
+ * @param root0
+ * @param root0.env
  * @returns {Promise<object>}
  */
-// eslint-disable-next-line no-underscore-dangle
-export const make = async (guestPowers, _context) => {
+
+export const make = async (guestPowers, _context, { env = {} } = {}) => {
+  const workloadEnv = selectFaeWorkloadEnv(env);
+  const { maxSubagents, maxDepth: defaultMaxDepth } =
+    readFaeWorkloadConfig(workloadEnv);
   /** @type {any} */
   const powers = guestPowers;
 
@@ -1144,9 +1157,7 @@ export const make = async (guestPowers, _context) => {
       // either could enumerate and tear down the other's subagent.
       assertAgentName(name);
       const maxDepth =
-        maxSubagentDepth === undefined
-          ? DEFAULT_MAX_SUBAGENT_DEPTH
-          : maxSubagentDepth;
+        maxSubagentDepth === undefined ? defaultMaxDepth : maxSubagentDepth;
       if (!Number.isInteger(maxDepth) || maxDepth < 0) {
         throw new Error('maxSubagentDepth must be a non-negative integer.');
       }
@@ -1175,6 +1186,8 @@ export const make = async (guestPowers, _context) => {
         spawnerSpecifier,
         depth: 0,
         maxDepth,
+        maxSubagents,
+        workloadEnv,
         systemPrompt,
         pin,
       });

@@ -39,8 +39,14 @@ const LocatorShape = M.string();
 // Message numbers are non-negative BigInts
 const MessageNumberShape = M.bigint();
 
+// Mail dialogue and formula construction data have workload admission at their
+// harness/setup boundary. Their structural text profile must also admit older
+// retained values after those workload settings are lowered.
+const RetainedTextShape = M.string({ stringLengthLimit: 0x7fff_ffff });
+const MessageStringsShape = M.arrayOf(RetainedTextShape);
+
 // Environment variables as string-to-string record
-const EnvShape = M.recordOf(M.string(), M.string());
+const EnvShape = M.recordOf(M.string(), RetainedTextShape);
 
 // Options for makeUnconfined and makeArchive
 const MakeCapletOptionsShape = M.splitRecord(
@@ -280,7 +286,7 @@ export const GuestInterface = M.interface('EndoGuest', {
   // Send a package message
   send: M.call(
     NameOrPathShape,
-    M.arrayOf(M.string()),
+    MessageStringsShape,
     EdgeNamesShape,
     NamesOrPathsShape,
   )
@@ -289,14 +295,14 @@ export const GuestInterface = M.interface('EndoGuest', {
   // Reply to a message
   reply: M.call(
     MessageNumberShape,
-    M.arrayOf(M.string()),
+    MessageStringsShape,
     EdgeNamesShape,
     NamesOrPathsShape,
   ).returns(M.promise()),
   // Edit a message the caller previously sent
   editMessage: M.call(
     MessageNumberShape,
-    M.arrayOf(M.string()),
+    MessageStringsShape,
     EdgeNamesShape,
     NamesOrPathsShape,
   )
@@ -369,7 +375,7 @@ export const HostInterface = M.interface('EndoHost', {
     .returns(M.promise()),
   send: M.call(
     NameOrPathShape,
-    M.arrayOf(M.string()),
+    MessageStringsShape,
     EdgeNamesShape,
     NamesOrPathsShape,
   )
@@ -568,14 +574,14 @@ export const HostInterface = M.interface('EndoHost', {
   // Reply to a message
   reply: M.call(
     MessageNumberShape,
-    M.arrayOf(M.string()),
+    MessageStringsShape,
     EdgeNamesShape,
     NamesOrPathsShape,
   ).returns(M.promise()),
   // Edit a message the caller previously sent
   editMessage: M.call(
     MessageNumberShape,
-    M.arrayOf(M.string()),
+    MessageStringsShape,
     EdgeNamesShape,
     NamesOrPathsShape,
   )
@@ -690,14 +696,12 @@ export const ChannelInvitationInterface = M.interface('EndoChannelInvitation', {
   join: M.call(M.string()).returns(M.promise()),
 });
 
-
 export const AttenuatorInterface = M.interface('EndoChannelAttenuator', {
   setInvitationValidity: M.call(M.boolean()).returns(M.promise()),
   setHeatConfig: M.call(M.record()).returns(M.promise()),
   getHeatConfig: M.call().returns(M.promise()),
   temporaryBan: M.call(M.number()).returns(M.promise()),
 });
-
 
 export const InvitationInterface = M.interface('EndoInvitation', {
   accept: M.call(IdShape).optional(M.string()).returns(M.promise()),

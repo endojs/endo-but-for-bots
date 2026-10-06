@@ -70,6 +70,7 @@
 // minted over) is the code between its steps here.
 
 import { Fail, q } from '@endo/errors';
+import { readBrokerWorkloadEnv } from '@endo/hosted-agent/provider-broker-service.js';
 import {
   assertGuestRootsDisjoint,
   bindFlootBackend,
@@ -142,6 +143,7 @@ harden(inferCredentialKind);
 export const main = async (hostAgent, { exec = undefined } = {}) => {
   await null;
   const { env } = process;
+  const workloadEnv = readBrokerWorkloadEnv(env);
   // The account authority this broker serves: the pool's id, or the single
   // account's, as the operator declared it. Every plan records it, and a
   // pool's set carries it as its id.
@@ -309,6 +311,7 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   // The broker's one exact powers dependency is the managed credential's
   // SecretBlob, or the pool's namespace powers.
   await provideBrokerService(hostAgent, {
+    workloadEnv,
     label: LABEL,
     prefix: PREFIX,
     sandboxDir: SANDBOX_DIR,

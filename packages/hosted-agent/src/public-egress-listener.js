@@ -4,6 +4,7 @@ import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { createServer } from 'node:http';
 import { isIP } from 'node:net';
+import { DEFAULT_WORKLOAD_LIMITS } from './workload-limits.js';
 
 /** @import { IncomingMessage } from 'node:http' */
 /** @import { Socket } from 'node:net' */
@@ -48,10 +49,10 @@ export const makePublicEgressListener = async ({
   endpoint,
   host = '127.0.0.1',
   port = 0,
-  maxConnections = 8,
-  timeoutMs = 600_000,
-  maxUploadBytes = 256n * 1024n ** 2n,
-  maxDownloadBytes = 512n * 1024n ** 2n,
+  maxConnections = DEFAULT_WORKLOAD_LIMITS.networkConnections,
+  timeoutMs = DEFAULT_WORKLOAD_LIMITS.networkTunnelTimeoutMs,
+  maxUploadBytes = DEFAULT_WORKLOAD_LIMITS.networkBytes,
+  maxDownloadBytes = DEFAULT_WORKLOAD_LIMITS.networkBytes,
 }) => {
   (isIP(host) !== 0 &&
     Number.isInteger(port) &&
@@ -59,10 +60,10 @@ export const makePublicEgressListener = async ({
     port <= 65_535 &&
     Number.isInteger(maxConnections) &&
     maxConnections > 0 &&
-    maxConnections <= 64 &&
+    maxConnections <= 0xffff_ffff &&
     Number.isInteger(timeoutMs) &&
     timeoutMs > 0 &&
-    timeoutMs <= 600_000 &&
+    timeoutMs <= 0x7fff_ffff &&
     typeof maxUploadBytes === 'bigint' &&
     maxUploadBytes > 0n &&
     typeof maxDownloadBytes === 'bigint' &&

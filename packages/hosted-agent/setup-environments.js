@@ -6,6 +6,12 @@ import { E } from '@endo/eventual-send';
 import { Fail } from '@endo/errors';
 import { PINNED_IMAGE_REFERENCE_PATTERN } from '@endo/sandbox/policy.js';
 import { makePodmanHostEnvironment } from '@endo/sandbox/podman-host-environment.js';
+import { DEFAULT_PROCESS_OUTPUT_BYTE_LIMIT } from '@endo/sandbox/spawner.js';
+import { readWorkloadBytes } from './src/workload-limits.js';
+import {
+  PUBLIC_EGRESS_ENV_KEYS,
+  readPublicEgressLimits,
+} from './src/public-egress.js';
 import {
   prepareRuntimeEnv,
   providePrivateDirectory,
@@ -24,11 +30,18 @@ const specifier = assertCurrentSpecifier(
   'Environment runner',
 );
 
-/** Host-only provisioning. Persist construction policy, never ambient credentials.
+/**
+ * Host-only provisioning. Persist construction policy, never ambient credentials.
  * @param {any} host
  * @param {Record<string,string|undefined>} [env]
  */
 export const main = async (host, env = process.env) => {
+  readPublicEgressLimits(env);
+  readWorkloadBytes(
+    env,
+    'ENDO_ENVIRONMENT_PROCESS_OUTPUT_BYTES',
+    DEFAULT_PROCESS_OUTPUT_BYTE_LIMIT,
+  );
   const namePath = ['environments', 'runner'];
   const required = key => {
     env[key] || Fail`Missing environment setup configuration ${key}`;
@@ -68,6 +81,8 @@ export const main = async (host, env = process.env) => {
     ENDO_ENVIRONMENT_PUBLIC_INTERNET: ceiling,
   };
   for (const key of [
+    ...PUBLIC_EGRESS_ENV_KEYS,
+    'ENDO_ENVIRONMENT_PROCESS_OUTPUT_BYTES',
     'ENDO_NINEP_SUDO',
     'ENDO_NINEP_MOUNT_PROGRAM',
     'ENDO_NINEP_UMOUNT_PROGRAM',
