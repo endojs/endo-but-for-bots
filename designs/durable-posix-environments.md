@@ -23,6 +23,12 @@ An October 6 unattended Luna run now verifies execution of the scoped JavaScript
 test lane, with three automatic first-turn checkpoints. It is not an all-green
 repo or clean end-to-end response: eleven test failures remain, and the final
 chat response reached the 48-tool-step cap after the report was written.
+The shared direct-provider guard is now 1024 rounds in source, including
+standalone Fae (previously 32). Local tests cover exact exhaustion, explicit
+overrides and a normal final answer beyond the old 48-round cutoff. A round
+is one provider response plus its requested tools, not one individual call;
+the final answer also consumes a round. Deployment and a fresh unattended
+end-to-end response on the new default remain unverified.
 The Floot development preset publishes only the common
 Shell as `shell` in inventory and exposes structured `runCommand`/`inspectShell`
 tools, distinct from JavaScript `exec`. Only Fae inference backends select it;
@@ -565,6 +571,26 @@ daemon formula. Only the fresh test session and its owned native allocation were
 removed after positive settlement, export/archive verification and an acknowledged
 idle stop/disposal. The original eight sessions, their uncertainty evidence,
 Secrets, renewal owners and workspaces were preserved.
+
+### Nearby operational limits — 2026-10-06 source audit
+
+These are implementation choices, not provider/model limits. This audit records
+them without changing them. The first two are the most likely next obstacles
+for long development tasks; the prior Yarn resets are not proven to come from
+the connection cap.
+
+| Limit | Current behavior | Source |
+|---|---|---|
+| Retained transcript per turn | 16,777,216 UTF-16 code units across encoded records; exceeding it refuses publication. Compaction reduces inference context, not retained original tool evidence, so does not free this budget. The separate 65,536-record cap is less likely to bind first. | `packages/floot/src/journal-transcript.js`, `packages/floot/src/turn-journal.js` |
+| Public network | Eight concurrent sockets/resolutions, with excess requests refused rather than queued; 2 GiB aggregate upload/download payload per egress instance, after which it closes all tunnels and disables itself. A tunnel has an absolute ten-minute lifetime, not an idle timeout. There is no default lifetime connection-count allowance. | `packages/hosted-agent/src/public-egress.js`; the environment runner supplies no limit overrides |
+| Development Shell | Ten-minute default invocation timeout, overridable per call. Each stdout/stderr stream retains at most 1 MiB, marks truncation and continues draining without killing the process. Long logs can be redirected to native HOME and inspected in pieces. | `packages/floot/src/development-environment.js`, `packages/exo-shell/src/shell.js` |
+| Direct OpenRouter inference | Five-minute default per-request timeout, configurable at provider construction. This is distinct from a whole-turn deadline or generated-output token cap. | `packages/lal/providers/openrouter.js` |
+| Subagents | Eight live children per parent; default delegation depth one. Reply waiting defaults to five minutes and accepts one second through one hour per ask. | `packages/fae/src/subagent-host.js`, `packages/fae/src/subagent.js`, `packages/floot/agent.js` |
+
+The transcript and lifetime network byte budgets need explicit product decisions
+before increasing them or removing them. Per-frame bounds, paged read limits and
+malformed-input validation serve different purposes; they should not be removed
+as a blanket response to these workload cutoffs.
 
 The shared credential-free listener worker now accepts a closed network-only
 bootstrap with only a public-egress endpoint, and publishes `ManagedNetworkV1`

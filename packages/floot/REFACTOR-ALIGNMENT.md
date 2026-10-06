@@ -52,6 +52,13 @@ The agent saved its report/ledger, but its final chat reply reached the existing
 against the retained independent audit. Execution is verified, not a green repo
 or clean end-to-end assistant completion. After verified export/archive, only this
 new disposable session/allocation was removed; the original eight were preserved.
+The direct-provider runaway-loop guard is now shared with standalone Fae at
+1024 rounds in source (formerly Floot 48/Fae 32), with local exact-exhaustion,
+override and normal-completion-after-48 fixtures passing. A fresh live run on
+this default remains pending; the historical generation-200 result is unchanged.
+The POSIX design also records nearby workload bounds: per-turn retained transcript,
+public-egress concurrency/traffic/tunnel lifetime, shell output/timeouts,
+OpenRouter request timeout and subagent budgets. No other limits were changed.
 The [durable POSIX design](../../designs/durable-posix-environments.md) records
 the policy and OpenCode comparison; older hold/no-producer statements below are
 historical and superseded for the direct Fae paths.

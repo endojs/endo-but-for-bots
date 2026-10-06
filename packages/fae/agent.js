@@ -39,7 +39,7 @@ import {
   makeReadChannelTool,
 } from './src/tool-makers.js';
 import { extractToolCallsFromContent } from './src/extract-tool-calls.js';
-import { runAgenticTurn } from './src/turn-engine.js';
+import { DEFAULT_MAX_TOOL_ROUNDS, runAgenticTurn } from './src/turn-engine.js';
 import {
   assertAgentName,
   composeSubagentSystemPrompt,
@@ -55,7 +55,6 @@ import { AUTH_SECRET_PETNAME } from './src/credentials.js';
 
 /** Same pattern as isSpecialName in packages/daemon/src/pet-name.js */
 const specialNamePattern = /^[A-Z][A-Z0-9-]{0,127}$/;
-const MAX_TOOL_ROUNDS = 32;
 
 /**
  * Errors whose text this agent wrote itself, and may therefore mail back.
@@ -309,7 +308,7 @@ export const spawnWorkerLoop = async (
   /**
    * The provider a turn runs on, resolved once when the turn starts.
    *
-   * Not once per round: a turn may take up to `MAX_TOOL_ROUNDS` provider calls,
+   * Not once per round: a turn may make many provider calls,
    * and reading the secret for each of them would multiply the daemon's audit
    * trail by the model's tool use — burying the retry pattern that trail exists
    * to show, and paying three eventual-sends per round for it. Per turn is the
@@ -485,7 +484,7 @@ export const spawnWorkerLoop = async (
     const outcome = await runAgenticTurn({
       leafId: leafNodeId,
       signal: loopAbort.signal,
-      maxRounds: MAX_TOOL_ROUNDS,
+      maxRounds: DEFAULT_MAX_TOOL_ROUNDS,
       getTools: round =>
         round === 0 ? firstTools : discoverTools(powers, localTools),
       getContext: async (currentLeafId, tools) => {
@@ -822,7 +821,7 @@ export const spawnWorkerLoop = async (
           throw senderVisible(
             Error(
               outcome.exhausted
-                ? `FAE turn exceeded ${MAX_TOOL_ROUNDS} tool rounds`
+                ? `FAE turn exceeded ${DEFAULT_MAX_TOOL_ROUNDS} tool rounds`
                 : 'FAE provider returned no assistant message',
             ),
           );

@@ -38,15 +38,21 @@ const makeFakePowers = () => {
 };
 
 /**
- * A provider that never stops asking for a tool. Every round names a tool the
- * session does not have, whose failure comes back as an ordinary tool result,
- * so the loop can only end at the ceiling.
+ * Request an absent tool whose failure comes back as an ordinary tool result.
+ * Without a finalAfter value, the loop can only end at the ceiling.
+ * @param {number} [finalAfter] Tool rounds before a normal final answer.
  */
-const makeInsatiableProvider = () => {
+const makeToolLoopProvider = finalAfter => {
   let calls = 0;
   const provider = harden({
     chatStream: async () => {
       calls += 1;
+      if (finalAfter !== undefined && calls > finalAfter) {
+        return harden({
+          message: { role: 'assistant', content: 'done' },
+          usage: { inputTokens: 1, outputTokens: 1 },
+        });
+      }
       return harden({
         message: {
           role: 'assistant',
@@ -82,7 +88,7 @@ const say = async (agent, text) => {
 };
 
 test('a turn ends on the tool-step fallback at the configured ceiling', async t => {
-  const insatiable = makeInsatiableProvider();
+  const insatiable = makeToolLoopProvider();
   const agent = await makeStreamingAgent(
     makeFakePowers(),
     undefined,
@@ -107,8 +113,9 @@ test('a turn ends on the tool-step fallback at the configured ceiling', async t 
   t.is(history.at(-1)?.content, TOOL_STEP_FALLBACK);
 });
 
-test('the ceiling defaults to a coding-sized budget, not a voice-sized one', async t => {
-  const insatiable = makeInsatiableProvider();
+test('the shared default stops an endless turn at exactly 1024 rounds', async t => {
+  t.timeout(60_000);
+  const insatiable = makeToolLoopProvider();
   const agent = await makeStreamingAgent(
     makeFakePowers(),
     undefined,
@@ -120,5 +127,22 @@ test('the ceiling defaults to a coding-sized budget, not a voice-sized one', asy
     { journalPowers: makeFakePowers() },
   );
   await say(agent, 'loop forever');
-  t.is(insatiable.calls(), 48);
+  t.is(insatiable.calls(), 1024);
+});
+
+test('a default turn can answer normally after more than 48 tool rounds', async t => {
+  const looping = makeToolLoopProvider(50);
+  const agent = await makeStreamingAgent(
+    makeFakePowers(),
+    undefined,
+    { kind: 'provider', provideProvider: () => looping.provider },
+    'test prompt',
+    { journalPowers: makeFakePowers() },
+  );
+  const events = await say(agent, 'finish the long task');
+  t.is(looping.calls(), 51);
+  t.is(events.filter(event => event.type === 'tool_call').length, 50);
+  t.deepEqual(events.at(-2), { type: 'final', text: 'done' });
+  t.deepEqual(events.at(-1), { type: 'end' });
+  t.is((await agent.getHistory()).at(-1)?.content, 'done');
 });

@@ -27,7 +27,10 @@ import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
-import { runAgenticTurn } from '@endo/fae/src/turn-engine.js';
+import {
+  DEFAULT_MAX_TOOL_ROUNDS,
+  runAgenticTurn,
+} from '@endo/fae/src/turn-engine.js';
 import {
   SubagentSpawnerInterface,
   assertSubagentName,
@@ -103,12 +106,10 @@ import {
 import { makeSessionNetworkPolicy } from './src/network-policy.js';
 import { makeContainerMountRegistrar } from './src/container-mounts.js';
 
-// Cap the tool-call loop so a misbehaving model can't spin forever before it
-// produces a spoken reply. A safety ceiling, not a work budget: a coding turn
-// routinely takes dozens of tool rounds, and at 8 sessions bailed out mid-task
-// with the tool-step fallback. `FLOOT_MAX_TOOL_ROUNDS` overrides it per
-// deployment. The hosted backends run their own loops and never reach it.
-const DEFAULT_MAX_TOOL_ROUNDS = 48;
+// Direct-provider turns share Fae's finite runaway-loop guard. A round is one
+// model response and all of its tool results, not one individual tool call.
+// `FLOOT_MAX_TOOL_ROUNDS` overrides the default per deployment. Hosted CLI
+// backends run their own loops and never reach this guard.
 const AGENT_SHUTDOWN_TIMEOUT_MS = 30_000;
 
 const execFileAsync = promisify(execFile);
