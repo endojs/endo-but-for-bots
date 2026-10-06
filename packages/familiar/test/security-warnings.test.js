@@ -297,5 +297,10 @@ test('electron-main re-verifies before every Chat reload and new window', async 
     /createWindow\(\);\s*securityWarnings\.verifyAndWarn\(mainWindow\)/,
     'a window recreated on activate is verified afresh',
   );
+  t.regex(
+    source,
+    /try \{\s*await securityWarnings\.verifyAndWarn\(mainWindow\);\s*\} catch/,
+    'a failed startup verification is caught rather than fatal',
+  );
   t.notRegex(source, /deliverSecurityWarnings\(/, 'no snapshot replay');
 });

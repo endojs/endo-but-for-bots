@@ -99,6 +99,11 @@ const makeWarningDelivery = (webContents, chatPageUrl) => {
  * loaded) and again after every subsequent load of the Chat page.  Does
  * nothing when there are no warnings.
  *
+ * Each call installs a new `did-finish-load` listener that keeps resending
+ * this call's `warnings`, so call it at most once per `webContents`.  To
+ * deliver a fresh verdict on every window creation or reload, use
+ * `makeSecurityWarningReporter`, which reuses one delivery per `webContents`.
+ *
  * @param {WebContentsLike} webContents
  * @param {string[]} warnings
  * @param {string} chatPageUrl - the Chat page URL, as for `isChatPageUrl`

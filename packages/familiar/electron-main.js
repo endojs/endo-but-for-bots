@@ -82,15 +82,15 @@ const securityWarnings = makeSecurityWarningReporter({
 });
 
 /**
- * Re-verify the defenses for `win` before its Chat page reloads.  A failed
+ * Re-verify the defenses for `window` before its Chat page reloads.  A failed
  * verification is logged rather than thrown, so it cannot block the reload.
  *
- * @param {Electron.BrowserWindow} win
+ * @param {Electron.BrowserWindow} window
  */
-const reverifyBeforeReload = async win => {
+const reverifyBeforeReload = async window => {
   await null;
   try {
-    await securityWarnings.verifyAndWarn(win);
+    await securityWarnings.verifyAndWarn(window);
   } catch (error) {
     logger.error('[Familiar] Security verification failed:', error);
   }
@@ -328,8 +328,14 @@ const main = async () => {
   ipcMain.handle('familiar:purge-daemon', () => handlePurgeDaemon(mainWindow));
   ipcMain.handle('familiar:get-version', () => app.getVersion());
 
-  // Step 7: Verify exfiltration defenses and notify renderer.
-  await securityWarnings.verifyAndWarn(mainWindow);
+  // Step 7: Verify exfiltration defenses and notify renderer.  A failed
+  // verification is logged rather than thrown, as at the other call sites,
+  // so it cannot abort startup.
+  try {
+    await securityWarnings.verifyAndWarn(mainWindow);
+  } catch (error) {
+    logger.error('[Familiar] Security verification failed:', error);
+  }
 
   // macOS: recreate window when dock icon is clicked
   app.on('activate', () => {

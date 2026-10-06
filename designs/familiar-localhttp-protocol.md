@@ -463,7 +463,8 @@ or escaping its sandbox.
 #### Runtime verification and user notification
 
 At startup, the Familiar verifies each defense layer, and it verifies again
-whenever it creates a new window (macOS `activate`), because the DNS canary
+whenever it creates a new window (macOS `activate`) and before it reloads the
+Chat page for a daemon restart or purge, because the DNS canary
 depends on runtime state that can change while the app runs.
 If a layer cannot be confirmed (e.g., `app.configureHostResolver` is not
 available in the Electron version, or a command-line flag is not recognized),
@@ -535,10 +536,16 @@ contextBridge.exposeInMainWorld('familiar', {
   },
 });
 
-// In electron-main.js: sends on every Chat-page load, never to weblets.
-// Runs again for each recreated window rather than reusing this result.
-const warnings = await verifyExfiltrationDefenses();
-deliverSecurityWarnings(mainWindow.webContents, warnings, chatPageUrl);
+// In electron-main.js: one reporter keeps one delivery per window, which
+// sends on every Chat-page load and never to weblets.
+const securityWarnings = makeSecurityWarningReporter({
+  verifyDefenses: verifyExfiltrationDefenses,
+  chatPageUrl,
+});
+// Verify afresh at startup, for each recreated window, and before each
+// daemon-restart or purge reload, rather than replaying an earlier result.
+// A failed verification is logged, never fatal.
+await securityWarnings.verifyAndWarn(mainWindow).catch(logError);
 ```
 
 #### Research needed
