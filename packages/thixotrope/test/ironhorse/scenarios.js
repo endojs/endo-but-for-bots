@@ -4,7 +4,10 @@ import test from '@endo/ses-ava/test.js';
 import { appendFile, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { listenerSource, producerSource } from '../../src/demo-promise-vats.js';
+import {
+  listenerSource,
+  producerSource,
+} from '../../src/ironhorse/demo-promise-vats.js';
 import { makeFixture, settled } from './_fixture.js';
 
 // Every scenario owns a daemon and two Ironhorse processes. These are serial
@@ -274,6 +277,56 @@ test.serial(
       message: /MeterAbort/,
     });
     t.is(await f.daemon.getWorker(f.ownerId).evaluate('40 + 2'), 42);
+  },
+);
+
+test.serial(
+  'completed-crank garbage is reclaimed across snapshot recovery',
+  async t => {
+    t.timeout(120_000);
+    const f = await makeFixture(t, {
+      ownerSource: `(() => {
+        const retained = { count: 0 };
+        const aliases = [retained, retained];
+        return Far('AllocationChurn', {
+          churn: () => {
+            const temporary = [];
+            for (let i = 0; i < 20000; i += 1) {
+              temporary.push({ index: i, owner: retained, label: 'temporary' });
+            }
+            if (temporary[19999].owner !== retained) throw Error('lost owner');
+            retained.count += 1;
+            return retained.count;
+          },
+          read: () => harden({
+            count: retained.count,
+            same: aliases[0] === retained && aliases[1] === retained,
+          }),
+        });
+      })()`,
+      guestSource: `Far('ChurnCaller', {
+        churn: () => E(counter).churn(),
+        read: () => E(counter).read(),
+      })`,
+    });
+    // Each crank fits comfortably in the heap, but their discarded objects
+    // together exceed the default slot ceiling without between-crank GC.
+    // Retained identity and state must survive both collection and restore.
+    for (let phase = 0; phase < 2; phase += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const caller = await f.guest();
+      for (let round = 0; round < 6; round += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        t.is(await E(caller).churn(), phase * 6 + round + 1);
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await f.restart();
+      // eslint-disable-next-line no-await-in-loop
+      t.deepEqual(await E(await f.guest()).read(), {
+        count: (phase + 1) * 6,
+        same: true,
+      });
+    }
   },
 );
 

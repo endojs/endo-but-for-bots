@@ -161,6 +161,10 @@ fn eval(session: &mut StoreSession, source: &str, budget: u64) -> Result<String,
     if !outcome.completed {
         return Err(format!("guest crank halted: {:?}", outcome.halt));
     }
+    // Reclaim completed-crank garbage before persisting the next heap image.
+    // Collection is deterministic and runs only after a successful crank;
+    // an exhausted or otherwise halted crank must remain a fatal failure.
+    m.collect_garbage();
     Ok(outcome.result)
 }
 
@@ -224,6 +228,64 @@ fn supervise_lock(state: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// JSON computron budgets are decimal strings so JS never rounds a u64.
+fn positive_integer(value: &Value, name: &str) -> Result<u64, String> {
+    let amount = match value {
+        Value::String(text) if !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) => {
+            text.parse::<u64>().ok()
+        }
+        Value::Number(number) => number.as_u64(),
+        _ => None,
+    };
+    amount
+        .filter(|n| *n > 0)
+        .ok_or_else(|| format!("{name} must be a positive u64 integer"))
+}
+
+/// A request names the source to evaluate and may override the crank budget.
+/// A malformed request is the client's mistake, not a VM halt: it is answered
+/// with an error reply and the heap session stays open for the next request.
+fn parse_request(request: &Value, crank_budget: u64) -> Result<(&str, u64), String> {
+    let source = request["source"].as_str().ok_or("source required")?;
+    let budget = if request["budget"].is_null() {
+        crank_budget
+    } else {
+        positive_integer(&request["budget"], "budget")?
+    };
+    Ok((source, budget))
+}
+
+fn reply(stdout: &mut impl Write, message: Value) -> Result<(), String> {
+    writeln!(stdout, "{message}").map_err(|e| e.to_string())?;
+    stdout.flush().map_err(|e| e.to_string())
+}
+
+struct WorkerLimits {
+    crank_budget: u64,
+    bootstrap_budget: u64,
+    slot_ceiling: u32,
+    chunk_ceiling: u32,
+}
+
+impl WorkerLimits {
+    fn parse(text: &str) -> Result<Self, String> {
+        let value: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        Ok(Self {
+            crank_budget: positive_integer(&value["crankBudget"], "crankBudget")?,
+            bootstrap_budget: positive_integer(&value["bootstrapBudget"], "bootstrapBudget")?,
+            slot_ceiling: u32::try_from(positive_integer(&value["slotCeiling"], "slotCeiling")?)
+                .map_err(|_| "slotCeiling exceeds the u32 address space")?,
+            chunk_ceiling: u32::try_from(positive_integer(&value["chunkCeiling"], "chunkCeiling")?)
+                .map_err(|_| "chunkCeiling exceeds the u32 address space")?,
+        })
+    }
+
+    fn apply(&self, machine: &mut Interp) {
+        machine.set_slot_ceiling(self.slot_ceiling);
+        machine.set_chunk_ceiling(self.chunk_ceiling as usize);
+    }
+}
+
 /// Open the worker's heap. A new heap starts a session on a fresh machine;
 /// an existing one is first upgraded in place to the current store schema,
 /// as the daemon's opener does, since resume refuses an older schema. The
@@ -234,39 +296,46 @@ fn supervise_lock(state: &str) -> Result<(), String> {
 fn open_heap(
     path: &str,
     signature: &Signature,
+    limits: &WorkerLimits,
 ) -> Result<(SqliteHeapStore, StoreSession, bool), String> {
     let fresh = !std::path::Path::new(path).exists();
     let mut store = SqliteHeapStore::open(path).map_err(|e| format!("open: {e:?}"))?;
-    let session = if fresh {
-        begin_store_session(Interp::new(), signature, &mut store)
+    let mut session = if fresh {
+        let mut machine = Interp::new();
+        limits.apply(&mut machine);
+        begin_store_session(machine, signature, &mut store)
             .map_err(|(_, e)| format!("begin: {e:?}"))?
     } else {
         migrate_store(&mut store, signature).map_err(|e| format!("migrate: {e:?}"))?;
         resume_from_store(&store, signature).map_err(|e| format!("restore: {e:?}"))?
     };
+    // Arena policy is not snapshot state. Reapply it after every restoration.
+    limits.apply(session.machine_mut());
     Ok((store, session, fresh))
 }
 
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
-    let path = args
-        .next()
-        .ok_or("usage: thixotrope-ironhorse-worker heap.sqlite [boot.js ...]")?;
+    let path = args.next().ok_or(
+        "usage: thixotrope-ironhorse-worker heap.sqlite profile lease limits-json [boot.js ...]",
+    )?;
     if path == "--lock-state" {
         return supervise_lock(&args.next().ok_or("state directory required")?);
     }
     let profile = args.next().ok_or("runtime profile required")?;
     let active_path = args.next().ok_or("worker lease path required")?;
+    let limits = WorkerLimits::parse(&args.next().ok_or("worker limits required")?)?;
     let _active = lock_file(
         std::path::Path::new(&active_path),
         rustix::fs::FlockOperation::LockShared,
     )?;
     let signature = Signature::new(&profile);
-    let (mut store, mut session, fresh) = open_heap(&path, &signature)?;
+    let (mut store, mut session, fresh) = open_heap(&path, &signature, &limits)?;
     if fresh {
         for boot in args {
             let source = std::fs::read_to_string(&boot).map_err(|e| e.to_string())?;
-            eval(&mut session, &source, 1_000_000_000).map_err(|e| format!("boot {boot}: {e}"))?;
+            eval(&mut session, &source, limits.bootstrap_budget)
+                .map_err(|e| format!("boot {boot}: {e}"))?;
         }
         checkpoint_to_store(&mut session, &signature, &mut store)
             .map_err(|e| format!("boot checkpoint: {e:?}"))?;
@@ -276,31 +345,38 @@ fn run() -> Result<(), String> {
     writeln!(stdout, "{}", json!({"op":"ready"})).map_err(|e| e.to_string())?;
     stdout.flush().map_err(|e| e.to_string())?;
     for line in stdin.lock().lines() {
-        let request: Value =
-            serde_json::from_str(&line.map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        let line = line.map_err(|e| e.to_string())?;
+        let request: Value = match serde_json::from_str(&line) {
+            Ok(request) => request,
+            Err(error) => {
+                reply(
+                    &mut stdout,
+                    json!({"op":"error", "message":error.to_string()}),
+                )?;
+                continue;
+            }
+        };
         if request["op"] == "close" {
             break;
         }
-        let source = request["source"].as_str().ok_or("source required")?;
-        let result = match eval(
-            &mut session,
-            source,
-            request["budget"].as_u64().unwrap_or(10_000_000),
-        ) {
+        let (source, budget) = match parse_request(&request, limits.crank_budget) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                reply(&mut stdout, json!({"op":"error", "message":error}))?;
+                continue;
+            }
+        };
+        let result = match eval(&mut session, source, budget) {
             Ok(result) => result,
             Err(error) => {
-                writeln!(stdout, "{}", json!({"op":"fatal", "message":error}))
-                    .map_err(|e| e.to_string())?;
-                stdout.flush().map_err(|e| e.to_string())?;
+                reply(&mut stdout, json!({"op":"fatal", "message":error}))?;
                 return Err(error);
             }
         };
         // No result or outbound frame escapes a crank that failed to commit.
         checkpoint_to_store(&mut session, &signature, &mut store)
             .map_err(|e| format!("checkpoint: {e:?}"))?;
-        writeln!(stdout, "{}", json!({"op":"result", "result":result}))
-            .map_err(|e| e.to_string())?;
-        stdout.flush().map_err(|e| e.to_string())?;
+        reply(&mut stdout, json!({"op":"result", "result":result}))?;
     }
     drop(session);
     store.close().map_err(|e| format!("close: {e:?}"))?;
@@ -333,6 +409,124 @@ fn main() {
 mod tests {
     use super::*;
     use ironhorse_snapshot::store::MemoryStore;
+
+    fn test_limits() -> WorkerLimits {
+        WorkerLimits::parse(r#"{"crankBudget":"100000000","bootstrapBudget":"1000000000","slotCeiling":2000000,"chunkCeiling":536870912}"#).unwrap()
+    }
+
+    #[test]
+    fn configured_heap_above_default_survives_restore() {
+        let limits = test_limits();
+        let signature = Signature::new("configured-heap");
+        let mut store = MemoryStore::new();
+        let mut machine = Interp::new();
+        limits.apply(&mut machine);
+        let mut session = begin_store_session(machine, &signature, &mut store)
+            .map_err(|(_, error)| error)
+            .unwrap();
+        assert_eq!(
+            eval(
+                &mut session,
+                "globalThis.kept = null; for (var i = 0; i < 350000; i++) kept = {n:i, next:kept}; kept.n",
+                limits.crank_budget
+            )
+            .unwrap(),
+            "349999"
+        );
+        assert!(
+            session.machine_mut().slots().capacity() > ironhorse_vm::value::DEFAULT_SLOT_CEILING
+        );
+        checkpoint_to_store(&mut session, &signature, &mut store).unwrap();
+        drop(session);
+        let mut restored = resume_from_store(&store, &signature).unwrap();
+        limits.apply(restored.machine_mut());
+        assert_eq!(
+            restored.machine_mut().slots().ceiling(),
+            limits.slot_ceiling
+        );
+        assert_eq!(
+            restored.machine_mut().chunks().ceiling(),
+            limits.chunk_ceiling as usize
+        );
+        assert_eq!(
+            eval(&mut restored, "kept.n", limits.crank_budget).unwrap(),
+            "349999"
+        );
+    }
+
+    #[test]
+    fn configured_heap_and_meter_failures_remain_distinct() {
+        for heap_failure in [false, true] {
+            let signature = Signature::new("configured-refusal");
+            let mut store = MemoryStore::new();
+            let mut session = begin_store_session(Interp::new(), &signature, &mut store)
+                .map_err(|(_, error)| error)
+                .unwrap();
+            // Link builtins before restricting subsequent guest allocation.
+            eval(&mut session, "globalThis.kept = []", 1000000).unwrap();
+            let budget = if heap_failure {
+                let ceiling = session.machine_mut().slots().capacity() + 100;
+                session.machine_mut().set_slot_ceiling(ceiling);
+                10000000
+            } else {
+                1000
+            };
+            let error = eval(
+                &mut session,
+                "for (var i = 0; i < 10000; i++) kept.push({i}); kept.length",
+                budget,
+            )
+            .unwrap_err();
+            assert!(
+                error.contains(if heap_failure {
+                    "HeapExhausted"
+                } else {
+                    "MeterAbort"
+                }),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn worker_limits_preserve_u64_budgets_and_validate_ceilings() {
+        let limits = WorkerLimits::parse(r#"{"crankBudget":"9007199254740993","bootstrapBudget":"18446744073709551615","slotCeiling":2000000,"chunkCeiling":536870912}"#).unwrap();
+        assert_eq!(limits.crank_budget, 9_007_199_254_740_993);
+        assert_eq!(limits.bootstrap_budget, u64::MAX);
+        assert!(positive_integer(&json!(0), "budget").is_err());
+        assert!(positive_integer(&json!("18446744073709551616"), "budget").is_err());
+    }
+
+    #[test]
+    fn malformed_requests_are_answered_rather_than_fatal() {
+        let crank_budget = 42;
+        assert_eq!(
+            parse_request(&json!({"op":"eval","source":"1"}), crank_budget).unwrap(),
+            ("1", crank_budget)
+        );
+        assert_eq!(
+            parse_request(
+                &json!({"op":"eval","source":"1","budget":"9007199254740993"}),
+                crank_budget
+            )
+            .unwrap(),
+            ("1", 9_007_199_254_740_993)
+        );
+        assert_eq!(
+            parse_request(&json!({"op":"eval"}), crank_budget).unwrap_err(),
+            "source required"
+        );
+        assert_eq!(
+            parse_request(&json!({"op":"eval","source":"1","budget":0}), crank_budget).unwrap_err(),
+            "budget must be a positive u64 integer"
+        );
+        let mut out = Vec::new();
+        let error = json!({"op":"error", "message":"budget must be a positive u64 integer"});
+        reply(&mut out, error.clone()).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.ends_with('\n') && !text.trim_end().contains('\n'));
+        assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), error);
+    }
 
     #[test]
     fn worker_compilation_is_charged_without_changing_script_semantics() {
@@ -407,7 +601,7 @@ mod tests {
         let path = path.to_str().unwrap();
         let signature = Signature::new("worker-migration-test");
 
-        let (mut store, mut session, fresh) = open_heap(path, &signature).unwrap();
+        let (mut store, mut session, fresh) = open_heap(path, &signature, &test_limits()).unwrap();
         assert!(fresh);
         assert_eq!(eval(&mut session, "var n = 7; n", 1_000_000).unwrap(), "7");
         checkpoint_to_store(&mut session, &signature, &mut store).unwrap();
@@ -423,7 +617,7 @@ mod tests {
             .unwrap();
         store.close().unwrap();
 
-        let (store, mut session, fresh) = open_heap(path, &signature).unwrap();
+        let (store, mut session, fresh) = open_heap(path, &signature, &test_limits()).unwrap();
         assert!(!fresh);
         assert_eq!(
             store.manifest().unwrap(),

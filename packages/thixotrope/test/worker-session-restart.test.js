@@ -25,9 +25,14 @@ import { Far } from '@endo/far';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makeThixotropeDaemon } from '../src/daemon.js';
-import { makePeerSnapshottingReplayEngine } from '../src/peer-replay-engine.js';
-import { makeFsStore } from '../src/store-fs.js';
+import { makeThixotropeDaemon } from '../src/core/daemon.js';
+import { makePeerSnapshottingReplayEngine } from '../src/core/peer-replay-engine.js';
+import { makeFsStore } from '../src/store/store-fs.js';
+import { sleepWorkers } from './_sleep-workers.js';
+
+import { makeNodePowers } from '../src/platform/node/powers.js';
+
+const nodePowers = makeNodePowers();
 
 const COUNTER_SOURCE = `
 (() => {
@@ -66,9 +71,9 @@ const resources = {
 
 /** @param {string} statePath */
 const makeDaemon = statePath =>
-  makeThixotropeDaemon({
-    store: makeFsStore(statePath),
-    engine: makePeerSnapshottingReplayEngine(),
+  makeThixotropeDaemon(nodePowers, {
+    store: makeFsStore(nodePowers, statePath),
+    engine: makePeerSnapshottingReplayEngine(nodePowers),
     codec: syrupCodec,
     resources,
     makeNetlayer: ({ handlers, logger }) =>
@@ -78,7 +83,7 @@ const makeDaemon = statePath =>
 test('worker sessions survive a daemon restart', async t => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-wsr-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
-  const store = makeFsStore(statePath);
+  const store = makeFsStore(nodePowers, statePath);
 
   /** @type {string} */
   let idA;
@@ -154,8 +159,7 @@ test('worker sessions survive a daemon restart', async t => {
     t.truthy(hubState.sessions[idA], 'worker A has hub session rows');
     t.truthy(hubState.sessions[idB], 'worker B has hub session rows');
 
-    await workerA.sleep();
-    await workerB.sleep();
+    await sleepWorkers(d1);
     t.false(workerA.isAwake());
     t.false(workerB.isAwake());
 
@@ -167,10 +171,10 @@ test('worker sessions survive a daemon restart', async t => {
     const d2 = await makeDaemon(statePath);
     t.teardown(() => d2.shutdown());
 
-    t.false(
-      d2.getWorker(idB).isAwake(),
-      'restoring records and obligations woke no worker',
-    );
+    // Startup may resume journal work. Sleep explicitly before checking that
+    // restored references transparently wake their targets on the next call.
+    await sleepWorkers(d2);
+    t.false(d2.getWorker(idB).isAwake());
 
     const greeter = await d2.lookup('greeter-cap');
     t.is(
@@ -287,5 +291,132 @@ test('a pending answer survives a daemon restart and settles after it', async t 
       ['settled', 'through'],
       'the answer row routed the settlement across the restart',
     );
+  }
+});
+
+test('retiring a worker retires the resources bound to it', async t => {
+  const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-wsr-bound-'));
+  t.teardown(() => rm(statePath, { recursive: true, force: true }));
+  /** @type {string} */
+  let holderId;
+  {
+    const d1 = await makeDaemon(statePath);
+    const owner = await d1.createWorker({ debugLabel: 'owner' });
+    const holder = await d1.createWorker({ debugLabel: 'holder' });
+    holderId = holder.workerId;
+    // One binding, whatever the order of its fields; a worker the daemon
+    // does not serve, or a field it does not know, is refused.
+    const echo = d1.makeResource('echo', {
+      workerId: owner.workerId,
+      key: 'one',
+    });
+    t.is(
+      d1.makeResource('echo', { key: 'one', workerId: owner.workerId }),
+      echo,
+    );
+    t.not(d1.makeResource('echo', { workerId: owner.workerId }), echo);
+    t.not(d1.makeResource('echo'), echo);
+    t.throws(() => d1.makeResource('echo', { workerId: 'f'.repeat(32) }), {
+      message: /bound to a worker this daemon serves/,
+    });
+    t.throws(
+      () => d1.makeResource('echo', /** @type {any} */ ({ worker: 'x' })),
+      { message: /names a worker and a key/ },
+    );
+    // The resource is held by another worker, across its export record.
+    const greeter = await holder.evaluate(
+      `(globalThis.greeter = Far('Greeter', { greet: name => E(echo).shout('hello ' + name) }))`,
+      { echo },
+    );
+    t.is(await E(greeter).greet('world'), 'HELLO WORLD');
+    // The export is recorded against its binding, in the endpoint's tables.
+    const endpoint = makeFsStore(nodePowers, statePath).provideWorkerStore(
+      'e'.repeat(32),
+    );
+    const recordedSlot = () =>
+      Object.entries(endpoint.getTablesRecord()?.exports ?? {}).find(
+        ([, recorded]) =>
+          JSON.stringify(recorded) ===
+          JSON.stringify({
+            kind: 'resource',
+            name: 'echo',
+            binding: { workerId: owner.workerId, key: 'one' },
+          }),
+      )?.[0];
+    const slot = recordedSlot();
+    t.truthy(slot);
+    // A resource is also retired by name and binding, once.
+    d1.makeResource('echo', { workerId: holder.workerId, key: 'x' });
+    t.true(d1.retireResource('echo', { key: 'x', workerId: holder.workerId }));
+    t.false(d1.retireResource('echo', { workerId: holder.workerId, key: 'x' }));
+    await owner.retire();
+    // The worker is gone, so nothing binds to it any more; the holder's
+    // export of what was bound to it is nulled at once, so a restart seats
+    // a tombstone there.
+    t.is(recordedSlot(), undefined);
+    t.is(
+      endpoint.getTablesRecord()?.exports?.[/** @type {string} */ (slot)],
+      null,
+    );
+    t.throws(
+      () => d1.makeResource('echo', { workerId: owner.workerId, key: 'one' }),
+      { message: /bound to a worker this daemon serves/ },
+    );
+    await d1.shutdown();
+  }
+  {
+    const d2 = await makeDaemon(statePath);
+    t.teardown(() => d2.shutdown());
+    const holder = d2.getWorker(holderId);
+    const greeter = await holder.evaluate('globalThis.greeter');
+    await t.throwsAsync(() => E(greeter).greet('again'), {
+      message: /no method "shout"/,
+    });
+    // A resource bound to nothing is untouched by any worker's retirement.
+    const plain = d2.makeResource('echo');
+    const shouter = await holder.evaluate(
+      `Far('Shouter', { shout: text => E(echo).shout(text) })`,
+      { echo: plain },
+    );
+    t.is(await E(shouter).shout('still here'), 'STILL HERE');
+  }
+});
+
+test('an ephemeral worker discarded at a start takes the resources bound to it', async t => {
+  const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-wsr-ephemeral-'));
+  t.teardown(() => rm(statePath, { recursive: true, force: true }));
+  /** @type {string} */
+  let holderId;
+  /** @type {string} */
+  let ephemeralId;
+  {
+    const d1 = await makeDaemon(statePath);
+    const ephemeral = await d1.createWorker({
+      debugLabel: 'adapter',
+      ephemeral: true,
+    });
+    const holder = await d1.createWorker({ debugLabel: 'holder' });
+    ephemeralId = ephemeral.workerId;
+    holderId = holder.workerId;
+    const echo = d1.makeResource('echo', { workerId: ephemeralId });
+    const greeter = await holder.evaluate(
+      `(globalThis.greeter = Far('Greeter', { greet: name => E(echo).shout('hello ' + name) }))`,
+      { echo },
+    );
+    t.is(await E(greeter).greet('world'), 'HELLO WORLD');
+    await d1.shutdown();
+  }
+  {
+    // The next start discards the ephemeral worker, and with it the
+    // resource bound to it: the holder meets a tombstone, not an instance
+    // for a worker that is gone.
+    const d2 = await makeDaemon(statePath);
+    t.teardown(() => d2.shutdown());
+    t.false(d2.listWorkerIds().includes(ephemeralId));
+    const holder = d2.getWorker(holderId);
+    const greeter = await holder.evaluate('globalThis.greeter');
+    await t.throwsAsync(() => E(greeter).greet('again'), {
+      message: /no method "shout"/,
+    });
   }
 });

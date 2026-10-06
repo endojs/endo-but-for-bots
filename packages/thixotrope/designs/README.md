@@ -1,9 +1,21 @@
 # Potential Thixotrope designs
 
-The [main design](../../../designs/thixotrope.md) describes the architecture and current runtime.
-This directory holds potential designs and experiments, not additional implemented guarantees.
+The [main design](../../../designs/thixotrope.md) describes the architecture and current runtime,
+and is the normative document; its vocabulary section defines the terms used here.
+This directory holds the implementation notes behind contracts that are implemented,
+[native resource installation](native-resource-installation.md),
+[Ironhorse limits](ironhorse-limits.md) and [layered message delivery](message-delivery.md),
+together with proposals that remain exploratory.
 [Vat replacement and SQL heap upgrades](vat-replacement.md) explore upgrade fallback mechanisms and
 possible table designs in more detail.
+[Host-managed resources](host-managed-resources.md) records the changes proposed while reviewing
+the implementation, and which of them are done: the installation registry in a vat of the daemon's
+own, many workspaces per daemon, resources bound to workers, alarms and the control socket as native
+resources, and where the package can reuse its own building blocks and other Endo packages instead
+of a second implementation.
+Two notes that argued for the manager and adapter model before it was built are kept under
+[archive](archive/): [what a host service had to write](archive/host-service-template.md) and
+[manual persistence vats](archive/manual-persistence-vats.md).
 
 This document records the current hypotheses, requirements, and open questions.
 It is not a claim that the implementation satisfies them.
@@ -139,7 +151,7 @@ Explicit retirement uses persistent tombstones and reconnect-time terminal notif
 
 Peer acceptance scope is explicit: restart-safe with the persistence adapter, process-lifetime without it.
 Version 1 peers and snapshots are not automatically migrated.
-Retransmission buffers and parked session retention remain unbounded; admission quotas, the public
+Retransmission buffers and dormant session retention remain unbounded; admission quotas, the public
 connection-acquisition interface, and user-space availability subscriptions remain separate work.
 Resume tokens require protection by the base transport; TCP testing does not authenticate or encrypt it.
 Tests exercise durable handoff failure boundaries and reconnect/restart recovery, not hardware
@@ -221,22 +233,25 @@ Persisting a JavaScript reference does not preserve the underlying OS resource.
 
 Direction matters:
 
-- An ephemeral client can call a durable object and disappear while the durable object remains.
+- A transient client can call a durable object and disappear while the durable object remains.
   The inventory TUI exercises this case, including the reverse callback edge created by its
   subscription and release of that callback when the UI closes.
 - A durable object can initiate and manage an ephemeral resource, such as a child process or listening
   web server.
-  The lifecycle, recovery, and authority model for this direction has not yet been established.
+  Directory-installed native resources now exercise this direction: a dedicated manager vat retains
+  desired state, and a separate disposable process owns the platform resources.
+  The registry vat and the host's index keep the installation bookkeeping; the workspace holds only
+  the resource's facet in its inventory.
 
-A durable resource manager might hold a recreation recipe, a reference to a live incarnation, and
-pending operations whose outcomes differ after failure.
-That is a candidate abstraction, not permission to replay arbitrary process launches or I/O.
+The adapter keeper serializes creation and replacement and restores the manager's desired state.
+An incarnation's references break permanently when its process exits.
+Replacement occurs on the next manager use, at daemon startup, or on the host's report of the
+adapter's own exit; pending external operations are never replayed into the replacement.
 Recreating a listener does not recreate its accepted sockets, and restarting a process does not
 establish whether a previous request produced an external effect.
 
-Experiments should cover normal close, process death, daemon restart, and failure during creation.
-They should determine whether stale references break or reconnect, how pending promises settle,
-what cleanup occurs, and whether recovery needs renewed user authority.
+Current tests cover normal close, process death, daemon restart, and failure during creation.
+Future native resources must specify their own operation outcomes and restoration policy.
 Generation identity must prevent an old operation from silently targeting a replacement resource
 when its meaning would change.
 

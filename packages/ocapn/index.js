@@ -22,6 +22,7 @@
  */
 
 export { makeOcapn } from './src/client/index.js';
+export { PENDING_ANSWER_ABORTED_MESSAGE } from './src/client/ocapn.js';
 export {
   decodeSwissnum,
   swissnumFromBytes,
