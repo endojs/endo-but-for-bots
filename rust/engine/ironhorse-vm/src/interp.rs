@@ -1583,14 +1583,12 @@ impl Halt {
     /// still the sole definition of "is a panic," not of "must discard the
     /// crank" (a strictly larger set).
     ///
-    /// The settled core is `StackOverflow | ReentryLimit | MeterAbort | EngineInvariant(_) | Panic(_)`.
-    /// `Decode` and the harness-only `StepLimit` are **provisional**
-    /// members: they terminate-without-commit like a panic, but their
-    /// provenance is supervisor/harness rather than guest behavior, so
-    /// their inclusion is an open question (design § Open Questions).
-    /// Because this returns a bare `bool`, a caller written against today's
-    /// answer for those two gets **no compiler signal** if the question
-    /// later flips it — treat this doc note as that signal.
+    /// The membership is settled (`designs/ironhorse-panic.md` § The Formal
+    /// `Panic` Category, Q1): `StackOverflow | ReentryLimit | MeterAbort |
+    /// HeapExhausted | EngineInvariant(_) | Panic(_)`, plus `Decode` and the
+    /// harness-only `StepLimit`. Those two terminate-without-commit like a
+    /// panic; their provenance (bytecode integrity, execution bound) is
+    /// preserved in the structured reason rather than by exclusion here.
     ///
     /// A pure function of the `Halt` value: it never consults caller
     /// context. `Decode` arises only on the loader path and `StepLimit`
@@ -1605,8 +1603,6 @@ impl Halt {
                 | Halt::HeapExhausted
                 | Halt::Panic(_)
                 | Halt::EngineInvariant(_)
-                // Provisional (Open Question), may change without a
-                // type-level signal:
                 | Halt::Decode(_)
                 | Halt::StepLimit(_)
         )

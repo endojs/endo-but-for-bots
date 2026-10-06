@@ -102,6 +102,15 @@ Ironhorse engine primitive.
 
 ## Ownership map
 
+This table summarizes who owns each boundary; the sections below develop it.
+Read it as an index on first pass.
+`ExecutionOutcome` is defined in § The Formal `Panic` Category;
+the transcript, snapshot watermark, and `TranscriptFault` in
+§ The Slot Machine Message Embargo Contract,
+§ Backend selection and snapshot ordering (Q3),
+and § Transcript storage failures (Q6);
+retry by stable key in § Slot Machine Termination and Retry.
+
 | Boundary | Mechanism | Policy | Durable state | Lifecycle / commit authority | Value crossing |
 |---|---|---|---|---|---|
 | Engine → worker adapter → Slot Machine | Execute and drain; classify termination | Slot Machine selects commit/discard and survival | Slot Machine owns snapshot identities and transcript; engine supplies heap bytes | Slot Machine restores, replays, commits, or discards | `ExecutionOutcome` plus diagnostic reason |
@@ -181,7 +190,7 @@ Net-new panic sources (no existing `Halt` variant, added by this design):
   becomes the supervisor's commit/discard decision).
 - **Reference-error panic (opt-in).** The Coda's configuration, off by default.
 
-**The live FFI abort guard.** The hazard identified by this design was a Rust
+**The already-live FFI abort hazard.** The hazard identified by this design was a Rust
 panic crossing an `extern "C"` callback and aborting the shared daemon process.
 The guard has landed in #1150: `worker_io.rs` captures the fault, poisons the
 worker, prevents subsequent guarded effects, and the XS run loop returns
