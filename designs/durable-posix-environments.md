@@ -19,6 +19,10 @@ Tokyo now runs generation 200, app `69d7ef537de40b99e3823998b105a955fb246baf`,
 host `04b95a754af32d67e1f9c554a45e7e2b24f60793`, with the host-side CapTP
 answer-release correction, per-invocation Shell timeout overrides and shared
 first-turn compaction described below.
+An October 6 unattended Luna run now verifies execution of the scoped JavaScript
+test lane, with three automatic first-turn checkpoints. It is not an all-green
+repo or clean end-to-end response: eleven test failures remain, and the final
+chat response reached the 48-tool-step cap after the report was written.
 The Floot development preset publishes only the common
 Shell as `shell` in inventory and exposes structured `runCommand`/`inspectShell`
 tools, distinct from JavaScript `exec`. Only Fae inference backends select it;
@@ -479,7 +483,8 @@ Private evidence was verified before deleting only this disposable session and
 disposing its allocation. The original eight sessions, Secrets and workspaces
 were preserved. Receipts remain under
 `/var/lib/endo/fae-compaction-acceptance-20261006/`; no helper was registered as a
-daemon formula. Unattended whole-suite completion remains unverified.
+daemon formula. This bounded gate did not verify unattended whole-suite execution;
+the later full-lane verification below supersedes that limitation.
 
 The inspected [OpenCode implementation](https://github.com/kumavis/opencode/blob/af032b9fbc293cd19283e16f6a7f8effe296c065/packages/opencode/src/session/compaction.ts)
 uses a budgeted recent tail, within-turn splitting and bounded prose tool excerpts
@@ -493,6 +498,74 @@ and paths/references, with explicit preservation of still-relevant earlier
 summary facts and exact commands, paths and identifiers.
 This is model-authored continuation text, not a new durable state schema or
 system instruction; section headings are guidance rather than a dispatch gate.
+
+### Unattended JavaScript test-lane verification — 2026-10-06
+
+Fresh session `muvuozxr-fe6xx1-0` used Fae/Codex `gpt-5.6-luna`, high reasoning,
+the development preset and public internet on generation 200. One initial task
+asked it to execute, not fix, the JavaScript workspace lane at the exact deployed
+app revision. No coaching, corrective turn, manual compaction, source/test edit,
+signature bypass or privilege escalation was used. It selected explicit
+per-invocation timeouts while leaving the runners' own timeouts unchanged.
+The run lasted about 57 minutes and settled with **48 tool calls/results and
+three automatic checkpoints in its first user turn**.
+
+The agent corrected its `sh`/`pipefail` mistake and transient Yarn proxy resets,
+then completed immutable dependency installation and the root declaration build.
+It downloaded signed Debian dependencies into native HOME, extracted runtime
+libraries and `procps` without root, and used the locked Chromium/Electron recipes.
+The 13-minute non-daemon graph completed under its explicit 30-minute Shell
+override. Four initially blocked suites passed after these prerequisite repairs:
+Preact container (171), Preact social (34), Familiar (7), and Hosted Agent (826).
+Host worker memory stayed healthy; the earlier V8 heap failure did not recur.
+
+Independent checks, including adversarial review of the retained artifacts,
+establish the following coverage:
+
+| Gate | Verified result |
+|---|---|
+| Non-daemon graph | All 115 package test tasks and 125 build tasks terminal, no cache hits; test-task identities exactly match the in-scope package scripts |
+| Daemon files | Exact sorted manifest of 109 files; 108 non-core files executed once in five batches |
+| Core daemon titles | 268 unique source titles, including conditional Node aliases and `testShim`; disjoint a–f, g–m and complement title sets match the reporter exactly |
+| Core partitions | 65 passed; 89 passed; 110 passed and 4 failed; every complement exclusion, including `!j*`, present in actual invocation |
+| Daemon aggregate | 1,506 passed, 6 failed, 5 configured skips (four Node/Rust cross-supervisor and one network test) |
+| Checkout | Exact revision `69d7ef537de40b99e3823998b105a955fb246baf`; tracked source and lockfiles unchanged |
+
+Eleven unique failures remain: two Codex setup assertions, two Sandbox
+Podman-policy host-environment/proxy assertions, one OCapn API snapshot, and six
+daemon failures. The daemon failures are the archived/native Floot context
+restart fixtures, OpenCode backend owner/storage, Claude backend owner/storage,
+OpenCode broker secret retention, and `provideSubMount` capability validation.
+The retained broker fixtures still pass retired model configuration; the logs
+show that refusal explicitly. The OCapn failure is printed three times by its
+wrapper but represents one failing title. No failing assertion was suppressed
+or patched. Rust, XS, test262, lint and type-contract CI lanes were outside scope.
+
+The agent wrote its report, coverage ledger and per-task status file, and copied
+the short report to `/workspace/endo-test-run-report.md`. Its own aggregate count
+(1,384 daemon passes) is wrong: the independently checked aggregate is 1,506.
+It also mislabels one core failure and the Sandbox proxy assertions. Preserve
+that original report as evidence, but use the independent audit above as authority.
+After writing the files at tool step 48, the final chat output was the existing
+tool-step-limit warning. Thus **unattended test execution is verified; clean
+end-to-end assistant completion is not**. The round-cap/final-summary behavior
+and report accuracy remain follow-ups, not compaction failures. This run did not
+repeat the cold-restart gate; the separate eight-command test above covers it.
+
+Full hydrated tool evidence excludes credentials and opaque reasoning payloads.
+The exporter ends with an explicit completion receipt for 48 calls/results.
+The private archive contains 379 allowlisted regular log/JSON/report files,
+20,212,168 source bytes, compressed to 3,837,996 bytes, SHA-256
+`bba30483e1946a3e62e76a947a6d7e5113931b82beae86b92961bd02bf930ebb`.
+Each extracted member was independently checked against its recorded hash;
+the archive also compared equal to the live files before disposal.
+Receipts, the original reports and the independent audit remain under
+`/var/lib/endo/endo-autonomous-suite-4-20261006/`. No helper was installed as a
+daemon formula. Only the fresh test session and its owned native allocation were
+removed after positive settlement, export/archive verification and an acknowledged
+idle stop/disposal. The original eight sessions, their uncertainty evidence,
+Secrets, renewal owners and workspaces were preserved.
+
 The shared credential-free listener worker now accepts a closed network-only
 bootstrap with only a public-egress endpoint, and publishes `ManagedNetworkV1`
 readiness without creating or reporting an inference HTTP endpoint.

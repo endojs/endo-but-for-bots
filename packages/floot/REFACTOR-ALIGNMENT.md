@@ -43,6 +43,15 @@ two automatic checkpoints, then cold daemon restart and context-only recall
 without new tools or summarization. Explicit native stop preceded restart;
 the disposable session/allocation were removed after private evidence export.
 The original eight sessions, Secrets and workspaces remain unchanged.
+The fresh unattended October 6 Luna test run also verifies all 115 non-daemon
+package test tasks and all 109 daemon test files at the deployed revision, with
+three automatic checkpoints across 48 settled calls/results in one user turn.
+Eleven distinct assertion/fixture failures remain; no tests or source were changed.
+The agent saved its report/ledger, but its final chat reply reached the existing
+48-tool-step cap. Its aggregate count and some failure labels also need correction
+against the retained independent audit. Execution is verified, not a green repo
+or clean end-to-end assistant completion. After verified export/archive, only this
+new disposable session/allocation was removed; the original eight were preserved.
 The [durable POSIX design](../../designs/durable-posix-environments.md) records
 the policy and OpenCode comparison; older hold/no-producer statements below are
 historical and superseded for the direct Fae paths.
