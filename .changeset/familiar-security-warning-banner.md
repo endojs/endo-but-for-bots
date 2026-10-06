@@ -1,6 +1,6 @@
 ---
 '@endo/chat': minor
-'@endo/familiar': patch
+'@endo/familiar': minor
 ---
 
 Chat now shows a dismissible banner when the Familiar cannot confirm one of its exfiltration defenses at startup.

@@ -7,12 +7,6 @@ import harden from '@endo/harden';
 // designs/familiar-localhttp-protocol.md, "Runtime verification and user
 // notification").  The warnings say that a layer of the exfiltration defense
 // could not be confirmed; the banner is non-blocking and dismissible.
-//
-// Call `mount()` after each replacement of `document.body`.  A dismissal lasts
-// until the Familiar reports a warning not seen before, or until the Chat page
-// reloads: a daemon restart or purge reloads it after the Familiar re-checks
-// its defenses, and the banner then shows that fresh verdict.  The banner stays
-// above the reconnect overlay.
 
 export const SECURITY_WARNING_BANNER_ID = 'familiar-security-warnings';
 
@@ -43,8 +37,13 @@ const normalizeWarnings = warnings => {
 
 /**
  * @typedef {object} SecurityWarningBanner
- * @property {(next: unknown) => void} show replace the displayed warnings
- * @property {() => void} mount re-insert the banner after a body replacement
+ * @property {(next: unknown) => void} show replace the displayed warnings.
+ *   A dismissal lasts until `show` receives a warning not seen before, or
+ *   until the Chat page reloads (a daemon restart or purge reloads it after
+ *   the Familiar re-checks its defenses).  The banner stays above the
+ *   reconnect overlay.
+ * @property {() => void} mount re-insert the banner; call it after each
+ *   replacement of `document.body`
  */
 
 /**

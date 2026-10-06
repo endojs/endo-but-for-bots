@@ -24,13 +24,20 @@ harden(SECURITY_WARNINGS_CHANNEL);
  */
 
 /**
+ * The URL without its query and fragment, with its path percent-decoded.
+ * Node's `pathToFileURL` and Chromium's URL canonicalizer, which produces
+ * `webContents.getURL()`, escape different sets of characters (Node emits
+ * `%7E` for `~`; Chromium decodes it), so comparing serialized paths could
+ * miss the Chat page and silently drop its warnings.
+ *
  * @param {string} url
- * @returns {string | undefined} the URL without its query and fragment
+ * @returns {string | undefined}
  */
 const pageIdentity = url => {
   try {
     const parsed = new URL(url);
-    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+    const path = decodeURIComponent(parsed.pathname);
+    return `${parsed.protocol}//${parsed.host}${path}`;
   } catch {
     return undefined;
   }
@@ -39,8 +46,8 @@ const pageIdentity = url => {
 /**
  * The `file:` URL of the built Chat page at `chatDistPath`.  Unlike a
  * `file://${path}` template, this percent-encodes characters such as a space,
- * `#`, `?`, or `%` the way the URL that `webContents.getURL()` reports does,
- * so `isChatPageUrl` still matches when the install path contains them.
+ * `#`, `?`, or `%`, so the path survives parsing intact and `isChatPageUrl`
+ * still matches when the install path contains them.
  *
  * @param {string} chatDistPath
  * @returns {string}
@@ -51,7 +58,7 @@ harden(chatFilePageUrl);
 /**
  * Whether `url` is the Chat page at `chatPageUrl`, the URL
  * `electron-main.js` loads into the window.  The query and fragment may
- * differ; the protocol, host, port, and path must not.
+ * differ; the protocol, host, port, and percent-decoded path must not.
  *
  * @param {string} url
  * @param {string} chatPageUrl

@@ -146,6 +146,24 @@ test('chatFilePageUrl matches the loaded Chat page for an install path needing e
   t.false(isChatPageUrl(loaded, `file://${chatDistPath}`));
 });
 
+test('isChatPageUrl ignores which characters each URL serializer escapes', t => {
+  // Node's pathToFileURL emits %7E for `~`; Chromium's getURL() reports `~`.
+  const tildePageUrl = chatFilePageUrl('/opt/PROGRA~1/dist/index.html');
+  t.true(
+    isChatPageUrl('file:///opt/PROGRA~1/dist/index.html#g=x', tildePageUrl),
+  );
+  t.true(
+    isChatPageUrl('file:///opt/PROGRA%7E1/dist/index.html#g=x', tildePageUrl),
+  );
+  t.true(
+    isChatPageUrl(
+      'file:///opt/PROGRA~1/dist/index.html',
+      'file:///opt/PROGRA%7E1/dist/index.html',
+    ),
+  );
+  t.false(isChatPageUrl('file:///opt/PROGRA~2/dist/index.html', tildePageUrl));
+});
+
 test('the channel matches the preload subscription', async t => {
   const { readFile } = await import('node:fs/promises');
   const preload = await readFile(
