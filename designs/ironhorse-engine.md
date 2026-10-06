@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-02 |
-| **Updated** | 2026-09-13 |
+| **Updated** | 2026-09-29 |
 | **Author** | endolinbot (prompted) |
 | **Status** | Approved (2026-07-02, program supervisor `port-xs-to-rust-memory-safe-engine`; all ten open questions resolved, see § Resolved Questions) |
 | **Revised** | 2026-07-04 — **metering doctrine: accuracy over parity** (maintainer directive). The meter is Ironhorse's own release-versioned deterministic cost model, a proxy for real (wall-clock) execution cost, NOT a reproduction of XS's computron counts. The XS differential oracle is retained for **result** correctness only; computron comparison is demoted to advisory telemetry. This selects the "stated determinism-equivalence proof" branch the § Prompt already permitted. See § Metering (requirement 1a) and § Agoric consensus compatibility for the authoritative statement. |
@@ -935,6 +935,22 @@ Recorded here because the failure this passage is correcting was precisely a
 true half standing in for a false one.
 
 ### Endor integration (requirement 8)
+
+**Panic/recovery consumer dependency (filed 2026-09-29).**
+Before the production `-e ironhorse` worker can consume
+[ironhorse-panic](ironhorse-panic.md)'s `ExecutionOutcome`, finish the real
+init/restore/deliver envelope protocol, daemon host-power adapters, and SES boot
+bundle named by `engine::run_worker` in `rust/endo/src/ironhorse_engine.rs`.
+Heap persistence and the classifier are already present; an eval-only substitute
+is not acceptance of delivery integration.
+Classify after delivery and job-drain, then return the outcome to Slot Machine,
+which alone commits/discards, publishes snapshot watermarks, and restarts/replays.
+Acceptance must distinguish a normal CapTP rejected return (commit and continue),
+a genuinely escaped throw (discard and terminate), and every panic reason
+(discard and enter configured recovery); include a sibling-worker survival case.
+Complete the payload-preserving panic representation refactor before this consumer.
+The XS/CAS transcript adapter can land independently and must share these tests.
+The old "stage 8/9" shorthand does not supersede these concrete dependencies.
 
 **Current status:** direct embedding exists in `rust/endo/src/ironhorse_engine.rs`;
 the common engine trait is deferred under W6 decision 2, and the complete worker
