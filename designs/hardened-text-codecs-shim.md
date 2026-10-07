@@ -4,7 +4,7 @@
 |---|---|
 | **Created** | 2026-05-04 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | Revised — permits landed upstream (endojs/endo#3322); encapsulation revision in PR [#1349](https://github.com/endojs/endo-but-for-bots/pull/1349) |
 
 ## What is the Problem Being Solved?
 
@@ -125,6 +125,20 @@ Tests live under `packages/ses/test/`.
    The existing XS test runner exercises (1) and (5) on a host that
    never provided the codecs.
 
+7. **Restricted-property reproduction (endojs/endo#3369).**
+   Define own `caller` and `arguments`, each
+   `{ value: null, writable: false, configurable: false }`, on the
+   host codec constructors before `lockdown()` — the shape V8 ships
+   up to and including Chrome 137 — and assert that `lockdown()`
+   completes, that the permitted codecs are the SES-owned
+   replacements, and that the host constructor objects are
+   unreachable from the permitted intrinsics.
+   Lives in both the Node suite
+   (`test/text-encoder-decoder-restricted-properties.test.js`) and
+   the Playwright browser suite
+   (`browser-test/tests/text-codecs.spec.js`), where a genuinely
+   affected Chromium carries the properties natively.
+
 ### Compatibility considerations
 
 - **Code that monkey-patches the codecs.**
@@ -135,6 +149,76 @@ Tests live under `packages/ses/test/`.
   that already applies to every other intrinsic).
   Note this in the SES changeset for the release that ships the
   shim.
+
+## Revision: encapsulated constructors (2026-10-07)
+
+The original design sampled the host constructors directly onto the
+permitted intrinsics.
+That shipped upstream in endojs/endo#3322 (ses 2.3.0) and promptly
+broke `lockdown()` on a wide band of Chromium releases
+(endojs/endo#3369): on V8 up to and including Chrome 137, WebIDL
+constructors — including `TextEncoder` and `TextDecoder` — carry own
+legacy restricted properties, `caller` and `arguments`, each
+`{ value: null, writable: false, configurable: false }`.
+`arguments` and `caller` are not in the `FunctionInstance` permit
+set, so the permits-enforcement pass tries to delete them, cannot
+(they are non-configurable), and `lockdown()` throws.
+
+Measured boundary (Chrome for Testing headless shells, Linux x64,
+2026-10-07): 120, 126, 127, 133, 136, and 137 all carry the
+restricted properties on both codec constructors; 138, 139, and 140
+are clean.
+The affected band is therefore every Chromium before 138 (June
+2025), not "before 127" as the issue first estimated.
+
+Rejected alternatives:
+
+- **Tolerate the descriptor in `cauterizeProperty`.**
+  Withdrawn by the issue reporter: the descriptor
+  `{ value: null, writable: false, configurable: false }` reads
+  identically on these WebIDL constructors, where the slot stays
+  inert, and on a sloppy function, where the slot is live during a
+  call and leaks the caller and the arguments.
+  A tolerance keyed on the descriptor shape tolerates the live case
+  too.
+- **Permit the properties (endojs/endo#3371).**
+  Same exposure decision expressed in the permits table, with the
+  added drawback that a configurable variant of the property would
+  also be permitted.
+  Leaving `caller` and `arguments` visible on permitted intrinsics
+  is not acceptable from an ocap standpoint (mhofman, endojs/endo#3369).
+
+Adopted remedy — **encapsulation** (mhofman: "The repair would have
+to replace the class altogether"): before the intrinsics collector
+samples the global object, `lockdown()` replaces each host codec
+constructor, where present, with a SES-owned constructor
+(`packages/ses/src/tame-text-codecs.js`) that throws without `new`,
+delegates construction to the captured host original via
+`Reflect.construct` (preserving `new.target` for subclassing), and
+reuses the host prototype object as its own non-writable
+`prototype`.
+The shared prototype's `constructor` is repointed at the
+replacement, so the host constructor object — restricted properties
+and all — is unreachable from the permitted intrinsics graph on
+every engine.
+The host prototypes carry no restricted properties, and all codec
+behavior (methods, option getters, brand checks) lives on them, so
+instances are genuine host codec instances and `instanceof`,
+`encodeInto`, streaming `decode`, labels, and the
+`encoding`/`fatal`/`ignoreBOM` getters retain host behavior.
+The replacement is unconditional where the codecs exist, so the
+permitted intrinsics have the same shape on affected and unaffected
+engines alike; hosts without the codecs (XS without a providing
+shell) keep the absent-codec degradation path unchanged.
+The taming is idempotent, because SES-for-XS must apply it at module
+load — its shim compartment constructor samples the global
+intrinsics before `lockdown()` runs — and `lockdown()` applies it
+again on every platform.
+
+The revision is possibly temporary: once every supported engine
+ships clean codec constructors, the encapsulation could be retired
+in favor of direct sampling, with only test plan item 7 to retire
+alongside it.
 
 ## Dependencies
 
@@ -183,6 +267,15 @@ Tests live under `packages/ses/test/`.
    XS users continue to lack `TextEncoder` and `TextDecoder`.
    A separate polyfill design can layer cleanly on top when there is
    demand.
+
+4. **Encapsulate, do not tolerate.**
+   The permitted codec constructors are SES-owned replacements that
+   delegate to the captured host originals (§ Revision), because the
+   host constructors carry undeletable legacy restricted properties
+   on Chromium before 138 and the restricted-property descriptor is
+   indistinguishable from a live sloppy-function slot, so no
+   tolerance or permit can admit the host constructor objects
+   safely.
 
 ## Prompt
 
