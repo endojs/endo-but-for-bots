@@ -3649,3 +3649,21 @@ export type HashlineApplyEditOptions = {
    */
   reapplyWindow?: number;
 };
+
+/**
+ * A formula nonce locator's `get`. It is widened to the wire's
+ * `string | Uint8Array` secret (the incoming `bootstrap.fetch` path may hand
+ * raw bytes for a non-ASCII secret), which the `string`-keyed `NonceLocator`
+ * typedef cannot express. By parameter contravariance it stays assignable to
+ * `NonceLocator.get`, so it remains a valid `makeOcapn` locator.
+ */
+export type FormulaNonceLocatorGet = (
+  secret: string | Uint8Array,
+) => Promise<unknown>;
+
+/**
+ * The `NonceLocator` `makeFormulaNonceLocator` returns.
+ */
+export type FormulaNonceLocator = {
+  get: FormulaNonceLocatorGet;
+};
