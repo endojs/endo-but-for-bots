@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-10-01 |
-| **Updated** | 2026-10-06 |
+| **Updated** | 2026-10-07 |
 | **Author** | kumavis (prompted) |
 | **Status** | Initial implementation complete; Tokyo acceptance passed |
 
@@ -36,8 +36,27 @@ and durable replay. Generation 201 is live with app
 `7d07e051ceeb63684910ce7b29c4b3bd2f257656`, and one rebuilt credential-free
 listener at `sha256:8602ffe7480daae287db41c8bf6e9068d5827174ed7883d66db4bb19cb0a6651`
 for the development runner and all three hosted brokers. Harness/base images
-are unchanged. The fresh unattended Luna CI retry is running, not yet completed
-acceptance evidence.
+are unchanged. The fresh unattended Luna CI retry stopped after 33 minutes with
+an explicit Codex `server_is_overloaded` stream error, after 33 tool calls and
+two compactions. The non-daemon graph finished 236/240 tasks successfully; five
+daemon batches ran before the overload. Four non-daemon test packages and two
+daemon context fixtures failed. The remaining daemon batch and `endo.test.js`
+were not reached; this is neither complete coverage nor a CI pass.
+
+The October 7 overload follow-up adds live inference-local retries to the shared
+subscription Responses adapter: five waits of 5, 10, 20, 40 and 60 seconds, then
+the sixth refusal is terminal. Constructor `overloadRetryDelaysMs` configures
+the sequence (empty disables retries). Each retry keeps the identical serialized
+request/session affinity and acknowledges endpoint revocation before waiting.
+Only a named `server_is_overloaded` refusal before any output or usage qualifies;
+unknown events, partial reasoning/tool/text output, observer failures, malformed
+streams, HTTP errors and transport uncertainty are not replayed. Cancellation
+and disposal interrupt backoff. Sanitized diagnostics report attempts/delays,
+not provider prose or credentials. This is volatile transport retry state, not
+another durable turn or a recovered-turn replay mechanism; tool dispatch stays
+behind the existing journaled complete-response boundary. OpenRouter reuses the
+same abortable delay, without changing its retry policy. Deployment and a new
+unattended CI attempt remain to be verified.
 The Floot development preset publishes only the common
 Shell as `shell` in inventory and exposes structured `runCommand`/`inspectShell`
 tools, distinct from JavaScript `exec`. Only Fae inference backends select it;

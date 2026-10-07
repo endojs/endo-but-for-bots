@@ -7,6 +7,7 @@ import { Far } from '@endo/marshal';
 import { makePromiseKit } from '@endo/promise-kit';
 
 import { makeSubscriptionResponsesProvider } from '../providers/subscription-responses.js';
+import { abortableDelay } from '../providers/delay.js';
 // Exercise the real internal broker without exporting its constructor as API.
 // eslint-disable-next-line import/no-relative-packages
 import { makeBrokerSubscription } from '../../hosted-agent/src/broker-subscription.js';
@@ -790,4 +791,289 @@ test('failed revocation fences inference and remains retryable by disposal', asy
   refuse = false;
   await subject.provider.dispose();
   t.is(subject.revocations(), 2);
+});
+
+const overload = harden({
+  type: 'error',
+  code: 'server_is_overloaded',
+  error: {
+    code: 'server_is_overloaded',
+    type: 'service_unavailable_error',
+    message: 'Private provider prose must not reach the retry log',
+  },
+});
+
+/**
+ * @param {any[][]} attempts
+ * @param {any} [options]
+ */
+const retryFixture = (attempts, options = {}) => {
+  const requests = [];
+  const steps = [];
+  const logs = [];
+  const delays = [];
+  let opened = 0;
+  const subscription = Far('RetrySubscription', {
+    describe: () => harden({ models: [MODEL] }),
+    openEndpoint: spec => {
+      const index = opened;
+      opened += 1;
+      steps.push(`open:${index}`);
+      if (spec.sessionId !== 'retry-session') throw Error('Changed session');
+      return Far('RetryEndpoint', {
+        revoke: async () => {
+          steps.push(`revoke:${index}`);
+          await options.revoke?.();
+        },
+        requestByteStream: request => {
+          steps.push(`request:${index}`);
+          requests.push(request);
+          const bytes = new TextEncoder().encode(
+            (attempts[index] ?? attempts[attempts.length - 1])
+              .map(event => `data: ${JSON.stringify(event)}\n\n`)
+              .join(''),
+          );
+          return harden({
+            status: options.status ?? 200,
+            contentType: 'text/event-stream',
+            reader: bytesReaderFromIterator([bytes][Symbol.iterator]()),
+          });
+        },
+      });
+    },
+  });
+  const provider = makeSubscriptionResponsesProvider({
+    subscription,
+    model: MODEL,
+    sessionId: 'retry-session',
+    log: line => logs.push(line),
+    sleep: async (ms, signal) => {
+      steps.push('sleep');
+      delays.push(ms);
+      await options.sleep?.(ms, signal);
+    },
+    ...(options.retryDelays === undefined
+      ? {}
+      : { overloadRetryDelaysMs: options.retryDelays }),
+  });
+  return { provider, requests, steps, logs, delays };
+};
+
+test('overload retries revoke before backoff and preserve the exact request', async t => {
+  const messages = [{ role: 'user', content: 'Original task' }];
+  const subject = retryFixture(
+    [
+      [
+        { type: 'response.created', response: { output: [] } },
+        { type: 'response.in_progress', response: { output: [] } },
+        overload,
+      ],
+      [completion([callItem])],
+    ],
+    {
+      sleep: () => {
+        messages[0].content = 'Changed task';
+      },
+    },
+  );
+  t.teardown(() => subject.provider.dispose());
+  const result = await subject.provider.chat(messages, []);
+  t.is(result.message.tool_calls?.[0].id, 'call1');
+  t.deepEqual(subject.requests[0], subject.requests[1]);
+  t.is(JSON.parse(subject.requests[1].body).input[0].content, 'Original task');
+  t.deepEqual(subject.steps, [
+    'open:0',
+    'request:0',
+    'revoke:0',
+    'sleep',
+    'open:1',
+    'request:1',
+    'revoke:1',
+  ]);
+  t.deepEqual(subject.delays, [5000]);
+  t.deepEqual(subject.logs, [
+    '[subscription-responses] provider overloaded; retry 1/5 in 5000ms',
+  ]);
+});
+
+test('persistent overload is bounded to six attempts and five gentle delays', async t => {
+  const subject = retryFixture([[overload]]);
+  t.teardown(() => subject.provider.dispose());
+  await t.throwsAsync(subject.provider.chat([], []), {
+    message: /code=server_is_overloaded, type=service_unavailable_error/,
+  });
+  t.is(subject.requests.length, 6);
+  t.deepEqual(subject.delays, [5000, 10_000, 20_000, 40_000, 60_000]);
+  t.is(subject.logs.length, 5);
+  t.false(subject.logs.join('').includes('Private'));
+});
+
+test('overload delay configuration can be changed or disabled', async t => {
+  for (const retryDelays of [[], [15, 25]]) {
+    const subject = retryFixture([[overload]], { retryDelays });
+    t.teardown(() => subject.provider.dispose());
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(subject.provider.chat([], []), {
+      message: /server_is_overloaded/,
+    });
+    t.is(subject.requests.length, retryDelays.length + 1);
+    t.deepEqual(subject.delays, retryDelays);
+  }
+  const sparse = [];
+  sparse.length = 1;
+  for (const retryDelays of [
+    [0],
+    [-1],
+    [1.5],
+    [0x8000_0000],
+    ['5000'],
+    sparse,
+  ]) {
+    t.throws(() => retryFixture([[overload]], { retryDelays }), {
+      message: /Invalid overload retry delays/,
+    });
+  }
+});
+
+for (const [label, event] of [
+  ['text', { type: 'response.output_text.delta', delta: 'Partial' }],
+  [
+    'item',
+    { type: 'response.output_item.added', output_index: 0, item: callItem },
+  ],
+  [
+    'function arguments',
+    { type: 'response.function_call_arguments.delta', delta: '{}' },
+  ],
+  [
+    'reasoning',
+    { type: 'response.reasoning_summary_text.delta', delta: 'Private' },
+  ],
+  ['unknown event', { type: 'future.event' }],
+  ['incomplete lifecycle', { type: 'response.created', response: {} }],
+  [
+    'lifecycle output',
+    { type: 'response.created', response: { output: [callItem] } },
+  ],
+  [
+    'positive usage',
+    {
+      type: 'response.in_progress',
+      response: { output: [], usage: { input_tokens: 2 } },
+    },
+  ],
+  [
+    'zero usage',
+    {
+      type: 'response.in_progress',
+      response: { output: [], usage: { input_tokens: 0, output_tokens: 0 } },
+    },
+  ],
+  [
+    'unrecognized usage',
+    {
+      type: 'response.in_progress',
+      response: { output: [], usage: { mystery: 1 } },
+    },
+  ],
+]) {
+  test(`overload never retries after ${label}`, async t => {
+    const subject = retryFixture([[event, overload], [completion()]]);
+    t.teardown(() => subject.provider.dispose());
+    await t.throwsAsync(
+      subject.provider.chatStream(
+        [],
+        [],
+        () => {},
+        undefined,
+        () => {},
+      ),
+      {
+        message: /server_is_overloaded/,
+      },
+    );
+    t.is(subject.requests.length, 1);
+    t.deepEqual(subject.delays, []);
+  });
+}
+
+test('overload carrying output or usage is not retried', async t => {
+  for (const response of [
+    { error: overload.error, output: [callItem] },
+    { error: overload.error, usage: { input_tokens: 1 } },
+  ]) {
+    const subject = retryFixture([[{ type: 'response.failed', response }]]);
+    t.teardown(() => subject.provider.dispose());
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(subject.provider.chat([], []), {
+      message: /server_is_overloaded/,
+    });
+    t.is(subject.requests.length, 1);
+  }
+});
+
+test('overload retries do not swallow observer failures or ambiguous HTTP failures', async t => {
+  const subject = retryFixture([
+    [{ type: 'response.output_text.delta', delta: 'Partial' }, overload],
+  ]);
+  t.teardown(() => subject.provider.dispose());
+  await t.throwsAsync(
+    subject.provider.chatStream([], [], () => {
+      throw Error('Observer failed');
+    }),
+    {
+      message: 'Observer failed',
+    },
+  );
+  t.is(subject.requests.length, 1);
+  const http = retryFixture([[overload]], { status: 503 });
+  t.teardown(() => http.provider.dispose());
+  await t.throwsAsync(http.provider.chat([], []), { message: /HTTP 503/ });
+  t.is(http.requests.length, 1);
+});
+
+for (const action of ['abort', 'dispose']) {
+  test(`${action} interrupts real overload backoff without another endpoint`, async t => {
+    t.timeout(1500);
+    const entered = makePromiseKit();
+    const controller = new AbortController();
+    const subject = retryFixture([[overload]], {
+      sleep: (ms, signal) => {
+        entered.resolve(undefined);
+        return abortableDelay(ms, signal);
+      },
+    });
+    t.teardown(() => subject.provider.dispose());
+    const call = subject.provider.chat([], [], controller.signal);
+    const rejected = t.throwsAsync(call, {
+      message: action === 'abort' ? 'Cancelled backoff' : /disposed/,
+    });
+    await entered.promise;
+    if (action === 'abort') controller.abort(Error('Cancelled backoff'));
+    else await subject.provider.dispose();
+    await rejected;
+    t.is(subject.requests.length, 1);
+    t.deepEqual(subject.steps, ['open:0', 'request:0', 'revoke:0', 'sleep']);
+  });
+}
+
+test('overload cleanup failure fences retry and new inference', async t => {
+  let fail = true;
+  const subject = retryFixture([[overload]], {
+    revoke: () => {
+      if (fail) throw Error('Revocation failed');
+    },
+  });
+  t.teardown(() => {
+    fail = false;
+    return subject.provider.dispose();
+  });
+  await t.throwsAsync(subject.provider.chat([], []), {
+    message: 'Revocation failed',
+  });
+  await t.throwsAsync(subject.provider.chat([], []), {
+    message: /cleanup pending/,
+  });
+  t.is(subject.requests.length, 1);
+  t.deepEqual(subject.delays, []);
 });

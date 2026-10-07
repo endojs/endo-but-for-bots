@@ -9,8 +9,11 @@ import { canonicalJson } from '@endo/hosted-agent/canonical-json.js';
 import { makePromiseKit } from '@endo/promise-kit';
 import { M, mustMatch } from '@endo/patterns';
 
+import { abortableDelay } from './delay.js';
+
 // A transport bound matching the Codex broker, not a model context limit.
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+const OVERLOAD_RETRY_DELAYS_MS = harden([5000, 10_000, 20_000, 40_000, 60_000]);
 const reasoningEffortPattern = /^[a-z][a-z0-9_-]{0,63}$/;
 /** @type {Record<string, string>} */
 const FAILURE_EXPLANATIONS = harden({
@@ -338,6 +341,10 @@ const responseEvents = async function* responseEventIterator(bytes) {
  * @param {string} [options.reasoningEffort]
  * @param {number} [options.contextLength] Provider-observed metadata supplied by
  *   the catalog integration, not an execution budget. Absent means unknown.
+ * @param {readonly number[]} [options.overloadRetryDelaysMs] One delay per retry;
+ *   an empty array disables retries. Only explicit refusals before output qualify.
+ * @param {(ms: number, signal?: AbortSignal) => Promise<void>} [options.sleep]
+ * @param {(line: string) => void} [options.log] Sanitized retry diagnostics.
  */
 export const makeSubscriptionResponsesProvider = ({
   subscription,
@@ -345,6 +352,9 @@ export const makeSubscriptionResponsesProvider = ({
   model,
   reasoningEffort,
   contextLength,
+  overloadRetryDelaysMs = OVERLOAD_RETRY_DELAYS_MS,
+  sleep = abortableDelay,
+  log = () => {},
 }) => {
   (typeof model === 'string' && model.length > 0) ||
     Fail`Responses model required`;
@@ -359,6 +369,15 @@ export const makeSubscriptionResponsesProvider = ({
       Number(contextLength) > 0 &&
       Number(contextLength) <= 0xffff_ffff) ||
     Fail`Invalid model context length`;
+  Array.isArray(overloadRetryDelaysMs) || Fail`Invalid overload retry delays`;
+  const retryDelays = harden([...overloadRetryDelaysMs]);
+  retryDelays.every(
+    delay =>
+      Number.isInteger(delay) &&
+      Number(delay) > 0 &&
+      Number(delay) <= 0x7fff_ffff,
+  ) || Fail`Invalid overload retry delays`;
+  const overloadFailures = new WeakSet();
   let disposed = false;
   /** @type {Set<() => Promise<void>>} */
   const cleanups = new Set();
@@ -367,18 +386,16 @@ export const makeSubscriptionResponsesProvider = ({
   let cleanupFailed = false;
 
   /**
-   * @param {any[]} messages
-   * @param {any[]} tools
+   * @param {{method: string, path: string, body: string}} request
    * @param {(text: string) => void} [onToken]
    * @param {AbortSignal} [signal]
    * @param {(usage: any) => void} [onUsage]
    */
-  const chatStream = async (messages, tools, onToken, signal, onUsage) => {
+  const attempt = async (request, onToken, signal, onUsage) => {
     await null;
     !disposed || Fail`Subscription provider disposed`;
     !cleanupFailed || Fail`Subscription provider cleanup pending`;
     signal?.throwIfAborted();
-    const context = requestContext(messages, model);
     const cancelled = makePromiseKit();
     void cancelled.promise.catch(() => undefined);
     const wait = promise => Promise.race([promise, cancelled.promise]);
@@ -437,37 +454,10 @@ export const makeSubscriptionResponsesProvider = ({
       // share may narrow these ids; the broker still admits every dispatch.
       (Array.isArray(catalog.models) && catalog.models.includes(model)) ||
         Fail`Model absent from subscription catalog`;
-      const wireTools = tools.map(tool => {
-        (tool.type === 'function' &&
-          typeof tool.function?.name === 'string' &&
-          tool.function.name !== '' &&
-          tool.function.parameters &&
-          typeof tool.function.parameters === 'object') ||
-          Fail`Invalid Responses tool schema`;
-        return { type: 'function', ...tool.function };
-      });
       admission.resolve(undefined);
       endpoint = await wait(endpointP);
       assertLive();
-      const response = await wait(
-        E(endpoint).requestByteStream(
-          harden({
-            method: 'POST',
-            path: '/v1/responses',
-            body: JSON.stringify({
-              model,
-              ...context,
-              store: false,
-              stream: true,
-              include: ['reasoning.encrypted_content'],
-              ...(reasoningEffort
-                ? { reasoning: { effort: reasoningEffort } }
-                : {}),
-              ...(tools.length ? { tools: wireTools } : {}),
-            }),
-          }),
-        ),
-      );
+      const response = await wait(E(endpoint).requestByteStream(request));
       assertLive();
       (response.status === 200 &&
         /^text\/event-stream(?:;|$)/i.test(response.contentType ?? '')) ||
@@ -479,12 +469,36 @@ export const makeSubscriptionResponsesProvider = ({
       const completedItems = new Map();
       let doneMarker = false;
       let usage;
+      let retryEligible = true;
       for (;;) {
         const next = await wait(events.next());
         assertLive();
         if (next.done) break;
         const event = next.value;
         typeof event?.type === 'string' || Fail`Invalid Responses event type`;
+        const failureEvent = [
+          'error',
+          'response.failed',
+          'response.incomplete',
+        ].includes(event.type);
+        const emptyLifecycle =
+          ['response.created', 'response.in_progress'].includes(event.type) &&
+          Array.isArray(event.response?.output) &&
+          event.response.output.length === 0;
+        // Unknown/ignored deltas are still output. Usage, even zero or an
+        // unrecognized shape, may already have reached an observer or a meter.
+        // Never infer permission to replay from a missing common message.
+        if (
+          (!failureEvent && !emptyLifecycle) ||
+          event.usage != null ||
+          event.response?.usage != null ||
+          event.message?.usage != null ||
+          (event.response?.output !== undefined &&
+            (!Array.isArray(event.response.output) ||
+              event.response.output.length !== 0))
+        ) {
+          retryEligible = false;
+        }
         !doneMarker || Fail`Responses event after stream end`;
         if (event.type === 'stream.done') {
           completed !== undefined ||
@@ -508,12 +522,20 @@ export const makeSubscriptionResponsesProvider = ({
           onUsage?.(usage);
           assertLive();
         }
-        if (
-          ['error', 'response.failed', 'response.incomplete'].includes(
-            event.type,
-          )
-        ) {
-          throw responseFailure(event);
+        if (failureEvent) {
+          const failure = responseFailure(event);
+          const error =
+            event.type === 'error'
+              ? (event.error ?? event)
+              : event.response?.error;
+          if (
+            retryEligible &&
+            event.type !== 'response.incomplete' &&
+            error?.code === 'server_is_overloaded'
+          ) {
+            overloadFailures.add(failure);
+          }
+          throw failure;
         }
         if (
           event.type === 'response.output_item.added' ||
@@ -585,6 +607,79 @@ export const makeSubscriptionResponsesProvider = ({
       if (wasCancelled) void cleanup().catch(() => undefined);
       else await cleanup();
       if (iterator) void iterator.return?.().catch(() => undefined);
+    }
+  };
+  /**
+   * Retries belong to this live inference call, never to a recovered turn.
+   * Tools run only after a complete response has returned to the agent loop.
+   * @param {any[]} messages
+   * @param {any[]} tools
+   * @param {(text: string) => void} [onToken]
+   * @param {AbortSignal} [signal]
+   * @param {(usage: any) => void} [onUsage]
+   */
+  const chatStream = async (messages, tools, onToken, signal, onUsage) => {
+    await null;
+    !disposed || Fail`Subscription provider disposed`;
+    !cleanupFailed || Fail`Subscription provider cleanup pending`;
+    signal?.throwIfAborted();
+    const context = requestContext(messages, model);
+    const wireTools = tools.map(tool => {
+      (tool.type === 'function' &&
+        typeof tool.function?.name === 'string' &&
+        tool.function.name !== '' &&
+        tool.function.parameters &&
+        typeof tool.function.parameters === 'object') ||
+        Fail`Invalid Responses tool schema`;
+      return { type: 'function', ...tool.function };
+    });
+    // Freeze the request once: retries cannot observe a caller's mutations.
+    const request = harden({
+      method: 'POST',
+      path: '/v1/responses',
+      body: JSON.stringify({
+        model,
+        ...context,
+        store: false,
+        stream: true,
+        include: ['reasoning.encrypted_content'],
+        ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
+        ...(tools.length ? { tools: wireTools } : {}),
+      }),
+    });
+    const backoff = new AbortController();
+    const liveSignal = signal
+      ? AbortSignal.any([signal, backoff.signal])
+      : backoff.signal;
+    // Unlike attempt cleanup, this registration lasts across the backoff gap.
+    /** @param {unknown} reason */
+    const cancel = reason => backoff.abort(reason);
+    cancellations.add(cancel);
+    try {
+      for (let retry = 0; ; retry += 1) {
+        liveSignal.throwIfAborted();
+        try {
+          return await attempt(request, onToken, liveSignal, onUsage);
+        } catch (error) {
+          liveSignal.throwIfAborted();
+          if (
+            !(error instanceof Error) ||
+            !overloadFailures.has(error) ||
+            retry >= retryDelays.length ||
+            cleanupFailed
+          ) {
+            throw error;
+          }
+          // attempt's finally acknowledged revocation before this catch.
+          const delay = retryDelays[retry];
+          log(
+            `[subscription-responses] provider overloaded; retry ${retry + 1}/${retryDelays.length} in ${delay}ms`,
+          );
+          await sleep(delay, liveSignal);
+        }
+      }
+    } finally {
+      cancellations.delete(cancel);
     }
   };
   return harden({
