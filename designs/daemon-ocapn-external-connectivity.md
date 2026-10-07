@@ -265,6 +265,19 @@ accumulator, the SQLite `retention` table, and the
 [`daemon-cross-peer-gc`](daemon-cross-peer-gc.md) logic are unchanged
 — only the transport beneath them changes.
 
+> **Note on the formula nonce locator (added 2026-09-05).**
+> `makeFormulaNonceLocator` (`@endo/daemon/formula-nonce-locator.js`)
+> implements steps 1-3 above as a standalone mechanism.
+> It is not yet wired: the daemon's live OCapN endpoint still serves
+> peers through `localGateway.provide`, as the Status section records.
+> It treats every presentation that is not a canonical local formula
+> identifier as one uniform miss, so it does not itself resolve a
+> well-known swissnum word.
+> The well-known bootstrap swissnum whose exo carries
+> `followRetentionSet` is served as this section describes, by the
+> daemon's locator checking that fixed swissnum before delegating every
+> other presentation to the formula locator.
+
 ### 3. `endo://` Locators Become OCapN Locations and Sturdyrefs
 
 Today an `endo://` URL is a query string the daemon parses itself.
