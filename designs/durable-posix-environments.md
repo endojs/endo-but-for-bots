@@ -55,8 +55,16 @@ and disposal interrupt backoff. Sanitized diagnostics report attempts/delays,
 not provider prose or credentials. This is volatile transport retry state, not
 another durable turn or a recovered-turn replay mechanism; tool dispatch stays
 behind the existing journaled complete-response boundary. OpenRouter reuses the
-same abortable delay, without changing its retry policy. Deployment and a new
-unattended CI attempt remain to be verified.
+same abortable delay, without changing its retry policy.
+Generation 202 deploys app `8e371829f8641254b98b01910060181f924a9fcb` and host
+`3b2dd1cd904e7429d38b57e960c42db4460ba253`; images and subscription owners are
+unchanged. A credential-free fixture on the deployed adapter passed two real
+backoff waits (5/10 seconds), then succeeded on request three, with matching
+requests and acknowledged endpoint revocation. The new unattended Luna attempt
+is session `muxdfze3-lg934x-0`, receipts/logs under
+`/var/lib/endo/endo-autonomous-suite-6-20261007/`. It is running, not yet complete
+acceptance evidence. The old failed session and all original credentials/data
+remain intact; the previous transcript is privately archived before restart.
 The Floot development preset publishes only the common
 Shell as `shell` in inventory and exposes structured `runCommand`/`inspectShell`
 tools, distinct from JavaScript `exec`. Only Fae inference backends select it;
