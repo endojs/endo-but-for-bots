@@ -3206,6 +3206,12 @@ export interface DaemonCoreExternal {
   formulateEndo: DaemonCore['formulateEndo'];
   nodeNumber: NodeNumber;
   provide: DaemonCore['provide'];
+  sturdyRefForFormula: ReturnType<
+    typeof import('./formula-sturdyref.js').makeFormulaSturdyRefKit
+  >['sturdyRefForFormula'];
+  formulaIdOf: ReturnType<
+    typeof import('./formula-sturdyref.js').makeFormulaSturdyRefKit
+  >['formulaIdOf'];
   capTpConnectionRegistrar: CapTpConnectionRegistrar;
 }
 
