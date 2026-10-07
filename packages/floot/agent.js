@@ -4306,6 +4306,7 @@ export const make = async (
           ownedProvider = makeSubscriptionResponsesProvider({
             ...recipe,
             sessionId: `floot-${id}`,
+            log: line => console.error(line),
           });
           agentConfig = {
             kind: 'provider',

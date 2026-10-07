@@ -4,29 +4,8 @@
 import { boundedJson } from '@endo/hosted-agent/bounded-json.js';
 import { DEFAULT_WORKLOAD_LIMITS } from '@endo/hosted-agent/workload-limits.js';
 
+import { abortableDelay } from './delay.js';
 import { toOpenAICompatibleMessages } from './openai-compatible-messages.js';
-
-/**
- * @param {number} ms
- * @param {AbortSignal} [signal]
- * @returns {Promise<void>}
- */
-const defaultSleep = (ms, signal) =>
-  new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(signal.reason);
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve();
-    }, ms);
-    function onAbort() {
-      clearTimeout(timer);
-      reject(signal?.reason);
-    }
-    signal?.addEventListener('abort', onAbort, { once: true });
-  });
 
 /**
  * How many requests one `chat` may make. A request is repeated only when
@@ -196,7 +175,7 @@ export const makeOpenRouterProvider = ({
   apiKey,
   model,
   fetchImpl = fetch,
-  sleep = defaultSleep,
+  sleep = abortableDelay,
   requestTimeoutMs = REQUEST_TIMEOUT_MS,
   log = line => console.error(line),
   now = Date.now,

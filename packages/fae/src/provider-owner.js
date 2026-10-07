@@ -78,6 +78,7 @@ export const makeProviderOwner = ({
         subscription: config.subscription,
         sessionId: /** @type {string} */ (sessionId),
         model: config.model || '',
+        log: line => console.error(line),
         ...(config.reasoningEffort === undefined
           ? {}
           : { reasoningEffort: config.reasoningEffort }),

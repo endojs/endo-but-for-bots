@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-10-01 |
-| **Updated** | 2026-10-06 |
+| **Updated** | 2026-10-07 |
 | **Author** | kumavis (prompted) |
 | **Status** | Initial implementation complete; Tokyo acceptance passed |
 
@@ -27,17 +27,77 @@ The shared direct-provider guard is now 1024 rounds in source, including
 standalone Fae (previously 32). Local tests cover exact exhaustion, explicit
 overrides and a normal final answer beyond the old 48-round cutoff. A round
 is one provider response plus its requested tools, not one individual call;
-the final answer also consumes a round. Generation 201 now deploys this default;
-a fresh unattended end-to-end response remains under test.
+the final answer also consumes a round.
+Generation 201 deployed this default; generation 202's unattended end-to-end
+response now completes, with the test failures recorded below.
 The operational guards listed below now have generous defaults and explicit
 operator settings. Local tests and adversarial review cover their configuration
-and durable replay. Generation 201 is live with app
+and durable replay. Generation 201 deployed app
 `1bda964b842c080519b801d274ff4f0135a58346`, host
 `7d07e051ceeb63684910ce7b29c4b3bd2f257656`, and one rebuilt credential-free
 listener at `sha256:8602ffe7480daae287db41c8bf6e9068d5827174ed7883d66db4bb19cb0a6651`
 for the development runner and all three hosted brokers. Harness/base images
-are unchanged. The fresh unattended Luna CI retry is running, not yet completed
-acceptance evidence.
+are unchanged. The fresh unattended Luna CI retry stopped after 33 minutes with
+an explicit Codex `server_is_overloaded` stream error, after 33 tool calls and
+two compactions. The non-daemon graph finished 236/240 tasks successfully; five
+daemon batches ran before the overload. Four non-daemon test packages and two
+daemon context fixtures failed. The remaining daemon batch and `endo.test.js`
+were not reached; this is neither complete coverage nor a CI pass.
+
+The October 7 overload follow-up adds live inference-local retries to the shared
+subscription Responses adapter: five waits of 5, 10, 20, 40 and 60 seconds, then
+the sixth refusal is terminal. Constructor `overloadRetryDelaysMs` configures
+the sequence (empty disables retries). Each retry keeps the identical serialized
+request/session affinity and acknowledges endpoint revocation before waiting.
+Only a named `server_is_overloaded` refusal before any output or usage qualifies;
+unknown events, partial reasoning/tool/text output, observer failures, malformed
+streams, HTTP errors and transport uncertainty are not replayed. Cancellation
+and disposal interrupt backoff. Sanitized diagnostics report attempts/delays,
+not provider prose or credentials. This is volatile transport retry state, not
+another durable turn or a recovered-turn replay mechanism; tool dispatch stays
+behind the existing journaled complete-response boundary. OpenRouter reuses the
+same abortable delay, without changing its retry policy.
+Generation 202 deploys app `8e371829f8641254b98b01910060181f924a9fcb` and host
+`3b2dd1cd904e7429d38b57e960c42db4460ba253`; images and subscription owners are
+unchanged. A credential-free fixture on the deployed adapter passed two real
+backoff waits (5/10 seconds), then succeeded on request three, with matching
+requests and acknowledged endpoint revocation.
+No real upstream overload occurred in the new CI attempt; the fixture is the
+live evidence for backoff mechanics, not a claim that this run exercised them.
+
+The unattended Luna attempt, session `muxdfze3-lg934x-0`, completed in 52m53s
+with 46 tool calls/results, three compactions and a final assistant response.
+Immutable installation and the normal root type build passed.
+The initial non-daemon graph executed 115 test tasks and 125 builds; autonomous
+browser/Electron/library/procps remediation repaired four failed test tasks.
+Latest outcomes are 112 successful test tasks, three failed test tasks and all
+125 builds successful, not 237 individual passing tests.
+All 110 daemon files ran: six disjoint batches cover 109 non-core files, and
+the three exhaustive, disjoint core partitions cover all 268 registered titles.
+Daemon results are **1,507 passed, six failed, five skipped**.
+Normal test timeouts were unchanged; the tracked checkout stayed clean at the
+activated revision.
+
+Eleven unique failures remain across packages and daemon tests: an OCapN API
+snapshot (repeated across three SES configurations), two sandbox environment
+extensibility assertions, two Codex setup publication fixtures, two context
+fixtures lacking dispatch intent, two retired broker-model configurations,
+one derived-mount interface mismatch and one native OpenCode fixture that
+requires the unavailable nested Podman executable.
+Failing fixtures do not prove their later assertions or restart behavior.
+The saved agent report also omits five skips, mixes sandbox counts from separate
+SES configurations and claims a `/workspace` report that it actually wrote only
+to `/home/node/endo-test-run-report.md`.
+The independently checked ledger remains in native HOME at
+`/home/node/endo-test-run/coverage-ledger.md`.
+This establishes completion of the scoped JavaScript execution task, not green
+CI or coverage of Rust, XS, test262, lint or type-contract lanes.
+Private receipts/logs and the complete 46-call/46-result export remain under
+`/var/lib/endo/endo-autonomous-suite-6-20261007/`.
+After settlement/export, only this experiment's captured native admin was
+stopped; it acknowledged idle, inactive and non-interrupted.
+The session, native HOME, logs, workspaces, old failed session and all original
+credentials/data remain intact; no helper became a daemon formula.
 The Floot development preset publishes only the common
 Shell as `shell` in inventory and exposes structured `runCommand`/`inspectShell`
 tools, distinct from JavaScript `exec`. Only Fae inference backends select it;
