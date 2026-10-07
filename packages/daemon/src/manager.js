@@ -126,6 +126,7 @@ import {
   EndoInterface,
 } from './interfaces.js';
 import { makeTraceAggregator } from './trace-aggregator.js';
+import { makeFormulaSturdyRefKit } from './formula-sturdyref.js';
 import { getUnredactedStackString } from './unredacted-stack.js';
 
 /** @import { Passable } from '@endo/pass-style' */
@@ -1295,7 +1296,24 @@ const makeDaemonCore = async (
 
   // The following are functions that manage that state.
 
-  /** @param {FormulaIdentifier} inputId */
+  /**
+   * Resolves once `seedFormulaGraphFromPersistence` has loaded every
+   * persisted record into `formulaForId`.
+   *
+   * @type {PromiseKit<void>}
+   */
+  const formulaGraphSeeded = makePromiseKit();
+
+  /**
+   * The formula named by `id`, from memory only. Seeding loads every
+   * persisted record and every formulation sets `formulaForId` when it
+   * writes a record, so once seeding is done a miss means the formula is
+   * unknown or the collector has dropped it. Reading the record back would
+   * revive a collected formula whose record the collector has not yet
+   * deleted, so a miss is refused instead.
+   *
+   * @param {FormulaIdentifier} inputId
+   */
   const getFormulaForId = async inputId => {
     const id = inputId;
     // No synchronous preamble.
@@ -1305,14 +1323,15 @@ const makeDaemonCore = async (
     if (formula !== undefined) {
       return formula;
     }
-
-    const { number: fNum } = parseId(id);
-    ({ formula } = await persistencePowers.readFormula(fNum));
-    await withFormulaGraphLock(async () => {
-      formulaForId.set(id, formula);
-      formulaGraph.onFormulaAdded(id, formula);
-    });
-    return formula;
+    await formulaGraphSeeded.promise;
+    formula = formulaForId.get(id);
+    if (formula !== undefined) {
+      return formula;
+    }
+    // The identifier is left unquoted so that, under the daemon's default
+    // `safe` error taming, the message redacts it: a formula identifier is
+    // closely held, and the error may reach whoever asked.
+    throw makeError(X`Formula ${id} is unknown or has been collected`);
   };
 
   /** @param {FormulaIdentifier} inputId */
@@ -1418,6 +1437,10 @@ const makeDaemonCore = async (
       // eslint-disable-next-line no-use-before-define
       provideController(id).value
     );
+
+  const { sturdyRefForFormula, formulaIdOf } = makeFormulaSturdyRefKit({
+    provide,
+  });
 
   /** @param {FormulaIdentifier} id */
   const dropLiveValue = id => {
@@ -3737,14 +3760,18 @@ const makeDaemonCore = async (
     },
     'git-remote': async (formula, context, id) => {
       const { gitId, credentialId, name, policy, revoked = false } = formula;
-      let currentFormula = formula;
       const persistGitRemoteState = async ({
         policy: nextPolicy,
         revoked: nextRevoked,
       }) => {
         await withFormulaGraphLock(async () => {
           const { number: formulaNumber, node: formulaNode } = parseId(id);
-          const latestFormula = formulaForId.get(id) ?? currentFormula;
+          const latestFormula = formulaForId.get(id);
+          // A miss means the collector has dropped this formula. Writing it
+          // back would revive a collected formula, so refuse instead.
+          if (latestFormula === undefined) {
+            throw makeError(X`GitRemote ${q(name)} has been collected`);
+          }
           if (latestFormula.type !== 'git-remote') {
             throw makeError(
               X`GitRemote controller cannot update non-remote formula ${q(id)}`,
@@ -3761,7 +3788,6 @@ const makeDaemonCore = async (
             nextFormula,
           );
           formulaForId.set(id, nextFormula);
-          currentFormula = nextFormula;
         });
       };
       context.thisDiesIfThatDies(gitId);
@@ -8404,8 +8430,15 @@ const makeDaemonCore = async (
     return info;
   };
 
+  // Seeding must not call `provide` or `getFormulaForId`: a lookup that
+  // misses memory waits on `formulaGraphSeeded`, so it would never settle.
+  // A failed seeding rejects the gate so that any waiting lookup fails too.
   /** @type {DaemonCoreExternal} */
-  await seedFormulaGraphFromPersistence();
+  await seedFormulaGraphFromPersistence().catch(error => {
+    formulaGraphSeeded.reject(error);
+    throw error;
+  });
+  formulaGraphSeeded.resolve();
 
   // eslint-disable-next-line no-undef
   if (typeof process !== 'undefined' && process.env.ENDO_FORMULA_GRAPH) {
@@ -8425,6 +8458,8 @@ const makeDaemonCore = async (
   return {
     formulateEndo,
     provide,
+    sturdyRefForFormula,
+    formulaIdOf,
     nodeNumber: localNodeNumber,
     capTpConnectionRegistrar,
     traceAggregator,
