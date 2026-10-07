@@ -93,7 +93,7 @@ arrive as `::ffff:10.x.x.x`.
 ## OCapN formula nonce locator
 
 `@endo/daemon/formula-nonce-locator.js` exports `makeFormulaNonceLocator`, an OCapN `NonceLocator` for `@endo/ocapn`'s `makeOcapn`.
-A peer presents a canonical formula identifier for this node as the Swiss number, and the locator returns that formula's capability.
+A peer presents a canonical formula identifier for this daemon as the Swiss number, and the locator returns that formula's capability.
 Every failure, including a malformed, foreign-node, absent, or non-capability identifier, is the same miss, which the OCapN bootstrap reports as one fixed `secret not found` rejection.
 
 ```js
@@ -102,9 +102,10 @@ import { makeFormulaNonceLocator } from '@endo/daemon/formula-nonce-locator.js';
 const ocapn = await makeOcapn({
   codec: syrupCodec,
   network,
-  locator: makeFormulaNonceLocator({ provideLocalFormula, localNodeNumber }),
+  locator: makeFormulaNonceLocator({ provideLocalFormula, isLocalNode }),
 });
 ```
 
+`isLocalNode` decides which node numbers are local; in the daemon it is `isLocalKey`, which accepts the daemon's node number and every registered agent key.
 The locator refuses well-known swissnum words such as `endo-peer-entry`.
 A deployment that keeps a well-known bootstrap swissnum checks for it in a thin outer locator and delegates everything else to this one.

@@ -265,7 +265,7 @@ accumulator, the SQLite `retention` table, and the
 [`daemon-cross-peer-gc`](daemon-cross-peer-gc.md) logic are unchanged
 — only the transport beneath them changes.
 
-> **Note on the formula nonce locator (added 2026-09-05).**
+> **Note on the formula nonce locator (added 2026-10-07).**
 > `makeFormulaNonceLocator` (`@endo/daemon/formula-nonce-locator.js`)
 > implements steps 1-3 above as a standalone mechanism.
 > It is not yet wired: the daemon's live OCapN endpoint still serves

@@ -5,10 +5,15 @@ import { Far } from '@endo/pass-style';
 import { makeFormulaNonceLocator } from '@endo/daemon/formula-nonce-locator.js';
 
 const localNode = 'b'.repeat(64);
+const agentNode = 'e'.repeat(64);
 const foreignNode = 'c'.repeat(64);
 const formulaNumber = 'a'.repeat(64);
 const localId = `${formulaNumber}:${localNode}`;
+const agentId = `${formulaNumber}:${agentNode}`;
 const foreignId = `${formulaNumber}:${foreignNode}`;
+
+// Mirrors the daemon's `isLocalKey`: its own node or a registered agent key.
+const isLocal = node => node === localNode || node === agentNode;
 
 /** A stand-in guest capability: an OCapN-exportable remotable. */
 const makeGuest = () => Far('Guest', { greet: () => 'hi from guest' });
@@ -17,20 +22,47 @@ test('a local formula identifier returns exactly its incarnated capability', asy
   const guest = makeGuest();
   const calls = [];
   const locator = makeFormulaNonceLocator({
-    provideLocalFormula: async (id, node) => {
-      calls.push([id, node]);
+    provideLocalFormula: async id => {
+      calls.push(id);
       return guest;
     },
-    localNodeNumber: localNode,
+    isLocalNode: isLocal,
   });
 
   const value = await locator.get(localId);
   t.is(value, guest, 'returns the incarnated capability by identity');
-  t.deepEqual(
-    calls,
-    [[localId, localNode]],
-    'provide called with the id and local node',
-  );
+  t.deepEqual(calls, [localId], 'provide called with the id');
+});
+
+test('an identifier under a registered agent node hits', async t => {
+  await null;
+  // Host and guest formula identifiers carry their agent's node number,
+  // not the daemon's, so a locator that compared against the daemon's
+  // node alone would miss every real host or guest identifier.
+  const guest = makeGuest();
+  const calls = [];
+  const locator = makeFormulaNonceLocator({
+    provideLocalFormula: async id => {
+      calls.push(id);
+      return guest;
+    },
+    isLocalNode: isLocal,
+  });
+
+  t.is(await locator.get(agentId), guest, 'the agent-node identifier hits');
+  t.deepEqual(calls, [agentId], 'provide called with the agent-node id');
+});
+
+test('a throwing isLocalNode stays a uniform miss', async t => {
+  await null;
+  const locator = makeFormulaNonceLocator({
+    provideLocalFormula: async () => t.fail('provide should not run'),
+    isLocalNode: () => {
+      throw new Error('predicate blew up');
+    },
+    logger: { error: () => {} },
+  });
+  t.is(await locator.get(localId), undefined);
 });
 
 test('every miss class collapses to the identical undefined miss', async t => {
@@ -50,7 +82,7 @@ test('every miss class collapses to the identical undefined miss', async t => {
       'malformed ASCII',
       makeFormulaNonceLocator({
         provideLocalFormula: async () => t.fail('provide should not run'),
-        localNodeNumber: localNode,
+        isLocalNode: isLocal,
       }),
       'not-a-formula-identifier',
     ],
@@ -58,7 +90,7 @@ test('every miss class collapses to the identical undefined miss', async t => {
       'raw non-ASCII bytes',
       makeFormulaNonceLocator({
         provideLocalFormula: async () => t.fail('provide should not run'),
-        localNodeNumber: localNode,
+        isLocalNode: isLocal,
       }),
       bytesId,
     ],
@@ -66,7 +98,7 @@ test('every miss class collapses to the identical undefined miss', async t => {
       'noncanonical (uppercase hex)',
       makeFormulaNonceLocator({
         provideLocalFormula: async () => t.fail('provide should not run'),
-        localNodeNumber: localNode,
+        isLocalNode: isLocal,
       }),
       `${formulaNumber.toUpperCase()}:${localNode}`,
     ],
@@ -74,7 +106,7 @@ test('every miss class collapses to the identical undefined miss', async t => {
       'noncanonical (wrong length)',
       makeFormulaNonceLocator({
         provideLocalFormula: async () => t.fail('provide should not run'),
-        localNodeNumber: localNode,
+        isLocalNode: isLocal,
       }),
       `${'a'.repeat(63)}:${localNode}`,
     ],
@@ -83,7 +115,7 @@ test('every miss class collapses to the identical undefined miss', async t => {
       makeFormulaNonceLocator({
         provideLocalFormula: async () =>
           t.fail('provide should not run for a foreign node'),
-        localNodeNumber: localNode,
+        isLocalNode: isLocal,
       }),
       foreignId,
     ],
@@ -93,7 +125,7 @@ test('every miss class collapses to the identical undefined miss', async t => {
         provideLocalFormula: async () => {
           throw new ReferenceError('No formula exists for number ...');
         },
-        localNodeNumber: localNode,
+        isLocalNode: isLocal,
       }),
       localId,
     ],
@@ -103,7 +135,7 @@ test('every miss class collapses to the identical undefined miss', async t => {
         provideLocalFormula: async () => {
           throw new Error('Unknown or collected mount formula ...');
         },
-        localNodeNumber: localNode,
+        isLocalNode: isLocal,
       }),
       localId,
     ],
@@ -111,7 +143,7 @@ test('every miss class collapses to the identical undefined miss', async t => {
       'non-exportable value',
       makeFormulaNonceLocator({
         provideLocalFormula: async () => nonExportable,
-        localNodeNumber: localNode,
+        isLocalNode: isLocal,
       }),
       localId,
     ],
@@ -121,7 +153,7 @@ test('every miss class collapses to the identical undefined miss', async t => {
         provideLocalFormula: async () => {
           throw new TypeError('Invalid formula: ...');
         },
-        localNodeNumber: localNode,
+        isLocalNode: isLocal,
       }),
       localId,
     ],
@@ -129,7 +161,7 @@ test('every miss class collapses to the identical undefined miss', async t => {
       'old fixed endo-bootstrap name',
       makeFormulaNonceLocator({
         provideLocalFormula: async () => t.fail('provide should not run'),
-        localNodeNumber: localNode,
+        isLocalNode: isLocal,
       }),
       'endo-bootstrap',
     ],
@@ -137,7 +169,7 @@ test('every miss class collapses to the identical undefined miss', async t => {
       'old fixed endo-peer-entry name',
       makeFormulaNonceLocator({
         provideLocalFormula: async () => t.fail('provide should not run'),
-        localNodeNumber: localNode,
+        isLocalNode: isLocal,
       }),
       'endo-peer-entry',
     ],
@@ -172,7 +204,7 @@ test('a throwing miss logger stays a uniform miss', async t => {
     provideLocalFormula: async () => {
       throw new ReferenceError('absent');
     },
-    localNodeNumber: localNode,
+    isLocalNode: isLocal,
     logger: {
       error: () => {
         throw new Error('logger blew up');
@@ -215,7 +247,7 @@ test('a caught value whose classification throws stays a uniform miss', async t 
       provideLocalFormula: async () => {
         throw thrown;
       },
-      localNodeNumber: localNode,
+      isLocalNode: isLocal,
       logger: {
         error: (_message, errorClass) => loggedClasses.push(errorClass),
       },
@@ -242,7 +274,7 @@ test('the miss logger receives the error class only, never the caught message', 
       // worst case the docstring guards against.
       throw new TypeError(`incarnation failed for ${id}`);
     },
-    localNodeNumber: localNode,
+    isLocalNode: isLocal,
     logger: {
       error: (...args) => {
         loggedArguments.push(args);

@@ -43,7 +43,7 @@ const errorClassName = error => {
 
 /**
  * Make an OCapN `NonceLocator` that resolves a presented canonical formula
- * identifier for this node to that formula's incarnated capability. This is
+ * identifier for this daemon to that formula's incarnated capability. This is
  * steps 1-3 of `designs/daemon-ocapn-external-connectivity.md` §2: decode,
  * assert local, `provide(id)`.
  *
@@ -54,15 +54,22 @@ const errorClassName = error => {
  * identifiers (never dialed), a rejecting `provideLocalFormula`, and a
  * non-capability value all miss.
  *
+ * An identifier is local when `isLocalNode` accepts its node number. In
+ * the daemon that is the same predicate as `isLocalKey`: the daemon's own
+ * node number or any registered agent key, since host and guest formula
+ * identifiers carry their agent's node number.
+ *
  * The identifier is validated and its node checked before
  * `provideLocalFormula` runs, so the miss guarantee does not depend on the
  * provider's own validation (the daemon's `localGateway.provide` repeats
  * these checks, but throws distinguishable errors that this wrapper folds).
  *
  * @param {object} options
- * @param {(id: FormulaIdentifier, localNodeNumber: NodeNumber) => Promise<unknown>} options.provideLocalFormula
+ * @param {(id: FormulaIdentifier) => Promise<unknown>} options.provideLocalFormula
  *   Incarnates a local formula. Every rejection becomes a miss.
- * @param {NodeNumber} options.localNodeNumber
+ * @param {(node: NodeNumber) => boolean} options.isLocalNode
+ *   Whether a node number names this daemon or one of its agents. A
+ *   throw is a miss.
  * @param {Pick<Console, 'error'>} [options.logger]
  *   Receives the error class (never the message, which may echo the
  *   bearer identifier) of each miss. Defaults to `console`.
@@ -70,7 +77,7 @@ const errorClassName = error => {
  */
 export const makeFormulaNonceLocator = ({
   provideLocalFormula,
-  localNodeNumber,
+  isLocalNode,
   logger = console,
 }) => {
   /**
@@ -86,10 +93,10 @@ export const makeFormulaNonceLocator = ({
       }
       assertValidId(secret);
       const { node, id } = parseId(secret);
-      if (node !== localNodeNumber) {
+      if (isLocalNode(node) !== true) {
         return undefined;
       }
-      const value = await provideLocalFormula(id, localNodeNumber);
+      const value = await provideLocalFormula(id);
       assertCapability(value);
       return value;
     } catch (error) {

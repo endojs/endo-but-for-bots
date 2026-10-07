@@ -18,8 +18,12 @@ import { netListenAllowed } from './_net-permission.js';
 const netTest = netListenAllowed ? test : test.skip;
 
 const localNode = 'b'.repeat(64);
+const agentNode = 'e'.repeat(64);
 const formulaNumber = 'a'.repeat(64);
-const guestId = `${formulaNumber}:${localNode}`;
+// A real guest identifier carries the guest agent's node number, not the
+// daemon's, so the hit cases present one under a registered agent node.
+const guestId = `${formulaNumber}:${agentNode}`;
+const isLocal = node => node === localNode || node === agentNode;
 const foreignId = `${formulaNumber}:${'c'.repeat(64)}`;
 
 const codecs = [
@@ -52,6 +56,16 @@ const makeClient = async ({ codec, designator, locator }) => {
   return { client, location: netlayerHolder.netlayer.location };
 };
 
+// Shut both listeners down even when an assertion fails mid-test.
+const makePair = async (t, server, client) => {
+  const pair = {};
+  pair.server = await makeClient(server);
+  t.teardown(() => pair.server.client.shutdown());
+  pair.client = await makeClient(client);
+  t.teardown(() => pair.client.client.shutdown());
+  return pair;
+};
+
 for (const [codecName, codec] of codecs) {
   netTest(
     `[${codecName}] a local guest formula fetches the guest capability, not host/gateway`,
@@ -60,28 +74,22 @@ for (const [codecName, codec] of codecs) {
         greet: name => `hello ${name} from the guest`,
       });
       const locator = makeFormulaNonceLocator({
-        provideLocalFormula: async (id, node) => {
+        provideLocalFormula: async id => {
           t.is(
             id,
             guestId,
             'the presented identifier reaches provide verbatim',
           );
-          t.is(node, localNode);
           return guest;
         },
-        localNodeNumber: localNode,
+        isLocalNode: isLocal,
       });
 
-      const server = await makeClient({
-        codec,
-        designator: `server-${codecName}`,
-        locator,
-      });
-      const client = await makeClient({
-        codec,
-        designator: `client-${codecName}`,
-        locator: new Map(),
-      });
+      const { server, client } = await makePair(
+        t,
+        { codec, designator: `server-${codecName}`, locator },
+        { codec, designator: `client-${codecName}`, locator: new Map() },
+      );
 
       const sturdyRef = client.client.makeSturdyRef(server.location, guestId);
       const fetched = await client.client.enlivenSturdyRef(sturdyRef);
@@ -104,9 +112,6 @@ for (const [codecName, codec] of codecs) {
         undefined,
         'no gateway provide on the guest',
       );
-
-      client.client.shutdown();
-      server.client.shutdown();
     },
   );
 
@@ -122,24 +127,22 @@ for (const [codecName, codec] of codecs) {
           // Absent / never-formulated: the real daemon path rejects here.
           throw new ReferenceError(`No formula exists for number ${id}`);
         },
-        localNodeNumber: localNode,
+        isLocalNode: isLocal,
       });
-      const server = await makeClient({
-        codec,
-        designator: `server2-${codecName}`,
-        locator,
-      });
-      const client = await makeClient({
-        codec,
-        designator: `client2-${codecName}`,
-        locator: new Map(),
-      });
+      const { server, client } = await makePair(
+        t,
+        { codec, designator: `server2-${codecName}`, locator },
+        { codec, designator: `client2-${codecName}`, locator: new Map() },
+      );
 
       const missSecrets = [
         'not-a-formula-identifier', // malformed ASCII
         `${formulaNumber.toUpperCase()}:${localNode}`, // noncanonical
         foreignId, // foreign node
         `${'d'.repeat(64)}:${localNode}`, // absent local formula
+        `${guestId}\n`, // near miss: trailing newline
+        `${guestId}\0`, // near miss: trailing NUL
+        ` ${guestId}`, // near miss: leading space
         'endo-bootstrap', // well-known word, not a formula identifier
         'endo-peer-entry', // live peer-entry swissnum, not a formula identifier
       ];
@@ -162,12 +165,10 @@ for (const [codecName, codec] of codecs) {
       }
       // And the message names nothing about the presentation.
       for (const secret of missSecrets) {
-        if (typeof secret === 'string' && secret !== 'endo-bootstrap') {
-          t.false(
-            first.includes(secret),
-            'the rejection never echoes the presented secret',
-          );
-        }
+        t.false(
+          first.includes(secret),
+          'the rejection never echoes the presented secret',
+        );
       }
 
       // A valid presentation on the same locator still succeeds, proving
@@ -175,9 +176,6 @@ for (const [codecName, codec] of codecs) {
       const goodRef = client.client.makeSturdyRef(server.location, guestId);
       const good = await client.client.enlivenSturdyRef(goodRef);
       t.is(await E(good).greet(), 'hi');
-
-      client.client.shutdown();
-      server.client.shutdown();
     },
   );
 
@@ -187,18 +185,13 @@ for (const [codecName, codec] of codecs) {
       const guest = Far('Guest', { greet: () => 'hi' });
       const locator = makeFormulaNonceLocator({
         provideLocalFormula: async () => guest,
-        localNodeNumber: localNode,
+        isLocalNode: isLocal,
       });
-      const server = await makeClient({
-        codec,
-        designator: `server3-${codecName}`,
-        locator,
-      });
-      const client = await makeClient({
-        codec,
-        designator: `client3-${codecName}`,
-        locator: new Map(),
-      });
+      const { server, client } = await makePair(
+        t,
+        { codec, designator: `server3-${codecName}`, locator },
+        { codec, designator: `client3-${codecName}`, locator: new Map() },
+      );
 
       // Open a session (connect) but never fetch. The only thing the peer
       // exposes at export position 0 is the protocol bootstrap; it carries
@@ -213,9 +206,6 @@ for (const [codecName, codec] of codecs) {
         undefined,
         'the bootstrap has no guest method; the session conveys no application capability',
       );
-
-      client.client.shutdown();
-      server.client.shutdown();
     },
   );
 }
