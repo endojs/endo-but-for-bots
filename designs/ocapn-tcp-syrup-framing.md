@@ -3,9 +3,23 @@
 | | |
 |---|---|
 | **Created** | 2026-04-23 |
-| **Updated** | 2026-05-06 |
+| **Updated** | 2026-10-07 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | **Complete** |
+
+## Status
+
+Landed on `llm` as `bdb9ddc50d` ("feat(ocapn): add opt-in syrup framing to
+TCP-testing netlayer"). The implementation deviates from Option 2 below:
+rather than a sibling `tcp-syrups` netlayer, `makeTcpNetLayer`
+(`@endo/ocapn/netlayer/tcp-testing`) gained a `framing` option whose default,
+`'syrup'`, wraps each message in `@endo/syrup-frame` `<length>:<payload>`
+framing; `framing: 'none'` keeps raw records for the Python
+`ocapn-test-suite` `testing_only_tcp` netlayer and goes away once that suite
+adopts the framing or is retired. Tests: `packages/ocapn/test/netlayer-tcp-syrup.test.js`.
+The handshake relocation this design anticipated is now
+[ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md)'s
+network-owned identity exchange.
 
 ## What is the Problem Being Solved?
 

@@ -217,8 +217,10 @@ Alternatively, the transport plugins could be subdirectories of
 
 - **ocapn-network-transport-separation** — provides the `OcapnNetwork` interface
   and registration mechanism.
-- **ocapn-tcp-for-test-extraction** — moves `op:start-session` out of core so
-  OCapN-Noise doesn't inherit it.
+- **ocapn-tcp-for-test-extraction** — makes each network own its identity
+  exchange and removes the core `op:start-session` fallback; OCapN-Noise
+  already owns its session and keeps its encrypted `op:start-session`
+  (`exchangeIdentity`).
 
 ## Security Considerations
 

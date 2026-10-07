@@ -495,8 +495,8 @@ LLM-agent stack).*
 | [thixotrope-on-cloudflare](thixotrope-on-cloudflare.md) | 2026-09-23 | 2026-09-24 | Proposed |
 | [thixotrope-on-cloudflare-addendum-single-vat-hub](thixotrope-on-cloudflare-addendum-single-vat-hub.md) | 2026-09-24 | 2026-09-24 | Proposed |
 | [thixotrope-on-cloudflare-review](thixotrope-on-cloudflare-review.md) | 2026-09-24 | 2026-09-24 | Reference |
-| [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | In Progress |
-| [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md) | 2026-04-23 | 2026-05-06 | **Complete** |
+| [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-10-07 | In Progress |
+| [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md) | 2026-04-23 | 2026-10-07 | **Complete** |
 | [syrup-frame](syrup-frame.md) | 2026-05-04 | 2026-05-06 | Deprecated |
 | [cbor-frame](cbor-frame.md) | 2026-05-04 | 2026-07-15 | In Progress (PR #288 open) |
 | [cbor-codec](cbor-codec.md) | 2026-07-12 | 2026-07-28 | Phases 1–2 implemented |
@@ -1169,8 +1169,8 @@ finalized.
 | Design | Status | Notes |
 |--------|--------|-------|
 | ocapn-network-transport-separation | In Progress | Foundation for transport abstraction |
-| ocapn-tcp-for-test-extraction | In Progress | Clean separation before Noise |
-| ocapn-tcp-syrup-framing | **Complete** | Comma-less netstring variant (`@endo/syrups`) on a distinct `tcp+syrups` netlayer identifier |
+| ocapn-tcp-for-test-extraction | In Progress | Network-owned identity exchange: shared `@endo/ocapn/start-session` wrapper, Iroh migrates before the core `op:start-session` fallback is removed (revised 2026-10-07) |
+| ocapn-tcp-syrup-framing | **Complete** | `framing` option on the TCP-testing netlayer (default `'syrup'` via `@endo/syrup-frame`, `'none'` for the Python suite); landed as `bdb9ddc50d` |
 | syrups | Deprecated | Consolidated with PR 29's `@endo/syrups` (same shape: `Uint8Array` chunks in, `Uint8Array`-delimited messages out); see [`ocapn-tcp-syrup-framing.md`](ocapn-tcp-syrup-framing.md) |
 | cbor-frame | In Progress (PR #288 open) | `@endo/cbor-frame` reader/writer for length-prefixed CBOR byte strings; peer of `@endo/syrup-frame` and `@endo/netstring` |
 | cbor-codec | Phases 1–2 implemented | Shared canonical-CBOR primitive codec (`@endo/cbor`) extracted from `packages/ocapn/src/cbor` and PR #124's `packages/slots/src/cbor.js`; also serves the M11 `endor` slot-machine line; complement of the framing package `@endo/cbor-frame` (impl PR #288) |
@@ -1886,8 +1886,8 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | ~~unhandled-rejection-display~~ | S | — | — | ✅ Complete (out-of-milestone diagnostic; PR #187 closes #171). CapTP `CTP_DISCONNECT.reason` now renders structured Error reasons rather than empty `{}` |
 | hardener-indexed-cardinality | S | 1 day | — | Out-of-milestone `master`-based optimization: conjoined cardinality-count-plus-last-key-ordering test for the purely indexed TypedArray fast path, regression matrix, and focused benchmark |
 | ocapn-network-transport-separation | M-L | 1.5 weeks | 4 | Architectural refactor (M-L bumped 1.2x) |
-| ocapn-tcp-for-test-extraction | S-M | 3 days | 4 | Code relocation |
-| ocapn-tcp-syrup-framing | S-M | 3 days | 4 | `@endo/syrups` package, new `tcp+syrups` netlayer; design merged (PR #108); impl PR #109 open |
+| ocapn-tcp-for-test-extraction | M | 1 week | 4 | Four phases: extract wrapper, migrate Iroh, migrate tcp-testing/ws/thixotrope, remove core fallback |
+| ~~ocapn-tcp-syrup-framing~~ | S-M | — | 4 | ✅ Complete (`bdb9ddc50d`: `framing` option on the TCP-testing netlayer, `@endo/syrup-frame`) |
 | ~~syrup-frame~~ | — | — | 4 | Consolidated into `ocapn-tcp-syrup-framing` (PR 29); see [`syrup-frame.md`](syrup-frame.md) |
 | ~~cbor-frame~~ | — | — | 4 | New `@endo/cbor-frame` package (implemented, PR #288); design merged with syrup framing in PR #86 |
 | cbor-codec | S | 2-3 days | 4 | New `@endo/cbor` package plus ocapn and slots migrations; slots adoption gated on PR #124 landing |
