@@ -2715,6 +2715,76 @@ test('facet group (agent + handle) collects atomically', async t => {
   }
 });
 
+test('looking up a collected formula by identifier rejects', async t => {
+  const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+  const { host } = await makeHost(config, cancelled);
+
+  await E(host).storeValue(harden({ doomed: true }), 'doomed');
+  const doomedId = await E(host).identify('doomed');
+  t.deepEqual(await E(host).lookupById(doomedId), { doomed: true });
+
+  await E(host).remove('doomed');
+  await waitForCondition(
+    async () => !formulaExistsInDb(config.statePath, doomedId),
+  );
+
+  const error = await t.throwsAsync(() => E(host).lookupById(doomedId), {
+    message: /unknown or has been collected/,
+  });
+  // The identifier is closely held, so the error must not reveal it.
+  t.false(error.message.includes(parseId(doomedId).number));
+});
+
+test('a collected formula whose record is still persisted is not revived', async t => {
+  const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+  const { host } = await makeHost(config, cancelled);
+
+  await E(host).storeValue(harden({ doomed: true }), 'doomed');
+  const doomedId = await E(host).identify('doomed');
+  const { number, node } = parseId(doomedId);
+  const recordPath = filesystemFormulaPath(config.statePath, number);
+  const recordOnFilesystem = fs.existsSync(recordPath);
+  const record = readFormulaFromDb(config.statePath, doomedId);
+
+  await E(host).remove('doomed');
+  await waitForCondition(
+    async () => !formulaExistsInDb(config.statePath, doomedId),
+  );
+
+  // Put the record back, as if the lookup arrived after the collector
+  // dropped the formula from memory but before it deleted the record.
+  if (recordOnFilesystem) {
+    fs.mkdirSync(path.dirname(recordPath), { recursive: true });
+    fs.writeFileSync(recordPath, JSON.stringify(record));
+  } else {
+    openTestDb(config.statePath).writeFormula(number, node, record);
+  }
+  t.true(formulaExistsInDb(config.statePath, doomedId));
+
+  await t.throwsAsync(() => E(host).lookupById(doomedId), {
+    message: /unknown or has been collected/,
+  });
+  // Refusing must not have read the record back into memory either.
+  await t.throwsAsync(() => E(host).lookupById(doomedId), {
+    message: /unknown or has been collected/,
+  });
+});
+
+test('a formula persisted before restart resolves by identifier after restart', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+
+  let keptId;
+  {
+    const { host } = await makeHost(config, cancelled);
+    await E(host).storeValue(harden({ kept: true }), 'kept');
+    keptId = await E(host).identify('kept');
+    await restart(config);
+  }
+
+  const { host } = await makeHost(config, cancelled);
+  t.deepEqual(await E(host).lookupById(keptId), { kept: true });
+});
+
 test('unnamed eval results are collected', async t => {
   const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
   const { host } = await makeHost(config, cancelled);
