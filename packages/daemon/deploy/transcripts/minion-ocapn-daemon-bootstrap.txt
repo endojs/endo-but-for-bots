@@ -1,0 +1,118 @@
+Full Endo Pet Daemon on minion.town — OCapN-Noise over WebSocket
+Captured 2026-07-11 from host i-0380cd68b90020fad (aarch64, Ubuntu 24.04) via SSM.
+
+A local peer reaches the DEPLOYED full Pet Daemon's EndoOcapnBootstrap (swissnum
+`endo-bootstrap`) over the public wss://minion.town/ocapn-daemon endpoint. The
+daemon runs as a Docker container (image endo-pet-daemon:ocapn-ws) built by
+packages/daemon/deploy/Dockerfile; Caddy on :443 reverse-proxies /ocapn-daemon
+to the container's published loopback port 127.0.0.1:8931 -> 8930.
+
+================================================================================
+1. IMAGE BUILD — the native SQLite / datachannel deps compile in-image
+   (the point of containerizing: the host never runs `apt-get` for a toolchain)
+================================================================================
+$ cd /opt/endo-daemon-src && DOCKER_BUILDKIT=1 docker build \
+    -f packages/daemon/deploy/Dockerfile -t endo-pet-daemon:ocapn-ws .
+...
+ ➤ YN0007: │ @ipshipyard/node-datachannel@npm:0.26.6 must be built because it never has been before or the last one failed
+ ➤ YN0007: │ better-sqlite3@npm:11.10.0 must be built because it never has been before or the last one failed
+ ➤ YN0000: └ Completed in 31s 822ms
+ ➤ YN0000: · Done with warnings in 38s 586ms
+#12 naming to docker.io/library/endo-pet-daemon:ocapn-ws done
+#12 DONE
+
+================================================================================
+2. FRESH RUN (clean volume) — the full daemon boots and installs @nets/ocapn,
+   advertising an OCapN-Noise-WS location
+================================================================================
+$ docker run -d --name endo-pet-daemon --restart unless-stopped \
+    -p 127.0.0.1:8931:8930 -v endo-daemon-data:/data endo-pet-daemon:ocapn-ws
+
+--- boot log ---
+[boot] starting daemon; state=/data/state sock=/data/endo.sock
+endo daemon ready { type: 'ready', gatewayAddress: 'http://127.0.0.1:8920' }
+CapTP ocapn-boot exception: TypeError: Unknown pet name: "ocapn"     # (benign: idempotency guard's lookup misses on a fresh volume, so it installs from scratch)
+[boot] installing @nets/ocapn with ws-listen-addr=0.0.0.0:8930
+[boot] @nets/ocapn installed; bootstrap swissnum=endo-bootstrap
+[boot] advertised address = ocapn+noise+ws://127.0.0.1:8930/?node=a6cd6e01283acd9a0ed7fd7377b377075fe5cc37569d341fb654d456e27ba377&loc=...
+[boot] location written to /data/ocapn-daemon-location.json
+[boot] location = {"type":"ocapn-peer","network":"np","transport":"np","designator":"8c8dcf45391642106273204aab6ed7e4117899d1df64ee85446c0579b4508aeb","hints":{"ws:url":"ws://127.0.0.1:8930"}}
+[boot] daemon is up; holding container alive (SIGTERM to stop cleanly)
+
+--- advertised location ---
+{
+  "type": "ocapn-peer",
+  "network": "np",
+  "transport": "np",
+  "designator": "8c8dcf45391642106273204aab6ed7e4117899d1df64ee85446c0579b4508aeb",
+  "hints": { "ws:url": "ws://127.0.0.1:8930" }
+}
+
+================================================================================
+3. LOCAL PEER reaches the bootstrap over wss://minion.town/ocapn-daemon
+   (run from inside the container; Caddy TLS -> loopback 8931 -> container 8930)
+================================================================================
+$ docker exec -e WS_URL_OVERRIDE=wss://minion.town/ocapn-daemon endo-pet-daemon \
+    sh -c 'cd /app/packages/daemon &&
+           node deploy/ocapn-bootstrap-client.mjs /data/ocapn-daemon-location.json endo-bootstrap'
+
+[peer] rewrote ws:url hint -> wss://minion.town/ocapn-daemon
+[peer] dialing {"type":"ocapn-peer","network":"np","transport":"np","designator":"8c8dcf45391642106273204aab6ed7e4117899d1df64ee85446c0579b4508aeb","hints":{"ws:url":"wss://minion.town/ocapn-daemon"}}
+[peer] enlivened 'endo-bootstrap' (EndoOcapnBootstrap); invoking...
+[peer] getNodeId() = a6cd6e01283acd9a0ed7fd7377b377075fe5cc37569d341fb654d456e27ba377
+[peer] help() = Endo OCapN bootstrap object. getNodeId() reports this daemon's node number; getAgentBinding() returns the signed attestation that ties this session's OCapN key to the agent; getGreeter() returns the EndoGreeter that runs the peer handshake.
+[peer] getAgentBinding().agentPublicKey = a6cd6e01283acd9a0ed7fd7377b377075fe5cc37569d341fb654d456e27ba377
+[peer] getGreeter() -> EndoGreeter present
+RESULT {"ok":true,"swissnum":"endo-bootstrap","nodeId":"a6cd6e01283acd9a0ed7fd7377b377075fe5cc37569d341fb654d456e27ba377","agentPublicKey":"a6cd6e01283acd9a0ed7fd7377b377075fe5cc37569d341fb654d456e27ba377","hasGreeter":true}
+
+================================================================================
+4. RESTART on the persisted volume — idempotency test (the container runs
+   --restart unless-stopped; a host reboot must NOT hang re-installing @nets)
+================================================================================
+$ docker restart endo-pet-daemon
+
+--- boot log after restart ---
+[boot] received SIGTERM; stopping daemon
+[boot] starting daemon; state=/data/state sock=/data/endo.sock
+endo daemon ready { type: 'ready', gatewayAddress: 'http://127.0.0.1:8920' }
+[boot] @nets/ocapn already installed (persisted volume); reusing + re-binding
+[boot] @nets/ocapn installed; bootstrap swissnum=endo-bootstrap
+[boot] advertised address = ocapn+noise+ws://127.0.0.1:8930/?node=a6cd6e01283acd9a0ed7fd7377b377075fe5cc37569d341fb654d456e27ba377&loc=...
+[boot] location = {"type":"ocapn-peer",...,"designator":"ce47e379747de35b8c52485b1f6393a0a3e9a9588169316fef5b532ffdd60ed1","hints":{"ws:url":"ws://127.0.0.1:8930"}}
+[boot] daemon is up; holding container alive (SIGTERM to stop cleanly)
+
+Note: the node id (persistent agent identity) stays a6cd6e01... across the
+restart, while the OCapN-Noise session designator rotates 8c8dcf45 -> ce47e379
+(the network module mints a fresh ephemeral session key on every install). No
+hang: the reuse path replaces the from-scratch storeValue+makeUnconfined+move.
+
+================================================================================
+5. LOCAL PEER after restart — the reused daemon still serves the bootstrap
+================================================================================
+$ docker exec -e WS_URL_OVERRIDE=wss://minion.town/ocapn-daemon endo-pet-daemon \
+    sh -c 'cd /app/packages/daemon &&
+           node deploy/ocapn-bootstrap-client.mjs /data/ocapn-daemon-location.json endo-bootstrap'
+
+[peer] rewrote ws:url hint -> wss://minion.town/ocapn-daemon
+[peer] dialing {..."designator":"ce47e379747de35b8c52485b1f6393a0a3e9a9588169316fef5b532ffdd60ed1","hints":{"ws:url":"wss://minion.town/ocapn-daemon"}}
+[peer] enlivened 'endo-bootstrap' (EndoOcapnBootstrap); invoking...
+[peer] getNodeId() = a6cd6e01283acd9a0ed7fd7377b377075fe5cc37569d341fb654d456e27ba377
+[peer] getAgentBinding().agentPublicKey = a6cd6e01283acd9a0ed7fd7377b377075fe5cc37569d341fb654d456e27ba377
+[peer] getGreeter() -> EndoGreeter present
+RESULT {"ok":true,"swissnum":"endo-bootstrap","nodeId":"a6cd6e01283acd9a0ed7fd7377b377075fe5cc37569d341fb654d456e27ba377","agentPublicKey":"a6cd6e01283acd9a0ed7fd7377b377075fe5cc37569d341fb654d456e27ba377","hasGreeter":true}
+
+$ docker ps --filter name=endo-pet-daemon --format '{{.Names}} {{.Status}} {{.Ports}}'
+endo-pet-daemon Up 44 seconds 127.0.0.1:8931->8930/tcp
+
+================================================================================
+6. CADDY route (added alongside the standalone demo's /ocapn, left untouched)
+================================================================================
+$ sed -n '/handle \/ocapn-daemon/,/}/p' /etc/caddy/conf.d/minion-town.caddy
+	handle /ocapn-daemon* {
+		reverse_proxy 127.0.0.1:8931
+	}
+$ grep -n 'handle /ocapn' /etc/caddy/conf.d/minion-town.caddy
+25:	handle /ocapn-daemon* {      # full Pet Daemon (this deploy) -> :8931
+28:	handle /ocapn* {             # standalone OCapN-Noise-WS demo (unchanged) -> :8930
+$ caddy validate --config /etc/caddy/Caddyfile
+Valid configuration
