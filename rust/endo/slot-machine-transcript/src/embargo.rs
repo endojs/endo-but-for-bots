@@ -156,7 +156,7 @@ impl<S: FrameSink> Embargo<S> {
 
     /// Sequences committed but not yet handed to the sink.
     pub fn queued(&self) -> Vec<Sequence> {
-        self.queue.iter().map(|f| f.sequence).collect()
+        self.queue.iter().map(|frame| frame.sequence).collect()
     }
 
     /// Frames staged by the active crank.
@@ -223,8 +223,8 @@ impl<S: FrameSink> Embargo<S> {
                     released.push(frame.sequence);
                     self.queue.pop_front();
                 }
-                Err(e) => {
-                    blocked = Some(e);
+                Err(error) => {
+                    blocked = Some(error);
                     break;
                 }
             }

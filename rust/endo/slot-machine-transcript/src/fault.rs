@@ -103,9 +103,9 @@ impl FaultPlan {
     }
 
     /// A plan that fires `mode` at operation `n` (1-based).
-    pub fn fail_at(n: u64, mode: FaultMode) -> FaultPlan {
-        assert!(n >= 1, "fault operations are numbered from 1");
-        FaultPlan::build(Some((n, mode)))
+    pub fn fail_at(trigger_index: u64, mode: FaultMode) -> FaultPlan {
+        assert!(trigger_index >= 1, "fault operations are numbered from 1");
+        FaultPlan::build(Some((trigger_index, mode)))
     }
 
     fn build(trigger: Option<(u64, FaultMode)>) -> FaultPlan {
@@ -129,7 +129,7 @@ impl FaultPlan {
     fn lock(&self) -> MutexGuard<'_, PlanState> {
         // A panic while holding the lock is a test failure already; keep
         // counting so the diagnostics survive it.
-        self.state.lock().unwrap_or_else(|e| e.into_inner())
+        self.state.lock().unwrap_or_else(|error| error.into_inner())
     }
 
     /// The SQLite VFS name to open the transcript with.
@@ -174,10 +174,10 @@ impl FaultPlan {
         if is_sync {
             state.syncs += 1;
         }
-        let Some((n, mode)) = state.trigger else {
+        let Some((trigger_index, mode)) = state.trigger else {
             return Decision::Proceed;
         };
-        if state.count != n {
+        if state.count != trigger_index {
             return Decision::Proceed;
         }
         state.fired = true;
@@ -202,7 +202,7 @@ impl FaultPlan {
     /// Run one counted Rust-side durability operation under the plan.
     /// `half` performs half of a write for [`FaultMode::TornWrite`]; pass
     /// `None` for operations that are not writes.
-    pub(crate) fn op(
+    pub(crate) fn run_operation(
         &self,
         label: &str,
         is_sync: bool,
@@ -247,8 +247,8 @@ struct FaultFile {
     real: *mut ffi::sqlite3_file,
 }
 
-const fn round8(n: usize) -> usize {
-    (n + 7) & !7
+const fn align_to_eight(size: usize) -> usize {
+    (size + 7) & !7
 }
 
 fn register_vfs(plan: &FaultPlan) {
@@ -267,7 +267,7 @@ fn register_vfs(plan: &FaultPlan) {
         let mut vfs: ffi::sqlite3_vfs = ptr::read(real);
         vfs.iVersion = 2;
         vfs.szOsFile =
-            (round8(std::mem::size_of::<FaultFile>()) + (*real).szOsFile as usize) as c_int;
+            (align_to_eight(std::mem::size_of::<FaultFile>()) + (*real).szOsFile as usize) as c_int;
         vfs.pNext = ptr::null_mut();
         vfs.zName = plan.vfs_name.as_ptr();
         vfs.pAppData = app.cast();
@@ -298,7 +298,7 @@ unsafe fn app<'a>(vfs: *mut ffi::sqlite3_vfs) -> &'a VfsApp {
 
 fn file_kind(flags: c_int) -> &'static str {
     if flags & ffi::SQLITE_OPEN_MAIN_DB != 0 {
-        "db"
+        "database"
     } else if flags & ffi::SQLITE_OPEN_WAL != 0 {
         "wal"
     } else if flags & ffi::SQLITE_OPEN_MAIN_JOURNAL != 0 {
@@ -317,8 +317,8 @@ unsafe extern "C" fn vfs_open(
 ) -> c_int {
     let app = app(vfs);
     let ours = file as *mut FaultFile;
-    let real_file =
-        (file as *mut u8).add(round8(std::mem::size_of::<FaultFile>())) as *mut ffi::sqlite3_file;
+    let real_file = (file as *mut u8).add(align_to_eight(std::mem::size_of::<FaultFile>()))
+        as *mut ffi::sqlite3_file;
     (*ours).base.pMethods = ptr::null();
     let rc = ((*app.real).xOpen.expect("xOpen"))(app.real, name, real_file, flags, out_flags);
     if rc != ffi::SQLITE_OK {
@@ -352,8 +352,8 @@ unsafe fn short_name(name: *const c_char) -> String {
     if name.is_null() {
         return "<anon>".into();
     }
-    let s = CStr::from_ptr(name).to_string_lossy();
-    s.rsplit('/').next().unwrap_or("").to_string()
+    let path = CStr::from_ptr(name).to_string_lossy();
+    path.rsplit('/').next().unwrap_or("").to_string()
 }
 
 unsafe extern "C" fn vfs_access(
@@ -369,20 +369,20 @@ unsafe extern "C" fn vfs_access(
 unsafe extern "C" fn vfs_full_pathname(
     vfs: *mut ffi::sqlite3_vfs,
     name: *const c_char,
-    n: c_int,
+    size: c_int,
     out: *mut c_char,
 ) -> c_int {
     let real = app(vfs).real;
-    ((*real).xFullPathname.expect("xFullPathname"))(real, name, n, out)
+    ((*real).xFullPathname.expect("xFullPathname"))(real, name, size, out)
 }
 
 unsafe extern "C" fn vfs_randomness(
     vfs: *mut ffi::sqlite3_vfs,
-    n: c_int,
+    size: c_int,
     out: *mut c_char,
 ) -> c_int {
     let real = app(vfs).real;
-    ((*real).xRandomness.expect("xRandomness"))(real, n, out)
+    ((*real).xRandomness.expect("xRandomness"))(real, size, out)
 }
 
 unsafe extern "C" fn vfs_sleep(vfs: *mut ffi::sqlite3_vfs, micros: c_int) -> c_int {
@@ -397,12 +397,12 @@ unsafe extern "C" fn vfs_current_time(vfs: *mut ffi::sqlite3_vfs, out: *mut f64)
 
 unsafe extern "C" fn vfs_get_last_error(
     vfs: *mut ffi::sqlite3_vfs,
-    n: c_int,
+    size: c_int,
     out: *mut c_char,
 ) -> c_int {
     let real = app(vfs).real;
     match (*real).xGetLastError {
-        Some(f) => f(real, n, out),
+        Some(method) => method(real, size, out),
         None => 0,
     }
 }
@@ -413,7 +413,7 @@ unsafe extern "C" fn vfs_current_time_int64(
 ) -> c_int {
     let real = app(vfs).real;
     match (*real).xCurrentTimeInt64 {
-        Some(f) => f(real, out),
+        Some(method) => method(real, out),
         None => {
             let mut day = 0.0;
             let rc = vfs_current_time(vfs, &mut day);
@@ -460,46 +460,46 @@ unsafe fn parts<'a>(
 }
 
 unsafe extern "C" fn io_close(file: *mut ffi::sqlite3_file) -> c_int {
-    let (_, real, m) = parts(file);
-    (m.xClose.expect("xClose"))(real)
+    let (_, real, methods) = parts(file);
+    (methods.xClose.expect("xClose"))(real)
 }
 
 unsafe extern "C" fn io_read(
     file: *mut ffi::sqlite3_file,
     buf: *mut c_void,
-    n: c_int,
+    size: c_int,
     off: ffi::sqlite3_int64,
 ) -> c_int {
-    let (_, real, m) = parts(file);
-    (m.xRead.expect("xRead"))(real, buf, n, off)
+    let (_, real, methods) = parts(file);
+    (methods.xRead.expect("xRead"))(real, buf, size, off)
 }
 
 unsafe extern "C" fn io_write(
     file: *mut ffi::sqlite3_file,
     buf: *const c_void,
-    n: c_int,
+    size: c_int,
     off: ffi::sqlite3_int64,
 ) -> c_int {
-    let (ours, real, m) = parts(file);
-    let write = m.xWrite.expect("xWrite");
-    let label = format!("sqlite:write:{}@{off}+{n}", ours.kind);
+    let (ours, real, methods) = parts(file);
+    let write = methods.xWrite.expect("xWrite");
+    let label = format!("sqlite:write:{}@{off}+{size}", ours.kind);
     match (*ours.app).plan.decide(&label, true, false) {
-        Decision::Proceed => write(real, buf, n, off),
+        Decision::Proceed => write(real, buf, size, off),
         Decision::Fail => ffi::SQLITE_IOERR_WRITE,
         Decision::Tear => {
-            write(real, buf, n / 2, off);
+            write(real, buf, size / 2, off);
             ffi::SQLITE_IOERR_WRITE
         }
         Decision::ProceedThenFail => {
-            write(real, buf, n, off);
+            write(real, buf, size, off);
             ffi::SQLITE_IOERR_WRITE
         }
     }
 }
 
 unsafe extern "C" fn io_truncate(file: *mut ffi::sqlite3_file, size: ffi::sqlite3_int64) -> c_int {
-    let (ours, real, m) = parts(file);
-    let truncate = m.xTruncate.expect("xTruncate");
+    let (ours, real, methods) = parts(file);
+    let truncate = methods.xTruncate.expect("xTruncate");
     let label = format!("sqlite:truncate:{}@{size}", ours.kind);
     match (*ours.app).plan.decide(&label, false, false) {
         Decision::Proceed => truncate(real, size),
@@ -512,8 +512,8 @@ unsafe extern "C" fn io_truncate(file: *mut ffi::sqlite3_file, size: ffi::sqlite
 }
 
 unsafe extern "C" fn io_sync(file: *mut ffi::sqlite3_file, flags: c_int) -> c_int {
-    let (ours, real, m) = parts(file);
-    let sync = m.xSync.expect("xSync");
+    let (ours, real, methods) = parts(file);
+    let sync = methods.xSync.expect("xSync");
     let label = format!("sqlite:sync:{}", ours.kind);
     match (*ours.app).plan.decide(&label, false, true) {
         Decision::Proceed => sync(real, flags),
@@ -529,45 +529,47 @@ unsafe extern "C" fn io_file_size(
     file: *mut ffi::sqlite3_file,
     out: *mut ffi::sqlite3_int64,
 ) -> c_int {
-    let (_, real, m) = parts(file);
-    (m.xFileSize.expect("xFileSize"))(real, out)
+    let (_, real, methods) = parts(file);
+    (methods.xFileSize.expect("xFileSize"))(real, out)
 }
 
 unsafe extern "C" fn io_lock(file: *mut ffi::sqlite3_file, level: c_int) -> c_int {
-    let (_, real, m) = parts(file);
-    (m.xLock.expect("xLock"))(real, level)
+    let (_, real, methods) = parts(file);
+    (methods.xLock.expect("xLock"))(real, level)
 }
 
 unsafe extern "C" fn io_unlock(file: *mut ffi::sqlite3_file, level: c_int) -> c_int {
-    let (_, real, m) = parts(file);
-    (m.xUnlock.expect("xUnlock"))(real, level)
+    let (_, real, methods) = parts(file);
+    (methods.xUnlock.expect("xUnlock"))(real, level)
 }
 
 unsafe extern "C" fn io_check_reserved_lock(
     file: *mut ffi::sqlite3_file,
     out: *mut c_int,
 ) -> c_int {
-    let (_, real, m) = parts(file);
-    (m.xCheckReservedLock.expect("xCheckReservedLock"))(real, out)
+    let (_, real, methods) = parts(file);
+    (methods.xCheckReservedLock.expect("xCheckReservedLock"))(real, out)
 }
 
 unsafe extern "C" fn io_file_control(
     file: *mut ffi::sqlite3_file,
-    op: c_int,
-    arg: *mut c_void,
+    operation: c_int,
+    argument: *mut c_void,
 ) -> c_int {
-    let (_, real, m) = parts(file);
-    (m.xFileControl.expect("xFileControl"))(real, op, arg)
+    let (_, real, methods) = parts(file);
+    (methods.xFileControl.expect("xFileControl"))(real, operation, argument)
 }
 
 unsafe extern "C" fn io_sector_size(file: *mut ffi::sqlite3_file) -> c_int {
-    let (_, real, m) = parts(file);
-    (m.xSectorSize.expect("xSectorSize"))(real)
+    let (_, real, methods) = parts(file);
+    (methods.xSectorSize.expect("xSectorSize"))(real)
 }
 
 unsafe extern "C" fn io_device_characteristics(file: *mut ffi::sqlite3_file) -> c_int {
-    let (_, real, m) = parts(file);
-    (m.xDeviceCharacteristics.expect("xDeviceCharacteristics"))(real)
+    let (_, real, methods) = parts(file);
+    (methods
+        .xDeviceCharacteristics
+        .expect("xDeviceCharacteristics"))(real)
 }
 
 unsafe extern "C" fn io_shm_map(
@@ -577,9 +579,9 @@ unsafe extern "C" fn io_shm_map(
     extend: c_int,
     out: *mut *mut c_void,
 ) -> c_int {
-    let (_, real, m) = parts(file);
-    match m.xShmMap {
-        Some(f) => f(real, page, page_size, extend, out),
+    let (_, real, methods) = parts(file);
+    match methods.xShmMap {
+        Some(method) => method(real, page, page_size, extend, out),
         None => ffi::SQLITE_IOERR,
     }
 }
@@ -587,27 +589,27 @@ unsafe extern "C" fn io_shm_map(
 unsafe extern "C" fn io_shm_lock(
     file: *mut ffi::sqlite3_file,
     offset: c_int,
-    n: c_int,
+    count: c_int,
     flags: c_int,
 ) -> c_int {
-    let (_, real, m) = parts(file);
-    match m.xShmLock {
-        Some(f) => f(real, offset, n, flags),
+    let (_, real, methods) = parts(file);
+    match methods.xShmLock {
+        Some(method) => method(real, offset, count, flags),
         None => ffi::SQLITE_IOERR,
     }
 }
 
 unsafe extern "C" fn io_shm_barrier(file: *mut ffi::sqlite3_file) {
-    let (_, real, m) = parts(file);
-    if let Some(f) = m.xShmBarrier {
-        f(real)
+    let (_, real, methods) = parts(file);
+    if let Some(method) = methods.xShmBarrier {
+        method(real)
     }
 }
 
 unsafe extern "C" fn io_shm_unmap(file: *mut ffi::sqlite3_file, delete: c_int) -> c_int {
-    let (_, real, m) = parts(file);
-    match m.xShmUnmap {
-        Some(f) => f(real, delete),
+    let (_, real, methods) = parts(file);
+    match methods.xShmUnmap {
+        Some(method) => method(real, delete),
         None => ffi::SQLITE_OK,
     }
 }

@@ -149,9 +149,9 @@ pub struct TranscriptFault {
 }
 
 impl std::fmt::Display for TranscriptFault {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
-            f,
+            formatter,
             "transcript fault in worker {} during {:?} (crank {:?}, seq {:?}, sqlite {:?}/{:?}, outcome {}): {}",
             self.worker,
             self.operation,
@@ -183,14 +183,14 @@ pub enum TranscriptError {
 }
 
 impl std::fmt::Display for TranscriptError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TranscriptError::Fault(fault) => write!(f, "{fault}"),
+            TranscriptError::Fault(fault) => write!(formatter, "{fault}"),
             TranscriptError::Poisoned(fault) => {
-                write!(f, "transcript poisoned by earlier fault: {fault}")
+                write!(formatter, "transcript poisoned by earlier fault: {fault}")
             }
-            TranscriptError::Backpressure(s) => write!(f, "transcript backpressure: {s}"),
-            TranscriptError::Protocol(s) => write!(f, "transcript protocol error: {s}"),
+            TranscriptError::Backpressure(s) => write!(formatter, "transcript backpressure: {s}"),
+            TranscriptError::Protocol(s) => write!(formatter, "transcript protocol error: {s}"),
         }
     }
 }
@@ -373,8 +373,8 @@ pub struct Transcript {
     stats: TranscriptStats,
 }
 
-fn sqlite_codes(e: &rusqlite::Error) -> (Option<i32>, Option<i32>) {
-    match e {
+fn sqlite_codes(error: &rusqlite::Error) -> (Option<i32>, Option<i32>) {
+    match error {
         rusqlite::Error::SqliteFailure(err, _) => (Some(err.code as i32), Some(err.extended_code)),
         _ => (None, None),
     }
@@ -389,22 +389,23 @@ impl Transcript {
     ) -> Result<(Transcript, Recovery), TranscriptError> {
         let path = path.as_ref();
         let worker = config.worker.clone();
-        let open_fault = |detail: String, e: Option<&rusqlite::Error>| {
-            let (p, x) = e.map(sqlite_codes).unwrap_or((None, None));
+        let open_fault = |detail: String, error: Option<&rusqlite::Error>| {
+            let (primary, extended) = error.map(sqlite_codes).unwrap_or((None, None));
             TranscriptError::Fault(TranscriptFault {
                 worker: worker.clone(),
                 crank: None,
                 sequence: None,
                 operation: Operation::Open,
-                sqlite_primary: p,
-                sqlite_extended: x,
+                sqlite_primary: primary,
+                sqlite_extended: extended,
                 commit_outcome_known: true,
                 detail,
             })
         };
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| open_fault(format!("create {}: {e}", parent.display()), None))?;
+            std::fs::create_dir_all(parent).map_err(|error| {
+                open_fault(format!("create {}: {error}", parent.display()), None)
+            })?;
         }
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
             | OpenFlags::SQLITE_OPEN_CREATE
@@ -413,20 +414,22 @@ impl Transcript {
             Some(plan) => Connection::open_with_flags_and_vfs(path, flags, plan.vfs_name()),
             None => Connection::open_with_flags(path, flags),
         }
-        .map_err(|e| open_fault(format!("open {}: {e}", path.display()), Some(&e)))?;
+        .map_err(|error| open_fault(format!("open {}: {error}", path.display()), Some(&error)))?;
         // The supervisor is the only writer: hold the file exclusively (the
         // heap store's discipline), which also keeps the WAL index in
         // process memory rather than a `-shm` file, and choose WAL with FULL
         // synchronous durability.
         let setup = || -> rusqlite::Result<String> {
-            connection.query_row("PRAGMA locking_mode=EXCLUSIVE", [], |r| {
-                r.get::<_, String>(0)
+            connection.query_row("PRAGMA locking_mode=EXCLUSIVE", [], |row| {
+                row.get::<_, String>(0)
             })?;
-            let mode: String = connection.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
+            let mode: String =
+                connection.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
             connection.execute_batch("PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;")?;
             Ok(mode)
         };
-        let mode = setup().map_err(|e| open_fault(format!("configure: {e}"), Some(&e)))?;
+        let mode =
+            setup().map_err(|error| open_fault(format!("configure: {error}"), Some(&error)))?;
         if !mode.eq_ignore_ascii_case("wal") {
             return Err(open_fault(format!("journal_mode is {mode}, not wal"), None));
         }
@@ -449,18 +452,18 @@ impl Transcript {
         operation: Operation,
         crank: Option<CrankId>,
         known: bool,
-        e: &rusqlite::Error,
+        error: &rusqlite::Error,
     ) -> TranscriptError {
-        let (p, x) = sqlite_codes(e);
+        let (primary, extended) = sqlite_codes(error);
         self.poison(TranscriptFault {
             worker: self.worker.clone(),
             crank,
             sequence: None,
             operation,
-            sqlite_primary: p,
-            sqlite_extended: x,
+            sqlite_primary: primary,
+            sqlite_extended: extended,
             commit_outcome_known: known,
-            detail: e.to_string(),
+            detail: error.to_string(),
         })
     }
 
@@ -473,7 +476,7 @@ impl Transcript {
 
     fn check_healthy(&self) -> Result<(), TranscriptError> {
         match &self.poisoned {
-            Some(f) => Err(TranscriptError::Poisoned(f.clone())),
+            Some(fault) => Err(TranscriptError::Poisoned(fault.clone())),
             None => Ok(()),
         }
     }
@@ -508,12 +511,15 @@ impl Transcript {
         body: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<T>,
     ) -> Result<T, TranscriptError> {
         let result = (|| -> Result<T, (bool, rusqlite::Error)> {
-            let transaction = self.connection.transaction().map_err(|e| (true, e))?;
-            let value = body(&transaction).map_err(|e| (true, e))?;
-            transaction.commit().map_err(|e| (false, e))?;
+            let transaction = self
+                .connection
+                .transaction()
+                .map_err(|error| (true, error))?;
+            let value = body(&transaction).map_err(|error| (true, error))?;
+            transaction.commit().map_err(|error| (false, error))?;
             Ok(value)
         })();
-        result.map_err(|(known, e)| self.fault(operation, crank, known, &e))
+        result.map_err(|(known, error)| self.fault(operation, crank, known, &error))
     }
 
     fn init_schema(&mut self) -> Result<(), TranscriptError> {
@@ -550,7 +556,7 @@ impl Transcript {
             )?;
             transaction.execute_batch(host::SCHEMA)?;
             let existing: Option<String> = transaction
-                .query_row("SELECT value FROM meta WHERE key = 'worker'", [], |r| r.get(0))
+                .query_row("SELECT value FROM meta WHERE key = 'worker'", [], |row| row.get(0))
                 .optional()?;
             if existing.is_none() {
                 transaction.execute(
@@ -577,7 +583,7 @@ impl Transcript {
     fn recover(&mut self) -> Result<Recovery, TranscriptError> {
         let in_doubt = self
             .cranks_in_state("started")
-            .map_err(|e| self.fault(Operation::Recover, None, true, &e))?;
+            .map_err(|error| self.fault(Operation::Recover, None, true, &error))?;
         if !in_doubt.is_empty() {
             self.transact(Operation::Recover, None, |transaction| {
                 transaction.execute(
@@ -595,15 +601,15 @@ impl Transcript {
 
     fn cranks_in_state(&self, state: &str) -> rusqlite::Result<Vec<AbortedCrank>> {
         let mut statement = self.connection.prepare(
-            "SELECT c.crank_id, e.seq, e.payload FROM crank c
-             JOIN event e ON e.seq = c.inbound_seq
+            "SELECT c.crank_id, error.seq, error.payload FROM crank c
+             JOIN event error ON error.seq = c.inbound_seq
              WHERE c.state = ?1 ORDER BY c.crank_id",
         )?;
-        let rows = statement.query_map([state], |r| {
+        let rows = statement.query_map([state], |row| {
             Ok(AbortedCrank {
-                crank: r.get::<_, i64>(0)? as u64,
-                inbound_seq: r.get::<_, i64>(1)? as u64,
-                inbound: r.get(2)?,
+                crank: row.get::<_, i64>(0)? as u64,
+                inbound_seq: row.get::<_, i64>(1)? as u64,
+                inbound: row.get(2)?,
             })
         })?;
         rows.collect()
@@ -612,20 +618,20 @@ impl Transcript {
     /// Every aborted crank still on record, with its inbound delivery.
     pub fn aborted_cranks(&self) -> Result<Vec<AbortedCrank>, TranscriptError> {
         self.cranks_in_state("aborted")
-            .map_err(|e| self.read_error(&e))
+            .map_err(|error| self.read_error(&error))
     }
 
-    fn read_error(&self, e: &rusqlite::Error) -> TranscriptError {
-        let (p, x) = sqlite_codes(e);
+    fn read_error(&self, error: &rusqlite::Error) -> TranscriptError {
+        let (primary, extended) = sqlite_codes(error);
         TranscriptError::Fault(TranscriptFault {
             worker: self.worker.clone(),
             crank: self.active_crank(),
             sequence: None,
             operation: Operation::Read,
-            sqlite_primary: p,
-            sqlite_extended: x,
+            sqlite_primary: primary,
+            sqlite_extended: extended,
             commit_outcome_known: true,
-            detail: e.to_string(),
+            detail: error.to_string(),
         })
     }
 
@@ -636,21 +642,21 @@ impl Transcript {
                 "SELECT epoch, hash, watermark_crank, watermark_seq, engine_signature, panic_on_reference_error
                  FROM snapshot ORDER BY epoch DESC LIMIT 1",
                 [],
-                |r| {
+                |row| {
                     Ok(SnapshotRecord {
-                        epoch: r.get::<_, i64>(0)? as u64,
-                        hash: r.get(1)?,
-                        watermark_crank: r.get::<_, i64>(2)? as u64,
-                        watermark_sequence: r.get::<_, i64>(3)? as u64,
+                        epoch: row.get::<_, i64>(0)? as u64,
+                        hash: row.get(1)?,
+                        watermark_crank: row.get::<_, i64>(2)? as u64,
+                        watermark_sequence: row.get::<_, i64>(3)? as u64,
                         meta: SnapshotMeta {
-                            engine_signature: r.get(4)?,
-                            panic_on_reference_error: r.get::<_, i64>(5)? != 0,
+                            engine_signature: row.get(4)?,
+                            panic_on_reference_error: row.get::<_, i64>(5)? != 0,
                         },
                     })
                 },
             )
             .optional()
-            .map_err(|e| self.read_error(&e))
+            .map_err(|error| self.read_error(&error))
     }
 
     /// Step 1: durably admit an inbound delivery and start a crank. The
@@ -708,9 +714,9 @@ impl Transcript {
                 });
                 Ok(crank)
             }
-            Err(e) => {
+            Err(error) => {
                 self.pending_acknowledgments = acknowledgments_for_retry;
-                Err(e)
+                Err(error)
             }
         }
     }
@@ -846,24 +852,24 @@ impl Transcript {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT e.seq, e.crank_id, e.payload FROM event e
-                 JOIN crank c ON c.crank_id = e.crank_id
-                 WHERE e.kind = 'outbound' AND e.released = 0 AND c.state = 'committed'
-                 ORDER BY e.seq",
+                "SELECT error.seq, error.crank_id, error.payload FROM event error
+                 JOIN crank c ON c.crank_id = error.crank_id
+                 WHERE error.kind = 'outbound' AND error.released = 0 AND c.state = 'committed'
+                 ORDER BY error.seq",
             )
-            .map_err(|e| self.read_error(&e))?;
+            .map_err(|error| self.read_error(&error))?;
         let rows = statement
-            .query_map([], |r| {
-                let sequence = r.get::<_, i64>(0)? as u64;
+            .query_map([], |row| {
+                let sequence = row.get::<_, i64>(0)? as u64;
                 Ok(ReleasableFrame {
                     sequence,
-                    crank: r.get::<_, i64>(1)? as u64,
+                    crank: row.get::<_, i64>(1)? as u64,
                     idempotency_key: format!("{}:{sequence}", self.worker),
-                    payload: r.get(2)?,
+                    payload: row.get(2)?,
                 })
             })
             .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>());
-        rows.map_err(|e| self.read_error(&e))
+        rows.map_err(|error| self.read_error(&error))
     }
 
     /// Durably publish a snapshot of the worker's current heap, which must
@@ -890,18 +896,18 @@ impl Transcript {
         let (live_crank, live_seq) = self
             .connection
             .query_row(
-                "SELECT COALESCE(MAX(c.crank_id), 0), COALESCE(MAX(e.seq), 0) FROM crank c
-                 JOIN event e ON e.crank_id = c.crank_id WHERE c.state = 'committed'",
+                "SELECT COALESCE(MAX(c.crank_id), 0), COALESCE(MAX(error.seq), 0) FROM crank c
+                 JOIN event error ON error.crank_id = c.crank_id WHERE c.state = 'committed'",
                 [],
-                |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? as u64)),
+                |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
             )
-            .map_err(|e| self.read_error(&e))?;
+            .map_err(|error| self.read_error(&error))?;
         let watermark_crank = live_crank.max(previous.as_ref().map_or(0, |s| s.watermark_crank));
         let watermark_sequence =
             live_seq.max(previous.as_ref().map_or(0, |s| s.watermark_sequence));
         let hash = match blob_store.write_blob(blob) {
             Ok(hash) => hash,
-            Err(e) => {
+            Err(error) => {
                 return Err(self.poison(TranscriptFault {
                     worker: self.worker.clone(),
                     crank: None,
@@ -910,7 +916,7 @@ impl Transcript {
                     sqlite_primary: None,
                     sqlite_extended: None,
                     commit_outcome_known: true,
-                    detail: e.to_string(),
+                    detail: error.to_string(),
                 }))
             }
         };
@@ -964,19 +970,19 @@ impl Transcript {
             )?;
             transaction.execute(
                 "DELETE FROM host_call WHERE NOT EXISTS
-                   (SELECT 1 FROM event e WHERE e.seq = host_call.request_seq)",
+                   (SELECT 1 FROM event error WHERE error.seq = host_call.request_seq)",
                 [],
             )?;
             transaction.execute(
                 "DELETE FROM crank WHERE crank_id <= ?1 AND state = 'committed'
-                   AND NOT EXISTS (SELECT 1 FROM event e WHERE e.crank_id = crank.crank_id)",
+                   AND NOT EXISTS (SELECT 1 FROM event error WHERE error.crank_id = crank.crank_id)",
                 [watermark],
             )?;
             let superseded = {
                 let mut statement = transaction
                     .prepare("SELECT hash FROM snapshot WHERE epoch < ?1 ORDER BY epoch")?;
                 let rows =
-                    statement.query_map([snapshot.epoch as i64], |r| r.get::<_, String>(0))?;
+                    statement.query_map([snapshot.epoch as i64], |row| row.get::<_, String>(0))?;
                 rows.collect::<rusqlite::Result<Vec<_>>>()?
             };
             transaction.execute(
@@ -1019,7 +1025,7 @@ impl Transcript {
         let Some(snapshot) = self.latest_snapshot()? else {
             return Err(TranscriptError::Protocol("no published snapshot".into()));
         };
-        let snapshot_bytes = blob_store.read_blob(&snapshot.hash).map_err(|e| {
+        let snapshot_bytes = blob_store.read_blob(&snapshot.hash).map_err(|error| {
             TranscriptError::Fault(TranscriptFault {
                 worker: self.worker.clone(),
                 crank: None,
@@ -1028,27 +1034,27 @@ impl Transcript {
                 sqlite_primary: None,
                 sqlite_extended: None,
                 commit_outcome_known: true,
-                detail: format!("published snapshot epoch {}: {e}", snapshot.epoch),
+                detail: format!("published snapshot epoch {}: {error}", snapshot.epoch),
             })
         })?;
         let read = || -> rusqlite::Result<Vec<CommittedCrank>> {
             let mut cranks_stmt = self.connection.prepare(
-                "SELECT c.crank_id, e.payload FROM crank c JOIN event e ON e.seq = c.inbound_seq
+                "SELECT c.crank_id, error.payload FROM crank c JOIN event error ON error.seq = c.inbound_seq
                  WHERE c.state = 'committed' AND c.crank_id > ?1 ORDER BY c.crank_id",
             )?;
             let mut out_stmt = self
                 .connection
                 .prepare("SELECT seq, payload FROM event WHERE crank_id = ?1 AND kind = 'outbound' ORDER BY seq")?;
             let heads = cranks_stmt
-                .query_map([snapshot.watermark_crank as i64], |r| {
-                    Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
+                .query_map([snapshot.watermark_crank as i64], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             let mut cranks = Vec::with_capacity(heads.len());
             for (crank, inbound) in heads {
                 let outbound = out_stmt
-                    .query_map([crank], |r| {
-                        Ok((r.get::<_, i64>(0)? as u64, r.get::<_, Vec<u8>>(1)?))
+                    .query_map([crank], |row| {
+                        Ok((row.get::<_, i64>(0)? as u64, row.get::<_, Vec<u8>>(1)?))
                     })?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 cranks.push(CommittedCrank {
@@ -1059,7 +1065,7 @@ impl Transcript {
             }
             Ok(cranks)
         };
-        let cranks = read().map_err(|e| self.read_error(&e))?;
+        let cranks = read().map_err(|error| self.read_error(&error))?;
         Ok(ReplayPlan {
             snapshot,
             snapshot_bytes,
@@ -1073,10 +1079,10 @@ impl Transcript {
             .query_row(
                 "SELECT state FROM crank WHERE crank_id = ?1",
                 [crank as i64],
-                |r| r.get(0),
+                |row| row.get(0),
             )
             .optional()
-            .map_err(|e| self.read_error(&e))
+            .map_err(|error| self.read_error(&error))
     }
 
     /// Every outbound event on record with its crank's state, in sequence
@@ -1085,20 +1091,20 @@ impl Transcript {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT e.seq, e.crank_id, c.state FROM event e JOIN crank c ON c.crank_id = e.crank_id
-                 WHERE e.kind = 'outbound' ORDER BY e.seq",
+                "SELECT error.seq, error.crank_id, c.state FROM event error JOIN crank c ON c.crank_id = error.crank_id
+                 WHERE error.kind = 'outbound' ORDER BY error.seq",
             )
-            .map_err(|e| self.read_error(&e))?;
+            .map_err(|error| self.read_error(&error))?;
         let rows = statement
-            .query_map([], |r| {
+            .query_map([], |row| {
                 Ok((
-                    r.get::<_, i64>(0)? as u64,
-                    r.get::<_, i64>(1)? as u64,
-                    r.get(2)?,
+                    row.get::<_, i64>(0)? as u64,
+                    row.get::<_, i64>(1)? as u64,
+                    row.get(2)?,
                 ))
             })
             .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>());
-        rows.map_err(|e| self.read_error(&e))
+        rows.map_err(|error| self.read_error(&error))
     }
 }
 

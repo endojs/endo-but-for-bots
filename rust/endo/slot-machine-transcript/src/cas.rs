@@ -46,17 +46,22 @@ pub enum ContentAddressedStoreError {
 }
 
 impl std::fmt::Display for ContentAddressedStoreError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ContentAddressedStoreError::Io(e) => write!(f, "snapshot blob unreadable: {e}"),
+            ContentAddressedStoreError::Io(error) => {
+                write!(formatter, "snapshot blob unreadable: {error}")
+            }
             ContentAddressedStoreError::Corrupt { expected, actual } => {
                 write!(
-                    f,
+                    formatter,
                     "snapshot blob {expected} is corrupt (hashes to {actual})"
                 )
             }
             ContentAddressedStoreError::InvalidName(name) => {
-                write!(f, "snapshot blob name {name:?} is not a SHA-256 digest")
+                write!(
+                    formatter,
+                    "snapshot blob name {name:?} is not a SHA-256 digest"
+                )
             }
         }
     }
@@ -97,7 +102,7 @@ impl ContentAddressedStore {
         &self.directory
     }
 
-    fn op(
+    fn run_operation(
         &self,
         label: &str,
         is_sync: bool,
@@ -105,7 +110,7 @@ impl ContentAddressedStore {
         half: Option<&mut dyn FnMut() -> io::Result<()>>,
     ) -> io::Result<()> {
         match &self.fault {
-            Some(plan) => plan.op(label, is_sync, full, half),
+            Some(plan) => plan.run_operation(label, is_sync, full, half),
             None => full(),
         }
     }
@@ -130,32 +135,32 @@ impl ContentAddressedStore {
 
     fn write_blob_steps(&self, bytes: &[u8], temporary: &Path, hash: &str) -> io::Result<()> {
         let mut half = || -> io::Result<()> {
-            let mut f = File::create(temporary)?;
-            f.write_all(&bytes[..bytes.len() / 2])
+            let mut file = File::create(temporary)?;
+            file.write_all(&bytes[..bytes.len() / 2])
         };
-        self.op(
+        self.run_operation(
             "blob-store:write-blob",
             false,
             || {
-                let mut f = File::create(temporary)?;
-                f.write_all(bytes)
+                let mut file = File::create(temporary)?;
+                file.write_all(bytes)
             },
             Some(&mut half),
         )?;
-        self.op(
+        self.run_operation(
             "blob-store:sync-blob",
             true,
             || File::open(temporary)?.sync_all(),
             None,
         )?;
-        let dest = self.directory.join(hash);
-        self.op(
+        let destination = self.directory.join(hash);
+        self.run_operation(
             "blob-store:rename-blob",
             false,
-            || fs::rename(temporary, &dest),
+            || fs::rename(temporary, &destination),
             None,
         )?;
-        self.op(
+        self.run_operation(
             "blob-store:sync-directory",
             true,
             || sync_directory(&self.directory),

@@ -102,15 +102,15 @@ pub enum AdmissionError {
 }
 
 impl std::fmt::Display for AdmissionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AdmissionError::Unclassified(names) => write!(
-                f,
+                formatter,
                 "retryable worker refuses unclassified host callbacks: {}",
                 names.join(", ")
             ),
             AdmissionError::NonIdempotentOutbound(names) => write!(
-                f,
+                formatter,
                 "retryable worker refuses non-idempotent outbound providers \
                  (add an idempotency protocol or declare a barrier): {}",
                 names.join(", ")
@@ -153,8 +153,8 @@ impl CallbackRegistry {
             let unclassified: Vec<String> = self
                 .entries
                 .iter()
-                .filter(|(_, c)| c.is_none())
-                .map(|(n, _)| n.clone())
+                .filter(|(_, class)| class.is_none())
+                .map(|(name, _)| name.clone())
                 .collect();
             if !unclassified.is_empty() {
                 return Err(AdmissionError::Unclassified(unclassified));
@@ -162,8 +162,8 @@ impl CallbackRegistry {
             let unsafe_outbound: Vec<String> = self
                 .entries
                 .iter()
-                .filter(|(_, c)| **c == Some(HostClass::Outbound { idempotent: false }))
-                .map(|(n, _)| n.clone())
+                .filter(|(_, class)| **class == Some(HostClass::Outbound { idempotent: false }))
+                .map(|(name, _)| name.clone())
                 .collect();
             if !unsafe_outbound.is_empty() {
                 return Err(AdmissionError::NonIdempotentOutbound(unsafe_outbound));
@@ -173,7 +173,7 @@ impl CallbackRegistry {
             classes: self
                 .entries
                 .into_iter()
-                .map(|(n, c)| (n, c.unwrap_or(HostClass::Barrier)))
+                .map(|(name, class)| (name, class.unwrap_or(HostClass::Barrier)))
                 .collect(),
         })
     }
@@ -253,8 +253,8 @@ pub enum HostCallError {
 }
 
 impl From<TranscriptError> for HostCallError {
-    fn from(e: TranscriptError) -> HostCallError {
-        HostCallError::Transcript(e)
+    fn from(error: TranscriptError) -> HostCallError {
+        HostCallError::Transcript(error)
     }
 }
 
@@ -556,7 +556,7 @@ impl Transcript {
                 read_handle,
             )
             .optional()
-            .map_err(|e| self.read_error(&e))
+            .map_err(|error| self.read_error(&error))
     }
 
     /// Every handle the log says is open, including broken ones.
@@ -569,7 +569,7 @@ impl Transcript {
             let rows = statement.query_map([], read_handle)?;
             rows.collect()
         };
-        read().map_err(|e| self.read_error(&e))
+        read().map_err(|error| self.read_error(&error))
     }
 
     /// Whether `handle` is open (and not broken) as of the active crank's
@@ -596,8 +596,8 @@ impl Transcript {
             }
         }
         Ok(match self.handle_row(handle)? {
-            Some(r) if r.open && r.broken => HandleState::Broken,
-            Some(r) if r.open => HandleState::Open,
+            Some(row) if row.open && row.broken => HandleState::Broken,
+            Some(row) if row.open => HandleState::Open,
             _ => HandleState::Closed,
         })
     }
@@ -672,9 +672,9 @@ impl Transcript {
             .query_row(
                 "SELECT COALESCE(MAX(handle_id), 0) FROM host_handle",
                 [],
-                |r| r.get(0),
+                |row| row.get(0),
             )
-            .map_err(|e| self.read_error(&e))?;
+            .map_err(|error| self.read_error(&error))?;
         let staged = self.active.as_ref().map_or(0, |a| {
             a.host
                 .iter()
@@ -697,8 +697,8 @@ impl Transcript {
         request: &[u8],
         invoke: impl FnOnce(&[u8]) -> HostOutcome,
     ) -> Result<HostReply, HostCallError> {
-        self.stage_host_call(callbacks, callback, handle, request, false, |r| {
-            (invoke(r), None)
+        self.stage_host_call(callbacks, callback, handle, request, false, |row| {
+            (invoke(row), None)
         })
     }
 
@@ -714,8 +714,8 @@ impl Transcript {
         request: &[u8],
         invoke: impl FnOnce(&[u8]) -> (HostOutcome, TransactionalWrite),
     ) -> Result<HostReply, HostCallError> {
-        self.stage_host_call(callbacks, callback, handle, request, true, |r| {
-            let (outcome, write) = invoke(r);
+        self.stage_host_call(callbacks, callback, handle, request, true, |row| {
+            let (outcome, write) = invoke(row);
             (outcome, Some(write))
         })
     }
@@ -826,7 +826,7 @@ impl Transcript {
         // row is already durable: its ordinal stays reserved and the crank
         // may no longer commit, so aborting it leaves the barrier escaped
         // for recovery to stop at.
-        if let Err(e) = self.check_host_call_bounds(request.len(), outcome.reply.len()) {
+        if let Err(error) = self.check_host_call_bounds(request.len(), outcome.reply.len()) {
             if class != HostClass::Transactional
                 && (outcome.opens.is_some() || (outcome.closes && handle.is_some()))
             {
@@ -839,7 +839,7 @@ impl Transcript {
                     .host
                     .push(Staged::RefusedBarrier);
             }
-            return Err(e.into());
+            return Err(error.into());
         }
         let opened = match outcome.opens {
             Some(descriptor) => Some((self.next_handle_id()?, descriptor)),
@@ -918,25 +918,25 @@ impl Transcript {
     pub fn releasable_effects(&self) -> Result<Vec<ReleasableEffect>, TranscriptError> {
         let read = || -> rusqlite::Result<Vec<ReleasableEffect>> {
             let mut statement = self.connection.prepare(
-                "SELECT e.seq, e.crank_id, h.callback, e.payload FROM event e
-                 JOIN crank c ON c.crank_id = e.crank_id
-                 JOIN host_call h ON h.request_seq = e.seq
-                 WHERE e.kind = 'host-effect' AND e.released = 0 AND c.state = 'committed'
-                 ORDER BY e.seq",
+                "SELECT error.seq, error.crank_id, h.callback, error.payload FROM event error
+                 JOIN crank c ON c.crank_id = error.crank_id
+                 JOIN host_call h ON h.request_seq = error.seq
+                 WHERE error.kind = 'host-effect' AND error.released = 0 AND c.state = 'committed'
+                 ORDER BY error.seq",
             )?;
-            let rows = statement.query_map([], |r| {
-                let sequence = r.get::<_, i64>(0)? as Sequence;
+            let rows = statement.query_map([], |row| {
+                let sequence = row.get::<_, i64>(0)? as Sequence;
                 Ok(ReleasableEffect {
                     sequence,
-                    crank: r.get::<_, i64>(1)? as CrankId,
+                    crank: row.get::<_, i64>(1)? as CrankId,
                     idempotency_key: format!("{}:{sequence}", self.worker),
-                    callback: r.get(2)?,
-                    request: r.get(3)?,
+                    callback: row.get(2)?,
+                    request: row.get(3)?,
                 })
             })?;
             rows.collect()
         };
-        read().map_err(|e| self.read_error(&e))
+        read().map_err(|error| self.read_error(&error))
     }
 
     /// On restart, rebuild every open handle from its descriptor through
@@ -988,14 +988,17 @@ impl Transcript {
         reconstruct: impl FnOnce(&HandleRecord) -> Result<(), String>,
     ) -> Result<(), TranscriptError> {
         self.check_healthy()?;
-        let Some(mut record) = self.handle_row(handle)?.filter(|r| r.open && r.broken) else {
+        let Some(mut record) = self
+            .handle_row(handle)?
+            .filter(|row| row.open && row.broken)
+        else {
             return Err(TranscriptError::Protocol(format!(
                 "handle {handle} is not broken"
             )));
         };
         record.descriptor = Some(descriptor.clone());
-        reconstruct(&record).map_err(|e| {
-            TranscriptError::Protocol(format!("replacement for handle {handle} failed: {e}"))
+        reconstruct(&record).map_err(|error| {
+            TranscriptError::Protocol(format!("replacement for handle {handle} failed: {error}"))
         })?;
         self.transact(Operation::Recover, None, |transaction| {
             transaction.execute(
@@ -1045,24 +1048,24 @@ impl Transcript {
                    AND c.crank_id != ?1
                  ORDER BY h.request_seq LIMIT 1",
                 params![active, HostClass::Barrier.tag()],
-                |r| {
+                |row| {
                     Ok(RecoveryStop::EscapedBarrier {
-                        crank: r.get::<_, i64>(0)? as CrankId,
-                        sequence: r.get::<_, i64>(1)? as Sequence,
-                        callback: r.get(2)?,
+                        crank: row.get::<_, i64>(0)? as CrankId,
+                        sequence: row.get::<_, i64>(1)? as Sequence,
+                        callback: row.get(2)?,
                     })
                 },
             )
             .optional()
-            .map_err(|e| self.read_error(&e))?;
+            .map_err(|error| self.read_error(&error))?;
         if let Some(stop) = escaped {
             return Ok(Err(stop));
         }
         let broken: Vec<HandleId> = self
             .open_handles()?
             .into_iter()
-            .filter(|r| r.broken)
-            .map(|r| r.handle)
+            .filter(|row| row.broken)
+            .map(|row| row.handle)
             .collect();
         if !broken.is_empty() {
             return Ok(Err(RecoveryStop::BrokenHandles(broken)));
@@ -1109,17 +1112,17 @@ impl Transcript {
                  WHERE c.state = 'committed' AND h.crank_id > ?1
                  ORDER BY h.crank_id, h.call_ordinal",
             )?;
-            let rows = statement.query_map([watermark as i64], |r| {
+            let rows = statement.query_map([watermark as i64], |row| {
                 Ok(Recorded {
-                    crank: r.get::<_, i64>(0)? as CrankId,
-                    sequence: r.get::<_, i64>(1)? as Sequence,
-                    callback: r.get(2)?,
-                    class: r.get(3)?,
-                    handle: r.get::<_, Option<i64>>(4)?.map(|h| h as HandleId),
-                    request: r.get(5)?,
-                    reply: r.get(6)?,
-                    opened: r.get::<_, Option<i64>>(7)?.map(|h| h as HandleId),
-                    cleared: r.get::<_, i64>(8)? != 0,
+                    crank: row.get::<_, i64>(0)? as CrankId,
+                    sequence: row.get::<_, i64>(1)? as Sequence,
+                    callback: row.get(2)?,
+                    class: row.get(3)?,
+                    handle: row.get::<_, Option<i64>>(4)?.map(|h| h as HandleId),
+                    request: row.get(5)?,
+                    reply: row.get(6)?,
+                    opened: row.get::<_, Option<i64>>(7)?.map(|h| h as HandleId),
+                    cleared: row.get::<_, i64>(8)? != 0,
                 })
             })?;
             let mut by_crank: BTreeMap<CrankId, VecDeque<Recorded>> = BTreeMap::new();
@@ -1129,12 +1132,12 @@ impl Transcript {
             }
             Ok(by_crank)
         };
-        let calls = read().map_err(|e| self.read_error(&e))?;
+        let calls = read().map_err(|error| self.read_error(&error))?;
         let broken = self
             .open_handles()?
             .into_iter()
-            .filter(|r| r.broken)
-            .map(|r| r.handle)
+            .filter(|row| row.broken)
+            .map(|row| row.handle)
             .collect();
         Ok(HostReplay {
             calls,
@@ -1151,14 +1154,14 @@ enum HandleState {
     Closed,
 }
 
-fn read_handle(r: &rusqlite::Row<'_>) -> rusqlite::Result<HandleRecord> {
+fn read_handle(row: &rusqlite::Row<'_>) -> rusqlite::Result<HandleRecord> {
     Ok(HandleRecord {
-        handle: r.get::<_, i64>(0)? as HandleId,
-        callback: r.get(1)?,
-        created_by: r.get::<_, i64>(2)? as Sequence,
-        descriptor: r.get(3)?,
-        open: r.get::<_, i64>(4)? != 0,
-        broken: r.get::<_, i64>(5)? != 0,
+        handle: row.get::<_, i64>(0)? as HandleId,
+        callback: row.get(1)?,
+        created_by: row.get::<_, i64>(2)? as Sequence,
+        descriptor: row.get(3)?,
+        open: row.get::<_, i64>(4)? != 0,
+        broken: row.get::<_, i64>(5)? != 0,
     })
 }
 
