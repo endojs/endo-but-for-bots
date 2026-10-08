@@ -105,6 +105,18 @@ jobs:
         # *runtime store* the daemon resolves on every run, so a run
         # that hits it fetches less from the substitute servers.
         #
+        # This is a resilience measure, not a wall-clock
+        # optimization: on a healthy substitute day a restore
+        # (download + zstd + tar) may be no faster than the fetches it
+        # replaces. What it buys is fewer round-trips to servers that
+        # periodically degrade. The extract and snapshot steps log
+        # their elapsed time and the tarball size as `::notice::`
+        # lines so cold and hit runs can be compared.
+        #
+        # The cache degrades to a miss rather than failing the job
+        # wherever that is safe: a missing, empty, or corrupt tarball
+        # is skipped, and a failed snapshot is simply not saved.
+        #
         # `/gnu/store` and `/var/guix/db` are root-owned, so
         # `actions/cache` (which runs as `runner`) cannot read or
         # write them directly. We cache a runner-owned staging
@@ -115,7 +127,13 @@ jobs:
         # declares the `cache-hit` output this job gates on, and an
         # explicit save step lets the snapshot run before saving
         # rather than relying on the post-job hook.
+        #
+        # `hashFiles` returns an empty string when the path misses,
+        # which would collapse the key to a shared prefix (a July run
+        # saved under `guix-store-1.5.0-` that way), so the restore,
+        # snapshot, and save steps all require a non-empty hash.
         id: guix-store-cache
+        if: hashFiles('endo/.github/workflows/ocapn-guile-interop.yml') != ''
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/guix-store-cache
@@ -127,7 +145,9 @@ jobs:
           # `restore-keys`: seeding from an older snapshot and
           # re-saving would grow the tarball without bound across
           # workflow edits, so each edit starts a fresh snapshot.
-          key: guix-store-${{ env.GUIX_VERSION }}-${{ hashFiles('endo/.github/workflows/ocapn-guile-interop.yml') }}
+          # The runner OS and arch are in the key because a store
+          # snapshot is not portable across architectures.
+          key: guix-store-${{ runner.os }}-${{ runner.arch }}-${{ env.GUIX_VERSION }}-${{ hashFiles('endo/.github/workflows/ocapn-guile-interop.yml') }}
       - name: Download Guix stable tarball
         # `ftp.gnu.org/gnu/guix/` is the GNU project's canonical
         # mirror for release binaries. It is operationally independent
@@ -234,19 +254,32 @@ jobs:
         # daemon gets write access in its own mount namespace), so
         # both units are stopped across the extract and restarted
         # afterwards, on failure too.
+        #
+        # The archive is integrity-checked (`zstd -t`) before anything
+        # is touched; a missing, empty, or corrupt archive is treated
+        # as a cache miss and the job continues on the installer store
+        # alone. A `tar` failure *after* that check (for example
+        # ENOSPC) still fails the job, because a half-extracted
+        # `/var/guix/db` is not safe to run against.
         if: steps.guix-store-cache.outputs.cache-hit == 'true'
         run: |
           set -euo pipefail
-          if [ ! -f ~/guix-store-cache/store.tar.zst ]; then
-            echo "::error::guix store cache key matched but ~/guix-store-cache/store.tar.zst is missing"
-            exit 1
+          archive=~/guix-store-cache/store.tar.zst
+          if [ ! -s "$archive" ]; then
+            echo "::warning::guix store cache key matched but $archive is missing or empty; continuing as a cache miss"
+            exit 0
           fi
-          ls -l ~/guix-store-cache/store.tar.zst
+          ls -l "$archive"
+          start=$SECONDS
+          if ! zstd -q -t "$archive"; then
+            echo "::warning::guix store cache archive failed its integrity check; continuing as a cache miss"
+            exit 0
+          fi
           trap 'sudo systemctl start gnu-store.mount guix-daemon.service' EXIT
           sudo systemctl stop guix-daemon.service gnu-store.mount
-          sudo tar --extract --zstd --file ~/guix-store-cache/store.tar.zst \
+          sudo tar --extract --zstd --file "$archive" \
               --directory / --no-overwrite-dir
-          echo "::notice::guix store restored from cache: $(sudo du -sh /gnu/store | cut -f1) in /gnu/store"
+          echo "::notice::guix store restored from cache in $((SECONDS - start))s: $(sudo du -sh /gnu/store | cut -f1) in /gnu/store"
       - name: Authorize build farm
         # Authorizes both ci.guix.gnu.org and bordeaux.guix.gnu.org;
         # both .pub files ship inside the Guix tarball under
@@ -340,23 +373,58 @@ jobs:
         # restore yields store paths the daemon's DB records as
         # valid. The daemon is stopped across the `tar` so the SQLite
         # DB is closed and checkpointed rather than copied live.
-        if: steps.guix-store-cache.outputs.cache-hit != 'true'
+        #
+        # The cache is only an optimization, so a failure here never
+        # fails the job: it emits a warning and leaves `ready` unset,
+        # and the save step below is gated on `ready`. The archive is
+        # written under a temporary name and renamed only on success,
+        # so a partial archive is never published. Snapshots over
+        # `GUIX_STORE_CACHE_MAX_BYTES` are not saved, to stay well
+        # inside the repository's cache quota.
+        id: guix-store-snapshot
+        if: steps.guix-store-cache.outcome == 'success' && steps.guix-store-cache.outputs.cache-hit != 'true'
+        env:
+          GUIX_STORE_CACHE_MAX_BYTES: '4000000000'
         run: |
-          set -euo pipefail
-          timeout 600s guix shell --pure --no-grafts --fallback \
-            guile guile-fibers guile-websocket guile-gnutls guile-gcrypt -- \
-            guile -c '(exit 0)'
+          set -uo pipefail
+          start=$SECONDS
+          if ! timeout 600s guix shell --pure --no-grafts --fallback \
+              guile guile-fibers guile-websocket guile-gnutls guile-gcrypt -- \
+              guile -c '(exit 0)'; then
+            echo "::warning::could not realize the guile profile for the store snapshot; not saving the cache"
+            exit 0
+          fi
           mkdir -p ~/guix-store-cache
+          archive=~/guix-store-cache/store.tar.zst
+          rm -f "$archive" "$archive.tmp"
           trap 'sudo systemctl start guix-daemon.service' EXIT
           sudo systemctl stop guix-daemon.service
-          sudo tar --create --file ~/guix-store-cache/store.tar.zst --zstd \
-              /gnu/store /var/guix/db
+          if ! sudo tar --create --file "$archive.tmp" --zstd \
+              /gnu/store /var/guix/db; then
+            echo "::warning::guix store snapshot tar failed; not saving the cache"
+            sudo rm -f "$archive.tmp"
+            exit 0
+          fi
           # `actions/cache` runs as the `runner` user and cannot
           # upload a root-owned file.
-          sudo chown -R "$(id -u):$(id -g)" ~/guix-store-cache
-          echo "::notice::guix store snapshot: $(du -h ~/guix-store-cache/store.tar.zst | cut -f1) compressed"
+          if ! sudo chown -R "$(id -u):$(id -g)" ~/guix-store-cache ||
+              ! mv "$archive.tmp" "$archive"; then
+            echo "::warning::could not publish the guix store snapshot; not saving the cache"
+            exit 0
+          fi
+          size=$(stat -c %s "$archive")
+          echo "::notice::guix store snapshot in $((SECONDS - start))s: $(du -h "$archive" | cut -f1) compressed ($size bytes)"
+          if [ "$size" -gt "$GUIX_STORE_CACHE_MAX_BYTES" ]; then
+            echo "::warning::guix store snapshot exceeds $GUIX_STORE_CACHE_MAX_BYTES bytes; not saving the cache"
+            rm -f "$archive"
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
       - name: Save Guix store cache
-        if: steps.guix-store-cache.outputs.cache-hit != 'true'
+        # `continue-on-error`: a concurrent run that saved the same
+        # key first makes this save fail, which is harmless.
+        if: steps.guix-store-snapshot.outputs.ready == 'true'
+        continue-on-error: true
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/guix-store-cache
