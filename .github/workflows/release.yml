@@ -17,6 +17,11 @@ concurrency:
 # enumerates the writes it actually needs.
 permissions: {}
 
+# Defense in depth against npm lifecycle scripts running implicitly at install.
+env:
+  YARN_ENABLE_SCRIPTS: 'false'
+  npm_config_ignore_scripts: 'true'
+
 jobs:
   release:
     name: Release
@@ -48,7 +53,7 @@ jobs:
           cache: yarn
 
       - name: Install Dependencies
-        run: yarn
+        run: yarn install --immutable
 
       - name: Set up Git user
         run: |

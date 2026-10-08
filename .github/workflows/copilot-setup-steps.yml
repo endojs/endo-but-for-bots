@@ -24,6 +24,11 @@ on:
 permissions:
   contents: read
 
+# Defense in depth against npm lifecycle scripts running implicitly at install.
+env:
+  YARN_ENABLE_SCRIPTS: 'false'
+  npm_config_ignore_scripts: 'true'
+
 # Cancel in-progress runs for the same branch when a new run is started
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

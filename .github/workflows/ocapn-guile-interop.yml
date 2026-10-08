@@ -23,6 +23,11 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Defense in depth against npm lifecycle scripts running implicitly at install.
+  # .yarnrc.yml sets `enableScripts: false`; these env vars keep that posture
+  # if the repo-level config drifts, or if npm runs where yarn was intended.
+  YARN_ENABLE_SCRIPTS: 'false'
+  npm_config_ignore_scripts: 'true'
   # Pin to a specific Guix release rather than tracking nightly. The
   # nightly tarball lives behind `ci.guix.gnu.org`, which periodically
   # returns sustained 502s for hours and which is also the substitute
