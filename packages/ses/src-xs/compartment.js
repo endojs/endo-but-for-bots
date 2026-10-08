@@ -36,6 +36,8 @@ import { makeError } from '../src/error/assert.js';
 
 const muteReporter = chooseReporter('none');
 
+// This constructor samples the globals when SES is imported, so its
+// compartments receive the original, untamed bindings. Lockdown replaces it.
 export const ShimStartCompartment = makeCompartmentConstructor(
   makeCompartmentConstructor,
   getGlobalIntrinsics(globalThis, muteReporter),

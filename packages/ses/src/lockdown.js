@@ -151,8 +151,18 @@ const probeHostEvaluators = () => {
 
 /**
  * @param {LockdownOptions} [options]
+ * @param {(
+ *   intrinsics: Record<string, any>,
+ *   markVirtualizedNativeFunction: (object: object) => void,
+ * ) => void} [onIntrinsics] receives the lockdown intrinsics and the
+ * native-function marker once repairs are done, for an engine adapter that
+ * must build its own start Compartment constructor from them. It is called
+ * synchronously, at most once, before `repairIntrinsics` returns. A repeated
+ * call throws `SES_ALREADY_LOCKED_DOWN` before reaching it. This module is
+ * not exported from `ses`, and the public `lockdown` and `repairIntrinsics`
+ * on `globalThis` deliberately do not forward this parameter.
  */
-export const repairIntrinsics = (options = {}) => {
+export const repairIntrinsics = (options = {}, onIntrinsics = undefined) => {
   // First time, absent options default to 'safe'.
   // Subsequent times, absent options default to first options.
   // Thus, all present options must agree with first options.
@@ -579,6 +589,10 @@ export const repairIntrinsics = (options = {}) => {
 
     return tamedHarden;
   };
+
+  if (onIntrinsics !== undefined) {
+    onIntrinsics(intrinsics, markVirtualizedNativeFunction);
+  }
 
   return hardenIntrinsics;
 };
