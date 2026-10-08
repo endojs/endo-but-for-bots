@@ -104,11 +104,28 @@ jobs:
           # Cache key includes the version and sha256 so a version
           # bump or upstream re-publish forces a fresh download.
           key: guix-binary-x86_64-linux-${{ env.GUIX_VERSION }}-${{ env.GUIX_TARBALL_SHA256 }}
+      - name: Compute Guix store cache key
+        # The key is the values that determine the snapshot's
+        # contents: the pinned Guix version (a version bump may
+        # change the on-disk DB schema), the installer tarball's
+        # sha256 (an upstream re-publish under the same version
+        # ships a different store and DB), and the realized package
+        # set. The package list is hashed rather than interpolated
+        # so the key stays short and free of characters
+        # `actions/cache` rejects. Unrelated edits to this file
+        # therefore keep the cache. The runner OS and arch are in
+        # the key because a store snapshot is not portable across
+        # architectures.
+        id: guix-store-key
+        run: |
+          set -euo pipefail
+          packages=$(printf '%s' "$GUIX_GUILE_PACKAGES" | sha256sum | cut -c1-16)
+          echo "key=guix-store-${RUNNER_OS}-${RUNNER_ARCH}-${GUIX_VERSION}-${GUIX_TARBALL_SHA256}-${packages}" >> "$GITHUB_OUTPUT"
       - name: Restore Guix store cache
-        # Iteration III of the guix-CI resilience pattern (I was the
-        # tarball cache, II the substitute-server reorder and
-        # fallback). The tarball cache above amortizes the
-        # installer download; this second cache amortizes the
+        # Complements the tarball cache above and the
+        # substitute-server fallback in the daemon unit below. The
+        # tarball cache amortizes the installer download; this
+        # second cache amortizes the
         # *runtime store* the daemon resolves on every run, so a run
         # that hits it fetches less from the substitute servers.
         #
@@ -143,17 +160,11 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/guix-store-cache
-          # The key is the values that determine the snapshot's
-          # contents: the pinned Guix version (a version bump may
-          # change the on-disk DB schema) and the realized package
-          # set. Unrelated edits to this file therefore keep the
-          # cache. There are deliberately no `restore-keys`: seeding
-          # from an older snapshot and re-saving would grow the
-          # tarball without bound across package-set changes, so
-          # each change starts a fresh snapshot. The runner OS and
-          # arch are in the key because a store snapshot is not
-          # portable across architectures.
-          key: guix-store-${{ runner.os }}-${{ runner.arch }}-${{ env.GUIX_VERSION }}-${{ env.GUIX_GUILE_PACKAGES }}
+          # There are deliberately no `restore-keys`: seeding from an
+          # older snapshot and re-saving would grow the tarball
+          # without bound across package-set changes, so each change
+          # starts a fresh snapshot.
+          key: ${{ steps.guix-store-key.outputs.key }}
       - name: Download Guix stable tarball
         # `ftp.gnu.org/gnu/guix/` is the GNU project's canonical
         # mirror for release binaries. It is operationally independent
@@ -260,7 +271,10 @@ jobs:
         # `gnu-store.mount` is a read-only bind of `/gnu/store` (the
         # daemon gets write access in its own mount namespace), so
         # both units are stopped across the extract and restarted
-        # afterwards, on failure too.
+        # afterwards, on failure too. The restart waits for the
+        # daemon socket, because `Authorize build farm` talks to the
+        # daemon next. The archive is deleted once extracted, to
+        # free runner disk for the test.
         #
         # Integrity of the restored bytes is `actions/cache`'s job:
         # an entry it cannot extract is reported as a miss and this
@@ -284,10 +298,19 @@ jobs:
           fi
           ls -l "$archive"
           start=$SECONDS
-          trap 'sudo systemctl start gnu-store.mount guix-daemon.service' EXIT
+          restart() {
+            sudo systemctl start gnu-store.mount guix-daemon.service
+            for _ in $(seq 1 30); do
+              if [ -S /var/guix/daemon-socket/socket ]; then return 0; fi
+              sleep 1
+            done
+            echo "::warning::guix-daemon socket not ready 30s after restart"
+          }
+          trap restart EXIT
           sudo systemctl stop guix-daemon.service gnu-store.mount
           sudo tar --extract --file "$archive" \
               --directory / --no-overwrite-dir gnu/store var/guix/db
+          rm -rf ~/guix-store-cache
           echo "::notice::guix store restored from cache in $((SECONDS - start))s: $(sudo du -sh /gnu/store | cut -f1) in /gnu/store"
           echo "usable=true" >> "$GITHUB_OUTPUT"
       - name: Authorize build farm
@@ -444,9 +467,14 @@ jobs:
         with:
           path: ~/guix-store-cache
           key: ${{ steps.guix-store-cache.outputs.cache-primary-key }}
+      - name: Remove Guix store cache archive
+        # Frees up to `GUIX_STORE_CACHE_MAX_BYTES` of runner disk
+        # before the test.
+        if: always()
+        run: rm -rf ~/guix-store-cache
       - name: Wait for Guix daemon
-        # The extract and snapshot steps restart the daemon; wait
-        # for it before `guix shell` below connects.
+        # The snapshot step restarts the daemon; wait for it before
+        # `guix shell` below connects.
         run: |
           for _ in $(seq 1 30); do
             if systemctl is-active --quiet guix-daemon.service &&
