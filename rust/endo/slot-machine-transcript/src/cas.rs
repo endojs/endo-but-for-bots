@@ -224,8 +224,7 @@ impl ContentAddressedStore {
 }
 
 /// Whether `name` is a `.transcript-blob.<pid>.<sequence>.tmp` temporary
-/// whose writing process provably no longer exists. Without a `/proc` to
-/// consult, no writer is provably dead and the temporary is kept.
+/// whose writing process provably no longer exists.
 fn is_dead_blob_temporary(name: &str) -> bool {
     let Some(rest) = name
         .strip_prefix(".transcript-blob.")
@@ -239,11 +238,31 @@ fn is_dead_blob_temporary(name: &str) -> bool {
     let (Ok(pid), Ok(_)) = (pid.parse::<u32>(), sequence.parse::<u64>()) else {
         return false;
     };
-    if pid == std::process::id() {
+    pid != std::process::id() && process_is_dead(pid)
+}
+
+/// Whether no process `pid` exists. A pid beyond the platform's range
+/// cannot name a process; signal 0 probes the rest without delivering one.
+#[cfg(unix)]
+fn process_is_dead(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return true;
+    };
+    if pid <= 0 {
         return false;
     }
-    let proc_root = Path::new("/proc");
-    proc_root.join("self").exists() && !proc_root.join(pid.to_string()).exists()
+    // SAFETY: signal 0 performs only the existence and permission checks.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return false;
+    }
+    io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
+/// Without a way to probe another process, no writer is provably dead and
+/// its temporary is kept.
+#[cfg(not(unix))]
+fn process_is_dead(_pid: u32) -> bool {
+    false
 }
 
 /// Whether `name` has the shape of a [`blob_hash`]: 64 lowercase
