@@ -94,7 +94,7 @@ pub struct FaultPlan {
     vfs_name: Arc<CString>,
 }
 
-static VFS_SEQ: AtomicU64 = AtomicU64::new(0);
+static VFS_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 impl FaultPlan {
     /// A plan that never fires: counts and logs operations only.
@@ -109,9 +109,12 @@ impl FaultPlan {
     }
 
     fn build(trigger: Option<(u64, FaultMode)>) -> FaultPlan {
-        let seq = VFS_SEQ.fetch_add(1, Ordering::Relaxed);
-        let name = CString::new(format!("slot-machine-fault-{}-{seq}", std::process::id()))
-            .expect("vfs name has no NUL");
+        let sequence = VFS_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let name = CString::new(format!(
+            "slot-machine-fault-{}-{sequence}",
+            std::process::id()
+        ))
+        .expect("vfs name has no NUL");
         let plan = FaultPlan {
             state: Arc::new(Mutex::new(PlanState {
                 trigger,

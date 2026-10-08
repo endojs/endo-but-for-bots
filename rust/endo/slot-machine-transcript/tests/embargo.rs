@@ -46,7 +46,8 @@ impl FrameSink for Link {
         }
         self.handoffs += 1;
         let mut peer = self.peer.borrow_mut();
-        peer.wire.push((frame.idempotency_key.clone(), frame.seq));
+        peer.wire
+            .push((frame.idempotency_key.clone(), frame.sequence));
         match peer.suppressor.receive(frame) {
             Received::Fresh => peer.delivered.push(frame.payload.clone()),
             Received::Duplicate => peer.duplicates += 1,
@@ -353,10 +354,10 @@ fn a_durable_acknowledgment_narrows_re_release_to_the_unacknowledged_suffix() {
 
 #[test]
 fn the_suppressor_keeps_one_mark_per_worker_and_survives_a_receiver_restart() {
-    let frame = |worker: &str, seq: u64| ReleasableFrame {
-        seq,
+    let frame = |worker: &str, sequence: u64| ReleasableFrame {
+        sequence,
         crank: 1,
-        idempotency_key: format!("{worker}:{seq}"),
+        idempotency_key: format!("{worker}:{sequence}"),
         payload: Vec::new(),
     };
     let mut s = DuplicateSuppressor::new();

@@ -70,13 +70,13 @@ fn committed_frames_release_in_sequence_with_stable_keys() {
     }
     let frames = t.commit_crank().unwrap();
     assert_eq!(frames.len(), 3);
-    assert!(frames.windows(2).all(|w| w[0].seq < w[1].seq));
+    assert!(frames.windows(2).all(|w| w[0].sequence < w[1].sequence));
     for f in &frames {
         assert_eq!(f.crank, crank);
-        assert_eq!(f.idempotency_key, format!("w:{}", f.seq));
+        assert_eq!(f.idempotency_key, format!("w:{}", f.sequence));
     }
     assert_eq!(t.releasable().unwrap(), frames);
-    t.mark_released(frames.iter().map(|f| f.seq));
+    t.mark_released(frames.iter().map(|f| f.sequence));
     t.flush_acknowledgments().unwrap();
     assert!(t.releasable().unwrap().is_empty());
 }
@@ -97,7 +97,7 @@ fn one_admission_and_one_release_sync_per_crank_regardless_of_frame_count() {
             t.stage_outbound(format!("frame-{i}").into_bytes()).unwrap();
         }
         let released = t.commit_crank().unwrap();
-        t.mark_released(released.iter().map(|f| f.seq));
+        t.mark_released(released.iter().map(|f| f.sequence));
         plan.syncs() - before
     };
     // Warm up so the WAL header write is behind us.
@@ -294,7 +294,7 @@ fn compaction_keeps_aborted_cranks_and_never_reuses_ids() {
     t.begin_crank(b"doomed").unwrap();
     t.abort_crank().unwrap();
     supervisor.crank(b"two", &mut wire).unwrap();
-    let last_seq = wire.accepted_keys.last().unwrap().clone();
+    let last_sequence = wire.accepted_keys.last().unwrap().clone();
     let s = supervisor.publish().unwrap();
     assert_eq!(s.watermark_crank, 3);
     let t = &mut supervisor.transcript;
@@ -310,9 +310,9 @@ fn compaction_keeps_aborted_cranks_and_never_reuses_ids() {
     assert_eq!(next, 4, "crank ids are never reused after compaction");
     t.stage_outbound(b"x".to_vec()).unwrap();
     let frames = t.commit_crank().unwrap();
-    let last: u64 = last_seq.rsplit(':').next().unwrap().parse().unwrap();
+    let last: u64 = last_sequence.rsplit(':').next().unwrap().parse().unwrap();
     assert!(
-        frames[0].seq > last,
+        frames[0].sequence > last,
         "sequences are never reused after compaction"
     );
 }

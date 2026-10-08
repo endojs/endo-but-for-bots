@@ -102,7 +102,7 @@ fn reclaim_tolerates_a_kept_hash_that_is_missing() {
 #[test]
 fn a_blob_temporary_does_not_share_the_heap_snapshot_prefix() {
     // `xsnap::Machine::suspend_to_cas` names its temporaries
-    // `.snapshot.<pid>.<seq>.tmp` in the same directory; a blob temporary
+    // `.snapshot.<pid>.<sequence>.tmp` in the same directory; a blob temporary
     // left by a crash must not be mistaken for, or collide with, one.
     let root = tempfile::tempdir().unwrap();
     let blob_store = ContentAddressedStore::open(root.path().join("blob_store"))

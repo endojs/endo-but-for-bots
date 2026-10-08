@@ -13,7 +13,7 @@
 //!   state, the inbound event that started each, and its starting epoch;
 //! - `event`: inbound, outbound, host-call request/reply, and post-commit
 //!   host-effect rows with monotonic sequence numbers that are never reused,
-//!   so `<worker>:<seq>` is a stable idempotency key;
+//!   so `<worker>:<sequence>` is a stable idempotency key;
 //! - `host_call` and `host_handle`: the classification of each recorded host
 //!   call, and durable logical handles with their reconstruction
 //!   descriptors (§ Host functions are messages too; see the `host` module
@@ -133,7 +133,7 @@ pub struct TranscriptFault {
     /// The crank in flight, if any.
     pub crank: Option<CrankId>,
     /// The event sequence involved, if known.
-    pub seq: Option<Sequence>,
+    pub sequence: Option<Sequence>,
     /// The interrupted operation.
     pub operation: Operation,
     /// SQLite's primary result code, when the failure came from SQLite.
@@ -156,7 +156,7 @@ impl std::fmt::Display for TranscriptFault {
             self.worker,
             self.operation,
             self.crank,
-            self.seq,
+            self.sequence,
             self.sqlite_primary,
             self.sqlite_extended,
             if self.commit_outcome_known { "known" } else { "unknown" },
@@ -275,7 +275,7 @@ pub struct SnapshotRecord {
     /// The last committed crank the snapshot covers (0 before any crank).
     pub watermark_crank: CrankId,
     /// The last event sequence of a committed crank the snapshot covers.
-    pub watermark_seq: Sequence,
+    pub watermark_sequence: Sequence,
     /// The pinned replay configuration.
     pub meta: SnapshotMeta,
 }
@@ -285,10 +285,10 @@ pub struct SnapshotRecord {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReleasableFrame {
     /// The event sequence.
-    pub seq: Sequence,
+    pub sequence: Sequence,
     /// The crank that committed it.
     pub crank: CrankId,
-    /// `<worker>:<seq>`, stable across restarts.
+    /// `<worker>:<sequence>`, stable across restarts.
     pub idempotency_key: String,
     /// The frame bytes.
     pub payload: Vec<u8>,
@@ -368,7 +368,7 @@ pub struct Transcript {
     worker: String,
     limits: TranscriptLimits,
     active: Option<ActiveCrank>,
-    pending_acks: Vec<Sequence>,
+    pending_acknowledgments: Vec<Sequence>,
     poisoned: Option<TranscriptFault>,
     stats: TranscriptStats,
 }
@@ -394,7 +394,7 @@ impl Transcript {
             TranscriptError::Fault(TranscriptFault {
                 worker: worker.clone(),
                 crank: None,
-                seq: None,
+                sequence: None,
                 operation: Operation::Open,
                 sqlite_primary: p,
                 sqlite_extended: x,
@@ -435,7 +435,7 @@ impl Transcript {
             worker: config.worker,
             limits: config.limits,
             active: None,
-            pending_acks: Vec::new(),
+            pending_acknowledgments: Vec::new(),
             poisoned: None,
             stats: TranscriptStats::default(),
         };
@@ -455,7 +455,7 @@ impl Transcript {
         self.poison(TranscriptFault {
             worker: self.worker.clone(),
             crank,
-            seq: None,
+            sequence: None,
             operation,
             sqlite_primary: p,
             sqlite_extended: x,
@@ -620,7 +620,7 @@ impl Transcript {
         TranscriptError::Fault(TranscriptFault {
             worker: self.worker.clone(),
             crank: self.active_crank(),
-            seq: None,
+            sequence: None,
             operation: Operation::Read,
             sqlite_primary: p,
             sqlite_extended: x,
@@ -641,7 +641,7 @@ impl Transcript {
                         epoch: r.get::<_, i64>(0)? as u64,
                         hash: r.get(1)?,
                         watermark_crank: r.get::<_, i64>(2)? as u64,
-                        watermark_seq: r.get::<_, i64>(3)? as u64,
+                        watermark_sequence: r.get::<_, i64>(3)? as u64,
                         meta: SnapshotMeta {
                             engine_signature: r.get(4)?,
                             panic_on_reference_error: r.get::<_, i64>(5)? != 0,
@@ -677,7 +677,7 @@ impl Transcript {
                     .into(),
             ));
         };
-        let acknowledgments = std::mem::take(&mut self.pending_acks);
+        let acknowledgments = std::mem::take(&mut self.pending_acknowledgments);
         let acknowledgments_for_retry = acknowledgments.clone();
         let result = self.transact(Operation::Admit, None, |transaction| {
             flush_acknowledgments(transaction, &acknowledgments)?;
@@ -690,10 +690,10 @@ impl Transcript {
                 "INSERT INTO event (crank_id, kind, payload) VALUES (?1, 'inbound', ?2)",
                 params![crank, inbound],
             )?;
-            let seq = transaction.last_insert_rowid();
+            let sequence = transaction.last_insert_rowid();
             transaction.execute(
                 "UPDATE crank SET inbound_seq = ?1 WHERE crank_id = ?2",
-                params![seq, crank],
+                params![sequence, crank],
             )?;
             Ok(crank as u64)
         });
@@ -709,7 +709,7 @@ impl Transcript {
                 Ok(crank)
             }
             Err(e) => {
-                self.pending_acks = acknowledgments_for_retry;
+                self.pending_acknowledgments = acknowledgments_for_retry;
                 Err(e)
             }
         }
@@ -776,11 +776,11 @@ impl Transcript {
                 )?;
                 for payload in active.pending {
                     insert.execute(params![crank as i64, payload])?;
-                    let seq = transaction.last_insert_rowid() as u64;
+                    let sequence = transaction.last_insert_rowid() as u64;
                     frames.push(ReleasableFrame {
-                        seq,
+                        sequence,
                         crank,
-                        idempotency_key: format!("{worker}:{seq}"),
+                        idempotency_key: format!("{worker}:{sequence}"),
                         payload,
                     });
                 }
@@ -824,16 +824,16 @@ impl Transcript {
     /// a crash first merely re-releases them, and receivers drop the
     /// duplicates by sequence.
     pub fn mark_released(&mut self, seqs: impl IntoIterator<Item = Sequence>) {
-        self.pending_acks.extend(seqs);
+        self.pending_acknowledgments.extend(seqs);
     }
 
     /// Make pending release acknowledgments durable now.
     pub fn flush_acknowledgments(&mut self) -> Result<(), TranscriptError> {
         self.check_healthy()?;
-        if self.pending_acks.is_empty() {
+        if self.pending_acknowledgments.is_empty() {
             return Ok(());
         }
-        let acknowledgments = std::mem::take(&mut self.pending_acks);
+        let acknowledgments = std::mem::take(&mut self.pending_acknowledgments);
         self.transact(Operation::AcknowledgeRelease, None, |transaction| {
             flush_acknowledgments(transaction, &acknowledgments)
         })?;
@@ -854,11 +854,11 @@ impl Transcript {
             .map_err(|e| self.read_error(&e))?;
         let rows = statement
             .query_map([], |r| {
-                let seq = r.get::<_, i64>(0)? as u64;
+                let sequence = r.get::<_, i64>(0)? as u64;
                 Ok(ReleasableFrame {
-                    seq,
+                    sequence,
                     crank: r.get::<_, i64>(1)? as u64,
-                    idempotency_key: format!("{}:{seq}", self.worker),
+                    idempotency_key: format!("{}:{sequence}", self.worker),
                     payload: r.get(2)?,
                 })
             })
@@ -897,14 +897,15 @@ impl Transcript {
             )
             .map_err(|e| self.read_error(&e))?;
         let watermark_crank = live_crank.max(previous.as_ref().map_or(0, |s| s.watermark_crank));
-        let watermark_seq = live_seq.max(previous.as_ref().map_or(0, |s| s.watermark_seq));
+        let watermark_sequence =
+            live_seq.max(previous.as_ref().map_or(0, |s| s.watermark_sequence));
         let hash = match blob_store.write_blob(blob) {
             Ok(hash) => hash,
             Err(e) => {
                 return Err(self.poison(TranscriptFault {
                     worker: self.worker.clone(),
                     crank: None,
-                    seq: None,
+                    sequence: None,
                     operation: Operation::WriteSnapshotBlob,
                     sqlite_primary: None,
                     sqlite_extended: None,
@@ -913,7 +914,7 @@ impl Transcript {
                 }))
             }
         };
-        let acknowledgments = std::mem::take(&mut self.pending_acks);
+        let acknowledgments = std::mem::take(&mut self.pending_acknowledgments);
         let record_hash = hash.clone();
         let record_meta = meta.clone();
         let epoch = self.transact(Operation::PublishSnapshot, None, |transaction| {
@@ -926,7 +927,7 @@ impl Transcript {
                     record_meta.engine_signature,
                     record_meta.panic_on_reference_error as i64,
                     watermark_crank as i64,
-                    watermark_seq as i64
+                    watermark_sequence as i64
                 ],
             )?;
             Ok(transaction.last_insert_rowid() as u64)
@@ -936,7 +937,7 @@ impl Transcript {
             epoch,
             hash,
             watermark_crank,
-            watermark_seq,
+            watermark_sequence,
             meta,
         })
     }
@@ -951,7 +952,7 @@ impl Transcript {
         let Some(snapshot) = self.latest_snapshot()? else {
             return Ok(Vec::new());
         };
-        let acknowledgments = std::mem::take(&mut self.pending_acks);
+        let acknowledgments = std::mem::take(&mut self.pending_acknowledgments);
         let superseded = self.transact(Operation::Compact, None, |transaction| {
             flush_acknowledgments(transaction, &acknowledgments)?;
             let watermark = snapshot.watermark_crank as i64;
@@ -1022,7 +1023,7 @@ impl Transcript {
             TranscriptError::Fault(TranscriptFault {
                 worker: self.worker.clone(),
                 crank: None,
-                seq: None,
+                sequence: None,
                 operation: Operation::Read,
                 sqlite_primary: None,
                 sqlite_extended: None,
@@ -1111,8 +1112,8 @@ fn flush_acknowledgments(
     let mut statement = transaction.prepare(
         "UPDATE event SET released = 1 WHERE seq = ?1 AND kind IN ('outbound', 'host-effect')",
     )?;
-    for seq in acknowledgments {
-        statement.execute([*seq as i64])?;
+    for sequence in acknowledgments {
+        statement.execute([*sequence as i64])?;
     }
     Ok(())
 }

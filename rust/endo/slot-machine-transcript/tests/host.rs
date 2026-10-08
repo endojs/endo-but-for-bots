@@ -4,7 +4,6 @@
 
 use std::cell::Cell;
 use std::path::Path;
-use std::rc::Rc;
 
 use slot_machine_transcript::{
     AdmissionError, AdmittedCallbacks, CallbackRegistry, ContentAddressedStore, HostCallError,
@@ -184,7 +183,7 @@ fn barrier_in_a_crank_that_never_committed_stops_retry_until_cleared() {
     let stop = t.recovery_gate().unwrap().unwrap_err();
     let RecoveryStop::EscapedBarrier {
         crank,
-        seq,
+        sequence,
         callback,
     } = stop
     else {
@@ -198,7 +197,7 @@ fn barrier_in_a_crank_that_never_committed_stops_retry_until_cleared() {
         replay.call("launch-missile", None, b"target"),
         Err(ReplayStop::Mismatch { .. })
     ));
-    t.clear_barrier(seq).unwrap();
+    t.clear_barrier(sequence).unwrap();
     assert_eq!(t.recovery_gate().unwrap(), Ok(()));
 }
 
@@ -237,13 +236,13 @@ fn replay_follows_the_guest_call_order_around_a_barrier() {
             opened: None
         })
     );
-    let Err(ReplayStop::Barrier { seq, .. }) = replay.call("launch-missile", None, b"target")
+    let Err(ReplayStop::Barrier { sequence, .. }) = replay.call("launch-missile", None, b"target")
     else {
         panic!("expected the barrier second");
     };
     // Once cleared, replay answers the barrier and the calls after it in
     // the order the guest made them.
-    t.clear_barrier(seq).unwrap();
+    t.clear_barrier(sequence).unwrap();
     let mut replay = t.host_replay().unwrap();
     replay.begin_crank(1);
     replay.call("now", None, b"clock").unwrap();
@@ -283,7 +282,7 @@ fn outbound_effect_runs_only_after_commit_with_a_stable_idempotency_key() {
     assert_eq!(r, HostReply::Deferred);
     t.abort_crank().unwrap();
     assert!(t.releasable_effects().unwrap().is_empty());
-    // Committed crank: releasable after commit, keyed by `<worker>:<seq>`.
+    // Committed crank: releasable after commit, keyed by `<worker>:<sequence>`.
     t.begin_crank(b"d2").unwrap();
     t.host_call(
         &callbacks,
@@ -298,16 +297,19 @@ fn outbound_effect_runs_only_after_commit_with_a_stable_idempotency_key() {
     let effects = t.releasable_effects().unwrap();
     assert_eq!(effects.len(), 1);
     assert_eq!(effects[0].request, b"world");
-    assert_eq!(effects[0].idempotency_key, format!("w:{}", effects[0].seq));
+    assert_eq!(
+        effects[0].idempotency_key,
+        format!("w:{}", effects[0].sequence)
+    );
     // Crash after invoking the provider, before the ack is durable: the
     // effect is offered again under the same key, which the provider's
     // idempotency protocol collapses.
-    t.mark_released([effects[0].seq]);
+    t.mark_released([effects[0].sequence]);
     drop(t);
     let mut t = reopen(root.path());
     let again = t.releasable_effects().unwrap();
     assert_eq!(again, effects);
-    t.mark_released([again[0].seq]);
+    t.mark_released([again[0].sequence]);
     t.flush_acknowledgments().unwrap();
     assert!(t.releasable_effects().unwrap().is_empty());
 }
@@ -627,34 +629,20 @@ fn host_call_refuses_an_unknown_callback_and_a_call_outside_a_crank() {
     t.abort_crank().unwrap();
 }
 
-/// A transactional effect: append the request to a local table.
+/// A transactional effect: put the request into the callback's store.
 fn put_row(request: &[u8]) -> TransactionalWrite {
-    let request = request.to_vec();
-    Box::new(move |transaction| {
-        transaction.execute(
-            "CREATE TABLE IF NOT EXISTS applied (request BLOB NOT NULL) STRICT",
-            [],
-        )?;
-        transaction.execute("INSERT INTO applied (request) VALUES (?1)", [&request])?;
-        Ok(())
-    })
+    vec![(request.to_vec(), Some(b"applied".to_vec()))]
 }
 
-/// How many times `put_row` has been applied durably.
+/// How many entries `put_row` has applied durably.
 fn applied(root: &Path) -> i64 {
     let connection = rusqlite::Connection::open(root.join("t.sqlite")).unwrap();
-    let exists: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'applied'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    if exists == 0 {
-        return 0;
-    }
     connection
-        .query_row("SELECT COUNT(*) FROM applied", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM host_store WHERE callback = 'put-row'",
+            [],
+            |row| row.get(0),
+        )
         .unwrap()
 }
 
@@ -935,107 +923,6 @@ fn a_reply_past_the_byte_bound_is_refused_and_its_handle_recorded_broken() {
     assert!(handles[0].broken);
 }
 
-/// Run `statement` as a transactional write and report whether the
-/// authorizer denied it. The write swallows the error so the crank's own
-/// commit bookkeeping cannot stand in for the authorizer.
-fn authorizer_denies(statement: &'static str) -> bool {
-    let root = tempfile::tempdir().unwrap();
-    let callbacks = callbacks();
-    let (mut t, _) = open(root.path());
-    let denied = Rc::new(Cell::new(None));
-    t.begin_crank(b"d1").unwrap();
-    let observed = denied.clone();
-    t.host_call_transactional(&callbacks, "put-row", None, b"k=v", move |_| {
-        let observed = observed.clone();
-        let write: TransactionalWrite = Box::new(move |transaction| {
-            let outcome = transaction.execute_batch(statement);
-            observed.set(Some(matches!(
-                outcome,
-                Err(rusqlite::Error::SqliteFailure(e, _))
-                    if e.code == rusqlite::ErrorCode::AuthorizationForStatementDenied
-            )));
-            Ok(())
-        });
-        (reply(b"ok"), write)
-    })
-    .unwrap();
-    t.commit_crank().unwrap();
-    denied.get().expect("the write ran")
-}
-
-#[test]
-fn a_transactional_write_cannot_touch_the_transcript_tables() {
-    for statement in [
-        "SELECT count(*) FROM event",
-        "UPDATE crank SET state = 'aborted' WHERE crank_id = 0",
-        "INSERT INTO meta (key, value) VALUES ('k', 'v')",
-        "DELETE FROM host_handle",
-        "CREATE INDEX evil ON event (payload)",
-        "DROP TABLE snapshot",
-        "PRAGMA user_version = 7",
-        "SAVEPOINT s",
-        "ATTACH DATABASE ':memory:' AS other",
-        "REINDEX",
-        // SQLite folds identifier case.
-        "SELECT count(*) FROM EVENT",
-        "UPDATE Crank SET state = 'aborted' WHERE crank_id = 0",
-        // A temp object would shadow the transcript's unqualified names.
-        "CREATE TEMP TABLE EVENT (seq INTEGER PRIMARY KEY)",
-        "CREATE TEMP TABLE own_scratch (v INTEGER)",
-        "CREATE TEMP VIEW event AS SELECT 1",
-        "CREATE TEMP VIEW Crank AS SELECT 1 AS crank_id, 'committed' AS state",
-        "CREATE TABLE own (v INTEGER); CREATE TEMP TRIGGER t AFTER INSERT ON own BEGIN SELECT 1; END",
-        "CREATE VIEW host_handle_v AS SELECT 1; DROP VIEW host_handle_v; CREATE VIEW Host_Handle AS SELECT 1",
-        // The transcript's AUTOINCREMENT counters.
-        "UPDATE sqlite_sequence SET seq = 9223372036854775807 WHERE name = 'event'",
-    ] {
-        assert!(authorizer_denies(statement), "{statement} was allowed");
-    }
-    // The adapter's own tables stay writable.
-    for statement in [
-        "CREATE TABLE own (v INTEGER)",
-        "CREATE TABLE own (v INTEGER PRIMARY KEY AUTOINCREMENT); INSERT INTO own DEFAULT VALUES",
-        "CREATE TABLE own (v INTEGER); CREATE VIEW own_view AS SELECT v FROM own; DROP VIEW own_view; DROP TABLE own",
-        "CREATE TABLE own (v INTEGER); INSERT INTO own VALUES (abs(-1)); SELECT count(*) FROM own",
-    ] {
-        assert!(!authorizer_denies(statement), "{statement} was denied");
-    }
-}
-
-#[test]
-fn a_shadowing_temp_table_cannot_capture_the_transcript_writes() {
-    let root = tempfile::tempdir().unwrap();
-    let callbacks = callbacks();
-    let (mut t, _) = open(root.path());
-    t.begin_crank(b"d1").unwrap();
-    t.host_call_transactional(&callbacks, "put-row", None, b"k=v", |_| {
-        let write: TransactionalWrite = Box::new(|transaction| {
-            transaction.execute_batch(
-                "CREATE TEMP TABLE EVENT (seq INTEGER PRIMARY KEY, crank_id, kind, payload)",
-            )
-        });
-        (reply(b"ok"), write)
-    })
-    .unwrap();
-    assert!(t.commit_crank().is_err());
-    drop(t);
-    // The refused write left nothing behind: a fresh delivery's inbound
-    // event is durable in the main schema.
-    let mut t = reopen(root.path());
-    t.begin_crank(b"d2").unwrap();
-    t.commit_crank().unwrap();
-    drop(t);
-    let connection = rusqlite::Connection::open(root.path().join("t.sqlite")).unwrap();
-    let durable: i64 = connection
-        .query_row(
-            "SELECT count(*) FROM main.event WHERE payload = ?1",
-            [b"d2".as_slice()],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(durable, 1);
-}
-
 #[test]
 fn an_escaped_close_of_a_handle_opened_in_the_same_crank_breaks_it() {
     let root = tempfile::tempdir().unwrap();
@@ -1066,21 +953,6 @@ fn an_escaped_close_of_a_handle_opened_in_the_same_crank_breaks_it() {
         t.recovery_gate().unwrap(),
         Err(RecoveryStop::BrokenHandles(vec![file]))
     );
-}
-
-#[test]
-fn a_denied_transactional_write_fails_the_commit() {
-    let root = tempfile::tempdir().unwrap();
-    let callbacks = callbacks();
-    let (mut t, _) = open(root.path());
-    t.begin_crank(b"d1").unwrap();
-    t.host_call_transactional(&callbacks, "put-row", None, b"k=v", |_| {
-        let write: TransactionalWrite =
-            Box::new(|transaction| transaction.execute_batch("SELECT count(*) FROM event"));
-        (reply(b"ok"), write)
-    })
-    .unwrap();
-    assert!(t.commit_crank().is_err());
 }
 
 #[test]
@@ -1146,10 +1018,10 @@ fn a_barrier_reply_past_the_byte_bound_forces_abort_and_stops_recovery() {
         "expected an escaped barrier, got {stop:?}"
     );
     // Only the one barrier ran, so clearing it clears the gate.
-    let RecoveryStop::EscapedBarrier { seq, .. } = stop else {
+    let RecoveryStop::EscapedBarrier { sequence, .. } = stop else {
         unreachable!()
     };
-    t.clear_barrier(seq).unwrap();
+    t.clear_barrier(sequence).unwrap();
     assert_eq!(t.recovery_gate().unwrap(), Ok(()));
 }
 

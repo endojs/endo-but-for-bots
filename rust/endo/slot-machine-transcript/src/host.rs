@@ -15,12 +15,12 @@
 //!   as `host-request` / `host-reply` events that commit with the crank, so
 //!   an aborted crank leaves none. A `transactional` call goes through
 //!   [`Transcript::host_call_transactional`] instead: its adapter performs
-//!   no effect when invoked and returns a [`TransactionalWrite`] that runs
-//!   inside the crank's commit transaction, so an aborted crank applies
+//!   no effect when invoked and returns a [`TransactionalWrite`] that the
+//!   crank's commit transaction applies, so an aborted crank applies
 //!   nothing and a retried crank applies the effect once. An `outbound` call is
 //!   not invoked during the crank. It is staged as a `host-effect` event and
 //!   becomes releasable only after commit ([`Transcript::releasable_effects`]),
-//!   keyed by `<worker>:<seq>` for the provider's idempotency protocol. A
+//!   keyed by `<worker>:<sequence>` for the provider's idempotency protocol. A
 //!   `barrier` call's request is made durable in its own transaction
 //!   *before* invocation, so even a crash mid-crank leaves a record that an
 //!   effect may have escaped.
@@ -51,8 +51,6 @@
 //! a [`HandleRecord::created_by`] may name a sequence no event backs.
 
 use std::collections::{BTreeMap, VecDeque};
-
-use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 
 use rusqlite::{params, OptionalExtension};
 
@@ -130,7 +128,6 @@ pub struct CallbackRegistry {
 }
 
 impl CallbackRegistry {
-    /// An empty registry.
     pub fn new() -> CallbackRegistry {
         CallbackRegistry::default()
     }
@@ -142,7 +139,6 @@ impl CallbackRegistry {
         self
     }
 
-    /// Register `name` without a classification.
     pub fn unclassified(mut self, name: &str) -> CallbackRegistry {
         self.entries.insert(name.to_string(), None);
         self
@@ -190,7 +186,6 @@ pub struct AdmittedCallbacks {
 }
 
 impl AdmittedCallbacks {
-    /// The classification of `name`, if registered.
     pub fn class(&self, name: &str) -> Option<HostClass> {
         self.classes.get(name).copied()
     }
@@ -209,26 +204,13 @@ pub struct HostOutcome {
     pub closes: bool,
 }
 
-/// A transactional callback's local effect, applied inside the crank's
-/// commit transaction on the worker's transcript database. An aborted
-/// crank never runs it, so a retry cannot apply the effect twice.
-///
-/// The write runs under an SQLite authorizer that confines it to the
-/// adapter's own tables in the `main` schema: it may not read or write the
-/// transcript's tables (`meta`, `snapshot`, `crank`, `event`, `host_call`,
-/// `host_handle`) or `sqlite_sequence`, in any letter case; create or drop
-/// anything in the `temp` schema, whose names would shadow the
-/// transcript's unqualified ones for the life of the connection; end or
-/// nest the transaction; attach a database; or change a pragma. Any action
-/// the authorizer does not allow-list is denied. A
-/// denied statement fails the write, which fails the crank's commit and
-/// poisons the transcript until it is reopened.
-///
-/// The authorizer guards against a cooperating adapter's mistakes. It is
-/// not a boundary against a hostile one: the write receives the
-/// transaction, which derefs to the connection that installs the
-/// authorizer and so could remove it. Admit only trusted adapters.
-pub type TransactionalWrite = Box<dyn Fn(&rusqlite::Transaction<'_>) -> rusqlite::Result<()>>;
+/// A transactional callback's local effect: a write set of `(key, value)`
+/// entries in the callback's own namespace of the transcript's
+/// `host_store` table, where `Some(value)` puts and `None` deletes. The
+/// crank's commit transaction applies it with the transcript's own
+/// statements, so an aborted crank applies nothing and a retry cannot
+/// apply the effect twice. The adapter never receives the connection.
+pub type TransactionalWrite = Vec<(Vec<u8>, Option<Vec<u8>>)>;
 
 /// What the guest gets back from a host call.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -309,7 +291,7 @@ pub enum RecoveryStop {
     /// effect may have escaped. An operator must clear it.
     EscapedBarrier {
         crank: CrankId,
-        seq: Sequence,
+        sequence: Sequence,
         callback: String,
     },
     /// Handles re-seated as broken and not yet replaced or reported lost.
@@ -325,7 +307,7 @@ pub enum ReplayStop {
     /// [`Transcript::host_replay`].
     Barrier {
         crank: CrankId,
-        seq: Sequence,
+        sequence: Sequence,
         callback: String,
     },
     /// The replayed guest's call differs from the recorded one in callback,
@@ -335,87 +317,25 @@ pub enum ReplayStop {
     BrokenHandle(HandleId),
 }
 
-/// The transcript's own tables, which a [`TransactionalWrite`] may not touch.
-const TRANSCRIPT_TABLES: [&str; 6] = [
-    "meta",
-    "snapshot",
-    "crank",
-    "event",
-    "host_call",
-    "host_handle",
-];
-
-/// Allow-list what a table write needs and deny everything else, so an
-/// action this list does not name (a virtual table, `REINDEX`, an action a
-/// newer SQLite reports as `Unknown`) fails closed. Function calls are
-/// allowed: the crate enables neither rusqlite's `functions` nor its `vtab`
-/// feature, so only SQLite's built-in functions exist on the connection.
-///
-/// Every `temp`-schema action is denied: SQLite resolves an unqualified
-/// name in `temp` before `main`, and the transcript's own statements are
-/// unqualified, so a temp table or view named `event` would capture its
-/// writes or forge its reads. SQLite folds identifier case, and the
-/// authorizer sees a name as the statement spelled it, so names are
-/// compared case-insensitively.
-fn confine_transactional_write(context: AuthContext<'_>) -> Authorization {
-    let name = match context.action {
-        AuthAction::Select | AuthAction::Recursive | AuthAction::Function { .. } => {
-            return Authorization::Allow
-        }
-        AuthAction::CreateView { view_name } | AuthAction::DropView { view_name } => view_name,
-        AuthAction::CreateIndex { table_name, .. }
-        | AuthAction::CreateTable { table_name }
-        | AuthAction::CreateTrigger { table_name, .. }
-        | AuthAction::Delete { table_name }
-        | AuthAction::DropIndex { table_name, .. }
-        | AuthAction::DropTable { table_name }
-        | AuthAction::DropTrigger { table_name, .. }
-        | AuthAction::Insert { table_name }
-        | AuthAction::Read { table_name, .. }
-        | AuthAction::Update { table_name, .. }
-        | AuthAction::AlterTable { table_name, .. }
-        | AuthAction::Analyze { table_name } => table_name,
-        _ => return Authorization::Deny,
-    };
-    if context.database_name.is_some_and(|db| db != "main") || is_reserved_name(name) {
-        Authorization::Deny
-    } else {
-        Authorization::Allow
-    }
-}
-
-/// Whether `name` is a transcript table or `sqlite_sequence`, whose
-/// counters the transcript's `AUTOINCREMENT` keys draw from, in any letter
-/// case. (`CREATE` and `DROP` themselves write `sqlite_schema`, so that
-/// table stays reachable; SQLite refuses a direct write to it.)
-fn is_reserved_name(name: &str) -> bool {
-    TRANSCRIPT_TABLES
-        .iter()
-        .chain(&["sqlite_sequence"])
-        .any(|table| table.eq_ignore_ascii_case(name))
-}
-
-/// Run a transactional write confined by [`confine_transactional_write`].
-/// The statement cache is flushed first so the write cannot reuse a
-/// statement the transcript prepared without the authorizer, and again
-/// after, by a guard that also removes the authorizer if the write
-/// unwinds, so the transcript's own statements never run under it.
-fn run_transactional_write(
+/// Apply `callback`'s transactional write set to `host_store`.
+fn apply_transactional_write(
     transaction: &rusqlite::Transaction<'_>,
+    callback: &str,
     write: &TransactionalWrite,
 ) -> rusqlite::Result<()> {
-    struct Confined<'a, 'c>(&'a rusqlite::Transaction<'c>);
-    impl Drop for Confined<'_, '_> {
-        fn drop(&mut self) {
-            self.0
-                .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
-            self.0.flush_prepared_statement_cache();
-        }
+    for (key, value) in write {
+        match value {
+            Some(value) => transaction.execute(
+                "INSERT OR REPLACE INTO host_store (callback, key, value) VALUES (?1, ?2, ?3)",
+                rusqlite::params![callback, key, value],
+            )?,
+            None => transaction.execute(
+                "DELETE FROM host_store WHERE callback = ?1 AND key = ?2",
+                rusqlite::params![callback, key],
+            )?,
+        };
     }
-    transaction.flush_prepared_statement_cache();
-    transaction.authorizer(Some(confine_transactional_write));
-    let _confined = Confined(transaction);
-    write(transaction)
+    Ok(())
 }
 
 /// One call staged in the active crank.
@@ -428,7 +348,7 @@ pub(crate) enum Staged {
         handle: Option<HandleId>,
         request: Vec<u8>,
         /// Set for a barrier whose request row is already durable.
-        request_seq: Option<Sequence>,
+        request_sequence: Option<Sequence>,
         reply: Vec<u8>,
         opens: Option<(HandleId, Option<Vec<u8>>)>,
         closes: bool,
@@ -466,10 +386,10 @@ pub(crate) enum Staged {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReleasableEffect {
     /// The `host-effect` event sequence.
-    pub seq: Sequence,
+    pub sequence: Sequence,
     /// The crank that committed it.
     pub crank: CrankId,
-    /// `<worker>:<seq>`: the provider's idempotency key.
+    /// `<worker>:<sequence>`: the provider's idempotency key.
     pub idempotency_key: String,
     /// The provider callback.
     pub callback: String,
@@ -492,6 +412,12 @@ pub(crate) const SCHEMA: &str = "
         cleared INTEGER NOT NULL DEFAULT 0
     ) STRICT;
     CREATE UNIQUE INDEX IF NOT EXISTS host_call_by_crank ON host_call (crank_id, call_ordinal);
+    CREATE TABLE IF NOT EXISTS host_store (
+        callback TEXT NOT NULL,
+        key BLOB NOT NULL,
+        value BLOB NOT NULL,
+        PRIMARY KEY (callback, key)
+    ) STRICT;
     CREATE TABLE IF NOT EXISTS host_handle (
         handle_id INTEGER PRIMARY KEY,
         created_by_seq INTEGER NOT NULL,
@@ -528,25 +454,25 @@ pub(crate) fn commit_staged(
                 class,
                 handle,
                 request,
-                request_seq,
+                request_sequence,
                 reply,
                 opens,
                 closes,
                 write,
             } => {
                 if let Some(write) = write {
-                    run_transactional_write(transaction, write)?;
+                    apply_transactional_write(transaction, callback, write)?;
                 }
-                let request_seq = match request_seq {
-                    Some(seq) => *seq,
+                let request_sequence = match request_sequence {
+                    Some(sequence) => *sequence,
                     None => {
-                        let seq = insert_event(transaction, crank, "host-request", request)?;
+                        let sequence = insert_event(transaction, crank, "host-request", request)?;
                         transaction.execute(
                             "INSERT INTO host_call
                                (request_seq, crank_id, call_ordinal, callback, class, handle_id)
                              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                             params![
-                                seq as i64,
+                                sequence as i64,
                                 crank as i64,
                                 *ordinal as i64,
                                 callback,
@@ -554,25 +480,25 @@ pub(crate) fn commit_staged(
                                 handle.map(|h| h as i64)
                             ],
                         )?;
-                        seq
+                        sequence
                     }
                 };
-                let reply_seq = insert_event(transaction, crank, "host-reply", reply)?;
+                let reply_sequence = insert_event(transaction, crank, "host-reply", reply)?;
                 transaction.execute(
                     "UPDATE host_call SET reply_seq = ?1, opened_handle = ?2, closes = ?3
                      WHERE request_seq = ?4",
                     params![
-                        reply_seq as i64,
+                        reply_sequence as i64,
                         opens.as_ref().map(|(h, _)| *h as i64),
                         *closes as i64,
-                        request_seq as i64
+                        request_sequence as i64
                     ],
                 )?;
                 if let Some((h, descriptor)) = opens {
                     transaction.execute(
                         "INSERT INTO host_handle (handle_id, created_by_seq, callback, descriptor, open)
                          VALUES (?1, ?2, ?3, ?4, 1)",
-                        params![*h as i64, request_seq as i64, callback, descriptor],
+                        params![*h as i64, request_sequence as i64, callback, descriptor],
                     )?;
                 }
                 if let (true, Some(h)) = (*closes, handle) {
@@ -587,12 +513,12 @@ pub(crate) fn commit_staged(
                 callback,
                 request,
             } => {
-                let seq = insert_event(transaction, crank, "host-effect", request)?;
+                let sequence = insert_event(transaction, crank, "host-effect", request)?;
                 transaction.execute(
                     "INSERT INTO host_call (request_seq, crank_id, call_ordinal, callback, class)
                      VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![
-                        seq as i64,
+                        sequence as i64,
                         crank as i64,
                         *ordinal as i64,
                         callback,
@@ -853,17 +779,17 @@ impl Transcript {
             return Ok(HostReply::Deferred);
         }
         // A barrier's request is durable before the effect runs.
-        let request_seq = if class == HostClass::Barrier {
+        let request_sequence = if class == HostClass::Barrier {
             let callback = callback.to_string();
             Some(
                 self.transact(Operation::HostBarrier, Some(crank), |transaction| {
-                    let seq = insert_event(transaction, crank, "host-request", request)?;
+                    let sequence = insert_event(transaction, crank, "host-request", request)?;
                     transaction.execute(
                         "INSERT INTO host_call
                        (request_seq, crank_id, call_ordinal, callback, class, handle_id)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                         params![
-                            seq as i64,
+                            sequence as i64,
                             crank as i64,
                             ordinal as i64,
                             callback,
@@ -871,7 +797,7 @@ impl Transcript {
                             handle.map(|h| h as i64)
                         ],
                     )?;
-                    Ok(seq)
+                    Ok(sequence)
                 })?,
             )
         } else {
@@ -930,7 +856,7 @@ impl Transcript {
                 class,
                 handle,
                 request: request.to_vec(),
-                request_seq,
+                request_sequence,
                 reply: outcome.reply.clone(),
                 opens: opened,
                 closes: outcome.closes,
@@ -968,12 +894,12 @@ impl Transcript {
         }
         self.transact(Operation::HostEscape, Some(crank), |transaction| {
             if let Some((h, descriptor)) = &opened {
-                let seq = insert_event(transaction, crank, "host-escape", request)?;
+                let sequence = insert_event(transaction, crank, "host-escape", request)?;
                 transaction.execute(
                     "INSERT INTO host_handle
                        (handle_id, created_by_seq, callback, descriptor, open, broken)
                      VALUES (?1, ?2, ?3, ?4, 1, 1)",
-                    params![*h as i64, seq as i64, callback, descriptor],
+                    params![*h as i64, sequence as i64, callback, descriptor],
                 )?;
             }
             if let Some(h) = closed {
@@ -999,11 +925,11 @@ impl Transcript {
                  ORDER BY e.seq",
             )?;
             let rows = statement.query_map([], |r| {
-                let seq = r.get::<_, i64>(0)? as Sequence;
+                let sequence = r.get::<_, i64>(0)? as Sequence;
                 Ok(ReleasableEffect {
-                    seq,
+                    sequence,
                     crank: r.get::<_, i64>(1)? as CrankId,
-                    idempotency_key: format!("{}:{seq}", self.worker),
+                    idempotency_key: format!("{}:{sequence}", self.worker),
                     callback: r.get(2)?,
                     request: r.get(3)?,
                 })
@@ -1122,7 +1048,7 @@ impl Transcript {
                 |r| {
                     Ok(RecoveryStop::EscapedBarrier {
                         crank: r.get::<_, i64>(0)? as CrankId,
-                        seq: r.get::<_, i64>(1)? as Sequence,
+                        sequence: r.get::<_, i64>(1)? as Sequence,
                         callback: r.get(2)?,
                     })
                 },
@@ -1152,17 +1078,17 @@ impl Transcript {
     /// barrier that stopped it. After clearing, discard that replay and call
     /// [`Transcript::host_replay`] again; resuming the stale one desyncs its
     /// queue from the recorded calls.
-    pub fn clear_barrier(&mut self, seq: Sequence) -> Result<(), TranscriptError> {
+    pub fn clear_barrier(&mut self, sequence: Sequence) -> Result<(), TranscriptError> {
         self.check_healthy()?;
         let changed = self.transact(Operation::Recover, None, |transaction| {
             transaction.execute(
                 "UPDATE host_call SET cleared = 1 WHERE request_seq = ?1 AND class = ?2",
-                params![seq as i64, HostClass::Barrier.tag()],
+                params![sequence as i64, HostClass::Barrier.tag()],
             )
         })?;
         if changed != 1 {
             return Err(TranscriptError::Protocol(format!(
-                "no barrier at seq {seq}"
+                "no barrier at seq {sequence}"
             )));
         }
         Ok(())
@@ -1186,7 +1112,7 @@ impl Transcript {
             let rows = statement.query_map([watermark as i64], |r| {
                 Ok(Recorded {
                     crank: r.get::<_, i64>(0)? as CrankId,
-                    seq: r.get::<_, i64>(1)? as Sequence,
+                    sequence: r.get::<_, i64>(1)? as Sequence,
                     callback: r.get(2)?,
                     class: r.get(3)?,
                     handle: r.get::<_, Option<i64>>(4)?.map(|h| h as HandleId),
@@ -1239,7 +1165,7 @@ fn read_handle(r: &rusqlite::Row<'_>) -> rusqlite::Result<HandleRecord> {
 #[derive(Clone, Debug)]
 struct Recorded {
     crank: CrankId,
-    seq: Sequence,
+    sequence: Sequence,
     callback: String,
     class: String,
     handle: Option<HandleId>,
@@ -1297,14 +1223,14 @@ impl HostReplay {
                 crank,
                 detail: format!(
                     "recorded {}({:?}) at seq {}, replayed {callback}({handle:?})",
-                    rec.callback, rec.handle, rec.seq
+                    rec.callback, rec.handle, rec.sequence
                 ),
             });
         }
         if rec.class == HostClass::Barrier.tag() && !rec.cleared {
             return Err(ReplayStop::Barrier {
                 crank,
-                seq: rec.seq,
+                sequence: rec.sequence,
                 callback: rec.callback,
             });
         }

@@ -75,11 +75,11 @@ pub struct Wire {
 
 impl Wire {
     pub fn receive(&mut self, frame: &ReleasableFrame) {
-        if self.highest.is_some_and(|h| frame.seq <= h) {
+        if self.highest.is_some_and(|h| frame.sequence <= h) {
             self.duplicates += 1;
             return;
         }
-        self.highest = Some(frame.seq);
+        self.highest = Some(frame.sequence);
         self.accepted.push(frame.payload.clone());
         self.accepted_keys.push(frame.idempotency_key.clone());
     }
@@ -171,7 +171,7 @@ impl Supervisor {
         }
         supervisor
             .transcript
-            .mark_released(frames.iter().map(|f| f.seq));
+            .mark_released(frames.iter().map(|f| f.sequence));
         Ok(supervisor)
     }
 
@@ -190,7 +190,8 @@ impl Supervisor {
                 for frame in &frames {
                     wire.receive(frame);
                 }
-                self.transcript.mark_released(frames.iter().map(|f| f.seq));
+                self.transcript
+                    .mark_released(frames.iter().map(|f| f.sequence));
                 Ok(())
             }
             Err(e) => {

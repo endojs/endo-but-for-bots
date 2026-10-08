@@ -156,7 +156,7 @@ impl<S: FrameSink> Embargo<S> {
 
     /// Sequences committed but not yet handed to the sink.
     pub fn queued(&self) -> Vec<Sequence> {
-        self.queue.iter().map(|f| f.seq).collect()
+        self.queue.iter().map(|f| f.sequence).collect()
     }
 
     /// Frames staged by the active crank.
@@ -220,7 +220,7 @@ impl<S: FrameSink> Embargo<S> {
         while let Some(frame) = self.queue.front() {
             match self.sink.deliver(frame) {
                 Ok(()) => {
-                    released.push(frame.seq);
+                    released.push(frame.sequence);
                     self.queue.pop_front();
                 }
                 Err(e) => {
@@ -292,28 +292,30 @@ impl DuplicateSuppressor {
         &self.highest
     }
 
-    /// Classify `seq` from `worker`, advancing the mark when it is fresh.
-    /// Assumes in-order delivery per worker (see [`FrameSink`]): any `seq`
+    /// Classify `sequence` from `worker`, advancing the mark when it is fresh.
+    /// Assumes in-order delivery per worker (see [`FrameSink`]): any `sequence`
     /// at or below the mark is a duplicate.
-    pub fn receive_seq(&mut self, worker: &str, seq: Sequence) -> Received {
+    pub fn receive_sequence(&mut self, worker: &str, sequence: Sequence) -> Received {
         match self.highest.get_mut(worker) {
-            Some(highest) if seq <= *highest => Received::Duplicate,
+            Some(highest) if sequence <= *highest => Received::Duplicate,
             Some(highest) => {
-                *highest = seq;
+                *highest = sequence;
                 Received::Fresh
             }
             None => {
-                self.highest.insert(worker.to_string(), seq);
+                self.highest.insert(worker.to_string(), sequence);
                 Received::Fresh
             }
         }
     }
 
-    /// Classify a released frame by its idempotency key (`<worker>:<seq>`).
+    /// Classify a released frame by its idempotency key (`<worker>:<sequence>`).
     pub fn receive(&mut self, frame: &ReleasableFrame) -> Received {
         match frame.idempotency_key.rsplit_once(':') {
-            Some((worker, seq)) if seq.parse::<Sequence>().ok() == Some(frame.seq) => {
-                self.receive_seq(worker, frame.seq)
+            Some((worker, sequence))
+                if sequence.parse::<Sequence>().ok() == Some(frame.sequence) =>
+            {
+                self.receive_sequence(worker, frame.sequence)
             }
             _ => Received::Malformed,
         }

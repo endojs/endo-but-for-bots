@@ -109,7 +109,7 @@ fn assert_released_in_order(outcome: ExecutionOutcome) {
     ));
     let payloads: Vec<&[u8]> = released.iter().map(|f| f.payload.as_slice()).collect();
     assert_eq!(payloads, FRAMES);
-    assert!(released.windows(2).all(|w| w[0].seq < w[1].seq));
+    assert!(released.windows(2).all(|w| w[0].sequence < w[1].sequence));
     assert!(released
         .iter()
         .all(|f| f.idempotency_key == format!("vat-1:{}", f.seq)));

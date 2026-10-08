@@ -68,7 +68,7 @@ impl std::error::Error for ContentAddressedStoreError {}
 /// keeps its own counter under a `.snapshot.` prefix, so the transcript's
 /// temporaries take a distinct `.transcript-blob.` prefix: two writers
 /// sharing one directory never open the same temporary.
-static TEMPORARY_SEQ: AtomicU64 = AtomicU64::new(0);
+static TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// The SHA-256 of `bytes`, lower-case hex: a blob's CAS name.
 pub fn blob_hash(bytes: &[u8]) -> String {
@@ -114,10 +114,11 @@ impl ContentAddressedStore {
     /// existing blob of the same hash is rewritten to the same content.
     pub fn write_blob(&self, bytes: &[u8]) -> io::Result<String> {
         let hash = blob_hash(bytes);
-        let seq = TEMPORARY_SEQ.fetch_add(1, Ordering::Relaxed);
-        let temporary = self
-            .directory
-            .join(format!(".transcript-blob.{}.{seq}.tmp", std::process::id()));
+        let sequence = TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let temporary = self.directory.join(format!(
+            ".transcript-blob.{}.{sequence}.tmp",
+            std::process::id()
+        ));
         let result = self.write_blob_steps(bytes, &temporary, &hash);
         if result.is_err() && !self.fault.as_ref().is_some_and(FaultPlan::dead) {
             // A surviving process cleans up after itself; a dead one leaves
