@@ -28,9 +28,9 @@ await withFormulaGraphLock(async () => {
 
 ## Guest Provisioning
 
-### introducedNames
+### endowments
 
-`introducedNames` maps `{ parentName: childName }` where `parentName` is resolved in the host's namespace and `childName` is written into the guest's namespace. The `childName` must be a valid **pet name** (lowercase, matching `/^[a-z0-9][a-z0-9-]{0,127}$/`), not a special name.
+`provideGuest` endows a guest through one `endowments` map, `{ guestName: hostNamePath }`, where `hostNamePath` is an array of path components resolved in the host's namespace (never a bare string) and `guestName` is written into the guest's namespace. A `guestName` beginning with `@` is a special, indelible endowment (for example `'@main'`), only accepted when the guest is created; any other `guestName` must be a valid **pet name** (lowercase, matching `/^[a-z0-9][a-z0-9-]{0,127}$/`). Guests no longer accept `introducedNames`; `provideHost` still does (`{ parentName: childName }`).
 
 ### Handle vs Guest
 
@@ -38,7 +38,7 @@ await withFormulaGraphLock(async () => {
 
 ### provideGuest idempotency
 
-On restart, calling `provideGuest` with `introducedNames` on an already-existing guest fails because the reincarnated handle formula lacks `write`. Guard with `E(agent).has(name)` before calling `provideGuest`.
+On restart, calling `provideGuest` with `endowments` on an already-existing guest fails because the reincarnated handle formula lacks `write`. Guard with `E(agent).has(name)` before calling `provideGuest`.
 
 ## Message Protocol
 

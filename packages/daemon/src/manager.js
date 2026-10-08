@@ -741,6 +741,13 @@ const makeDaemonCore = async (
           ['worker', formula.worker],
           ['networks', formula.networks],
           ['planes', formula.planes],
+          ...Object.entries(formula.specialNames ?? {}).map(
+            ([name, id]) =>
+              /** @type {[string, FormulaIdentifier]} */ ([
+                `special:${name}`,
+                id,
+              ]),
+          ),
         ];
       case 'marshal':
         return (formula.slots ?? []).map((s, i) => [`slot${i}`, s]);
@@ -3634,6 +3641,7 @@ const makeDaemonCore = async (
         workerId,
         networksDirectoryId,
         planesDirectoryId,
+        formula.specialNames,
         context,
       );
       const handle = /** @type {any} */ (agent).handle();
@@ -5491,6 +5499,7 @@ const makeDaemonCore = async (
     hostAgentId,
     hostHandleId,
     workerLabel,
+    specialEndowments = Object.create(null),
   ) => {
     // Pin each dependency formula to protect it from collection until the
     // parent guest formula links them via formulaDeps.
@@ -5502,6 +5511,34 @@ const makeDaemonCore = async (
       pinned.push(id);
       return id;
     };
+
+    // Special endowments were resolved by name before the graph lock was
+    // taken. Pin them first, then confirm each still names a formula (and
+    // that `@main` still names a worker), so a source removed in that gap
+    // fails creation instead of leaving the guest bound to a dead formula.
+    for (const [specialName, specialId] of Object.entries(specialEndowments)) {
+      pin(specialId);
+      // eslint-disable-next-line no-await-in-loop
+      const formulaType = await getTypeForId(specialId).catch(() => undefined);
+      if (
+        formulaType === undefined ||
+        (specialName === '@main' && formulaType !== 'worker')
+      ) {
+        for (const id of pinned) {
+          // eslint-disable-next-line no-await-in-loop
+          await unpinTransient(id);
+        }
+        throw makeError(
+          X`ENDO_SPECIAL_NAME_SOURCE_UNAVAILABLE: Special name ${q(specialName)} no longer names ${specialName === '@main' ? 'a worker' : 'a formula'}`,
+          Error,
+          { code: 'ENDO_SPECIAL_NAME_SOURCE_UNAVAILABLE' },
+        );
+      }
+    }
+    // An endowed `@main` takes the default worker's slot rather than
+    // overriding it, so the formula holds one worker and the remaining
+    // special names are only those the daemon does not bind itself.
+    const { '@main': endowedWorkerId, ...specialNames } = specialEndowments;
 
     // Generate the agent keypair first so we know the agent's node number.
     const guestFormulaNumber = /** @type {FormulaNumber} */ (
@@ -5554,14 +5591,16 @@ const makeDaemonCore = async (
         )
       ).id,
     );
-    const workerId = pin(
-      (
-        await formulateNumberedWorker(
-          /** @type {FormulaNumber} */ (await randomHex256()),
-          { label: workerLabel ?? 'guest', nodeNumber: agentNodeNumber },
-        )
-      ).id,
-    );
+    const workerId =
+      endowedWorkerId ??
+      pin(
+        (
+          await formulateNumberedWorker(
+            /** @type {FormulaNumber} */ (await randomHex256()),
+            { label: workerLabel ?? 'guest', nodeNumber: agentNodeNumber },
+          )
+        ).id,
+      );
     // Each guest gets its own (initially empty) networks directory that
     // controls which connection hints appear in locators it produces.
     const networksDirectoryId = pin(
@@ -5581,6 +5620,7 @@ const makeDaemonCore = async (
       mailboxStoreId,
       mailHubId,
       workerId,
+      specialNames: harden(specialNames),
       networksDirectoryId,
       planesDirectoryId,
       pinned,
@@ -5599,6 +5639,9 @@ const makeDaemonCore = async (
       mailboxStore: identifiers.mailboxStoreId,
       mailHub: identifiers.mailHubId,
       worker: identifiers.workerId,
+      ...(Object.keys(identifiers.specialNames).length === 0
+        ? {}
+        : { specialNames: identifiers.specialNames }),
       networks: identifiers.networksDirectoryId,
       planes: identifiers.planesDirectoryId,
     };
@@ -5618,12 +5661,14 @@ const makeDaemonCore = async (
     hostHandleId,
     deferredTasks,
     workerLabel,
+    specialEndowments = Object.create(null),
   ) => {
     return withFormulaGraphLock(async () => {
       const identifiers = await formulateGuestDependencies(
         hostAgentId,
         hostHandleId,
         workerLabel,
+        specialEndowments,
       );
 
       await deferredTasks.execute({

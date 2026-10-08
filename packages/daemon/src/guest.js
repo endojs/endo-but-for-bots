@@ -2,11 +2,12 @@
 
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
-import { q } from '@endo/errors';
+import { makeError, q, X } from '@endo/errors';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import { makePetSitter } from './pet-sitter.js';
 import {
   assertPetNamePath,
+  daemonReservedSpecialNames,
   namePathFrom,
   petNamePathFrom,
 } from './pet-name.js';
@@ -62,6 +63,7 @@ export const makeGuestMaker = ({
    * @param {FormulaIdentifier} mainWorkerId
    * @param {FormulaIdentifier} networksDirectoryId
    * @param {FormulaIdentifier} planesDirectoryId
+   * @param {Record<string, FormulaIdentifier> | undefined} specialEndowments
    * @param {Context} context
    */
   const makeGuest = async (
@@ -76,6 +78,7 @@ export const makeGuestMaker = ({
     mainWorkerId,
     networksDirectoryId,
     planesDirectoryId,
+    specialEndowments,
     context,
   ) => {
     context.thisDiesIfThatDies(hostHandleId);
@@ -88,6 +91,9 @@ export const makeGuestMaker = ({
     context.thisDiesIfThatDies(mainWorkerId);
     context.thisDiesIfThatDies(networksDirectoryId);
     context.thisDiesIfThatDies(planesDirectoryId);
+    for (const specialId of Object.values(specialEndowments ?? {})) {
+      context.thisDiesIfThatDies(specialId);
+    }
 
     const baseController = await provideStoreController(petStoreId);
     const mailboxController = await provideStoreController(mailboxStoreId);
@@ -95,12 +101,28 @@ export const makeGuestMaker = ({
       '@agent': guestId,
       '@self': handleId,
       '@host': hostHandleId,
+      '@main': mainWorkerId,
     };
     if (mailHubId !== undefined) {
       specialNames['@mail'] = mailHubId;
     }
     specialNames['@nets'] = networksDirectoryId;
     specialNames['@planes'] = planesDirectoryId;
+    for (const [specialName, specialId] of Object.entries(
+      specialEndowments ?? {},
+    )) {
+      // Every name the daemon binds above is reserved, whatever a formula
+      // holds; an endowed `@main` arrives as the formula's worker instead.
+      if (
+        specialName === '@main' ||
+        daemonReservedSpecialNames.includes(specialName)
+      ) {
+        throw makeError(
+          X`Special endowment must not replace daemon-bound name ${q(specialName)}`,
+        );
+      }
+      specialNames[specialName] = specialId;
+    }
     const specialStore = makePetSitter(baseController, specialNames);
 
     const getNetworkAddresses = () =>

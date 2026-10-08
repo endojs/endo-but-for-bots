@@ -425,7 +425,7 @@ Lal is provisioned as a guest caplet inside the Endo daemon:
 ### Setup (`setup.js`)
 
 ```
-E(agent).provideGuest('lal', { introducedNames: {}, agentName: 'profile-for-lal' })
+E(agent).provideGuest('lal', { endowments: {}, agentName: 'profile-for-lal' })
     │
     ├─ E(guest).storeValue(config, 'lal-config')   # Persist config
     │

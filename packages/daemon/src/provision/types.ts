@@ -101,6 +101,15 @@ export type HostProvisionPowers = {
     guestName: string,
     id: string,
   ) => Promise<void>;
+  /**
+   * Resolve one special (indelible) endowment's host pet name path to a
+   * formula identifier, failing if the source is missing or, for `@main`, is
+   * not a worker.
+   */
+  resolveSpecialEndowment: (
+    specialName: string,
+    hostPath: string[],
+  ) => Promise<string>;
 };
 
 export type ResolvedCredential = {

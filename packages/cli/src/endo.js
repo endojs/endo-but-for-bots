@@ -753,9 +753,9 @@ export const main = async rawArgs => {
     )
     .description('makes a mailbox and storage for a guest (peer or program)')
     .action(async (handleName, agentName, options) => {
-      const { as: agentNames, introduce: introducedNames } = options;
+      const { as: agentNames, introduce: introductions } = options;
       const { mkguest } = await import('./commands/mkguest.js');
-      return mkguest({ agentName, handleName, agentNames, introducedNames });
+      return mkguest({ agentName, handleName, agentNames, introductions });
     });
 
   program

@@ -7,7 +7,7 @@ Lal is an AI agent manager that runs as an unconfined guest caplet. It sends a c
 ### Setup script (`setup.js`)
 
 - Run via `endo run --UNCONFINED setup.js --powers @agent` or `yarn setup`.
-- Uses `introducedNames: harden({ '@agent': 'host-agent' })` to give the guest a reference to the host agent under the `@agent` special name.
+- Uses `endowments: harden({ 'host-agent': ['@agent'] })` to give the guest a reference to the host agent (the host's `@agent`) under the pet name `host-agent`.
 - Guards `provideGuest` with `E(agent).has(name)` to avoid crashes on restart (the handle formula lacks `write` on reincarnation).
 - LLM provider configuration (host, model, auth token) is received via forms at runtime, not environment variables.
 

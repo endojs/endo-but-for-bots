@@ -57,7 +57,7 @@ export const main = async agent => {
   const hasProviderFactory = await E(agent).has(providerFactoryGuest);
   if (!hasProviderFactory) {
     await E(agent).provideGuest(providerFactoryGuest, {
-      introducedNames: harden({ '@agent': 'host-agent' }),
+      endowments: harden({ 'host-agent': ['@agent'] }),
       agentName: providerFactoryAgent,
     });
   }
@@ -80,7 +80,7 @@ export const main = async agent => {
     const hasFactory = await E(agent).has(factoryGuestName);
     if (!hasFactory) {
       await E(agent).provideGuest(factoryGuestName, {
-        introducedNames: harden({ '@agent': 'host-agent' }),
+        endowments: harden({ 'host-agent': ['@agent'] }),
         agentName: factoryAgent,
       });
     }
