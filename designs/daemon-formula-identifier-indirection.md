@@ -84,6 +84,14 @@ that opaque number to an internal `FormulaIdentifier`. A formula may have any
 number of reference rows. Revocation changes one row's state, and rotation
 atomically revokes that row and inserts a new active row with the same target.
 
+This relocates formula identifiers rather than eliminating them: the registry's
+`target_formula_id` column becomes the only naming record that holds one
+(§ Where formula identifiers still live). Rotation makes an old `r1` locator
+fail closed unconditionally. It makes the *target* unreachable to the old
+holder only after legacy resolution is disabled (stage 5), because until then
+anyone holding a legacy locator or a previously disclosed formula identifier
+can still resolve the target through the compatibility reader.
+
 Use a versioned locator path so a reference number cannot be confused with the
 same-width formula number:
 
@@ -186,6 +194,28 @@ is a separate authority-bearing step. Conversely, `externalizeId` is replaced
 by issue-then-format and can no longer turn an arbitrary formula identifier
 directly into a locator.
 
+### Where formula identifiers still live
+
+The registry moves formula identifiers out of boundary and naming records; it
+does not remove them from the daemon. After this change they survive in:
+
+- `formula_reference.target_formula_id`, the one naming record that maps a
+  reference (binding or share) to its target;
+- formula bodies and formula-graph state, as internal graph edges;
+- daemon-private calls such as `resolvePetName`, `resolveReference`, and the
+  internal half of `reverseLocate`, which hand an identifier to formula
+  machinery and never return it across a host or guest facet; and
+- legacy locators and legacy SturdyRefs issued before this change, outside
+  daemon state, until legacy resolution is disabled.
+
+The trust boundary is therefore the daemon process and its manager database,
+not the pet-store table. A pet-store row holds a `binding` reference number,
+which is itself never exported. Anything that crosses a host or guest facet,
+CapTP, a locator, or a SturdyRef carries either a `share` reference number or
+an inspection reference, never a formula identifier. Compromise of the
+database or process exposes identifiers, as recorded under § Threat model and
+cost.
+
 ### Issue and resolve
 
 ```mermaid
@@ -283,6 +313,15 @@ The transaction always contains either the old active root or the new active
 root, so rotation cannot create a collection gap. If the process stops before
 commit, the old locator remains active. If it stops after commit but before the
 response arrives, retry returns the committed successor.
+
+Rotation revokes one `r1` reference; it does not revoke the target. While the
+legacy compatibility reader is enabled, a holder of a legacy locator for the
+same formula, or of a formula identifier disclosed by an earlier `identify`
+call or inspector output, can still resolve the target without any `r1`
+reference. Rotation is a complete leak response only for a target that was
+never exposed under the legacy scheme, or after legacy resolution is disabled
+(stage 5). Until then a publisher responding to a leak must treat any
+legacy-era exposure of the target as still live.
 
 ```mermaid
 sequenceDiagram
@@ -392,7 +431,9 @@ Every active reference is a formula-graph root:
 - A revoked reference and its tombstone do not root the target.
 
 The registry projects roots into the existing formula graph with an explicit
-`reference:<kind>:<reference-number-prefix>` edge label. Retention-path APIs
+`reference:<kind>:<row-ordinal>` edge label. The label uses a registry row
+ordinal rather than any part of the reference number, so retention-path output
+discloses no bearer material. Retention-path APIs
 use session-scoped inspection references for navigation. Merely inspecting a
 path does not issue or root a share; an explicit export action creates the
 locator and its corresponding root.
@@ -461,7 +502,8 @@ For newly issued `r1` references, this design protects against:
 It does not protect against:
 
 - a formula identifier already leaked under the legacy scheme while legacy
-  resolution remains enabled;
+  resolution remains enabled, including reaching a rotated target through such
+  an identifier or a legacy locator;
 - a holder that already enlivened and retained a presence;
 - delegation performed by that live holder;
 - compromise of the daemon database or process, which exposes active bearer
@@ -502,7 +544,7 @@ encryption-key custody and key-rotation blast radius. It is useful when
 stateless redemption is the goal; stateless redemption conflicts with this
 design's per-share revocation goal.
 
-### 4. Stateful opaque reference registry — recommended
+### 4. Stateful opaque reference registry (recommended)
 
 Map a random per-share reference number to the internal identifier. This is one
 extra lookup, but it directly models independent authority, atomic rotation,
@@ -538,15 +580,21 @@ network input.
 ## Acceptance criteria
 
 - No newly written locator, SturdyRef record, or pet-store row contains a
-  formula number or complete formula identifier.
+  formula number or complete formula identifier. The only naming record that
+  holds one is `formula_reference.target_formula_id`, and no host or guest
+  facet method returns it.
 - Formula-inspector and retention-path public results contain opaque inspection
   references rather than formula identifiers, and inspecting does not add a
   durable root.
 - Two shares for one formula have distinct reference numbers and both resolve;
   revoking either leaves the other active.
 - Rotation leaves the formula identifier and formula body unchanged, returns a
-  new locator, makes the old locator fail closed, and is idempotent after a
+  new locator, makes the old `r1` locator fail closed, and is idempotent after a
   lost response.
+- With legacy resolution enabled, a test shows that a legacy locator for a
+  rotated target still resolves (documenting the gap). With legacy resolution
+  disabled, the same legacy locator and the old `r1` locator both fail closed,
+  and only the successor resolves.
 - A cached locator cannot bypass revocation on a new enlivenment; a presence
   already live follows the documented session semantics.
 - An active share retains its target across restart. Revoking the last share

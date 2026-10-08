@@ -7,8 +7,8 @@ layer new groom notes at the top of this file.*
 
 *Recently added or revised:
 [daemon-formula-identifier-indirection](daemon-formula-identifier-indirection.md)
-(added 2026-10-08; a daemon-owned registry turns formula identifiers into
-strictly internal addresses and gives every locator or SturdyRef share a fresh,
+(added 2026-10-08; a daemon-owned registry relocates formula identifiers
+behind the daemon boundary and gives every locator or SturdyRef share a fresh,
 independently revocable 256-bit reference; rotation atomically replaces only
 that share, pet stores migrate to binding references, and active references
 participate explicitly in local and cross-peer retention),
