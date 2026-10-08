@@ -71,7 +71,7 @@ const projectGlobals = async (guest, request) => {
       : [global.petName ?? global.name];
     if (
       !introducedBindings.has(global.name) ||
-      // Missing introductions follow provideGuest's established ignore rule.
+      // A missing ordinary endowment is ignored by provideGuest.
       // eslint-disable-next-line no-await-in-loop
       (await E(guest).has(...petNamePath))
     ) {
@@ -138,9 +138,19 @@ export const provideEndoCodeModeGuest = async (
 
     const guest = await E(host).provideGuest(identity.guestName, {
       authority: request.authority,
+      // The daemon endows a guest through one `endowments` map from
+      // guest-side names to host pet name paths.
       ...(Object.keys(request.introducedNames).length === 0
         ? {}
-        : { introducedNames: request.introducedNames }),
+        : {
+            endowments: harden(
+              Object.fromEntries(
+                Object.entries(request.introducedNames).map(
+                  ([hostName, guestName]) => [guestName, [hostName]],
+                ),
+              ),
+            ),
+          }),
     });
     const proposed = harden({
       version: /** @type {1} */ (1),

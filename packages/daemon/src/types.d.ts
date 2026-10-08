@@ -219,6 +219,11 @@ export type GuestFormula = {
   mailboxStore: FormulaIdentifier;
   mailHub: FormulaIdentifier;
   worker: FormulaIdentifier;
+  /**
+   * Creator-endowed special names. An endowed `@main` is not listed here: it
+   * is the formula's `worker`.
+   */
+  specialNames?: Record<string, FormulaIdentifier>;
   networks: FormulaIdentifier;
   planes: FormulaIdentifier;
 };
@@ -1435,9 +1440,25 @@ export type MakeHostOptions = {
   introducedNames?: Record<string, string>;
 };
 
-export type MakeGuestOptions = MakeHostOptions & {
+export type MakeGuestOptions = {
+  agentName?: string | string[];
   /** Immutable named capability graph for a retained guest. */
   authority?: EndoGuestAuthority;
+  /**
+   * The single endowment mapping from guest-side names to the providing
+   * host's pet name paths (arrays of path components). The guest-side name
+   * (the map key) determines policy: a name beginning with `@` is a special,
+   * indelible endowment (for example an `@main` worker replacement) and may
+   * not name a daemon-reserved slot; any other name is an ordinary, mutable
+   * introduction. The values are pet name paths, never formula identifiers;
+   * the daemon resolves them to formula identifiers behind its boundary. For
+   * a retained guest the whole map is part of the immutable retained policy,
+   * so a repeat must name the same paths: special entries keep the
+   * identifiers they resolved to at creation, while ordinary entries are
+   * resolved again by name on each reconnect. Special endowments cannot be
+   * added to an existing unretained guest.
+   */
+  endowments?: Record<string, string[]>;
 };
 
 export type MakeCapletOptions = {
@@ -2462,6 +2483,7 @@ type FormulateNumberedGuestParams = {
   mailboxStoreId: FormulaIdentifier;
   mailHubId: FormulaIdentifier;
   workerId: FormulaIdentifier;
+  specialNames: Record<string, FormulaIdentifier>;
   networksDirectoryId: FormulaIdentifier;
   planesDirectoryId: FormulaIdentifier;
   pinned: FormulaIdentifier[];
@@ -2615,6 +2637,7 @@ export interface DaemonCore {
     hostHandleId: FormulaIdentifier,
     deferredTasks: DeferredTasks<AgentDeferredTaskParams>,
     workerLabel?: string,
+    specialEndowments?: Record<string, FormulaIdentifier>,
   ) => FormulateResult<EndoGuest>;
 
   /**
@@ -2628,6 +2651,7 @@ export interface DaemonCore {
     hostAgentId: FormulaIdentifier,
     hostHandleId: FormulaIdentifier,
     workerLabel?: string,
+    specialEndowments?: Record<string, FormulaIdentifier>,
   ) => Promise<Readonly<FormulateNumberedGuestParams>>;
 
   formulateChannel: (

@@ -4,6 +4,7 @@
 
 /** @import { EdgeName, Name, NamePath, PetName, SpecialName } from './types.js' */
 
+import harden from '@endo/harden';
 import { q } from '@endo/errors';
 
 /**
@@ -35,6 +36,22 @@ export const isPetName = petName => isValidName(petName);
  * @returns {name is SpecialName}
  */
 export const isSpecialName = name => validSpecialNamePattern.test(name);
+
+/**
+ * Special names the daemon itself binds in every guest; an endowment may not
+ * replace them. `@main` is deliberately absent: an endowed `@main` takes the
+ * default worker's place in the guest formula rather than arriving as a
+ * special endowment. `host.js` rejects these early; `guest.js` enforces the
+ * same set where it binds the names.
+ */
+export const daemonReservedSpecialNames = harden([
+  '@agent',
+  '@self',
+  '@host',
+  '@mail',
+  '@nets',
+  '@planes',
+]);
 
 /**
  * @param {string} name

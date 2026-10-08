@@ -223,7 +223,7 @@ test.serial('agent replies to channel mention (not inbox)', async t => {
   const factoryAgentName = 'profile-for-fae-factory';
 
   await E(host).provideGuest(factoryGuestName, {
-    introducedNames: harden({ '@agent': 'host-agent' }),
+    endowments: harden({ 'host-agent': ['@agent'] }),
     agentName: factoryAgentName,
   });
 
