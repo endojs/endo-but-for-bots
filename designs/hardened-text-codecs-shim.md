@@ -303,7 +303,7 @@ Tests live under `packages/ses/test/`.
 ## Revision: encapsulated constructors (2026-10-07)
 
 Summary of the remedy:
-before the intrinsics collector samples the global object, SES
+Before the intrinsics collector samples the global object, SES
 replaces each host `TextEncoder` and `TextDecoder` with an SES-owned
 constructor that delegates construction to the host through
 `Reflect.construct` and reuses the host prototype object, so
@@ -460,7 +460,17 @@ paragraph after it explains why the shared prototype works.
 The codec module does not define its own delegator.
 It uses one shared maker, `encapsulateHostConstructor(Host, name)`
 in `packages/ses/src/encapsulate-host-constructor.js`, which states
-the rule once and owns the idempotence check.
+the rule once.
+The maker is pure with respect to the global object: it builds the
+delegator, sets its `length`, `name`, and `prototype`, repoints the
+shared prototype's `constructor`, and returns the delegator.
+It never reads or writes `globalThis` and keeps no install record,
+because `SharedURL`, its intended second consumer, is returned as an
+intrinsic through `addIntrinsics` and never written to the global.
+Replacing the global binding, and skipping a binding that is already
+one of SES's replacements, belongs to the codec taming in
+`tame-text-codecs.js`, the only caller that writes the global (see
+the idempotence paragraph below).
 `SharedURL` in `tame-url-constructor.js` already has this shape; the
 `URL` and `URLSearchParams` follow-up moves it onto the maker rather
 than adding further copies.
@@ -591,11 +601,13 @@ Replacing the binding once on the global makes every sampling agree.
 The taming is therefore applied twice on SES-for-XS (at module load
 and again inside `lockdown()`) and once elsewhere, so it must be
 idempotent.
-The shared maker keeps a `WeakSet` of the encapsulated constructors
-it has installed; a pass that finds the global binding already in
-that set leaves it alone instead of wrapping the replacement in a
-second delegator.
-The decision keys only on that `WeakSet`, the record of the maker's
+The codec taming in `tame-text-codecs.js` owns the idempotence
+check: it keeps a module-level `WeakSet` of the encapsulated
+constructors it has installed on the global, adding each one after
+the maker returns it and the taming writes the binding.
+A pass that finds the global binding already in that set leaves it
+alone instead of wrapping the replacement in a second delegator.
+The decision keys only on that `WeakSet`, the record of the taming's
 own past action, never on an incidental state such as a frozen
 prototype, which another shim or another copy of SES can also
 produce.
@@ -604,7 +616,8 @@ already frozen cannot repoint the `constructor`, and it cannot tell
 whether the binding is a host constructor.
 It throws a `TypeError` naming the constructor (for example,
 "Cannot tame TextDecoder: its prototype was frozen before SES could
-encapsulate it") rather than leaving a possibly-host constructor on
+encapsulate it; a second copy of SES loaded after `lockdown()` is
+a likely cause") rather than leaving a possibly-host constructor on
 the permitted path, where it would either fail the permits pass
 again on affected Chromium or break the rule that a permitted host
 WebIDL constructor is never the host object.
