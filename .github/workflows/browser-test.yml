@@ -1,9 +1,12 @@
 name: Browser Tests
+
+# run on pushes to master, and on all PRs (even the ones that target other
+# branches), matching ci.yml
+
 on:
   push:
     branches: [master]
   pull_request:
-    branches: [master]
   schedule:
     - cron: '0 0 * * *' # Runs every day at midnight
 
