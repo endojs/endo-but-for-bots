@@ -7,7 +7,7 @@ export const mkguest = async ({
   handleName,
   agentName,
   agentNames,
-  introducedNames,
+  introductions,
 }) =>
   withEndoAgent(agentNames, { os, process }, async ({ agent }) => {
     // A slash-delimited handle or agent name nests the guest inside a
@@ -15,8 +15,10 @@ export const mkguest = async ({
     // `mkdir`, `store`, and `mv`).
     // `--introduce hostName:guestName` endows the guest with the host's
     // `hostName` (a slash-delimited pet name path) as its `guestName`.
+    // The flag is keyed by host name, but `endowments` is keyed by guest
+    // name, so each pair is inverted here.
     const endowments = Object.fromEntries(
-      Object.entries(introducedNames ?? {}).map(([hostName, guestName]) => [
+      Object.entries(introductions ?? {}).map(([hostName, guestName]) => [
         guestName,
         parsePetNamePath(hostName),
       ]),

@@ -231,6 +231,11 @@ categories as the daemon:
 - `introducedNames`: a record mapping each single-segment host `Name` to a
   single-segment guest pet name, for example
   `{ 'calendar-service': 'calendar' }`.
+  This is Agentry's own spelling and keeps the host-to-guest direction on
+  purpose.
+  Agentry translates it into the daemon's `provideGuest` `endowments` map,
+  which runs the other way (guest name to host pet name path), so Agentry
+  needs a daemon that accepts `endowments`.
 
 The categories are singular because each value is already an object of named
 grants.
@@ -379,9 +384,9 @@ endo-pi --endo-provision='{"piTools":"preserve","mount":{"workspace":{"path":"."
 ```
 
 Introductions use one host pet name and one guest pet name.
-They deliberately reuse `provideGuest`'s established `introducedNames`
-contract: a missing host source is ignored, and reacquisition applies the same
-host-name-to-guest-name mapping again.
+Agentry translates each one into an ordinary `provideGuest` endowment (the
+guest name mapped to the one-segment host path), so a missing host source is
+ignored, and reacquisition applies the same mapping again.
 
 ```sh
 # Combine workspace, filesystem, Git, and a named host capability.
