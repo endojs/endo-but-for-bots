@@ -33,12 +33,23 @@ env:
   # corresponding sha256 must be refreshed at the same time.
   GUIX_VERSION: '1.5.0'
   GUIX_TARBALL_SHA256: 'aa41025489c5061543e9c48873eaa829b900b2da75d40f9648913622f5f47817'
+  # The package set of the Guile goblin-chat host's `guix shell`
+  # profile. The store snapshot realizes this same profile, so both
+  # steps read it from here.
+  GUIX_GUILE_PACKAGES: 'guile guile-fibers guile-websocket guile-gnutls guile-gcrypt'
+  # The layout version of the Guix store cache snapshot. Bump it when
+  # the snapshot or extract steps change what the archive holds, or to
+  # re-key past a cache entry that proved unusable (cache entries are
+  # immutable, so re-keying is the only way to replace one).
+  GUIX_STORE_CACHE_SCHEMA: '1'
 
 jobs:
   test-ocapn-guile-interop:
     name: test-ocapn-guile-interop
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read # `actions/checkout` reads the repository
 
     steps:
       - name: Checkout Endo
@@ -98,6 +109,68 @@ jobs:
           # Cache key includes the version and sha256 so a version
           # bump or upstream re-publish forces a fresh download.
           key: guix-binary-x86_64-linux-${{ env.GUIX_VERSION }}-${{ env.GUIX_TARBALL_SHA256 }}
+      - name: Compute Guix store cache key
+        # The key is the values that determine the snapshot's
+        # contents: the pinned Guix version (a version bump may
+        # change the on-disk DB schema), the installer tarball's
+        # sha256 (an upstream re-publish under the same version
+        # ships a different store and DB), and the realized package
+        # set, plus `GUIX_STORE_CACHE_SCHEMA` for the snapshot layout.
+        # The package list is hashed rather than interpolated
+        # so the key stays short and free of characters
+        # `actions/cache` rejects. Other edits to this file
+        # keep the cache. The runner OS and arch are in
+        # the key because a store snapshot is not portable across
+        # architectures.
+        id: guix-store-key
+        run: |
+          set -euo pipefail
+          packages=$(printf '%s' "$GUIX_GUILE_PACKAGES" | sha256sum | cut -c1-16)
+          echo "key=guix-store-v${GUIX_STORE_CACHE_SCHEMA}-${RUNNER_OS}-${RUNNER_ARCH}-${GUIX_VERSION}-${GUIX_TARBALL_SHA256}-${packages}" >> "$GITHUB_OUTPUT"
+      - name: Restore Guix store cache
+        # Complements the tarball cache above and the
+        # substitute-server fallback in the daemon unit below. The
+        # tarball cache amortizes the installer download; this
+        # second cache amortizes the
+        # *runtime store* the daemon resolves on every run, so a run
+        # that hits it fetches less from the substitute servers.
+        #
+        # This is a resilience measure, not a wall-clock
+        # optimization: on a healthy substitute day a restore
+        # (download + decompress + tar) may be no faster than the fetches it
+        # replaces. What it buys is fewer round-trips to servers that
+        # periodically degrade. The extract and snapshot steps log
+        # their elapsed time and the tarball size as `::notice::`
+        # lines so cold and hit runs can be compared.
+        #
+        # The cache degrades to a miss rather than failing the job
+        # wherever that is safe: `actions/cache` reports a corrupt
+        # entry it cannot extract as a miss, a missing or empty
+        # tarball is skipped, and a failed snapshot is simply not
+        # saved.
+        #
+        # `/gnu/store` and `/var/guix/db` are root-owned, so
+        # `actions/cache` (which runs as `runner`) cannot read or
+        # write them directly. We cache a runner-owned staging
+        # directory holding an uncompressed tarball of both; the
+        # *Extract* and *Snapshot* shell steps below wrap the
+        # `sudo tar`. The tarball is deliberately uncompressed:
+        # `actions/cache` already compresses and integrity-checks
+        # what it stores, so it owns both.
+        #
+        # Split `restore` / `save` sub-actions: only `cache/restore`
+        # declares the `cache-hit` output this job gates on, and an
+        # explicit save step lets the snapshot run before saving
+        # rather than relying on the post-job hook.
+        id: guix-store-cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/guix-store-cache
+          # There are deliberately no `restore-keys`: seeding from an
+          # older snapshot and re-saving would grow the tarball
+          # without bound across package-set changes, so each change
+          # starts a fresh snapshot.
+          key: ${{ steps.guix-store-key.outputs.key }}
       - name: Download Guix stable tarball
         # `ftp.gnu.org/gnu/guix/` is the GNU project's canonical
         # mirror for release binaries. It is operationally independent
@@ -191,6 +264,66 @@ jobs:
           sudo systemctl enable --now gnu-store.mount guix-daemon.service
 
           echo "$GUIX_PATH/bin" >> "$GITHUB_PATH"
+      - name: Extract Guix store cache snapshot
+        # Paired with the `Restore Guix store cache` step above. On an
+        # exact key hit, extract the prior run's snapshot on top of
+        # the just-installed store so the daemon finds the resolved
+        # closure on disk and skips those substitute fetches. A store
+        # path names the same derivation output in the installer and
+        # the snapshot (byte-identical in practice, since Guix builds
+        # are reproducible); the snapshot's `/var/guix/db` is a
+        # superset of the installer's DB.
+        #
+        # `gnu-store.mount` is a read-only bind of `/gnu/store` (the
+        # daemon gets write access in its own mount namespace), so
+        # both units are stopped across the extract and restarted
+        # afterwards, on failure too. The restart waits for the
+        # daemon socket, because `Authorize build farm` talks to the
+        # daemon next. The archive is deleted once extracted, to
+        # free runner disk for the test.
+        #
+        # Integrity of the restored bytes is `actions/cache`'s job:
+        # an entry it cannot extract is reported as a miss and this
+        # step does not run. A missing or empty archive is still
+        # treated as a miss, and the job continues on the installer
+        # store alone; the snapshot step is skipped on any hit, because
+        # the save could not replace the immutable entry, and the
+        # warning says to bump `GUIX_STORE_CACHE_SCHEMA` to re-key it.
+        # Stale SQLite `-wal`/`-shm` sidecars are removed before the
+        # extract so they cannot be replayed against the restored DB.
+        # The restored store is trusted because the
+        # cache is scoped to this repository's own runs, not because
+        # of Guix signatures, so the extract is limited to the two
+        # trees the snapshot captures. A `tar` failure (for example
+        # ENOSPC) fails the job, because a half-extracted
+        # `/var/guix/db` is not safe to run against.
+        id: guix-store-extract
+        if: steps.guix-store-cache.outputs.cache-hit == 'true'
+        run: |
+          set -euo pipefail
+          archive=~/guix-store-cache/store.tar
+          if [ ! -s "$archive" ]; then
+            echo "::warning::guix store cache key matched but $archive is missing or empty; continuing as a cache miss; this entry cannot be replaced in place, so bump GUIX_STORE_CACHE_SCHEMA to re-key it"
+            rm -rf ~/guix-store-cache
+            exit 0
+          fi
+          ls -l "$archive"
+          start=$SECONDS
+          restart() {
+            sudo systemctl start gnu-store.mount guix-daemon.service
+            for _ in $(seq 1 30); do
+              if [ -S /var/guix/daemon-socket/socket ]; then return 0; fi
+              sleep 1
+            done
+            echo "::warning::guix-daemon socket not ready 30s after restart"
+          }
+          trap restart EXIT
+          sudo systemctl stop guix-daemon.service gnu-store.mount
+          sudo rm -f /var/guix/db/db.sqlite-wal /var/guix/db/db.sqlite-shm
+          sudo tar --extract --file "$archive" \
+              --directory / --no-overwrite-dir gnu/store var/guix/db
+          rm -rf ~/guix-store-cache
+          echo "::notice::guix store restored from cache in $((SECONDS - start))s: $(sudo du -sh /gnu/store | cut -f1) in /gnu/store"
       - name: Authorize build farm
         # Authorizes both ci.guix.gnu.org and bordeaux.guix.gnu.org;
         # both .pub files ship inside the Guix tarball under
@@ -268,6 +401,102 @@ jobs:
             } > "$scratch"
             cat "$scratch" >> "$GITHUB_ENV"
 
+      - name: Snapshot Guix store for cache
+        # Paired with the `Restore Guix store cache` step at the top
+        # of the job, and runs only on a cache miss: on a hit the key
+        # already names an immutable entry, so a fresh snapshot could
+        # not be saved (see `GUIX_STORE_CACHE_SCHEMA`). Before snapshotting,
+        # realize the exact `guix shell --pure --no-grafts` profile
+        # that `Start Guile goblin-chat host` uses (same flags and
+        # `GUIX_GUILE_PACKAGES`), so the ungrafted outputs,
+        # `guile` itself, and the profile derivation are in the
+        # snapshot too, not only the grafted `guix build` outputs
+        # resolved above. (`--pure` leaves coreutils off PATH, so the
+        # profile is exercised with `guile` rather than `true`.)
+        #
+        # `/gnu/store` and `/var/guix/db` are captured together so a
+        # restore yields store paths the daemon's DB records as
+        # valid. The daemon is stopped across the `tar` so the SQLite
+        # DB is closed and checkpointed rather than copied live.
+        #
+        # The cache is only an optimization, so a failure here never
+        # fails the job: it emits a warning and leaves `ready` unset,
+        # and the save step below is gated on `ready`. The archive is
+        # written under a temporary name and renamed only on success,
+        # so a partial archive is never published, and the `tar` is
+        # bounded by a timeout so a slow snapshot cannot eat into the
+        # interop test's job budget. Snapshots over
+        # `GUIX_STORE_CACHE_MAX_BYTES` (measured uncompressed) are not
+        # saved, to stay well inside the repository's cache quota;
+        # every run on such a key then pays for a snapshot it
+        # discards, so the warning says so.
+        id: guix-store-snapshot
+        if: steps.guix-store-cache.outcome == 'success' && steps.guix-store-cache.outputs.cache-hit != 'true'
+        env:
+          GUIX_STORE_CACHE_MAX_BYTES: '4000000000'
+        run: |
+          set -uo pipefail
+          start=$SECONDS
+          # shellcheck disable=SC2086 # GUIX_GUILE_PACKAGES is a word list
+          if ! timeout 600s guix shell --pure --no-grafts --fallback \
+              $GUIX_GUILE_PACKAGES -- \
+              guile -c '(exit 0)'; then
+            echo "::warning::could not realize the guile profile for the store snapshot; not saving the cache"
+            exit 0
+          fi
+          mkdir -p ~/guix-store-cache
+          archive=~/guix-store-cache/store.tar
+          rm -f "$archive" "$archive.tmp"
+          trap 'sudo systemctl start guix-daemon.service' EXIT
+          sudo systemctl stop guix-daemon.service
+          if ! timeout 900s sudo tar --create --file "$archive.tmp" \
+              /gnu/store /var/guix/db; then
+            echo "::warning::guix store snapshot tar failed; not saving the cache"
+            sudo rm -f "$archive.tmp"
+            exit 0
+          fi
+          # `actions/cache` runs as the `runner` user and cannot
+          # upload a root-owned file.
+          if ! sudo chown -R "$(id -u):$(id -g)" ~/guix-store-cache ||
+              ! mv "$archive.tmp" "$archive"; then
+            echo "::warning::could not publish the guix store snapshot; not saving the cache"
+            exit 0
+          fi
+          size=$(stat -c %s "$archive")
+          echo "::notice::guix store snapshot in $((SECONDS - start))s: $(du -h "$archive" | cut -f1) uncompressed ($size bytes)"
+          if [ "$size" -gt "$GUIX_STORE_CACHE_MAX_BYTES" ]; then
+            echo "::warning::guix store snapshot exceeds $GUIX_STORE_CACHE_MAX_BYTES bytes; not saving the cache, so every run on this key re-snapshots and discards it (raise the cap or shrink the closure)"
+            rm -f "$archive"
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+      - name: Save Guix store cache
+        # `continue-on-error`: a concurrent run that saved the same
+        # key first makes this save fail, which is harmless.
+        if: steps.guix-store-snapshot.outputs.ready == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/guix-store-cache
+          key: ${{ steps.guix-store-cache.outputs.cache-primary-key }}
+      - name: Remove Guix store cache archive
+        # Frees up to `GUIX_STORE_CACHE_MAX_BYTES` of runner disk
+        # before the test.
+        if: always()
+        run: rm -rf ~/guix-store-cache
+      - name: Wait for Guix daemon
+        # The snapshot step restarts the daemon; wait for it before
+        # `guix shell` below connects.
+        run: |
+          for _ in $(seq 1 30); do
+            if systemctl is-active --quiet guix-daemon.service &&
+                [ -S /var/guix/daemon-socket/socket ]; then exit 0; fi
+            sleep 1
+          done
+          echo "guix-daemon not ready" >&2
+          sudo systemctl status guix-daemon.service --no-pager || true
+          exit 1
+
       - name: Start Guile goblin-chat host
         working-directory: endo
         env:
@@ -302,10 +531,11 @@ jobs:
           # polling-for-sturdyref loop below caps the startup portion at
           # 240s and leaves at least 360s for the Endo client to drive the
           # interop, which the Endo step itself bounds at 120s.
+          # shellcheck disable=SC2086 # GUIX_GUILE_PACKAGES is a word list
           OCAPN_TEST_PORT="$OCAPN_TEST_PORT" GUILE_AUTO_COMPILE=1 \
             timeout 600s guix shell --pure --no-grafts --fallback \
             --preserve='^OCAPN_TEST_PORT$|^GUILE_AUTO_COMPILE$' \
-            guile guile-fibers guile-websocket guile-gnutls guile-gcrypt -- \
+            $GUIX_GUILE_PACKAGES -- \
             guile \
               -L "$FIBERS_OUT/share/guile/site/3.0" \
               -L "$WEBSOCKET_OUT/share/guile/site/3.0" \
