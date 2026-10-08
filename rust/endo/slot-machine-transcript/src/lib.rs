@@ -1006,7 +1006,8 @@ impl Transcript {
     }
 
     /// Reject resuming for replay under a configuration other than the one
-    /// the latest snapshot pinned (§ Coda: a replay under a different
+    /// the latest snapshot pinned (designs/ironhorse-panic.md § Coda: An
+    /// Option to Panic on Reference Errors; a replay under a different
     /// `panic-on-reference-error` setting could diverge from the run that
     /// produced the transcript).
     pub fn check_resume(&self, meta: &SnapshotMeta) -> Result<(), TranscriptError> {
