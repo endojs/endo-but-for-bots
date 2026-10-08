@@ -37,6 +37,11 @@ env:
   # profile. The store snapshot realizes this same profile, so both
   # steps read it from here.
   GUIX_GUILE_PACKAGES: 'guile guile-fibers guile-websocket guile-gnutls guile-gcrypt'
+  # The layout version of the Guix store cache snapshot. Bump it when
+  # the snapshot or extract steps change what the archive holds, or to
+  # re-key past a cache entry that proved unusable (cache entries are
+  # immutable, so re-keying is the only way to replace one).
+  GUIX_STORE_CACHE_SCHEMA: '1'
 
 jobs:
   test-ocapn-guile-interop:
@@ -110,17 +115,18 @@ jobs:
         # change the on-disk DB schema), the installer tarball's
         # sha256 (an upstream re-publish under the same version
         # ships a different store and DB), and the realized package
-        # set. The package list is hashed rather than interpolated
+        # set, plus `GUIX_STORE_CACHE_SCHEMA` for the snapshot layout.
+        # The package list is hashed rather than interpolated
         # so the key stays short and free of characters
-        # `actions/cache` rejects. Unrelated edits to this file
-        # therefore keep the cache. The runner OS and arch are in
+        # `actions/cache` rejects. Other edits to this file
+        # keep the cache. The runner OS and arch are in
         # the key because a store snapshot is not portable across
         # architectures.
         id: guix-store-key
         run: |
           set -euo pipefail
           packages=$(printf '%s' "$GUIX_GUILE_PACKAGES" | sha256sum | cut -c1-16)
-          echo "key=guix-store-${RUNNER_OS}-${RUNNER_ARCH}-${GUIX_VERSION}-${GUIX_TARBALL_SHA256}-${packages}" >> "$GITHUB_OUTPUT"
+          echo "key=guix-store-v${GUIX_STORE_CACHE_SCHEMA}-${RUNNER_OS}-${RUNNER_ARCH}-${GUIX_VERSION}-${GUIX_TARBALL_SHA256}-${packages}" >> "$GITHUB_OUTPUT"
       - name: Restore Guix store cache
         # Complements the tarball cache above and the
         # substitute-server fallback in the daemon unit below. The
@@ -280,7 +286,12 @@ jobs:
         # an entry it cannot extract is reported as a miss and this
         # step does not run. A missing or empty archive is still
         # treated as a miss, and the job continues on the installer
-        # store alone. The restored store is trusted because the
+        # store alone; the snapshot step is skipped on any hit, because
+        # the save could not replace the immutable entry, and the
+        # warning says to bump `GUIX_STORE_CACHE_SCHEMA` to re-key it.
+        # Stale SQLite `-wal`/`-shm` sidecars are removed before the
+        # extract so they cannot be replayed against the restored DB.
+        # The restored store is trusted because the
         # cache is scoped to this repository's own runs, not because
         # of Guix signatures, so the extract is limited to the two
         # trees the snapshot captures. A `tar` failure (for example
@@ -292,7 +303,7 @@ jobs:
           set -euo pipefail
           archive=~/guix-store-cache/store.tar
           if [ ! -s "$archive" ]; then
-            echo "::warning::guix store cache key matched but $archive is missing or empty; continuing as a cache miss"
+            echo "::warning::guix store cache key matched but $archive is missing or empty; continuing as a cache miss; this entry cannot be replaced in place, so bump GUIX_STORE_CACHE_SCHEMA to re-key it"
             rm -rf ~/guix-store-cache
             exit 0
           fi
@@ -308,11 +319,11 @@ jobs:
           }
           trap restart EXIT
           sudo systemctl stop guix-daemon.service gnu-store.mount
+          sudo rm -f /var/guix/db/db.sqlite-wal /var/guix/db/db.sqlite-shm
           sudo tar --extract --file "$archive" \
               --directory / --no-overwrite-dir gnu/store var/guix/db
           rm -rf ~/guix-store-cache
           echo "::notice::guix store restored from cache in $((SECONDS - start))s: $(sudo du -sh /gnu/store | cut -f1) in /gnu/store"
-          echo "usable=true" >> "$GITHUB_OUTPUT"
       - name: Authorize build farm
         # Authorizes both ci.guix.gnu.org and bordeaux.guix.gnu.org;
         # both .pub files ship inside the Guix tarball under
@@ -392,8 +403,9 @@ jobs:
 
       - name: Snapshot Guix store for cache
         # Paired with the `Restore Guix store cache` step at the top
-        # of the job, and skipped when the extract step restored a
-        # usable snapshot under this key. Before snapshotting,
+        # of the job, and runs only on a cache miss: on a hit the key
+        # already names an immutable entry, so a fresh snapshot could
+        # not be saved (see `GUIX_STORE_CACHE_SCHEMA`). Before snapshotting,
         # realize the exact `guix shell --pure --no-grafts` profile
         # that `Start Guile goblin-chat host` uses (same flags and
         # `GUIX_GUILE_PACKAGES`), so the ungrafted outputs,
@@ -419,7 +431,7 @@ jobs:
         # every run on such a key then pays for a snapshot it
         # discards, so the warning says so.
         id: guix-store-snapshot
-        if: steps.guix-store-cache.outcome == 'success' && steps.guix-store-extract.outputs.usable != 'true'
+        if: steps.guix-store-cache.outcome == 'success' && steps.guix-store-cache.outputs.cache-hit != 'true'
         env:
           GUIX_STORE_CACHE_MAX_BYTES: '4000000000'
         run: |
