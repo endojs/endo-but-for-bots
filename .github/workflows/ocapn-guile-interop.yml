@@ -333,7 +333,8 @@ jobs:
         # package list; keep them in sync), so the ungrafted outputs,
         # `guile` itself, and the profile derivation are in the
         # snapshot too, not only the grafted `guix build` outputs
-        # resolved above.
+        # resolved above. (`--pure` leaves coreutils off PATH, so the
+        # profile is exercised with `guile` rather than `true`.)
         #
         # `/gnu/store` and `/var/guix/db` are captured together so a
         # restore yields store paths the daemon's DB records as
@@ -343,7 +344,8 @@ jobs:
         run: |
           set -euo pipefail
           timeout 600s guix shell --pure --no-grafts --fallback \
-            guile guile-fibers guile-websocket guile-gnutls guile-gcrypt -- true
+            guile guile-fibers guile-websocket guile-gnutls guile-gcrypt -- \
+            guile -c '(exit 0)'
           mkdir -p ~/guix-store-cache
           trap 'sudo systemctl start guix-daemon.service' EXIT
           sudo systemctl stop guix-daemon.service
