@@ -167,11 +167,18 @@ const start = async () => {
         handlers,
         logger,
         specifiedPort: 22_046,
-        // The Python `ocapn-test-suite` `testing_only_tcp` netlayer
-        // writes a raw syrup record per `sendall` with no length prefix.
-        // Opt out of the JS netlayer's default `'syrup'` framing to
-        // interoperate with that suite.
-        framing: 'none',
+        // The Python `ocapn-test-suite` pinned in
+        // `.github/workflows/ci.yml` (endojs/ocapn-test-suite at
+        // SHA 89e80d70cf0689fce0b92936f22a84b02e9e1aee, branch
+        // `feat/syrups-framing`, endojs/ocapn-test-suite#1) frames
+        // each CapTP message on the wire as
+        // `<ascii-decimal-length>:<payload>`. Use the JS netlayer's
+        // default `'syrup'` framing so the two ends round-trip.
+        // OCAPN-TEST-SUITE-PIN: when the SHA on the line above
+        // moves, also move the matching pin in
+        // `.github/workflows/ci.yml`; a repo-wide grep for
+        // `OCAPN-TEST-SUITE-PIN` finds both call sites.
+        framing: 'syrup',
       }),
   });
   const testObjectTable = makeTestObjectTable(ocapn);
