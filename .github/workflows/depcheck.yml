@@ -11,9 +11,7 @@ on:
 permissions:
   contents: read
 
-# Defense in depth against npm lifecycle scripts. This workflow does not run
-# a package install, but this block documents the posture and future-proofs
-# against additions. See designs/ci-no-npm-lifecycle.md.
+# Defense in depth against npm lifecycle scripts, should an install be added.
 env:
   YARN_ENABLE_SCRIPTS: 'false'
   npm_config_ignore_scripts: 'true'
