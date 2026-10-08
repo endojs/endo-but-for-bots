@@ -82,12 +82,41 @@ fn reclaim_removes_orphan_temporaries_alone() {
     std::fs::write(
         root.path()
             .join("blob_store")
-            .join(".transcript-blob.1.0.tmp"),
+            // No process can hold the largest pid, so its writer is dead.
+            .join(".transcript-blob.4294967295.0.tmp"),
         b"half",
     )
     .unwrap();
     assert_eq!(blob_store.reclaim(&keep).unwrap(), 1);
     assert_eq!(names(&root), keep);
+}
+
+#[test]
+fn reclaim_spares_live_temporaries_foreign_files_and_subdirectories() {
+    let (root, blob_store) = store();
+    let directory = root.path().join("blob_store");
+    let garbage = blob_store.write_blob(b"garbage").unwrap();
+    let live = format!(".transcript-blob.{}.0.tmp", std::process::id());
+    let spared = [
+        live.as_str(),
+        ".snapshot.4294967295.0.tmp",
+        "README",
+        ".transcript-blob.not-a-pid.0.tmp",
+    ];
+    for name in spared {
+        std::fs::write(directory.join(name), b"x").unwrap();
+    }
+    std::fs::create_dir(directory.join("nested")).unwrap();
+    assert_eq!(blob_store.reclaim(&[]).unwrap(), 1);
+    let remaining = names(&root);
+    assert!(!remaining.contains(&garbage), "{remaining:?}");
+    for name in spared {
+        assert!(
+            remaining.iter().any(|n| n == name),
+            "{name} in {remaining:?}"
+        );
+    }
+    assert!(directory.join("nested").is_dir());
 }
 
 #[test]

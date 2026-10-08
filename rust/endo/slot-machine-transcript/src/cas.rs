@@ -186,22 +186,64 @@ impl ContentAddressedStore {
         Ok(bytes)
     }
 
-    /// Remove every blob and orphan temporary not named in `keep`. Blobs the
-    /// transcript never published (a crash between rename and publication)
-    /// and blobs superseded by a newer published snapshot are both garbage.
+    /// Remove every blob not named in `keep`, and every blob temporary whose
+    /// writing process is provably dead. Blobs the transcript never published
+    /// (a crash between rename and publication) and blobs superseded by a
+    /// newer published snapshot are both garbage.
+    ///
+    /// Only names this store owns are touched: a foreign file, a
+    /// subdirectory, a heap `.snapshot.*` temporary, or a blob temporary
+    /// whose writer may still be alive is left in place. `reclaim` must still
+    /// not run while a writer in this process is publishing a blob, since the
+    /// blob it is about to publish is not yet in `keep`.
     pub fn reclaim(&self, keep: &[String]) -> io::Result<usize> {
         let mut removed = 0;
         for entry in fs::read_dir(&self.directory)? {
             let entry = entry?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if keep.contains(&name) {
+            if !entry.file_type()?.is_file() {
                 continue;
             }
-            fs::remove_file(entry.path())?;
-            removed += 1;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let garbage = if is_blob_name(&name) {
+                !keep.contains(&name)
+            } else {
+                is_dead_blob_temporary(&name)
+            };
+            if !garbage {
+                continue;
+            }
+            match fs::remove_file(entry.path()) {
+                Ok(()) => removed += 1,
+                // A concurrent reclaim got there first.
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
         }
         Ok(removed)
     }
+}
+
+/// Whether `name` is a `.transcript-blob.<pid>.<sequence>.tmp` temporary
+/// whose writing process provably no longer exists. Without a `/proc` to
+/// consult, no writer is provably dead and the temporary is kept.
+fn is_dead_blob_temporary(name: &str) -> bool {
+    let Some(rest) = name
+        .strip_prefix(".transcript-blob.")
+        .and_then(|rest| rest.strip_suffix(".tmp"))
+    else {
+        return false;
+    };
+    let Some((pid, sequence)) = rest.split_once('.') else {
+        return false;
+    };
+    let (Ok(pid), Ok(_)) = (pid.parse::<u32>(), sequence.parse::<u64>()) else {
+        return false;
+    };
+    if pid == std::process::id() {
+        return false;
+    }
+    let proc_root = Path::new("/proc");
+    proc_root.join("self").exists() && !proc_root.join(pid.to_string()).exists()
 }
 
 /// Whether `name` has the shape of a [`blob_hash`]: 64 lowercase
