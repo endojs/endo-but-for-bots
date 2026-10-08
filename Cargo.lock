@@ -4641,6 +4641,7 @@ name = "slot-machine-transcript"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "libc",
  "rusqlite",
  "sha2 0.10.9",
  "tempfile",
