@@ -45,7 +45,6 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read # `actions/checkout` reads the repository
-      actions: write # `gh cache delete` evicts a corrupt store-cache entry
 
     steps:
       - name: Checkout Endo
@@ -115,47 +114,46 @@ jobs:
         #
         # This is a resilience measure, not a wall-clock
         # optimization: on a healthy substitute day a restore
-        # (download + zstd + tar) may be no faster than the fetches it
+        # (download + decompress + tar) may be no faster than the fetches it
         # replaces. What it buys is fewer round-trips to servers that
         # periodically degrade. The extract and snapshot steps log
         # their elapsed time and the tarball size as `::notice::`
         # lines so cold and hit runs can be compared.
         #
         # The cache degrades to a miss rather than failing the job
-        # wherever that is safe: a missing, empty, or corrupt tarball
-        # is skipped, and a failed snapshot is simply not saved.
+        # wherever that is safe: `actions/cache` reports a corrupt
+        # entry it cannot extract as a miss, a missing or empty
+        # tarball is skipped, and a failed snapshot is simply not
+        # saved.
         #
         # `/gnu/store` and `/var/guix/db` are root-owned, so
         # `actions/cache` (which runs as `runner`) cannot read or
         # write them directly. We cache a runner-owned staging
-        # directory holding a zstd tarball of both; the *Extract* and
-        # *Snapshot* shell steps below wrap the `sudo tar`.
+        # directory holding an uncompressed tarball of both; the
+        # *Extract* and *Snapshot* shell steps below wrap the
+        # `sudo tar`. The tarball is deliberately uncompressed:
+        # `actions/cache` already compresses and integrity-checks
+        # what it stores, so it owns both.
         #
         # Split `restore` / `save` sub-actions: only `cache/restore`
         # declares the `cache-hit` output this job gates on, and an
         # explicit save step lets the snapshot run before saving
         # rather than relying on the post-job hook.
-        #
-        # `hashFiles` returns an empty string when the path misses,
-        # which would collapse the key to a shared prefix, so the
-        # restore, snapshot, and save steps all require a non-empty
-        # hash.
         id: guix-store-cache
-        if: hashFiles('endo/.github/workflows/ocapn-guile-interop.yml') != ''
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/guix-store-cache
-          # The key includes the pinned Guix version (a version bump
-          # may change the on-disk DB schema) and a hash of this
-          # workflow file (the package set and daemon configuration
-          # both live here). The checkout uses `path: endo`, so the
-          # file is under `endo/`. There are deliberately no
-          # `restore-keys`: seeding from an older snapshot and
-          # re-saving would grow the tarball without bound across
-          # workflow edits, so each edit starts a fresh snapshot.
-          # The runner OS and arch are in the key because a store
-          # snapshot is not portable across architectures.
-          key: guix-store-${{ runner.os }}-${{ runner.arch }}-${{ env.GUIX_VERSION }}-${{ hashFiles('endo/.github/workflows/ocapn-guile-interop.yml') }}
+          # The key is the values that determine the snapshot's
+          # contents: the pinned Guix version (a version bump may
+          # change the on-disk DB schema) and the realized package
+          # set. Unrelated edits to this file therefore keep the
+          # cache. There are deliberately no `restore-keys`: seeding
+          # from an older snapshot and re-saving would grow the
+          # tarball without bound across package-set changes, so
+          # each change starts a fresh snapshot. The runner OS and
+          # arch are in the key because a store snapshot is not
+          # portable across architectures.
+          key: guix-store-${{ runner.os }}-${{ runner.arch }}-${{ env.GUIX_VERSION }}-${{ env.GUIX_GUILE_PACKAGES }}
       - name: Download Guix stable tarball
         # `ftp.gnu.org/gnu/guix/` is the GNU project's canonical
         # mirror for release binaries. It is operationally independent
@@ -253,60 +251,43 @@ jobs:
         # Paired with the `Restore Guix store cache` step above. On an
         # exact key hit, extract the prior run's snapshot on top of
         # the just-installed store so the daemon finds the resolved
-        # closure on disk and skips those substitute fetches. Store
-        # paths are content-addressed, so a path the installer also
-        # ships is byte-identical in the snapshot; the snapshot's
-        # `/var/guix/db` is a superset of the installer's DB.
+        # closure on disk and skips those substitute fetches. A store
+        # path names the same derivation output in the installer and
+        # the snapshot (byte-identical in practice, since Guix builds
+        # are reproducible); the snapshot's `/var/guix/db` is a
+        # superset of the installer's DB.
         #
         # `gnu-store.mount` is a read-only bind of `/gnu/store` (the
         # daemon gets write access in its own mount namespace), so
         # both units are stopped across the extract and restarted
         # afterwards, on failure too.
         #
-        # The archive is integrity-checked (`zstd -t`) before anything
-        # is touched; a missing, empty, or corrupt archive is treated
-        # as a cache miss and the job continues on the installer store
-        # alone. `zstd -t` detects corrupt framing, not tampering: a
-        # restored store is trusted because the cache is scoped to
-        # this repository's own runs, not because of Guix signatures.
-        # A `tar` failure *after* that check (for example ENOSPC)
-        # still fails the job, because a half-extracted
+        # Integrity of the restored bytes is `actions/cache`'s job:
+        # an entry it cannot extract is reported as a miss and this
+        # step does not run. A missing or empty archive is still
+        # treated as a miss, and the job continues on the installer
+        # store alone. The restored store is trusted because the
+        # cache is scoped to this repository's own runs, not because
+        # of Guix signatures, so the extract is limited to the two
+        # trees the snapshot captures. A `tar` failure (for example
+        # ENOSPC) fails the job, because a half-extracted
         # `/var/guix/db` is not safe to run against.
-        #
-        # Cache keys are immutable, so a bad entry would otherwise be
-        # restored (and its eviction clock reset) on every run without
-        # ever being replaced. On a bad hit this step deletes the
-        # entry (best effort; the token is read-only on fork PRs) and
-        # leaves `usable` unset, so the snapshot and save steps below
-        # re-create it under the same key.
         id: guix-store-extract
         if: steps.guix-store-cache.outputs.cache-hit == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          CACHE_KEY: ${{ steps.guix-store-cache.outputs.cache-primary-key }}
         run: |
           set -euo pipefail
-          archive=~/guix-store-cache/store.tar.zst
-          discard() {
-            echo "::warning::$1; continuing as a cache miss and re-snapshotting"
-            gh cache delete "$CACHE_KEY" ||
-              echo "::warning::could not delete cache entry $CACHE_KEY; the re-snapshot save will not replace it"
+          archive=~/guix-store-cache/store.tar
+          if [ ! -s "$archive" ]; then
+            echo "::warning::guix store cache key matched but $archive is missing or empty; continuing as a cache miss"
             rm -rf ~/guix-store-cache
             exit 0
-          }
-          if [ ! -s "$archive" ]; then
-            discard "guix store cache key matched but $archive is missing or empty"
           fi
           ls -l "$archive"
           start=$SECONDS
-          if ! zstd -q -t "$archive"; then
-            discard "guix store cache archive failed its integrity check"
-          fi
           trap 'sudo systemctl start gnu-store.mount guix-daemon.service' EXIT
           sudo systemctl stop guix-daemon.service gnu-store.mount
-          sudo tar --extract --zstd --file "$archive" \
-              --directory / --no-overwrite-dir
+          sudo tar --extract --file "$archive" \
+              --directory / --no-overwrite-dir gnu/store var/guix/db
           echo "::notice::guix store restored from cache in $((SECONDS - start))s: $(sudo du -sh /gnu/store | cut -f1) in /gnu/store"
           echo "usable=true" >> "$GITHUB_OUTPUT"
       - name: Authorize build farm
@@ -407,11 +388,13 @@ jobs:
         # fails the job: it emits a warning and leaves `ready` unset,
         # and the save step below is gated on `ready`. The archive is
         # written under a temporary name and renamed only on success,
-        # so a partial archive is never published. Snapshots over
-        # `GUIX_STORE_CACHE_MAX_BYTES` are not saved, to stay well
-        # inside the repository's cache quota; every run on such a
-        # key then pays for a snapshot it discards, so the warning
-        # says so.
+        # so a partial archive is never published, and the `tar` is
+        # bounded by a timeout so a slow snapshot cannot eat into the
+        # interop test's job budget. Snapshots over
+        # `GUIX_STORE_CACHE_MAX_BYTES` (measured uncompressed) are not
+        # saved, to stay well inside the repository's cache quota;
+        # every run on such a key then pays for a snapshot it
+        # discards, so the warning says so.
         id: guix-store-snapshot
         if: steps.guix-store-cache.outcome == 'success' && steps.guix-store-extract.outputs.usable != 'true'
         env:
@@ -427,11 +410,11 @@ jobs:
             exit 0
           fi
           mkdir -p ~/guix-store-cache
-          archive=~/guix-store-cache/store.tar.zst
+          archive=~/guix-store-cache/store.tar
           rm -f "$archive" "$archive.tmp"
           trap 'sudo systemctl start guix-daemon.service' EXIT
           sudo systemctl stop guix-daemon.service
-          if ! sudo tar --create --file "$archive.tmp" --zstd \
+          if ! timeout 900s sudo tar --create --file "$archive.tmp" \
               /gnu/store /var/guix/db; then
             echo "::warning::guix store snapshot tar failed; not saving the cache"
             sudo rm -f "$archive.tmp"
@@ -445,7 +428,7 @@ jobs:
             exit 0
           fi
           size=$(stat -c %s "$archive")
-          echo "::notice::guix store snapshot in $((SECONDS - start))s: $(du -h "$archive" | cut -f1) compressed ($size bytes)"
+          echo "::notice::guix store snapshot in $((SECONDS - start))s: $(du -h "$archive" | cut -f1) uncompressed ($size bytes)"
           if [ "$size" -gt "$GUIX_STORE_CACHE_MAX_BYTES" ]; then
             echo "::warning::guix store snapshot exceeds $GUIX_STORE_CACHE_MAX_BYTES bytes; not saving the cache, so every run on this key re-snapshots and discards it (raise the cap or shrink the closure)"
             rm -f "$archive"
