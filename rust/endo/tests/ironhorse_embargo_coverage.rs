@@ -112,7 +112,7 @@ fn assert_released_in_order(outcome: ExecutionOutcome) {
     assert!(released.windows(2).all(|w| w[0].sequence < w[1].sequence));
     assert!(released
         .iter()
-        .all(|f| f.idempotency_key == format!("vat-1:{}", f.seq)));
+        .all(|f| f.idempotency_key == format!("vat-1:{}", f.sequence)));
     assert_eq!(
         requeued,
         FRAMES.len(),
