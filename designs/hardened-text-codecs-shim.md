@@ -14,11 +14,9 @@
 > SES now replaces each host codec constructor with its own
 > constructor that delegates to the host and shares the host
 > prototype, and samples that replacement instead.
-> The details are in § Revision: encapsulated constructors, which
-> overrides any earlier section that it contradicts.
-> The sampling story in § What is the Problem Being Solved? and
-> step 1 of § Lockdown sequencing each carry a note pointing at the
-> current behavior.
+> The sections below describe the current design; the history of the
+> change, the evidence, and the rejected alternatives are in the
+> section Revision: encapsulated constructors.
 
 ## What is the Problem Being Solved?
 
@@ -31,13 +29,15 @@ portable alternative to Node's `Buffer`) and would be welcome
 additions to the permitted intrinsics.
 
 Unlike `URL`, the text codecs have no ambient-authority static
-methods and no exposed iterator prototype, so the taming story is
-straightforward: list them on `universalPropertyNames`, sample
-during the existing intrinsics-collection pass, and harden.
-(Superseded: on Chromium before 138 (measured through 137, inferred
-for the unmeasured versions) the host constructors cannot be
-sampled directly, so SES samples encapsulated replacements instead;
-see § Revision: encapsulated constructors.)
+methods and no exposed iterator prototype.
+The taming is therefore small: SES replaces each host codec
+constructor with an SES-owned constructor that delegates to the host
+and shares the host prototype, lists the codecs on
+`universalPropertyNames`, samples the replacements during the
+existing intrinsics-collection pass, and hardens them.
+The replacement is needed because the host constructors cannot be
+sampled directly on Chromium before 138 (see the section Revision:
+encapsulated constructors).
 
 This work targets the same source as the URL shim
 ([endojs/endo#2635](https://github.com/endojs/endo/issues/2635)) but
@@ -94,15 +94,13 @@ absence exactly as they do today.
 
 ### Lockdown sequencing
 
-(Revised: step 1 is the replace-before-sample step added by
-§ Revision: encapsulated constructors.
-On SES-for-XS that step also runs at module load.)
-
 The new permits hook into the existing `intrinsics.js` flow:
 
 1. The codec taming replaces each host codec constructor on the
    global with an encapsulated constructor
-   (§ Revision: encapsulated constructors).
+   (see the section Revision: encapsulated constructors).
+   On SES-for-XS this step also runs once at module load, before
+   `lockdown()`.
 2. `getGlobalIntrinsics` collects `TextEncoder` and `TextDecoder`
    (now the encapsulated replacements) from the global.
 3. The whitelist pass walks the permits graph and prunes any
@@ -171,8 +169,8 @@ Tests live under `packages/ses/test/`.
    shared prototypes.
    It cannot see references held inside host closures.
    The test therefore checks the walk, and it does not claim that no
-   reference exists anywhere (§ Revision: encapsulated constructors
-   lists the channels the walk does not cover).
+   reference exists anywhere (the section Revision: encapsulated
+   constructors lists the channels the walk does not cover).
    The test asserts the codec fix alone, so it does not depend on the
    `URL` and `URLSearchParams` follow-up:
    - The Node suite
@@ -204,29 +202,31 @@ Tests live under `packages/ses/test/`.
    provides the codecs.
 
 9. **Subclassing and pre-lockdown captures.**
-   After `lockdown()`, `class X extends TextDecoder {}` yields
-   instances that are `instanceof X` and `instanceof TextDecoder`
-   and decode correctly.
-   A host constructor captured before `lockdown()`
-   (`const { TextDecoder: Host } = globalThis`) satisfies
-   `new TextDecoder() instanceof Host` and
-   `new Host() instanceof TextDecoder`, while `Host !== TextDecoder`.
-   An instance constructed before `lockdown()` reports the
-   replacement as its `constructor`.
-   `Reflect.construct(TextDecoder, [], F)` with an arbitrary function
-   `F` yields an instance whose prototype is `F.prototype`, and
-   neither the instance, `F`, nor anything the walk of item 7 reaches
-   from them is the host constructor.
-   The same holds when `F` is a Proxy, or when `F.prototype` is an
-   accessor: `Reflect.construct` reads `F.prototype` through an
-   ordinary `[[Get]]` on `F`, so a guest trap or getter observes only
-   `F` and the property key, never `Host`.
-   The replacements' `name` and `length` equal the host's
-   (`'TextEncoder'`/`'TextDecoder'`, `0`).
-   Calling a replacement without `new` throws a `TypeError` whose
-   message names the constructor.
-   `new TextDecoder('bogus')` throws the same error class as the host
-   (`RangeError`), because arguments are forwarded unchanged.
+   After `lockdown()`, with `Host` a host constructor captured before
+   `lockdown()` (`const { TextDecoder: Host } = globalThis`):
+   - `class X extends TextDecoder {}` yields instances that are
+     `instanceof X` and `instanceof TextDecoder` and decode correctly.
+   - `new TextDecoder() instanceof Host` is `true`.
+   - `new Host() instanceof TextDecoder` is `true`.
+   - `Host !== TextDecoder`.
+   - An instance constructed before `lockdown()` reports the
+     replacement as its `constructor`.
+   - `Reflect.construct(TextDecoder, [], F)` with an arbitrary
+     function `F` yields an instance whose prototype is
+     `F.prototype`, and neither the instance, `F`, nor anything the
+     walk of item 7 reaches from them is the host constructor.
+   - The same holds when `F` is a Proxy, or when `F.prototype` is an
+     accessor: `Reflect.construct` reads `F.prototype` through an
+     ordinary `[[Get]]` on `F`, so a guest trap or getter observes
+     only `F` and the property key, never `Host`.
+   - The replacements' `name` and `length` equal the host's
+     (`'TextEncoder'`/`'TextDecoder'`, `0`).
+   - The replacements' own keys are exactly `length`, `name`, and
+     `prototype`.
+   - Calling a replacement without `new` throws a `TypeError` whose
+     message names the constructor.
+   - `new TextDecoder('bogus')` throws the same error class as the
+     host (`RangeError`), because arguments are forwarded unchanged.
 
 ### Compatibility considerations
 
@@ -240,9 +240,9 @@ Tests live under `packages/ses/test/`.
   shim.
 - **Constructor identity changes after lockdown.**
   The permitted `TextEncoder` and `TextDecoder` are SES-owned
-  replacements (§ Revision: encapsulated constructors), so a host
-  constructor captured before `lockdown()` is no longer identical to
-  the global binding:
+  replacements (see the section Revision: encapsulated
+  constructors), so a host constructor captured before `lockdown()`
+  is no longer identical to the global binding:
   `Host === TextDecoder` is `false`.
   `instanceof` still holds in both directions, because the
   replacement reuses the host prototype object; that preservation is
@@ -270,15 +270,15 @@ Tests live under `packages/ses/test/`.
   - the `.changeset/` entry for the SES release that ships the
     revision, which states the identity change, the repointed
     `constructor`, and the retirement trigger
-    (§ Revision: encapsulated constructors);
+    (see the section Revision: encapsulated constructors);
   - a short note in `packages/ses/docs/guide.md`, beside its
     existing `TextEncoder`/`TextDecoder` entries, saying that the
     permitted codecs are SES-owned stand-ins for the host
     constructors and linking to this design.
 - **More than one copy of SES in a realm.**
   Each loaded copy of SES keeps its own record of the replacements it
-  installed (§ Revision: encapsulated constructors, the idempotence
-  paragraph).
+  installed (see the idempotence paragraph of the section Revision:
+  encapsulated constructors).
   A second copy that runs its codec taming before any `lockdown()`
   wraps the first copy's replacement again.
   The result behaves the same: both wrappers share the host
@@ -288,7 +288,7 @@ Tests live under `packages/ses/test/`.
   The cost is one extra call frame per construction.
   A copy that runs after `lockdown()` finds the prototype frozen
   while the binding is not one of its own replacements, and throws
-  a diagnostic (§ Revision: encapsulated constructors).
+  a diagnostic (see the section Revision: encapsulated constructors).
   Tolerating that case would need a way to tell another copy's
   replacement from a host constructor whose prototype some other
   party froze, which a per-copy `WeakSet` cannot do; silently
@@ -301,6 +301,19 @@ Tests live under `packages/ses/test/`.
   unless an endowment passes them in.
 
 ## Revision: encapsulated constructors (2026-10-07)
+
+Summary of the remedy:
+before the intrinsics collector samples the global object, SES
+replaces each host `TextEncoder` and `TextDecoder` with an SES-owned
+constructor that delegates construction to the host through
+`Reflect.construct` and reuses the host prototype object, so
+instances and `instanceof` keep host behavior.
+The permitted intrinsics are those replacements, never the host
+constructor objects, so the host's undeletable `caller` and
+`arguments` properties never reach the permits pass.
+The rest of this section gives the failure that motivates the
+change, the measured evidence, the rejected alternatives, and then
+the adopted remedy in detail.
 
 Background: `lockdown()` collects the intrinsics (the built-in
 objects every compartment shares), then walks them against an
@@ -549,14 +562,14 @@ against that.
 Escape channels this argument and the walk do not cover:
 - References held inside host closures or internal slots.
 - Other names for the same host constructors that a host module
-  exposes (§ Compatibility considerations), and endowments that pass
-  them in.
+  exposes (see the section Compatibility considerations), and
+  endowments that pass them in.
 - Host constructors from other realms, which are other objects.
 
 The replacement is unconditional where the codecs exist, so the
 permitted intrinsics have the same shape on affected and unaffected
 engines alike, at the cost of constructor identity with pre-lockdown
-captures (§ Compatibility considerations).
+captures (see the section Compatibility considerations).
 Hosts without the codecs (XS without a providing shell) keep the
 absent-codec degradation path unchanged.
 
@@ -595,7 +608,7 @@ encapsulate it") rather than leaving a possibly-host constructor on
 the permitted path, where it would either fail the permits pass
 again on affected Chromium or break the rule that a permitted host
 WebIDL constructor is never the host object.
-The `WeakSet` is per loaded copy of SES; § Compatibility
+The `WeakSet` is per loaded copy of SES; the section Compatibility
 considerations describes what a second copy in the same realm does
 and why the result is still correct.
 Test plan item 8 covers the double application.
@@ -672,7 +685,7 @@ as the fix for endojs/endo#3369.
 4. **Encapsulate, do not tolerate.**
    The permitted codec constructors are SES-owned replacements that
    delegate to the captured host originals
-   (§ Revision: encapsulated constructors).
+   (see the section Revision: encapsulated constructors).
    The host constructors carry undeletable legacy restricted
    properties on Chromium before 138.
    The restricted-property descriptor is indistinguishable from a
