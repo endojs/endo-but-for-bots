@@ -44,10 +44,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
-      contents: read
-      # `gh cache delete` in *Extract Guix store cache snapshot*
-      # evicts a corrupt store-cache entry so it can be re-saved.
-      actions: write
+      contents: read # `actions/checkout` reads the repository
+      actions: write # `gh cache delete` evicts a corrupt store-cache entry
 
     steps:
       - name: Checkout Endo
