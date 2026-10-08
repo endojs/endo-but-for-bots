@@ -399,14 +399,14 @@ pub struct ReleasableEffect {
 
 pub(crate) const SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS host_call (
-        request_seq INTEGER PRIMARY KEY,
+        request_sequence INTEGER PRIMARY KEY,
         crank_id INTEGER NOT NULL,
         call_ordinal INTEGER NOT NULL,
         callback TEXT NOT NULL,
         class TEXT NOT NULL
             CHECK (class IN ('pure', 'read', 'transactional', 'outbound', 'barrier')),
         handle_id INTEGER,
-        reply_seq INTEGER,
+        reply_sequence INTEGER,
         opened_handle INTEGER,
         closes INTEGER NOT NULL DEFAULT 0,
         cleared INTEGER NOT NULL DEFAULT 0
@@ -420,7 +420,7 @@ pub(crate) const SCHEMA: &str = "
     ) STRICT;
     CREATE TABLE IF NOT EXISTS host_handle (
         handle_id INTEGER PRIMARY KEY,
-        created_by_seq INTEGER NOT NULL,
+        created_by_sequence INTEGER NOT NULL,
         callback TEXT NOT NULL,
         descriptor BLOB,
         open INTEGER NOT NULL,
@@ -446,8 +446,8 @@ pub(crate) fn commit_staged(
     crank: CrankId,
     staged: &[Staged],
 ) -> rusqlite::Result<()> {
-    for s in staged {
-        match s {
+    for staged_effect in staged {
+        match staged_effect {
             Staged::Call {
                 ordinal,
                 callback,
@@ -469,7 +469,7 @@ pub(crate) fn commit_staged(
                         let sequence = insert_event(transaction, crank, "host-request", request)?;
                         transaction.execute(
                             "INSERT INTO host_call
-                               (request_seq, crank_id, call_ordinal, callback, class, handle_id)
+                               (request_sequence, crank_id, call_ordinal, callback, class, handle_id)
                              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                             params![
                                 sequence as i64,
@@ -477,7 +477,7 @@ pub(crate) fn commit_staged(
                                 *ordinal as i64,
                                 callback,
                                 class.tag(),
-                                handle.map(|h| h as i64)
+                                handle.map(|handle| handle as i64)
                             ],
                         )?;
                         sequence
@@ -485,8 +485,8 @@ pub(crate) fn commit_staged(
                 };
                 let reply_sequence = insert_event(transaction, crank, "host-reply", reply)?;
                 transaction.execute(
-                    "UPDATE host_call SET reply_seq = ?1, opened_handle = ?2, closes = ?3
-                     WHERE request_seq = ?4",
+                    "UPDATE host_call SET reply_sequence = ?1, opened_handle = ?2, closes = ?3
+                     WHERE request_sequence = ?4",
                     params![
                         reply_sequence as i64,
                         opens.as_ref().map(|(h, _)| *h as i64),
@@ -496,7 +496,7 @@ pub(crate) fn commit_staged(
                 )?;
                 if let Some((h, descriptor)) = opens {
                     transaction.execute(
-                        "INSERT INTO host_handle (handle_id, created_by_seq, callback, descriptor, open)
+                        "INSERT INTO host_handle (handle_id, created_by_sequence, callback, descriptor, open)
                          VALUES (?1, ?2, ?3, ?4, 1)",
                         params![*h as i64, request_sequence as i64, callback, descriptor],
                     )?;
@@ -515,7 +515,7 @@ pub(crate) fn commit_staged(
             } => {
                 let sequence = insert_event(transaction, crank, "host-effect", request)?;
                 transaction.execute(
-                    "INSERT INTO host_call (request_seq, crank_id, call_ordinal, callback, class)
+                    "INSERT INTO host_call (request_sequence, crank_id, call_ordinal, callback, class)
                      VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![
                         sequence as i64,
@@ -550,7 +550,7 @@ impl Transcript {
     fn handle_row(&self, handle: HandleId) -> Result<Option<HandleRecord>, TranscriptError> {
         self.connection
             .query_row(
-                "SELECT handle_id, callback, created_by_seq, descriptor, open, broken
+                "SELECT handle_id, callback, created_by_sequence, descriptor, open, broken
                  FROM host_handle WHERE handle_id = ?1",
                 [handle as i64],
                 read_handle,
@@ -563,7 +563,7 @@ impl Transcript {
     pub fn open_handles(&self) -> Result<Vec<HandleRecord>, TranscriptError> {
         let read = || -> rusqlite::Result<Vec<HandleRecord>> {
             let mut statement = self.connection.prepare(
-                "SELECT handle_id, callback, created_by_seq, descriptor, open, broken
+                "SELECT handle_id, callback, created_by_sequence, descriptor, open, broken
                  FROM host_handle WHERE open = 1 ORDER BY handle_id",
             )?;
             let rows = statement.query_map([], read_handle)?;
@@ -576,21 +576,23 @@ impl Transcript {
     /// staged calls.
     fn live_handle_state(&self, handle: HandleId) -> Result<HandleState, TranscriptError> {
         if let Some(active) = &self.active {
-            for s in active.host.iter().rev() {
-                match s {
+            for staged_effect in active.host.iter().rev() {
+                match staged_effect {
                     Staged::Call {
-                        handle: Some(h),
+                        handle: Some(staged_handle),
                         closes: true,
                         ..
-                    } if *h == handle => return Ok(HandleState::Closed),
+                    } if *staged_handle == handle => return Ok(HandleState::Closed),
                     Staged::Call {
-                        opens: Some((h, _)),
+                        opens: Some((staged_handle, _)),
                         ..
-                    } if *h == handle => return Ok(HandleState::Open),
-                    Staged::Loss { handle: h } if *h == handle => return Ok(HandleState::Closed),
-                    Staged::Escaped { closed: Some(h) } if *h == handle => {
-                        return Ok(HandleState::Broken)
-                    }
+                    } if *staged_handle == handle => return Ok(HandleState::Open),
+                    Staged::Loss {
+                        handle: staged_handle,
+                    } if *staged_handle == handle => return Ok(HandleState::Closed),
+                    Staged::Escaped {
+                        closed: Some(staged_handle),
+                    } if *staged_handle == handle => return Ok(HandleState::Broken),
                     _ => {}
                 }
             }
@@ -605,12 +607,13 @@ impl Transcript {
     /// The next recorded call's position in the active crank. Pure calls
     /// and loss acknowledgments are not recorded calls.
     fn next_call_ordinal(&self) -> u64 {
-        self.active.as_ref().map_or(0, |a| {
-            a.host
+        self.active.as_ref().map_or(0, |active| {
+            active
+                .host
                 .iter()
-                .filter(|s| {
+                .filter(|staged| {
                     matches!(
-                        s,
+                        staged,
                         Staged::Call { .. } | Staged::Effect { .. } | Staged::RefusedBarrier
                     )
                 })
@@ -675,10 +678,11 @@ impl Transcript {
                 |row| row.get(0),
             )
             .map_err(|error| self.read_error(&error))?;
-        let staged = self.active.as_ref().map_or(0, |a| {
-            a.host
+        let staged = self.active.as_ref().map_or(0, |active| {
+            active
+                .host
                 .iter()
-                .filter(|s| matches!(s, Staged::Call { opens: Some(_), .. }))
+                .filter(|staged| matches!(staged, Staged::Call { opens: Some(_), .. }))
                 .count()
         });
         Ok(durable as HandleId + staged as HandleId + 1)
@@ -746,10 +750,16 @@ impl Transcript {
                 HandleState::Closed => return Err(HostCallError::UnknownHandle(h)),
             }
         }
-        let (refused_barrier, escaped) = self.active.as_ref().map_or((false, false), |a| {
+        let (refused_barrier, escaped) = self.active.as_ref().map_or((false, false), |active| {
             (
-                a.host.iter().any(|s| matches!(s, Staged::RefusedBarrier)),
-                a.host.iter().any(|s| matches!(s, Staged::Escaped { .. })),
+                active
+                    .host
+                    .iter()
+                    .any(|staged| matches!(staged, Staged::RefusedBarrier)),
+                active
+                    .host
+                    .iter()
+                    .any(|staged| matches!(staged, Staged::Escaped { .. })),
             )
         });
         if class != HostClass::Pure {
@@ -786,7 +796,7 @@ impl Transcript {
                     let sequence = insert_event(transaction, crank, "host-request", request)?;
                     transaction.execute(
                         "INSERT INTO host_call
-                       (request_seq, crank_id, call_ordinal, callback, class, handle_id)
+                       (request_sequence, crank_id, call_ordinal, callback, class, handle_id)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                         params![
                             sequence as i64,
@@ -794,7 +804,7 @@ impl Transcript {
                             ordinal as i64,
                             callback,
                             HostClass::Barrier.tag(),
-                            handle.map(|h| h as i64)
+                            handle.map(|handle| handle as i64)
                         ],
                     )?;
                     Ok(sequence)
@@ -845,7 +855,7 @@ impl Transcript {
             Some(descriptor) => Some((self.next_handle_id()?, descriptor)),
             None => None,
         };
-        let opened_id = opened.as_ref().map(|(h, _)| *h);
+        let opened_id = opened.as_ref().map(|(handle, _)| *handle);
         self.active
             .as_mut()
             .expect("active crank")
@@ -897,7 +907,7 @@ impl Transcript {
                 let sequence = insert_event(transaction, crank, "host-escape", request)?;
                 transaction.execute(
                     "INSERT INTO host_handle
-                       (handle_id, created_by_seq, callback, descriptor, open, broken)
+                       (handle_id, created_by_sequence, callback, descriptor, open, broken)
                      VALUES (?1, ?2, ?3, ?4, 1, 1)",
                     params![*h as i64, sequence as i64, callback, descriptor],
                 )?;
@@ -918,11 +928,11 @@ impl Transcript {
     pub fn releasable_effects(&self) -> Result<Vec<ReleasableEffect>, TranscriptError> {
         let read = || -> rusqlite::Result<Vec<ReleasableEffect>> {
             let mut statement = self.connection.prepare(
-                "SELECT error.seq, error.crank_id, h.callback, error.payload FROM event error
-                 JOIN crank c ON c.crank_id = error.crank_id
-                 JOIN host_call h ON h.request_seq = error.seq
-                 WHERE error.kind = 'host-effect' AND error.released = 0 AND c.state = 'committed'
-                 ORDER BY error.seq",
+                "SELECT entry.sequence, entry.crank_id, host_call.callback, entry.payload FROM event entry
+                 JOIN crank ON crank.crank_id = entry.crank_id
+                 JOIN host_call ON host_call.request_sequence = entry.sequence
+                 WHERE entry.kind = 'host-effect' AND entry.released = 0 AND crank.state = 'committed'
+                 ORDER BY entry.sequence",
             )?;
             let rows = statement.query_map([], |row| {
                 let sequence = row.get::<_, i64>(0)? as Sequence;
@@ -958,19 +968,19 @@ impl Transcript {
                 Err(reason) => report.broken.push((record.handle, reason)),
             }
         }
-        let broken: Vec<HandleId> = report.broken.iter().map(|(h, _)| *h).collect();
+        let broken: Vec<HandleId> = report.broken.iter().map(|(handle, _)| *handle).collect();
         let reseated = report.reseated.clone();
         self.transact(Operation::Recover, None, |transaction| {
-            for h in &broken {
+            for handle in &broken {
                 transaction.execute(
                     "UPDATE host_handle SET broken = 1 WHERE handle_id = ?1",
-                    [*h as i64],
+                    [*handle as i64],
                 )?;
             }
-            for h in &reseated {
+            for handle in &reseated {
                 transaction.execute(
                     "UPDATE host_handle SET broken = 0 WHERE handle_id = ?1",
-                    [*h as i64],
+                    [*handle as i64],
                 )?;
             }
             Ok(())
@@ -1038,15 +1048,15 @@ impl Transcript {
     /// issuing calls in that crank from the crank's own outcome, not from
     /// this gate.
     pub fn recovery_gate(&self) -> Result<Result<(), RecoveryStop>, TranscriptError> {
-        let active = self.active_crank().map_or(-1, |c| c as i64);
+        let active = self.active_crank().map_or(-1, |crank| crank as i64);
         let escaped = self
             .connection
             .query_row(
-                "SELECT h.crank_id, h.request_seq, h.callback FROM host_call h
-                 JOIN crank c ON c.crank_id = h.crank_id
-                 WHERE h.class = ?2 AND h.cleared = 0 AND c.state != 'committed'
-                   AND c.crank_id != ?1
-                 ORDER BY h.request_seq LIMIT 1",
+                "SELECT host_call.crank_id, host_call.request_sequence, host_call.callback FROM host_call
+                 JOIN crank ON crank.crank_id = host_call.crank_id
+                 WHERE host_call.class = ?2 AND host_call.cleared = 0 AND crank.state != 'committed'
+                   AND crank.crank_id != ?1
+                 ORDER BY host_call.request_sequence LIMIT 1",
                 params![active, HostClass::Barrier.tag()],
                 |row| {
                     Ok(RecoveryStop::EscapedBarrier {
@@ -1085,7 +1095,7 @@ impl Transcript {
         self.check_healthy()?;
         let changed = self.transact(Operation::Recover, None, |transaction| {
             transaction.execute(
-                "UPDATE host_call SET cleared = 1 WHERE request_seq = ?1 AND class = ?2",
+                "UPDATE host_call SET cleared = 1 WHERE request_sequence = ?1 AND class = ?2",
                 params![sequence as i64, HostClass::Barrier.tag()],
             )
         })?;
@@ -1100,17 +1110,19 @@ impl Transcript {
     /// The recorded host calls of the committed suffix after the latest
     /// snapshot, for replay.
     pub fn host_replay(&self) -> Result<HostReplay, TranscriptError> {
-        let watermark = self.latest_snapshot()?.map_or(0, |s| s.watermark_crank);
+        let watermark = self
+            .latest_snapshot()?
+            .map_or(0, |snapshot| snapshot.watermark_crank);
         let read = || -> rusqlite::Result<BTreeMap<CrankId, VecDeque<Recorded>>> {
             let mut statement = self.connection.prepare(
-                "SELECT h.crank_id, h.request_seq, h.callback, h.class, h.handle_id,
-                        request.payload, reply.payload, h.opened_handle, h.cleared
-                 FROM host_call h
-                 JOIN crank c ON c.crank_id = h.crank_id
-                 JOIN event request ON request.seq = h.request_seq
-                 LEFT JOIN event reply ON reply.seq = h.reply_seq
-                 WHERE c.state = 'committed' AND h.crank_id > ?1
-                 ORDER BY h.crank_id, h.call_ordinal",
+                "SELECT host_call.crank_id, host_call.request_sequence, host_call.callback, host_call.class, host_call.handle_id,
+                        request.payload, reply.payload, host_call.opened_handle, host_call.cleared
+                 FROM host_call
+                 JOIN crank ON crank.crank_id = host_call.crank_id
+                 JOIN event request ON request.sequence = host_call.request_sequence
+                 LEFT JOIN event reply ON reply.sequence = host_call.reply_sequence
+                 WHERE crank.state = 'committed' AND host_call.crank_id > ?1
+                 ORDER BY host_call.crank_id, host_call.call_ordinal",
             )?;
             let rows = statement.query_map([watermark as i64], |row| {
                 Ok(Recorded {
@@ -1118,10 +1130,14 @@ impl Transcript {
                     sequence: row.get::<_, i64>(1)? as Sequence,
                     callback: row.get(2)?,
                     class: row.get(3)?,
-                    handle: row.get::<_, Option<i64>>(4)?.map(|h| h as HandleId),
+                    handle: row
+                        .get::<_, Option<i64>>(4)?
+                        .map(|handle| handle as HandleId),
                     request: row.get(5)?,
                     reply: row.get(6)?,
-                    opened: row.get::<_, Option<i64>>(7)?.map(|h| h as HandleId),
+                    opened: row
+                        .get::<_, Option<i64>>(7)?
+                        .map(|handle| handle as HandleId),
                     cleared: row.get::<_, i64>(8)? != 0,
                 })
             })?;

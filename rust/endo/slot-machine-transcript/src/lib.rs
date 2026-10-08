@@ -312,7 +312,7 @@ pub struct AbortedCrank {
     /// The crank id.
     pub crank: CrankId,
     /// The inbound event's sequence.
-    pub inbound_seq: Sequence,
+    pub inbound_sequence: Sequence,
     /// The inbound delivery.
     pub inbound: Vec<u8>,
 }
@@ -433,7 +433,7 @@ impl Transcript {
         if !mode.eq_ignore_ascii_case("wal") {
             return Err(open_fault(format!("journal_mode is {mode}, not wal"), None));
         }
-        let mut t = Transcript {
+        let mut transcript = Transcript {
             connection,
             worker: config.worker,
             limits: config.limits,
@@ -442,9 +442,9 @@ impl Transcript {
             poisoned: None,
             stats: TranscriptStats::default(),
         };
-        t.init_schema()?;
-        let recovery = t.recover()?;
-        Ok((t, recovery))
+        transcript.init_schema()?;
+        let recovery = transcript.recover()?;
+        Ok((transcript, recovery))
     }
 
     fn fault(
@@ -498,7 +498,7 @@ impl Transcript {
 
     /// The crank in flight, if any.
     pub fn active_crank(&self) -> Option<CrankId> {
-        self.active.as_ref().map(|a| a.crank)
+        self.active.as_ref().map(|active| active.crank)
     }
 
     /// Run `body` in one transaction and commit it, distinguishing a failure
@@ -536,22 +536,22 @@ impl Transcript {
                      engine_signature BLOB NOT NULL,
                      panic_on_reference_error INTEGER NOT NULL,
                      watermark_crank INTEGER NOT NULL,
-                     watermark_seq INTEGER NOT NULL
+                     watermark_sequence INTEGER NOT NULL
                  ) STRICT;
                  CREATE TABLE IF NOT EXISTS crank (
                      crank_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                     inbound_seq INTEGER,
+                     inbound_sequence INTEGER,
                      start_epoch INTEGER NOT NULL,
                      state TEXT NOT NULL CHECK (state IN ('started', 'committed', 'aborted'))
                  ) STRICT;
                  CREATE TABLE IF NOT EXISTS event (
-                     seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
                      crank_id INTEGER NOT NULL REFERENCES crank (crank_id),
                      kind TEXT NOT NULL CHECK (kind IN ('inbound', 'outbound', 'host-request', 'host-reply', 'host-effect', 'host-escape')),
                      payload BLOB NOT NULL,
                      released INTEGER NOT NULL DEFAULT 0
                  ) STRICT;
-                 CREATE INDEX IF NOT EXISTS event_by_crank ON event (crank_id, seq);
+                 CREATE INDEX IF NOT EXISTS event_by_crank ON event (crank_id, sequence);
                  CREATE INDEX IF NOT EXISTS crank_by_state ON crank (state, crank_id);",
             )?;
             transaction.execute_batch(host::SCHEMA)?;
@@ -601,14 +601,14 @@ impl Transcript {
 
     fn cranks_in_state(&self, state: &str) -> rusqlite::Result<Vec<AbortedCrank>> {
         let mut statement = self.connection.prepare(
-            "SELECT c.crank_id, error.seq, error.payload FROM crank c
-             JOIN event error ON error.seq = c.inbound_seq
-             WHERE c.state = ?1 ORDER BY c.crank_id",
+            "SELECT crank.crank_id, entry.sequence, entry.payload FROM crank
+             JOIN event entry ON entry.sequence = crank.inbound_sequence
+             WHERE crank.state = ?1 ORDER BY crank.crank_id",
         )?;
         let rows = statement.query_map([state], |row| {
             Ok(AbortedCrank {
                 crank: row.get::<_, i64>(0)? as u64,
-                inbound_seq: row.get::<_, i64>(1)? as u64,
+                inbound_sequence: row.get::<_, i64>(1)? as u64,
                 inbound: row.get(2)?,
             })
         })?;
@@ -639,7 +639,7 @@ impl Transcript {
     pub fn latest_snapshot(&self) -> Result<Option<SnapshotRecord>, TranscriptError> {
         self.connection
             .query_row(
-                "SELECT epoch, hash, watermark_crank, watermark_seq, engine_signature, panic_on_reference_error
+                "SELECT epoch, hash, watermark_crank, watermark_sequence, engine_signature, panic_on_reference_error
                  FROM snapshot ORDER BY epoch DESC LIMIT 1",
                 [],
                 |row| {
@@ -698,7 +698,7 @@ impl Transcript {
             )?;
             let sequence = transaction.last_insert_rowid();
             transaction.execute(
-                "UPDATE crank SET inbound_seq = ?1 WHERE crank_id = ?2",
+                "UPDATE crank SET inbound_sequence = ?1 WHERE crank_id = ?2",
                 params![sequence, crank],
             )?;
             Ok(crank as u64)
@@ -760,7 +760,7 @@ impl Transcript {
             if active
                 .host
                 .iter()
-                .any(|s| matches!(s, host::Staged::RefusedBarrier))
+                .any(|staged| matches!(staged, host::Staged::RefusedBarrier))
             {
                 return Err(TranscriptError::Protocol(format!(
                     "crank {} refused a barrier's reply and must abort",
@@ -852,10 +852,10 @@ impl Transcript {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT error.seq, error.crank_id, error.payload FROM event error
-                 JOIN crank c ON c.crank_id = error.crank_id
-                 WHERE error.kind = 'outbound' AND error.released = 0 AND c.state = 'committed'
-                 ORDER BY error.seq",
+                "SELECT entry.sequence, entry.crank_id, entry.payload FROM event entry
+                 JOIN crank ON crank.crank_id = entry.crank_id
+                 WHERE entry.kind = 'outbound' AND entry.released = 0 AND crank.state = 'committed'
+                 ORDER BY entry.sequence",
             )
             .map_err(|error| self.read_error(&error))?;
         let rows = statement
@@ -893,18 +893,25 @@ impl Transcript {
         // Compaction may have dropped the rows of cranks an earlier snapshot
         // covered, so the watermark never moves below the previous one.
         let previous = self.latest_snapshot()?;
-        let (live_crank, live_seq) = self
+        let (live_crank, live_sequence) = self
             .connection
             .query_row(
-                "SELECT COALESCE(MAX(c.crank_id), 0), COALESCE(MAX(error.seq), 0) FROM crank c
-                 JOIN event error ON error.crank_id = c.crank_id WHERE c.state = 'committed'",
+                "SELECT COALESCE(MAX(crank.crank_id), 0), COALESCE(MAX(entry.sequence), 0) FROM crank
+                 JOIN event entry ON entry.crank_id = crank.crank_id WHERE crank.state = 'committed'",
                 [],
                 |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
             )
             .map_err(|error| self.read_error(&error))?;
-        let watermark_crank = live_crank.max(previous.as_ref().map_or(0, |s| s.watermark_crank));
-        let watermark_sequence =
-            live_seq.max(previous.as_ref().map_or(0, |s| s.watermark_sequence));
+        let watermark_crank = live_crank.max(
+            previous
+                .as_ref()
+                .map_or(0, |snapshot| snapshot.watermark_crank),
+        );
+        let watermark_sequence = live_sequence.max(
+            previous
+                .as_ref()
+                .map_or(0, |snapshot| snapshot.watermark_sequence),
+        );
         let hash = match blob_store.write_blob(blob) {
             Ok(hash) => hash,
             Err(error) => {
@@ -926,7 +933,7 @@ impl Transcript {
         let epoch = self.transact(Operation::PublishSnapshot, None, |transaction| {
             flush_acknowledgments(transaction, &acknowledgments)?;
             transaction.execute(
-                "INSERT INTO snapshot (hash, engine_signature, panic_on_reference_error, watermark_crank, watermark_seq)
+                "INSERT INTO snapshot (hash, engine_signature, panic_on_reference_error, watermark_crank, watermark_sequence)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
                     record_hash,
@@ -970,12 +977,12 @@ impl Transcript {
             )?;
             transaction.execute(
                 "DELETE FROM host_call WHERE NOT EXISTS
-                   (SELECT 1 FROM event error WHERE error.seq = host_call.request_seq)",
+                   (SELECT 1 FROM event entry WHERE entry.sequence = host_call.request_sequence)",
                 [],
             )?;
             transaction.execute(
                 "DELETE FROM crank WHERE crank_id <= ?1 AND state = 'committed'
-                   AND NOT EXISTS (SELECT 1 FROM event error WHERE error.crank_id = crank.crank_id)",
+                   AND NOT EXISTS (SELECT 1 FROM event entry WHERE entry.crank_id = crank.crank_id)",
                 [watermark],
             )?;
             let superseded = {
@@ -994,7 +1001,7 @@ impl Transcript {
         self.stats.compactions += 1;
         Ok(superseded
             .into_iter()
-            .filter(|h| *h != snapshot.hash)
+            .filter(|hash| *hash != snapshot.hash)
             .collect())
     }
 
@@ -1039,12 +1046,12 @@ impl Transcript {
         })?;
         let read = || -> rusqlite::Result<Vec<CommittedCrank>> {
             let mut cranks_stmt = self.connection.prepare(
-                "SELECT c.crank_id, error.payload FROM crank c JOIN event error ON error.seq = c.inbound_seq
-                 WHERE c.state = 'committed' AND c.crank_id > ?1 ORDER BY c.crank_id",
+                "SELECT crank.crank_id, entry.payload FROM crank JOIN event entry ON entry.sequence = crank.inbound_sequence
+                 WHERE crank.state = 'committed' AND crank.crank_id > ?1 ORDER BY crank.crank_id",
             )?;
             let mut out_stmt = self
                 .connection
-                .prepare("SELECT seq, payload FROM event WHERE crank_id = ?1 AND kind = 'outbound' ORDER BY seq")?;
+                .prepare("SELECT sequence, payload FROM event WHERE crank_id = ?1 AND kind = 'outbound' ORDER BY sequence")?;
             let heads = cranks_stmt
                 .query_map([snapshot.watermark_crank as i64], |row| {
                     Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
@@ -1091,8 +1098,8 @@ impl Transcript {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT error.seq, error.crank_id, c.state FROM event error JOIN crank c ON c.crank_id = error.crank_id
-                 WHERE error.kind = 'outbound' ORDER BY error.seq",
+                "SELECT entry.sequence, entry.crank_id, crank.state FROM event entry JOIN crank ON crank.crank_id = entry.crank_id
+                 WHERE entry.kind = 'outbound' ORDER BY entry.sequence",
             )
             .map_err(|error| self.read_error(&error))?;
         let rows = statement
@@ -1116,7 +1123,7 @@ fn flush_acknowledgments(
         return Ok(());
     }
     let mut statement = transaction.prepare(
-        "UPDATE event SET released = 1 WHERE seq = ?1 AND kind IN ('outbound', 'host-effect')",
+        "UPDATE event SET released = 1 WHERE sequence = ?1 AND kind IN ('outbound', 'host-effect')",
     )?;
     for sequence in acknowledgments {
         statement.execute([*sequence as i64])?;
