@@ -25,6 +25,7 @@ import precompiledModuleSource from '../tmp/_meaning.pre-mjs.json';
 // not as they were when SES was imported.
 delete globalThis.TextEncoder;
 globalThis.TextDecoder = function TextDecoder() {};
+globalThis.addedBeforeLockdown = {};
 
 lockdown();
 
@@ -50,11 +51,16 @@ print('# compartments receive global intrinsics sampled at lockdown');
     Object.isFrozen(TextDecoder.prototype),
     'replaced global prototype must be hardened',
   );
+  assert.equal(
+    compartment.evaluate('typeof addedBeforeLockdown'),
+    'undefined',
+    'non-universal global added before lockdown must not leak into compartments',
+  );
   assert(
     compartment.evaluate('Date') !== globalThis.Date,
     'compartments must receive %SharedDate%, not %InitialDate%',
   );
-  for (const source of ['Date.now()', 'Math.random()']) {
+  for (const source of ['Date.now()', 'new Date()', 'Math.random()']) {
     const outcome = compartment.evaluate(`
       try {
         ${source};
