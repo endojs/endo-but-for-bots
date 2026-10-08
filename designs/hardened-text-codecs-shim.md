@@ -99,8 +99,12 @@ The new permits hook into the existing `intrinsics.js` flow:
 1. The codec taming replaces each host codec constructor on the
    global with an encapsulated constructor
    (see the section Revision: encapsulated constructors).
-   On SES-for-XS this step also runs once at module load, before
-   `lockdown()`.
+   This step runs exactly once, inside `lockdown()`, on every engine,
+   SES-for-XS included.
+   That single application depends on
+   endojs/endo-but-for-bots#1425 (see the section Dependencies),
+   which stops SES-for-XS from sampling the global intrinsics at
+   module load for the post-lockdown `Compartment`.
 2. `getGlobalIntrinsics` collects `TextEncoder` and `TextDecoder`
    (now the encapsulated replacements) from the global.
 3. The whitelist pass walks the permits graph and prunes any
@@ -188,16 +192,16 @@ Tests live under `packages/ses/test/`.
    `lockdown()` succeeding on an affected Chromium with `URL` and
    `URLSearchParams` present is the follow-up's test, not this one's.
 
-8. **Double application.**
-   Apply the codec taming twice before `lockdown()` (the SES-for-XS
-   sequence: once at module load, once inside `lockdown()`), and
-   assert that the second pass is a no-op: the global binding is the
-   same replacement object after both passes, and its `prototype`
-   is still the host prototype, not a second wrapper.
-   Also freeze a host codec prototype before the first pass, while
-   the global binding is still the host constructor, and assert that
-   the taming throws a `TypeError` naming the constructor rather than
-   leaving the host constructor in place.
+8. **Unrepointable host prototype.**
+   Before `lockdown()`, while the global binding is still the host
+   constructor, put a host codec prototype into each state that
+   prevents repointing its `constructor`: frozen; non-extensible
+   with `constructor` made non-writable; and extensible with
+   `constructor` made non-writable and non-configurable.
+   In each state, assert that `lockdown()` throws a `TypeError`
+   naming the constructor, rather than leaving the host constructor
+   in place or failing with an untyped error from deep inside
+   `lockdown()`.
    Runs in the Node suite and in the XS runner with a shell that
    provides the codecs.
 
@@ -251,11 +255,10 @@ Tests live under `packages/ses/test/`.
   Instances that a program constructed before `lockdown()` share the
   host prototype, so their `constructor` now reports the
   replacement.
-  This is a visible mutation of host-shared state, made once, before
-  the prototype is hardened.
-  On SES-for-XS the mutation happens when the module is imported,
-  because the taming runs at module load, so importing SES-for-XS
-  repoints the `constructor` even if `lockdown()` is never called.
+  This is a visible mutation of host-shared state, made once, inside
+  `lockdown()`, before the prototype is hardened.
+  Importing SES without calling `lockdown()` leaves the host
+  constructors and their prototypes untouched, on every engine.
 - **The replacement is a different function object.**
   On every engine, including those whose host constructors are
   clean, the permitted constructors are SES-owned functions.
@@ -276,23 +279,12 @@ Tests live under `packages/ses/test/`.
     permitted codecs are SES-owned stand-ins for the host
     constructors and linking to this design.
 - **More than one copy of SES in a realm.**
-  Each loaded copy of SES keeps its own record of the replacements it
-  installed (see the idempotence paragraph of the section Revision:
-  encapsulated constructors).
-  A second copy that runs its codec taming before any `lockdown()`
-  wraps the first copy's replacement again.
-  The result behaves the same: both wrappers share the host
-  prototype, the prototype's `constructor` points at the outer
-  wrapper, and the inner wrapper is reachable only from the outer
-  one's closure.
-  The cost is one extra call frame per construction.
-  A copy that runs after `lockdown()` finds the prototype frozen
-  while the binding is not one of its own replacements, and throws
-  a diagnostic (see the section Revision: encapsulated constructors).
-  Tolerating that case would need a way to tell another copy's
-  replacement from a host constructor whose prototype some other
-  party froze, which a per-copy `WeakSet` cannot do; silently
-  sampling the second is the failure the guard exists to prevent.
+  The taming runs only inside `lockdown()`, so importing a second
+  copy of SES changes nothing.
+  A second copy whose `lockdown()` runs after the first finds the
+  codec prototype already frozen, cannot repoint its `constructor`,
+  and throws the diagnostic described in the install paragraph of
+  the section Revision: encapsulated constructors.
 - **Other names for the same host constructors.**
   Host modules such as Node's `util` may expose the codec
   constructors under a second name.
@@ -467,10 +459,9 @@ shared prototype's `constructor`, and returns the delegator.
 It never reads or writes `globalThis` and keeps no install record,
 because `SharedURL`, its intended second consumer, is returned as an
 intrinsic through `addIntrinsics` and never written to the global.
-Replacing the global binding, and skipping a binding that is already
-one of SES's replacements, belongs to the codec taming in
+Replacing the global binding belongs to the codec taming in
 `tame-text-codecs.js`, the only caller that writes the global (see
-the idempotence paragraph below).
+the install paragraph below).
 `SharedURL` in `tame-url-constructor.js` already has this shape; the
 `URL` and `URLSearchParams` follow-up moves it onto the maker rather
 than adding further copies.
@@ -583,48 +574,47 @@ captures (see the section Compatibility considerations).
 Hosts without the codecs (XS without a providing shell) keep the
 absent-codec degradation path unchanged.
 
-Why the global binding is replaced, rather than returned through
-`addIntrinsics` (the `lockdown()` call that registers a tamed
-intrinsic under a permit name) as `tameUrlConstructor` and
-`tameDateConstructor` return theirs:
+Install rule: inside `lockdown()`, the taming writes each
+replacement to the global binding exactly once, just before the
+intrinsics collector samples the universal names.
 `TextEncoder` and `TextDecoder` are universal names, which the
-intrinsics collector samples from the global object.
-SES-for-XS, the SES build that runs on Moddable's XS engine, builds
-its shim compartment constructor at module load.
-That step calls `getGlobalIntrinsics`, which samples the universal
-names from the global object, before `lockdown()` runs and outside
-`lockdown()`'s `addIntrinsics` calls.
-Returning the replacements as intrinsics would leave both samplings
-observing the host constructors on the global.
-Replacing the binding once on the global makes every sampling agree.
+collector reads from the global object rather than receiving through
+`addIntrinsics` (the `lockdown()` call that registers a tamed
+intrinsic under a permit name, as `tameUrlConstructor` and
+`tameDateConstructor` do).
+This one write is the install rule for universal host WebIDL
+constructors; the `URLSearchParams` follow-up, also universal, uses
+the same rule rather than adding its own install logic.
 
-The taming is therefore applied twice on SES-for-XS (at module load
-and again inside `lockdown()`) and once elsewhere, so it must be
-idempotent.
-The codec taming in `tame-text-codecs.js` owns the idempotence
-check: it keeps a module-level `WeakSet` of the encapsulated
-constructors it has installed on the global, adding each one after
-the maker returns it and the taming writes the binding.
-A pass that finds the global binding already in that set leaves it
-alone instead of wrapping the replacement in a second delegator.
-The decision keys only on that `WeakSet`, the record of the taming's
-own past action, never on an incidental state such as a frozen
-prototype, which another shim or another copy of SES can also
-produce.
-A pass that finds a binding not in the set whose `prototype` is
-already frozen cannot repoint the `constructor`, and it cannot tell
-whether the binding is a host constructor.
-It throws a `TypeError` naming the constructor (for example,
-"Cannot tame TextDecoder: its prototype was frozen before SES could
-encapsulate it; a second copy of SES loaded after `lockdown()` is
-a likely cause") rather than leaving a possibly-host constructor on
-the permitted path, where it would either fail the permits pass
-again on affected Chromium or break the rule that a permitted host
-WebIDL constructor is never the host object.
-The `WeakSet` is per loaded copy of SES; the section Compatibility
-considerations describes what a second copy in the same realm does
-and why the result is still correct.
-Test plan item 8 covers the double application.
+The single application depends on endojs/endo-but-for-bots#1425.
+Without that change, SES-for-XS, the SES build that runs on
+Moddable's XS engine, builds the shim compartment constructor for
+the post-lockdown `Compartment` at module load, with
+`getGlobalIntrinsics` sampling the universal names from the global
+object outside `lockdown()`; a taming that runs only inside
+`lockdown()` would be invisible to that earlier sample.
+With it, `lockdown()` on SES-for-XS builds the post-lockdown
+`Compartment` from a fresh `makeShimStartCompartment()` after
+`hardenIntrinsics()`, as Node already does through
+`setGlobalObjectMutableProperties` in `packages/ses/src/lockdown.js`,
+so every post-lockdown sample sees the hardened replacement.
+The import-time shim constructor that remains serves only the
+pre-lockdown adapter, which never sees permitted intrinsics.
+The taming therefore runs once on every engine, keeps no record of
+past passes, and needs no idempotence check.
+
+When the taming finds a host codec prototype whose `constructor` it
+cannot repoint (the prototype is frozen, or the property is
+non-writable and either non-configurable or on a non-extensible
+prototype), it throws a `TypeError` naming the constructor (for
+example, "Cannot tame TextDecoder: its prototype's constructor
+cannot be repointed; the prototype was frozen or locked before
+lockdown(), possibly by a second copy of SES") rather than leaving a
+possibly-host constructor on the permitted path, where it would
+either fail the permits pass again on affected Chromium or break the
+rule that a permitted host WebIDL constructor is never the host
+object.
+Test plan item 8 covers each of those prototype states.
 
 The revision is possibly temporary.
 Retirement trigger: when the oldest Chromium that SES supports is
@@ -652,6 +642,7 @@ as the fix for endojs/endo#3369.
 | Design | Relationship |
 |---|---|
 | [hardened-url-shim](hardened-url-shim.md) | Sibling design split from the same source issue.  Both add a vetted host-provided constructor to SES permits.  The two sets of permits are independent and may land in either order. |
+| endojs/endo-but-for-bots#1425 (sample XS compartment intrinsics at lockdown) | Prerequisite.  The codec taming runs once, inside `lockdown()` (see the section Lockdown sequencing); without endojs/endo-but-for-bots#1425, SES-for-XS samples the universal names at module load and would miss the replacement, so the codec revision lands after it. |
 | [base64-native-fallthrough](base64-native-fallthrough.md) | Same family of work: tame and dispatch to native intrinsics inside SES rather than re-implementing in JavaScript.  Independent. |
 
 ## Phases
