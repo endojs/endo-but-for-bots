@@ -1,5 +1,4 @@
 // @ts-check
-/* global globalThis */
 
 // Replacement for the test deleted by endojs/endo#372 (commit 5cf2a20389).
 // See https://github.com/endojs/endo/issues/390
@@ -14,9 +13,10 @@
 // against the wrong object, and the rest of the SES test suite would not
 // notice.
 //
-// Each assertion below independently re-derives an anonymous intrinsic and
-// compares it (by identity) to what `getAnonymousIntrinsics()` returns. The
-// independent derivations are deliberately written without going through
+// Each assertion below compares an anonymous intrinsic (by identity) to a
+// value the test obtains on its own: usually by re-deriving it from host
+// objects, and for `%InertCompartment%` by importing the shim's export. The
+// derivations are deliberately written without going through
 // `commons.js`, so that a regression in `get-anonymous-intrinsics.js` cannot
 // also corrupt the reference values.
 //
@@ -25,13 +25,8 @@
 // `repairIntrinsics`).
 
 import test from 'ava';
-// `getAnonymousIntrinsics` looks up `ArrayBuffer.prototype.sliceToImmutable`,
-// which the SES shim ordinarily polyfills via the immutable-arraybuffer
-// shim that `lockdown.js` imports for its side effect. We need to load the
-// same side-effect shim here because we want to call
-// `getAnonymousIntrinsics` directly, before lockdown.
-import '@endo/immutable-arraybuffer/shim.js';
 import { getAnonymousIntrinsics } from '../src/get-anonymous-intrinsics.js';
+import { InertCompartment } from '../src/compartment.js';
 
 const { getPrototypeOf, getOwnPropertyDescriptor } = Object;
 
@@ -40,9 +35,12 @@ test('getAnonymousIntrinsics returns the expected anonymous intrinsics', t => {
 
   // Tracks the names the test expects to find in `intrinsics`, so we can
   // fail closed if `getAnonymousIntrinsics` ever adds a new entry without
-  // a matching test branch. Each `isSame` call records its name; each
-  // `isAbsent` call deliberately does not.
+  // a matching test branch. Each `assertSame` call records its name; each
+  // `assertAbsent` call deliberately does not.
   const expectedKeys = new Set();
+  // Names whose value may legitimately be `undefined` on this host, because
+  // the source writes the key unconditionally with an `undefined` value.
+  const undefinedKeys = new Set();
 
   // Using `===` and `t.true` instead of `t.is` avoids the AVA-side
   // diff-formatter trying to enumerate iterator prototypes when an
@@ -50,14 +48,14 @@ test('getAnonymousIntrinsics returns the expected anonymous intrinsics', t => {
   // `[object Foo Iterator]` placeholder concordance constructs. This way
   // failures still pinpoint the offending line via the stack trace, and
   // the message field tells the reader which intrinsic mismatched.
-  const isSame = (name, actual, expected) => {
+  const assertSame = (name, actual, expected) => {
     expectedKeys.add(name);
     t.true(
       actual === expected,
       `${name} should equal the independently derived value`,
     );
   };
-  const isAbsent = (name, reason) => {
+  const assertAbsent = (name, reason) => {
     t.true(!(name in intrinsics), `${name} ${reason}`);
   };
 
@@ -65,10 +63,10 @@ test('getAnonymousIntrinsics returns the expected anonymous intrinsics', t => {
   // strict-mode arguments object.
   const expectedThrowTypeError = (function makeArgs() {
     // eslint-disable-next-line prefer-rest-params
-    const desc = getOwnPropertyDescriptor(arguments, 'callee');
-    return desc && desc.get;
+    const descriptor = getOwnPropertyDescriptor(arguments, 'callee');
+    return descriptor && descriptor.get;
   })();
-  isSame(
+  assertSame(
     '%ThrowTypeError%',
     intrinsics['%ThrowTypeError%'],
     expectedThrowTypeError,
@@ -79,7 +77,7 @@ test('getAnonymousIntrinsics returns the expected anonymous intrinsics', t => {
     // eslint-disable-next-line no-new-wrappers
     new String()[Symbol.iterator](),
   );
-  isSame(
+  assertSame(
     '%StringIteratorPrototype%',
     intrinsics['%StringIteratorPrototype%'],
     expectedStringIteratorPrototype,
@@ -90,21 +88,25 @@ test('getAnonymousIntrinsics returns the expected anonymous intrinsics', t => {
     const expectedRegExpStringIteratorPrototype = getPrototypeOf(
       /./[Symbol.matchAll](''),
     );
-    isSame(
+    assertSame(
       '%RegExpStringIteratorPrototype%',
       intrinsics['%RegExpStringIteratorPrototype%'],
       expectedRegExpStringIteratorPrototype,
     );
   } else {
-    isAbsent(
-      '%RegExpStringIteratorPrototype%',
-      'should be absent when host lacks RegExp.prototype[Symbol.matchAll]',
+    // The source always writes this key; without `matchAll` its value is
+    // `undefined`.
+    expectedKeys.add('%RegExpStringIteratorPrototype%');
+    undefinedKeys.add('%RegExpStringIteratorPrototype%');
+    t.true(
+      intrinsics['%RegExpStringIteratorPrototype%'] === undefined,
+      '%RegExpStringIteratorPrototype% should be undefined when host lacks RegExp.prototype[Symbol.matchAll]',
     );
   }
 
   // %ArrayIteratorPrototype%
   const expectedArrayIteratorPrototype = getPrototypeOf([][Symbol.iterator]());
-  isSame(
+  assertSame(
     '%ArrayIteratorPrototype%',
     intrinsics['%ArrayIteratorPrototype%'],
     expectedArrayIteratorPrototype,
@@ -114,7 +116,7 @@ test('getAnonymousIntrinsics returns the expected anonymous intrinsics', t => {
   const expectedMapIteratorPrototype = getPrototypeOf(
     new Map()[Symbol.iterator](),
   );
-  isSame(
+  assertSame(
     '%MapIteratorPrototype%',
     intrinsics['%MapIteratorPrototype%'],
     expectedMapIteratorPrototype,
@@ -124,7 +126,7 @@ test('getAnonymousIntrinsics returns the expected anonymous intrinsics', t => {
   const expectedSetIteratorPrototype = getPrototypeOf(
     new Set()[Symbol.iterator](),
   );
-  isSame(
+  assertSame(
     '%SetIteratorPrototype%',
     intrinsics['%SetIteratorPrototype%'],
     expectedSetIteratorPrototype,
@@ -134,7 +136,7 @@ test('getAnonymousIntrinsics returns the expected anonymous intrinsics', t => {
   const expectedIteratorPrototype = getPrototypeOf(
     expectedArrayIteratorPrototype,
   );
-  isSame(
+  assertSame(
     '%IteratorPrototype%',
     intrinsics['%IteratorPrototype%'],
     expectedIteratorPrototype,
@@ -152,7 +154,7 @@ test('getAnonymousIntrinsics returns the expected anonymous intrinsics', t => {
 
   // %TypedArray% is the shared abstract supertype of Int8Array etc.
   const expectedTypedArray = getPrototypeOf(Int8Array);
-  isSame('%TypedArray%', intrinsics['%TypedArray%'], expectedTypedArray);
+  assertSame('%TypedArray%', intrinsics['%TypedArray%'], expectedTypedArray);
   // The shim derives this from Float64Array; cross-check that all typed
   // array constructors agree.
   t.true(
@@ -166,21 +168,22 @@ test('getAnonymousIntrinsics returns the expected anonymous intrinsics', t => {
 
   // %InertGeneratorFunction% and %Generator%.
   // eslint-disable-next-line no-empty-function, func-names
-  const generatorFn = function* () {};
-  const expectedGeneratorFunction = getPrototypeOf(generatorFn).constructor;
+  const generatorFunction = function* () {};
+  const expectedGeneratorFunction =
+    getPrototypeOf(generatorFunction).constructor;
   const expectedGenerator = expectedGeneratorFunction.prototype;
-  isSame(
+  assertSame(
     '%InertGeneratorFunction%',
     intrinsics['%InertGeneratorFunction%'],
     expectedGeneratorFunction,
   );
-  isSame('%Generator%', intrinsics['%Generator%'], expectedGenerator);
+  assertSame('%Generator%', intrinsics['%Generator%'], expectedGenerator);
 
   // %InertAsyncFunction%.
   // eslint-disable-next-line no-empty-function, func-names
-  const asyncFn = async function () {};
-  const expectedAsyncFunction = getPrototypeOf(asyncFn).constructor;
-  isSame(
+  const asyncFunction = async function () {};
+  const expectedAsyncFunction = getPrototypeOf(asyncFunction).constructor;
+  assertSame(
     '%InertAsyncFunction%',
     intrinsics['%InertAsyncFunction%'],
     expectedAsyncFunction,
@@ -190,139 +193,152 @@ test('getAnonymousIntrinsics returns the expected anonymous intrinsics', t => {
   // %AsyncIteratorPrototype% are only present when the host supports
   // async generators. Mirrors the conditional inside
   // `getAnonymousIntrinsics`.
-  let expectedAsyncGeneratorFunction;
+  let asyncGeneratorFunction;
   try {
     // Use indirection because some platforms (notably Hermes) cannot parse
-    // async-generator syntax even at module load time.
+    // async-generator syntax even at module load time. Like `commons.js`,
+    // treat only a `SyntaxError` as "host lacks async generators".
     // eslint-disable-next-line no-new-func
-    const ag = new Function('return (async function* () {})')();
-    expectedAsyncGeneratorFunction = getPrototypeOf(ag).constructor;
-  } catch (_e) {
-    expectedAsyncGeneratorFunction = undefined;
+    asyncGeneratorFunction = new Function('return (async function* () {})')();
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) {
+      throw error;
+    }
   }
-  if (expectedAsyncGeneratorFunction !== undefined) {
+  if (asyncGeneratorFunction !== undefined) {
+    const expectedAsyncGeneratorFunction = getPrototypeOf(
+      asyncGeneratorFunction,
+    ).constructor;
     const expectedAsyncGenerator = expectedAsyncGeneratorFunction.prototype;
     const expectedAsyncGeneratorPrototype = expectedAsyncGenerator.prototype;
     const expectedAsyncIteratorPrototype = getPrototypeOf(
       expectedAsyncGeneratorPrototype,
     );
-    isSame(
+    assertSame(
       '%InertAsyncGeneratorFunction%',
       intrinsics['%InertAsyncGeneratorFunction%'],
       expectedAsyncGeneratorFunction,
     );
-    isSame(
+    assertSame(
       '%AsyncGenerator%',
       intrinsics['%AsyncGenerator%'],
       expectedAsyncGenerator,
     );
-    isSame(
+    assertSame(
       '%AsyncGeneratorPrototype%',
       intrinsics['%AsyncGeneratorPrototype%'],
       expectedAsyncGeneratorPrototype,
     );
-    isSame(
+    assertSame(
       '%AsyncIteratorPrototype%',
       intrinsics['%AsyncIteratorPrototype%'],
       expectedAsyncIteratorPrototype,
     );
   } else {
-    isAbsent(
+    for (const name of [
       '%InertAsyncGeneratorFunction%',
-      'should be absent when host lacks async generators',
-    );
+      '%AsyncGenerator%',
+      '%AsyncGeneratorPrototype%',
+      '%AsyncIteratorPrototype%',
+    ]) {
+      assertAbsent(name, 'should be absent when host lacks async generators');
+    }
   }
 
   // %InertFunction% is the (inert post-lockdown) Function constructor.
   // Before lockdown it is just Function; the shim only renders it inert
   // later via tameFunctionConstructors.
-  isSame('%InertFunction%', intrinsics['%InertFunction%'], Function);
+  assertSame('%InertFunction%', intrinsics['%InertFunction%'], Function);
 
   // %InertCompartment% is provided by the shim itself, not derived from a
-  // host intrinsic. Just check it is present and a function.
-  expectedKeys.add('%InertCompartment%');
-  t.is(
-    typeof intrinsics['%InertCompartment%'],
-    'function',
+  // host intrinsic, so compare it to the shim's own export.
+  assertSame(
     '%InertCompartment%',
+    intrinsics['%InertCompartment%'],
+    InertCompartment,
   );
 
-  // Iterator-helpers proposal intrinsics, only when host implements them.
+  // Iterator helpers (ES2025), only when the host implements them.
   if (globalThis.Iterator) {
-    const expectedIteratorHelperPrototype = getPrototypeOf(
-      // eslint-disable-next-line @endo/no-polymorphic-call
-      globalThis.Iterator.from([]).take(0),
+    // Since ES2025, %Iterator.prototype% is reachable by name; it must be the
+    // same object as the ancestor derived from the array iterator above.
+    t.true(
+      globalThis.Iterator.prototype === expectedIteratorPrototype,
+      'Iterator.prototype should be %IteratorPrototype%',
     );
-    isSame(
+    // Derived via `map` on an array iterator rather than the source's
+    // `Iterator.from([]).take(0)` path (ECMA-262 §27.1.2.1).
+    const expectedIteratorHelperPrototype = getPrototypeOf(
+      [].values().map(x => x),
+    );
+    t.true(
+      getPrototypeOf(expectedIteratorHelperPrototype) ===
+        expectedIteratorPrototype,
+      '%IteratorHelperPrototype% should inherit from %IteratorPrototype%',
+    );
+    assertSame(
       '%IteratorHelperPrototype%',
       intrinsics['%IteratorHelperPrototype%'],
       expectedIteratorHelperPrototype,
     );
     const expectedWrapForValidIteratorPrototype = getPrototypeOf(
-      // eslint-disable-next-line @endo/no-polymorphic-call
       globalThis.Iterator.from({
         next() {
           return { value: undefined };
         },
       }),
     );
-    isSame(
+    t.true(
+      getPrototypeOf(expectedWrapForValidIteratorPrototype) ===
+        expectedIteratorPrototype,
+      '%WrapForValidIteratorPrototype% should inherit from %IteratorPrototype%',
+    );
+    assertSame(
       '%WrapForValidIteratorPrototype%',
       intrinsics['%WrapForValidIteratorPrototype%'],
       expectedWrapForValidIteratorPrototype,
     );
   } else {
-    isAbsent(
+    for (const name of [
       '%IteratorHelperPrototype%',
-      'should be absent when host lacks globalThis.Iterator',
-    );
+      '%WrapForValidIteratorPrototype%',
+    ]) {
+      assertAbsent(
+        name,
+        'should be absent when host lacks globalThis.Iterator',
+      );
+    }
   }
 
+  // Async iterator helpers (TC39 stage 2 proposal; names may change), only
+  // when the host implements them.
   if (globalThis.AsyncIterator) {
     const expectedAsyncIteratorHelperPrototype = getPrototypeOf(
-      // eslint-disable-next-line @endo/no-polymorphic-call
       globalThis.AsyncIterator.from([]).take(0),
     );
-    isSame(
+    assertSame(
       '%AsyncIteratorHelperPrototype%',
       intrinsics['%AsyncIteratorHelperPrototype%'],
       expectedAsyncIteratorHelperPrototype,
     );
     const expectedWrapForValidAsyncIteratorPrototype = getPrototypeOf(
-      // eslint-disable-next-line @endo/no-polymorphic-call
       globalThis.AsyncIterator.from({ next() {} }),
     );
-    isSame(
+    assertSame(
       '%WrapForValidAsyncIteratorPrototype%',
       intrinsics['%WrapForValidAsyncIteratorPrototype%'],
       expectedWrapForValidAsyncIteratorPrototype,
     );
   } else {
-    isAbsent(
+    for (const name of [
       '%AsyncIteratorHelperPrototype%',
-      'should be absent when host lacks globalThis.AsyncIterator',
-    );
-  }
-
-  // %ImmutableArrayBufferPrototype%. The shim provides
-  // `ArrayBuffer.prototype.sliceToImmutable` itself when the host lacks
-  // it, so this entry is only included when the immutable slice has its
-  // own prototype distinct from `ArrayBuffer.prototype`.
-  const ab = new ArrayBuffer(0);
-  // eslint-disable-next-line @endo/no-polymorphic-call
-  const iab = ab.sliceToImmutable();
-  const iabProto = getPrototypeOf(iab);
-  if (iabProto !== ArrayBuffer.prototype) {
-    isSame(
-      '%ImmutableArrayBufferPrototype%',
-      intrinsics['%ImmutableArrayBufferPrototype%'],
-      iabProto,
-    );
-  } else {
-    isAbsent(
-      '%ImmutableArrayBufferPrototype%',
-      'should be absent when host immutable slice shares ArrayBuffer.prototype',
-    );
+      '%WrapForValidAsyncIteratorPrototype%',
+    ]) {
+      assertAbsent(
+        name,
+        'should be absent when host lacks globalThis.AsyncIterator',
+      );
+    }
   }
 
   // Sanity check: every key in the intrinsics record begins and ends with
@@ -335,13 +351,15 @@ test('getAnonymousIntrinsics returns the expected anonymous intrinsics', t => {
       name.startsWith('%') && name.endsWith('%'),
       `intrinsic name ${name} should be wrapped in %...%`,
     );
-    t.not(intrinsics[name], undefined, `${name} should not be undefined`);
+    if (!undefinedKeys.has(name)) {
+      t.not(intrinsics[name], undefined, `${name} should not be undefined`);
+    }
     t.not(intrinsics[name], null, `${name} should not be null`);
   }
 
   // Fail closed when a future patch adds a new intrinsic without a
   // matching test branch. This catches drift that the per-name identity
-  // checks alone cannot: a new key with no corresponding `isSame` call
+  // checks alone cannot: a new key with no corresponding `assertSame` call
   // would slip through silently.
   t.deepEqual(
     Object.keys(intrinsics).slice().sort(),
