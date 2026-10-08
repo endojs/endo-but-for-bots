@@ -39,18 +39,24 @@ const codeUnitCompare = (left, right) => {
  */
 const codePointCompare = (left, right) => {
   // Iterate by code point rather than by UTF-16 code unit.
-  const leftCps = [...left];
-  const rightCps = [...right];
-  const n = Math.min(leftCps.length, rightCps.length);
-  for (let i = 0; i < n; i += 1) {
-    const a = /** @type {number} */ (leftCps[i].codePointAt(0));
-    const b = /** @type {number} */ (rightCps[i].codePointAt(0));
-    if (a !== b) return a < b ? -1 : 1;
+  const leftCodePoints = [...left];
+  const rightCodePoints = [...right];
+  const commonLength = Math.min(leftCodePoints.length, rightCodePoints.length);
+  for (let i = 0; i < commonLength; i += 1) {
+    const leftCodePoint = /** @type {number} */ (
+      leftCodePoints[i].codePointAt(0)
+    );
+    const rightCodePoint = /** @type {number} */ (
+      rightCodePoints[i].codePointAt(0)
+    );
+    if (leftCodePoint !== rightCodePoint) {
+      return leftCodePoint < rightCodePoint ? -1 : 1;
+    }
   }
   // eslint-disable-next-line no-nested-ternary
-  return leftCps.length < rightCps.length
+  return leftCodePoints.length < rightCodePoints.length
     ? -1
-    : leftCps.length > rightCps.length
+    : leftCodePoints.length > rightCodePoints.length
       ? 1
       : 0;
 };

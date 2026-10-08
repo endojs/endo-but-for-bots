@@ -29,11 +29,9 @@ import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
 import { compareRank as parentCompareRank } from '../src/rankOrder.js';
 import { multiplanarStrings, sorted } from '../tools/marshal-test-data.js';
 
-/** @import { RankCompare } from '../src/types.js' */
-
 /**
  * @typedef {object} CompareStringsNamespace
- * @property {RankCompare} compareStrings
+ * @property {(left: string, right: string) => -1 | 0 | 1} compareStrings
  * @property {string} capturedSetting
  */
 
@@ -83,21 +81,23 @@ test('per-compartment ENDO_RANK_STRINGS controls string ranking inside the compa
   t.is(compareStrings(bmpHigh, surrogatePair), -1);
 
   // And the resulting sort differs from the parent's.
-  const strs = harden([bmpHigh, surrogatePair]);
-  t.deepEqual(sorted(strs, parentCompareRank), [surrogatePair, bmpHigh]);
-  t.deepEqual(sorted(strs, compareStrings), [bmpHigh, surrogatePair]);
+  const strings = harden([bmpHigh, surrogatePair]);
+  t.deepEqual(sorted(strings, parentCompareRank), [surrogatePair, bmpHigh]);
+  t.deepEqual(sorted(strings, compareStrings), [bmpHigh, surrogatePair]);
 });
 
 test('two sibling sub-compartments capture different ENDO_RANK_STRINGS', async t => {
-  const utf16 = await importFixtureWithEnvOption('utf16-code-unit-order');
-  const codePoint = await importFixtureWithEnvOption(
+  const codeUnitNamespace = await importFixtureWithEnvOption(
+    'utf16-code-unit-order',
+  );
+  const codePointNamespace = await importFixtureWithEnvOption(
     'unicode-code-point-order',
   );
 
-  t.is(utf16.capturedSetting, 'utf16-code-unit-order');
-  t.is(codePoint.capturedSetting, 'unicode-code-point-order');
+  t.is(codeUnitNamespace.capturedSetting, 'utf16-code-unit-order');
+  t.is(codePointNamespace.capturedSetting, 'unicode-code-point-order');
 
   // Same inputs, opposite results.
-  t.is(utf16.compareStrings(surrogatePair, bmpHigh), -1);
-  t.is(codePoint.compareStrings(surrogatePair, bmpHigh), 1);
+  t.is(codeUnitNamespace.compareStrings(surrogatePair, bmpHigh), -1);
+  t.is(codePointNamespace.compareStrings(surrogatePair, bmpHigh), 1);
 });
