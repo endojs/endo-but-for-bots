@@ -8,7 +8,7 @@
 // This generates ../tmp/test-xs.js, which can be run with xst directly for
 // validation of the XS environment under SES-for-XS.
 
-/* global print */
+/* global globalThis, print */
 
 // Eslint does not know about package reflexive imports (importing your own
 // package), which in this case is necessary to go through the conditional
@@ -20,10 +20,55 @@ import 'ses';
 // eslint-disable-next-line import/no-unresolved
 import precompiledModuleSource from '../tmp/_meaning.pre-mjs.json';
 
+// Alter universal globals between importing SES and lockdown.
+// New compartments must see the globals as they are at lockdown, hardened,
+// not as they were when SES was imported.
+delete globalThis.TextEncoder;
+globalThis.TextDecoder = function TextDecoder() {};
+
 lockdown();
 
 // spot checks
 assert(Object.isFrozen(Object));
+
+print('# compartments receive global intrinsics sampled at lockdown');
+{
+  const compartment = new Compartment();
+  assert.equal(
+    compartment.evaluate('typeof TextEncoder'),
+    'undefined',
+    'global deleted before lockdown must not leak into compartments',
+  );
+  const TextDecoder = compartment.evaluate('TextDecoder');
+  assert.equal(
+    TextDecoder,
+    globalThis.TextDecoder,
+    'global replaced before lockdown must be shared with compartments',
+  );
+  assert(Object.isFrozen(TextDecoder), 'replaced global must be hardened');
+  assert(
+    Object.isFrozen(TextDecoder.prototype),
+    'replaced global prototype must be hardened',
+  );
+  assert(
+    compartment.evaluate('Date') !== globalThis.Date,
+    'compartments must receive %SharedDate%, not %InitialDate%',
+  );
+  for (const source of ['Date.now()', 'Math.random()']) {
+    const outcome = compartment.evaluate(`
+      try {
+        ${source};
+        'returned';
+      } catch (error) {
+        error.message;
+      }
+    `);
+    assert(
+      outcome.startsWith('secure mode'),
+      `${source} must throw in compartments made after lockdown`,
+    );
+  }
+}
 
 print('# shim compartment can import a shim precompiled module source');
 {
