@@ -32,7 +32,10 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use crate::{CrankId, ReleasableFrame, Sequence, Transcript, TranscriptError};
+use crate::{
+    ContentAddressedStore, CrankId, ReleasableFrame, Sequence, SnapshotMeta, SnapshotRecord,
+    Transcript, TranscriptError,
+};
 
 /// How the crank ended, as the supervisor's commit decision reads it: the
 /// three arms of the engine's `ExecutionOutcome`, without its reasons.
@@ -133,15 +136,27 @@ impl<S: FrameSink> Embargo<S> {
         })
     }
 
-    /// The transcript, for snapshot publication, compaction, and audit.
+    /// The transcript, for audit. Crank protocol calls go through the
+    /// embargo so the release queue and staged count stay in step with it.
     pub fn transcript(&self) -> &Transcript {
         &self.transcript
     }
 
-    /// The transcript, mutably. Crank protocol calls must go through the
-    /// embargo instead.
-    pub fn transcript_mut(&mut self) -> &mut Transcript {
-        &mut self.transcript
+    /// Publish a snapshot between cranks. See
+    /// [`Transcript::publish_snapshot`].
+    pub fn publish_snapshot(
+        &mut self,
+        blob_store: &ContentAddressedStore,
+        blob: &[u8],
+        meta: SnapshotMeta,
+    ) -> Result<SnapshotRecord, TranscriptError> {
+        self.transcript.publish_snapshot(blob_store, blob, meta)
+    }
+
+    /// Compact the transcript under the latest snapshot. See
+    /// [`Transcript::compact`].
+    pub fn compact(&mut self) -> Result<Vec<String>, TranscriptError> {
+        self.transcript.compact()
     }
 
     /// The sink.
