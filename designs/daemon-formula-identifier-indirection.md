@@ -28,10 +28,10 @@ The evidence is both the maintainer's 2026-10-08 direction and the present
 implementation. [`locator.js`](../packages/daemon/src/locator.js) serializes a
 formula number into every locator and returns a formula identifier when it
 parses one. [`pet-store.js`](../packages/daemon/src/pet-store.js) and the
-`pet_store_entry.formula_id` column persist those identifiers directly. The
-current SturdyRef work likewise uses a formula number as the OCapN swiss number
-in its cross-peer sketches. These are the exact capture sites this design
-replaces.
+`pet_store_entry.formula_id` column persist those identifiers directly. Any
+future SturdyRef that derived its OCapN swiss number from a formula number
+would inherit the same exposure, so this design gives SturdyRefs a reference
+number instead. These are the exact capture sites this design replaces.
 
 ### Analogy: verified, with limits
 
@@ -104,8 +104,8 @@ and the formulated value determine the actual type. OCapN SturdyRefs use the
 tagged swiss number `endo-ref-v1:{referenceNumber}`. Neither representation
 contains or can be decoded into a formula identifier.
 
-The `r1` invitation form also removes the legacy `from` formula-number query
-parameter. The invitation formula already carries its internal relationship to
+The `r1` invitation form also removes the legacy `from` (handle number) and
+`fromNode` query parameters. The invitation formula already carries its internal relationship to
 the inviter, so the resolver obtains that relationship after reference lookup.
 `fromNode` and `handleNode` may remain where the network-identity work needs
 them because node public keys are routing identities, not formula identifiers;
@@ -169,8 +169,11 @@ share-producing application persists this control facet alongside its own
 record. The public locator alone grants resolution, not administration.
 
 `locate(...petNamePath)` remains a convenience for callers that only need a
-bearer string: it resolves the pet-store binding, issues a fresh `share`
-reference, and discards the control facet. A new `share(...petNamePath)` method
+bearer string: it returns the binding's *default share*, issuing it on the
+first call and reusing it thereafter. The default share is an ordinary `share`
+row marked `default`, so the issuer surface lists it and can rotate or revoke
+it like any other share; a later `locate` after revocation issues a new
+default. No issuance path leaves a share without a revocation path. A new `share(...petNamePath)` method
 returns the control facet for callers that need rotation. Each call issues a
 new share, so two recipients can be revoked independently. `reverseLocate`
 resolves an active reference to its internal formula identifier before doing
@@ -187,8 +190,8 @@ facets no longer return formula-identifier strings from `identify`; callers use
 `share` for a durable outward capability or an inspector session for local
 diagnostics. During the compatibility release, `identify` is deprecated and
 restricted to daemon-internal callers before removal from the public
-interface. Internally, `resolvePetName` and `resolveReference` may still return
-a formula identifier to formula machinery. `internalizeLocator` becomes a
+interface. Internally, the daemon-private halves of `identify`, `lookup`, and
+`lookupById` may still hand a formula identifier to formula machinery. `internalizeLocator` becomes a
 syntax-only parse that returns a peer and reference number; registry resolution
 is a separate authority-bearing step. Conversely, `externalizeId` is replaced
 by issue-then-format and can no longer turn an arbitrary formula identifier
@@ -202,8 +205,8 @@ does not remove them from the daemon. After this change they survive in:
 - `formula_reference.target_formula_id`, the one naming record that maps a
   reference (binding or share) to its target;
 - formula bodies and formula-graph state, as internal graph edges;
-- daemon-private calls such as `resolvePetName`, `resolveReference`, and the
-  internal half of `reverseLocate`, which hand an identifier to formula
+- daemon-private calls such as the internal halves of `identify`, `lookup`,
+  `lookupById`, and `reverseLocate`, which hand an identifier to formula
   machinery and never return it across a host or guest facet; and
 - legacy locators and legacy SturdyRefs issued before this change, outside
   daemon state, until legacy resolution is disabled.
@@ -378,8 +381,10 @@ Within one SQLite transaction, the upgrader:
    copies its old formula identifier into the reference target, and writes the
    new reference number into the rebuilt row.
 4. Rewrites stored locator-bearing rows, including
-   `synced_store_entry.locator`, by parsing a legacy local locator, issuing a
-   new `share` reference, and storing an `r1` locator. A foreign legacy locator
+   `synced_store_entry.locator`, by parsing a legacy local locator, issuing or
+   reusing the target binding's default `share` reference, and storing an `r1`
+   locator. These shares are listable and revocable through the issuer
+   surface exactly as `locate` defaults are. A foreign legacy locator
    is preserved for the compatibility resolver because this daemon cannot
    create a row in the remote peer's registry.
 5. Applies explicit, type-specific visitors to any durable SturdyRef-bearing
@@ -406,7 +411,7 @@ Unlike that repair, v4 completes before any reader can observe the new schema.
 
 The parser distinguishes formats structurally: `/r1/<reference>` is new, while
 the old single path component is a legacy formula number. For one compatibility
-release, readers accept both and writers emit only `r1`. A metric counts legacy
+release, readers accept both; from stage 3 onward, writers emit only `r1`. A metric counts legacy
 resolution by local versus foreign peer. Disabling legacy resolution is an
 operator-visible release gate, after which every legacy locator fails closed.
 
@@ -553,13 +558,15 @@ keeps formula identifiers out of every external representation.
 
 ## Staged rollout
 
-1. **Registry and grammar.** Add the v4 schema, reference manager, `r1` locator
-   and SturdyRef codecs, reference-root projection, and unit tests. Keep current
-   writers unchanged while the migration and dual reader soak.
-2. **Internal names.** Migrate pet stores to `binding` references and make all
-   daemon internals resolve through the registry. Move formula-inspector and
-   retention-path navigation to session-scoped inspection references. Keep
-   formula identifiers only in formula bodies, graph state, and daemon-private
+1. **Registry, v4 schema, and internal names, together.** The v3→v4 upgrade
+   rebuilds `pet_store_entry` and rewrites stored locators, so the schema, the
+   reference manager, the `r1` locator and SturdyRef codecs, the dual reader,
+   the reference-root projection, and the pet-store switch to `binding`
+   references land in one release. All daemon internals resolve through the
+   registry from this stage on.
+2. **Inspection references.** Move formula-inspector and retention-path
+   navigation to session-scoped inspection references. Keep formula
+   identifiers only in formula bodies, graph state, and daemon-private
    implementation calls.
 3. **New shares.** Change locator and SturdyRef writers to mint `share`
    references. Add `share()` and `FormulaReferenceControl`, including atomic
@@ -572,8 +579,14 @@ keeps formula identifiers out of every external representation.
    number resolver. Remove it only after one further release with zero observed
    use.
 
-Each stage is independently restart-safe. Stages 2 and 3 do not begin until the
-v3 fixture upgrade and rollback tests pass; stage 5 is the point at which the
+Each stage is independently restart-safe because no stage ships a schema
+version without the code that reads it. Stages 2 and 3 do not begin until the
+v3 fixture upgrade tests pass. **Rollback policy:** there is no in-place
+downgrade, since a daemon refuses a database with a newer schema version.
+Before the v4 upgrade, the migration copies the v3 database file aside;
+rolling back stage 1 means reinstalling the prior release and restoring that
+copy, which discards writes made after the upgrade. Stages 2 through 5 change
+no schema and roll back by reinstalling the prior release; stage 5 is the point at which the
 "formula identifiers are strictly internal" property becomes unconditional for
 network input.
 
