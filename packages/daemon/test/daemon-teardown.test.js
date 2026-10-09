@@ -221,11 +221,15 @@ test.serial(
         }
       });
     });
+    const launcherExitedEarly = launcherExitPromise.then(() => {
+      throw Error('launcher exited before reporting ready');
+    });
+    // The launcher exits normally once the daemon is up, after the race is
+    // settled; that losing rejection must not surface as unhandled.
+    launcherExitedEarly.catch(() => {});
     await Promise.race([
       waitForPid(launcherReadyPath, 60_000),
-      launcherExitPromise.then(() => {
-        throw Error('launcher exited before reporting ready');
-      }),
+      launcherExitedEarly,
     ]);
     const daemonPid = await waitForPid(
       path.join(config.ephemeralStatePath, 'endo.pid'),
