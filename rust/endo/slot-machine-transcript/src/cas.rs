@@ -1,0 +1,361 @@
+//! Content-addressed snapshot blobs with power-loss-durable publication.
+//!
+//! The XS/CAS backend (designs/ironhorse-panic.md § Open Questions, "Which
+//! worker backend") keeps each worker heap snapshot as an immutable,
+//! SHA-256-named blob. Writing one durably takes four ordered steps, each a
+//! counted [`crate::FaultPlan`] operation:
+//!
+//! 1. write the bytes to a unique temporary file,
+//! 2. sync the temporary file,
+//! 3. rename it to its hash,
+//! 4. sync the containing directory, so the rename survives power loss.
+//!
+//! The design calls out step 4 as the one `xsnap`'s `suspend_to_cas` lacked
+//! before power-loss durability could be claimed; `suspend_to_cas` now syncs
+//! the directory after its rename too.
+//! A blob is not *published* until the transcript records its hash and
+//! watermark ([`crate::Transcript::publish_snapshot`]), so a crash anywhere in
+//! these four steps leaves at worst an orphan temporary or an unpublished
+//! blob, which is safe to reclaim.
+//!
+//! A store belongs to one worker. [`ContentAddressedStore::open`] records the
+//! owner in a marker file and refuses a second owner, because
+//! [`ContentAddressedStore::reclaim`] treats every blob its one transcript
+//! does not keep as garbage, which would delete a co-tenant's live snapshot.
+
+use std::fs::{self, File};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use sha2::{Digest, Sha256};
+
+use crate::fault::FaultPlan;
+
+/// A directory of content-addressed snapshot blobs, owned by one worker.
+#[derive(Clone, Debug)]
+pub struct ContentAddressedStore {
+    directory: PathBuf,
+    fault: Option<FaultPlan>,
+}
+
+/// The marker file naming a store's owning worker.
+const OWNER_MARKER: &str = ".owner";
+
+/// A CAS read failure. Any of these is a storage fault: recovery must stop,
+/// not fall back to an older or arbitrary snapshot.
+#[derive(Debug)]
+pub enum ContentAddressedStoreError {
+    /// The blob could not be read.
+    Io(io::Error),
+    /// The blob's bytes do not hash to its name.
+    Corrupt { expected: String, actual: String },
+    /// The name is not a SHA-256 digest, so it names no blob in the store.
+    InvalidName(String),
+}
+
+impl std::fmt::Display for ContentAddressedStoreError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ContentAddressedStoreError::Io(error) => {
+                write!(formatter, "snapshot blob unreadable: {error}")
+            }
+            ContentAddressedStoreError::Corrupt { expected, actual } => {
+                write!(
+                    formatter,
+                    "snapshot blob {expected} is corrupt (hashes to {actual})"
+                )
+            }
+            ContentAddressedStoreError::InvalidName(name) => {
+                write!(
+                    formatter,
+                    "snapshot blob name {name:?} is not a SHA-256 digest"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ContentAddressedStoreError {}
+
+/// Numbers this process's temporaries. `xsnap::Machine::suspend_to_cas`
+/// keeps its own counter under a `.snapshot.` prefix, so the transcript's
+/// temporaries take a distinct `.transcript-blob.` prefix: two writers
+/// sharing one directory never open the same temporary.
+static TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// The SHA-256 of `bytes`, lower-case hex: a blob's CAS name.
+pub fn blob_hash(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+impl ContentAddressedStore {
+    /// The content-addressed store of `owner`, the worker whose transcript
+    /// publishes into it, rooted at `directory` and created if absent. A
+    /// directory already owned by another worker is refused with
+    /// [`io::ErrorKind::AlreadyExists`].
+    pub fn open(directory: impl Into<PathBuf>, owner: &str) -> io::Result<ContentAddressedStore> {
+        let directory = directory.into();
+        fs::create_dir_all(&directory)?;
+        let marker = directory.join(OWNER_MARKER);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&marker)
+        {
+            Ok(mut file) => {
+                file.write_all(owner.as_bytes())?;
+                file.sync_all()?;
+                sync_directory(&directory)?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                let existing = fs::read(&marker)?;
+                if existing != owner.as_bytes() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!(
+                            "snapshot store {} belongs to worker {:?}, not {owner:?}",
+                            directory.display(),
+                            String::from_utf8_lossy(&existing)
+                        ),
+                    ));
+                }
+            }
+            Err(error) => return Err(error),
+        }
+        Ok(ContentAddressedStore {
+            directory,
+            fault: None,
+        })
+    }
+
+    /// The same store with its durability operations routed through `plan`.
+    pub fn with_fault_plan(mut self, plan: FaultPlan) -> ContentAddressedStore {
+        self.fault = Some(plan);
+        self
+    }
+
+    /// The store's directory.
+    pub fn directory(&self) -> &Path {
+        &self.directory
+    }
+
+    fn run_operation(
+        &self,
+        label: &str,
+        is_sync: bool,
+        full: impl FnOnce() -> io::Result<()>,
+        half: Option<&mut dyn FnMut() -> io::Result<()>>,
+    ) -> io::Result<()> {
+        match &self.fault {
+            Some(plan) => plan.run_operation(label, is_sync, full, half),
+            None => full(),
+        }
+    }
+
+    /// Durably write `bytes` as a blob and return its hash. Idempotent: an
+    /// existing blob of the same hash is rewritten to the same content.
+    pub fn write_blob(&self, bytes: &[u8]) -> io::Result<String> {
+        let hash = blob_hash(bytes);
+        let sequence = TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let temporary = self.directory.join(format!(
+            ".transcript-blob.{}.{sequence}.tmp",
+            std::process::id()
+        ));
+        let result = self.write_blob_steps(bytes, &temporary, &hash);
+        if result.is_err() && !self.fault.as_ref().is_some_and(FaultPlan::dead) {
+            // A surviving process cleans up after itself; a dead one leaves
+            // the orphan temporary for later reclamation.
+            let _ = fs::remove_file(&temporary);
+        }
+        result.map(|()| hash)
+    }
+
+    fn write_blob_steps(&self, bytes: &[u8], temporary: &Path, hash: &str) -> io::Result<()> {
+        let mut half = || -> io::Result<()> {
+            let mut file = File::create(temporary)?;
+            file.write_all(&bytes[..bytes.len() / 2])
+        };
+        self.run_operation(
+            "blob-store:write-blob",
+            false,
+            || {
+                let mut file = File::create(temporary)?;
+                file.write_all(bytes)
+            },
+            Some(&mut half),
+        )?;
+        self.run_operation(
+            "blob-store:sync-blob",
+            true,
+            || File::open(temporary)?.sync_all(),
+            None,
+        )?;
+        let destination = self.directory.join(hash);
+        self.run_operation(
+            "blob-store:rename-blob",
+            false,
+            || fs::rename(temporary, &destination),
+            None,
+        )?;
+        self.run_operation(
+            "blob-store:sync-directory",
+            true,
+            || sync_directory(&self.directory),
+            None,
+        )
+    }
+
+    /// Read and verify the blob named `hash`.
+    /// The name must be 64 lowercase hexadecimal digits: it comes from the
+    /// durable transcript, and anything else could leave the directory.
+    pub fn read_blob(&self, hash: &str) -> Result<Vec<u8>, ContentAddressedStoreError> {
+        if !is_blob_name(hash) {
+            return Err(ContentAddressedStoreError::InvalidName(hash.to_string()));
+        }
+        let bytes = fs::read(self.directory.join(hash)).map_err(ContentAddressedStoreError::Io)?;
+        let actual = blob_hash(&bytes);
+        if actual != hash {
+            return Err(ContentAddressedStoreError::Corrupt {
+                expected: hash.to_string(),
+                actual,
+            });
+        }
+        Ok(bytes)
+    }
+
+    /// Remove every blob not named in `keep`, and every blob temporary whose
+    /// writing process is provably dead. Blobs the transcript never published
+    /// (a crash between rename and publication) and blobs superseded by a
+    /// newer published snapshot are both garbage.
+    ///
+    /// The store has one owner ([`ContentAddressedStore::open`]), so `keep`
+    /// is that worker's whole live set. Only names this store owns are
+    /// touched: the owner marker, a foreign file, a
+    /// subdirectory, a heap `.snapshot.*` temporary, or a blob temporary
+    /// whose writer may still be alive is left in place. `reclaim` must still
+    /// not run while a writer in this process is publishing a blob, since the
+    /// blob it is about to publish is not yet in `keep`.
+    pub fn reclaim(&self, keep: &[String]) -> io::Result<usize> {
+        let mut removed = 0;
+        for entry in fs::read_dir(&self.directory)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let garbage = if is_blob_name(&name) {
+                !keep.contains(&name)
+            } else {
+                is_dead_blob_temporary(&name)
+            };
+            if !garbage {
+                continue;
+            }
+            match fs::remove_file(entry.path()) {
+                Ok(()) => removed += 1,
+                // A concurrent reclaim got there first.
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(removed)
+    }
+}
+
+/// Whether `name` is a `.transcript-blob.<pid>.<sequence>.tmp` temporary
+/// whose writing process provably no longer exists.
+fn is_dead_blob_temporary(name: &str) -> bool {
+    let Some(rest) = name
+        .strip_prefix(".transcript-blob.")
+        .and_then(|rest| rest.strip_suffix(".tmp"))
+    else {
+        return false;
+    };
+    let Some((pid, sequence)) = rest.split_once('.') else {
+        return false;
+    };
+    let (Ok(pid), Ok(_)) = (pid.parse::<u32>(), sequence.parse::<u64>()) else {
+        return false;
+    };
+    pid != std::process::id() && process_is_dead(pid)
+}
+
+/// Whether no process `pid` exists. A pid beyond the platform's range
+/// cannot name a process; signal 0 probes the rest without delivering one.
+#[cfg(unix)]
+fn process_is_dead(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return true;
+    };
+    if pid <= 0 {
+        return false;
+    }
+    // SAFETY: signal 0 performs only the existence and permission checks.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return false;
+    }
+    io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
+/// Without a way to probe another process, no writer is provably dead and
+/// its temporary is kept.
+#[cfg(not(unix))]
+fn process_is_dead(_pid: u32) -> bool {
+    false
+}
+
+/// Whether `name` has the shape of a [`blob_hash`]: 64 lowercase
+/// hexadecimal digits.
+fn is_blob_name(name: &str) -> bool {
+    name.len() == 64 && name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Sync a directory so a rename or create inside it survives power loss.
+pub fn sync_directory(directory: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        File::open(directory)?.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        // Only unix targets are supported. Windows has no directory handle
+        // to sync, and no durability guarantee is claimed there.
+        let _ = directory;
+        Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::process_is_dead;
+
+    #[test]
+    fn a_live_child_is_spared_and_its_reaped_pid_is_dead() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id();
+        assert!(!process_is_dead(pid), "a live child must not be reclaimed");
+        child.kill().expect("kill child");
+        child.wait().expect("reap child");
+        // Once reaped the pid names no process until the kernel reuses it,
+        // which it does not do this quickly.
+        assert!(process_is_dead(pid), "a reaped child is dead (ESRCH)");
+    }
+
+    #[test]
+    fn a_process_that_refuses_the_probe_is_alive() {
+        // Pid 1 always exists. An unprivileged probe gets EPERM and a
+        // privileged one succeeds; either way it is not provably dead.
+        assert!(!process_is_dead(1));
+    }
+
+    #[test]
+    fn pids_outside_the_platform_range_name_no_process() {
+        assert!(process_is_dead(u32::MAX));
+        // Zero and negative pids address process groups, never one writer.
+        assert!(!process_is_dead(0));
+    }
+}

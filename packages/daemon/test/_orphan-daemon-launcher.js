@@ -11,6 +11,8 @@
 // eslint-disable-next-line import/order
 import '@endo/init';
 
+import fs from 'fs';
+
 import { start } from '../index.js';
 
 const config = JSON.parse(process.argv[2]);
@@ -18,5 +20,17 @@ config.pets = new Map();
 config.values = new Map();
 
 await start(config);
-// Intentionally do not stop(): return and let this process exit, orphaning the
-// daemon.
+
+// Stay alive until the parent test has observed the daemon's pid. The parent
+// then terminates this launcher, orphaning the detached daemon without racing
+// the daemon's removal of its pid file.
+const terminated = new Promise(resolve => {
+  const keepAlive = setInterval(() => {}, 1000);
+  process.once('SIGTERM', () => {
+    clearInterval(keepAlive);
+    resolve(undefined);
+  });
+});
+await fs.promises.writeFile(process.argv[3], `${process.pid}\n`);
+await terminated;
+// Intentionally do not stop().

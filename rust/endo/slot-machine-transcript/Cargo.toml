@@ -1,0 +1,17 @@
+# Slot Machine per-worker write-ahead transcript (designs/ironhorse-panic.md).
+# A sibling crate so it builds without the XS toolchain or the engine crates.
+[package]
+name = "slot-machine-transcript"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rusqlite = { version = "0.31", features = ["bundled", "hooks"] }
+sha2 = "0.10"
+hex = "0.4"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

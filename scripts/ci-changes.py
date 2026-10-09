@@ -54,6 +54,7 @@ WORKFLOWS = {
 CORE = {
     "ironhorse-meter", "ironhorse-vm", "ironhorse-snapshot",
     "ironhorse-compile", "ironhorse-regexp", "ironhorse-store-sqlite",
+    "slot-machine-transcript",
 }
 
 
@@ -315,7 +316,8 @@ def classify(paths, graphs, all_jobs=False):
             jobs["viable-release"] = True
         if path == "scripts/update-action-pins.mjs":
             jobs["check-action-pins"] = True
-        if path.endswith(".rs") and (under(path, "rust/engine") or under(path, "rust/endo/ironhorse-store-sqlite")):
+        if path.endswith(".rs") and (under(path, "rust/engine") or under(path, "rust/endo/ironhorse-store-sqlite")
+                                   or under(path, "rust/endo/slot-machine-transcript")):
             jobs["format-ironhorse"] = True
         if path in {
             "c/moddable", ".gitmodules", "rust/endo/xsnap/xsnap-platform.c",

@@ -387,6 +387,21 @@ pub mod engine {
                 }
             }
         }
+
+        /// The Slot Machine embargo verdict for this outcome (design
+        /// § The Slot Machine Message Embargo Contract): `Quiesced` commits
+        /// and releases the crank's staged frames; `Uncaught` and
+        /// `Panicked` discard them. The verdict reads only the arm, never
+        /// the halt inside `Panicked`, so every termination path that is
+        /// not quiescence, `MeterAbort` included, releases nothing.
+        pub fn verdict(&self) -> slot_machine_transcript::CrankVerdict {
+            use slot_machine_transcript::CrankVerdict;
+            match self {
+                ExecutionOutcome::Quiesced => CrankVerdict::Quiesced,
+                ExecutionOutcome::Uncaught(_) => CrankVerdict::Uncaught,
+                ExecutionOutcome::Panicked(_) => CrankVerdict::Panicked,
+            }
+        }
     }
 
     /// The outcome of one evaluation, carrying the engine's own meter
@@ -1648,7 +1663,7 @@ pub mod engine {
         /// `checkpoint_every > 1` cadence opens, without consuming the
         /// machine (`close`) or perturbing the free list (`collect`).
         /// A supervisor calls it before copying `heap_store_path` or
-        /// before an external acknowledgement. A no-op at a checkpoint
+        /// before an external acknowledgment. A no-op at a checkpoint
         /// boundary; on failure the machine rewinds to the last
         /// checkpoint and the error says the pending cranks were never
         /// durable.

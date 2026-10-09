@@ -778,6 +778,14 @@ impl Machine {
         };
         let final_path = cas_dir.join(&hash);
         std::fs::rename(&tmp_path, &final_path).map_err(SnapshotError::Io)?;
+        // The rename is durable only once its directory is synced; a
+        // published snapshot must survive power loss
+        // (designs/ironhorse-panic.md § Open Questions, "Which worker
+        // backend"). Only unix targets can sync a directory.
+        #[cfg(unix)]
+        std::fs::File::open(cas_dir)
+            .and_then(|directory| directory.sync_all())
+            .map_err(SnapshotError::Io)?;
         Ok(hash)
     }
 
