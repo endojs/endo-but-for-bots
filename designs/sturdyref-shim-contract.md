@@ -46,26 +46,22 @@ shape, and this document does not reopen it:
 - A global `SturdyRef` shim, analogous to the `HandledPromise` shim: each copy
   races to define `SturdyRef` globally, and the first definer wins.
 - A `SturdyRef` is **constructed** the way a `Proxy` or `HandledPromise` is,
-  with a **handler** whose `enliven` hook defines both what the ref captures
-  and how it is revived. What a SturdyRef captures is defined **entirely** by
-  that handler.
+  with a **handler** whose `enliven` hook defines how it is revived. The
+  constructor also captures a string locator for the individual ref, so one
+  handler can serve every SturdyRef minted by a CapTP.
 - `SturdyRef.enliven(ref)` sends an `enliven` message to the ref, which
-  dispatches to its handler's hook. A higher layer, such as a CapTP, uses this
-  hook to define the enlivening procedure from the ref's content.
+  dispatches to its handler's hook with both the ref and its locator. A higher
+  layer, such as a CapTP, uses this hook to define the enlivening procedure.
 
 ## Design
 
 ### Surface
 
-Items marked *provisional* are the proposed answers to the matching entries in
-[Open questions](#open-questions). They are the defaults a layer-1 build
-implements unless the maintainer decides otherwise, and no higher layer may
-depend on them until they are settled.
-
 ```js
-const ref = new SturdyRef(handler); // handler: { enliven(ref) => value | Promise }
+const ref = new SturdyRef(handler, locator); // handler: { enliven(ref, locator) => value | Promise }
 SturdyRef.enliven(ref);             // => Promise<live reference>
 SturdyRef.isSturdyRef(value);       // => boolean, a brand check that confers no authority
+E.enliven(ref);                     // => Promise<live reference>
 ```
 
 A handler author's view, end to end:
@@ -73,37 +69,39 @@ A handler author's view, end to end:
 ```js
 const locator = 'ocapn://peer.example/s/abc123';
 const handler = {
-  enliven(_ref) {
-    return connectAndFetch(locator); // any value or promise
+  enliven(_ref, refLocator) {
+    return connectAndFetch(refLocator); // any value or promise
   },
 };
-const ref = new SturdyRef(handler);
+const ref = new SturdyRef(handler, locator);
 SturdyRef.isSturdyRef(ref); // true
 Reflect.ownKeys(ref);        // [] (the locator is not reachable from the ref)
 const live = await SturdyRef.enliven(ref); // the value connectAndFetch resolved to
 ```
 
-- **`new SturdyRef(handler)`** requires `handler` to be an object whose
-  `enliven` property is a function, and throws `TypeError` otherwise. It reads
-  `handler.enliven` once, at construction (*provisional*, Open question 3:
-  read once or on every call). That protects only the dispatch target. The
-  constructor does not harden or freeze the handler (*provisional*, Open
-  question 4: harden the handler or not), so any state the hook reads through
+- **`new SturdyRef(handler, locator)`** requires `handler` to be an object
+  whose `enliven` property is a function and `locator` to be a string, and
+  throws `TypeError` otherwise. A string leaves locator evolution to the
+  protocol that interprets it; layer 1 does not impose an OCapN-shaped record.
+  The constructor reads `handler.enliven` once. This deliberately captures the
+  trap early instead of following `Proxy`'s dynamic trap lookup. That protects
+  only the dispatch target. The constructor does not harden or freeze the
+  handler, so any state the hook reads through
   `this` or its closure stays mutable and is the handler author's to protect.
   A handler that keeps mutable state on `this` works; a handler that needs
-  stability hardens itself. It returns a fresh object that is frozen and has no own properties. The
-  object inherits from a hardened `SturdyRef.prototype`, which carries only
-  `constructor` and `Symbol.toStringTag: 'SturdyRef'` (*provisional*, Open
-  question 5: prototype or `null` prototype). The handler is kept in a closely held
-  `WeakMap<SturdyRef, handler>` inside the realm's single `SturdyRef`
-  constructor. It is never reachable from the ref. Calling `SturdyRef` without
-  `new` throws, as it does for `Proxy`.
+  stability hardens itself. It returns a fresh object that is frozen and has
+  no own properties. The object inherits from a hardened
+  `SturdyRef.prototype`, which carries only `constructor` and
+  `Symbol.toStringTag: 'SturdyRef'`. The handler, captured hook, and locator
+  are kept in a closely held `WeakMap` inside the realm's single `SturdyRef`
+  constructor. They are never reachable from the ref. Calling `SturdyRef`
+  without `new` throws, as it does for `Proxy`.
 - **`SturdyRef.enliven(ref)`** returns a promise.
-  - Timing: the hook runs in a later turn (*provisional*, Open question 1:
-    later turn or synchronous).
+  - Timing: the hook runs in a later turn.
   - Call form: the shim invokes the captured hook as
-    `enliven.call(handler, ref)` (*provisional*, Open question 2: pass the ref
-    or not) and resolves the promise with the result. Because this is an
+    `enliven.call(handler, ref, locator)` and resolves the promise with the
+    result. Passing both values lets the handler be shared while preserving
+    access to the particular ref for identity-keyed policy. Because this is an
     ordinary promise resolution, a hook that returns a thenable has it
     assimilated.
   - Failure: if the hook throws, the promise rejects with that error. A
@@ -130,15 +128,17 @@ const live = await SturdyRef.enliven(ref); // the value connectAndFetch resolved
   The brand check proves only that *some* caller built the ref with this
   realm's constructor. It says nothing about who minted it or whether its
   handler is trustworthy; see [Provenance](#provenance).
+- **`E.enliven(ref)`** is the `@endo/eventual-send` spelling of
+  `SturdyRef.enliven(ref)`, following the precedent of `E.resolve` as the
+  convenience spelling for the corresponding constructor static. It lands
+  with the layer-1 build.
 
 The ref is **opaque**: `Reflect.ownKeys(ref)` is empty, and nothing on the ref
-or its prototype reaches the handler. Refs have **no identification**: two
-refs built from the same handler are distinct and not equal. Each ref has its
-own object identity, as any object does, but the shim offers no equality
-based on what the ref refers to. Any notion of "same referent" belongs to the
-handler, which can close over whatever it likes (a locator, a swiss number,
-which is the unguessable secret that names an object at an OCapN peer, or a
-formula id).
+or its prototype reaches the handler or locator. Refs have **no
+identification**: two refs built from the same handler and locator are distinct
+and not equal. Each ref has its own object identity, as any object does, but
+the shim offers no equality based on what the locator denotes. Interning by
+locator belongs to the minting layer.
 
 **Name overlap with `@endo/ocapn`.** Until layer 5, `@endo/ocapn` keeps its own
 free functions `isSturdyRef(value)` and `enlivenSturdyRef(sturdyRef, ...)`,
@@ -167,8 +167,8 @@ first-wins mechanics:
   minted by one twin is recognized and enlivened by another. The shape check
   cannot detect semantic drift between twins: the first definer's behavior
   (timing, call form, hook read time) governs every copy. Layer 1 accepts
-  that, because the provisional answers are settled before `@endo/sturdyref`
-  is first published, so every released copy implements one contract. A later
+  that, because these semantics are settled before `@endo/sturdyref` is first
+  published, so every released copy implements one contract. A later
   change to those semantics must add a contract marker (for example a
   `SturdyRef.contract` version static) to the shape check rather than rely on
   first-wins.
@@ -219,8 +219,8 @@ the next section.
 Dropping the withholding moves a risk rather than removing it. Once layer 2
 propagates `SturdyRef`, a guest can call `new SturdyRef(evilHandler)`, and the
 result passes `SturdyRef.isSturdyRef`. If a host or a CapTP enlivened such a
-ref, the guest's hook would run in the host's turn with that ref as its
-argument. The brand check cannot prevent that: it proves "built by this
+ref, the guest's hook would run in the host's turn with that ref and locator as
+its arguments. The brand check cannot prevent that: it proves "built by this
 realm's constructor", never "built by a party I trust".
 
 Minter provenance is therefore not a layer-1 property, and layer 1 does not
@@ -257,7 +257,7 @@ SturdyRef global` becomes a temporary characterization test, named
 `characterization (flips in layer 2): without a SES permit, a child
 compartment does not see SturdyRef`. Its comment says it pins today's
 default, not a guarantee, and that layer 2 replaces it with
-`present at repairIntrinsics → propagated`. The source comment "withheld from
+`present at repairIntrinsics -> propagated`. The source comment "withheld from
 confined guests by construction" in #774's `sturdyref-shim.js` is removed.
 
 ### #774 Test Disposition
@@ -265,16 +265,17 @@ confined guests by construction" in #774's `sturdyref-shim.js` is removed.
 | #774 test | Layer 1 |
 |---|---|
 | installed after lockdown: hardened and functioning | kept; now covers the constructor and statics |
-| locators are objects, not strings | dropped (there is no locator); replaced by *capture is handler-defined* |
-| no location: passStyleOf-opaque, leaks no locator | rewritten: frozen, no own keys, handler unreachable; `passStyleOf` rejects, and `SturdyRef.prototype` has no `PASS_STYLE` property |
-| no identification: same locator mints distinct refs | kept, keyed on the same handler |
+| locators are objects, not strings | reversed: the constructor captures a string locator without imposing protocol-specific structure |
+| no location: passStyleOf-opaque, leaks no locator | rewritten: frozen, no own keys, handler and locator unreachable; `passStyleOf` rejects, and `SturdyRef.prototype` has no `PASS_STYLE` property |
+| no identification: same locator mints distinct refs | kept: the same handler and locator mint distinct refs unless the minting layer interns them |
 | withheld from child compartments | becomes a characterization test that layer 2 flips (see above) |
 | first-wins: selections converge on one mapping | kept: a twin's ref passes `isSturdyRef` and `enliven` in the other twin |
 | malformed pre-existing global is rejected | kept, with the new shape check |
 | *(new)* | installed before lockdown: `lockdown()` does not throw (no prior harden installed); afterward `globalThis.SturdyRef` is still the installed constructor, and it and its prototype are frozen. (SES leaves an unpermitted start-compartment global in place and does not reject it; checking against a SES permit waits for layer 2, which adds one.) |
-| *(new)* | enliven dispatches to the hook in a later turn; enlivening one ref twice runs the hook twice and yields both results (no cached settlement); hook throw → rejection; non-ref → `TypeError` rejection; handler without `enliven` throws at construction; call without `new` throws; an object created with `Object.create(SturdyRef.prototype)` fails `isSturdyRef` |
-| *(new)* | the hook runs as `enliven.call(handler, ref)`: inside it, `this === handler` and the argument is the ref |
-| *(new)* | `handler.enliven` is read once, at construction: replacing it on the handler afterward does not change what an existing ref's enliven dispatches to (pins the provisional answer to Open question 3; if the maintainer chooses read-on-every-call, this row flips) |
+| *(new)* | enliven dispatches to the hook in a later turn; enlivening one ref twice runs the hook twice and yields both results (no cached settlement); hook throw -> rejection; non-ref -> `TypeError` rejection; handler without `enliven` or a non-string locator throws at construction; call without `new` throws; an object created with `Object.create(SturdyRef.prototype)` fails `isSturdyRef` |
+| *(new)* | the hook runs as `enliven.call(handler, ref, locator)`: inside it, `this === handler`, the first argument is the ref, and the second is its captured string locator |
+| *(new)* | `handler.enliven` is read once, at construction: replacing it on the handler afterward does not change what an existing ref's enliven dispatches to |
+| *(new)* | `E.enliven(ref)` delegates to `SturdyRef.enliven(ref)` and preserves its later-turn, resolution, and rejection behavior |
 
 ### Disposition of the Withdrawn HandledPromise-Enliven Vision
 
@@ -292,9 +293,9 @@ here so that none of them is lost or silently reintroduced:
 - **An `enliven` meta-trap: absorbed.** The trap moves off the HandledPromise
   handler and becomes the SturdyRef handler's `enliven` hook.
 - **`HandledPromise.enliven`: rejected.** `SturdyRef.enliven` is the
-  call-through, and HandledPromise is not involved. **`E.enliven`: deferred.**
-  `@endo/eventual-send` could later add a sugar alias for `SturdyRef.enliven`
-  (see Open questions).
+  call-through, and HandledPromise is not involved. **`E.enliven`: adopted.**
+  Layer 1 adds it as the eventual-send convenience spelling for
+  `SturdyRef.enliven`, following the precedent of `E.resolve`.
 - **The `Promise.delegate` / `Promise[Symbol.for('enliven')]` stopgap:
   deferred and orthogonal.** `SturdyRef` does not depend on the native-promise
   trajectory. If it is standardized, it would be its own proposal.
@@ -317,10 +318,11 @@ this call-through to the handler's hook; `@endo/eventual-send` is unchanged.
 The two designs differ on what the ref *is*:
 
 - **Representation: superseded.** That design makes a SturdyRef a
-  pass-by-copy data box carrying `(location, secret)`. Here the ref carries
-  nothing; its content lives with the handler, and whether and how it
-  passes is decided by layers 3 and 4. Once those layers land, the data-box
-  representation is retired along with `@endo/ocapn`'s tagged record.
+  pass-by-copy data box carrying `(location, secret)`. Here the ref is an
+  opaque object whose locator string lives in the shim's private side table;
+  whether and how that string passes is decided by layers 3 and 4. Once those
+  layers land, the public data-box representation is retired along with
+  `@endo/ocapn`'s tagged record.
 - **Retention: still live, and not decided here.** That design's
   worker-side `retain` / `release` syscalls and daemon-side retention table
   concern the daemon, and layer 8 inherits them as input. Layer 1 takes no
@@ -332,79 +334,49 @@ The roadmap entry for `sturdy-refs-endor-syscall` links here.
 
 | Boundary | Mechanism | Policy / durable state | Value crossing |
 |---|---|---|---|
-| shim ↔ handler author | shim: construct, brand, dispatch | handler: what is captured, how it is revived, revocation, memoization, its own mutability | the ref (object identity only, no content); the hook's result |
-| shim ↔ SES (layer 2) | shim: install on `globalThis`; freeze, or harden if a harden is already present | SES: permit, harden at `lockdown`, propagate | the `SturdyRef` constructor |
-| shim ↔ pass-style (layer 3) | shim: `isSturdyRef` | pass-style: classification | a boolean |
-| shim ↔ CapTP / daemon (layers 5, 8) | shim: brand only | CapTP / daemon: minter provenance | the ref |
+| shim <-> handler author | shim: capture a string locator, brand, dispatch | handler: how the locator is interpreted and revived, revocation, memoization, its own mutability | the ref and locator to the hook; the hook's result |
+| shim <-> SES (layer 2) | shim: install on `globalThis`; freeze, or harden if a harden is already present | SES: permit, harden at `lockdown`, propagate | the `SturdyRef` constructor |
+| shim <-> pass-style (layer 3) | shim: `isSturdyRef` | pass-style: classification | a boolean |
+| shim <-> CapTP / daemon (layers 5, 8) | shim: capture the locator and brand the ref | CapTP / daemon: locator interpretation and minter provenance | the ref and locator at construction; the ref at serialization |
 
-The shim owns no durable state and no restart or replay. It only evaluates
-and dispatches. Commit and persistence belong to CapTP and the daemon
-(layers 5–8).
+The shim owns only the in-memory association from a ref to its handler, hook,
+and locator. It owns no durable state and no restart or replay. Commit and
+persistence belong to CapTP and the daemon (layers 5–8).
 
 ### Forward Sketch (Layers 3–5, No Implementation)
 
 Layer 3 (pass-style) recognizes a SturdyRef using `SturdyRef.isSturdyRef`
 alone and admits it as its own passable category, analogous to a presence.
-Like a remotable, it has object identity and no data. Marshal (layer 4) represents
-it as a slot of a distinct kind: `convertValToSlot` receives the ref, and the
-marshal encodings (capdata, smallcaps, CBOR) gain a sturdyref marker that sits
-alongside remotable and promise slots. The shim is not needed for either
-step.
+Like a remotable, it has object identity and no publicly readable data.
+Marshal (layer 4) represents it as a slot of a distinct kind:
+`convertValToSlot` receives the ref, and the marshal encodings (capdata,
+smallcaps, CBOR) gain a sturdyref marker that sits alongside remotable and
+promise slots. The locator remains private to the shim and handler at this
+layer.
 
-A CapTP (layer 5) keeps one table, a `WeakMap` from ref to data (peer id,
-swiss number, connection hints), and one shared handler for all the refs it
-mints. It mints with `new SturdyRef(sharedHandler)` and records the ref's data
-in the table. The shared handler's hook receives the ref (Open question 2's
-proposed answer is what makes one handler serve many refs), looks up its data
-in the table, and revives it through the bootstrap / nonce locator (layers
-6–7). Serialization reads the same table. The data therefore lives once, as
-data, and the handler is a function over it. This subsumes `@endo/ocapn`'s
-`ocapn-sturdyref` tagged record. Finding a ref in the table is also the
-CapTP's provenance check (see [Provenance](#provenance)).
+A CapTP (layer 5) uses one shared handler for all the refs it mints. It mints
+each with `new SturdyRef(sharedHandler, locator)`. The shared handler's hook
+receives the particular ref and locator and revives it through the bootstrap /
+nonce locator (layers 6–7), without one closure or handler per ref. For
+serialization and provenance, the CapTP keeps a private table of the refs it
+minted and their locators. Finding a ref in that table is the CapTP's
+provenance check (see [Provenance](#provenance)). This arrangement subsumes
+`@endo/ocapn`'s public `ocapn-sturdyref` tagged record.
 
-The table maps ref to data, but layer 5 also needs the inverse, data to an
-existing ref, if exporting the same target twice is to yield the same ref.
-Layer 1 gives refs no identity of their own (two refs built from one handler
-are distinct), and marshal dedups repeated values within a message by object
-identity, so mint-time interning is a layer-5 decision that this layer
-deliberately does not make.
+Layer 5 also needs the inverse, locator to an existing ref, if exporting the
+same target twice is to yield the same ref. Layer 1 gives refs no equality by
+locator (two refs built from one handler and locator are distinct), and
+marshal dedups repeated values within a message by object identity, so
+mint-time interning is a layer-5 decision that this layer deliberately does
+not make.
 
-Only the minting CapTP holds the table, so only it can serialize the ref.
-Construct, brand, and dispatch are enough for layers 3 and 4, and for a CapTP
-that carries only its own refs. A ref minted by CapTP A and handed to CapTP B
-(Open question 7) reduces to whether B may consult A's table, which is a
-question between two CapTPs, not a question about the shim's contract. If
-layer 5 instead wants a handler hook that yields serializable data, that hook
-is optional and additive: refs whose handlers lack it keep working, and the
-shim continues to dispatch only `enliven`. Either answer therefore fits the
-layer-1 surface, and layer 1 can freeze without waiting for Open question 7.
-
-## Open Questions
-
-1. Should the hook run in a later turn (proposed, to match eventual send), or
-   synchronously inside `SturdyRef.enliven` with its result wrapped in a
-   promise?
-2. Should the hook receive the ref as its argument (proposed, so one handler
-   can serve many refs, as the layer-5 sketch relies on), or no argument, the
-   way a per-ref closure would?
-3. Should `enliven` be read once at construction (proposed; the dispatch
-   target is immune to a later swap of `handler.enliven`), or on every call,
-   as `Proxy` looks up its traps? Decide together with question 4: reading
-   once does not protect the rest of the handler, which the hook still reads
-   through `this`.
-4. Should the constructor harden the handler it captures (proposed: no, and
-   document it)? Hardening would make the whole handler stable, but it would
-   make a handler that keeps mutable state on `this` fail at first use, far
-   from the cause. The proposal leaves the handler's mutability to its author,
-   as the Surface section states.
-5. Should instances inherit from `SturdyRef.prototype` (proposed; gives a
-   readable `toStringTag`) or have a `null` prototype?
-6. Should `E.enliven` land as sugar in `@endo/eventual-send`, and if so, at
-   which layer?
-7. If a ref minted by CapTP A is passed to CapTP B, may B carry it? Layer 5
-   answers this. It does not block layer 1: as the forward sketch shows, the
-   answer is either a table-sharing arrangement between CapTPs or an optional,
-   additive handler hook, and both fit the layer-1 surface.
+Only the minting CapTP holds the serialization table, so only it can serialize
+the ref. When CapTP A sends the ref through CapTP B, A emits the locator string
+and B remints a ref with B's shared handler only if B's protocol recognizes the
+locator. Otherwise B rejects it. Choosing a string preserves room to evolve
+locator syntax but deliberately gives up the invariant that every SturdyRef is
+passable over every protocol. Cross-CapTP carrying is therefore a protocol
+compatibility decision, not a new layer-1 hook.
 
 ## Prompt
 
