@@ -6,6 +6,12 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[daemon-formula-identifier-indirection](daemon-formula-identifier-indirection.md)
+(added 2026-10-08; a daemon-owned registry relocates formula identifiers
+behind the daemon boundary and gives every locator or SturdyRef share a fresh,
+independently revocable 256-bit reference; rotation atomically replaces only
+that share, pet stores migrate to binding references, and active references
+participate explicitly in local and cross-peer retention),
 [ironhorse-guest-compartment](ironhorse-guest-compartment.md) (added
 2026-09-18; the implementation specification for a guest-callable
 `Compartment` in `ironhorse-vm` — the remainder
@@ -363,6 +369,7 @@ LLM-agent stack).*
 | [floot-daemon-owned-turns](floot-daemon-owned-turns.md) | 2026-08-10 | 2026-09-07 | **Complete** |
 | [daemon-256-bit-identifiers](daemon-256-bit-identifiers.md) | 2026-02-24 | 2026-03-02 | **Complete** |
 | [daemon-agent-network-identity](daemon-agent-network-identity.md) | 2026-03-02 | 2026-03-18 | In Progress |
+| [daemon-formula-identifier-indirection](daemon-formula-identifier-indirection.md) | 2026-10-08 | 2026-10-08 | Proposed |
 | [daemon-agent-tools](daemon-agent-tools.md) | 2026-03-02 | 2026-08-06 | In Progress |
 | [agent-follow-stream-tool](agent-follow-stream-tool.md) | 2026-05-12 | 2026-08-31 | Proposed |
 | [daemon-ocapn-external-connectivity](daemon-ocapn-external-connectivity.md) | 2026-05-21 | 2026-05-21 | In Progress |
@@ -577,7 +584,7 @@ LLM-agent stack).*
 | [thixotrope/message-delivery](../packages/thixotrope/designs/message-delivery.md) | 2026-09-08 | — | **Implemented** |
 | [thixotrope/vat-replacement](../packages/thixotrope/designs/vat-replacement.md) | 2026-09-08 | — | Proposed (exploratory) |
 
-**Current totals (2026-10-07, hardened-text-codecs-shim to Implemented):** 77 Complete/Implemented, 84 In Progress, 18 Not Started, 25 Proposed, 3 Active, 21 Reference, 4 Deprecated, 2 Draft, 5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phases 1–2 implemented* and [genie-integration](genie-integration.md) as a *Largely realized* retrospective (**244 indexed records**). The bucket sum is 244. The raw audit covered 242 files (`designs/*.md` plus `packages/*/designs/*.md`): six ledger/support files were excluded, while four already-indexed nested channel-thread research records lie outside those two globs. Every indexed record and untallied file was checked in six disjoint batches against document metadata, all-state PR searches, and the `llm` log; 63 claimed-to-verified status corrections and 16 new rows are recorded in [`ARCHIVE.md`](ARCHIVE.md). The totals also count [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md) (**Implemented**, #1306), which landed on `llm` concurrently with this pass and was folded in at rebase. The Cloudflare pass adds [thixotrope-on-cloudflare](thixotrope-on-cloudflare.md) (Proposed), [thixotrope-on-cloudflare-addendum-single-vat-hub](thixotrope-on-cloudflare-addendum-single-vat-hub.md) (Proposed) and [thixotrope-on-cloudflare-review](thixotrope-on-cloudflare-review.md) (Reference) to the summary table (Proposed 23 -> 25, Reference 20 -> 21, records 240 -> 243), and both Proposed designs to the M4 table, the dependency graph and the estimates table. Neither is estimated: the base design's Phase 0 is a go/no-go measurement gated on the engine work in `rust/engine/WASM-BLOCKERS.md` and `rust/engine/STACK-DEPTH-REFACTOR.md`, so no milestone-duration, critical-path or timeline change is assigned.
+**Current totals (2026-10-08, formula identifier indirection added):** 77 Complete/Implemented, 84 In Progress, 18 Not Started, 26 Proposed, 3 Active, 21 Reference, 4 Deprecated, 2 Draft, 5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phases 1–2 implemented* and [genie-integration](genie-integration.md) as a *Largely realized* retrospective (**245 indexed records**). The bucket sum is 245. The raw audit covered 243 files (`designs/*.md` plus `packages/*/designs/*.md`): six ledger/support files were excluded, while four already-indexed nested channel-thread research records lie outside those two globs. Every indexed record and untallied file was checked in six disjoint batches against document metadata, all-state PR searches, and the `llm` log; 63 claimed-to-verified status corrections and 16 new rows are recorded in [`ARCHIVE.md`](ARCHIVE.md). The totals also count [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md) (**Implemented**, #1306), which landed on `llm` concurrently with this pass and was folded in at rebase. The Cloudflare pass adds [thixotrope-on-cloudflare](thixotrope-on-cloudflare.md) (Proposed), [thixotrope-on-cloudflare-addendum-single-vat-hub](thixotrope-on-cloudflare-addendum-single-vat-hub.md) (Proposed) and [thixotrope-on-cloudflare-review](thixotrope-on-cloudflare-review.md) (Reference) to the summary table (Proposed 23 -> 25, Reference 20 -> 21, records 240 -> 243), and both Proposed designs to the M4 table, the dependency graph and the estimates table. Neither is estimated: the base design's Phase 0 is a go/no-go measurement gated on the engine work in `rust/engine/WASM-BLOCKERS.md` and `rust/engine/STACK-DEPTH-REFACTOR.md`, so no milestone-duration, critical-path or timeline change is assigned. Formula identifier indirection adds one Proposed M4 record without changing the existing milestone projection.
 
 The 2026-09-30 rebase of PR #1116 adds [guest-native-invitations](guest-native-invitations.md) (**In Progress**: the guest `invite`/`accept` surface landed in #1305 and #1310), increasing In Progress from 83 to 84 and the indexed records from 243 to 244.
 
@@ -611,7 +618,7 @@ inventing implementation commitments.
 |---|---|---|
 | `inter-package-plain-re-exports`, `intra-package-plain-re-exports` | M2 | Package-hygiene cleanup before cross-package capability work. |
 | `http-confine`, `platform-range-and-tree-reads`, `endo-fs-seam-review-followups` | M3 | HTTP and readable-tree foundations for tools and daemon guests. |
-| `captp-error-identification`, `daemon-locator-reference` | M4 | CapTP identity and locator semantics for federation. |
+| `captp-error-identification`, `daemon-locator-reference`, `daemon-formula-identifier-indirection` | M4 | CapTP identity, locator semantics, and independently revocable formula references for federation. |
 | `notifier-pubsub-migration`, `unredacted-stack-sanctioned-ses-api` | M10 | Shared ecosystem surface and confinement diagnostics. |
 | `hosted-agent-broker-oauth` | M5 | Which credential bills a hosted agent session, and who holds it. Records why both vendor subscription modes stay closed. |
 | `daemon-engo-supervisor`, `worker-rust-xs` | M11 | Supervisor and native worker path for `endor`. |
@@ -626,8 +633,11 @@ flowchart TD
         d256[daemon-256-bit-identifiers<br/><i>COMPLETE</i>]
         dloc[daemon-locator-terminology<br/><i>IN PROGRESS</i>]
         dnet[daemon-agent-network-identity<br/><i>IN PROGRESS</i>]
+        dref[daemon-formula-identifier-indirection<br/><i>PROPOSED</i>]
         d256 --> dloc
         d256 --> dnet
+        dloc --> dref
+        dnet --> dref
     end
 
     subgraph Daemon Messaging
@@ -1180,6 +1190,7 @@ finalized.
 | cbor-encode-decode | Not Started | Split `@endo/cbor` into `@endo/cbor/encode` and `@endo/cbor/decode` subpath exports with an internal `internals.js` for the shared `canonicalInfo`/`CANONICAL_NAN`/bounds; root `.` re-export preserved; follow-up to kriskowal's review of #885 |
 | ocapn-noise-cryptographic-review | Deprecated (superseded by [ocapn-noise-network](ocapn-noise-network.md)) | External review coordination |
 | daemon-agent-network-identity | In Progress | Per-agent keypairs for network identity |
+| daemon-formula-identifier-indirection | Proposed | Daemon registry for opaque, per-share formula references; locators, SturdyRefs, and pet stores stop capturing formula identifiers, and rotation revokes one share without changing its target |
 | daemon-ocapn-external-connectivity | In Progress | Daemon adopts `@endo/ocapn` for the daemon-to-daemon peer edge; retires the bespoke `EndoNetwork`/`EndoGreeter`/`RemoteControl` CapTP peer stack. Worker, CLI, and web-gateway edges stay CapTP. Satisfies the daemon-integration half of the M4 exit criterion (implementation in-flight: PRs #340, #684, #688, #693) |
 | ~~ocapn-noise-network~~ | **Complete** | Noise IK netlayer for OCapN landed via PR #137 (merged 2026-05-08), consolidating the stacked PRs #111 (CBOR codec) + #112 (Noise IK netlayer) + #113 (transport tests) |
 | ~~ocapn-iroh-netlayer~~ | **Complete** | iroh 1.0 QUIC netlayer for `@endo/ocapn` (`@endo/ocapn-iroh`): dial-by-EndpointId with discovery/relays, netstring framing under the `ocapn/netstring/0` ALPN, standard `op:start-session`; implemented with the design |
@@ -1192,7 +1203,8 @@ finalized.
 
 **Exit criterion:** Two Endo daemons can connect securely over
 OCapN-Noise. Locator format supports node identification via agent
-keypairs.
+keypairs and independently revocable references without exposing formula
+identifiers.
 
 **Estimated duration (1 dev):** 4-5 weeks (existing milestone estimate).
 The Thixotrope worker engines are implemented; remaining delivery-contract work has not been
@@ -1899,6 +1911,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | thixotrope-on-cloudflare | — | not estimated; its Phase 0 is a go/no-go measurement | 4 | The stack prerequisites are costed in `rust/engine/STACK-DEPTH-REFACTOR.md`; the other engine prerequisites (`rust/engine/WASM-BLOCKERS.md` B1, B5, B7, B8) are not costed; the rest waits on Phase 0. |
 | thixotrope-on-cloudflare-addendum-single-vat-hub | — | not estimated | 4 | Phase 2 of the base design; its protocol findings in the review must be resolved first. |
 | daemon-agent-network-identity | S-M | 3 days | 4 | Network registration, locator construction |
+| daemon-formula-identifier-indirection | M-L | 1-1.5 weeks | 4 | Versioned opaque-reference registry, v3-to-v4 SQLite migration, pet-store binding references, locator/SturdyRef codecs, atomic rotate/revoke controls, and retention integration; minion.town clip UI is a separate consumer cut |
 | ~~ocapn-noise-network~~ | L | — | 4 | ✅ Complete (PR #137 consolidates stacked PRs #111/#112/#113; merged 2026-05-08) |
 | ~~ocapn-iroh-netlayer~~ | M | — | 4 | ✅ Complete (implemented with the design: `@endo/ocapn-iroh`, mock-iroh CI tests plus `ENDO_IROH_INTEGRATION=1`-gated real-endpoint test) |
 | ocapn-noise-key-only-session-boundary | M | 3-4 days | 4 | Noise-free key-sniffing relay and independent terminating listener, application-injected OCapN network adapter, static SIGHUP-reloadable route configuration from a loosely coupled Node controller exo, and WebSocket-to-relay handoff migration; Node prototype prepared for a Rust data plane behind a CBOR configuration protocol |
