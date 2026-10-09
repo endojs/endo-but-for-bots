@@ -38,7 +38,9 @@
 //! [`Transcript::publish_snapshot`] therefore orders the steps: the
 //! transcript's cranks are already committed; the blob is written, synced,
 //! renamed, and its directory synced ([`ContentAddressedStore::write_blob`]); only then is
-//! its hash recorded with the exact committed watermark it covers; and only
+//! its hash recorded with the committed watermark it covers (the latest
+//! committed crank and sequence, never below the previous snapshot's, since
+//! compaction may have dropped the rows that snapshot covered); and only
 //! after that record is durable may [`Transcript::compact`] drop the covered
 //! prefix. A crash anywhere leaves the previous published snapshot and its
 //! full replay suffix. A published snapshot never covers an uncommitted
@@ -152,7 +154,7 @@ impl std::fmt::Display for TranscriptFault {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "transcript fault in worker {} during {:?} (crank {:?}, seq {:?}, sqlite {:?}/{:?}, outcome {}): {}",
+            "transcript fault in worker {} during {:?} (crank {:?}, sequence {:?}, sqlite {:?}/{:?}, outcome {}): {}",
             self.worker,
             self.operation,
             self.crank,
@@ -564,8 +566,16 @@ impl Transcript {
                     params![worker, SCHEMA_VERSION.to_string()],
                 )?;
             }
-            Ok(existing)
+            let schema_version: Option<String> = transaction
+                .query_row(
+                    "SELECT value FROM meta WHERE key = 'schema_version'",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok((existing, schema_version))
         })?;
+        let (existing, schema_version) = existing;
         if let Some(existing) = existing {
             if existing != self.worker {
                 return Err(TranscriptError::Protocol(format!(
@@ -573,6 +583,15 @@ impl Transcript {
                     self.worker
                 )));
             }
+        }
+        // A transcript written by another schema version may lack tables or
+        // columns this crate relies on, or carry ones it does not know: refuse
+        // it rather than replay from a misread record.
+        if schema_version.as_deref() != Some(SCHEMA_VERSION.to_string().as_str()) {
+            return Err(TranscriptError::Protocol(format!(
+                "transcript schema version {}, not {SCHEMA_VERSION}",
+                schema_version.as_deref().unwrap_or("absent")
+            )));
         }
         Ok(())
     }
@@ -808,14 +827,24 @@ impl Transcript {
     /// and record it aborted. On a poisoned transcript the discard still
     /// happens, but no write is attempted: the durable `started` row without
     /// a commit already withholds every effect, and reopening records it.
+    ///
+    /// A staged host call whose adapter already ran may have opened or
+    /// closed a native resource that the abort cannot take back. The abort
+    /// transaction records each such handle as broken, as
+    /// [`Transcript::host_call`] does for a refused call, so its logical id
+    /// is never reissued and [`Transcript::recovery_gate`] stops until the
+    /// adapter supplies a replacement or the application acknowledges the
+    /// loss.
     pub fn abort_crank(&mut self) -> Result<(), TranscriptError> {
         let Some(active) = self.active.take() else {
             return Err(TranscriptError::Protocol("no active crank".into()));
         };
         self.check_healthy()?;
         let crank = active.crank;
+        let escapes = host::aborted_escapes(&active.host);
         drop(active);
         self.transact(Operation::Abort, Some(crank), |transaction| {
+            host::record_aborted_escapes(transaction, crank, &escapes)?;
             transaction.execute(
                 "UPDATE crank SET state = 'aborted' WHERE crank_id = ?1 AND state = 'started'",
                 [crank as i64],
@@ -840,8 +869,12 @@ impl Transcript {
             return Ok(());
         }
         let acknowledgments = std::mem::take(&mut self.pending_acknowledgments);
-        self.transact(Operation::AcknowledgeRelease, None, |transaction| {
+        let acknowledgments_for_retry = acknowledgments.clone();
+        let result = self.transact(Operation::AcknowledgeRelease, None, |transaction| {
             flush_acknowledgments(transaction, &acknowledgments)
+        });
+        result.inspect_err(|_| {
+            self.pending_acknowledgments = acknowledgments_for_retry;
         })?;
         self.stats.acknowledgment_flushes += 1;
         Ok(())
@@ -928,9 +961,10 @@ impl Transcript {
             }
         };
         let acknowledgments = std::mem::take(&mut self.pending_acknowledgments);
+        let acknowledgments_for_retry = acknowledgments.clone();
         let record_hash = hash.clone();
         let record_meta = meta.clone();
-        let epoch = self.transact(Operation::PublishSnapshot, None, |transaction| {
+        let result = self.transact(Operation::PublishSnapshot, None, |transaction| {
             flush_acknowledgments(transaction, &acknowledgments)?;
             transaction.execute(
                 "INSERT INTO snapshot (hash, engine_signature, panic_on_reference_error, watermark_crank, watermark_sequence)
@@ -944,6 +978,9 @@ impl Transcript {
                 ],
             )?;
             Ok(transaction.last_insert_rowid() as u64)
+        });
+        let epoch = result.inspect_err(|_| {
+            self.pending_acknowledgments = acknowledgments_for_retry;
         })?;
         self.stats.publications += 1;
         Ok(SnapshotRecord {
@@ -966,7 +1003,8 @@ impl Transcript {
             return Ok(Vec::new());
         };
         let acknowledgments = std::mem::take(&mut self.pending_acknowledgments);
-        let superseded = self.transact(Operation::Compact, None, |transaction| {
+        let acknowledgments_for_retry = acknowledgments.clone();
+        let result = self.transact(Operation::Compact, None, |transaction| {
             flush_acknowledgments(transaction, &acknowledgments)?;
             let watermark = snapshot.watermark_crank as i64;
             transaction.execute(
@@ -997,6 +1035,9 @@ impl Transcript {
                 [snapshot.epoch as i64],
             )?;
             Ok(superseded)
+        });
+        let superseded = result.inspect_err(|_| {
+            self.pending_acknowledgments = acknowledgments_for_retry;
         })?;
         self.stats.compactions += 1;
         Ok(superseded
@@ -1010,7 +1051,9 @@ impl Transcript {
     /// Option to Panic on Reference Errors; a replay under a different
     /// `panic-on-reference-error` setting could diverge from the run that
     /// produced the transcript).
-    pub fn check_resume(&self, meta: &SnapshotMeta) -> Result<(), TranscriptError> {
+    /// Returns the snapshot checked. [`Transcript::replay_plan`] and
+    /// [`Transcript::host_replay`] run this check themselves.
+    pub fn check_resume(&self, meta: &SnapshotMeta) -> Result<SnapshotRecord, TranscriptError> {
         let Some(snapshot) = self.latest_snapshot()? else {
             return Err(TranscriptError::Protocol("no published snapshot".into()));
         };
@@ -1020,19 +1063,21 @@ impl Transcript {
                 snapshot.epoch, snapshot.meta
             )));
         }
-        Ok(())
+        Ok(snapshot)
     }
 
     /// The latest published snapshot, verified, and the committed cranks
-    /// after its watermark. A missing or corrupt blob is a storage fault:
-    /// recovery stops rather than falling back to another snapshot.
+    /// after its watermark. `expected` is the configuration the caller will
+    /// replay under; it must equal the one the snapshot pinned
+    /// ([`Transcript::check_resume`]), checked before any bytes are returned.
+    /// A missing or corrupt blob is a storage fault: recovery stops rather
+    /// than falling back to another snapshot.
     pub fn replay_plan(
         &self,
         blob_store: &ContentAddressedStore,
+        expected: &SnapshotMeta,
     ) -> Result<ReplayPlan, TranscriptError> {
-        let Some(snapshot) = self.latest_snapshot()? else {
-            return Err(TranscriptError::Protocol("no published snapshot".into()));
-        };
+        let snapshot = self.check_resume(expected)?;
         let snapshot_bytes = blob_store.read_blob(&snapshot.hash).map_err(|error| {
             TranscriptError::Fault(TranscriptFault {
                 worker: self.worker.clone(),

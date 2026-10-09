@@ -16,14 +16,9 @@
 //! cannot make a durable state torn.
 //!
 //! The plan fires once, at operation number `n` (1-based), in one of the
-//! [`FaultMode`]s. [`FaultMode::Crash`] and [`FaultMode::TornWrite`] model a
-//! process kill: the operation does not happen (or happens halfway) and every
-//! later mutating operation is refused, so nothing after the kill reaches the
-//! disk. The test then drops the transcript and reopens the same files
+//! [`FaultMode`]s. After a modeled kill every later mutating operation is
+//! refused, so the test drops the transcript and reopens the same files
 //! without the plan, which is exactly what a restarted supervisor sees.
-//! [`FaultMode::FailOnce`] and [`FaultMode::FailAfterEffect`] model an I/O
-//! error the process survives; the second is the ambiguous-commit shape,
-//! where the data reached the disk but the caller was told it failed.
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::io;

@@ -22,13 +22,6 @@
 //! [`DuplicateSuppressor`] drops any sequence at or below the highest it
 //! has delivered for that worker, so the peer observes every frame exactly
 //! once.
-//!
-//! Scope split with `designs/worker-quiescence-embargo.md` (#989): that
-//! design owns the admission/quiescence boundary and the in-memory
-//! buffering in front of it. In durable mode this module replaces its
-//! release-at-quiescence step with release-after-durable-commit; there is
-//! one pending batch per worker (the transcript's) and one release
-//! authority (this type), never two stacked buffers.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -41,10 +34,10 @@ use crate::{
 /// three arms of the engine's `ExecutionOutcome`, without its reasons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CrankVerdict {
-    /// The delivery ran to quiescence. A delivery whose result was an
-    /// ordinary rejection (a CapTP error reply) also ends here: the
-    /// rejection is itself a committed outbound frame (§ Open Questions, "Should an
-    /// uncaught `Throw`").
+    /// The delivery ran the event loop to quiescence (§ The Formal `Panic`
+    /// Category, item 4). A delivery whose result was an ordinary rejection
+    /// (a CapTP error reply) also ends here: the rejection is itself a
+    /// committed outbound frame.
     Quiesced,
     /// A throw escaped every handler of the delivery. Discard; not placed
     /// on the restore-and-replay path. The discard holds under either
@@ -268,7 +261,8 @@ pub enum Received {
     Fresh,
     /// A re-release of a frame already delivered: drop it.
     Duplicate,
-    /// The idempotency key does not name the frame's own sequence: refuse
+    /// The idempotency key is not exactly `<worker>:<sequence>` for the
+    /// transport-authenticated worker and the frame's own sequence: refuse
     /// it rather than advance a mark it does not own.
     Malformed,
 }
@@ -324,15 +318,15 @@ impl DuplicateSuppressor {
         }
     }
 
-    /// Classify a released frame by its idempotency key (`<worker>:<sequence>`).
-    pub fn receive(&mut self, frame: &ReleasableFrame) -> Received {
-        match frame.idempotency_key.rsplit_once(':') {
-            Some((worker, sequence))
-                if sequence.parse::<Sequence>().ok() == Some(frame.sequence) =>
-            {
-                self.receive_sequence(worker, frame.sequence)
-            }
-            _ => Received::Malformed,
+    /// Classify a released frame that the transport authenticated as coming
+    /// from `worker`. The mark advanced is always `worker`'s, never one named
+    /// by the sender-written key, and the key must be the canonical
+    /// `<worker>:<sequence>` the transcript writes, so a frame cannot forge
+    /// another worker's mark or spell its own sequence two ways (`+5`, `005`).
+    pub fn receive(&mut self, worker: &str, frame: &ReleasableFrame) -> Received {
+        if frame.idempotency_key != format!("{worker}:{}", frame.sequence) {
+            return Received::Malformed;
         }
+        self.receive_sequence(worker, frame.sequence)
     }
 }

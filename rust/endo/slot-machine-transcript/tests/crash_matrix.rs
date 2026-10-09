@@ -126,7 +126,7 @@ fn run_case(n: Option<(u64, FaultMode)>) -> (Outcome, FaultPlan) {
     for (sequence, crank, state) in supervisor.transcript.outbound_audit().expect("audit") {
         assert_eq!(
             state, "committed",
-            "{label}: outbound seq {sequence} of crank {crank} is on record uncommitted"
+            "{label}: outbound sequence {sequence} of crank {crank} is on record uncommitted"
         );
     }
     for aborted in supervisor.transcript.aborted_cranks().expect("aborted") {

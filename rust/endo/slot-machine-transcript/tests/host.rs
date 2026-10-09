@@ -36,7 +36,7 @@ fn callbacks() -> AdmittedCallbacks {
 
 /// Open a transcript with an initial snapshot published.
 fn open(root: &Path) -> (Transcript, ContentAddressedStore) {
-    let blob_store = ContentAddressedStore::open(root.join("blob_store")).unwrap();
+    let blob_store = ContentAddressedStore::open(root.join("blob_store"), "w").unwrap();
     let (mut t, _) = Transcript::open(root.join("t.sqlite"), TranscriptConfig::new("w")).unwrap();
     if t.latest_snapshot().unwrap().is_none() {
         t.publish_snapshot(&blob_store, b"heap-0", meta()).unwrap();
@@ -147,7 +147,7 @@ fn declared_barrier_halts_replay_instead_of_reinvoking_the_effect() {
     assert_eq!(invocations.get(), 1);
     let t = reopen(root.path());
     assert_eq!(t.recovery_gate().unwrap(), Ok(()));
-    let mut replay = t.host_replay().unwrap();
+    let mut replay = t.host_replay(&meta()).unwrap();
     replay.begin_crank(1);
     assert_eq!(
         replay.call("now", None, b"clock"),
@@ -191,7 +191,7 @@ fn barrier_in_a_crank_that_never_committed_stops_retry_until_cleared() {
     };
     assert_eq!((crank, callback.as_str()), (1, "launch-missile"));
     // No recorded reply for the aborted crank reaches replay.
-    let mut replay = t.host_replay().unwrap();
+    let mut replay = t.host_replay(&meta()).unwrap();
     replay.begin_crank(1);
     assert!(matches!(
         replay.call("launch-missile", None, b"target"),
@@ -227,7 +227,7 @@ fn replay_follows_the_guest_call_order_around_a_barrier() {
         t.commit_crank().unwrap();
     }
     let mut t = reopen(root.path());
-    let mut replay = t.host_replay().unwrap();
+    let mut replay = t.host_replay(&meta()).unwrap();
     replay.begin_crank(1);
     assert_eq!(
         replay.call("now", None, b"clock"),
@@ -243,7 +243,7 @@ fn replay_follows_the_guest_call_order_around_a_barrier() {
     // Once cleared, replay answers the barrier and the calls after it in
     // the order the guest made them.
     t.clear_barrier(sequence).unwrap();
-    let mut replay = t.host_replay().unwrap();
+    let mut replay = t.host_replay(&meta()).unwrap();
     replay.begin_crank(1);
     replay.call("now", None, b"clock").unwrap();
     assert_eq!(
@@ -348,7 +348,7 @@ fn handle_without_descriptor_is_reseated_broken_and_never_silently_succeeds() {
         Err(RecoveryStop::BrokenHandles(vec![socket]))
     );
     // Replay of a use of the broken handle stops rather than answering.
-    let mut replay = t.host_replay().unwrap();
+    let mut replay = t.host_replay(&meta()).unwrap();
     replay.begin_crank(1);
     replay.call("connect", None, b"peer:80").unwrap();
     assert_eq!(
@@ -506,7 +506,7 @@ fn handles_with_descriptors_reseat_and_replay_the_recorded_reply_stream() {
         .unwrap();
     assert_eq!(report.reseated, vec![file]);
     assert_eq!(t.recovery_gate().unwrap(), Ok(()));
-    let mut replay = t.host_replay().unwrap();
+    let mut replay = t.host_replay(&meta()).unwrap();
     replay.begin_crank(1);
     assert_eq!(
         opened(replay.call("open-file", None, b"/a.txt").unwrap()),
@@ -533,13 +533,13 @@ fn replay_divergence_is_a_deterministic_fault() {
         t.commit_crank().unwrap();
     }
     let t = reopen(root.path());
-    let mut replay = t.host_replay().unwrap();
+    let mut replay = t.host_replay(&meta()).unwrap();
     replay.begin_crank(1);
     assert!(matches!(
         replay.call("now", None, b"other"),
         Err(ReplayStop::Mismatch { crank: 1, .. })
     ));
-    let mut replay = t.host_replay().unwrap();
+    let mut replay = t.host_replay(&meta()).unwrap();
     replay.begin_crank(1);
     assert!(matches!(
         replay.end_crank(),
@@ -553,13 +553,114 @@ fn aborted_crank_records_no_host_events_or_handles() {
     let callbacks = callbacks();
     let (mut t, _) = open(root.path());
     t.begin_crank(b"d1").unwrap();
-    t.host_call(&callbacks, "connect", None, b"peer:80", |_| {
-        opens(b"ok", None)
-    })
-    .unwrap();
+    t.host_call(&callbacks, "now", None, b"clock", |_| reply(b"t0"))
+        .unwrap();
     t.abort_crank().unwrap();
     assert!(t.open_handles().unwrap().is_empty());
     assert_eq!(t.recovery_gate().unwrap(), Ok(()));
+    let mut replay = t.host_replay(&meta()).unwrap();
+    replay.begin_crank(1);
+    assert!(replay.end_crank().is_ok());
+}
+
+#[test]
+fn an_aborted_crank_records_the_handles_its_adapters_opened_or_closed_as_broken() {
+    let root = tempfile::tempdir().unwrap();
+    let callbacks = callbacks();
+    let (mut t, _) = open(root.path());
+    t.begin_crank(b"d1").unwrap();
+    let kept = opened(
+        t.host_call(&callbacks, "open-file", None, b"/kept", |_| {
+            opens(b"fd", Some(b"path:/kept"))
+        })
+        .unwrap(),
+    );
+    t.commit_crank().unwrap();
+
+    // The adapter opens a socket and closes the file, then the crank
+    // aborts. Neither native effect can be taken back.
+    t.begin_crank(b"d2").unwrap();
+    let socket = opened(
+        t.host_call(&callbacks, "connect", None, b"peer:80", |_| {
+            opens(b"ok", None)
+        })
+        .unwrap(),
+    );
+    t.host_call(&callbacks, "close", Some(kept), b"", |_| closes(b""))
+        .unwrap();
+    // A transactional open performs nothing until commit, so it leaves no
+    // handle behind.
+    t.host_call_transactional(&callbacks, "put-row", None, b"k=v", |r| {
+        (opens(b"row", Some(b"cap:/row")), put_row(r))
+    })
+    .unwrap();
+    t.abort_crank().unwrap();
+
+    // The opened id is reserved, not reissued to the next crank while the
+    // adapter still holds its resource.
+    let handles: Vec<(u64, bool)> = t
+        .open_handles()
+        .unwrap()
+        .into_iter()
+        .map(|record| (record.handle, record.broken))
+        .collect();
+    assert_eq!(handles, vec![(kept, true), (socket, true)]);
+    assert_eq!(
+        t.recovery_gate().unwrap(),
+        Err(RecoveryStop::BrokenHandles(vec![kept, socket]))
+    );
+    t.begin_crank(b"d3").unwrap();
+    let next = opened(
+        t.host_call(&callbacks, "connect", None, b"peer:81", |_| {
+            opens(b"ok", None)
+        })
+        .unwrap(),
+    );
+    assert!(next > socket, "handle {next} reuses an escaped id");
+    t.acknowledge_loss(socket).unwrap();
+    t.acknowledge_loss(kept).unwrap();
+    t.commit_crank().unwrap();
+    assert_eq!(t.recovery_gate().unwrap(), Ok(()));
+}
+
+#[test]
+fn write_sets_and_descriptors_count_toward_the_host_byte_bound() {
+    let root = tempfile::tempdir().unwrap();
+    let callbacks = callbacks();
+    let mut config = TranscriptConfig::new("w");
+    config.limits.max_host_bytes = 16;
+    let blob_store = ContentAddressedStore::open(root.path().join("cas"), "w").unwrap();
+    let (mut t, _) = Transcript::open(root.path().join("t.sqlite"), config).unwrap();
+    t.publish_snapshot(&blob_store, b"heap-0", meta()).unwrap();
+    t.begin_crank(b"d1").unwrap();
+    // A three-byte request and a two-byte reply are within the bound, but
+    // the write set's twelve key and value bytes are not.
+    assert!(matches!(
+        t.host_call_transactional(&callbacks, "put-row", None, b"k=v", |_| {
+            (
+                reply(b"ok"),
+                vec![(b"key".to_vec(), Some(b"value-bytes".to_vec()))],
+            )
+        }),
+        Err(HostCallError::Transcript(TranscriptError::Backpressure(_)))
+    ));
+    // The same holds for a reconstruction descriptor.
+    assert!(matches!(
+        t.host_call(&callbacks, "open-file", None, b"/f", |_| {
+            opens(b"fd", Some(b"path:/a/long/descriptor"))
+        }),
+        Err(HostCallError::Transcript(TranscriptError::Backpressure(_)))
+    ));
+    // A staged write set also counts against later calls.
+    t.host_call_transactional(&callbacks, "put-row", None, b"k", |_| {
+        (reply(b""), vec![(b"0123456789".to_vec(), None)])
+    })
+    .unwrap();
+    assert!(matches!(
+        t.host_call(&callbacks, "now", None, b"clock", |_| reply(b"t")),
+        Err(HostCallError::Transcript(TranscriptError::Backpressure(_)))
+    ));
+    t.abort_crank().unwrap();
 }
 
 #[test]
@@ -588,7 +689,7 @@ fn compaction_keeps_open_handles_and_unreleased_effects() {
     assert_eq!(t.open_handles().unwrap()[0].handle, file);
     assert_eq!(t.releasable_effects().unwrap().len(), 1);
     // The covered crank's calls are not replayed from the new snapshot.
-    let mut replay = t.host_replay().unwrap();
+    let mut replay = t.host_replay(&meta()).unwrap();
     replay.begin_crank(1);
     replay.end_crank().unwrap();
 }
@@ -717,7 +818,7 @@ fn pure_calls_run_live_and_are_not_recorded() {
     }
     // Nothing to replay: the replayed guest re-runs the pure call itself.
     let t = reopen(root.path());
-    let mut replay = t.host_replay().unwrap();
+    let mut replay = t.host_replay(&meta()).unwrap();
     replay.begin_crank(1);
     replay.end_crank().unwrap();
 }
@@ -740,7 +841,7 @@ fn a_committed_outbound_effect_replays_as_deferred_without_the_provider() {
         t.commit_crank().unwrap();
     }
     let t = reopen(root.path());
-    let mut replay = t.host_replay().unwrap();
+    let mut replay = t.host_replay(&meta()).unwrap();
     replay.begin_crank(1);
     assert_eq!(
         replay.call("post-webhook", None, b"hello"),
@@ -802,7 +903,7 @@ fn a_closed_handle_is_refused_in_its_own_crank_and_after_commit() {
     );
     t.abort_crank().unwrap();
     // Replay answers the close from the record.
-    let mut replay = t.host_replay().unwrap();
+    let mut replay = t.host_replay(&meta()).unwrap();
     replay.begin_crank(2);
     assert_eq!(
         replay.call("close", Some(file), b""),
@@ -853,7 +954,7 @@ fn recovery_operations_refuse_targets_in_the_wrong_state() {
     // Clearing a barrier that was never recorded is refused.
     assert!(t.clear_barrier(12345).is_err());
     // A replayed call before any crank begins is a mismatch.
-    let mut replay = t.host_replay().unwrap();
+    let mut replay = t.host_replay(&meta()).unwrap();
     assert!(matches!(
         replay.call("now", None, b"clock"),
         Err(ReplayStop::Mismatch { crank: 0, .. })
@@ -899,7 +1000,7 @@ fn a_reply_past_the_byte_bound_is_refused_and_its_handle_recorded_broken() {
     let callbacks = callbacks();
     let mut config = TranscriptConfig::new("w");
     config.limits.max_host_bytes = 8;
-    let blob_store = ContentAddressedStore::open(root.path().join("blob_store")).unwrap();
+    let blob_store = ContentAddressedStore::open(root.path().join("blob_store"), "w").unwrap();
     let (mut t, _) = Transcript::open(root.path().join("t.sqlite"), config).unwrap();
     t.publish_snapshot(&blob_store, b"heap-0", meta()).unwrap();
     t.begin_crank(b"d1").unwrap();
@@ -961,7 +1062,7 @@ fn a_transactional_reply_past_the_byte_bound_records_no_escape() {
     let callbacks = callbacks();
     let mut config = TranscriptConfig::new("w");
     config.limits.max_host_bytes = 8;
-    let blob_store = ContentAddressedStore::open(root.path().join("cas")).unwrap();
+    let blob_store = ContentAddressedStore::open(root.path().join("cas"), "w").unwrap();
     let (mut t, _) = Transcript::open(root.path().join("t.sqlite"), config).unwrap();
     t.publish_snapshot(&blob_store, b"heap-0", meta()).unwrap();
     t.begin_crank(b"d1").unwrap();
@@ -985,7 +1086,7 @@ fn a_barrier_reply_past_the_byte_bound_forces_abort_and_stops_recovery() {
     let callbacks = callbacks();
     let mut config = TranscriptConfig::new("w");
     config.limits.max_host_bytes = 8;
-    let blob_store = ContentAddressedStore::open(root.path().join("cas")).unwrap();
+    let blob_store = ContentAddressedStore::open(root.path().join("cas"), "w").unwrap();
     let (mut t, _) = Transcript::open(root.path().join("t.sqlite"), config).unwrap();
     t.publish_snapshot(&blob_store, b"heap-0", meta()).unwrap();
     t.begin_crank(b"d1").unwrap();
@@ -1031,7 +1132,7 @@ fn misclassified_escapes_per_crank_are_bounded() {
     let callbacks = callbacks();
     let mut config = TranscriptConfig::new("w");
     config.limits.max_host_calls = 2;
-    let blob_store = ContentAddressedStore::open(root.path().join("cas")).unwrap();
+    let blob_store = ContentAddressedStore::open(root.path().join("cas"), "w").unwrap();
     let (mut t, _) = Transcript::open(root.path().join("t.sqlite"), config).unwrap();
     t.publish_snapshot(&blob_store, b"heap-0", meta()).unwrap();
     t.begin_crank(b"d1").unwrap();
@@ -1074,7 +1175,7 @@ fn recorded_host_calls_per_crank_are_bounded() {
     let mut config = TranscriptConfig::new("w");
     config.limits.max_host_calls = 2;
     config.limits.max_host_bytes = 16;
-    let blob_store = ContentAddressedStore::open(root.path().join("blob_store")).unwrap();
+    let blob_store = ContentAddressedStore::open(root.path().join("blob_store"), "w").unwrap();
     let (mut t, _) = Transcript::open(root.path().join("t.sqlite"), config).unwrap();
     t.publish_snapshot(&blob_store, b"heap-0", meta()).unwrap();
     t.begin_crank(b"d1").unwrap();

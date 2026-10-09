@@ -129,8 +129,8 @@ impl Supervisor {
         wire: &mut Wire,
     ) -> Result<Supervisor, TranscriptError> {
         let mut config = TranscriptConfig::new(&files.worker);
-        let mut blob_store =
-            ContentAddressedStore::open(files.cas_directory()).expect("blob_store directory");
+        let mut blob_store = ContentAddressedStore::open(files.cas_directory(), &files.worker)
+            .expect("blob_store directory");
         if let Some(plan) = &plan {
             config = config.with_fault_plan(plan.clone());
             blob_store = blob_store.with_fault_plan(plan.clone());
@@ -149,7 +149,9 @@ impl Supervisor {
             // first retryable delivery.
             supervisor.publish()?;
         } else {
-            let plan = supervisor.transcript.replay_plan(&supervisor.blob_store)?;
+            let plan = supervisor
+                .transcript
+                .replay_plan(&supervisor.blob_store, &meta())?;
             let mut state = restore(&plan.snapshot_bytes);
             for crank in &plan.cranks {
                 let (next, out) = deliver(state, &crank.inbound);

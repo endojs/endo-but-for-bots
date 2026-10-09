@@ -54,7 +54,7 @@ use std::collections::{BTreeMap, VecDeque};
 
 use rusqlite::{params, OptionalExtension};
 
-use crate::{CrankId, Operation, Sequence, Transcript, TranscriptError};
+use crate::{CrankId, Operation, Sequence, SnapshotMeta, Transcript, TranscriptError};
 
 /// A durable logical handle id. The guest heap stores this, never an OS
 /// file descriptor or native pointer.
@@ -317,6 +317,14 @@ pub enum ReplayStop {
     BrokenHandle(HandleId),
 }
 
+/// The key and value bytes a transactional write set stages.
+fn write_bytes(write: &TransactionalWrite) -> usize {
+    write.iter().fold(0usize, |sum, (key, value)| {
+        sum.saturating_add(key.len())
+            .saturating_add(value.as_ref().map_or(0, Vec::len))
+    })
+}
+
 /// Apply `callback`'s transactional write set to `host_store`.
 fn apply_transactional_write(
     transaction: &rusqlite::Transaction<'_>,
@@ -546,6 +554,78 @@ pub(crate) fn commit_staged(
     Ok(())
 }
 
+/// The handle effects of an aborted crank's staged calls: handles the
+/// crank opened, and durable handles it closed. Each read or barrier
+/// call's adapter has already run, so the native effect stands whether or
+/// not the crank commits.
+pub(crate) struct AbortedEscapes {
+    opened: Vec<(HandleId, String, Vec<u8>, Option<Vec<u8>>)>,
+    closed: Vec<HandleId>,
+}
+
+pub(crate) fn aborted_escapes(staged: &[Staged]) -> AbortedEscapes {
+    let mut escapes = AbortedEscapes {
+        opened: Vec::new(),
+        closed: Vec::new(),
+    };
+    for staged_effect in staged {
+        if let Staged::Call {
+            callback,
+            class,
+            handle,
+            request,
+            opens,
+            closes,
+            ..
+        } = staged_effect
+        {
+            // A transactional adapter performs no effect when invoked, so
+            // an aborted crank's transactional call left nothing behind.
+            if *class == HostClass::Transactional {
+                continue;
+            }
+            if let Some((opened, descriptor)) = opens {
+                escapes.opened.push((
+                    *opened,
+                    callback.clone(),
+                    request.clone(),
+                    descriptor.clone(),
+                ));
+            }
+            if let (true, Some(closed)) = (*closes, handle) {
+                escapes.closed.push(*closed);
+            }
+        }
+    }
+    escapes
+}
+
+/// Record an aborted crank's escaped handle effects inside its abort
+/// transaction: an opened resource becomes a broken handle, reserving its
+/// logical id, and a closed durable handle is marked broken.
+pub(crate) fn record_aborted_escapes(
+    transaction: &rusqlite::Transaction<'_>,
+    crank: CrankId,
+    escapes: &AbortedEscapes,
+) -> rusqlite::Result<()> {
+    for (handle, callback, request, descriptor) in &escapes.opened {
+        let sequence = insert_event(transaction, crank, "host-escape", request)?;
+        transaction.execute(
+            "INSERT INTO host_handle
+               (handle_id, created_by_sequence, callback, descriptor, open, broken)
+             VALUES (?1, ?2, ?3, ?4, 1, 1)",
+            params![*handle as i64, sequence as i64, callback, descriptor],
+        )?;
+    }
+    for handle in &escapes.closed {
+        transaction.execute(
+            "UPDATE host_handle SET broken = 1 WHERE handle_id = ?1 AND open = 1",
+            [*handle as i64],
+        )?;
+    }
+    Ok(())
+}
+
 impl Transcript {
     fn handle_row(&self, handle: HandleId) -> Result<Option<HandleRecord>, TranscriptError> {
         self.connection
@@ -624,7 +704,9 @@ impl Transcript {
     /// Refuse, not truncate, a host call past the crank's bound. A reply's
     /// size is known only after the effect runs, so admission checks the
     /// request alone (`reply_bytes` zero) and [`Transcript::stage_host_call`]
-    /// checks again with the reply before staging it.
+    /// checks again with everything the call stages besides its request:
+    /// the reply, an opened handle's reconstruction descriptor, and a
+    /// transactional write set.
     fn check_host_call_bounds(
         &self,
         request_bytes: usize,
@@ -638,9 +720,21 @@ impl Transcript {
         let mut bytes = 0usize;
         for staged in &active.host {
             match staged {
-                Staged::Call { request, reply, .. } => {
+                Staged::Call {
+                    request,
+                    reply,
+                    opens,
+                    write,
+                    ..
+                } => {
                     calls += 1;
-                    bytes = bytes.saturating_add(request.len() + reply.len());
+                    bytes =
+                        bytes
+                            .saturating_add(request.len() + reply.len())
+                            .saturating_add(opens.as_ref().map_or(0, |(_, descriptor)| {
+                                descriptor.as_ref().map_or(0, Vec::len)
+                            }))
+                            .saturating_add(write.as_ref().map_or(0, write_bytes));
                 }
                 Staged::Effect { request, .. } => {
                     calls += 1;
@@ -836,7 +930,17 @@ impl Transcript {
         // row is already durable: its ordinal stays reserved and the crank
         // may no longer commit, so aborting it leaves the barrier escaped
         // for recovery to stop at.
-        if let Err(error) = self.check_host_call_bounds(request.len(), outcome.reply.len()) {
+        let staged_bytes = outcome
+            .reply
+            .len()
+            .saturating_add(
+                outcome
+                    .opens
+                    .as_ref()
+                    .map_or(0, |descriptor| descriptor.as_ref().map_or(0, Vec::len)),
+            )
+            .saturating_add(write.as_ref().map_or(0, write_bytes));
+        if let Err(error) = self.check_host_call_bounds(request.len(), staged_bytes) {
             if class != HostClass::Transactional
                 && (outcome.opens.is_some() || (outcome.closes && handle.is_some()))
             {
@@ -1101,18 +1205,17 @@ impl Transcript {
         })?;
         if changed != 1 {
             return Err(TranscriptError::Protocol(format!(
-                "no barrier at seq {sequence}"
+                "no barrier at sequence {sequence}"
             )));
         }
         Ok(())
     }
 
     /// The recorded host calls of the committed suffix after the latest
-    /// snapshot, for replay.
-    pub fn host_replay(&self) -> Result<HostReplay, TranscriptError> {
-        let watermark = self
-            .latest_snapshot()?
-            .map_or(0, |snapshot| snapshot.watermark_crank);
+    /// snapshot, for replay under `expected`, which must equal the
+    /// configuration the snapshot pinned ([`Transcript::check_resume`]).
+    pub fn host_replay(&self, expected: &SnapshotMeta) -> Result<HostReplay, TranscriptError> {
+        let watermark = self.check_resume(expected)?.watermark_crank;
         let read = || -> rusqlite::Result<BTreeMap<CrankId, VecDeque<Recorded>>> {
             let mut statement = self.connection.prepare(
                 "SELECT host_call.crank_id, host_call.request_sequence, host_call.callback, host_call.class, host_call.handle_id,
@@ -1241,7 +1344,7 @@ impl HostReplay {
             return Err(ReplayStop::Mismatch {
                 crank,
                 detail: format!(
-                    "recorded {}({:?}) at seq {}, replayed {callback}({handle:?})",
+                    "recorded {}({:?}) at sequence {}, replayed {callback}({handle:?})",
                     rec.callback, rec.handle, rec.sequence
                 ),
             });
@@ -1256,8 +1359,17 @@ impl HostReplay {
         if rec.class == (HostClass::Outbound { idempotent: true }).tag() {
             return Ok(HostReply::Deferred);
         }
+        let Some(reply) = rec.reply else {
+            return Err(ReplayStop::Mismatch {
+                crank,
+                detail: format!(
+                    "recorded {} at sequence {} has no reply",
+                    rec.callback, rec.sequence
+                ),
+            });
+        };
         Ok(HostReply::Reply {
-            reply: rec.reply.unwrap_or_default(),
+            reply,
             opened: rec.opened,
         })
     }

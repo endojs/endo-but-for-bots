@@ -10,12 +10,18 @@
 //! 3. rename it to its hash,
 //! 4. sync the containing directory, so the rename survives power loss.
 //!
-//! `xsnap`'s `suspend_to_cas` performed the first three; step 4 is the one the
-//! design calls out as missing before power-loss durability can be claimed.
+//! The design calls out step 4 as the one `xsnap`'s `suspend_to_cas` lacked
+//! before power-loss durability could be claimed; `suspend_to_cas` now syncs
+//! the directory after its rename too.
 //! A blob is not *published* until the transcript records its hash and
 //! watermark ([`crate::Transcript::publish_snapshot`]), so a crash anywhere in
 //! these four steps leaves at worst an orphan temporary or an unpublished
 //! blob, which is safe to reclaim.
+//!
+//! A store belongs to one worker. [`ContentAddressedStore::open`] records the
+//! owner in a marker file and refuses a second owner, because
+//! [`ContentAddressedStore::reclaim`] treats every blob its one transcript
+//! does not keep as garbage, which would delete a co-tenant's live snapshot.
 
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -26,12 +32,15 @@ use sha2::{Digest, Sha256};
 
 use crate::fault::FaultPlan;
 
-/// A directory of content-addressed snapshot blobs.
+/// A directory of content-addressed snapshot blobs, owned by one worker.
 #[derive(Clone, Debug)]
 pub struct ContentAddressedStore {
     directory: PathBuf,
     fault: Option<FaultPlan>,
 }
+
+/// The marker file naming a store's owning worker.
+const OWNER_MARKER: &str = ".owner";
 
 /// A CAS read failure. Any of these is a storage fault: recovery must stop,
 /// not fall back to an older or arbitrary snapshot.
@@ -81,10 +90,39 @@ pub fn blob_hash(bytes: &[u8]) -> String {
 }
 
 impl ContentAddressedStore {
-    /// A content-addressed store rooted at `directory`, created if absent.
-    pub fn open(directory: impl Into<PathBuf>) -> io::Result<ContentAddressedStore> {
+    /// The content-addressed store of `owner`, the worker whose transcript
+    /// publishes into it, rooted at `directory` and created if absent. A
+    /// directory already owned by another worker is refused with
+    /// [`io::ErrorKind::AlreadyExists`].
+    pub fn open(directory: impl Into<PathBuf>, owner: &str) -> io::Result<ContentAddressedStore> {
         let directory = directory.into();
         fs::create_dir_all(&directory)?;
+        let marker = directory.join(OWNER_MARKER);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&marker)
+        {
+            Ok(mut file) => {
+                file.write_all(owner.as_bytes())?;
+                file.sync_all()?;
+                sync_directory(&directory)?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                let existing = fs::read(&marker)?;
+                if existing != owner.as_bytes() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!(
+                            "snapshot store {} belongs to worker {:?}, not {owner:?}",
+                            directory.display(),
+                            String::from_utf8_lossy(&existing)
+                        ),
+                    ));
+                }
+            }
+            Err(error) => return Err(error),
+        }
         Ok(ContentAddressedStore {
             directory,
             fault: None,
@@ -191,7 +229,9 @@ impl ContentAddressedStore {
     /// (a crash between rename and publication) and blobs superseded by a
     /// newer published snapshot are both garbage.
     ///
-    /// Only names this store owns are touched: a foreign file, a
+    /// The store has one owner ([`ContentAddressedStore::open`]), so `keep`
+    /// is that worker's whole live set. Only names this store owns are
+    /// touched: the owner marker, a foreign file, a
     /// subdirectory, a heap `.snapshot.*` temporary, or a blob temporary
     /// whose writer may still be alive is left in place. `reclaim` must still
     /// not run while a writer in this process is publishing a blob, since the
@@ -283,5 +323,39 @@ pub fn sync_directory(directory: &Path) -> io::Result<()> {
         // to sync, and no durability guarantee is claimed there.
         let _ = directory;
         Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::process_is_dead;
+
+    #[test]
+    fn a_live_child_is_spared_and_its_reaped_pid_is_dead() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id();
+        assert!(!process_is_dead(pid), "a live child must not be reclaimed");
+        child.kill().expect("kill child");
+        child.wait().expect("reap child");
+        // Once reaped the pid names no process until the kernel reuses it,
+        // which it does not do this quickly.
+        assert!(process_is_dead(pid), "a reaped child is dead (ESRCH)");
+    }
+
+    #[test]
+    fn a_process_that_refuses_the_probe_is_alive() {
+        // Pid 1 always exists. An unprivileged probe gets EPERM and a
+        // privileged one succeeds; either way it is not provably dead.
+        assert!(!process_is_dead(1));
+    }
+
+    #[test]
+    fn pids_outside_the_platform_range_name_no_process() {
+        assert!(process_is_dead(u32::MAX));
+        // Zero and negative pids address process groups, never one writer.
+        assert!(!process_is_dead(0));
     }
 }

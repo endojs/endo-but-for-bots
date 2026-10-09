@@ -36,7 +36,7 @@ fn admission_requires_a_published_snapshot() {
         t.begin_crank(b"x"),
         Err(TranscriptError::Protocol(_))
     ));
-    let blob_store = ContentAddressedStore::open(root.path().join("blob_store")).unwrap();
+    let blob_store = ContentAddressedStore::open(root.path().join("blob_store"), "w").unwrap();
     t.publish_snapshot(&blob_store, &snapshot_bytes(0), meta())
         .unwrap();
     t.begin_crank(b"x").unwrap();
@@ -129,7 +129,7 @@ fn staging_past_the_per_crank_bound_is_refused_not_truncated() {
         ..TranscriptLimits::default()
     };
     let (mut t, _) = Transcript::open(&path, config).unwrap();
-    let blob_store = ContentAddressedStore::open(root.path().join("blob_store")).unwrap();
+    let blob_store = ContentAddressedStore::open(root.path().join("blob_store"), "w").unwrap();
     t.publish_snapshot(&blob_store, &snapshot_bytes(0), meta())
         .unwrap();
     assert!(matches!(
@@ -337,7 +337,7 @@ fn compaction_retains_unreleased_frames() {
     assert_eq!(held[0].payload, b"held");
     assert!(supervisor
         .transcript
-        .replay_plan(&blob_store)
+        .replay_plan(&blob_store, &meta())
         .unwrap()
         .cranks
         .is_empty());
@@ -387,6 +387,54 @@ fn resume_under_a_different_pinned_configuration_is_rejected() {
         supervisor.transcript.check_resume(&other_engine),
         Err(TranscriptError::Protocol(_))
     ));
+    // Replay itself refuses the mismatch: no caller can obtain snapshot
+    // bytes or recorded host replies without naming the pinned
+    // configuration.
+    assert!(matches!(
+        supervisor
+            .transcript
+            .replay_plan(&supervisor.blob_store, &flipped),
+        Err(TranscriptError::Protocol(_))
+    ));
+    assert!(matches!(
+        supervisor.transcript.host_replay(&other_engine),
+        Err(TranscriptError::Protocol(_))
+    ));
+    supervisor
+        .transcript
+        .replay_plan(&supervisor.blob_store, &meta())
+        .unwrap();
+    supervisor.transcript.host_replay(&meta()).unwrap();
+}
+
+#[test]
+fn a_transcript_of_another_schema_version_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("t.sqlite");
+    drop(Transcript::open(&path, TranscriptConfig::new("w")).unwrap());
+    for version in [Some("1"), Some("3"), None] {
+        {
+            let connection = rusqlite::Connection::open(&path).unwrap();
+            match version {
+                Some(version) => connection
+                    .execute(
+                        "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
+                        [version],
+                    )
+                    .unwrap(),
+                None => connection
+                    .execute("DELETE FROM meta WHERE key = 'schema_version'", [])
+                    .unwrap(),
+            };
+        }
+        assert!(
+            matches!(
+                Transcript::open(&path, TranscriptConfig::new("w")),
+                Err(TranscriptError::Protocol(_))
+            ),
+            "schema version {version:?} must be refused"
+        );
+    }
 }
 
 #[test]
@@ -408,13 +456,13 @@ fn a_blob_write_fault_poisons_before_anything_is_published() {
     drop(Supervisor::start(&files, None, &mut wire).unwrap());
     let plan = FaultPlan::counting();
     let (mut t, _) = Transcript::open(files.transcript(), TranscriptConfig::new("w")).unwrap();
-    let blob_store = ContentAddressedStore::open(files.cas_directory())
+    let blob_store = ContentAddressedStore::open(files.cas_directory(), &files.worker)
         .unwrap()
         .with_fault_plan(plan.clone());
     let before = t.latest_snapshot().unwrap();
     // Aim at the directory sync, the step xsnap's suspend_to_cas omitted.
     let plan2 = FaultPlan::fail_at(4, FaultMode::FailOnce);
-    let blob_store2 = ContentAddressedStore::open(files.cas_directory())
+    let blob_store2 = ContentAddressedStore::open(files.cas_directory(), &files.worker)
         .unwrap()
         .with_fault_plan(plan2.clone());
     let Err(TranscriptError::Fault(fault)) =
@@ -438,7 +486,7 @@ fn a_blob_write_fault_poisons_before_anything_is_published() {
 #[test]
 fn blob_names_that_are_not_digests_are_refused() {
     let root = tempfile::tempdir().unwrap();
-    let blob_store = ContentAddressedStore::open(root.path().join("blob_store")).unwrap();
+    let blob_store = ContentAddressedStore::open(root.path().join("blob_store"), "w").unwrap();
     for name in [
         "../t.sqlite",
         "/etc/passwd",

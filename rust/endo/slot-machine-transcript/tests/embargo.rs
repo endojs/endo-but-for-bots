@@ -30,6 +30,8 @@ struct Peer {
 /// never records the acknowledgment.
 struct Link {
     peer: Rc<RefCell<Peer>>,
+    /// The worker the transport authenticated, as a real transport would.
+    worker: String,
     handoffs: usize,
     crash_after: Option<usize>,
 }
@@ -48,7 +50,7 @@ impl FrameSink for Link {
         let mut peer = self.peer.borrow_mut();
         peer.wire
             .push((frame.idempotency_key.clone(), frame.sequence));
-        match peer.suppressor.receive(frame) {
+        match peer.suppressor.receive(&self.worker, frame) {
             Received::Fresh => peer.delivered.push(frame.payload.clone()),
             Received::Duplicate => peer.duplicates += 1,
             Received::Malformed => panic!("malformed key {}", frame.idempotency_key),
@@ -62,8 +64,8 @@ fn open(
     peer: &Rc<RefCell<Peer>>,
     crash_after: Option<usize>,
 ) -> (Embargo<Link>, ContentAddressedStore) {
-    let blob_store =
-        ContentAddressedStore::open(files.cas_directory()).expect("blob_store directory");
+    let blob_store = ContentAddressedStore::open(files.cas_directory(), &files.worker)
+        .expect("blob_store directory");
     let (mut transcript, _recovery) =
         Transcript::open(files.transcript(), TranscriptConfig::new(&files.worker))
             .expect("open transcript");
@@ -74,6 +76,7 @@ fn open(
     }
     let link = Link {
         peer: peer.clone(),
+        worker: files.worker.clone(),
         handoffs: 0,
         crash_after,
     };
@@ -361,23 +364,40 @@ fn the_suppressor_keeps_one_mark_per_worker_and_survives_a_receiver_restart() {
         payload: Vec::new(),
     };
     let mut s = DuplicateSuppressor::new();
-    assert_eq!(s.receive(&frame("a", 5)), Received::Fresh);
-    assert_eq!(s.receive(&frame("b", 2)), Received::Fresh);
-    assert_eq!(s.receive(&frame("a", 5)), Received::Duplicate);
-    assert_eq!(s.receive(&frame("a", 3)), Received::Duplicate);
-    assert_eq!(s.receive(&frame("b", 3)), Received::Fresh);
+    assert_eq!(s.receive("a", &frame("a", 5)), Received::Fresh);
+    assert_eq!(s.receive("b", &frame("b", 2)), Received::Fresh);
+    assert_eq!(s.receive("a", &frame("a", 5)), Received::Duplicate);
+    assert_eq!(s.receive("a", &frame("a", 3)), Received::Duplicate);
+    assert_eq!(s.receive("b", &frame("b", 3)), Received::Fresh);
     // A worker name containing ':' still keys correctly.
-    assert_eq!(s.receive(&frame("host:w", 1)), Received::Fresh);
-    assert_eq!(s.receive(&frame("host:w", 1)), Received::Duplicate);
+    assert_eq!(s.receive("host:w", &frame("host:w", 1)), Received::Fresh);
+    assert_eq!(
+        s.receive("host:w", &frame("host:w", 1)),
+        Received::Duplicate
+    );
     // A key naming another sequence is refused, not delivered.
     let mut forged = frame("a", 9);
     forged.idempotency_key = "a:10".into();
-    assert_eq!(s.receive(&forged), Received::Malformed);
+    assert_eq!(s.receive("a", &forged), Received::Malformed);
+    // A non-canonical spelling of the frame's own sequence is refused too.
+    for spelling in ["a:+9", "a:009"] {
+        let mut padded = frame("a", 9);
+        padded.idempotency_key = spelling.into();
+        assert_eq!(s.receive("a", &padded), Received::Malformed);
+    }
     assert_eq!(s.watermarks().get("a"), Some(&5));
+    // A sender cannot advance another worker's mark by naming it in the
+    // key: a frame from "mallory" keyed as "a" is refused, so a forged
+    // `a:u64::MAX` cannot suppress the rest of a's frames.
+    let victim = frame("a", u64::MAX);
+    assert_eq!(s.receive("mallory", &victim), Received::Malformed);
+    assert_eq!(s.watermarks().get("a"), Some(&5));
+    assert_eq!(s.watermarks().get("mallory"), None);
+    assert_eq!(s.receive("a", &frame("a", 6)), Received::Fresh);
 
     let mut restored = DuplicateSuppressor::with_watermarks(s.watermarks().clone());
-    assert_eq!(restored.receive(&frame("a", 5)), Received::Duplicate);
-    assert_eq!(restored.receive(&frame("a", 6)), Received::Fresh);
+    assert_eq!(restored.receive("a", &frame("a", 6)), Received::Duplicate);
+    assert_eq!(restored.receive("a", &frame("a", 7)), Received::Fresh);
 }
 
 #[test]

@@ -55,7 +55,7 @@ fn run(source: &str) -> ExecutionOutcome {
 
 fn embargo(directory: &std::path::Path) -> (Embargo<Wire>, Rc<RefCell<Vec<ReleasableFrame>>>) {
     let path = slot_machine_transcript::transcript_path(directory, "vat-1");
-    let cas = ContentAddressedStore::open(directory.join("snapshots")).unwrap();
+    let cas = ContentAddressedStore::open(directory.join("snapshots"), "vat-1").unwrap();
     let (mut transcript, _) = Transcript::open(&path, TranscriptConfig::new("vat-1")).unwrap();
     if transcript.latest_snapshot().unwrap().is_none() {
         let meta = SnapshotMeta {

@@ -1,5 +1,5 @@
-//! The snapshot store's corner cases: tampered blobs, malformed names, and
-//! reclamation boundaries.
+//! The snapshot store's corner cases: tampered blobs, malformed names,
+//! ownership, and reclamation boundaries.
 
 use slot_machine_transcript::{
     ContentAddressedStore, ContentAddressedStoreError, FaultMode, FaultPlan,
@@ -7,7 +7,7 @@ use slot_machine_transcript::{
 
 fn store() -> (tempfile::TempDir, ContentAddressedStore) {
     let root = tempfile::tempdir().unwrap();
-    let blob_store = ContentAddressedStore::open(root.path().join("blob_store")).unwrap();
+    let blob_store = ContentAddressedStore::open(root.path().join("blob_store"), "w").unwrap();
     (root, blob_store)
 }
 
@@ -15,6 +15,7 @@ fn names(root: &tempfile::TempDir) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(root.path().join("blob_store"))
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name != ".owner")
         .collect();
     names.sort();
     names
@@ -134,7 +135,7 @@ fn a_blob_temporary_does_not_share_the_heap_snapshot_prefix() {
     // `.snapshot.<pid>.<sequence>.tmp` in the same directory; a blob temporary
     // left by a crash must not be mistaken for, or collide with, one.
     let root = tempfile::tempdir().unwrap();
-    let blob_store = ContentAddressedStore::open(root.path().join("blob_store"))
+    let blob_store = ContentAddressedStore::open(root.path().join("blob_store"), "w")
         .unwrap()
         .with_fault_plan(FaultPlan::fail_at(2, FaultMode::Crash));
     assert!(blob_store.write_blob(b"heap").is_err());
@@ -142,4 +143,53 @@ fn a_blob_temporary_does_not_share_the_heap_snapshot_prefix() {
     assert_eq!(names.len(), 1, "{names:?}");
     assert!(names[0].starts_with(".transcript-blob."), "{names:?}");
     assert!(names[0].ends_with(".tmp"), "{names:?}");
+}
+
+#[test]
+fn a_store_has_one_owner_so_reclaim_cannot_delete_a_co_tenants_snapshot() {
+    use slot_machine_transcript::{Transcript, TranscriptConfig};
+
+    let root = tempfile::tempdir().unwrap();
+    let shared = root.path().join("blob_store");
+    let meta = slot_machine_transcript::SnapshotMeta {
+        engine_signature: b"toy".to_vec(),
+        panic_on_reference_error: false,
+    };
+    let store_a = ContentAddressedStore::open(&shared, "a").unwrap();
+    let (mut a, _) =
+        Transcript::open(root.path().join("a.sqlite"), TranscriptConfig::new("a")).unwrap();
+    let published = a.publish_snapshot(&store_a, b"heap-a", meta).unwrap();
+
+    // A second transcript cannot adopt the same directory: its reclaim would
+    // keep only its own snapshot and delete worker a's.
+    let error = ContentAddressedStore::open(&shared, "b").unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+
+    // The owner reopens its store, and reclaiming keeps the marker and the
+    // published blob.
+    let reopened = ContentAddressedStore::open(&shared, "a").unwrap();
+    assert_eq!(
+        reopened
+            .reclaim(std::slice::from_ref(&published.hash))
+            .unwrap(),
+        0
+    );
+    assert!(shared.join(".owner").exists());
+    assert_eq!(reopened.read_blob(&published.hash).unwrap(), b"heap-a");
+
+    // A separate directory per worker is the supported layout.
+    let store_b = ContentAddressedStore::open(root.path().join("blob_store_b"), "b").unwrap();
+    let (mut b, _) =
+        Transcript::open(root.path().join("b.sqlite"), TranscriptConfig::new("b")).unwrap();
+    b.publish_snapshot(
+        &store_b,
+        b"heap-b",
+        slot_machine_transcript::SnapshotMeta {
+            engine_signature: b"toy".to_vec(),
+            panic_on_reference_error: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(store_b.reclaim(&[]).unwrap(), 1);
+    assert_eq!(reopened.read_blob(&published.hash).unwrap(), b"heap-a");
 }
