@@ -3,9 +3,33 @@
 | | |
 |---|---|
 | **Created** | 2026-10-08 |
-| **Updated** | 2026-10-08 |
+| **Updated** | 2026-10-09 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
+
+## Problem
+
+Every Endo locator, and every SturdyRef sketch built on the same scheme,
+carries a formula number. A formula number names one formula forever, so a
+leaked link cannot be revoked without revoking every other link to the same
+object, and two links handed to different people are byte-identical. This
+design puts a revocable, randomly numbered reference between each exported
+link and the formula it reaches, so one leaked link can be rotated without
+touching its siblings or the formula itself.
+
+### Terms
+
+- **Formula identifier**: the daemon's internal address for a formula,
+  `{number}:{node}`, where `number` is 256 random bits and `node` is the
+  daemon's public key. Today it doubles as a bearer secret.
+- **Locator**: an `endo://` URL that names a peer and, today, a formula number.
+  Anyone holding it can ask that peer for the object.
+- **SturdyRef** and **swiss number**: OCapN's durable reference record and the
+  secret inside it that the receiving peer uses to find the object.
+- **Pet store**: the per-host or per-guest table mapping human names to
+  formula identifiers.
+- **Presence** and **enliven**: a presence is a live CapTP proxy for a remote
+  object; enlivening a locator or SturdyRef resolves it into a presence.
 
 ## Direction, analogy, and speculation
 
@@ -84,11 +108,17 @@ that opaque number to an internal `FormulaIdentifier`. A formula may have any
 number of reference rows. Revocation changes one row's state, and rotation
 atomically revokes that row and inserts a new active row with the same target.
 
-This relocates formula identifiers rather than eliminating them: the registry's
-`target_formula_id` column becomes the only naming record that holds one
-(§ Where formula identifiers still live). Rotation makes an old `r1` locator
-fail closed unconditionally. It makes the *target* unreachable to the old
-holder only after legacy resolution is disabled (stage 5), because until then
+The property this design delivers is precise: **no newly exported bearer
+contains a formula identifier.** "Strictly internal" in the prompt means
+"not exported", and it holds unconditionally only from stage 4, when the
+legacy reader is disabled. Until then, identifiers already handed out under
+the legacy scheme keep working. The registry relocates formula identifiers
+rather than eliminating them: the registry's `target_formula_id` column
+becomes the only naming record that holds one, and formula bodies keep them as
+internal graph edges (§ Where formula identifiers still live).
+
+Rotation makes an old `r1` locator fail closed unconditionally. It makes the *target* unreachable to the old
+holder only after legacy resolution is disabled (stage 4), because until then
 anyone holding a legacy locator or a previously disclosed formula identifier
 can still resolve the target through the compatibility reader.
 
@@ -138,59 +168,124 @@ schema (exact SQLite affinities remain an implementation choice):
 | `reference_number` | 32 cryptographically random bytes, encoded canonically for the locator; primary key and bearer secret |
 | `target_formula_id` | Internal `{number}:{node}` identifier; never serialized into a locator, SturdyRef, or pet-store row |
 | `kind` | `binding` for a pet-store name or `share` for an exported locator/SturdyRef |
+| `lineage` | Nullable; for a `share`, the ordinal of the `ShareControl` that issued it, shared by every row that control has rotated through |
 | `state` | `active` or `revoked` |
-| `generation` | Monotonic generation within one rotation lineage, starting at zero |
-| `predecessor` | Nullable reference number used by the administrative path for idempotent rotation and audit |
 | `created_at`, `revoked_at` | Operational metadata; `revoked_at` is null while active |
 
-`predecessor` is not returned by public resolution. A unique constraint permits
-at most one successor for an old reference, so retrying rotation after an
-ambiguous response returns the already-created successor rather than minting a
-chain of accidental replacements.
+A partial unique index permits at most one `active` row per `lineage`. There
+is no `default` flag, `generation`, or `predecessor` column: every share
+belongs to exactly one control, and a control has at most one live share.
 
-Rows do not contain an owner identity or an ACL. Authority to issue, rotate,
-or revoke comes from possession of a `FormulaReferenceControl` facet produced
-at issuance. The formula-backed facet closes over the row identity, and no
+### Share controls
+
+Rows do not contain an owner identity or an ACL. Authority to rotate or revoke
+a share comes from possession of the `ShareControl` that issued it, and no
 manager method accepts a locator or reference number as administrative
-authority. Its surface is:
+authority. A `ShareControl` is itself a formula (type `share-control`) whose
+body names its lineage ordinal and its target. It therefore survives restart,
+can be named in a pet store, and is collected like any other formula. It does
+not root its share: the active share row is the root, so dropping the control
+does not silently revoke the link (see listing, below). Its surface is:
 
 ```js
-FormulaReferenceControl: {
+ShareControl: {
+  // Locator of the lineage's current active share. Rejects with
+  // ReferenceUnavailable once the lineage is revoked.
   getLocator(): Promise<string>;
+  // Revoke the current share and issue its successor; returns the new locator.
   rotate(): Promise<string>;
+  // Revoke the current share and close the lineage. Idempotent.
   revoke(): Promise<void>;
 }
 ```
 
-The control advances to the successor after `rotate()`. The returned string is
-the new locator. Calling `rotate()` again returns the same successor if the
-first response was lost; calling it after an explicit `revoke()` rejects. A
-share-producing application persists this control facet alongside its own
-record. The public locator alone grants resolution, not administration.
+Every copy of a control is the same formula and reads the same lineage, so
+there is no stale copy: `getLocator()` always reports the lineage's current
+share, and is documented as a state query rather than a pure getter.
+`rotate()` is not idempotent by itself; each call advances the lineage. A
+caller whose `rotate()` response was lost calls `getLocator()` to learn the
+current locator instead of rotating again. Two concurrent `rotate()` calls are
+serialized by the registry transaction: both succeed, the lineage advances
+twice, and the second caller's result is the current locator. `rotate()` and
+`getLocator()` after `revoke()` reject with `ReferenceUnavailable`.
 
-`locate(...petNamePath)` remains a convenience for callers that only need a
-bearer string: it returns the binding's *default share*, issuing it on the
-first call and reusing it thereafter. The default share is an ordinary `share`
-row marked `default`, so the issuer surface lists it and can rotate or revoke
-it like any other share; a later `locate` after revocation issues a new
-default. No issuance path leaves a share without a revocation path. A new `share(...petNamePath)` method
-returns the control facet for callers that need rotation. Each call issues a
-new share, so two recipients can be revoked independently. `reverseLocate`
+The issuing host or guest also exposes the controls it has issued, so a
+publisher that loses a control can still find and revoke its share:
+
+```js
+listShares(...petNamePath): Promise<Array<ShareControl>>; // active lineages for that target
+```
+
+The listing is scoped to the caller's own pet-name space: it returns only
+lineages issued through that host or guest, never shares issued by another
+party for the same formula.
+
+### Issuing shares
+
+`share(...petNamePath)` is the single issuer. It resolves the pet name to its
+target, issues a fresh lineage and share row, and returns the `ShareControl`.
+Each call issues a new share, so two recipients can be revoked independently.
+
+`locate(...petNamePath)` is kept for compatibility as a deprecated alias for
+`share(...petNamePath)` followed by `getLocator()`. It therefore also mints a
+fresh, independently revocable share on every call and can be found through
+`listShares`. The documented entry point for handing a link to a recipient is
+`share`. `locate` callers that call it in a loop root one share per call; the
+issuance quota under § Threat model and cost bounds that. `reverseLocate`
 resolves an active reference to its internal formula identifier before doing
 the existing reverse pet-name lookup.
+
+### Pet-store bindings
 
 Pet-store entries use `binding` references. A rename moves the binding
 reference; an alias gets its own binding reference; removing a name revokes and
 drops that binding. Exporting a pet name never exposes the binding reference:
 it always mints a `share` reference. This separation ensures rotating a leaked
-link neither renames the object nor invalidates another link.
+link neither renames the object nor invalidates another link. A binding has no
+lineage and no control: its lifecycle is exactly the existing pet-store entry
+lifecycle.
+
+### Why a registry, and why bindings
+
+The pet store already maps a name to an identifier, and `lookup` and
+`lookupById` already resolve through it. That indirection is not enough for
+shares: a pet name is not a bearer and has one row per name, while per-share
+revocation needs one row per *issued bearer*, and a rotation needs to change
+which bearer is live without renaming anything. That is what `share` rows add.
+
+`binding` rows are a separate, smaller question, because a binding is never
+exported and the trust boundary is the daemon process and its database. They
+are kept for three reasons, in order of weight:
+
+1. The maintainer direction (§ Direction: design to this) names pet-store
+   entries explicitly among the records that must name a durable indirection.
+   Dropping bindings would be a direction change, which this
+   design flags instead of making.
+2. Pet-store contents leave the store through more paths than the facet
+   methods: directory listings handed to guests, `synced_store_entry`
+   replication, and debugging dumps. With bindings, none of those paths can
+   carry an identifier even by mistake, which is what the egress inventory
+   under § Where formula identifiers still live has to prove.
+3. Roots become uniform: every naming root is a registry row, so retention
+   projection has one source instead of two.
+
+The cost is the `pet_store_entry` rebuild in migration step 2 and one extra
+indexed lookup on a pet-name resolution. If the maintainer prefers the smaller
+primitive, the design degrades cleanly to share rows only: drop migration
+steps 2 and 3, keep `pet_store_entry.formula_id`, and add `synced_store_entry`
+and directory listings to the stage-1 egress gate instead. Everything else
+below is unchanged by that choice.
 
 The method boundary changes with the storage boundary. Public host and guest
 facets no longer return formula-identifier strings from `identify`; callers use
 `share` for a durable outward capability or an inspector session for local
-diagnostics. During the compatibility release, `identify` is deprecated and
-restricted to daemon-internal callers before removal from the public
-interface. Internally, the daemon-private halves of `identify`, `lookup`, and
+diagnostics. During the compatibility release, the public `identify` stays on
+the interface but rejects with an error whose message names `share` (for a
+link) and the inspector session (for diagnostics) as replacements, and the
+daemon logs each rejected call with the caller's pet-name path so operators
+can find stale callers. It is removed from the interface in the following
+release. The CLI's `endo identify` and `--identifier` flags print the same
+replacement guidance and exit non-zero. Internally, the daemon-private halves of `identify`, `lookup`, and
 `lookupById` may still hand a formula identifier to formula machinery. `internalizeLocator` becomes a
 syntax-only parse that returns a peer and reference number; registry resolution
 is a separate authority-bearing step. Conversely, `externalizeId` is replaced
@@ -219,6 +314,27 @@ an inspection reference, never a formula identifier. Compromise of the
 database or process exposes identifiers, as recorded under § Threat model and
 cost.
 
+Method return values are only one egress channel. Stage 1 is gated on a
+grep-backed inventory, checked into the implementation PR, of every site where
+a formula identifier or formula number can leave the daemon, with each site
+either converted or justified. The inventory covers at least:
+
+- host and guest facet return values, including `identify`, `lookupById`,
+  directory listings, and inspector results;
+- message records, whose `from` and `to` fields are externalized as locators
+  in [`mail.js`](../packages/daemon/src/mail.js) and therefore become `r1`
+  shares;
+- error messages built with `makeError` and `q()` that interpolate an
+  identifier, which must name a pet-name path or an inspection reference
+  instead;
+- `help()` and `__getMethodNames__` output;
+- daemon logs reachable by a guest or written to files shipped with bug
+  reports; and
+- `synced_store_entry` and any other replicated table.
+
+Acceptance criterion 1 is stated against this inventory, not only against
+named method return values.
+
 ### Issue and resolve
 
 ```mermaid
@@ -227,7 +343,7 @@ flowchart LR
     Directory -->|resolve binding| Registry[Formula reference registry]
     Registry -->|internal target| FormulaStore[Formula store]
     Directory -->|issue fresh share| Registry
-    Registry -->|locator plus control facet| App
+    Registry -->|locator plus ShareControl| App
     Holder[Locator holder] -->|r1 reference number| Resolver[Locator or SturdyRef resolver]
     Resolver -->|active lookup| Registry
     Registry -->|internal formula identifier| FormulaStore
@@ -239,7 +355,29 @@ random source. Resolution performs one indexed lookup and checks `kind =
 'share'` and `state = 'active'` before the formula identifier enters the
 existing local/remote formulation path. Unknown, malformed, revoked, and wrong-
 kind references all fail with the same non-oracular `ReferenceUnavailable`
-result.
+error.
+
+`ReferenceUnavailable` is a thrown error (a rejected promise) with a fixed
+message and no detail, raised wherever a reference is resolved: locator
+resolution, SturdyRef enlivenment, and `lookup` of a stored locator. It is
+distinct from connection and CapTP errors, which keep their existing types, so
+a client can tell "ask the sender for a new link" from "retry later". Every
+failure path performs the same single primary-key probe and returns the same
+error after the same checks; a revoked tombstone and an absent row differ only
+in whether that probe returns a row. This design does not claim
+resistance to fine-grained timing measurement beyond that, which the threat
+model lists as out of scope.
+
+A locator's `peerKey` selects the peer, and the reference number is only ever
+looked up in that peer's registry. Two peers' reference spaces never mix, so
+`hint` and `peerKey` are routing data only; a forged `peerKey` reaches a
+different registry, where the number is unknown.
+
+The daemon is the only process that resolves references. Workers, gateways,
+and the CLI reach targets through daemon facets and never read the registry
+or cache resolutions. A future out-of-process resolver must read through the
+registry on every enlivenment, as the cache rule under § Rotation and
+revocation semantics requires.
 
 SturdyRef remains the generic pass-style object described by the ongoing
 SturdyRef work: the record contains location plus an opaque secret. For Endo
@@ -303,19 +441,20 @@ new roots that change the answer being observed.
 
 Rotation is a single SQLite transaction:
 
-1. Load the controlled row and reject if it is explicitly revoked without a
-   successor.
-2. If it already has a successor, return that successor's locator.
+1. Load the lineage's active row; reject with `ReferenceUnavailable` if the
+   lineage has none (it was revoked).
+2. Mark that row revoked.
 3. Insert a new active `share` row with a new random reference number, the same
-   target, `generation + 1`, and the old row as predecessor.
-4. Mark the old row revoked and commit.
-5. Invalidate any local resolver cache entry for the old reference and format
+   target, and the same lineage, then commit.
+4. Invalidate any local resolver cache entry for the old reference and format
    the new locator.
 
 The transaction always contains either the old active root or the new active
 root, so rotation cannot create a collection gap. If the process stops before
 commit, the old locator remains active. If it stops after commit but before the
-response arrives, retry returns the committed successor.
+response arrives, `getLocator()` returns the committed successor. Revoking a
+lineage after any number of rotations revokes its one active row; every
+earlier row in the lineage is already revoked.
 
 Rotation revokes one `r1` reference; it does not revoke the target. While the
 legacy compatibility reader is enabled, a holder of a legacy locator for the
@@ -323,7 +462,7 @@ same formula, or of a formula identifier disclosed by an earlier `identify`
 call or inspector output, can still resolve the target without any `r1`
 reference. Rotation is a complete leak response only for a target that was
 never exposed under the legacy scheme, or after legacy resolution is disabled
-(stage 5). Until then a publisher responding to a leak must treat any
+(stage 4). Until then a publisher responding to a leak must treat any
 legacy-era exposure of the target as still live.
 
 ```mermaid
@@ -335,7 +474,7 @@ sequenceDiagram
     participant N as New locator holder
     P->>C: rotate()
     C->>R: begin transaction
-    R->>R: insert successor and revoke predecessor
+    R->>R: revoke current row and insert successor
     R-->>C: commit successor
     C-->>P: new locator
     O->>R: resolve old reference
@@ -360,7 +499,7 @@ These operations govern future resolutions, not presences already obtained:
   forwarder.
 - Resolver caches may memoize an active result only within the resolution that
   establishes a session. They must not bypass the registry on a later
-  enlivenment. Cache invalidation is keyed by reference number and generation.
+  enlivenment. Cache invalidation is keyed by reference number.
 
 Retroactive revocation of live presences would require a forwarding proxy or
 session termination policy. That is a separate capability with different
@@ -375,18 +514,23 @@ inside startup.
 
 Within one SQLite transaction, the upgrader:
 
-1. Creates `formula_reference` and its state, target, and predecessor indexes.
+1. Creates `formula_reference` and its state, target, and lineage indexes.
 2. Rebuilds `pet_store_entry` with `reference_number` in place of `formula_id`.
 3. Creates one active `binding` reference for every existing pet-store row,
    copies its old formula identifier into the reference target, and writes the
    new reference number into the rebuilt row.
 4. Rewrites stored locator-bearing rows, including
-   `synced_store_entry.locator`, by parsing a legacy local locator, issuing or
-   reusing the target binding's default `share` reference, and storing an `r1`
-   locator. These shares are listable and revocable through the issuer
-   surface exactly as `locate` defaults are. A foreign legacy locator
-   is preserved for the compatibility resolver because this daemon cannot
-   create a row in the remote peer's registry.
+   `synced_store_entry.locator`, one row at a time:
+   - A legacy *local* locator gets its own fresh lineage and `share` row, and
+     the stored row is rewritten to that share's `r1` locator. Distinct stored
+     copies get distinct shares; the migration never collapses them into one
+     revocable unit. Each migrated lineage is owned by the host whose store
+     held the row, so it appears in that host's `listShares`.
+   - A legacy locator whose target formula no longer exists is left as-is and
+     counted; it already fails to resolve and issuing a share would root
+     nothing.
+   - A legacy *foreign* locator is preserved for the compatibility resolver,
+     because this daemon cannot create a row in the remote peer's registry.
 5. Applies explicit, type-specific visitors to any durable SturdyRef-bearing
    formula records present when the SturdyRef work lands. The present tree has
    no general durable SturdyRef table, so the initial visitor is an assertion
@@ -398,6 +542,16 @@ Within one SQLite transaction, the upgrader:
 Formula bodies may continue to contain formula identifiers for internal graph
 edges. The migration must not replace those. The invariant is about boundary
 and naming records, not the daemon's own formula graph.
+
+Migration step 4 adds one root per rewritten local locator. Where the storing
+entry already roots its target, the share root duplicates that edge. Where it
+did not, the target was reachable through a bearer string the daemon itself
+stores, and this design treats every durable bearer as a root, so the target
+becomes retained on purpose; the upgrade test fixture includes such a row and
+asserts the policy. Deleting the stored row revokes its migrated share in the
+same transaction, so no orphan share root outlives its owner. The migration
+logs the number of shares issued and of stale and foreign locators skipped, so
+an operator can see the one-time root count.
 
 The migration is idempotent by schema version and transactional rollback.
 Startup refuses a database with a newer version or an incomplete v4 shape.
@@ -411,8 +565,8 @@ Unlike that repair, v4 completes before any reader can observe the new schema.
 
 The parser distinguishes formats structurally: `/r1/<reference>` is new, while
 the old single path component is a legacy formula number. For one compatibility
-release, readers accept both; from stage 3 onward, writers emit only `r1`. A metric counts legacy
-resolution by local versus foreign peer. Disabling legacy resolution is an
+release, readers accept both; from stage 1 onward, writers emit only `r1`. A metric
+counts legacy resolution by local versus foreign peer. Disabling legacy resolution is an
 operator-visible release gate, after which every legacy locator fails closed.
 
 There is no honest per-link rotation for a legacy locator: every copy contains
@@ -423,6 +577,22 @@ number while the legacy resolver is enabled. Migration can rewrite stored
 copies, but it cannot find copies outside daemon state. Operators must issue
 new references, distribute them, and then disable legacy resolution to close
 that authority class.
+
+Foreign legacy locators are a **known loss at stage 4**. This daemon cannot
+issue rows in a remote registry, so once legacy resolution is disabled a stored
+foreign legacy locator fails closed until the remote peer's operator issues an
+`r1` share and the local user stores it. Stage 4's cutoff report lists those
+rows by pet name so the loss is visible, but there is no automatic migration
+path for them.
+
+Mixed-version fleets fail visibly, not silently. A pre-v4 parser meets an `r1`
+locator as two path components where it expects one and rejects it locally as
+a malformed locator before any network request, so the error is a parse error,
+not `ReferenceUnavailable`. A pre-v4 peer that receives an `endo-ref-v1:`
+swiss number reports an unknown swiss number. The v4 daemon's locator parser
+error names the supported versions, and the stage 1 release notes state that
+`r1` links require v4 on the issuing peer. No version handshake is added:
+locators are offline strings, so there is no session in which to negotiate.
 
 ## GC and cross-peer retention
 
@@ -455,7 +625,7 @@ local or cross-peer edge are gone.
 stateDiagram-v2
     [*] --> Active: issue reference and add root
     Active --> Active: resolve and establish session
-    Active --> Revoked: revoke or rotate predecessor
+    Active --> Revoked: revoke, or rotate away from this row
     Revoked --> Tombstone: remove reference root
     Tombstone --> [*]: compact metadata only
     state ActiveSession {
@@ -478,7 +648,7 @@ metadata after policy permits, but it must never permit token reuse.
 | Pet store | Human name to `binding` reference | Formula identifiers, share issuance policy, or public locator reuse |
 | Formula inspector session | Ephemeral opaque navigation handles for host diagnostics | Durable sharing, retention roots, or raw identifiers in client results |
 | `@endo/pass-style` SturdyRef | Opaque location-and-secret carrier and handler dispatch | Formula semantics or daemon registry access |
-| minion.town clip publisher | When to issue/rotate/revoke, durable custody of the control facet, display of the current locator | Token generation, resolver semantics, migration, or GC bookkeeping |
+| minion.town clip publisher | When to issue/rotate/revoke, durable custody of the `ShareControl` (recoverable through `listShares`), display of the current locator | Token generation, resolver semantics, migration, or GC bookkeeping |
 
 The registry commits or rolls back an issue/rotation/revocation operation. The
 formula store commits ordinary formulation and graph changes. Rotation does not
@@ -522,8 +692,9 @@ The data-path cost is one indexed SQLite lookup and state check on a cold
 resolution, plus one formula-graph root per active reference. Messages on an
 established CapTP session pay no extra lookup. Rotation costs one insert and one
 update in a transaction. The potentially unbounded resource is outstanding
-shares, so the issuer surface must support listing and revoking its controls,
-and deployments may impose issuance quotas without changing the wire format.
+shares, so `listShares` lets an issuer enumerate and revoke its own lineages,
+and deployments may impose per-host issuance quotas without changing the wire
+format.
 
 ## Options considered
 
@@ -544,8 +715,14 @@ clone operation, not capability rotation.
 
 Project the identifier as an ocap-kernel-style randomized ciphertext. This
 hides and de-correlates the identifier without a lookup table, but individual
-revocation then needs a denylist, which recreates a registry while retaining
-encryption-key custody and key-rotation blast radius. It is useful when
+revocation then needs a denylist. A denylist is smaller than this registry: it
+grows with outstanding revocations rather than with all issued shares. It
+still has to be durable, consulted on every resolution, and kept forever (or
+until the key rotates), because a ciphertext can be replayed at any time; that
+is the same never-compacting state as this design's tombstones, plus
+encryption-key custody and a key-rotation blast radius that revokes every
+share at once. It also cannot support `listShares` or quota accounting, which
+need a record of what was issued. It is useful when
 stateless redemption is the goal; stateless redemption conflicts with this
 design's per-share revocation goal.
 
@@ -558,52 +735,71 @@ keeps formula identifiers out of every external representation.
 
 ## Staged rollout
 
-1. **Registry, v4 schema, and internal names, together.** The v3→v4 upgrade
-   rebuilds `pet_store_entry` and rewrites stored locators, so the schema, the
-   reference manager, the `r1` locator and SturdyRef codecs, the dual reader,
-   the reference-root projection, and the pet-store switch to `binding`
-   references land in one release. All daemon internals resolve through the
-   registry from this stage on.
-2. **Inspection references.** Move formula-inspector and retention-path
-   navigation to session-scoped inspection references. Keep formula
-   identifiers only in formula bodies, graph state, and daemon-private
-   implementation calls.
-3. **New shares.** Change locator and SturdyRef writers to mint `share`
-   references. Add `share()` and `FormulaReferenceControl`, including atomic
-   retryable rotate/revoke and cache invalidation.
-4. **Consumer adoption.** Have minion.town clips retain the control facet and
-   implement "rotate link" as one call followed by publication of the returned
-   locator. Exercise two shares for one clip and revoke only the leaked one.
-5. **Legacy shutdown.** Measure legacy reads, publish the compatibility cutoff,
-   require operators to reissue durable links, then disable the legacy formula-
-   number resolver. Remove it only after one further release with zero observed
-   use.
+Each stage lists what it depends on and what a user can observe.
+
+1. **Registry, v4 schema, codecs, and shares.** Depends on nothing. The
+   v3-to-v4 upgrade rewrites stored locators to `r1`, so writers must emit `r1`
+   from the same release: the schema, the registry, the `r1` locator and
+   SturdyRef codecs, the dual reader, the reference-root projection, the
+   pet-store switch to `binding` references, `share()`, `ShareControl`,
+   `listShares`, and `locate` as an alias all land together. Gated on the
+   egress inventory and the v3 fixture upgrade tests. *Observable:* new links
+   look like `/r1/...`, old links still work, and a link can be rotated.
+2. **Facet egress closure.** Depends on stage 1, because the replacements for
+   `identify` are `share` and inspection references. Moves formula-inspector and
+   retention-path navigation to session-scoped inspection references, makes the
+   public `identify` and CLI `--identifier` reject with replacement guidance,
+   and converts the remaining inventory sites. This is the API break, so it
+   ships in its own release with release notes. *Observable:* no host or guest
+   output shows a formula number.
+3. **Consumer adoption.** Depends on stage 1 only. minion.town clips retain the
+   `ShareControl` and implement "rotate link" as one call followed by
+   publication of the returned locator. *Observable:* a leaked clip link can be
+   rotated without affecting a second share of the same clip.
+4. **Legacy shutdown.** Depends on stages 1 to 3. Measure legacy reads, publish
+   the compatibility cutoff and the foreign-locator loss report, require
+   operators to reissue durable links, then disable the legacy formula-number
+   resolver. Remove it only after one further release with zero observed use.
+   *Observable:* legacy links fail closed; "not exported" holds unconditionally.
 
 Each stage is independently restart-safe because no stage ships a schema
-version without the code that reads it. Stages 2 and 3 do not begin until the
-v3 fixture upgrade tests pass. **Rollback policy:** there is no in-place
-downgrade, since a daemon refuses a database with a newer schema version.
-Before the v4 upgrade, the migration copies the v3 database file aside;
-rolling back stage 1 means reinstalling the prior release and restoring that
-copy, which discards writes made after the upgrade. Stages 2 through 5 change
-no schema and roll back by reinstalling the prior release; stage 5 is the point at which the
-"formula identifiers are strictly internal" property becomes unconditional for
-network input.
+version without the code that reads it.
+
+**Rollback policy.** There is no in-place downgrade, since a daemon refuses a
+database with a newer schema version. Before the v4 upgrade, the daemon copies
+the v3 database file aside. Rolling back stage 1 means reinstalling the prior
+release and restoring that copy. This is an operator restore, not part of the
+migration, so it does not affect the migration's idempotence. It discards
+every write made after the upgrade, including every `r1` share issued since:
+links already handed to peers then fail as malformed (the prior release cannot
+parse `r1`), and their holders must be sent fresh legacy links. Stages 2 to 4
+change no schema and roll back by reinstalling the prior release.
 
 ## Acceptance criteria
 
 - No newly written locator, SturdyRef record, or pet-store row contains a
   formula number or complete formula identifier. The only naming record that
-  holds one is `formula_reference.target_formula_id`, and no host or guest
-  facet method returns it.
+  holds one is `formula_reference.target_formula_id`, and every site in the
+  egress inventory (facet results, message records, error messages, help
+  output, guest-visible logs, replicated tables) is converted or justified.
 - Formula-inspector and retention-path public results contain opaque inspection
   references rather than formula identifiers, and inspecting does not add a
   durable root.
 - Two shares for one formula have distinct reference numbers and both resolve;
-  revoking either leaves the other active.
+  revoking either leaves the other active. Two `locate` calls likewise return
+  two independently revocable shares.
+- `listShares` returns every active lineage the caller issued for a target,
+  including migrated ones, and revoking through a listed control works after
+  the original control was dropped.
 - Rotation leaves the formula identifier and formula body unchanged, returns a
-  new locator, makes the old `r1` locator fail closed, and is idempotent after a
-  lost response.
+  new locator, and makes the old `r1` locator fail closed. After a lost
+  response, `getLocator()` returns the committed successor. Two concurrent
+  `rotate()` calls on one control both succeed, leave exactly one active row,
+  and the later result equals `getLocator()`.
+- The codec rejects a malformed reference number, a wrong-length number, an
+  unknown version segment, and an `r1` query parameter carrying a formula
+  number. Unknown, revoked, and wrong-kind references raise the same
+  `ReferenceUnavailable`.
 - With legacy resolution enabled, a test shows that a legacy locator for a
   rotated target still resolves (documenting the gap). With legacy resolution
   disabled, the same legacy locator and the old `r1` locator both fail closed,
@@ -615,15 +811,17 @@ network input.
   also gone.
 - A v3 database containing pet-store rows and stored locators upgrades in one
   transaction, survives injected interruption, and opens successfully twice.
+  Two stored copies of one legacy locator migrate to two distinct shares;
+  deleting a stored row revokes its migrated share.
 - New writers never emit legacy locators. The compatibility reader can be
   disabled, after which all legacy locators fail closed.
 - The three diagrams in this document parse with Mermaid's grammar.
 
 ## Follow-ups
 
-- Implement the daemon registry, v4 migration, codecs, control facet, retention
+- Implement the daemon registry, v4 migration, codecs, `ShareControl`, `listShares`, retention
   projection, and compatibility gate as one coordinated build.
-- Adopt the control facet in the minion.town clip publisher after the daemon
+- Adopt `ShareControl` in the minion.town clip publisher after the daemon
   build lands; that integration owns the product wording and link-republication
   workflow.
 - Treat at-rest token hashing or encryption, live-session revocable proxies,
