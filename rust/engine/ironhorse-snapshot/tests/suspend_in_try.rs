@@ -35,7 +35,10 @@ fn yield_inside_try_resumes_and_catches_after_the_suspend() {
          var it = g(); var a = it.next().value; var res = it.next(5); a + res.value",
     );
     assert!(ok, "halt: {r}");
-    assert_eq!(r, "16", "1 (first yield) + 15 (5 thrown after resume, caught, +10)");
+    assert_eq!(
+        r, "16",
+        "1 (first yield) + 15 (5 thrown after resume, caught, +10)"
+    );
 }
 
 #[test]
@@ -66,7 +69,10 @@ fn nested_tries_survive_the_suspend() {
          var it = g(); it.next(); it.next(5).value",
     );
     assert!(ok, "halt: {r}");
-    assert_eq!(r, "106", "inner rethrow (+1) lands in the rebased outer catch (+100)");
+    assert_eq!(
+        r, "106",
+        "inner rethrow (+1) lands in the rebased outer catch (+100)"
+    );
 }
 
 #[test]
@@ -78,5 +84,8 @@ fn generator_state_survives_multiple_suspends_in_one_try() {
          var it = g(); it.next(); it.next(3); it.next(4).value",
     );
     assert!(ok, "halt: {r}");
-    assert_eq!(r, "14", "(3 + 4) thrown after the second resume, caught, *2");
+    assert_eq!(
+        r, "14",
+        "(3 + 4) thrown after the second resume, caught, *2"
+    );
 }

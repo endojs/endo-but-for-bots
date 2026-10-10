@@ -46,8 +46,16 @@ impl<'a> FindingBytes<'a> {
     }
 }
 
-// Kept byte-for-byte equivalent in behavior to the small stage-1 generator in
-// ironhorse-fuzz. Duplicating this test-only helper keeps the regression in the
+// This is a FROZEN COPY of the stage-1 generator as it stood when the trophy
+// was minimized — a wrapping cursor at a fixed depth of 4. It is deliberately
+// NOT kept equivalent to `ironhorse_fuzz::gen_program`, which has since gained
+// a finite cursor and a fuzzer-drawn depth (architecture finding F040). Freezing
+// it is what makes the recorded input still fold to the program this trophy is
+// about; tracking the live generator would silently retarget the regression.
+// What it produces is checked below — the program text in one file, the
+// completion value in the other — so the freeze is verified rather than
+// merely declared.
+// Duplicating this test-only helper also keeps the regression in the
 // oracle-free ironhorse-vm test surface.
 fn generate_program(data: &[u8]) -> String {
     let mut bytes = FindingBytes::new(data);

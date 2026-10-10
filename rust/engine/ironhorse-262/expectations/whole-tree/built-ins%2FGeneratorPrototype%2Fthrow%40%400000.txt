@@ -1,0 +1,45 @@
+# engine=ironhorse features=default corpus=built-ins/GeneratorPrototype/throw tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/GeneratorPrototype/throw/from-state-completed.js sloppy pass
+built-ins/GeneratorPrototype/throw/from-state-completed.js strict pass
+built-ins/GeneratorPrototype/throw/from-state-executing.js sloppy pass
+built-ins/GeneratorPrototype/throw/from-state-executing.js strict pass
+built-ins/GeneratorPrototype/throw/from-state-suspended-start.js sloppy pass
+built-ins/GeneratorPrototype/throw/from-state-suspended-start.js strict pass
+built-ins/GeneratorPrototype/throw/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/GeneratorPrototype/throw/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/GeneratorPrototype/throw/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be throw; name value should be throw"
+built-ins/GeneratorPrototype/throw/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be throw; name value should be throw"
+built-ins/GeneratorPrototype/throw/not-a-constructor.js sloppy pass
+built-ins/GeneratorPrototype/throw/not-a-constructor.js strict pass
+built-ins/GeneratorPrototype/throw/property-descriptor.js sloppy pass
+built-ins/GeneratorPrototype/throw/property-descriptor.js strict pass
+built-ins/GeneratorPrototype/throw/this-val-not-generator.js sloppy pass
+built-ins/GeneratorPrototype/throw/this-val-not-generator.js strict pass
+built-ins/GeneratorPrototype/throw/this-val-not-object.js sloppy pass
+built-ins/GeneratorPrototype/throw/this-val-not-object.js strict pass
+built-ins/GeneratorPrototype/throw/try-catch-before-try.js sloppy pass
+built-ins/GeneratorPrototype/throw/try-catch-before-try.js strict pass
+built-ins/GeneratorPrototype/throw/try-catch-following-catch.js sloppy pass
+built-ins/GeneratorPrototype/throw/try-catch-following-catch.js strict pass
+built-ins/GeneratorPrototype/throw/try-catch-within-catch.js sloppy pass
+built-ins/GeneratorPrototype/throw/try-catch-within-catch.js strict pass
+built-ins/GeneratorPrototype/throw/try-catch-within-try.js sloppy pass
+built-ins/GeneratorPrototype/throw/try-catch-within-try.js strict pass
+built-ins/GeneratorPrototype/throw/try-finally-before-try.js sloppy pass
+built-ins/GeneratorPrototype/throw/try-finally-before-try.js strict pass
+built-ins/GeneratorPrototype/throw/try-finally-following-finally.js sloppy pass
+built-ins/GeneratorPrototype/throw/try-finally-following-finally.js strict pass
+built-ins/GeneratorPrototype/throw/try-finally-nested-try-catch-within-catch.js sloppy pass
+built-ins/GeneratorPrototype/throw/try-finally-nested-try-catch-within-catch.js strict pass
+built-ins/GeneratorPrototype/throw/try-finally-nested-try-catch-within-finally.js sloppy pass
+built-ins/GeneratorPrototype/throw/try-finally-nested-try-catch-within-finally.js strict pass
+built-ins/GeneratorPrototype/throw/try-finally-nested-try-catch-within-inner-try.js sloppy pass
+built-ins/GeneratorPrototype/throw/try-finally-nested-try-catch-within-inner-try.js strict pass
+built-ins/GeneratorPrototype/throw/try-finally-nested-try-catch-within-outer-try-after-nested.js sloppy pass
+built-ins/GeneratorPrototype/throw/try-finally-nested-try-catch-within-outer-try-after-nested.js strict pass
+built-ins/GeneratorPrototype/throw/try-finally-nested-try-catch-within-outer-try-before-nested.js sloppy pass
+built-ins/GeneratorPrototype/throw/try-finally-nested-try-catch-within-outer-try-before-nested.js strict pass
+built-ins/GeneratorPrototype/throw/try-finally-within-finally.js sloppy pass
+built-ins/GeneratorPrototype/throw/try-finally-within-finally.js strict pass
+built-ins/GeneratorPrototype/throw/try-finally-within-try.js sloppy pass
+built-ins/GeneratorPrototype/throw/try-finally-within-try.js strict pass

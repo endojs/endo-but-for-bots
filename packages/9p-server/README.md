@@ -54,9 +54,24 @@ Other handlers that pipeline two or three calls into one batch:
 `Tread` against a file uses `OpenFile.read(offset, length)` →
 `PassableBytesReader`; bytes flow through `@endo/exo-stream`'s
 base64-on-the-wire framing (until CapTP gains native binary).
-Drained with `{ buffer: 1 }` so the producer pre-emits the first
-chunk without waiting for our sync — saves the per-chunk
-sync/ack round-trip for the common single-frame case.
+Drained with `{ buffer: 2 }`: a single-frame read is _two_ nodes on
+the wire, not one — the chunk, then the terminator the producer
+emits when its iterator runs out — and `makeReaderPump` waits for a
+sync before every pull past `buffer`. `buffer: 1` would pre-emit the
+chunk but leave the terminator behind a second sync, a round trip
+paid on every `Tread`, since the handler always breaks out of the
+drain once it has `count` bytes. Higher values only add sync nodes
+this producer never uses.
+
+The chunk's `stringLengthLimit` is derived from the `Tread`'s own
+`count` rather than left to @endo/patterns' 100_000-character
+default — that default caps a base64 chunk at 75_000 bytes, which is
+narrower than a 128 KiB `msize` promises and surfaces to the client
+as a bare `EIO`. So the negotiated `msize` (a per-mount option on
+[`mount-caplet.js`](./mount-caplet.js)) is what governs I/O size.
+`Twrite` has no equivalent limit to work around: the responder builds
+its pump without a `writePattern`, so a write chunk is never
+length-validated.
 
 `Treaddir` drains a `Directory.list()` `Cursor` once per fid
 into a per-fid buffer that's paginated against the kernel's 9P
@@ -139,9 +154,9 @@ choice of backing changes them:
 | 9P op / feature | Expected behavior | Source |
 |---|---|---|
 | `Tattach`, `Twalk`, `Tlopen`, `Tread`, `Twrite`, `Treaddir`, `Tmkdir`, `Tunlinkat`, `Trenameat`, `Tclunk`, `Tflush`, `Tstatfs` | supported | `src/server.js` dispatch |
-| `Tgetattr` | size + a/m/c/btime real; **mode synthesized** `0o755`/`0o644`, uid/gid `1000`, nlink `1` | `server.js:611` |
-| `Tsetattr` size / atime / mtime | forwarded to `setAttrs` | `server.js:901` |
-| `Tsetattr` mode / uid / gid (chmod / chown) | **silently ignored** | `server.js:886` (read off the wire, discarded) |
+| `Tgetattr` | size + a/m/c/btime real; **mode synthesized** `0o755`/`0o644`, nlink `1`; uid/gid are the *caplet worker's* (see below) | `src/server.js` `onGetattr` |
+| `Tsetattr` size / atime / mtime | forwarded to `setAttrs` | `src/server.js` `onSetattr` |
+| `Tsetattr` mode / uid / gid (chmod / chown) | **silently ignored** (read off the wire, discarded) | `src/server.js` `onSetattr` |
 | `Txattrwalk` (xattrs) | `ENOSYS` (vat-local `user.*` sidecar not exposed) | `server.js:264` |
 | `Tlock` / `Tgetlock` (byte-range locks) | not implemented | — |
 | `Tsymlink` / `Tmknod` (symlinks, device nodes) | not implemented (tree-shaped base) | — |
@@ -149,6 +164,17 @@ choice of backing changes them:
 
 `readOnly(fs)` additionally rejects every mutating op; the mounting
 process sees `EACCES`.
+
+The synthesized uid/gid come from `mountIdentity(process)` in the
+mount caplet — the worker's own identity, not a hardcoded `1000`.
+v9fs sets `i_uid`/`i_gid` from what `Tgetattr` reports and defines no
+`.permission` op for 9P2000.L, so `generic_permission` checks them
+against the accessing process's fsuid, and the synthesized mode grants
+write to the owner only. **The mount is therefore writable exactly when
+the accessing process's uid equals the caplet worker's** — a rootless
+container whose root maps to the user running the caplet. A container
+process running as any other uid gets a read-only view. Lifting that
+needs real ownership, i.e. `PosixFs` (below).
 
 ### Variance by backing — expected
 

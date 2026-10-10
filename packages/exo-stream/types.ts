@@ -70,6 +70,17 @@ export interface MakeReaderOptions<
   TRead extends Passable = Passable,
   TReadReturn extends Passable = undefined,
 > {
+  /**
+   * Cooperatively interrupt this source when the consumer closes or its
+   * synchronization chain fails. May run during next(); must arrange for that
+   * pull to settle without another input value. To reject an interrupted pull,
+   * use the supplied reason unchanged; other pull errors still fail the stream.
+   * Called at most once per stream.
+   * Its completion is awaited before iterator.return(), which still never
+   * overlaps a pull. Without this hook, closing waits for the pending pull.
+   * This is a local capability, not part of the remote reader interface.
+   */
+  cancelPending?: (reason: Error) => void | Promise<void>;
   /** Number of values to pre-pull before waiting for synchronizes (default 0) */
   buffer?: number;
   /** Pattern for TRead (yielded values) */
@@ -152,15 +163,24 @@ export interface ReaderIterator<
 
 /**
  * A passable bytes reader reference.
- * Uses streamBase64() to allow future migration to direct bytes transport.
+ * `stream()` yields passable byte arrays (frozen `Uint8Array`s over immutable
+ * `ArrayBuffer`s) for initiators using `iterateReader()`. `streamBase64()`
+ * yields the same chunks as base64 strings (decoded to Uint8Array by
+ * `iterateBytesReader()`); it is retained for compatibility and is slated for
+ * deprecation. A reader is consumed once, through either method. `stream()`
+ * is optional because a hand-rolled or older remote bytes reader may offer
+ * only `streamBase64()`; readers made by `bytesReaderFromIterator()` offer
+ * both.
  * The final synchronization node carries the argument value passed to the
  * initiator's return(value) call when closing early; if the responder is backed
  * by a JavaScript iterator with a return(value) method, it may replace that
  * argument with its own return value. All other synchronization values are flow
  * control (`undefined`).
- * Yields base64-encoded strings (decoded to Uint8Array by initiator).
  */
 export interface PassableBytesReader<TReadReturn extends Passable = undefined> {
+  stream?(
+    synPromise: ERef<StreamNode<Passable, TReadReturn>>,
+  ): Promise<StreamNode<Uint8Array, TReadReturn>>;
   streamBase64(
     synPromise: ERef<StreamNode<Passable, TReadReturn>>,
   ): Promise<StreamNode<string, TReadReturn>>;
@@ -208,6 +228,17 @@ export interface BytesReaderIterator<
  * Options for makeReader pump.
  */
 export interface ReaderPumpOptions {
+  /**
+   * Cooperatively interrupt this source when the consumer closes or its
+   * synchronization chain fails. May run during next(); must arrange for that
+   * pull to settle without another input value. To reject an interrupted pull,
+   * use the supplied reason unchanged; other pull errors still fail the stream.
+   * Called at most once per stream.
+   * Its completion is awaited before iterator.return(), which still never
+   * overlaps a pull. Without this hook, closing waits for the pending pull.
+   * This is a local capability, not part of the remote reader interface.
+   */
+  cancelPending?: (reason: Error) => void | Promise<void>;
   /** Number of values to pre-pull before waiting for synchronizes (default 0) */
   buffer?: number;
   /** Pattern for TRead (yielded values) */
@@ -235,6 +266,17 @@ export interface WriterPumpOptions {
 export interface MakeBytesReaderOptions<
   TReadReturn extends Passable = undefined,
 > {
+  /**
+   * Cooperatively interrupt this source when the consumer closes or its
+   * synchronization chain fails. May run during next(); must arrange for that
+   * pull to settle without another input value. To reject an interrupted pull,
+   * use the supplied reason unchanged; other pull errors still fail the stream.
+   * Called at most once per stream.
+   * Its completion is awaited before iterator.return(), which still never
+   * overlaps a pull. Without this hook, closing waits for the pending pull.
+   * This is a local capability, not part of the remote reader interface.
+   */
+  cancelPending?: (reason: Error) => void | Promise<void>;
   /** Number of values to pre-pull before waiting for synchronizes (default 0) */
   buffer?: number;
   /** Pattern for TReadReturn (return value) */

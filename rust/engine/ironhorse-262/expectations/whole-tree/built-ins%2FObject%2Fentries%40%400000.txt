@@ -1,0 +1,43 @@
+# engine=ironhorse features=default corpus=built-ins/Object/entries tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Object/entries/exception-during-enumeration.js sloppy pass
+built-ins/Object/entries/exception-during-enumeration.js strict pass
+built-ins/Object/entries/exception-not-object-coercible.js sloppy pass
+built-ins/Object/entries/exception-not-object-coercible.js strict pass
+built-ins/Object/entries/function-length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Object/entries/function-length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Object/entries/function-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be entries; name value should be entries"
+built-ins/Object/entries/function-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be entries; name value should be entries"
+built-ins/Object/entries/function-property-descriptor.js sloppy pass
+built-ins/Object/entries/function-property-descriptor.js strict pass
+built-ins/Object/entries/getter-adding-key.js sloppy pass
+built-ins/Object/entries/getter-adding-key.js strict pass
+built-ins/Object/entries/getter-making-future-key-nonenumerable.js sloppy pass
+built-ins/Object/entries/getter-making-future-key-nonenumerable.js strict pass
+built-ins/Object/entries/getter-removing-future-key.js sloppy pass
+built-ins/Object/entries/getter-removing-future-key.js strict pass
+built-ins/Object/entries/inherited-properties-omitted.js sloppy pass
+built-ins/Object/entries/inherited-properties-omitted.js strict pass
+built-ins/Object/entries/not-a-constructor.js sloppy pass
+built-ins/Object/entries/not-a-constructor.js strict pass
+built-ins/Object/entries/observable-operations.js sloppy pass
+built-ins/Object/entries/observable-operations.js strict pass
+built-ins/Object/entries/order-after-define-property-with-function.js sloppy pass
+built-ins/Object/entries/order-after-define-property-with-function.js strict pass
+built-ins/Object/entries/order-after-define-property.js sloppy pass
+built-ins/Object/entries/order-after-define-property.js strict pass
+built-ins/Object/entries/primitive-booleans.js sloppy pass
+built-ins/Object/entries/primitive-booleans.js strict pass
+built-ins/Object/entries/primitive-numbers.js sloppy pass
+built-ins/Object/entries/primitive-numbers.js strict pass
+built-ins/Object/entries/primitive-strings.js sloppy pass
+built-ins/Object/entries/primitive-strings.js strict pass
+built-ins/Object/entries/primitive-symbols.js sloppy pass
+built-ins/Object/entries/primitive-symbols.js strict pass
+built-ins/Object/entries/return-order.js sloppy pass
+built-ins/Object/entries/return-order.js strict pass
+built-ins/Object/entries/symbols-omitted.js sloppy pass
+built-ins/Object/entries/symbols-omitted.js strict pass
+built-ins/Object/entries/tamper-with-global-object.js sloppy pass
+built-ins/Object/entries/tamper-with-global-object.js strict pass
+built-ins/Object/entries/tamper-with-object-keys.js sloppy pass
+built-ins/Object/entries/tamper-with-object-keys.js strict pass

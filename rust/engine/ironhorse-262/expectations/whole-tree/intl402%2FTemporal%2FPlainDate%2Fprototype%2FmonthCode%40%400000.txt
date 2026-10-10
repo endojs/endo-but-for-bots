@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/PlainDate/prototype/monthCode tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/PlainDate/prototype/monthCode/chinese-calendar-dates.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/monthCode/chinese-calendar-dates.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/monthCode/dangi-calendar-dates.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/monthCode/dangi-calendar-dates.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/monthCode/leap-months-hebrew.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/monthCode/leap-months-hebrew.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/monthCode/no-leap-months-non-lunisolar.js sloppy skip:oracle-host-missing-temporal
+intl402/Temporal/PlainDate/prototype/monthCode/no-leap-months-non-lunisolar.js strict skip:oracle-host-missing-temporal
+intl402/Temporal/PlainDate/prototype/monthCode/no-leap-months-persian.js sloppy skip:oracle-host-missing-temporal
+intl402/Temporal/PlainDate/prototype/monthCode/no-leap-months-persian.js strict skip:oracle-host-missing-temporal

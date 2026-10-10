@@ -28,6 +28,7 @@
       "default": "./index.js"
     },
     "./iroh.js": "./src/networks/iroh.js",
+    "./formula-identifier.js": "./src/formula-identifier.js",
     "./locator.js": "./locator.js",
     "./pet-name.js": "./src/pet-name.js",
     "./type-guards.js": "./src/type-guards.js",
@@ -41,7 +42,7 @@
     "build": "exit 0",
     "prepack": "git clean -fX -e node_modules/ && tsc --build tsconfig.build.json",
     "postpack": "git clean -fX -e node_modules/",
-    "cover": "c8 ava --config test/_ava-ses.config.js",
+    "cover": "c8 ava",
     "generate:help": "node scripts/generate-help-text-data.mjs",
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "eslint --fix .",
@@ -89,6 +90,7 @@
     "@endo/platform": "workspace:^",
     "@endo/promise-kit": "workspace:^",
     "@endo/relay-server": "workspace:^",
+    "@endo/sha256": "workspace:^",
     "@endo/stream": "workspace:^",
     "@endo/stream-node": "workspace:^",
     "@endo/tar": "workspace:^",
@@ -97,7 +99,7 @@
     "@endo/zip": "workspace:^",
     "better-sqlite3": "^12.0.0",
     "ses": "workspace:^",
-    "ws": "^8.21.3"
+    "ws": "^8.22.0"
   },
   "optionalDependencies": {
     "@number0/iroh": "^1.1.0"
@@ -105,7 +107,6 @@
   "devDependencies": {
     "@endo/bundle-source": "workspace:^",
     "@endo/ses-ava": "workspace:^",
-    "@endo/sha256": "workspace:^",
     "@types/ws": "^8.18.1",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
@@ -131,7 +132,12 @@
     "files": [
       "test/**/*.test.*"
     ],
-    "timeout": "5m"
+    "serial": true,
+    "concurrency": 1,
+    "timeout": "5m",
+    "environmentVariables": {
+      "ENDO_EXIT_WHEN_ORPHANED": "1"
+    }
   },
   "typeCoverage": {
     "atLeast": 97.21

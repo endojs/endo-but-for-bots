@@ -1,0 +1,15 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/PlainYearMonth/prototype/valueOf tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/PlainYearMonth/prototype/valueOf/basic.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainYearMonth/prototype/valueOf/basic.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainYearMonth/prototype/valueOf/branding.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainYearMonth/prototype/valueOf/branding.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainYearMonth/prototype/valueOf/builtin.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainYearMonth/prototype/valueOf/builtin.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainYearMonth/prototype/valueOf/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainYearMonth/prototype/valueOf/length.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainYearMonth/prototype/valueOf/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainYearMonth/prototype/valueOf/name.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainYearMonth/prototype/valueOf/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/PlainYearMonth/prototype/valueOf/not-a-constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/PlainYearMonth/prototype/valueOf/prop-desc.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainYearMonth/prototype/valueOf/prop-desc.js strict skip:oracle-host-missing-temporal

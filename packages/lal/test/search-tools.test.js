@@ -10,8 +10,14 @@ import { makeExecuteTool } from '../tool-dispatch.js';
 const makeStub = () => {
   const calls = [];
   const capability = {
-    glob(pattern) {
-      calls.push(['glob', pattern]);
+    glob(pattern, options) {
+      // Record the options record only when one was actually passed, so a
+      // dispatch that forwards `(pattern)` stays distinguishable from one that
+      // forwards `(pattern, undefined)` — the difference a capability
+      // predating the parameter would notice.
+      calls.push(
+        options === undefined ? ['glob', pattern] : ['glob', pattern, options],
+      );
       return Promise.resolve(['src/a.js', 'src/b.js']);
     },
     grep(pattern, paths, options) {
@@ -191,4 +197,71 @@ test('grep passes a special-character regexp and glob filter through verbatim', 
     ['lookup', 'workspace'],
     ['glorp', '*.js', '(foo|bar)', undefined],
   ]);
+});
+
+// `followSymlinks` is the `rg -L` escape hatch. It exists in the platform
+// engine and the daemon mount face; these pin that the tool boundary forwards
+// it rather than swallowing it, which is the failure the option is easiest to
+// ship with — everything still passes, the sweep just never widens.
+test('glob forwards followSymlinks as an options record', async t => {
+  const { calls, run } = makeStub();
+  await run('glob', {
+    petNameOrPath: 'workspace',
+    pattern: 'src/**/*.js',
+    followSymlinks: true,
+  });
+  t.deepEqual(calls, [
+    ['lookup', 'workspace'],
+    ['glob', 'src/**/*.js', { followSymlinks: true }],
+  ]);
+});
+
+test('glob omits the options record when followSymlinks is absent', async t => {
+  const { calls, run } = makeStub();
+  await run('glob', { petNameOrPath: 'workspace', pattern: 'src/**' });
+  // One argument, not `(pattern, {})`: a capability predating the parameter
+  // must still answer a plain glob.
+  t.deepEqual(calls[1], ['glob', 'src/**']);
+});
+
+test('grep forwards followSymlinks to the whole-tree walk', async t => {
+  const { calls, run } = makeStub();
+  await run('grep', {
+    petNameOrPath: 'workspace',
+    pattern: 'TODO',
+    followSymlinks: true,
+  });
+  t.deepEqual(calls, [
+    ['lookup', 'workspace'],
+    ['grep', 'TODO', undefined, { followSymlinks: true }],
+  ]);
+});
+
+test('grep with a glob forwards followSymlinks to the fused glorp surface', async t => {
+  const { calls, run } = makeStub();
+  await run('grep', {
+    petNameOrPath: 'workspace',
+    pattern: 'TODO',
+    glob: 'src/**/*.js',
+    maxResults: 5,
+    followSymlinks: true,
+  });
+  t.deepEqual(calls, [
+    ['lookup', 'workspace'],
+    ['glorp', 'src/**/*.js', 'TODO', { maxResults: 5, followSymlinks: true }],
+  ]);
+});
+
+test('a non-boolean followSymlinks is rejected before dispatch', async t => {
+  const { calls, run } = makeStub();
+  await t.throwsAsync(
+    () =>
+      run('glob', {
+        petNameOrPath: 'workspace',
+        pattern: 'src/**',
+        followSymlinks: 'yes',
+      }),
+    { message: /glob args/ },
+  );
+  t.deepEqual(calls, []);
 });

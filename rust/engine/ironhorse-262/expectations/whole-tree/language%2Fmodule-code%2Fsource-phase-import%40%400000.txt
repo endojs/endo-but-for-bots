@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=language/module-code/source-phase-import tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/module-code/source-phase-import/import-source.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/module-code/source-phase-import/import-source.js strict skip:unsupported-opcode:module:dynamic-import
+language/module-code/source-phase-import/reexport-source-binding-named-import.js sloppy skip:unsupported-opcode:module:static-linking
+language/module-code/source-phase-import/reexport-source-binding-namespace-get.js sloppy skip:unsupported-opcode:module:static-linking

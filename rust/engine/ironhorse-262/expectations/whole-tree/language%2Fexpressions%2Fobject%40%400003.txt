@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=language/expressions/object tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/object/setter-param-eval-strict-inside.js sloppy pass
+language/expressions/object/setter-param-eval-strict-outside.js strict pass
+language/expressions/object/setter-prop-desc.js sloppy pass
+language/expressions/object/setter-prop-desc.js strict pass
+language/expressions/object/setter-super-prop.js sloppy pass
+language/expressions/object/setter-super-prop.js strict pass
+language/expressions/object/yield-non-strict-access.js sloppy pass
+language/expressions/object/yield-non-strict-syntax.js sloppy pass

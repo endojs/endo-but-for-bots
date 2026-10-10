@@ -6,16 +6,18 @@ import { Fail, q } from '@endo/errors';
 import { E, Far } from '@endo/far';
 import { makeOcapn } from '@endo/ocapn';
 import { encodeSwissnum, swissnumFromBytes } from '@endo/ocapn/client/util';
-import { makeOcapnHub } from '@endo/ocapn/hub';
 import { makeCryptography, makeSessionId } from '@endo/ocapn/cryptography';
 import {
   readOcapnHandshakeMessage,
   writeOcapnHandshakeMessage,
 } from '@endo/ocapn/operations';
 
+import { makeOcapnHub } from './hub.js';
 import { makeDurableWorkerTransport } from './durable-worker-transport.js';
 import { derivePipeResumption } from './pipe-network.js';
 import { isSessionToken } from './store-fs.js';
+import { inspectVatReachability } from './vat-reachability.js';
+import { WorkerHaltError } from './worker-engine.js';
 import { makeWorkerSessionRecords } from './worker-session-records.js';
 
 /**
@@ -29,7 +31,7 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
 /**
  * The thixotrope daemon, hub edition: mostly a forwarding and
  * slot-rewriting hub, per design. The daemon is NOT an OCapN client —
- * the OCapN hub (`@endo/ocapn/hub`) routes every message between
+ * the Thixotrope hub (`src/hub.js`) routes every message between
  * sessions by structural transcoding over persisted c-list tables, so
  * the daemon reifies nothing that flows between workers and peers:
  * no presences, no promises, no subscriptions, no obligation rows.
@@ -85,10 +87,10 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  *   on the receiving declaration. Its default leaves the result as
  *   unconstrained as it was before, so an embedder that names nothing
  *   is unaffected.
+ * @property {(options?: { keep?: Array<string> }) => ReturnType<typeof inspectVatReachability>} inspectReachability
  * @property {(options?: { keep?: Array<string> }) => Promise<Array<string>>} collectVats
  * @property {() => Promise<void>} shutdown
- * @property {() => Promise<void>} crash abandon live state the way a
- *   power failure would; the store remains recoverable
+ * @property {() => Promise<void>} crash drain queued work then terminate without snapshots
  */
 
 // 128 random bits as lowercase hex: worker ids and default swissnums.
@@ -118,7 +120,7 @@ const ENDPOINT_SESSION = 'endpoint';
  * @param {boolean} [options.verbose]
  * @returns {Promise<ThixotropeDaemon>}
  */
-export const makeThixotropeDaemon = async ({
+const buildDaemon = async ({
   store,
   engine,
   codec,
@@ -164,18 +166,25 @@ export const makeThixotropeDaemon = async ({
         engine,
         idleSleepMs,
         debugLabel: workerStore.getMeta().debugLabel,
+        onFatal: () => hub.retireSession(workerId),
         onFrame: (
           /** @type {Uint8Array} */ bytes,
           /** @type {number} */ sequenceNumber,
         ) => holder.sink.deliver(bytes, sequenceNumber),
       });
       holder.sink = hub.attachSession(workerId, {
-        send: (/** @type {Uint8Array} */ bytes) => transport.write(bytes),
+        send: (
+          /** @type {Uint8Array} */ bytes,
+          /** @type {string | undefined} */ sequence = undefined,
+        ) => transport.write(bytes, sequence),
         // The worker transport journals frames against heap snapshots;
         // hub frames toward a momentarily-detached worker session must
         // queue, never break.
         durable: true,
+        requireAcceptance: true,
       });
+      if (workerStore.getMeta().failure !== undefined)
+        hub.retireSession(workerId);
       entry = { transport, sink: holder.sink };
       workers.set(workerId, entry);
     }
@@ -211,6 +220,9 @@ export const makeThixotropeDaemon = async ({
     workerId: ENDPOINT_ID,
     role: 'worker',
   });
+  // These are outgoing answer positions, not restored incoming resolver obligations.
+  // Settled cached answers and imports do not independently pin their vats.
+  const pendingEndpointAnswers = new Set();
   const endpointClient = await makeOcapn({
     codec,
     debugLabel: 'thixotrope-endpoint',
@@ -221,6 +233,14 @@ export const makeThixotropeDaemon = async ({
         /** @type {string} */ slot,
         /** @type {FarRef<object>} */ value,
       ) => {
+        if (slot[0] === 'a' && slot[1] === '-') {
+          const position = slot.slice(2);
+          pendingEndpointAnswers.add(position);
+          const settled = () => {
+            pendingEndpointAnswers.delete(position);
+          };
+          void Promise.resolve(value).then(settled, settled);
+        }
         if (slot[0] === 'o' && slot[1] === '-') {
           importPositions.set(value, BigInt(slot.slice(2)));
         }
@@ -246,18 +266,21 @@ export const makeThixotropeDaemon = async ({
   // resumeSession seam (handshake-free, restorable exports), frames
   // flowing directly between the hub duct and the client's message
   // handler.
+  let stopped = false;
+  /** @type {Uint8Array[]} */
+  const endpointOutbound = [];
   const endpointConnection = harden({
     netlayer: harden({ location: endpointResumption.peerLocation }),
     isOutgoing: true,
     get isDestroyed() {
-      return false;
+      return stopped;
     },
-    write: (/** @type {Uint8Array} */ bytes) => endpointSink.deliver(bytes),
+    write: (/** @type {Uint8Array} */ bytes) => {
+      if (stopped) return;
+      if (endpointSink === undefined) endpointOutbound.push(bytes);
+      else endpointSink.deliver(bytes);
+    },
     end: () => {},
-  });
-  endpointSink = hub.attachSession(ENDPOINT_SESSION, {
-    send: (/** @type {Uint8Array} */ bytes) =>
-      endpointHandlers.handleMessageData(endpointConnection, bytes),
   });
   records.registerWorkerConnection(endpointConnection, ENDPOINT_ID);
   const endpointResumed = endpointHandlers.resumeSession(
@@ -286,12 +309,17 @@ export const makeThixotropeDaemon = async ({
     identity = undefined,
   ) => {
     const sink = hub.attachSession(sessionKey, {
-      send: (/** @type {Uint8Array} */ bytes) => connection.write(bytes),
+      send: (
+        /** @type {Uint8Array} */ bytes,
+        /** @type {string | undefined} */ sequence = undefined,
+      ) => connection.write(bytes, sequence),
       // Resumable peers and outbound exporter sessions are durable:
       // frames toward them queue across a disconnect. An ephemeral
       // peer that is gone is gone.
       durable:
         sessionKey.startsWith('peer:') || sessionKey.startsWith('handoff:'),
+      requireAcceptance:
+        connection.netlayer.getResumeToken?.(connection) !== undefined,
       // A bad frame from beyond the process boundary aborts the
       // session and drops the connection.
       remote: true,
@@ -323,6 +351,36 @@ export const makeThixotropeDaemon = async ({
     // reset in a successor process and inherit the persisted hub
     // tables of a previous process's connection.
     return `conn:${randomHex128()}`;
+  };
+
+  /**
+   * @param {any} connection
+   * @param {Record<string, any>} update
+   */
+  const saveHandshake = (connection, update) => {
+    const token = netlayerRef.netlayer?.getResumeToken?.(connection);
+    if (token === undefined) return;
+    const sessionStore = store.provideSessionStore(token);
+    sessionStore.setMeta({ ...sessionStore.getMeta(), ...update });
+  };
+
+  /**
+   * @param {any} connection
+   * @param {string} sessionKey
+   * @param {any} identity
+   * @param {Record<string, any>} [extra]
+   */
+  const saveIdentity = (connection, sessionKey, identity, extra = {}) => {
+    saveHandshake(connection, {
+      ...extra,
+      hubSessionKey: sessionKey,
+      hubEpoch: hub.getSessionEpoch(sessionKey),
+      identity: {
+        sessionIdB64: encodeBase64(identity.sessionId),
+        peerPublicKeyQB64: encodeBase64(identity.peerPublicKeyQ),
+        selfPrivateKeyB64: encodeBase64(identity.selfPrivateKeyBytes),
+      },
+    });
   };
 
   const captpVersion = '1.0';
@@ -364,22 +422,29 @@ export const makeThixotropeDaemon = async ({
         keyPair,
         new ArrayBuffer(0),
       );
-      connection.write(
-        writeOcapnHandshakeMessage(
-          {
-            type: 'op:start-session',
-            captpVersion,
-            sessionPublicKey: keyPair.publicKey.descriptor,
-            location: myLocation,
-            locationSignature,
-          },
-          codec,
-        ),
+      const request = writeOcapnHandshakeMessage(
+        {
+          type: 'op:start-session',
+          captpVersion,
+          sessionPublicKey: keyPair.publicKey.descriptor,
+          location: myLocation,
+          locationSignature,
+        },
+        codec,
       );
+      saveHandshake(connection, {
+        hubSessionKey: sessionKey,
+        hubEpoch: hub.getSessionEpoch(sessionKey),
+        pendingPrivateKeyB64: encodeBase64(privateKeyBytes),
+        handshakeRequest: encodeBase64(request),
+      });
+      connection.write(request);
     } catch (error) {
       dialingSessions.delete(sessionKey);
       logError('handoff dial failed:', error);
-      hub.retireSession(sessionKey);
+      // A committed withdrawal remains an obligation. Local admission or
+      // storage failure does not prove that its destination is retired.
+      throw error;
     }
   };
 
@@ -398,7 +463,10 @@ export const makeThixotropeDaemon = async ({
         get isDestroyed() {
           return destroyed;
         },
-        write: (/** @type {Uint8Array} */ bytes) => socket.write(bytes),
+        write: (
+          /** @type {Uint8Array} */ bytes,
+          /** @type {string | undefined} */ sequence = undefined,
+        ) => socket.write(bytes, sequence),
         end: () => {
           if (!destroyed) {
             destroyed = true;
@@ -412,22 +480,43 @@ export const makeThixotropeDaemon = async ({
     handleMessageData: (
       /** @type {any} */ connection,
       /** @type {Uint8Array} */ data,
-      /** @type {number | undefined} */ sequenceNumber = undefined,
+      /** @type {number | bigint | undefined} */ sequenceNumber = undefined,
     ) => {
+      if (stopped) return;
       const bound = connectionSessions.get(connection);
       if (bound !== undefined) {
+        // The first frame is the handshake, whose intent and identity were
+        // persisted before its effects. Inbox replay must not decode it as
+        // an ordinary OCapN message after restoration already bound the hub.
+        if (sequenceNumber !== undefined && BigInt(sequenceNumber) === 1n)
+          return;
         bound.deliver(data, sequenceNumber);
         return;
+      }
+      const resumeToken = netlayerRef.netlayer?.getResumeToken?.(connection);
+      if (resumeToken !== undefined) {
+        const saved = store.provideSessionStore(resumeToken).getMeta();
+        if (saved.identity !== undefined) {
+          // Resume a handoff interrupted by an I/O error in this process.
+          // Do not generate a different key after the peer saw our response.
+          resumption.restoreSession(hubHandlers, connection, resumeToken);
+          if (sequenceNumber !== undefined && BigInt(sequenceNumber) === 1n)
+            return;
+          connectionSessions.get(connection)?.deliver(data, sequenceNumber);
+          return;
+        }
       }
       const dial = pendingOutbound.get(connection);
       if (dial !== undefined) {
         // The exporter's reply to our outbound handshake.
-        pendingOutbound.delete(connection);
+        let verified = false;
         try {
           const reader = codec.makeReader(data);
           const message = readOcapnHandshakeMessage(reader);
           message.type === 'op:start-session' ||
             Fail`expected op:start-session, got ${q(message.type)}`;
+          message.captpVersion === captpVersion ||
+            Fail`invalid captp version ${q(message.captpVersion)}`;
           const peerPublicKey = cryptography.makeOcapnPublicKey(
             message.sessionPublicKey.q,
           );
@@ -437,16 +526,22 @@ export const makeThixotropeDaemon = async ({
             peerPublicKey,
             new ArrayBuffer(0),
           );
+          verified = true;
           const sessionId = makeSessionId(
             dial.keyPair.publicKey.id,
             peerPublicKey.id,
           );
-          bindConnectionToHub(connection, dial.sessionKey, {
+          const identity = {
             sessionId,
             peerPublicKeyQ: message.sessionPublicKey.q,
             selfPrivateKeyBytes: dial.privateKeyBytes,
-          });
+          };
+          saveIdentity(connection, dial.sessionKey, identity);
+          bindConnectionToHub(connection, dial.sessionKey, identity);
+          pendingOutbound.delete(connection);
         } catch (error) {
+          if (verified) throw error;
+          pendingOutbound.delete(connection);
           logError('handoff handshake failed:', error);
           dialingSessions.delete(dial.sessionKey);
           hub.retireSession(dial.sessionKey);
@@ -456,6 +551,7 @@ export const makeThixotropeDaemon = async ({
       }
       // Handshake: answer op:start-session with a per-connection
       // identity, then bind the connection to a hub session.
+      let verified = false;
       try {
         const reader = codec.makeReader(data);
         const message = readOcapnHandshakeMessage(reader);
@@ -472,6 +568,7 @@ export const makeThixotropeDaemon = async ({
           peerPublicKey,
           new ArrayBuffer(0),
         );
+        verified = true;
         const { keyPair, privateKeyBytes } =
           cryptography.makeOcapnKeyPairWithPrivateBytes();
         const { location } = netlayerRef.netlayer;
@@ -481,25 +578,31 @@ export const makeThixotropeDaemon = async ({
           new ArrayBuffer(0),
         );
         const sessionId = makeSessionId(keyPair.publicKey.id, peerPublicKey.id);
-        connection.write(
-          writeOcapnHandshakeMessage(
-            {
-              type: 'op:start-session',
-              captpVersion,
-              sessionPublicKey: keyPair.publicKey.descriptor,
-              location,
-              locationSignature,
-            },
-            codec,
-          ),
+        const response = writeOcapnHandshakeMessage(
+          {
+            type: 'op:start-session',
+            captpVersion,
+            sessionPublicKey: keyPair.publicKey.descriptor,
+            location,
+            locationSignature,
+          },
+          codec,
         );
-        bindConnectionToHub(connection, sessionKeyForConnection(connection), {
+        const sessionKey = sessionKeyForConnection(connection);
+        const identity = {
           sessionId,
           peerPublicKeyQ: message.sessionPublicKey.q,
-          // The hub signs gift handoff receives with this session key.
           selfPrivateKeyBytes: privateKeyBytes,
+        };
+        // One document records the response and identity before either can
+        // become observable. A successor completes an interrupted handshake.
+        saveIdentity(connection, sessionKey, identity, {
+          handshakeResponse: encodeBase64(response),
         });
+        connection.write(response);
+        bindConnectionToHub(connection, sessionKey, identity);
       } catch (error) {
+        if (verified) throw error;
         logError('handshake failed:', error);
         connection.write(
           writeOcapnHandshakeMessage(
@@ -511,6 +614,7 @@ export const makeThixotropeDaemon = async ({
       }
     },
     handleConnectionClose: (/** @type {any} */ connection) => {
+      if (stopped) return;
       const dial = pendingOutbound.get(connection);
       if (dial !== undefined) {
         // The dial died before its handshake: the gift withdrawal can
@@ -544,50 +648,75 @@ export const makeThixotropeDaemon = async ({
   });
 
   /**
-   * The netlayer's session-resumption power: frame-level durability in
-   * the session stores (as before), but restoration just rebinds the
-   * duct to the hub session — the tables are already there.
+   * Each session document atomically owns its incoming and outgoing frames,
+   * watermarks, incarnation, and handshake recovery state. The filesystem
+   * store publishes this document with fsync + rename + directory fsync.
    */
   const resumption = harden({
     isDurableToken: (/** @type {string} */ token) => isSessionToken(token),
-    onHello: (/** @type {string} */ token) => {
-      store.deleteSession(token);
-      store.provideSessionStore(token).setMeta({});
-      // A fresh logical connection under a reused token supersedes any
-      // prior hub session rows for it.
-      hub.retireSession(`peer:${token}`);
-    },
-    loadForResume: (/** @type {string} */ token) => {
-      if (!store.listSessionTokens().includes(token)) {
-        return undefined;
-      }
+    listSessions: () => store.listSessionTokens(),
+    isRetired: (/** @type {string} */ token) =>
+      store.listSessionTokens().includes(token) &&
+      Boolean(store.provideSessionStore(token).getMeta().retired),
+    recordRetirementConfirmed: (/** @type {string} */ token) => {
       const sessionStore = store.provideSessionStore(token);
       const meta = sessionStore.getMeta();
-      if (meta.established === undefined) {
-        return undefined;
-      }
-      const frames = sessionStore
-        .readFrames()
-        .map(({ n, b64 }) => ({ n, bytes: decodeBase64(b64) }));
-      // A crash can land between the frame append and the sendSeq
-      // meta write; the frames file is the authority on how far the
-      // sequence actually advanced.
-      const sendSeq = frames.reduce(
-        (max, frame) => Math.max(max, Number(frame.n)),
-        Number(meta.sendSeq ?? 0),
-      );
-      // Report the HUB's committed watermark, not the netlayer's
-      // advisory one: a crash between the netlayer's record and the
-      // hub's commit then just means the peer retransmits a frame the
-      // hub's own watermark drops — exactly once either way.
-      const recvSeq = Math.min(
-        Number(meta.recvSeq ?? 0),
-        hub.inboundWatermark(`peer:${token}`),
-      );
+      meta.retired || Fail`cannot confirm retirement of a live session`;
+      sessionStore.setMeta({ ...meta, retirementConfirmed: true });
+    },
+    recordPeerDurability: (
+      /** @type {string} */ token,
+      /** @type {'restart' | 'process'} */ scope,
+    ) => {
+      const sessionStore = store.provideSessionStore(token);
+      const meta = sessionStore.getMeta();
+      meta.peerDurability === undefined ||
+        meta.peerDurability === scope ||
+        Fail`peer durability changed within a session`;
+      sessionStore.setMeta({ ...meta, peerDurability: scope });
+    },
+    onHello: (
+      /** @type {string} */ token,
+      /** @type {any} */ location = undefined,
+    ) => {
+      !store.listSessionTokens().includes(token) ||
+        Fail`durable session token has already been used`;
+      store.provideSessionStore(token).setMeta({
+        version: 2,
+        isOriginator: location !== undefined,
+        ...(location === undefined ? {} : { location }),
+        recvSeq: '0',
+        sendSeq: '0',
+        ackSeq: '0',
+        processedSeq: '0',
+        hubDelivery: '0',
+        frames: [],
+        inbox: [],
+      });
+    },
+    loadForResume: (/** @type {string} */ token) => {
+      if (!store.listSessionTokens().includes(token)) return undefined;
+      const meta = store.provideSessionStore(token).getMeta();
+      // Receipt-only v1 records cannot establish durable acceptance.
+      if (meta.version !== 2) return undefined;
       return {
-        recvSeq,
-        sendSeq,
-        frames,
+        recvSeq: meta.recvSeq,
+        sendSeq: meta.sendSeq,
+        ackSeq: meta.ackSeq,
+        hubDelivery: meta.hubDelivery,
+        isOriginator: meta.isOriginator,
+        location: meta.location,
+        peerDurability: meta.peerDurability,
+        retired: Boolean(meta.retired),
+        retirementConfirmed: Boolean(meta.retirementConfirmed),
+        frames: meta.frames.map((/** @type {any} */ frame) => ({
+          n: frame.n,
+          bytes: decodeBase64(frame.b64),
+        })),
+        inbox: meta.inbox.map((/** @type {any} */ frame) => ({
+          n: frame.n,
+          bytes: decodeBase64(frame.b64),
+        })),
       };
     },
     restoreSession: (
@@ -595,37 +724,99 @@ export const makeThixotropeDaemon = async ({
       /** @type {any} */ connection,
       /** @type {string} */ token,
     ) => {
-      // The peer resumed: its hub session rows are the session state.
-      // No handshake, no re-seating; just rebind the duct.
-      bindConnectionToHub(connection, `peer:${token}`);
+      const meta = store.provideSessionStore(token).getMeta();
+      if (meta.retired) return;
+      // A crash can occur after recording the handshake intent but before
+      // the transport accepts its first outgoing frame.
+      const firstFrame = meta.handshakeResponse ?? meta.handshakeRequest;
+      if (meta.sendSeq === '0' && firstFrame !== undefined) {
+        connection.write(decodeBase64(firstFrame));
+      }
+      if (meta.identity !== undefined) {
+        bindConnectionToHub(connection, meta.hubSessionKey, {
+          sessionId: decodeBase64(meta.identity.sessionIdB64),
+          peerPublicKeyQ: decodeBase64(meta.identity.peerPublicKeyQB64),
+          selfPrivateKeyBytes: decodeBase64(meta.identity.selfPrivateKeyB64),
+        });
+        if (meta.hubSessionKey.startsWith('handoff:'))
+          dialingSessions.add(meta.hubSessionKey);
+      } else if (meta.pendingPrivateKeyB64 !== undefined) {
+        const privateKeyBytes = decodeBase64(meta.pendingPrivateKeyB64);
+        pendingOutbound.set(connection, {
+          sessionKey: meta.hubSessionKey,
+          privateKeyBytes,
+          keyPair: cryptography.makeOcapnKeyPairFromPrivateKey(privateKeyBytes),
+        });
+        dialingSessions.add(meta.hubSessionKey);
+      }
     },
     recordOutbound: (
       /** @type {string} */ token,
-      /** @type {number} */ n,
+      /** @type {bigint} */ n,
+      /** @type {Uint8Array} */ bytes,
+      /** @type {string | undefined} */ hubSequence = undefined,
+    ) => {
+      const sessionStore = store.provideSessionStore(token);
+      const meta = sessionStore.getMeta();
+      !meta.retired || Fail`durable session is retired`;
+      n === BigInt(meta.sendSeq) + 1n || Fail`outbound sequence gap`;
+      sessionStore.setMeta({
+        ...meta,
+        sendSeq: String(n),
+        ...(hubSequence === undefined ? {} : { hubDelivery: hubSequence }),
+        frames: [...meta.frames, { n: String(n), b64: encodeBase64(bytes) }],
+      });
+    },
+    recordAck: (/** @type {string} */ token, /** @type {bigint} */ n) => {
+      const sessionStore = store.provideSessionStore(token);
+      const meta = sessionStore.getMeta();
+      n <= BigInt(meta.sendSeq) ||
+        Fail`acknowledgement exceeds issued sequence`;
+      if (n <= BigInt(meta.ackSeq)) return;
+      sessionStore.setMeta({
+        ...meta,
+        ackSeq: String(n),
+        frames: meta.frames.filter(
+          (/** @type {any} */ frame) => BigInt(frame.n) > n,
+        ),
+      });
+    },
+    recordInbound: (
+      /** @type {string} */ token,
+      /** @type {bigint} */ n,
       /** @type {Uint8Array} */ bytes,
     ) => {
       const sessionStore = store.provideSessionStore(token);
-      sessionStore.appendFrame({ n, b64: encodeBase64(bytes) });
+      const meta = sessionStore.getMeta();
+      !meta.retired || Fail`durable session is retired`;
+      if (n <= BigInt(meta.recvSeq)) return;
+      n === BigInt(meta.recvSeq) + 1n || Fail`inbound sequence gap`;
       sessionStore.setMeta({
-        ...sessionStore.getMeta(),
-        sendSeq: n,
-        established: true,
+        ...meta,
+        recvSeq: String(n),
+        inbox: [...meta.inbox, { n: String(n), b64: encodeBase64(bytes) }],
       });
     },
-    recordAck: (/** @type {string} */ token, /** @type {number} */ n) => {
-      store.provideSessionStore(token).truncateFramesUpTo(n);
-    },
-    recordInbound: (/** @type {string} */ token, /** @type {number} */ n) => {
+    recordProcessed: (/** @type {string} */ token, /** @type {bigint} */ n) => {
       const sessionStore = store.provideSessionStore(token);
+      const meta = sessionStore.getMeta();
+      if (meta.retired || n <= BigInt(meta.processedSeq)) return;
+      n === BigInt(meta.processedSeq) + 1n || Fail`processed sequence gap`;
+      n <= BigInt(meta.recvSeq) || Fail`processing unaccepted frame`;
       sessionStore.setMeta({
-        ...sessionStore.getMeta(),
-        recvSeq: n,
-        established: true,
+        ...meta,
+        processedSeq: String(n),
+        inbox: meta.inbox.filter(
+          (/** @type {any} */ frame) => BigInt(frame.n) > n,
+        ),
       });
     },
     onEnd: (/** @type {string} */ token) => {
-      store.deleteSession(token);
-      hub.retireSession(`peer:${token}`);
+      const sessionStore = store.provideSessionStore(token);
+      const meta = sessionStore.getMeta();
+      // Never reuse a retired incarnation after releasing its dedup state.
+      sessionStore.setMeta({ ...meta, retired: true, frames: [], inbox: [] });
+      hub.retireSession(meta.hubSessionKey ?? `peer:${token}`, meta.hubEpoch);
     },
   });
 
@@ -725,6 +916,8 @@ export const makeThixotropeDaemon = async ({
       help: () =>
         'ThixotropeWorkerFacade: evaluate(source, endowments) evaluates in this worker with the properties of the endowments record bound as named values; getId() returns the worker id; retire() permanently deletes the worker.',
       getId: () => workerId,
+      // Return the guest shell so pending guest answers stay guest-to-guest.
+      getEvaluator: () => provideShell(workerId),
       /**
        * @param {string} source
        * @param {Record<string, unknown>} [endowments]
@@ -759,15 +952,21 @@ export const makeThixotropeDaemon = async ({
     'worker-controller': makeWorkerControllerResource,
   });
 
-  // Restore: reattach every worker transport (asleep) and re-seat the
-  // endpoint's recorded exports (resources by name; pending answers
-  // reject at-most-once). Hub tables restored themselves.
+  // Seat the endpoint's recorded exports before accepting any retained hub
+  // output. Startup writes toward the hub wait until its sink is attached.
+  records.restoreWorker(ENDPOINT_ID);
+  endpointSink = hub.attachSession(ENDPOINT_SESSION, {
+    send: (/** @type {Uint8Array} */ bytes) =>
+      endpointHandlers.handleMessageData(endpointConnection, bytes),
+  });
+  for (const bytes of endpointOutbound.splice(0)) endpointSink.deliver(bytes);
+
+  // Reattach worker transports asleep, after the endpoint can receive frames.
   for (const workerId of store.listWorkerIds()) {
     if (workerId !== ENDPOINT_ID) {
       provideWorkerSession(workerId);
     }
   }
-  records.restoreWorker(ENDPOINT_ID);
 
   // Only after every session is seated does the daemon accept
   // connections: an early resume must never race the restore.
@@ -780,6 +979,12 @@ export const makeThixotropeDaemon = async ({
     }),
     resumption,
   });
+  for (const token of store.listSessionTokens()) {
+    const meta = store.provideSessionStore(token).getMeta();
+    if (meta.retired)
+      hub.retireSession(meta.hubSessionKey ?? `peer:${token}`, meta.hubEpoch);
+  }
+  netlayerRef.netlayer.start?.();
   const { location } = netlayerRef.netlayer;
 
   // Gift redemptions interrupted by the previous process's death:
@@ -788,6 +993,74 @@ export const makeThixotropeDaemon = async ({
   for (const dial of hub.pendingDials()) {
     handoffDialRef.connect(dial.location, dial.sessionKey);
   }
+
+  const stopDaemon = async () => {
+    for (const entry of workers.values()) entry.transport.end();
+    try {
+      // Drain every transport even when one termination fails. No queued wake
+      // may outlive the state-directory ownership released by our caller.
+      const results = await Promise.allSettled(
+        [...workers.values()].map(entry => entry.transport.crash()),
+      );
+      for (const result of results) {
+        if (result.status === 'rejected') throw result.reason;
+      }
+    } finally {
+      stopped = true;
+      endpointClient.shutdown();
+      netlayerRef.netlayer.shutdown();
+    }
+  };
+
+  // An accepted dispatch can outlive the process before its worker runs.
+  // Resume journal suffixes now: hub deduplication correctly suppresses a
+  // second dispatch, so no future network traffic need wake these workers.
+  // Checkpointed sleepers and quarantined workers remain asleep.
+  try {
+    await Promise.all(
+      [...workers].map(async ([workerId, entry]) => {
+        const workerStore = store.provideWorkerStore(workerId);
+        const meta = workerStore.getMeta();
+        if (
+          meta.failure === undefined &&
+          workerStore.journalLength() > (meta.snapshot?.cut ?? 0)
+        ) {
+          try {
+            await entry.transport.wake();
+          } catch (error) {
+            // Fatal guest replay quarantines only that worker, just as live
+            // delivery does. Infrastructure failures still abort startup.
+            if (
+              !(error instanceof WorkerHaltError) ||
+              workerStore.getMeta().failure === undefined
+            )
+              throw error;
+          }
+        }
+      }),
+    );
+  } catch (error) {
+    await stopDaemon();
+    throw error;
+  }
+
+  /** @param {{keep?: string[]}} [options] */
+  const inspectReachability = ({ keep = [] } = {}) =>
+    inspectVatReachability({
+      workers: [...workers].map(([workerId, entry]) => ({
+        workerId,
+        awake: entry.transport.isAwake(),
+        debugLabel: store.provideWorkerStore(workerId).getMeta().debugLabel,
+      })),
+      hubState: store.getHubState(),
+      endpointExports: store.provideWorkerStore(ENDPOINT_ID).getTablesRecord()
+        ?.exports,
+      endpointPendingAnswers: [...pendingEndpointAnswers],
+      connectedSessions: [...connectionSessions.values()].flatMap(binding =>
+        binding ? [binding.key] : [],
+      ),
+      keep,
+    });
 
   /** @type {ThixotropeDaemon} */
   const daemon = {
@@ -828,74 +1101,100 @@ export const makeThixotropeDaemon = async ({
     },
     unpublish: secret => hub.unpublish(secret),
     lookup,
+    inspectReachability,
     collectVats: async ({ keep = [] } = {}) => {
-      const { publishedOrigins, holdings } = hub.inspect();
-      const marked = new Set(keep);
-      for (const origin of publishedOrigins) {
-        if (workers.has(/** @type {string} */ (origin))) {
-          marked.add(origin);
+      const candidates = inspectReachability({ keep }).collectible;
+      const swept = [];
+      for (const workerId of candidates) {
+        // Retirement yields: a new root or message may have appeared since the
+        // previous victim. Recheck instead of sweeping a stale candidate list.
+        if (inspectReachability({ keep }).collectible.includes(workerId)) {
+          // eslint-disable-next-line no-await-in-loop
+          await retireWorkerNow(workerId);
+          swept.push(workerId);
         }
-      }
-      for (const [workerId, entry] of workers.entries()) {
-        if (entry.transport.isAwake()) {
-          marked.add(workerId);
-        }
-      }
-      // Holder keeps target: a worker stays if a remote peer, a
-      // marked worker, or the keep list holds a reference into it.
-      // The endpoint is deliberately not a root (its cached shells
-      // must not pin every worker). Propagate to a fixpoint.
-      const isRootHolder = (/** @type {string} */ holder) =>
-        holder !== ENDPOINT_SESSION && !workers.has(holder);
-      let changed = true;
-      while (changed) {
-        changed = false;
-        for (const { origin, holders } of holdings) {
-          if (workers.has(origin) && !marked.has(origin)) {
-            if (
-              holders.some(
-                (/** @type {string} */ holder) =>
-                  isRootHolder(holder) || marked.has(holder),
-              )
-            ) {
-              marked.add(origin);
-              changed = true;
-            }
-          }
-        }
-      }
-      const swept = [...workers.keys()].filter(
-        workerId => !marked.has(workerId),
-      );
-      for (const workerId of swept) {
-        // eslint-disable-next-line no-await-in-loop
-        await retireWorkerNow(workerId);
       }
       return harden(swept.sort());
     },
     shutdown: async () => {
-      for (const entry of workers.values()) {
-        // eslint-disable-next-line no-await-in-loop
-        await entry.transport.sleep();
+      try {
+        for (const entry of workers.values()) {
+          // eslint-disable-next-line no-await-in-loop
+          await entry.transport.sleep();
+        }
+      } finally {
+        // A later vat can reopen one parked earlier, and a failed sleep must
+        // still stop intake before terminating every remaining incarnation.
+        await stopDaemon();
       }
-      for (const entry of workers.values()) {
-        entry.transport.end();
-      }
-      endpointClient.shutdown();
-      netlayerRef.netlayer.shutdown();
     },
-    crash: async () => {
-      for (const entry of workers.values()) {
-        entry.transport.end();
-      }
-      for (const entry of workers.values()) {
-        // eslint-disable-next-line no-await-in-loop
-        await entry.transport.crash();
-      }
-      endpointClient.shutdown();
-      netlayerRef.netlayer.shutdown();
-    },
+    crash: stopDaemon,
   };
   return harden(daemon);
+};
+/**
+ * Acquire engine ownership before reading or restoring daemon state.
+ * @param {Parameters<typeof buildDaemon>[0]} options
+ */
+export const makeThixotropeDaemon = async options => {
+  const release = await options.engine.acquireStore?.(options.store.statePath);
+  try {
+    /** @param {any} record @returns {any} */
+    const guard = record =>
+      harden(
+        Object.fromEntries(
+          Object.entries(record).map(([key, value]) => [
+            key,
+            typeof value !== 'function'
+              ? value
+              : (...args) => {
+                  options.engine.assertStoreOwnership?.();
+                  const result = Reflect.apply(value, record, args);
+                  return key === 'provideWorkerStore' ||
+                    key === 'provideSessionStore'
+                    ? guard(result)
+                    : result;
+                },
+          ]),
+        ),
+      );
+    const daemon = await buildDaemon({
+      ...options,
+      store: guard(options.store),
+    });
+    /** @type {Promise<void> | undefined} */
+    let closing;
+    /** @param {() => Promise<void>} stop */
+    const close = stop => {
+      closing ??= (async () => {
+        try {
+          await stop();
+        } finally {
+          await release?.();
+        }
+      })();
+      return closing;
+    };
+    return harden({
+      ...daemon,
+      shutdown: () => close(daemon.shutdown),
+      crash: () => close(daemon.crash),
+      inspectWorkers: () =>
+        harden(
+          daemon.listWorkerIds().map(workerId => {
+            const workerStore = options.store.provideWorkerStore(workerId);
+            return harden({
+              workerId,
+              ...workerStore.getMeta(),
+              journalLength: workerStore.journalLength(),
+              awake: daemon.getWorker(workerId).isAwake(),
+            });
+          }),
+        ),
+    });
+  } catch (error) {
+    await release?.();
+    throw error;
+  }
 };
 harden(makeThixotropeDaemon);

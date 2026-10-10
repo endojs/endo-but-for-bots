@@ -133,10 +133,9 @@ test('default deny: followNameChanges snapshot omits restricted names', async t 
 test('default deny: entry() denies a restricted segment in string and array forms', async t => {
   const rootPath = makeDenyFixture(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
-  // Both the slash-joined string form and the array form deny eagerly at
-  // mint, so a restricted name never reaches an entry handle in the first
-  // place — the two forms enforce identically.
-  await t.throwsAsync(() => E(mount).entry('.ssh/id_rsa'), {
+  // Both the single-name string form and the path array form deny eagerly at
+  // mint, so a restricted name never reaches an entry handle.
+  await t.throwsAsync(() => E(mount).entry('.ssh'), {
     message: /Access denied/,
   });
   await t.throwsAsync(() => E(mount).entry(['.ssh', 'id_rsa']), {
@@ -307,6 +306,42 @@ test('revocation: propagates to a file handle opened before revoke', async t => 
   });
 });
 
+test('revocation: a range of a mount file view revokes with it', async t => {
+  const rootPath = makeTemporaryRoot(t);
+  const { mount, control } = makeRevocableMount({
+    rootPath,
+    readOnly: false,
+    filePowers,
+  });
+  await E(mount).writeText(['file.txt'], 'hello world');
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('file.txt'));
+  // Attenuate to a byte range *before* revoking; the derived view reads through
+  // the same live file, so it must revoke together with its origin.
+  const range = await E(file).byteRange(0n, 5n);
+  t.is(await E(range).text(), 'hello');
+
+  E(control).revoke();
+
+  await t.throwsAsync(() => E(range).text(), {
+    message: /Mount has been revoked/,
+  });
+  await t.throwsAsync(() => E(range).sha256(), {
+    message: /Mount has been revoked/,
+  });
+  // A range taken *after* revocation likewise cannot read.
+  const postRange = await E(file)
+    .byteRange(0n, 3n)
+    .catch(() => undefined);
+  if (postRange !== undefined) {
+    await t.throwsAsync(() => E(postRange).text(), {
+      message: /Mount has been revoked/,
+    });
+  } else {
+    // `range` itself may reject on a revoked file (assertLive) — also valid.
+    t.pass();
+  }
+});
+
 test('revocation: a base64 file stream refuses on a revoked mount', async t => {
   const rootPath = makeTemporaryRoot(t);
   const { mount, control } = makeRevocableMount({
@@ -336,7 +371,7 @@ test('revocation: propagates to an entry minted before revoke', async t => {
     readOnly: false,
     filePowers,
   });
-  const entry = await E(mount).entry('a/b.txt');
+  const entry = await E(mount).entry(['a', 'b.txt']);
   t.deepEqual(await E(entry).segments(), ['a', 'b.txt']);
 
   E(control).revoke();

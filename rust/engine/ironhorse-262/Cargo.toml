@@ -6,11 +6,15 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[lints]
+workspace = true
+
 [lib]
 name = "ironhorse_262"
 path = "src/lib.rs"
 
 [dependencies]
+ironhorse-runtime = { path = "../ironhorse-runtime" }
 ironhorse-vm = { path = "../ironhorse-vm" }
 xs-oracle = { path = "../xs-oracle" }
 ironhorse-compile = { path = "../ironhorse-compile" }
@@ -29,6 +33,12 @@ path = "src/bin/compile_diff.rs"
 [[bin]]
 name = "endot-ih"
 path = "src/bin/endot_ih.rs"
+
+# ironhorse-xst: Ironhorse as a plain test262 host, driven by the real
+# `test262-harness --host-type xs` rather than by our own walker.
+[[bin]]
+name = "ironhorse-xst"
+path = "src/bin/ironhorse_xst.rs"
 
 # corpus-to-262: the mechanical corpus -> test262-style case converter
 # (design § Part 1). Dual-runs each corpus line against the oracle once and

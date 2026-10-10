@@ -1,0 +1,1382 @@
+// @ts-check
+
+/**
+ * Effective-state policy enforcement for confined slices.
+ *
+ * A `SlicePolicyRequest` is the machine-checkable half of a hosted-agent
+ * deployment contract: the identity, namespaces, mount table, network
+ * shape, and resource ceilings a slice must actually run under. This
+ * module does two things and no I/O:
+ *
+ *   1. `assertSlicePolicyRequest` normalizes and validates the request,
+ *      then `assemblePolicyArgv` translates it into the exact container
+ *      flags the driver passes to every operation in the slice.
+ *   2. `attestSlicePolicy` reads back what the runtime and the kernel
+ *      actually did — the container runtime's own resolved view, the
+ *      namespace links of the live process, the interface inventory of
+ *      the network namespace it joined, and the quota recorded against
+ *      each writable volume from a kernel quota observer — and returns a
+ *      `SlicePolicyAttestationV1`
+ *      record only when every control is proved.
+ *
+ * The two halves are deliberately separate. Requested flags are a
+ * statement of intent; a host can silently ignore `--pids-limit`, a
+ * storage driver can refuse a quota, and a network namespace can carry a
+ * routable interface the caller never asked for. An attestation derived
+ * from the request would restate the intent. Every field below is
+ * therefore derived from observation, and anything unobserved, absent,
+ * or in an unrecognized shape throws rather than attesting: the safe
+ * collapse for "what we read back does not make sense to us" is "this
+ * control is not proved", which fails provisioning, never "provisioning
+ * succeeded under an unverified control".
+ *
+ * Where the kernel answers for the live process directly — seccomp mode,
+ * no-new-privileges, the effective capability mask, the namespace links,
+ * the interface inventory, the identity inside the user namespace — that
+ * is the answer used, because a container runtime reports the
+ * configuration it was handed rather than the one that took effect, and
+ * on the controls it disables by default it reports nothing at all.
+ *
+ * Byte quantities are `bigint`. Linux expresses cgroup ceilings as
+ * unsigned 64-bit quantities, so a `number` would advertise
+ * JavaScript's 2**53 limit as if it were the kernel's. Counts that the
+ * kernel genuinely bounds well inside four bytes (uid, gid, pids, open
+ * files, cores) stay `number`.
+ */
+
+import { makeError, q, X } from '@endo/errors';
+
+import { SECCOMP_MODE_FILTER } from './observe.js';
+
+/** @import { SlicePolicyRequest, SlicePolicyMount, SlicePolicyAttestation, ObservedSliceState } from './types.js' */
+
+/**
+ * The only policy profile this version implements. A profile names a
+ * whole contract rather than a bag of independent switches, so a slice
+ * cannot be provisioned under a partially-applied hardening posture.
+ */
+export const SLICE_POLICY_PROFILE = 'hosted-agent-v1';
+harden(SLICE_POLICY_PROFILE);
+
+/** Version tag carried by every attestation this module mints. */
+export const SLICE_POLICY_ATTESTATION_VERSION = 'SlicePolicyAttestationV1';
+harden(SLICE_POLICY_ATTESTATION_VERSION);
+
+/**
+ * Mount options the attestation reports. The effective option list a
+ * container runtime returns also carries bookkeeping the contract does
+ * not speak to (`rprivate`, `size=`, `mode=`, `rw`), so the attestation
+ * reports the hardening subset and `attestSlicePolicy` separately
+ * insists that `nosuid` and `nodev` are among them.
+ */
+const ATTESTED_MOUNT_OPTIONS = harden(['nodev', 'noexec', 'nosuid']);
+
+/** Options every mount in the table must carry, whatever else it has. */
+const REQUIRED_MOUNT_OPTIONS = harden(['nodev', 'nosuid']);
+
+/**
+ * The cgroup v2 controllers the attested ceilings are applied through.
+ * Exported because the driver re-asks the same question when it admits
+ * an operation, and the two must agree about which controllers matter:
+ * refusing an operation because `io` was undelegated would refuse it
+ * over a controller no attested ceiling depends on.
+ */
+export const REQUIRED_CGROUP_CONTROLLERS = harden(['memory', 'pids', 'cpu']);
+
+/**
+ * Interfaces a `broker-only` network namespace may contain. The broker's
+ * in-namespace listener is reachable over loopback; anything else is a
+ * routable path the contract does not permit.
+ */
+const BROKER_ONLY_INTERFACES = harden(['lo']);
+
+/**
+ * The shared-memory tmpfs a container runtime attaches whether or not
+ * anyone asked, and whose size it takes from its own flag and reports
+ * in its own field rather than through the mount table. It is a
+ * writable path in the slice, so it carries a declared ceiling like
+ * every other one — as a resource rather than a mount, because that is
+ * the shape the runtime configures and reports it in.
+ *
+ * Its mount options are the one thing not read back. The runtime sets
+ * `nosuid` there by default, and `no-new-privileges` — which *is*
+ * proved, from the kernel — independently makes a setuid binary
+ * written to it grant nothing on exec.
+ */
+const SHM_DESTINATION = '/dev/shm';
+
+/** Image references must be pinned by digest; tags are rejected. */
+const IMAGE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
+
+/**
+ * A whole digest-pinned image reference: `registry/name@sha256:<64 hex>`.
+ *
+ * The reference reaches the container runtime as a *positional*
+ * argument, after every flag, so a value beginning with `-` is parsed
+ * as one more flag and the next token becomes the image. That is an
+ * argument injection into the very command this module exists to
+ * constrain, and the flags it can add — `--security-opt unmask=ALL`,
+ * `--cgroupns host`, `--sysctl` — are ones the attestation does not
+ * read, so the slice would come back weakened and attest clean.
+ *
+ * A policy already requires a pinned digest, so demanding the whole
+ * reference be in that shape costs nothing legitimate.
+ */
+export const PINNED_IMAGE_REFERENCE_PATTERN =
+  /^[a-z0-9][a-z0-9._-]*(?::\d{1,5})?(?:\/[a-z0-9][a-z0-9._-]*)*@sha256:[0-9a-f]{64}$/;
+harden(PINNED_IMAGE_REFERENCE_PATTERN);
+
+/** Portable, bounded name for a volume, container, or mount role. */
+const PORTABLE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+
+/** Absolute, normal, non-traversing destination path inside the slice. */
+const INNER_PATH_PATTERN = /^(\/[A-Za-z0-9][A-Za-z0-9_.-]*)+$/;
+
+/**
+ * Where a runtime attach may land: strictly under `/mnt/`, so it can
+ * never shadow a role the profile fixes elsewhere in the table. The
+ * segment shape is `INNER_PATH_PATTERN`'s, which is also what rejects
+ * `..`.
+ */
+const ATTACH_DESTINATION_PATTERN = /^\/mnt(\/[A-Za-z0-9][A-Za-z0-9_.-]*)+$/;
+
+/** The filesystem type a bind must carry to be an attach and not host data. */
+const ATTACH_FSTYPE = '9p';
+
+/**
+ * Assert a value is a positive integer that fits the four-byte range the
+ * kernel uses for the quantity, and return it.
+ *
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {number}
+ */
+const assertPositiveCount = (value, label) => {
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value <= 0 ||
+    value > 0xffff_ffff
+  ) {
+    throw makeError(X`slice policy ${q(label)} must be a positive count`);
+  }
+  return value;
+};
+
+/**
+ * Assert a value is a non-negative byte quantity and return it.
+ *
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {bigint}
+ */
+const assertByteCount = (value, label) => {
+  if (typeof value !== 'bigint' || value < 0n) {
+    throw makeError(
+      X`slice policy ${q(label)} must be a non-negative byte count`,
+    );
+  }
+  return value;
+};
+
+/**
+ * Assert a value is a bounded portable name and return it.
+ *
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {string}
+ */
+const assertPortableName = (value, label) => {
+  if (typeof value !== 'string' || !PORTABLE_NAME_PATTERN.test(value)) {
+    throw makeError(X`slice policy ${q(label)} must be a portable name`);
+  }
+  return value;
+};
+
+/**
+ * Assert an exact key set, so an unknown field is a rejection rather
+ * than a silently ignored one.
+ *
+ * @param {unknown} record
+ * @param {readonly string[]} keys
+ * @param {string} label
+ * @returns {Record<string, unknown>}
+ */
+const assertExactKeys = (record, keys, label) => {
+  if (typeof record !== 'object' || record === null || Array.isArray(record)) {
+    throw makeError(X`slice policy ${q(label)} must be a record`);
+  }
+  const actual = Object.keys(record).sort().join(',');
+  const expected = [...keys].sort().join(',');
+  if (actual !== expected) {
+    throw makeError(
+      X`slice policy ${q(label)} has unknown or missing fields: expected ${q(expected)}, got ${q(actual)}`,
+    );
+  }
+  return /** @type {Record<string, unknown>} */ (record);
+};
+
+/**
+ * Parse a byte size the way container tooling writes one back: a bare
+ * decimal count, or a decimal with a binary suffix (`4G`, `4GiB`).
+ * Returns `null` for anything else, which callers treat as "no quota
+ * recorded" and therefore as a failure to prove the ceiling.
+ *
+ * Suffixes are binary because every tool in this path (`podman
+ * --tmpfs size=`, `--memory`, volume `size=`) reads them that way.
+ *
+ * @param {unknown} text
+ * @returns {bigint | null}
+ */
+export const parseByteSize = text => {
+  if (typeof text === 'bigint') return text >= 0n ? text : null;
+  if (typeof text === 'number') {
+    // Not a claim that the domain stops at 2**53 — it does not, which is
+    // why every ceiling here is a `bigint`. It is that a JSON number
+    // above that has *already* lost precision by the time it reaches
+    // this function, so it cannot serve as an exact ceiling and "we
+    // cannot read this exactly" is genuinely "not proved". Anything
+    // wider has to arrive as text to survive the trip.
+    return Number.isSafeInteger(text) && text >= 0 ? BigInt(text) : null;
+  }
+  if (typeof text !== 'string') return null;
+  const match = text.trim().match(/^(\d+)\s*(|[kmgtp])(i?b)?$/i);
+  if (match === null) return null;
+  const scale = { '': 0n, k: 1n, m: 2n, g: 3n, t: 4n, p: 5n };
+  const exponent =
+    scale[/** @type {keyof typeof scale} */ (match[2].toLowerCase())];
+  return BigInt(match[1]) * 1024n ** exponent;
+};
+harden(parseByteSize);
+
+/**
+ * Validate one entry of the requested mount table.
+ *
+ * @param {unknown} candidate
+ * @returns {SlicePolicyMount}
+ */
+const assertPolicyMount = candidate => {
+  const record = /** @type {Record<string, unknown>} */ (
+    typeof candidate === 'object' && candidate !== null ? candidate : {}
+  );
+  const kind = record.kind;
+  if (kind !== 'volume' && kind !== 'tmpfs' && kind !== 'attach') {
+    throw makeError(
+      X`slice policy mount kind must be "volume", "tmpfs", or "attach"; got ${q(kind)}`,
+    );
+  }
+  if (kind === 'attach') {
+    assertExactKeys(
+      record,
+      ['role', 'kind', 'source', 'destination', 'mode'],
+      `mount ${record.role}`,
+    );
+    const role = assertPortableName(record.role, 'mount role');
+    const { destination, source, mode } = record;
+    if (
+      typeof destination !== 'string' ||
+      !ATTACH_DESTINATION_PATTERN.test(destination)
+    ) {
+      throw makeError(
+        X`slice policy attach ${q(role)} needs an absolute normal destination under /mnt/; got ${q(destination)}`,
+      );
+    }
+    // The host side of the bind. The same bounded shape as a destination:
+    // the bridge that mints these mountpoints composes them from an
+    // operator-configured base and a content-hash name, so nothing
+    // legitimate needs more, and a looser shape would admit the runtime's
+    // own option separators.
+    if (typeof source !== 'string' || !INNER_PATH_PATTERN.test(source)) {
+      throw makeError(
+        X`slice policy attach ${q(role)} needs an absolute normal host mountpoint; got ${q(source)}`,
+      );
+    }
+    if (mode !== 'ro' && mode !== 'rw') {
+      throw makeError(
+        X`slice policy attach ${q(role)} mode must be "ro" or "rw"; got ${q(mode)}`,
+      );
+    }
+    return harden({ role, kind, source, destination, mode });
+  }
+  const keys =
+    kind === 'volume'
+      ? ['role', 'kind', 'source', 'destination', 'sizeBytes']
+      : ['role', 'kind', 'destination', 'sizeBytes'];
+  assertExactKeys(record, keys, `mount ${record.role}`);
+  const role = assertPortableName(record.role, 'mount role');
+  const destination = record.destination;
+  // `INNER_PATH_PATTERN` requires every segment to begin with an
+  // alphanumeric, so it is also what rejects `..` — a second traversal
+  // check beside it would read as independent defence while actually
+  // being unreachable, and would invite relaxing the pattern later on
+  // the belief that traversal was still caught.
+  if (
+    typeof destination !== 'string' ||
+    !INNER_PATH_PATTERN.test(destination)
+  ) {
+    throw makeError(
+      X`slice policy mount ${q(role)} needs an absolute normal destination; got ${q(destination)}`,
+    );
+  }
+  const sizeBytes = assertByteCount(
+    record.sizeBytes,
+    `mount ${role} sizeBytes`,
+  );
+  if (sizeBytes === 0n) {
+    throw makeError(
+      X`slice policy mount ${q(role)} must declare a positive writable ceiling`,
+    );
+  }
+  if (kind === 'tmpfs') {
+    return harden({ role, kind, destination, sizeBytes });
+  }
+  const source = assertPortableName(record.source, `mount ${role} source`);
+  return harden({ role, kind, source, destination, sizeBytes });
+};
+
+/**
+ * Normalize and validate a slice policy request.
+ *
+ * Every ceiling the contract names must be present: a policy with a
+ * "leave this one to the host default" hole is exactly the shape whose
+ * enforcement nobody can later prove.
+ *
+ * @param {unknown} request
+ * @returns {SlicePolicyRequest}
+ */
+export const assertSlicePolicyRequest = request => {
+  const record = assertExactKeys(
+    request,
+    [
+      'profile',
+      'imageDigest',
+      'uid',
+      'gid',
+      'brokerSidecar',
+      'resources',
+      'mounts',
+      'attestationArgv',
+    ],
+    'request',
+  );
+  if (record.profile !== SLICE_POLICY_PROFILE) {
+    throw makeError(
+      X`slice policy profile must be ${q(SLICE_POLICY_PROFILE)}; got ${q(record.profile)}`,
+    );
+  }
+  const imageDigest = record.imageDigest;
+  if (
+    typeof imageDigest !== 'string' ||
+    !IMAGE_DIGEST_PATTERN.test(imageDigest)
+  ) {
+    throw makeError(
+      X`slice policy image must be pinned by SHA-256 digest; got ${q(imageDigest)}`,
+    );
+  }
+  // uid/gid 0 would keep the slice's processes root inside the user
+  // namespace, which is the identity `no-new-privileges` and a dropped
+  // capability set exist to make unreachable.
+  const uid = assertPositiveCount(record.uid, 'uid');
+  const gid = assertPositiveCount(record.gid, 'gid');
+
+  const sidecar = assertExactKeys(
+    record.brokerSidecar,
+    Object.hasOwn(
+      /** @type {object} */ (record.brokerSidecar ?? {}),
+      'netnsPath',
+    )
+      ? ['netnsPath']
+      : ['container'],
+    'brokerSidecar',
+  );
+  /** @type {SlicePolicyRequest['brokerSidecar']} */
+  let brokerSidecar;
+  if (Object.hasOwn(sidecar, 'netnsPath')) {
+    const netnsPath = sidecar.netnsPath;
+    // Same bounded shape as an inner mount destination. A looser check
+    // would let a comma through, and a runtime that reads `--network`
+    // as a comma-separated list would then attach the slice to a
+    // network the policy never named.
+    if (typeof netnsPath !== 'string' || !INNER_PATH_PATTERN.test(netnsPath)) {
+      throw makeError(
+        X`slice policy brokerSidecar.netnsPath must be an absolute normal path; got ${q(netnsPath)}`,
+      );
+    }
+    brokerSidecar = harden({ netnsPath });
+  } else {
+    brokerSidecar = harden({
+      container: assertPortableName(
+        sidecar.container,
+        'brokerSidecar.container',
+      ),
+    });
+  }
+
+  const resourceRecord = assertExactKeys(
+    record.resources,
+    [
+      'memoryBytes',
+      'pids',
+      'cpuCores',
+      'openFiles',
+      'coreBytes',
+      'shmBytes',
+      'maxConcurrentOperations',
+      'writableBytes',
+    ],
+    'resources',
+  );
+  const resources = harden({
+    memoryBytes: assertByteCount(resourceRecord.memoryBytes, 'memoryBytes'),
+    pids: assertPositiveCount(resourceRecord.pids, 'pids'),
+    cpuCores: assertPositiveCount(resourceRecord.cpuCores, 'cpuCores'),
+    openFiles: assertPositiveCount(resourceRecord.openFiles, 'openFiles'),
+    coreBytes: assertByteCount(resourceRecord.coreBytes, 'coreBytes'),
+    shmBytes: assertByteCount(resourceRecord.shmBytes, 'shmBytes'),
+    maxConcurrentOperations: assertPositiveCount(
+      resourceRecord.maxConcurrentOperations,
+      'maxConcurrentOperations',
+    ),
+    writableBytes: assertByteCount(
+      resourceRecord.writableBytes,
+      'writableBytes',
+    ),
+  });
+  if (resources.memoryBytes === 0n) {
+    throw makeError(X`slice policy memoryBytes must be positive`);
+  }
+
+  const mountList = record.mounts;
+  if (!Array.isArray(mountList) || mountList.length === 0) {
+    throw makeError(X`slice policy must declare its exact mount table`);
+  }
+  const mounts = harden(mountList.map(assertPolicyMount));
+  const roles = new Set();
+  const destinations = new Set();
+  const sources = new Set();
+  // Every ceiling in `resources` is applied per container, and the
+  // slice runs the anchor plus up to `maxConcurrentOperations`
+  // operations, each its own container with its own cgroup and its own
+  // tmpfs. So the per-container writable paths — the tmpfs entries and
+  // the shared-memory tmpfs — count once per container, while the
+  // volumes are one piece of durable storage that every container
+  // mounts and are counted once.
+  //
+  // Getting this wrong is not academic: `writableBytes` would then name
+  // a total nothing bounds, which is exactly the shape the sum check
+  // below exists to refuse.
+  const containers = 1n + BigInt(resources.maxConcurrentOperations);
+  let perContainerWritable = resources.shmBytes;
+  let sharedWritable = 0n;
+  for (const mount of mounts) {
+    if (roles.has(mount.role)) {
+      throw makeError(
+        X`slice policy mount role ${q(mount.role)} is duplicated`,
+      );
+    }
+    roles.add(mount.role);
+    if (destinations.has(mount.destination)) {
+      throw makeError(
+        X`slice policy mount destination ${q(mount.destination)} is duplicated`,
+      );
+    }
+    if (mount.destination === SHM_DESTINATION) {
+      throw makeError(
+        X`slice policy declares ${q(SHM_DESTINATION)} as a mount; its ceiling belongs in resources.shmBytes, which is where the runtime takes it from`,
+      );
+    }
+    destinations.add(mount.destination);
+    if (mount.kind === 'volume') {
+      if (sources.has(mount.source)) {
+        throw makeError(
+          X`slice policy volume ${q(mount.source)} is mounted twice`,
+        );
+      }
+      sources.add(mount.source);
+      sharedWritable += mount.sizeBytes;
+    } else if (mount.kind === 'attach') {
+      // Not host storage: an attach is served through a capability, and
+      // its bytes live wherever that capability keeps them. It adds
+      // nothing to the writable ceiling this table bounds.
+      if (sources.has(mount.source)) {
+        throw makeError(
+          X`slice policy attach ${q(mount.source)} is mounted twice`,
+        );
+      }
+      sources.add(mount.source);
+    } else {
+      perContainerWritable += mount.sizeBytes;
+    }
+  }
+  // The aggregate ceiling is what the parts actually add up to, not an
+  // independent number: nothing enforces a total that no single path is
+  // bounded by, so a request whose parts do not add up to its whole is
+  // asking for a control the host cannot apply.
+  const writable = sharedWritable + perContainerWritable * containers;
+  if (writable !== resources.writableBytes) {
+    throw makeError(
+      X`slice policy writableBytes ${q(resources.writableBytes)} does not equal what its writable paths add up to across the anchor and ${q(resources.maxConcurrentOperations)} operations: ${q(writable)}`,
+    );
+  }
+
+  const attestationArgv = record.attestationArgv;
+  if (
+    !Array.isArray(attestationArgv) ||
+    attestationArgv.length === 0 ||
+    attestationArgv.some(arg => typeof arg !== 'string' || arg.includes('\0'))
+  ) {
+    throw makeError(
+      X`slice policy attestationArgv must be a non-empty argv from the pinned image`,
+    );
+  }
+
+  return harden({
+    profile: SLICE_POLICY_PROFILE,
+    imageDigest,
+    uid,
+    gid,
+    brokerSidecar,
+    resources,
+    mounts,
+    attestationArgv: harden([...attestationArgv]),
+  });
+};
+harden(assertSlicePolicyRequest);
+
+/**
+ * The `--network` value that joins the slice to the broker's prepared
+ * namespace. `none` would mint a fresh empty namespace the broker has
+ * no listener in; joining is what makes loopback-only reachability and
+ * a single provider peer the same fact.
+ *
+ * @param {SlicePolicyRequest['brokerSidecar']} sidecar
+ * @returns {string}
+ */
+export const brokerNetworkArg = sidecar =>
+  Object.hasOwn(sidecar, 'netnsPath')
+    ? `ns:${/** @type {{ netnsPath: string }} */ (sidecar).netnsPath}`
+    : `container:${/** @type {{ container: string }} */ (sidecar).container}`;
+harden(brokerNetworkArg);
+
+/**
+ * Translate a validated policy into the container-create flags every
+ * operation in the slice runs under.
+ *
+ * The result is the whole policy-bearing prefix: the driver appends
+ * only naming, labelling, environment, and the operation's own argv, so
+ * the configuration this function produces is the configuration the
+ * attestation observes and the configuration every operation gets.
+ *
+ * @param {SlicePolicyRequest} policy
+ * @returns {string[]}
+ */
+export const assemblePolicyArgv = policy => {
+  const { resources } = policy;
+  /** @type {string[]} */
+  const argv = [
+    '--user',
+    `${policy.uid}:${policy.gid}`,
+    // The user namespace is deliberately *not* requested here.
+    // `--userns private` asks a rootless engine to nest a second one
+    // inside its own, which needs subordinate id ranges to map from and
+    // fails outright on a host that has none — while adding nothing:
+    // rootless containers already run outside the daemon's user
+    // namespace, and `attestSlicePolicy` proves that from
+    // `/proc/<pid>/ns/user` rather than from any flag. The driver
+    // additionally refuses a namespace another of its live slices
+    // holds. Both are observations, which is the point.
+    //
+    // The two below are named explicitly because they cost nothing and
+    // let the attestation read a definite value back instead of an
+    // empty string meaning "whatever this host does".
+    '--pid',
+    'private',
+    '--ipc',
+    'private',
+    '--security-opt',
+    'no-new-privileges',
+    '--cap-drop',
+    'ALL',
+    '--read-only',
+    // Every writable path is declared below; the runtime's convenience
+    // tmpfs set would add undeclared ones.
+    '--read-only-tmpfs=false',
+    '--network',
+    brokerNetworkArg(policy.brokerSidecar),
+    '--memory',
+    `${resources.memoryBytes}`,
+    // Equal memory and memory+swap ceilings leave no swap for the slice
+    // to spill into, so the memory ceiling is the whole ceiling.
+    '--memory-swap',
+    `${resources.memoryBytes}`,
+    '--pids-limit',
+    `${resources.pids}`,
+    '--cpus',
+    `${resources.cpuCores}`,
+    '--ulimit',
+    `nofile=${resources.openFiles}:${resources.openFiles}`,
+    '--ulimit',
+    `core=${resources.coreBytes}:${resources.coreBytes}`,
+    '--shm-size',
+    `${resources.shmBytes}`,
+  ];
+  for (const mount of policy.mounts) {
+    if (mount.kind === 'tmpfs') {
+      argv.push(
+        '--mount',
+        `type=tmpfs,destination=${mount.destination},rw,nosuid,nodev,tmpfs-size=${mount.sizeBytes},tmpfs-mode=0700,U=true,notmpcopyup`,
+      );
+    } else if (mount.kind === 'attach') {
+      // The one bind the table admits, and only because the attestation
+      // then proves what it was bound from. `rprivate` is the runtime's
+      // default, stated because a policy states everything: a shared
+      // propagation would let a mount event inside the slice reach the
+      // host's view of the same 9P tree.
+      argv.push(
+        '--mount',
+        `type=bind,source=${mount.source},destination=${mount.destination},${mount.mode === 'ro' ? 'ro' : 'rw'},nosuid,nodev,bind-propagation=rprivate`,
+      );
+    } else {
+      argv.push(
+        '--volume',
+        `${mount.source}:${mount.destination}:rw,nosuid,nodev`,
+      );
+    }
+  }
+  return harden(argv);
+};
+harden(assemblePolicyArgv);
+
+/**
+ * Read a field from a runtime inspect record, treating a missing field
+ * as a failure to observe rather than as a default.
+ *
+ * @param {any} record
+ * @param {string} path Dotted path, e.g. `HostConfig.PidsLimit`.
+ * @returns {unknown}
+ */
+const observed = (record, path) => {
+  let cursor = record;
+  for (const key of path.split('.')) {
+    if (typeof cursor !== 'object' || cursor === null) return undefined;
+    cursor = cursor[key];
+  }
+  return cursor;
+};
+
+/**
+ * Fail with a uniform message so every unproved control reads the same
+ * way in a provisioning log.
+ *
+ * @param {string} control
+ * @param {unknown} [saw]
+ * @returns {never}
+ */
+const unproved = (control, saw) => {
+  throw saw === undefined
+    ? makeError(X`slice policy control ${q(control)} is not enforced`)
+    : makeError(
+        X`slice policy control ${q(control)} is not enforced; observed ${q(saw)}`,
+      );
+};
+
+/**
+ * Normalize the effective mount options a runtime reports. Runtimes
+ * write them either as a list or as a comma-separated string, and both
+ * carry bookkeeping alongside the hardening flags.
+ *
+ * @param {unknown} options
+ * @returns {string[]}
+ */
+const effectiveMountOptions = options => {
+  /** @type {string[]} */
+  let parts;
+  if (Array.isArray(options)) {
+    parts = options.filter(option => typeof option === 'string');
+  } else if (typeof options === 'string') {
+    parts = options.split(',');
+  } else {
+    return [];
+  }
+  return parts.map(option => option.trim()).filter(o => o !== '');
+};
+
+/**
+ * Read the destination-keyed tmpfs map a runtime reports alongside its
+ * `Mounts` array, as a plain record of option strings.
+ *
+ * @param {any} inspect
+ * @returns {Record<string, string>}
+ */
+const tmpfsTable = inspect => {
+  const table = observed(inspect, 'HostConfig.Tmpfs');
+  // Absent is empty; anything else unrecognized is unproved. Dropping
+  // an entry we could not read would let an undeclared writable path
+  // pass the exactness check below by being invisible to it — the
+  // asymmetry the `Mounts` branch already avoids.
+  if (table === undefined || table === null) return harden({});
+  if (typeof table !== 'object' || Array.isArray(table)) {
+    return unproved('mount table', table);
+  }
+  /** @type {Record<string, string>} */
+  const entries = {};
+  for (const [destination, options] of Object.entries(table)) {
+    if (typeof options !== 'string') {
+      return unproved(
+        'mount table',
+        `unreadable tmpfs entry at ${destination}`,
+      );
+    }
+    entries[destination] = options;
+  }
+  return harden(entries);
+};
+
+/**
+ * Locate the effective mount the runtime reports at a destination,
+ * across the two shapes a runtime uses: a `Mounts` array for volumes and
+ * binds, and a destination-keyed tmpfs map.
+ *
+ * @param {any} inspect
+ * @param {Record<string, string>} tmpfs Already-validated tmpfs table,
+ *   passed rather than rebuilt so the two readings of it cannot drift.
+ * @param {SlicePolicyMount} mount
+ * @returns {{ source: string, options: string[], readOnly: boolean, sizeBytes: bigint | null } | null}
+ */
+const findEffectiveMount = (inspect, tmpfs, mount) => {
+  if (mount.kind === 'tmpfs') {
+    const entry = tmpfs[mount.destination];
+    if (entry !== undefined) {
+      const size = entry
+        .split(',')
+        .find(option => option.startsWith('size='))
+        ?.slice('size='.length);
+      return harden({
+        source: 'tmpfs',
+        options: harden(effectiveMountOptions(entry)),
+        readOnly: entry.split(',').includes('ro'),
+        sizeBytes: size === undefined ? null : parseByteSize(size),
+      });
+    }
+  }
+  const mounts = observed(inspect, 'Mounts');
+  if (!Array.isArray(mounts)) return null;
+  for (const candidate of mounts) {
+    if (
+      typeof candidate !== 'object' ||
+      candidate === null ||
+      candidate.Destination !== mount.destination
+    ) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    if (candidate.Type !== (mount.kind === 'attach' ? 'bind' : mount.kind)) {
+      return null;
+    }
+    const options = harden(effectiveMountOptions(candidate.Options));
+    if (mount.kind === 'tmpfs') {
+      const size = (
+        Array.isArray(candidate.Options)
+          ? candidate.Options
+          : String(candidate.Options ?? '').split(',')
+      )
+        .map(String)
+        .find((/** @type {string} */ option) => option.startsWith('size='))
+        ?.slice('size='.length);
+      return harden({
+        source: 'tmpfs',
+        options,
+        readOnly: candidate.RW === false,
+        sizeBytes: size === undefined ? null : parseByteSize(size),
+      });
+    }
+    return harden({
+      source: String(candidate.Name ?? candidate.Source ?? ''),
+      options,
+      readOnly: candidate.RW === false,
+      // A volume's ceiling belongs to the volume, not to this mount of
+      // it, so it is read from the storage driver rather than from here.
+      sizeBytes: null,
+    });
+  }
+  return null;
+};
+
+/**
+ * Prove the requested mount table is the effective mount table, and
+ * report it.
+ *
+ * @param {SlicePolicyRequest} policy
+ * @param {ObservedSliceState} state
+ * @returns {SlicePolicyAttestation['mounts']}
+ */
+const attestMounts = (policy, state) => {
+  const effectiveMounts = observed(state.inspect, 'Mounts');
+  const effectiveTmpfs = tmpfsTable(state.inspect);
+  const declaredDestinations = new Set(
+    policy.mounts.map(mount => mount.destination),
+  );
+  const attachDestinations = new Set(
+    policy.mounts
+      .filter(mount => mount.kind === 'attach')
+      .map(mount => mount.destination),
+  );
+  // An undeclared mount is the failure this table exists to exclude, so
+  // enumerate what the runtime actually attached before matching the
+  // declared entries against it. An absent list is read as an empty one:
+  // the declared entries are then reported as unattached, which is the
+  // same rejection by a more specific name.
+  if (
+    effectiveMounts !== undefined &&
+    effectiveMounts !== null &&
+    !Array.isArray(effectiveMounts)
+  ) {
+    return unproved('mount table', effectiveMounts);
+  }
+  for (const candidate of effectiveMounts ?? []) {
+    const destination = /** @type {any} */ (candidate)?.Destination;
+    if (typeof destination !== 'string') {
+      return unproved('mount table', candidate);
+    }
+    if (!declaredDestinations.has(destination)) {
+      return unproved('mount table', `undeclared mount at ${destination}`);
+    }
+    if (
+      /** @type {any} */ (candidate).Type === 'bind' &&
+      !attachDestinations.has(destination)
+    ) {
+      // A bind is the only mount shape that can reach host state — a
+      // home directory, a credential store, a runtime socket. The only
+      // binds the table admits are its declared attaches, each of which
+      // is proved below to be a 9P projection rather than host data, so
+      // `hostHome` and `hostSockets` still follow from the absence of any
+      // other bind rather than from a path blocklist.
+      return unproved('mount table', `host bind mount at ${destination}`);
+    }
+  }
+  for (const destination of Object.keys(effectiveTmpfs)) {
+    if (!declaredDestinations.has(destination)) {
+      return unproved('mount table', `undeclared tmpfs at ${destination}`);
+    }
+  }
+
+  return harden(
+    policy.mounts.map(mount => {
+      const effective = findEffectiveMount(
+        state.inspect,
+        effectiveTmpfs,
+        mount,
+      );
+      if (effective === null) {
+        return unproved(`mount ${mount.role}`, 'not attached');
+      }
+      if (mount.kind === 'attach') {
+        // The runtime's half: the bind is of the declared host mountpoint,
+        // in the declared mode, with the hardening options.
+        if (effective.source !== mount.source) {
+          return unproved(`mount ${mount.role}`, effective.source);
+        }
+        if (effective.readOnly !== (mount.mode === 'ro')) {
+          return unproved(
+            `mount ${mount.role}`,
+            effective.readOnly ? 'attached read-only' : 'attached read-write',
+          );
+        }
+        const missingRuntime = REQUIRED_MOUNT_OPTIONS.filter(
+          option => !effective.options.includes(option),
+        );
+        if (missingRuntime.length > 0) {
+          return unproved(
+            `mount ${mount.role}`,
+            `missing ${missingRuntime.join(',')}`,
+          );
+        }
+        // The kernel's half, which is the part the runtime cannot answer:
+        // what filesystem the slice actually sees at the destination. A
+        // bind inherits the type of what it was bound from, so a 9P type
+        // here says the source is a projection served by a userspace
+        // server — the bridge — and not host data. Anything else at that
+        // path, including nothing, is exactly the host bind the table
+        // excludes.
+        const kernel = state.attachMounts?.get(mount.destination);
+        if (kernel === undefined || kernel === null) {
+          return unproved(
+            `mount ${mount.role}`,
+            'absent from the anchor mount table',
+          );
+        }
+        if (kernel.fstype !== ATTACH_FSTYPE) {
+          return unproved(
+            `mount ${mount.role}`,
+            `${kernel.fstype} rather than a ${ATTACH_FSTYPE} projection`,
+          );
+        }
+        // The whole projection, not a subtree of it. A bind whose root is
+        // a subpath carries the same filesystem type and would pass every
+        // other check here while showing the slice a different — possibly
+        // wider — tree than the capability the attach names.
+        if (kernel.root !== '/') {
+          return unproved(
+            `mount ${mount.role}`,
+            `a bind of ${kernel.root} within the projection rather than the whole of it`,
+          );
+        }
+        if (kernel.options.includes('ro') !== (mount.mode === 'ro')) {
+          return unproved(
+            `mount ${mount.role}`,
+            `kernel mounted it ${kernel.options.includes('ro') ? 'read-only' : 'read-write'}`,
+          );
+        }
+        const missingKernel = REQUIRED_MOUNT_OPTIONS.filter(
+          option => !kernel.options.includes(option),
+        );
+        if (missingKernel.length > 0) {
+          return unproved(
+            `mount ${mount.role}`,
+            `kernel mount missing ${missingKernel.join(',')}`,
+          );
+        }
+        return harden({
+          role: mount.role,
+          source: `attach:${mount.source}`,
+          destination: mount.destination,
+          mode: mount.mode,
+          // From the kernel's per-mount options, not the runtime record
+          // two lines of evidence away: `noexec` is attested here and
+          // required nowhere, so reading it from the runtime would let a
+          // runtime assert a hardening the slice does not have.
+          options: harden(
+            ATTESTED_MOUNT_OPTIONS.filter(option =>
+              kernel.options.includes(option),
+            ),
+          ),
+        });
+      }
+      if (effective.readOnly) {
+        return unproved(`mount ${mount.role}`, 'attached read-only');
+      }
+      if (mount.kind === 'volume' && effective.source !== mount.source) {
+        return unproved(`mount ${mount.role}`, effective.source);
+      }
+      const missing = REQUIRED_MOUNT_OPTIONS.filter(
+        option => !effective.options.includes(option),
+      );
+      if (missing.length > 0) {
+        return unproved(`mount ${mount.role}`, `missing ${missing.join(',')}`);
+      }
+      // The writable ceiling: a tmpfs carries its own `size=`, a volume
+      // carries a quota independently observed from the kernel. Neither
+      // is a flag we can take on faith, so both are read back.
+      let ceiling = effective.sizeBytes;
+      if (mount.kind === 'volume') {
+        const volume = state.volumes.get(mount.source);
+        // A volume created with `--opt device=… --opt o=bind` is a host
+        // directory the runtime still reports as `Type: 'volume'`, so
+        // the bind check above walks straight past it and `hostHome`
+        // would be attested `none` over the operator's home directory.
+        if (volume?.hostPath != null) {
+          return unproved(
+            `mount ${mount.role}`,
+            `volume is backed by the host path ${volume.hostPath}`,
+          );
+        }
+        ceiling = volume?.sizeBytes ?? null;
+      }
+      if (ceiling === null) {
+        return unproved(`mount ${mount.role} storage ceiling`);
+      }
+      if (ceiling !== mount.sizeBytes) {
+        return unproved(`mount ${mount.role} storage ceiling`, ceiling);
+      }
+      if (mount.kind === 'tmpfs') {
+        // The single-UID slice must be able to use its declared writable roots.
+        // Inspect must preserve the requested ownership, not image-directory
+        // defaults such as root-owned /run or /workspace.
+        const optionValues = Object.fromEntries(
+          effective.options.map(option => option.split('=')),
+        );
+        if (
+          optionValues.uid !== String(policy.uid) ||
+          optionValues.gid !== String(policy.gid) ||
+          !['0700', '700'].includes(optionValues.mode)
+        ) {
+          return unproved(`mount ${mount.role} ownership`);
+        }
+      }
+      return harden({
+        role: mount.role,
+        source: mount.kind === 'tmpfs' ? 'tmpfs' : `volume:${mount.source}`,
+        destination: mount.destination,
+        mode: /** @type {const} */ ('rw'),
+        options: harden(
+          ATTESTED_MOUNT_OPTIONS.filter(option =>
+            effective.options.includes(option),
+          ),
+        ),
+      });
+    }),
+  );
+};
+
+/**
+ * Derive a `SlicePolicyAttestationV1` from observed runtime and kernel
+ * state, or throw naming the first control that is not proved.
+ *
+ * @param {SlicePolicyRequest} policy
+ * @param {ObservedSliceState} state
+ * @returns {SlicePolicyAttestation}
+ */
+export const attestSlicePolicy = (policy, state) => {
+  const { inspect, resources: hostResources } = state;
+
+  if (!state.rootless) {
+    return unproved('rootless backend');
+  }
+  if (observed(inspect, 'State.Running') !== true) {
+    return unproved('live slice anchor');
+  }
+  if (observed(inspect, 'HostConfig.Privileged') === true) {
+    return unproved('unprivileged container');
+  }
+
+  // Identity. `--user` is echoed back verbatim; the process's own
+  // reported uid/gid is what the kernel actually gave it.
+  if (state.processIdentity.uid !== policy.uid) {
+    return unproved('uid', state.processIdentity.uid);
+  }
+  if (state.processIdentity.gid !== policy.gid) {
+    return unproved('gid', state.processIdentity.gid);
+  }
+
+  // Image identity: the manifest digest the runtime resolved this
+  // container's image to. Deliberately not the image ID, which is the
+  // digest of a different blob and would compare equal to nothing the
+  // operator approved.
+  const imageDigest = observed(inspect, 'ImageDigest');
+  if (
+    typeof imageDigest !== 'string' ||
+    !IMAGE_DIGEST_PATTERN.test(imageDigest) ||
+    imageDigest !== policy.imageDigest
+  ) {
+    return unproved('image digest', imageDigest);
+  }
+
+  // Namespaces. A runtime's own report of "private" is a restatement of
+  // the flag; the kernel's answer is whether the anchor's namespace
+  // links differ from the ones this process holds.
+  for (const kind of /** @type {const} */ (['user', 'pid', 'ipc', 'mount'])) {
+    const namespace = state.namespaces[kind];
+    if (namespace.unshared !== true || namespace.id === null) {
+      return unproved(`${kind} namespace`, namespace.id);
+    }
+  }
+  /** @type {SlicePolicyAttestation['namespaces']} */
+  const namespaces = harden({
+    user: /** @type {const} */ ('private'),
+    pid: /** @type {const} */ ('private'),
+    ipc: /** @type {const} */ ('private'),
+    mount: /** @type {const} */ ('private'),
+  });
+
+  // Filesystem and privilege posture.
+  if (observed(inspect, 'HostConfig.ReadonlyRootfs') !== true) {
+    return unproved('read-only root');
+  }
+  // Nothing may be in force that the policy did not ask for. The two
+  // kernel-proved controls below say a filter is loaded and privileges
+  // cannot be regained; they say nothing about `unmask=`, `mask=`,
+  // `label=disable`, or `apparmor=unconfined`, each of which weakens
+  // the slice without touching either answer.
+  const securityOpts = observed(inspect, 'HostConfig.SecurityOpt');
+  if (securityOpts !== undefined && securityOpts !== null) {
+    if (!Array.isArray(securityOpts)) {
+      return unproved('security options', securityOpts);
+    }
+    const unrecognized = securityOpts
+      .map(String)
+      .filter(
+        option =>
+          !/^no-new-privileges(:true)?$/.test(option) &&
+          !option.startsWith('seccomp='),
+      );
+    if (unrecognized.length > 0) {
+      return unproved('security options', unrecognized.join(' '));
+    }
+  }
+
+  // The three per-process privilege controls all have a kernel answer
+  // for the live anchor, so none of them is taken from the runtime's
+  // report of its own configuration. That report is not merely weaker:
+  // an engine whose defaults already disable seccomp says nothing about
+  // it in `SecurityOpt` at all, so reading the flag list would attest a
+  // filter nobody loaded.
+  if (state.processIdentity.noNewPrivs !== true) {
+    return unproved('no-new-privileges', state.processIdentity.noNewPrivs);
+  }
+  if (state.processIdentity.seccompMode !== SECCOMP_MODE_FILTER) {
+    return unproved('seccomp', state.processIdentity.seccompMode);
+  }
+  // All three capability masks, not just the effective one. A process
+  // whose permitted set is non-empty can raise any of it back into
+  // effect with one `capset()`, and a non-empty bounding set is what
+  // would let a descendant acquire one at all, so an empty `CapEff`
+  // beside either of those is a posture that lasts until the slice
+  // decides otherwise.
+  for (const set of /** @type {const} */ ([
+    'effectiveCapabilities',
+    'permittedCapabilities',
+    'boundingCapabilities',
+  ])) {
+    const mask = state.processIdentity[set];
+    if (mask !== 0n) {
+      return unproved(
+        'dropped capabilities',
+        mask === null ? null : `${set}=0x${mask.toString(16)}`,
+      );
+    }
+  }
+  const devices = observed(inspect, 'HostConfig.Devices');
+  if (!Array.isArray(devices) || devices.length !== 0) {
+    return unproved('device isolation', devices);
+  }
+
+  // Network. `broker-only` is loopback plus the broker's in-namespace
+  // listener and nothing else, so the proof is the interface inventory
+  // of the namespace the anchor actually joined.
+  const interfaces = [...state.network.interfaces].sort();
+  if (interfaces.join(',') !== [...BROKER_ONLY_INTERFACES].sort().join(',')) {
+    return unproved('broker-only network', interfaces.join(','));
+  }
+  if (state.network.routableRoutes !== 0) {
+    return unproved(
+      'broker-only network',
+      `${state.network.routableRoutes} routable routes`,
+    );
+  }
+  const networkNamespaceId = state.network.namespaceId;
+  if (
+    typeof networkNamespaceId !== 'string' ||
+    !PORTABLE_NAME_PATTERN.test(networkNamespaceId)
+  ) {
+    return unproved('network namespace identity', networkNamespaceId);
+  }
+  // A loopback-only inventory is not by itself the broker's namespace: a
+  // slice that landed in a fresh empty namespace has the same inventory
+  // and a perfectly well-formed identity. It matters because the broker
+  // lease binds to the id this attestation reports, so an id that is not
+  // the broker's binds the lease to a namespace with no listener in it.
+  if (networkNamespaceId !== state.network.brokerNamespaceId) {
+    return unproved(
+      'broker namespace identity',
+      `joined ${networkNamespaceId}, broker holds ${state.network.brokerNamespaceId}`,
+    );
+  }
+
+  // Resource ceilings, read back from the runtime's resolved view. A
+  // host that silently ignored a flag reports the ignored value here.
+  const memory = parseByteSize(observed(inspect, 'HostConfig.Memory'));
+  if (memory === null || memory !== policy.resources.memoryBytes) {
+    return unproved('memory ceiling', memory);
+  }
+  const memorySwap = parseByteSize(observed(inspect, 'HostConfig.MemorySwap'));
+  if (memorySwap === null || memorySwap !== policy.resources.memoryBytes) {
+    return unproved('swap ceiling', memorySwap);
+  }
+  const shmSize = parseByteSize(observed(inspect, 'HostConfig.ShmSize'));
+  if (shmSize === null || shmSize !== policy.resources.shmBytes) {
+    return unproved(`shared-memory ceiling at ${SHM_DESTINATION}`, shmSize);
+  }
+  const pidsLimit = observed(inspect, 'HostConfig.PidsLimit');
+  if (pidsLimit !== policy.resources.pids) {
+    return unproved('pid ceiling', pidsLimit);
+  }
+  const quota = observed(inspect, 'HostConfig.CpuQuota');
+  const period = observed(inspect, 'HostConfig.CpuPeriod');
+  const nanoCpus = observed(inspect, 'HostConfig.NanoCpus');
+  const quotaCores =
+    typeof quota === 'number' && typeof period === 'number' && period > 0
+      ? quota / period
+      : typeof nanoCpus === 'number' && nanoCpus > 0
+        ? nanoCpus / 1e9
+        : null;
+  if (quotaCores !== policy.resources.cpuCores) {
+    return unproved('cpu ceiling', quotaCores);
+  }
+  const ulimits = observed(inspect, 'HostConfig.Ulimits');
+  /**
+   * @param {string} name
+   * @param {bigint} expected
+   */
+  const assertUlimit = (name, expected) => {
+    if (!Array.isArray(ulimits)) return unproved(`${name} ceiling`, ulimits);
+    const entry = ulimits.find(
+      candidate =>
+        typeof candidate?.Name === 'string' &&
+        candidate.Name.replace(/^RLIMIT_/, '').toLowerCase() === name,
+    );
+    const soft = parseByteSize(entry?.Soft);
+    const hard = parseByteSize(entry?.Hard);
+    if (
+      soft === null ||
+      hard === null ||
+      soft !== expected ||
+      hard !== expected
+    ) {
+      return unproved(`${name} ceiling`, entry);
+    }
+    return expected;
+  };
+  assertUlimit('nofile', BigInt(policy.resources.openFiles));
+  assertUlimit('core', policy.resources.coreBytes);
+
+  // A cgroup ceiling the host cannot delegate is a ceiling nothing
+  // applies, whatever the runtime echoed back.
+  const missingControllers = [...REQUIRED_CGROUP_CONTROLLERS].filter(
+    controller => !hostResources.cgroupControllers.includes(controller),
+  );
+  if (missingControllers.length > 0) {
+    // Both halves, because the generic renderer says "observed X" and
+    // the missing set alone reads as though those were the controllers
+    // the host had. An operator reading this needs to know what it
+    // does delegate as much as what it does not.
+    return unproved(
+      'cgroup delegation',
+      `delegated ${hostResources.cgroupControllers.join(',') || 'none'}, needs ${missingControllers.join(',')}`,
+    );
+  }
+
+  const mounts = attestMounts(policy, state);
+
+  // Descendant reaping: a private pid namespace puts every descendant,
+  // however it detached itself, inside the container the driver removes,
+  // and the driver's exact-label reconciliation covers the case where
+  // the daemon that owned it died first.
+  if (!state.descendantReaping) {
+    return unproved('descendant reaping');
+  }
+
+  return harden({
+    version: SLICE_POLICY_ATTESTATION_VERSION,
+    profile: policy.profile,
+    backend: /** @type {const} */ ('rootless-podman'),
+    imageDigest,
+    network: /** @type {const} */ ('broker-only'),
+    networkNamespaceId,
+    uid: policy.uid,
+    gid: policy.gid,
+    readOnlyRoot: /** @type {const} */ (true),
+    noNewPrivileges: /** @type {const} */ (true),
+    dropAllCapabilities: /** @type {const} */ (true),
+    seccomp: /** @type {const} */ (true),
+    devices: /** @type {const} */ ('none'),
+    hostSockets: /** @type {const} */ ('none'),
+    hostHome: /** @type {const} */ ('none'),
+    descendantReaping: /** @type {const} */ (true),
+    namespaces,
+    limits: harden({
+      memoryBytes: policy.resources.memoryBytes,
+      pids: policy.resources.pids,
+      cpuCores: policy.resources.cpuCores,
+      openFiles: policy.resources.openFiles,
+      coreBytes: policy.resources.coreBytes,
+      shmBytes: policy.resources.shmBytes,
+      maxConcurrentOperations: policy.resources.maxConcurrentOperations,
+      writableBytes: policy.resources.writableBytes,
+    }),
+    mounts,
+  });
+};
+harden(attestSlicePolicy);
+
+/**
+ * Project a container-runtime inspect record down to the fields the
+ * attestation checks, canonically ordered.
+ *
+ * Two containers with the same fingerprint were resolved by the runtime
+ * to the same enforced configuration. The driver compares each
+ * operation's against the anchor's before letting it run, which is what
+ * turns "these containers were asked for the same flags" — an inference
+ * this module otherwise refuses — into "this host resolved those flags
+ * the same way it did when the slice was proved".
+ *
+ * It is deliberately not a proof of the kernel state: that was read of
+ * the anchor. What it catches is the host changing underneath a live
+ * slice — cgroup delegation revoked, an engine upgrade resolving a flag
+ * differently — between the slice being attested and an operation being
+ * admitted.
+ *
+ * @param {unknown} inspect
+ * @returns {string}
+ */
+export const sliceConfigFingerprint = inspect => {
+  const fields = harden([
+    'ImageDigest',
+    'HostConfig.Privileged',
+    'HostConfig.ReadonlyRootfs',
+    'HostConfig.SecurityOpt',
+    'HostConfig.Devices',
+    // Capabilities are the one attested category with no other
+    // per-operation coverage: the kernel-side masks are read of the
+    // anchor only, so a `default_capabilities` change or an engine that
+    // stopped honouring `--cap-drop ALL` would otherwise reach an
+    // operation with an identical fingerprint.
+    'HostConfig.CapDrop',
+    'HostConfig.CapAdd',
+    'HostConfig.Memory',
+    'HostConfig.MemorySwap',
+    'HostConfig.ShmSize',
+    'HostConfig.PidsLimit',
+    'HostConfig.CpuQuota',
+    'HostConfig.CpuPeriod',
+    'HostConfig.NanoCpus',
+    'HostConfig.Ulimits',
+    'HostConfig.Tmpfs',
+    'HostConfig.ReadonlyTmpfs',
+    'HostConfig.NetworkMode',
+    'HostConfig.UsernsMode',
+    'HostConfig.PidMode',
+    'HostConfig.IpcMode',
+    'Config.User',
+  ]);
+  /**
+   * Canonical JSON: object key order is an artifact of how the runtime
+   * serialized its answer, not of the configuration, so two orderings
+   * of the same record must not fingerprint differently.
+   *
+   * @param {unknown} value
+   * @returns {string}
+   */
+  const canonical = value => {
+    if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+    if (typeof value === 'object' && value !== null) {
+      return `{${Object.keys(value)
+        .sort()
+        .map(
+          key =>
+            `${JSON.stringify(key)}:${canonical(/** @type {any} */ (value)[key])}`,
+        )
+        .join(',')}}`;
+    }
+    return JSON.stringify(value ?? null);
+  };
+  const mounts = observed(inspect, 'Mounts');
+  const mountSummary = (Array.isArray(mounts) ? mounts : [])
+    .map(mount =>
+      canonical({
+        Type: mount?.Type,
+        Name: mount?.Name,
+        Source: mount?.Source,
+        Destination: mount?.Destination,
+        Options: [
+          ...(Array.isArray(mount?.Options) ? mount.Options : []),
+        ].sort(),
+        RW: mount?.RW,
+      }),
+    )
+    .sort()
+    .join(',');
+  return `${fields
+    .map(field => `${field}=${canonical(observed(inspect, field))}`)
+    .join(';')};Mounts=[${mountSummary}]`;
+};
+harden(sliceConfigFingerprint);

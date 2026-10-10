@@ -8,7 +8,10 @@
  */
 
 import type { ERef, FarRef } from '@endo/eventual-send';
-import type { PassableBytesReader } from '@endo/exo-stream';
+import type {
+  PassableBytesReader,
+  PassableBytesWriter,
+} from '@endo/exo-stream';
 
 // ---------------------------------------------------------------------------
 // Network policy
@@ -20,6 +23,12 @@ import type { PassableBytesReader } from '@endo/exo-stream';
  * is a hard error, never an upgrade.
  *
  * - `none`        — no network reachable.
+ * - `broker-only` — join a namespace an operator prepared that holds
+ *                   loopback and nothing routable, so the only peer is
+ *                   the broker's in-namespace listener. Requires — and
+ *                   is required by — a `SlicePolicyRequest`, which names
+ *                   the namespace and whose attestation proves the
+ *                   interface inventory.
  * - `private`     — private namespace, NAT'd outbound, RFC 1918 / loopback
  *                   blocklisted.
  * - `host-loopback` — share host net namespace, only loopback reachable.
@@ -27,7 +36,12 @@ import type { PassableBytesReader } from '@endo/exo-stream';
  * - `host-net`    — share host net namespace, no extra filtering.
  */
 export type NetworkProfile =
-  'none' | 'private' | 'host-loopback' | 'host-lan' | 'host-net';
+  | 'none'
+  | 'broker-only'
+  | 'private'
+  | 'host-loopback'
+  | 'host-lan'
+  | 'host-net';
 
 // ---------------------------------------------------------------------------
 // Backend driver names and probe results
@@ -187,11 +201,263 @@ export type SandboxMakeOpts = {
    * `src/limits.js#DEFAULT_LIMITS`.
    */
   limits?: ResourceLimits;
+  /**
+   * Enforced deployment policy. When present, `make()` builds the slice
+   * under exactly this configuration and rejects unless every control
+   * is proved against effective state; `SandboxHandle.policy()` then
+   * returns the attestation. Requires `network: 'broker-only'`, and
+   * declares the whole mount table, so `mounts` must be empty.
+   */
+  policy?: SlicePolicyRequest;
+};
+
+// ---------------------------------------------------------------------------
+// Slice policy — enforced configuration and its attestation
+// ---------------------------------------------------------------------------
+
+/**
+ * One entry of the exact mount table a policy declares. Every entry is
+ * writable and carries a ceiling: a writable path with no ceiling is
+ * the aggregate storage bound's missing half, and a read-only path
+ * belongs in the image rather than in the table.
+ *
+ * A `tmpfs` entry is minted per slice; a `volume` entry names durable
+ * state an operator created, whose ceiling the storage driver must
+ * already have recorded because nothing can impose one afterwards.
+ */
+export type SlicePolicyMount =
+  | {
+      role: string;
+      kind: 'tmpfs';
+      destination: string;
+      sizeBytes: bigint;
+    }
+  | {
+      role: string;
+      kind: 'volume';
+      source: string;
+      destination: string;
+      sizeBytes: bigint;
+    }
+  | {
+      role: string;
+      /**
+       * A runtime attach: a capability an operator-held bridge already
+       * serves over 9P at a host mountpoint, bound into the slice under
+       * `/mnt/`. It carries no storage ceiling because it is not host
+       * storage — writes go through the capability to wherever that
+       * capability keeps its bytes. The attestation proves the mount the
+       * slice sees at `destination` is a 9P projection rather than host
+       * data; which capability it projects is the bridge's business.
+       */
+      kind: 'attach';
+      /** Absolute, normal host path of the 9P mountpoint. */
+      source: string;
+      /** Absolute, normal path under `/mnt/`. */
+      destination: string;
+      mode: 'ro' | 'rw';
+    };
+
+/**
+ * Resource ceilings a policy requires the host to apply through cgroups
+ * and rlimits. Every ceiling is mandatory: a policy with a
+ * "leave this one to the host default" hole is exactly the shape whose
+ * enforcement nobody can later prove.
+ *
+ * Byte quantities are `bigint` because Linux expresses cgroup ceilings
+ * as unsigned 64-bit quantities; counts the kernel bounds well inside
+ * four bytes stay `number`.
+ */
+export type SlicePolicyResources = {
+  memoryBytes: bigint;
+  pids: number;
+  cpuCores: number;
+  openFiles: number;
+  coreBytes: bigint;
+  /**
+   * Ceiling for the `/dev/shm` tmpfs. It is a resource rather than a
+   * mount because that is the shape the runtime configures and reports
+   * it in — it attaches one whether or not anyone asked — and it counts
+   * toward `writableBytes` like every other writable path.
+   */
+  shmBytes: bigint;
+  /**
+   * How many operation containers may be live at once, beside the
+   * anchor. Every ceiling above is applied *per container* — the driver
+   * runs one container per spawn — so this is what makes the slice-wide
+   * aggregate below a finite number rather than a wish.
+   */
+  maxConcurrentOperations: number;
+  /**
+   * The slice-wide writable aggregate. Must equal the volumes' ceilings
+   * (shared: every container mounts the same storage) plus the tmpfs
+   * and shared-memory ceilings times `1 + maxConcurrentOperations`
+   * (per container: each gets its own).
+   */
+  writableBytes: bigint;
+};
+
+/**
+ * The machine-checkable half of a hosted-agent deployment contract.
+ *
+ * Passing one to `SandboxFactory.make()` makes construction fail closed:
+ * the slice is created under exactly this configuration, a live anchor
+ * is inspected against the kernel's own account of what happened, and
+ * `make()` rejects unless every control is proved.
+ */
+export type SlicePolicyRequest = {
+  /** The only profile v1 implements. */
+  profile: 'hosted-agent-v1';
+  /** `sha256:<64 lowercase hex digits>`; tags are rejected. */
+  imageDigest: string;
+  /** Numeric identity inside the slice's user namespace; never 0. */
+  uid: number;
+  gid: number;
+  /**
+   * The network namespace to join, named either by the container that
+   * holds it or by its path. The operator prepares it with the broker's
+   * loopback listener and nothing routable; the attestation proves the
+   * inventory rather than trusting the preparation.
+   */
+  brokerSidecar: { container: string } | { netnsPath: string };
+  resources: SlicePolicyResources;
+  /** The exact mount table, and nothing else, that the slice may have. */
+  mounts: readonly SlicePolicyMount[];
+  /**
+   * An argv from the pinned image that blocks until it is removed. It
+   * runs as the slice's policy anchor: the live container the
+   * attestation reads namespace links, identity, and interfaces from.
+   * The caller names it because the caller pinned the image.
+   */
+  attestationArgv: readonly string[];
+};
+
+/**
+ * What the runtime and the kernel were observed to have done, gathered
+ * by the driver and translated by `attestSlicePolicy`.
+ */
+export type ObservedSliceState = {
+  /** Parsed container-runtime inspect record for the live anchor. */
+  inspect: unknown;
+  /** Whether the container engine runs without host root. */
+  rootless: boolean;
+  /**
+   * Per namespace, which one the anchor holds and whether it differs
+   * from the observer's. The identity is carried, not folded away, so a
+   * caller can also check it against the other slices in play —
+   * "unshared" is not "private" on its own.
+   */
+  namespaces: Record<
+    'user' | 'pid' | 'ipc' | 'mount',
+    { id: string | null; unshared: boolean }
+  >;
+  /**
+   * The anchor's network namespace as `procfs` describes it, beside the
+   * identity of the one the policy named. They must be the same
+   * namespace: a loopback-only inventory is also what a fresh empty
+   * namespace has.
+   */
+  network: {
+    namespaceId: string;
+    brokerNamespaceId: string;
+    interfaces: readonly string[];
+    routableRoutes: number;
+  };
+  /**
+   * The anchor's per-process posture as the kernel reports it: its
+   * uid/gid inside its own user namespace, its seccomp mode, whether it
+   * can regain privileges, and its effective capability mask. A field
+   * this kernel does not report is `null`, which is read as "not
+   * proved" rather than as an answer either way.
+   */
+  processIdentity: {
+    uid: number;
+    gid: number;
+    seccompMode: number | null;
+    noNewPrivs: boolean | null;
+    effectiveCapabilities: bigint | null;
+    permittedCapabilities: bigint | null;
+    boundingCapabilities: bigint | null;
+  };
+  /**
+   * Per declared volume: the recorded storage ceiling (`null` when
+   * none is), and the host path backing it when it is a bind wearing a
+   * volume's name rather than managed storage.
+   */
+  volumes: ReadonlyMap<
+    string,
+    { sizeBytes: bigint | null; hostPath: string | null }
+  >;
+  /**
+   * Per declared attach destination, the kernel's account of the mount
+   * there in the anchor's own mount namespace (`/proc/<pid>/mountinfo`):
+   * its filesystem type, the subtree of that filesystem it exposes
+   * (`root`, `/` for the whole of it) and its per-mount options, or
+   * `null` when nothing is mounted at it. May be absent when the policy
+   * declares no attaches; an attach with no entry here is not proved.
+   */
+  attachMounts?: ReadonlyMap<
+    string,
+    { fstype: string; root: string; options: readonly string[] } | null
+  >;
+  /** Host controls the ceilings depend on. */
+  resources: { cgroupControllers: readonly string[] };
+  /** Whether every descendant is inside something the driver removes. */
+  descendantReaping: boolean;
+};
+
+/**
+ * Proof that a slice runs under its policy, derived entirely from
+ * observation. Every field is present only because the corresponding
+ * control was observed; `attestSlicePolicy` throws rather than
+ * attesting to one it could not read.
+ */
+export type SlicePolicyAttestation = {
+  version: 'SlicePolicyAttestationV1';
+  profile: 'hosted-agent-v1';
+  backend: 'rootless-podman';
+  imageDigest: string;
+  network: 'broker-only';
+  /** Stable identity of the joined namespace, for a broker lease to bind to. */
+  networkNamespaceId: string;
+  uid: number;
+  gid: number;
+  readOnlyRoot: true;
+  noNewPrivileges: true;
+  dropAllCapabilities: true;
+  seccomp: true;
+  devices: 'none';
+  hostSockets: 'none';
+  hostHome: 'none';
+  descendantReaping: true;
+  namespaces: {
+    user: 'private';
+    pid: 'private';
+    ipc: 'private';
+    mount: 'private';
+  };
+  limits: SlicePolicyResources;
+  /** The effective mount table, with the hardening options in force. */
+  mounts: readonly {
+    role: string;
+    /** `tmpfs`, `volume:<name>`, or `attach:<host mountpoint>`. */
+    source: string;
+    destination: string;
+    /** `rw` for every volume and tmpfs; an attach reports its own mode. */
+    mode: 'ro' | 'rw';
+    options: readonly string[];
+  }[];
 };
 
 /**
  * Resource caps applied to the slice's first process (and inherited
  * by every descendant).  Each key matches a `prlimit` long flag.
+ *
+ * These are per-process rlimits, not cgroup ceilings: they bound what
+ * one process can ask for, not what a slice can consume in aggregate.
+ * A deployment that needs the aggregate bound wants `SlicePolicyRequest`
+ * (`resources`), whose ceilings are applied through cgroups and read
+ * back from effective state.
  */
 export type ResourceLimits = {
   /** RLIMIT_AS — virtual memory bytes. */
@@ -245,6 +511,12 @@ export type SliceSpec = {
    * Drivers translate this into `prlimit` argv before bwrap exec.
    */
   limits?: ResourceLimits;
+  /**
+   * Enforced deployment policy, passed through unvalidated: the driver
+   * validates it, because only the driver can say what its backend can
+   * actually enforce and read back.
+   */
+  policy?: SlicePolicyRequest;
 };
 
 // ---------------------------------------------------------------------------
@@ -253,7 +525,7 @@ export type SliceSpec = {
 
 /** Reader / writer references — Endo's existing stdio plumbing. */
 export type ReaderRef = ERef<PassableBytesReader>;
-export type WriterRef = ERef<unknown>;
+export type WriterRef = ERef<PassableBytesWriter>;
 
 /**
  * Per-spawn options passed to `SandboxHandle.spawn()`.
@@ -310,6 +582,13 @@ export type SandboxHandle = FarRef<{
    * caller at settlement; failures initiated later surface through `wait()`.
    */
   spawn(argv: readonly string[], opts?: SpawnOpts): Promise<ProcessHandle>;
+  /**
+   * Report the slice's policy attestation. Rejects for a slice that was
+   * not created under a policy — there is no "unenforced" attestation,
+   * because a record saying nothing is enforced is one a caller can
+   * mistake for one saying something is.
+   */
+  policy(): Promise<SlicePolicyAttestation>;
   mount(
     cap: MountCap,
     innerPath: string,
@@ -448,6 +727,13 @@ export type SandboxDriver = {
   probe(): Promise<Omit<BackendProbe, 'name'>>;
   /** Materialise a slice from a fully-resolved `SliceSpec`. */
   prepareSlice(spec: SliceSpec): Promise<DriverSliceContext>;
+  /**
+   * Report the attestation minted while preparing the slice. Optional:
+   * a driver whose backend cannot prove the controls omits it, and the
+   * factory then rejects `policy()` rather than inventing a weaker
+   * answer.
+   */
+  policy?(slice: DriverSliceContext): Promise<SlicePolicyAttestation>;
   /** Spawn a process inside a previously-prepared slice. */
   spawn(
     slice: DriverSliceContext,

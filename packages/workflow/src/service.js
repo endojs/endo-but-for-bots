@@ -38,6 +38,7 @@
  */
 
 import { Fail, q } from '@endo/errors';
+import { parseLocator } from '@endo/daemon/locator.js';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
@@ -119,6 +120,23 @@ const randomHex = (length = 12) => {
   return hex.slice(0, length);
 };
 
+// Locators may carry changing connection hints; authenticate the formula.
+const sameParty = (left, right) => {
+  if (typeof left !== 'string' || typeof right !== 'string') return false;
+  try {
+    const a = parseLocator(left);
+    const b = parseLocator(right);
+    return a.node === b.node && a.number === b.number;
+  } catch {
+    return false;
+  }
+};
+const isFormReply = (message, correlation) =>
+  message.type === 'value' &&
+  message.replyTo === correlation.messageId &&
+  sameParty(message.from, correlation.to) &&
+  sameParty(message.to, correlation.from);
+
 const defaultClock = harden({
   now: () => Date.now(),
   setTimeout: (fn, ms) => globalThis.setTimeout(fn, ms),
@@ -147,7 +165,7 @@ export const resolveChartRefs = async (chart, loadChart, stack = []) => {
       await Promise.all(
         effects.map(async effect => {
           await null;
-          if (effect.kind === 'spawn' && typeof effect.chart === 'string') {
+          if (effect.kind === 'spawn') {
             return harden({ ...effect, chart: await resolveRef(effect.chart) });
           }
           return effect;
@@ -354,6 +372,18 @@ export const makeWorkflowService = async ({
     }
   };
 
+  // Daemon maybeLookup is optional only at the first path segment. Check each
+  // directory edge explicitly so an absent nested answer stays pending during
+  // recovery instead of becoming a failed request.
+  /** @param {string[]} path */
+  const maybeLookupPath = async path => {
+    for (let length = 1; length <= path.length; length += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      if (!(await E(powers).has(...path.slice(0, length)))) return undefined;
+    }
+    return E(powers).lookup(path);
+  };
+
   const runPath = (runId, ...rest) => [ROOT, RUNS, runId, ...rest];
 
   const readJournal = async runId => {
@@ -371,8 +401,7 @@ export const makeWorkflowService = async ({
     return journal;
   };
 
-  const loadInstalledChart = async key =>
-    E(powers).maybeLookup([ROOT, CHARTS, key]);
+  const loadInstalledChart = async key => maybeLookupPath([ROOT, CHARTS, key]);
 
   // #endregion
 
@@ -992,14 +1021,16 @@ export const makeWorkflowService = async ({
 
     const markerFor = effectId => `[workflow ${runId} ${effectId}]`;
 
-    const findOwnMessage = async (type, marker) => {
+    const findOwnMessage = async (type, marker, parties) => {
       const messages = await E(powers).listMessages();
       for (let i = messages.length - 1; i >= 0; i -= 1) {
         const message = messages[i];
         if (
           message.type === type &&
           typeof message.description === 'string' &&
-          message.description.endsWith(marker)
+          message.description.endsWith(marker) &&
+          sameParty(message.from, parties.from) &&
+          sameParty(message.to, parties.to)
         ) {
           return message;
         }
@@ -1007,11 +1038,11 @@ export const makeWorkflowService = async ({
       return undefined;
     };
 
-    const scanForOwnMessage = async (type, marker) => {
+    const scanForOwnMessage = async (type, marker, parties) => {
       await null;
       for (let attempt = 0; attempt < CORRELATION_SCAN_ATTEMPTS; attempt += 1) {
         // eslint-disable-next-line no-await-in-loop
-        const found = await findOwnMessage(type, marker);
+        const found = await findOwnMessage(type, marker, parties);
         if (found !== undefined) {
           return found;
         }
@@ -1041,7 +1072,7 @@ export const makeWorkflowService = async ({
       }
       attachedAsks.add(effectId);
       // An already-stored answer settles immediately and idempotently.
-      const stored = await E(powers).maybeLookup(correlation.responseName);
+      const stored = await maybeLookupPath(correlation.responseName);
       if (stored !== undefined) {
         settleEffect(effectId, 'fulfilled', stored).catch(() => {});
         return;
@@ -1067,7 +1098,11 @@ export const makeWorkflowService = async ({
         mode === 'request' ? effect.what.description : effect.form.description;
       const description = `${base} ${marker}`;
       const recipientPath = runPath(runId, ENDOWMENTS, effect.to);
-      let existing = await findOwnMessage(mode, marker);
+      const parties = harden({
+        from: await E(powers).locate('@self'),
+        to: await E(powers).locate(...recipientPath),
+      });
+      let existing = await findOwnMessage(mode, marker, parties);
       if (existing === undefined) {
         if (mode === 'request') {
           const responseName = answersPathFor(effectId);
@@ -1083,9 +1118,10 @@ export const makeWorkflowService = async ({
         } else {
           await E(powers).form(recipientPath, description, effect.form.fields);
         }
-        existing = await scanForOwnMessage(mode, marker);
+        existing = await scanForOwnMessage(mode, marker, parties);
       }
       const correlation = harden({
+        ...parties,
         mode,
         responseName: answersPathFor(effectId),
         ...(existing !== undefined
@@ -1103,15 +1139,16 @@ export const makeWorkflowService = async ({
       });
       if (mode === 'form') {
         if (existing !== undefined) {
-          formCorrelations.set(existing.messageId, { runId, effectId });
+          formCorrelations.set(existing.messageId, {
+            ...correlation,
+            runId,
+            effectId,
+          });
           // Adopt a reply that arrived before the correlation was
           // registered (or while the daemon was down).
           const messages = await E(powers).listMessages();
           for (const message of messages) {
-            if (
-              message.type === 'value' &&
-              message.replyTo === existing.messageId
-            ) {
+            if (isFormReply(message, correlation)) {
               // eslint-disable-next-line no-await-in-loop
               const value = await E(powers).lookup([
                 '@mail',
@@ -1631,8 +1668,18 @@ export const makeWorkflowService = async ({
                 // eslint-disable-next-line no-await-in-loop
                 await dispatchAsk(record);
               } else if (correlation.mode === 'form') {
+                const authenticated = {
+                  ...correlation,
+                  // eslint-disable-next-line no-await-in-loop
+                  from: await E(powers).locate('@self'),
+                  // eslint-disable-next-line no-await-in-loop
+                  to: await E(powers).locate(
+                    ...runPath(runId, ENDOWMENTS, effect.to),
+                  ),
+                };
                 if (correlation.messageId !== undefined) {
                   formCorrelations.set(correlation.messageId, {
+                    ...authenticated,
                     runId,
                     effectId,
                   });
@@ -1641,10 +1688,7 @@ export const makeWorkflowService = async ({
                 // eslint-disable-next-line no-await-in-loop
                 const messages = await E(powers).listMessages();
                 for (const message of messages) {
-                  if (
-                    message.type === 'value' &&
-                    message.replyTo === correlation.messageId
-                  ) {
+                  if (isFormReply(message, authenticated)) {
                     // eslint-disable-next-line no-await-in-loop
                     const value = await E(powers).lookup([
                       '@mail',
@@ -1975,7 +2019,7 @@ export const makeWorkflowService = async ({
       },
       resolveRef: async alias => {
         REF_ALIAS.test(alias) || Fail`not a ref alias (ref-<n>): ${q(alias)}`;
-        const cap = await E(powers).maybeLookup(runPath(runId, REFS, alias));
+        const cap = await maybeLookupPath(runPath(runId, REFS, alias));
         cap !== undefined || Fail`run ${q(runId)} has no ref ${q(alias)}`;
         // Journal the access before releasing the capability.
         await jobs.enqueue(() =>
@@ -2062,7 +2106,7 @@ export const makeWorkflowService = async ({
     engines.set(runId, engine);
     try {
       if (factory !== undefined) {
-        const record = await E(powers).maybeLookup([
+        const record = await maybeLookupPath([
           ROOT,
           FACTORIES,
           factory,
@@ -2085,7 +2129,7 @@ export const makeWorkflowService = async ({
   };
 
   const recoverRun = async runId => {
-    const chart = await E(powers).maybeLookup(runPath(runId, CHART_NAME));
+    const chart = await maybeLookupPath(runPath(runId, CHART_NAME));
     const journal = await readJournal(runId);
     if (chart === undefined || journal.length === 0) {
       // An aborted mint: `startRun` threw between directory creation and
@@ -2142,9 +2186,7 @@ export const makeWorkflowService = async ({
   const factoryPath = (fid, ...rest) => [ROOT, FACTORIES, fid, ...rest];
 
   const loadFactoryRecord = async fid => {
-    const record = await E(powers).maybeLookup(
-      factoryPath(fid, FACTORY_RECORD),
-    );
+    const record = await maybeLookupPath(factoryPath(fid, FACTORY_RECORD));
     record !== undefined || Fail`no workflow factory ${q(fid)}`;
     return record;
   };
@@ -2248,9 +2290,7 @@ export const makeWorkflowService = async ({
     const records = new Map();
     for (const each of fids) {
       // eslint-disable-next-line no-await-in-loop
-      const record = await E(powers).maybeLookup(
-        factoryPath(each, FACTORY_RECORD),
-      );
+      const record = await maybeLookupPath(factoryPath(each, FACTORY_RECORD));
       if (record !== undefined) {
         records.set(each, record);
       }
@@ -2366,37 +2406,72 @@ export const makeWorkflowService = async ({
     if (facet !== undefined) {
       return facet;
     }
-    facet = makeExo('WorkflowFactory', WorkflowFactoryInterface, {
-      start: async ({ params = harden({}), endowments = harden({}) } = {}) => {
-        const { record, chart, boundParams, boundEndowments } =
-          await loadFactoryBindings(fid);
-        assertNoOverlap(record, params, endowments);
-        const engine = await startRun(chart, {
-          params: harden({ ...params, ...boundParams }),
-          endowments: harden({ ...endowments, ...boundEndowments }),
-          factory: fid,
-        });
-        // Close the start/revoke race: the revocation sweep cancels
-        // every registered run of a condemned factory, and any run that
-        // registered after the sweep re-reads the durable record here —
-        // one side always sees the other.
-        const recheck = await loadFactoryRecord(fid);
-        if (recheck.revoked || revokingFactories.has(fid)) {
-          const group = await quarantineEngineTree(engine.runId);
-          rememberQuarantineGroup(engine.runId, group);
-          try {
-            await engine.cancel(`factory ${fid} revoked`);
-            await releaseQuarantineGroup(engine.runId);
-          } catch (error) {
-            console.error(
-              `workflow run ${engine.runId}: revoked-run cancellation failed`,
-              error,
-            );
-          }
-          throw Fail`workflow factory ${q(fid)} is revoked`;
+    const starts = new Map();
+    const start = async ({
+      params = harden({}),
+      endowments = harden({}),
+      requestId = undefined,
+    } = {}) => {
+      const { record, chart, boundParams, boundEndowments } =
+        await loadFactoryBindings(fid);
+      assertNoOverlap(record, params, endowments);
+      const combinedParams = harden({ ...params, ...boundParams });
+      let requestedRunId;
+      if (requestId !== undefined) {
+        (typeof requestId === 'string' && /^.{1,200}$/s.test(requestId)) ||
+          Fail`invalid factory requestId`;
+        keys(endowments).length === 0 ||
+          Fail`idempotent starts require pre-bound endowments`;
+        assertDataOnly(combinedParams, 'idempotent start params');
+        requestedRunId = `r-${fid}-${hashEntry(harden({ requestId }))}`;
+        const existing = engines.get(requestedRunId);
+        if (existing !== undefined) {
+          canonicalStringify(existing.fold.params) ===
+            canonicalStringify(combinedParams) ||
+            Fail`requestId already used with different params`;
+          return harden({ runId: existing.runId, run: existing.runFacet });
         }
-        // The starter through a factory observes; it does not control.
-        return harden({ runId: engine.runId, run: engine.runFacet });
+      }
+      const engine = await startRun(chart, {
+        runId: requestedRunId,
+        params: combinedParams,
+        endowments: harden({ ...endowments, ...boundEndowments }),
+        factory: fid,
+      });
+      // Close the start/revoke race: the revocation sweep cancels
+      // every registered run of a condemned factory, and any run that
+      // registered after the sweep re-reads the durable record here —
+      // one side always sees the other.
+      const recheck = await loadFactoryRecord(fid);
+      if (recheck.revoked || revokingFactories.has(fid)) {
+        const group = await quarantineEngineTree(engine.runId);
+        rememberQuarantineGroup(engine.runId, group);
+        try {
+          await engine.cancel(`factory ${fid} revoked`);
+          await releaseQuarantineGroup(engine.runId);
+        } catch (error) {
+          console.error(
+            `workflow run ${engine.runId}: revoked-run cancellation failed`,
+            error,
+          );
+        }
+        throw Fail`workflow factory ${q(fid)} is revoked`;
+      }
+      // The starter through a factory observes; it does not control.
+      return harden({ runId: engine.runId, run: engine.runFacet });
+    };
+    facet = makeExo('WorkflowFactory', WorkflowFactoryInterface, {
+      start: async (options = {}) => {
+        const { requestId } = options;
+        if (requestId === undefined) return start(options);
+        const preceding = starts.get(requestId) ?? Promise.resolve();
+        const next = preceding.catch(() => {}).then(() => start(options));
+        starts.set(requestId, next);
+        try {
+          return await next;
+        } finally {
+          if (starts.get(requestId) === next) starts.delete(requestId);
+        }
       },
       describe: async () => {
         const record = await loadFactoryRecord(fid);
@@ -2455,7 +2530,11 @@ export const makeWorkflowService = async ({
             correlation === undefined
               ? undefined
               : engines.get(correlation.runId);
-          if (correlation !== undefined && engine !== undefined) {
+          if (
+            correlation !== undefined &&
+            engine !== undefined &&
+            isFormReply(message, correlation)
+          ) {
             const value = await E(powers).lookup([
               '@mail',
               String(message.number),

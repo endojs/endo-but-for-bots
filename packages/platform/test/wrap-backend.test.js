@@ -586,12 +586,12 @@ test('copy onto an existing directory merges (does not replace)', async t => {
   t.is((await E(merged).getQid()).type, 'file');
 });
 
-// Content-address hooks: qidFor / blobInfoFor.
+// Content-address hook: qidFor.
 
 // A minimal read-only backend whose two paths point at one "blob" (a
 // stand-in for a git object OID). It advertises the optional content-
-// address hooks so wrapBackend sources QID pathIds and BlobRef hashes
-// from the OID instead of the path hash / SHA-256 defaults.
+// address hook so wrapBackend sources QID pathIds from the OID instead of the
+// path hash default.
 const OID_BLOB = 'ab'.repeat(20); // 40 hex chars, like a git sha1
 const OID_TREE = 'cd'.repeat(20);
 const makeHookedBackend = () => {
@@ -633,11 +633,6 @@ const makeHookedBackend = () => {
       if (e === undefined) return undefined;
       return harden({ type: kind, pathId: BigInt(`0x${e.oid}`), version: 0n });
     },
-    blobInfoFor(path) {
-      const e = entryFor(path);
-      if (e === undefined || e.kind !== 'file') return undefined;
-      return harden({ algorithm: 'git-sha1', hash: e.oid });
-    },
   });
 };
 
@@ -659,25 +654,24 @@ test('wrapBackend: qidFor hook sources QID pathId from the backend OID', async t
   t.is(xQid.pathId, yQid.pathId);
 });
 
-test('wrapBackend: blobInfoFor hook sets BlobRef algorithm + hash', async t => {
+test('wrapBackend: BlobRef identity uses the selected bytes', async t => {
   const fs = wrapBackend(makeHookedBackend());
   const root = await E(fs).root();
   const x = await E(root).lookup('x.txt');
   const y = await E(root).lookup('y.txt');
 
-  const xInfo = await E(await E(x).snapshot()).getInfo();
-  const yInfo = await E(await E(y).snapshot()).getInfo();
-  t.is(xInfo.algorithm, 'git-sha1');
-  t.is(xInfo.hash, OID_BLOB);
-  t.is(xInfo.size, BigInt('same content\n'.length));
+  const xBlob = await E(x).snapshot();
+  const yBlob = await E(y).snapshot();
+  const xHash = await E(xBlob).sha256();
+  const yHash = await E(yBlob).sha256();
+  t.is(await E(xBlob).size(), BigInt('same content\n'.length));
   // Same blob → same BlobRef hash across paths.
-  t.is(xInfo.hash, yInfo.hash);
+  t.is(xHash, yHash);
 });
 
-test('wrapBackend: without hooks, QID + BlobRef fall back to path hash / sha256', async t => {
-  // The plain in-memory backend advertises neither hook, so identity
-  // degrades to the path-hash synthQid and SHA-256 BlobRef — two paths
-  // with identical content get DIFFERENT QIDs (path identity).
+test('wrapBackend: without qidFor, QID falls back to path hash', async t => {
+  // The plain in-memory backend has no qidFor hook, so two paths with
+  // identical content get different QIDs while both snapshots expose SHA-256.
   const fs = makeFs();
   const root = await E(fs).root();
   await E(root).write('x.txt', 'same content\n');
@@ -688,25 +682,22 @@ test('wrapBackend: without hooks, QID + BlobRef fall back to path hash / sha256'
   const yQid = await E(y).getQid();
   t.not(xQid.pathId, yQid.pathId, 'path-hash QID distinguishes the two paths');
 
-  const info = await E(await E(x).snapshot()).getInfo();
-  t.is(info.algorithm, 'sha256');
+  t.is(typeof (await E(await E(x).snapshot()).sha256()), 'string');
 });
 
-test('wrapBackend: hooks present but returning undefined fall back per-path', async t => {
+test('wrapBackend: qidFor returning undefined falls back per-path', async t => {
   // The documented contract is "absent OR returns `undefined` for a
   // given path → fall back". The absent half is covered above; this
-  // pins the present-but-undefined half: a backend that ADVERTISES both
-  // hooks (they are functions) yet returns `undefined` for an extant
-  // file must still degrade to the path-hash synthQid / SHA-256 default,
+  // pins the present-but-undefined half: a backend whose hook returns
+  // `undefined` for an extant file must still degrade to path-hash identity,
   // not stamp an OID identity. A regression that dropped the
   // `!== undefined` guard would leave every other test green but break
   // this fallback.
   const inner = makeHookedBackend();
   const backend = harden({
     ...inner,
-    // Present functions, but they decline for every path.
+    // Present hook, but it declines for every path.
     qidFor: () => undefined,
-    blobInfoFor: () => undefined,
   });
   const fs = wrapBackend(backend);
   const root = await E(fs).root();
@@ -720,10 +711,5 @@ test('wrapBackend: hooks present but returning undefined fall back per-path', as
   t.not(xQid.pathId, yQid.pathId, 'undefined qidFor falls back to path-hash');
   t.not(xQid.pathId, BigInt(`0x${OID_BLOB}`));
 
-  const xInfo = await E(await E(x).snapshot()).getInfo();
-  t.is(
-    xInfo.algorithm,
-    'sha256',
-    'undefined blobInfoFor falls back to SHA-256',
-  );
+  t.is(typeof (await E(await E(x).snapshot()).sha256()), 'string');
 });

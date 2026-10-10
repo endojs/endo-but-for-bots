@@ -126,7 +126,7 @@ test.afterEach.always(async t => {
   }
 });
 
-// Both blobs (getInfo().hash) and trees (sha256()) report the content hash as
+// Both blobs and trees report the content hash with sha256() as
 // base64; the content store keys files by the hex digest, so convert via
 // storeKeyOf wherever the store address is needed.
 const storeKeyOf = hashBase64 => encodeHex(decodeBase64(hashBase64));
@@ -144,7 +144,7 @@ test('content-store blob is reclaimed when its only formula is collected', async
     new TextEncoder().encode('blob-content'),
   ]);
   const blob = await E(host).storeBlob(readerRef, 'lonely-blob');
-  const sha256 = (await E(blob).getInfo()).hash;
+  const sha256 = await E(blob).sha256();
 
   const filePath = contentPathOf(config.statePath, sha256);
   t.true(fs.existsSync(filePath), 'blob file written to content store');
@@ -172,8 +172,8 @@ test('content-store blob survives when a sibling formula still references the sa
     'twin-b',
   );
 
-  const shaA = (await E(blobA).getInfo()).hash;
-  const shaB = (await E(blobB).getInfo()).hash;
+  const shaA = await E(blobA).sha256();
+  const shaB = await E(blobB).sha256();
   t.is(shaA, shaB, 'both blobs dedupe to the same content hash');
 
   const filePath = contentPathOf(config.statePath, shaA);
@@ -249,17 +249,9 @@ test('content-store blob from a readable-tree formula is reclaimed when the tree
   const tree = await E(host).lookup(['lonely-tree']);
   const sha256 = await E(tree).sha256();
 
-  // getInfo() is the uniform identity accessor on the real content store:
-  // its base64 hash equals sha256() and the cheap size() path yields the
-  // manifest byte length as a bigint.
-  const info =
-    /** @type {{ algorithm: string, hash: string, size: bigint }} */ (
-      await E(tree).getInfo()
-    );
-  t.is(info.algorithm, 'sha256');
-  t.is(info.hash, sha256);
-  t.is(typeof info.size, 'bigint');
-  t.true(info.size > 0n);
+  const size = /** @type {bigint} */ (await E(tree).size());
+  t.is(typeof size, 'bigint');
+  t.true(size > 0n);
 
   const filePath = contentPathOf(config.statePath, sha256);
   t.true(fs.existsSync(filePath), 'tree root JSON written to content store');
@@ -365,7 +357,7 @@ test('readable-tree collection preserves a child blob hash that a surviving read
     bytesReaderFromIterator([sharedBytes]),
     'shared-leaf-blob',
   );
-  const sharedSha256 = (await E(sharedBlob).getInfo()).hash;
+  const sharedSha256 = await E(sharedBlob).sha256();
 
   const remoteTree = makeRemoteBlobTree({
     'shared.txt': sharedBytes,

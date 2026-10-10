@@ -12,6 +12,11 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { execFile, execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+import { sha256 } from '@endo/sha256';
+import { encodeBase64 } from '@endo/base64';
+
+/** @import { ExecutionContext } from 'ava' */
 
 import {
   gitClone,
@@ -143,10 +148,83 @@ test('NativeGitBackend.tree exposes GitBlob help through eventual send', async t
 });
 
 /**
+ * Commit a single file and return its GitBlob for the committed content.
+ *
+ * @param {ExecutionContext} t
+ * @param {string} name
+ * @param {string} content
+ */
+const commitBlob = async (t, name, content) => {
+  const { backend, repoRoot } = await provisionRepo(t);
+  await fs.promises.writeFile(path.join(repoRoot, name), content);
+  await execFileAsync('git', ['add', name], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', 'init'],
+    { cwd: repoRoot },
+  );
+  const tree = await backend.tree('HEAD');
+  return tree.lookup(name);
+};
+
+test('GitBlob.byteRange attenuates to a derived blob over a byte interval', async t => {
+  const blob = /** @type {any} */ (
+    await commitBlob(t, 'data.txt', 'hello world\n')
+  );
+  const b64 = s => encodeBase64(sha256(encodeUtf8(s)));
+
+  const hello = await E(blob).byteRange(0n, 5n);
+  t.is(await E(hello).text(), 'hello');
+  t.is(await E(hello).size(), 5n);
+  t.is(await E(hello).sha256(), b64('hello'));
+
+  // A range of a range intersects and never regains authority.
+  t.is(await E(await E(hello).byteRange(1n, 3n)).text(), 'el');
+  t.is(await E(await E(hello).byteRange(3n, 100n)).text(), 'lo');
+
+  // EOF clamp and start === end.
+  t.is(await E(await E(blob).byteRange(6n, 100n)).text(), 'world\n');
+  t.is(await E(await E(blob).byteRange(3n, 3n)).text(), '');
+
+  // byteRange composes within the selected authority.
+  t.is(await E(await E(hello).byteRange(1n, 3n)).text(), 'el');
+
+  // EINVAL on an inverted or negative byte range.
+  await t.throwsAsync(() => E(blob).byteRange(5n, 2n), { message: /EINVAL/ });
+  await t.throwsAsync(() => E(blob).byteRange(-1n, 2n), {
+    message: /EINVAL|safe/,
+  });
+});
+
+test('GitBlob.textRange attenuates to a line interval (LF, terminal-LF, CRLF)', async t => {
+  const lf = /** @type {any} */ (await commitBlob(t, 'lf.txt', 'a\nb\nc\n'));
+  t.is(await E(await E(lf).textRange(0, 2)).text(), 'a\nb');
+  t.is(await E(await E(lf).textRange(0, 100)).text(), 'a\nb\nc\n');
+  t.is(await E(await E(lf).textRange(1, 1)).text(), '');
+
+  const term = /** @type {any} */ (await commitBlob(t, 'term.txt', 'a\nb\n'));
+  t.is(await E(await E(term).textRange(2, 3)).text(), '');
+
+  const crlf = /** @type {any} */ (
+    await commitBlob(t, 'crlf.txt', 'x\r\ny\r\n')
+  );
+  t.is(await E(await E(crlf).textRange(0, 1)).text(), 'x\r');
+
+  // Composition: byte range then text range, and text range then byte range.
+  const doc = /** @type {any} */ (
+    await commitBlob(t, 'doc.txt', 'one\ntwo\nthree\n')
+  );
+  const firstEight = await E(doc).byteRange(0n, 8n); // 'one\ntwo\n'
+  t.is(await E(await E(firstEight).textRange(0, 1)).text(), 'one');
+  const twoLines = await E(doc).textRange(0, 2); // 'one\ntwo'
+  t.is(await E(await E(twoLines).byteRange(0n, 3n)).text(), 'one');
+});
+
+/**
  * A repository root the backend accepts, so `remotePush` reaches its argv
  * construction. Every assertion below rejects before any transport runs.
  *
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  */
 const provisionRepoRoot = async t => {
   const root = await fs.promises.mkdtemp(

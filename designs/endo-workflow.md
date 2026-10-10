@@ -393,8 +393,9 @@ of the document can cite them tersely.
   widening (`packages/agentry/src/code-mode-provisioning.js:136`) — a
   ready-made durable job-context primitive.
   Floot sessions are guests reachable both by direct
-  `E(session).converse(input)` (streaming reader) and by mail (each session
-  follows its own inbox and replies, `packages/floot/agent.js:868`); lal is
+  `E(session).startTurn(input)` (a daemon-owned turn the caller watches) and
+  by mail (each session follows its own inbox and replies,
+  `packages/floot/agent.js:868`); lal is
   a mail-driven guest whose only dispatch path is its inbox loop
   (`packages/lal/inbox-loop.js:36`).
   Guests are durable agents with mailboxes; work can be *asked* of them by

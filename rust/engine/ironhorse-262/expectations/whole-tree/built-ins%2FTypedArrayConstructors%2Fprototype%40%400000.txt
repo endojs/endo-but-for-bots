@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArrayConstructors/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArrayConstructors/prototype/Symbol.iterator.js sloppy pass
+built-ins/TypedArrayConstructors/prototype/Symbol.iterator.js strict pass
+built-ins/TypedArrayConstructors/prototype/bigint-Symbol.iterator.js sloppy pass
+built-ins/TypedArrayConstructors/prototype/bigint-Symbol.iterator.js strict pass

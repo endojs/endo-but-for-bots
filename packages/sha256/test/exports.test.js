@@ -64,6 +64,53 @@ test('every condition arm resolves to a working digest', async t => {
   }
 });
 
+test('every async condition arm resolves to a working digest', async t => {
+  const { exports } = await readPackageJson();
+  const arms = exports['./async'];
+  t.deepEqual(
+    Object.keys(arms).sort(),
+    ['browser', 'default', 'node', 'xs'],
+    'the same arms as the synchronous export, and no others',
+  );
+  t.is(arms.browser, arms.default, 'default is the browser (WebCrypto) build');
+  t.is(arms.xs, './src/sha256-endor-async.js');
+  const originalHostSha256Bytes = Object.getOwnPropertyDescriptor(
+    globalThis,
+    'hostSha256Bytes',
+  );
+  Object.defineProperty(globalThis, 'hostSha256Bytes', {
+    value: (/** @type {Uint8Array} */ bytes) =>
+      createHash('sha256').update(bytes).digest(),
+    configurable: true,
+  });
+  try {
+    for (const [condition, target] of Object.entries(arms)) {
+      const url = new URL(/** @type {string} */ (target), packageJsonUrl);
+      // eslint-disable-next-line no-await-in-loop
+      const { sha256Async, sha256IntoAsync } = await import(url.href);
+      t.is(typeof sha256Async, 'function', `${condition}: exports sha256Async`);
+      t.is(
+        typeof sha256IntoAsync,
+        'function',
+        `${condition}: exports sha256IntoAsync`,
+      );
+      // eslint-disable-next-line no-await-in-loop
+      const digest = await sha256Async(abc);
+      t.is(hex(digest), abcHex, `${condition}: hashes "abc" correctly`);
+    }
+  } finally {
+    if (originalHostSha256Bytes === undefined) {
+      delete (/** @type {any} */ (globalThis).hostSha256Bytes);
+    } else {
+      Object.defineProperty(
+        globalThis,
+        'hostSha256Bytes',
+        originalHostSha256Bytes,
+      );
+    }
+  }
+});
+
 test('the xs arm selects the Endor host contract', async t => {
   // The condition identifies the bundle that runs under Endor. The target
   // names the platform contract instead of either supported engine.

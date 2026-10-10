@@ -1,0 +1,25 @@
+# engine=ironhorse features=default corpus=intl402/Segmenter/prototype/segment tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Segmenter/prototype/segment/branding.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/branding.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/length.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/length.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/name.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/name.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/name_of_symbol_iterator.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/name_of_symbol_iterator.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/nested-next.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/nested-next.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/next-inside-next.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/next-inside-next.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/next-mix-with-containing.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/next-mix-with-containing.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/prop-desc.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/prop-desc.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/segment-grapheme-iterable.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/segment-grapheme-iterable.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/segment-sentence-iterable.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/segment-sentence-iterable.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/segment-tostring.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/segment-tostring.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/segment-word-iterable.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/segment-word-iterable.js strict skip:oracle-host-missing-intl

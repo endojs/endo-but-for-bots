@@ -23,7 +23,16 @@
 
 export const gitRemoteDeclarations = harden({
   gitRemote: {
-    aux: `type RemoteOperationResult = {
+    aux: `type RemoteCredentialHealth = {
+    required: false;
+} | {
+    required: true;
+    kind: 'bearer' | 'basic';
+    audience: string;
+    available: boolean;
+    revoked: boolean;
+};
+type RemoteOperationResult = {
     updatedRefs: RemoteRefUpdate[];
     text: string;
     droppedUpdatedRefsCount?: number;
@@ -60,6 +69,7 @@ type RemoteRefUpdate = {
 };
 type RemoteNormalizedRemotePolicy = RemotePolicy & Required<Pick<RemotePolicy, 'allowForcePush' | 'allowTags' | 'allowDelete' | 'allowLocalFileTransport'>>;`,
     body: `{
+    credentialHealth: () => Promise<RemoteCredentialHealth>;
     fetch: (options?: {
         prune?: boolean;
         tags?: boolean;

@@ -1,0 +1,31 @@
+# engine=ironhorse features=default corpus=built-ins/Object/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Object/prototype/15.2.3.1.js sloppy pass
+built-ins/Object/prototype/15.2.3.1.js strict pass
+built-ins/Object/prototype/S15.2.3.1_A1.js sloppy pass
+built-ins/Object/prototype/S15.2.3.1_A1.js strict pass
+built-ins/Object/prototype/S15.2.3.1_A2.js sloppy pass
+built-ins/Object/prototype/S15.2.3.1_A2.js strict pass
+built-ins/Object/prototype/S15.2.3.1_A3.js sloppy pass
+built-ins/Object/prototype/S15.2.3.1_A3.js strict pass
+built-ins/Object/prototype/S15.2.4_A1_T1.js sloppy pass
+built-ins/Object/prototype/S15.2.4_A1_T1.js strict pass
+built-ins/Object/prototype/S15.2.4_A1_T2.js sloppy pass
+built-ins/Object/prototype/S15.2.4_A1_T2.js strict pass
+built-ins/Object/prototype/S15.2.4_A2.js sloppy pass
+built-ins/Object/prototype/S15.2.4_A2.js strict pass
+built-ins/Object/prototype/S15.2.4_A3.js sloppy pass
+built-ins/Object/prototype/S15.2.4_A3.js strict pass
+built-ins/Object/prototype/S15.2.4_A4.js sloppy pass
+built-ins/Object/prototype/S15.2.4_A4.js strict pass
+built-ins/Object/prototype/extensibility.js sloppy pass
+built-ins/Object/prototype/extensibility.js strict pass
+built-ins/Object/prototype/proto.js sloppy pass
+built-ins/Object/prototype/proto.js strict pass
+built-ins/Object/prototype/setPrototypeOf-with-different-values.js sloppy pass
+built-ins/Object/prototype/setPrototypeOf-with-different-values.js strict pass
+built-ins/Object/prototype/setPrototypeOf-with-non-circular-values-__proto__.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.setPrototypeOf(ObjProto, { __proto__: null }) throws a TypeError Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Object/prototype/setPrototypeOf-with-non-circular-values-__proto__.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.setPrototypeOf(ObjProto, { __proto__: null }) throws a TypeError Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Object/prototype/setPrototypeOf-with-non-circular-values.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.setPrototypeOf(ObjProto, Object.create(null)) throws a TypeError Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Object/prototype/setPrototypeOf-with-non-circular-values.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.setPrototypeOf(ObjProto, Object.create(null)) throws a TypeError Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Object/prototype/setPrototypeOf-with-same-value.js sloppy pass
+built-ins/Object/prototype/setPrototypeOf-with-same-value.js strict pass

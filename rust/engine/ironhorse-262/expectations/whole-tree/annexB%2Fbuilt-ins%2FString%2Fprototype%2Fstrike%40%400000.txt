@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=annexB/built-ins/String/prototype/strike tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/built-ins/String/prototype/strike/B.2.3.12.js sloppy skip:shared-positive-test-failure
+annexB/built-ins/String/prototype/strike/B.2.3.12.js strict skip:shared-positive-test-failure
+annexB/built-ins/String/prototype/strike/length.js sloppy skip:shared-positive-test-failure
+annexB/built-ins/String/prototype/strike/length.js strict skip:shared-positive-test-failure
+annexB/built-ins/String/prototype/strike/name.js sloppy skip:shared-positive-test-failure
+annexB/built-ins/String/prototype/strike/name.js strict skip:shared-positive-test-failure
+annexB/built-ins/String/prototype/strike/not-a-constructor.js sloppy skip:shared-test262-failure
+annexB/built-ins/String/prototype/strike/not-a-constructor.js strict skip:shared-test262-failure
+annexB/built-ins/String/prototype/strike/prop-desc.js sloppy skip:shared-test262-failure
+annexB/built-ins/String/prototype/strike/prop-desc.js strict skip:shared-test262-failure
+annexB/built-ins/String/prototype/strike/this-val-tostring-err.js sloppy skip:shared-test262-failure
+annexB/built-ins/String/prototype/strike/this-val-tostring-err.js strict skip:shared-test262-failure

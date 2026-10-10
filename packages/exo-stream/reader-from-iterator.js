@@ -39,10 +39,11 @@ import { makeReaderPump } from './reader-pump.js';
  * @returns {PassableReader<TRead, TReadReturn>}
  */
 export const readerFromIterator = (iterator, options = {}) => {
-  const { buffer = 0, readPattern, readReturnPattern } = options;
+  const { buffer = 0, readPattern, readReturnPattern, cancelPending } = options;
 
   const pump = makeReaderPump(iterator, {
     buffer,
+    cancelPending,
     readPattern,
     readReturnPattern,
   });

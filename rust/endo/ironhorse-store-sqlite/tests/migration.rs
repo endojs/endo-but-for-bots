@@ -1,16 +1,14 @@
-//! Store-schema migration lock for the SQLite backend. This exercises the
-//! ladder under the committed v5 fixture's own legacy engine signature;
-//! ordinary current callers use `Signature::new`, whose engine-owned boot
-//! generation rejects this pre-current-boot fixture before machine adoption.
-//! `migration_fixtures.rs` documents how the fixture was frozen.
+//! Matching-boot schema migration and refusal of unfingerprinted historical stores.
 
 mod common;
 
 use common::TempDir;
+use ironhorse_snapshot::store::HeapStoreCommit;
 
 use ironhorse_snapshot::machine::{checkpoint_to_store, resume_from_store};
 use ironhorse_snapshot::store::{
-    migrate_store, validate_store, HeapStore, StoreError, STORE_SCHEMA_VERSION,
+    migrate_store, validate_store_content, HeapStore, StoreError, StoreManifest,
+    STORE_SCHEMA_VERSION,
 };
 use ironhorse_snapshot::{Signature, SnapshotError};
 use ironhorse_store_sqlite::SqliteHeapStore;
@@ -24,22 +22,88 @@ const READ_CRANK: &str = "var keep; var g; var i; var t; \
 const READ_RESULT: &str = "3";
 
 fn sig() -> Signature {
-    Signature::decode(b"ironhorse-worker-v1").expect("frozen fixture signature")
+    Signature::new("ironhorse-worker-v1")
+}
+
+fn write_matching_boot_v5(path: &std::path::Path) {
+    use ironhorse_snapshot::machine::MachineSnapshot;
+    use ironhorse_snapshot::store::{image_to_batch_unchecked, CommitToken};
+    let mut m = ironhorse_vm::Interp::new();
+    let source = "var keep = {v: 1, w: 2}; var g = 0; var i = 0; var t = 3; t";
+    let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+    let code = m
+        .relink_crank(&code, &ironhorse_vm::parse_symbols(&symbols))
+        .unwrap();
+    assert!(m.run(&code).completed);
+    let mut store = SqliteHeapStore::open(path).unwrap();
+    store
+        .commit(&image_to_batch_unchecked(
+            &m.snapshot_image_for_testing(&sig()).unwrap(),
+            1,
+            CommitToken::ZERO,
+        ))
+        .unwrap();
+    let current = store.manifest().unwrap();
+    let mut small = store.read_small_state().unwrap();
+    let mut end = 0;
+    for _ in 0..6 {
+        let len = u32::from_be_bytes(small[end..end + 4].try_into().unwrap()) as usize;
+        end += 4 + len;
+    }
+    small.truncate(end);
+    // The manifest as schema 5 laid it out, written through the migration
+    // hook: an older build's store as migration reads it, less its row-leaf
+    // hashes, which migration drops anyway. The hook stores the small state
+    // in one row, as schema 5 did, and leaves the sections this build's
+    // commit wrote, which a schema-5 store never had: the migration reads
+    // the row and overwrites every section.
+    let v5 = StoreManifest {
+        store_schema: 5,
+        ..current.clone()
+    };
+    store.replace_for_migration(&current, &v5, &small).unwrap();
+    store.close().unwrap();
 }
 
 #[test]
-fn v5_sqlite_store_migrates_in_place_and_keeps_working() {
-    let dir = TempDir::new("ih-migrate-sqlite");
+fn historical_boot_cannot_authorize_migration_even_with_matching_signature() {
+    let dir = TempDir::new("ih-migrate-legacy-boot");
     let path = dir.join("store.sqlite");
     std::fs::copy(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/store-v5.sqlite"),
         &path,
     )
     .expect("copy fixture");
+    let mut store = SqliteHeapStore::open(&path).unwrap();
+    let before = store.manifest().unwrap();
+    let wal = path.with_extension("sqlite-wal");
+    let bytes_before = (std::fs::read(&path).unwrap(), std::fs::read(&wal).ok());
+    for expected in [sig(), before.signature.clone()] {
+        assert!(matches!(
+            migrate_store(&mut store, &expected),
+            Err(StoreError::Snapshot(SnapshotError::BootLayoutMismatch {
+                found: None,
+                ..
+            }))
+        ));
+        assert_eq!(store.manifest().unwrap(), before);
+        assert_eq!(
+            (std::fs::read(&path).unwrap(), std::fs::read(&wal).ok()),
+            bytes_before,
+            "a boot refusal cannot mutate the database or WAL"
+        );
+    }
+    store.close().unwrap();
+}
+
+#[test]
+fn v5_sqlite_store_migrates_in_place_and_keeps_working() {
+    let dir = TempDir::new("ih-migrate-sqlite");
+    let path = dir.join("store.sqlite");
+    write_matching_boot_v5(&path);
 
     // Open no longer migrates (review wave 4, F2): the caller runs the
-    // signature-gated migration (restamp schema + v6 root; the seal
-    // chain is untouched — links stay opaque history).
+    // signature-gated migration.
     let mut store = SqliteHeapStore::open(&path).expect("open v5 store");
     assert!(
         migrate_store(&mut store, &sig()).expect("migrate v5 store"),
@@ -50,13 +114,17 @@ fn v5_sqlite_store_migrates_in_place_and_keeps_working() {
         manifest.store_schema, STORE_SCHEMA_VERSION,
         "migration restamped the store to the current schema"
     );
-    validate_store(&store, &sig()).expect("migrated store recombines to its v6 root");
+    validate_store_content(&store, &sig()).expect("the migrated store validates");
 
     // Resume, re-read the v5-era content, and extend the chain.
-    let (bytecode, _symbols) =
+    let (bytecode, symbols) =
         ironhorse_compile::compile_atoms(READ_CRANK).expect("read crank compiles");
     let epoch_before = manifest.epoch;
     let mut session = resume_from_store(&store, &sig()).expect("resume from migrated store");
+    let bytecode = session
+        .machine_mut()
+        .relink_crank(&bytecode, &ironhorse_vm::parse_symbols(&symbols))
+        .unwrap();
     let o = session.machine_mut().run(&bytecode);
     assert!(o.completed, "read crank completes: {}", o.result);
     assert_eq!(o.result, READ_RESULT);
@@ -76,7 +144,7 @@ fn v5_sqlite_store_migrates_in_place_and_keeps_working() {
     let manifest = store.manifest().expect("manifest");
     assert_eq!(manifest.store_schema, STORE_SCHEMA_VERSION);
     assert_eq!(manifest.epoch, epoch);
-    validate_store(&store, &sig()).expect("still valid on reopen");
+    validate_store_content(&store, &sig()).expect("still valid on reopen");
 }
 
 /// Review wave 4, F2/F3: the signature gate fires before the first
@@ -88,11 +156,7 @@ fn v5_sqlite_store_migrates_in_place_and_keeps_working() {
 fn migrate_refuses_incompatible_signature_and_resume_names_the_gap() {
     let dir = TempDir::new("ih-migrate-sqlite-sig");
     let path = dir.join("store.sqlite");
-    std::fs::copy(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/store-v5.sqlite"),
-        &path,
-    )
-    .expect("copy fixture");
+    write_matching_boot_v5(&path);
 
     let mut store = SqliteHeapStore::open(&path).expect("open v5 store");
     match migrate_store(&mut store, &Signature::new("some-other-host")) {

@@ -1,0 +1,171 @@
+{
+  "stage8_envelope": "unavailable",
+  "unmeasured": [
+    "four-variant daemon benchmark",
+    "comparable heap footprint",
+    "engine code size"
+  ],
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "--release",
+    "-p",
+    "ironhorse-262",
+    "--test",
+    "xs_performance_bench",
+    "--",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "log": "warning: xs-oracle@0.0.1: /Users/xyz/Development/endo5/rust/engine/xs-oracle/../../../rust/endo/xsnap/xsnap-platform.c:94:1: warning: missing field 'signature' initializer [-Wmissing-field-initializers]\nwarning: xs-oracle@0.0.1:    94 | };\nwarning: xs-oracle@0.0.1:       | ^\nwarning: xs-oracle@0.0.1: 1 warning generated.\n    Finished `release` profile [optimized] target(s) in 0.04s\n     Running tests/xs_performance_bench.rs (target/release/deps/xs_performance_bench-77d1db3bbe90ea63)\n\nrunning 1 test\ntest compare_xs_microbenchmarks ... XS_MICRO parse xs_ns=1431000 ironhorse_ns=5595583 ratio=3.910261\nXS_SAMPLES parse xs=[1478000.0, 1431000.0, 1548000.0, 1431000.0, 1412000.0, 1358000.0, 1782000.0] ironhorse=[5975791.0, 5635833.0, 5550875.0, 5432375.0, 5240167.0, 5968208.0, 5595583.0]\nXS_MICRO properties xs_ns=9131000 ironhorse_ns=10643875 ratio=1.165686\nXS_SAMPLES properties xs=[9150000.0, 9253000.0, 9175000.0, 9111000.0, 9131000.0, 9053000.0, 8947000.0] ironhorse=[10644292.0, 10377625.0, 10668667.0, 10643875.0, 10752209.0, 10628166.0, 10595666.0]\nXS_MICRO calls xs_ns=15393000 ironhorse_ns=14735000 ratio=0.957253\nXS_SAMPLES calls xs=[15423000.0, 15478000.0, 15337000.0, 15486000.0, 14633000.0, 15393000.0, 15383000.0] ironhorse=[14613875.0, 14718542.0, 14854959.0, 14895583.0, 14651916.0, 14735000.0, 14752083.0]\nXS_MICRO allocation_churn xs_ns=11957000 ironhorse_ns=9971750 ratio=0.833968\nXS_SAMPLES allocation_churn xs=[11521000.0, 12058000.0, 11957000.0, 11921000.0, 12090000.0, 11968000.0, 11876000.0] ironhorse=[10014583.0, 10015375.0, 9928709.0, 9976125.0, 9770167.0, 9971750.0, 9912459.0]\nXS_MICRO strings xs_ns=17571000 ironhorse_ns=13877083 ratio=0.789772\nXS_SAMPLES strings xs=[17776000.0, 17557000.0, 17571000.0, 17572000.0, 17503000.0, 17581000.0, 17495000.0] ironhorse=[13797000.0, 13939208.0, 13837959.0, 14010417.0, 13877083.0, 13919417.0, 13802667.0]\nXS_MICRO_ENVELOPE geometric_mean=1.235074 limit=2.0 within_limit=true\nSTAGE8_ENVELOPE unavailable: daemon arm and comparable heap/code footprint are not measured\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.90s\n\n",
+  "fixtures": {
+    "parse": {
+      "phase": "compile",
+      "samples_ns": {
+        "xs": [
+          1478000.0,
+          1431000.0,
+          1548000.0,
+          1431000.0,
+          1412000.0,
+          1358000.0,
+          1782000.0
+        ],
+        "ironhorse": [
+          5975791.0,
+          5635833.0,
+          5550875.0,
+          5432375.0,
+          5240167.0,
+          5968208.0,
+          5595583.0
+        ]
+      },
+      "ratio": 3.9102606568832985
+    },
+    "properties": {
+      "phase": "execute",
+      "samples_ns": {
+        "xs": [
+          9150000.0,
+          9253000.0,
+          9175000.0,
+          9111000.0,
+          9131000.0,
+          9053000.0,
+          8947000.0
+        ],
+        "ironhorse": [
+          10644292.0,
+          10377625.0,
+          10668667.0,
+          10643875.0,
+          10752209.0,
+          10628166.0,
+          10595666.0
+        ]
+      },
+      "ratio": 1.1656855766071623
+    },
+    "calls": {
+      "phase": "execute",
+      "samples_ns": {
+        "xs": [
+          15423000.0,
+          15478000.0,
+          15337000.0,
+          15486000.0,
+          14633000.0,
+          15393000.0,
+          15383000.0
+        ],
+        "ironhorse": [
+          14613875.0,
+          14718542.0,
+          14854959.0,
+          14895583.0,
+          14651916.0,
+          14735000.0,
+          14752083.0
+        ]
+      },
+      "ratio": 0.9572532969531605
+    },
+    "allocation_churn": {
+      "phase": "execute",
+      "samples_ns": {
+        "xs": [
+          11521000.0,
+          12058000.0,
+          11957000.0,
+          11921000.0,
+          12090000.0,
+          11968000.0,
+          11876000.0
+        ],
+        "ironhorse": [
+          10014583.0,
+          10015375.0,
+          9928709.0,
+          9976125.0,
+          9770167.0,
+          9971750.0,
+          9912459.0
+        ]
+      },
+      "ratio": 0.8339675503888936
+    },
+    "strings": {
+      "phase": "execute",
+      "samples_ns": {
+        "xs": [
+          17776000.0,
+          17557000.0,
+          17571000.0,
+          17572000.0,
+          17503000.0,
+          17581000.0,
+          17495000.0
+        ],
+        "ironhorse": [
+          13797000.0,
+          13939208.0,
+          13837959.0,
+          14010417.0,
+          13877083.0,
+          13919417.0,
+          13802667.0
+        ]
+      },
+      "ratio": 0.7897719537874908
+    }
+  },
+  "geometric_mean": 1.2350739801327386,
+  "maximum_ratio": 2.0,
+  "within_microbenchmark_limit": true,
+  "provenance": {
+    "commit": "db908db5078b48665b49008f5f90e9bf4c822a98",
+    "xs_commit": "23b4d6b0a65f35209d9118c4c13c6c9b3e68784d",
+    "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "source_sha256": {
+      "ironhorse-262/tests/xs_performance_bench.rs": "764895001a857011004e9ee9b6d8622bbde6768679cae0f42c775a3af5b26596",
+      "xs-oracle/csrc/xs_shim.c": "83162976a0e21c5bd4ab05210469c51a386cee2aa50aeec8c4e31a97a48a084d",
+      "xs-oracle/src/lib.rs": "003cad62c1492d0edb704d2feebe007ebd2ec2dd4890964c5714705065bf4ea2",
+      "xs-oracle/build.rs": "9e593d604fb0bd24e5bda5e12e49cb4ddf1b8fddb791a2db3ee3b1d243d1003f",
+      "rust-toolchain.toml": "9323c14eb9d9b0693acd8f3f8d3f85ecda1443c352c2cfd4ef3118038b6f143d",
+      "Cargo.lock": "10cba5f2fd3f259c2d0ed8ca8dfde64b91ebb89938edde4712668ddd2cba808d"
+    },
+    "environment": {
+      "CC": null,
+      "CFLAGS": null,
+      "RUSTFLAGS": null,
+      "CARGO_ENCODED_RUSTFLAGS": null,
+      "CARGO_INCREMENTAL": "0",
+      "RUST_MIN_STACK": "33554432"
+    }
+  },
+  "failures": []
+}

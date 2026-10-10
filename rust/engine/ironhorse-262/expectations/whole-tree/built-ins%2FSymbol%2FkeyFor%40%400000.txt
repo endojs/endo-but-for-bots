@@ -1,0 +1,17 @@
+# engine=ironhorse features=default corpus=built-ins/Symbol/keyFor tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Symbol/keyFor/arg-non-symbol.js sloppy pass
+built-ins/Symbol/keyFor/arg-non-symbol.js strict pass
+built-ins/Symbol/keyFor/arg-symbol-registry-hit.js sloppy pass
+built-ins/Symbol/keyFor/arg-symbol-registry-hit.js strict pass
+built-ins/Symbol/keyFor/arg-symbol-registry-miss.js sloppy pass
+built-ins/Symbol/keyFor/arg-symbol-registry-miss.js strict pass
+built-ins/Symbol/keyFor/cross-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Symbol/keyFor/cross-realm.js strict skip:shared-positive-test-failure
+built-ins/Symbol/keyFor/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Symbol/keyFor/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Symbol/keyFor/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be keyFor; name value should be keyFor"
+built-ins/Symbol/keyFor/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be keyFor; name value should be keyFor"
+built-ins/Symbol/keyFor/not-a-constructor.js sloppy pass
+built-ins/Symbol/keyFor/not-a-constructor.js strict pass
+built-ins/Symbol/keyFor/prop-desc.js sloppy pass
+built-ins/Symbol/keyFor/prop-desc.js strict pass

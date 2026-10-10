@@ -1,0 +1,31 @@
+# engine=ironhorse features=default corpus=built-ins/isFinite tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/isFinite/S15.1.2.5_A2.6.js sloppy pass
+built-ins/isFinite/S15.1.2.5_A2.6.js strict pass
+built-ins/isFinite/S15.1.2.5_A2.7.js sloppy pass
+built-ins/isFinite/S15.1.2.5_A2.7.js strict pass
+built-ins/isFinite/not-a-constructor.js sloppy pass
+built-ins/isFinite/not-a-constructor.js strict pass
+built-ins/isFinite/prop-desc.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isFinite name descriptor value should be isFinite; isFinite name value should be isFinite"
+built-ins/isFinite/prop-desc.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isFinite name descriptor value should be isFinite; isFinite name value should be isFinite"
+built-ins/isFinite/return-abrupt-from-tonumber-number-symbol.js sloppy pass
+built-ins/isFinite/return-abrupt-from-tonumber-number-symbol.js strict pass
+built-ins/isFinite/return-abrupt-from-tonumber-number.js sloppy pass
+built-ins/isFinite/return-abrupt-from-tonumber-number.js strict pass
+built-ins/isFinite/return-false-on-nan-or-infinities.js sloppy pass
+built-ins/isFinite/return-false-on-nan-or-infinities.js strict pass
+built-ins/isFinite/return-true-for-valid-finite-numbers.js sloppy pass
+built-ins/isFinite/return-true-for-valid-finite-numbers.js strict pass
+built-ins/isFinite/tonumber-operations.js sloppy pass
+built-ins/isFinite/tonumber-operations.js strict pass
+built-ins/isFinite/toprimitive-call-abrupt.js sloppy pass
+built-ins/isFinite/toprimitive-call-abrupt.js strict pass
+built-ins/isFinite/toprimitive-get-abrupt.js sloppy pass
+built-ins/isFinite/toprimitive-get-abrupt.js strict pass
+built-ins/isFinite/toprimitive-not-callable-throws.js sloppy pass
+built-ins/isFinite/toprimitive-not-callable-throws.js strict pass
+built-ins/isFinite/toprimitive-result-is-object-throws.js sloppy pass
+built-ins/isFinite/toprimitive-result-is-object-throws.js strict pass
+built-ins/isFinite/toprimitive-result-is-symbol-throws.js sloppy pass
+built-ins/isFinite/toprimitive-result-is-symbol-throws.js strict pass
+built-ins/isFinite/toprimitive-valid-result.js sloppy pass
+built-ins/isFinite/toprimitive-valid-result.js strict pass

@@ -36,6 +36,7 @@ import {
 import { start, stop, purge, makeEndoClient } from '../index.js';
 import { makeFilePowers } from '../src/manager-node-powers.js';
 import { lineageOf, makeMount } from '../src/mount.js';
+import { quiesceGitMaintenance, removeRepoTree } from './_git-fixture.js';
 
 const execFileAsync = nodePromisify(execFile);
 const exampleCredential = () =>
@@ -64,11 +65,7 @@ const makeFakeGitMount = () => {
     list: async () => [],
     lookup: async () => undefined,
     sha256: () => '',
-    getInfo: async () => ({
-      algorithm: 'sha256',
-      hash: '',
-      size: 0n,
-    }),
+    size: async () => 0n,
   });
   const mount = Far('FakeMount', {
     has: async () => false,
@@ -120,7 +117,9 @@ const provisionHostContext = async t => {
   t.teardown(async () => {
     await stop(config);
     cancel(Error('teardown'));
-    await fs.promises.rm(root, { recursive: true, force: true });
+    // The daemon clones repositories under its state directory, so this
+    // delete races the same background packing (see `removeRepoTree`).
+    await removeRepoTree(root);
   });
   return { host: E(getBootstrap()).host(), config };
 };
@@ -130,8 +129,9 @@ const provisionHostContext = async t => {
  */
 const provisionGitContext = async t => {
   const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'git-remote-'));
-  t.teardown(() => fs.promises.rm(root, { recursive: true, force: true }));
+  t.teardown(() => removeRepoTree(root));
   await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: root });
+  await quiesceGitMaintenance(root);
   await execFileAsync(
     'git',
     [
@@ -163,11 +163,10 @@ const provisionBareRemote = async (t, sourceRepo) => {
   const remoteParent = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), 'git-remote-bare-'),
   );
-  t.teardown(() =>
-    fs.promises.rm(remoteParent, { recursive: true, force: true }),
-  );
+  t.teardown(() => removeRepoTree(remoteParent));
   const remoteRoot = path.join(remoteParent, 'remote.git');
   await execFileAsync('git', ['clone', '--bare', sourceRepo, remoteRoot]);
+  await quiesceGitMaintenance(remoteRoot);
   return remoteRoot;
 };
 
@@ -406,6 +405,71 @@ test('GitRemote requires matching credential authority for HTTPS', async t => {
   await t.throwsAsync(E(remote).fetch({}), {
     message: /credential .* revoked/,
   });
+});
+
+test('GitRemote reports credential health before a push fails on it', async t => {
+  const backend = harden({ ...makeNotYetImplementedBackend() });
+  const git = makeGit({ mount: makeFakeGitMount(), backend, lineageOf });
+  const operations = makeGitOperations({ backend, git });
+  const credential = exampleCredential();
+  const { remote } = makeGitRemote({
+    git,
+    operations,
+    name: 'origin',
+    credential,
+    policy: {
+      url: 'https://github.com/example/repo.git',
+      allowedDirections: ['fetch'],
+      fetchRefspecs: ['+refs/heads/*:refs/remotes/origin/*'],
+      pushRefspecs: [],
+    },
+  });
+
+  const live = await E(remote).credentialHealth();
+  t.deepEqual(live, {
+    required: true,
+    kind: 'bearer',
+    audience: 'https://github.com',
+    available: true,
+    revoked: false,
+  });
+  // The leak check has to run while there is material to leak: after the
+  // revoke below the token is gone from the record either way.
+  t.false(JSON.stringify(live).includes('test-token'));
+
+  // A daemon restart leaves the record revoked with its material gone.
+  // Before this method, the next push was the first thing that said so.
+  revokeGitCredential(credential);
+  t.deepEqual(await E(remote).credentialHealth(), {
+    required: true,
+    kind: 'bearer',
+    audience: 'https://github.com',
+    available: false,
+    revoked: true,
+  });
+});
+
+test('GitRemote credential health is `required: false` and nothing else for a credential-free remote', async t => {
+  const backend = harden({ ...makeNotYetImplementedBackend() });
+  const git = makeGit({ mount: makeFakeGitMount(), backend, lineageOf });
+  const operations = makeGitOperations({ backend, git });
+  const { remote } = makeGitRemote({
+    git,
+    operations,
+    name: 'origin',
+    policy: {
+      url: 'file:///tmp/repo.git',
+      allowedDirections: ['fetch'],
+      fetchRefspecs: ['+refs/heads/*:refs/remotes/origin/*'],
+      pushRefspecs: [],
+      allowLocalFileTransport: true,
+    },
+  });
+
+  // The `required: false` arm is the whole record: a remote that needs no
+  // credential has no liveness to report, and the guard's rest pattern is the
+  // empty record, so a stray `kind`/`audience` here would not reach a caller.
+  t.deepEqual(await E(remote).credentialHealth(), { required: false });
 });
 
 test('GitRemote passes HTTPS credential material to backend transport only', async t => {
@@ -1896,6 +1960,9 @@ test('GitRemoteController.revoke makes all remote ops refuse', async t => {
   // Every guest-visible operation now refuses.  The controller still
   // works so the host can inspect after revocation.
   await t.throwsAsync(E(remote).inspect(), { message: /has been revoked/ });
+  await t.throwsAsync(E(remote).credentialHealth(), {
+    message: /has been revoked/,
+  });
   await t.throwsAsync(E(remote).fetch({}), { message: /has been revoked/ });
   const view = await E(controller).inspect();
   t.true(view.revoked);

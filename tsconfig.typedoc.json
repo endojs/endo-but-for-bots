@@ -34,6 +34,8 @@
     "packages/preact-container",
     "packages/c",
     "packages/**/dist",
+    "packages/**/dist-ironhorse",
+    "packages/**/dist-xs",
     "packages/**/build",
     "packages/**/docs",
     "**/node_modules/**"

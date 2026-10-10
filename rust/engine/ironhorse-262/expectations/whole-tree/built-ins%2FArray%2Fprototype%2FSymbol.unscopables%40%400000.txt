@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=built-ins/Array/prototype/Symbol.unscopables tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Array/prototype/Symbol.unscopables/array-find-from-last.js sloppy pass
+built-ins/Array/prototype/Symbol.unscopables/array-find-from-last.js strict pass
+built-ins/Array/prototype/Symbol.unscopables/at.js sloppy pass
+built-ins/Array/prototype/Symbol.unscopables/at.js strict pass
+built-ins/Array/prototype/Symbol.unscopables/change-array-by-copy.js sloppy pass
+built-ins/Array/prototype/Symbol.unscopables/change-array-by-copy.js strict pass
+built-ins/Array/prototype/Symbol.unscopables/prop-desc.js sloppy pass
+built-ins/Array/prototype/Symbol.unscopables/prop-desc.js strict pass
+built-ins/Array/prototype/Symbol.unscopables/value.js sloppy pass
+built-ins/Array/prototype/Symbol.unscopables/value.js strict pass

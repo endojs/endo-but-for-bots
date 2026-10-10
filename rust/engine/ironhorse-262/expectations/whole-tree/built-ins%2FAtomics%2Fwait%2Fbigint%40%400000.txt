@@ -1,0 +1,26 @@
+# engine=ironhorse features=default corpus=built-ins/Atomics/wait/bigint tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Atomics/wait/bigint/bad-range.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/cannot-suspend-throws.js sloppy skip:structural:can-block
+built-ins/Atomics/wait/bigint/false-for-timeout-agent.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/false-for-timeout.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/nan-for-timeout.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/negative-index-throws.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/negative-timeout-agent.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/negative-timeout.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/no-spurious-wakeup-no-operation.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/no-spurious-wakeup-on-add.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/no-spurious-wakeup-on-and.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/no-spurious-wakeup-on-compareExchange.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/no-spurious-wakeup-on-exchange.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/no-spurious-wakeup-on-or.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/no-spurious-wakeup-on-store.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/no-spurious-wakeup-on-sub.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/no-spurious-wakeup-on-xor.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/non-bigint64-typedarray-throws.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/non-shared-bufferdata-throws.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/null-bufferdata-throws.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/out-of-range-index-throws.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/value-not-equal.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/waiterlist-block-indexedposition-wake.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/waiterlist-order-of-operations-is-fifo.js sloppy skip:structural:multi-agent
+built-ins/Atomics/wait/bigint/was-woken-before-timeout.js sloppy skip:structural:multi-agent

@@ -1,0 +1,15 @@
+# engine=ironhorse features=default corpus=intl402/DisplayNames/prototype/of tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/DisplayNames/prototype/of/type-calendar-invalid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/of/type-calendar-invalid.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/of/type-calendar-valid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/of/type-calendar-valid.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/of/type-datetimefield-invalid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/of/type-datetimefield-invalid.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/of/type-datetimefield-valid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/of/type-datetimefield-valid.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/of/type-language-invalid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/of/type-language-invalid.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/of/type-language-valid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/of/type-language-valid.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/of/type-region-invalid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/of/type-region-invalid.js strict skip:oracle-host-missing-global:Intl

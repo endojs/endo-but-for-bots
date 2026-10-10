@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=built-ins/Iterator/prototype/Symbol.iterator tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Iterator/prototype/Symbol.iterator/is-function.js sloppy pass
+built-ins/Iterator/prototype/Symbol.iterator/is-function.js strict pass
+built-ins/Iterator/prototype/Symbol.iterator/length.js sloppy pass
+built-ins/Iterator/prototype/Symbol.iterator/length.js strict pass
+built-ins/Iterator/prototype/Symbol.iterator/name.js sloppy pass
+built-ins/Iterator/prototype/Symbol.iterator/name.js strict pass
+built-ins/Iterator/prototype/Symbol.iterator/prop-desc.js sloppy pass
+built-ins/Iterator/prototype/Symbol.iterator/prop-desc.js strict pass
+built-ins/Iterator/prototype/Symbol.iterator/return-val.js sloppy pass
+built-ins/Iterator/prototype/Symbol.iterator/return-val.js strict pass

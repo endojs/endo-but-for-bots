@@ -1,0 +1,17 @@
+# engine=ironhorse features=default corpus=language/statements/class/super tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/super/in-constructor-superproperty-evaluation.js sloppy pass
+language/statements/class/super/in-constructor-superproperty-evaluation.js strict pass
+language/statements/class/super/in-constructor.js sloppy pass
+language/statements/class/super/in-constructor.js strict pass
+language/statements/class/super/in-getter.js sloppy pass
+language/statements/class/super/in-getter.js strict pass
+language/statements/class/super/in-methods.js sloppy pass
+language/statements/class/super/in-methods.js strict pass
+language/statements/class/super/in-setter.js sloppy pass
+language/statements/class/super/in-setter.js strict pass
+language/statements/class/super/in-static-getter.js sloppy pass
+language/statements/class/super/in-static-getter.js strict pass
+language/statements/class/super/in-static-methods.js sloppy pass
+language/statements/class/super/in-static-methods.js strict pass
+language/statements/class/super/in-static-setter.js sloppy pass
+language/statements/class/super/in-static-setter.js strict pass

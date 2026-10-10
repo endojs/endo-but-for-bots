@@ -38,7 +38,7 @@ pub const KEYS: FourCc = FourCc(*b"KEYS");
 pub const NAME: FourCc = FourCc(*b"NAME");
 /// `SYMB` — the symbol table (well-known / registered symbol identities).
 pub const SYMB: FourCc = FourCc(*b"SYMB");
-/// `METR` — the metering state (design row 6): the frozen 16.16
+/// `METR` — cost-table version and SHA-256 digest, plus the frozen 16.16
 /// fixed-point counters plus the cost-table version that produced them,
 /// so a resumed machine continues its meter exactly. Ironhorse-specific (XS
 /// carries meter state differently), which the Ironhorse `VERS` discriminator
@@ -55,6 +55,12 @@ pub const ARRY: FourCc = FourCc(*b"ARRY");
 /// entries. Ironhorse-specific; emitted only when non-empty (see
 /// [`ARRY`]).
 pub const COLL: FourCc = FourCc(*b"COLL");
+/// `IDXP` — an ORDINARY object's integer-indexed properties (ledger
+/// `IndexProps` row): per instance, the sparse index→value map XS keeps in
+/// an internal `XS_ARRAY_KIND` slot. Ironhorse-specific; emitted only when
+/// non-empty (see [`ARRY`]), so a machine that never wrote an index property
+/// on a plain object keeps its exact pre-`IDXP` container bytes.
+pub const IDXP: FourCc = FourCc(*b"IDXP");
 /// `REGY` — the `Symbol.for` registry (ledger `SymbolRegistry` row):
 /// key bytes → descriptor slot, pairwise. Ironhorse-specific; emitted
 /// only when non-empty (see [`ARRY`]). Distinct from `KEYS`/`SYMB`,
@@ -124,6 +130,11 @@ pub const IBFN: FourCc = FourCc(*b"IBFN");
 pub const PRIV: FourCc = FourCc(*b"PRIV");
 /// `DISP` — DisposableStack/AsyncDisposableStack state and records.
 pub const DISP: FourCc = FourCc(*b"DISP");
+/// `ASYN` — suspended async-function activations linked from PRMS
+/// reactions, followed (format 23) by the async generator instances:
+/// state, suspended activation, queued requests and the active one.
+pub const ASYN: FourCc = FourCc(*b"ASYN");
+
 /// `GENR` — synchronous generator lifecycle and saved activations.
 pub const GENR: FourCc = FourCc(*b"GENR");
 /// `PRMS` — the promise cluster: per-instance settlement state and
@@ -136,7 +147,7 @@ pub const PRMS: FourCc = FourCc(*b"PRMS");
 /// than wider `ERRD` rows, so an older container stays an
 /// encoding-identical subset and the read range keeps its meaning.
 pub const ESTK: FourCc = FourCc(*b"ESTK");
-/// `NFLR` — the installed-names floor (wave-6 W6-7): the id ceiling at
+/// `NFLR` — the installed-names floor: the id ceiling at
 /// or below which partial install passes leave bindings alone. Four
 /// big-endian bytes. Emitted only when it differs from the name-table
 /// length (the conservative default a floor-less restore assumes), so
@@ -162,11 +173,7 @@ pub const INTL: FourCc = FourCc(*b"INTL");
 /// UNKNOWN tags is sound because the `VERS` range gate runs first: a
 /// container from a newer format (the one honest source of new tags)
 /// is already refused by version.
-pub const CANONICAL_ATOM_ORDER: &[FourCc] = &[
-    VERS, SIGN, CREA, BLOC, HEAP, STAC, KEYS, NAME, SYMB, METR, ARRY, COLL, REGY, ERRD, ESTK,
-    ABUF, TARR, DVIW, WRAP, REGX, ARGB, TMPR, INTL, ITER, DATE, FUNC, PROX, ACCS, IBFN, PRIV,
-    DISP, GENR, PRMS, NFLR,
-];
+pub const CANONICAL_ATOM_ORDER: &[FourCc] = &crate::snapshot_roster::canonical_atom_order();
 
 /// The Ironhorse discriminator embedded at the head of the `VERS` atom. An
 /// Ironhorse snapshot is never mistaken for an XS one and vice versa
@@ -179,8 +186,8 @@ pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 
 /// The Ironhorse snapshot format version — the stamp every writer
 /// emits. Bumped on any change to the atom layout or the slot-record
-/// encoding, INCLUDING the addition of state-bearing atoms (review
-/// finding 1): version 2 marks the initial side-table atom family
+/// encoding, INCLUDING the addition of state-bearing atoms:
+/// version 2 marks the initial side-table atom family
 /// (`ARRY`…`INTL`/`ITER`/`NFLR`), so a version-1 reader — which skips
 /// unknown atoms and would silently drop arrays, collections, RegExps,
 /// Intl records and iterator cursors — refuses a version-2 container
@@ -191,11 +198,34 @@ pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 /// version 7 adds Intl bound-function links; version 8 adds private
 /// elements; version 9 adds disposable stacks; version 10 adds
 /// synchronous generators; version 11 adds error construction frames
-/// (`ESTK`); version 12 adds the promise cluster (`PRMS`).
+/// (`ESTK`); version 12 adds the promise cluster (`PRMS`); version 13 adds
+/// suspended async-function activations (`ASYN`); version 14 adds the
+/// `IDXP` index-property store, which a version-13 reader would skip —
+/// silently dropping every integer-keyed property of every ordinary
+/// object. Version 15 encodes NAME entries as canonical XS CESU-8,
+/// preserving every JavaScript UTF-16 code unit; older NAME entries are
+/// decoded as UTF-8 and converted losslessly on read.
 /// The reader accepts
 /// [`IRONHORSE_FORMAT_VERSION_MIN_READ`]`..=`this and refuses anything
 /// newer.
-pub const IRONHORSE_FORMAT_VERSION: u32 = 12;
+// Version 16 requires canonical container bytes, including exact core
+// payload lengths and CREA's declared BLOC length.
+// Version 17 reserves a u32::MAX chunk length as a reusable-block marker,
+// followed by its total u32 span. Earlier readers cannot walk these BLOC bytes.
+// Version 18 persists relocated boot-native name chunks in the FUNC suffix.
+// Version 19 records code-segment identities in saved exception handlers.
+// Version 20 carries the first reported unhandled rejection in PRMS.
+// Version 21 adds shared environments, roots, modules, and queued jobs to FUNC.
+/// Format 22 adds host-function recipes to the shared FUNC extension.
+/// Format 23 lets `ASYN` carry async generator instances after the
+/// activations, and the `AsyncGenerator*` reaction kinds resume.
+/// Format 24 lets `ASYN` carry the `Array.fromAsync` accumulations after the
+/// generators, and the `FromAsync*` reaction kinds resume (architecture
+/// finding F127). A payload with no accumulations is byte-identical to what
+/// format 23 wrote; one carrying accumulations but no generators writes a zero
+/// generator count as a positional placeholder, which is the only case where
+/// that count may be zero.
+pub const IRONHORSE_FORMAT_VERSION: u32 = 24;
 
 /// The oldest format version this reader still decodes. Version-1
 /// containers predate the version-2 stamp; every version-1 writer in
@@ -252,6 +282,9 @@ impl Version {
         if payload.len() < 10 {
             return Err(VersionError::Truncated);
         }
+        if payload.len() != 10 {
+            return Err(VersionError::TrailingBytes);
+        }
         if payload[0..4] != IRONHORSE_MAGIC {
             let mut m = [0u8; 4];
             m.copy_from_slice(&payload[0..4]);
@@ -261,10 +294,8 @@ impl Version {
         // The read RANGE, not the write stamp: an older readable
         // version decodes (its atoms are a subset with the same
         // encodings), while a NEWER one is refused — its atoms may
-        // carry state this reader would silently skip (review
-        // finding 1).
-        if !(IRONHORSE_FORMAT_VERSION_MIN_READ..=IRONHORSE_FORMAT_VERSION)
-            .contains(&format_version)
+        // carry state this reader would silently skip.
+        if !(IRONHORSE_FORMAT_VERSION_MIN_READ..=IRONHORSE_FORMAT_VERSION).contains(&format_version)
         {
             return Err(VersionError::UnsupportedVersion(format_version));
         }
@@ -304,89 +335,114 @@ impl Version {
 #[derive(Debug, PartialEq, Eq)]
 pub enum VersionError {
     Truncated,
+    TrailingBytes,
     /// The `VERS` payload did not carry the [`IRONHORSE_MAGIC`] discriminator —
     /// a foreign (e.g. XS) snapshot, whose import is out of scope.
     NotIronhorse([u8; 4]),
     UnsupportedVersion(u32),
-    SlotWidthMismatch { expected: u8, found: u8 },
+    SlotWidthMismatch {
+        expected: u8,
+        found: u8,
+    },
     UnsupportedEndian(u8),
 }
 
-/// The current boot-object layout generation. Bump this whenever
-/// `Interp::create_intrinsics` changes any boot-derived slot identity or
-/// metadata table. The engine-owned suffix prevents a host from accidentally
-/// reusing its callback signature across an incompatible boot change.
-pub const BOOT_LAYOUT_VERSION: u32 = 17;
-
-const BOOT_LAYOUT_SIGNATURE_KEY: &str = "|ironhorse-boot=";
-
-/// The ENGINE-COMPATIBILITY signature (`SIGN`). Identifies the engine build a
-/// snapshot was written against, and gates adoption fail-closed: a reader
-/// whose signature differs from the snapshot's refuses the read before any
-/// restore runs, exactly as `fxReadSnapshot` does.
-///
-/// It covers two layouts, and a change to EITHER must bump it:
-///
-/// 1. **The host callback table.** Append-only: new host functions are
-///    added at the end and existing indices never change (per
-///    `designs/daemon-xs-worker-snapshot.md` § Callback table binding).
-///    A callback index would otherwise bind to the wrong host function.
-///
-/// 2. **The boot-derived `SlotIndex` layout** — every slot
-///    `create_intrinsics` allocates below `boot_slot_count`. Adoption
-///    boots a fresh machine and then REPLACES its arenas with the
-///    image's, so the boot-derived maps keyed by slot index (`functions`
-///    above all, and every `*_proto` field) survive from the CURRENT
-///    boot rather than being rebuilt from the snapshot. A container
-///    written under a different boot layout would therefore attach this
-///    build's boot metadata to the image's unrelated slots — silently.
-///    Nothing else catches it: `boot_slot_count` is not serialized, and
-///    `VERS` versions the WIRE SCHEMA (the atom set), not the heap the
-///    atoms describe.
-///
-/// [`Signature::new`] appends the engine-owned boot-layout generation to the
-/// host-provided callback-table signature. Store-backed workers and exported
-/// containers are expected to survive daemon replacement and compatible
-/// engine upgrades, so "same build only" is not an acceptable contract; this
-/// makes the cross-build promise checkable without relying on every host to
-/// remember a separate bump. Locked by
-/// `crafted_row_refusals::a_container_from_a_foreign_boot_layout_is_refused`.
+/// Engine compatibility identity: the host's callback-table signature and
+/// the fingerprint derived from this engine's actual intrinsic boot layout.
+/// Both must match before adoption. Legacy string-only signatures decode for
+/// inspection but cannot authorize restoration without a boot fingerprint.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Signature(String);
+pub struct Signature {
+    host: String,
+    boot: Option<[u8; 32]>,
+}
+
+/// The first sixteen hex digits of a 32-byte fingerprint: enough to tell two
+/// boot layouts apart in a log line, while the full value stays in `Debug`.
+/// Infallible by type — the argument is a fixed 32-byte array.
+fn fingerprint_prefix(f: &mut std::fmt::Formatter<'_>, digest: &[u8; 32]) -> std::fmt::Result {
+    for byte in &digest[..8] {
+        write!(f, "{byte:02x}")?;
+    }
+    Ok(())
+}
+
+impl std::fmt::Display for Signature {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.boot {
+            Some(boot) => {
+                write!(f, "{} @", self.host)?;
+                fingerprint_prefix(f, boot)
+            }
+            None => write!(f, "{} (no boot fingerprint)", self.host),
+        }
+    }
+}
+
+// Signature's fields are private; classify them beside their declaration so a
+// future retained Slot cannot bypass the snapshot visitation type check.
+impl crate::stored_slots::Metadata for Signature {}
+const _: fn(&Signature) = |signature| {
+    let Signature { host, boot } = signature;
+    crate::stored_slots::metadata(host);
+    crate::stored_slots::metadata(boot);
+};
 
 impl Signature {
-    pub fn new(s: impl Into<String>) -> Signature {
-        Signature(format!(
-            "{}{BOOT_LAYOUT_SIGNATURE_KEY}{BOOT_LAYOUT_VERSION}",
-            s.into()
-        ))
-    }
-
-    /// Serialize the `SIGN` payload (the raw signature bytes).
-    pub fn encode(&self) -> Vec<u8> {
-        self.0.as_bytes().to_vec()
-    }
-
-    /// Decode a `SIGN` payload.
-    pub fn decode(payload: &[u8]) -> Result<Signature, SignatureError> {
-        match std::str::from_utf8(payload) {
-            Ok(s) => Ok(Signature(s.to_string())),
-            Err(_) => Err(SignatureError::NotUtf8),
+    pub fn new(host: impl Into<String>) -> Signature {
+        Signature {
+            host: host.into(),
+            boot: Some(ironhorse_vm::Interp::boot_fingerprint()),
         }
     }
 
-    /// Whether a snapshot written under `self` may be read by a machine
-    /// whose current signature is `current`. Equality is required: any
-    /// difference means the callback table changed layout, so indices
-    /// cannot be trusted.
+    /// Serialize the fixed-width boot digest followed by the host bytes.
+    /// Legacy signatures retain their bytes for inspection and authentication.
+    pub fn encode(&self) -> Vec<u8> {
+        let Some(boot) = self.boot else {
+            return self.host.as_bytes().to_vec();
+        };
+        let mut bytes = b"IHB1".to_vec();
+        bytes.extend_from_slice(&boot);
+        bytes.extend_from_slice(self.host.as_bytes());
+        bytes
+    }
+
+    pub fn decode(payload: &[u8]) -> Result<Signature, SignatureError> {
+        let (boot, host) = if payload.starts_with(b"IHB1") {
+            let digest = payload.get(4..36).ok_or(SignatureError::Truncated)?;
+            (Some(digest.try_into().unwrap()), &payload[36..])
+        } else {
+            (None, payload)
+        };
+        let host = std::str::from_utf8(host)
+            .map_err(|_| SignatureError::NotUtf8)?
+            .to_string();
+        Ok(Signature { host, boot })
+    }
+
+    /// Validate against the running engine, even if a caller supplied the
+    /// same forged or legacy signature as both found and expected identities.
+    pub(crate) fn check_boot(&self) -> Result<(), SnapshotError> {
+        let expected = ironhorse_vm::Interp::boot_fingerprint();
+        if self.boot != Some(expected) {
+            return Err(SnapshotError::BootLayoutMismatch {
+                expected,
+                found: self.boot,
+            });
+        }
+        Ok(())
+    }
+
     pub fn is_compatible_with(&self, current: &Signature) -> bool {
-        self == current
+        self == current && self.check_boot().is_ok()
     }
 }
 
 /// A `SIGN` atom that cannot be decoded.
 #[derive(Debug, PartialEq, Eq)]
 pub enum SignatureError {
+    Truncated,
     NotUtf8,
 }
 
@@ -394,21 +450,110 @@ pub enum SignatureError {
 /// framing, version, and signature failures.
 #[derive(Debug, PartialEq, Eq)]
 pub enum SnapshotError {
+    /// The snapshot lacks this engine's mechanically derived boot identity.
+    BootLayoutMismatch {
+        expected: [u8; 32],
+        found: Option<[u8; 32]>,
+    },
     Atom(AtomError),
     Version(VersionError),
     Signature(SignatureError),
     /// The host's current signature does not match the snapshot's — the
     /// callback table changed layout since the snapshot was written.
-    SignatureMismatch { expected: Signature, found: Signature },
-    /// The snapshot's cost-table version does not match this engine's
+    SignatureMismatch {
+        expected: Signature,
+        found: Signature,
+    },
+    /// The snapshot's cost-table version or digest does not match this engine's
     /// frozen table ([`ironhorse_vm::COST_TABLE_VERSION`]) — resuming would
     /// continue a meter under changed weights. Fails closed, the metering
     /// analogue of [`SnapshotError::SignatureMismatch`] (design row 6).
-    CostTableMismatch { expected: String, found: String },
+    CostTableMismatch {
+        expected: String,
+        found: String,
+    },
     /// A required atom (`VERS`, `SIGN`, `HEAP`, …) was absent.
     MissingAtom(FourCc),
     /// A structural payload was malformed (wrong length, bad slot record).
     Corrupt(&'static str),
+}
+
+impl std::fmt::Display for VersionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VersionError::Truncated => write!(f, "`VERS` payload is shorter than the header"),
+            VersionError::TrailingBytes => write!(f, "`VERS` payload has trailing bytes"),
+            VersionError::NotIronhorse(magic) => write!(
+                f,
+                "`VERS` discriminator is {magic:?}, not an IronHorse snapshot"
+            ),
+            VersionError::UnsupportedVersion(found) => {
+                write!(f, "container format {found} is outside the readable range")
+            }
+            VersionError::SlotWidthMismatch { expected, found } => write!(
+                f,
+                "slot width is {found} bytes, this engine uses {expected}"
+            ),
+            VersionError::UnsupportedEndian(found) => {
+                write!(f, "byte order tag {found} is not supported")
+            }
+        }
+    }
+}
+
+impl std::error::Error for VersionError {}
+
+impl std::fmt::Display for SignatureError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SignatureError::Truncated => write!(f, "`SIGN` payload is truncated"),
+            SignatureError::NotUtf8 => write!(f, "`SIGN` host string is not UTF-8"),
+        }
+    }
+}
+
+impl std::error::Error for SignatureError {}
+
+impl std::fmt::Display for SnapshotError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SnapshotError::BootLayoutMismatch { expected, found } => {
+                write!(f, "boot layout mismatch: snapshot carries ")?;
+                match found {
+                    Some(found) => fingerprint_prefix(f, found)?,
+                    None => write!(f, "no fingerprint")?,
+                }
+                write!(f, ", this engine derives ")?;
+                fingerprint_prefix(f, expected)
+            }
+            SnapshotError::Atom(e) => write!(f, "malformed container: {e}"),
+            SnapshotError::Version(e) => write!(f, "incompatible container: {e}"),
+            SnapshotError::Signature(e) => write!(f, "malformed signature: {e}"),
+            SnapshotError::SignatureMismatch { expected, found } => write!(
+                f,
+                "signature mismatch: snapshot carries {found}, this host is {expected}"
+            ),
+            SnapshotError::CostTableMismatch { expected, found } => write!(
+                f,
+                "cost-table mismatch: snapshot carries {found}, this engine is {expected}"
+            ),
+            SnapshotError::MissingAtom(tag) => {
+                write!(f, "required atom `{}` is absent", tag.as_str())
+            }
+            SnapshotError::Corrupt(what) => write!(f, "corrupt payload: {what}"),
+        }
+    }
+}
+
+impl std::error::Error for SnapshotError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            SnapshotError::Atom(e) => Some(e),
+            SnapshotError::Version(e) => Some(e),
+            SnapshotError::Signature(e) => Some(e),
+            _ => None,
+        }
+    }
 }
 
 impl From<AtomError> for SnapshotError {
@@ -478,7 +623,10 @@ mod tests {
     /// private elements, disposable stacks, and generators.
     #[test]
     fn the_write_stamp_is_past_the_side_table_addition() {
-        assert!(IRONHORSE_FORMAT_VERSION >= 10, "the generator atom is a format bump");
+        assert!(
+            Version::current().format_version >= 10,
+            "the generator atom is a format bump"
+        );
         assert_eq!(Version::current().format_version, IRONHORSE_FORMAT_VERSION);
     }
 
@@ -497,18 +645,19 @@ mod tests {
     fn version_rejects_a_future_format() {
         assert_eq!(
             Version::decode(&stamped(IRONHORSE_FORMAT_VERSION + 1)),
-            Err(VersionError::UnsupportedVersion(IRONHORSE_FORMAT_VERSION + 1))
+            Err(VersionError::UnsupportedVersion(
+                IRONHORSE_FORMAT_VERSION + 1
+            ))
         );
     }
 
     #[test]
     fn signature_round_trips_and_gates() {
         let s = Signature::new("ironhorse-worker-v1");
-        assert_eq!(
-            s.encode(),
-            b"ironhorse-worker-v1|ironhorse-boot=17",
-            "the engine-owned boot generation travels with every host signature"
-        );
+        let encoded = s.encode();
+        assert_eq!(&encoded[..4], b"IHB1");
+        assert_eq!(&encoded[4..36], &ironhorse_vm::Interp::boot_fingerprint());
+        assert_eq!(&encoded[36..], b"ironhorse-worker-v1");
         assert_eq!(Signature::decode(&s.encode()).unwrap(), s);
         assert!(s.is_compatible_with(&Signature::new("ironhorse-worker-v1")));
         assert!(!s.is_compatible_with(&Signature::new("ironhorse-worker-v2")));

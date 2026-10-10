@@ -4,16 +4,56 @@ A streaming LLM agent harness for the Endo daemon, plus the two voice caplets
 that make it a hands-free voice assistant.
 
 - **Factory** (`agent.js`) — a fae-like factory that owns one guest per chat
-  session and exposes `converse(text) -> replyReader`, a pull-based stream of
-  reply-token deltas (`src/stream.js`).
-- **Voice caplets** (`voice/`) — two independent, swappable daemon objects:
-  - `floot-stt` — speech-to-text via [Moonshine](https://github.com/moonshine-ai/moonshine)
+  session and exposes `startTurn(text) -> FlootTurn`, a turn the daemon runs and
+  a caller watches through `watch()`, a pull-based stream of reply-token deltas
+  (`src/stream.js`).
+  The turn belongs to the daemon (`src/session-turn.js`): watching is how a
+  client sees it; `cancel()` requests a stop and `whenFinished()` waits for teardown.
+  `speak(ttsServer, options?)` opens a spoken view of the same turn
+  (`src/turn-speech.js`): the daemon feeds the reply text to the TTS caplet and
+  hands back its audio stream, so a spoken reply never depends on the browser
+  relaying text; calling it again restarts speech with other options.
+  `getCurrentTurn()` on the session returns `{ input, turn, history }` or `null`, allowing
+  a reloaded browser to recover the active turn.
+  Its history promise resolves before execution, after earlier queued mail, so recovery
+  can combine it with the prompt and live output without duplicating a durable commit.
+  Each session accepts one outstanding UI turn; a competing `startTurn` rejects.
+  Mail remains serialized through the session's execution queue.
+  Turns survive browser disconnects, but daemon restarts recover committed history
+  rather than live turn handles.
+- **Voice caplets** (`voice/`) — two independent, swappable daemon objects,
+  provisioned under the `floot/` inventory directory (`FLOOT_DIR`):
+  - `floot/stt` — speech-to-text via [Moonshine](https://github.com/moonshine-ai/moonshine)
     (`voice/audio-server-caplet.js`): `transcribe(audioReader) -> textReader`.
-  - `floot-tts` — text-to-speech via [piper](https://github.com/rhasspy/piper)
-    (`voice/tts-server-caplet.js`): `synthesize(textReader) -> audioReader`.
+  - `floot/tts` — text-to-speech via [piper](https://github.com/rhasspy/piper)
+    (`voice/tts-server-caplet.js`): `synthesize(textReader, options?) -> audioReader`;
+    `getConfiguration()` lists its voices, defaults, and the ranges of the
+    Piper controls the options are held to.
 
 The browser UI lives in [`@endo/chat`](../chat); a Chat Space looks these three
 objects up by pet-name and streams to/from them.
+
+## Hosted security status
+
+Floot refuses the legacy `claude-cli` route, which looked a bare `ClaudeClient`
+up by name from its own profile.
+Claude runs only through an operator-provisioned hosted backend discovered as
+`claude-backend`: [`@endo/claude-sandbox`](../claude-sandbox/README.md#claudebackendfactory-floot-hosted-backend)
+supplies one (`setup-hosted.js`) that runs `claude -p` in a rootless Podman
+slice per session and bridges the session's pinned Endo tools in over a
+per-session MCP socket.
+That backend still materialises the credential inside the slice; binding it is
+an operator decision, not a certification against the token-free hosted
+contract.
+Codex policy composition and broker primitives are available, but live runtime,
+listener, and subscription acceptance remain prerequisites for production use.
+See [deployment acceptance](../codex-sandbox/DEPLOYMENT-ACCEPTANCE.md).
+
+Runtime container mounts — a session attaching a capability it holds under
+`/mnt/` of its sandbox with `attachContainerMount` — stay inside that contract:
+each attach is declared on the hosted session's policy and attested as a 9P
+projection served through the capability, never an undeclared bind.
+See [runtime-container-fs-mount](../../designs/runtime-container-fs-mount.md).
 
 ## Demo dependencies
 
@@ -24,9 +64,9 @@ caplets are unconfined and spawn these as subprocesses).
 | --- | --- | --- |
 | Endo daemon + `endo` CLI | everything | Built from this monorepo (`yarn build`); start with `endo start`. |
 | `ANTHROPIC_API_KEY` | factory | Anthropic API key for the LLM. Passed via a capability handle, never stored in caplet env. |
-| [`uv`](https://docs.astral.sh/uv/) | `floot-stt` | Runs `voice/moonshine_daemon.py`, which is PEP-723 self-contained — `uv` installs `moonshine-voice` and downloads the model on first run. No project Python env needed. |
-| [`piper`](https://github.com/rhasspy/piper) binary | `floot-tts` | Standalone TTS engine. Point `FLOOT_TTS_BINARY` at it (default `piper` on PATH). |
-| A piper voice model | `floot-tts` | A `<voice>.onnx` plus its companion `<voice>.onnx.json` (the `.json` supplies `audio.sample_rate`). `FLOOT_TTS_MODEL` is the absolute path to the `.onnx`. |
+| [`uv`](https://docs.astral.sh/uv/) | `floot/stt` | Runs `voice/moonshine_daemon.py`, which is PEP-723 self-contained — `uv` installs `moonshine-voice` and downloads the model on first run. No project Python env needed. Optional: `FLOOT_STT_ENABLE=0` skips STT. |
+| [`piper`](https://github.com/rhasspy/piper) binary | `floot/tts` | Standalone TTS engine. Point `FLOOT_TTS_BINARY` at it (default `piper` on PATH). |
+| A piper voice model | `floot/tts` | A `<voice>.onnx` plus its companion `<voice>.onnx.json` (the `.json` supplies `audio.sample_rate`). `FLOOT_TTS_MODEL` is the absolute path to the `.onnx`. |
 
 ### Getting a piper voice
 
@@ -56,6 +96,15 @@ The voice id encodes its path: `en_GB-alba-medium` → `en/en_GB/alba/medium/`.
 
    Creates the pinned `floot-factory` and a default session.
 
+   Re-running the script is safe: it keeps the factory host and every session,
+   re-creates only the factory caplet against the current checkout, and replaces
+   the secret only when a key is given.
+   A daemon that runs it from `ENDO_EXTRA` forwards only `ENDO_`-prefixed
+   variables, so every knob is also read as `ENDO_FLOOT_*` and the key as
+   `ENDO_FLOOT_AUTH_TOKEN`.
+   `FLOOT_MAX_TOOL_ROUNDS` (default 48) caps the provider calls one turn may
+   make before Floot gives up with its tool-step fallback.
+
 3. **Provision the voice caplets.** Ensure `uv`, `piper`, and a voice model are
    present, then:
 
@@ -64,21 +113,212 @@ The voice id encodes its path: `en_GB-alba-medium` → `en/en_GB/alba/medium/`.
    ```
 
    Or with an `.env` that sets `FLOOT_TTS_MODEL` (plus optional
-   `FLOOT_TTS_BINARY`, `FLOOT_TTS_SPEED`, `FLOOT_STT_LANG`):
+   `FLOOT_TTS_BINARY`, `FLOOT_TTS_SPEED`, `FLOOT_STT_LANG`, `FLOOT_STT_UV`,
+   `FLOOT_STT_ENABLE`, `FLOOT_DIR`):
 
    ```sh
    ./setup-voice.sh
    ```
 
-   Stands up `floot-stt` (warms up Moonshine) and `floot-tts`.
+   Stands up `floot/tts` first, then `floot/stt` (warms up Moonshine).
+   The two halves are independent: STT is best-effort, so a missing `uv` or a
+   failed Moonshine warmup only skips STT, and `FLOOT_STT_ENABLE=0` leaves it
+   out of a TTS-only deployment.
+   Like the factory setup, every knob is also read as `ENDO_FLOOT_*`, so a
+   daemon can run `voice-setup.js` from `ENDO_EXTRA`.
 
 4. **Open the UI.** In [`@endo/chat`](../chat): `yarn dev`.
    Create a Chat Space and set its object paths to `floot-factory`, STT path
-   `floot-stt`, TTS path `floot-tts`.
+   `floot/stt`, TTS path `floot/tts`.
 
 ## Swapping an implementation
 
-`floot-stt` and `floot-tts` are separate daemon formulas, each behind its own
+`floot/stt` and `floot/tts` are separate daemon formulas, each behind its own
 pet-name. To use a different engine, provision a replacement object exposing the
 same interface (`transcribe` / `synthesize`) under the same pet-name — no change
 to the factory or UI is required.
+
+## Subagents
+
+A session may delegate to a subagent session and converse with it over the
+daemon mailbox, using `spawnSubagent`, `askSubagent`, and `stopSubagent`.
+A subagent session runs on its parent's backend and model, records its parent in
+the session registry, and is released with it.
+Set `FLOOT_MAX_SUBAGENT_DEPTH=0` to withhold the tools entirely.
+See [@endo/fae's SUBAGENTS.md](../fae/SUBAGENTS.md).
+
+## Provider credentials
+
+`floot-factory-setup.js` puts `ANTHROPIC_API_KEY` in the daemon's secret manager
+under `secrets/floot-auth` and hands the factory the `SecretBlob`; the
+`floot/llm-provider` value carries no credential.
+Re-running setup without the key in the environment keeps the secret already in
+the manager, and re-running it *with* a key replaces the bytes of the existing
+record rather than minting a second one, so delegated capabilities stay valid.
+
+A turn reads the secret afresh and the provider cache is keyed on the bytes, so
+a rotation or a revocation reaches every open session by itself, on that
+session's next turn — no daemon restart, and no call to make.
+`refreshCredentials()` is for a change to the provider *config* — a different
+host, provider kind, or default model bound at `floot/llm-provider` — which is
+read once and would otherwise need a restart.
+
+## Plan and rate limits
+
+`getAccount(refresh?)` on the factory, and on each session facet, reports the
+subscription plan behind this deployment's credential, how much of each rate
+limit is left, and — per session — what the conversation has cost at the current
+list price.
+A provider-backed session also gets an `accountStatus` tool, so the model can
+answer those questions where the user asked them.
+A session on a hosted backend does not: it runs the backend's own tool loop over
+a tool set projected before the session agent exists.
+`getAccount(refresh?)` answers the same questions to a UI either way.
+
+Every figure carries `observedAt` and a source of `observed`, `declared`,
+`remembered`, or `unavailable`, so a declared figure is never mistaken for a
+measured one.
+Provision it by pointing `FLOOT_ACCOUNT_PROFILE` at a JSON profile when running
+setup; without one, `getAccount()` reports that no oracle is available and the
+tool is absent.
+See [@endo/hosted-agent's ACCOUNT-ORACLE.md](../hosted-agent/ACCOUNT-ORACLE.md).
+
+## Design → implementation → review
+
+A Floot conversation can prepare a design and acceptance criteria, then hand
+that agreed text to a configured development/review workflow. The built-in
+`handoffDesign` tool starts it; `reviewStatus` observes it. Merely discussing a
+design does not start implementation. Ask Floot to hand it off when ready.
+
+The workflow resolves the base and every submitted candidate to commit OIDs,
+asks a developer to implement the design, and waits for every reviewer. Dissent
+returns the combined report to the developer within the review budget. Once
+review passes, a durable request delivers the candidate OID back to the
+originating Floot conversation. The conversation records the notification in
+its history before the model can acknowledge delivery, so a provider failure
+cannot erase an acknowledged notice. Nothing merges or deploys automatically.
+Budget exhaustion asks the human operator for a typed extension or abandonment;
+abandonment also notifies the originating conversation.
+
+Provision the workflow service using `@endo/workflow`'s README and pin that
+service for restart recovery. Then use `provisionDevReview` from
+`@endo/floot/dev-review.js` in trusted host setup code:
+
+```js
+import { provisionDevReview } from '@endo/floot/dev-review.js';
+
+const { fid, factory } = await provisionDevReview({
+  host,          // provisioning EndoHost
+  service,       // pinned WorkflowService
+  project,       // Git for the implementation worktree
+  projectName: 'search-project', // participant-local petname
+  developer,     // dedicated developer Floot guest powers
+  reviewers: [reviewerA, reviewerB], // distinct reviewer Floot guest powers
+  initiator,     // guest powers of the Floot conversation preparing the design
+  operator,      // human operator's mail handle
+});
+```
+
+The participants here are guest **controls** used only during setup. A Floot
+factory host holds them under `session-agent-<session-id>`; the public session
+facet returned by `createSession` is not a guest control. Create dedicated
+implementation/reviewer sessions, obtain their guest controls through the
+provisioning host, and pass those to setup. Use a dedicated implementation
+worktree. This helper does not allocate a new worktree or new agents per run.
+If running multiple projects concurrently, give each a separate worktree and
+participant sessions rather than changing the same project grant mid-run.
+
+Setup installs the writer Git grant in the developer and read-only grants in
+the reviewers. It creates a durable, read-only revision adapter for the
+workflow's keyed invocation protocol. The factory binds the project, roster,
+operator, and originating inbox, then installs a formula-backed connection as `dev-review`
+in the initiating guest. That connection reacquires factory/run facets after
+restart and restricts status, budget changes, and cancellation to this factory. The guest never receives `WorkflowService` or
+`WorkflowControl`. Keep `fid` for administrative recovery or revocation through
+`E(service).factory(fid)`.
+
+For example, Floot can call:
+
+```js
+handoffDesign({
+  name: 'keyboard-search',
+  title: 'Keyboard-accessible search',
+  design: 'The complete agreed design, including acceptance criteria…',
+  base: 'main',
+  rounds: '3',
+});
+```
+
+`name` is an idempotency key within the configured factory. Replaying the handoff
+returns the same run, including after service restart. Choose a new name for a
+new design. A data receipt is stored as `review-keyboard-search`; `reviewStatus` resolves
+it through the durable connection. `setReviewBudget` and `cancelReview` allow
+the initiating conversation to manage its own handoffs when the user asks.
+
+Floot's inbox understands request descriptions and exposes `resolveRequest`,
+`rejectRequest`, and `submitForm`. Developer submissions and reviewer verdicts
+must be typed values, not prose replies. Natural-number form fields accept
+decimal strings through `submitForm` and are converted to bigint before the
+daemon checks the field patterns. The Chat form UI likewise supports bounded
+bigint review budgets.
+
+## Machine admin: deploys as operator-approved workflows
+
+The `machine-admin` session preset is `full-control` plus this host's NixOS
+administration, per
+[floot-admin-deploy-workflows](../../designs/floot-admin-deploy-workflows.md).
+Its session holds:
+
+- `nixos` — the raw `NixosAdmin` caplet from `@endo/space-nixos-admin`, for
+  orientation (`getSystemInfo`, `getVitals`, `listFiles`, `readFile`,
+  `getEndoRev`, `status`, `getLog`) and emergencies. Its stage/build/apply
+  verbs are root-equivalent, and the prompt routes ordinary deploys elsewhere.
+- `deploy-endo` and `change-nixos` — proposal-only connections
+  (`deploy-connection.js`) to two deploy-workflow factories over the charts in
+  `deploy-charts.js` (`endo-release`, `nixos-config-change`).
+  `start({ params })` stages and dry-builds the proposal and sends an approval
+  form to the owner's inbox; `status(runId)`, `explain(runId)`, and
+  `journal(runId, { from })` observe it. Through a connection a session cannot
+  approve, cancel, or steer a run, and cannot observe runs of other
+  factories.
+- `forgejo-credential`, reachable through `endo` (the factory host), so the
+  session pushes a revision to the local forge before proposing it.
+
+`floot-factory-setup.js` stores those grants on the factory host
+(`machine-admin-setup.js`) on every start, as locators to the root
+inventory's own bindings, and retracts a grant whose provider has gone. Each
+factory — binding the caplet as `performer` and the root host's `@self`
+handle as `operator` — is minted once and re-minted only when the chart's
+name or version changes or the factory is revoked or no longer known to the
+service; the old factory is never revoked, since that would cancel its live
+runs. The
+connection caplet in front of a factory is re-created on every start, like
+the factory caplet, and a session re-copies it on revival. List the
+providers in `ENDO_EXTRA` ahead of the Floot setup:
+
+```
+@endo/workflow/setup.js                             # pinned workflow-service
+@endo/space-nixos-admin/setup.js                    # controller-for-nixos-admin
+@endo/space-nixos-admin/setup-forgejo-credential.js # forgejo-credential
+@endo/floot/floot-factory-setup.js
+```
+
+Each grant is a quiet no-op where its provider is absent. Without the
+workflow service the session opens without deploy connections, and its prompt
+reports deployment unavailable rather than falling back to the raw caplet;
+without the NixOS controller the preset refuses to open a new session (one
+that already holds a copy keeps it).
+The daemon's Git remotes speak https only, so the forge the credential names
+(`ENDO_FORGEJO_URL`) must be an https origin for the session to clone from
+and push to it; the prompt derives the clone URL from the credential's
+audience rather than naming a host.
+
+One connection serves every session that holds it, so a machine-admin
+session observes the whole deploy history of its host, not only the runs it
+started; a preset that must isolate principals from each other needs a
+connection per principal.
+
+The preset's prompt is versioned (`promptVersion`): a bump migrates the prompt
+of every existing `machine-admin` session exactly once on the factory's next
+registry load, leaving custom and delegated prompts untouched. Ordinary preset
+edits never reach a live session.

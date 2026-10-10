@@ -16,10 +16,12 @@
 //! tests are **skipped** the instant ironhorse reaches an opcode outside the
 //! covered subset, and each such skip is **named by the opcode** that
 //! stopped it — never folded into a pass rate. A test is **covered** only
-//! when ironhorse runs it end-to-end to an outcome that is **bit-exact**
-//! (result/thrown-value AND computron, four-valued completion) with the
-//! oracle. A **divergence** — ironhorse completing with a wrong value/computron,
-//! or accepting a program XS rejects — is a real failure the bar forbids.
+//! when ironhorse runs it end-to-end to an outcome that **observably
+//! agrees** (result/thrown-value, four-valued completion) with the oracle;
+//! computron drift against XS is advisory telemetry (XS-computron parity
+//! is a non-goal). A **divergence** — ironhorse completing with a wrong
+//! value, or accepting a program XS rejects — is a real failure the bar
+//! forbids.
 //!
 //! The split is the deliverable: it states exactly how much of real
 //! `language/` the covered grammar reaches today, growing as later stages
@@ -33,7 +35,8 @@ use std::path::{Path, PathBuf};
 /// How one assembled test classified.
 #[derive(Debug, Clone)]
 pub enum Class {
-    /// Ran end-to-end, bit-exact with the oracle (the covered grammar).
+    /// Ran end-to-end, observably agreeing with the oracle (the covered
+    /// grammar); computron drift is advisory.
     Covered,
     /// Ran end-to-end but disagreed with the oracle — a real failure.
     Divergent(Box<DualRun>),
@@ -79,7 +82,11 @@ pub fn assemble(harness_dir: &Path, src: &str, fm: &Frontmatter) -> Result<Strin
     if fm.flags.iter().any(|f| f == "module") {
         return Err("structural:module".into());
     }
-    if fm.flags.iter().any(|f| f == "async" || f == "CanBlockIsFalse") {
+    if fm
+        .flags
+        .iter()
+        .any(|f| f == "async" || f == "CanBlockIsFalse")
+    {
         return Err("structural:async-or-can-block".into());
     }
     if fm.flags.iter().any(|f| f == "raw") {
@@ -109,11 +116,39 @@ pub fn classify(source: &str) -> Class {
         Some(r) => r,
         None => return Class::Skipped("oracle-machine-error".into()),
     };
+    classify_run(r)
+}
+
+pub(crate) fn classify_run(r: DualRun) -> Class {
+    if matches!(
+        &r.ironhorse_halt,
+        Halt::Panic(ironhorse_vm::PanicKind::EngineFault { .. })
+    ) {
+        return Class::Divergent(Box::new(r));
+    }
     // An opcode outside the covered grammar stopped ironhorse: name it. This
     // is the honest skip — the vast bulk of `language/`, each attributed to
     // the exact built-in/feature opcode that is not yet modeled.
-    if let Halt::Unsupported(op) = r.ironhorse_halt {
-        return Class::Skipped(format!("unsupported-opcode:{}", op));
+    if let Halt::NotImplemented(op) = r.ironhorse_halt {
+        // Only a label the engine has registered as a declined surface (or
+        // one of the runner's own) earns the skip; an unregistered label is
+        // the engine granting itself an exemption, and fails.
+        if crate::xst::is_skip_eligible_label(op) {
+            return Class::Skipped(format!("unsupported-opcode:{}", op));
+        }
+        return Class::Divergent(Box::new(r));
+    }
+    if let Halt::Refused(op) = r.ironhorse_halt {
+        if ironhorse_vm::halt_labels::is_refused_label(op) {
+            return Class::Skipped(format!("refused:{op}"));
+        }
+        return Class::Divergent(Box::new(r));
+    }
+    // One of the interpreter's own guards fired on bytecode the oracle
+    // produced: the engine's state is wrong, a real failure whatever the
+    // oracle then did — never an honest skip.
+    if let Halt::EngineInvariant(_) = r.ironhorse_halt {
+        return Class::Divergent(Box::new(r));
     }
     // Empty/undecodable bytecode: a parse-phase negative test (the oracle
     // compiler rejected the source, which ironhorse's loader cannot mirror —
@@ -123,54 +158,49 @@ pub fn classify(source: &str) -> Class {
         return Class::Skipped("parse-or-decode".into());
     }
     match r.agreement {
-        // ironhorse ran to a normal completion. Bit-exact (result AND
-        // computron) is the only "covered" — a program is certified only
-        // when it agrees on both axes. The other completing shapes are
-        // built-in gaps at stage 2b ("built-ins stubbed"), named honestly:
-        //  - ironhorse renders a non-primitive completion as its Reference stub
-        //    (`[object Object]`) where the oracle's `String()` of a function
-        //    or object differs — a `Function.prototype.toString` / object
-        //    coercion gap, not a covered-grammar error.
-        //  - ironhorse computes the SAME value but diverges on computrons: it
-        //    completed the value correctly but under-meters a built-in step
-        //    it does not model (object `ToPrimitive` in a numeric/bitwise
-        //    coercion, function naming via a property define). Named as a
-        //    computron gap, not folded into `covered`.
-        //  - ironhorse computes a DIFFERENT primitive value: a genuine
-        //    covered-grammar correctness bug the bar forbids.
-        // (The strict metering guarantee for the covered *primitive*
-        // grammar is carried with zero tolerance by the curated corpora and
-        // the differential fuzz, which is how e.g. the sloppy-global
-        // create-metering gap this runner first surfaced was fixed.)
+        // Observable results gate coverage; XS costs are advisory.
         Agreement::BothComplete => {
-            if r.is_bit_exact() {
+            if r.observables_agree() {
                 Class::Covered
             } else if r.ironhorse_result == "[object Object]" && !r.result_agrees {
                 Class::Skipped("non-primitive-completion".into())
-            } else if r.result_agrees {
-                Class::Skipped("builtin-coercion-computron-gap".into())
             } else {
                 Class::Divergent(Box::new(r))
             }
         }
-        // A shared abort is covered only when the thrown value AND
-        // computrons match (a primitive throw the oracle also throws, per
-        // the tightened predicate). A test whose oracle abort is a real
+        // A shared abort agrees only when the thrown value matches.
+        // A test whose oracle abort is a real
         // `Error` object ironhorse does not construct simply does not match —
         // that is a built-in gap, named as a skip, not a divergence.
         Agreement::BothAbort => {
-            if r.is_bit_exact() {
+            if r.observables_agree() {
                 Class::Covered
             } else {
-                Class::Skipped("abort-value-or-cost-differs".into())
+                Class::Skipped("abort-value-differs".into())
             }
         }
         // ironhorse completed a program the oracle rejected: a real
         // over-acceptance the bar must surface.
         Agreement::IronhorseOnlyComplete => Class::Divergent(Box::new(r)),
-        // ironhorse aborted (an internal-limit throw) where the oracle
-        // completed: an ironhorse limitation, not a semantic lie — skipped.
-        Agreement::OracleOnlyComplete => Class::Skipped("ironhorse-aborted".into()),
+        // ironhorse aborted where the oracle completed. An uncaught throw on
+        // a program the oracle ran to completion is a wrong answer (a failed
+        // harness assertion or a spurious engine error), never a limitation —
+        // except the one honest shape, a host intrinsic the port has not
+        // landed, which names itself; only the engine's own limits (stack
+        // geometry, meter, step ceiling) are the other honest skip.
+        Agreement::OracleOnlyComplete => match &r.ironhorse_halt {
+            Halt::Throw {
+                rendered: thrown, ..
+            } => match crate::xst::classify_missing_global(&r.source, thrown) {
+                Some(crate::xst::MissingGlobal::Unlanded(name)) => {
+                    Class::Skipped(format!("ironhorse-missing-global:{name}"))
+                }
+                // A probe that did not answer is no evidence of a host gap:
+                // the throw is judged as the throw it is.
+                _ => Class::Divergent(Box::new(r)),
+            },
+            _ => Class::Skipped("ironhorse-aborted-limit".into()),
+        },
     }
 }
 
@@ -400,8 +430,8 @@ mod tests {
         // (charCodeAt/codePointAt/charAt/slice/substring — the code-unit
         // index/slice surface the swap re-implemented), dual-run each against
         // the pin, and require ZERO divergence on RESULTS. A test whose value
-        // agrees but whose computrons shift under the recalibration is a NAMED
-        // `builtin-coercion-computron-gap` skip (classify()), NOT a divergence —
+        // agrees is COVERED however far its computrons shift under the
+        // recalibration — computron drift against XS is advisory telemetry,
         // exactly the accuracy-over-parity split the swap adopted. Whole-tree
         // `built-ins/String` (1111 files) is the `endot-ih` binary; this
         // in-`cargo test` slice stays bounded so the oracle RSS is contained.
@@ -423,7 +453,10 @@ mod tests {
         for s in sections {
             files.extend(collect_js(&root.join(s)));
         }
-        assert!(!files.is_empty(), "the UTF-16 String sections must have tests");
+        assert!(
+            !files.is_empty(),
+            "the UTF-16 String sections must have tests"
+        );
         let rep = run_files(&harness, &root, &files);
         eprintln!(
             "test262 String.prototype (UTF-16 sections): total={} covered={} divergent={}",
@@ -450,7 +483,7 @@ mod tests {
         // walk the covered-grammar-adjacent sections (expressions and
         // statements the 2b subset touches), assemble each the standard
         // test262 way, dual-run, and require ZERO divergence — every test
-        // ironhorse runs end-to-end agrees bit-exactly with XS; everything
+        // ironhorse runs end-to-end agrees observably with XS; everything
         // else is honestly skipped by a NAMED reason (the unsupported
         // opcode, a parse-negative, a built-in abort). The covered count is
         // reported, not asserted to a target: it states how far the covered
@@ -489,7 +522,10 @@ mod tests {
         for s in sections {
             files.extend(collect_js(&root.join(s)));
         }
-        assert!(!files.is_empty(), "covered-grammar language sections must have tests");
+        assert!(
+            !files.is_empty(),
+            "covered-grammar language sections must have tests"
+        );
         let rep = run_files(&harness, &root, &files);
 
         eprintln!(
@@ -540,7 +576,7 @@ mod tests {
         // GUARD: a test tagged `lockdown` calls `lockdown()`, which the XS
         // ORACLE SHIM (the bare `fxCreateMachine` boot) crashes on — the same
         // `lockdown()` surface the stage-4b harden child folded as an honest
-        // `Halt::Unsupported` on the ironhorse side. Since dual-run runs the
+        // `Halt::NotImplemented` on the ironhorse side. Since dual-run runs the
         // program on the oracle FIRST, handing a `lockdown()` test to the
         // oracle SIGSEGVs the harness process. These are pre-partitioned into
         // a NAMED structural skip (`oracle-shim-unsafe:lockdown`) and never
@@ -578,6 +614,38 @@ mod tests {
             rep.met_bar(),
             "zero RESULT divergence required on the ses-xs-parity suite; got {} divergence(s)",
             rep.divergences.len()
+        );
+
+        // Ratchet the reach, in BOTH directions. Zero divergence alone is
+        // satisfied by skipping everything, and the set is computed from
+        // front-matter rather than a list, so six cases were added and covered
+        // without anything going red -- leaving `CHANGELOG.md`'s tally and two
+        // designs quoting "2 files, covered=0" long after it was true.
+        //
+        // Raising these is the point: when the guest `Compartment`/`lockdown`
+        // globals land, `covered` reaches `total` and this fails until the
+        // ledger is updated with it.
+        //
+        // 6 -> 7 when the guest `Compartment` landed
+        // (`designs/ironhorse-guest-compartment.md`). It moved ONE case, not
+        // two: `Symbol.toStringTag.js` is now covered, and
+        // `Symbol.toStringTag-lockdown.js` still is not -- it is the remaining
+        // `oracle-shim-unsafe:lockdown` skip, held out of the oracle run for a
+        // reason that is about `lockdown`, not about `Compartment`. The last
+        // case is therefore not this work's to take.
+        const SES_PARITY_TOTAL: usize = 8;
+        const SES_PARITY_COVERED: usize = 7;
+        assert_eq!(
+            (rep.total, rep.covered),
+            (SES_PARITY_TOTAL, SES_PARITY_COVERED),
+            "ses-xs-parity reach moved: total={} covered={} (pinned {}/{}). \
+             Update these constants AND the tally in rust/engine/CHANGELOG.md, \
+             which designs/ironhorse-ses-compartment-equivalence.md and \
+             designs/ironhorse-daemon-acceptance-sequencing.md both quote.",
+            rep.total,
+            rep.covered,
+            SES_PARITY_TOTAL,
+            SES_PARITY_COVERED,
         );
     }
 }

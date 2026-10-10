@@ -46,6 +46,30 @@ const VERSION_9P2000_L = '9P2000.L';
 const MIN_MSIZE = 4096;
 const DEFAULT_MSIZE = 131_072;
 
+// `iterateBytesReader` carries each chunk from the backing Filesystem as a
+// base64 string and validates it with `M.string()`, which without an explicit
+// limit inherits @endo/patterns' default `stringLengthLimit` of 100_000
+// characters. Base64 encodes n bytes as 4*ceil(n/3) characters, so that
+// default caps a single chunk at 75_000 bytes: 75_000 encodes to exactly
+// 100_000 characters and passes, 75_001 encodes to 100_004 and is rejected
+// before it ever reaches us. The rejection surfaces to the client as a bare
+// EIO, which reads as disk corruption rather than as a limit — and with a
+// 128 KiB `msize` the client believes it may read far more than that at
+// once, so any file over ~75 KiB was unreadable through a mount.
+//
+// The bound we actually want is "no more than this Tread asked for", which
+// `onRead` already clamps against `msize`. Deriving the limit from `count`
+// says that directly, and is a tighter bound than the 100_000-character
+// default rather than a looser one.
+//
+/**
+ * The longest base64 chunk a Tread of `count` bytes can legitimately carry.
+ *
+ * @param {number} count - bytes this Tread may return.
+ * @returns {number} characters
+ */
+const base64LimitFor = count => 4 * Math.ceil(count / 3);
+
 const MASK_U32 = 0xffff_ffffn;
 const MASK_U64 = (1n << 64n) - 1n;
 
@@ -105,6 +129,8 @@ const errnoOf = e => {
  *   socket: import('node:net').Socket,
  *   onClose?: () => void,
  *   cancelled?: Promise<unknown>,
+ *   uid?: number,
+ *   gid?: number,
  * }} opts
  *
  * `cancelled`: settlement (resolve or reject) is the cancellation
@@ -119,6 +145,8 @@ export const serveConnection = ({
   socket,
   onClose,
   cancelled = new Promise(() => {}),
+  uid = 1000,
+  gid = 1000,
 }) => {
   /** @type {Map<number, Fid>} */
   const fids = new Map();
@@ -584,12 +612,24 @@ export const serveConnection = ({
       const chunks = [];
       let total = 0;
       const want = Number(count);
-      // `buffer: 1` lets the producer pre-emit the first chunk
-      // without waiting for our sync — collapses the per-chunk
-      // sync/ack round-trip for the common single-frame case
-      // (`makeBytesReaderFromBytes` yields the whole slice in one
-      // chunk, so this is almost always single-frame).
-      for await (const chunk of iterateBytesReader(reader, { buffer: 1 })) {
+      // A single-frame read is two nodes on the wire, not one: the chunk,
+      // then the terminator the producer emits when its iterator runs out
+      // (`makeBytesReaderFromBytes` and the extended-fs backends all yield
+      // the whole slice in one chunk). `makeReaderPump` waits for a sync
+      // before every pull past `buffer`, so `buffer: 1` pre-satisfies the
+      // chunk but leaves the terminator behind a second sync — a round trip
+      // we pay on every Tread, because we always break out of this loop and
+      // drain. `buffer: 2` covers both. Higher values only add unused sync
+      // nodes: measured against a remote Filesystem, 2 is where the latency
+      // win saturates while the message count keeps climbing.
+      //
+      // `stringLengthLimit` overrides @endo/patterns' 100_000-character
+      // default, which is narrower than `count` and surfaces as EIO
+      // (see `base64LimitFor`).
+      for await (const chunk of iterateBytesReader(reader, {
+        buffer: 2,
+        stringLengthLimit: base64LimitFor(count),
+      })) {
         // Stop pulling from the FS if the connection was torn down
         // mid-read (cancellation / disconnect) instead of draining a
         // potentially large read against a dead socket.
@@ -640,8 +680,17 @@ export const serveConnection = ({
       const isDir = f.qid.type === 'directory';
       const mode = (isDir ? S.IFDIR : S.IFREG) | (isDir ? 0o755 : 0o644);
       w.u32(mode);
-      w.u32(1000); // uid — base FS has no concept; default for guest mount.
-      w.u32(1000); // gid
+      // The capability filesystem has no POSIX ownership, so the bridge
+      // supplies the mounter worker's identity. v9fs sets i_uid/i_gid from
+      // these and has no `.permission` op for 9P2000.L, so `generic_permission`
+      // checks them against the caller's fsuid — which makes the mount
+      // writable exactly when the accessing process's uid equals the uid this
+      // reports. That covers the case we care about: a rootless container
+      // whose root maps to the user running the caplet. A container process
+      // running as any *other* uid still gets a read-only view, because the
+      // mode below grants write to the owner only.
+      w.u32(uid);
+      w.u32(gid);
       // nlink: directories have >= 2 (`.` plus the parent's entry);
       // reporting 1 confuses `find`'s link-count traversal optimisation.
       // The base FS exposes no real link count, so synthesise 2/1.
@@ -848,6 +897,10 @@ export const serveConnection = ({
     if (count > remaining || count > maxByMsize) {
       return sendError(tag, ERRNO.EINVAL);
     }
+    // The write path has no chunk-length limit to work around: the
+    // responder (`bytesWriterFromIterator`) builds its pump without a
+    // `writePattern`, so a write chunk is never length-validated. `count`
+    // is already bounded by the frame checks above.
     const data = r.take(count);
     const f = fids.get(fid);
     if (!f || !f.open) return sendError(tag, ERRNO.EBADF);
@@ -868,7 +921,7 @@ export const serveConnection = ({
       );
       await w8.return();
       const w = makeWriter(4);
-      w.u32(count);
+      w.u32(data.length);
       send(wrapMessage(T.Rwrite, tag, w.finish()));
     } catch (e) {
       return sendError(tag, errnoOf(e));

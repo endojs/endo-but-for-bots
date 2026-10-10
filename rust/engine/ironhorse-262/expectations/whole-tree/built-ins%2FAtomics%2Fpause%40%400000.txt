@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=built-ins/Atomics/pause tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Atomics/pause/descriptor.js sloppy skip:shared-test262-failure
+built-ins/Atomics/pause/descriptor.js strict skip:shared-test262-failure
+built-ins/Atomics/pause/length.js sloppy skip:shared-positive-test-failure
+built-ins/Atomics/pause/length.js strict skip:shared-positive-test-failure
+built-ins/Atomics/pause/name.js sloppy skip:shared-positive-test-failure
+built-ins/Atomics/pause/name.js strict skip:shared-positive-test-failure
+built-ins/Atomics/pause/not-a-constructor.js sloppy skip:shared-test262-failure
+built-ins/Atomics/pause/not-a-constructor.js strict skip:shared-test262-failure
+built-ins/Atomics/pause/returns-undefined.js sloppy skip:shared-positive-test-failure
+built-ins/Atomics/pause/returns-undefined.js strict skip:shared-positive-test-failure

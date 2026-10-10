@@ -28,6 +28,7 @@ import {
   FIXTURES,
   buildNodeGolden,
   checkEndorBaselineDivergence,
+  fixtureDirectoryOf,
   goldenPath,
   serialize,
   stable,
@@ -39,19 +40,24 @@ import {
 // would go unchecked here; a FIXTURES entry without a golden would fail its
 // own case, but this names the omission directly.
 test('every committed golden is accounted for in FIXTURES', t => {
-  const onDisk = fs
-    .readdirSync(fileURLToPath(testRoot), { withFileTypes: true })
-    .filter(
-      entry =>
-        entry.isDirectory() &&
-        entry.name.startsWith('fixtures-') &&
-        fs.existsSync(
-          `${fileURLToPath(testRoot)}${entry.name}/expected-compartment-map.json`,
-        ),
-    )
-    .map(entry => entry.name.slice('fixtures-'.length))
-    .sort();
-  const inTable = FIXTURES.map(fix => fix.name).sort();
+  const root = fileURLToPath(testRoot);
+  const onDisk = [];
+  const visit = directory => {
+    for (const entry of fs.readdirSync(`${root}${directory}`, {
+      withFileTypes: true,
+    })) {
+      if (entry.isDirectory()) {
+        const child = `${directory}${entry.name}/`;
+        if (fs.existsSync(`${root}${child}expected-compartment-map.json`)) {
+          onDisk.push(child.slice(0, -1));
+        }
+        visit(child);
+      }
+    }
+  };
+  visit('');
+  onDisk.sort();
+  const inTable = FIXTURES.map(fixtureDirectoryOf).sort();
   t.deepEqual(
     onDisk,
     inTable,
@@ -62,7 +68,7 @@ test('every committed golden is accounted for in FIXTURES', t => {
 for (const fix of FIXTURES) {
   if (fix.oracle === 'node') {
     test(`fixtures-${fix.name} golden matches the pure-JS compartment mapper`, async t => {
-      const committed = fs.readFileSync(goldenPath(fix.name), 'utf8');
+      const committed = fs.readFileSync(goldenPath(fix), 'utf8');
       const live = await buildNodeGolden(fix);
       // Compare the parsed, key-stabilised structures for a readable diff on
       // failure. `stable` matches the canonicalisation the committed file was

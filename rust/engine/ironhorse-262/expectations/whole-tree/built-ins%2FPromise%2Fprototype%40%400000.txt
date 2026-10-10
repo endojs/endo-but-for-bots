@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=built-ins/Promise/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Promise/prototype/S25.4.4.2_A1.1_T1.js sloppy pass
+built-ins/Promise/prototype/S25.4.4.2_A1.1_T1.js strict pass
+built-ins/Promise/prototype/S25.4.5_A3.1_T1.js sloppy pass
+built-ins/Promise/prototype/S25.4.5_A3.1_T1.js strict pass
+built-ins/Promise/prototype/Symbol.toStringTag.js sloppy pass
+built-ins/Promise/prototype/Symbol.toStringTag.js strict pass
+built-ins/Promise/prototype/no-promise-state.js sloppy pass
+built-ins/Promise/prototype/no-promise-state.js strict pass
+built-ins/Promise/prototype/prop-desc.js sloppy pass
+built-ins/Promise/prototype/prop-desc.js strict pass
+built-ins/Promise/prototype/proto.js sloppy pass
+built-ins/Promise/prototype/proto.js strict pass

@@ -24,7 +24,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    uses: $/.github/workflows/ci-changes.yml
+
   browser-tests:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['browser-tests']) }}
     timeout-minutes: 30
     runs-on: ubuntu-latest
     # This Chrome nightly image can no longer install browsers in Github CI for
@@ -41,6 +46,10 @@ jobs:
     # env:
     #   HOME: /root # Firefox complains otherwise
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Put unstable chrome where playwright would look for it
         run: mv /opt/google/chrome /opt/google/chrome-unstable
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

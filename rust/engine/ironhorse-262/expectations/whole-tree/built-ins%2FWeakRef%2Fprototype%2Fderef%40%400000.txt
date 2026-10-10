@@ -1,0 +1,19 @@
+# engine=ironhorse features=default corpus=built-ins/WeakRef/prototype/deref tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/WeakRef/prototype/deref/custom-this.js sloppy skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/prototype/deref/custom-this.js strict skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/prototype/deref/length.js sloppy skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/prototype/deref/length.js strict skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/prototype/deref/name.js sloppy skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/prototype/deref/name.js strict skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/prototype/deref/not-a-constructor.js sloppy skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/prototype/deref/not-a-constructor.js strict skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/prototype/deref/prop-desc.js sloppy skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/prototype/deref/prop-desc.js strict skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/prototype/deref/return-object-target.js sloppy skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/prototype/deref/return-object-target.js strict skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/prototype/deref/return-symbol-target.js sloppy fail:"abort-type divergence: oracle threw \"TypeError: target: not an object\" ironhorse threw \"ReferenceError: get WeakRef: undefined variable\""
+built-ins/WeakRef/prototype/deref/return-symbol-target.js strict fail:"abort-type divergence: oracle threw \"TypeError: target: not an object\" ironhorse threw \"ReferenceError: get WeakRef: undefined variable\""
+built-ins/WeakRef/prototype/deref/this-does-not-have-internal-target-throws.js sloppy skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/prototype/deref/this-does-not-have-internal-target-throws.js strict skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/prototype/deref/this-not-object-throws.js sloppy skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/prototype/deref/this-not-object-throws.js strict skip:ironhorse-missing-global:WeakRef

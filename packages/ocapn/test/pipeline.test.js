@@ -608,12 +608,20 @@ test('pipeline: three-party handoff shows B forwarding to C on behalf of A', asy
     }),
   );
 
-  // Create three clients with artificial write latency for deterministic ordering
-  const clientKitA = await makeTestClient({ debugLabel: 'A', writeLatencyMs });
+  // Create three clients with artificial write latency for deterministic
+  // ordering. Import collection stays disabled, as in every other transcript
+  // test in this file: a mid-test GC otherwise injects op:gc-exports entries
+  // into the recorded transcripts (observed on the macOS CI runners).
+  const clientKitA = await makeTestClient({
+    debugLabel: 'A',
+    writeLatencyMs,
+    clientOptions: { enableImportCollection: false },
+  });
   const clientKitC = await makeTestClient({
     debugLabel: 'C',
     makeDefaultSwissnumTable: () => cObjectTable,
     writeLatencyMs,
+    clientOptions: { enableImportCollection: false },
   });
 
   /** @type {any} */
@@ -639,6 +647,7 @@ test('pipeline: three-party handoff shows B forwarding to C on behalf of A', asy
     debugLabel: 'B',
     makeDefaultSwissnumTable: () => bObjectTable,
     writeLatencyMs,
+    clientOptions: { enableImportCollection: false },
   });
 
   const shutdownAll = () => {

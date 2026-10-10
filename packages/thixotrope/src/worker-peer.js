@@ -41,11 +41,13 @@ const IDENTIFIER_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
  * @param {(bytes: Uint8Array) => void} options.send outbound OCapN
  *   frames toward the host
  * @param {string} [options.debugLabel]
+ * @param {boolean} [options.enableImportCollection] replay doubles disable nondeterministic Node GC frames
  */
 export const makeWorkerPeer = async ({
   workerId,
   send,
   debugLabel = 'thixotrope-worker-peer',
+  enableImportCollection = true,
 }) => {
   const compartment = new Compartment();
   Object.assign(compartment.globalThis, {
@@ -91,6 +93,7 @@ export const makeWorkerPeer = async ({
   });
 
   const client = await makeOcapn({
+    enableImportCollection,
     codec: syrupCodec,
     network: pipe.network,
     locator,

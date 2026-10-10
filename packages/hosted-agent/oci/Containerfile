@@ -1,0 +1,6 @@
+# Built only from the exact workspace worker bundle; it contains no credential.
+FROM docker.io/library/node:22.19.0-bookworm-slim@sha256:4a4884e8a44826194dff92ba316264f392056cbe243dcc9fd3551e71cea02b90
+COPY provider-worker.mjs /opt/endo-provider-worker.mjs
+USER node
+WORKDIR /opt
+ENTRYPOINT ["node", "/opt/endo-provider-worker.mjs"]

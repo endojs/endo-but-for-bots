@@ -1,0 +1,25 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArrayConstructors/of/BigInt tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArrayConstructors/of/BigInt/argument-is-symbol-throws.js sloppy pass
+built-ins/TypedArrayConstructors/of/BigInt/argument-is-symbol-throws.js strict pass
+built-ins/TypedArrayConstructors/of/BigInt/argument-number-value-throws.js sloppy pass
+built-ins/TypedArrayConstructors/of/BigInt/argument-number-value-throws.js strict pass
+built-ins/TypedArrayConstructors/of/BigInt/custom-ctor-does-not-instantiate-ta-throws.js sloppy pass
+built-ins/TypedArrayConstructors/of/BigInt/custom-ctor-does-not-instantiate-ta-throws.js strict pass
+built-ins/TypedArrayConstructors/of/BigInt/custom-ctor-returns-other-instance.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/of/BigInt/custom-ctor-returns-other-instance.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/of/BigInt/custom-ctor-returns-smaller-instance-throws.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/of/BigInt/custom-ctor-returns-smaller-instance-throws.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/of/BigInt/custom-ctor.js sloppy pass
+built-ins/TypedArrayConstructors/of/BigInt/custom-ctor.js strict pass
+built-ins/TypedArrayConstructors/of/BigInt/inherited.js sloppy pass
+built-ins/TypedArrayConstructors/of/BigInt/inherited.js strict pass
+built-ins/TypedArrayConstructors/of/BigInt/invoked-as-func.js sloppy pass
+built-ins/TypedArrayConstructors/of/BigInt/invoked-as-func.js strict pass
+built-ins/TypedArrayConstructors/of/BigInt/new-instance-empty.js sloppy pass
+built-ins/TypedArrayConstructors/of/BigInt/new-instance-empty.js strict pass
+built-ins/TypedArrayConstructors/of/BigInt/new-instance-using-custom-ctor.js sloppy pass
+built-ins/TypedArrayConstructors/of/BigInt/new-instance-using-custom-ctor.js strict pass
+built-ins/TypedArrayConstructors/of/BigInt/new-instance.js sloppy pass
+built-ins/TypedArrayConstructors/of/BigInt/new-instance.js strict pass
+built-ins/TypedArrayConstructors/of/BigInt/this-is-not-constructor.js sloppy pass
+built-ins/TypedArrayConstructors/of/BigInt/this-is-not-constructor.js strict pass

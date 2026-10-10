@@ -1,6 +1,9 @@
 // @ts-check
 
 import harden from '@endo/harden';
+import { assertPattern, mustMatch } from '@endo/patterns';
+
+/** @import { Pattern } from '@endo/patterns' */
 
 // Shared shape logic for answering a form-request message.
 //
@@ -47,13 +50,27 @@ const tagOf = value => {
  * exactly the previous behaviour.
  *
  * @param {FormFieldDef} field
- * @returns {'boolean' | 'text'}
+ * @returns {'boolean' | 'bigint' | 'text'}
  */
 export const fieldKind = field => {
   const pattern = field && field.pattern;
+  const payload =
+    typeof pattern === 'object' && pattern !== null && 'payload' in pattern
+      ? pattern.payload
+      : undefined;
   if (tagOf(pattern) === 'match:kind') {
-    if (/** @type {any} */ (pattern).payload === 'boolean') return 'boolean';
+    if (payload === 'boolean') return 'boolean';
   }
+  if (tagOf(pattern) === 'match:nat') return 'bigint';
+  if (tagOf(pattern) === 'match:kind' && payload === 'bigint') return 'bigint';
+  if (
+    tagOf(pattern) === 'match:and' &&
+    Array.isArray(payload) &&
+    payload.some(
+      part => fieldKind({ name: field.name, pattern: part }) === 'bigint',
+    )
+  )
+    return 'bigint';
   return 'text';
 };
 harden(fieldKind);
@@ -86,15 +103,26 @@ harden(initialFormValues);
  *
  * @param {FormFieldDef[]} fields
  * @param {Record<string, string | boolean | undefined>} values
- * @returns {Record<string, string | boolean>}
+ * @returns {Record<string, string | boolean | bigint>}
  */
 export const collectFormValues = (fields, values) => {
-  /** @type {Record<string, string | boolean>} */
+  /** @type {Record<string, string | boolean | bigint>} */
   const collected = {};
   for (const field of fields) {
     const value = values[field.name];
     if (fieldKind(field) === 'boolean') {
       collected[field.name] = value === true;
+    } else if (fieldKind(field) === 'bigint') {
+      const text = String(value ?? '').trim();
+      if (!/^-?[0-9]+$/.test(text))
+        throw Error(`${field.label || field.name} must be an integer`);
+      const integer = BigInt(text);
+      // Mail field patterns are validated by the daemon; retain the check at
+      // this UI boundary before using the untyped transport value.
+      const pattern = /** @type {Pattern} */ (field.pattern);
+      assertPattern(pattern);
+      mustMatch(integer, pattern, field.label || field.name);
+      collected[field.name] = integer;
     } else {
       collected[field.name] =
         value === undefined || value === null ? '' : String(value);

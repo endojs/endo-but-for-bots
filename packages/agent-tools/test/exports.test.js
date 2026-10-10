@@ -249,7 +249,22 @@ test('agent-tools scoped exports resolve the relocated surfaces', async t => {
 
   t.deepEqual(
     Object.keys(mcp).sort(),
-    [],
+    [
+      'BRIDGE_DOWN',
+      'INTERNAL_ERROR',
+      'INVALID_PARAMS',
+      'INVALID_REQUEST',
+      'METHOD_NOT_FOUND',
+      'PARSE_ERROR',
+      'TOOL_NOT_PERMITTED',
+      'forwardTo',
+      'isConstructionError',
+      'makeConstructionError',
+      'makeMcpToolServer',
+      'makeToolCatalog',
+      'renderAllowedTools',
+      'renderToolResult',
+    ],
     '@endo/agent-tools/adapters/mcp.js runtime export surface',
   );
 

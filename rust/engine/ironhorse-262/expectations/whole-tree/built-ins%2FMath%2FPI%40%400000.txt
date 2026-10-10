@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=built-ins/Math/PI tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Math/PI/prop-desc.js sloppy pass
+built-ins/Math/PI/prop-desc.js strict pass
+built-ins/Math/PI/value.js sloppy pass
+built-ins/Math/PI/value.js strict pass

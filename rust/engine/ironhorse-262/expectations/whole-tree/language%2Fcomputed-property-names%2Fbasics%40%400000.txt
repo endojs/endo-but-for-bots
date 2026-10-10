@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=language/computed-property-names/basics tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/computed-property-names/basics/number.js sloppy pass
+language/computed-property-names/basics/number.js strict pass
+language/computed-property-names/basics/string.js sloppy pass
+language/computed-property-names/basics/string.js strict pass
+language/computed-property-names/basics/symbol.js sloppy pass
+language/computed-property-names/basics/symbol.js strict pass

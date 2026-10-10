@@ -1,0 +1,43 @@
+# engine=ironhorse features=default corpus=intl402/DurationFormat tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/DurationFormat/constructor-locales-invalid.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: Expected a CustomError but got a TypeError\""
+intl402/DurationFormat/constructor-locales-invalid.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: Expected a CustomError but got a TypeError\""
+intl402/DurationFormat/constructor-locales-valid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/constructor-locales-valid.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/constructor-options-defaults.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/constructor-options-defaults.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/constructor-options-fractionalDigits-invalid.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: new Intl.DurationFormat(\\\"en\\\", {fractionalDigits: \\\"-10\\\"}) throws RangeError Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: new Intl.DurationFormat(\\\"en\\\", {fractionalDigits: \\\"-10\\\"}) throws RangeError Expected a RangeError but got a TypeError\""
+intl402/DurationFormat/constructor-options-fractionalDigits-invalid.js strict fail:"abort-value-differs: oracle=\"Test262Error: new Intl.DurationFormat(\\\"en\\\", {fractionalDigits: \\\"-10\\\"}) throws RangeError Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: new Intl.DurationFormat(\\\"en\\\", {fractionalDigits: \\\"-10\\\"}) throws RangeError Expected a RangeError but got a TypeError\""
+intl402/DurationFormat/constructor-options-fractionalDigits-valid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/constructor-options-fractionalDigits-valid.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/constructor-options-invalid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/constructor-options-invalid.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/constructor-options-localeMatcher-invalid.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: null is an invalid localeMatcher option value Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: null is an invalid localeMatcher option value Expected a RangeError but got a TypeError\""
+intl402/DurationFormat/constructor-options-localeMatcher-invalid.js strict fail:"abort-value-differs: oracle=\"Test262Error: null is an invalid localeMatcher option value Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: null is an invalid localeMatcher option value Expected a RangeError but got a TypeError\""
+intl402/DurationFormat/constructor-options-localeMatcher-valid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/constructor-options-localeMatcher-valid.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/constructor-options-numberingSystem-invalid.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: new Intl.DurationFormat(\\\"en\\\", {numberingSystem: \\\"\\\"}) throws RangeError Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: new Intl.DurationFormat(\\\"en\\\", {numberingSystem: \\\"\\\"}) throws RangeError Expected a RangeError but got a TypeError\""
+intl402/DurationFormat/constructor-options-numberingSystem-invalid.js strict fail:"abort-value-differs: oracle=\"Test262Error: new Intl.DurationFormat(\\\"en\\\", {numberingSystem: \\\"\\\"}) throws RangeError Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: new Intl.DurationFormat(\\\"en\\\", {numberingSystem: \\\"\\\"}) throws RangeError Expected a RangeError but got a TypeError\""
+intl402/DurationFormat/constructor-options-numberingSystem-valid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/constructor-options-numberingSystem-valid.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/constructor-options-order.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/constructor-options-order.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/constructor-options-style-conflict.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: long is an invalid style option value when following a unit with \\\"numeric\\\" style Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: long is an invalid style option value when following a unit with \\\"numeric\\\" style Expected a RangeError but got a TypeError\""
+intl402/DurationFormat/constructor-options-style-conflict.js strict fail:"abort-value-differs: oracle=\"Test262Error: long is an invalid style option value when following a unit with \\\"numeric\\\" style Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: long is an invalid style option value when following a unit with \\\"numeric\\\" style Expected a RangeError but got a TypeError\""
+intl402/DurationFormat/constructor-options-style-invalid.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: null is an invalid style option value Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: null is an invalid style option value Expected a RangeError but got a TypeError\""
+intl402/DurationFormat/constructor-options-style-invalid.js strict fail:"abort-value-differs: oracle=\"Test262Error: null is an invalid style option value Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: null is an invalid style option value Expected a RangeError but got a TypeError\""
+intl402/DurationFormat/constructor-options-style-valid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/constructor-options-style-valid.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/constructor-unit-style-defaults.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/constructor-unit-style-defaults.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/extensibility.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/extensibility.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/length.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/length.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/name.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/name.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/newtarget-undefined.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/newtarget-undefined.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/prop-desc.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/prop-desc.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/prototype.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/prototype.js strict skip:oracle-host-missing-global:Intl

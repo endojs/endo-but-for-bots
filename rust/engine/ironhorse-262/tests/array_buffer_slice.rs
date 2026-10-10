@@ -117,9 +117,7 @@ fn rejects_non_array_buffer_and_shared_receivers_before_coercion() {
 
 #[test]
 fn slice_and_species_expose_standard_metadata() {
-    assert_result_agrees(
-        "ArrayBuffer.prototype.slice.name+':'+ArrayBuffer.prototype.slice.length",
-    );
+    assert_result_agrees("ArrayBuffer.prototype.slice.name+':'+ArrayBuffer.prototype.slice.length");
     assert_result_agrees(
         "ArrayBuffer.prototype[Symbol.toStringTag]+':'+Object.prototype.toString.call(new ArrayBuffer(0))",
     );

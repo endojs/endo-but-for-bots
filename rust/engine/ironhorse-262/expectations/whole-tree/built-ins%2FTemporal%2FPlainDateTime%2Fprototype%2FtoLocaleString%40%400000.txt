@@ -1,0 +1,15 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/PlainDateTime/prototype/toLocaleString tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/PlainDateTime/prototype/toLocaleString/branding.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/toLocaleString/branding.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/toLocaleString/builtin.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/prototype/toLocaleString/builtin.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/prototype/toLocaleString/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/prototype/toLocaleString/length.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/prototype/toLocaleString/name.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/toLocaleString/name.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/toLocaleString/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/PlainDateTime/prototype/toLocaleString/not-a-constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/PlainDateTime/prototype/toLocaleString/prop-desc.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/toLocaleString/prop-desc.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/toLocaleString/return-string.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/prototype/toLocaleString/return-string.js strict skip:oracle-host-missing-temporal

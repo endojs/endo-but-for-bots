@@ -1,0 +1,62 @@
+{
+  "name": "@endo/codex-sandbox",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A bounded Endo capability adapter for a Codex CLI process running in an externally managed sandbox slice.",
+  "keywords": [],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/codex-sandbox"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "main": "src/codex-client.js",
+  "exports": {
+    ".": "./src/codex-client.js",
+    "./audit-journal.js": "./audit-journal.js",
+    "./backend-factory.js": "./backend-factory.js",
+    "./app-server-transport.js": "./app-server-transport.js",
+    "./protocol.js": "./protocol.js",
+    "./package.json": "./package.json",
+    "./sandbox-policy.js": "./src/sandbox-policy.js",
+    "./runtime-verifier.js": "./src/runtime-verifier.js",
+    "./durable-volumes.js": "./src/durable-volumes.js",
+    "./volume-host.js": "./src/volume-host.js"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "test": "ava",
+    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "yarn lint:eslint --fix",
+    "lint:eslint": "eslint '**/*.js'",
+    "lint:types": "tsc"
+  },
+  "dependencies": {
+    "@endo/errors": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
+    "@endo/exo": "workspace:^",
+    "@endo/exo-stream": "workspace:^",
+    "@endo/hosted-agent": "workspace:^",
+    "@endo/pass-style": "workspace:^",
+    "@endo/patterns": "workspace:^",
+    "@endo/sandbox": "workspace:^"
+  },
+  "devDependencies": {
+    "@endo/far": "workspace:^",
+    "@endo/init": "workspace:^",
+    "ava": "catalog:dev",
+    "eslint": "catalog:dev",
+    "typescript": "catalog:dev"
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.js"
+    ],
+    "timeout": "60s"
+  }
+}

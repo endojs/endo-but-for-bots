@@ -90,7 +90,14 @@ const allowEnvPass = key => {
     keepStdEnv.has(key) ||
     key.startsWith('ENDO_') ||
     key.startsWith('LOCKDOWN_') ||
-    key.startsWith('XDG_')
+    key.startsWith('XDG_') ||
+    // A hosted daemon runs rootless Podman and the 9P mounter from ENDO_EXTRA
+    // setup scripts; these carry the container store, image, and mount
+    // configuration those subprocesses resolve from the environment.
+    key.startsWith('CLAUDE_') ||
+    key.startsWith('NINEP_') ||
+    key === 'CONTAINER_HOST' ||
+    key === 'CONTAINERS_CONF'
   );
 };
 

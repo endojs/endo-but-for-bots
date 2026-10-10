@@ -66,9 +66,7 @@ fn reflect_set_prototype_of_reports_cycle_as_false() {
 
 #[test]
 fn acyclic_reparenting_still_succeeds() {
-    assert_result_agrees(
-        "let a = {}; let b = {x: 3}; Object.setPrototypeOf(a, b); a.x",
-    );
+    assert_result_agrees("let a = {}; let b = {x: 3}; Object.setPrototypeOf(a, b); a.x");
     assert_result_agrees(
         "let a = {}; Object.setPrototypeOf(a, null); Object.getPrototypeOf(a) === null",
     );

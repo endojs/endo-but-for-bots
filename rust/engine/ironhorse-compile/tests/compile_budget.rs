@@ -1,0 +1,318 @@
+use ironhorse_compile::{compile_atoms_with, compile_atoms_with_budget, ParseErrorKind};
+use ironhorse_meter::{COMPILE_SOURCE_BYTE_METERING, COMPILE_WORK_METERING};
+
+#[test]
+fn budgeted_script_preserves_goal_and_refuses_at_exact_boundary() {
+    use ironhorse_compile::{compile_atoms_goal, compile_atoms_goal_with_meter, Goal, ParseMeter};
+    for source in [
+        "var x = 1; x",
+        "\"use strict\"; var x = 1; x",
+        "function f(){return 2;} f()",
+    ] {
+        let meter = ParseMeter::with_budget(u64::MAX);
+        let actual = compile_atoms_goal_with_meter(
+            source,
+            ironhorse_compile::Goal::Script,
+            false,
+            meter.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            actual,
+            compile_atoms_goal(source, Goal::Script, false).unwrap()
+        );
+        let raw = meter.raw();
+        assert!(raw > 0);
+        assert_eq!(
+            compile_atoms_goal_with_meter(
+                source,
+                ironhorse_compile::Goal::Script,
+                false,
+                ParseMeter::with_budget(raw)
+            )
+            .unwrap(),
+            actual
+        );
+        let short = ParseMeter::with_budget(raw - 1);
+        assert_eq!(
+            compile_atoms_goal_with_meter(
+                source,
+                ironhorse_compile::Goal::Script,
+                false,
+                short.clone()
+            )
+            .unwrap_err()
+            .kind,
+            ParseErrorKind::MeterLimit
+        );
+        assert_eq!(short.raw(), raw - 1);
+    }
+    let source = format!("/*{}*/ 1", "x".repeat(1_000_000));
+    let meter = ParseMeter::with_budget(32 << 16);
+    assert_eq!(
+        compile_atoms_goal_with_meter(
+            &source,
+            ironhorse_compile::Goal::Script,
+            false,
+            meter.clone()
+        )
+        .unwrap_err()
+        .kind,
+        ParseErrorKind::MeterLimit
+    );
+    assert_eq!(meter.raw(), 32 << 16);
+}
+
+#[test]
+fn using_disposal_slot_scans_are_precharged() {
+    let n = 256u64;
+    let declarations = (0..n)
+        .map(|i| format!("using a{i}=null;"))
+        .collect::<String>();
+    let source = format!("function f() {{ {declarations} }}");
+    let full = compile_atoms_with_budget(&source, false, u64::MAX);
+    assert_eq!(
+        full.result.unwrap(),
+        compile_atoms_with(&source, false).unwrap()
+    );
+    assert!(full.parse_meter_raw >= 2 * n * n * COMPILE_WORK_METERING);
+    let budget = n * n * COMPILE_WORK_METERING;
+    let bounded = compile_atoms_with_budget(&source, false, budget);
+    assert_eq!(bounded.result.unwrap_err().kind, ParseErrorKind::MeterLimit);
+    assert_eq!(bounded.parse_meter_raw, budget);
+}
+
+#[test]
+fn byte_admission_refuses_large_comments_before_compilation() {
+    let source = format!("/*{}*/ 1", "x".repeat(1_000_000));
+    let report = compile_atoms_with_budget(&source, false, 32 << 16);
+    assert_eq!(report.result.unwrap_err().kind, ParseErrorKind::MeterLimit);
+    assert_eq!(report.parse_meter_raw, 32 << 16);
+}
+
+#[test]
+fn successful_budgeted_compilation_preserves_atoms_and_exact_boundary() {
+    let source = "var a = [1, 2]; a[0] + a[1]";
+    let report = compile_atoms_with_budget(source, false, u64::MAX);
+    let raw = report.parse_meter_raw;
+    assert!(raw > source.len() as u64 * COMPILE_SOURCE_BYTE_METERING);
+    assert_eq!(
+        report.result.unwrap(),
+        compile_atoms_with(source, false).unwrap()
+    );
+    assert!(compile_atoms_with_budget(source, false, raw).result.is_ok());
+    let short = compile_atoms_with_budget(source, false, raw - 1);
+    assert_eq!(short.result.unwrap_err().kind, ParseErrorKind::MeterLimit);
+    assert_eq!(short.parse_meter_raw, raw - 1);
+}
+
+#[test]
+fn failures_retain_compilation_charges() {
+    for source in ["var =", "'unterminated", r#"({"\uD800": })"#] {
+        let report = compile_atoms_with_budget(source, false, u64::MAX);
+        assert!(report.result.is_err());
+        assert!(report.parse_meter_raw >= source.len() as u64 * COMPILE_SOURCE_BYTE_METERING);
+    }
+}
+
+#[test]
+fn tiny_budgets_and_large_single_tokens_are_named_refusals() {
+    for source in [
+        String::new(),
+        " ".repeat(10_000),
+        format!("'{}'", "x".repeat(10_000)),
+    ] {
+        let report = compile_atoms_with_budget(&source, false, 0);
+        assert_eq!(report.result.unwrap_err().kind, ParseErrorKind::MeterLimit);
+        assert_eq!(report.parse_meter_raw, 0);
+    }
+}
+
+#[test]
+fn work_limits_cover_bigint_and_regexp_validation() {
+    let bigint = format!("{}n", "9".repeat(10_000));
+    let regexp = format!(
+        "/{}/",
+        (0..1000).map(|i| format!("(?<a{i}>x)")).collect::<String>()
+    );
+    for source in [bigint, regexp] {
+        let budget = (source.len() as u64 * 3) << 16;
+        let report = compile_atoms_with_budget(&source, false, budget);
+        assert_eq!(report.result.unwrap_err().kind, ParseErrorKind::MeterLimit);
+        assert_eq!(report.parse_meter_raw, budget);
+    }
+}
+
+#[test]
+fn each_phase_boundary_refuses_without_panicking_or_emitting_partial_atoms() {
+    for source in [
+        "function f(x){try{return x+1;}finally{x=0;}} f(2)",
+        "class C { x=1; static y=2; m(){return this.x;} } new C().m()",
+        "class C { static #x=1; static #y=2; static get #z(){return this.#x;} }",
+        "var a=[1,2]; var {x,...rest}={x:1,y:2}; for(var v of a) {x+=v;} x",
+        "var x=12345678901234567890n; /(?<a>x)(?<b>y)/; x",
+    ] {
+        let full = compile_atoms_with_budget(source, false, u64::MAX);
+        assert!(full.result.is_ok(), "{:?}", full.result);
+        for units in 0..(full.parse_meter_raw >> 16) {
+            let report = compile_atoms_with_budget(source, false, units << 16);
+            assert_eq!(
+                report.result.unwrap_err().kind,
+                ParseErrorKind::MeterLimit,
+                "{source}: {units}"
+            );
+            assert_eq!(report.parse_meter_raw, units << 16);
+        }
+    }
+}
+
+#[test]
+fn embedding_host_retains_charges_across_a_compiler_unwind() {
+    // The coder's own early-error path UNWINDS: `Coder::report_kind` resumes
+    // with a private payload that `compile_parser` catches, because a reported
+    // error has to stop the pass the way XS's `longjmp` stops it. So the
+    // shared meter still has to survive an unwind between the work and the
+    // receipt, which is what this asserts.
+    //
+    // The fixture used to be a source that PANICKED the coder, caught here
+    // with `catch_unwind`. That is no longer available and its absence is the
+    // point: the static-block fold now returns a structured `Unsupported`
+    // rather than dying (architecture finding F063), so there is no known
+    // source that panics this compiler to use as a fixture.
+    let meter = ironhorse_compile::ParseMeter::with_budget(u64::MAX);
+    let error = ironhorse_compile::compile_atoms_with_meter(
+        "class C { static { let x=1; } }",
+        false,
+        meter.clone(),
+    )
+    .expect_err("the static-block fold is a named coder gap");
+    assert_eq!(
+        error.kind,
+        ParseErrorKind::Unsupported,
+        "the fold must stay a named coverage gap, not become a SyntaxError"
+    );
+    assert!(meter.raw() > 0, "the work before the fold is still billed");
+    assert!(!meter.exhausted(), "the host did not refuse");
+}
+
+/// A reported early error stops the coder where it is reported. Gated by COST:
+/// the coder charges per node, so a pass that walked the whole program after
+/// reporting would bill for it.
+///
+/// This is the property `Coder::report_kind`'s unwind exists for, and it has a
+/// history. The first version latched the error and RETURNED, guarding one
+/// panic site out of eighty-odd with a `poisoned()` flag; the pass walked on
+/// and died at an unguarded site, losing the classification it had just
+/// recorded. A flag nothing reads cannot be tested; a cost can.
+#[test]
+fn a_reported_early_error_stops_the_pass() {
+    let bill = |source: &str| {
+        let meter = ironhorse_compile::ParseMeter::with_budget(u64::MAX);
+        let _ = ironhorse_compile::compile_atoms_with_meter(source, false, meter.clone());
+        meter.raw()
+    };
+    // Two programs with the SAME tail, differing only in whether the first
+    // statement reports an early error. Both pay the full parse and scope —
+    // those phases finish before the coder starts — so the difference between
+    // them is the coder's bill for the tail, and nothing else.
+    let tail = "function f(a, b) { return a + b; } ".repeat(200);
+    let short = bill("({a = 1});");
+    let reported = bill(&format!("({{a = 1}}); {tail}"));
+    let whole = bill(&format!("1; {tail}"));
+    assert!(
+        whole > short * 10,
+        "the fixture's tail must dominate the cost, or this gate proves \
+         nothing: short={short} whole={whole}"
+    );
+    let coded_tail = whole.saturating_sub(reported);
+    assert!(
+        coded_tail * 4 > whole,
+        "coding continued past a reported early error. The erroring program \
+         billed {reported} and the identical non-erroring one {whole}: a \
+         difference of {coded_tail}, which is the coder's share of the tail. \
+         A pass that stops at the error leaves roughly half the bill unspent \
+         (parse and scope still run in full); a pass that walks on leaves \
+         none."
+    );
+}
+
+#[test]
+fn regexp_string_set_products_are_bounded_without_named_captures() {
+    let left = (0..1000)
+        .map(|i| format!("aa{i}"))
+        .collect::<Vec<_>>()
+        .join("|");
+    let right = (0..1000)
+        .map(|i| format!("bb{i}"))
+        .collect::<Vec<_>>()
+        .join("|");
+    let source = format!(r"/[\q{{{left}}}&&\q{{{right}}}]/v");
+    let budget = (source.len() as u64 * 3) << 16;
+    let report = compile_atoms_with_budget(&source, false, budget);
+    assert_eq!(report.result.unwrap_err().kind, ParseErrorKind::MeterLimit);
+    assert_eq!(report.parse_meter_raw, budget);
+}
+
+#[test]
+fn live_host_refusal_interrupts_before_lexing_and_retains_the_charge() {
+    let mut charged = 0;
+    let meter = ironhorse_compile::ParseMeter::with_charge_callback(u64::MAX, |raw| {
+        charged += raw;
+        false
+    });
+    let progress = meter.clone();
+    let source = "'unterminated";
+    let result = ironhorse_compile::compile_atoms_with_meter(source, false, meter);
+    assert_eq!(result.unwrap_err().kind, ParseErrorKind::MeterLimit);
+    let raw = progress.raw();
+    assert!(progress.exhausted());
+    drop(progress);
+    assert_eq!(charged, raw);
+    assert_eq!(raw, source.len() as u64 * COMPILE_SOURCE_BYTE_METERING);
+}
+
+#[test]
+fn live_callback_accounts_each_phase_and_stops_at_its_first_refusal() {
+    let source = "function f(x){return x+1;} f(2)";
+    let full = compile_atoms_with_budget(source, false, u64::MAX).parse_meter_raw;
+    for limit in [(source.len() as u64 + 4) << 16, full - (1 << 16)] {
+        let mut charged = 0;
+        let mut refusals = 0;
+        let meter = ironhorse_compile::ParseMeter::with_charge_callback(u64::MAX, |raw| {
+            assert_eq!(refusals, 0, "no charge after refusal");
+            charged += raw;
+            let keep = charged <= limit;
+            if !keep {
+                refusals += 1;
+            }
+            keep
+        });
+        let progress = meter.clone();
+        let result = ironhorse_compile::compile_atoms_with_meter(source, false, meter);
+        assert_eq!(result.unwrap_err().kind, ParseErrorKind::MeterLimit);
+        let raw = progress.raw();
+        drop(progress);
+        assert_eq!(charged, raw);
+        assert_eq!(refusals, 1);
+        assert!(raw > limit);
+    }
+}
+
+#[test]
+fn retained_meter_keeps_module_goal_and_bounds_its_compilation() {
+    use ironhorse_compile::{
+        compile_atoms_goal_with_meter, compile_module_atoms, Goal, ParseMeter,
+    };
+    let source = "export const x = 7; export function f(){return x;}";
+    let meter = ParseMeter::with_budget(u64::MAX);
+    let actual = compile_atoms_goal_with_meter(source, Goal::Module, false, meter.clone()).unwrap();
+    assert_eq!(actual, compile_module_atoms(source).unwrap());
+    let short = ParseMeter::with_budget(meter.raw() - 1);
+    assert_eq!(
+        compile_atoms_goal_with_meter(source, Goal::Module, false, short.clone())
+            .unwrap_err()
+            .kind,
+        ParseErrorKind::MeterLimit
+    );
+    assert_eq!(short.raw(), meter.raw() - 1);
+}

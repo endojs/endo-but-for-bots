@@ -1,0 +1,167 @@
+# engine=ironhorse features=default corpus=language/expressions/dynamic-import/syntax/valid tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/dynamic-import/syntax/valid/nested-do-while-script-code-valid.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-do-while-script-code-valid.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-else-braceless-empty-str-is-valid-assign-expr.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-else-braceless-empty-str-is-valid-assign-expr.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-else-braceless-import-attributes-trailing-comma-first.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-else-braceless-import-attributes-trailing-comma-first.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-else-braceless-import-attributes-trailing-comma-second.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-else-braceless-import-attributes-trailing-comma-second.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-else-braceless-import-defer-empty-str-is-valid-assign-expr.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-else-braceless-import-defer-empty-str-is-valid-assign-expr.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-else-braceless-import-defer-script-code-valid.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-else-braceless-import-defer-script-code-valid.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-else-braceless-import-source-empty-str-is-valid-assign-expr.js sloppy skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-else-braceless-import-source-empty-str-is-valid-assign-expr.js strict skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-else-braceless-import-source-script-code-valid.js sloppy skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-else-braceless-import-source-script-code-valid.js strict skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-else-braceless-nested-imports.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-else-braceless-nested-imports.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-else-braceless-script-code-valid.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-else-braceless-script-code-valid.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-else-empty-str-is-valid-assign-expr.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-else-empty-str-is-valid-assign-expr.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-else-import-attributes-trailing-comma-first.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-else-import-attributes-trailing-comma-first.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-else-import-attributes-trailing-comma-second.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-else-import-attributes-trailing-comma-second.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-else-import-defer-empty-str-is-valid-assign-expr.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-else-import-defer-empty-str-is-valid-assign-expr.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-else-import-defer-script-code-valid.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-else-import-defer-script-code-valid.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-else-import-source-empty-str-is-valid-assign-expr.js sloppy skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-else-import-source-empty-str-is-valid-assign-expr.js strict skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-else-import-source-script-code-valid.js sloppy skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-else-import-source-script-code-valid.js strict skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-else-nested-imports.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-else-nested-imports.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-else-script-code-valid.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-else-script-code-valid.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-function-empty-str-is-valid-assign-expr.js sloppy pass
+language/expressions/dynamic-import/syntax/valid/nested-function-empty-str-is-valid-assign-expr.js strict pass
+language/expressions/dynamic-import/syntax/valid/nested-function-import-attributes-trailing-comma-first.js sloppy pass
+language/expressions/dynamic-import/syntax/valid/nested-function-import-attributes-trailing-comma-first.js strict pass
+language/expressions/dynamic-import/syntax/valid/nested-function-import-attributes-trailing-comma-second.js sloppy pass
+language/expressions/dynamic-import/syntax/valid/nested-function-import-attributes-trailing-comma-second.js strict pass
+language/expressions/dynamic-import/syntax/valid/nested-function-import-defer-empty-str-is-valid-assign-expr.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-function-import-defer-empty-str-is-valid-assign-expr.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-function-import-defer-script-code-valid.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-function-import-defer-script-code-valid.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-function-import-source-empty-str-is-valid-assign-expr.js sloppy skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-function-import-source-empty-str-is-valid-assign-expr.js strict skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-function-import-source-script-code-valid.js sloppy skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-function-import-source-script-code-valid.js strict skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-function-nested-imports.js sloppy pass
+language/expressions/dynamic-import/syntax/valid/nested-function-nested-imports.js strict pass
+language/expressions/dynamic-import/syntax/valid/nested-function-return-empty-str-is-valid-assign-expr.js sloppy pass
+language/expressions/dynamic-import/syntax/valid/nested-function-return-empty-str-is-valid-assign-expr.js strict pass
+language/expressions/dynamic-import/syntax/valid/nested-function-return-import-attributes-trailing-comma-first.js sloppy pass
+language/expressions/dynamic-import/syntax/valid/nested-function-return-import-attributes-trailing-comma-first.js strict pass
+language/expressions/dynamic-import/syntax/valid/nested-function-return-import-attributes-trailing-comma-second.js sloppy pass
+language/expressions/dynamic-import/syntax/valid/nested-function-return-import-attributes-trailing-comma-second.js strict pass
+language/expressions/dynamic-import/syntax/valid/nested-function-return-import-defer-empty-str-is-valid-assign-expr.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-function-return-import-defer-empty-str-is-valid-assign-expr.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-function-return-import-defer-script-code-valid.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-function-return-import-defer-script-code-valid.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-function-return-import-source-empty-str-is-valid-assign-expr.js sloppy skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-function-return-import-source-empty-str-is-valid-assign-expr.js strict skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-function-return-import-source-script-code-valid.js sloppy skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-function-return-import-source-script-code-valid.js strict skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-function-return-nested-imports.js sloppy pass
+language/expressions/dynamic-import/syntax/valid/nested-function-return-nested-imports.js strict pass
+language/expressions/dynamic-import/syntax/valid/nested-function-return-script-code-valid.js sloppy pass
+language/expressions/dynamic-import/syntax/valid/nested-function-return-script-code-valid.js strict pass
+language/expressions/dynamic-import/syntax/valid/nested-function-script-code-valid.js sloppy pass
+language/expressions/dynamic-import/syntax/valid/nested-function-script-code-valid.js strict pass
+language/expressions/dynamic-import/syntax/valid/nested-if-braceless-empty-str-is-valid-assign-expr.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-if-braceless-empty-str-is-valid-assign-expr.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-if-braceless-import-attributes-trailing-comma-first.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-if-braceless-import-attributes-trailing-comma-first.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-if-braceless-import-attributes-trailing-comma-second.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-if-braceless-import-attributes-trailing-comma-second.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-if-braceless-import-defer-empty-str-is-valid-assign-expr.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-if-braceless-import-defer-empty-str-is-valid-assign-expr.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-if-braceless-import-defer-script-code-valid.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-if-braceless-import-defer-script-code-valid.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-if-braceless-import-source-empty-str-is-valid-assign-expr.js sloppy skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-if-braceless-import-source-empty-str-is-valid-assign-expr.js strict skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-if-braceless-import-source-script-code-valid.js sloppy skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-if-braceless-import-source-script-code-valid.js strict skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-if-braceless-nested-imports.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-if-braceless-nested-imports.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-if-braceless-script-code-valid.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-if-braceless-script-code-valid.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-if-empty-str-is-valid-assign-expr.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-if-empty-str-is-valid-assign-expr.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-if-import-attributes-trailing-comma-first.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-if-import-attributes-trailing-comma-first.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-if-import-attributes-trailing-comma-second.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-if-import-attributes-trailing-comma-second.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-if-import-defer-empty-str-is-valid-assign-expr.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-if-import-defer-empty-str-is-valid-assign-expr.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-if-import-defer-script-code-valid.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-if-import-defer-script-code-valid.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-if-import-source-empty-str-is-valid-assign-expr.js sloppy skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-if-import-source-empty-str-is-valid-assign-expr.js strict skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-if-import-source-script-code-valid.js sloppy skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-if-import-source-script-code-valid.js strict skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-if-nested-imports.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-if-nested-imports.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-if-script-code-valid.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-if-script-code-valid.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-while-empty-str-is-valid-assign-expr.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-while-empty-str-is-valid-assign-expr.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-while-import-attributes-trailing-comma-first.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-while-import-attributes-trailing-comma-first.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-while-import-attributes-trailing-comma-second.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-while-import-attributes-trailing-comma-second.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-while-import-defer-empty-str-is-valid-assign-expr.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-while-import-defer-empty-str-is-valid-assign-expr.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-while-import-defer-script-code-valid.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-while-import-defer-script-code-valid.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-while-import-source-empty-str-is-valid-assign-expr.js sloppy skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-while-import-source-empty-str-is-valid-assign-expr.js strict skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-while-import-source-script-code-valid.js sloppy skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-while-import-source-script-code-valid.js strict skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-while-nested-imports.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-while-nested-imports.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-while-script-code-valid.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-while-script-code-valid.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-with-empty-str-is-valid-assign-expr.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-with-expression-empty-str-is-valid-assign-expr.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-with-expression-import-attributes-trailing-comma-first.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-with-expression-import-attributes-trailing-comma-second.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-with-expression-import-defer-empty-str-is-valid-assign-expr.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-with-expression-import-defer-script-code-valid.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-with-expression-import-source-empty-str-is-valid-assign-expr.js sloppy skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-with-expression-import-source-script-code-valid.js sloppy skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-with-expression-nested-imports.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-with-expression-script-code-valid.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-with-import-attributes-trailing-comma-first.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-with-import-attributes-trailing-comma-second.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-with-import-defer-empty-str-is-valid-assign-expr.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-with-import-defer-script-code-valid.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/nested-with-import-source-empty-str-is-valid-assign-expr.js sloppy skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-with-import-source-script-code-valid.js sloppy skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/nested-with-nested-imports.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/nested-with-script-code-valid.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/new-covered-expression-is-valid.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/new-covered-expression-is-valid.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/top-level-empty-str-is-valid-assign-expr.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/top-level-empty-str-is-valid-assign-expr.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/top-level-import-attributes-trailing-comma-first.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/top-level-import-attributes-trailing-comma-first.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/top-level-import-attributes-trailing-comma-second.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/top-level-import-attributes-trailing-comma-second.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/top-level-import-defer-empty-str-is-valid-assign-expr.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/top-level-import-defer-empty-str-is-valid-assign-expr.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/top-level-import-defer-script-code-valid.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/top-level-import-defer-script-code-valid.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/syntax/valid/top-level-import-source-empty-str-is-valid-assign-expr.js sloppy skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/top-level-import-source-empty-str-is-valid-assign-expr.js strict skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/top-level-import-source-script-code-valid.js sloppy skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/top-level-import-source-script-code-valid.js strict skip:parse-or-decode
+language/expressions/dynamic-import/syntax/valid/top-level-nested-imports.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/top-level-nested-imports.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/top-level-script-code-valid.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/syntax/valid/top-level-script-code-valid.js strict skip:unsupported-opcode:module:dynamic-import

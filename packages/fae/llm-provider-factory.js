@@ -6,6 +6,8 @@ import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
+import { provideAuthSecret } from './src/credentials.js';
+
 const ProviderFactoryInterface = M.interface('LLMProviderFactory', {
   help: M.call().optional(M.string()).returns(M.string()),
 });
@@ -13,9 +15,16 @@ const ProviderFactoryInterface = M.interface('LLMProviderFactory', {
 /**
  * Caplet that presents a form for creating LLM provider configs.
  *
- * On each form submission, stores `{ host, model, authToken }` as a
- * named value in the HOST agent's petstore so it's accessible to
- * everything.
+ * On each form submission, stores `{ host, model, authSecretName }` as a named
+ * value in the HOST agent's petstore so it's accessible to everything, and puts
+ * the submitted token in the daemon's secret manager under `secrets/<name>-auth`
+ * so the config value every reader holds never carries the credential.
+ *
+ * The submission itself is a daemon form value, and the daemon has no notion
+ * of a secret form field yet, so that record still holds the token as it was
+ * typed; it is reachable only by whoever can read this caplet's mailbox, and
+ * it cannot be rotated or revoked in place. Rotation and revocation act on the
+ * `SecretBlob`, which is what every provider reads.
  *
  * @param {import('@endo/eventual-send').FarRef<object>} guestPowers
  * @param {Promise<object> | object | undefined} _context
@@ -87,15 +96,64 @@ export const make = (guestPowers, _context) => {
 
           const { name, host, model, authToken } = config;
 
+          // The token goes to the daemon's secret manager, not into the config
+          // value: a value in the pet store is plaintext, cannot be rotated or
+          // revoked, and every reader of the config would hold the credential.
+          // The config keeps only the *name* the blob was bound to; whoever
+          // provisions an agent resolves that name to a capability and
+          // delegates the capability.
+          /** @type {string | undefined} */
+          let authSecretName;
+          /** @type {string | undefined} */
+          let secretFailure;
+          if (authToken) {
+            try {
+              ({ secretName: authSecretName } = await provideAuthSecret({
+                hostAgent,
+                name: `${name}-auth`,
+                description: `LLM auth token for provider "${name}"`,
+                token: authToken,
+              }));
+            } catch (secretError) {
+              // `@secrets` is carried only by the root host. Say so rather than
+              // silently storing a plaintext token as if nothing happened.
+              secretFailure =
+                secretError instanceof Error
+                  ? secretError.message
+                  : String(secretError);
+              console.error(
+                `[llm-provider-factory] secret manager unavailable (${secretFailure}); storing a plaintext token for "${name}"`,
+              );
+            }
+          }
+
           await E(hostAgent).storeValue(
-            harden({ host, model, authToken }),
+            harden({
+              host,
+              model,
+              ...(authSecretName
+                ? { authSecretName }
+                : authToken
+                  ? { authToken }
+                  : {}),
+            }),
             name,
           );
 
           console.log(`[llm-provider-factory] Provider "${name}" stored.`);
           await E(powers).reply(
             msg.number,
-            [`Provider "${name}" created successfully.`],
+            [
+              // The operator, not just the caplet's stderr, is told when the
+              // token was stored in plaintext: what they lose is rotation,
+              // revocation, and an audit trail, and only they can fix it.
+              // eslint-disable-next-line no-nested-ternary
+              authSecretName
+                ? `Provider "${name}" created successfully; its token is held as secrets/${authSecretName}.`
+                : secretFailure
+                  ? `Provider "${name}" created, but the secret manager was unavailable (${secretFailure}), so its token is stored in plaintext under the pet name "${name}". That token cannot be rotated, revoked, or audited. Re-run this from the daemon's root host to move it into @secrets.`
+                  : `Provider "${name}" created successfully.`,
+            ],
             [],
             [],
           );

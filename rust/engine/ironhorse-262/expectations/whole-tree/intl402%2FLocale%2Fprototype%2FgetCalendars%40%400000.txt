@@ -1,0 +1,17 @@
+# engine=ironhorse features=default corpus=intl402/Locale/prototype/getCalendars tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Locale/prototype/getCalendars/branding.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCalendars/branding.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCalendars/likely-subtags-region.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCalendars/likely-subtags-region.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCalendars/name.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCalendars/name.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCalendars/output-array.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCalendars/output-array.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCalendars/prop-desc.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCalendars/prop-desc.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCalendars/region-override.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCalendars/region-override.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCalendars/region-priority.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCalendars/region-priority.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCalendars/subdivision-region.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCalendars/subdivision-region.js strict skip:oracle-host-missing-global:Intl

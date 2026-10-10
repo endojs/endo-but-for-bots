@@ -52,8 +52,14 @@ fn fulfillment_static_import_and_call() {
     let o = run_graph(
         "fulfill",
         &[
-            ("dep.js", "export const x = 41; export function inc(n){ return n + 1; }"),
-            ("main.mjs", "import { x, inc } from './dep.js'; globalThis.result = inc(x);"),
+            (
+                "dep.js",
+                "export const x = 41; export function inc(n){ return n + 1; }",
+            ),
+            (
+                "main.mjs",
+                "import { x, inc } from './dep.js'; globalThis.result = inc(x);",
+            ),
         ],
         "main.mjs",
     );
@@ -69,13 +75,24 @@ fn rejection_throwing_dependency() {
         "throw",
         &[
             ("boom.js", "throw new Error('boom');"),
-            ("main.mjs", "import './boom.js'; globalThis.result = 'unreached';"),
+            (
+                "main.mjs",
+                "import './boom.js'; globalThis.result = 'unreached';",
+            ),
         ],
         "main.mjs",
     );
     assert!(!o.completed, "throwing dependency must reject");
-    assert!(o.error.contains("boom"), "reason should carry the throw, got {:?}", o.error);
-    assert!(o.result.is_empty(), "no result on rejection, got {:?}", o.result);
+    assert!(
+        o.error.contains("boom"),
+        "reason should carry the throw, got {:?}",
+        o.error
+    );
+    assert!(
+        o.result.is_empty(),
+        "no result on rejection, got {:?}",
+        o.result
+    );
 }
 
 #[test]
@@ -95,7 +112,11 @@ fn namespace_sorted_keys_and_values() {
         ],
         "main.mjs",
     );
-    assert!(o.completed, "namespace graph should fulfill, err={:?}", o.error);
+    assert!(
+        o.completed,
+        "namespace graph should fulfill, err={:?}",
+        o.error
+    );
     assert_eq!(o.result, "a,b,default|12|9");
 }
 
@@ -107,7 +128,10 @@ fn module_instance_cached_once() {
     let o = run_graph(
         "identity",
         &[
-            ("counter.js", "globalThis.count=(globalThis.count||0)+1; export const n = globalThis.count;"),
+            (
+                "counter.js",
+                "globalThis.count=(globalThis.count||0)+1; export const n = globalThis.count;",
+            ),
             ("a.js", "export { n } from './counter.js';"),
             (
                 "main.mjs",
@@ -118,7 +142,11 @@ fn module_instance_cached_once() {
         ],
         "main.mjs",
     );
-    assert!(o.completed, "identity graph should fulfill, err={:?}", o.error);
+    assert!(
+        o.completed,
+        "identity graph should fulfill, err={:?}",
+        o.error
+    );
     assert_eq!(o.result, "true:1");
 }
 
@@ -147,7 +175,11 @@ fn cyclic_graph_evaluation_order() {
         ],
         "main.mjs",
     );
-    assert!(o.completed, "cyclic graph should fulfill, err={:?}", o.error);
+    assert!(
+        o.completed,
+        "cyclic graph should fulfill, err={:?}",
+        o.error
+    );
     assert_eq!(o.result, "true:oe");
 }
 
@@ -165,7 +197,11 @@ fn import_meta_shape() {
         )],
         "main.mjs",
     );
-    assert!(o.completed, "import.meta graph should fulfill, err={:?}", o.error);
+    assert!(
+        o.completed,
+        "import.meta graph should fulfill, err={:?}",
+        o.error
+    );
     assert_eq!(o.result, "object/true/nourl");
 }
 
@@ -185,7 +221,11 @@ fn import_meta_is_per_module() {
         ],
         "main.mjs",
     );
-    assert!(o.completed, "per-module meta graph should fulfill, err={:?}", o.error);
+    assert!(
+        o.completed,
+        "per-module meta graph should fulfill, err={:?}",
+        o.error
+    );
     assert_eq!(o.result, "true:object");
 }
 
@@ -198,11 +238,18 @@ fn dynamic_import_fulfillment_with_top_level_await() {
         "dyn-fulfill",
         &[
             ("dep.js", "export const v = 7;"),
-            ("main.mjs", "const ns = await import('./dep.js'); globalThis.result = 'dyn:'+ns.v;"),
+            (
+                "main.mjs",
+                "const ns = await import('./dep.js'); globalThis.result = 'dyn:'+ns.v;",
+            ),
         ],
         "main.mjs",
     );
-    assert!(o.completed, "dynamic import should fulfill, err={:?}", o.error);
+    assert!(
+        o.completed,
+        "dynamic import should fulfill, err={:?}",
+        o.error
+    );
     assert_eq!(o.result, "dyn:7");
 }
 
@@ -219,7 +266,11 @@ fn dynamic_import_rejection_is_catchable() {
         )],
         "main.mjs",
     );
-    assert!(o.completed, "in-guest catch keeps the entry fulfilled, err={:?}", o.error);
+    assert!(
+        o.completed,
+        "in-guest catch keeps the entry fulfilled, err={:?}",
+        o.error
+    );
     assert_eq!(o.result, "caught:true");
 }
 
@@ -229,7 +280,10 @@ fn unresolved_static_specifier_rejects() {
     // failure: the entry module's import promise rejects.
     let o = run_graph(
         "unresolved",
-        &[("main.mjs", "import x from './nope.js'; globalThis.result='unreached';")],
+        &[(
+            "main.mjs",
+            "import x from './nope.js'; globalThis.result='unreached';",
+        )],
         "main.mjs",
     );
     assert!(!o.completed, "unresolved specifier must reject");
@@ -284,7 +338,11 @@ fn test262_live_binding_update_fixture() {
         ],
         "main.mjs",
     );
-    assert!(o.completed, "live-binding fixture should fulfill, err={:?}", o.error);
+    assert!(
+        o.completed,
+        "live-binding fixture should fulfill, err={:?}",
+        o.error
+    );
     // The import binding is live: after the exporter mutates `x`, the
     // importer reads the new value.
     assert_eq!(o.result, "1->2");

@@ -12,7 +12,7 @@
 //! computron agreement is advisory telemetry, not asserted here.
 //!
 //! The re-entrant `Reflect.apply`/`Reflect.construct` are NOT exercised here:
-//! they self-name an honest `Halt::Unsupported` this child (their
+//! they self-name an honest `Halt::NotImplemented` this child (their
 //! spread-argument trampoline metering is a later increment), so a dual-run of
 //! them would not `BothComplete` on ironhorse — the gap is documented, not tested.
 
@@ -234,7 +234,9 @@ fn reflect_extensibility_and_symbol_statics() {
     assert_result_agrees(
         "var o={}; Reflect.preventExtensions(o); Reflect.isExtensible(o)+'|'+Reflect.set(o,'x',1)",
     );
-    assert_result_agrees("var s=Symbol(); var o={}; o[s]=1; Object.getOwnPropertySymbols(o).length");
+    assert_result_agrees(
+        "var s=Symbol(); var o={}; o[s]=1; Object.getOwnPropertySymbols(o).length",
+    );
 }
 
 #[test]

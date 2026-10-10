@@ -20,27 +20,35 @@
 //! tables are enumerated in [`crate::sidetable`] with their coverage; the
 //! ones marked `Pending` there are the remaining atoms.
 
+mod shared_codec;
+
 use crate::atom::{AtomReader, AtomWriter};
 use crate::format::{
     Signature, SnapshotError, Version, BLOC, CREA, HEAP, KEYS, METR, NAME, SIGN, STAC, SYMB, VERS,
 };
 use crate::slot_codec::{decode_slots, encode_slots, SLOT_RECORD_BYTES};
+use ironhorse_vm::snapshot_api::{
+    CollatorData, DateTimeFormatData, IntlTables, IteratorRow, ListFormatData, LocaleData,
+    NumberFormatData, PluralRulesData, SegmentIteratorData, SegmenterData, SegmentsData,
+};
+use ironhorse_vm::value::canonicalize_nan;
+use ironhorse_vm::SymbolName;
 use ironhorse_vm::{
-    dtf_component_key_static, ChunkArena, CollatorData, DateTimeFormatData, IntlTables,
-    IteratorRow, Kind, ListFormatData, LocaleData, MeterState, NumberFormatData, Payload,
-    PluralRulesData, SegmentIteratorData, SegmenterData, SegmentsData, Slot, SlotArena,
+    dtf_component_key_static, ChunkArena, Kind, MeterState, Payload, Slot, SlotArena,
     COST_TABLE_VERSION,
 };
 
 /// The metering state carried in the `METR` atom (design row 6: "meter
 /// state across suspend"). The frozen 16.16 fixed-point counters plus the
-/// **cost-table version** that produced them; a resume whose cost-table
+/// **cost-table version and digest** that produced them; a resume whose cost-table
 /// version differs from this engine's [`ironhorse_vm::COST_TABLE_VERSION`]
 /// fails closed ([`SnapshotError::CostTableMismatch`]) rather than
 /// silently continuing a meter whose weights changed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MeterImage {
     pub cost_table_version: String,
+    /// SHA-256 of the actual weights and default keys, independent of the name.
+    pub cost_table_digest: [u8; 32],
     pub index: u64,
     pub interval: u64,
     pub count: u64,
@@ -52,6 +60,7 @@ impl MeterImage {
     pub fn of(state: MeterState) -> MeterImage {
         MeterImage {
             cost_table_version: COST_TABLE_VERSION.to_string(),
+            cost_table_digest: ironhorse_vm::cost_table::digest(),
             index: state.index,
             interval: state.interval,
             count: state.count,
@@ -82,6 +91,7 @@ impl MeterImage {
         let vb = self.cost_table_version.as_bytes();
         v.extend_from_slice(&(vb.len() as u32).to_be_bytes());
         v.extend_from_slice(vb);
+        v.extend_from_slice(&self.cost_table_digest);
         v
     }
 
@@ -96,24 +106,47 @@ impl MeterImage {
         // Exact consumption: this decoder also reads the small state's
         // length-delimited meter section, where tolerated trailing
         // bytes would defeat the store decoders' fail-closed rule.
-        if 28 + vlen != p.len() {
+        if vlen.checked_add(60) != Some(p.len()) {
             return Err(SnapshotError::Corrupt("METR version string"));
         }
         let cost_table_version = std::str::from_utf8(&p[28..28 + vlen])
             .map_err(|_| SnapshotError::Corrupt("METR version not utf8"))?
             .to_string();
-        Ok(MeterImage {
+        let cost_table_digest = p[28 + vlen..].try_into().unwrap();
+        let meter = MeterImage {
             cost_table_version,
+            cost_table_digest,
             index,
             interval,
             count,
-        })
+        };
+        meter.validate()?;
+        Ok(meter)
+    }
+
+    /// Reject a name or digest mismatch before restoring any meter state.
+    pub fn validate(&self) -> Result<(), SnapshotError> {
+        if self.cost_table_version != COST_TABLE_VERSION {
+            return Err(SnapshotError::CostTableMismatch {
+                expected: COST_TABLE_VERSION.to_string(),
+                found: self.cost_table_version.clone(),
+            });
+        }
+        let expected = ironhorse_vm::cost_table::digest();
+        if self.cost_table_digest != expected {
+            return Err(SnapshotError::CostTableMismatch {
+                expected: crate::sha256::hex(&expected),
+                found: crate::sha256::hex(&self.cost_table_digest),
+            });
+        }
+        Ok(())
     }
 }
 
 /// Machine creation parameters (`CREA`). The heap-sizing hints XS records
-/// so a restore can pre-size the arenas; ironhorse's arenas grow on demand, so
-/// these are advisory (recorded for fidelity and future pre-sizing).
+/// so a restore can pre-size the arenas. Ironhorse writers record the current
+/// arena sizes. Since format 16, `initial_chunk_bytes` also bounds the exact
+/// `BLOC` payload; older formats treated it as an advisory sizing hint.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct CreationParams {
     pub initial_slot_count: u32,
@@ -130,6 +163,9 @@ impl CreationParams {
     pub(crate) fn decode(p: &[u8]) -> Result<CreationParams, SnapshotError> {
         if p.len() < 8 {
             return Err(SnapshotError::Corrupt("CREA payload too short"));
+        }
+        if p.len() != 8 {
+            return Err(SnapshotError::Corrupt("CREA trailing bytes"));
         }
         Ok(CreationParams {
             initial_slot_count: u32::from_be_bytes([p[0], p[1], p[2], p[3]]),
@@ -148,6 +184,25 @@ impl CreationParams {
 pub struct ArrayImage {
     pub owner: u32,
     pub length: u32,
+    pub items: Vec<(u32, Slot)>,
+}
+
+/// One ordinary object's serialized index-property row (the `IDXP` atom /
+/// small-state index-props section): the owning slot, its high-water mark, and
+/// its sparse index→value map ascending by index. Values are ordinary slot
+/// records, exactly as [`ArrayImage`]'s items are.
+///
+/// `high_water` is NOT an array `length`: an ordinary object has no array
+/// `length` semantics, so nothing bounds the indices — the one invariant
+/// `ARRY` has that this row deliberately does not. It is the greatest index
+/// ever stored plus one, and it only rises, so a row may carry a mark with an
+/// EMPTY item list: that is the tombstone the array-iterator cursor domain
+/// rests on once a property is deleted, and it has to travel or a resumed
+/// machine forgets an index it once held.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IndexPropsImage {
+    pub owner: u32,
+    pub high_water: u32,
     pub items: Vec<(u32, Slot)>,
 }
 
@@ -186,7 +241,7 @@ pub struct RegistryImage {
 pub struct ErrorImage {
     pub owner: u32,
     pub name: String,
-    pub message: Option<String>,
+    pub message: Option<SymbolName>,
     /// The call-frame names captured when the error was CONSTRUCTED,
     /// which the `stack` accessor renders as `\n at <name> ()` lines.
     /// They must travel: the constructing call stack is gone by the
@@ -256,13 +311,13 @@ pub struct WrapperImage {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegExpImage {
     pub owner: u32,
-    pub source: String,
+    pub source: SymbolName,
     pub flags: String,
     pub last_index_bits: u64,
 }
 
 /// One Date instance's serialized `[[DateValue]]`: owning slot and raw
-/// IEEE-754 bits. Raw bits preserve invalid dates and negative zero exactly.
+/// IEEE-754 bits. Encoding canonicalizes invalid-date NaNs and preserves negative zero.
 /// Ascending by owner.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DateImage {
@@ -298,14 +353,14 @@ impl TemporalImage {
 /// The symbol-key property-id table (the `SYMB` atom / small-state
 /// symbols section): the machine's top-down mint counter and every
 /// `(id, descriptor slot)` pair, ascending by id. Symbol keys mint
-/// DOWNWARD from `u16::MAX` (string keys — program symbols and
+/// DOWNWARD from `u16::MAX - 1` (string keys — program symbols and
 /// runtime-interned names alike — live in the NAME table, growing up
 /// from 1), so persisting this table is what lets a heap holding
 /// symbol-KEYED properties round-trip: the restored machine re-binds
 /// each stored id to the same descriptor slot instead of re-minting
 /// the number for a different symbol.
 ///
-/// Wire form: the canonical EMPTY table (`next_id == u16::MAX`, no
+/// Wire form: the canonical EMPTY table (`next_id == u16::MAX - 1`, no
 /// pairs) encodes as the legacy 4-zero-byte empty list, byte-stable
 /// with every blob and store written before the table traveled;
 /// anything else encodes as `u16 next_id`, `u32 count`, then the
@@ -319,7 +374,7 @@ pub struct SymbolKeyImage {
 impl Default for SymbolKeyImage {
     fn default() -> SymbolKeyImage {
         SymbolKeyImage {
-            next_id: u16::MAX,
+            next_id: u16::MAX - 1,
             pairs: Vec::new(),
         }
     }
@@ -351,7 +406,7 @@ pub struct MachineImage {
     /// `KEYS`: runtime-interned property key names.
     pub keys: Vec<String>,
     /// `NAME`: the program symbol names, id-ordered (`symbol_names`).
-    pub names: Vec<String>,
+    pub names: Vec<SymbolName>,
     /// `SYMB`: the symbol-key property-id table (see [`SymbolKeyImage`]).
     pub symbols: SymbolKeyImage,
     /// `METR`: the metering state (design row 6). A resumed machine
@@ -359,6 +414,8 @@ pub struct MachineImage {
     pub meter: MeterImage,
     /// `ARRY`: the arrays side table (side-table ledger), owner-ascending.
     pub arrays: Vec<ArrayImage>,
+    /// `IDXP`: an ordinary object's integer-indexed properties, owner-ascending.
+    pub index_props: Vec<IndexPropsImage>,
     /// `COLL`: the collections side table (ledger), owner-ascending.
     pub collections: Vec<CollectionImage>,
     /// `REGY`: the `Symbol.for` registry (ledger), key-ascending.
@@ -378,23 +435,23 @@ pub struct MachineImage {
     /// `DATE`: Date `[[DateValue]]` records, owner-ascending.
     pub dates: Vec<DateImage>,
     /// `FUNC`: retained guest-callability state.
-    pub function_state: ironhorse_vm::FunctionStateSnapshot,
+    pub function_state: ironhorse_vm::snapshot_api::FunctionStateSnapshot,
     /// `PROX`: Proxy internal slots and revoker links.
-    pub proxy_state: ironhorse_vm::ProxyStateSnapshot,
+    pub proxy_state: ironhorse_vm::snapshot_api::ProxyStateSnapshot,
     /// `ACCS`: guest accessor getter/setter mappings.
-    pub accessors: Vec<ironhorse_vm::AccessorRow>,
+    pub accessors: Vec<ironhorse_vm::snapshot_api::AccessorRow>,
     /// `IBFN`: runtime Intl bound-function links.
-    pub intl_bound_functions: Vec<ironhorse_vm::IntlBoundFunctionRow>,
+    pub intl_bound_functions: Vec<ironhorse_vm::snapshot_api::IntlBoundFunctionRow>,
     /// `PRIV`: private values and accessors.
-    pub private_elements: ironhorse_vm::PrivateElementSnapshot,
+    pub private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot,
     /// `DISP`: explicit resource-management stacks.
-    pub disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
+    pub disposable_stacks: Vec<ironhorse_vm::snapshot_api::DisposableStackRow>,
     /// `GENR`: synchronous generator saved activations.
-    pub generators: Vec<ironhorse_vm::GeneratorRow>,
+    pub generators: Vec<ironhorse_vm::snapshot_api::GeneratorRow>,
     /// `PRMS`: the promise cluster — settlement state, resolving
     /// functions, `[[AlreadyResolved]]` guards, and combinator
     /// accumulators, validated as one unit (the rows cross-reference).
-    pub promise_cluster: ironhorse_vm::PromiseClusterSnapshot,
+    pub promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot,
     /// `ARGB`: the arguments-exotic brand owners, ascending.
     pub arguments_brands: Vec<u32>,
     /// `TMPR`: the four Temporal record tables (ledger).
@@ -403,10 +460,53 @@ pub struct MachineImage {
     pub intl: IntlTables,
     /// `ITER`: the built-in iterator cursors (ledger), owner-ascending.
     pub iterators: Vec<IteratorRow>,
-    /// `NFLR`: the installed-names floor (wave-6 W6-7), when it
+    /// `NFLR`: the installed-names floor, when it
     /// traveled. `None` — a pre-floor snapshot — restores to the
     /// conservative full-table default.
     pub name_floor: Option<u32>,
+}
+
+/// Immutable proof that an image crossed a live persistence gate or the
+/// complete snapshot decoder. Mutation requires discarding this proof.
+///
+/// ```compile_fail
+/// use ironhorse_snapshot::{image::MachineImage, write_machine};
+/// fn persist_unchecked(image: &MachineImage) { write_machine(image); }
+/// ```
+///
+/// ```compile_fail
+/// use ironhorse_snapshot::GatedImage;
+/// fn mutate_admitted(mut image: GatedImage) { image.slots.clear(); }
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct GatedImage(MachineImage);
+
+impl GatedImage {
+    pub(crate) fn new(image: MachineImage) -> Result<Self, SnapshotError> {
+        if image.stored_unregistered_key_id().is_some() {
+            return Err(SnapshotError::Corrupt(
+                "stored property id outside the name and symbol-key tables",
+            ));
+        }
+        Ok(Self(image))
+    }
+
+    /// Inspect admitted state without permitting mutation.
+    pub fn image(&self) -> &MachineImage {
+        &self.0
+    }
+
+    /// Discard the proof to edit data for inspection or adversarial tooling.
+    pub fn into_image(self) -> MachineImage {
+        self.0
+    }
+}
+
+impl std::ops::Deref for GatedImage {
+    type Target = MachineImage;
+    fn deref(&self) -> &MachineImage {
+        self.image()
+    }
 }
 
 /// A decoded machine image that has crossed the complete container
@@ -426,6 +526,11 @@ impl ValidatedSnapshot {
         ValidatedSnapshot { image }
     }
 
+    /// Preserve validation when publishing a decoded snapshot again.
+    pub fn into_gated(self) -> GatedImage {
+        GatedImage(self.image)
+    }
+
     /// Borrow the validated plain-data image for inspection.
     pub fn image(&self) -> &MachineImage {
         &self.image
@@ -437,67 +542,100 @@ impl ValidatedSnapshot {
     }
 }
 
-impl MachineImage {
-    /// Build an image straight from a pair of arenas plus the stack and
-    /// symbol tables — the arena-(de)serialization surface. The caller
-    /// supplies the machine signature (its callback-table version).
-    pub fn from_arenas(
-        signature: Signature,
-        slots: &SlotArena,
-        chunks: &ChunkArena,
-        stack: &[Slot],
-        names: Vec<String>,
-        keys: Vec<String>,
-        symbols: SymbolKeyImage,
-    ) -> MachineImage {
-        MachineImage {
-            version: Version::current(),
-            signature,
-            creation: CreationParams {
-                initial_slot_count: slots.capacity(),
-                initial_chunk_bytes: chunks.byte_size() as u32,
-            },
-            chunks: chunks.raw_vec(),
-            slots: slots.records(),
-            slot_free: slots.free_list().to_vec(),
-            slot_live: slots.live_count(),
-            stack: stack.to_vec(),
-            keys,
-            names,
-            symbols,
-            meter: MeterImage::current(),
-            arrays: Vec::new(),
-            collections: Vec::new(),
-            registry: Vec::new(),
-            errors: Vec::new(),
-            buffers: Vec::new(),
-            typed_arrays: Vec::new(),
-            data_views: Vec::new(),
-            wrappers: Vec::new(),
-            regexps: Vec::new(),
-            dates: Vec::new(),
-            function_state: ironhorse_vm::FunctionStateSnapshot::default(),
-            proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
-            accessors: Vec::new(),
-            intl_bound_functions: Vec::new(),
-            private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
-            disposable_stacks: Vec::new(),
-            generators: Vec::new(),
-            promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
-            arguments_brands: Vec::new(),
-            temporal: TemporalImage::default(),
-            intl: IntlTables::default(),
-            iterators: Vec::new(),
-            name_floor: None,
+macro_rules! define_image_constructor {
+    ($($section:ident {
+        image_field: $field:ident,
+        builder: $builder:ident,
+        live: [$($live_field:ident: $ty:ty => ($interp:ident, $dirty:ident) $extract:block)?],
+        $($rest:tt)*
+    })*) => {
+        /// Build an image straight from a pair of arenas plus the stack and
+        /// symbol tables — the arena-(de)serialization surface. The caller
+        /// supplies the machine signature (its callback-table version).
+        pub fn from_arenas(
+            signature: Signature,
+            slots: &SlotArena,
+            chunks: &ChunkArena,
+            stack: &[Slot],
+            names: Vec<SymbolName>,
+            keys: Vec<String>,
+            symbols: SymbolKeyImage,
+        ) -> MachineImage {
+            MachineImage {
+                version: Version::current(),
+                signature,
+                creation: CreationParams {
+                    initial_slot_count: slots.capacity(),
+                    initial_chunk_bytes: chunks.byte_size() as u32,
+                },
+                chunks: chunks.raw_vec(),
+                slots: slots.records(),
+                slot_free: slots.free_list().to_vec(),
+                slot_live: slots.live_count(),
+                stack: stack.to_vec(),
+                keys,
+                names,
+                symbols,
+                meter: MeterImage::current(),
+                $($($live_field: Default::default(),)?) *
+                name_floor: None,
+            }
         }
-    }
+    };
+}
+
+// These compatibility builders keep their historical argument order. The
+// roster owns each grouped field's type, group membership, and assignment.
+macro_rules! define_grouped_builders {
+    ($($section:ident {
+        image_field: $field:ident,
+        builder: $builder:ident,
+        live: [$($live:tt)*],
+        bounds: [$($bounds:tt)*],
+        gate: [$($gate:tt)*],
+        restore: [$($restore:tt)*],
+        initialize: [$($next:ident; $(#[$attr:meta])* $init_field:ident: $ty:ty = $init:expr)?],
+        $($rest:tt)*
+    })*) => {
+        define_grouped_builders!(@scan [] []; $(($builder; [$($init_field: $ty)?]))*);
+    };
+    (@scan $bulk:tt $language:tt; (none; $field:tt) $($rest:tt)*) => {
+        define_grouped_builders!(@scan $bulk $language; $($rest)*);
+    };
+    (@scan [$($bulk:tt)*] $language:tt; (bulk; [$field:ident: $ty:ty]) $($rest:tt)*) => {
+        define_grouped_builders!(@scan [$($bulk)* $field: $ty,] $language; $($rest)*);
+    };
+    (@scan $bulk:tt [$($language:tt)*]; (language; [$field:ident: $ty:ty]) $($rest:tt)*) => {
+        define_grouped_builders!(@scan $bulk [$($language)* $field: $ty,]; $($rest)*);
+    };
+    (@scan [$($bulk:ident: $bulk_ty:ty,)*] [$($language:ident: $language_ty:ty,)*];) => {
+        /// Attach the bulk side tables, symbol registry, and error data
+        /// (side-table ledger). The snapshot surface calls this with the
+        /// live machine's `*_snapshot()` views, already in canonical order.
+        pub fn with_side_tables(mut self, $($bulk: $bulk_ty,)*) -> MachineImage {
+            $(self.$bulk = $bulk;)*
+            self
+        }
+        /// Attach the data-only language rows (store schema v11): primitive
+        /// wrappers, regexps, the arguments-exotic brand, and the Temporal
+        /// record tables. The snapshot surface calls this with the live
+        /// machine's `*_snapshot()` views, already in canonical order.
+        pub fn with_language_rows(mut self, $($language: $language_ty,)*) -> MachineImage {
+            $(self.$language = $language;)*
+            self
+        }
+    };
+}
+
+impl MachineImage {
+    crate::snapshot_roster::snapshot_payloads!(define_image_constructor);
 
     /// The first stored property id that is registered in NEITHER table —
     /// not a `names` position (string keys live IN the table since the
     /// id-space unification) and not a `symbols` pair (the SYMB atom now
     /// carries every minted symbol-key id) — or `None` if every stored id
     /// resolves. The persist/adopt paths treat a hit as
-    /// [`crate::store::StoreError::Corrupt`]: an unregistered id maps to
+    /// [`SnapshotError::Corrupt`]: an unregistered id maps to
     /// nothing on resume, and honest minting cannot produce one, so it
     /// can only be torn or crafted bytes. Free slots are skipped — a
     /// stale record on the free list names nothing.
@@ -505,35 +643,29 @@ impl MachineImage {
     /// Asking the IMAGE rather than the live machine's mint counter is
     /// what makes the answer survive a round trip: the counter is small
     /// state a resume restores verbatim, but a counter says only that
-    /// minting HAPPENED, not that an id was stored (review wave 5's
-    /// false-positive lesson) — and a crafted image lies about its
+    /// minting HAPPENED, not that an id was stored — and a crafted image
+    /// can lie about its
     /// counter anyway. The stored ids are the evidence.
     pub fn stored_unregistered_key_id(&self) -> Option<u16> {
         let registered = self.symbols.id_set();
-        let free: std::collections::BTreeSet<u32> = self.slot_free.iter().copied().collect();
-        let live = self
-            .slots
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !free.contains(&(*i as u32)))
-            .map(|(_, s)| s);
-        first_stored_unregistered_id(live.chain(self.stack.iter()), self.names.len(), &registered)
-            .or_else(|| {
-                first_stored_unregistered_id(
-                    self.arrays.iter().flat_map(|a| a.items.iter().map(|(_, s)| s)),
+        let mut first = None;
+        self.visit_slots(&mut |slot| {
+            if first.is_none() {
+                first = first_stored_unregistered_id(
+                    std::iter::once(slot),
                     self.names.len(),
                     &registered,
-                )
-            })
-            .or_else(|| {
-                first_stored_unregistered_id(
-                    self.collections
-                        .iter()
-                        .flat_map(|c| c.entries.iter().flat_map(|(k, v)| [k, v])),
-                    self.names.len(),
-                    &registered,
-                )
-            })
+                );
+            }
+        });
+        first
+    }
+
+    /// Visit every stored Slot record, excluding opaque freed heap records.
+    /// The image and nested slot-bearing rows are classified by exhaustive
+    /// destructuring, so additions require an explicit visitation decision.
+    pub fn visit_slots(&self, f: &mut dyn FnMut(&Slot)) {
+        crate::stored_slots::visit_image_slots(self, f);
     }
 
     /// Attach a metering state to this image (design row 6). The snapshot
@@ -544,48 +676,7 @@ impl MachineImage {
         self
     }
 
-    /// Attach the bulk side tables, symbol registry, and error data
-    /// (side-table ledger). The snapshot surface calls this with the
-    /// live machine's `*_snapshot()` views, already in canonical order.
-    pub fn with_side_tables(
-        mut self,
-        arrays: Vec<ArrayImage>,
-        collections: Vec<CollectionImage>,
-        registry: Vec<RegistryImage>,
-        errors: Vec<ErrorImage>,
-        buffers: Vec<BufferImage>,
-        typed_arrays: Vec<TypedArrayImage>,
-        data_views: Vec<DataViewImage>,
-    ) -> MachineImage {
-        self.arrays = arrays;
-        self.collections = collections;
-        self.registry = registry;
-        self.errors = errors;
-        self.buffers = buffers;
-        self.typed_arrays = typed_arrays;
-        self.data_views = data_views;
-        self
-    }
-
-    /// Attach the data-only language rows (store schema v11): primitive
-    /// wrappers, regexps, the arguments-exotic brand, and the Temporal
-    /// record tables. The snapshot surface calls this with the live
-    /// machine's `*_snapshot()` views, already in canonical order.
-    pub fn with_language_rows(
-        mut self,
-        wrappers: Vec<WrapperImage>,
-        regexps: Vec<RegExpImage>,
-        arguments_brands: Vec<u32>,
-        temporal: TemporalImage,
-        intl: IntlTables,
-    ) -> MachineImage {
-        self.wrappers = wrappers;
-        self.regexps = regexps;
-        self.arguments_brands = arguments_brands;
-        self.temporal = temporal;
-        self.intl = intl;
-        self
-    }
+    crate::snapshot_roster::snapshot_payloads!(define_grouped_builders);
 
     /// Attach the built-in iterator cursors (ledger `Iterators` row).
     /// The snapshot surface calls this with the live machine's
@@ -605,7 +696,7 @@ impl MachineImage {
     /// Attach the atomic retained guest-callability state.
     pub fn with_function_state(
         mut self,
-        function_state: ironhorse_vm::FunctionStateSnapshot,
+        function_state: ironhorse_vm::snapshot_api::FunctionStateSnapshot,
     ) -> MachineImage {
         self.function_state = function_state;
         self
@@ -613,20 +704,23 @@ impl MachineImage {
 
     pub fn with_proxy_state(
         mut self,
-        proxy_state: ironhorse_vm::ProxyStateSnapshot,
+        proxy_state: ironhorse_vm::snapshot_api::ProxyStateSnapshot,
     ) -> MachineImage {
         self.proxy_state = proxy_state;
         self
     }
 
-    pub fn with_accessors(mut self, accessors: Vec<ironhorse_vm::AccessorRow>) -> MachineImage {
+    pub fn with_accessors(
+        mut self,
+        accessors: Vec<ironhorse_vm::snapshot_api::AccessorRow>,
+    ) -> MachineImage {
         self.accessors = accessors;
         self
     }
 
     pub fn with_intl_bound_functions(
         mut self,
-        rows: Vec<ironhorse_vm::IntlBoundFunctionRow>,
+        rows: Vec<ironhorse_vm::snapshot_api::IntlBoundFunctionRow>,
     ) -> MachineImage {
         self.intl_bound_functions = rows;
         self
@@ -634,7 +728,7 @@ impl MachineImage {
 
     pub fn with_private_elements(
         mut self,
-        private_elements: ironhorse_vm::PrivateElementSnapshot,
+        private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot,
     ) -> MachineImage {
         self.private_elements = private_elements;
         self
@@ -642,27 +736,29 @@ impl MachineImage {
 
     pub fn with_disposable_stacks(
         mut self,
-        disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
+        disposable_stacks: Vec<ironhorse_vm::snapshot_api::DisposableStackRow>,
     ) -> MachineImage {
         self.disposable_stacks = disposable_stacks;
         self
     }
 
-    pub fn with_generators(mut self, generators: Vec<ironhorse_vm::GeneratorRow>) -> MachineImage {
+    pub fn with_generators(
+        mut self,
+        generators: Vec<ironhorse_vm::snapshot_api::GeneratorRow>,
+    ) -> MachineImage {
         self.generators = generators;
         self
     }
 
     pub fn with_promise_cluster(
         mut self,
-        promise_cluster: ironhorse_vm::PromiseClusterSnapshot,
+        promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot,
     ) -> MachineImage {
         self.promise_cluster = promise_cluster;
         self
     }
 
-    /// Attach the installed-names floor (wave-6 W6-7; the `NFLR`
-    /// atom). The snapshot surface calls this with the live machine's
+    /// Attach the installed-names floor (the `NFLR` atom). The snapshot surface calls this with the live machine's
     /// floor so a resumed machine's partial install passes re-consider
     /// exactly the ids the live machine's would. CANONICALIZED: a floor
     /// AT the table length is the restore default, so it is stored (and
@@ -676,9 +772,23 @@ impl MachineImage {
     /// Rebuild the slot and chunk arenas from this image. Round-trips the
     /// index arenas exactly (indices preserved, free list preserved).
     pub fn to_arenas(&self) -> (SlotArena, ChunkArena) {
-        let slots = SlotArena::from_image(self.slots.clone(), self.slot_free.clone(), self.slot_live);
+        let slots =
+            SlotArena::from_image(self.slots.clone(), self.slot_free.clone(), self.slot_live);
         let chunks = ChunkArena::from_image(self.chunks.clone());
         (slots, chunks)
+    }
+
+    /// [`Self::to_arenas`], refusing an out-of-range or duplicate free
+    /// entry, or a live count the free list does not account for, instead
+    /// of panicking. The store's eager resume restores through here from
+    /// a free list no validator has checked (the store-seam design's trust
+    /// model), so a bad one must come back as an error.
+    pub fn try_to_arenas(&self) -> Result<(SlotArena, ChunkArena), SnapshotError> {
+        let slots =
+            SlotArena::try_from_image(self.slots.clone(), self.slot_free.clone(), self.slot_live)
+                .map_err(|_| SnapshotError::Corrupt("invalid slot arena image"))?;
+        let chunks = ChunkArena::from_image(self.chunks.clone());
+        Ok((slots, chunks))
     }
 }
 
@@ -716,9 +826,8 @@ pub(crate) fn decode_strings(p: &[u8]) -> Result<Vec<String>, SnapshotError> {
         i += 4;
         // checked_add: `len` is attacker-sized (a full u32), so on a
         // 32-bit usize `i + len` can wrap past the gate and panic at
-        // the slice below instead of returning the structured error
-        // (wave-3 finding; the `i + 4` advances elsewhere cannot wrap
-        // because `i` never exceeds `p.len()`).
+        // the slice below instead of returning the structured error.
+        // The `i + 4` advances elsewhere follow a successful four-byte read.
         let end = i
             .checked_add(len)
             .ok_or(SnapshotError::Corrupt("string list entry body"))?;
@@ -729,6 +838,60 @@ pub(crate) fn decode_strings(p: &[u8]) -> Result<Vec<String>, SnapshotError> {
             .map_err(|_| SnapshotError::Corrupt("string list entry not utf8"))?;
         out.push(s.to_string());
         i = end;
+    }
+    if i != p.len() {
+        return Err(SnapshotError::Corrupt("string list trailing bytes"));
+    }
+    Ok(out)
+}
+
+pub(crate) fn encode_names(list: &[SymbolName]) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&(list.len() as u32).to_be_bytes());
+    for s in list {
+        let b = s.as_bytes();
+        v.extend_from_slice(&(b.len() as u32).to_be_bytes());
+        v.extend_from_slice(b);
+    }
+    v
+}
+
+pub(crate) fn decode_names(p: &[u8]) -> Result<Vec<SymbolName>, SnapshotError> {
+    if p.len() < 4 {
+        return Err(SnapshotError::Corrupt("string list header"));
+    }
+    let count = u32::from_be_bytes([p[0], p[1], p[2], p[3]]) as usize;
+    // Reserve no more than the payload could possibly hold: every entry
+    // carries at least a 4-byte length header, so a valid `count` never
+    // exceeds `p.len() / 4`. Clamping the pre-reservation keeps a malformed
+    // `count` (up to `u32::MAX`) from reserving gigabytes before the
+    // per-entry bounds check below rejects the truncation (fuzz trophy
+    // `malformed_string_count_does_not_over_allocate`).
+    let mut out = Vec::with_capacity(count.min(p.len() / 4));
+    let mut i = 4;
+    for _ in 0..count {
+        if i + 4 > p.len() {
+            return Err(SnapshotError::Corrupt("string list entry header"));
+        }
+        let len = u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]) as usize;
+        i += 4;
+        // checked_add: `len` is attacker-sized (a full u32), so on a
+        // 32-bit usize `i + len` can wrap past the gate and panic at
+        // the slice below instead of returning the structured error.
+        // The `i + 4` advances elsewhere follow a successful four-byte read.
+        let end = i
+            .checked_add(len)
+            .ok_or(SnapshotError::Corrupt("string list entry body"))?;
+        if end > p.len() {
+            return Err(SnapshotError::Corrupt("string list entry body"));
+        }
+        let s = SymbolName::from_cesu8(&p[i..end])
+            .ok_or(SnapshotError::Corrupt("name list entry not CESU-8"))?;
+        out.push(s);
+        i = end;
+    }
+    if i != p.len() {
+        return Err(SnapshotError::Corrupt("name list trailing bytes"));
     }
     Ok(out)
 }
@@ -759,6 +922,9 @@ pub(crate) fn decode_u32s(p: &[u8]) -> Result<Vec<u32>, SnapshotError> {
         }
         out.push(u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]));
         i += 4;
+    }
+    if i != p.len() {
+        return Err(SnapshotError::Corrupt("u32 list trailing bytes"));
     }
     Ok(out)
 }
@@ -799,17 +965,20 @@ fn decode_heap(p: &[u8]) -> Result<(Vec<Slot>, Vec<u32>, u32), SnapshotError> {
     // checked_mul, not `*`: on a 32-bit usize the product can wrap,
     // and a wrapped `want` would satisfy the truncation gate below
     // while `slot_count` stays attacker-sized — falsifying the bound
-    // the `seen` scratch depends on (review finding; latent until a
-    // 32-bit/wasm port, but the comment below claims the bound on
-    // every target, so make it true on every target).
+    // the `seen` scratch depends on. The scratch bound must hold on
+    // every target, including 32-bit hosts.
     let want = slot_count
         .checked_mul(SLOT_RECORD_BYTES)
         .ok_or(SnapshotError::Corrupt("HEAP record count"))?;
     if p.len() - i < want {
         return Err(SnapshotError::Corrupt("HEAP records truncated"));
     }
-    // Semantic gates on the free list, matching the store path's
-    // (`validate_store`): every index in range, no duplicates. An
+    if p.len() - i != want {
+        return Err(SnapshotError::Corrupt("HEAP trailing bytes"));
+    }
+    // Semantic gates on the free list, matching the store validator's
+    // (`validate_store`) and the VM's own as it builds the slot arena:
+    // every index in range, no duplicates. An
     // out-of-range entry would panic the arena's free-bitmap rebuild
     // at construction (the snapshot_decoder fuzz target found that
     // panic within its first half-minute once the toolchain ran
@@ -827,7 +996,8 @@ fn decode_heap(p: &[u8]) -> Result<(Vec<Slot>, Vec<u32>, u32), SnapshotError> {
     if free.len() as u64 + live as u64 != slot_count as u64 {
         return Err(SnapshotError::Corrupt("HEAP live/free accounting"));
     }
-    let slots = decode_slots(&p[i..i + want]).map_err(|_| SnapshotError::Corrupt("HEAP slot record"))?;
+    let slots =
+        decode_slots(&p[i..i + want]).map_err(|_| SnapshotError::Corrupt("HEAP slot record"))?;
     Ok((slots, free, live))
 }
 
@@ -872,7 +1042,7 @@ impl<'a> Cursor<'a> {
     }
     fn bytes(&mut self, len: usize) -> Result<&'a [u8], SnapshotError> {
         // checked_add: `len` is attacker-sized, so `i + len` can wrap
-        // on 32-bit targets (the wave-3 class the string decoder guards).
+        // on 32-bit targets, just as in `decode_strings`.
         let end = self
             .i
             .checked_add(len)
@@ -914,6 +1084,81 @@ pub(crate) fn encode_arrays(arrays: &[ArrayImage]) -> Vec<u8> {
     v
 }
 
+pub(crate) fn encode_index_props(rows: &[IndexPropsImage]) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+    for r in rows {
+        v.extend_from_slice(&r.owner.to_be_bytes());
+        v.extend_from_slice(&r.high_water.to_be_bytes());
+        v.extend_from_slice(&(r.items.len() as u32).to_be_bytes());
+        for (index, value) in &r.items {
+            v.extend_from_slice(&index.to_be_bytes());
+            crate::slot_codec::encode_slot(value, &mut v);
+        }
+    }
+    v
+}
+
+pub(crate) fn decode_index_props(p: &[u8]) -> Result<Vec<IndexPropsImage>, SnapshotError> {
+    let mut c = Cursor::new(p, "index-props side table");
+    let count = c.u32()? as usize;
+    // Each row costs at least 12 header bytes; clamp the reservation like the
+    // neighbouring decoders do.
+    let mut out: Vec<IndexPropsImage> = Vec::with_capacity(count.min(p.len() / 12));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        let high_water = c.u32()?;
+        let item_count = c.u32()? as usize;
+        let mut items = Vec::with_capacity(item_count.min(p.len() / 24));
+        let mut prev_index: Option<u32> = None;
+        for _ in 0..item_count {
+            let index = c.u32()?;
+            let value = c.slot()?;
+            // Strictly-ascending item indices, for `decode_arrays`' reason:
+            // `restore_bulk_side_tables` inserts into a `BTreeMap`, so a
+            // crafted duplicate or out-of-order pair is silently deduped and
+            // re-sorted by a resume, and resume-then-re-snapshot would emit
+            // different bytes than it read — breaking the import∘export
+            // identity the CAS key rests on.
+            if prev_index.is_some_and(|prev| index <= prev) {
+                return Err(SnapshotError::Corrupt(
+                    "index-props side table: item indices not strictly ascending",
+                ));
+            }
+            prev_index = Some(index);
+            items.push((index, value));
+        }
+        // No length bound to check, unlike `decode_arrays`: an ordinary
+        // object's index property may sit at any `u32`, and `4294967295` is a
+        // perfectly ordinary name-shaped key that never reaches this table.
+        //
+        // The high-water mark must still cover the items present. `restore`
+        // raises it to the greatest index it inserts, so a row claiming less
+        // would come back out of a resume larger than it went in, and
+        // resume-then-re-snapshot would emit different bytes than it read —
+        // the same import∘export identity the ascending rules above protect.
+        // A mark ABOVE the greatest index is the ordinary tombstone case (a
+        // deleted index, or every index deleted), so only the shortfall is
+        // refused.
+        if prev_index.is_some_and(|last| high_water <= last) {
+            return Err(SnapshotError::Corrupt(
+                "index-props side table: high-water mark below its own items",
+            ));
+        }
+        if out.last().is_some_and(|prev| owner <= prev.owner) {
+            return Err(SnapshotError::Corrupt(
+                "index-props side table: owners not strictly ascending",
+            ));
+        }
+        out.push(IndexPropsImage {
+            owner,
+            high_water,
+            items,
+        });
+    }
+    Ok(out)
+}
+
 pub(crate) fn decode_arrays(p: &[u8]) -> Result<Vec<ArrayImage>, SnapshotError> {
     let mut c = Cursor::new(p, "arrays side table");
     let count = c.u32()? as usize;
@@ -930,8 +1175,7 @@ pub(crate) fn decode_arrays(p: &[u8]) -> Result<Vec<ArrayImage>, SnapshotError> 
             let index = c.u32()?;
             let value = c.slot()?;
             // Strictly-ascending ITEM indices, for the same reason the
-            // owner check below exists — one level deeper, which wave 4
-            // missed. `restore_bulk_side_tables` inserts items into a
+            // owner check below exists. `restore_bulk_side_tables` inserts items into a
             // `BTreeMap`, so a crafted duplicate or out-of-order pair is
             // silently DEDUPED and RE-SORTED by a resume: items
             // [(1,10),(1,11)] come back as one item, and [(3,30),(1,10)]
@@ -940,9 +1184,9 @@ pub(crate) fn decode_arrays(p: &[u8]) -> Result<Vec<ArrayImage>, SnapshotError> 
             // import∘export identity the CAS key rests on.
             //
             // Note the plain `write_machine(read_machine(b))` round trip
-            // IS idempotent for these, which is exactly why the wave-4
-            // test missed it: the divergence only appears once the image
-            // has passed through a live `Interp` (review wave 5).
+            // IS idempotent for these: the divergence only appears once the
+            // image has passed through a live `Interp`. See
+            // `decode_rejects_non_ascending_array_item_indices`.
             if prev_index.is_some_and(|prev| index <= prev) {
                 return Err(SnapshotError::Corrupt(
                     "arrays side table: item indices not strictly ascending",
@@ -956,7 +1200,7 @@ pub(crate) fn decode_arrays(p: &[u8]) -> Result<Vec<ArrayImage>, SnapshotError> 
         // a value that `arr.length` says is not there, and a resume
         // re-emitting the row would have to either drop the item or
         // silently grow the length, so import∘export stops being the
-        // identity the CAS key rests on (review wave 5).
+        // identity the CAS key rests on.
         //
         // What is deliberately NOT checked here is `length` itself. A
         // sparse array is ordinary JS state, so a row declaring a huge
@@ -972,8 +1216,7 @@ pub(crate) fn decode_arrays(p: &[u8]) -> Result<Vec<ArrayImage>, SnapshotError> 
         // Bounding the LAST index bounds the row: the indices are already
         // strictly ascending, so `last < length` gives every index a
         // distinct value below `length`, hence `item_count <= length` with
-        // no separate count check. (A count check was written first and
-        // bite-checking found it unreachable behind these two.)
+        // no separate count check.
         if let Some(last) = prev_index {
             if last >= length {
                 return Err(SnapshotError::Corrupt(
@@ -981,15 +1224,20 @@ pub(crate) fn decode_arrays(p: &[u8]) -> Result<Vec<ArrayImage>, SnapshotError> 
                 ));
             }
         }
-        // Strictly-ascending owners (wave-4 P2): the writer emits them
+        // Strictly-ascending owners: the writer emits them
         // owner-sorted and unique (one row per instance). Enforcing it
         // at decode rejects a crafted duplicate — whose restore would
         // displace the first row's `ArrayData` WITHOUT decrementing its
         // side-ref counts (a parity-net panic / release over-pin) — and
         // makes `import ∘ export` idempotent (the dedup-and-re-sort a
         // crafted unordered image would otherwise survive).
-        if out.last().is_some_and(|prev: &ArrayImage| owner <= prev.owner) {
-            return Err(SnapshotError::Corrupt("arrays side table: owners not strictly ascending"));
+        if out
+            .last()
+            .is_some_and(|prev: &ArrayImage| owner <= prev.owner)
+        {
+            return Err(SnapshotError::Corrupt(
+                "arrays side table: owners not strictly ascending",
+            ));
         }
         out.push(ArrayImage {
             owner,
@@ -1038,12 +1286,15 @@ pub(crate) fn decode_collections(p: &[u8]) -> Result<Vec<CollectionImage>, Snaps
             entries.push((key, value));
         }
         // Strictly-ascending owners — same rationale as `decode_arrays`.
-        if out.last().is_some_and(|prev: &CollectionImage| owner <= prev.owner) {
+        if out
+            .last()
+            .is_some_and(|prev: &CollectionImage| owner <= prev.owner)
+        {
             return Err(SnapshotError::Corrupt(
                 "collections side table: owners not strictly ascending",
             ));
         }
-        // The rehash geometry (review finding 9): `table_length`
+        // The rehash geometry: `table_length`
         // mirrors XS's power-of-two address array
         // (`fxResizeEntries` / the vm's `collection_table_resize`),
         // which the engine only ever doubles or halves between
@@ -1064,7 +1315,7 @@ pub(crate) fn decode_collections(p: &[u8]) -> Result<Vec<CollectionImage>, Snaps
             }
         } else {
             if !table_length.is_power_of_two()
-                || table_length < ironhorse_vm::interp::MAP_MIN_TABLE_LENGTH
+                || table_length < ironhorse_vm::snapshot_api::MAP_MIN_TABLE_LENGTH
                 || table_length > TABLE_MAX
             {
                 return Err(SnapshotError::Corrupt(
@@ -1095,7 +1346,7 @@ pub(crate) fn decode_collections(p: &[u8]) -> Result<Vec<CollectionImage>, Snaps
 /// symbols section). See [`SymbolKeyImage`] for the wire form and the
 /// legacy-empty byte-stability rule.
 pub(crate) fn encode_symbol_keys(symbols: &SymbolKeyImage) -> Vec<u8> {
-    if symbols.next_id == u16::MAX && symbols.pairs.is_empty() {
+    if symbols.next_id == u16::MAX - 1 && symbols.pairs.is_empty() {
         // Canonical empty: the legacy empty-u32-list bytes, so every
         // pre-table blob and store stays byte-identical.
         return vec![0, 0, 0, 0];
@@ -1116,19 +1367,19 @@ pub(crate) fn decode_symbol_keys(p: &[u8]) -> Result<SymbolKeyImage, SnapshotErr
     }
     let mut c = Cursor::new(p, "symbol-key table");
     let next_id = c.u16()?;
-    // `next_id == u16::MAX` means nothing was ever minted, and that
-    // state has exactly one canonical encoding — the 4-byte legacy
-    // empty accepted above (every pair would fail `id <= next_id`, so
-    // a new-format payload claiming it can only be the redundant
-    // empty). Accepting it would break the import∘export byte
-    // identity the sibling decoders enforce by rejecting their
-    // non-canonical forms.
+    // The historical virgin counter also had only the four-zero spelling.
+    // Reject its redundant explicit representation rather than normalizing it.
     if next_id == u16::MAX {
         return Err(SnapshotError::Corrupt(
             "symbol-key table: non-canonical empty (legacy encoding required)",
         ));
     }
     let count = c.u32()? as usize;
+    if next_id == u16::MAX - 1 && count == 0 {
+        return Err(SnapshotError::Corrupt(
+            "symbol-key table: non-canonical empty (legacy encoding required)",
+        ));
+    }
     let mut pairs = Vec::with_capacity(count.min(p.len() / 6));
     let mut prev: Option<u16> = None;
     let mut descs = std::collections::BTreeSet::new();
@@ -1141,6 +1392,11 @@ pub(crate) fn decode_symbol_keys(p: &[u8]) -> Result<SymbolKeyImage, SnapshotErr
         // canonical — a crafted duplicate would displace a binding at
         // restore and break import∘export identity, the same class the
         // sibling decoders refuse.
+        if id == u16::MAX {
+            return Err(SnapshotError::Corrupt(
+                "symbol-key table: reserved environment id (legacy symbol namespace unsupported)",
+            ));
+        }
         if id <= next_id || prev.is_some_and(|prev_id| id <= prev_id) {
             return Err(SnapshotError::Corrupt(
                 "symbol-key table: ids not strictly ascending above the counter",
@@ -1181,7 +1437,10 @@ pub(crate) fn decode_registry(p: &[u8]) -> Result<Vec<RegistryImage>, SnapshotEr
         // bytes): a crafted duplicate/unordered registry would
         // otherwise not round-trip byte-identically and could displace
         // a forward/reverse map entry at restore.
-        if out.last().is_some_and(|prev: &RegistryImage| key <= prev.key) {
+        if out
+            .last()
+            .is_some_and(|prev: &RegistryImage| key <= prev.key)
+        {
             return Err(SnapshotError::Corrupt(
                 "symbol registry: keys not strictly ascending",
             ));
@@ -1193,8 +1452,8 @@ pub(crate) fn decode_registry(p: &[u8]) -> Result<Vec<RegistryImage>, SnapshotEr
         // `Symbol.for('aaa') === Symbol.for('bbb')` TRUE and leave
         // `Symbol.keyFor` answering the wrong key. Both indices are in
         // bounds and the registry is a GC root, so nothing downstream
-        // catches it — it is a silent spec break, not a crash (review
-        // wave 5). Linear scan: one row per registered symbol, decoded
+        // catches it. See `decode_rejects_a_registry_whose_keys_share_a_descriptor`.
+        // Linear scan: one row per registered symbol, decoded
         // once at an untrusted boundary, where clarity beats a hash set.
         if out
             .iter()
@@ -1226,7 +1485,10 @@ pub(crate) fn encode_errors(errors: &[ErrorImage]) -> Vec<u8> {
         match &e.message {
             Some(m) => {
                 v.push(1);
-                let m = m.as_bytes();
+                let scalar = m.to_text();
+                let m = scalar
+                    .as_ref()
+                    .map_or_else(|| m.as_bytes(), |s| s.as_bytes());
                 v.extend_from_slice(&(m.len() as u32).to_be_bytes());
                 v.extend_from_slice(m);
             }
@@ -1260,9 +1522,13 @@ pub(crate) fn decode_errors(p: &[u8]) -> Result<Vec<ErrorImage>, SnapshotError> 
             0 => None,
             1 => {
                 let msg_len = c.u32()? as usize;
-                Some(String::from_utf8(c.bytes(msg_len)?.to_vec()).map_err(|_| {
-                    SnapshotError::Corrupt("error-data side table: message not UTF-8")
-                })?)
+                let bytes = c.bytes(msg_len)?;
+                Some(match std::str::from_utf8(bytes) {
+                    Ok(text) => SymbolName::from(text),
+                    Err(_) => SymbolName::from_cesu8(bytes).ok_or(SnapshotError::Corrupt(
+                        "error-data side table: invalid message encoding",
+                    ))?,
+                })
             }
             _ => {
                 return Err(SnapshotError::Corrupt(
@@ -1275,7 +1541,10 @@ pub(crate) fn decode_errors(p: &[u8]) -> Result<Vec<ErrorImage>, SnapshotError> 
         // crafted duplicate would displace a row at restore while an
         // unordered image would re-sort — either breaks the
         // import∘export identity the CAS key rests on.
-        if out.last().is_some_and(|prev: &ErrorImage| owner <= prev.owner) {
+        if out
+            .last()
+            .is_some_and(|prev: &ErrorImage| owner <= prev.owner)
+        {
             return Err(SnapshotError::Corrupt(
                 "error-data side table: owners not strictly ascending",
             ));
@@ -1387,7 +1656,10 @@ pub(crate) fn decode_buffers(p: &[u8]) -> Result<Vec<BufferImage>, SnapshotError
             ));
         }
         // Strictly-ascending owners, for the sibling decoders' reason.
-        if out.last().is_some_and(|prev: &BufferImage| owner <= prev.owner) {
+        if out
+            .last()
+            .is_some_and(|prev: &BufferImage| owner <= prev.owner)
+        {
             return Err(SnapshotError::Corrupt(
                 "array-buffers side table: owners not strictly ascending",
             ));
@@ -1436,7 +1708,10 @@ pub(crate) fn decode_typed_arrays(p: &[u8]) -> Result<Vec<TypedArrayImage>, Snap
                 "typed-arrays side table: unknown element kind",
             ));
         }
-        if out.last().is_some_and(|prev: &TypedArrayImage| owner <= prev.owner) {
+        if out
+            .last()
+            .is_some_and(|prev: &TypedArrayImage| owner <= prev.owner)
+        {
             return Err(SnapshotError::Corrupt(
                 "typed-arrays side table: owners not strictly ascending",
             ));
@@ -1477,7 +1752,10 @@ pub(crate) fn decode_data_views(p: &[u8]) -> Result<Vec<DataViewImage>, Snapshot
         let buffer = c.u32()?;
         let offset = c.u32()?;
         let size = c.u32()?;
-        if out.last().is_some_and(|prev: &DataViewImage| owner <= prev.owner) {
+        if out
+            .last()
+            .is_some_and(|prev: &DataViewImage| owner <= prev.owner)
+        {
             return Err(SnapshotError::Corrupt(
                 "data-views side table: owners not strictly ascending",
             ));
@@ -1513,7 +1791,10 @@ pub(crate) fn decode_wrappers(p: &[u8]) -> Result<Vec<WrapperImage>, SnapshotErr
     for _ in 0..count {
         let owner = c.u32()?;
         let value = c.slot()?;
-        if out.last().is_some_and(|prev: &WrapperImage| owner <= prev.owner) {
+        if out
+            .last()
+            .is_some_and(|prev: &WrapperImage| owner <= prev.owner)
+        {
             return Err(SnapshotError::Corrupt(
                 "wrapper side table: owners not strictly ascending",
             ));
@@ -1532,13 +1813,22 @@ pub(crate) fn encode_regexps(regexps: &[RegExpImage]) -> Vec<u8> {
     v.extend_from_slice(&(regexps.len() as u32).to_be_bytes());
     for r in regexps {
         v.extend_from_slice(&r.owner.to_be_bytes());
-        let src = r.source.as_bytes();
+        // Retain legacy UTF-8 bytes for scalar sources. Non-scalar sources
+        // use canonical CESU-8, which old decoders reject explicitly.
+        let scalar = r.source.to_text();
+        let src = scalar
+            .as_ref()
+            .map_or_else(|| r.source.as_bytes(), |s| s.as_bytes());
         v.extend_from_slice(&(src.len() as u32).to_be_bytes());
         v.extend_from_slice(src);
         let flags = r.flags.as_bytes();
         v.extend_from_slice(&(flags.len() as u32).to_be_bytes());
         v.extend_from_slice(flags);
-        v.extend_from_slice(&r.last_index_bits.to_be_bytes());
+        v.extend_from_slice(
+            &canonicalize_nan(f64::from_bits(r.last_index_bits))
+                .to_bits()
+                .to_be_bytes(),
+        );
     }
     v
 }
@@ -1550,13 +1840,21 @@ pub(crate) fn decode_regexps(p: &[u8]) -> Result<Vec<RegExpImage>, SnapshotError
     for _ in 0..count {
         let owner = c.u32()?;
         let source_len = c.u32()? as usize;
-        let source = String::from_utf8(c.bytes(source_len)?.to_vec())
-            .map_err(|_| SnapshotError::Corrupt("regexp side table: source not UTF-8"))?;
+        let source_bytes = c.bytes(source_len)?;
+        let source = match std::str::from_utf8(source_bytes) {
+            Ok(text) => SymbolName::from(text),
+            Err(_) => SymbolName::from_cesu8(source_bytes).ok_or(SnapshotError::Corrupt(
+                "regexp side table: invalid source encoding",
+            ))?,
+        };
         let flags_len = c.u32()? as usize;
         let flags = String::from_utf8(c.bytes(flags_len)?.to_vec())
             .map_err(|_| SnapshotError::Corrupt("regexp side table: flags not UTF-8"))?;
         let last_index_bits = ((c.u32()? as u64) << 32) | c.u32()? as u64;
-        if out.last().is_some_and(|prev: &RegExpImage| owner <= prev.owner) {
+        if out
+            .last()
+            .is_some_and(|prev: &RegExpImage| owner <= prev.owner)
+        {
             return Err(SnapshotError::Corrupt(
                 "regexp side table: owners not strictly ascending",
             ));
@@ -1578,7 +1876,11 @@ pub(crate) fn encode_dates(dates: &[DateImage]) -> Vec<u8> {
     v.extend_from_slice(&(dates.len() as u32).to_be_bytes());
     for d in dates {
         v.extend_from_slice(&d.owner.to_be_bytes());
-        v.extend_from_slice(&d.value_bits.to_be_bytes());
+        v.extend_from_slice(
+            &canonicalize_nan(f64::from_bits(d.value_bits))
+                .to_bits()
+                .to_be_bytes(),
+        );
     }
     v
 }
@@ -1590,7 +1892,10 @@ pub(crate) fn decode_dates(p: &[u8]) -> Result<Vec<DateImage>, SnapshotError> {
     for _ in 0..count {
         let owner = c.u32()?;
         let value_bits = ((c.u32()? as u64) << 32) | c.u32()? as u64;
-        if out.last().is_some_and(|prev: &DateImage| owner <= prev.owner) {
+        if out
+            .last()
+            .is_some_and(|prev: &DateImage| owner <= prev.owner)
+        {
             return Err(SnapshotError::Corrupt(
                 "date side table: owners not strictly ascending",
             ));
@@ -1602,7 +1907,9 @@ pub(crate) fn decode_dates(p: &[u8]) -> Result<Vec<DateImage>, SnapshotError> {
 }
 
 /// Encode the atomic retained guest-callability cluster (`FUNC`).
-pub(crate) fn encode_function_state(state: &ironhorse_vm::FunctionStateSnapshot) -> Vec<u8> {
+pub(crate) fn encode_function_state(
+    state: &ironhorse_vm::snapshot_api::FunctionStateSnapshot,
+) -> Vec<u8> {
     let mut v = Vec::new();
     let text = |v: &mut Vec<u8>, value: &str| {
         v.extend_from_slice(&(value.len() as u32).to_be_bytes());
@@ -1658,12 +1965,22 @@ pub(crate) fn encode_function_state(state: &ironhorse_vm::FunctionStateSnapshot)
         v.extend_from_slice(&owner.to_be_bytes());
         v.extend_from_slice(&id.to_be_bytes());
     }
+    if let Some(rows) = &state.native_names {
+        v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+        for &(owner, offset) in rows {
+            v.extend_from_slice(&owner.to_be_bytes());
+            v.extend_from_slice(&offset.to_be_bytes());
+        }
+    }
+    if let Some(shared) = &state.shared {
+        shared_codec::encode(shared, &mut v);
+    }
     v
 }
 
 pub(crate) fn decode_function_state(
     p: &[u8],
-) -> Result<ironhorse_vm::FunctionStateSnapshot, SnapshotError> {
+) -> Result<ironhorse_vm::snapshot_api::FunctionStateSnapshot, SnapshotError> {
     let mut c = Cursor::new(p, "function state");
     let text = |c: &mut Cursor<'_>| -> Result<String, SnapshotError> {
         let len = c.u32()? as usize;
@@ -1687,7 +2004,7 @@ pub(crate) fn decode_function_state(
         let owner = c.u32()?;
         if functions
             .last()
-            .is_some_and(|row: &ironhorse_vm::FunctionRow| owner <= row.owner)
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::FunctionRow| owner <= row.owner)
         {
             return Err(SnapshotError::Corrupt(
                 "function state: owners not strictly ascending",
@@ -1714,7 +2031,7 @@ pub(crate) fn decode_function_state(
             2 => Some(true),
             _ => return Err(SnapshotError::Corrupt("function state: bad class tag")),
         };
-        functions.push(ironhorse_vm::FunctionRow {
+        functions.push(ironhorse_vm::snapshot_api::FunctionRow {
             owner,
             segment,
             body_start,
@@ -1735,7 +2052,7 @@ pub(crate) fn decode_function_state(
         let owner = c.u32()?;
         if bound_functions
             .last()
-            .is_some_and(|row: &ironhorse_vm::BoundFunctionRow| owner <= row.owner)
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::BoundFunctionRow| owner <= row.owner)
         {
             return Err(SnapshotError::Corrupt(
                 "bound-function state: owners not strictly ascending",
@@ -1748,7 +2065,7 @@ pub(crate) fn decode_function_state(
         for _ in 0..arg_count {
             args.push(c.slot()?);
         }
-        bound_functions.push(ironhorse_vm::BoundFunctionRow {
+        bound_functions.push(ironhorse_vm::snapshot_api::BoundFunctionRow {
             owner,
             target,
             this_arg,
@@ -1782,8 +2099,33 @@ pub(crate) fn decode_function_state(
         }
         deleted_meta.push(row);
     }
+    // Older FUNC rows end at deleted_meta. The optional suffix persists
+    // relocated boot-native name chunks without reallocating during restore.
+    let native_names = if c.i == p.len() {
+        None
+    } else {
+        let count = c.u32()? as usize;
+        let mut rows = Vec::with_capacity(count.min(p.len() / 8));
+        for _ in 0..count {
+            let row = (c.u32()?, c.u32()?);
+            if rows.last().is_some_and(|prev: &(u32, u32)| row.0 <= prev.0) {
+                return Err(SnapshotError::Corrupt(
+                    "native names: owners not strictly ascending",
+                ));
+            }
+            rows.push(row);
+        }
+        Some(rows)
+    };
+    let shared = if c.i == p.len() {
+        None
+    } else {
+        Some(shared_codec::decode(&mut c)?)
+    };
     c.done()?;
-    Ok(ironhorse_vm::FunctionStateSnapshot {
+    Ok(ironhorse_vm::snapshot_api::FunctionStateSnapshot {
+        shared,
+        native_names,
         segments,
         functions,
         bound_functions,
@@ -1792,7 +2134,9 @@ pub(crate) fn decode_function_state(
     })
 }
 
-pub(crate) fn encode_proxy_state(state: &ironhorse_vm::ProxyStateSnapshot) -> Vec<u8> {
+pub(crate) fn encode_proxy_state(
+    state: &ironhorse_vm::snapshot_api::ProxyStateSnapshot,
+) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&(state.proxies.len() as u32).to_be_bytes());
     for row in &state.proxies {
@@ -1812,7 +2156,7 @@ pub(crate) fn encode_proxy_state(state: &ironhorse_vm::ProxyStateSnapshot) -> Ve
 
 pub(crate) fn decode_proxy_state(
     p: &[u8],
-) -> Result<ironhorse_vm::ProxyStateSnapshot, SnapshotError> {
+) -> Result<ironhorse_vm::snapshot_api::ProxyStateSnapshot, SnapshotError> {
     let mut c = Cursor::new(p, "proxy state");
     let count = c.u32()? as usize;
     let mut proxies = Vec::with_capacity(count.min(p.len() / 13));
@@ -1820,7 +2164,7 @@ pub(crate) fn decode_proxy_state(
         let owner = c.u32()?;
         if proxies
             .last()
-            .is_some_and(|row: &ironhorse_vm::ProxyRow| owner <= row.owner)
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::ProxyRow| owner <= row.owner)
         {
             return Err(SnapshotError::Corrupt(
                 "proxy state: owners not strictly ascending",
@@ -1833,7 +2177,7 @@ pub(crate) fn decode_proxy_state(
             1 => true,
             _ => return Err(SnapshotError::Corrupt("proxy state: bad boolean byte")),
         };
-        proxies.push(ironhorse_vm::ProxyRow {
+        proxies.push(ironhorse_vm::snapshot_api::ProxyRow {
             owner,
             target,
             handler,
@@ -1846,23 +2190,23 @@ pub(crate) fn decode_proxy_state(
         let owner = c.u32()?;
         if revokers
             .last()
-            .is_some_and(|row: &ironhorse_vm::ProxyRevokerRow| owner <= row.owner)
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::ProxyRevokerRow| owner <= row.owner)
         {
             return Err(SnapshotError::Corrupt(
                 "proxy revokers: owners not strictly ascending",
             ));
         }
-        revokers.push(ironhorse_vm::ProxyRevokerRow {
+        revokers.push(ironhorse_vm::snapshot_api::ProxyRevokerRow {
             owner,
             proxy: c.u32()?,
             name_chunk: c.u32()?,
         });
     }
     c.done()?;
-    Ok(ironhorse_vm::ProxyStateSnapshot { proxies, revokers })
+    Ok(ironhorse_vm::snapshot_api::ProxyStateSnapshot { proxies, revokers })
 }
 
-pub(crate) fn encode_accessors(rows: &[ironhorse_vm::AccessorRow]) -> Vec<u8> {
+pub(crate) fn encode_accessors(rows: &[ironhorse_vm::snapshot_api::AccessorRow]) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
     for row in rows {
@@ -1883,7 +2227,7 @@ pub(crate) fn encode_accessors(rows: &[ironhorse_vm::AccessorRow]) -> Vec<u8> {
 
 pub(crate) fn decode_accessors(
     p: &[u8],
-) -> Result<Vec<ironhorse_vm::AccessorRow>, SnapshotError> {
+) -> Result<Vec<ironhorse_vm::snapshot_api::AccessorRow>, SnapshotError> {
     let mut c = Cursor::new(p, "accessor state");
     let count = c.u32()? as usize;
     let mut rows = Vec::with_capacity(count.min(p.len() / 8));
@@ -1892,7 +2236,9 @@ pub(crate) fn decode_accessors(
         let id = c.u16()?;
         if rows
             .last()
-            .is_some_and(|row: &ironhorse_vm::AccessorRow| (owner, id) <= (row.owner, row.id))
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::AccessorRow| {
+                (owner, id) <= (row.owner, row.id)
+            })
         {
             return Err(SnapshotError::Corrupt(
                 "accessor state: rows not strictly ascending",
@@ -1907,7 +2253,7 @@ pub(crate) fn decode_accessors(
         };
         let get = value()?;
         let set = value()?;
-        rows.push(ironhorse_vm::AccessorRow {
+        rows.push(ironhorse_vm::snapshot_api::AccessorRow {
             owner,
             id,
             get,
@@ -1918,7 +2264,9 @@ pub(crate) fn decode_accessors(
     Ok(rows)
 }
 
-pub(crate) fn encode_intl_bound_functions(rows: &[ironhorse_vm::IntlBoundFunctionRow]) -> Vec<u8> {
+pub(crate) fn encode_intl_bound_functions(
+    rows: &[ironhorse_vm::snapshot_api::IntlBoundFunctionRow],
+) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
     for row in rows {
@@ -1935,7 +2283,7 @@ pub(crate) fn encode_intl_bound_functions(rows: &[ironhorse_vm::IntlBoundFunctio
 
 pub(crate) fn decode_intl_bound_functions(
     p: &[u8],
-) -> Result<Vec<ironhorse_vm::IntlBoundFunctionRow>, SnapshotError> {
+) -> Result<Vec<ironhorse_vm::snapshot_api::IntlBoundFunctionRow>, SnapshotError> {
     let mut c = Cursor::new(p, "Intl bound-function state");
     let count = c.u32()? as usize;
     let mut rows = Vec::with_capacity(count.min(p.len() / 17));
@@ -1949,7 +2297,9 @@ pub(crate) fn decode_intl_bound_functions(
         let function = c.u32()?;
         if rows
             .last()
-            .is_some_and(|row: &ironhorse_vm::IntlBoundFunctionRow| function <= row.function)
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::IntlBoundFunctionRow| {
+                function <= row.function
+            })
         {
             return Err(SnapshotError::Corrupt(
                 "Intl bound-function state: functions not strictly ascending",
@@ -1957,10 +2307,9 @@ pub(crate) fn decode_intl_bound_functions(
         }
         let owner = c.u32()?;
         let name_len = c.u32()? as usize;
-        let name = String::from_utf8(c.bytes(name_len)?.to_vec()).map_err(|_| {
-            SnapshotError::Corrupt("Intl bound-function state: name not UTF-8")
-        })?;
-        rows.push(ironhorse_vm::IntlBoundFunctionRow {
+        let name = String::from_utf8(c.bytes(name_len)?.to_vec())
+            .map_err(|_| SnapshotError::Corrupt("Intl bound-function state: name not UTF-8"))?;
+        rows.push(ironhorse_vm::snapshot_api::IntlBoundFunctionRow {
             kind,
             function,
             owner,
@@ -1973,7 +2322,9 @@ pub(crate) fn decode_intl_bound_functions(
     Ok(rows)
 }
 
-pub(crate) fn encode_private_elements(state: &ironhorse_vm::PrivateElementSnapshot) -> Vec<u8> {
+pub(crate) fn encode_private_elements(
+    state: &ironhorse_vm::snapshot_api::PrivateElementSnapshot,
+) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&(state.values.len() as u32).to_be_bytes());
     for row in &state.values {
@@ -2000,7 +2351,7 @@ pub(crate) fn encode_private_elements(state: &ironhorse_vm::PrivateElementSnapsh
 
 pub(crate) fn decode_private_elements(
     p: &[u8],
-) -> Result<ironhorse_vm::PrivateElementSnapshot, SnapshotError> {
+) -> Result<ironhorse_vm::snapshot_api::PrivateElementSnapshot, SnapshotError> {
     let mut c = Cursor::new(p, "private elements");
     let count = c.u32()? as usize;
     let mut values = Vec::with_capacity(count.min(p.len() / (8 + SLOT_RECORD_BYTES)));
@@ -2009,7 +2360,7 @@ pub(crate) fn decode_private_elements(
         let brand = c.u32()?;
         if values
             .last()
-            .is_some_and(|row: &ironhorse_vm::PrivateValueRow| {
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::PrivateValueRow| {
                 (receiver, brand) <= (row.receiver, row.brand)
             })
         {
@@ -2017,7 +2368,7 @@ pub(crate) fn decode_private_elements(
                 "private values: rows not strictly ascending",
             ));
         }
-        values.push(ironhorse_vm::PrivateValueRow {
+        values.push(ironhorse_vm::snapshot_api::PrivateValueRow {
             receiver,
             brand,
             value: c.slot()?,
@@ -2030,7 +2381,7 @@ pub(crate) fn decode_private_elements(
         let brand = c.u32()?;
         if accessors
             .last()
-            .is_some_and(|row: &ironhorse_vm::PrivateAccessorRow| {
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::PrivateAccessorRow| {
                 (receiver, brand) <= (row.receiver, row.brand)
             })
         {
@@ -2042,12 +2393,10 @@ pub(crate) fn decode_private_elements(
             match c.u8()? {
                 0 => Ok(None),
                 1 => Ok(Some(c.slot()?)),
-                _ => Err(SnapshotError::Corrupt(
-                    "private accessors: bad option tag",
-                )),
+                _ => Err(SnapshotError::Corrupt("private accessors: bad option tag")),
             }
         };
-        accessors.push(ironhorse_vm::PrivateAccessorRow {
+        accessors.push(ironhorse_vm::snapshot_api::PrivateAccessorRow {
             receiver,
             brand,
             get: value()?,
@@ -2055,10 +2404,12 @@ pub(crate) fn decode_private_elements(
         });
     }
     c.done()?;
-    Ok(ironhorse_vm::PrivateElementSnapshot { values, accessors })
+    Ok(ironhorse_vm::snapshot_api::PrivateElementSnapshot { values, accessors })
 }
 
-pub(crate) fn encode_disposable_stacks(rows: &[ironhorse_vm::DisposableStackRow]) -> Vec<u8> {
+pub(crate) fn encode_disposable_stacks(
+    rows: &[ironhorse_vm::snapshot_api::DisposableStackRow],
+) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
     for row in rows {
@@ -2077,7 +2428,7 @@ pub(crate) fn encode_disposable_stacks(rows: &[ironhorse_vm::DisposableStackRow]
 
 pub(crate) fn decode_disposable_stacks(
     p: &[u8],
-) -> Result<Vec<ironhorse_vm::DisposableStackRow>, SnapshotError> {
+) -> Result<Vec<ironhorse_vm::snapshot_api::DisposableStackRow>, SnapshotError> {
     let mut c = Cursor::new(p, "disposable stacks");
     let count = c.u32()? as usize;
     let mut rows = Vec::with_capacity(count.min(p.len() / 10));
@@ -2094,7 +2445,7 @@ pub(crate) fn decode_disposable_stacks(
         let owner = c.u32()?;
         if rows
             .last()
-            .is_some_and(|row: &ironhorse_vm::DisposableStackRow| owner <= row.owner)
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::DisposableStackRow| owner <= row.owner)
         {
             return Err(SnapshotError::Corrupt(
                 "disposable stacks: owners not strictly ascending",
@@ -2106,7 +2457,7 @@ pub(crate) fn decode_disposable_stacks(
         let mut records =
             Vec::with_capacity(record_count.min(p.len() / (2 * SLOT_RECORD_BYTES + 1)));
         for _ in 0..record_count {
-            records.push(ironhorse_vm::DisposalRecordRow {
+            records.push(ironhorse_vm::snapshot_api::DisposalRecordRow {
                 resource: c.slot()?,
                 method: c.slot()?,
                 pass_resource: boolean(&mut c)?,
@@ -2117,7 +2468,7 @@ pub(crate) fn decode_disposable_stacks(
                 "disposable stacks: disposed stack retains records",
             ));
         }
-        rows.push(ironhorse_vm::DisposableStackRow {
+        rows.push(ironhorse_vm::snapshot_api::DisposableStackRow {
             owner,
             disposed,
             asynchronous,
@@ -2128,45 +2479,65 @@ pub(crate) fn decode_disposable_stacks(
     Ok(rows)
 }
 
-pub(crate) fn encode_generators(rows: &[ironhorse_vm::GeneratorRow]) -> Vec<u8> {
-    fn slots(v: &mut Vec<u8>, rows: &[Slot]) {
-        v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
-        for row in rows {
-            crate::slot_codec::encode_slot(row, v);
-        }
+fn encode_frame_slots(v: &mut Vec<u8>, rows: &[Slot]) {
+    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+    for row in rows {
+        crate::slot_codec::encode_slot(row, v);
     }
-    fn id_map(v: &mut Vec<u8>, rows: &[(u16, u64)]) {
-        v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
-        for &(id, index) in rows {
-            v.extend_from_slice(&id.to_be_bytes());
-            v.extend_from_slice(&index.to_be_bytes());
-        }
+}
+fn encode_frame_id_map(v: &mut Vec<u8>, rows: &[(u16, u64)]) {
+    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+    for &(id, index) in rows {
+        v.extend_from_slice(&id.to_be_bytes());
+        v.extend_from_slice(&index.to_be_bytes());
     }
-    fn frame(v: &mut Vec<u8>, row: &ironhorse_vm::SavedFrameRow) {
-        slots(v, &row.locals);
-        id_map(v, &row.id_map);
-        slots(v, &row.args);
-        crate::slot_codec::encode_slot(&row.this_val, v);
-        crate::slot_codec::encode_slot(&row.env, v);
-        v.extend_from_slice(&row.cur_func.to_be_bytes());
-        v.push(row.cur_target as u8);
-        v.extend_from_slice(&row.target_func.to_be_bytes());
-        v.push(row.strict as u8);
-        crate::slot_codec::encode_slot(&row.result, v);
-        slots(v, &row.stack_slice);
-        v.extend_from_slice(&(row.jumps.len() as u32).to_be_bytes());
-        for jump in &row.jumps {
-            v.extend_from_slice(&jump.target_pc.to_be_bytes());
-            v.extend_from_slice(&jump.stack_offset.to_be_bytes());
-            v.extend_from_slice(&jump.locals_len.to_be_bytes());
-            id_map(v, &jump.id_map);
-            v.extend_from_slice(&jump.call_depth_offset.to_be_bytes());
-            crate::slot_codec::encode_slot(&jump.env, v);
-            v.push(jump.flag);
+}
+// GENR and ASYN use a u32::MAX count prefix for the extended saved-frame
+// layout. It cannot be a legacy count: each row takes at least six bytes and
+// both container atoms and framed store sections have u32 payload lengths.
+// Within an extended row, u32::MAX denotes legacy implicit segment identity;
+// a serialized segment table cannot contain enough entries to use that index.
+fn encode_saved_frame(
+    v: &mut Vec<u8>,
+    row: &ironhorse_vm::snapshot_api::SavedFrameRow,
+    explicit_segments: bool,
+) {
+    encode_frame_slots(v, &row.locals);
+    encode_frame_id_map(v, &row.id_map);
+    encode_frame_slots(v, &row.args);
+    crate::slot_codec::encode_slot(&row.this_val, v);
+    crate::slot_codec::encode_slot(&row.env, v);
+    v.extend_from_slice(&row.cur_func.to_be_bytes());
+    v.push(row.cur_target as u8);
+    v.extend_from_slice(&row.target_func.to_be_bytes());
+    v.push(row.strict as u8);
+    crate::slot_codec::encode_slot(&row.result, v);
+    encode_frame_slots(v, &row.stack_slice);
+    v.extend_from_slice(&(row.jumps.len() as u32).to_be_bytes());
+    for jump in &row.jumps {
+        v.extend_from_slice(&jump.target_pc.to_be_bytes());
+        if explicit_segments {
+            v.extend_from_slice(&jump.segment.unwrap_or(u32::MAX).to_be_bytes());
         }
-        v.extend_from_slice(&row.resume_pc.to_be_bytes());
+        v.extend_from_slice(&jump.stack_offset.to_be_bytes());
+        v.extend_from_slice(&jump.locals_len.to_be_bytes());
+        encode_frame_id_map(v, &jump.id_map);
+        v.extend_from_slice(&jump.call_depth_offset.to_be_bytes());
+        crate::slot_codec::encode_slot(&jump.env, v);
+        v.push(jump.flag);
     }
+    v.extend_from_slice(&row.resume_pc.to_be_bytes());
+}
+
+pub(crate) fn encode_generators(rows: &[ironhorse_vm::snapshot_api::GeneratorRow]) -> Vec<u8> {
+    let explicit_segments = rows
+        .iter()
+        .filter_map(|row| row.frame.as_ref())
+        .any(|frame| frame.jumps.iter().any(|jump| jump.segment.is_some()));
     let mut v = Vec::new();
+    if explicit_segments {
+        v.extend_from_slice(&u32::MAX.to_be_bytes());
+    }
     v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
     for row in rows {
         v.extend_from_slice(&row.owner.to_be_bytes());
@@ -2175,98 +2546,110 @@ pub(crate) fn encode_generators(rows: &[ironhorse_vm::GeneratorRow]) -> Vec<u8> 
             None => v.push(0),
             Some(saved) => {
                 v.push(1);
-                frame(&mut v, saved);
+                encode_saved_frame(&mut v, saved, explicit_segments);
             }
         }
     }
     v
 }
 
+fn u64_value(c: &mut Cursor<'_>) -> Result<u64, SnapshotError> {
+    Ok(((c.u32()? as u64) << 32) | c.u32()? as u64)
+}
+fn boolean(c: &mut Cursor<'_>) -> Result<bool, SnapshotError> {
+    match c.u8()? {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(SnapshotError::Corrupt("generator frame: bad boolean byte")),
+    }
+}
+fn decode_frame_slots(c: &mut Cursor<'_>, p: &[u8]) -> Result<Vec<Slot>, SnapshotError> {
+    let count = c.u32()? as usize;
+    let mut rows = Vec::with_capacity(count.min(p.len() / SLOT_RECORD_BYTES));
+    for _ in 0..count {
+        rows.push(c.slot()?);
+    }
+    Ok(rows)
+}
+fn decode_frame_id_map(c: &mut Cursor<'_>, p: &[u8]) -> Result<Vec<(u16, u64)>, SnapshotError> {
+    let count = c.u32()? as usize;
+    let mut rows: Vec<(u16, u64)> = Vec::with_capacity(count.min(p.len() / 10));
+    for _ in 0..count {
+        let row = (c.u16()?, u64_value(c)?);
+        if rows.last().is_some_and(|previous| row.0 <= previous.0) {
+            return Err(SnapshotError::Corrupt(
+                "generator frame: id map not strictly ascending",
+            ));
+        }
+        rows.push(row);
+    }
+    Ok(rows)
+}
+fn decode_saved_frame(
+    c: &mut Cursor<'_>,
+    p: &[u8],
+    explicit_segments: bool,
+) -> Result<ironhorse_vm::snapshot_api::SavedFrameRow, SnapshotError> {
+    let locals = decode_frame_slots(c, p)?;
+    let frame_id_map = decode_frame_id_map(c, p)?;
+    let args = decode_frame_slots(c, p)?;
+    let this_val = c.slot()?;
+    let env = c.slot()?;
+    let cur_func = c.u32()?;
+    let cur_target = boolean(c)?;
+    let target_func = c.u32()?;
+    let strict = boolean(c)?;
+    let result = c.slot()?;
+    let stack_slice = decode_frame_slots(c, p)?;
+    let jump_count = c.u32()? as usize;
+    let mut jumps = Vec::with_capacity(jump_count.min(p.len() / 50));
+    for _ in 0..jump_count {
+        jumps.push(ironhorse_vm::snapshot_api::SavedJumpRow {
+            target_pc: u64_value(c)?,
+            segment: if explicit_segments {
+                let segment = c.u32()?;
+                (segment != u32::MAX).then_some(segment)
+            } else {
+                None
+            },
+            stack_offset: u64_value(c)?,
+            locals_len: u64_value(c)?,
+            id_map: decode_frame_id_map(c, p)?,
+            call_depth_offset: u64_value(c)?,
+            env: c.slot()?,
+            flag: c.u8()?,
+        });
+    }
+    Ok(ironhorse_vm::snapshot_api::SavedFrameRow {
+        locals,
+        id_map: frame_id_map,
+        args,
+        this_val,
+        env,
+        cur_func,
+        cur_target,
+        target_func,
+        strict,
+        result,
+        stack_slice,
+        jumps,
+        resume_pc: u64_value(c)?,
+    })
+}
+
 pub(crate) fn decode_generators(
     p: &[u8],
-) -> Result<Vec<ironhorse_vm::GeneratorRow>, SnapshotError> {
-    fn u64_value(c: &mut Cursor<'_>) -> Result<u64, SnapshotError> {
-        Ok(((c.u32()? as u64) << 32) | c.u32()? as u64)
-    }
-    fn boolean(c: &mut Cursor<'_>) -> Result<bool, SnapshotError> {
-        match c.u8()? {
-            0 => Ok(false),
-            1 => Ok(true),
-            _ => Err(SnapshotError::Corrupt("generator frame: bad boolean byte")),
-        }
-    }
-    fn slots(c: &mut Cursor<'_>, p: &[u8]) -> Result<Vec<Slot>, SnapshotError> {
-        let count = c.u32()? as usize;
-        let mut rows = Vec::with_capacity(count.min(p.len() / SLOT_RECORD_BYTES));
-        for _ in 0..count {
-            rows.push(c.slot()?);
-        }
-        Ok(rows)
-    }
-    fn id_map(c: &mut Cursor<'_>, p: &[u8]) -> Result<Vec<(u16, u64)>, SnapshotError> {
-        let count = c.u32()? as usize;
-        let mut rows: Vec<(u16, u64)> = Vec::with_capacity(count.min(p.len() / 10));
-        for _ in 0..count {
-            let row = (c.u16()?, u64_value(c)?);
-            if rows.last().is_some_and(|previous| row.0 <= previous.0) {
-                return Err(SnapshotError::Corrupt(
-                    "generator frame: id map not strictly ascending",
-                ));
-            }
-            rows.push(row);
-        }
-        Ok(rows)
-    }
-    fn frame(c: &mut Cursor<'_>, p: &[u8]) -> Result<ironhorse_vm::SavedFrameRow, SnapshotError> {
-        let locals = slots(c, p)?;
-        let frame_id_map = id_map(c, p)?;
-        let args = slots(c, p)?;
-        let this_val = c.slot()?;
-        let env = c.slot()?;
-        let cur_func = c.u32()?;
-        let cur_target = boolean(c)?;
-        let target_func = c.u32()?;
-        let strict = boolean(c)?;
-        let result = c.slot()?;
-        let stack_slice = slots(c, p)?;
-        let jump_count = c.u32()? as usize;
-        let mut jumps = Vec::with_capacity(jump_count.min(p.len() / 50));
-        for _ in 0..jump_count {
-            jumps.push(ironhorse_vm::SavedJumpRow {
-                target_pc: u64_value(c)?,
-                stack_offset: u64_value(c)?,
-                locals_len: u64_value(c)?,
-                id_map: id_map(c, p)?,
-                call_depth_offset: u64_value(c)?,
-                env: c.slot()?,
-                flag: c.u8()?,
-            });
-        }
-        Ok(ironhorse_vm::SavedFrameRow {
-            locals,
-            id_map: frame_id_map,
-            args,
-            this_val,
-            env,
-            cur_func,
-            cur_target,
-            target_func,
-            strict,
-            result,
-            stack_slice,
-            jumps,
-            resume_pc: u64_value(c)?,
-        })
-    }
-
+) -> Result<Vec<ironhorse_vm::snapshot_api::GeneratorRow>, SnapshotError> {
     let mut c = Cursor::new(p, "generators");
-    let count = c.u32()? as usize;
+    let prefix = c.u32()?;
+    let explicit_segments = prefix == u32::MAX;
+    let count = if explicit_segments { c.u32()? } else { prefix } as usize;
     let mut rows = Vec::with_capacity(count.min(p.len() / 6));
     for _ in 0..count {
         let owner = c.u32()?;
         if rows
             .last()
-            .is_some_and(|row: &ironhorse_vm::GeneratorRow| owner <= row.owner)
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::GeneratorRow| owner <= row.owner)
         {
             return Err(SnapshotError::Corrupt(
                 "generators: owners not strictly ascending",
@@ -2278,7 +2661,7 @@ pub(crate) fn decode_generators(
         }
         let saved = match c.u8()? {
             0 => None,
-            1 => Some(frame(&mut c, p)?),
+            1 => Some(decode_saved_frame(&mut c, p, explicit_segments)?),
             _ => return Err(SnapshotError::Corrupt("generators: bad frame tag")),
         };
         if (state == 2) != saved.is_none() {
@@ -2286,22 +2669,353 @@ pub(crate) fn decode_generators(
                 "generators: state and frame disagree",
             ));
         }
-        rows.push(ironhorse_vm::GeneratorRow {
+        rows.push(ironhorse_vm::snapshot_api::GeneratorRow {
             state,
             owner,
             frame: saved,
         });
     }
     c.done()?;
+    if explicit_segments
+        && !rows
+            .iter()
+            .filter_map(|row| row.frame.as_ref())
+            .any(|frame| frame.jumps.iter().any(|jump| jump.segment.is_some()))
+    {
+        return Err(SnapshotError::Corrupt(
+            "generator frame: redundant segment prefix",
+        ));
+    }
+    Ok(rows)
+}
+
+/// The `ASYN` payload: the async-function activations, sharing the
+/// generator saved-frame encoding, followed — only when there are any —
+/// by the async generator instances (format 23). The optional
+/// `u32::MAX` prefix marks explicit saved-handler code segments for
+/// every frame in the payload; the generator trailer is present exactly
+/// when its count is non-zero, so one logical state has one encoding.
+pub(crate) fn encode_async_section(
+    instances: &[ironhorse_vm::snapshot_api::AsyncRow],
+    generators: &[ironhorse_vm::snapshot_api::AsyncGeneratorRow],
+    from_async: &[ironhorse_vm::snapshot_api::FromAsyncRow],
+) -> Vec<u8> {
+    let explicit_segments = instances
+        .iter()
+        .map(|row| &row.frame)
+        .chain(generators.iter().filter_map(|row| row.frame.as_ref()))
+        .any(|frame| frame.jumps.iter().any(|jump| jump.segment.is_some()));
+    let mut v = Vec::new();
+    if explicit_segments {
+        v.extend_from_slice(&u32::MAX.to_be_bytes());
+    }
+    v.extend_from_slice(&(instances.len() as u32).to_be_bytes());
+    for row in instances {
+        v.extend_from_slice(&row.owner.to_be_bytes());
+        v.extend_from_slice(&row.result_promise.to_be_bytes());
+        crate::slot_codec::encode_slot(&row.resolve, &mut v);
+        crate::slot_codec::encode_slot(&row.reject, &mut v);
+        encode_saved_frame(&mut v, &row.frame, explicit_segments);
+    }
+    if generators.is_empty() && from_async.is_empty() {
+        return v;
+    }
+    let encode_request =
+        |v: &mut Vec<u8>, request: &ironhorse_vm::snapshot_api::AsyncGeneratorRequestRow| {
+            v.push(request.status);
+            crate::slot_codec::encode_slot(&request.value, v);
+            crate::slot_codec::encode_slot(&request.resolve, v);
+            crate::slot_codec::encode_slot(&request.reject, v);
+        };
+    v.extend_from_slice(&(generators.len() as u32).to_be_bytes());
+    for row in generators {
+        v.extend_from_slice(&row.owner.to_be_bytes());
+        v.push(row.state);
+        match &row.frame {
+            None => v.push(0),
+            Some(frame) => {
+                v.push(1);
+                encode_saved_frame(&mut v, frame, explicit_segments);
+            }
+        }
+        v.extend_from_slice(&(row.requests.len() as u32).to_be_bytes());
+        for request in &row.requests {
+            encode_request(&mut v, request);
+        }
+        match &row.active {
+            None => v.push(0),
+            Some(request) => {
+                v.push(1);
+                encode_request(&mut v, request);
+            }
+        }
+    }
+    // The `Array.fromAsync` accumulations, after the generators (architecture
+    // finding F127). A payload with no accumulations is byte-identical to what
+    // format 23 wrote; one with accumulations but no generators carries a zero
+    // generator count as a positional placeholder, which is the only case where
+    // that count may be zero and the decoder enforces it.
+    if from_async.is_empty() {
+        return v;
+    }
+    v.extend_from_slice(&(from_async.len() as u32).to_be_bytes());
+    for row in from_async {
+        crate::slot_codec::encode_slot(&row.resolve, &mut v);
+        crate::slot_codec::encode_slot(&row.reject, &mut v);
+        v.extend_from_slice(&row.target.to_be_bytes());
+        v.extend_from_slice(&row.k.to_be_bytes());
+        v.extend_from_slice(&row.len.to_be_bytes());
+        crate::slot_codec::encode_slot(&row.mapfn, &mut v);
+        crate::slot_codec::encode_slot(&row.this_arg, &mut v);
+        crate::slot_codec::encode_slot(&row.iterator, &mut v);
+        crate::slot_codec::encode_slot(&row.next_method, &mut v);
+        crate::slot_codec::encode_slot(&row.array_like, &mut v);
+        crate::slot_codec::encode_slot(&row.close_error, &mut v);
+        v.push(row.flags);
+    }
+    v
+}
+
+/// Decode the `ASYN` payload into its activations and generator rows,
+/// checking every structural invariant the writer guarantees: ascending
+/// owners in both lists, a generator state below `Executing`, a frame
+/// present exactly while the body can still run, no active request on a
+/// start- or yield-suspended instance, and no queued request without an
+/// active one ahead of it.
+pub(crate) fn decode_async_section(
+    p: &[u8],
+) -> Result<
+    (
+        Vec<ironhorse_vm::snapshot_api::AsyncRow>,
+        Vec<ironhorse_vm::snapshot_api::AsyncGeneratorRow>,
+        Vec<ironhorse_vm::snapshot_api::FromAsyncRow>,
+    ),
+    SnapshotError,
+> {
+    let mut c = Cursor::new(p, "async instances");
+    let prefix = c.u32()?;
+    let explicit_segments = prefix == u32::MAX;
+    let count = if explicit_segments { c.u32()? } else { prefix } as usize;
+    let mut rows: Vec<ironhorse_vm::snapshot_api::AsyncRow> =
+        Vec::with_capacity(count.min(p.len() / 8));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        if rows.last().is_some_and(|row| owner <= row.owner) {
+            return Err(SnapshotError::Corrupt(
+                "async instances: owners not strictly ascending",
+            ));
+        }
+        rows.push(ironhorse_vm::snapshot_api::AsyncRow {
+            owner,
+            result_promise: c.u32()?,
+            resolve: c.slot()?,
+            reject: c.slot()?,
+            frame: decode_saved_frame(&mut c, p, explicit_segments)?,
+        });
+    }
+    let mut generators: Vec<ironhorse_vm::snapshot_api::AsyncGeneratorRow> = Vec::new();
+    let mut from_async: Vec<ironhorse_vm::snapshot_api::FromAsyncRow> = Vec::new();
+    if c.done().is_err() {
+        let count = c.u32()? as usize;
+        // A zero generator count is legal ONLY as the positional placeholder
+        // for a `from_async` section behind it; with nothing behind it, it is
+        // the redundant trailer the writer never emits.
+        if count == 0 && c.done().is_ok() {
+            return Err(SnapshotError::Corrupt(
+                "async generators: redundant empty trailer",
+            ));
+        }
+        if count != 0 {
+            let decode_request = |c: &mut Cursor<'_>| {
+                let status = c.u8()?;
+                if status > 2 {
+                    return Err(SnapshotError::Corrupt(
+                        "async generators: invalid request status",
+                    ));
+                }
+                Ok(ironhorse_vm::snapshot_api::AsyncGeneratorRequestRow {
+                    status,
+                    value: c.slot()?,
+                    resolve: c.slot()?,
+                    reject: c.slot()?,
+                })
+            };
+            generators.reserve(count.min(p.len() / 12));
+            for _ in 0..count {
+                let owner = c.u32()?;
+                if generators.last().is_some_and(|row| owner <= row.owner) {
+                    return Err(SnapshotError::Corrupt(
+                        "async generators: owners not strictly ascending",
+                    ));
+                }
+                let state = c.u8()?;
+                if state > 3 {
+                    return Err(SnapshotError::Corrupt("async generators: invalid state"));
+                }
+                let frame = match c.u8()? {
+                    0 => None,
+                    1 => Some(decode_saved_frame(&mut c, p, explicit_segments)?),
+                    _ => return Err(SnapshotError::Corrupt("async generators: bad frame tag")),
+                };
+                let request_count = c.u32()? as usize;
+                let mut requests = Vec::with_capacity(request_count.min(p.len() / 12));
+                for _ in 0..request_count {
+                    requests.push(decode_request(&mut c)?);
+                }
+                let active = match c.u8()? {
+                    0 => None,
+                    1 => Some(decode_request(&mut c)?),
+                    _ => {
+                        return Err(SnapshotError::Corrupt(
+                            "async generators: bad active request tag",
+                        ))
+                    }
+                };
+                let row = ironhorse_vm::snapshot_api::AsyncGeneratorRow {
+                    owner,
+                    state,
+                    frame,
+                    requests,
+                    active,
+                };
+                // The row's own shape invariants, shared with the restore path
+                // and the store gate so no admission point is looser than the
+                // reader that has to accept what it writes.
+                if !row.frame_matches_state() {
+                    return Err(SnapshotError::Corrupt(
+                        "async generators: state and frame disagree",
+                    ));
+                }
+                if !row.requests_match_state() {
+                    return Err(SnapshotError::Corrupt(
+                        "async generators: request queue disagrees with state",
+                    ));
+                }
+                if !row.start_frame_is_fresh() {
+                    return Err(SnapshotError::Corrupt(
+                        "async generators: start frame is not fresh",
+                    ));
+                }
+                generators.push(row);
+            }
+        }
+        // The `Array.fromAsync` accumulations (architecture finding F127).
+        if c.done().is_err() {
+            let count = c.u32()? as usize;
+            if count == 0 {
+                return Err(SnapshotError::Corrupt("fromAsync: redundant empty trailer"));
+            }
+            // Eight slots plus twenty-one scalar bytes (target, k, len,
+            // flags): the row's true minimum width, so a declared count
+            // cannot reserve more than the payload could hold.
+            from_async.reserve(count.min(p.len() / (8 * SLOT_RECORD_BYTES + 21)));
+            for _ in 0..count {
+                let row = ironhorse_vm::snapshot_api::FromAsyncRow {
+                    resolve: c.slot()?,
+                    reject: c.slot()?,
+                    target: c.u32()?,
+                    k: u64_value(&mut c)?,
+                    len: u64_value(&mut c)?,
+                    mapfn: c.slot()?,
+                    this_arg: c.slot()?,
+                    iterator: c.slot()?,
+                    next_method: c.slot()?,
+                    array_like: c.slot()?,
+                    close_error: c.slot()?,
+                    flags: c.u8()?,
+                };
+                // An unknown bit is corrupt, the same rule every other row in
+                // this cluster applies to a non-boolean boolean byte.
+                if row.flags & !ironhorse_vm::snapshot_api::FromAsyncRow::FLAGS != 0 {
+                    return Err(SnapshotError::Corrupt("fromAsync: unknown flag bit"));
+                }
+                // `mapping` is what says `mapfn` is callable; a cleared flag
+                // with a reference in the slot is a row that would call
+                // something the writer never intended.
+                if !row.has(ironhorse_vm::snapshot_api::FromAsyncRow::MAPPING)
+                    && row.mapfn.kind == Kind::Reference
+                {
+                    return Err(SnapshotError::Corrupt(
+                        "fromAsync: mapfn present without the mapping flag",
+                    ));
+                }
+                // The two input paths are exclusive: an iterator, or an
+                // array-like with a length. `sync_wrapped` is a property of an
+                // iterator and means nothing without one.
+                let iterated = row.iterator.kind == Kind::Reference;
+                if !iterated
+                    && (row.next_method.kind == Kind::Reference
+                        || row.has(ironhorse_vm::snapshot_api::FromAsyncRow::SYNC_WRAPPED))
+                {
+                    return Err(SnapshotError::Corrupt(
+                        "fromAsync: iterator state without an iterator",
+                    ));
+                }
+                // And the other direction, which is the one a stall hides
+                // in: an iterator with no `next` method is admitted by every
+                // clause above, and the resumed accumulation then has nothing
+                // to step — its result promise never settles at all. A
+                // permanent silent stall is worse than a refusal.
+                if iterated && row.next_method.kind != Kind::Reference {
+                    return Err(SnapshotError::Corrupt(
+                        "fromAsync: an iterator without its next method",
+                    ));
+                }
+                if iterated && row.len != 0 {
+                    return Err(SnapshotError::Corrupt(
+                        "fromAsync: an iterated accumulation carries a length",
+                    ));
+                }
+                if !iterated && row.k > row.len {
+                    return Err(SnapshotError::Corrupt(
+                        "fromAsync: index past the array-like length",
+                    ));
+                }
+                from_async.push(row);
+            }
+        }
+    }
+    c.done()?;
+    if explicit_segments
+        && !rows
+            .iter()
+            .map(|row| &row.frame)
+            .chain(generators.iter().filter_map(|row| row.frame.as_ref()))
+            .any(|frame| frame.jumps.iter().any(|jump| jump.segment.is_some()))
+    {
+        return Err(SnapshotError::Corrupt(
+            "generator frame: redundant segment prefix",
+        ));
+    }
+    Ok((rows, generators, from_async))
+}
+
+/// The activations half of [`encode_async_section`] alone.
+#[cfg(test)]
+pub(crate) fn encode_async_instances(rows: &[ironhorse_vm::snapshot_api::AsyncRow]) -> Vec<u8> {
+    encode_async_section(rows, &[], &[])
+}
+
+/// [`decode_async_section`] for a payload with no generator trailer.
+#[cfg(test)]
+pub(crate) fn decode_async_instances(
+    p: &[u8],
+) -> Result<Vec<ironhorse_vm::snapshot_api::AsyncRow>, SnapshotError> {
+    let (rows, generators, from_async) = decode_async_section(p)?;
+    assert!(generators.is_empty(), "payload carries generator rows");
+    assert!(from_async.is_empty(), "payload carries fromAsync rows");
     Ok(rows)
 }
 
 /// Encode the promise cluster (the `PRMS` payload / small-state
 /// promise section): four `u32`-counted lists in the fixed order
 /// promises, resolving functions, guards, combinators. See
-/// [`ironhorse_vm::PromiseClusterSnapshot`] for the row shapes and the
-/// compacted-arena canonical form.
-pub(crate) fn encode_promise_cluster(c: &ironhorse_vm::PromiseClusterSnapshot) -> Vec<u8> {
+/// [`ironhorse_vm::snapshot_api::PromiseClusterSnapshot`] for the row shapes and the
+/// compacted-arena canonical form. A present historical rejection adds its
+/// owner as a four-byte suffix; an absent report keeps the legacy payload.
+pub(crate) fn encode_promise_cluster(
+    c: &ironhorse_vm::snapshot_api::PromiseClusterSnapshot,
+) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&(c.promises.len() as u32).to_be_bytes());
     for row in &c.promises {
@@ -2340,6 +3054,9 @@ pub(crate) fn encode_promise_cluster(c: &ironhorse_vm::PromiseClusterSnapshot) -
         v.extend_from_slice(&row.remaining.to_be_bytes());
         v.extend_from_slice(&row.results.to_be_bytes());
     }
+    if let Some(owner) = c.unhandled_rejection {
+        v.extend_from_slice(&owner.to_be_bytes());
+    }
     v
 }
 
@@ -2349,9 +3066,10 @@ pub(crate) fn encode_promise_cluster(c: &ironhorse_vm::PromiseClusterSnapshot) -
 /// discipline every compound atom follows (a view names a buffer row, a
 /// generator frame names a function row):
 ///
-/// - an async-flavored reaction kind (bytes 3–10) is refused by name —
-///   it would resume machinery no atom carries, and the persist gate
-///   refuses the machine before an honest writer can emit one; byte 11 is the
+/// - a reaction kind past 12 is refused by name: it would resume machinery no
+///   atom carries. Bytes 4–6 are the async-generator kinds, carried in `ASYN`
+///   since format 23, and bytes 7–10 the `Array.fromAsync` kinds, carried
+///   there since format 24 (architecture finding F127); byte 11 is the
 ///   resumable second half of `Promise.prototype.finally`, and byte 12 is a
 ///   synchronous combinator element callback retained by a custom `then`;
 /// - a settled promise carries no reactions (settlement drains them,
@@ -2368,9 +3086,29 @@ pub(crate) fn encode_promise_cluster(c: &ironhorse_vm::PromiseClusterSnapshot) -
 /// - a live non-`Race` combinator's `remaining` covers its
 ///   pending element reactions — each drain decrements it once, so a
 ///   smaller count would underflow at resume.
-pub(crate) fn decode_promise_cluster(
+#[cfg(test)]
+fn decode_promise_cluster(
     p: &[u8],
-) -> Result<ironhorse_vm::PromiseClusterSnapshot, SnapshotError> {
+) -> Result<ironhorse_vm::snapshot_api::PromiseClusterSnapshot, SnapshotError> {
+    let state = decode_promise_cluster_payload(p)?;
+    let referenced: std::collections::BTreeSet<_> = state
+        .promises
+        .iter()
+        .flat_map(|p| &p.reactions)
+        .filter(|r| r.kind == 2 || r.kind == 12)
+        .map(|r| r.a)
+        .collect();
+    if referenced.len() != state.combinators.len() {
+        return Err(SnapshotError::Corrupt(
+            "promise cluster: combinators not densely referenced",
+        ));
+    }
+    Ok(state)
+}
+
+pub(crate) fn decode_promise_cluster_payload(
+    p: &[u8],
+) -> Result<ironhorse_vm::snapshot_api::PromiseClusterSnapshot, SnapshotError> {
     let mut c = Cursor::new(p, "promise cluster");
     let boolean = |c: &mut Cursor<'_>| -> Result<bool, SnapshotError> {
         match c.u8()? {
@@ -2380,13 +3118,13 @@ pub(crate) fn decode_promise_cluster(
         }
     };
     let count = c.u32()? as usize;
-    let mut promises: Vec<ironhorse_vm::PromiseRow> =
+    let mut promises: Vec<ironhorse_vm::snapshot_api::PromiseRow> =
         Vec::with_capacity(count.min(p.len() / (SLOT_RECORD_BYTES + 10)));
     for _ in 0..count {
         let owner = c.u32()?;
         if promises
             .last()
-            .is_some_and(|row: &ironhorse_vm::PromiseRow| owner <= row.owner)
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::PromiseRow| owner <= row.owner)
         {
             return Err(SnapshotError::Corrupt(
                 "promise cluster: owners not strictly ascending",
@@ -2412,12 +3150,16 @@ pub(crate) fn decode_promise_cluster(
             let resolve = c.slot()?;
             let reject = c.slot()?;
             let kind = c.u8()?;
-            if kind > 2 && kind != 11 && kind != 12 {
+            // 0–3, the three async-generator kinds (4–6), the four
+            // `FromAsync*` kinds (7–10, carried in `ASYN` since format 24 —
+            // architecture finding F127), `FinallyAwait` (11) and
+            // `CombineDirect` (12) all resume. 13 and up name nothing.
+            if kind > 12 {
                 return Err(SnapshotError::Corrupt(
                     "promise cluster: reaction kind does not resume",
                 ));
             }
-            reactions.push(ironhorse_vm::PromiseReactionRow {
+            reactions.push(ironhorse_vm::snapshot_api::PromiseReactionRow {
                 on_fulfilled,
                 on_rejected,
                 resolve,
@@ -2427,7 +3169,7 @@ pub(crate) fn decode_promise_cluster(
                 b: c.u32()?,
             });
         }
-        promises.push(ironhorse_vm::PromiseRow {
+        promises.push(ironhorse_vm::snapshot_api::PromiseRow {
             owner,
             state,
             result,
@@ -2436,19 +3178,19 @@ pub(crate) fn decode_promise_cluster(
         });
     }
     let count = c.u32()? as usize;
-    let mut functions: Vec<ironhorse_vm::PromiseFnRow> =
+    let mut functions: Vec<ironhorse_vm::snapshot_api::PromiseFnRow> =
         Vec::with_capacity(count.min(p.len() / 17));
     for _ in 0..count {
         let function = c.u32()?;
         if functions
             .last()
-            .is_some_and(|row: &ironhorse_vm::PromiseFnRow| function <= row.function)
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::PromiseFnRow| function <= row.function)
         {
             return Err(SnapshotError::Corrupt(
                 "promise cluster: functions not strictly ascending",
             ));
         }
-        functions.push(ironhorse_vm::PromiseFnRow {
+        functions.push(ironhorse_vm::snapshot_api::PromiseFnRow {
             function,
             promise: c.u32()?,
             reject: boolean(&mut c)?,
@@ -2462,7 +3204,7 @@ pub(crate) fn decode_promise_cluster(
         guards.push(boolean(&mut c)?);
     }
     let count = c.u32()? as usize;
-    let mut combinators: Vec<ironhorse_vm::CombinatorRow> =
+    let mut combinators: Vec<ironhorse_vm::snapshot_api::CombinatorRow> =
         Vec::with_capacity(count.min(p.len() / (2 * SLOT_RECORD_BYTES + 9)));
     for _ in 0..count {
         let kind = c.u8()?;
@@ -2471,7 +3213,7 @@ pub(crate) fn decode_promise_cluster(
                 "promise cluster: unknown combinator kind",
             ));
         }
-        combinators.push(ironhorse_vm::CombinatorRow {
+        combinators.push(ironhorse_vm::snapshot_api::CombinatorRow {
             kind,
             resolve: c.slot()?,
             reject: c.slot()?,
@@ -2479,11 +3221,18 @@ pub(crate) fn decode_promise_cluster(
             results: c.u32()?,
         });
     }
+    let unhandled_rejection = if c.i == p.len() { None } else { Some(c.u32()?) };
     c.done()?;
+    if unhandled_rejection.is_some_and(|owner| {
+        !promises
+            .iter()
+            .any(|row| row.owner == owner && row.state == 2)
+    }) {
+        return Err(SnapshotError::Corrupt("promise cluster"));
+    }
 
     // The cross-references, all four tables now in hand.
-    let owners: std::collections::BTreeSet<u32> =
-        promises.iter().map(|row| row.owner).collect();
+    let owners: std::collections::BTreeSet<u32> = promises.iter().map(|row| row.owner).collect();
     // A guard is the `[[AlreadyResolved]]` boolean of exactly ONE
     // resolving pair (`fxPushPromiseFunctions` mints two rows per
     // guard: opposite polarity, one promise). The collector may sweep
@@ -2596,6 +3345,20 @@ pub(crate) fn decode_promise_cluster(
                         "promise cluster: malformed direct combinator callback"
                     }));
                 }
+            } else if (3..=10).contains(&r.kind) {
+                // A NATIVE reaction — `AsyncAwait`, `AsyncGenerator*`, or one
+                // of the four `Array.fromAsync` steps — carries its instance
+                // or arena index in `a` and nothing else. It has no guest
+                // callbacks and no capability, because the machinery it
+                // resumes is the engine's own (architecture finding F127
+                // brought the `FromAsync*` kinds into this class).
+                if r.b != 0
+                    || ![r.on_fulfilled, r.on_rejected, r.resolve, r.reject]
+                        .iter()
+                        .all(|slot| slot.kind == Kind::Undefined)
+                {
+                    return Err(SnapshotError::Corrupt("async reaction: invalid payload"));
+                }
             } else {
                 let both_references =
                     r.resolve.kind == Kind::Reference && r.reject.kind == Kind::Reference;
@@ -2623,11 +3386,6 @@ pub(crate) fn decode_promise_cluster(
         }
     }
     for (row, &pending) in combinators.iter().zip(&comb_pending) {
-        if pending == 0 {
-            return Err(SnapshotError::Corrupt(
-                "promise cluster: combinators not densely referenced",
-            ));
-        }
         if row.resolve.kind != Kind::Reference || row.reject.kind != Kind::Reference {
             return Err(SnapshotError::Corrupt(
                 "promise cluster: combinator capability names no function",
@@ -2640,11 +3398,17 @@ pub(crate) fn decode_promise_cluster(
             ));
         }
     }
-    Ok(ironhorse_vm::PromiseClusterSnapshot {
+    Ok(ironhorse_vm::snapshot_api::PromiseClusterSnapshot {
+        unhandled_rejection,
         promises,
         functions,
         guards,
         combinators,
+        async_instances: Vec::new(),
+        async_generators: Vec::new(),
+        // `PRMS` carries none of these three; `ASYN` does, and the roster
+        // merges the two payloads into one cluster.
+        from_async: Vec::new(),
     })
 }
 
@@ -2729,7 +3493,11 @@ pub(crate) fn decode_temporal(p: &[u8]) -> Result<TemporalImage, SnapshotError> 
     let mut prev = None;
     for _ in 0..n {
         let owner = c.u32()?;
-        ascending(prev, owner, "temporal instants: owners not strictly ascending")?;
+        ascending(
+            prev,
+            owner,
+            "temporal instants: owners not strictly ascending",
+        )?;
         prev = Some(owner);
         let mut b = [0u8; 16];
         b.copy_from_slice(c.bytes(16)?);
@@ -2739,7 +3507,11 @@ pub(crate) fn decode_temporal(p: &[u8]) -> Result<TemporalImage, SnapshotError> 
     let mut prev = None;
     for _ in 0..n {
         let owner = c.u32()?;
-        ascending(prev, owner, "temporal durations: owners not strictly ascending")?;
+        ascending(
+            prev,
+            owner,
+            "temporal durations: owners not strictly ascending",
+        )?;
         prev = Some(owner);
         let mut f = [0i64; 10];
         for x in &mut f {
@@ -2753,7 +3525,11 @@ pub(crate) fn decode_temporal(p: &[u8]) -> Result<TemporalImage, SnapshotError> 
     let mut prev = None;
     for _ in 0..n {
         let owner = c.u32()?;
-        ascending(prev, owner, "temporal plains: owners not strictly ascending")?;
+        ascending(
+            prev,
+            owner,
+            "temporal plains: owners not strictly ascending",
+        )?;
         prev = Some(owner);
         let kind = c.u8()?;
         // The engine's plain-record discriminants are 0..=4; anything
@@ -2774,7 +3550,11 @@ pub(crate) fn decode_temporal(p: &[u8]) -> Result<TemporalImage, SnapshotError> 
     let mut prev = None;
     for _ in 0..n {
         let owner = c.u32()?;
-        ascending(prev, owner, "temporal zoneds: owners not strictly ascending")?;
+        ascending(
+            prev,
+            owner,
+            "temporal zoneds: owners not strictly ascending",
+        )?;
         prev = Some(owner);
         let mut b = [0u8; 16];
         b.copy_from_slice(c.bytes(16)?);
@@ -2977,10 +3757,7 @@ pub(crate) fn decode_intl(p: &[u8]) -> Result<IntlTables, SnapshotError> {
             _ => Err(SnapshotError::Corrupt("intl side table: bad boolean byte")),
         }
     }
-    fn owner_of(
-        c: &mut Cursor<'_>,
-        prev: &mut Option<u32>,
-    ) -> Result<u32, SnapshotError> {
+    fn owner_of(c: &mut Cursor<'_>, prev: &mut Option<u32>) -> Result<u32, SnapshotError> {
         let owner = c.u32()?;
         if prev.is_some_and(|p| owner <= p) {
             return Err(SnapshotError::Corrupt(
@@ -3009,11 +3786,11 @@ pub(crate) fn decode_intl(p: &[u8]) -> Result<IntlTables, SnapshotError> {
         for _ in 0..un {
             let k = text(&mut c)?;
             let val = text(&mut c)?;
-            // Canonical bytes only (review): the writer iterates the
+            // Canonical bytes only: the writer iterates the
             // `BTreeMap` in strictly-ascending key order, so a
             // duplicated or unordered key can only be crafted — and
             // silently accepting it re-canonicalizes, breaking the
-            // write(read(bytes)) == bytes identity the seals pin.
+            // write(read(bytes)) == bytes identity the golden pins hold.
             if prev_key.as_ref().is_some_and(|p| k <= *p) {
                 return Err(SnapshotError::Corrupt(
                     "intl side table: unicode keys not strictly ascending",
@@ -3151,11 +3928,9 @@ pub(crate) fn decode_intl(p: &[u8]) -> Result<IntlTables, SnapshotError> {
             // Boundaries TILE the input left to right: the engine's
             // `segment_units` emits `(previous boundary, boundary)`
             // pairs, so every start is exactly the previous END and
-            // every segment is non-empty. The pre-review check
-            // compared against the previous START, so overlapping
-            // ranges decoded silently (review); anything that does not
-            // tile is crafted bytes the consuming natives would index
-            // on.
+            // every segment is non-empty. Comparing previous STARTS instead
+            // would admit overlapping ranges. Anything that does not
+            // tile is crafted bytes the consuming natives would index on.
             if start != prev_end || end <= start || end > units.len() {
                 return Err(SnapshotError::Corrupt(
                     "intl side table: segment boundaries do not tile their input",
@@ -3188,10 +3963,8 @@ pub(crate) fn decode_intl(p: &[u8]) -> Result<IntlTables, SnapshotError> {
         let owner = owner_of(&mut c, &mut prev)?;
         let segments_inst = ironhorse_vm::value::SlotIndex(c.u32()?);
         let pos = c.u32()? as usize;
-        t.segment_iterators.push((
-            owner,
-            SegmentIteratorData { segments_inst, pos },
-        ));
+        t.segment_iterators
+            .push((owner, SegmentIteratorData { segments_inst, pos }));
     }
     let n = c.u32()? as usize;
     let mut prev = None;
@@ -3267,7 +4040,7 @@ pub(crate) fn encode_iterators(rows: &[IteratorRow]) -> Vec<u8> {
 /// 8): it wraps a live iterable, retains a result slot, and carries none of the
 /// index/done/key/text state the other cursor kinds use.
 ///
-/// Shared by [`decode_iterators`] and [`check_image_slot_bounds`] so the
+/// Shared by [`decode_iterators`] and [`check_machine_image_bounds`] so the
 /// encoding has exactly one definition and a change to it cannot land in one
 /// gate while missing the other.
 fn iterator_from_wrapper_malformed(
@@ -3284,6 +4057,30 @@ fn iterator_from_wrapper_malformed(
         || done
         || !enum_keys_empty
         || !str_bytes_empty
+}
+
+/// The self-contained shape gate for a lazy Iterator helper cursor (kinds
+/// 10-14: map, filter, take, drop, flatMap). Each wraps a live underlying
+/// iterator and retains a holder array in `result` carrying the captured
+/// `next`, the mapper/predicate or remaining count, and flatMap's live inner
+/// iterator. `index` is the callback counter, so it is unconstrained; the
+/// for-in and string payloads are always empty.
+///
+/// `done` is load-bearing here rather than free: a spent helper RELEASES its
+/// underlying iterator (`helper_finish`), so `iterable` is NULL on a done row
+/// — the same shape a live string cursor carries — and must NOT be on a row
+/// that can still yield. The holder survives either way, emptied.
+///
+/// Shared by both gates for the same reason as
+/// [`iterator_from_wrapper_malformed`].
+fn lazy_helper_malformed(
+    iterable: u32,
+    result: u32,
+    done: bool,
+    enum_keys_empty: bool,
+    str_bytes_empty: bool,
+) -> bool {
+    result == u32::MAX || !enum_keys_empty || !str_bytes_empty || (!done && iterable == u32::MAX)
 }
 
 /// The self-contained shape gate for a RegExp String Iterator cursor (kind 9):
@@ -3303,7 +4100,7 @@ fn regexp_string_iterator_malformed(
         || result == u32::MAX
         || index > 3
         || !enum_keys_empty
-        || str_bytes_len % 2 != 0
+        || !str_bytes_len.is_multiple_of(2)
 }
 
 pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotError> {
@@ -3318,10 +4115,11 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
             ));
         }
         let kind = c.u8()?;
-        // The engine's cursor kinds are 0..=9 (array values/keys/entries,
+        // The engine's cursor kinds are 0..=14 (array values/keys/entries,
         // for-in, string, collection keys/values/entries, Iterator.from
-        // generic wrappers, and RegExp String Iterator).
-        if kind > 9 {
+        // generic wrappers, RegExp String Iterator, and the five lazy Iterator
+        // helpers map/filter/take/drop/flatMap).
+        if kind > 14 {
             return Err(SnapshotError::Corrupt("iterator cursors: unknown kind"));
         }
         let iterable = c.u32()?;
@@ -3350,9 +4148,29 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
                 "iterator cursors: string cursor outside its text",
             ));
         }
+        if (10..=14).contains(&kind)
+            && lazy_helper_malformed(
+                iterable,
+                result,
+                done,
+                enum_keys.is_empty(),
+                str_bytes.is_empty(),
+            )
+        {
+            return Err(SnapshotError::Corrupt(
+                "iterator cursors: malformed lazy Iterator helper",
+            ));
+        }
         if kind == 3 && index as usize > enum_keys.len() {
             return Err(SnapshotError::Corrupt(
                 "iterator cursors: for-in cursor past its key list",
+            ));
+        }
+        // A for-in cursor always names the prototype level it steps (even
+        // `for (k in null)` names `%Object.prototype%`) and its result.
+        if kind == 3 && (iterable == u32::MAX || result == u32::MAX) {
+            return Err(SnapshotError::Corrupt(
+                "iterator cursors: for-in cursor without its level or result",
             ));
         }
         if kind == 8
@@ -3397,53 +4215,54 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
     Ok(out)
 }
 
-/// The data-only language rows, bundled for the bounds gate (one
-/// parameter instead of four more positionals as the ledger grows).
-pub(crate) struct LangRows<'a> {
-    pub wrappers: &'a [WrapperImage],
-    pub regexps: &'a [RegExpImage],
-    pub dates: &'a [DateImage],
-    pub function_state: &'a ironhorse_vm::FunctionStateSnapshot,
-    pub proxy_state: &'a ironhorse_vm::ProxyStateSnapshot,
-    pub accessors: &'a [ironhorse_vm::AccessorRow],
-    pub intl_bound_functions: &'a [ironhorse_vm::IntlBoundFunctionRow],
-    pub private_elements: &'a ironhorse_vm::PrivateElementSnapshot,
-    pub disposable_stacks: &'a [ironhorse_vm::DisposableStackRow],
-    pub generators: &'a [ironhorse_vm::GeneratorRow],
-    pub promise_cluster: &'a ironhorse_vm::PromiseClusterSnapshot,
-    pub arguments_brands: &'a [u32],
-    pub temporal: &'a TemporalImage,
-    pub intl: &'a IntlTables,
-}
-
-impl LangRows<'_> {
-    /// The empty rows, for callers checking language-row-free content.
-    pub(crate) const EMPTY: LangRows<'static> = LangRows {
-        wrappers: &[],
-        regexps: &[],
-        dates: &[],
-        function_state: &EMPTY_FUNCTION_STATE,
-        proxy_state: &EMPTY_PROXY_STATE,
-        accessors: &[],
-        intl_bound_functions: &[],
-        private_elements: &EMPTY_PRIVATE_ELEMENTS,
-        disposable_stacks: &[],
-        generators: &[],
-        promise_cluster: &EMPTY_PROMISE_CLUSTER,
-        arguments_brands: &[],
-        temporal: &EMPTY_TEMPORAL,
-        intl: &EMPTY_INTL,
+/// All side tables borrowed for the shared semantic bounds gate. Field
+/// coverage comes from the snapshot roster, independently checked against
+/// MachineImage's source fields.
+macro_rules! define_bounds_tables {
+    ($($section:ident {
+        image_field: $field:ident,
+        builder: $builder:ident,
+        live: [$($live:tt)*],
+        bounds: [$($bounds_field:ident: $ty:ty = $empty:expr)?],
+        $($rest:tt)*
+    })*) => {
+        pub(crate) struct BoundsTables<'a> {
+            $($(pub $bounds_field: &'a $ty,)?) *
+        }
+        impl MachineImage {
+            pub(crate) fn bounds_tables(&self) -> BoundsTables<'_> {
+                BoundsTables { $($($bounds_field: &self.$bounds_field,)?) * }
+            }
+        }
+        impl crate::store::SmallState {
+            pub(crate) fn bounds_tables(&self) -> BoundsTables<'_> {
+                BoundsTables { $($($bounds_field: &self.$bounds_field,)?) * }
+            }
+        }
+        #[cfg(test)]
+        impl BoundsTables<'_> {
+            pub(crate) const EMPTY: BoundsTables<'static> = BoundsTables {
+                $($($bounds_field: $empty,)?) *
+            };
+        }
     };
 }
+crate::snapshot_roster::snapshot_payloads!(define_bounds_tables);
 
-static EMPTY_PROMISE_CLUSTER: ironhorse_vm::PromiseClusterSnapshot =
-    ironhorse_vm::PromiseClusterSnapshot {
+#[cfg(test)]
+static EMPTY_PROMISE_CLUSTER: ironhorse_vm::snapshot_api::PromiseClusterSnapshot =
+    ironhorse_vm::snapshot_api::PromiseClusterSnapshot {
         promises: Vec::new(),
         functions: Vec::new(),
         guards: Vec::new(),
         combinators: Vec::new(),
+        from_async: Vec::new(),
+        async_instances: Vec::new(),
+        async_generators: Vec::new(),
+        unhandled_rejection: None,
     };
 
+#[cfg(test)]
 static EMPTY_TEMPORAL: TemporalImage = TemporalImage {
     instants: Vec::new(),
     durations: Vec::new(),
@@ -3451,6 +4270,7 @@ static EMPTY_TEMPORAL: TemporalImage = TemporalImage {
     zoneds: Vec::new(),
 };
 
+#[cfg(test)]
 static EMPTY_INTL: IntlTables = IntlTables {
     locales: Vec::new(),
     collators: Vec::new(),
@@ -3462,52 +4282,30 @@ static EMPTY_INTL: IntlTables = IntlTables {
     segment_iterators: Vec::new(),
     date_time_formats: Vec::new(),
 };
-static EMPTY_FUNCTION_STATE: ironhorse_vm::FunctionStateSnapshot =
-    ironhorse_vm::FunctionStateSnapshot {
+#[cfg(test)]
+static EMPTY_FUNCTION_STATE: ironhorse_vm::snapshot_api::FunctionStateSnapshot =
+    ironhorse_vm::snapshot_api::FunctionStateSnapshot {
+        shared: None,
+        native_names: None,
         segments: Vec::new(),
         functions: Vec::new(),
         bound_functions: Vec::new(),
         ctor_prototypes: Vec::new(),
         deleted_meta: Vec::new(),
     };
-static EMPTY_PROXY_STATE: ironhorse_vm::ProxyStateSnapshot = ironhorse_vm::ProxyStateSnapshot {
-    proxies: Vec::new(),
-    revokers: Vec::new(),
-};
-static EMPTY_PRIVATE_ELEMENTS: ironhorse_vm::PrivateElementSnapshot =
-    ironhorse_vm::PrivateElementSnapshot {
+#[cfg(test)]
+static EMPTY_PROXY_STATE: ironhorse_vm::snapshot_api::ProxyStateSnapshot =
+    ironhorse_vm::snapshot_api::ProxyStateSnapshot {
+        proxies: Vec::new(),
+        revokers: Vec::new(),
+    };
+#[cfg(test)]
+static EMPTY_PRIVATE_ELEMENTS: ironhorse_vm::snapshot_api::PrivateElementSnapshot =
+    ironhorse_vm::snapshot_api::PrivateElementSnapshot {
         values: Vec::new(),
         accessors: Vec::new(),
     };
 
-/// Every slot index and chunk offset a decoded image can carry, checked
-/// against the geometry the image itself declares.
-///
-/// This is the SEMANTIC gate the byte-level decoders lack: a crafted
-/// index is rooted or walked by the collector and hits an unchecked
-/// `Vec` index — a RELEASE panic on the first `collect_garbage`. Wave 4
-/// closed only the three side tables; review wave 5 showed the class is
-/// wider, and that the narrow version missed containers with NO side
-/// table at all (a 238-byte container panicked at `value.rs`'s
-/// `marks[i]`). So the walk now covers, against `slot_count`:
-///
-/// - every `HEAP` slot's `next` link and `Reference` payload,
-/// - every `STAC` slot's ditto,
-/// - side-table owners, array item values, collection entry keys AND
-///   values, and registry descriptors;
-///
-/// and, against `chunk_len`, every `String`/`BigInt` chunk offset on any
-/// of those slots — invisible to `each_ref_slot`, and reachable at
-/// compaction from a side table even when the owner is DEAD, because
-/// `external_chunk_refs` walks the tables unconditionally.
-///
-/// `SlotIndex::NULL` is skipped, matching `SideRefCounts::page_of`: a
-/// null reference is an absence, not an out-of-arena index, and scoring
-/// it as one would refuse honest images.
-///
-/// `heap` is empty on the store path, where rows are not read at
-/// validation time; those records are bounds-checked as they fault
-/// ([`crate::machine`]'s page source).
 /// The chunk arena's per-payload header width (`value.rs`'s private
 /// `CHUNK_HEADER`). A payload offset always sits this far above its
 /// header, which is why `0` is not a valid offset.
@@ -3548,30 +4346,228 @@ where
     I: IntoIterator<Item = &'a Slot>,
 {
     let floor = runtime_intern_floor(program_names)?;
-    slots
-        .into_iter()
-        .find_map(|s| s.stored_key_id().filter(|&id| id >= floor && !registered.contains(&id)))
+    slots.into_iter().find_map(|s| {
+        s.stored_key_id()
+            .filter(|&id| id >= floor && !registered.contains(&id))
+    })
 }
 
-/// `SYMB` joined this walk when the symbol-key table became live
-/// state (it was deliberately excluded while nothing consumed the
-/// section on restore — review wave 5): each pair's descriptor is a
-/// slot index the restored machine will use as a property-key
-/// identity, so an out-of-arena descriptor is refused with the same
-/// closed fist as every other crafted index.
+/// Buffer backing lengths agree with their allocation headers. Detached
+/// buffers expose zero length while retaining the original allocation.
+pub(crate) fn check_buffer_chunk_lengths(
+    buffers: &[BufferImage],
+    chunks: &[u8],
+) -> Result<(), SnapshotError> {
+    for buffer in buffers {
+        let start = buffer.data as usize;
+        let header = start
+            .checked_sub(CHUNK_HEADER)
+            .and_then(|offset| chunks.get(offset..start))
+            .ok_or(SnapshotError::Corrupt("buffer chunk header out of bounds"))?;
+        let length = u32::from_le_bytes(header.try_into().unwrap()) as usize;
+        if length > chunks.len().saturating_sub(start)
+            || if buffer.flags & 1 != 0 {
+                buffer.length != 0
+            } else {
+                buffer.length as usize != length
+            }
+        {
+            return Err(SnapshotError::Corrupt(
+                "buffer length disagrees with chunk header",
+            ));
+        }
+    }
+    Ok(())
+}
+
+// Expand validation in historical order, without rebuilding shared indices.
+// Context slots are tables, owner/slot checks, name/slot/chunk bounds, symbols,
+// the existing out-of-bounds constants, and the heap. Only needed bindings
+// are introduced.
+macro_rules! define_gate_chain {
+    (($d:tt); $($section:ident => $next:ident, [$($field:ident),+],
+        ([$($tables:ident)?], [$($owned:ident)?], [$($check:ident)?],
+         [$($names:ident)?], [$($slots:ident)?], [$($chunks:ident)?],
+         [$($symbols:ident)?], [$($oob:ident)?], [$($ooc:ident)?], [$($heap:ident)?]) $body:block)*) => {
+        macro_rules! check_rostered_bounds {
+            $(($section, $d input_tables:ident, $d input_owned:ident, $d input_check:ident,
+                $d input_names:ident, $d input_slots:ident, $d input_chunks:ident,
+                $d input_symbols:ident, $d input_oob:ident, $d input_ooc:ident, $d input_heap:ident) => {{
+                $(let $field = $d input_tables.$field;)+
+                $(let $tables = $d input_tables;)?
+                $(let $owned = &$d input_owned;)?
+                $(let $check = &$d input_check;)?
+                $(let $names = $d input_names;)?
+                $(let $slots = $d input_slots;)?
+                $(let $chunks = $d input_chunks;)?
+                $(let $symbols = $d input_symbols;)?
+                $(const $oob: SnapshotError = $d input_oob;)?
+                $(const $ooc: SnapshotError = $d input_ooc;)?
+                $(let $heap = $d input_heap;)?
+                $body
+                check_rostered_bounds!($next, $d input_tables, $d input_owned, $d input_check,
+                    $d input_names, $d input_slots, $d input_chunks, $d input_symbols,
+                    $d input_oob, $d input_ooc, $d input_heap);
+            }};)*
+            (End, $d input_tables:ident, $d input_owned:ident, $d input_check:ident,
+                $d input_names:ident, $d input_slots:ident, $d input_chunks:ident,
+                $d input_symbols:ident, $d input_oob:ident, $d input_ooc:ident, $d input_heap:ident) => {};
+        }
+    };
+}
+macro_rules! define_gate_steps {
+    ($($section:ident {
+        image_field: $field:ident,
+        builder: $builder:ident,
+        live: [$($live:tt)*],
+        bounds: [$($bounds:tt)*],
+        gate: [$($next:ident, [$($gated:ident),+],
+            ([$($tables:ident)?], [$($owned:ident)?], [$($check:ident)?],
+             [$($names:ident)?], [$($slots:ident)?], [$($chunks:ident)?],
+             [$($symbols:ident)?], [$($oob:ident)?], [$($ooc:ident)?], [$($heap:ident)?]) $body:block)?],
+        $($rest:tt)*
+    })*) => {
+        define_gate_chain!(($); $($($section => $next, [$($gated),+],
+            ([$($tables)?], [$($owned)?], [$($check)?], [$($names)?], [$($slots)?],
+             [$($chunks)?], [$($symbols)?], [$($oob)?], [$($ooc)?], [$($heap)?]) $body)?) *);
+    };
+}
+crate::snapshot_roster::snapshot_payloads!(define_gate_steps);
+
+// Derive saved-frame instruction boundaries, retaining the secondary refusals.
+// The caller must first validate body bounds and instruction completeness with
+// the ordinary function-state gate; this helper is not a standalone validator.
+fn generator_body_starts(
+    body_start: Option<u64>,
+    body_len: u64,
+    code: &[u8],
+) -> Result<(u64, u64, std::collections::BTreeSet<u64>), SnapshotError> {
+    let Some(body_start) = body_start else {
+        return Err(SnapshotError::Corrupt(
+            "generator frame: current function has no body",
+        ));
+    };
+    let Some(body_end) = body_start.checked_add(body_len) else {
+        return Err(SnapshotError::Corrupt(
+            "generator frame: current function has no body",
+        ));
+    };
+    let mut set = std::collections::BTreeSet::new();
+    let mut pc = body_start as usize;
+    while pc < body_end as usize {
+        let Some(len) = ironhorse_vm::instruction_len(code, pc) else {
+            return Err(SnapshotError::Corrupt(
+                "generator frame: malformed body bytecode",
+            ));
+        };
+        set.insert(pc as u64);
+        pc = pc.saturating_add(len);
+    }
+    Ok((body_start, body_end, set))
+}
+
+/// Check all stored Slot records through the exhaustive image visitor, then
+/// validate scalar owners, handles and cross-table geometry.
+pub(crate) fn check_machine_image_bounds(image: &MachineImage) -> Result<(), SnapshotError> {
+    if image
+        .function_state
+        .shared
+        .as_ref()
+        .is_some_and(|s| !s.host_functions.is_empty())
+        && image.version.format_version < 22
+    {
+        return Err(SnapshotError::Corrupt("host functions require format 22"));
+    }
+    if image.function_state.shared.is_some() && image.version.format_version < 21 {
+        return Err(SnapshotError::Corrupt("shared machine requires format 21"));
+    }
+    check_stored_bounds(
+        &image.slots,
+        |f| image.visit_slots(f),
+        &image.bounds_tables(),
+        image.names.len(),
+        &image.symbols,
+        image.slots.len() as u32,
+        image.chunks.len(),
+        &image.slot_free,
+    )
+}
+
+/// The lazy store gate visits the complete SmallState type without fetching
+/// heap pages. Stored heap records are checked separately when they fault.
+pub(crate) fn check_small_state_bounds(
+    small: &crate::store::SmallState,
+    slot_count: u32,
+    chunk_len: usize,
+) -> Result<(), SnapshotError> {
+    use crate::stored_slots::VisitSlots;
+    check_stored_bounds(
+        &[],
+        |f| small.visit(f),
+        &small.bounds_tables(),
+        small.names.len(),
+        &small.symbols,
+        slot_count,
+        chunk_len,
+        &small.slot_free,
+    )
+}
+
+// Legacy-shaped test fixture adapter. Production callers pass an entire stored
+// state above; this roster cannot omit a newly added production Slot holder.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
+#[deny(unused_variables)]
 pub(crate) fn check_image_slot_bounds(
     heap: &[Slot],
     stack: &[Slot],
-    arrays: &[ArrayImage],
-    collections: &[CollectionImage],
-    registry: &[RegistryImage],
-    errors: &[ErrorImage],
-    buffers: &[BufferImage],
-    typed_arrays: &[TypedArrayImage],
-    data_views: &[DataViewImage],
-    lang: &LangRows<'_>,
-    iterators: &[IteratorRow],
+    tables: &BoundsTables<'_>,
+    names_len: usize,
+    symbols: &SymbolKeyImage,
+    slot_count: u32,
+    chunk_len: usize,
+    free: &[u32],
+) -> Result<(), SnapshotError> {
+    use crate::stored_slots::VisitSlots;
+    check_stored_bounds(
+        heap,
+        |f| {
+            for (index, slot) in heap.iter().enumerate() {
+                if !free.contains(&(index as u32)) {
+                    f(slot);
+                }
+            }
+            stack.visit(f);
+            tables.visit(f);
+        },
+        tables,
+        names_len,
+        symbols,
+        slot_count,
+        chunk_len,
+        free,
+    )
+}
+
+/// Check stored references against the declared slot and chunk geometry.
+/// The caller's roster-generated visitor covers live heap records, stack
+/// slots, and side-table Slot payloads; `check_rostered_bounds!` checks row
+/// owners and the remaining typed fields. See `stored_slots.rs` and
+/// `image_bounds_reject_out_of_arena_indices`.
+///
+/// Reference targets must be live and in range. Null references and chunk
+/// offsets represent absence and are skipped. Non-null chunk offsets must
+/// leave room for their allocation header; `Slot::each_ref_slot` alone
+/// cannot establish this because it does not visit chunk offsets.
+///
+/// Small-state validation supplies an empty heap on the lazy store path;
+/// the VM's fault installer checks heap records when their pages are read.
+#[allow(clippy::too_many_arguments)]
+#[deny(unused_variables)]
+fn check_stored_bounds(
+    heap: &[Slot],
+    visit: impl FnOnce(&mut dyn FnMut(&Slot)),
+    tables: &BoundsTables<'_>,
     names_len: usize,
     symbols: &SymbolKeyImage,
     slot_count: u32,
@@ -3581,9 +4577,11 @@ pub(crate) fn check_image_slot_bounds(
     const OOB: SnapshotError = SnapshotError::Corrupt("slot index out of arena bounds");
     const OOC: SnapshotError = SnapshotError::Corrupt("chunk offset out of arena bounds");
     const FREE: SnapshotError = SnapshotError::Corrupt("side table names a free slot");
-    // The free set, as a bitmap (entries already range-checked and
-    // deduplicated by both decode paths). It cuts BOTH ways (review
-    // findings 2+3): a freed heap record is OPAQUE — the sweep does not
+    // The free set, as a bitmap. The container decode range-checks and
+    // deduplicates the entries first; the store paths build their arenas,
+    // which refuse a bad free list, after this runs, so here an entry out
+    // of range is ignored and a duplicate marks once. The free set cuts
+    // BOTH ways: a freed heap record is OPAQUE — the sweep does not
     // scrub it and chunk compaction remaps MARKED slots only, so an
     // honest post-GC snapshot legitimately holds freed records whose
     // stale chunk offsets sit outside the compacted arena, and nothing
@@ -3610,7 +4608,7 @@ pub(crate) fn check_image_slot_bounds(
     };
     let check = |s: &Slot| -> Result<(), SnapshotError> {
         let mut bad = false;
-        s.each_ref_slot(|r| bad |= !r.is_null() && r.0 >= slot_count);
+        s.each_ref_slot(|r| bad |= !r.is_null() && (r.0 >= slot_count || is_free(r.0)));
         if bad {
             return Err(OOB);
         }
@@ -3627,666 +4625,10 @@ pub(crate) fn check_image_slot_bounds(
         }
         Ok(())
     };
-    for (i, s) in heap.iter().enumerate() {
-        if is_free(i as u32) {
-            continue; // opaque: dead bytes, preserved for index identity only
-        }
-        check(s)?;
-    }
-    for s in stack {
-        check(s)?;
-    }
-    for a in arrays {
-        owned(a.owner)?;
-        for (_, v) in &a.items {
-            check(v)?;
-        }
-    }
-    for coll in collections {
-        owned(coll.owner)?;
-        for (k, v) in &coll.entries {
-            check(k)?;
-            check(v)?;
-        }
-    }
-    for e in registry {
-        owned(e.descriptor)?;
-    }
-    for e in errors {
-        owned(e.owner)?;
-    }
-    // The typed-array family carries CROSS-table geometry, checked here
-    // where all three tables are in hand (the SYMB-vs-NAME precedent):
-    // every buffer's backing extent lies inside the chunk arena, and
-    // every live view names a buffer ROW whose length covers the view.
-    // Detached buffers retain the former view geometry, whose observable
-    // accessors project zero lengths. A view that merely named an in-bounds
-    // SLOT with no buffer row would restore without a backing allocation.
-    let buffer_shape = |slot: u32| -> Option<(u32, bool)> {
-        buffers
-            .binary_search_by_key(&slot, |b| b.owner)
-            .ok()
-            .map(|i| (buffers[i].length, buffers[i].flags & 1 != 0))
-    };
-    for b in buffers {
-        owned(b.owner)?;
-        if b.data == u32::MAX
-            || (b.data as usize) < CHUNK_HEADER
-            || b.data as u64 + b.length as u64 > chunk_len as u64
-        {
-            return Err(OOC);
-        }
-    }
-    for t in typed_arrays {
-        owned(t.owner)?;
-        owned(t.buffer)?;
-        let shift = ironhorse_vm::TYPED_ARRAY_TYPES
-            .get(t.kind as usize)
-            .map(|ty| ty.shift)
-            .ok_or(SnapshotError::Corrupt(
-                "typed-arrays side table: unknown element kind",
-            ))?;
-        let covered = buffer_shape(t.buffer).is_some_and(|(len, detached)| {
-            detached || t.offset as u64 + ((t.length as u64) << shift) <= len as u64
-        });
-        if !covered {
-            return Err(SnapshotError::Corrupt(
-                "typed-arrays side table: view geometry past its buffer",
-            ));
-        }
-    }
-    for d in data_views {
-        owned(d.owner)?;
-        owned(d.buffer)?;
-        let covered = buffer_shape(d.buffer).is_some_and(|(len, detached)| {
-            detached || d.offset as u64 + d.size as u64 <= len as u64
-        });
-        if !covered {
-            return Err(SnapshotError::Corrupt(
-                "data-views side table: view geometry past its buffer",
-            ));
-        }
-    }
-    // The language rows: weak owners bounded like every sibling's, and
-    // a wrapper's boxed VALUE walks the same slot check as an array
-    // item (its refs and chunk offset are real edges).
-    for w in lang.wrappers {
-        owned(w.owner)?;
-        check(&w.value)?;
-    }
-    for r in lang.regexps {
-        owned(r.owner)?;
-        if !ironhorse_vm::regexp_source_compiles(&r.source, &r.flags) {
-            return Err(SnapshotError::Corrupt(
-                "regexp side table: persisted source does not compile",
-            ));
-        }
-    }
-    for d in lang.dates {
-        owned(d.owner)?;
-    }
-    let function_owners: std::collections::BTreeSet<u32> = lang
-        .function_state
-        .functions
-        .iter()
-        .map(|row| row.owner)
-        .collect();
-    let bound_owners: std::collections::BTreeSet<u32> = lang
-        .function_state
-        .bound_functions
-        .iter()
-        .map(|row| row.owner)
-        .collect();
-    let mut referenced_segments = std::collections::BTreeSet::new();
-    for row in &lang.function_state.functions {
-        owned(row.owner)?;
-        if row.closures != u32::MAX {
-            owned(row.closures)?;
-        }
-        if row.home != u32::MAX {
-            owned(row.home)?;
-        }
-        if row.name_chunk != u32::MAX {
-            let offset = row.name_chunk as usize;
-            if offset < CHUNK_HEADER || offset > chunk_len {
-                return Err(OOC);
-            }
-        }
-        match (row.segment, row.body_start) {
-            (Some(segment), Some(start)) => {
-                let Some(code) = lang.function_state.segments.get(segment as usize) else {
-                    return Err(SnapshotError::Corrupt(
-                        "function state: body names no segment",
-                    ));
-                };
-                let Some(end) = start.checked_add(row.body_len) else {
-                    return Err(SnapshotError::Corrupt(
-                        "function state: body range overflow",
-                    ));
-                };
-                if end > code.len() as u64 {
-                    return Err(SnapshotError::Corrupt(
-                        "function state: body range outside segment",
-                    ));
-                }
-                let mut pc = start as usize;
-                let end = end as usize;
-                while pc < end {
-                    let Some(len) = ironhorse_vm::instruction_len(code, pc) else {
-                        return Err(SnapshotError::Corrupt(
-                            "function state: malformed body bytecode",
-                        ));
-                    };
-                    pc = pc.saturating_add(len);
-                }
-                if pc != end {
-                    return Err(SnapshotError::Corrupt(
-                        "function state: body instruction crosses its range",
-                    ));
-                }
-                referenced_segments.insert(segment);
-            }
-            (None, None) if bound_owners.contains(&row.owner) => {}
-            _ => {
-                return Err(SnapshotError::Corrupt(
-                    "function state: body and segment disagree",
-                ))
-            }
-        }
-    }
-    if referenced_segments.len() != lang.function_state.segments.len()
-        || referenced_segments
-            .iter()
-            .copied()
-            .ne(0..lang.function_state.segments.len() as u32)
-    {
-        return Err(SnapshotError::Corrupt(
-            "function state: segments not densely referenced",
-        ));
-    }
-    for row in &lang.function_state.bound_functions {
-        owned(row.owner)?;
-        owned(row.target)?;
-        if !function_owners.contains(&row.owner) {
-            return Err(SnapshotError::Corrupt(
-                "bound-function state: owner has no function row",
-            ));
-        }
-        check(&row.this_arg)?;
-        for arg in &row.args {
-            check(arg)?;
-        }
-    }
-    for &(owner, prototype) in &lang.function_state.ctor_prototypes {
-        owned(owner)?;
-        owned(prototype)?;
-        if !function_owners.contains(&owner) {
-            return Err(SnapshotError::Corrupt(
-                "constructor-prototype state: owner has no function row",
-            ));
-        }
-    }
-    for &(owner, id) in &lang.function_state.deleted_meta {
-        owned(owner)?;
-        if id == 0 || id as usize > names_len {
-            return Err(SnapshotError::Corrupt(
-                "deleted-function metadata: id outside the name table",
-            ));
-        }
-    }
-    let proxy_owners: std::collections::BTreeSet<u32> = lang
-        .proxy_state
-        .proxies
-        .iter()
-        .map(|row| row.owner)
-        .collect();
-    for row in &lang.proxy_state.proxies {
-        owned(row.owner)?;
-        if row.revoked {
-            if row.target != u32::MAX || row.handler != u32::MAX {
-                return Err(SnapshotError::Corrupt(
-                    "proxy state: revoked proxy retains target or handler",
-                ));
-            }
-        } else {
-            owned(row.target)?;
-            owned(row.handler)?;
-        }
-    }
-    for row in &lang.proxy_state.revokers {
-        owned(row.owner)?;
-        if !proxy_owners.contains(&row.proxy) {
-            return Err(SnapshotError::Corrupt(
-                "proxy revoker names no proxy row",
-            ));
-        }
-        if row.name_chunk != u32::MAX {
-            let offset = row.name_chunk as usize;
-            if offset < CHUNK_HEADER || offset > chunk_len {
-                return Err(OOC);
-            }
-        }
-    }
-    let symbol_ids = symbols.id_set();
-    for row in lang.accessors {
-        owned(row.owner)?;
-        if row.id == 0
-            || (row.id as usize > names_len && !symbol_ids.contains(&row.id))
-        {
-            return Err(SnapshotError::Corrupt(
-                "accessor state: id outside the property-key tables",
-            ));
-        }
-        for value in [row.get, row.set].into_iter().flatten() {
-            if value.kind != Kind::Reference {
-                return Err(SnapshotError::Corrupt(
-                    "accessor state: getter or setter is not callable",
-                ));
-            }
-            check(&value)?;
-        }
-    }
-    for row in lang.intl_bound_functions {
-        owned(row.function)?;
-        owned(row.owner)?;
-        if row.name_chunk != u32::MAX {
-            let offset = row.name_chunk as usize;
-            if offset < CHUNK_HEADER || offset > chunk_len {
-                return Err(OOC);
-            }
-        }
-        let owner_exists = match row.kind {
-            0 => lang
-                .intl
-                .collators
-                .binary_search_by_key(&row.owner, |(owner, _)| *owner)
-                .is_ok(),
-            1 => lang
-                .intl
-                .number_formats
-                .binary_search_by_key(&row.owner, |(owner, _)| *owner)
-                .is_ok(),
-            _ => false,
-        };
-        if !owner_exists {
-            return Err(SnapshotError::Corrupt(
-                "Intl bound-function state: owner has no Intl row",
-            ));
-        }
-    }
-    let private_value_keys: std::collections::BTreeSet<(u32, u32)> = lang
-        .private_elements
-        .values
-        .iter()
-        .map(|row| (row.receiver, row.brand))
-        .collect();
-    for row in &lang.private_elements.values {
-        owned(row.receiver)?;
-        owned(row.brand)?;
-        check(&row.value)?;
-    }
-    for row in &lang.private_elements.accessors {
-        owned(row.receiver)?;
-        owned(row.brand)?;
-        if private_value_keys.contains(&(row.receiver, row.brand)) {
-            return Err(SnapshotError::Corrupt(
-                "private elements: key has both value and accessor rows",
-            ));
-        }
-        for value in [row.get, row.set].into_iter().flatten() {
-            if value.kind != Kind::Reference {
-                return Err(SnapshotError::Corrupt(
-                    "private accessors: getter or setter is not callable",
-                ));
-            }
-            check(&value)?;
-        }
-    }
-    for row in lang.disposable_stacks {
-        owned(row.owner)?;
-        for record in &row.records {
-            check(&record.resource)?;
-            check(&record.method)?;
-            if record.method.kind != Kind::Reference {
-                return Err(SnapshotError::Corrupt(
-                    "disposable stacks: disposal method is not callable",
-                ));
-            }
-        }
-    }
-    let mut body_starts: std::collections::HashMap<u32, std::collections::BTreeSet<u64>> =
-        std::collections::HashMap::new();
-    for row in lang.generators {
-        owned(row.owner)?;
-        let Some(frame) = &row.frame else {
-            continue;
-        };
-        owned(frame.cur_func)?;
-        if frame.target_func != u32::MAX {
-            owned(frame.target_func)?;
-        }
-        for slot in frame
-            .locals
-            .iter()
-            .chain(&frame.args)
-            .chain(&frame.stack_slice)
-            .chain([&frame.this_val, &frame.env, &frame.result])
-        {
-            check(slot)?;
-        }
-        let function = lang
-            .function_state
-            .functions
-            .binary_search_by_key(&frame.cur_func, |function| function.owner)
-            .ok()
-            .and_then(|index| lang.function_state.functions.get(index))
-            .ok_or(SnapshotError::Corrupt(
-                "generator frame: current function has no function row",
-            ))?;
-        let code = function
-            .segment
-            .and_then(|segment| lang.function_state.segments.get(segment as usize))
-            .ok_or(SnapshotError::Corrupt(
-                "generator frame: current function has no segment",
-            ))?;
-        // A segment holds every function its crank compiled, so a
-        // segment-wide bound is far too loose for a resume cursor: it
-        // admits the segment end, a byte inside an instruction's
-        // operand or payload, and a perfectly valid instruction start
-        // belonging to a DIFFERENT body. Each of those enters dispatch
-        // at a pc the generator never suspended at. The cursor and
-        // every saved-handler target must instead be an instruction
-        // START within `cur_func`'s OWN `[body_start, body_end)` --
-        // the same walk the function-state gate above already proved
-        // sizes cleanly to its end. Memoized per function because a
-        // crafted image may name one large body from arbitrarily many
-        // generator rows.
-        let starts = match body_starts.entry(frame.cur_func) {
-            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-            std::collections::hash_map::Entry::Vacant(e) => {
-                let Some(body_start) = function.body_start else {
-                    return Err(SnapshotError::Corrupt(
-                        "generator frame: current function has no body",
-                    ));
-                };
-                let Some(body_end) = body_start.checked_add(function.body_len) else {
-                    return Err(SnapshotError::Corrupt(
-                        "generator frame: current function has no body",
-                    ));
-                };
-                let mut set = std::collections::BTreeSet::new();
-                let mut pc = body_start as usize;
-                while pc < body_end as usize {
-                    let Some(len) = ironhorse_vm::instruction_len(code, pc) else {
-                        return Err(SnapshotError::Corrupt(
-                            "generator frame: malformed body bytecode",
-                        ));
-                    };
-                    set.insert(pc as u64);
-                    pc = pc.saturating_add(len);
-                }
-                // A NESTED function's bytecode lives INSIDE its
-                // enclosing body's range -- a generator declaring
-                // `var h = function () {...}` owns a body that
-                // physically contains h's -- so the walk above collects
-                // h's instruction starts too, and a cursor pointing at
-                // one would enter h's code with the GENERATOR's frame.
-                // That is the same "a pc in another function body"
-                // class the sibling-body arm closes, one level down, so
-                // subtract every contained body.
-                for other in &lang.function_state.functions {
-                    if other.owner == frame.cur_func || other.segment != function.segment {
-                        continue;
-                    }
-                    let (Some(start), Some(end)) = (
-                        other.body_start,
-                        other
-                            .body_start
-                            .and_then(|s| s.checked_add(other.body_len)),
-                    ) else {
-                        continue;
-                    };
-                    if start >= body_start && end <= body_end {
-                        set.retain(|&pc| pc < start || pc >= end);
-                    }
-                }
-                e.insert(set)
-            }
-        };
-        if !starts.contains(&frame.resume_pc)
-            || frame
-                .id_map
-                .iter()
-                .any(|&(id, index)| {
-                    id == 0 || id as usize > names_len || index >= frame.locals.len() as u64
-                })
-        {
-            return Err(SnapshotError::Corrupt(
-                "generator frame: invalid resume cursor or scope map",
-            ));
-        }
-        for jump in &frame.jumps {
-            check(&jump.env)?;
-            // The handler's `id_map` is bounded by the handler's OWN
-            // `locals_len` -- the length its resumed `catch` resolves
-            // against -- not by the frame's current locals. A shorter
-            // `locals_len` with an index in between passed the frame's
-            // bound and then misresolved a name on the way out.
-            // `call_depth_offset` is the fifth attacker-controlled number
-            // on this row and the only one the gate used to skip, while
-            // restore computes `return_depth + jump.call_depth_offset`
-            // unchecked -- an arithmetic panic on a crafted value under
-            // the dev profile, and a handler scoped to an impossible
-            // call depth otherwise.
-            //
-            // The structural bound is exact, not a chosen constant: a
-            // generator suspends at a `yield` in its OWN body, so every
-            // call it made has returned and every saved handler belongs
-            // to that same activation. The offset is therefore always
-            // zero. Measured across five shapes -- a bare yield, a
-            // yield inside try/finally, a nested try, a yield after a
-            // call returns, and `yield*` delegation -- all emit 0.
-            if jump.flag != 1
-                || jump.call_depth_offset != 0
-                || !starts.contains(&jump.target_pc)
-                || jump.stack_offset > frame.stack_slice.len() as u64
-                || jump.locals_len > frame.locals.len() as u64
-                || jump.id_map.iter().any(|&(id, index)| {
-                    id == 0 || id as usize > names_len || index >= jump.locals_len
-                })
-            {
-                return Err(SnapshotError::Corrupt(
-                    "generator frame: invalid saved handler",
-                ));
-            }
-        }
-    }
-    // The promise cluster: owners, settlement results, and reaction
-    // slots bounded like every sibling's; a resolving function's name
-    // chunk ranged like a function row's — with NO null exemption,
-    // because `make_resolving_functions` always interns a real empty
-    // chunk and reading a NULL one faults. A combinator's results
-    // Array must name an `ARRY` row (the element drain writes through
-    // the dense store), the view-names-a-buffer-row discipline. Its
-    // capability callbacks are bounded like every other carried Slot.
-    for row in &lang.promise_cluster.promises {
-        owned(row.owner)?;
-        check(&row.result)?;
-        for r in &row.reactions {
-            check(&r.on_fulfilled)?;
-            check(&r.on_rejected)?;
-            check(&r.resolve)?;
-            check(&r.reject)?;
-        }
-    }
-    for row in &lang.promise_cluster.functions {
-        owned(row.function)?;
-        owned(row.promise)?;
-        let offset = row.name_chunk as usize;
-        if offset < CHUNK_HEADER || offset > chunk_len {
-            return Err(OOC);
-        }
-    }
-    let mut results_lengths = Vec::with_capacity(lang.promise_cluster.combinators.len());
-    for row in &lang.promise_cluster.combinators {
-        check(&row.resolve)?;
-        check(&row.reject)?;
-        owned(row.results)?;
-        let Ok(k) = arrays.binary_search_by_key(&row.results, |a| a.owner) else {
-            return Err(SnapshotError::Corrupt(
-                "promise cluster: combinator's results Array has no row",
-            ));
-        };
-        let len = arrays[k].length;
-        // `remaining` starts at the ELEMENT COUNT — which is exactly
-        // the results Array's preset length — and only ever
-        // decrements, so a value above it can only be crafted (it
-        // would leave the combinator pending after every surviving
-        // reaction drains). A `race` never decrements at all, so its
-        // remaining still EQUALS the count.
-        if row.remaining > len || (row.kind == 2 && row.remaining != len) {
-            return Err(SnapshotError::Corrupt(
-                "promise cluster: remaining outside its element count",
-            ));
-        }
-        results_lengths.push(len);
-    }
-    // A combinator reaction's element index writes the results Array at
-    // the drain (`array_set_dense` grows `length` to cover it) — and on
-    // the `any` path the AggregateError builder then iterates
-    // `0..length`. The combinator presets `length` to its ELEMENT COUNT
-    // at creation and every honest element index sits below it, so an
-    // index at or past the row's carried length can only be crafted:
-    // unchecked, it resumes a machine whose accumulator no execution
-    // produces (and a huge one turns the aggregate walk into a
-    // billions-long loop). This is a cross-ATOM check, so it lives here
-    // beside the results-names-a-row gate, not in the atom decoder.
-    for r in lang
-        .promise_cluster
-        .promises
-        .iter()
-        .flat_map(|row| row.reactions.iter())
-    {
-        if (r.kind == 2 || r.kind == 12)
-            && results_lengths
-                .get(r.a as usize)
-                .is_none_or(|len| r.b >= *len)
-        {
-            return Err(SnapshotError::Corrupt(
-                "promise cluster: element index outside the results Array",
-            ));
-        }
-    }
-    for &o in lang.arguments_brands {
-        owned(o)?;
-    }
-    for &(o, _) in &lang.temporal.instants {
-        owned(o)?;
-    }
-    for &(o, _) in &lang.temporal.durations {
-        owned(o)?;
-    }
-    for &(o, _, _, _) in &lang.temporal.plains {
-        owned(o)?;
-    }
-    for (o, _, _, _) in &lang.temporal.zoneds {
-        owned(*o)?;
-    }
-    // The Intl rows: weak owners bounded like every sibling's, and a
-    // segment ITERATOR must name an owner with a segments ROW whose
-    // list covers its cursor — the view-names-a-buffer-row discipline.
-    for o in lang
-        .intl
-        .locales
-        .iter()
-        .map(|(o, _)| *o)
-        .chain(lang.intl.collators.iter().map(|(o, _)| *o))
-        .chain(lang.intl.list_formats.iter().map(|(o, _)| *o))
-        .chain(lang.intl.plural_rules.iter().map(|(o, _)| *o))
-        .chain(lang.intl.number_formats.iter().map(|(o, _)| *o))
-        .chain(lang.intl.segmenters.iter().map(|(o, _)| *o))
-        .chain(lang.intl.segments.iter().map(|(o, _)| *o))
-        .chain(lang.intl.segment_iterators.iter().map(|(o, _)| *o))
-        .chain(lang.intl.date_time_formats.iter().map(|(o, _)| *o))
-    {
-        owned(o)?;
-    }
-    for (_, it) in &lang.intl.segment_iterators {
-        let row = lang
-            .intl
-            .segments
-            .binary_search_by_key(&it.segments_inst.0, |(o, _)| *o);
-        let covered = match row {
-            Ok(k) => it.pos <= lang.intl.segments[k].1.segments.len(),
-            Err(_) => false,
-        };
-        if it.segments_inst.0 >= slot_count || !covered {
-            return Err(SnapshotError::Corrupt(
-                "intl side table: segment iterator names no covering segments row",
-            ));
-        }
-    }
-    // The iterator cursors: weak owner and result slots bounded; a
-    // collection cursor must name a COVERING collections row (its
-    // `next()` indexes the table unconditionally) with the carried
-    // ordinal inside the compacted live list; a RegExp String Iterator must
-    // carry valid mode bits and UTF-16; a for-in cursor's key ids must live in
-    // the restored name table.
-    for r in iterators {
-        owned(r.owner)?;
-        owned(r.result)?;
-        if r.iterable != u32::MAX {
-            owned(r.iterable)?;
-        }
-        if (5..=7).contains(&r.kind) {
-            let row = collections.binary_search_by_key(&r.iterable, |c| c.owner);
-            let covered = match row {
-                Ok(k) => r.index as usize <= collections[k].entries.len(),
-                Err(_) => false,
-            };
-            if !covered {
-                return Err(SnapshotError::Corrupt(
-                    "iterator cursors: collection cursor names no covering row",
-                ));
-            }
-        }
-        if r.kind == 8
-            && iterator_from_wrapper_malformed(
-                r.iterable,
-                r.result,
-                r.index,
-                r.done,
-                r.enum_keys.is_empty(),
-                r.str_bytes.is_empty(),
-            )
-        {
-            return Err(SnapshotError::Corrupt(
-                "iterator cursors: malformed Iterator.from wrapper",
-            ));
-        }
-        if r.kind == 9
-            && regexp_string_iterator_malformed(
-                r.iterable,
-                r.result,
-                r.index,
-                r.enum_keys.is_empty(),
-                r.str_bytes.len(),
-            )
-        {
-            return Err(SnapshotError::Corrupt(
-                "iterator cursors: invalid RegExp String Iterator",
-            ));
-        }
-        if r.kind == 3
-            && r.enum_keys
-                .iter()
-                .any(|&(id, _)| id != 0 && id as usize > names_len)
-        {
-            return Err(SnapshotError::Corrupt(
-                "iterator cursors: for-in key id outside the name table",
-            ));
-        }
-    }
+    crate::stored_slots::check_slots(visit, &check)?;
+    check_rostered_bounds!(
+        Arrays, tables, owned, check, names_len, slot_count, chunk_len, symbols, OOB, OOC, heap
+    );
     for &(_, desc) in &symbols.pairs {
         owned(desc)?;
     }
@@ -4308,13 +4650,15 @@ pub(crate) fn decode_stack(p: &[u8]) -> Result<Vec<Slot>, SnapshotError> {
     // checked_mul for the same reason as `decode_heap`'s twin gate: on
     // a 32-bit usize the product can wrap to a small `want` that
     // satisfies the truncation gate below, silently short-decoding the
-    // stack (wave-3 finding — the decode_heap fix was not mirrored
-    // here; latent until a 32-bit/wasm port, closed on every target).
+    // stack. Both gates must reject overflow on every target.
     let want = count
         .checked_mul(SLOT_RECORD_BYTES)
         .ok_or(SnapshotError::Corrupt("STAC record count"))?;
     if p.len() - 4 < want {
         return Err(SnapshotError::Corrupt("STAC records truncated"));
+    }
+    if p.len() - 4 != want {
+        return Err(SnapshotError::Corrupt("STAC trailing bytes"));
     }
     decode_slots(&p[4..4 + want]).map_err(|_| SnapshotError::Corrupt("STAC slot record"))
 }
@@ -4323,137 +4667,184 @@ pub(crate) fn decode_stack(p: &[u8]) -> Result<Vec<Slot>, SnapshotError> {
 /// written in the canonical order `VERS SIGN CREA BLOC HEAP STAC KEYS NAME
 /// SYMB METR` (the order `xsSnapshot.c` emits, with the ironhorse-specific
 /// `METR` meter atom last), so two writes of the same image are
-/// byte-identical.
-pub fn write_machine(image: &MachineImage) -> Vec<u8> {
+/// byte-identical. Returns a framing error if an atom or the complete
+/// envelope exceeds the u32 wire size.
+pub fn write_machine(image: &GatedImage) -> Result<Vec<u8>, SnapshotError> {
+    encode_machine(image.image())
+}
+
+/// Encode arbitrary data for low-level inspection and adversarial tooling.
+/// This bypasses lifecycle and semantic gates; normal persistence uses
+/// [`write_machine`] with a [`GatedImage`].
+#[cfg(any(test, feature = "unchecked-tooling"))]
+pub fn write_machine_unchecked(image: &MachineImage) -> Vec<u8> {
+    encode_machine(image).expect("tooling image fits the atom container")
+}
+
+fn encode_machine(image: &MachineImage) -> Result<Vec<u8>, SnapshotError> {
     let mut w = AtomWriter::new();
-    w.atom(VERS, &image.version.encode());
-    w.atom(SIGN, &image.signature.encode());
-    w.atom(CREA, &image.creation.encode());
-    w.atom(BLOC, &image.chunks);
-    w.atom(HEAP, &encode_heap(image));
-    w.atom(STAC, &encode_stack(&image.stack));
-    w.atom(KEYS, &encode_strings(&image.keys));
-    w.atom(NAME, &encode_strings(&image.names));
-    w.atom(SYMB, &encode_symbol_keys(&image.symbols));
-    w.atom(METR, &image.meter.encode());
-    // Side-table ledger atoms, emitted ONLY when non-empty: a machine
-    // with no side-table state keeps its exact pre-ledger container
-    // bytes, so the CAS/blob identity of every existing container —
-    // the golden-vector pin included — is unchanged by the ledger.
-    // Presence is content-determined, so the canonical-bytes property
-    // (same image → same bytes) holds either way.
-    if !image.arrays.is_empty() {
-        w.atom(crate::format::ARRY, &encode_arrays(&image.arrays));
+    let mut version = image.version.clone();
+    if image
+        .generators
+        .iter()
+        .filter_map(|row| row.frame.as_ref())
+        .chain(
+            image
+                .promise_cluster
+                .async_instances
+                .iter()
+                .map(|row| &row.frame),
+        )
+        .chain(
+            image
+                .promise_cluster
+                .async_generators
+                .iter()
+                .filter_map(|row| row.frame.as_ref()),
+        )
+        .any(|frame| frame.jumps.iter().any(|jump| jump.segment.is_some()))
+    {
+        version.format_version = version.format_version.max(19);
     }
-    if !image.collections.is_empty() {
-        w.atom(crate::format::COLL, &encode_collections(&image.collections));
+    if !image.promise_cluster.async_generators.is_empty() {
+        // The generator trailer of `ASYN` is a format-23 shape: an older
+        // reader would refuse the payload's trailing bytes.
+        version.format_version = version.format_version.max(23);
     }
-    if !image.registry.is_empty() {
-        w.atom(crate::format::REGY, &encode_registry(&image.registry));
+    if !image.promise_cluster.from_async.is_empty() {
+        // And the `Array.fromAsync` trailer behind it is a format-24 shape
+        // (architecture finding F127). Without this the writer would emit a
+        // container it cannot read back: an image whose stamp came from
+        // somewhere other than the current writer — a decoded older image
+        // republished, or one deliberately marker-stamped — carries the
+        // trailer under a stamp the reader refuses by name.
+        version.format_version = version.format_version.max(24);
     }
-    if !image.errors.is_empty() {
-        w.atom(crate::format::ERRD, &encode_errors(&image.errors));
-        // Emitted only when some error actually captured frames, so a
-        // machine whose errors have none writes byte-identically to
-        // before this atom existed.
-        if image.errors.iter().any(|e| !e.frames.is_empty()) {
-            w.atom(crate::format::ESTK, &encode_error_frames(&image.errors));
+    if image.function_state.native_names.is_some() {
+        version.format_version = version.format_version.max(18);
+    }
+    if version.format_version < 17 {
+        // Decoded images can be re-published without passing through Interp.
+        // Never advertise reusable blocks to a reader that cannot walk them.
+        // This only detects the format requirement; malformed block lengths
+        // retain the existing deferred-validation policy.
+        let mut cursor = 0usize;
+        while let Some(header) = image
+            .chunks
+            .get(cursor..)
+            .and_then(|tail| tail.get(..CHUNK_HEADER))
+        {
+            let length = u32::from_le_bytes(header.try_into().unwrap());
+            if length == u32::MAX {
+                version.format_version = 17;
+                break;
+            }
+            let Some(end) = cursor
+                .checked_add(CHUNK_HEADER)
+                .and_then(|start| start.checked_add(length as usize))
+            else {
+                break;
+            };
+            cursor = end;
         }
     }
-    if !image.buffers.is_empty() {
-        w.atom(crate::format::ABUF, &encode_buffers(&image.buffers));
-    }
-    if !image.typed_arrays.is_empty() {
-        w.atom(crate::format::TARR, &encode_typed_arrays(&image.typed_arrays));
-    }
-    if !image.data_views.is_empty() {
-        w.atom(crate::format::DVIW, &encode_data_views(&image.data_views));
-    }
-    if !image.wrappers.is_empty() {
-        w.atom(crate::format::WRAP, &encode_wrappers(&image.wrappers));
-    }
-    if !image.regexps.is_empty() {
-        w.atom(crate::format::REGX, &encode_regexps(&image.regexps));
-    }
-    if !image.arguments_brands.is_empty() {
-        w.atom(
-            crate::format::ARGB,
-            &encode_arguments_brands(&image.arguments_brands),
-        );
-    }
-    if !image.temporal.is_empty() {
-        w.atom(crate::format::TMPR, &encode_temporal(&image.temporal));
-    }
-    if !image.intl.is_empty() {
-        w.atom(crate::format::INTL, &encode_intl(&image.intl));
-    }
-    if !image.iterators.is_empty() {
-        w.atom(crate::format::ITER, &encode_iterators(&image.iterators));
-    }
-    if !image.dates.is_empty() {
-        w.atom(crate::format::DATE, &encode_dates(&image.dates));
-    }
-    if !image.function_state.is_empty() {
-        w.atom(
-            crate::format::FUNC,
-            &encode_function_state(&image.function_state),
-        );
-    }
-    if !image.proxy_state.is_empty() {
-        w.atom(
-            crate::format::PROX,
-            &encode_proxy_state(&image.proxy_state),
-        );
-    }
-    if !image.accessors.is_empty() {
-        w.atom(crate::format::ACCS, &encode_accessors(&image.accessors));
-    }
-    if !image.intl_bound_functions.is_empty() {
-        w.atom(
-            crate::format::IBFN,
-            &encode_intl_bound_functions(&image.intl_bound_functions),
-        );
-    }
-    if !image.private_elements.is_empty() {
-        w.atom(
-            crate::format::PRIV,
-            &encode_private_elements(&image.private_elements),
-        );
-    }
-    if !image.disposable_stacks.is_empty() {
-        w.atom(
-            crate::format::DISP,
-            &encode_disposable_stacks(&image.disposable_stacks),
-        );
-    }
-    if !image.generators.is_empty() {
-        w.atom(crate::format::GENR, &encode_generators(&image.generators));
-    }
-    if !image.promise_cluster.is_empty() {
-        w.atom(
-            crate::format::PRMS,
-            &encode_promise_cluster(&image.promise_cluster),
-        );
-    }
-    // The installed-names floor: `Some` only when it differs from the
-    // name-table length (`with_name_floor` canonicalizes), so machines
-    // whose floor sits at the table stay byte-stable with every
-    // pre-floor container.
-    if let Some(floor) = image.name_floor {
-        w.atom(crate::format::NFLR, &floor.to_be_bytes());
-    }
+    // Preserve the wire format when rewriting a legacy scalar-only image.
+    // An image containing new non-scalar names must advertise format 15.
+    let legacy_names = (version.format_version < 15)
+        .then(|| {
+            image
+                .names
+                .iter()
+                .map(SymbolName::to_text)
+                .collect::<Option<Vec<_>>>()
+        })
+        .flatten();
+    let names = if let Some(names) = legacy_names {
+        encode_strings(&names)
+    } else {
+        version.format_version = version.format_version.max(15);
+        encode_names(&image.names)
+    };
+    w.atom(VERS, &version.encode())?;
+    w.atom(SIGN, &image.signature.encode())?;
+    w.atom(CREA, &image.creation.encode())?;
+    w.atom(BLOC, &image.chunks)?;
+    w.atom(HEAP, &encode_heap(image))?;
+    crate::snapshot_roster::write_payload_atoms(&mut w, image, &names)?;
     w.finish()
 }
 
-/// Parse an `XS_M` atom container into a machine image, enforcing the
-/// ironhorse `VERS` discriminator and checking the host callback-table
-/// `SIGN` against `expected_sig` — a mismatch fails closed exactly as
-/// `fxReadSnapshot` does (a callback index would bind the wrong host
-/// function). Pass the machine's current signature.
-///
-/// This low-level API returns a mutable plain-data model for tooling and
-/// crafted-input tests. Machine adoption uses [`read_validated_machine`], whose
-/// private wrapper prevents mutation between this validation and restore.
+// Container decoding has its own absence and legacy policies. The roster's
+// successor chain preserves decoder error precedence independently of wire order.
+macro_rules! apply_container_decode {
+    (replace, $target:expr, $body:block) => {
+        $target = $body;
+    };
+    (extend, $target:expr, $body:block) => {
+        $body
+    };
+}
+macro_rules! define_container_decoder {
+    (($d:tt); [$($init_field:ident = $init:expr,)*];
+        $($section:ident => $next:ident, $mode:ident, $field:ident,
+            ($reader:ident, [$($version:ident)?], [$($small:ident)?]) $body:block)*
+    ) => {
+        fn decode_container_payloads(
+            reader: &AtomReader<'_>,
+            version: &Version,
+        ) -> Result<crate::store::SmallState, SnapshotError> {
+            let mut small = crate::store::SmallState {
+                $($init_field: $init,)*
+            };
+            macro_rules! decode_step {
+                $(($section) => {{
+                    apply_container_decode!($mode, small.$field, {
+                        let $reader = reader;
+                        $(let $version = version;)?
+                        $(let $small = &mut small;)?
+                        $body
+                    });
+                    decode_step!($next);
+                }};)*
+                (End) => {};
+            }
+            decode_step!(Stack);
+            Ok(small)
+        }
+        macro_rules! container_image_from {
+            ($d source:ident; $d ($d header:ident),*; free: $d free:ident) => {{
+                let mut image = MachineImage {
+                    $d ($d header,)*
+                    $($init_field: $d source.$init_field,)*
+                };
+                // The decoded heap owns free slots; the retired small-state
+                // free-list placeholder must never replace it.
+                image.slot_free = $d free;
+                image
+            }};
+        }
+    };
+}
+macro_rules! define_container_payloads {
+    ($($section:ident {
+        image_field: $field:ident,
+        builder: $builder:ident,
+        live: [$($live:tt)*],
+        bounds: [$($bounds:tt)*],
+        gate: [$($gate:tt)*],
+        restore: [$($restore:tt)*],
+        initialize: [$($small_next:ident; $(#[$small_attr:meta])* $init_field:ident: $init_ty:ty = $init:expr)?],
+        legacy_label: $legacy_label:literal,
+        decode_legacy($decoded:ident, $input:ident): $decode:block,
+        decode_container: [$($next:ident, $mode:ident, ($reader:ident, [$($version:ident)?], [$($small:ident)?]) $body:block)?],
+        $($rest:tt)*
+    })*) => {
+        define_container_decoder!(($); [$($($init_field = $init,)?) *];
+            $($($section => $next, $mode, $field, ($reader, [$($version)?], [$($small)?]) $body)?) *);
+    };
+}
+crate::snapshot_roster::snapshot_payloads!(define_container_payloads);
+
 /// An optional side-table atom the writer emits only when its table is
 /// NON-EMPTY. A present-but-empty one can therefore only be crafted,
 /// and accepting it would re-canonicalize on the next write -- the same
@@ -4467,6 +4858,15 @@ fn present_and_non_empty<T>(rows: Vec<T>, what: &'static str) -> Result<Vec<T>, 
     Ok(rows)
 }
 
+/// Parse an `XS_M` atom container into a machine image, enforcing the
+/// ironhorse `VERS` discriminator and checking the host callback-table
+/// `SIGN` against `expected_sig` — a mismatch fails closed exactly as
+/// `fxReadSnapshot` does (a callback index would bind the wrong host
+/// function). Pass the machine's current signature.
+///
+/// This low-level API returns a mutable plain-data model for tooling and
+/// crafted-input tests. Machine adoption uses [`read_validated_machine`], whose
+/// private wrapper prevents mutation between this validation and restore.
 pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage, SnapshotError> {
     let r = AtomReader::parse(buf)?;
 
@@ -4475,6 +4875,8 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
 
     let sign = r.find(SIGN).ok_or(SnapshotError::MissingAtom(SIGN))?;
     let signature = Signature::decode(sign.payload)?;
+    signature.check_boot()?;
+    expected_sig.check_boot()?;
     if !signature.is_compatible_with(expected_sig) {
         return Err(SnapshotError::SignatureMismatch {
             expected: expected_sig.clone(),
@@ -4507,302 +4909,31 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         Some(a) => CreationParams::decode(a.payload)?,
         None => CreationParams::default(),
     };
-    let chunks = r.find(BLOC).map(|a| a.payload.to_vec()).unwrap_or_default();
+    let chunk_bytes = r.find(BLOC).map(|a| a.payload).unwrap_or_default();
+    if version.format_version >= 16 && chunk_bytes.len() != creation.initial_chunk_bytes as usize {
+        return Err(SnapshotError::Corrupt("BLOC length differs from CREA"));
+    }
+    let chunks = chunk_bytes.to_vec();
 
     let heap = r.find(HEAP).ok_or(SnapshotError::MissingAtom(HEAP))?;
     let (slots, slot_free, slot_live) = decode_heap(heap.payload)?;
 
-    let stack = match r.find(STAC) {
-        Some(a) => decode_stack(a.payload)?,
-        None => Vec::new(),
-    };
-    // The write verbs persist only QUIESCENT machines, and quiescence
-    // includes an empty value stack — so a populated `STAC` cannot come
-    // from an honest writer, and adopting one would seed a machine that
-    // can neither run nor checkpoint safely (review finding 5: the
-    // reader must enforce what the writer enforces).
-    if !stack.is_empty() {
-        return Err(SnapshotError::Corrupt(
-            "STAC not empty at a quiescent boundary",
-        ));
-    }
-    let keys = match r.find(KEYS) {
-        Some(a) => decode_strings(a.payload)?,
-        None => Vec::new(),
-    };
-    let names = match r.find(NAME) {
-        Some(a) => decode_strings(a.payload)?,
-        None => Vec::new(),
-    };
-    let symbols = match r.find(SYMB) {
-        Some(a) => decode_symbol_keys(a.payload)?,
-        None => SymbolKeyImage::default(),
-    };
-    // The symbol-key counter must clear the name table (its ids mint
-    // DOWNWARD from u16::MAX; a counter at or below the table would
-    // alias a symbol id onto a string key at restore — see
-    // `Interp::restore_symbol_key_table`). Checked here where names
-    // and symbols are both in hand; `validate_store` mirrors it for
-    // the store path.
-    if (symbols.next_id as usize) <= names.len() {
-        return Err(SnapshotError::Corrupt(
-            "symbol-key table: counter inside the name table",
-        ));
-    }
+    let small = decode_container_payloads(&r, &version)?;
+    let image = container_image_from!(small;
+        version, signature, creation, chunks, slots, slot_live; free: slot_free);
+    check_machine_image_bounds(&image)?;
+    check_buffer_chunk_lengths(&image.buffers, &image.chunks)?;
 
-    // METR (design row 6): decode the metering state and fail closed on a
-    // cost-table version this engine did not produce — the metering
-    // analogue of the SIGN check above. An absent METR (a pre-row-6
-    // container) reads as a zeroed meter under the current table.
-    let meter = match r.find(METR) {
-        Some(a) => MeterImage::decode(a.payload)?,
-        None => MeterImage::current(),
-    };
-    if meter.cost_table_version != COST_TABLE_VERSION {
-        return Err(SnapshotError::CostTableMismatch {
-            expected: COST_TABLE_VERSION.to_string(),
-            found: meter.cost_table_version,
-        });
-    }
-
-    // Side-table ledger atoms: absent means empty (a pre-ledger or
-    // side-table-free container), exactly mirroring the writer's
-    // emit-only-when-non-empty rule.
-    let arrays = match r.find(crate::format::ARRY) {
-        Some(a) => present_and_non_empty(decode_arrays(a.payload)?, "ARRY atom present but empty; the writer omits it")?,
-        None => Vec::new(),
-    };
-    let collections = match r.find(crate::format::COLL) {
-        Some(a) => present_and_non_empty(decode_collections(a.payload)?, "COLL atom present but empty; the writer omits it")?,
-        None => Vec::new(),
-    };
-    let registry = match r.find(crate::format::REGY) {
-        Some(a) => present_and_non_empty(decode_registry(a.payload)?, "REGY atom present but empty; the writer omits it")?,
-        None => Vec::new(),
-    };
-    let mut errors = match r.find(crate::format::ERRD) {
-        Some(a) => present_and_non_empty(decode_errors(a.payload)?, "ERRD atom present but empty; the writer omits it")?,
-        None => Vec::new(),
-    };
-    // Join the frames back onto their rows. An owner naming no `ERRD`
-    // row is crafted: the writer emits frames only for errors it also
-    // emitted — and emits the ATOM only when some row exists, so a
-    // present-but-empty one is the same non-canonical shape every
-    // optional atom refuses (a zero row COUNT; a zero-length frame
-    // LIST inside a row is refused by the decoder itself).
-    if let Some(a) = r.find(crate::format::ESTK) {
-        let rows = decode_error_frames(a.payload)?;
-        if rows.is_empty() {
-            return Err(SnapshotError::Corrupt(
-                "ESTK atom present but empty; the writer omits it",
-            ));
-        }
-        for (owner, frames) in rows {
-            let Some(row) = errors.iter_mut().find(|e| e.owner == owner) else {
-                return Err(SnapshotError::Corrupt(
-                    "error-frame side table: owner has no error row",
-                ));
-            };
-            row.frames = frames;
-        }
-    }
-    let buffers = match r.find(crate::format::ABUF) {
-        Some(a) => present_and_non_empty(decode_buffers(a.payload)?, "ABUF atom present but empty; the writer omits it")?,
-        None => Vec::new(),
-    };
-    let typed_arrays = match r.find(crate::format::TARR) {
-        Some(a) => present_and_non_empty(decode_typed_arrays(a.payload)?, "TARR atom present but empty; the writer omits it")?,
-        None => Vec::new(),
-    };
-    let data_views = match r.find(crate::format::DVIW) {
-        Some(a) => present_and_non_empty(decode_data_views(a.payload)?, "DVIW atom present but empty; the writer omits it")?,
-        None => Vec::new(),
-    };
-    let wrappers = match r.find(crate::format::WRAP) {
-        Some(a) => present_and_non_empty(decode_wrappers(a.payload)?, "WRAP atom present but empty; the writer omits it")?,
-        None => Vec::new(),
-    };
-    let regexps = match r.find(crate::format::REGX) {
-        Some(a) => present_and_non_empty(decode_regexps(a.payload)?, "REGX atom present but empty; the writer omits it")?,
-        None => Vec::new(),
-    };
-    let arguments_brands = match r.find(crate::format::ARGB) {
-        Some(a) => present_and_non_empty(decode_arguments_brands(a.payload)?, "ARGB atom present but empty; the writer omits it")?,
-        None => Vec::new(),
-    };
-    let temporal = match r.find(crate::format::TMPR) {
-        Some(a) => {
-            let t = decode_temporal(a.payload)?;
-            if t.is_empty() {
-                return Err(SnapshotError::Corrupt(
-                    "TMPR atom present but empty; the writer omits it",
-                ));
-            }
-            t
-        }
-        None => TemporalImage::default(),
-    };
-    let intl = match r.find(crate::format::INTL) {
-        Some(a) => {
-            let t = decode_intl(a.payload)?;
-            if t.is_empty() {
-                return Err(SnapshotError::Corrupt(
-                    "INTL atom present but empty; the writer omits it",
-                ));
-            }
-            t
-        }
-        None => IntlTables::default(),
-    };
-    let iterators = match r.find(crate::format::ITER) {
-        Some(a) => present_and_non_empty(decode_iterators(a.payload)?, "ITER atom present but empty; the writer omits it")?,
-        None => Vec::new(),
-    };
-    let dates = match r.find(crate::format::DATE) {
-        Some(a) => present_and_non_empty(decode_dates(a.payload)?, "DATE atom present but empty; the writer omits it")?,
-        None => Vec::new(),
-    };
-    let function_state = match r.find(crate::format::FUNC) {
-        Some(a) => {
-            let state = decode_function_state(a.payload)?;
-            if state.is_empty() {
-                return Err(SnapshotError::Corrupt(
-                    "FUNC atom present but empty; the writer omits it",
-                ));
-            }
-            state
-        }
-        None => ironhorse_vm::FunctionStateSnapshot::default(),
-    };
-    let proxy_state = match r.find(crate::format::PROX) {
-        Some(a) => {
-            let state = decode_proxy_state(a.payload)?;
-            if state.is_empty() {
-                return Err(SnapshotError::Corrupt(
-                    "PROX atom present but empty; the writer omits it",
-                ));
-            }
-            state
-        }
-        None => ironhorse_vm::ProxyStateSnapshot::default(),
-    };
-    let accessors = match r.find(crate::format::ACCS) {
-        Some(a) => present_and_non_empty(decode_accessors(a.payload)?, "ACCS atom present but empty; the writer omits it")?,
-        None => Vec::new(),
-    };
-    let intl_bound_functions = match r.find(crate::format::IBFN) {
-        Some(a) => present_and_non_empty(decode_intl_bound_functions(a.payload)?, "IBFN atom present but empty; the writer omits it")?,
-        None => Vec::new(),
-    };
-    let private_elements = match r.find(crate::format::PRIV) {
-        Some(a) => {
-            let state = decode_private_elements(a.payload)?;
-            if state.is_empty() {
-                return Err(SnapshotError::Corrupt(
-                    "PRIV atom present but empty; the writer omits it",
-                ));
-            }
-            state
-        }
-        None => ironhorse_vm::PrivateElementSnapshot::default(),
-    };
-    let disposable_stacks = match r.find(crate::format::DISP) {
-        Some(a) => present_and_non_empty(decode_disposable_stacks(a.payload)?, "DISP atom present but empty; the writer omits it")?,
-        None => Vec::new(),
-    };
-    let generators = match r.find(crate::format::GENR) {
-        Some(a) => present_and_non_empty(decode_generators(a.payload)?, "GENR atom present but empty; the writer omits it")?,
-        None => Vec::new(),
-    };
-    let promise_cluster = match r.find(crate::format::PRMS) {
-        Some(a) => {
-            let cluster = decode_promise_cluster(a.payload)?;
-            if cluster.is_empty() {
-                return Err(SnapshotError::Corrupt(
-                    "PRMS atom present but empty; the writer omits it",
-                ));
-            }
-            cluster
-        }
-        None => ironhorse_vm::PromiseClusterSnapshot::default(),
-    };
-    let name_floor = match r.find(crate::format::NFLR) {
-        Some(a) => {
-            if a.payload.len() != 4 {
-                return Err(SnapshotError::Corrupt("installed-names floor size"));
-            }
-            let floor = u32::from_be_bytes([a.payload[0], a.payload[1], a.payload[2], a.payload[3]]);
-            // A floor past the name table cannot come from an honest
-            // suspension — installs only ever floor at a table length
-            // the machine actually had.
-            if floor as usize > names.len() {
-                return Err(SnapshotError::Corrupt(
-                    "installed-names floor past the name table",
-                ));
-            }
-            // A floor AT the table length is the fully-installed state
-            // every writer canonicalizes as an ABSENT atom
-            // (`with_name_floor`); an explicit one can only be crafted,
-            // and accepting it re-canonicalizes on the next write —
-            // breaking write(read(bytes)) == bytes (review).
-            if floor as usize == names.len() {
-                return Err(SnapshotError::Corrupt(
-                    "installed-names floor: non-canonical explicit full floor",
-                ));
-            }
-            Some(floor)
-        }
-        None => None,
-    };
-    // Semantic bounds gate (wave-4 P1, widened in wave 5): every slot
-    // index and chunk offset the container carries — heap, stack,
-    // symbols and side tables alike — must fall inside the decoded
-    // arenas, or the collector would index them out of range in
-    // release.
-    check_image_slot_bounds(
-        &slots,
-        &stack,
-        &arrays,
-        &collections,
-        &registry,
-        &errors,
-        &buffers,
-        &typed_arrays,
-        &data_views,
-        &LangRows {
-            wrappers: &wrappers,
-            regexps: &regexps,
-            dates: &dates,
-            function_state: &function_state,
-            proxy_state: &proxy_state,
-            accessors: &accessors,
-            intl_bound_functions: &intl_bound_functions,
-            private_elements: &private_elements,
-            disposable_stacks: &disposable_stacks,
-            generators: &generators,
-            promise_cluster: &promise_cluster,
-            arguments_brands: &arguments_brands,
-            temporal: &temporal,
-            intl: &intl,
-        },
-        &iterators,
-        names.len(),
-        &symbols,
-        slots.len() as u32,
-        chunks.len(),
-        &slot_free,
-    )?;
-
-    // A container stamped with the CURRENT version must carry every
+    // Since version 15, a container must carry every
     // atom the current writer unconditionally emits — omitting one
     // (the reader would supply a default and the next write would put
-    // it back) is one more second-encoding shape. Older versions in
+    // it back) is one more second-encoding shape. Versions before 15 in
     // the read range keep their recorded leniencies (e.g. the
     // pre-row-6 absent `METR`); their writers no longer run, so the
     // canonical-bytes property is claimed of current containers.
     // Checked LAST so a malformed atom refuses by its own decoder's
     // name first — this gate is about honest-looking omissions.
-    if version.format_version == crate::format::IRONHORSE_FORMAT_VERSION {
+    if image.version.format_version >= 15 {
         for tag in [VERS, SIGN, CREA, BLOC, HEAP, STAC, KEYS, NAME, SYMB, METR] {
             if r.find(tag).is_none() {
                 return Err(SnapshotError::Corrupt(
@@ -4812,43 +4943,13 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         }
     }
 
-    Ok(MachineImage {
-        version,
-        signature,
-        creation,
-        chunks,
-        slots,
-        slot_free,
-        slot_live,
-        stack,
-        keys,
-        names,
-        symbols,
-        meter,
-        arrays,
-        collections,
-        registry,
-        errors,
-        buffers,
-        typed_arrays,
-        data_views,
-        wrappers,
-        regexps,
-        dates,
-        function_state,
-        proxy_state,
-        accessors,
-        intl_bound_functions,
-        private_elements,
-        disposable_stacks,
-        generators,
-        promise_cluster,
-        arguments_brands,
-        temporal,
-        intl,
-        iterators,
-        name_floor,
-    })
+    // Version 16 makes canonical bytes part of admission, including
+    // required core atoms and canonical slot encodings. Older formats
+    // retain their documented import normalization path.
+    if image.version.format_version >= 16 && encode_machine(&image)? != buf {
+        return Err(SnapshotError::Corrupt("non-canonical machine encoding"));
+    }
+    Ok(image)
 }
 
 /// Decode and validate container bytes into the proof-carrying image accepted
@@ -4872,6 +4973,41 @@ pub fn read_validated_machine(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_name_suffix_preserves_legacy_and_rejects_malformed_rows() {
+        use ironhorse_vm::snapshot_api::FunctionStateSnapshot;
+
+        let legacy = FunctionStateSnapshot::default();
+        let legacy_bytes = super::encode_function_state(&legacy);
+        assert_eq!(super::decode_function_state(&legacy_bytes).unwrap(), legacy);
+
+        let current = FunctionStateSnapshot {
+            native_names: Some(vec![(3, 4), (7, 20)]),
+            ..FunctionStateSnapshot::default()
+        };
+        let bytes = super::encode_function_state(&current);
+        assert_eq!(super::decode_function_state(&bytes).unwrap(), current);
+        for end in legacy_bytes.len() + 1..bytes.len() {
+            assert!(super::decode_function_state(&bytes[..end]).is_err());
+        }
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(super::decode_function_state(&trailing).is_err());
+
+        for rows in [vec![(3, 4), (3, 20)], vec![(7, 4), (3, 20)]] {
+            let invalid = FunctionStateSnapshot {
+                native_names: Some(rows),
+                ..FunctionStateSnapshot::default()
+            };
+            assert_eq!(
+                super::decode_function_state(&super::encode_function_state(&invalid)),
+                Err(super::SnapshotError::Corrupt(
+                    "native names: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
     use super::*;
     use ironhorse_vm::{ChunkOffset, Kind, Payload, SlotIndex};
 
@@ -4883,10 +5019,18 @@ mod tests {
     fn decode_rejects_non_ascending_side_table_owners() {
         // A crafted ARRY with two rows for the same owner: restore
         // would displace the first `ArrayData` without decrementing its
-        // side-ref counts (wave-4 P2). Decode must reject it.
+        // side-ref counts. Decode must reject it.
         let dup = vec![
-            ArrayImage { owner: 3, length: 0, items: vec![] },
-            ArrayImage { owner: 3, length: 0, items: vec![] },
+            ArrayImage {
+                owner: 3,
+                length: 0,
+                items: vec![],
+            },
+            ArrayImage {
+                owner: 3,
+                length: 0,
+                items: vec![],
+            },
         ];
         assert!(matches!(
             decode_arrays(&encode_arrays(&dup)),
@@ -4894,16 +5038,32 @@ mod tests {
         ));
         // Unordered (would break import∘export idempotency / CAS).
         let unordered = vec![
-            CollectionImage { owner: 5, kind: 0, table_length: 0, entries: vec![] },
-            CollectionImage { owner: 2, kind: 0, table_length: 0, entries: vec![] },
+            CollectionImage {
+                owner: 5,
+                kind: 0,
+                table_length: 0,
+                entries: vec![],
+            },
+            CollectionImage {
+                owner: 2,
+                kind: 0,
+                table_length: 0,
+                entries: vec![],
+            },
         ];
         assert!(matches!(
             decode_collections(&encode_collections(&unordered)),
             Err(SnapshotError::Corrupt(_))
         ));
         let dup_key = vec![
-            RegistryImage { key: b"k".to_vec(), descriptor: 1 },
-            RegistryImage { key: b"k".to_vec(), descriptor: 2 },
+            RegistryImage {
+                key: b"k".to_vec(),
+                descriptor: 1,
+            },
+            RegistryImage {
+                key: b"k".to_vec(),
+                descriptor: 2,
+            },
         ];
         assert!(matches!(
             decode_registry(&encode_registry(&dup_key)),
@@ -4911,8 +5071,16 @@ mod tests {
         ));
         // The ascending forms decode fine.
         let ok = vec![
-            ArrayImage { owner: 2, length: 0, items: vec![] },
-            ArrayImage { owner: 5, length: 0, items: vec![] },
+            ArrayImage {
+                owner: 2,
+                length: 0,
+                items: vec![],
+            },
+            ArrayImage {
+                owner: 5,
+                length: 0,
+                items: vec![],
+            },
         ];
         assert_eq!(decode_arrays(&encode_arrays(&ok)).unwrap(), ok);
     }
@@ -4921,8 +5089,18 @@ mod tests {
     fn error_data_decode_refuses_crafted_rows() {
         // Duplicate owner: restore would displace the first row.
         let dup = vec![
-            ErrorImage { owner: 3, name: "Error".to_string(), message: None , frames: Vec::new() },
-            ErrorImage { owner: 3, name: "TypeError".to_string(), message: None , frames: Vec::new() },
+            ErrorImage {
+                owner: 3,
+                name: "Error".to_string(),
+                message: None,
+                frames: Vec::new(),
+            },
+            ErrorImage {
+                owner: 3,
+                name: "TypeError".to_string(),
+                message: None,
+                frames: Vec::new(),
+            },
         ];
         assert!(matches!(
             decode_errors(&encode_errors(&dup)),
@@ -4934,7 +5112,7 @@ mod tests {
             owner: 1,
             name: "NotAnError".to_string(),
             message: None,
-                frames: Vec::new(),
+            frames: Vec::new(),
         }];
         assert!(matches!(
             decode_errors(&encode_errors(&unknown)),
@@ -4945,7 +5123,7 @@ mod tests {
             owner: 1,
             name: "Error".to_string(),
             message: None,
-                frames: Vec::new(),
+            frames: Vec::new(),
         }]);
         *bytes.last_mut().unwrap() = 2;
         assert!(matches!(
@@ -4954,43 +5132,99 @@ mod tests {
         ));
         // The well-formed rows round-trip, message halves preserved.
         let ok = vec![
-            ErrorImage { owner: 2, name: "RangeError".to_string(), message: Some("r".to_string()) , frames: Vec::new() },
-            ErrorImage { owner: 7, name: "SuppressedError".to_string(), message: None , frames: Vec::new() },
+            ErrorImage {
+                owner: 2,
+                name: "RangeError".to_string(),
+                message: Some("r".into()),
+                frames: Vec::new(),
+            },
+            ErrorImage {
+                owner: 7,
+                name: "SuppressedError".to_string(),
+                message: None,
+                frames: Vec::new(),
+            },
         ];
         assert_eq!(decode_errors(&encode_errors(&ok)).unwrap(), ok);
         // And an out-of-arena owner is refused by the bounds gate.
-        let oob = vec![ErrorImage { owner: 9, name: "Error".to_string(), message: None, frames: Vec::new() }];
+        let oob = vec![ErrorImage {
+            owner: 9,
+            name: "Error".to_string(),
+            message: None,
+            frames: Vec::new(),
+        }];
         assert!(check_image_slot_bounds(
             &[],
             &[],
-            &[],
-            &[],
-            &[],
-            &oob,
-            &[],
-            &[],
-            &[],
-            &LangRows::EMPTY,
-            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &oob,
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
             0,
             &SymbolKeyImage::default(),
             4,
-            64
-        , &[])
+            64,
+            &[],
+        )
         .is_err());
     }
 
     #[test]
-    fn date_decode_preserves_raw_bits_and_refuses_duplicate_owners() {
+    fn regexp_encoding_canonicalizes_legacy_nan() {
+        let rows = vec![RegExpImage {
+            owner: 7,
+            source: SymbolName::default(),
+            flags: String::new(),
+            last_index_bits: 0xfff0_0000_0000_0001,
+        }];
+        let encoded = encode_regexps(&rows);
+        let mut expected = rows.clone();
+        expected[0].last_index_bits = 0x7ff8_0000_0000_0000;
+        assert_eq!(decode_regexps(&encoded).unwrap(), expected);
+        let mut legacy = encoded.clone();
+        legacy[16..24].copy_from_slice(&rows[0].last_index_bits.to_be_bytes());
+        assert_eq!(decode_regexps(&legacy).unwrap(), rows);
+        assert_eq!(encode_regexps(&decode_regexps(&legacy).unwrap()), encoded);
+    }
+
+    #[test]
+    fn date_encoding_canonicalizes_nan_and_refuses_duplicate_owners() {
         let rows = vec![
-            DateImage { owner: 2, value_bits: (-0.0f64).to_bits() },
-            DateImage { owner: 7, value_bits: 0x7ff8_0000_0000_0042 },
+            DateImage {
+                owner: 2,
+                value_bits: (-0.0f64).to_bits(),
+            },
+            DateImage {
+                owner: 7,
+                value_bits: 0x7ff8_0000_0000_0042,
+            },
         ];
-        assert_eq!(decode_dates(&encode_dates(&rows)).unwrap(), rows);
+        let mut expected = rows.clone();
+        expected[1].value_bits = 0x7ff8_0000_0000_0000;
+        let encoded = encode_dates(&rows);
+        assert_eq!(decode_dates(&encoded).unwrap(), expected);
+        let mut legacy = encoded.clone();
+        legacy[20..28].copy_from_slice(&rows[1].value_bits.to_be_bytes());
+        assert_eq!(decode_dates(&legacy).unwrap(), rows);
+        assert_eq!(encode_dates(&decode_dates(&legacy).unwrap()), encoded);
 
         let duplicate = vec![
-            DateImage { owner: 3, value_bits: 1.0f64.to_bits() },
-            DateImage { owner: 3, value_bits: 2.0f64.to_bits() },
+            DateImage {
+                owner: 3,
+                value_bits: 1.0f64.to_bits(),
+            },
+            DateImage {
+                owner: 3,
+                value_bits: 2.0f64.to_bits(),
+            },
         ];
         assert!(matches!(
             decode_dates(&encode_dates(&duplicate)),
@@ -5001,30 +5235,61 @@ mod tests {
     #[test]
     fn typed_array_family_decode_refuses_crafted_rows() {
         // Unknown flag bits on a buffer row.
-        let bad_flags = vec![BufferImage { owner: 1, data: 4, length: 8, flags: 4 }];
+        let bad_flags = vec![BufferImage {
+            owner: 1,
+            data: 4,
+            length: 8,
+            flags: 4,
+        }];
         assert!(matches!(
             decode_buffers(&encode_buffers(&bad_flags)),
             Err(SnapshotError::Corrupt(_))
         ));
         // Duplicate owners in each table.
         let dup_buf = vec![
-            BufferImage { owner: 2, data: 4, length: 8, flags: 0 },
-            BufferImage { owner: 2, data: 16, length: 8, flags: 0 },
+            BufferImage {
+                owner: 2,
+                data: 4,
+                length: 8,
+                flags: 0,
+            },
+            BufferImage {
+                owner: 2,
+                data: 16,
+                length: 8,
+                flags: 0,
+            },
         ];
         assert!(matches!(
             decode_buffers(&encode_buffers(&dup_buf)),
             Err(SnapshotError::Corrupt(_))
         ));
         // Unknown element kind on a view row.
-        let bad_kind = vec![TypedArrayImage { owner: 1, kind: 200, buffer: 2, offset: 0, length: 1 }];
+        let bad_kind = vec![TypedArrayImage {
+            owner: 1,
+            kind: 200,
+            buffer: 2,
+            offset: 0,
+            length: 1,
+        }];
         assert!(matches!(
             decode_typed_arrays(&encode_typed_arrays(&bad_kind)),
             Err(SnapshotError::Corrupt(_))
         ));
         // Unordered data-view owners.
         let unordered = vec![
-            DataViewImage { owner: 5, buffer: 1, offset: 0, size: 1 },
-            DataViewImage { owner: 3, buffer: 1, offset: 0, size: 1 },
+            DataViewImage {
+                owner: 5,
+                buffer: 1,
+                offset: 0,
+                size: 1,
+            },
+            DataViewImage {
+                owner: 3,
+                buffer: 1,
+                offset: 0,
+                size: 1,
+            },
         ];
         assert!(matches!(
             decode_data_views(&encode_data_views(&unordered)),
@@ -5032,13 +5297,37 @@ mod tests {
         ));
         // The well-formed rows round-trip.
         let ok_b = vec![
-            BufferImage { owner: 1, data: 4, length: 8, flags: 0b10 },
-            BufferImage { owner: 3, data: 16, length: 0, flags: 0b01 },
+            BufferImage {
+                owner: 1,
+                data: 4,
+                length: 8,
+                flags: 0b10,
+            },
+            BufferImage {
+                owner: 3,
+                data: 16,
+                length: 0,
+                flags: 0b01,
+            },
         ];
         assert_eq!(decode_buffers(&encode_buffers(&ok_b)).unwrap(), ok_b);
-        let ok_t = vec![TypedArrayImage { owner: 2, kind: 0, buffer: 1, offset: 0, length: 8 }];
-        assert_eq!(decode_typed_arrays(&encode_typed_arrays(&ok_t)).unwrap(), ok_t);
-        let ok_d = vec![DataViewImage { owner: 2, buffer: 1, offset: 4, size: 4 }];
+        let ok_t = vec![TypedArrayImage {
+            owner: 2,
+            kind: 0,
+            buffer: 1,
+            offset: 0,
+            length: 8,
+        }];
+        assert_eq!(
+            decode_typed_arrays(&encode_typed_arrays(&ok_t)).unwrap(),
+            ok_t
+        );
+        let ok_d = vec![DataViewImage {
+            owner: 2,
+            buffer: 1,
+            offset: 4,
+            size: 4,
+        }];
         assert_eq!(decode_data_views(&encode_data_views(&ok_d)).unwrap(), ok_d);
     }
 
@@ -5046,44 +5335,234 @@ mod tests {
     fn typed_array_family_bounds_refuse_crafted_geometry() {
         let sym = SymbolKeyImage::default();
         // A buffer whose backing extent runs past the chunk arena.
-        let past = vec![BufferImage { owner: 1, data: 60, length: 8, flags: 0 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &past, &[], &[], &LangRows::EMPTY, &[], 0, &sym, 4, 64, &[]).is_err());
+        let past = vec![BufferImage {
+            owner: 1,
+            data: 60,
+            length: 8,
+            flags: 0,
+        }];
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &past,
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
+            0,
+            &sym,
+            4,
+            64,
+            &[],
+        )
+        .is_err());
         // A buffer whose offset sits inside the chunk header.
-        let low = vec![BufferImage { owner: 1, data: 2, length: 8, flags: 0 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &low, &[], &[], &LangRows::EMPTY, &[], 0, &sym, 4, 64, &[]).is_err());
+        let low = vec![BufferImage {
+            owner: 1,
+            data: 2,
+            length: 8,
+            flags: 0,
+        }];
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &low,
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
+            0,
+            &sym,
+            4,
+            64,
+            &[],
+        )
+        .is_err());
         // The NULL chunk sentinel is never valid backing, even when a
         // store advertises a chunk domain large enough to cover u32::MAX.
-        let null = vec![BufferImage { owner: 1, data: u32::MAX, length: 0, flags: 0 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &null, &[], &[], &LangRows::EMPTY, &[], 0, &sym, 4, usize::MAX, &[]).is_err());
+        let null = vec![BufferImage {
+            owner: 1,
+            data: u32::MAX,
+            length: 0,
+            flags: 0,
+        }];
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &null,
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
+            0,
+            &sym,
+            4,
+            usize::MAX,
+            &[],
+        )
+        .is_err());
         // A view naming a buffer with NO row (an in-bounds slot is not
         // enough — restoring it would read through unbacked geometry).
-        let orphan = vec![TypedArrayImage { owner: 2, kind: 0, buffer: 3, offset: 0, length: 1 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &orphan, &[], &LangRows::EMPTY, &[], 0, &sym, 4, 64, &[]).is_err());
+        let orphan = vec![TypedArrayImage {
+            owner: 2,
+            kind: 0,
+            buffer: 3,
+            offset: 0,
+            length: 1,
+        }];
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &orphan,
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
+            0,
+            &sym,
+            4,
+            64,
+            &[],
+        )
+        .is_err());
         // View geometry past its buffer's length (Uint32Array: shift 2).
-        let buf = vec![BufferImage { owner: 1, data: 4, length: 8, flags: 0 }];
+        let buf = vec![BufferImage {
+            owner: 1,
+            data: 4,
+            length: 8,
+            flags: 0,
+        }];
         let kind_u32 = ironhorse_vm::TYPED_ARRAY_TYPES
             .iter()
             .position(|t| t.shift == 2)
             .unwrap() as u8;
-        let wide = vec![TypedArrayImage { owner: 2, kind: kind_u32, buffer: 1, offset: 4, length: 2 }];
-        assert!(
-            check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &buf, &wide, &[], &LangRows::EMPTY, &[], 0, &sym, 4, 64, &[]).is_err()
-        );
-        // A data view past its buffer.
-        let dv = vec![DataViewImage { owner: 2, buffer: 1, offset: 6, size: 4 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &buf, &[], &dv, &LangRows::EMPTY, &[], 0, &sym, 4, 64, &[]).is_err());
-        // The covered forms pass.
-        let fit_view = vec![TypedArrayImage { owner: 2, kind: kind_u32, buffer: 1, offset: 0, length: 2 }];
-        let fit_dv = vec![DataViewImage { owner: 3, buffer: 1, offset: 4, size: 4 }];
+        let wide = vec![TypedArrayImage {
+            owner: 2,
+            kind: kind_u32,
+            buffer: 1,
+            offset: 4,
+            length: 2,
+        }];
         assert!(check_image_slot_bounds(
-            &[], &[], &[], &[], &[], &[], &buf, &fit_view, &fit_dv, &LangRows::EMPTY, &[], 0, &sym, 4, 64
-        , &[])
+            &[],
+            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &buf,
+                typed_arrays: &wide,
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
+            0,
+            &sym,
+            4,
+            64,
+            &[],
+        )
+        .is_err());
+        // A data view past its buffer.
+        let dv = vec![DataViewImage {
+            owner: 2,
+            buffer: 1,
+            offset: 6,
+            size: 4,
+        }];
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &buf,
+                typed_arrays: &[],
+                data_views: &dv,
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
+            0,
+            &sym,
+            4,
+            64,
+            &[],
+        )
+        .is_err());
+        // The covered forms pass.
+        let fit_view = vec![TypedArrayImage {
+            owner: 2,
+            kind: kind_u32,
+            buffer: 1,
+            offset: 0,
+            length: 2,
+        }];
+        let fit_dv = vec![DataViewImage {
+            owner: 3,
+            buffer: 1,
+            offset: 4,
+            size: 4,
+        }];
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &buf,
+                typed_arrays: &fit_view,
+                data_views: &fit_dv,
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
+            0,
+            &sym,
+            4,
+            64,
+            &[],
+        )
         .is_ok());
     }
 
     #[test]
     fn intl_decode_refuses_crafted_rows() {
-        use ironhorse_vm::{CollatorData, DateTimeFormatData, SegmentsData};
+        use ironhorse_vm::snapshot_api::{CollatorData, DateTimeFormatData, SegmentsData};
         fn collator(owner: u32) -> (u32, CollatorData) {
             (
                 owner,
@@ -5101,7 +5580,12 @@ mod tests {
         // Owners not strictly ascending.
         let mut t = IntlTables::default();
         t.collators = vec![collator(5), collator(3)];
-        assert!(decode_intl(&encode_intl(&t)).is_err(), "non-ascending owners");
+        assert_eq!(
+            decode_intl(&encode_intl(&t)),
+            Err(SnapshotError::Corrupt(
+                "intl side table: owners not strictly ascending"
+            ))
+        );
         // Segment boundaries outside their input.
         let mut t = IntlTables::default();
         t.segments = vec![(
@@ -5112,10 +5596,14 @@ mod tests {
                 granularity: "word".into(),
             },
         )];
-        assert!(decode_intl(&encode_intl(&t)).is_err(), "segment end past units");
-        // Overlapping ranges (review): a start must equal the previous
-        // END — the pre-review check compared previous STARTS, so
-        // (0,2),(1,3) decoded silently.
+        assert_eq!(
+            decode_intl(&encode_intl(&t)),
+            Err(SnapshotError::Corrupt(
+                "intl side table: segment boundaries do not tile their input"
+            ))
+        );
+        // Overlapping ranges: a start must equal the previous END.
+        // Comparing previous STARTS would admit (0,2),(1,3).
         let mut t = IntlTables::default();
         t.segments = vec![(
             1,
@@ -5125,7 +5613,12 @@ mod tests {
                 granularity: "word".into(),
             },
         )];
-        assert!(decode_intl(&encode_intl(&t)).is_err(), "overlapping segments");
+        assert_eq!(
+            decode_intl(&encode_intl(&t)),
+            Err(SnapshotError::Corrupt(
+                "intl side table: segment boundaries do not tile their input"
+            ))
+        );
         // Boundaries that do not COVER the input (ICU always emits the
         // final boundary at the unit count).
         let mut t = IntlTables::default();
@@ -5137,17 +5630,22 @@ mod tests {
                 granularity: "word".into(),
             },
         )];
-        assert!(decode_intl(&encode_intl(&t)).is_err(), "non-covering segments");
+        assert_eq!(
+            decode_intl(&encode_intl(&t)),
+            Err(SnapshotError::Corrupt(
+                "intl side table: segment boundaries do not cover their input"
+            ))
+        );
         // Unicode-extension keys: the writer emits BTreeMap order, so
-        // unordered or duplicated keys are non-canonical crafted bytes
-        // (review: silently re-canonicalizing broke byte identity).
+        // unordered or duplicated keys are non-canonical crafted bytes.
+        // Silently re-canonicalizing would break byte identity.
         let mut unicode = std::collections::BTreeMap::new();
         unicode.insert("ca".to_string(), "vx".to_string());
         unicode.insert("nu".to_string(), "wy".to_string());
         let mut t = IntlTables::default();
         t.locales = vec![(
             1,
-            ironhorse_vm::LocaleData {
+            ironhorse_vm::snapshot_api::LocaleData {
                 tag: "en".into(),
                 language: "en".into(),
                 script: None,
@@ -5157,16 +5655,44 @@ mod tests {
             },
         )];
         let canonical = encode_intl(&t);
+        assert_eq!(decode_intl(&canonical).unwrap(), t);
+        let mut invalid = canonical.clone();
+        invalid[12] = 0xff; // count, owner, tag length, first tag byte
+        assert_eq!(
+            decode_intl(&invalid),
+            Err(SnapshotError::Corrupt("intl side table: string not UTF-8"))
+        );
+        invalid = canonical.clone();
+        invalid[20] = 2; // script option follows tag and language strings
+        assert_eq!(
+            decode_intl(&invalid),
+            Err(SnapshotError::Corrupt("intl side table: bad option tag"))
+        );
+
         let ca = canonical.windows(2).position(|w| w == b"ca").unwrap();
         let nu = canonical.windows(2).position(|w| w == b"nu").unwrap();
         let mut swapped = canonical.clone();
         swapped[ca..ca + 2].copy_from_slice(b"nu");
         swapped[nu..nu + 2].copy_from_slice(b"ca");
-        assert!(decode_intl(&swapped).is_err(), "unordered unicode keys");
+        assert_eq!(
+            decode_intl(&swapped),
+            Err(SnapshotError::Corrupt(
+                "intl side table: unicode keys not strictly ascending"
+            ))
+        );
         let mut duped = canonical.clone();
         duped[nu..nu + 2].copy_from_slice(b"ca");
-        assert!(decode_intl(&duped).is_err(), "duplicate unicode keys");
-        assert_eq!(decode_intl(&canonical).unwrap(), t, "canonical order round-trips");
+        assert_eq!(
+            decode_intl(&duped),
+            Err(SnapshotError::Corrupt(
+                "intl side table: unicode keys not strictly ascending"
+            ))
+        );
+        assert_eq!(
+            decode_intl(&canonical).unwrap(),
+            t,
+            "canonical order round-trips"
+        );
         // An unknown date-time component key is crafted bytes: the keys
         // are a closed engine set carried as statics.
         let mut t = IntlTables::default();
@@ -5185,19 +5711,29 @@ mod tests {
             },
         )];
         let mut bytes = encode_intl(&t);
+        assert_eq!(decode_intl(&bytes).unwrap(), t);
         let needle = b"year";
         let at = bytes.windows(4).position(|w| w == needle).unwrap();
         bytes[at..at + 4].copy_from_slice(b"yerp");
-        assert!(decode_intl(&bytes).is_err(), "unknown component key");
+        assert_eq!(
+            decode_intl(&bytes),
+            Err(SnapshotError::Corrupt(
+                "intl side table: unknown date-time component key"
+            ))
+        );
         // A boolean byte outside 0/1.
         let mut t = IntlTables::default();
         t.collators = vec![collator(1)];
         let mut bytes = encode_intl(&t);
+        assert_eq!(decode_intl(&bytes).unwrap(), t);
         // The `numeric` byte follows the four leading strings; find the
         // first 0x00 after the "default" text and poke it to 7.
         let at = bytes.windows(7).position(|w| w == b"default").unwrap() + 7;
         bytes[at] = 7;
-        assert!(decode_intl(&bytes).is_err(), "boolean byte outside 0/1");
+        assert_eq!(
+            decode_intl(&bytes),
+            Err(SnapshotError::Corrupt("intl side table: bad boolean byte"))
+        );
         // The intact forms round-trip.
         let mut ok = IntlTables::default();
         ok.collators = vec![collator(1), collator(4)];
@@ -5214,26 +5750,14 @@ mod tests {
 
     #[test]
     fn intl_bounds_refuse_crafted_iterators_and_owners() {
-        use ironhorse_vm::{SegmentIteratorData, SegmentsData};
+        use ironhorse_vm::snapshot_api::{SegmentIteratorData, SegmentsData};
         let sym = SymbolKeyImage::default();
         let check = |intl: &IntlTables| {
-            let lang = LangRows {
-                wrappers: &[],
-                regexps: &[],
-                dates: &[],
-                function_state: &EMPTY_FUNCTION_STATE,
-                proxy_state: &EMPTY_PROXY_STATE,
-                accessors: &[],
-                intl_bound_functions: &[],
-                private_elements: &EMPTY_PRIVATE_ELEMENTS,
-                disposable_stacks: &[],
-                generators: &[],
-                promise_cluster: &EMPTY_PROMISE_CLUSTER,
-                arguments_brands: &[],
-                temporal: &EMPTY_TEMPORAL,
+            let tables = BoundsTables {
                 intl,
+                ..BoundsTables::EMPTY
             };
-            check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &[], &[], &lang, &[], 0, &sym, 4, 64, &[])
+            check_image_slot_bounds(&[], &[], &tables, 0, &sym, 4, 64, &[])
         };
         let segs = |owner: u32| {
             (
@@ -5254,86 +5778,207 @@ mod tests {
         t.segments = vec![segs(1)];
         t.segment_iterators = vec![(
             2,
-            SegmentIteratorData { segments_inst: ironhorse_vm::value::SlotIndex(3), pos: 0 },
+            SegmentIteratorData {
+                segments_inst: ironhorse_vm::value::SlotIndex(3),
+                pos: 0,
+            },
         )];
-        assert!(check(&t).is_err(), "iterator names no covering segments row");
+        assert_eq!(
+            check(&t),
+            Err(SnapshotError::Corrupt(
+                "intl side table: segment iterator names no covering segments row"
+            ))
+        );
         // A cursor past the precomputed list.
         let mut t = IntlTables::default();
         t.segments = vec![segs(1)];
         t.segment_iterators = vec![(
             2,
-            SegmentIteratorData { segments_inst: ironhorse_vm::value::SlotIndex(1), pos: 5 },
+            SegmentIteratorData {
+                segments_inst: ironhorse_vm::value::SlotIndex(1),
+                pos: 5,
+            },
         )];
-        assert!(check(&t).is_err(), "cursor past the list");
+        assert_eq!(
+            check(&t),
+            Err(SnapshotError::Corrupt(
+                "intl side table: segment iterator names no covering segments row"
+            ))
+        );
         // The covered form passes (pos == len is the exhausted cursor).
         let mut t = IntlTables::default();
         t.segments = vec![segs(1)];
         t.segment_iterators = vec![(
             2,
-            SegmentIteratorData { segments_inst: ironhorse_vm::value::SlotIndex(1), pos: 1 },
+            SegmentIteratorData {
+                segments_inst: ironhorse_vm::value::SlotIndex(1),
+                pos: 1,
+            },
         )];
-        assert!(check(&t).is_ok(), "a covering row with an in-range cursor passes");
+        assert!(
+            check(&t).is_ok(),
+            "a covering row with an in-range cursor passes"
+        );
     }
 
     #[test]
     fn iterator_decode_refuses_crafted_rows() {
-        fn row(owner: u32) -> IteratorRow {
-            IteratorRow {
-                owner,
-                kind: 0,
-                iterable: 1,
-                index: 0,
-                done: false,
-                result: 2,
-                enum_keys: Vec::new(),
-                str_bytes: Vec::new(),
+        let row = |kind| IteratorRow {
+            owner: 2,
+            kind,
+            iterable: 1,
+            index: 0,
+            done: false,
+            result: 3,
+            enum_keys: vec![],
+            str_bytes: vec![],
+        };
+        // 10-14 are the lazy Iterator helpers, whose self-contained shape
+        // gate the fixture row already satisfies (a live iterable, a holder
+        // in `result`, and empty for-in and string payloads).
+        for kind in 0..=14 {
+            assert_eq!(
+                decode_iterators(&encode_iterators(&[row(kind)])).unwrap(),
+                vec![row(kind)]
+            );
+        }
+        let first = row(0);
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_iterators(&encode_iterators(&[first.clone(), second.clone()])).is_ok());
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_iterators(&encode_iterators(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "iterator cursors: owners not strictly ascending"
+                ))
+            );
+        }
+        for kind in [15, 255] {
+            assert_eq!(
+                decode_iterators(&encode_iterators(&[row(kind)])),
+                Err(SnapshotError::Corrupt("iterator cursors: unknown kind"))
+            );
+        }
+        // A lazy helper row missing its underlying iterator or its holder is
+        // refused by shape, not by kind.
+        for kind in 10..=14 {
+            for broken in [
+                IteratorRow {
+                    iterable: u32::MAX,
+                    ..row(kind)
+                },
+                IteratorRow {
+                    result: u32::MAX,
+                    ..row(kind)
+                },
+                IteratorRow {
+                    str_bytes: vec![0, b'a'],
+                    ..row(kind)
+                },
+                IteratorRow {
+                    enum_keys: vec![(0, 0)],
+                    ..row(kind)
+                },
+            ] {
+                assert_eq!(
+                    decode_iterators(&encode_iterators(&[broken])),
+                    Err(SnapshotError::Corrupt(
+                        "iterator cursors: malformed lazy Iterator helper"
+                    ))
+                );
             }
         }
-        // Owners not strictly ascending.
-        assert!(decode_iterators(&encode_iterators(&[row(5), row(3)])).is_err());
-        // Unknown kind.
-        let mut bad = row(1);
-        bad.kind = 10;
-        assert!(decode_iterators(&encode_iterators(&[bad])).is_err());
-        // A string cursor splitting a UTF-16 unit, and one past its text.
-        let mut odd = row(1);
-        odd.kind = 4;
-        odd.str_bytes = vec![0, 97, 0, 98];
-        odd.index = 1;
-        assert!(decode_iterators(&encode_iterators(&[odd.clone()])).is_err());
-        odd.index = 6;
-        assert!(decode_iterators(&encode_iterators(&[odd])).is_err());
-        // A RegExp String Iterator must carry a matcher, an arena anchor, an
-        // even-sized UTF-16 payload, and only its two mode bits in `index`.
-        let mut regexp = row(1);
-        regexp.kind = 9;
-        regexp.index = 4;
-        assert!(decode_iterators(&encode_iterators(&[regexp.clone()])).is_err());
-        regexp.index = 3;
-        regexp.str_bytes = vec![0];
-        assert!(decode_iterators(&encode_iterators(&[regexp])).is_err());
-        let mut regexp = row(1);
-        regexp.kind = 9;
-        regexp.iterable = u32::MAX;
-        assert!(decode_iterators(&encode_iterators(&[regexp])).is_err());
-        let mut regexp = row(1);
-        regexp.kind = 9;
-        regexp.enum_keys.push((1, 0));
-        assert!(decode_iterators(&encode_iterators(&[regexp])).is_err());
-        // A for-in cursor past its key list.
-        let mut over = row(1);
-        over.kind = 3;
-        over.enum_keys = vec![(0, 0)];
-        over.index = 2;
-        assert!(decode_iterators(&encode_iterators(&[over])).is_err());
-        // The intact forms round-trip.
-        let mut s = row(3);
-        s.kind = 4;
-        s.iterable = u32::MAX;
-        s.str_bytes = vec![0, 97, 0, 98];
-        s.index = 2;
-        let ok = vec![row(1), s];
-        assert_eq!(decode_iterators(&encode_iterators(&ok)).unwrap(), ok);
+        for value in [2, 255] {
+            let mut bytes = encode_iterators(&[row(0)]);
+            bytes[17] = value; // count, owner, kind, iterable, index, done
+            assert_eq!(
+                decode_iterators(&bytes),
+                Err(SnapshotError::Corrupt("iterator cursors: bad done byte"))
+            );
+        }
+        let mut string = row(4);
+        string.iterable = u32::MAX;
+        string.str_bytes = vec![0, 97, 0, 98];
+        for index in [0, 2, 4] {
+            string.index = index;
+            assert!(decode_iterators(&encode_iterators(&[string.clone()])).is_ok());
+        }
+        for index in [1, 6] {
+            string.index = index;
+            assert_eq!(
+                decode_iterators(&encode_iterators(&[string.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "iterator cursors: string cursor outside its text"
+                ))
+            );
+        }
+        let mut forin = row(3);
+        forin.enum_keys = vec![(1, 0)];
+        forin.index = 1;
+        assert!(decode_iterators(&encode_iterators(&[forin.clone()])).is_ok());
+        forin.index = 2;
+        assert_eq!(
+            decode_iterators(&encode_iterators(&[forin.clone()])),
+            Err(SnapshotError::Corrupt(
+                "iterator cursors: for-in cursor past its key list"
+            ))
+        );
+        forin.index = 1;
+        for field in 0..2 {
+            let mut invalid = forin.clone();
+            match field {
+                0 => invalid.iterable = u32::MAX,
+                _ => invalid.result = u32::MAX,
+            }
+            assert_eq!(
+                decode_iterators(&encode_iterators(&[invalid])),
+                Err(SnapshotError::Corrupt(
+                    "iterator cursors: for-in cursor without its level or result"
+                ))
+            );
+        }
+        // Reset each independent malformed wrapper component from its valid row.
+        for field in 0..6 {
+            let mut invalid = row(8);
+            match field {
+                0 => invalid.iterable = u32::MAX,
+                1 => invalid.result = u32::MAX,
+                2 => invalid.index = 1,
+                3 => invalid.done = true,
+                4 => invalid.enum_keys.push((1, 0)),
+                _ => invalid.str_bytes.push(0),
+            }
+            assert_eq!(
+                decode_iterators(&encode_iterators(&[invalid])),
+                Err(SnapshotError::Corrupt(
+                    "iterator cursors: malformed Iterator.from wrapper"
+                ))
+            );
+        }
+        for mode in 0..=3 {
+            let mut valid = row(9);
+            valid.index = mode;
+            valid.str_bytes = vec![0, 97];
+            assert!(decode_iterators(&encode_iterators(&[valid])).is_ok());
+        }
+        for field in 0..5 {
+            let mut invalid = row(9);
+            match field {
+                0 => invalid.iterable = u32::MAX,
+                1 => invalid.result = u32::MAX,
+                2 => invalid.index = 4,
+                3 => invalid.enum_keys.push((1, 0)),
+                _ => invalid.str_bytes.push(0),
+            }
+            assert_eq!(
+                decode_iterators(&encode_iterators(&[invalid])),
+                Err(SnapshotError::Corrupt(
+                    "iterator cursors: invalid RegExp String Iterator"
+                ))
+            );
+        }
     }
 
     #[test]
@@ -5341,8 +5986,25 @@ mod tests {
         let sym = SymbolKeyImage::default();
         let check = |rows: &[IteratorRow], colls: &[CollectionImage], names_len: usize| {
             check_image_slot_bounds(
-                &[], &[], &[], colls, &[], &[], &[], &[], &[], &LangRows::EMPTY, rows, names_len,
-                &sym, 4, 64, &[],
+                &[],
+                &[],
+                &BoundsTables {
+                    arrays: &[],
+                    index_props: &[],
+                    collections: colls,
+                    registry: &[],
+                    errors: &[],
+                    buffers: &[],
+                    typed_arrays: &[],
+                    data_views: &[],
+                    iterators: rows,
+                    ..BoundsTables::EMPTY
+                },
+                names_len,
+                &sym,
+                4,
+                64,
+                &[],
             )
         };
         let coll = CollectionImage {
@@ -5362,9 +6024,19 @@ mod tests {
             str_bytes: Vec::new(),
         };
         // A collection cursor naming an instance with NO covering row.
-        assert!(check(&[cursor(0, 0)], std::slice::from_ref(&coll), 0).is_err());
+        assert_eq!(
+            check(&[cursor(0, 0)], std::slice::from_ref(&coll), 0),
+            Err(SnapshotError::Corrupt(
+                "iterator cursors: collection cursor names no covering row"
+            ))
+        );
         // A cursor past the compacted live list.
-        assert!(check(&[cursor(1, 2)], std::slice::from_ref(&coll), 0).is_err());
+        assert_eq!(
+            check(&[cursor(1, 2)], std::slice::from_ref(&coll), 0),
+            Err(SnapshotError::Corrupt(
+                "iterator cursors: collection cursor names no covering row"
+            ))
+        );
         // The exhausted cursor (index == live count) passes.
         assert!(check(&[cursor(1, 1)], std::slice::from_ref(&coll), 0).is_ok());
         // A for-in key id outside the restored name table.
@@ -5378,7 +6050,12 @@ mod tests {
             enum_keys: vec![(7, 0)],
             str_bytes: Vec::new(),
         };
-        assert!(check(std::slice::from_ref(&forin), &[], 3).is_err());
+        assert_eq!(
+            check(std::slice::from_ref(&forin), &[], 3),
+            Err(SnapshotError::Corrupt(
+                "iterator cursors: for-in key id outside the name table"
+            ))
+        );
         assert!(check(std::slice::from_ref(&forin), &[], 7).is_ok());
         // An out-of-arena owner/result.
         let mut oob = cursor(1, 0);
@@ -5388,57 +6065,224 @@ mod tests {
 
     #[test]
     fn image_bounds_reject_out_of_arena_indices() {
-        // Wave 4 closed the three side tables; wave 5 showed the class is
-        // wider — a container with NO side table at all panicked the
-        // collector via an unchecked `marks[i]`. Each arm below is a
-        // shape a reviewer actually crafted and reached a release panic
-        // (or an abort) with. slot_count = 4, chunk_len = 64 throughout.
+        // Out-of-bounds references must be rejected even when the image
+        // has no side tables: the collector indexes its marks by the
+        // referenced slot. Exercise arena and side-table paths with
+        // slot_count = 4, chunk_len = 64 throughout.
         let ok = |heap: &[Slot], stack: &[Slot]| {
-            check_image_slot_bounds(heap, stack, &[], &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64, &[])
+            check_image_slot_bounds(
+                heap,
+                stack,
+                &BoundsTables {
+                    arrays: &[],
+                    index_props: &[],
+                    collections: &[],
+                    registry: &[],
+                    errors: &[],
+                    buffers: &[],
+                    typed_arrays: &[],
+                    data_views: &[],
+                    iterators: &[],
+                    ..BoundsTables::EMPTY
+                },
+                0,
+                &SymbolKeyImage::default(),
+                4,
+                64,
+                &[],
+            )
         };
         let refd = |i: u32| Slot::of(Kind::Reference, Payload::Reference(SlotIndex(i)));
 
-        // --- the wave-5 additions: heap, next, stack, symbols, chunks ---
-        assert!(ok(&[refd(9)], &[]).is_err(), "heap Reference past the arena");
+        // --- heap, next, stack, symbols, chunks ---
+        assert!(
+            ok(&[refd(9)], &[]).is_err(),
+            "heap Reference past the arena"
+        );
         let mut chained = Slot::undefined();
         chained.next = SlotIndex(9);
         assert!(ok(&[chained], &[]).is_err(), "heap `next` past the arena");
-        assert!(ok(&[], &[refd(9)]).is_err(), "stack Reference past the arena");
+        assert!(
+            ok(&[], &[refd(9)]).is_err(),
+            "stack Reference past the arena"
+        );
         let bad_chunk = Slot::of(Kind::String, Payload::String(ChunkOffset(0xFFFF_0000)));
-        assert!(ok(&[bad_chunk], &[]).is_err(), "chunk offset past the arena");
+        assert!(
+            ok(&[bad_chunk], &[]).is_err(),
+            "chunk offset past the arena"
+        );
         let below_header = Slot::of(Kind::String, Payload::String(ChunkOffset(0)));
-        assert!(ok(&[below_header], &[]).is_err(), "chunk offset below the header");
+        assert!(
+            ok(&[below_header], &[]).is_err(),
+            "chunk offset below the header"
+        );
 
-        // --- the wave-4 arms, still enforced ---
-        let bad_desc = [RegistryImage { key: b"k".to_vec(), descriptor: 9 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &bad_desc, &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64, &[]).is_err());
+        // --- side-table owners and values ---
+        let bad_desc = [RegistryImage {
+            key: b"k".to_vec(),
+            descriptor: 9,
+        }];
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &bad_desc,
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
+            0,
+            &SymbolKeyImage::default(),
+            4,
+            64,
+            &[],
+        )
+        .is_err());
         // A symbol-key descriptor beyond the arena is refused the same way.
         let bad_sym = SymbolKeyImage {
-            next_id: u16::MAX - 1,
-            pairs: vec![(u16::MAX, 4)],
+            next_id: u16::MAX - 2,
+            pairs: vec![(u16::MAX - 1, 4)],
         };
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &bad_sym, 4, 64, &[]).is_err());
-        let bad_owner = [ArrayImage { owner: 9, length: 0, items: vec![] }];
-        assert!(check_image_slot_bounds(&[], &[], &bad_owner, &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64, &[]).is_err());
-        let bad_ref = [ArrayImage { owner: 1, length: 1, items: vec![(0, refd(9))] }];
-        assert!(check_image_slot_bounds(&[], &[], &bad_ref, &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64, &[]).is_err());
-        // Collections were passed `&[]` in every wave-4 case, so that
-        // whole branch never executed (wave 5, llvm-cov). Exercise both
-        // the key and the value side.
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
+            0,
+            &bad_sym,
+            4,
+            64,
+            &[],
+        )
+        .is_err());
+        let bad_owner = [ArrayImage {
+            owner: 9,
+            length: 0,
+            items: vec![],
+        }];
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &BoundsTables {
+                arrays: &bad_owner,
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
+            0,
+            &SymbolKeyImage::default(),
+            4,
+            64,
+            &[],
+        )
+        .is_err());
+        let bad_ref = [ArrayImage {
+            owner: 1,
+            length: 1,
+            items: vec![(0, refd(9))],
+        }];
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &BoundsTables {
+                arrays: &bad_ref,
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
+            0,
+            &SymbolKeyImage::default(),
+            4,
+            64,
+            &[],
+        )
+        .is_err());
+        // Non-empty collections must exercise both the key and the value
+        // checks; empty fixtures cannot detect a missing traversal.
         let bad_key = [CollectionImage {
             owner: 1,
             kind: 0,
             table_length: 0,
             entries: vec![(refd(9), Slot::undefined())],
         }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &bad_key, &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64, &[]).is_err());
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &bad_key,
+                registry: &[],
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
+            0,
+            &SymbolKeyImage::default(),
+            4,
+            64,
+            &[],
+        )
+        .is_err());
         let bad_val = [CollectionImage {
             owner: 1,
             kind: 0,
             table_length: 0,
             entries: vec![(Slot::undefined(), refd(9))],
         }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &bad_val, &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64, &[]).is_err());
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &bad_val,
+                registry: &[],
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
+            0,
+            &SymbolKeyImage::default(),
+            4,
+            64,
+            &[],
+        )
+        .is_err());
 
         // --- in-bounds and NULL pass ---
         assert!(ok(&[refd(3)], &[refd(0)]).is_ok(), "in-bounds indices pass");
@@ -5447,7 +6291,61 @@ mod tests {
             "a NULL reference is an absence, not an out-of-arena index",
         );
         let good_chunk = Slot::of(Kind::String, Payload::String(ChunkOffset(8)));
-        assert!(ok(&[good_chunk], &[]).is_ok(), "an in-range chunk offset passes");
+        assert!(
+            ok(&[good_chunk], &[]).is_ok(),
+            "an in-range chunk offset passes"
+        );
+    }
+
+    #[test]
+    fn live_edges_cannot_reach_free_records() {
+        let reference = Slot::of(Kind::Reference, Payload::Reference(SlotIndex(2)));
+        let mut next = Slot::undefined();
+        next.next = SlotIndex(2);
+        let poison = Slot::of(Kind::Reference, Payload::Reference(SlotIndex(900_000)));
+        for edge in [reference, next] {
+            for location in 0..3 {
+                let mut heap = vec![Slot::undefined(), Slot::undefined(), poison];
+                let mut stack = Vec::new();
+                let mut arrays = Vec::new();
+                match location {
+                    0 => heap[1] = edge,
+                    1 => stack.push(edge),
+                    _ => arrays.push(ArrayImage {
+                        owner: 1,
+                        length: 1,
+                        items: vec![(0, edge)],
+                    }),
+                }
+                assert!(
+                    matches!(
+                        check_image_slot_bounds(
+                            &heap,
+                            &stack,
+                            &BoundsTables {
+                                arrays: &arrays,
+                                index_props: &[],
+                                collections: &[],
+                                registry: &[],
+                                errors: &[],
+                                buffers: &[],
+                                typed_arrays: &[],
+                                data_views: &[],
+                                iterators: &[],
+                                ..BoundsTables::EMPTY
+                            },
+                            0,
+                            &SymbolKeyImage::default(),
+                            3,
+                            64,
+                            &[2],
+                        ),
+                        Err(SnapshotError::Corrupt("slot index out of arena bounds"))
+                    ),
+                    "live edge in location {location} must not reach opaque free bytes"
+                );
+            }
+        }
     }
 
     /// Review findings 2+3 (free-record hygiene): a record on the free
@@ -5464,8 +6362,25 @@ mod tests {
         let sym = SymbolKeyImage::default();
         let gate = |heap: &[Slot], errors: &[ErrorImage], free: &[u32]| {
             check_image_slot_bounds(
-                heap, &[], &[], &[], &[], errors, &[], &[], &[], &LangRows::EMPTY, &[], 0, &sym,
-                4, 64, free,
+                heap,
+                &[],
+                &BoundsTables {
+                    arrays: &[],
+                    index_props: &[],
+                    collections: &[],
+                    registry: &[],
+                    errors,
+                    buffers: &[],
+                    typed_arrays: &[],
+                    data_views: &[],
+                    iterators: &[],
+                    ..BoundsTables::EMPTY
+                },
+                0,
+                &sym,
+                4,
+                64,
+                free,
             )
         };
         // A stale chunk offset AND a dangling reference on freed
@@ -5473,16 +6388,31 @@ mod tests {
         let stale_chunk = Slot::of(Kind::String, Payload::String(ChunkOffset(0xFFFF_0000)));
         let stale_ref = Slot::of(Kind::Reference, Payload::Reference(SlotIndex(9)));
         assert!(
-            gate(&[Slot::undefined(), stale_chunk, stale_ref, Slot::undefined()], &[], &[1, 2]).is_ok(),
+            gate(
+                &[Slot::undefined(), stale_chunk, stale_ref, Slot::undefined()],
+                &[],
+                &[1, 2]
+            )
+            .is_ok(),
             "freed records are opaque: stale bytes must not refuse an honest post-GC image"
         );
-        // The SAME records live: refused (the wave-5 rule unchanged).
+        // The SAME records live: refused by the bounds gate.
         assert!(
-            gate(&[Slot::undefined(), stale_chunk, stale_ref, Slot::undefined()], &[], &[]).is_err(),
-            "live records keep the wave-5 refusals"
+            gate(
+                &[Slot::undefined(), stale_chunk, stale_ref, Slot::undefined()],
+                &[],
+                &[]
+            )
+            .is_err(),
+            "live records must reject stale chunk offsets and dangling references"
         );
         // A side-table row owned by a free slot: refused by name.
-        let row = [ErrorImage { owner: 1, name: "Error".to_string(), message: None, frames: Vec::new() }];
+        let row = [ErrorImage {
+            owner: 1,
+            name: "Error".to_string(),
+            message: None,
+            frames: Vec::new(),
+        }];
         assert!(
             matches!(
                 gate(&[Slot::undefined(); 4], &row, &[1]),
@@ -5494,7 +6424,7 @@ mod tests {
         assert!(gate(&[Slot::undefined(); 4], &row, &[]).is_ok());
     }
 
-    /// Review wave 5: the declared `length` must cover the row's items.
+    /// The declared `length` must cover the row's items.
     ///
     /// Note what this does NOT do: it does not bound `length` itself. A
     /// sparse array is ordinary JS state (`a[0] = 7; a.length = 2e8`), so
@@ -5509,27 +6439,47 @@ mod tests {
         // More items than the length can hold — caught, like the case
         // below, by bounding the last index: ascending indices under
         // `length` cannot outnumber it.
-        let overfull = vec![ArrayImage { owner: 1, length: 1, items: vec![(0, v(7)), (1, v(8))] }];
+        let overfull = vec![ArrayImage {
+            owner: 1,
+            length: 1,
+            items: vec![(0, v(7)), (1, v(8))],
+        }];
         assert!(matches!(
             decode_arrays(&encode_arrays(&overfull)),
             Err(SnapshotError::Corrupt(_)),
         ));
         // A single item sitting AT or PAST the declared length.
-        let past = vec![ArrayImage { owner: 1, length: 2, items: vec![(2, v(7))] }];
+        let past = vec![ArrayImage {
+            owner: 1,
+            length: 2,
+            items: vec![(2, v(7))],
+        }];
         assert!(matches!(
             decode_arrays(&encode_arrays(&past)),
             Err(SnapshotError::Corrupt(_)),
         ));
         // A dense, honest row still decodes.
-        let ok = vec![ArrayImage { owner: 1, length: 2, items: vec![(0, v(7)), (1, v(8))] }];
+        let ok = vec![ArrayImage {
+            owner: 1,
+            length: 2,
+            items: vec![(0, v(7)), (1, v(8))],
+        }];
         assert_eq!(decode_arrays(&encode_arrays(&ok)).unwrap(), ok);
         // And a SPARSE row does too — the guard bounds the items, it does
         // not require density. Including the extreme: this is exactly
         // `a[0] = 7; a.length = 2e8`, and refusing it would refuse a
         // correct snapshot.
-        let sparse = vec![ArrayImage { owner: 1, length: 9, items: vec![(0, v(7)), (8, v(8))] }];
+        let sparse = vec![ArrayImage {
+            owner: 1,
+            length: 9,
+            items: vec![(0, v(7)), (8, v(8))],
+        }];
         assert_eq!(decode_arrays(&encode_arrays(&sparse)).unwrap(), sparse);
-        let huge = vec![ArrayImage { owner: 1, length: 200_000_000, items: vec![(0, v(7))] }];
+        let huge = vec![ArrayImage {
+            owner: 1,
+            length: 200_000_000,
+            items: vec![(0, v(7))],
+        }];
         assert_eq!(decode_arrays(&encode_arrays(&huge)).unwrap(), huge);
     }
 
@@ -5542,12 +6492,20 @@ mod tests {
         // import-export identity the CAS key rests on. Note the plain
         // write(read(b)) round trip IS idempotent for these, which is
         // why only a live-Interp round trip exposes it.
-        let dup = vec![ArrayImage { owner: 1, length: 4, items: vec![(1, v(10)), (1, v(11))] }];
+        let dup = vec![ArrayImage {
+            owner: 1,
+            length: 4,
+            items: vec![(1, v(10)), (1, v(11))],
+        }];
         assert!(matches!(
             decode_arrays(&encode_arrays(&dup)),
             Err(SnapshotError::Corrupt(_)),
         ));
-        let unordered = vec![ArrayImage { owner: 1, length: 4, items: vec![(3, v(30)), (1, v(10))] }];
+        let unordered = vec![ArrayImage {
+            owner: 1,
+            length: 4,
+            items: vec![(3, v(30)), (1, v(10))],
+        }];
         assert!(matches!(
             decode_arrays(&encode_arrays(&unordered)),
             Err(SnapshotError::Corrupt(_)),
@@ -5562,8 +6520,14 @@ mod tests {
         // indices in bounds, registry rooted, nothing downstream catches
         // it.
         let shared = vec![
-            RegistryImage { key: b"aaa".to_vec(), descriptor: 3 },
-            RegistryImage { key: b"bbb".to_vec(), descriptor: 3 },
+            RegistryImage {
+                key: b"aaa".to_vec(),
+                descriptor: 3,
+            },
+            RegistryImage {
+                key: b"bbb".to_vec(),
+                descriptor: 3,
+            },
         ];
         assert!(matches!(
             decode_registry(&encode_registry(&shared)),
@@ -5571,8 +6535,14 @@ mod tests {
         ));
         // Distinct descriptors decode fine.
         let ok = vec![
-            RegistryImage { key: b"aaa".to_vec(), descriptor: 3 },
-            RegistryImage { key: b"bbb".to_vec(), descriptor: 4 },
+            RegistryImage {
+                key: b"aaa".to_vec(),
+                descriptor: 3,
+            },
+            RegistryImage {
+                key: b"bbb".to_vec(),
+                descriptor: 4,
+            },
         ];
         assert_eq!(decode_registry(&encode_registry(&ok)).unwrap(), ok);
     }
@@ -5580,6 +6550,7 @@ mod tests {
     #[test]
     fn empty_machine_round_trips_byte_equal() {
         let img = MachineImage {
+            index_props: Vec::new(),
             version: Version::current(),
             signature: sig(),
             creation: CreationParams::default(),
@@ -5602,30 +6573,185 @@ mod tests {
             wrappers: Vec::new(),
             regexps: Vec::new(),
             dates: Vec::new(),
-            function_state: ironhorse_vm::FunctionStateSnapshot::default(),
-            proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
+            function_state: ironhorse_vm::snapshot_api::FunctionStateSnapshot::default(),
+            proxy_state: ironhorse_vm::snapshot_api::ProxyStateSnapshot::default(),
             accessors: Vec::new(),
             intl_bound_functions: Vec::new(),
-            private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
+            private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
             generators: Vec::new(),
-            promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
+            promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
             iterators: Vec::new(),
             name_floor: None,
         };
-        let bytes = write_machine(&img);
+        let bytes = write_machine_unchecked(&img);
         let back = read_machine(&bytes, &sig()).unwrap();
         assert_eq!(back, img);
         // Second write byte-equals the first.
-        assert_eq!(write_machine(&back), bytes);
+        assert_eq!(write_machine_unchecked(&back), bytes);
+    }
+
+    fn container_roster_fixture(
+        version: u32,
+        edits: &[(crate::format::FourCc, Option<Vec<u8>>)],
+    ) -> Vec<u8> {
+        let mut image = MachineImage::from_arenas(
+            sig(),
+            &SlotArena::new(),
+            &ChunkArena::new(),
+            &[],
+            vec!["😀".into()],
+            vec![],
+            SymbolKeyImage::default(),
+        );
+        image.version.format_version = version;
+        // A real free-list payload must survive the small-state transfer.
+        image.slots = vec![Slot::undefined()];
+        image.slot_free = vec![0];
+        let bytes = write_machine_unchecked(&image);
+        let reader = AtomReader::parse(&bytes).unwrap();
+        let mut writer = AtomWriter::new();
+        for &tag in crate::format::CANONICAL_ATOM_ORDER {
+            let payload = match edits.iter().find(|(edited, _)| *edited == tag) {
+                Some((_, payload)) => payload.as_deref(),
+                None => reader.find(tag).map(|atom| atom.payload),
+            };
+            if let Some(payload) = payload {
+                writer.atom(tag, payload).unwrap();
+            }
+        }
+        writer.finish().unwrap()
+    }
+
+    #[test]
+    fn roster_container_decode_preserves_competing_refusal_precedence() {
+        use crate::format::{ABUF, ARRY, ESTK, IDXP};
+        let empty = Some(vec![0, 0, 0, 0]);
+        let cases = [
+            (
+                vec![(ARRY, empty.clone()), (IDXP, empty.clone())],
+                "IDXP atom present but empty; the writer omits it",
+            ),
+            (
+                vec![(METR, None), (IDXP, empty.clone())],
+                "missing METR identity",
+            ),
+            (
+                vec![
+                    (STAC, Some(encode_stack(&[Slot::integer(1)]))),
+                    (METR, None),
+                ],
+                "STAC not empty at a quiescent boundary",
+            ),
+            (
+                vec![
+                    (
+                        ESTK,
+                        Some(encode_error_frames(&[ErrorImage {
+                            owner: 0,
+                            name: "Error".into(),
+                            message: None,
+                            frames: vec!["frame".into()],
+                        }])),
+                    ),
+                    (ABUF, empty),
+                ],
+                "error-frame side table: owner has no error row",
+            ),
+        ];
+        for (edits, expected) in cases {
+            for version in [14, Version::current().format_version] {
+                let bytes = container_roster_fixture(version, &edits);
+                assert!(
+                    matches!(read_machine(&bytes, &sig()), Err(SnapshotError::Corrupt(actual)) if actual == expected),
+                    "version {version}: expected {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn roster_container_decode_preserves_legacy_names_and_heap_free_slots() {
+        for version in [14, Version::current().format_version] {
+            let bytes = container_roster_fixture(version, &[]);
+            let image = read_machine(&bytes, &sig()).unwrap();
+            assert_eq!(image.version.format_version, version);
+            assert_eq!(image.names, vec![SymbolName::from("😀")]);
+            assert_eq!(image.slot_free, vec![0]);
+            assert_eq!(image.slot_live, 0);
+            assert_eq!(write_machine_unchecked(&image), bytes);
+        }
+    }
+
+    #[test]
+    fn roster_container_preserves_presence_and_legacy_name_bytes() {
+        let mut image = MachineImage::from_arenas(
+            sig(),
+            &SlotArena::new(),
+            &ChunkArena::new(),
+            &[],
+            vec!["😀".into()],
+            vec![],
+            SymbolKeyImage::default(),
+        );
+        image.version.format_version = 14;
+        let bytes = write_machine_unchecked(&image);
+        let reader = AtomReader::parse(&bytes).unwrap();
+        assert_eq!(
+            reader
+                .atoms()
+                .iter()
+                .map(|atom| atom.tag.0)
+                .collect::<Vec<_>>(),
+            [
+                *b"VERS", *b"SIGN", *b"CREA", *b"BLOC", *b"HEAP", *b"STAC", *b"KEYS", *b"NAME",
+                *b"SYMB", *b"METR"
+            ],
+        );
+        // Format 14 uses UTF-8, not CESU-8, even for supplementary scalars.
+        assert_eq!(
+            reader.find(NAME).unwrap().payload,
+            &[0, 0, 0, 1, 0, 0, 0, 4, 0xf0, 0x9f, 0x98, 0x80]
+        );
+        assert_eq!(
+            Version::decode(reader.find(VERS).unwrap().payload)
+                .unwrap()
+                .format_version,
+            14
+        );
+
+        // Writer-only fixtures isolate content-dependent omission, without
+        // asking the adoption gate to accept these synthetic owner records.
+        image.errors.push(ErrorImage {
+            owner: 0,
+            name: "Error".into(),
+            message: None,
+            frames: vec![],
+        });
+        let bytes = write_machine_unchecked(&image);
+        let reader = AtomReader::parse(&bytes).unwrap();
+        assert!(reader.find(crate::format::ERRD).is_some());
+        assert!(reader.find(crate::format::ESTK).is_none());
+        assert!(reader.find(crate::format::NFLR).is_none());
+        image.errors[0].frames.push("f".into());
+        image.name_floor = Some(0);
+        let bytes = write_machine_unchecked(&image);
+        let reader = AtomReader::parse(&bytes).unwrap();
+        assert!(reader.find(crate::format::ESTK).is_some());
+        assert_eq!(
+            reader.find(crate::format::NFLR).unwrap().payload,
+            &[0, 0, 0, 0]
+        );
+        assert_eq!(reader.atoms().last().unwrap().tag, crate::format::NFLR);
     }
 
     #[test]
     fn signature_mismatch_fails_closed() {
         let img = MachineImage {
+            index_props: Vec::new(),
             version: Version::current(),
             signature: Signature::new("written-under-v1"),
             creation: CreationParams::default(),
@@ -5648,21 +6774,21 @@ mod tests {
             wrappers: Vec::new(),
             regexps: Vec::new(),
             dates: Vec::new(),
-            function_state: ironhorse_vm::FunctionStateSnapshot::default(),
-            proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
+            function_state: ironhorse_vm::snapshot_api::FunctionStateSnapshot::default(),
+            proxy_state: ironhorse_vm::snapshot_api::ProxyStateSnapshot::default(),
             accessors: Vec::new(),
             intl_bound_functions: Vec::new(),
-            private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
+            private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
             generators: Vec::new(),
-            promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
+            promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
             iterators: Vec::new(),
             name_floor: None,
         };
-        let bytes = write_machine(&img);
+        let bytes = write_machine_unchecked(&img);
         match read_machine(&bytes, &Signature::new("host-is-now-v2")) {
             Err(SnapshotError::SignatureMismatch { .. }) => {}
             other => panic!("expected signature mismatch, got {:?}", other),
@@ -5698,8 +6824,7 @@ mod tests {
         slots.free(scratch);
 
         // The stack is EMPTY: `read_machine` enforces quiescence (a
-        // populated STAC cannot come from an honest writer — review
-        // finding 5), and honest writers only ever persist between
+        // populated STAC cannot come from an honest writer), and honest writers only ever persist between
         // cranks. The heap graph above already exercises reference,
         // closure, and string payload round-trips.
         let stack: Vec<Slot> = Vec::new();
@@ -5710,19 +6835,19 @@ mod tests {
             &slots,
             &chunks,
             &stack,
-            vec!["length".to_string(), "name".to_string()],
+            vec!["length".into(), "name".into()],
             vec!["dynKey".to_string()],
             SymbolKeyImage {
-                next_id: u16::MAX - 2,
-                pairs: vec![(u16::MAX - 1, 0), (u16::MAX, 1)],
+                next_id: u16::MAX - 3,
+                pairs: vec![(u16::MAX - 2, 0), (u16::MAX - 1, 1)],
             },
         );
 
-        let bytes = write_machine(&img);
+        let bytes = write_machine_unchecked(&img);
         let back = read_machine(&bytes, &sig()).unwrap();
         assert_eq!(back, img);
         // Byte-equality of the second write.
-        assert_eq!(write_machine(&back), bytes);
+        assert_eq!(write_machine_unchecked(&back), bytes);
 
         // Structural: the rebuilt arenas reproduce the graph.
         let (slots2, chunks2) = back.to_arenas();
@@ -5744,25 +6869,417 @@ mod tests {
     }
 
     #[test]
+    fn side_table_decoders_refuse_truncated_headers_and_absent_rows() {
+        // No complete count header, or a count claiming rows without bytes.
+        // Every call below runs the production decoder and names its refusal.
+        for bytes in [&[][..], &[0], &[0, 0], &[0, 0, 0], &[0, 0, 0, 1], &[255; 4]] {
+            assert!(matches!(
+                decode_index_props(bytes),
+                Err(SnapshotError::Corrupt("index-props side table"))
+            ));
+            assert!(matches!(
+                decode_arrays(bytes),
+                Err(SnapshotError::Corrupt("arrays side table"))
+            ));
+            assert!(matches!(
+                decode_collections(bytes),
+                Err(SnapshotError::Corrupt("collections side table"))
+            ));
+            assert!(matches!(
+                decode_registry(bytes),
+                Err(SnapshotError::Corrupt("symbol registry"))
+            ));
+            assert!(matches!(
+                decode_errors(bytes),
+                Err(SnapshotError::Corrupt("error-data side table"))
+            ));
+            assert!(matches!(
+                decode_error_frames(bytes),
+                Err(SnapshotError::Corrupt("error-frame side table"))
+            ));
+            assert!(matches!(
+                decode_buffers(bytes),
+                Err(SnapshotError::Corrupt("array-buffers side table"))
+            ));
+            assert!(matches!(
+                decode_typed_arrays(bytes),
+                Err(SnapshotError::Corrupt("typed-arrays side table"))
+            ));
+            assert!(matches!(
+                decode_data_views(bytes),
+                Err(SnapshotError::Corrupt("data-views side table"))
+            ));
+            assert!(matches!(
+                decode_wrappers(bytes),
+                Err(SnapshotError::Corrupt("wrapper side table"))
+            ));
+            assert!(matches!(
+                decode_regexps(bytes),
+                Err(SnapshotError::Corrupt("regexp side table"))
+            ));
+            assert!(matches!(
+                decode_dates(bytes),
+                Err(SnapshotError::Corrupt("date side table"))
+            ));
+            assert!(matches!(
+                decode_function_state(bytes),
+                Err(SnapshotError::Corrupt("function state"))
+            ));
+            assert!(matches!(
+                decode_proxy_state(bytes),
+                Err(SnapshotError::Corrupt("proxy state"))
+            ));
+            assert!(matches!(
+                decode_accessors(bytes),
+                Err(SnapshotError::Corrupt("accessor state"))
+            ));
+            assert!(matches!(
+                decode_intl_bound_functions(bytes),
+                Err(SnapshotError::Corrupt("Intl bound-function state"))
+            ));
+            assert!(matches!(
+                decode_private_elements(bytes),
+                Err(SnapshotError::Corrupt("private elements"))
+            ));
+            assert!(matches!(
+                decode_disposable_stacks(bytes),
+                Err(SnapshotError::Corrupt("disposable stacks"))
+            ));
+            assert!(matches!(
+                decode_generators(bytes),
+                Err(SnapshotError::Corrupt("generators"))
+            ));
+            assert!(matches!(
+                decode_async_instances(bytes),
+                Err(SnapshotError::Corrupt("async instances"))
+            ));
+            assert!(matches!(
+                decode_promise_cluster(bytes),
+                Err(SnapshotError::Corrupt("promise cluster"))
+            ));
+            assert!(matches!(
+                decode_arguments_brands(bytes),
+                Err(SnapshotError::Corrupt("arguments brand set"))
+            ));
+            assert!(matches!(
+                decode_temporal(bytes),
+                Err(SnapshotError::Corrupt("temporal record tables"))
+            ));
+            assert!(matches!(
+                decode_intl(bytes),
+                Err(SnapshotError::Corrupt("intl record tables"))
+            ));
+            assert!(matches!(
+                decode_iterators(bytes),
+                Err(SnapshotError::Corrupt("iterator cursors"))
+            ));
+        }
+    }
+
+    #[test]
+    fn optional_empty_atoms_have_exact_refusals() {
+        let image = MachineImage::from_arenas(
+            sig(),
+            &SlotArena::new(),
+            &ChunkArena::new(),
+            &[],
+            vec!["name".into()],
+            Vec::new(),
+            SymbolKeyImage::default(),
+        );
+        let bytes = write_machine_unchecked(&image);
+        assert_eq!(read_machine(&bytes, &sig()).unwrap(), image);
+        let parsed = AtomReader::parse(&bytes).unwrap();
+        let append = |tag, payload: Vec<u8>| {
+            assert!(
+                parsed.find(tag).is_none(),
+                "fixture already contains {tag:?}"
+            );
+            let mut writer = AtomWriter::new();
+            for atom in parsed.atoms() {
+                writer.atom(atom.tag, atom.payload).unwrap();
+            }
+            writer.atom(tag, &payload).unwrap();
+            read_machine(&writer.finish().unwrap(), &sig())
+        };
+        assert_eq!(
+            append(crate::format::IDXP, encode_index_props(&image.index_props)),
+            Err(SnapshotError::Corrupt(
+                "IDXP atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::ARRY, encode_arrays(&image.arrays)),
+            Err(SnapshotError::Corrupt(
+                "ARRY atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::COLL, encode_collections(&image.collections)),
+            Err(SnapshotError::Corrupt(
+                "COLL atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::REGY, encode_registry(&image.registry)),
+            Err(SnapshotError::Corrupt(
+                "REGY atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::ERRD, encode_errors(&image.errors)),
+            Err(SnapshotError::Corrupt(
+                "ERRD atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::ESTK, encode_error_frames(&image.errors)),
+            Err(SnapshotError::Corrupt(
+                "ESTK atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::ABUF, encode_buffers(&image.buffers)),
+            Err(SnapshotError::Corrupt(
+                "ABUF atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(
+                crate::format::TARR,
+                encode_typed_arrays(&image.typed_arrays)
+            ),
+            Err(SnapshotError::Corrupt(
+                "TARR atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::DVIW, encode_data_views(&image.data_views)),
+            Err(SnapshotError::Corrupt(
+                "DVIW atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::WRAP, encode_wrappers(&image.wrappers)),
+            Err(SnapshotError::Corrupt(
+                "WRAP atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::REGX, encode_regexps(&image.regexps)),
+            Err(SnapshotError::Corrupt(
+                "REGX atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(
+                crate::format::ARGB,
+                encode_arguments_brands(&image.arguments_brands)
+            ),
+            Err(SnapshotError::Corrupt(
+                "ARGB atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::TMPR, encode_temporal(&image.temporal)),
+            Err(SnapshotError::Corrupt(
+                "TMPR atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::INTL, encode_intl(&image.intl)),
+            Err(SnapshotError::Corrupt(
+                "INTL atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::ITER, encode_iterators(&image.iterators)),
+            Err(SnapshotError::Corrupt(
+                "ITER atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::DATE, encode_dates(&image.dates)),
+            Err(SnapshotError::Corrupt(
+                "DATE atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(
+                crate::format::FUNC,
+                encode_function_state(&image.function_state)
+            ),
+            Err(SnapshotError::Corrupt(
+                "FUNC atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::PROX, encode_proxy_state(&image.proxy_state)),
+            Err(SnapshotError::Corrupt(
+                "PROX atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::ACCS, encode_accessors(&image.accessors)),
+            Err(SnapshotError::Corrupt(
+                "ACCS atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(
+                crate::format::IBFN,
+                encode_intl_bound_functions(&image.intl_bound_functions)
+            ),
+            Err(SnapshotError::Corrupt(
+                "IBFN atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(
+                crate::format::PRIV,
+                encode_private_elements(&image.private_elements)
+            ),
+            Err(SnapshotError::Corrupt(
+                "PRIV atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(
+                crate::format::DISP,
+                encode_disposable_stacks(&image.disposable_stacks)
+            ),
+            Err(SnapshotError::Corrupt(
+                "DISP atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::GENR, encode_generators(&image.generators)),
+            Err(SnapshotError::Corrupt(
+                "GENR atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(
+                crate::format::PRMS,
+                encode_promise_cluster(&image.promise_cluster)
+            ),
+            Err(SnapshotError::Corrupt(
+                "PRMS atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(
+                crate::format::ASYN,
+                encode_async_instances(&image.promise_cluster.async_instances)
+            ),
+            Err(SnapshotError::Corrupt("ASYN atom present but empty"))
+        );
+        assert_eq!(
+            append(crate::format::NFLR, vec![0; 3]),
+            Err(SnapshotError::Corrupt("installed-names floor size"))
+        );
+        assert_eq!(
+            append(crate::format::NFLR, 2u32.to_be_bytes().to_vec()),
+            Err(SnapshotError::Corrupt(
+                "installed-names floor past the name table"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::NFLR, 1u32.to_be_bytes().to_vec()),
+            Err(SnapshotError::Corrupt(
+                "installed-names floor: non-canonical explicit full floor"
+            ))
+        );
+        // A partial installed-name floor is valid and survives unchanged.
+        assert_eq!(
+            append(crate::format::NFLR, 0u32.to_be_bytes().to_vec())
+                .unwrap()
+                .name_floor,
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn core_payloads_reject_slack_and_current_containers_are_canonical() {
+        let image = MachineImage::from_arenas(
+            sig(),
+            &SlotArena::new(),
+            &ChunkArena::new(),
+            &[],
+            vec!["name".into()],
+            vec!["key".into()],
+            SymbolKeyImage::default(),
+        );
+        let bytes = write_machine_unchecked(&image);
+        assert_eq!(
+            write_machine_unchecked(&read_machine(&bytes, &sig()).unwrap()),
+            bytes
+        );
+        for tag in [VERS, CREA, BLOC, HEAP, STAC, KEYS, NAME] {
+            let parsed = AtomReader::parse(&bytes).unwrap();
+            let mut writer = AtomWriter::new();
+            for atom in parsed.atoms() {
+                let mut payload = atom.payload.to_vec();
+                if atom.tag == tag {
+                    payload.push(0);
+                }
+                writer.atom(atom.tag, &payload).unwrap();
+            }
+            assert!(
+                read_machine(&writer.finish().unwrap(), &sig()).is_err(),
+                "slack in {tag:?}"
+            );
+        }
+        // A core atom absent from an otherwise valid current container is
+        // also a second encoding of the default value and must be refused.
+        for version in [15, 16] {
+            let mut variant = image.clone();
+            variant.version.format_version = version;
+            let bytes = write_machine_unchecked(&variant);
+            for tag in [CREA, BLOC, STAC] {
+                let parsed = AtomReader::parse(&bytes).unwrap();
+                let mut writer = AtomWriter::new();
+                for atom in parsed.atoms() {
+                    if atom.tag != tag {
+                        writer.atom(atom.tag, atom.payload).unwrap();
+                    }
+                }
+                assert!(
+                    read_machine(&writer.finish().unwrap(), &sig()).is_err(),
+                    "missing {tag:?}"
+                );
+            }
+        }
+        // NAME before version 15 used the same UTF-8 decoder as KEYS.
+        let mut legacy_name = encode_strings(&["legacy".into()]);
+        legacy_name.push(0);
+        assert!(decode_strings(&legacy_name).is_err());
+        let mut frees = encode_u32s(&[1]);
+        frees.push(0);
+        assert!(decode_u32s(&frees).is_err());
+    }
+
+    #[test]
     fn string_and_symbol_tables_round_trip() {
         let img = MachineImage {
+            index_props: Vec::new(),
             version: Version::current(),
             signature: sig(),
             creation: CreationParams {
                 initial_slot_count: 3,
-                initial_chunk_bytes: 16,
+                initial_chunk_bytes: 4,
             },
             chunks: vec![1, 2, 3, 4],
             slots: vec![Slot::integer(9)],
             slot_free: vec![],
             slot_live: 1,
-            // Empty by the quiescence gate (review finding 5).
+            // Empty by the quiescence gate.
             stack: vec![],
             keys: vec!["k1".to_string(), "k2".to_string(), "".to_string()],
-            names: vec!["Object".to_string(), "length".to_string()],
+            names: vec!["Object".into(), "length".into()],
             symbols: SymbolKeyImage {
-                next_id: u16::MAX - 1,
-                pairs: vec![(u16::MAX, 0)],
+                next_id: u16::MAX - 2,
+                pairs: vec![(u16::MAX - 1, 0)],
             },
             meter: MeterImage::current(),
             arrays: Vec::new(),
@@ -5775,21 +7292,21 @@ mod tests {
             wrappers: Vec::new(),
             regexps: Vec::new(),
             dates: Vec::new(),
-            function_state: ironhorse_vm::FunctionStateSnapshot::default(),
-            proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
+            function_state: ironhorse_vm::snapshot_api::FunctionStateSnapshot::default(),
+            proxy_state: ironhorse_vm::snapshot_api::ProxyStateSnapshot::default(),
             accessors: Vec::new(),
             intl_bound_functions: Vec::new(),
-            private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
+            private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
             generators: Vec::new(),
-            promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
+            promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
             iterators: Vec::new(),
             name_floor: None,
         };
-        let bytes = write_machine(&img);
+        let bytes = write_machine_unchecked(&img);
         let back = read_machine(&bytes, &sig()).unwrap();
         assert_eq!(back, img);
     }
@@ -5799,9 +7316,9 @@ mod tests {
         // A hand-built container with VERS+SIGN but no HEAP.
         use crate::atom::AtomWriter;
         let mut w = AtomWriter::new();
-        w.atom(VERS, &Version::current().encode());
-        w.atom(SIGN, &sig().encode());
-        let bytes = w.finish();
+        w.atom(VERS, &Version::current().encode()).unwrap();
+        w.atom(SIGN, &sig().encode()).unwrap();
+        let bytes = w.finish().unwrap();
         assert_eq!(
             read_machine(&bytes, &sig()),
             Err(SnapshotError::MissingAtom(HEAP))
@@ -5825,9 +7342,9 @@ mod tests {
             vec![],
             SymbolKeyImage::default(),
         );
-        let bytes = write_machine(&img);
+        let bytes = write_machine_unchecked(&img);
         let back = read_machine(&bytes, &sig()).unwrap();
-        assert_eq!(write_machine(&back), bytes);
+        assert_eq!(write_machine_unchecked(&back), bytes);
         let (slots2, chunks2) = back.to_arenas();
         if let Payload::BigInt(o) = slots2.get(bi).value {
             assert_eq!(&*chunks2.payload(o), &[0x00, 0x01, 0x00, 0x00, 0x00]);
@@ -5836,7 +7353,7 @@ mod tests {
         }
     }
 
-    // --- malformed-atom decoder trophies (stage-6 child 4) ---
+    // --- malformed-atom decoder regressions ---
     //
     // A container whose list-count field is enormous but whose payload is
     // short must fail closed **promptly** — the reader must not pre-reserve a
@@ -5848,7 +7365,7 @@ mod tests {
     // clamp in `decode_strings`/`decode_u32s`/`decode_heap` is what makes them
     // return in microseconds; before it, each hung on a 16–100 GB allocation.
     // (The daemon restore path must fail closed on a corrupt snapshot, never
-    // crash the worker — job spec item 2.)
+    // crash the worker.)
 
     use crate::atom::AtomWriter;
 
@@ -5857,10 +7374,10 @@ mod tests {
     /// appended after it is reached by the decoder.
     fn valid_prefix() -> AtomWriter {
         let mut w = AtomWriter::new();
-        w.atom(VERS, &Version::current().encode());
-        w.atom(SIGN, &sig().encode());
+        w.atom(VERS, &Version::current().encode()).unwrap();
+        w.atom(SIGN, &sig().encode()).unwrap();
         // Empty HEAP payload: slot_count=0, free_count=0, live=0.
-        w.atom(HEAP, &[0u8; 12]);
+        w.atom(HEAP, &[0u8; 12]).unwrap();
         w
     }
 
@@ -5873,20 +7390,38 @@ mod tests {
     fn malformed_string_count_does_not_over_allocate() {
         // KEYS claims u32::MAX strings but carries none.
         let mut w = valid_prefix();
-        w.atom(KEYS, &huge_count_payload());
-        let bytes = w.finish();
+        w.atom(KEYS, &huge_count_payload()).unwrap();
+        let bytes = w.finish().unwrap();
         assert_eq!(
             read_machine(&bytes, &sig()),
             Err(SnapshotError::Corrupt("string list entry header"))
         );
         // NAME is decoded by the same path — lock it too.
         let mut w = valid_prefix();
-        w.atom(NAME, &huge_count_payload());
-        let bytes = w.finish();
+        w.atom(NAME, &huge_count_payload()).unwrap();
+        let bytes = w.finish().unwrap();
         assert_eq!(
             read_machine(&bytes, &sig()),
             Err(SnapshotError::Corrupt("string list entry header"))
         );
+    }
+
+    #[test]
+    fn reserved_symbol_namespace_is_refused_without_reinterpreting_legacy_keys() {
+        let legacy = SymbolKeyImage {
+            next_id: u16::MAX - 1,
+            pairs: vec![(u16::MAX, 4)],
+        };
+        assert_eq!(
+            decode_symbol_keys(&encode_symbol_keys(&legacy)),
+            Err(SnapshotError::Corrupt(
+                "symbol-key table: reserved environment id (legacy symbol namespace unsupported)"
+            ))
+        );
+        let virgin = decode_symbol_keys(&[0, 0, 0, 0]).unwrap();
+        assert_eq!(virgin.next_id, u16::MAX - 1);
+        assert_eq!(encode_symbol_keys(&virgin), [0, 0, 0, 0]);
+        assert!(decode_symbol_keys(&[0xFF, 0xFE, 0, 0, 0, 0]).is_err());
     }
 
     #[test]
@@ -5920,8 +7455,8 @@ mod tests {
         let mut payload = vec![0u8, 1];
         payload.extend_from_slice(&u32::MAX.to_be_bytes());
         let mut w = valid_prefix();
-        w.atom(SYMB, &payload);
-        let bytes = w.finish();
+        w.atom(SYMB, &payload).unwrap();
+        let bytes = w.finish().unwrap();
         assert_eq!(
             read_machine(&bytes, &sig()),
             Err(SnapshotError::Corrupt("symbol-key table"))
@@ -5936,10 +7471,10 @@ mod tests {
         heap.extend_from_slice(&u32::MAX.to_be_bytes()); // free_count = u32::MAX
         heap.extend_from_slice(&0u32.to_be_bytes()); // live = 0
         let mut w = AtomWriter::new();
-        w.atom(VERS, &Version::current().encode());
-        w.atom(SIGN, &sig().encode());
-        w.atom(HEAP, &heap);
-        let bytes = w.finish();
+        w.atom(VERS, &Version::current().encode()).unwrap();
+        w.atom(SIGN, &sig().encode()).unwrap();
+        w.atom(HEAP, &heap).unwrap();
+        let bytes = w.finish().unwrap();
         assert_eq!(
             read_machine(&bytes, &sig()),
             Err(SnapshotError::Corrupt("HEAP free list"))
@@ -5954,7 +7489,7 @@ mod tests {
         // duplicate, and accounting violations — same gates as the
         // store path.
         let record = [0u8; SLOT_RECORD_BYTES]; // one Undefined record
-        let arm = |free: &[u32], live: u32, slot_count: u32, what: &'static str| {
+        let arm = |free: &[u32], live: u32, slot_count: u32| {
             let mut heap = Vec::new();
             heap.extend_from_slice(&slot_count.to_be_bytes());
             heap.extend_from_slice(&(free.len() as u32).to_be_bytes());
@@ -5966,21 +7501,26 @@ mod tests {
                 heap.extend_from_slice(&record);
             }
             let mut w = AtomWriter::new();
-            w.atom(VERS, &Version::current().encode());
-            w.atom(SIGN, &sig().encode());
-            w.atom(HEAP, &heap);
-            assert_eq!(
-                read_machine(&w.finish(), &sig()),
-                Err(SnapshotError::Corrupt(what)),
-                "free={free:?} live={live} slot_count={slot_count}"
-            );
+            w.atom(VERS, &Version::current().encode()).unwrap();
+            w.atom(SIGN, &sig().encode()).unwrap();
+            w.atom(HEAP, &heap).unwrap();
+            read_machine(&w.finish().unwrap(), &sig())
         };
         // Out of range.
-        arm(&[7], 0, 1, "HEAP free list entry");
+        assert_eq!(
+            arm(&[7], 0, 1),
+            Err(SnapshotError::Corrupt("HEAP free list entry"))
+        );
         // Duplicate.
-        arm(&[0, 0], 0, 2, "HEAP free list entry");
+        assert_eq!(
+            arm(&[0, 0], 0, 2),
+            Err(SnapshotError::Corrupt("HEAP free list entry"))
+        );
         // Accounting: free + live != slot_count.
-        arm(&[], 5, 1, "HEAP live/free accounting");
+        assert_eq!(
+            arm(&[], 5, 1),
+            Err(SnapshotError::Corrupt("HEAP live/free accounting"))
+        );
     }
 
     #[test]
@@ -5993,10 +7533,10 @@ mod tests {
         heap.extend_from_slice(&0u32.to_be_bytes()); // free_count = 0
         heap.extend_from_slice(&0u32.to_be_bytes()); // live = 0
         let mut w = AtomWriter::new();
-        w.atom(VERS, &Version::current().encode());
-        w.atom(SIGN, &sig().encode());
-        w.atom(HEAP, &heap);
-        let bytes = w.finish();
+        w.atom(VERS, &Version::current().encode()).unwrap();
+        w.atom(SIGN, &sig().encode()).unwrap();
+        w.atom(HEAP, &heap).unwrap();
+        let bytes = w.finish().unwrap();
         assert_eq!(
             read_machine(&bytes, &sig()),
             Err(SnapshotError::Corrupt("HEAP records truncated"))
@@ -6009,11 +7549,3731 @@ mod tests {
         let mut stac = Vec::new();
         stac.extend_from_slice(&u32::MAX.to_be_bytes()); // count = u32::MAX
         let mut w = valid_prefix();
-        w.atom(STAC, &stac);
-        let bytes = w.finish();
+        w.atom(STAC, &stac).unwrap();
+        let bytes = w.finish().unwrap();
         assert_eq!(
             read_machine(&bytes, &sig()),
             Err(SnapshotError::Corrupt("STAC records truncated"))
         );
+    }
+}
+
+#[cfg(test)]
+mod meter_identity_tests {
+    use super::*;
+
+    #[test]
+    fn meter_identity_requires_exact_digest_and_consumption() {
+        let meter = MeterImage::current();
+        let bytes = meter.encode();
+        assert_eq!(MeterImage::decode(&bytes).unwrap(), meter);
+        // An old name-only record cannot certify the current weights.
+        assert!(MeterImage::decode(&bytes[..bytes.len() - 32]).is_err());
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(MeterImage::decode(&trailing).is_err());
+        let mut changed = bytes;
+        *changed.last_mut().unwrap() ^= 1;
+        assert!(matches!(
+            MeterImage::decode(&changed),
+            Err(SnapshotError::CostTableMismatch { .. })
+        ));
+    }
+}
+
+#[cfg(test)]
+mod scalar_framing_refusals {
+    use super::*;
+
+    #[test]
+    fn creation_and_meter_framing() {
+        let creation = CreationParams::default().encode();
+        assert!(CreationParams::decode(&creation).is_ok());
+        for length in 0..8 {
+            assert_eq!(
+                CreationParams::decode(&creation[..length]),
+                Err(SnapshotError::Corrupt("CREA payload too short"))
+            );
+        }
+        let mut trailing = creation;
+        trailing.push(0);
+        assert_eq!(
+            CreationParams::decode(&trailing),
+            Err(SnapshotError::Corrupt("CREA trailing bytes"))
+        );
+
+        let meter = MeterImage::current().encode();
+        assert!(MeterImage::decode(&meter).is_ok());
+        for length in 0..28 {
+            assert_eq!(
+                MeterImage::decode(&meter[..length]),
+                Err(SnapshotError::Corrupt("METR header"))
+            );
+        }
+        for length in 28..meter.len() {
+            assert_eq!(
+                MeterImage::decode(&meter[..length]),
+                Err(SnapshotError::Corrupt("METR version string"))
+            );
+        }
+        let mut invalid = meter.clone();
+        invalid[28] = 0xff;
+        assert_eq!(
+            MeterImage::decode(&invalid),
+            Err(SnapshotError::Corrupt("METR version not utf8"))
+        );
+        invalid = meter;
+        invalid[24..28].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert_eq!(
+            MeterImage::decode(&invalid),
+            Err(SnapshotError::Corrupt("METR version string"))
+        );
+    }
+
+    #[test]
+    fn heap_and_stack_framing() {
+        let mut heap = vec![0; 12];
+        assert!(decode_heap(&heap).is_ok());
+        for length in 0..12 {
+            assert_eq!(
+                decode_heap(&heap[..length]),
+                Err(SnapshotError::Corrupt("HEAP header"))
+            );
+        }
+        heap.push(0);
+        assert_eq!(
+            decode_heap(&heap),
+            Err(SnapshotError::Corrupt("HEAP trailing bytes"))
+        );
+        heap = vec![0; 12 + SLOT_RECORD_BYTES];
+        heap[3] = 1; // one live Undefined slot, an honest control
+        heap[11] = 1;
+        assert!(decode_heap(&heap).is_ok());
+        heap[12] = 200; // no such Kind, with otherwise valid framing/accounting
+        assert_eq!(
+            decode_heap(&heap),
+            Err(SnapshotError::Corrupt("HEAP slot record"))
+        );
+
+        let mut stack = encode_stack(&[Slot::undefined()]);
+        assert!(decode_stack(&stack).is_ok());
+        for length in 0..4 {
+            assert_eq!(
+                decode_stack(&stack[..length]),
+                Err(SnapshotError::Corrupt("STAC header"))
+            );
+        }
+        stack[4] = 200;
+        assert_eq!(
+            decode_stack(&stack),
+            Err(SnapshotError::Corrupt("STAC slot record"))
+        );
+        stack[4] = 0;
+        stack.push(0);
+        assert_eq!(
+            decode_stack(&stack),
+            Err(SnapshotError::Corrupt("STAC trailing bytes"))
+        );
+    }
+
+    #[test]
+    fn string_name_and_integer_list_framing() {
+        let strings = encode_strings(&["abc".to_owned()]);
+        assert_eq!(decode_strings(&strings).unwrap(), vec!["abc"]);
+        assert_eq!(
+            decode_names(&strings).unwrap(),
+            vec![SymbolName::from("abc")]
+        );
+        for length in 0..4 {
+            assert_eq!(
+                decode_strings(&strings[..length]),
+                Err(SnapshotError::Corrupt("string list header"))
+            );
+            assert_eq!(
+                decode_names(&strings[..length]),
+                Err(SnapshotError::Corrupt("string list header"))
+            );
+        }
+        for length in 8..strings.len() {
+            assert_eq!(
+                decode_strings(&strings[..length]),
+                Err(SnapshotError::Corrupt("string list entry body"))
+            );
+            assert_eq!(
+                decode_names(&strings[..length]),
+                Err(SnapshotError::Corrupt("string list entry body"))
+            );
+        }
+        let mut invalid = strings.clone();
+        invalid[8] = 0xff;
+        assert_eq!(
+            decode_strings(&invalid),
+            Err(SnapshotError::Corrupt("string list entry not utf8"))
+        );
+        assert_eq!(
+            decode_names(&invalid),
+            Err(SnapshotError::Corrupt("name list entry not CESU-8"))
+        );
+        invalid = strings;
+        invalid.push(0);
+        assert_eq!(
+            decode_strings(&invalid),
+            Err(SnapshotError::Corrupt("string list trailing bytes"))
+        );
+        assert_eq!(
+            decode_names(&invalid),
+            Err(SnapshotError::Corrupt("name list trailing bytes"))
+        );
+        invalid[4..8].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert_eq!(
+            decode_strings(&invalid),
+            Err(SnapshotError::Corrupt("string list entry body"))
+        );
+        assert_eq!(
+            decode_names(&invalid),
+            Err(SnapshotError::Corrupt("string list entry body"))
+        );
+
+        let mut integers = encode_u32s(&[42]);
+        assert_eq!(decode_u32s(&integers).unwrap(), vec![42]);
+        for length in 0..4 {
+            assert_eq!(
+                decode_u32s(&integers[..length]),
+                Err(SnapshotError::Corrupt("u32 list header"))
+            );
+        }
+        for length in 4..integers.len() {
+            assert_eq!(
+                decode_u32s(&integers[..length]),
+                Err(SnapshotError::Corrupt("u32 list entry"))
+            );
+        }
+        integers.push(0);
+        assert_eq!(
+            decode_u32s(&integers),
+            Err(SnapshotError::Corrupt("u32 list trailing bytes"))
+        );
+    }
+}
+
+#[cfg(test)]
+mod side_table_order_refusals {
+    use super::*;
+
+    #[test]
+    fn arrays_require_unique_ascending_owners() {
+        let first = ArrayImage {
+            owner: 2,
+            length: 0,
+            items: vec![],
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_arrays(&encode_arrays(&[first.clone(), second.clone()])).is_ok());
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_arrays(&encode_arrays(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "arrays side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn index_props_require_unique_ascending_owners() {
+        let first = IndexPropsImage {
+            owner: 2,
+            high_water: 0,
+            items: vec![],
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_index_props(&encode_index_props(&[first.clone(), second.clone()])).is_ok());
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_index_props(&encode_index_props(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "index-props side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn collections_require_unique_ascending_owners() {
+        let first = CollectionImage {
+            owner: 2,
+            kind: 2,
+            table_length: 0,
+            entries: vec![],
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_collections(&encode_collections(&[first.clone(), second.clone()])).is_ok());
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_collections(&encode_collections(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "collections side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn buffers_require_unique_ascending_owners() {
+        let first = BufferImage {
+            owner: 2,
+            data: 0,
+            length: 0,
+            flags: 0,
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_buffers(&encode_buffers(&[first.clone(), second.clone()])).is_ok());
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_buffers(&encode_buffers(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "array-buffers side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn typed_arrays_require_unique_ascending_owners() {
+        let first = TypedArrayImage {
+            owner: 2,
+            kind: 0,
+            buffer: 0,
+            offset: 0,
+            length: 0,
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(
+            decode_typed_arrays(&encode_typed_arrays(&[first.clone(), second.clone()])).is_ok()
+        );
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_typed_arrays(&encode_typed_arrays(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "typed-arrays side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn data_views_require_unique_ascending_owners() {
+        let first = DataViewImage {
+            owner: 2,
+            buffer: 0,
+            offset: 0,
+            size: 0,
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_data_views(&encode_data_views(&[first.clone(), second.clone()])).is_ok());
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_data_views(&encode_data_views(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "data-views side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn wrappers_require_unique_ascending_owners() {
+        let first = WrapperImage {
+            owner: 2,
+            value: Slot::integer(7),
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_wrappers(&encode_wrappers(&[first.clone(), second.clone()])).is_ok());
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_wrappers(&encode_wrappers(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "wrapper side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn dates_require_unique_ascending_owners() {
+        let first = DateImage {
+            owner: 2,
+            value_bits: 0,
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_dates(&encode_dates(&[first.clone(), second.clone()])).is_ok());
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_dates(&encode_dates(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "date side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn regexps_require_unique_ascending_owners() {
+        let first = RegExpImage {
+            owner: 2,
+            source: "a".into(),
+            flags: "g".into(),
+            last_index_bits: 0,
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_regexps(&encode_regexps(&[first.clone(), second.clone()])).is_ok());
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_regexps(&encode_regexps(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "regexp side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn errors_require_unique_ascending_owners() {
+        let first = ErrorImage {
+            owner: 2,
+            name: "Error".into(),
+            message: None,
+            frames: vec![],
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_errors(&encode_errors(&[first.clone(), second.clone()])).is_ok());
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_errors(&encode_errors(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "error-data side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn error_frames_require_unique_ascending_owners() {
+        let first = ErrorImage {
+            owner: 2,
+            name: "Error".into(),
+            message: None,
+            frames: vec!["f".into()],
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(
+            decode_error_frames(&encode_error_frames(&[first.clone(), second.clone()])).is_ok()
+        );
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_error_frames(&encode_error_frames(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "error-frame side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod side_table_field_refusals {
+    use super::*;
+
+    #[test]
+    fn sparse_item_order_and_bounds() {
+        let mut array = ArrayImage {
+            owner: 1,
+            length: 4,
+            items: vec![(1, Slot::integer(1)), (3, Slot::integer(2))],
+        };
+        let mut props = IndexPropsImage {
+            owner: 1,
+            high_water: 4,
+            items: array.items.clone(),
+        };
+        assert!(decode_arrays(&encode_arrays(&[array.clone()])).is_ok());
+        assert!(decode_index_props(&encode_index_props(&[props.clone()])).is_ok());
+        for index in [1, 0] {
+            array.items[1].0 = index;
+            props.items[1].0 = index;
+            assert_eq!(
+                decode_arrays(&encode_arrays(&[array.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "arrays side table: item indices not strictly ascending"
+                ))
+            );
+            assert_eq!(
+                decode_index_props(&encode_index_props(&[props.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "index-props side table: item indices not strictly ascending"
+                ))
+            );
+        }
+        array.items[1].0 = 3;
+        props.items[1].0 = 3;
+        for limit in [3, 2] {
+            array.length = limit;
+            props.high_water = limit;
+            assert_eq!(
+                decode_arrays(&encode_arrays(&[array.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "arrays side table: item index at or past the declared length"
+                ))
+            );
+            assert_eq!(
+                decode_index_props(&encode_index_props(&[props.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "index-props side table: high-water mark below its own items"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn collection_geometry_and_kind() {
+        let minimum = ironhorse_vm::snapshot_api::MAP_MIN_TABLE_LENGTH;
+        let mut row = CollectionImage {
+            owner: 1,
+            kind: 0,
+            table_length: minimum,
+            entries: vec![],
+        };
+        assert!(decode_collections(&encode_collections(&[row.clone()])).is_ok());
+        for length in [0, minimum - 1, minimum * 3, 2 * 1024 * 1024] {
+            row.table_length = length;
+            assert_eq!(
+                decode_collections(&encode_collections(&[row.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "collections side table: unreachable rehash geometry"
+                ))
+            );
+        }
+        row.table_length = 8;
+        let high = 6;
+        row.entries = (0..high)
+            .map(|i| (Slot::integer(i as i32), Slot::undefined()))
+            .collect();
+        assert!(decode_collections(&encode_collections(&[row.clone()])).is_ok());
+        row.entries
+            .push((Slot::integer(high as i32), Slot::undefined()));
+        assert_eq!(
+            decode_collections(&encode_collections(&[row.clone()])),
+            Err(SnapshotError::Corrupt(
+                "collections side table: live size past the grow threshold"
+            ))
+        );
+        row.entries.clear();
+        for kind in [2, 3] {
+            row.kind = kind;
+            row.table_length = 0;
+            assert!(decode_collections(&encode_collections(&[row.clone()])).is_ok());
+            row.table_length = minimum;
+            assert_eq!(
+                decode_collections(&encode_collections(&[row.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "collections side table: weak kind carries a hash table"
+                ))
+            );
+        }
+        row.kind = 4;
+        assert_eq!(
+            decode_collections(&encode_collections(&[row])),
+            Err(SnapshotError::Corrupt("collection kind code"))
+        );
+    }
+
+    #[test]
+    fn buffer_flags_and_element_kinds() {
+        let mut buffer = BufferImage {
+            owner: 1,
+            data: 0,
+            length: 0,
+            flags: 0,
+        };
+        for flags in 0..=3 {
+            buffer.flags = flags;
+            assert!(decode_buffers(&encode_buffers(&[buffer.clone()])).is_ok());
+        }
+        for flags in [4, 128, 255] {
+            buffer.flags = flags;
+            assert_eq!(
+                decode_buffers(&encode_buffers(&[buffer.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "array-buffers side table: unknown flag bits"
+                ))
+            );
+        }
+        let mut view = TypedArrayImage {
+            owner: 1,
+            kind: 0,
+            buffer: 2,
+            offset: 0,
+            length: 0,
+        };
+        for kind in 0..ironhorse_vm::TYPED_ARRAY_TYPES.len() as u8 {
+            view.kind = kind;
+            assert!(decode_typed_arrays(&encode_typed_arrays(&[view.clone()])).is_ok());
+        }
+        for kind in [ironhorse_vm::TYPED_ARRAY_TYPES.len() as u8, 255] {
+            view.kind = kind;
+            assert_eq!(
+                decode_typed_arrays(&encode_typed_arrays(&[view.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "typed-arrays side table: unknown element kind"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn error_and_regexp_text_fields() {
+        let row = ErrorImage {
+            owner: 1,
+            name: "Error".into(),
+            message: Some("m".into()),
+            frames: vec!["f".into()],
+        };
+        let bytes = encode_errors(&[row.clone()]);
+        assert!(decode_errors(&bytes).is_ok());
+        let mut invalid = bytes.clone();
+        invalid[12] = 0xff; // name follows count, owner, and length
+        assert_eq!(
+            decode_errors(&invalid),
+            Err(SnapshotError::Corrupt(
+                "error-data side table: name not UTF-8"
+            ))
+        );
+        invalid = bytes.clone();
+        invalid[12] = b'X';
+        assert_eq!(
+            decode_errors(&invalid),
+            Err(SnapshotError::Corrupt(
+                "error-data side table: not an engine error name"
+            ))
+        );
+        invalid = bytes.clone();
+        invalid[17] = 2;
+        assert_eq!(
+            decode_errors(&invalid),
+            Err(SnapshotError::Corrupt(
+                "error-data side table: message flag not 0/1"
+            ))
+        );
+        invalid = bytes;
+        *invalid.last_mut().unwrap() = 0xff;
+        assert_eq!(
+            decode_errors(&invalid),
+            Err(SnapshotError::Corrupt(
+                "error-data side table: invalid message encoding"
+            ))
+        );
+
+        let frames = encode_error_frames(&[row]);
+        assert!(decode_error_frames(&frames).is_ok());
+        invalid = frames.clone();
+        *invalid.last_mut().unwrap() = 0xff;
+        assert_eq!(
+            decode_error_frames(&invalid),
+            Err(SnapshotError::Corrupt(
+                "error-frame side table: frame name not UTF-8"
+            ))
+        );
+        invalid = frames[..12].to_vec();
+        invalid[8..12].copy_from_slice(&0u32.to_be_bytes());
+        assert_eq!(
+            decode_error_frames(&invalid),
+            Err(SnapshotError::Corrupt(
+                "error-frame side table: empty frame list is not emitted"
+            ))
+        );
+
+        let regexp = encode_regexps(&[RegExpImage {
+            owner: 1,
+            source: "a".into(),
+            flags: "g".into(),
+            last_index_bits: 0,
+        }]);
+        assert!(decode_regexps(&regexp).is_ok());
+        invalid = regexp.clone();
+        invalid[12] = 0xff;
+        assert_eq!(
+            decode_regexps(&invalid),
+            Err(SnapshotError::Corrupt(
+                "regexp side table: invalid source encoding"
+            ))
+        );
+        invalid = regexp;
+        invalid[17] = 0xff;
+        assert_eq!(
+            decode_regexps(&invalid),
+            Err(SnapshotError::Corrupt("regexp side table: flags not UTF-8"))
+        );
+    }
+}
+
+#[cfg(test)]
+mod symbol_temporal_refusals {
+    use super::*;
+
+    #[test]
+    fn symbol_ids_and_descriptors_are_bijective() {
+        let valid = SymbolKeyImage {
+            next_id: 10,
+            pairs: vec![(11, 1), (12, 2)],
+        };
+        assert_eq!(
+            decode_symbol_keys(&encode_symbol_keys(&valid)).unwrap(),
+            valid
+        );
+        for pairs in [
+            vec![(10, 1)],
+            vec![(9, 1)],
+            vec![(11, 1), (11, 2)],
+            vec![(12, 1), (11, 2)],
+        ] {
+            assert_eq!(
+                decode_symbol_keys(&encode_symbol_keys(&SymbolKeyImage { next_id: 10, pairs })),
+                Err(SnapshotError::Corrupt(
+                    "symbol-key table: ids not strictly ascending above the counter"
+                ))
+            );
+        }
+        let mut invalid = valid;
+        invalid.pairs[1].1 = 1;
+        assert_eq!(
+            decode_symbol_keys(&encode_symbol_keys(&invalid)),
+            Err(SnapshotError::Corrupt(
+                "symbol-key table: two ids share a descriptor"
+            ))
+        );
+    }
+
+    #[test]
+    fn registry_keys_and_descriptors_are_bijective() {
+        let first = RegistryImage {
+            key: b"b".to_vec(),
+            descriptor: 1,
+        };
+        let mut second = RegistryImage {
+            key: b"c".to_vec(),
+            descriptor: 2,
+        };
+        assert!(decode_registry(&encode_registry(&[first.clone(), second.clone()])).is_ok());
+        for key in [b"b", b"a"] {
+            second.key = key.to_vec();
+            assert_eq!(
+                decode_registry(&encode_registry(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "symbol registry: keys not strictly ascending"
+                ))
+            );
+        }
+        second.key = b"c".to_vec();
+        second.descriptor = 1;
+        assert_eq!(
+            decode_registry(&encode_registry(&[first, second])),
+            Err(SnapshotError::Corrupt(
+                "symbol registry: two keys share a descriptor"
+            ))
+        );
+    }
+
+    #[test]
+    fn arguments_brands_require_unique_ascending_owners() {
+        assert_eq!(
+            decode_arguments_brands(&encode_arguments_brands(&[1, 2])).unwrap(),
+            vec![1, 2]
+        );
+        for owners in [[1, 1], [2, 1]] {
+            assert_eq!(
+                decode_arguments_brands(&encode_arguments_brands(&owners)),
+                Err(SnapshotError::Corrupt(
+                    "arguments brand set: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn temporal_tables_each_require_unique_ascending_owners() {
+        let valid = TemporalImage {
+            instants: vec![(2, 0), (3, 1)],
+            durations: vec![(2, [0; 10]), (3, [0; 10])],
+            plains: vec![
+                (2, 0, 2026, [1, 1, 0, 0, 0, 0, 0, 0]),
+                (3, 0, 2026, [1, 1, 0, 0, 0, 0, 0, 0]),
+            ],
+            zoneds: vec![(2, 0, "UTC".into(), 0), (3, 1, "UTC".into(), 0)],
+        };
+        assert_eq!(decode_temporal(&encode_temporal(&valid)).unwrap(), valid);
+        for owner in [2, 1] {
+            let mut invalid = valid.clone();
+            invalid.instants[1].0 = owner;
+            assert_eq!(
+                decode_temporal(&encode_temporal(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "temporal instants: owners not strictly ascending"
+                ))
+            );
+            invalid = valid.clone();
+            invalid.durations[1].0 = owner;
+            assert_eq!(
+                decode_temporal(&encode_temporal(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "temporal durations: owners not strictly ascending"
+                ))
+            );
+            invalid = valid.clone();
+            invalid.plains[1].0 = owner;
+            assert_eq!(
+                decode_temporal(&encode_temporal(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "temporal plains: owners not strictly ascending"
+                ))
+            );
+            invalid = valid.clone();
+            invalid.zoneds[1].0 = owner;
+            assert_eq!(
+                decode_temporal(&encode_temporal(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "temporal zoneds: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn temporal_kind_and_zone_encoding() {
+        let mut plain = TemporalImage {
+            plains: vec![(1, 0, 2026, [1, 1, 0, 0, 0, 0, 0, 0])],
+            ..TemporalImage::default()
+        };
+        for kind in 0..=4 {
+            plain.plains[0].1 = kind;
+            assert!(decode_temporal(&encode_temporal(&plain)).is_ok());
+        }
+        for kind in [5, 255] {
+            plain.plains[0].1 = kind;
+            assert_eq!(
+                decode_temporal(&encode_temporal(&plain)),
+                Err(SnapshotError::Corrupt("temporal plains: unknown kind"))
+            );
+        }
+        let zoned = TemporalImage {
+            zoneds: vec![(1, 0, "UTC".into(), 0)],
+            ..TemporalImage::default()
+        };
+        let mut bytes = encode_temporal(&zoned);
+        assert_eq!(decode_temporal(&bytes).unwrap(), zoned);
+        // The sole zone string immediately precedes the eight-byte offset.
+        let zone_start = bytes.len() - 8 - 3;
+        bytes[zone_start] = 0xff;
+        assert_eq!(
+            decode_temporal(&bytes),
+            Err(SnapshotError::Corrupt(
+                "temporal zoneds: time zone not UTF-8"
+            ))
+        );
+    }
+}
+
+#[cfg(test)]
+mod object_state_refusals {
+    use super::*;
+    use ironhorse_vm::snapshot_api::{
+        AccessorRow, DisposableStackRow, DisposalRecordRow, PrivateAccessorRow,
+        PrivateElementSnapshot, PrivateValueRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot,
+    };
+
+    #[test]
+    fn proxy_and_revoker_order_and_boolean() {
+        let valid = ProxyStateSnapshot {
+            proxies: vec![
+                ProxyRow {
+                    owner: 2,
+                    target: 4,
+                    handler: 5,
+                    revoked: false,
+                },
+                ProxyRow {
+                    owner: 3,
+                    target: 4,
+                    handler: 5,
+                    revoked: false,
+                },
+            ],
+            revokers: vec![
+                ProxyRevokerRow {
+                    owner: 6,
+                    proxy: 2,
+                    name_chunk: 0,
+                },
+                ProxyRevokerRow {
+                    owner: 7,
+                    proxy: 3,
+                    name_chunk: 0,
+                },
+            ],
+        };
+        let bytes = encode_proxy_state(&valid);
+        assert_eq!(decode_proxy_state(&bytes).unwrap(), valid);
+        for owner in [2, 1] {
+            let mut invalid = valid.clone();
+            invalid.proxies[1].owner = owner;
+            assert_eq!(
+                decode_proxy_state(&encode_proxy_state(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "proxy state: owners not strictly ascending"
+                ))
+            );
+        }
+        for owner in [6, 5] {
+            let mut invalid = valid.clone();
+            invalid.revokers[1].owner = owner;
+            assert_eq!(
+                decode_proxy_state(&encode_proxy_state(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "proxy revokers: owners not strictly ascending"
+                ))
+            );
+        }
+        for value in [2, 255] {
+            let mut invalid = bytes.clone();
+            invalid[16] = value; // count + owner + target + handler
+            assert_eq!(
+                decode_proxy_state(&invalid),
+                Err(SnapshotError::Corrupt("proxy state: bad boolean byte"))
+            );
+        }
+    }
+
+    #[test]
+    fn public_accessor_tuple_order_and_option_tags() {
+        let first = AccessorRow {
+            owner: 2,
+            id: 3,
+            get: None,
+            set: None,
+        };
+        let mut second = AccessorRow {
+            owner: 2,
+            id: 4,
+            get: None,
+            set: None,
+        };
+        assert!(decode_accessors(&encode_accessors(&[first.clone(), second.clone()])).is_ok());
+        for (owner, id) in [(2, 3), (2, 2), (1, 5)] {
+            second.owner = owner;
+            second.id = id;
+            assert_eq!(
+                decode_accessors(&encode_accessors(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "accessor state: rows not strictly ascending"
+                ))
+            );
+        }
+        let bytes = encode_accessors(&[first]);
+        assert!(decode_accessors(&bytes).is_ok());
+        for offset in [10, 11] {
+            // count, owner, id, then absent get/set tags
+            let mut invalid = bytes.clone();
+            invalid[offset] = 2;
+            assert_eq!(
+                decode_accessors(&invalid),
+                Err(SnapshotError::Corrupt("accessor state: bad option tag"))
+            );
+        }
+    }
+
+    #[test]
+    fn private_element_tuple_order_and_option_tags() {
+        let valid = PrivateElementSnapshot {
+            values: vec![
+                PrivateValueRow {
+                    receiver: 2,
+                    brand: 3,
+                    value: Slot::integer(1),
+                },
+                PrivateValueRow {
+                    receiver: 2,
+                    brand: 4,
+                    value: Slot::integer(2),
+                },
+            ],
+            accessors: vec![
+                PrivateAccessorRow {
+                    receiver: 3,
+                    brand: 3,
+                    get: None,
+                    set: None,
+                },
+                PrivateAccessorRow {
+                    receiver: 3,
+                    brand: 4,
+                    get: None,
+                    set: None,
+                },
+            ],
+        };
+        assert_eq!(
+            decode_private_elements(&encode_private_elements(&valid)).unwrap(),
+            valid
+        );
+        for (receiver, brand) in [(2, 3), (2, 2), (1, 5)] {
+            let mut invalid = valid.clone();
+            invalid.values[1].receiver = receiver;
+            invalid.values[1].brand = brand;
+            assert_eq!(
+                decode_private_elements(&encode_private_elements(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "private values: rows not strictly ascending"
+                ))
+            );
+        }
+        for (receiver, brand) in [(3, 3), (3, 2), (2, 5)] {
+            let mut invalid = valid.clone();
+            invalid.accessors[1].receiver = receiver;
+            invalid.accessors[1].brand = brand;
+            assert_eq!(
+                decode_private_elements(&encode_private_elements(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "private accessors: rows not strictly ascending"
+                ))
+            );
+        }
+        let bytes = encode_private_elements(&PrivateElementSnapshot {
+            values: vec![],
+            accessors: vec![valid.accessors[0].clone()],
+        });
+        assert!(decode_private_elements(&bytes).is_ok());
+        for offset in [16, 17] {
+            // two counts, receiver, brand, absent get/set
+            let mut invalid = bytes.clone();
+            invalid[offset] = 2;
+            assert_eq!(
+                decode_private_elements(&invalid),
+                Err(SnapshotError::Corrupt("private accessors: bad option tag"))
+            );
+        }
+    }
+
+    #[test]
+    fn disposable_stack_order_boolean_and_disposed_records() {
+        let first = DisposableStackRow {
+            owner: 2,
+            disposed: false,
+            asynchronous: false,
+            records: vec![DisposalRecordRow {
+                resource: Slot::undefined(),
+                method: Slot::undefined(),
+                pass_resource: false,
+            }],
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_disposable_stacks(&encode_disposable_stacks(&[
+            first.clone(),
+            second.clone()
+        ]))
+        .is_ok());
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_disposable_stacks(&encode_disposable_stacks(&[
+                    first.clone(),
+                    second.clone()
+                ])),
+                Err(SnapshotError::Corrupt(
+                    "disposable stacks: owners not strictly ascending"
+                ))
+            );
+        }
+        let bytes = encode_disposable_stacks(&[first.clone()]);
+        for offset in [8, 9, bytes.len() - 1] {
+            for value in [2, 255] {
+                let mut invalid = bytes.clone();
+                invalid[offset] = value;
+                assert_eq!(
+                    decode_disposable_stacks(&invalid),
+                    Err(SnapshotError::Corrupt(
+                        "disposable stacks: bad boolean byte"
+                    ))
+                );
+            }
+        }
+        let mut disposed = first;
+        disposed.disposed = true;
+        assert_eq!(
+            decode_disposable_stacks(&encode_disposable_stacks(&[disposed.clone()])),
+            Err(SnapshotError::Corrupt(
+                "disposable stacks: disposed stack retains records"
+            ))
+        );
+        disposed.records.clear();
+        assert!(decode_disposable_stacks(&encode_disposable_stacks(&[disposed])).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod function_decoder_refusals {
+    use super::*;
+    use ironhorse_vm::snapshot_api::{BoundFunctionRow, FunctionRow, FunctionStateSnapshot};
+
+    fn row(owner: u32) -> FunctionRow {
+        FunctionRow {
+            owner,
+            segment: None,
+            body_start: None,
+            body_len: 0,
+            closures: 0,
+            name: "f".into(),
+            arity: 0,
+            name_chunk: 0,
+            is_generator: false,
+            home: 0,
+            class_derived: None,
+        }
+    }
+
+    #[test]
+    fn function_cluster_ordering() {
+        let valid = FunctionStateSnapshot {
+            shared: None,
+            native_names: None,
+            segments: vec![],
+            functions: vec![row(2), row(3)],
+            bound_functions: vec![
+                BoundFunctionRow {
+                    owner: 2,
+                    target: 3,
+                    this_arg: Slot::undefined(),
+                    args: vec![],
+                },
+                BoundFunctionRow {
+                    owner: 3,
+                    target: 2,
+                    this_arg: Slot::undefined(),
+                    args: vec![],
+                },
+            ],
+            ctor_prototypes: vec![(2, 4), (3, 4)],
+            deleted_meta: vec![(2, 3), (2, 4)],
+        };
+        assert_eq!(
+            decode_function_state(&encode_function_state(&valid)).unwrap(),
+            valid
+        );
+        for owner in [2, 1] {
+            let mut invalid = valid.clone();
+            invalid.functions[1].owner = owner;
+            assert_eq!(
+                decode_function_state(&encode_function_state(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "function state: owners not strictly ascending"
+                ))
+            );
+            invalid = valid.clone();
+            invalid.bound_functions[1].owner = owner;
+            assert_eq!(
+                decode_function_state(&encode_function_state(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "bound-function state: owners not strictly ascending"
+                ))
+            );
+            invalid = valid.clone();
+            invalid.ctor_prototypes[1].0 = owner;
+            assert_eq!(
+                decode_function_state(&encode_function_state(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "constructor-prototype state: rows not strictly ascending"
+                ))
+            );
+        }
+        for pair in [(2, 3), (2, 2), (1, 5)] {
+            let mut invalid = valid.clone();
+            invalid.deleted_meta[1] = pair;
+            assert_eq!(
+                decode_function_state(&encode_function_state(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "deleted-function metadata: rows not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn function_tags_and_name() {
+        let mut valid = FunctionStateSnapshot {
+            functions: vec![row(1)],
+            ..FunctionStateSnapshot::default()
+        };
+        let bytes = encode_function_state(&valid);
+        assert_eq!(decode_function_state(&bytes).unwrap(), valid);
+        for value in [2, 255] {
+            let mut invalid = bytes.clone();
+            invalid[12] = value; // segment count, function count, owner, body tag
+            assert_eq!(
+                decode_function_state(&invalid),
+                Err(SnapshotError::Corrupt("function state: bad body tag"))
+            );
+            invalid = bytes.clone();
+            invalid[30] = value; // generator flag after the one-byte name
+            assert_eq!(
+                decode_function_state(&invalid),
+                Err(SnapshotError::Corrupt("function state: bad boolean byte"))
+            );
+        }
+        for value in [3, 255] {
+            let mut invalid = bytes.clone();
+            invalid[35] = value;
+            assert_eq!(
+                decode_function_state(&invalid),
+                Err(SnapshotError::Corrupt("function state: bad class tag"))
+            );
+        }
+        let mut invalid = bytes;
+        invalid[21] = 0xff;
+        assert_eq!(
+            decode_function_state(&invalid),
+            Err(SnapshotError::Corrupt("function state: name not UTF-8"))
+        );
+        // Exercise every accepted enum tag as well as the no-body control.
+        valid.segments.push(vec![0]);
+        valid.functions[0].segment = Some(0);
+        valid.functions[0].body_start = Some(0);
+        valid.functions[0].body_len = 1;
+        valid.functions[0].is_generator = true;
+        for class in [None, Some(false), Some(true)] {
+            valid.functions[0].class_derived = class;
+            assert_eq!(
+                decode_function_state(&encode_function_state(&valid)).unwrap(),
+                valid
+            );
+        }
+    }
+
+    fn check(state: &FunctionStateSnapshot) -> Result<(), SnapshotError> {
+        let lang = BoundsTables {
+            function_state: state,
+            ..BoundsTables::EMPTY
+        };
+        check_image_slot_bounds(
+            &[],
+            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..lang
+            },
+            4,
+            &SymbolKeyImage::default(),
+            8,
+            0,
+            &[],
+        )
+    }
+
+    #[test]
+    fn function_body_and_cross_table_semantics() {
+        use ironhorse_vm::Opcode;
+        let mut function = row(1);
+        function.segment = Some(0);
+        function.body_start = Some(0);
+        function.body_len = 1;
+        function.name_chunk = u32::MAX;
+        let valid = FunctionStateSnapshot {
+            functions: vec![function],
+            segments: vec![vec![Opcode::XS_CODE_UNDEFINED as u8]],
+            ..FunctionStateSnapshot::default()
+        };
+        assert_eq!(check(&valid), Ok(()));
+        let mut invalid = valid.clone();
+        invalid.functions[0].segment = Some(1);
+        assert_eq!(
+            check(&invalid),
+            Err(SnapshotError::Corrupt(
+                "function state: body names no segment"
+            ))
+        );
+        invalid = valid.clone();
+        invalid.functions[0].body_start = Some(u64::MAX);
+        assert_eq!(
+            check(&invalid),
+            Err(SnapshotError::Corrupt(
+                "function state: body range overflow"
+            ))
+        );
+        invalid = valid.clone();
+        invalid.functions[0].body_len = 2;
+        assert_eq!(
+            check(&invalid),
+            Err(SnapshotError::Corrupt(
+                "function state: body range outside segment"
+            ))
+        );
+        invalid = valid.clone();
+        invalid.segments[0] = vec![Opcode::XS_CODE_INTEGER_4 as u8];
+        assert_eq!(
+            check(&invalid),
+            Err(SnapshotError::Corrupt(
+                "function state: malformed body bytecode"
+            ))
+        );
+        invalid = valid.clone();
+        invalid.segments[0] = vec![Opcode::XS_CODE_INTEGER_1 as u8, 0];
+        assert_eq!(
+            check(&invalid),
+            Err(SnapshotError::Corrupt(
+                "function state: body instruction crosses its range"
+            ))
+        );
+        invalid.functions[0].body_len = 2;
+        assert_eq!(check(&invalid), Ok(()));
+        for pair in [(None, Some(0)), (Some(0), None), (None, None)] {
+            invalid = valid.clone();
+            invalid.functions[0].segment = pair.0;
+            invalid.functions[0].body_start = pair.1;
+            assert_eq!(
+                check(&invalid),
+                Err(SnapshotError::Corrupt(
+                    "function state: body and segment disagree"
+                ))
+            );
+        }
+        invalid = valid.clone();
+        invalid.segments.push(vec![Opcode::XS_CODE_UNDEFINED as u8]);
+        assert_eq!(
+            check(&invalid),
+            Err(SnapshotError::Corrupt(
+                "function state: segments not densely referenced"
+            ))
+        );
+        invalid = valid.clone();
+        invalid.bound_functions.push(BoundFunctionRow {
+            owner: 2,
+            target: 1,
+            this_arg: Slot::undefined(),
+            args: vec![],
+        });
+        assert_eq!(
+            check(&invalid),
+            Err(SnapshotError::Corrupt(
+                "bound-function state: owner has no function row"
+            ))
+        );
+        invalid = valid.clone();
+        invalid.ctor_prototypes.push((2, 3));
+        assert_eq!(
+            check(&invalid),
+            Err(SnapshotError::Corrupt(
+                "constructor-prototype state: owner has no function row"
+            ))
+        );
+        invalid.ctor_prototypes[0].0 = 1;
+        assert_eq!(check(&invalid), Ok(()));
+        for id in [0, 5] {
+            invalid = valid.clone();
+            invalid.deleted_meta.push((1, id));
+            assert_eq!(
+                check(&invalid),
+                Err(SnapshotError::Corrupt(
+                    "deleted-function metadata: id outside the name table"
+                ))
+            );
+        }
+        invalid.deleted_meta[0].1 = 4;
+        assert_eq!(check(&invalid), Ok(()));
+    }
+}
+
+#[cfg(test)]
+mod intl_bound_decoder_refusals {
+    use super::*;
+    use ironhorse_vm::snapshot_api::IntlBoundFunctionRow;
+
+    #[test]
+    fn bound_function_tags_names_and_order() {
+        let first = IntlBoundFunctionRow {
+            kind: 0,
+            function: 2,
+            owner: 1,
+            name: "f".into(),
+            name_chunk: u32::MAX,
+            arity: 1,
+        };
+        let mut second = first.clone();
+        second.function = 3;
+        second.kind = 1;
+        assert_eq!(
+            decode_intl_bound_functions(&encode_intl_bound_functions(&[
+                first.clone(),
+                second.clone()
+            ]))
+            .unwrap(),
+            vec![first.clone(), second.clone()]
+        );
+        for function in [2, 1] {
+            second.function = function;
+            assert_eq!(
+                decode_intl_bound_functions(&encode_intl_bound_functions(&[
+                    first.clone(),
+                    second.clone()
+                ])),
+                Err(SnapshotError::Corrupt(
+                    "Intl bound-function state: functions not strictly ascending"
+                ))
+            );
+        }
+        for kind in [2, 255] {
+            let mut invalid = first.clone();
+            invalid.kind = kind;
+            assert_eq!(
+                decode_intl_bound_functions(&encode_intl_bound_functions(&[invalid])),
+                Err(SnapshotError::Corrupt(
+                    "Intl bound-function state: unknown kind"
+                ))
+            );
+        }
+        let mut bytes = encode_intl_bound_functions(&[first]);
+        assert!(decode_intl_bound_functions(&bytes).is_ok());
+        bytes[17] = 0xff; // count, kind, function, owner, name length
+        assert_eq!(
+            decode_intl_bound_functions(&bytes),
+            Err(SnapshotError::Corrupt(
+                "Intl bound-function state: name not UTF-8"
+            ))
+        );
+    }
+}
+
+#[cfg(test)]
+mod generator_decoder_refusals {
+    use super::*;
+    use ironhorse_vm::snapshot_api::{AsyncRow, GeneratorRow, SavedFrameRow, SavedJumpRow};
+
+    fn frame() -> SavedFrameRow {
+        SavedFrameRow {
+            locals: vec![],
+            id_map: vec![],
+            args: vec![],
+            this_val: Slot::undefined(),
+            env: Slot::undefined(),
+            cur_func: 1,
+            cur_target: false,
+            target_func: 1,
+            strict: false,
+            result: Slot::undefined(),
+            stack_slice: vec![],
+            jumps: vec![],
+            resume_pc: 0,
+        }
+    }
+
+    #[test]
+    fn saved_handler_segment_codec_preserves_legacy_and_explicit_rows() {
+        let mut saved = frame();
+        saved.jumps.push(SavedJumpRow {
+            target_pc: 0,
+            segment: None,
+            stack_offset: 0,
+            locals_len: 0,
+            id_map: vec![],
+            call_depth_offset: 0,
+            env: Slot::undefined(),
+            flag: 1,
+        });
+        for explicit in [false, true] {
+            if explicit {
+                let mut jump = saved.jumps[0].clone();
+                jump.segment = Some(7);
+                saved.jumps.push(jump);
+            }
+            let mut legacy_frame = saved.clone();
+            for jump in &mut legacy_frame.jumps {
+                jump.segment = None;
+            }
+            let generators = vec![
+                GeneratorRow {
+                    owner: 1,
+                    state: 1,
+                    frame: Some(legacy_frame.clone()),
+                },
+                GeneratorRow {
+                    owner: 2,
+                    state: 1,
+                    frame: Some(saved.clone()),
+                },
+            ];
+            let bytes = encode_generators(&generators);
+            assert_eq!(bytes.starts_with(&u32::MAX.to_be_bytes()), explicit);
+            assert_eq!(decode_generators(&bytes).unwrap(), generators);
+            assert_eq!(
+                encode_generators(&decode_generators(&bytes).unwrap()),
+                bytes
+            );
+            for end in 0..bytes.len() {
+                assert!(
+                    decode_generators(&bytes[..end]).is_err(),
+                    "GENR truncated at {end}"
+                );
+            }
+            let instances = vec![
+                AsyncRow {
+                    owner: 1,
+                    result_promise: 3,
+                    resolve: Slot::undefined(),
+                    reject: Slot::undefined(),
+                    frame: legacy_frame,
+                },
+                AsyncRow {
+                    owner: 2,
+                    result_promise: 3,
+                    resolve: Slot::undefined(),
+                    reject: Slot::undefined(),
+                    frame: saved.clone(),
+                },
+            ];
+            let bytes = encode_async_instances(&instances);
+            assert_eq!(bytes.starts_with(&u32::MAX.to_be_bytes()), explicit);
+            assert_eq!(decode_async_instances(&bytes).unwrap(), instances);
+            assert_eq!(
+                encode_async_instances(&decode_async_instances(&bytes).unwrap()),
+                bytes
+            );
+            for end in 0..bytes.len() {
+                assert!(
+                    decode_async_instances(&bytes[..end]).is_err(),
+                    "ASYN truncated at {end}"
+                );
+            }
+        }
+        let redundant = [u32::MAX.to_be_bytes(), 0u32.to_be_bytes()].concat();
+        assert_eq!(
+            decode_generators(&redundant),
+            Err(SnapshotError::Corrupt(
+                "generator frame: redundant segment prefix"
+            ))
+        );
+        assert_eq!(
+            decode_async_instances(&redundant),
+            Err(SnapshotError::Corrupt(
+                "generator frame: redundant segment prefix"
+            ))
+        );
+    }
+
+    /// The generator trailer is a format-23 addition: a container stamped
+    /// older that carries one is refused by name whatever its rows hold
+    /// (the rows decode first; the stamp check follows), so the
+    /// writer-side stamp bump has a reader-side twin.
+    #[test]
+    fn async_generator_trailer_is_tied_to_the_format_stamp() {
+        use ironhorse_vm::snapshot_api::AsyncGeneratorRow;
+        let signature = Signature::new("ironhorse-test-sig-v1");
+        let mut image = MachineImage::from_arenas(
+            signature.clone(),
+            &SlotArena::new(),
+            &ChunkArena::new(),
+            &[],
+            vec!["name".into()],
+            Vec::new(),
+            SymbolKeyImage::default(),
+        );
+        let trailer = encode_async_section(
+            &[],
+            &[AsyncGeneratorRow {
+                owner: 3,
+                state: 3,
+                frame: None,
+                requests: vec![],
+                active: None,
+            }],
+            &[],
+        );
+        let mut with_trailer = |version: u32| {
+            image.version.format_version = version;
+            let bytes = write_machine_unchecked(&image);
+            let parsed = AtomReader::parse(&bytes).unwrap();
+            assert!(parsed.find(crate::format::ASYN).is_none());
+            let mut writer = AtomWriter::new();
+            for atom in parsed.atoms() {
+                writer.atom(atom.tag, atom.payload).unwrap();
+            }
+            writer.atom(crate::format::ASYN, &trailer).unwrap();
+            read_machine(&writer.finish().unwrap(), &signature)
+        };
+        assert_eq!(
+            with_trailer(22),
+            Err(SnapshotError::Corrupt(
+                "async generators: trailer in a pre-format-23 container"
+            ))
+        );
+        // At 23 the trailer passes the stamp gate and the crafted owner
+        // fails a later row check instead.
+        let at_23 = with_trailer(23);
+        assert!(at_23.is_err());
+        assert_ne!(
+            at_23,
+            Err(SnapshotError::Corrupt(
+                "async generators: trailer in a pre-format-23 container"
+            ))
+        );
+    }
+
+    /// The `ASYN` generator trailer's byte-level refusals: shapes no
+    /// honest encoder emits, so they are crafted on the wire.
+    #[test]
+    fn async_generator_trailer_refusals() {
+        use ironhorse_vm::snapshot_api::{AsyncGeneratorRequestRow, AsyncGeneratorRow};
+        let completed = |owner: u32| AsyncGeneratorRow {
+            owner,
+            state: 3,
+            frame: None,
+            requests: vec![],
+            active: None,
+        };
+        let request = |status: u8| AsyncGeneratorRequestRow {
+            status,
+            value: Slot::undefined(),
+            resolve: Slot::undefined(),
+            reject: Slot::undefined(),
+        };
+        // An honest trailer round-trips and is absent when empty.
+        let rows = vec![completed(3), completed(7)];
+        let bytes = encode_async_section(&[], &rows, &[]);
+        assert_eq!(
+            decode_async_section(&bytes).unwrap(),
+            (vec![], rows.clone(), vec![])
+        );
+        assert_eq!(encode_async_section(&[], &[], &[]), 0u32.to_be_bytes());
+        // Every cut after the (valid, empty) instance prefix is refused.
+        for end in 5..bytes.len() {
+            assert!(
+                decode_async_section(&bytes[..end]).is_err(),
+                "ASYN truncated at {end}"
+            );
+        }
+        // A present-but-empty trailer is not an encoding of anything.
+        let redundant = [0u32.to_be_bytes(), 0u32.to_be_bytes()].concat();
+        assert_eq!(
+            decode_async_section(&redundant),
+            Err(SnapshotError::Corrupt(
+                "async generators: redundant empty trailer"
+            ))
+        );
+        assert_eq!(
+            decode_async_section(&encode_async_section(
+                &[],
+                &[completed(5), completed(5)],
+                &[]
+            )),
+            Err(SnapshotError::Corrupt(
+                "async generators: owners not strictly ascending"
+            ))
+        );
+        // One frameless completed row: instances count (4), trailer count
+        // (4), owner (4), state (1), frame tag (1), request count (4),
+        // active tag (1).
+        let one = encode_async_section(&[], &[completed(5)], &[]);
+        assert_eq!(one.len(), 19);
+        let mut bad_frame_tag = one.clone();
+        bad_frame_tag[13] = 2;
+        assert_eq!(
+            decode_async_section(&bad_frame_tag),
+            Err(SnapshotError::Corrupt("async generators: bad frame tag"))
+        );
+        let mut bad_active_tag = one.clone();
+        bad_active_tag[18] = 2;
+        assert_eq!(
+            decode_async_section(&bad_active_tag),
+            Err(SnapshotError::Corrupt(
+                "async generators: bad active request tag"
+            ))
+        );
+        let mut executing = one.clone();
+        executing[12] = 4;
+        assert_eq!(
+            decode_async_section(&executing),
+            Err(SnapshotError::Corrupt("async generators: invalid state"))
+        );
+        let mut started_without_frame = one.clone();
+        started_without_frame[12] = 0;
+        assert_eq!(
+            decode_async_section(&started_without_frame),
+            Err(SnapshotError::Corrupt(
+                "async generators: state and frame disagree"
+            ))
+        );
+        let queued_without_active = AsyncGeneratorRow {
+            requests: vec![request(0)],
+            ..completed(5)
+        };
+        assert_eq!(
+            decode_async_section(&encode_async_section(&[], &[queued_without_active], &[])),
+            Err(SnapshotError::Corrupt(
+                "async generators: request queue disagrees with state"
+            ))
+        );
+        let bad_status = AsyncGeneratorRow {
+            active: Some(request(3)),
+            ..completed(5)
+        };
+        assert_eq!(
+            decode_async_section(&encode_async_section(&[], &[bad_status], &[])),
+            Err(SnapshotError::Corrupt(
+                "async generators: invalid request status"
+            ))
+        );
+        let returning = AsyncGeneratorRow {
+            requests: vec![request(0), request(2)],
+            active: Some(request(1)),
+            ..completed(5)
+        };
+        let bytes = encode_async_section(&[], std::slice::from_ref(&returning), &[]);
+        assert_eq!(decode_async_section(&bytes).unwrap().1, vec![returning]);
+        // An Awaiting instance is serving a request; one with nothing
+        // active would be re-encoded unreadably after its next request.
+        let awaiting_nothing = AsyncGeneratorRow {
+            state: 2,
+            frame: Some(frame()),
+            ..completed(5)
+        };
+        assert_eq!(
+            decode_async_section(&encode_async_section(&[], &[awaiting_nothing], &[])),
+            Err(SnapshotError::Corrupt(
+                "async generators: request queue disagrees with state"
+            ))
+        );
+        // A start-suspended body has no operand stack and no handlers.
+        let mut mid_body = frame();
+        mid_body.stack_slice.push(Slot::undefined());
+        let started_mid_body = AsyncGeneratorRow {
+            state: 0,
+            frame: Some(mid_body),
+            ..completed(5)
+        };
+        assert_eq!(
+            decode_async_section(&encode_async_section(&[], &[started_mid_body], &[])),
+            Err(SnapshotError::Corrupt(
+                "async generators: start frame is not fresh"
+            ))
+        );
+        let started_fresh = AsyncGeneratorRow {
+            state: 0,
+            frame: Some(frame()),
+            ..completed(5)
+        };
+        assert_eq!(
+            decode_async_section(&encode_async_section(
+                &[],
+                std::slice::from_ref(&started_fresh),
+                &[]
+            ))
+            .unwrap()
+            .1,
+            vec![started_fresh]
+        );
+    }
+
+    fn check(
+        functions: &ironhorse_vm::snapshot_api::FunctionStateSnapshot,
+        saved: &SavedFrameRow,
+    ) -> Result<(), SnapshotError> {
+        let generators = [GeneratorRow {
+            owner: 2,
+            state: 1,
+            frame: Some(saved.clone()),
+        }];
+        let lang = BoundsTables {
+            function_state: functions,
+            generators: &generators,
+            ..BoundsTables::EMPTY
+        };
+        check_image_slot_bounds(
+            &[],
+            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..lang
+            },
+            4,
+            &SymbolKeyImage::default(),
+            8,
+            0,
+            &[],
+        )
+    }
+
+    #[test]
+    fn instruction_boundary_derivation_retains_its_backstops() {
+        use ironhorse_vm::Opcode;
+        let code = [
+            Opcode::XS_CODE_INTEGER_1 as u8,
+            0,
+            Opcode::XS_CODE_UNDEFINED as u8,
+        ];
+        assert_eq!(
+            generator_body_starts(Some(0), 3, &code),
+            Ok((0, 3, [0, 2].into_iter().collect()))
+        );
+        assert_eq!(
+            generator_body_starts(Some(2), 1, &code),
+            Ok((2, 3, [2].into_iter().collect()))
+        );
+        // Exercise the production helper directly: the earlier function-state
+        // validation normally rejects these before saved-frame derivation.
+        for (start, len) in [(None, 0), (Some(u64::MAX), 1)] {
+            assert_eq!(
+                generator_body_starts(start, len, &code),
+                Err(SnapshotError::Corrupt(
+                    "generator frame: current function has no body"
+                ))
+            );
+        }
+        assert_eq!(
+            generator_body_starts(Some(0), 1, &[Opcode::XS_CODE_INTEGER_4 as u8]),
+            Err(SnapshotError::Corrupt(
+                "generator frame: malformed body bytecode"
+            ))
+        );
+    }
+
+    #[test]
+    fn saved_frame_requires_function_and_exact_resume_scope() {
+        use ironhorse_vm::snapshot_api::{FunctionRow, FunctionStateSnapshot};
+        use ironhorse_vm::Opcode;
+        let functions = FunctionStateSnapshot {
+            segments: vec![vec![
+                Opcode::XS_CODE_INTEGER_1 as u8,
+                0,
+                Opcode::XS_CODE_UNDEFINED as u8,
+            ]],
+            functions: vec![FunctionRow {
+                owner: 1,
+                segment: Some(0),
+                body_start: Some(0),
+                body_len: 3,
+                closures: 0,
+                name: "g".into(),
+                arity: 0,
+                name_chunk: u32::MAX,
+                is_generator: true,
+                home: 0,
+                class_derived: None,
+            }],
+            ..FunctionStateSnapshot::default()
+        };
+        let mut saved = frame();
+        saved.locals = vec![Slot::undefined()];
+        saved.id_map = vec![(4, 0)];
+        saved.stack_slice = vec![Slot::undefined()];
+        saved.jumps = vec![SavedJumpRow {
+            target_pc: 2,
+            segment: None,
+            stack_offset: 1,
+            locals_len: 1,
+            id_map: vec![(4, 0)],
+            call_depth_offset: 0,
+            env: Slot::undefined(),
+            flag: 1,
+        }];
+        for resume_pc in [0, 2] {
+            saved.resume_pc = resume_pc;
+            assert_eq!(check(&functions, &saved), Ok(()));
+        }
+        let mut two_segments = functions.clone();
+        two_segments.segments.push(functions.segments[0].clone());
+        let mut sibling = functions.functions[0].clone();
+        sibling.owner = 3;
+        sibling.segment = Some(1);
+        two_segments.functions.push(sibling);
+        let mut explicit = saved.clone();
+        explicit.jumps[0].segment = Some(0);
+        assert_eq!(check(&two_segments, &explicit), Ok(()));
+        // Both buffers and the pc are valid. The identity must still belong
+        // to this activation, rather than merely falling within table bounds.
+        explicit.jumps[0].segment = Some(1);
+        assert_eq!(
+            check(&two_segments, &explicit),
+            Err(SnapshotError::Corrupt(
+                "generator frame: invalid saved handler"
+            ))
+        );
+        let mut invalid = saved.clone();
+        invalid.cur_func = 3;
+        assert_eq!(
+            check(&functions, &invalid),
+            Err(SnapshotError::Corrupt(
+                "generator frame: current function has no function row"
+            ))
+        );
+        let mut bound = functions.clone();
+        bound.segments.clear();
+        bound.functions[0].segment = None;
+        bound.functions[0].body_start = None;
+        bound.functions[0].body_len = 0;
+        bound
+            .bound_functions
+            .push(ironhorse_vm::snapshot_api::BoundFunctionRow {
+                owner: 1,
+                target: 3,
+                this_arg: Slot::undefined(),
+                args: vec![],
+            });
+        assert_eq!(
+            check(&bound, &saved),
+            Err(SnapshotError::Corrupt(
+                "generator frame: current function has no segment"
+            ))
+        );
+        for resume_pc in [1, 3, u64::MAX] {
+            invalid = saved.clone();
+            invalid.resume_pc = resume_pc;
+            assert_eq!(
+                check(&functions, &invalid),
+                Err(SnapshotError::Corrupt(
+                    "generator frame: invalid resume cursor or scope map"
+                ))
+            );
+        }
+        for pair in [(0, 0), (5, 0), (4, 1), (4, u64::MAX)] {
+            invalid = saved.clone();
+            invalid.id_map = vec![pair];
+            assert_eq!(
+                check(&functions, &invalid),
+                Err(SnapshotError::Corrupt(
+                    "generator frame: invalid resume cursor or scope map"
+                ))
+            );
+        }
+        for case in 0..10 {
+            invalid = saved.clone();
+            let jump = &mut invalid.jumps[0];
+            match case {
+                0 => jump.flag = 0,
+                1 => jump.call_depth_offset = 1,
+                2 => jump.call_depth_offset = u64::MAX,
+                3 => jump.target_pc = 1,
+                4 => jump.target_pc = 3,
+                5 => jump.stack_offset = 2,
+                6 => jump.locals_len = 2,
+                7 => jump.id_map = vec![(0, 0)],
+                8 => jump.id_map = vec![(5, 0)],
+                9 => jump.locals_len = 0, // map valid for frame, invalid for handler
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                check(&functions, &invalid),
+                Err(SnapshotError::Corrupt(
+                    "generator frame: invalid saved handler"
+                )),
+                "case {case}"
+            );
+        }
+        assert_eq!(check(&functions, &saved), Ok(()));
+    }
+
+    #[test]
+    fn generator_state_frame_and_owner_guards() {
+        let valid = GeneratorRow {
+            owner: 2,
+            state: 0,
+            frame: Some(frame()),
+        };
+        for state in [0, 1, 2] {
+            let row = GeneratorRow {
+                state,
+                frame: (state != 2).then(frame),
+                ..valid.clone()
+            };
+            assert_eq!(
+                decode_generators(&encode_generators(&[row.clone()])).unwrap(),
+                vec![row]
+            );
+        }
+        let mut second = valid.clone();
+        second.owner = 3;
+        assert!(decode_generators(&encode_generators(&[valid.clone(), second.clone()])).is_ok());
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_generators(&encode_generators(&[valid.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "generators: owners not strictly ascending"
+                ))
+            );
+        }
+        for state in [3, 255] {
+            let mut invalid = valid.clone();
+            invalid.state = state;
+            assert_eq!(
+                decode_generators(&encode_generators(&[invalid])),
+                Err(SnapshotError::Corrupt("generators: invalid state"))
+            );
+        }
+        for state in [0, 1, 2] {
+            let invalid = GeneratorRow {
+                state,
+                frame: (state == 2).then(frame),
+                ..valid.clone()
+            };
+            assert_eq!(
+                decode_generators(&encode_generators(&[invalid])),
+                Err(SnapshotError::Corrupt(
+                    "generators: state and frame disagree"
+                ))
+            );
+        }
+        for tag in [2, 255] {
+            let mut bytes = encode_generators(&[valid.clone()]);
+            bytes[9] = tag; // count, owner, state, frame tag
+            assert_eq!(
+                decode_generators(&bytes),
+                Err(SnapshotError::Corrupt("generators: bad frame tag"))
+            );
+        }
+        // No local/id/argument rows: three counts precede this/env slots.
+        let current_target = 10 + 12 + 2 * SLOT_RECORD_BYTES + 4;
+        for offset in [current_target, current_target + 5] {
+            for tag in [2, 255] {
+                let mut bytes = encode_generators(&[valid.clone()]);
+                bytes[offset] = tag;
+                assert_eq!(
+                    decode_generators(&bytes),
+                    Err(SnapshotError::Corrupt("generator frame: bad boolean byte"))
+                );
+            }
+        }
+        let mut true_flags = valid;
+        let saved = true_flags.frame.as_mut().unwrap();
+        saved.cur_target = true;
+        saved.strict = true;
+        assert_eq!(
+            decode_generators(&encode_generators(&[true_flags.clone()])).unwrap(),
+            vec![true_flags]
+        );
+    }
+
+    #[test]
+    fn frame_and_jump_maps_require_unique_ascending_ids() {
+        let mut saved = frame();
+        saved.id_map = vec![(2, 0), (3, 1)];
+        saved.jumps.push(SavedJumpRow {
+            target_pc: 0,
+            segment: None,
+            stack_offset: 0,
+            locals_len: 0,
+            id_map: vec![(2, 0), (3, 1)],
+            call_depth_offset: 0,
+            env: Slot::undefined(),
+            flag: 0,
+        });
+        let valid = GeneratorRow {
+            owner: 1,
+            state: 0,
+            frame: Some(saved),
+        };
+        assert_eq!(
+            decode_generators(&encode_generators(&[valid.clone()])).unwrap(),
+            vec![valid.clone()]
+        );
+        for id in [2, 1] {
+            let mut invalid = valid.clone();
+            invalid.frame.as_mut().unwrap().id_map[1].0 = id;
+            assert_eq!(
+                decode_generators(&encode_generators(&[invalid])),
+                Err(SnapshotError::Corrupt(
+                    "generator frame: id map not strictly ascending"
+                ))
+            );
+            let mut invalid = valid.clone();
+            invalid.frame.as_mut().unwrap().jumps[0].id_map[1].0 = id;
+            assert_eq!(
+                decode_generators(&encode_generators(&[invalid])),
+                Err(SnapshotError::Corrupt(
+                    "generator frame: id map not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn async_owners_require_unique_ascending_order() {
+        let first = AsyncRow {
+            owner: 2,
+            result_promise: 1,
+            resolve: Slot::undefined(),
+            reject: Slot::undefined(),
+            frame: frame(),
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert_eq!(
+            decode_async_instances(&encode_async_instances(&[first.clone(), second.clone()]))
+                .unwrap(),
+            vec![first.clone(), second.clone()]
+        );
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_async_instances(&encode_async_instances(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "async instances: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+}
+
+/// The `Array.fromAsync` accumulation trailer's decoder (architecture
+/// finding F127), which rides behind the generators in `ASYN`.
+#[cfg(test)]
+mod from_async_decoder_refusals {
+    use super::*;
+
+    /// One in-flight `Array.fromAsync` accumulation on the array-like path,
+    /// which is the shortest honest row: no iterator, no map function.
+    fn from_async_row() -> ironhorse_vm::snapshot_api::FromAsyncRow {
+        ironhorse_vm::snapshot_api::FromAsyncRow {
+            resolve: Slot::undefined(),
+            reject: Slot::undefined(),
+            target: 3,
+            k: 1,
+            len: 2,
+            mapfn: Slot::undefined(),
+            this_arg: Slot::undefined(),
+            iterator: Slot::undefined(),
+            next_method: Slot::undefined(),
+            array_like: Slot::undefined(),
+            close_error: Slot::undefined(),
+            flags: ironhorse_vm::snapshot_api::FromAsyncRow::TARGET_IS_ARRAY,
+        }
+    }
+
+    /// The `fromAsync` trailer is a format-24 addition (architecture finding
+    /// F127), so a container stamped older that carries one is refused by
+    /// name — the writer-side stamp bump's reader-side twin, and the reason
+    /// the carry cannot be read back into a machine built before it existed.
+    #[test]
+    fn from_async_trailer_is_tied_to_the_format_stamp() {
+        let signature = Signature::new("ironhorse-test-sig-v1");
+        let mut image = MachineImage::from_arenas(
+            signature.clone(),
+            &SlotArena::new(),
+            &ChunkArena::new(),
+            &[],
+            vec!["name".into()],
+            Vec::new(),
+            SymbolKeyImage::default(),
+        );
+        let trailer = encode_async_section(&[], &[], &[from_async_row()]);
+        let mut with_trailer = |version: u32| {
+            image.version.format_version = version;
+            let bytes = write_machine_unchecked(&image);
+            let parsed = AtomReader::parse(&bytes).unwrap();
+            assert!(parsed.find(crate::format::ASYN).is_none());
+            let mut writer = AtomWriter::new();
+            for atom in parsed.atoms() {
+                writer.atom(atom.tag, atom.payload).unwrap();
+            }
+            writer.atom(crate::format::ASYN, &trailer).unwrap();
+            read_machine(&writer.finish().unwrap(), &signature)
+        };
+        assert_eq!(
+            with_trailer(23),
+            Err(SnapshotError::Corrupt(
+                "fromAsync: trailer in a pre-format-24 container"
+            ))
+        );
+        // At 24 the trailer passes the stamp gate and is refused by the
+        // NEXT rule instead. Named exactly rather than asserted `is_err`:
+        // this arm exists to show the stamp gate stopped being the reason,
+        // and any unrelated failure would satisfy a bare `is_err`. The image
+        // carries no promises, so the accumulation is unanchored and the
+        // density check fires before anything looks at the crafted target.
+        assert_eq!(
+            with_trailer(24),
+            Err(SnapshotError::Corrupt(
+                "fromAsync: accumulations not densely referenced"
+            ))
+        );
+    }
+
+    /// The writer-side twin of that stamp gate: an image carrying an
+    /// accumulation is STAMPED at 24, so the writer cannot emit a container
+    /// its own reader refuses.
+    ///
+    /// The generator trailer has had this floor since format 23. Without the
+    /// matching one here, an image whose stamp came from somewhere other than
+    /// the current writer — a decoded older image republished, or one
+    /// deliberately marker-stamped the way the golden-corpus controls are —
+    /// is written and then unreadable by name.
+    #[test]
+    fn writing_an_accumulation_raises_the_format_stamp() {
+        let signature = Signature::new("ironhorse-test-sig-v1");
+        let mut image = MachineImage::from_arenas(
+            signature.clone(),
+            &SlotArena::new(),
+            &ChunkArena::new(),
+            &[],
+            vec!["name".into()],
+            Vec::new(),
+            SymbolKeyImage::default(),
+        );
+        image.promise_cluster.from_async = vec![from_async_row()];
+        image.version.format_version = 23;
+        let bytes = write_machine_unchecked(&image);
+        let stamped = AtomReader::parse(&bytes).unwrap();
+        assert!(
+            stamped.find(crate::format::ASYN).is_some(),
+            "the trailer must actually be written"
+        );
+        // The refusal below must be the crafted target's, never the stamp's.
+        assert_ne!(
+            read_machine(&bytes, &signature),
+            Err(SnapshotError::Corrupt(
+                "fromAsync: trailer in a pre-format-24 container"
+            )),
+            "the writer emitted a container its own reader refuses"
+        );
+    }
+
+    /// The `ASYN` `fromAsync` trailer's byte-level refusals. The generator
+    /// count in front of it doubles as a positional placeholder, so the
+    /// arrangement itself — not just the rows — has shapes no honest encoder
+    /// emits.
+    #[test]
+    fn from_async_trailer_refusals() {
+        use ironhorse_vm::snapshot_api::FromAsyncRow;
+        let reference = |i: u32| {
+            Slot::of(
+                Kind::Reference,
+                Payload::Reference(ironhorse_vm::SlotIndex(i)),
+            )
+        };
+        // An honest trailer round-trips, and rides behind a zero generator
+        // count when the machine holds no generators.
+        let rows = vec![from_async_row()];
+        let bytes = encode_async_section(&[], &[], &rows);
+        assert_eq!(
+            decode_async_section(&bytes).unwrap(),
+            (vec![], vec![], rows.clone())
+        );
+        // Every cut after the instance and generator counts is refused.
+        for end in 9..bytes.len() {
+            assert!(
+                decode_async_section(&bytes[..end]).is_err(),
+                "fromAsync trailer truncated at {end}"
+            );
+        }
+        // A present-but-empty trailer is not an encoding of anything. Three
+        // zero counts: no instances, no generators, no accumulations.
+        let redundant = [0u32.to_be_bytes(); 3].concat();
+        assert_eq!(
+            decode_async_section(&redundant),
+            Err(SnapshotError::Corrupt("fromAsync: redundant empty trailer"))
+        );
+        let refused = |mutate: &dyn Fn(&mut FromAsyncRow)| {
+            let mut row = from_async_row();
+            mutate(&mut row);
+            decode_async_section(&encode_async_section(&[], &[], &[row])).map(|_| ())
+        };
+        assert_eq!(
+            refused(&|row| row.flags = FromAsyncRow::FLAGS + 1),
+            Err(SnapshotError::Corrupt("fromAsync: unknown flag bit"))
+        );
+        assert_eq!(
+            refused(&|row| row.mapfn = reference(4)),
+            Err(SnapshotError::Corrupt(
+                "fromAsync: mapfn present without the mapping flag"
+            ))
+        );
+        assert_eq!(
+            refused(&|row| row.next_method = reference(4)),
+            Err(SnapshotError::Corrupt(
+                "fromAsync: iterator state without an iterator"
+            ))
+        );
+        assert_eq!(
+            refused(&|row| {
+                row.iterator = reference(4);
+                row.next_method = reference(5);
+            }),
+            Err(SnapshotError::Corrupt(
+                "fromAsync: an iterated accumulation carries a length"
+            ))
+        );
+        assert_eq!(
+            refused(&|row| row.k = row.len + 1),
+            Err(SnapshotError::Corrupt(
+                "fromAsync: index past the array-like length"
+            ))
+        );
+        // `k == len` is the last honest index: the walk has consumed every
+        // element and the accumulation is about to settle.
+        assert!(refused(&|row| row.k = row.len).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod promise_decoder_refusals {
+    use super::*;
+    use ironhorse_vm::snapshot_api::{
+        CombinatorRow, PromiseClusterSnapshot, PromiseFnRow, PromiseReactionRow, PromiseRow,
+    };
+    use ironhorse_vm::value::SlotIndex;
+
+    fn reference(index: u32) -> Slot {
+        Slot::of(Kind::Reference, Payload::Reference(SlotIndex(index)))
+    }
+    fn valid() -> PromiseClusterSnapshot {
+        PromiseClusterSnapshot {
+            promises: vec![PromiseRow {
+                owner: 1,
+                state: 0,
+                result: Slot::undefined(),
+                ever_handled: false,
+                reactions: vec![],
+            }],
+            functions: vec![
+                PromiseFnRow {
+                    function: 2,
+                    promise: 1,
+                    reject: false,
+                    guard: 0,
+                    name_chunk: u32::MAX,
+                },
+                PromiseFnRow {
+                    function: 3,
+                    promise: 1,
+                    reject: true,
+                    guard: 0,
+                    name_chunk: u32::MAX,
+                },
+            ],
+            guards: vec![false],
+            combinators: vec![],
+            async_instances: vec![],
+            async_generators: vec![],
+            from_async: vec![],
+            unhandled_rejection: None,
+        }
+    }
+    #[test]
+    fn reported_rejection_suffix_requires_a_rejected_promise_and_preserves_legacy_bytes() {
+        let mut state = valid();
+        let legacy = encode_promise_cluster(&state);
+        assert_eq!(
+            decode_promise_cluster(&legacy).unwrap().unhandled_rejection,
+            None
+        );
+        state.unhandled_rejection = Some(1);
+        assert!(decode(&state).is_err(), "pending promise is not a report");
+        state.promises[0].state = 2;
+        state.promises[0].ever_handled = true;
+        assert_eq!(
+            decode(&state).unwrap(),
+            state,
+            "a later handler keeps history"
+        );
+        state.unhandled_rejection = Some(999);
+        assert!(decode(&state).is_err(), "unknown owner");
+        state.unhandled_rejection = None;
+        state.promises[0].state = 0;
+        state.promises[0].ever_handled = false;
+        assert_eq!(encode_promise_cluster(&state), legacy);
+    }
+
+    fn decode(state: &PromiseClusterSnapshot) -> Result<PromiseClusterSnapshot, SnapshotError> {
+        decode_promise_cluster(&encode_promise_cluster(state))
+    }
+    fn reaction() -> PromiseReactionRow {
+        PromiseReactionRow {
+            on_fulfilled: Slot::undefined(),
+            on_rejected: Slot::undefined(),
+            resolve: Slot::undefined(),
+            reject: Slot::undefined(),
+            kind: 2,
+            a: 0,
+            b: 0,
+        }
+    }
+    fn combining() -> PromiseClusterSnapshot {
+        let mut state = valid();
+        state.promises[0].reactions.push(reaction());
+        state.combinators.push(CombinatorRow {
+            kind: 0,
+            resolve: reference(2),
+            reject: reference(3),
+            remaining: 1,
+            results: 4,
+        });
+        state
+    }
+
+    fn check_bounds(
+        state: &PromiseClusterSnapshot,
+        arrays: &[ArrayImage],
+        heap: &[Slot],
+    ) -> Result<(), SnapshotError> {
+        let lang = BoundsTables {
+            promise_cluster: state,
+            ..BoundsTables::EMPTY
+        };
+        check_image_slot_bounds(
+            heap,
+            &[],
+            &BoundsTables {
+                arrays,
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..lang
+            },
+            4,
+            &SymbolKeyImage::default(),
+            8,
+            CHUNK_HEADER,
+            &[],
+        )
+    }
+
+    #[test]
+    fn combinator_results_require_covering_array_rows() {
+        let mut state = combining();
+        for function in &mut state.functions {
+            function.name_chunk = CHUNK_HEADER as u32;
+        }
+        let arrays = [ArrayImage {
+            owner: 4,
+            length: 2,
+            items: vec![],
+        }];
+        assert_eq!(check_bounds(&state, &arrays, &[]), Ok(()));
+        assert_eq!(
+            check_bounds(&state, &[], &[]),
+            Err(SnapshotError::Corrupt(
+                "promise cluster: combinator's results Array has no row"
+            ))
+        );
+        for kind in [0, 1, 2, 3] {
+            for remaining in [3, u32::MAX] {
+                let mut invalid = state.clone();
+                invalid.combinators[0].kind = kind;
+                invalid.combinators[0].remaining = remaining;
+                assert_eq!(
+                    check_bounds(&invalid, &arrays, &[]),
+                    Err(SnapshotError::Corrupt(
+                        "promise cluster: remaining outside its element count"
+                    ))
+                );
+            }
+        }
+        let mut race = state.clone();
+        race.combinators[0].kind = 2;
+        for remaining in [0, 1] {
+            race.combinators[0].remaining = remaining;
+            assert_eq!(
+                check_bounds(&race, &arrays, &[]),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: remaining outside its element count"
+                ))
+            );
+        }
+        race.combinators[0].remaining = 2;
+        assert_eq!(check_bounds(&race, &arrays, &[]), Ok(()));
+        for kind in [2, 12] {
+            for index in [0, 1] {
+                let mut valid = state.clone();
+                valid.promises[0].reactions[0].kind = kind;
+                valid.promises[0].reactions[0].b = index;
+                assert_eq!(check_bounds(&valid, &arrays, &[]), Ok(()));
+            }
+            for index in [2, u32::MAX] {
+                let mut invalid = state.clone();
+                invalid.promises[0].reactions[0].kind = kind;
+                invalid.promises[0].reactions[0].b = index;
+                assert_eq!(
+                    check_bounds(&invalid, &arrays, &[]),
+                    Err(SnapshotError::Corrupt(
+                        "promise cluster: element index outside the results Array"
+                    ))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn async_activation_requires_one_anchor_and_a_live_capability_pair() {
+        use ironhorse_vm::snapshot_api::{
+            AsyncRow, FunctionRow, FunctionStateSnapshot, SavedFrameRow,
+        };
+        use ironhorse_vm::Opcode;
+        let functions = FunctionStateSnapshot {
+            segments: vec![vec![Opcode::XS_CODE_UNDEFINED as u8]],
+            functions: vec![FunctionRow {
+                owner: 5,
+                segment: Some(0),
+                body_start: Some(0),
+                body_len: 1,
+                closures: 0,
+                name: "async".into(),
+                arity: 0,
+                name_chunk: u32::MAX,
+                is_generator: false,
+                home: 0,
+                class_derived: None,
+            }],
+            ..FunctionStateSnapshot::default()
+        };
+        let mut state = valid();
+        for function in &mut state.functions {
+            function.name_chunk = CHUNK_HEADER as u32;
+        }
+        state.promises[0].reactions.push(PromiseReactionRow {
+            kind: 3,
+            a: 4,
+            ..reaction()
+        });
+        state.async_instances.push(AsyncRow {
+            owner: 4,
+            result_promise: 1,
+            resolve: reference(2),
+            reject: reference(3),
+            frame: SavedFrameRow {
+                locals: vec![],
+                id_map: vec![],
+                args: vec![],
+                this_val: Slot::undefined(),
+                env: Slot::undefined(),
+                cur_func: 5,
+                cur_target: false,
+                target_func: u32::MAX,
+                strict: false,
+                result: Slot::undefined(),
+                stack_slice: vec![],
+                jumps: vec![],
+                resume_pc: 0,
+            },
+        });
+        let check = |state: &PromiseClusterSnapshot| {
+            let lang = BoundsTables {
+                promise_cluster: state,
+                function_state: &functions,
+                ..BoundsTables::EMPTY
+            };
+            check_image_slot_bounds(
+                &[],
+                &[],
+                &BoundsTables {
+                    arrays: &[],
+                    index_props: &[],
+                    collections: &[],
+                    registry: &[],
+                    errors: &[],
+                    buffers: &[],
+                    typed_arrays: &[],
+                    data_views: &[],
+                    iterators: &[],
+                    ..lang
+                },
+                4,
+                &SymbolKeyImage::default(),
+                8,
+                CHUNK_HEADER,
+                &[],
+            )
+        };
+        assert_eq!(check(&state), Ok(()));
+        let mut invalid = state.clone();
+        invalid.async_instances.clear();
+        assert_eq!(
+            check(&invalid),
+            Err(SnapshotError::Corrupt(
+                "async reaction: missing or duplicate activation"
+            ))
+        );
+        invalid = state.clone();
+        invalid.promises[0]
+            .reactions
+            .push(state.promises[0].reactions[0]);
+        assert_eq!(
+            check(&invalid),
+            Err(SnapshotError::Corrupt(
+                "async reaction: missing or duplicate activation"
+            ))
+        );
+        for case in 0..12 {
+            invalid = state.clone();
+            match case {
+                0 => invalid.promises[0].reactions.clear(),
+                1 => invalid.async_instances[0].resolve = Slot::undefined(),
+                2 => invalid.async_instances[0].reject = Slot::undefined(),
+                3 => invalid.async_instances[0].resolve = reference(6),
+                4 => invalid.functions[0].promise = 6,
+                5 => invalid.functions[1].promise = 6,
+                6 => invalid.functions[0].reject = true,
+                7 => invalid.functions[1].reject = false,
+                8 => invalid.functions[1].guard = 1,
+                9 => invalid.guards.clear(),
+                10 => invalid.guards[0] = true,
+                11 => invalid.promises[0].owner = 6, // anchor exists, result promise does not
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                check(&invalid),
+                Err(SnapshotError::Corrupt(
+                    "async activation: invalid promise capability or anchor"
+                )),
+                "case {case}"
+            );
+        }
+        assert_eq!(check(&state), Ok(()));
+    }
+
+    #[test]
+    fn capability_capture_fields_must_initialize_together() {
+        let state = PromiseClusterSnapshot {
+            functions: vec![PromiseFnRow {
+                function: 1,
+                promise: 2,
+                reject: false,
+                guard: u32::MAX,
+                name_chunk: CHUNK_HEADER as u32,
+            }],
+            ..PromiseClusterSnapshot::default()
+        };
+        let mut heap = vec![Slot::undefined(); 8];
+        heap[2].next = SlotIndex(3);
+        heap[3].next = SlotIndex(4);
+        for initialized in [false, true] {
+            for index in [3, 4] {
+                heap[index].kind = if initialized {
+                    Kind::Undefined
+                } else {
+                    Kind::Uninitialized
+                };
+            }
+            assert_eq!(check_bounds(&state, &[], &heap), Ok(()));
+        }
+        for initialized in [3, 4] {
+            heap[3].kind = Kind::Uninitialized;
+            heap[4].kind = Kind::Uninitialized;
+            heap[initialized].kind = Kind::Undefined;
+            assert_eq!(
+                check_bounds(&state, &[], &heap),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: mixed capability executor state"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn promise_states_order_and_guard_sharing() {
+        let baseline = valid();
+        assert_eq!(decode(&baseline).unwrap(), baseline);
+        for state in 0..=2 {
+            let mut good = baseline.clone();
+            good.promises[0].state = state;
+            assert!(decode(&good).is_ok());
+        }
+        for state in [3, 255] {
+            let mut bad = baseline.clone();
+            bad.promises[0].state = state;
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt("promise cluster: invalid state"))
+            );
+        }
+        let mut pair = baseline.clone();
+        let mut second = pair.promises[0].clone();
+        second.owner = 4;
+        pair.promises.push(second);
+        assert!(decode(&pair).is_ok());
+        for owner in [1, 0] {
+            let mut bad = pair.clone();
+            bad.promises[1].owner = owner;
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: owners not strictly ascending"
+                ))
+            );
+        }
+        for function in [2, 1] {
+            let mut bad = baseline.clone();
+            bad.functions[1].function = function;
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: functions not strictly ascending"
+                ))
+            );
+        }
+        let mut bad = baseline.clone();
+        bad.functions[0].promise = 7;
+        assert_eq!(
+            decode(&bad),
+            Err(SnapshotError::Corrupt(
+                "promise cluster: resolving function names no promise row"
+            ))
+        );
+        bad = baseline.clone();
+        bad.functions[0].guard = 1;
+        assert_eq!(
+            decode(&bad),
+            Err(SnapshotError::Corrupt(
+                "promise cluster: guard index out of range"
+            ))
+        );
+        bad = baseline.clone();
+        bad.functions[1].reject = false;
+        assert_eq!(
+            decode(&bad),
+            Err(SnapshotError::Corrupt(
+                "promise cluster: guard not shared by one resolving pair"
+            ))
+        );
+        bad = pair;
+        bad.functions[1].promise = 4;
+        assert_eq!(
+            decode(&bad),
+            Err(SnapshotError::Corrupt(
+                "promise cluster: guard not shared by one resolving pair"
+            ))
+        );
+        bad = baseline.clone();
+        bad.guards.push(false);
+        assert_eq!(
+            decode(&bad),
+            Err(SnapshotError::Corrupt(
+                "promise cluster: guards not densely referenced"
+            ))
+        );
+        let mut singleton = baseline.clone();
+        singleton.functions.pop();
+        assert!(decode(&singleton).is_ok());
+        // Three boolean sites: promise handled, function reject, guard cell.
+        let bytes = encode_promise_cluster(&baseline);
+        let function_start = 4 + 4 + 1 + SLOT_RECORD_BYTES + 1 + 4 + 4;
+        let guard_start = function_start + 2 * 17 + 4;
+        for offset in [9 + SLOT_RECORD_BYTES, function_start + 8, guard_start] {
+            let mut bytes = bytes.clone();
+            bytes[offset] = 2;
+            assert_eq!(
+                decode_promise_cluster(&bytes),
+                Err(SnapshotError::Corrupt("promise cluster: bad boolean byte"))
+            );
+        }
+    }
+
+    #[test]
+    fn combinator_reaction_invariants() {
+        let baseline = combining();
+        assert_eq!(decode(&baseline).unwrap(), baseline);
+        for state in [1, 2] {
+            let mut bad = baseline.clone();
+            bad.promises[0].state = state;
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: settled promise retains reactions"
+                ))
+            );
+        }
+        // 13 and up name nothing. 7-10 USED to be here: they are the
+        // `Array.fromAsync` steps, and `ASYN` has carried them since format
+        // 24 (architecture finding F127), so they decode like the other
+        // native kinds below rather than being refused.
+        for kind in [13, 14, 255] {
+            let mut bad = baseline.clone();
+            bad.promises[0].reactions[0].kind = kind;
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: reaction kind does not resume"
+                ))
+            );
+        }
+        // The async-generator and `Array.fromAsync` kinds decode like
+        // `AsyncAwait`: the index in `a`, nothing else; the row itself is
+        // checked by the gate.
+        for kind in [4, 5, 6, 7, 8, 9, 10] {
+            let mut resumed = baseline.clone();
+            resumed.promises[0].reactions[0].kind = kind;
+            resumed.promises[0].reactions[0].b = 0;
+            resumed.combinators.clear();
+            assert_eq!(decode(&resumed).unwrap(), resumed);
+            let mut bad = resumed.clone();
+            bad.promises[0].reactions[0].b = 1;
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt("async reaction: invalid payload"))
+            );
+        }
+        for kind in [4, 255] {
+            let mut bad = baseline.clone();
+            bad.combinators[0].kind = kind;
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: unknown combinator kind"
+                ))
+            );
+        }
+        let mut bad = baseline.clone();
+        bad.promises[0].reactions[0].a = 1;
+        assert_eq!(
+            decode(&bad),
+            Err(SnapshotError::Corrupt(
+                "promise cluster: combinator index out of range"
+            ))
+        );
+        bad = baseline.clone();
+        bad.promises[0].reactions.push(reaction());
+        assert_eq!(
+            decode(&bad),
+            Err(SnapshotError::Corrupt(
+                "promise cluster: duplicate element reaction"
+            ))
+        );
+        for field in 0..4 {
+            let mut bad = baseline.clone();
+            let r = &mut bad.promises[0].reactions[0];
+            match field {
+                0 => r.on_fulfilled = reference(2),
+                1 => r.on_rejected = reference(2),
+                2 => r.resolve = reference(2),
+                _ => r.reject = reference(3),
+            }
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: combinator reaction carries capability slots"
+                ))
+            );
+        }
+        bad = baseline.clone();
+        bad.promises[0].reactions.clear();
+        assert_eq!(
+            decode(&bad),
+            Err(SnapshotError::Corrupt(
+                "promise cluster: combinators not densely referenced"
+            ))
+        );
+        for reject in [false, true] {
+            let mut bad = baseline.clone();
+            if reject {
+                bad.combinators[0].reject = Slot::undefined();
+            } else {
+                bad.combinators[0].resolve = Slot::undefined();
+            }
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: combinator capability names no function"
+                ))
+            );
+        }
+        for kind in [0, 1, 3] {
+            let mut bad = baseline.clone();
+            bad.combinators[0].kind = kind;
+            bad.combinators[0].remaining = 0;
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: remaining below its pending reactions"
+                ))
+            );
+        }
+        let mut race = baseline;
+        race.combinators[0].kind = 2;
+        race.combinators[0].remaining = 0;
+        assert!(decode(&race).is_ok());
+    }
+
+    #[test]
+    fn capability_and_finally_homes() {
+        for tag in [u32::MAX, u32::MAX - 1, u32::MAX - 2] {
+            let baseline = PromiseClusterSnapshot {
+                functions: vec![PromiseFnRow {
+                    function: 2,
+                    promise: 1,
+                    reject: false,
+                    guard: tag,
+                    name_chunk: u32::MAX,
+                }],
+                ..PromiseClusterSnapshot::default()
+            };
+            assert_eq!(decode(&baseline).unwrap(), baseline);
+            for duplicate_home in [false, true] {
+                let mut bad = baseline.clone();
+                if duplicate_home {
+                    let mut second = bad.functions[0];
+                    second.function = 3;
+                    bad.functions.push(second);
+                } else {
+                    bad.functions[0].promise = 2;
+                }
+                if tag == u32::MAX {
+                    assert_eq!(
+                        decode(&bad),
+                        Err(SnapshotError::Corrupt(
+                            "promise cluster: malformed capability executor home"
+                        ))
+                    );
+                } else {
+                    assert_eq!(
+                        decode(&bad),
+                        Err(SnapshotError::Corrupt(
+                            "promise cluster: malformed finally function home"
+                        ))
+                    );
+                }
+            }
+            let mut polarity = baseline;
+            polarity.functions[0].reject = true;
+            if tag == u32::MAX {
+                assert_eq!(
+                    decode(&polarity),
+                    Err(SnapshotError::Corrupt(
+                        "promise cluster: malformed capability executor home"
+                    ))
+                );
+            } else {
+                assert!(decode(&polarity).is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn direct_combinator_requires_its_exact_resolving_pair() {
+        let mut baseline = combining();
+        let r = &mut baseline.promises[0].reactions[0];
+        r.kind = 12;
+        r.resolve = reference(2);
+        r.reject = reference(3);
+        assert_eq!(decode(&baseline).unwrap(), baseline);
+        for field in 0..7 {
+            let mut bad = baseline.clone();
+            let r = &mut bad.promises[0].reactions[0];
+            match field {
+                0 => r.on_fulfilled = reference(2),
+                1 => r.on_rejected = reference(3),
+                2 => r.resolve = Slot::undefined(),
+                3 => r.reject = Slot::undefined(),
+                4 => r.resolve = reference(3),
+                5 => r.reject = reference(2),
+                _ => r.resolve = reference(4),
+            }
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: malformed direct combinator callback"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn reaction_payloads_and_capabilities() {
+        for kind in [0, 1, 11] {
+            let mut baseline = valid();
+            let mut r = reaction();
+            r.kind = kind;
+            r.resolve = reference(2);
+            r.reject = reference(3);
+            if kind == 1 {
+                r.on_rejected = reference(3);
+            }
+            baseline.promises[0].reactions.push(r);
+            assert_eq!(decode(&baseline).unwrap(), baseline);
+            for reject in [false, true] {
+                let mut bad = baseline.clone();
+                let r = &mut bad.promises[0].reactions[0];
+                if reject {
+                    r.reject = Slot::undefined();
+                } else {
+                    r.resolve = Slot::undefined();
+                }
+                assert_eq!(
+                    decode(&bad),
+                    Err(SnapshotError::Corrupt(
+                        "promise cluster: reaction capability names no resolving function"
+                    ))
+                );
+            }
+            for field in 0..2 {
+                let mut bad = baseline.clone();
+                let r = &mut bad.promises[0].reactions[0];
+                if field == 0 {
+                    r.a = 2;
+                } else {
+                    r.b = 1;
+                }
+                assert_eq!(
+                    decode(&bad),
+                    Err(SnapshotError::Corrupt(
+                        "promise cluster: unused reaction payload not zero"
+                    ))
+                );
+            }
+            if kind == 11 {
+                let mut accepted = baseline.clone();
+                accepted.promises[0].reactions[0].a = 1;
+                assert!(decode(&accepted).is_ok());
+                let mut bad = baseline;
+                bad.promises[0].reactions[0].on_rejected = reference(3);
+                assert_eq!(
+                    decode(&bad),
+                    Err(SnapshotError::Corrupt(
+                        "promise cluster: unused reaction payload not zero"
+                    ))
+                );
+            } else if kind == 1 {
+                let mut bad = baseline;
+                bad.promises[0].reactions[0].on_rejected = Slot::undefined();
+                assert_eq!(
+                    decode(&bad),
+                    Err(SnapshotError::Corrupt(
+                        "promise cluster: unused reaction payload not zero"
+                    ))
+                );
+            }
+        }
+        let mut baseline = valid();
+        let mut r = reaction();
+        r.kind = 3;
+        baseline.promises[0].reactions.push(r);
+        assert_eq!(decode(&baseline).unwrap(), baseline);
+        for field in 0..5 {
+            let mut bad = baseline.clone();
+            let r = &mut bad.promises[0].reactions[0];
+            match field {
+                0 => r.b = 1,
+                1 => r.on_fulfilled = reference(2),
+                2 => r.on_rejected = reference(3),
+                3 => r.resolve = reference(2),
+                _ => r.reject = reference(3),
+            }
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt("async reaction: invalid payload"))
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod object_semantic_refusals {
+    use super::*;
+    use ironhorse_vm::snapshot_api::{
+        AccessorRow, DisposableStackRow, DisposalRecordRow, PrivateAccessorRow,
+        PrivateElementSnapshot, PrivateValueRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot,
+    };
+    use ironhorse_vm::value::SlotIndex;
+
+    fn reference() -> Slot {
+        Slot::of(Kind::Reference, Payload::Reference(SlotIndex(7)))
+    }
+    fn check(lang: &BoundsTables<'_>) -> Result<(), SnapshotError> {
+        check_image_slot_bounds(
+            &[],
+            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..*lang
+            },
+            4,
+            &SymbolKeyImage::default(),
+            8,
+            0,
+            &[],
+        )
+    }
+
+    #[test]
+    fn regexp_source_and_flags_must_compile() {
+        for (source, flags) in [("a+", "g"), ("(?:)", ""), ("[a-z]", "iu")] {
+            let rows = [RegExpImage {
+                owner: 1,
+                source: source.into(),
+                flags: flags.into(),
+                last_index_bits: 0,
+            }];
+            assert_eq!(
+                check(&BoundsTables {
+                    regexps: &rows,
+                    ..BoundsTables::EMPTY
+                }),
+                Ok(())
+            );
+        }
+        for (source, flags) in [("[", ""), ("(", ""), ("a", "gg"), ("a", "z")] {
+            let rows = [RegExpImage {
+                owner: 1,
+                source: source.into(),
+                flags: flags.into(),
+                last_index_bits: 0,
+            }];
+            assert_eq!(
+                check(&BoundsTables {
+                    regexps: &rows,
+                    ..BoundsTables::EMPTY
+                }),
+                Err(SnapshotError::Corrupt(
+                    "regexp side table: persisted source does not compile"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn intl_bound_function_requires_owner_in_the_right_table() {
+        let intl = IntlTables {
+            collators: vec![(
+                1,
+                CollatorData {
+                    locale: "en".into(),
+                    usage: "sort".into(),
+                    sensitivity: "variant".into(),
+                    collation: "default".into(),
+                    numeric: false,
+                    case_first: "false".into(),
+                    ignore_punctuation: false,
+                },
+            )],
+            ..IntlTables::default()
+        };
+        let valid = ironhorse_vm::snapshot_api::IntlBoundFunctionRow {
+            kind: 0,
+            function: 2,
+            owner: 1,
+            name: "compare".into(),
+            name_chunk: u32::MAX,
+            arity: 2,
+        };
+        let rows = [valid.clone()];
+        assert_eq!(
+            check(&BoundsTables {
+                intl: &intl,
+                intl_bound_functions: &rows,
+                ..BoundsTables::EMPTY
+            }),
+            Ok(())
+        );
+        for (owner, kind) in [(3, 0), (1, 1)] {
+            let rows = [ironhorse_vm::snapshot_api::IntlBoundFunctionRow {
+                owner,
+                kind,
+                ..valid.clone()
+            }];
+            assert_eq!(
+                check(&BoundsTables {
+                    intl: &intl,
+                    intl_bound_functions: &rows,
+                    ..BoundsTables::EMPTY
+                }),
+                Err(SnapshotError::Corrupt(
+                    "Intl bound-function state: owner has no Intl row"
+                ))
+            );
+        }
+        assert_eq!(
+            check(&BoundsTables {
+                intl_bound_functions: &rows,
+                ..BoundsTables::EMPTY
+            }),
+            Err(SnapshotError::Corrupt(
+                "Intl bound-function state: owner has no Intl row"
+            ))
+        );
+    }
+
+    #[test]
+    fn revoked_proxy_and_revoker_targets() {
+        let mut state = ProxyStateSnapshot {
+            proxies: vec![ProxyRow {
+                owner: 1,
+                target: u32::MAX,
+                handler: u32::MAX,
+                revoked: true,
+            }],
+            revokers: vec![ProxyRevokerRow {
+                owner: 2,
+                proxy: 1,
+                name_chunk: u32::MAX,
+            }],
+        };
+        let check_state = |state: &ProxyStateSnapshot| {
+            check(&BoundsTables {
+                proxy_state: state,
+                ..BoundsTables::EMPTY
+            })
+        };
+        assert_eq!(check_state(&state), Ok(()));
+        for handler in [false, true] {
+            let mut invalid = state.clone();
+            if handler {
+                invalid.proxies[0].handler = 3;
+            } else {
+                invalid.proxies[0].target = 3;
+            }
+            assert_eq!(
+                check_state(&invalid),
+                Err(SnapshotError::Corrupt(
+                    "proxy state: revoked proxy retains target or handler"
+                ))
+            );
+        }
+        state.revokers[0].proxy = 3;
+        assert_eq!(
+            check_state(&state),
+            Err(SnapshotError::Corrupt("proxy revoker names no proxy row"))
+        );
+        state.revokers[0].proxy = 1;
+        state.proxies[0].revoked = false;
+        state.proxies[0].target = 3;
+        state.proxies[0].handler = 4;
+        assert_eq!(check_state(&state), Ok(()));
+    }
+
+    #[test]
+    fn accessor_keys_and_callback_shapes() {
+        let valid = AccessorRow {
+            owner: 1,
+            id: 4,
+            get: Some(reference()),
+            set: Some(reference()),
+        };
+        let check_row = |row: &AccessorRow| {
+            check(&BoundsTables {
+                accessors: std::slice::from_ref(row),
+                ..BoundsTables::EMPTY
+            })
+        };
+        assert_eq!(check_row(&valid), Ok(()));
+        for id in [0, 5] {
+            let mut invalid = valid.clone();
+            invalid.id = id;
+            assert_eq!(
+                check_row(&invalid),
+                Err(SnapshotError::Corrupt(
+                    "accessor state: id outside the property-key tables"
+                ))
+            );
+        }
+        for setter in [false, true] {
+            let mut invalid = valid.clone();
+            if setter {
+                invalid.set = Some(Slot::integer(1));
+            } else {
+                invalid.get = Some(Slot::integer(1));
+            }
+            assert_eq!(
+                check_row(&invalid),
+                Err(SnapshotError::Corrupt(
+                    "accessor state: getter or setter is not callable"
+                ))
+            );
+        }
+        let mut absent = valid;
+        absent.get = None;
+        absent.set = None;
+        assert_eq!(check_row(&absent), Ok(()));
+    }
+
+    #[test]
+    fn private_key_collisions_and_callback_shapes() {
+        let valid = PrivateElementSnapshot {
+            values: vec![PrivateValueRow {
+                receiver: 1,
+                brand: 2,
+                value: Slot::integer(3),
+            }],
+            accessors: vec![PrivateAccessorRow {
+                receiver: 1,
+                brand: 3,
+                get: Some(reference()),
+                set: Some(reference()),
+            }],
+        };
+        let check_state = |state: &PrivateElementSnapshot| {
+            check(&BoundsTables {
+                private_elements: state,
+                ..BoundsTables::EMPTY
+            })
+        };
+        assert_eq!(check_state(&valid), Ok(()));
+        let mut invalid = valid.clone();
+        invalid.accessors[0].brand = 2;
+        assert_eq!(
+            check_state(&invalid),
+            Err(SnapshotError::Corrupt(
+                "private elements: key has both value and accessor rows"
+            ))
+        );
+        for setter in [false, true] {
+            let mut invalid = valid.clone();
+            if setter {
+                invalid.accessors[0].set = Some(Slot::integer(1));
+            } else {
+                invalid.accessors[0].get = Some(Slot::integer(1));
+            }
+            assert_eq!(
+                check_state(&invalid),
+                Err(SnapshotError::Corrupt(
+                    "private accessors: getter or setter is not callable"
+                ))
+            );
+        }
+        let mut absent = valid;
+        absent.accessors[0].get = None;
+        absent.accessors[0].set = None;
+        assert_eq!(check_state(&absent), Ok(()));
+    }
+
+    #[test]
+    fn disposal_methods_require_callback_references() {
+        let mut row = DisposableStackRow {
+            owner: 1,
+            disposed: false,
+            asynchronous: false,
+            records: vec![DisposalRecordRow {
+                resource: Slot::integer(1),
+                method: reference(),
+                pass_resource: false,
+            }],
+        };
+        let check_row = |row: &DisposableStackRow| {
+            check(&BoundsTables {
+                disposable_stacks: std::slice::from_ref(row),
+                ..BoundsTables::EMPTY
+            })
+        };
+        assert_eq!(check_row(&row), Ok(()));
+        row.records[0].method = Slot::integer(1);
+        assert_eq!(
+            check_row(&row),
+            Err(SnapshotError::Corrupt(
+                "disposable stacks: disposal method is not callable"
+            ))
+        );
+    }
+}
+
+#[cfg(test)]
+mod buffer_geometry_refusals {
+    use super::*;
+    fn check(
+        buffers: &[BufferImage],
+        typed: &[TypedArrayImage],
+        views: &[DataViewImage],
+    ) -> Result<(), SnapshotError> {
+        check_image_slot_bounds(
+            &[],
+            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers,
+                typed_arrays: typed,
+                data_views: views,
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
+            0,
+            &SymbolKeyImage::default(),
+            4,
+            12,
+            &[],
+        )
+    }
+    fn buffer() -> BufferImage {
+        BufferImage {
+            owner: 1,
+            data: 4,
+            length: 8,
+            flags: 0,
+        }
+    }
+
+    #[test]
+    fn backing_header_and_arena_bounds() {
+        let valid = buffer();
+        let mut bytes = 8u32.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&[0; 8]);
+        assert_eq!(
+            check_buffer_chunk_lengths(std::slice::from_ref(&valid), &bytes),
+            Ok(())
+        );
+        assert_eq!(check(std::slice::from_ref(&valid), &[], &[]), Ok(()));
+        for data in [0, 3, 13, u32::MAX] {
+            let mut invalid = valid.clone();
+            invalid.data = data;
+            assert_eq!(
+                check_buffer_chunk_lengths(std::slice::from_ref(&invalid), &bytes),
+                Err(SnapshotError::Corrupt("buffer chunk header out of bounds"))
+            );
+            assert_eq!(
+                check(&[invalid], &[], &[]),
+                Err(SnapshotError::Corrupt("chunk offset out of arena bounds"))
+            );
+        }
+        let mut invalid = valid.clone();
+        invalid.length = 9;
+        assert_eq!(
+            check(&[invalid], &[], &[]),
+            Err(SnapshotError::Corrupt("chunk offset out of arena bounds"))
+        );
+        let mut detached = valid;
+        detached.flags = 1;
+        detached.length = 0;
+        assert_eq!(
+            check_buffer_chunk_lengths(std::slice::from_ref(&detached), &bytes),
+            Ok(())
+        );
+        assert_eq!(check(&[detached], &[], &[]), Ok(()));
+    }
+
+    #[test]
+    fn typed_view_geometry_accounts_for_element_width() {
+        let backing = buffer();
+        for (kind, ty) in ironhorse_vm::TYPED_ARRAY_TYPES.iter().enumerate() {
+            let valid = TypedArrayImage {
+                owner: 2,
+                kind: kind as u8,
+                buffer: 1,
+                offset: 0,
+                length: 8 >> ty.shift,
+            };
+            assert_eq!(
+                check(
+                    std::slice::from_ref(&backing),
+                    std::slice::from_ref(&valid),
+                    &[]
+                ),
+                Ok(())
+            );
+            for field in 0..4 {
+                let mut invalid = valid.clone();
+                match field {
+                    0 => invalid.length += 1,
+                    1 => invalid.offset = 1,
+                    2 => invalid.buffer = 3,
+                    _ => {
+                        invalid.offset = u32::MAX;
+                        invalid.length = u32::MAX;
+                    }
+                }
+                assert_eq!(
+                    check(std::slice::from_ref(&backing), &[invalid], &[]),
+                    Err(SnapshotError::Corrupt(
+                        "typed-arrays side table: view geometry past its buffer"
+                    ))
+                );
+            }
+            let mut detached = backing.clone();
+            detached.flags = 1;
+            detached.length = 0;
+            assert_eq!(
+                check(&[detached], std::slice::from_ref(&valid), &[]),
+                Ok(())
+            );
+        }
+    }
+
+    #[test]
+    fn data_view_geometry_and_missing_backing() {
+        let backing = buffer();
+        let valid = DataViewImage {
+            owner: 2,
+            buffer: 1,
+            offset: 2,
+            size: 6,
+        };
+        assert_eq!(
+            check(
+                std::slice::from_ref(&backing),
+                &[],
+                std::slice::from_ref(&valid)
+            ),
+            Ok(())
+        );
+        for field in 0..4 {
+            let mut invalid = valid.clone();
+            match field {
+                0 => invalid.size = 7,
+                1 => invalid.offset = 3,
+                2 => invalid.buffer = 3,
+                _ => {
+                    invalid.offset = u32::MAX;
+                    invalid.size = u32::MAX;
+                }
+            }
+            assert_eq!(
+                check(std::slice::from_ref(&backing), &[], &[invalid]),
+                Err(SnapshotError::Corrupt(
+                    "data-views side table: view geometry past its buffer"
+                ))
+            );
+        }
+        let mut detached = backing;
+        detached.flags = 1;
+        detached.length = 0;
+        assert_eq!(check(&[detached], &[], &[valid]), Ok(()));
+    }
+}
+
+#[cfg(test)]
+mod container_grammar_refusals {
+    use super::*;
+    use crate::format::FourCc;
+
+    fn image() -> MachineImage {
+        MachineImage::from_arenas(
+            Signature::new("container-refusals"),
+            &SlotArena::new(),
+            &ChunkArena::new(),
+            &[],
+            vec![],
+            vec![],
+            SymbolKeyImage::default(),
+        )
+    }
+
+    #[test]
+    fn container_rejects_nonzero_reserved_slot_bytes() {
+        let mut slots = SlotArena::new();
+        slots.alloc(Slot::undefined());
+        let image = MachineImage::from_arenas(
+            Signature::new("canonical-slot"),
+            &slots,
+            &ChunkArena::new(),
+            &[],
+            vec![],
+            vec![],
+            SymbolKeyImage::default(),
+        );
+        let bytes = write_machine_unchecked(&image);
+        assert_eq!(read_machine(&bytes, &image.signature).unwrap(), image);
+        let reader = AtomReader::parse(&bytes).unwrap();
+        let heap = reader.find(HEAP).unwrap();
+        // HEAP's slot/live/free counts precede its first fixed-width record.
+        let reserved = 12 + 9;
+        assert_eq!(heap.payload[reserved], 0);
+        for byte in [1, 255] {
+            let mut payload = heap.payload.to_vec();
+            payload[reserved] = byte;
+            assert_eq!(
+                decode_heap(&payload).unwrap(),
+                decode_heap(heap.payload).unwrap()
+            );
+            let mut writer = AtomWriter::new();
+            for atom in reader.atoms() {
+                writer
+                    .atom(
+                        atom.tag,
+                        if atom.tag == HEAP {
+                            &payload
+                        } else {
+                            atom.payload
+                        },
+                    )
+                    .unwrap();
+            }
+            assert_eq!(
+                read_machine(&writer.finish().unwrap(), &image.signature),
+                Err(SnapshotError::Corrupt("non-canonical machine encoding"))
+            );
+        }
+    }
+
+    #[test]
+    fn container_requires_canonical_order_and_known_tags() {
+        let image = image();
+        let bytes = write_machine_unchecked(&image);
+        assert_eq!(read_machine(&bytes, &image.signature).unwrap(), image);
+        let parsed = AtomReader::parse(&bytes).unwrap();
+        let atoms = parsed.atoms();
+        for index in 0..atoms.len() - 1 {
+            let mut order: Vec<_> = (0..atoms.len()).collect();
+            order.swap(index, index + 1);
+            let mut writer = AtomWriter::new();
+            for i in order {
+                writer.atom(atoms[i].tag, atoms[i].payload).unwrap();
+            }
+            assert_eq!(
+                read_machine(&writer.finish().unwrap(), &image.signature),
+                Err(SnapshotError::Corrupt(
+                    "container atoms out of canonical order or unknown"
+                ))
+            );
+        }
+        let mut writer = AtomWriter::new();
+        for atom in atoms {
+            writer.atom(atom.tag, atom.payload).unwrap();
+        }
+        writer.atom(FourCc(*b"NOPE"), &[]).unwrap();
+        assert_eq!(
+            read_machine(&writer.finish().unwrap(), &image.signature),
+            Err(SnapshotError::Corrupt(
+                "container atoms out of canonical order or unknown"
+            ))
+        );
+    }
+
+    #[test]
+    fn required_atoms_and_quiescent_stack() {
+        let image = image();
+        let bytes = write_machine_unchecked(&image);
+        assert_eq!(read_machine(&bytes, &image.signature).unwrap(), image);
+        let parsed = AtomReader::parse(&bytes).unwrap();
+        for omitted in [CREA, BLOC, STAC, KEYS, NAME, SYMB, METR] {
+            assert!(parsed.find(omitted).is_some());
+            let mut writer = AtomWriter::new();
+            for atom in parsed.atoms() {
+                if atom.tag != omitted {
+                    writer.atom(atom.tag, atom.payload).unwrap();
+                }
+            }
+            let result = read_machine(&writer.finish().unwrap(), &image.signature);
+            if omitted == METR {
+                assert_eq!(result, Err(SnapshotError::Corrupt("missing METR identity")));
+            } else {
+                assert_eq!(
+                    result,
+                    Err(SnapshotError::Corrupt(
+                        "container missing an atom its version always writes"
+                    ))
+                );
+            }
+        }
+        let mut stacked = image.clone();
+        stacked.stack.push(Slot::integer(1));
+        assert_eq!(
+            read_machine(&write_machine_unchecked(&stacked), &image.signature),
+            Err(SnapshotError::Corrupt(
+                "STAC not empty at a quiescent boundary"
+            ))
+        );
+        let mut wrong_size = image;
+        wrong_size.creation.initial_chunk_bytes = 1;
+        assert_eq!(
+            read_machine(&write_machine_unchecked(&wrong_size), &wrong_size.signature),
+            Err(SnapshotError::Corrupt("BLOC length differs from CREA"))
+        );
+    }
+}
+
+#[cfg(test)]
+mod regexp_utf16_source {
+    use super::*;
+
+    #[test]
+    fn source_encoding_preserves_legacy_scalar_bytes_and_all_units() {
+        for units in [
+            vec![0xd800],
+            vec![0xdc00],
+            vec![0xd83d, 0xde00],
+            vec![0],
+            vec![0xd800, 0, 0xd83d, 0xde00, 0xfffd],
+        ] {
+            let row = RegExpImage {
+                owner: 1,
+                source: SymbolName::from_units(&units),
+                flags: String::new(),
+                last_index_bits: 0,
+            };
+            let encoded = encode_regexps(std::slice::from_ref(&row));
+            let decoded = decode_regexps(&encoded).expect("valid source encoding");
+            assert_eq!(decoded[0].source.to_units(), units);
+            if let Ok(text) = String::from_utf16(&units) {
+                let length = u32::from_be_bytes(encoded[8..12].try_into().unwrap()) as usize;
+                assert_eq!(&encoded[12..12 + length], text.as_bytes());
+            }
+            assert!(ironhorse_vm::regexp_source_compiles(&decoded[0].source, ""));
+        }
     }
 }

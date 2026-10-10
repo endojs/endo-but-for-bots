@@ -6,18 +6,34 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[lints]
+workspace = true
+
 [lib]
 name = "ironhorse_compile"
 path = "src/lib.rs"
 
 [dependencies]
+ironhorse-unicode = { path = "../ironhorse-unicode" }
+ironhorse-meter = { path = "../ironhorse-meter" }
+ironhorse-text = { path = "../ironhorse-text" }
 # Compile-time regexp-literal validation. XS's lexer runs `fxCompileRegExp`
 # on every regexp literal (`fxGetNextRegExp`), so a syntactically invalid
 # pattern is a parse-time SyntaxError; ironhorse mirrors that by validating the
 # literal through the same ported parser.
 ironhorse-regexp = { path = "../ironhorse-regexp" }
 
-[dev-dependencies]
-# The conformance oracle (XS at the pin), used only by the whole-corpus
-# parse-smoke integration test to certify accept/reject agreement.
-xs-oracle = { path = "../xs-oracle" }
+# Cargo does not support optional dev-dependencies. This optional dependency
+# is enabled only for the explicitly gated oracle integration tests below.
+xs-oracle = { path = "../xs-oracle", optional = true }
+
+[features]
+parity = ["dep:xs-oracle"]
+
+[[test]]
+name = "corpus_parse_smoke"
+required-features = ["parity"]
+
+[[test]]
+name = "coder_byte_identity"
+required-features = ["parity"]

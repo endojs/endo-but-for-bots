@@ -4,12 +4,13 @@
 //! around —
 //!
 //! - **checkpoint**: an incremental commit after a small crank, end to
-//!   end through WAL + `synchronous=FULL`. Since V6-c the metadata work
-//!   is **O(dirty · log n)**: the producer and the backend each hold a
-//!   live `RootLedger`, so neither re-reads nor re-hashes the untouched
-//!   leaves — before the ledger this arm measured the O(pages) seal
-//!   term the old label named (6.8 ms at 939 pages; now ~0.8 ms, flat
-//!   across the rung sizes, the residual being the row write + fsync).
+//!   end through WAL + `synchronous=FULL`. Its metadata work is
+//!   proportional to the dirty rows: since store schema 36 the store
+//!   keeps no row digests and no root, so a commit hashes nothing but the
+//!   changed small-state sections (before the V6-c root ledger this arm
+//!   measured an O(pages) seal term, 6.8 ms at 939 pages; with the ledger,
+//!   ~0.8 ms, flat across the rung sizes, the residual being the row
+//!   write + fsync).
 //! - **reach-full**: reachability from the boot/global root over an
 //!   ARENA-VISIBLE graph, both paths. `reachable_pages` reads the whole
 //!   edge set into Rust and BFSes there; `reachable_pages_sql` runs the
@@ -59,7 +60,7 @@ fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
 }
 
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
+fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("fixture compiles");
     (bytecode, parse_symbols(&symbols))
 }
@@ -126,7 +127,11 @@ fn store_query_cost_across_heap_sizes() {
         let mut session = resume_from_store_lazy(store.clone(), &sig()).unwrap();
         for k in 0..5 {
             let o = session.machine_mut().run(&b2);
-            assert_eq!(o.result, (8 + k).to_string(), "touch crank result (symbol alignment)");
+            assert_eq!(
+                o.result,
+                (8 + k).to_string(),
+                "touch crank result (symbol alignment)"
+            );
             let t0 = Instant::now();
             checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).unwrap();
             commit_ms.push(t0.elapsed().as_secs_f64() * 1e3);
@@ -138,7 +143,10 @@ fn store_query_cost_across_heap_sizes() {
         // the heap and dense/CTE do comparable work (and must AGREE).
         let full_answer = reachable_pages(&*store.borrow(), [0u32]).unwrap().len();
         let cte_full_answer = store.borrow().reachable_pages_sql(&[0]).unwrap().len();
-        assert_eq!(full_answer, cte_full_answer, "dense and CTE agree on the full answer");
+        assert_eq!(
+            full_answer, cte_full_answer,
+            "dense and CTE agree on the full answer"
+        );
         let dense_full_ms: Vec<f64> = (0..5)
             .map(|_| {
                 let t0 = Instant::now();
@@ -162,7 +170,11 @@ fn store_query_cost_across_heap_sizes() {
         // the transfer-∝-answer contrast — the CTE tracks the answer, the
         // dense path tracks the heap.
         let small_root = [pages + 7];
-        let small_answer = store.borrow().reachable_pages_sql(&small_root).unwrap().len();
+        let small_answer = store
+            .borrow()
+            .reachable_pages_sql(&small_root)
+            .unwrap()
+            .len();
         let dense_small_ms: Vec<f64> = (0..5)
             .map(|_| {
                 let t0 = Instant::now();
@@ -270,7 +282,7 @@ fn generational_indexed_steady_state() {
             checkpoint_to_store(&mut session, &sig(), &mut store).expect("ckpt");
             assert!(session.machine_mut().run(&bc).completed);
             checkpoint_to_store(&mut session, &sig(), &mut store).expect("ckpt");
-            slots_total = session.machine().slots.capacity();
+            slots_total = session.machine().slots().capacity();
 
             let t0 = Instant::now();
             freed_gen = generational_collect(&mut session, &store).expect("gen");

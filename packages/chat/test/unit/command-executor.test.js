@@ -43,6 +43,12 @@ const createMockContext = () => {
               args: [recipientPath, description, resultPath],
             });
           },
+          send: async (recipientPath, strings, edgeNames, petNames) => {
+            calls.push({
+              method: 'send',
+              args: [recipientPath, strings, edgeNames, petNames],
+            });
+          },
           dismiss: async number => {
             calls.push({ method: 'dismiss', args: [number] });
           },
@@ -154,6 +160,33 @@ test('execute request command', async t => {
   t.is(ctx.calls.length, 1);
   t.is(ctx.calls[0].method, 'request');
   t.deepEqual(ctx.calls[0].args, [['alice'], 'Please send file', ['the-file']]);
+});
+
+test('execute dm command sends to a pet-name path', async t => {
+  const ctx = createMockContext();
+  const executor = createCommandExecutor({
+    powers: ctx.powers,
+    showValue: v => ctx.showValueCalls.push(v),
+    showMessage: m => ctx.showMessageCalls.push(m),
+    showError: e => ctx.showErrorCalls.push(e),
+  });
+
+  const result = await executor.execute('dm', {
+    recipient: 'floot/controller-profile',
+    message: 'hello',
+  });
+
+  t.true(result.success);
+  t.is(ctx.calls.length, 1);
+  t.is(ctx.calls[0].method, 'send');
+  // A nested recipient has to arrive as a path: the daemon validates a
+  // recipient STRING as a single name segment and rejects an embedded "/".
+  t.deepEqual(ctx.calls[0].args, [
+    ['floot', 'controller-profile'],
+    ['hello'],
+    [],
+    [],
+  ]);
 });
 
 test('execute dismiss command', async t => {

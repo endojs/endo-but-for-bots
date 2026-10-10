@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-03 |
-| **Updated** | 2026-09-03 |
+| **Updated** | 2026-09-09 |
 | **Author** | kumavis (prompted) |
 | **Status** | Implemented (local backend) |
 
@@ -36,14 +36,20 @@ The store is therefore single-principal.
 `secret_record`, `secret_grant`, and `secret_audit_event` carry no owning-host
 column, and `SecretCatalog.list()` returns a `SecretAdmin` for every record in
 the daemon, so any holder of a `@secrets` root administers all of them.
-Only the daemon's root host carries `@secrets`; a host created by
-`provideHost` does not, and every name-hub method rejects the path on one.
-That is namespace hygiene rather than containment, and cannot be more at this
-layer: such a host already reaches the root host through its ambient `@endo`
-special name, so it is a full-authority peer rather than a lower-trust
-principal.
-Per-space secrets require both an owning-principal column and attenuating or
-withholding `@endo` on non-root hosts; an owner column alone is bypassable.
+Only the daemon's root host carries `@secrets` and `@endo`; a host created by
+`provideHost` carries neither, and every name-hub method rejects those paths on
+one.
+Withholding `@secrets` is namespace hygiene: it stops a child from advertising a
+facet it must not be understood to own.
+Withholding `@endo` (issue #1128) is the trust boundary it depends on: the `endo`
+facet's `host()` returns the root principal, so an ambient `@endo` on a child let
+`E(child).lookup('@endo')` then `E(endo).host()` act as the root — a
+full-authority peer rather than a lower-trust principal. That hatch is now closed,
+so a child host is no longer a peer of the root.
+Per-space secrets still require an owning-principal column on the secret records;
+withholding `@endo` narrows a child to its own namespace but does not by itself
+partition the single-principal store, and an owner column alone — without the
+now-closed `@endo` hatch — would have been bypassable.
 
 ## Scope
 
@@ -128,7 +134,13 @@ type SecretSummary = {
 
 interface SecretAdmin {
   getSummary(): Promise<SecretSummary>;
-  replaceBase64(bytesBase64: string): Promise<void>;
+  // `ifGeneration` makes the replacement conditional on the record still being
+  // at that version; the result is the generation it committed, which is what
+  // a caller staging a second write pins that write to.
+  replaceBase64(
+    bytesBase64: string,
+    options?: { ifGeneration?: bigint },
+  ): Promise<bigint>;
   setDescription(description: string): Promise<void>;
   revoke(): Promise<void>;
   delete(): Promise<void>;
@@ -598,8 +610,10 @@ boundary necessarily includes any process to which plaintext is delivered.
 - an XS authenticated-encryption host power;
 - a production KMS/HSM backend;
 - explicit audit retention, export, and purge policy;
-- per-principal partitioning of records, grants, and audit events, which
-  requires attenuating ambient `@endo` first (see Summary); and
+- per-principal partitioning of records, grants, and audit events; its
+  prerequisite of withholding ambient `@endo` from non-root hosts is now in
+  place (issue #1128, see Summary), leaving the owning-principal column on the
+  secret records as the remaining work; and
 - durable, separately delegable administration facets, which require their own
   unguessable selector persisted alongside the record.
 

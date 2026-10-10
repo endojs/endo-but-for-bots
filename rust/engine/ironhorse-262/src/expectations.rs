@@ -3,9 +3,9 @@
 //! [`designs/test262-fixture-consolidation.md`] § The expectation-list
 //! mechanism).
 //!
-//! Today the runner is green iff it produces zero `Fail`
-//! ([`crate::xst::XstReport::met_bar`]); a case that flips skip->covered or
-//! covered->skip is silently absorbed into the aggregate counts. This module
+//! Without an expectation list, the runner is green iff it produces zero
+//! `Fail` ([`crate::xst::XstReport::met_bar`]); aggregate counts alone cannot
+//! gate a case that flips skip->covered or covered->skip. This module
 //! externalizes the per-(case, mode) expectation into a committed, diff-
 //! friendly list so **both** flip directions surface as a reviewable ratchet
 //! event, keyed by the tuple the directive names: engine, mode, feature-set.
@@ -28,30 +28,49 @@ use std::collections::BTreeMap;
 /// The per-(case, mode) outcome an expectation records. `Skip` carries the
 /// honest named reason (the unsupported opcode, the structural shape, the
 /// not-implemented feature) so the committed list *is* the serialized
-/// honest-skip ledger.
+/// honest-skip ledger. `Fail` retains the exact diagnostic: changing a known
+/// failure into a different defect always produces a gating ratchet event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     Pass,
-    Fail,
+    Fail(String),
     Skip(String),
 }
 
 impl Outcome {
-    /// Serialize to the list token: `pass` / `fail` / `skip:<reason>`.
+    /// Serialize to `pass`, `fail:<JSON string>`, or `skip:<reason>`.
+    /// Quoting failure reasons preserves spaces, tabs, newlines and literal
+    /// backslashes without allowing diagnostics to create extra list entries.
     pub fn serialize(&self) -> String {
         match self {
             Outcome::Pass => "pass".to_string(),
-            Outcome::Fail => "fail".to_string(),
+            Outcome::Fail(reason) => format!("fail:{}", crate::report::json_str(reason)),
             Outcome::Skip(reason) => format!("skip:{}", reason),
         }
     }
 
-    /// Parse a list token back to an outcome. A `skip` with no reason reads
-    /// as an empty-reason skip; anything else is `None`.
+    /// Parse a list token back to an outcome. Legacy bare `fail` and `skip`
+    /// read as empty-reason outcomes, never wildcards. New failures carry a
+    /// quoted JSON string; malformed quoted reasons are rejected.
     pub fn parse(token: &str) -> Option<Outcome> {
         match token {
             "pass" => Some(Outcome::Pass),
-            "fail" => Some(Outcome::Fail),
+            // Legacy bare failures retain an empty reason; they are not a
+            // wildcard. A newly observed diagnostic requires re-baselining.
+            "fail" => Some(Outcome::Fail(String::new())),
+            _ if token.starts_with("fail:") => {
+                let reason = token.strip_prefix("fail:")?;
+                if !reason.starts_with('"') || !reason.ends_with('"') {
+                    return None;
+                }
+                let documents = yaml_rust2::YamlLoader::load_from_str(reason).ok()?;
+                if documents.len() != 1 {
+                    return None;
+                }
+                documents[0]
+                    .as_str()
+                    .map(|reason| Outcome::Fail(reason.to_string()))
+            }
             _ => token
                 .strip_prefix("skip:")
                 .or_else(|| (token == "skip").then_some(""))
@@ -237,6 +256,21 @@ pub enum Ratchet {
         mode: Mode,
         was: String,
     },
+    /// An expected failure became a skip: the failing path is no longer
+    /// exercised. Always gates, even when skip-reason changes are soft.
+    FailureSkipped {
+        path: String,
+        mode: Mode,
+        now: String,
+    },
+    /// An expected failure still fails, but for a different reason. Always
+    /// gates: replacing a known defect with another defect is not agreement.
+    FailureReasonChanged {
+        path: String,
+        mode: Mode,
+        from: String,
+        to: String,
+    },
     /// Both sides skip, but the named reason moved. Soft by default (the case
     /// still does not run); gates only under `strict_skip_reasons`.
     SkipReasonChanged {
@@ -279,6 +313,21 @@ impl Ratchet {
             Ratchet::Progress { path, mode, was } => {
                 format!("PROGRESS   {} [{}] {} -> pass", path, mode.as_str(), was)
             }
+            Ratchet::FailureSkipped { path, mode, now } => {
+                format!("FAIL-SKIPPED {} [{}] fail -> {}", path, mode.as_str(), now)
+            }
+            Ratchet::FailureReasonChanged {
+                path,
+                mode,
+                from,
+                to,
+            } => format!(
+                "FAIL-MOVED {} [{}] {} -> {}",
+                path,
+                mode.as_str(),
+                crate::report::json_str(from),
+                crate::report::json_str(to)
+            ),
             Ratchet::SkipReasonChanged {
                 path,
                 mode,
@@ -341,10 +390,15 @@ pub fn compare(observed: &BTreeMap<Key, Outcome>, expected: &Expectations) -> Ve
 /// Classify a same-key expected-vs-observed disagreement into a ratchet event.
 fn classify_change(path: &str, mode: Mode, expected: &Outcome, observed: &Outcome) -> Ratchet {
     match (expected, observed) {
-        // A newly-observed failure, whatever the list expected (an expected
-        // `fail` that still fails is `expected == observed`, handled by the
-        // caller before this point).
-        (_, Outcome::Fail) => Ratchet::NewFail {
+        (Outcome::Fail(from), Outcome::Fail(to)) => Ratchet::FailureReasonChanged {
+            path: path.to_string(),
+            mode,
+            from: from.clone(),
+            to: to.clone(),
+        },
+        // Equal failures are removed by compare; changed failures have their
+        // own gating event above. Every other newly observed failure is red.
+        (_, Outcome::Fail(_)) => Ratchet::NewFail {
             path: path.to_string(),
             mode,
         },
@@ -365,18 +419,17 @@ fn classify_change(path: &str, mode: Mode, expected: &Outcome, observed: &Outcom
             to: to.clone(),
         },
         // An expected `fail` (quarantine entry) that no longer fails is
-        // progress: the case now passes or skips. Surface it so the
-        // quarantine entry is removed from the list.
-        (Outcome::Fail, Outcome::Pass) => Ratchet::Progress {
+        // progress only when the case now passes. Losing coverage of the
+        // failure must gate separately from ordinary skip-reason churn.
+        (Outcome::Fail(reason), Outcome::Pass) => Ratchet::Progress {
             path: path.to_string(),
             mode,
-            was: "fail".to_string(),
+            was: Outcome::Fail(reason.clone()).serialize(),
         },
-        (Outcome::Fail, Outcome::Skip(to)) => Ratchet::SkipReasonChanged {
+        (Outcome::Fail(_), Outcome::Skip(to)) => Ratchet::FailureSkipped {
             path: path.to_string(),
             mode,
-            from: "fail".to_string(),
-            to: to.clone(),
+            now: to.clone(),
         },
         // Pass observed where pass expected is `expected == observed`, handled
         // by the caller; this arm is unreachable but keeps the match total.
@@ -397,11 +450,70 @@ mod tests {
 
     #[test]
     fn outcome_round_trips() {
-        for o in [Outcome::Pass, Outcome::Fail, skip("unsupported-opcode:add")] {
+        for o in [
+            Outcome::Pass,
+            Outcome::Fail("a diagnostic".into()),
+            skip("unsupported-opcode:add"),
+        ] {
             assert_eq!(Outcome::parse(&o.serialize()), Some(o));
         }
         assert_eq!(Outcome::parse("skip"), Some(Outcome::Skip(String::new())));
         assert_eq!(Outcome::parse("nonsense"), None);
+    }
+
+    #[test]
+    fn failure_reasons_round_trip_without_losing_whitespace_or_escapes() {
+        for reason in [
+            "",
+            "type differs",
+            " leading and trailing ",
+            "line\nnext\ttab\rreturn",
+            "literal \\n and \\",
+            "quoted \"value\"",
+            "\0\u{1f}",
+        ] {
+            let outcome = Outcome::Fail(reason.into());
+            let serialized = outcome.serialize();
+            assert!(!serialized.contains(['\n', '\r', '\t']));
+            assert_eq!(Outcome::parse(&serialized), Some(outcome.clone()));
+            let mut expected = Expectations::default();
+            expected.record("case.js", Mode::Strict, outcome);
+            assert_eq!(
+                Expectations::parse(&expected.to_text()).unwrap().entries,
+                expected.entries
+            );
+        }
+        assert_eq!(Outcome::parse("fail"), Some(Outcome::Fail(String::new())));
+        assert_eq!(Outcome::parse("fail:unquoted"), None);
+        assert_eq!(Outcome::parse("fail:\"unterminated"), None);
+    }
+
+    #[test]
+    fn changed_failure_reason_gates_without_strict_skip_reasons() {
+        let mut expected = Expectations::default();
+        expected.record(
+            "case.js",
+            Mode::Sloppy,
+            Outcome::Fail("first defect".into()),
+        );
+        assert!(compare(&expected.entries, &expected).is_empty());
+        let mut observed = expected.entries.clone();
+        observed.insert(
+            ("case.js".into(), Mode::Sloppy),
+            Outcome::Fail("second defect".into()),
+        );
+        let changes = compare(&observed, &expected);
+        assert!(
+            matches!(&changes[..], [Ratchet::FailureReasonChanged { from, to, .. }]
+            if from == "first defect" && to == "second defect")
+        );
+        assert!(changes[0].is_gating(false));
+        assert!(changes[0].describe().contains("first defect"));
+        expected.record("case.js", Mode::Sloppy, Outcome::Fail(String::new()));
+        assert!(
+            compare(&observed, &expected)[0].is_gating(false),
+            "legacy fail is not a wildcard"
+        );
     }
 
     #[test]
@@ -517,7 +629,10 @@ mod tests {
         let mut e = Expectations::default();
         e.record("a.js", Mode::Sloppy, Outcome::Pass);
         let mut observed = BTreeMap::new();
-        observed.insert(("a.js".into(), Mode::Sloppy), Outcome::Fail);
+        observed.insert(
+            ("a.js".into(), Mode::Sloppy),
+            Outcome::Fail("new failure".into()),
+        );
         let events = compare(&observed, &e);
         assert_eq!(
             events,
@@ -527,6 +642,30 @@ mod tests {
             }]
         );
         assert!(events[0].is_gating(false));
+    }
+
+    #[test]
+    fn failure_to_skip_always_gates() {
+        let mut expected = Expectations::default();
+        expected.record(
+            "failing.js",
+            Mode::Sloppy,
+            Outcome::Fail("known failure".into()),
+        );
+        let mut observed = expected.entries.clone();
+        observed.insert(
+            ("failing.js".into(), Mode::Sloppy),
+            skip("unsupported-opcode:add"),
+        );
+        let events = compare(&observed, &expected);
+        assert_eq!(events.len(), 1);
+        assert!(
+            matches!(&events[0], Ratchet::FailureSkipped { now, .. } if now == "unsupported-opcode:add")
+        );
+        assert!(events[0].is_gating(false));
+        assert!(events[0]
+            .describe()
+            .contains("fail -> unsupported-opcode:add"));
     }
 
     #[test]

@@ -1,9 +1,24 @@
 //! The full-corpus **byte-identity differential harness** (stage-5 child
 //! 7/7, the STAGE BAR). For every source in the conformance corpus, where
 //! the XS oracle compiler *accepts* the file, this asserts that
-//! `ironhorse_compile::compile(source)` equals `xs_oracle::run(source).bytecode`
-//! **byte for byte** — XS's coder is the ground truth (design § roadmap
-//! row 5; Design Decisions 4 and 5).
+//! `ironhorse_compile::compile_with(source, false)` equals
+//! `xs_oracle::run(source).bytecode` **byte for byte** — XS's coder is the
+//! ground truth (design § roadmap row 5; Design Decisions 4 and 5).
+//!
+//! The eval-goal entry (`compile_with`) is the one compared because it is
+//! the goal the oracle shim compiles: `fxParseScript(..., mxProgramFlag |
+//! mxEvalFlag)`, the `eval` builtin's flags. ironhorse's Script-goal entry
+//! (`compile`, what the dual-run executes) deviates from those bytes in
+//! exactly one known place — a **strict** program's top-level
+//! `var`/function declarations hoist to the global object
+//! (`EVAL_ENVIRONMENT` + the symbol path) as ECMA-262
+//! GlobalDeclarationInstantiation and `xst`'s `mxProgramFlag`-only Script
+//! parse require, where the strict *eval* program XS codes keeps them as
+//! frame locals. That deviation is pinned by
+//! `ironhorse-vm/tests/hardened_js_boundary.rs` and the compile crate's
+//! byte-identity suite; comparing the eval goal here keeps every remaining
+//! byte difference a genuine finding (see `rust/engine/README.md` § "Script
+//! goal vs. the oracle's eval framing").
 //!
 //! **Stage bar** (design § Feasibility Verdict): `divergent == 0` *and*
 //! accept/reject agreement, over the full corpus. A byte divergence on a
@@ -14,8 +29,8 @@
 //! Panic discipline: the coder still `panic!`s on constructs outside the
 //! ported surface (a loud fold, not a silent skip). The harness must be
 //! total over arbitrary corpus input, so every `compile` call runs under
-//! [`std::panic::catch_unwind`] with the process panic hook silenced for
-//! the batch; a caught panic classifies as an `ironhorse-rejected` (coder
+//! [`std::panic::catch_unwind`], leaving the caller's panic hook intact.
+//! A caught panic classifies as an `ironhorse-rejected` (coder
 //! fold), never a harness abort. An oracle machine-startup failure
 //! (`run` returns `None`) is the named `oracle-unavailable` outcome, also
 //! not an abort.
@@ -147,10 +162,12 @@ fn ironhorse_compile_module(source: &str) -> Result<Result<Vec<u8>, String>, Str
 
 /// ironhorse's compile verdict for `source`, total over panics. `Ok(Ok(bytes))`
 /// = accepted; `Ok(Err(reason))` = structured rejection; `Err(reason)` =
-/// coder panic (the ported-surface fold). The caller silences the panic
-/// hook for the batch.
+/// coder panic (the ported-surface fold). The caller's panic hook is preserved.
 fn ironhorse_compile(source: &str) -> Result<Result<Vec<u8>, String>, String> {
-    let caught = panic::catch_unwind(AssertUnwindSafe(|| ironhorse_compile::compile(source)));
+    // The eval-goal entry: the goal the oracle shim compiles (module doc).
+    let caught = panic::catch_unwind(AssertUnwindSafe(|| {
+        ironhorse_compile::compile_with(source, false)
+    }));
     match caught {
         Ok(Ok(bytes)) => Ok(Ok(bytes)),
         Ok(Err(e)) => Ok(Err(format!("{:?}", e))),
@@ -318,15 +335,12 @@ pub fn compile_one_module(source: &str) -> CompileVerdict {
 }
 
 /// Run the **Module** compile differential over an explicit list of `(id,
-/// source)` module programs, silencing the panic hook for the batch.
+/// source)` module programs, preserving the caller's panic hook.
 pub fn module_compile_diff_programs(programs: &[(String, String)]) -> CompileReport {
-    let prev_hook = panic::take_hook();
-    panic::set_hook(Box::new(|_| {}));
     let mut report = CompileReport::default();
     for (id, source) in programs {
         report.record(id, compile_one_module(source));
     }
-    panic::set_hook(prev_hook);
     report
 }
 
@@ -381,17 +395,14 @@ pub fn module_corpora_programs() -> Vec<(String, String)> {
 }
 
 /// Run the compile differential over an explicit list of `(id, source)`
-/// programs. Silences the panic hook for the batch so a coder fold does
-/// not spew to stderr per program (each is still counted and named).
+/// programs. Caught panics retain the caller's diagnostics and are also
+/// counted and named in the report.
 pub fn compile_diff_programs(programs: &[(String, String)]) -> CompileReport {
-    let prev_hook = panic::take_hook();
-    panic::set_hook(Box::new(|_| {}));
     let mut report = CompileReport::default();
     for (id, source) in programs {
         let verdict = compile_one(source);
         report.record(id, verdict);
     }
-    panic::set_hook(prev_hook);
     report
 }
 
@@ -495,11 +506,8 @@ fn oracle_symbols(source: &str) -> Option<(bool, Vec<u8>)> {
 /// every program in `programs` where both engines accept. The bytecode gate
 /// ([`compile_diff_programs`]) owns accept/reject and byte-of-code identity;
 /// this layers the SYMB-atom identity the flipped default depends on.
-/// Silences the panic hook for the batch so a coder fold is a skip, not a
-/// stderr spew.
+/// Caught panics retain the caller's diagnostics and count as skipped.
 pub fn symbols_diff_programs(programs: &[(String, String)]) -> SymbolsReport {
-    let prev_hook = panic::take_hook();
-    panic::set_hook(Box::new(|_| {}));
     let mut report = SymbolsReport::default();
     for (id, source) in programs {
         let (oracle_parsed, oracle_syms) = match oracle_symbols(source) {
@@ -510,7 +518,8 @@ pub fn symbols_diff_programs(programs: &[(String, String)]) -> SymbolsReport {
             }
         };
         let ironhorse = panic::catch_unwind(AssertUnwindSafe(|| {
-            ironhorse_compile::compile_atoms(source)
+            // The eval-goal entry, matching the bytecode gate's framing.
+            ironhorse_compile::compile_atoms_with(source, false)
         }));
         let ironhorse_syms = match ironhorse {
             Ok(Ok((_, syms))) => syms,
@@ -539,7 +548,6 @@ pub fn symbols_diff_programs(programs: &[(String, String)]) -> SymbolsReport {
             report.divergent.push((id.clone(), detail));
         }
     }
-    panic::set_hook(prev_hook);
     report
 }
 
@@ -653,6 +661,14 @@ pub fn print_report(
         )?;
     }
     Ok(())
+}
+
+/// Walk `dir` collecting `.js` files (recursively, sorted), skipping
+/// `staging/` and `_FIXTURE.js` — the same selection the dual-run runner
+/// uses, re-exported here so the `compile-diff` binary can address a
+/// test262 subtree without depending on the runner's private walker.
+pub fn collect_js(dir: &Path) -> Vec<PathBuf> {
+    crate::test262::collect_js(dir)
 }
 
 #[cfg(test)]
@@ -889,12 +905,4 @@ mod tests {
         // engines — it must stay a both-reject agreement (`OracleRejected`).
         assert_eq!(compile_one("var = ;"), CompileVerdict::OracleRejected);
     }
-}
-
-/// Walk `dir` collecting `.js` files (recursively, sorted), skipping
-/// `staging/` and `_FIXTURE.js` — the same selection the dual-run runner
-/// uses, re-exported here so the `compile-diff` binary can address a
-/// test262 subtree without depending on the runner's private walker.
-pub fn collect_js(dir: &Path) -> Vec<PathBuf> {
-    crate::test262::collect_js(dir)
 }

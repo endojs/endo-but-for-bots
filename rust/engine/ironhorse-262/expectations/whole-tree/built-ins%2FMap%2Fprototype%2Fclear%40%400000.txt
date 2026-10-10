@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=built-ins/Map/prototype/clear tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Map/prototype/clear/clear-map.js sloppy pass
+built-ins/Map/prototype/clear/clear-map.js strict pass
+built-ins/Map/prototype/clear/clear.js sloppy pass
+built-ins/Map/prototype/clear/clear.js strict pass
+built-ins/Map/prototype/clear/context-is-not-map-object.js sloppy pass
+built-ins/Map/prototype/clear/context-is-not-map-object.js strict pass
+built-ins/Map/prototype/clear/context-is-not-object.js sloppy pass
+built-ins/Map/prototype/clear/context-is-not-object.js strict pass
+built-ins/Map/prototype/clear/context-is-set-object-throws.js sloppy pass
+built-ins/Map/prototype/clear/context-is-set-object-throws.js strict pass
+built-ins/Map/prototype/clear/context-is-weakmap-object-throws.js sloppy pass
+built-ins/Map/prototype/clear/context-is-weakmap-object-throws.js strict pass
+built-ins/Map/prototype/clear/length.js sloppy pass
+built-ins/Map/prototype/clear/length.js strict pass
+built-ins/Map/prototype/clear/map-data-list-is-preserved.js sloppy pass
+built-ins/Map/prototype/clear/map-data-list-is-preserved.js strict pass
+built-ins/Map/prototype/clear/name.js sloppy pass
+built-ins/Map/prototype/clear/name.js strict pass
+built-ins/Map/prototype/clear/not-a-constructor.js sloppy pass
+built-ins/Map/prototype/clear/not-a-constructor.js strict pass
+built-ins/Map/prototype/clear/returns-undefined.js sloppy pass
+built-ins/Map/prototype/clear/returns-undefined.js strict pass

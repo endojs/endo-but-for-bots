@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/ZonedDateTime/prototype/offsetNanoseconds tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/ZonedDateTime/prototype/offsetNanoseconds/basic-named-timezone.js sloppy skip:oracle-host-missing-temporal
+intl402/Temporal/ZonedDateTime/prototype/offsetNanoseconds/basic-named-timezone.js strict skip:oracle-host-missing-temporal
+intl402/Temporal/ZonedDateTime/prototype/offsetNanoseconds/nanoseconds-subtracted-or-added-at-dst-transition.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/offsetNanoseconds/nanoseconds-subtracted-or-added-at-dst-transition.js strict skip:oracle-host-missing-global:Temporal

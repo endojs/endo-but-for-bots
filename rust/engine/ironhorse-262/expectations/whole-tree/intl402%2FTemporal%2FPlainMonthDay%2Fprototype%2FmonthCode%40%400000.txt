@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/PlainMonthDay/prototype/monthCode tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/PlainMonthDay/prototype/monthCode/chinese-calendar-dates.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: Expected a RangeError but got a TypeError\""
+intl402/Temporal/PlainMonthDay/prototype/monthCode/chinese-calendar-dates.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: Expected a RangeError but got a TypeError\""
+intl402/Temporal/PlainMonthDay/prototype/monthCode/dangi-calendar-dates.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: Expected a RangeError but got a TypeError\""
+intl402/Temporal/PlainMonthDay/prototype/monthCode/dangi-calendar-dates.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: Expected a RangeError but got a TypeError\""

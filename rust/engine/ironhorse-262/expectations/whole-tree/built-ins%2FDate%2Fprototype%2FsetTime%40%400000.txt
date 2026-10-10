@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=built-ins/Date/prototype/setTime tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Date/prototype/setTime/arg-to-number-err.js sloppy pass
+built-ins/Date/prototype/setTime/arg-to-number-err.js strict pass
+built-ins/Date/prototype/setTime/arg-to-number.js sloppy pass
+built-ins/Date/prototype/setTime/arg-to-number.js strict pass
+built-ins/Date/prototype/setTime/length.js sloppy pass
+built-ins/Date/prototype/setTime/length.js strict pass
+built-ins/Date/prototype/setTime/name.js sloppy pass
+built-ins/Date/prototype/setTime/name.js strict pass
+built-ins/Date/prototype/setTime/new-value-time-clip.js sloppy pass
+built-ins/Date/prototype/setTime/new-value-time-clip.js strict pass
+built-ins/Date/prototype/setTime/not-a-constructor.js sloppy pass
+built-ins/Date/prototype/setTime/not-a-constructor.js strict pass
+built-ins/Date/prototype/setTime/prop-desc.js sloppy pass
+built-ins/Date/prototype/setTime/prop-desc.js strict pass
+built-ins/Date/prototype/setTime/this-value-invalid-date.js sloppy pass
+built-ins/Date/prototype/setTime/this-value-invalid-date.js strict pass
+built-ins/Date/prototype/setTime/this-value-non-date.js sloppy pass
+built-ins/Date/prototype/setTime/this-value-non-date.js strict pass
+built-ins/Date/prototype/setTime/this-value-non-object.js sloppy pass
+built-ins/Date/prototype/setTime/this-value-non-object.js strict pass
+built-ins/Date/prototype/setTime/this-value-valid-date.js sloppy pass
+built-ins/Date/prototype/setTime/this-value-valid-date.js strict pass

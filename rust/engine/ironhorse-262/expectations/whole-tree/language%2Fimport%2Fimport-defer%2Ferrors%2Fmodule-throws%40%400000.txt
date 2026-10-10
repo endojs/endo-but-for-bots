@@ -1,0 +1,4 @@
+# engine=ironhorse features=default corpus=language/import/import-defer/errors/module-throws tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/import/import-defer/errors/module-throws/defer-import-after-evaluation.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/import/import-defer/errors/module-throws/third-party-evaluation-after-defer-import.js sloppy skip:module:compiler-rejected
+language/import/import-defer/errors/module-throws/trigger-evaluation.js sloppy skip:module:compiler-rejected

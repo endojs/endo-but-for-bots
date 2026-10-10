@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=built-ins/Symbol/asyncDispose tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Symbol/asyncDispose/cross-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Symbol/asyncDispose/cross-realm.js strict skip:shared-positive-test-failure
+built-ins/Symbol/asyncDispose/no-key.js sloppy pass
+built-ins/Symbol/asyncDispose/no-key.js strict pass
+built-ins/Symbol/asyncDispose/prop-desc.js sloppy pass
+built-ins/Symbol/asyncDispose/prop-desc.js strict pass

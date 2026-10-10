@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=built-ins/AsyncGeneratorFunction/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/AsyncGeneratorFunction/prototype/Symbol.toStringTag.js sloppy pass
+built-ins/AsyncGeneratorFunction/prototype/Symbol.toStringTag.js strict pass
+built-ins/AsyncGeneratorFunction/prototype/constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: constructor descriptor should not be writable"
+built-ins/AsyncGeneratorFunction/prototype/constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: constructor descriptor should not be writable"
+built-ins/AsyncGeneratorFunction/prototype/extensibility.js sloppy pass
+built-ins/AsyncGeneratorFunction/prototype/extensibility.js strict pass
+built-ins/AsyncGeneratorFunction/prototype/not-callable.js sloppy pass
+built-ins/AsyncGeneratorFunction/prototype/not-callable.js strict pass
+built-ins/AsyncGeneratorFunction/prototype/prop-desc.js sloppy pass
+built-ins/AsyncGeneratorFunction/prototype/prop-desc.js strict pass
+built-ins/AsyncGeneratorFunction/prototype/prototype.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: prototype descriptor should be configurable"
+built-ins/AsyncGeneratorFunction/prototype/prototype.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: prototype descriptor should be configurable"

@@ -98,15 +98,20 @@ export const helpTextEntries = harden([
     'GitBlob',
     {
       '': 'GitBlob - A read-only view of one Git blob object.\n\nA GitBlob is content-addressed and immutable: it is pinned to the blob\nobject id it was minted for, so later ref movement never changes its bytes.\nIt provides whole-value convenience reads together with the range-I/O\nsurface used by content-addressed readers.',
-      help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.\n- help() returns an overview of the interface\n- help("fetch") returns documentation for the fetch method',
+      help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.\n- help() returns an overview of the interface\n- help("bytes") returns documentation for the bytes method',
       streamBase64:
         "streamBase64(syndicationPromise) -> Promise\nStream the blob's bytes as base64-encoded chunks.\nThe syndication promise drives the reader-pump flow-control protocol.",
       text: 'text() -> Promise<string>\nRead the complete blob as UTF-8 text.',
       json: 'json() -> Promise<unknown>\nRead the complete blob as UTF-8 text and parse it as JSON.',
-      getInfo:
-        'getInfo() -> Promise<{ algorithm, hash, size }>\nGet the blob\'s content-address identity and byte length.\nThe result carries `algorithm` ("sha256"), a base64 `hash`, and `size` as a\nbigint.',
-      fetch:
-        'fetch(offset, length) -> Promise<PassableBytesReader>\nRead a byte window from the blob.\nThe range is `[offset, offset + length)`, clamped at end of file.',
+      sha256:
+        'sha256() -> Promise<string>\nReturn the SHA-256 digest of the selected bytes as base64.',
+      size: 'size() -> Promise<bigint>\nReturn the selected byte length.',
+      bytes:
+        'bytes() -> Promise<PassableBytesReader>\nStream all selected bytes.',
+      byteRange:
+        'byteRange(start, end) -> GitBlob\nAttenuate to the half-open byte interval `[start, end)` of this blob.\nReturns a new GitBlob with exactly the authority to read the selected bytes;\nranges compose (a range of a range intersects) and `start === end` selects an\nempty blob. Construction reads no bytes, so it resolves synchronously.',
+      textRange:
+        "textRange(startLine, endLine) -> Promise<GitBlob>\nAttenuate to lines `[startLine, endLine)` (0-based, end-exclusive, LF\nboundaries, CRLF preserved) of the blob's bytes.\nReturns a new GitBlob over the corresponding byte slice; it reads bytes to find\nthe line boundaries, so it resolves asynchronously.",
     },
   ],
   [
@@ -116,6 +121,8 @@ export const helpTextEntries = harden([
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.\n- help() returns an overview of the interface\n- help("push") returns documentation for the push method',
       inspect:
         "inspect() -> Promise<RemoteSnapshot>\nRead the remote's name, URL, and current policy.\nThrows once the remote has been revoked.",
+      credentialHealth:
+        'credentialHealth() -> Promise<RemoteCredentialHealth>\nReport whether the credential this remote would push with is usable,\nwithout using it.\nA credential holds its material in process memory, so a daemon restart\nleaves the record unavailable and the next push would otherwise be the\nfirst thing to say so.\n`required: false` is the whole answer for a remote that needs no\ncredential; otherwise the result carries `kind`, `audience`, `available`,\nand `revoked`.\n`revoked: true` means "unusable until rotated", not "an operator\ndeliberately revoked this": a credential rebuilt after a restart starts out\nrevoked too, so this reports whether the credential works and never why it\ndoes not.\nThis reports health only and never the credential material, which is why\nit is separate from inspect(), whose snapshot is policy alone.\nThrows once the remote has been revoked.',
       fetch:
         "fetch(options?) -> Promise<RemoteOperationResult>\nFetch the policy's fetch refspecs from the remote.\n`prune: true` requires `allowDelete` and `tags: true` requires\n`allowTags`.",
       pull: 'pull(options?) -> Promise<RemotePullResult>\nFetch and then integrate the result into the current branch.\n`strategy` is "ff-only" (the default), "merge", or "rebase", and `branch`\nmust be a ref the fetch policy is allowed to populate.\nThe result reports the fetch, the integration kind, and the new head.',

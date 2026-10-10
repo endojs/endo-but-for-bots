@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=built-ins/Atomics/notify/bigint tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Atomics/notify/bigint/bad-range.js sloppy skip:structural:multi-agent
+built-ins/Atomics/notify/bigint/non-bigint64-typedarray-throws.js sloppy skip:structural:multi-agent
+built-ins/Atomics/notify/bigint/non-shared-bufferdata-count-evaluation-throws.js sloppy skip:structural:multi-agent
+built-ins/Atomics/notify/bigint/non-shared-bufferdata-index-evaluation-throws.js sloppy skip:structural:multi-agent
+built-ins/Atomics/notify/bigint/non-shared-bufferdata-non-shared-int-views-throws.js sloppy skip:structural:multi-agent
+built-ins/Atomics/notify/bigint/non-shared-bufferdata-returns-0.js sloppy skip:structural:multi-agent
+built-ins/Atomics/notify/bigint/notify-all-on-loc.js sloppy skip:structural:multi-agent
+built-ins/Atomics/notify/bigint/null-bufferdata-throws.js sloppy skip:structural:multi-agent

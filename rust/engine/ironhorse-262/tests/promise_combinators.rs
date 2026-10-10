@@ -40,7 +40,10 @@ fn assert_oracle_result(source: &str, expected: &str) {
 fn assert_ironhorse_result(source: &str, expected: &str) {
     let run = dual_run(source).expect("the XS oracle machine must start");
     assert_eq!(run.agreement, Agreement::BothComplete, "{source}: {run:?}");
-    assert_eq!(run.ironhorse_result, expected, "ironhorse result for {source}");
+    assert_eq!(
+        run.ironhorse_result, expected,
+        "ironhorse result for {source}"
+    );
     assert_deterministic(source);
 }
 

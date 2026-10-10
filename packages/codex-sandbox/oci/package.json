@@ -1,0 +1,8 @@
+{
+  "name": "endo-codex-sandbox-image",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "@openai/codex": "0.152.0"
+  }
+}

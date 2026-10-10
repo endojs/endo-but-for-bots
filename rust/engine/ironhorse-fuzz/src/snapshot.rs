@@ -1,14 +1,13 @@
-//! Stage-6 child 4 (design § Snapshots, § Fuzzability): the **snapshot
-//! round-trip-invariance** and **malformed-atom decoder** fuzz arms over
+//! The **snapshot round-trip-invariance** and **malformed-atom decoder** fuzz arms over
 //! `ironhorse-snapshot`'s `XS_M` writer/reader.
 //!
-//! Two invariants, mirroring the two stage-1 fuzz targets' write/read split:
+//! Two invariants cover writing and reading:
 //!
 //! - **Round-trip invariance** ([`roundtrip_generated_is_invariant`],
 //!   [`roundtrip_program_is_invariant`]): a machine state serialized with
-//!   [`ironhorse_snapshot::write_machine`], read back with
+//!   [`ironhorse_snapshot::write_machine_unchecked`], read back with
 //!   [`ironhorse_snapshot::read_machine`], and re-serialized must be
-//!   **byte-identical**, and the decoded image must equal the original. The
+//!   **byte-identical**, including non-reflexive NaN payloads. The
 //!   generated-image arm folds fuzzer bytes into an adversarially-shaped
 //!   slot/chunk arena graph directly (fast, oracle-free); the program arm
 //!   **drives the engine** with a generated program — objects, closures,
@@ -33,7 +32,8 @@
 //! them), so the finding survives independent of the fuzzing infrastructure.
 
 use ironhorse_snapshot::{
-    from_snapshot_bytes, read_machine, write_machine, MachineImage, MachineSnapshot, Signature,
+    from_snapshot_bytes, read_machine, write_machine_unchecked, MachineImage, MachineSnapshot,
+    Signature,
 };
 use ironhorse_vm::{
     parse_symbols, ChunkArena, ChunkOffset, Interp, Kind, MeterState, Payload, Slot, SlotArena,
@@ -52,31 +52,33 @@ pub fn fuzz_snapshot_sig() -> Signature {
 /// A cursor over fuzzer-provided bytes, folding raw input into a machine image
 /// deterministically (a local copy of the lib's `Bytes` driver — the snapshot
 /// arms need `u32`/`ChunkOffset` draws the grammar driver does not expose).
-struct Cursor<'a> {
-    data: &'a [u8],
-    pos: usize,
+/// Same finite byte source, so all three cursors in the crate share one
+/// length-feedback story rather than two of them quietly wrapping.
+pub(crate) struct Cursor<'a> {
+    u: arbitrary::Unstructured<'a>,
 }
 
 impl<'a> Cursor<'a> {
-    fn new(data: &'a [u8]) -> Self {
-        Cursor { data, pos: 0 }
-    }
-    fn byte(&mut self) -> u8 {
-        if self.data.is_empty() {
-            return 0;
+    pub(crate) fn new(data: &'a [u8]) -> Self {
+        Cursor {
+            u: arbitrary::Unstructured::new(data),
         }
-        let b = self.data[self.pos % self.data.len()];
-        self.pos = self.pos.wrapping_add(1);
-        b
     }
-    fn choice(&mut self, n: u8) -> u8 {
+    /// One byte, or zero once the input is exhausted. FINITE, like the
+    /// grammar driver in `lib.rs` and for the same reason (F040): a
+    /// wrapping cursor makes every input infinitely long and defeats
+    /// libFuzzer's length feedback.
+    pub(crate) fn byte(&mut self) -> u8 {
+        self.u.arbitrary::<u8>().unwrap_or(0)
+    }
+    pub(crate) fn choice(&mut self, n: u8) -> u8 {
         if n == 0 {
             0
         } else {
             self.byte() % n
         }
     }
-    fn u32(&mut self) -> u32 {
+    pub(crate) fn u32(&mut self) -> u32 {
         let mut v = 0u32;
         for _ in 0..4 {
             v = (v << 8) | self.byte() as u32;
@@ -101,9 +103,8 @@ fn pick_off(c: &mut Cursor, offs: &[ChunkOffset]) -> ChunkOffset {
         // payload always sits above its 4-byte header, so 0 is an
         // offset the compactor rejects outright ("chunk offset below
         // header"). `NULL` is the absence sentinel, and the bounds gate
-        // and `page_of` both skip it (review wave 5 — the widened gate
-        // caught this generator minting images that would have panicked
-        // at their first compaction).
+        // and `page_of` both skip it. Using 0 would produce an image
+        // that cannot survive its first compaction.
         ChunkOffset::NULL
     } else {
         offs[(c.byte() as usize) % offs.len()]
@@ -198,8 +199,8 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     // free-list round-trip (indices are distinct — all allocated before
     // any free — so no double-free). A suffix, not a prefix: the ledger
     // rows below take ascending owners/descriptors from the LOW indices,
-    // and the reader now refuses a side-table row owned by a free slot
-    // (review findings 2+3), so the generated free set and the generated
+    // and the reader refuses a side-table row owned by a free slot,
+    // so the generated free set and the generated
     // owners must not overlap.
     let n_free = (c.byte() as usize) % idxs.len();
     for &ix in idxs.iter().skip(idxs.len() - n_free) {
@@ -208,16 +209,22 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     // The low indices that stayed live — the pool the ledger rows below
     // draw owners and descriptors from.
     let live_cap = (idxs.len() - n_free) as u32;
+    // Side-table values, as well as their owners, must only reference
+    // live records. F046 rejects edges into the freed suffix.
+    idxs.truncate(live_cap as usize);
 
     // The value stack is EMPTY: the reader enforces quiescence (a
-    // populated `STAC` cannot come from an honest writer — review
-    // finding 5), so a generated stack would turn the round-trip target
+    // populated `STAC` cannot come from an honest writer), so a
+    // generated stack would turn the round-trip target
     // into a decode-failure target. The refusal itself is locked by
     // `crafted_row_refusals.rs`, and the raw-bytes mutation lane still
     // corrupts the STAC atom's framing.
     let stack: Vec<Slot> = Vec::new();
 
-    let names = rand_string_list(&mut c);
+    let names: Vec<ironhorse_vm::SymbolName> = rand_string_list(&mut c)
+        .into_iter()
+        .map(ironhorse_vm::SymbolName::from)
+        .collect();
     let keys = rand_string_list(&mut c);
     // Symbol-key table: generated VALID like the ledger rows below —
     // ids strictly ascending above the counter, descriptors distinct,
@@ -228,7 +235,8 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     // At most one pair per distinct in-bounds descriptor, or the
     // dedup nudge below cannot terminate on a tiny arena.
     let n_sym = ((c.byte() % 5) as usize).min(bound as usize);
-    let sym_next = u16::MAX - n_sym as u16 - (c.byte() % 4) as u16;
+    // The maximum id is reserved for the internal environment marker.
+    let sym_next = u16::MAX - 1 - n_sym as u16 - (c.byte() % 4) as u16;
     let mut seen = std::collections::BTreeSet::new();
     let sym_pairs: Vec<(u16, u32)> = (0..n_sym)
         .map(|k| {
@@ -250,18 +258,16 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         count: c.u32() as u64,
     };
 
-    // Side-table ledger rows (wave-4 fuzz gap): arrays, collections,
+    // Side-table ledger rows: arrays, collections,
     // and the `Symbol.for` registry. Generated VALID — owners/refs
     // in-bounds (`< n_slots`), owners/keys strictly ascending — so the
     // round-trip target's write→read identity holds while the
-    // byte-mutation target now has well-framed ARRY/COLL/REGY atoms to
-    // corrupt (before this the decoders were never exercised). A
-    // running counter keeps owners ascending-unique.
+    // byte-mutation target has well-framed ARRY/COLL/REGY atoms to
+    // corrupt. A running counter keeps owners ascending-unique.
     //
-    // "Valid" is whatever the decoders accept, so wave 5's new rules are
-    // generated here too: array item indices strictly ascending and
-    // below the row's declared length, and registry descriptors
-    // pairwise distinct — and, since the review round, owners drawn
+    // Match the decoder's admission rules: array item indices strictly
+    // ascending and below the row's declared length, and registry descriptors
+    // pairwise distinct, owners drawn
     // only from LIVE slots and collection tables with reachable rehash
     // geometry. Generating rows the decoder refuses would turn the
     // round-trip target into a decode-failure target and stop
@@ -306,7 +312,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
             })
             .collect();
         let kind = c.byte() % 4;
-        // Reachable rehash geometry (review finding 9): weak kinds
+        // Reachable rehash geometry: weak kinds
         // carry no table; Map/Set carry the smallest power of two
         // whose grow threshold covers the live size, optionally
         // doubled a step or two (the cleared-then-shrinking states the
@@ -358,7 +364,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
             break;
         }
         let name = ERROR_NAMES[(c.byte() % 4) as usize].to_string();
-        let message = (c.byte() % 2 == 1).then(|| format!("m{}", c.u32() % 1000));
+        let message = (c.byte() % 2 == 1).then(|| format!("m{}", c.u32() % 1000).into());
         errors.push(ironhorse_snapshot::image::ErrorImage {
             owner: next_owner,
             name,
@@ -375,17 +381,33 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     }
     let n_dates = ((c.byte() % 4) as usize).min(cap as usize);
     let dates: Vec<ironhorse_snapshot::image::DateImage> = (0..n_dates)
-        .map(|owner| ironhorse_snapshot::image::DateImage {
-            owner: owner as u32,
-            value_bits: ((c.u32() as u64) << 32) | c.u32() as u64,
+        .map(|owner| {
+            let drawn = ((c.u32() as u64) << 32) | c.u32() as u64;
+            // A Date's time value is a Number, and a Number NaN has no
+            // observable payload in JavaScript, so `encode_dates`
+            // deliberately canonicalizes one (its own
+            // `date_encoding_canonicalizes_nan_and_refuses_duplicate_owners`
+            // pins that). A live machine therefore never holds a
+            // non-canonical NaN here, and drawing one would make the model
+            // half of the round-trip invariant fail on an image no engine
+            // can produce. Slot payloads are different and keep their raw
+            // NaN bits, which is why `payload` draws freely.
+            let value_bits = if f64::from_bits(drawn).is_nan() {
+                f64::NAN.to_bits()
+            } else {
+                drawn
+            };
+            ironhorse_snapshot::image::DateImage {
+                owner: owner as u32,
+                value_bits,
+            }
         })
         .collect();
 
-    // The GRADUATION-WAVE atoms. Eight state-bearing families landed
-    // and only `DATE` reached this generator, so seven decoders were
-    // exercised by nothing but their own hand-written fixtures --
-    // exactly the gap the earlier ARRY/COLL/REGY comment describes,
-    // reopened one wave later. Generated VALID for the same reason:
+    // Function, proxy, accessor, private, disposal, generator, and
+    // promise state must also reach the decoder through generated atoms.
+    // `generated_arena_snapshots_round_trip_byte_exact` requires a
+    // non-empty witness for each family. Generate valid rows according to
     // what the DECODERS accept (strictly-ascending keys, in-range
     // enums, UTF-8 names, no records on a disposed stack, frame and
     // state agreeing), so write -> read identity holds here while the
@@ -397,13 +419,12 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     // suffix, and the bounds gate refuses a side table that names one
     // ("side table names a free slot").
     let live_idxs: Vec<SlotIndex> = idxs.iter().copied().filter(|i| i.0 < live_cap).collect();
-    let slot = |c: &mut Cursor| {
-        Slot::of(Kind::Reference, Payload::Reference(pick_ref(c, &live_idxs)))
-    };
+    let slot =
+        |c: &mut Cursor| Slot::of(Kind::Reference, Payload::Reference(pick_ref(c, &live_idxs)));
     let opt_slot = |c: &mut Cursor| (c.byte() % 3 != 0).then(|| slot(c));
 
     let mut next_owner = 0u32;
-    let mut proxies: Vec<ironhorse_vm::ProxyRow> = Vec::new();
+    let mut proxies: Vec<ironhorse_vm::snapshot_api::ProxyRow> = Vec::new();
     for _ in 0..(c.byte() % 6) {
         if next_owner >= cap {
             break;
@@ -411,25 +432,33 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         let owner = next_owner;
         next_owner += 1 + (c.byte() % 3) as u32;
         let revoked = c.byte() % 4 == 0;
-        proxies.push(ironhorse_vm::ProxyRow {
+        proxies.push(ironhorse_vm::snapshot_api::ProxyRow {
             owner,
             // A revoked proxy NULLs both edges (`SlotIndex::NULL`, not
             // index 0, which is a live slot): the decoder refuses a
             // revoked row that retains them.
-            target: if revoked { u32::MAX } else { pick_ref(&mut c, &live_idxs).0 },
-            handler: if revoked { u32::MAX } else { pick_ref(&mut c, &live_idxs).0 },
+            target: if revoked {
+                u32::MAX
+            } else {
+                pick_ref(&mut c, &live_idxs).0
+            },
+            handler: if revoked {
+                u32::MAX
+            } else {
+                pick_ref(&mut c, &live_idxs).0
+            },
             revoked,
         });
     }
     let mut next_owner = 0u32;
-    let mut revokers: Vec<ironhorse_vm::ProxyRevokerRow> = Vec::new();
+    let mut revokers: Vec<ironhorse_vm::snapshot_api::ProxyRevokerRow> = Vec::new();
     for _ in 0..(c.byte() % 4) {
         if next_owner >= cap || proxies.is_empty() {
             break;
         }
         let owner = next_owner;
         next_owner += 1 + (c.byte() % 3) as u32;
-        revokers.push(ironhorse_vm::ProxyRevokerRow {
+        revokers.push(ironhorse_vm::snapshot_api::ProxyRevokerRow {
             owner,
             proxy: proxies[(c.byte() as usize) % proxies.len()].owner,
             // A name chunk is a real chunk-arena offset (or NULL), not
@@ -439,7 +468,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     }
 
     let mut next_owner = 0u32;
-    let mut accessors: Vec<ironhorse_vm::AccessorRow> = Vec::new();
+    let mut accessors: Vec<ironhorse_vm::snapshot_api::AccessorRow> = Vec::new();
     for _ in 0..(c.byte() % 6) {
         if next_owner >= cap || names.is_empty() {
             break;
@@ -451,7 +480,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         // outside the property-key tables. (Ids are 1-based: id `k + 1`
         // names `names[k]`.)
         next_owner += 1 + (c.byte() % 3) as u32;
-        accessors.push(ironhorse_vm::AccessorRow {
+        accessors.push(ironhorse_vm::snapshot_api::AccessorRow {
             owner,
             id: (c.u32() as usize % names.len()) as u16 + 1,
             get: opt_slot(&mut c),
@@ -471,14 +500,14 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     // drawn -- and the brand is a slot index like any other, so it
     // comes from the live prefix.
     let mut next_receiver = 0u32;
-    let mut private_values: Vec<ironhorse_vm::PrivateValueRow> = Vec::new();
+    let mut private_values: Vec<ironhorse_vm::snapshot_api::PrivateValueRow> = Vec::new();
     for _ in 0..(c.byte() % 6) {
         if next_receiver >= cap || live_idxs.is_empty() {
             break;
         }
         let receiver = next_receiver;
         next_receiver += 1 + (c.byte() % 3) as u32;
-        private_values.push(ironhorse_vm::PrivateValueRow {
+        private_values.push(ironhorse_vm::snapshot_api::PrivateValueRow {
             receiver,
             brand: pick_ref(&mut c, &live_idxs).0,
             value: slot(&mut c),
@@ -489,14 +518,14 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     // keeping the two disjoint means the generated image stays
     // adoptable as well as decodable.
     let mut next_receiver = next_receiver + 1;
-    let mut private_accessors: Vec<ironhorse_vm::PrivateAccessorRow> = Vec::new();
+    let mut private_accessors: Vec<ironhorse_vm::snapshot_api::PrivateAccessorRow> = Vec::new();
     for _ in 0..(c.byte() % 6) {
         if next_receiver >= cap || live_idxs.is_empty() {
             break;
         }
         let receiver = next_receiver;
         next_receiver += 1 + (c.byte() % 3) as u32;
-        private_accessors.push(ironhorse_vm::PrivateAccessorRow {
+        private_accessors.push(ironhorse_vm::snapshot_api::PrivateAccessorRow {
             receiver,
             brand: pick_ref(&mut c, &live_idxs).0,
             get: opt_slot(&mut c),
@@ -505,7 +534,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     }
 
     let mut next_owner = 0u32;
-    let mut disposable_stacks: Vec<ironhorse_vm::DisposableStackRow> = Vec::new();
+    let mut disposable_stacks: Vec<ironhorse_vm::snapshot_api::DisposableStackRow> = Vec::new();
     for _ in 0..(c.byte() % 6) {
         if next_owner >= cap {
             break;
@@ -516,12 +545,12 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         // A disposed stack ran its records to completion; the decoder
         // refuses one that still retains them.
         let n_records = if disposed { 0 } else { (c.byte() % 3) as usize };
-        disposable_stacks.push(ironhorse_vm::DisposableStackRow {
+        disposable_stacks.push(ironhorse_vm::snapshot_api::DisposableStackRow {
             owner,
             disposed,
             asynchronous: c.byte() % 2 == 0,
             records: (0..n_records)
-                .map(|_| ironhorse_vm::DisposalRecordRow {
+                .map(|_| ironhorse_vm::snapshot_api::DisposalRecordRow {
                     resource: slot(&mut c),
                     method: slot(&mut c),
                     pass_resource: c.byte() % 2 == 0,
@@ -543,11 +572,13 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     let n_body = 4 + (c.byte() % 8) as u64;
     let func_owner = pick_ref(&mut c, &live_idxs);
     let function_state = if live_idxs.is_empty() {
-        ironhorse_vm::FunctionStateSnapshot::default()
+        ironhorse_vm::snapshot_api::FunctionStateSnapshot::default()
     } else {
-        ironhorse_vm::FunctionStateSnapshot {
+        ironhorse_vm::snapshot_api::FunctionStateSnapshot {
+            shared: None,
+            native_names: None,
             segments: vec![vec![XS_CODE_END; n_body as usize]],
-            functions: vec![ironhorse_vm::FunctionRow {
+            functions: vec![ironhorse_vm::snapshot_api::FunctionRow {
                 owner: func_owner.0,
                 segment: Some(0),
                 body_start: Some(0),
@@ -568,7 +599,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     let has_function = !function_state.functions.is_empty();
 
     let mut next_owner = 0u32;
-    let mut generators: Vec<ironhorse_vm::GeneratorRow> = Vec::new();
+    let mut generators: Vec<ironhorse_vm::snapshot_api::GeneratorRow> = Vec::new();
     for _ in 0..(c.byte() % 6) {
         if next_owner >= cap {
             break;
@@ -578,10 +609,14 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         // 0 SuspendedStart / 1 SuspendedYield carry a frame; 2
         // Completed must not -- the decoder checks the agreement. With
         // no function row to name, only Completed rows are legal.
-        let state = if has_function && !names.is_empty() { c.byte() % 3 } else { 2 };
+        let state = if has_function && !names.is_empty() {
+            c.byte() % 3
+        } else {
+            2
+        };
         let frame = (state != 2).then(|| {
             let n_locals = 1 + (c.byte() % 4) as usize;
-            ironhorse_vm::SavedFrameRow {
+            ironhorse_vm::snapshot_api::SavedFrameRow {
                 locals: (0..n_locals).map(|_| slot(&mut c)).collect(),
                 // A scope entry names a program symbol (1-based, in
                 // range) and a local of THIS frame; the ids ascend
@@ -611,7 +646,11 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
                 resume_pc: c.u32() as u64 % n_body,
             }
         });
-        generators.push(ironhorse_vm::GeneratorRow { state, owner, frame });
+        generators.push(ironhorse_vm::snapshot_api::GeneratorRow {
+            state,
+            owner,
+            frame,
+        });
     }
 
     // The promise cluster (`PRMS`): generated to satisfy the decoder's
@@ -623,7 +662,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     // real empty chunk, and the bounds gate refuses the null it
     // tolerates on other rows).
     let mut next_owner = 0u32;
-    let mut prms_promises: Vec<ironhorse_vm::PromiseRow> = Vec::new();
+    let mut prms_promises: Vec<ironhorse_vm::snapshot_api::PromiseRow> = Vec::new();
     for _ in 0..(c.byte() % 4) {
         if next_owner >= live_cap {
             break;
@@ -635,7 +674,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         // capability must reference a resolving PAIR, so reactions
         // join below once the pair rows exist.
         let state = c.byte() % 3;
-        prms_promises.push(ironhorse_vm::PromiseRow {
+        prms_promises.push(ironhorse_vm::snapshot_api::PromiseRow {
             owner,
             state,
             result: slot(&mut c),
@@ -643,7 +682,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
             reactions: Vec::new(),
         });
     }
-    let mut prms_combinators: Vec<ironhorse_vm::CombinatorRow> = Vec::new();
+    let mut prms_combinators: Vec<ironhorse_vm::snapshot_api::CombinatorRow> = Vec::new();
     {
         let pending: Vec<usize> = prms_promises
             .iter()
@@ -665,7 +704,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
                 let results = sized[(c.byte() as usize) % sized.len()];
                 // A native element reaction carries NO capability —
                 // the decoder refuses populated slots on one.
-                let reaction = ironhorse_vm::PromiseReactionRow {
+                let reaction = ironhorse_vm::snapshot_api::PromiseReactionRow {
                     on_fulfilled: ironhorse_vm::Slot::undefined(),
                     on_rejected: ironhorse_vm::Slot::undefined(),
                     resolve: ironhorse_vm::Slot::undefined(),
@@ -686,7 +725,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
                     1 + c.u32() % results.length
                 };
                 let callback = Slot::of(Kind::Reference, Payload::Reference(func_owner));
-                prms_combinators.push(ironhorse_vm::CombinatorRow {
+                prms_combinators.push(ironhorse_vm::snapshot_api::CombinatorRow {
                     kind,
                     resolve: callback,
                     reject: callback,
@@ -700,7 +739,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     // opposite polarity — exactly `fxPushPromiseFunctions`' mint (the
     // guard-coherence gate refuses anything else; a swept singleton
     // half is also honest but a pair exercises more of the codec).
-    let mut prms_functions: Vec<ironhorse_vm::PromiseFnRow> = Vec::new();
+    let mut prms_functions: Vec<ironhorse_vm::snapshot_api::PromiseFnRow> = Vec::new();
     let mut prms_guards: Vec<bool> = Vec::new();
     let mut pairs: Vec<(u32, u32)> = Vec::new();
     if !prms_promises.is_empty() && !offs.is_empty() {
@@ -717,7 +756,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
             let promise = prms_promises[(c.byte() as usize) % prms_promises.len()].owner;
             let name_chunk = pick_off(&mut c, &offs).0;
             for (function, reject) in [(resolve_fn, false), (reject_fn, true)] {
-                prms_functions.push(ironhorse_vm::PromiseFnRow {
+                prms_functions.push(ironhorse_vm::snapshot_api::PromiseFnRow {
                     function,
                     promise,
                     reject,
@@ -742,49 +781,73 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
             for _ in 0..(c.byte() % 3) {
                 let host = pending[(c.byte() as usize) % pending.len()];
                 let (resolve_fn, reject_fn) = pairs[(c.byte() as usize) % pairs.len()];
-                let fn_ref = |f: u32| {
-                    Slot::of(
-                        Kind::Reference,
-                        Payload::Reference(SlotIndex(f)),
-                    )
-                };
-                prms_promises[host].reactions.push(ironhorse_vm::PromiseReactionRow {
-                    on_fulfilled: slot(&mut c),
-                    on_rejected: slot(&mut c),
-                    resolve: fn_ref(resolve_fn),
-                    reject: fn_ref(reject_fn),
-                    kind: c.byte() % 2,
-                    a: 0,
-                    b: 0,
-                });
+                let fn_ref = |f: u32| Slot::of(Kind::Reference, Payload::Reference(SlotIndex(f)));
+                prms_promises[host].reactions.push(
+                    ironhorse_vm::snapshot_api::PromiseReactionRow {
+                        on_fulfilled: slot(&mut c),
+                        on_rejected: slot(&mut c),
+                        resolve: fn_ref(resolve_fn),
+                        reject: fn_ref(reject_fn),
+                        kind: c.byte() % 2,
+                        a: 0,
+                        b: 0,
+                    },
+                );
             }
         }
     }
-    let promise_cluster = ironhorse_vm::PromiseClusterSnapshot {
+    let promise_cluster = ironhorse_vm::snapshot_api::PromiseClusterSnapshot {
+        unhandled_rejection: None,
+        async_instances: Vec::new(),
+        async_generators: Vec::new(),
+        // The generator does not mint `Array.fromAsync` accumulations: each
+        // one must be anchored by a `FromAsync*` reaction on a live promise,
+        // and an unanchored row is refused by the decoder, so an arbitrary
+        // one would only ever exercise that refusal.
+        from_async: Vec::new(),
         promises: prms_promises,
         functions: prms_functions,
         guards: prms_guards,
         combinators: prms_combinators,
     };
 
-    MachineImage::from_arenas(fuzz_snapshot_sig(), &slots, &chunks, &stack, names, keys, symbols)
-        .with_meter(meter)
-        .with_function_state(function_state)
-        .with_proxy_state(ironhorse_vm::ProxyStateSnapshot { proxies, revokers })
-        .with_accessors(accessors)
-        .with_private_elements(ironhorse_vm::PrivateElementSnapshot {
-            values: private_values,
-            accessors: private_accessors,
-        })
-        .with_disposable_stacks(disposable_stacks)
-        .with_generators(generators)
-        .with_promise_cluster(promise_cluster)
-        // The typed-array family is left empty here: honest ABUF rows
-        // need REAL chunk-arena extents, which this builder does not
-        // model. Crafted family bytes are exercised by the byte-level
-        // container decoder target instead.
-        .with_side_tables(arrays, collections, registry, errors, Vec::new(), Vec::new(), Vec::new())
-        .with_dates(dates)
+    MachineImage::from_arenas(
+        fuzz_snapshot_sig(),
+        &slots,
+        &chunks,
+        &stack,
+        names,
+        keys,
+        symbols,
+    )
+    .with_meter(meter)
+    .with_function_state(function_state)
+    .with_proxy_state(ironhorse_vm::snapshot_api::ProxyStateSnapshot { proxies, revokers })
+    .with_accessors(accessors)
+    .with_private_elements(ironhorse_vm::snapshot_api::PrivateElementSnapshot {
+        values: private_values,
+        accessors: private_accessors,
+    })
+    .with_disposable_stacks(disposable_stacks)
+    .with_generators(generators)
+    .with_promise_cluster(promise_cluster)
+    // The typed-array family is left empty here: honest ABUF rows
+    // need REAL chunk-arena extents, which this builder does not
+    // model. Crafted family bytes are exercised by the byte-level
+    // container decoder target instead.
+    .with_side_tables(
+        arrays,
+        // The index-property store is left empty here for the same reason the
+        // typed-array family is: this builder does not model it.
+        Vec::new(),
+        collections,
+        registry,
+        errors,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    )
+    .with_dates(dates)
 }
 
 /// The core round-trip invariant over a built image: a freshly written
@@ -800,7 +863,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
 /// codec's `nan_bits_preserved` lock covers that payload directly.
 pub fn roundtrip_image_is_invariant(img: &MachineImage) -> Result<(), RoundtripDivergence> {
     let sig = fuzz_snapshot_sig();
-    let bytes = write_machine(img);
+    let bytes = write_machine_unchecked(img);
     let back = match read_machine(&bytes, &sig) {
         Ok(b) => b,
         Err(e) => {
@@ -809,7 +872,7 @@ pub fn roundtrip_image_is_invariant(img: &MachineImage) -> Result<(), RoundtripD
             })
         }
     };
-    let bytes2 = write_machine(&back);
+    let bytes2 = write_machine_unchecked(&back);
     if bytes != bytes2 {
         return Err(RoundtripDivergence {
             detail: format!(
@@ -931,13 +994,28 @@ pub fn suspend_resume_is_transparent(
     };
     let b2 = m2.run(&b.bytecode);
 
-    if b2.completed != ub.completed || b2.result != ub.result || b2.computrons != ub.computrons {
+    // `coercion_error` joins the compare: a null-prototype completion
+    // renders the same `[object Object]` as a plain object, so a resumed
+    // twin that lost the null prototype link would agree on everything
+    // else.
+    if b2.completed != ub.completed
+        || b2.result != ub.result
+        || b2.computrons != ub.computrons
+        || b2.coercion_error != ub.coercion_error
+    {
         return Err(RoundtripDivergence {
             detail: format!(
                 "suspend/resume diverged from uninterrupted: resumed(completed={}, result={:?}, \
-                 computrons={}) vs uninterrupted(completed={}, result={:?}, computrons={}) \
-                 [A={source_a:?} B={source_b:?}]",
-                b2.completed, b2.result, b2.computrons, ub.completed, ub.result, ub.computrons
+                 computrons={}, coercion={:?}) vs uninterrupted(completed={}, result={:?}, \
+                 computrons={}, coercion={:?}) [A={source_a:?} B={source_b:?}]",
+                b2.completed,
+                b2.result,
+                b2.computrons,
+                b2.coercion_error,
+                ub.completed,
+                ub.result,
+                ub.computrons,
+                ub.coercion_error
             ),
         });
     }
@@ -950,7 +1028,7 @@ pub fn suspend_resume_is_transparent(
 /// This is the productive malformed corpus: the mutant still passes the
 /// `VERS`/`SIGN` gates often enough to reach the atom-payload decoders where a
 /// corrupt count field would, unclamped, drive an unbounded allocation.
-fn mutate_bytes(base: &[u8], data: &[u8]) -> Vec<u8> {
+pub(crate) fn mutate_bytes(base: &[u8], data: &[u8]) -> Vec<u8> {
     let mut out = base.to_vec();
     if out.is_empty() {
         return out;
@@ -1008,9 +1086,19 @@ pub fn decoder_is_error_free(data: &[u8]) {
 
     // The productive corpus: a valid snapshot with the bytes mutated in, so
     // the reader passes the gates and reaches the count-bearing decoders.
-    let valid = write_machine(&gen_machine_image(data));
+    let valid = write_machine_unchecked(&gen_machine_image(data));
     let mutated = mutate_bytes(&valid, data);
-    let _ = read_machine(&mutated, &sig);
+    if let Ok(image) = read_machine(&mutated, &sig) {
+        // Legacy imports intentionally normalize NaNs and absent core atoms.
+        // Version 16 makes byte identity an admission invariant.
+        if image.version.format_version >= 16 {
+            assert_eq!(
+                write_machine_unchecked(&image),
+                mutated,
+                "accepted snapshot must have one encoding"
+            );
+        }
+    }
     let _ = from_snapshot_bytes(&mutated, &sig);
 }
 
@@ -1025,7 +1113,7 @@ mod tests {
     fn seed_bytes(seed: u32, salt: u8) -> Vec<u8> {
         let s = seed.to_le_bytes();
         let mut buf = Vec::new();
-        for k in 0..(20 + (seed % 40)) {
+        for k in 0..(80 + (seed % 160)) {
             buf.push(
                 s[(k as usize) % 4]
                     .wrapping_add((k as u8).wrapping_mul(29))
@@ -1044,11 +1132,8 @@ mod tests {
         let mut saw_free = false;
         let mut saw_chunks = false;
         let mut saw_symbols = false;
-        // The side-table arms need witnesses too. Review wave 5 probed
-        // the generator and found it DOES produce all three today — but
-        // the four witnesses above exist precisely so a refactor cannot
-        // silently degrade an arm to empty, and the ledger arm shipped
-        // without that protection.
+        // Require non-empty witnesses for the side-table arms too, so a
+        // generator refactor cannot silently stop exercising a decoder.
         let mut saw_arrays = false;
         let mut saw_collections = false;
         let mut saw_registry = false;
@@ -1068,7 +1153,7 @@ mod tests {
         for seed in 0u32..3000 {
             let buf = seed_bytes(seed, 7);
             let img = gen_machine_image(&buf);
-            distinct.insert(write_machine(&img));
+            distinct.insert(write_machine_unchecked(&img));
             saw_free |= !img.slot_free.is_empty();
             saw_chunks |= !img.chunks.is_empty();
             saw_symbols |= !img.symbols.pairs.is_empty();
@@ -1097,11 +1182,15 @@ mod tests {
                 panic!("arena snapshot round-trip divergence at seed {seed}: {d:?}");
             }
         }
-        assert!(distinct.len() > 500, "arena sweep too uniform: {} distinct", distinct.len());
+        assert!(
+            distinct.len() > 500,
+            "arena sweep too uniform: {} distinct",
+            distinct.len()
+        );
         assert!(saw_free, "free-list arm never exercised");
         // (No value-stack witness: the reader enforces quiescence, so
         // the generator emits only the empty stack every honest writer
-        // does — review finding 5.)
+        // does.)
         assert!(saw_chunks, "chunk-arena arm never exercised");
         assert!(saw_symbols, "symbol-table arm never exercised");
         assert!(saw_arrays, "side-table ARRY arm never exercised");
@@ -1118,10 +1207,16 @@ mod tests {
         // The frame is the substantial half of the GENR codec; a
         // generator sweep that only ever emitted Completed rows would
         // leave `SavedFrameRow` unexercised while looking covered.
-        assert!(saw_generator_frames, "GENR suspended-frame arm never exercised");
+        assert!(
+            saw_generator_frames,
+            "GENR suspended-frame arm never exercised"
+        );
         assert!(saw_promises, "side-table PRMS arm never exercised");
         assert!(saw_promise_reactions, "PRMS reaction arm never exercised");
-        assert!(saw_promise_functions, "PRMS resolving-function arm never exercised");
+        assert!(
+            saw_promise_functions,
+            "PRMS resolving-function arm never exercised"
+        );
         assert!(saw_combinators, "PRMS combinator arm never exercised");
         // (`IBFN` and the typed-array family are deliberately not
         // generated -- both are cross-table dependent on state this
@@ -1206,10 +1301,8 @@ mod tests {
         // correct) but in the invariant: `roundtrip_image_is_invariant`
         // asserts write→read→write **byte-equality**, not value
         // equality, so a non-reflexive float payload is not a false
-        // trophy. The seed input was re-derived when the reader's
-        // quiescence gate emptied the generated stack (review finding
-        // 5) — the original's NaN rode a stack slot; this one is
-        // constructed to land it in heap slot 0 (no chunks, one slot,
+        // trophy. The reader's quiescence gate requires an empty stack,
+        // so the seed places the NaN in heap slot 0 (no chunks, one slot,
         // arm 4, bits 0x7ff8_0000_…).
         let data = [0x00u8, 0x00, 0x04, 0x7f, 0xf8, 0x00, 0x00, 0x00];
         let img = gen_machine_image(&data);
@@ -1228,9 +1321,13 @@ mod tests {
         );
         // Direct byte-equality, as the invariant states.
         let sig = fuzz_snapshot_sig();
-        let bytes = write_machine(&img);
+        let bytes = write_machine_unchecked(&img);
         let back = read_machine(&bytes, &sig).expect("valid snapshot reads back");
-        assert_eq!(write_machine(&back), bytes, "write→read→write byte-identical");
+        assert_eq!(
+            write_machine_unchecked(&back),
+            bytes,
+            "write→read→write byte-identical"
+        );
     }
 
     #[test]
@@ -1246,7 +1343,7 @@ mod tests {
         let mut gate_rejected = 0;
         for seed in 0u32..3000 {
             let buf = seed_bytes(seed, 23);
-            let valid = write_machine(&gen_machine_image(&buf));
+            let valid = write_machine_unchecked(&gen_machine_image(&buf));
             let mutated = mutate_bytes(&valid, &buf);
             match read_machine(&mutated, &sig) {
                 Ok(_) => restored_ok += 1,
@@ -1254,8 +1351,14 @@ mod tests {
                 Err(_) => gate_rejected += 1,
             }
         }
-        assert!(restored_ok > 0, "no mutant ever read back (mutation too destructive)");
-        assert!(reached_inner > 0, "no mutant reached the atom-payload decoders");
+        assert!(
+            restored_ok > 0,
+            "no mutant ever read back (mutation too destructive)"
+        );
+        assert!(
+            reached_inner > 0,
+            "no mutant reached the atom-payload decoders"
+        );
         assert!(gate_rejected > 0, "no mutant hit the outer gates");
     }
 }

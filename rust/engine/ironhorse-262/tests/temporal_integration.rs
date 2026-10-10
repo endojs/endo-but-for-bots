@@ -38,7 +38,10 @@ fn temporal_ironhorse(source: &str, expected: &str) {
 
 /// Assert that `expr` throws a `RangeError` under Ironhorse.
 fn temporal_range_error(expr: &str) {
-    temporal_ironhorse(&format!("var e=false;try{{{expr}}}catch(x){{e=x instanceof RangeError}}e"), "true");
+    temporal_ironhorse(
+        &format!("var e=false;try{{{expr}}}catch(x){{e=x instanceof RangeError}}e"),
+        "true",
+    );
 }
 
 #[test]
@@ -54,7 +57,9 @@ fn duration_compare_time_units_needs_no_relative_to() {
 #[test]
 fn duration_compare_calendar_units_require_relative_to() {
     // Calendar units with no relativeTo is a RangeError (compare/basic.js).
-    temporal_range_error("Temporal.Duration.compare(new Temporal.Duration(5), new Temporal.Duration(4))");
+    temporal_range_error(
+        "Temporal.Duration.compare(new Temporal.Duration(5), new Temporal.Duration(4))",
+    );
     temporal_range_error("new Temporal.Duration(0,5).total({unit:'day'})");
     temporal_range_error("new Temporal.Duration(0,5).total({unit:'year'})");
 }

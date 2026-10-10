@@ -6,9 +6,23 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[lints]
+workspace = true
+
 [lib]
 name = "ironhorse_regexp"
 path = "src/lib.rs"
 
-[dev-dependencies]
-xs-oracle = { path = "../xs-oracle" }
+[dependencies]
+ironhorse-unicode = { path = "../ironhorse-unicode" }
+ironhorse-meter = { path = "../ironhorse-meter" }
+# Cargo does not support optional dev-dependencies; keep the C oracle off
+# the default graph and enable it only for the parity integration target.
+xs-oracle = { path = "../xs-oracle", optional = true }
+
+[features]
+parity = ["dep:xs-oracle"]
+
+[[test]]
+name = "parity"
+required-features = ["parity"]

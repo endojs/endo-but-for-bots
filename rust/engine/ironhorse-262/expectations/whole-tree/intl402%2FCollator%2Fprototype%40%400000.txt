@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=intl402/Collator/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Collator/prototype/builtin.js sloppy skip:oracle-host-missing-intl
+intl402/Collator/prototype/builtin.js strict skip:oracle-host-missing-intl
+intl402/Collator/prototype/prop-desc.js sloppy skip:oracle-host-missing-intl
+intl402/Collator/prototype/prop-desc.js strict skip:oracle-host-missing-intl
+intl402/Collator/prototype/this-value-collator-prototype.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Intl.Collator.prototype is not an object that has been initialized as an Intl.Collator. Expected a TypeError but got a ReferenceError"
+intl402/Collator/prototype/this-value-collator-prototype.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Intl.Collator.prototype is not an object that has been initialized as an Intl.Collator. Expected a TypeError but got a ReferenceError"
+intl402/Collator/prototype/this-value-not-collator.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Collator/prototype/this-value-not-collator.js strict skip:oracle-host-missing-global:Intl

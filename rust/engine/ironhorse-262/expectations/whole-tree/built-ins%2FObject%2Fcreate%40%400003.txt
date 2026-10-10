@@ -1,0 +1,41 @@
+# engine=ironhorse features=default corpus=built-ins/Object/create tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Object/create/15.2.3.5-4-86.js sloppy pass
+built-ins/Object/create/15.2.3.5-4-86.js strict pass
+built-ins/Object/create/15.2.3.5-4-87.js sloppy pass
+built-ins/Object/create/15.2.3.5-4-87.js strict pass
+built-ins/Object/create/15.2.3.5-4-88.js sloppy pass
+built-ins/Object/create/15.2.3.5-4-88.js strict pass
+built-ins/Object/create/15.2.3.5-4-89.js sloppy pass
+built-ins/Object/create/15.2.3.5-4-89.js strict pass
+built-ins/Object/create/15.2.3.5-4-9.js sloppy pass
+built-ins/Object/create/15.2.3.5-4-9.js strict pass
+built-ins/Object/create/15.2.3.5-4-90.js sloppy pass
+built-ins/Object/create/15.2.3.5-4-90.js strict pass
+built-ins/Object/create/15.2.3.5-4-91.js sloppy pass
+built-ins/Object/create/15.2.3.5-4-91.js strict pass
+built-ins/Object/create/15.2.3.5-4-92.js sloppy pass
+built-ins/Object/create/15.2.3.5-4-92.js strict pass
+built-ins/Object/create/15.2.3.5-4-93.js sloppy pass
+built-ins/Object/create/15.2.3.5-4-93.js strict pass
+built-ins/Object/create/15.2.3.5-4-94.js sloppy pass
+built-ins/Object/create/15.2.3.5-4-94.js strict pass
+built-ins/Object/create/15.2.3.5-4-96.js sloppy pass
+built-ins/Object/create/15.2.3.5-4-96.js strict pass
+built-ins/Object/create/15.2.3.5-4-97.js sloppy pass
+built-ins/Object/create/15.2.3.5-4-97.js strict pass
+built-ins/Object/create/15.2.3.5-4-98.js sloppy pass
+built-ins/Object/create/15.2.3.5-4-98.js strict pass
+built-ins/Object/create/15.2.3.5-4-99.js sloppy pass
+built-ins/Object/create/15.2.3.5-4-99.js strict pass
+built-ins/Object/create/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be create; name value should be create"
+built-ins/Object/create/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be create; name value should be create"
+built-ins/Object/create/not-a-constructor.js sloppy pass
+built-ins/Object/create/not-a-constructor.js strict pass
+built-ins/Object/create/properties-arg-to-object-bigint.js sloppy pass
+built-ins/Object/create/properties-arg-to-object-bigint.js strict pass
+built-ins/Object/create/properties-arg-to-object-non-empty-string.js sloppy pass
+built-ins/Object/create/properties-arg-to-object-non-empty-string.js strict pass
+built-ins/Object/create/properties-arg-to-object-null.js sloppy pass
+built-ins/Object/create/properties-arg-to-object-null.js strict pass
+built-ins/Object/create/properties-arg-to-object.js sloppy pass
+built-ins/Object/create/properties-arg-to-object.js strict pass

@@ -1,0 +1,6 @@
+# Pinned upstream XS uses unaligned typed loads and allocation conventions that
+# trigger UBSAN in xsRun.c, xsdtoa.c, and xsMemory.c. Exempt upstream XS source
+# from undefined-behavior instrumentation; do not hide ASAN findings, or any
+# diagnostics in our xs_shim.c / xsnap-platform.c boundary code.
+[undefined]
+src:*/c/moddable/xs/sources/*

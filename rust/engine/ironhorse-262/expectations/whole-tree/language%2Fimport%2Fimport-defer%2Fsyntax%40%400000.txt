@@ -1,0 +1,16 @@
+# engine=ironhorse features=default corpus=language/import/import-defer/syntax tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/import/import-defer/syntax/import-attributes.js sloppy skip:module:compiler-rejected
+language/import/import-defer/syntax/invalid-default-and-defer-namespace.js sloppy pass
+language/import/import-defer/syntax/invalid-default-and-defer-namespace.js strict pass
+language/import/import-defer/syntax/invalid-defer-as-with-no-asterisk.js sloppy pass
+language/import/import-defer/syntax/invalid-defer-as-with-no-asterisk.js strict pass
+language/import/import-defer/syntax/invalid-defer-default-and-namespace.js sloppy pass
+language/import/import-defer/syntax/invalid-defer-default-and-namespace.js strict pass
+language/import/import-defer/syntax/invalid-defer-default.js sloppy pass
+language/import/import-defer/syntax/invalid-defer-default.js strict pass
+language/import/import-defer/syntax/invalid-defer-named.js sloppy pass
+language/import/import-defer/syntax/invalid-defer-named.js strict pass
+language/import/import-defer/syntax/invalid-export-defer-namespace.js sloppy pass
+language/import/import-defer/syntax/invalid-export-defer-namespace.js strict pass
+language/import/import-defer/syntax/valid-default-binding-named-defer.js sloppy skip:unsupported-opcode:module:static-linking
+language/import/import-defer/syntax/valid-defer-namespace.js sloppy skip:module:compiler-rejected

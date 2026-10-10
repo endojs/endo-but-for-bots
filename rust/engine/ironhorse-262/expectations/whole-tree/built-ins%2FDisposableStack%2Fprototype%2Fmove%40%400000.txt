@@ -1,0 +1,27 @@
+# engine=ironhorse features=default corpus=built-ins/DisposableStack/prototype/move tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/DisposableStack/prototype/move/does-not-dispose-resources.js sloppy pass
+built-ins/DisposableStack/prototype/move/does-not-dispose-resources.js strict pass
+built-ins/DisposableStack/prototype/move/length.js sloppy pass
+built-ins/DisposableStack/prototype/move/length.js strict pass
+built-ins/DisposableStack/prototype/move/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be move; name value should be move"
+built-ins/DisposableStack/prototype/move/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be move; name value should be move"
+built-ins/DisposableStack/prototype/move/not-a-constructor.js sloppy pass
+built-ins/DisposableStack/prototype/move/not-a-constructor.js strict pass
+built-ins/DisposableStack/prototype/move/prop-desc.js sloppy pass
+built-ins/DisposableStack/prototype/move/prop-desc.js strict pass
+built-ins/DisposableStack/prototype/move/returns-new-disposablestack-that-contains-moved-resources.js sloppy pass
+built-ins/DisposableStack/prototype/move/returns-new-disposablestack-that-contains-moved-resources.js strict pass
+built-ins/DisposableStack/prototype/move/returns-new-disposablestack-that-is-still-pending.js sloppy pass
+built-ins/DisposableStack/prototype/move/returns-new-disposablestack-that-is-still-pending.js strict pass
+built-ins/DisposableStack/prototype/move/returns-new-disposablestack.js sloppy pass
+built-ins/DisposableStack/prototype/move/returns-new-disposablestack.js strict pass
+built-ins/DisposableStack/prototype/move/sets-state-to-disposed.js sloppy pass
+built-ins/DisposableStack/prototype/move/sets-state-to-disposed.js strict pass
+built-ins/DisposableStack/prototype/move/still-returns-new-disposablestack-when-subclassed.js sloppy pass
+built-ins/DisposableStack/prototype/move/still-returns-new-disposablestack-when-subclassed.js strict pass
+built-ins/DisposableStack/prototype/move/this-does-not-have-internal-disposablestate-throws.js sloppy pass
+built-ins/DisposableStack/prototype/move/this-does-not-have-internal-disposablestate-throws.js strict pass
+built-ins/DisposableStack/prototype/move/this-not-object-throws.js sloppy pass
+built-ins/DisposableStack/prototype/move/this-not-object-throws.js strict pass
+built-ins/DisposableStack/prototype/move/throws-if-disposed.js sloppy pass
+built-ins/DisposableStack/prototype/move/throws-if-disposed.js strict pass

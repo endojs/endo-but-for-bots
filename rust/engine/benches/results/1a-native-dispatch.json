@@ -1,0 +1,572 @@
+{
+  "baseline_commit": "0db0d5ff9",
+  "candidate": "Native dispatch module extraction in the commit containing this artifact; reports identify pre-commit HEAD.",
+  "candidate_source_sha256": {
+    "rust/engine/ironhorse-vm/src/interp.rs": "54c51b4ff3dbf3e464fe45537042ceab96fac98ca254593ff5f0dcfddbdbba95",
+    "rust/engine/ironhorse-vm/src/interp/natives/mod.rs": "2507a8d10d86213afe03031b8aa835f894caf5e7e51ee6a59cd54ed797d1a749",
+    "rust/engine/ironhorse-vm/src/interp/natives/dispatch.rs": "6b5a20cd91395ed5c72ec4011a4a73c75d1b2a8758db10be910770b916bbd91e",
+    "rust/engine/ironhorse-vm/tests/allocation_admission_audit.rs": "57cdd06584ec8976bf20913593b7a39ced881137a35103e59405bd9e8d159d5f",
+    "rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs": "3c1e2d966d7e7d045500a434550e7c1598288c6be7472d390ae2a753d21c0faf"
+  },
+  "maximum_ratio": 1.25,
+  "notes": [
+    "Two central dispatch methods move to interp/natives/dispatch.rs. Independent review checked unchanged method content including comments and attributes against committed HEAD, allowing only scoped visibility and formatting. The inline-never attribute, heavy-frame wrappers and iterator-setter recursion shortcut remain in force.",
+    "Seven source-lock targets, the general baseline and eight existing property/regexp controls completed before runtime source edits. Candidate controls run serially after all validation processes finish, with no concurrent builds or tests started by this task. General comparison uses unchanged run.py compare and validate_reference at 1.25x. All measured reports are retained.",
+    "The eight targeted controls exclude compile/link/boot, use one warmup and five measured rounds, and check completion, results and raw-meter stability. Guest results and raw meter totals agree across revisions.",
+    "The GC and allocation method scans include natives/dispatch.rs. The capacity checker explicitly scans that module as well as the historical parent interval, property and regexp modules. A new mutation test rejects both raw Vec::with_capacity and sized vec! reservations in moved dispatch code.",
+    "A wrapper comment was corrected from dispatch below to dispatcher because the body now lives in the native module; no wrapper code changed.",
+    "This incremental F142 comparison does not establish full 1A performance acceptance against the original decomposition baseline.",
+    "Full engine CI passed 1490 tests with 26 ignored over 185 targets; SQLite passed 116 with 3 ignored. All six validation commands exited 0; VM rustdoc reported 61 existing warnings."
+  ],
+  "commands": [
+    "CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 IRONHORSE_REFERENCE_COMMIT=0db0d5ff9 python3 rust/engine/benches/run.py --write-baseline --baseline /tmp/1a-native-dispatch-before.json --output /tmp/1a-native-dispatch-before.json",
+    "CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test --locked --release --manifest-path rust/engine/Cargo.toml -p ironhorse-vm --test property_execution_bench --test regexp_execution_bench -- --ignored --nocapture (before and after)",
+    "RUST_MIN_STACK=33554432 cargo test --locked --manifest-path rust/engine/Cargo.toml -p ironhorse-meter -p ironhorse-unicode -p ironhorse-vm -p ironhorse-snapshot -p ironhorse-compile -p ironhorse-regexp --features ironhorse-vm/store-integrity --no-fail-fast",
+    "RUST_MIN_STACK=33554432 cargo test --locked -p ironhorse-store-sqlite",
+    "cargo clippy --locked --manifest-path rust/engine/Cargo.toml -p ironhorse-vm --lib -- -D warnings",
+    "cargo doc --locked --manifest-path rust/engine/Cargo.toml -p ironhorse-vm --no-deps",
+    "IRONHORSE_MATH_VECTOR=/tmp/1a-native-dispatch-math-vector.tsv cargo test --locked --manifest-path rust/engine/Cargo.toml -p ironhorse-vm --test math_determinism platform_math_vector"
+  ],
+  "before": {
+    "provenance": {
+      "commit": "0db0d5ff9",
+      "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+      "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+      "machine": "arm64",
+      "cpu": "arm",
+      "fixture_sha256": "57186d5e665baee27203114dfad6615889863e3099fa57ca319d6927f6bda46d",
+      "build_environment": {
+        "CARGO_INCREMENTAL": "0",
+        "RUSTFLAGS": null,
+        "CARGO_ENCODED_RUSTFLAGS": null,
+        "RUST_MIN_STACK": "33554432",
+        "RUSTUP_TOOLCHAIN": null,
+        "CARGO_BUILD_TARGET": null
+      }
+    },
+    "medians": {
+      "dispatch_ms": 1049.730584,
+      "slots_ms": 473.119292,
+      "chunks_ms": 31.491292,
+      "attached_detached_ms": 18.835542,
+      "attached_resident_ms": 27.138542,
+      "attached_faulting_ms": 26.743542,
+      "slide_500_front_ms": 1.246083,
+      "slide_500_tail_ms": 0.817833,
+      "slide_2000_front_ms": 2.385042,
+      "slide_2000_tail_ms": 0.940833,
+      "slide_8000_front_ms": 7.131625,
+      "slide_8000_tail_ms": 2.964625,
+      "gc_5000_full_first_ms": 2.736375,
+      "gc_5000_full_steady_ms": 0.778,
+      "gc_5000_partial_ms": 0.403917,
+      "gc_5000_gate_ms": 0.002666,
+      "gc_5000_enum_ms": 0.022042,
+      "gc_5000_query_ms": 0.004959,
+      "gc_5000_free_ms": 0.3745,
+      "gc_5000_sweep_ns_per_slot": 27.086638392,
+      "gc_20000_full_first_ms": 10.842042,
+      "gc_20000_full_steady_ms": 2.912125,
+      "gc_20000_partial_ms": 1.651333,
+      "gc_20000_gate_ms": 0.009625,
+      "gc_20000_enum_ms": 0.039875,
+      "gc_20000_query_ms": 0.017625,
+      "gc_20000_free_ms": 1.582458,
+      "gc_20000_sweep_ns_per_slot": 24.500839627,
+      "gc_80000_full_first_ms": 43.508208,
+      "gc_80000_full_steady_ms": 11.453666,
+      "gc_80000_partial_ms": 7.184292,
+      "gc_80000_gate_ms": 0.041792,
+      "gc_80000_enum_ms": 0.063375,
+      "gc_80000_query_ms": 0.070417,
+      "gc_80000_free_ms": 7.011125,
+      "gc_80000_sweep_ns_per_slot": 25.29813033,
+      "gc_5000_generational_ms": 0.050334,
+      "gc_5000_full_partial_ms": 0.047208,
+      "gc_20000_generational_ms": 0.05475,
+      "gc_20000_full_partial_ms": 0.090083,
+      "gc_80000_generational_ms": 0.106,
+      "gc_80000_full_partial_ms": 0.185958,
+      "placeholder_120320_ms": 0.0345,
+      "placeholder_500000_ms": 0.058584,
+      "placeholder_1000000_ms": 0.055,
+      "placeholder_4000000_ms": 0.203791,
+      "wake_eager_ms": 10.9115,
+      "wake_lazy_ms": 1.425458
+    },
+    "maximum_ratio": 1.25,
+    "failures": [],
+    "reference_provenance": null,
+    "reference_medians": null,
+    "comparison_kind": "historical-context-only"
+  },
+  "after": {
+    "provenance": {
+      "commit": "0db0d5ff9",
+      "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+      "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+      "machine": "arm64",
+      "cpu": "arm",
+      "fixture_sha256": "57186d5e665baee27203114dfad6615889863e3099fa57ca319d6927f6bda46d",
+      "build_environment": {
+        "CARGO_INCREMENTAL": "0",
+        "RUSTFLAGS": null,
+        "CARGO_ENCODED_RUSTFLAGS": null,
+        "RUST_MIN_STACK": "33554432",
+        "RUSTUP_TOOLCHAIN": null,
+        "CARGO_BUILD_TARGET": null
+      }
+    },
+    "medians": {
+      "dispatch_ms": 1055.714458,
+      "slots_ms": 480.266833,
+      "chunks_ms": 32.088417,
+      "attached_detached_ms": 19.213417,
+      "attached_resident_ms": 27.143791,
+      "attached_faulting_ms": 26.764375,
+      "slide_500_front_ms": 1.22525,
+      "slide_500_tail_ms": 0.845916,
+      "slide_2000_front_ms": 2.386584,
+      "slide_2000_tail_ms": 0.932541,
+      "slide_8000_front_ms": 7.138458,
+      "slide_8000_tail_ms": 2.34525,
+      "gc_5000_full_first_ms": 2.727542,
+      "gc_5000_full_steady_ms": 0.803208,
+      "gc_5000_partial_ms": 0.416167,
+      "gc_5000_gate_ms": 0.002667,
+      "gc_5000_enum_ms": 0.021917,
+      "gc_5000_query_ms": 0.005,
+      "gc_5000_free_ms": 0.379084,
+      "gc_5000_sweep_ns_per_slot": 26.035743193,
+      "gc_20000_full_first_ms": 10.769917,
+      "gc_20000_full_steady_ms": 2.969083,
+      "gc_20000_partial_ms": 1.715334,
+      "gc_20000_gate_ms": 0.009917,
+      "gc_20000_enum_ms": 0.033709,
+      "gc_20000_query_ms": 0.017041,
+      "gc_20000_free_ms": 1.65375,
+      "gc_20000_sweep_ns_per_slot": 23.893528667,
+      "gc_80000_full_first_ms": 43.562209,
+      "gc_80000_full_steady_ms": 11.401375,
+      "gc_80000_partial_ms": 7.295457,
+      "gc_80000_gate_ms": 0.039583,
+      "gc_80000_enum_ms": 0.06275,
+      "gc_80000_query_ms": 0.072,
+      "gc_80000_free_ms": 7.118625,
+      "gc_80000_sweep_ns_per_slot": 23.898893087,
+      "gc_5000_generational_ms": 0.045833,
+      "gc_5000_full_partial_ms": 0.051583,
+      "gc_20000_generational_ms": 0.0635,
+      "gc_20000_full_partial_ms": 0.084333,
+      "gc_80000_generational_ms": 0.120459,
+      "gc_80000_full_partial_ms": 0.197,
+      "placeholder_120320_ms": 0.01825,
+      "placeholder_500000_ms": 0.032959,
+      "placeholder_1000000_ms": 0.061208,
+      "placeholder_4000000_ms": 0.220042,
+      "wake_eager_ms": 11.514708,
+      "wake_lazy_ms": 1.521958
+    },
+    "maximum_ratio": 1.25,
+    "failures": [],
+    "reference_provenance": null,
+    "reference_medians": null,
+    "comparison_kind": "historical-context-only"
+  },
+  "ratios": {
+    "dispatch_ms": 1.005700390263184,
+    "slots_ms": 1.015107270239997,
+    "chunks_ms": 1.018961591032848,
+    "attached_detached_ms": 1.0200618065569869,
+    "attached_resident_ms": 1.000193414959433,
+    "attached_faulting_ms": 1.0007789918029557,
+    "slide_500_front_ms": 0.9832812099996548,
+    "slide_500_tail_ms": 1.0343383062312232,
+    "slide_2000_front_ms": 1.0006465294950782,
+    "slide_2000_tail_ms": 0.9911865336356186,
+    "slide_8000_front_ms": 1.0009581266541636,
+    "slide_8000_tail_ms": 0.791078129611671,
+    "gc_5000_full_first_ms": 0.9967720067607694,
+    "gc_5000_full_steady_ms": 1.032401028277635,
+    "gc_5000_partial_ms": 1.03032801293335,
+    "gc_5000_gate_ms": 1.0003750937734435,
+    "gc_5000_enum_ms": 0.994329008256964,
+    "gc_5000_query_ms": 1.0082677959265982,
+    "gc_5000_free_ms": 1.0122403204272363,
+    "gc_5000_sweep_ns_per_slot": 0.9612024503081052,
+    "gc_20000_full_first_ms": 0.9933476553586492,
+    "gc_20000_full_steady_ms": 1.019558913164785,
+    "gc_20000_partial_ms": 1.0387571737499341,
+    "gc_20000_gate_ms": 1.0303376623376623,
+    "gc_20000_enum_ms": 0.8453667711598747,
+    "gc_20000_query_ms": 0.9668652482269505,
+    "gc_20000_free_ms": 1.045051432644658,
+    "gc_20000_sweep_ns_per_slot": 0.9752126470257476,
+    "gc_80000_full_first_ms": 1.0012411681032691,
+    "gc_80000_full_steady_ms": 0.9954345621742419,
+    "gc_80000_partial_ms": 1.0154733410056271,
+    "gc_80000_gate_ms": 0.9471429938744257,
+    "gc_80000_enum_ms": 0.9901380670611439,
+    "gc_80000_query_ms": 1.0224803669568427,
+    "gc_80000_free_ms": 1.015332774697356,
+    "gc_80000_sweep_ns_per_slot": 0.9446900927164289,
+    "gc_5000_generational_ms": 0.9105773433464458,
+    "gc_5000_full_partial_ms": 1.0926749703440095,
+    "gc_20000_generational_ms": 1.1598173515981736,
+    "gc_20000_full_partial_ms": 0.9361699765771567,
+    "gc_80000_generational_ms": 1.1364056603773585,
+    "gc_80000_full_partial_ms": 1.0593789995590401,
+    "placeholder_120320_ms": 0.5289855072463767,
+    "placeholder_500000_ms": 0.5625938822886796,
+    "placeholder_1000000_ms": 1.1128727272727272,
+    "placeholder_4000000_ms": 1.0797434626651814,
+    "wake_eager_ms": 1.0552818585895616,
+    "wake_lazy_ms": 1.0676975400187168
+  },
+  "comparison_failures": [],
+  "targeted": {
+    "before": {
+      "log": "   Compiling ironhorse-vm v0.0.1 (/Users/xyz/Development/endo/rust/engine/ironhorse-vm)\n    Finished `release` profile [optimized] target(s) in 0.49s\n     Running tests/property_execution_bench.rs (rust/engine/target/release/deps/property_execution_bench-7078a47d2e70351a)\n\nrunning 1 test\nPROPERTY_MODULE_METRIC ordinary seconds=0.003151292 raw=3870347408 result=6001\nPROPERTY_MODULE_METRIC indexed seconds=0.001799917 raw=3314338872 result=2006\nPROPERTY_MODULE_METRIC proxy seconds=0.010334125 raw=15701434960 result=2003000\nPROPERTY_MODULE_METRIC descriptors seconds=0.017234584 raw=13945550432 result=20000\ntest property_execution ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s\n\n     Running tests/regexp_execution_bench.rs (rust/engine/target/release/deps/regexp_execution_bench-0c17a2d2230e8456)\n\nrunning 1 test\nREGEXP_MODULE_METRIC exec seconds=0.009410958 raw=14116238224 result=18000\nREGEXP_MODULE_METRIC replace_generic seconds=0.035331291 raw=27151607632 result=27000\nREGEXP_MODULE_METRIC split_match_all seconds=0.040345417 raw=24728735200 result=14000\nREGEXP_MODULE_METRIC unicode_empty_replace seconds=0.023143208 raw=18699719752 result=18000\ntest regexp_execution ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s\n\n",
+      "rows": {
+        "ordinary": {
+          "seconds": 0.003151292,
+          "raw": 3870347408,
+          "result": "6001"
+        },
+        "indexed": {
+          "seconds": 0.001799917,
+          "raw": 3314338872,
+          "result": "2006"
+        },
+        "proxy": {
+          "seconds": 0.010334125,
+          "raw": 15701434960,
+          "result": "2003000"
+        },
+        "descriptors": {
+          "seconds": 0.017234584,
+          "raw": 13945550432,
+          "result": "20000"
+        },
+        "exec": {
+          "seconds": 0.009410958,
+          "raw": 14116238224,
+          "result": "18000"
+        },
+        "replace_generic": {
+          "seconds": 0.035331291,
+          "raw": 27151607632,
+          "result": "27000"
+        },
+        "split_match_all": {
+          "seconds": 0.040345417,
+          "raw": 24728735200,
+          "result": "14000"
+        },
+        "unicode_empty_replace": {
+          "seconds": 0.023143208,
+          "raw": 18699719752,
+          "result": "18000"
+        }
+      }
+    },
+    "after": {
+      "log": "   Compiling ironhorse-vm v0.0.1 (/Users/xyz/Development/endo/rust/engine/ironhorse-vm)\n    Finished `release` profile [optimized] target(s) in 0.47s\n     Running tests/property_execution_bench.rs (rust/engine/target/release/deps/property_execution_bench-7078a47d2e70351a)\n\nrunning 1 test\nPROPERTY_MODULE_METRIC ordinary seconds=0.003240666 raw=3870347408 result=6001\nPROPERTY_MODULE_METRIC indexed seconds=0.001780375 raw=3314338872 result=2006\nPROPERTY_MODULE_METRIC proxy seconds=0.010561042 raw=15701434960 result=2003000\nPROPERTY_MODULE_METRIC descriptors seconds=0.017418375 raw=13945550432 result=20000\ntest property_execution ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s\n\n     Running tests/regexp_execution_bench.rs (rust/engine/target/release/deps/regexp_execution_bench-0c17a2d2230e8456)\n\nrunning 1 test\nREGEXP_MODULE_METRIC exec seconds=0.008939500 raw=14116238224 result=18000\nREGEXP_MODULE_METRIC replace_generic seconds=0.035365750 raw=27151607632 result=27000\nREGEXP_MODULE_METRIC split_match_all seconds=0.041772625 raw=24728735200 result=14000\nREGEXP_MODULE_METRIC unicode_empty_replace seconds=0.023855791 raw=18699719752 result=18000\ntest regexp_execution ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s\n\n",
+      "rows": {
+        "ordinary": {
+          "seconds": 0.003240666,
+          "raw": 3870347408,
+          "result": "6001"
+        },
+        "indexed": {
+          "seconds": 0.001780375,
+          "raw": 3314338872,
+          "result": "2006"
+        },
+        "proxy": {
+          "seconds": 0.010561042,
+          "raw": 15701434960,
+          "result": "2003000"
+        },
+        "descriptors": {
+          "seconds": 0.017418375,
+          "raw": 13945550432,
+          "result": "20000"
+        },
+        "exec": {
+          "seconds": 0.0089395,
+          "raw": 14116238224,
+          "result": "18000"
+        },
+        "replace_generic": {
+          "seconds": 0.03536575,
+          "raw": 27151607632,
+          "result": "27000"
+        },
+        "split_match_all": {
+          "seconds": 0.041772625,
+          "raw": 24728735200,
+          "result": "14000"
+        },
+        "unicode_empty_replace": {
+          "seconds": 0.023855791,
+          "raw": 18699719752,
+          "result": "18000"
+        }
+      }
+    },
+    "ratios": {
+      "ordinary": 1.0283610658739337,
+      "indexed": 0.9891428326972855,
+      "proxy": 1.0219580274091904,
+      "descriptors": 1.0106640810129215,
+      "exec": 0.9499032935860514,
+      "replace_generic": 1.0009753110918025,
+      "split_match_all": 1.0353747242220845,
+      "unicode_empty_replace": 1.0307901566628102
+    }
+  },
+  "measurement_commands": [
+    {
+      "name": "general-after",
+      "command": [
+        "python3",
+        "rust/engine/benches/run.py",
+        "--write-baseline",
+        "--baseline",
+        "/tmp/1a-native-dispatch-after.json",
+        "--output",
+        "/tmp/1a-native-dispatch-after.json"
+      ],
+      "status": 0
+    },
+    {
+      "name": "targeted-after",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--release",
+        "--manifest-path",
+        "rust/engine/Cargo.toml",
+        "-p",
+        "ironhorse-vm",
+        "--test",
+        "property_execution_bench",
+        "--test",
+        "regexp_execution_bench",
+        "--",
+        "--ignored",
+        "--nocapture"
+      ],
+      "status": 0
+    }
+  ],
+  "validation": {
+    "locks-before": {
+      "targets": 7,
+      "passed": 47,
+      "failed": 0,
+      "ignored": 0
+    },
+    "locks-after": {
+      "targets": 7,
+      "passed": 48,
+      "failed": 0,
+      "ignored": 0
+    },
+    "ci": {
+      "targets": 185,
+      "passed": 1490,
+      "failed": 0,
+      "ignored": 26
+    },
+    "sqlite": {
+      "targets": 11,
+      "passed": 116,
+      "failed": 0,
+      "ignored": 3
+    }
+  },
+  "validation_commands": [
+    {
+      "name": "locks-after",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/engine/Cargo.toml",
+        "-p",
+        "ironhorse-vm",
+        "--test",
+        "throw_construction_sites",
+        "--test",
+        "persistence_holder_registry",
+        "--test",
+        "gc_visitation_registry",
+        "--test",
+        "allocation_admission_audit",
+        "--test",
+        "halt_label_registry",
+        "--test",
+        "dispatch_loop_control_transfer",
+        "--test",
+        "runtime_key_registry"
+      ],
+      "status": 0
+    },
+    {
+      "name": "ci",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/engine/Cargo.toml",
+        "-p",
+        "ironhorse-meter",
+        "-p",
+        "ironhorse-unicode",
+        "-p",
+        "ironhorse-vm",
+        "-p",
+        "ironhorse-snapshot",
+        "-p",
+        "ironhorse-compile",
+        "-p",
+        "ironhorse-regexp",
+        "--features",
+        "ironhorse-vm/store-integrity",
+        "--no-fail-fast"
+      ],
+      "status": 0
+    },
+    {
+      "name": "sqlite",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "ironhorse-store-sqlite"
+      ],
+      "status": 0
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--manifest-path",
+        "rust/engine/Cargo.toml",
+        "-p",
+        "ironhorse-vm",
+        "--lib",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "status": 0
+    },
+    {
+      "name": "docs",
+      "command": [
+        "cargo",
+        "doc",
+        "--locked",
+        "--manifest-path",
+        "rust/engine/Cargo.toml",
+        "-p",
+        "ironhorse-vm",
+        "--no-deps"
+      ],
+      "status": 0
+    },
+    {
+      "name": "math",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/engine/Cargo.toml",
+        "-p",
+        "ironhorse-vm",
+        "--test",
+        "math_determinism",
+        "platform_math_vector"
+      ],
+      "status": 0
+    }
+  ],
+  "baseline_commands": [
+    {
+      "name": "locks-before",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/engine/Cargo.toml",
+        "-p",
+        "ironhorse-vm",
+        "--test",
+        "throw_construction_sites",
+        "--test",
+        "persistence_holder_registry",
+        "--test",
+        "gc_visitation_registry",
+        "--test",
+        "allocation_admission_audit",
+        "--test",
+        "halt_label_registry",
+        "--test",
+        "dispatch_loop_control_transfer",
+        "--test",
+        "runtime_key_registry"
+      ],
+      "status": 0
+    },
+    {
+      "name": "general-before",
+      "command": [
+        "python3",
+        "rust/engine/benches/run.py",
+        "--write-baseline",
+        "--baseline",
+        "/tmp/1a-native-dispatch-before.json",
+        "--output",
+        "/tmp/1a-native-dispatch-before.json"
+      ],
+      "status": 0
+    },
+    {
+      "name": "targeted-before",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--release",
+        "--manifest-path",
+        "rust/engine/Cargo.toml",
+        "-p",
+        "ironhorse-vm",
+        "--test",
+        "property_execution_bench",
+        "--test",
+        "regexp_execution_bench",
+        "--",
+        "--ignored",
+        "--nocapture"
+      ],
+      "status": 0
+    }
+  ],
+  "decision": "Accepted incremental native-dispatch extraction: all 48 general and eight targeted comparisons passed the unchanged 1.25x gate. Full 1A acceptance against the original baseline remains outstanding.",
+  "parent_lines": {
+    "before": 40286,
+    "after": 33939
+  }
+}

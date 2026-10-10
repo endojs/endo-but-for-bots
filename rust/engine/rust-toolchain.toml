@@ -1,0 +1,6 @@
+[toolchain]
+# Match the shipping daemon's compiler (iroh requires Rust 1.91). CI keeps its
+# existing Rust 1.88.0 rustfmt/clippy gates to avoid unrelated formatting churn.
+channel = "1.91.1"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

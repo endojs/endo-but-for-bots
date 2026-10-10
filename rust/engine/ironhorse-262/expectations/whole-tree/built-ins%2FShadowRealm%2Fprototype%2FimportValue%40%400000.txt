@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=built-ins/ShadowRealm/prototype/importValue tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/ShadowRealm/prototype/importValue/descriptor.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/prototype/importValue/import-value.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/prototype/importValue/length.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/prototype/importValue/name.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/prototype/importValue/not-constructor.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/prototype/importValue/proto.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/prototype/importValue/specifier-tostring.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/prototype/importValue/throws-if-exportname-not-string.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/prototype/importValue/throws-if-import-value-does-not-exist.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/prototype/importValue/throws-typeerror-import-syntax-error.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/prototype/importValue/throws-typeerror-import-throws.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/prototype/importValue/validates-realm-object.js sloppy skip:feature:ShadowRealm

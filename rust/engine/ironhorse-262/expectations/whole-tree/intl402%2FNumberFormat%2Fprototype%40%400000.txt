@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=intl402/NumberFormat/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/NumberFormat/prototype/builtin.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/builtin.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/prop-desc.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/prop-desc.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/this-value-numberformat-prototype.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Intl.NumberFormat's prototype is not an object that has been initialized as an Intl.NumberFormat Expected a TypeError but got a ReferenceError"
+intl402/NumberFormat/prototype/this-value-numberformat-prototype.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Intl.NumberFormat's prototype is not an object that has been initialized as an Intl.NumberFormat Expected a TypeError but got a ReferenceError"

@@ -1,0 +1,12 @@
+# engine=ironhorse features=default corpus=language/module-code/top-level-await/syntax tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/module-code/top-level-await/syntax/while-await-expr-func-expression.js sloppy skip:unsupported-opcode:module:top-level-await
+language/module-code/top-level-await/syntax/while-await-expr-identifier.js sloppy skip:unsupported-opcode:module:top-level-await
+language/module-code/top-level-await/syntax/while-await-expr-literal-number.js sloppy skip:unsupported-opcode:module:top-level-await
+language/module-code/top-level-await/syntax/while-await-expr-literal-string.js sloppy skip:unsupported-opcode:module:top-level-await
+language/module-code/top-level-await/syntax/while-await-expr-nested.js sloppy skip:unsupported-opcode:module:top-level-await
+language/module-code/top-level-await/syntax/while-await-expr-new-expr.js sloppy skip:unsupported-opcode:module:top-level-await
+language/module-code/top-level-await/syntax/while-await-expr-null.js sloppy skip:unsupported-opcode:module:top-level-await
+language/module-code/top-level-await/syntax/while-await-expr-obj-literal.js sloppy skip:unsupported-opcode:module:top-level-await
+language/module-code/top-level-await/syntax/while-await-expr-regexp.js sloppy skip:unsupported-opcode:module:top-level-await
+language/module-code/top-level-await/syntax/while-await-expr-template-literal.js sloppy skip:unsupported-opcode:module:top-level-await
+language/module-code/top-level-await/syntax/while-await-expr-this.js sloppy skip:unsupported-opcode:module:top-level-await

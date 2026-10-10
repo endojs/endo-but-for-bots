@@ -58,6 +58,9 @@ const makePeerIncarnation = ({ debugName, onOutbound }) => {
     if (envelope.t === 'init') {
       peer === undefined || Fail`worker ${q(debugName)}: duplicate init`;
       peer = await makeWorkerPeer({
+        // Outbound replay watermarks require identical frame order. Node GC
+        // finalizers are not journaled inputs and must not inject protocol frames.
+        enableImportCollection: false,
         workerId: /** @type {string} */ (envelope.workerId),
         debugLabel: /** @type {string | undefined} */ (envelope.debugLabel),
         send: frame => {

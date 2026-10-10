@@ -1,7 +1,7 @@
 //! The parser — a transliteration of the expression grammar in
 //! `c/moddable/xs/sources/xsSyntaxical.c` at the oracle pin. It drives
-//! the [`Lexer`](crate::lexer::Lexer) pull-style and builds XS's exact
-//! AST ([`crate::ast`]) on a node stack, statement-for-statement with
+//! the [`Lexer`] pull-style and builds XS's exact
+//! AST ([`crate::Item`] and [`crate::Node`]) on a node stack, statement-for-statement with
 //! XS so the scoper and coder built on top (later stage-5 children)
 //! see the tree shapes the byte-identity bar depends on.
 //!
@@ -30,10 +30,11 @@ use crate::meter::ParseMeter;
 use crate::token::Token;
 use crate::token_flags::has_flag;
 use crate::token_flags::{
-    ASSIGN_EXPRESSION, BEGIN_EXPRESSION, CALL_EXPRESSION, EQUAL_EXPRESSION, EXPONENTIATION_EXPRESSION,
-    IDENTIFIER_NAME, POSTFIX_EXPRESSION, PREFIX_EXPRESSION, RELATIONAL_EXPRESSION, SHIFT_EXPRESSION,
-    UNARY_EXPRESSION,
+    ADDITIVE_EXPRESSION, ASSIGN_EXPRESSION, BEGIN_EXPRESSION, CALL_EXPRESSION, EQUAL_EXPRESSION,
+    EXPONENTIATION_EXPRESSION, IDENTIFIER_NAME, MULTIPLICATIVE_EXPRESSION, POSTFIX_EXPRESSION,
+    PREFIX_EXPRESSION, RELATIONAL_EXPRESSION, SHIFT_EXPRESSION, UNARY_EXPRESSION,
 };
+use ironhorse_text::SymbolName;
 
 /// A parser error, classified and located as XS's `fxReportParserError`
 /// sites are. Carries the 1-based line and a message mirroring XS's
@@ -51,6 +52,8 @@ pub struct ParseError {
 /// The classified parse failure.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ParseErrorKind {
+    /// Host compilation work allowance exhausted; not a SyntaxError.
+    MeterLimit,
     /// A lexing error surfaced while pulling a token.
     Lex(LexError),
     /// A `SyntaxError` XS raises in the parser (an early error) — the
@@ -73,50 +76,180 @@ impl std::error::Error for ParseError {}
 
 impl From<LexError> for ParseError {
     fn from(e: LexError) -> ParseError {
-        ParseError { line: e.line, kind: ParseErrorKind::Lex(e.clone()), message: e.to_string() }
+        ParseError {
+            line: e.line,
+            kind: if e.kind == crate::error::LexErrorKind::MeterLimit {
+                ParseErrorKind::MeterLimit
+            } else {
+                ParseErrorKind::Lex(e.clone())
+            },
+            message: e.kind.to_string(),
+        }
     }
 }
 
 type PResult<T> = Result<T, ParseError>;
 
+/// Run `$body`, a production's body, as one recursion point of `$cost` budget
+/// units of `$parser` (see [`PARSER_STACK_BUDGET`]): refuse with
+/// `fxCheckParserStack`'s `"stack overflow"` when the charge would exceed the
+/// budget, else charge it and release it on every return of the body, an
+/// error's included.
+///
+/// A refusal `return`s it from the enclosing function. A macro rather than a
+/// helper taking a closure: a generic `nested(cost, closure)` left the helper
+/// or the closure a frame of its own on wasm (STACK-DEPTH-REFACTOR.md D3).
+/// Each charged production is an `#[inline(never)]` wrapper whose body, a
+/// `*_inner` function it alone calls, the optimizer inlines into it, so an
+/// optimized build spends one frame per recursion point and no caller's frame
+/// grows by the body. The refusal is built in place: an out-of-line refusal
+/// changed what the optimizer inlined into `statement`, by 16 bytes a level.
+macro_rules! charged {
+    ($parser:ident, $cost:expr, $body:expr) => {{
+        if $parser.depth + $cost > $crate::parser::PARSER_STACK_BUDGET {
+            return Err($parser.error("stack overflow"));
+        }
+        $parser.depth += $cost;
+        let result = $body;
+        $parser.depth -= $cost;
+        result
+    }};
+}
+pub(crate) use charged;
+
+/// The parser's native-recursion budget, in the units `charged!`
+/// charges.
+///
+/// XS's recursive-descent parser guards its C stack with
+/// `fxCheckParserStack`, a stack-address margin that varies with the host,
+/// the thread and the build profile — so the same source is accepted on one
+/// thread and rejected on another, and a source this port accepted with
+/// optimizations aborted the whole process without them (4,000 nested
+/// parentheses, about 8 KB of text). This parser instead charges every
+/// recursion point a fixed cost by frame class and refuses past this ceiling
+/// with XS's own `SyntaxError` wording (`"stack overflow"`), so the depth at
+/// which a program is rejected is a property of the program alone and part of
+/// the release-versioned contract.
+///
+/// The classes, and what the budget admits of each on its own:
+///
+/// - a full expression-cascade re-entry — a parenthesized or bracketed
+///   operand, an array or object literal element, a call's arguments, a
+///   template substitution, an arrow body — costs [`CASCADE_COST`] plus the
+///   operand charges the cascade passes on the way down: the whole
+///   precedence cascade is re-entered, about 18 KiB of frames per level
+///   unoptimized, so about 90 levels (91 nested parentheses compile, 92 do
+///   not);
+/// - a nested statement, a `new` or a destructuring-pattern level costs
+///   [`STATEMENT_COST`]: 512 levels (3-8 KiB each unoptimized; the `new`s of
+///   a chain are consumed in a loop and hold no frame of their own);
+/// - an assignment, unary, exponentiation or conditional operand — the cheap
+///   right-recursive chains such as `a ? b : c ? d : …`, `2 ** 2 ** …` or
+///   `!!!!x` — costs [`OPERAND_COST`]: about 1,000 levels (about 2 KiB each).
+///
+/// Every corner stays under 6 MiB of host stack unoptimized and under 2 MiB
+/// optimized. A flat sequence the grammar folds into a left-nested tree
+/// (`a + a + … + a`) never recurses here; the tree it builds is bounded
+/// instead, at [`crate::ast::TREE_DEPTH_LIMIT`], as each node is built.
+/// `tests/recursion_bounds.rs` pins every boundary.
+pub const PARSER_STACK_BUDGET: u32 = 1024;
+/// Budget units for one expression-cascade re-entry (see
+/// [`PARSER_STACK_BUDGET`]).
+pub const CASCADE_COST: u32 = 8;
+/// Budget units for one nested statement, `new` operand or binding-pattern
+/// level (see [`PARSER_STACK_BUDGET`]).
+pub const STATEMENT_COST: u32 = 2;
+/// Budget units for one assignment, unary or conditional operand level (see
+/// [`PARSER_STACK_BUDGET`]).
+pub const OPERAND_COST: u32 = 1;
+
+/// The rungs of XS's binary ladder, from `fxCoalesceExpression` (rung 0) to
+/// `fxMultiplicativeExpression` (rung 10), each parsing the one above it for
+/// its operands; [`Parser::binary_expression`] climbs them.
+const RUNGS: usize = 11;
+/// `fxRelationalExpression`'s rung.
+const RELATIONAL_RUNG: usize = 7;
+
+/// Whether `token` continues rung `rung` of the binary ladder: the test of
+/// the rung's operator loop.
+fn continues_rung(token: Token, rung: usize) -> bool {
+    match rung {
+        0 => token == Token::Coalesce,
+        1 => token == Token::Or,
+        2 => token == Token::And,
+        3 => token == Token::BitOr,
+        4 => token == Token::BitXor,
+        5 => token == Token::BitAnd,
+        6 => has_flag(token, EQUAL_EXPRESSION),
+        RELATIONAL_RUNG => has_flag(token, RELATIONAL_EXPRESSION),
+        8 => has_flag(token, SHIFT_EXPRESSION),
+        9 => has_flag(token, ADDITIVE_EXPRESSION),
+        10 => has_flag(token, MULTIPLICATIVE_EXPRESSION),
+        _ => unreachable!("the binary ladder has {RUNGS} rungs"),
+    }
+}
+
+/// Where the `fxRelationalExpression` of a binary climb stands.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Relational {
+    /// Entered, its first operand not yet returned: the `for`-header test
+    /// comes next.
+    Entered,
+    /// In its operator loop.
+    Looping,
+    /// Not looping: entered at `#x in`, which parses its right operand and
+    /// returns, or returned by the `for`-header test.
+    NotLooping,
+}
+
 /// Return the line of the second `__proto__:` setter in an object literal.
 /// Converted assignment/parameter covers are `ObjectBinding` nodes, so only
 /// nodes that remain `Object` are subject to Annex B.3.1.
-fn duplicate_proto_setter_line(item: &Item) -> Option<u32> {
-    match item {
-        Item::Node(node) => {
-            if node.token == Token::Object {
-                let mut found = false;
-                if let Some(Item::List(properties)) = node.children.first() {
-                    for property in properties {
-                        if let Item::Node(property) = property {
-                            let is_proto_setter = property.token == Token::Property
-                                && property.flags & flags::SHORTHAND == 0
-                                && matches!(
-                                    property.children.first(),
-                                    Some(Item::Symbol(symbol)) if symbol == "__proto__"
-                                );
-                            if is_proto_setter {
-                                if found {
-                                    return Some(property.line);
+fn duplicate_proto_setter_line(root: &Item) -> Option<u32> {
+    // The recursion's pre-order search as a worklist (STACK-DEPTH-REFACTOR.md
+    // D1b): children are pushed in reverse, so the first duplicate found is
+    // the same one.
+    let mut stack: Vec<&Item> = vec![root];
+    while let Some(item) = stack.pop() {
+        match item {
+            Item::Node(node) => {
+                if node.token == Token::Object {
+                    let mut found = false;
+                    if let Some(Item::List(properties)) = node.children.first() {
+                        for property in properties {
+                            if let Item::Node(property) = property {
+                                let is_proto_setter = property.token == Token::Property
+                                    && property.flags & flags::SHORTHAND == 0
+                                    && matches!(
+                                        property.children.first(),
+                                        Some(Item::Symbol(symbol)) if SymbolName::from_units(symbol) == "__proto__"
+                                    );
+                                if is_proto_setter {
+                                    if found {
+                                        return Some(property.line);
+                                    }
+                                    found = true;
                                 }
-                                found = true;
                             }
                         }
                     }
                 }
+                stack.extend(node.children.iter().rev());
             }
-            node.children.iter().find_map(duplicate_proto_setter_line)
+            Item::List(items) => stack.extend(items.iter().rev()),
+            Item::Symbol(_) | Item::Null => {}
         }
-        Item::List(items) => items.iter().find_map(duplicate_proto_setter_line),
-        Item::Symbol(_) | Item::Null => None,
     }
+    None
 }
 
 /// The parser: the token window (`states[0]`/`states[1]`), the mode-flag
 /// word (`parser->flags`), and the node-build stack (`parser->root`).
-pub struct Parser {
-    lexer: Lexer,
+pub struct Parser<'a> {
+    // Interior mutability also serves off-stack cover-grammar constructors.
+    // None records exhaustion; no tree with exhausted identities is published.
+    next_node_id: std::cell::Cell<Option<u32>>,
+    lexer: Lexer<'a>,
     /// `parser->states[0]` — the current token.
     cur: Lexeme,
     /// `parser->states[1..=2]` — the token lookahead window. Most grammar
@@ -132,13 +265,39 @@ pub struct Parser {
     /// `async` method key), read by the object/class member loops after a
     /// [`Self::property_name`] call.
     property_name_async_flag: u32,
+    /// Budget units in use by the recursion points currently on the native
+    /// stack (see [`PARSER_STACK_BUDGET`] and `charged!`), and by the
+    /// `new`s of a chain [`Self::new_expression`] has entered.
+    depth: u32,
 }
 
-impl Parser {
+impl<'a> Parser<'a> {
     /// A parser over `source`. `strict` seeds `mxStrictFlag`; `module`
     /// seeds the module context (`await` reserved at top level via the
     /// async flag, as XS does for a module program).
-    pub fn new(source: &str, strict: bool, module: bool) -> PResult<Parser> {
+    pub fn new(source: &str, strict: bool, module: bool) -> PResult<Parser<'a>> {
+        Self::with_meter(source, strict, module, ParseMeter::new())
+    }
+
+    pub(crate) fn with_meter(
+        source: &str,
+        strict: bool,
+        module: bool,
+        meter: ParseMeter<'a>,
+    ) -> PResult<Parser<'a>> {
+        Self::with_lexer(Lexer::with_meter(source, meter), strict, module)
+    }
+
+    pub(crate) fn with_units(
+        source: &[u16],
+        strict: bool,
+        module: bool,
+        meter: ParseMeter<'a>,
+    ) -> PResult<Parser<'a>> {
+        Self::with_lexer(Lexer::with_units(source, meter), strict, module)
+    }
+
+    fn with_lexer(mut lexer: Lexer<'a>, strict: bool, module: bool) -> PResult<Parser<'a>> {
         let mut flags = 0u32;
         if strict {
             flags |= flags::STRICT;
@@ -146,7 +305,6 @@ impl Parser {
         if module {
             flags |= flags::STRICT | flags::ASYNC;
         }
-        let mut lexer = Lexer::new(source);
         lexer.set_strict(flags & flags::STRICT != 0);
         lexer.set_async(flags & flags::ASYNC != 0);
         lexer.set_generator(flags & flags::GENERATOR != 0);
@@ -155,6 +313,7 @@ impl Parser {
         lexer.skip_shebang();
         let cur = lexer.next()?;
         Ok(Parser {
+            next_node_id: std::cell::Cell::new(Some(0)),
             lexer,
             cur,
             ahead: None,
@@ -162,7 +321,44 @@ impl Parser {
             flags,
             stack: Vec::new(),
             property_name_async_flag: 0,
+            depth: 0,
         })
+    }
+
+    /// Seed the program-level flags a direct eval inherits from its caller
+    /// (`super`, `new.target`): XS's `fxRunEval` passes them to the parse.
+    pub(crate) fn add_flags(&mut self, flags: u32) {
+        self.flags |= flags;
+    }
+
+    /// Whether the parsed program refers to `arguments` outside any
+    /// non-arrow function.
+    pub(crate) fn uses_arguments(&self) -> bool {
+        self.flags & flags::ARGUMENTS != 0
+    }
+
+    /// Allocate identities at every construction site, including nodes built
+    /// off the stack. IDs need not be contiguous after cover-grammar rewrites.
+    fn new_node(
+        &self,
+        token: Token,
+        line: u32,
+        flags: u32,
+        children: Vec<Item>,
+        value: Value,
+    ) -> Node {
+        let id = self.next_node_id.get().unwrap_or(u32::MAX);
+        self.next_node_id.set(id.checked_add(1));
+        let mut node = Node::new(token, line, flags, children, value);
+        node.id = id;
+        node
+    }
+
+    fn finish_tree(&self, root: Item) -> PResult<Item> {
+        if self.next_node_id.get().is_none() {
+            return Err(self.error("too many AST nodes"));
+        }
+        Ok(root)
     }
 
     /// Parse a single expression (an `AssignmentExpression` — XS's
@@ -171,7 +367,8 @@ impl Parser {
     pub fn parse_assignment_expression(&mut self) -> PResult<Item> {
         self.assignment_expression()?;
         self.expect_eof()?;
-        Ok(self.pop())
+        let root = self.pop();
+        self.finish_tree(root)
     }
 
     /// Parse a full comma expression (`fxCommaExpression`) to end of
@@ -179,12 +376,13 @@ impl Parser {
     pub fn parse_comma_expression(&mut self) -> PResult<Item> {
         self.comma_expression()?;
         self.expect_eof()?;
-        Ok(self.pop())
+        let root = self.pop();
+        self.finish_tree(root)
     }
 
     /// The parse meter (ironhorse's own frozen cost table), for telemetry
     /// after a parse.
-    pub fn meter(&self) -> &ParseMeter {
+    pub fn meter(&self) -> &ParseMeter<'a> {
         self.lexer.meter()
     }
 
@@ -198,7 +396,11 @@ impl Parser {
     // --- errors ---
 
     fn error(&self, message: &str) -> ParseError {
-        ParseError { line: self.cur.line, kind: ParseErrorKind::Syntax, message: message.to_string() }
+        ParseError {
+            line: self.cur.line,
+            kind: ParseErrorKind::Syntax,
+            message: message.to_string(),
+        }
     }
 
     fn unsupported_error(&self, message: &str) -> ParseError {
@@ -207,6 +409,13 @@ impl Parser {
             kind: ParseErrorKind::Unsupported,
             message: format!("unsupported: {message}"),
         }
+    }
+
+    /// Preserve every UTF-16 code unit in a literal property name.
+    fn string_property_name(&self) -> PResult<SymbolName> {
+        Ok(SymbolName::from_units(
+            self.cur.string.as_deref().unwrap_or_default(),
+        ))
     }
 
     // --- token window (fxGetNextToken / fxLookAheadOnce / fxMatchToken) ---
@@ -262,7 +471,9 @@ impl Parser {
     /// `fxIsKeyword` — is the current token an (unescaped) identifier
     /// spelled `word`?
     fn is_keyword(&self, word: &str) -> PResult<bool> {
-        if self.cur.token == Token::Identifier && self.cur.symbol.as_deref() == Some(word) {
+        if self.cur.token == Token::Identifier
+            && self.cur.symbol.as_ref().and_then(SymbolName::as_str) == Some(word)
+        {
             if self.cur.escaped {
                 return Err(self.error("escaped keyword"));
             }
@@ -286,16 +497,31 @@ impl Parser {
         self.stack.push(Item::Null);
     }
 
-    fn push_symbol(&mut self, symbol: String) {
-        self.stack.push(Item::Symbol(symbol));
+    fn push_symbol(&mut self, symbol: impl Into<SymbolName>) {
+        let symbol = symbol.into();
+        self.stack.push(Item::Symbol(symbol.to_units()));
     }
 
+    #[inline(never)]
     fn push_integer(&mut self, value: i32, line: u32) {
-        self.push(Item::Node(Box::new(Node { token: Token::Integer, line, flags: 0, children: Vec::new(), value: Value::Integer(value) })));
+        self.push(Item::Node(Box::new(self.new_node(
+            Token::Integer,
+            line,
+            0,
+            Vec::new(),
+            Value::Integer(value),
+        ))));
     }
 
+    #[inline(never)]
     fn push_number(&mut self, value: f64, line: u32) {
-        self.push(Item::Node(Box::new(Node { token: Token::Number, line, flags: 0, children: Vec::new(), value: Value::Number(value) })));
+        self.push(Item::Node(Box::new(self.new_node(
+            Token::Number,
+            line,
+            0,
+            Vec::new(),
+            Value::Number(value),
+        ))));
     }
 
     fn push_string(&mut self, value: Vec<u16>, line: u32, escaped: bool) {
@@ -306,18 +532,19 @@ impl Parser {
     /// `mxStringLegacyFlag` (bit 2) when its escape scan saw a legacy
     /// octal or `\8`/`\9`. `fxStringNodeHoist` turns that into a
     /// SyntaxError in a strict scope; sloppy code keeps the value.
+    #[inline(never)]
     fn push_string_legacy(&mut self, value: Vec<u16>, line: u32, escaped: bool, legacy: bool) {
         let mut flags = if escaped { 1 } else { 0 };
         if legacy {
             flags |= flags::STRING_LEGACY;
         }
-        self.push(Item::Node(Box::new(Node {
-            token: Token::String,
+        self.push(Item::Node(Box::new(self.new_node(
+            Token::String,
             line,
             flags,
-            children: Vec::new(),
-            value: Value::Str(value),
-        })));
+            Vec::new(),
+            Value::Str(value),
+        ))));
     }
 
     /// `fxPushStringNode` sets `flags = states[0].escaped`
@@ -325,18 +552,19 @@ impl Parser {
     /// carries `mxStringErrorFlag` (bit 1) when its escape scan failed, so
     /// the coder can turn it into `undefined` (tagged) or a SyntaxError
     /// (everywhere else). Kept faithful; not surfaced in the dump.
+    #[inline(never)]
     fn push_string_flagged(&mut self, value: Vec<u16>, line: u32, escaped: bool, error: bool) {
         let mut flags = if escaped { 1 } else { 0 };
         if error {
             flags |= flags::STRING_ERROR;
         }
-        self.push(Item::Node(Box::new(Node {
-            token: Token::String,
+        self.push(Item::Node(Box::new(self.new_node(
+            Token::String,
             line,
             flags,
-            children: Vec::new(),
-            value: Value::Str(value),
-        })));
+            Vec::new(),
+            Value::Str(value),
+        ))));
     }
 
     /// An untagged template's cooked value is coded through `fxStringNodeCode`,
@@ -345,9 +573,14 @@ impl Parser {
     /// octal in template position). A *tagged* template never codes the cooked
     /// slot (it emits `undefined` instead), so this fires only for the untagged
     /// primary-position template just built on the stack top.
+    #[inline(never)]
     fn reject_untagged_template_cooked_error(&self) -> PResult<()> {
-        let Some(Item::Node(node)) = self.stack.last() else { return Ok(()) };
-        let Some(Item::List(items)) = node.children.get(1) else { return Ok(()) };
+        let Some(Item::Node(node)) = self.stack.last() else {
+            return Ok(());
+        };
+        let Some(Item::List(items)) = node.children.get(1) else {
+            return Ok(());
+        };
         for item in items {
             if let Item::Node(mid) = item {
                 if mid.token == Token::TemplateMiddle {
@@ -362,12 +595,26 @@ impl Parser {
         Ok(())
     }
 
+    #[inline(never)]
     fn push_raw(&mut self, value: Vec<u16>, line: u32) {
-        self.push(Item::Node(Box::new(Node { token: Token::String, line, flags: 0, children: Vec::new(), value: Value::Str(value) })));
+        self.push(Item::Node(Box::new(self.new_node(
+            Token::String,
+            line,
+            0,
+            Vec::new(),
+            Value::Str(value),
+        ))));
     }
 
+    #[inline(never)]
     fn push_bigint(&mut self, value: crate::lexer::BigIntLiteral, line: u32) {
-        self.push(Item::Node(Box::new(Node { token: Token::Bigint, line, flags: 0, children: Vec::new(), value: Value::BigInt(value) })));
+        self.push(Item::Node(Box::new(self.new_node(
+            Token::Bigint,
+            line,
+            0,
+            Vec::new(),
+            Value::BigInt(value),
+        ))));
     }
 
     /// `fxPushNodeStruct` — pop `count` stack items and build a node of
@@ -380,7 +627,22 @@ impl Parser {
         }
         let start = self.stack.len() - count;
         let children: Vec<Item> = self.stack.split_off(start);
-        let node = Node { token, line, flags: self.flags & flags::INHERITED, children, value: Value::None };
+        let node = self.new_node(
+            token,
+            line,
+            self.flags & flags::INHERITED,
+            children,
+            Value::None,
+        );
+        // The tree-depth invariant: no node deeper than
+        // [`crate::ast::TREE_DEPTH_LIMIT`] is ever built, so no later pass —
+        // nor the tree's own drop glue — recurses past it. This is where a
+        // flat run the grammar folds into a left-nested chain (the binary
+        // rungs, member and call chains) grows one level per operand without
+        // any parser recursion to charge.
+        if node.depth > crate::ast::TREE_DEPTH_LIMIT {
+            return Err(self.error("stack overflow"));
+        }
         self.push(Item::Node(Box::new(node)));
         Ok(())
     }
@@ -422,21 +684,28 @@ impl Parser {
     /// exactly as `fxPushNodeStruct` would (used by the off-stack
     /// cover-grammar binding conversions).
     fn new_inherited_node(&self, token: Token, line: u32, children: Vec<Item>) -> Item {
-        Item::Node(Box::new(Node { token, line, flags: self.flags & flags::INHERITED, children, value: Value::None }))
+        Item::Node(Box::new(self.new_node(
+            token,
+            line,
+            self.flags & flags::INHERITED,
+            children,
+            Value::None,
+        )))
     }
 
     /// `fxDefineNodeNew(DEFINE, symbol)` + `node->initializer = pop`: pop
     /// the function/value on top and wrap it in a `Define` node keyed by
     /// `symbol`.
-    fn push_define(&mut self, symbol: String, line: u32) {
+    fn push_define(&mut self, symbol: impl Into<SymbolName>, line: u32) {
+        let symbol = symbol.into();
         let init = self.pop();
-        self.push(Item::Node(Box::new(Node {
-            token: Token::Define,
+        self.push(Item::Node(Box::new(self.new_node(
+            Token::Define,
             line,
-            flags: 0,
-            children: vec![Item::Symbol(symbol), init],
-            value: Value::None,
-        })));
+            0,
+            vec![Item::Symbol(symbol.to_units()), init],
+            Value::None,
+        ))));
     }
 
     /// Push an already-collected list of items as a `List` slot (the
@@ -449,7 +718,10 @@ impl Parser {
     /// `parser->states[1].token` — the one-token lookahead's kind, or
     /// [`Token::NoToken`] if no lookahead is buffered.
     fn ahead_token(&self) -> Token {
-        self.ahead.as_ref().map(|s| s.token).unwrap_or(Token::NoToken)
+        self.ahead
+            .as_ref()
+            .map(|s| s.token)
+            .unwrap_or(Token::NoToken)
     }
 
     /// `parser->states[1].crlf` — whether a line terminator precedes the
@@ -459,16 +731,19 @@ impl Parser {
     }
 
     fn ahead2_token(&self) -> Token {
-        self.ahead2.as_ref().map(|s| s.token).unwrap_or(Token::NoToken)
+        self.ahead2
+            .as_ref()
+            .map(|s| s.token)
+            .unwrap_or(Token::NoToken)
     }
 
     /// The symbol of the top-of-stack `Access` node (its `child[0]`), if
     /// any.
-    fn top_access_symbol(&self) -> Option<String> {
+    fn top_access_symbol(&self) -> Option<SymbolName> {
         if let Some(Item::Node(node)) = self.stack.last() {
             if node.token == Token::Access {
                 if let Some(Item::Symbol(s)) = node.children.first() {
-                    return Some(s.clone());
+                    return Some(SymbolName::from_units(s));
                 }
             }
         }
@@ -487,9 +762,8 @@ impl Parser {
 
     /// `fxCheckReference` — is the top-of-stack a valid assignment
     /// target for `token`? Unwraps a single-item `Expressions` cover to
-    /// its reference, as XS does. Destructuring targets (Array/Object
-    /// converted to bindings) are deferred, so an assignment into one
-    /// reports [`ParseErrorKind::Unsupported`].
+    /// its reference, as XS does. Plain assignment also converts Array/Object
+    /// covers into assignment patterns; compound assignment does not.
     fn check_reference(&mut self, token: Token) -> PResult<bool> {
         // Unwrap a parenthesized single reference: (x) = …
         if self.top_token() == Some(Token::Expressions) {
@@ -510,7 +784,10 @@ impl Parser {
                 }
                 Ok(true)
             }
-            Some(Token::Member) | Some(Token::MemberAt) | Some(Token::PrivateMember) | Some(Token::Undefined) => Ok(true),
+            Some(Token::Member)
+            | Some(Token::MemberAt)
+            | Some(Token::PrivateMember)
+            | Some(Token::Undefined) => Ok(true),
             _ => {
                 if token == Token::Assign {
                     if t == Some(Token::Array) {
@@ -537,10 +814,12 @@ impl Parser {
     fn unwrap_reference_cover(&mut self) {
         loop {
             let single = match self.stack.last() {
-                Some(Item::Node(node)) if node.token == Token::Expressions => match node.children.first() {
-                    Some(Item::List(items)) if items.len() == 1 => Some(items[0].clone()),
-                    _ => None,
-                },
+                Some(Item::Node(node)) if node.token == Token::Expressions => {
+                    match node.children.first() {
+                        Some(Item::List(items)) if items.len() == 1 => Some(items[0].clone()),
+                        _ => None,
+                    }
+                }
                 _ => None,
             };
             let Some(item) = single else { return };
@@ -549,7 +828,10 @@ impl Parser {
                 _ => None,
             };
             match inner_token {
-                Some(Token::Access) | Some(Token::Member) | Some(Token::MemberAt) | Some(Token::PrivateMember)
+                Some(Token::Access)
+                | Some(Token::Member)
+                | Some(Token::MemberAt)
+                | Some(Token::PrivateMember)
                 | Some(Token::Undefined) => {
                     self.pop();
                     self.push(item);
@@ -583,12 +865,13 @@ impl Parser {
 
     /// `fxCheckStrictSymbol` — `arguments`/`eval`/`yield` are invalid
     /// reference names in strict mode; `yield` also in a generator.
-    fn check_strict_symbol(&self, symbol: &str) -> PResult<()> {
+    fn check_strict_symbol(&self, symbol: impl Into<SymbolName>) -> PResult<()> {
+        let symbol = symbol.into();
         if self.flags & flags::STRICT != 0 {
-            match symbol {
-                "arguments" => return Err(self.error("invalid arguments (strict mode)")),
-                "eval" => return Err(self.error("invalid eval (strict mode)")),
-                "yield" => return Err(self.error("invalid yield (strict mode)")),
+            match symbol.as_str() {
+                Some("arguments") => return Err(self.error("invalid arguments (strict mode)")),
+                Some("eval") => return Err(self.error("invalid eval (strict mode)")),
+                Some("yield") => return Err(self.error("invalid yield (strict mode)")),
                 _ => {}
             }
         } else if self.flags & flags::YIELD != 0 && symbol == "yield" {
@@ -622,8 +905,15 @@ impl Parser {
         Ok(())
     }
 
-    /// `fxAssignmentExpression`.
+    /// `fxAssignmentExpression`. One [`OPERAND_COST`] recursion point: the
+    /// right-recursive chains (`a = b = c`, `a ? b : c ? d : e`, the
+    /// element/argument/substitution positions) all pass through here.
+    #[inline(never)]
     fn assignment_expression(&mut self) -> PResult<()> {
+        charged!(self, OPERAND_COST, self.assignment_expression_inner())
+    }
+
+    fn assignment_expression_inner(&mut self) -> PResult<()> {
         if self.cur.token == Token::Yield {
             return self.yield_expression();
         }
@@ -643,7 +933,7 @@ impl Parser {
 
     /// `fxConditionalExpression`.
     fn conditional_expression(&mut self) -> PResult<()> {
-        self.coalesce_expression()?;
+        self.binary_expression()?;
         if self.cur.token == Token::QuestionMark {
             let line = self.cur.line;
             self.check_arrow_function(1)?;
@@ -659,169 +949,104 @@ impl Parser {
         Ok(())
     }
 
-    /// A left-associative binary ladder rung: parse `next`, then while
-    /// the current token has `class_flag`, consume it and another `next`
-    /// and fold a 2-child node of that token. Mirrors the shape shared by
-    /// `fxOrExpression` … `fxShiftExpression`.
-    fn binary_ladder(
-        &mut self,
-        class_flag: u32,
-        next: fn(&mut Self) -> PResult<()>,
-    ) -> PResult<()> {
-        next(self)?;
-        while has_flag(self.cur.token, class_flag) {
+    /// `fxCoalesceExpression` through `fxMultiplicativeExpression`, XS's 11
+    /// left-associative rungs, climbed in one loop (STACK-DEPTH-REFACTOR.md
+    /// D3).
+    ///
+    /// In XS each rung is a production that parses the rung above it, then
+    /// loops while the current token continues it, consuming the operator,
+    /// parsing another operand of the rung above, checking for an arrow and
+    /// folding a 2-child node. So an operand of the ladder held 11 frames.
+    /// Here `pending[r]` is the operator rung `r`'s loop holds while its right
+    /// operand is parsed, the only state a rung's frame carried, and after
+    /// each operand the loop returns through the rungs from the top down as
+    /// the frames did: each folds its pending operator, then the first rung
+    /// the current token continues consumes it and its right operand enters
+    /// the rungs above it. Every token, fold, arrow check and error comes in
+    /// the ladder's order, and none of the rungs is charged, as none was.
+    ///
+    /// `fxRelationalExpression`'s two quirks are kept. Entered at a `#x`, it
+    /// parses `#x in ShiftExpression` and returns without looping. In a `for`
+    /// header (`mxForFlag`), it returns after its first operand when an `in`
+    /// or `of` follows, though its loop consumes an `in` after a relational
+    /// operator.
+    #[inline(never)]
+    fn binary_expression(&mut self) -> PResult<()> {
+        let mut pending: [Option<(Token, u32)>; RUNGS] = [None; RUNGS];
+        // The rung whose production the next operand is parsed for: rungs
+        // `entry..` are entered, and the ones below it hold their place.
+        let mut entry = 0;
+        let mut relational = Relational::Entered;
+        loop {
+            if entry <= RELATIONAL_RUNG {
+                relational = Relational::Entered;
+                if self.cur.token == Token::PrivateIdentifier {
+                    let line = self.cur.line;
+                    let sym = self.cur.symbol.clone().unwrap_or_default();
+                    self.push_symbol(sym);
+                    self.get_next_token()?;
+                    self.match_token(Token::In)?;
+                    if self.flags & flags::FOR != 0 {
+                        return Err(self.error("invalid in"));
+                    }
+                    // The `ShiftExpression` is parsed as a right operand of
+                    // the relational rung, and folded there.
+                    pending[RELATIONAL_RUNG] = Some((Token::PrivateIdentifier, line));
+                    relational = Relational::NotLooping;
+                }
+            }
+            self.exponentiation_expression()?;
             let token = self.cur.token;
-            let line = self.cur.line;
-            self.get_next_token()?;
-            next(self)?;
-            self.check_arrow_function(2)?;
-            self.push_node_struct(2, token, line)?;
+            let mut rung = RUNGS;
+            entry = loop {
+                if rung == 0 {
+                    return Ok(());
+                }
+                rung -= 1;
+                if let Some((operator, line)) = pending[rung].take() {
+                    self.check_arrow_function(2)?;
+                    self.push_node_struct(2, operator, line)?;
+                }
+                if rung == RELATIONAL_RUNG {
+                    if relational == Relational::Entered {
+                        relational = Relational::Looping;
+                        if self.flags & flags::FOR != 0
+                            && (token == Token::In || self.is_keyword("of")?)
+                        {
+                            relational = Relational::NotLooping;
+                        }
+                    }
+                    if relational == Relational::NotLooping {
+                        continue;
+                    }
+                }
+                if continues_rung(token, rung) {
+                    let line = self.cur.line;
+                    if rung == RELATIONAL_RUNG {
+                        self.match_token(token)?;
+                    } else {
+                        self.get_next_token()?;
+                    }
+                    pending[rung] = Some((token, line));
+                    break rung + 1;
+                }
+            };
         }
-        Ok(())
-    }
-
-    /// `fxCoalesceExpression`.
-    fn coalesce_expression(&mut self) -> PResult<()> {
-        self.or_expression()?;
-        while self.cur.token == Token::Coalesce {
-            let line = self.cur.line;
-            self.get_next_token()?;
-            self.or_expression()?;
-            self.check_arrow_function(2)?;
-            self.push_node_struct(2, Token::Coalesce, line)?;
-        }
-        Ok(())
-    }
-
-    /// `fxOrExpression`.
-    fn or_expression(&mut self) -> PResult<()> {
-        self.and_expression()?;
-        while self.cur.token == Token::Or {
-            let line = self.cur.line;
-            self.get_next_token()?;
-            self.and_expression()?;
-            self.check_arrow_function(2)?;
-            self.push_node_struct(2, Token::Or, line)?;
-        }
-        Ok(())
-    }
-
-    /// `fxAndExpression`.
-    fn and_expression(&mut self) -> PResult<()> {
-        self.bit_or_expression()?;
-        while self.cur.token == Token::And {
-            let line = self.cur.line;
-            self.get_next_token()?;
-            self.bit_or_expression()?;
-            self.check_arrow_function(2)?;
-            self.push_node_struct(2, Token::And, line)?;
-        }
-        Ok(())
-    }
-
-    /// `fxBitOrExpression`.
-    fn bit_or_expression(&mut self) -> PResult<()> {
-        self.bit_xor_expression()?;
-        while self.cur.token == Token::BitOr {
-            let line = self.cur.line;
-            self.get_next_token()?;
-            self.bit_xor_expression()?;
-            self.check_arrow_function(2)?;
-            self.push_node_struct(2, Token::BitOr, line)?;
-        }
-        Ok(())
-    }
-
-    /// `fxBitXorExpression`.
-    fn bit_xor_expression(&mut self) -> PResult<()> {
-        self.bit_and_expression()?;
-        while self.cur.token == Token::BitXor {
-            let line = self.cur.line;
-            self.get_next_token()?;
-            self.bit_and_expression()?;
-            self.check_arrow_function(2)?;
-            self.push_node_struct(2, Token::BitXor, line)?;
-        }
-        Ok(())
-    }
-
-    /// `fxBitAndExpression`.
-    fn bit_and_expression(&mut self) -> PResult<()> {
-        self.equal_expression()?;
-        while self.cur.token == Token::BitAnd {
-            let line = self.cur.line;
-            self.get_next_token()?;
-            self.equal_expression()?;
-            self.check_arrow_function(2)?;
-            self.push_node_struct(2, Token::BitAnd, line)?;
-        }
-        Ok(())
-    }
-
-    /// `fxEqualExpression`.
-    fn equal_expression(&mut self) -> PResult<()> {
-        self.binary_ladder(EQUAL_EXPRESSION, Self::relational_expression)
-    }
-
-    /// `fxRelationalExpression` — including the `#private in obj` form
-    /// and the `for`-header `in`/`of` short-circuit.
-    fn relational_expression(&mut self) -> PResult<()> {
-        if self.cur.token == Token::PrivateIdentifier {
-            let line = self.cur.line;
-            let sym = self.cur.symbol.clone().unwrap_or_default();
-            self.push_symbol(sym);
-            self.get_next_token()?;
-            self.match_token(Token::In)?;
-            if self.flags & flags::FOR != 0 {
-                return Err(self.error("invalid in"));
-            }
-            self.shift_expression()?;
-            self.check_arrow_function(2)?;
-            self.push_node_struct(2, Token::PrivateIdentifier, line)?;
-        } else {
-            self.shift_expression()?;
-            if self.flags & flags::FOR != 0
-                && (self.cur.token == Token::In || self.is_keyword("of")?)
-            {
-                return Ok(());
-            }
-            while has_flag(self.cur.token, RELATIONAL_EXPRESSION) {
-                let token = self.cur.token;
-                let line = self.cur.line;
-                self.match_token(token)?;
-                self.shift_expression()?;
-                self.check_arrow_function(2)?;
-                self.push_node_struct(2, token, line)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// `fxShiftExpression`.
-    fn shift_expression(&mut self) -> PResult<()> {
-        self.binary_ladder(SHIFT_EXPRESSION, Self::additive_expression)
-    }
-
-    /// `fxAdditiveExpression`.
-    fn additive_expression(&mut self) -> PResult<()> {
-        self.binary_ladder(
-            crate::token_flags::ADDITIVE_EXPRESSION,
-            Self::multiplicative_expression,
-        )
-    }
-
-    /// `fxMultiplicativeExpression`.
-    fn multiplicative_expression(&mut self) -> PResult<()> {
-        self.binary_ladder(
-            crate::token_flags::MULTIPLICATIVE_EXPRESSION,
-            Self::exponentiation_expression,
-        )
     }
 
     /// `fxExponentiationExpression` — right-associative, and a leading
     /// unary operand cannot be an exponentiation base (`-x ** y` is an
     /// early error handled by routing to `fxUnaryExpression`).
+    /// `fxExponentiationExpression`. One [`OPERAND_COST`] recursion point:
+    /// `**` is right-associative, so `2 ** 2 ** …` recurses here per operand
+    /// — after the charged operand production has already returned, so this
+    /// production must charge for itself.
+    #[inline(never)]
     fn exponentiation_expression(&mut self) -> PResult<()> {
+        charged!(self, OPERAND_COST, self.exponentiation_expression_inner())
+    }
+
+    fn exponentiation_expression_inner(&mut self) -> PResult<()> {
         if has_flag(self.cur.token, UNARY_EXPRESSION) {
             self.unary_expression()
         } else {
@@ -838,8 +1063,14 @@ impl Parser {
         }
     }
 
-    /// `fxUnaryExpression` — `+ - ! ~ typeof void delete await`.
+    /// `fxUnaryExpression` — `+ - ! ~ typeof void delete await`. One
+    /// [`OPERAND_COST`] recursion point (`!!!!x` recurses here per operator).
+    #[inline(never)]
     fn unary_expression(&mut self) -> PResult<()> {
+        charged!(self, OPERAND_COST, self.unary_expression_inner())
+    }
+
+    fn unary_expression_inner(&mut self) -> PResult<()> {
         if has_flag(self.cur.token, UNARY_EXPRESSION) {
             let token = self.cur.token;
             let line = self.cur.line;
@@ -870,8 +1101,13 @@ impl Parser {
         }
     }
 
-    /// `fxPrefixExpression` — `++ --`.
+    /// `fxPrefixExpression` — `++ --`. One [`OPERAND_COST`] recursion point.
+    #[inline(never)]
     fn prefix_expression(&mut self) -> PResult<()> {
+        charged!(self, OPERAND_COST, self.prefix_expression_inner())
+    }
+
+    fn prefix_expression_inner(&mut self) -> PResult<()> {
         if has_flag(self.cur.token, PREFIX_EXPRESSION) {
             let token = self.cur.token;
             let line = self.cur.line;
@@ -906,8 +1142,18 @@ impl Parser {
     }
 
     /// `fxCallExpression` — the member / call / optional-chaining /
-    /// tagged-template postfix loop.
+    /// tagged-template postfix loop. The [`CASCADE_COST`] recursion point:
+    /// every descent of the precedence cascade reaches here exactly once
+    /// before a primary expression re-enters the cascade (a parenthesized
+    /// operand, a literal element, an argument, a template substitution, an
+    /// arrow body), so this is where a nesting level's full cascade of frames
+    /// is charged.
+    #[inline(never)]
     fn call_expression(&mut self) -> PResult<()> {
+        charged!(self, CASCADE_COST, self.call_expression_inner())
+    }
+
+    fn call_expression_inner(&mut self) -> PResult<()> {
         let chain_line = self.cur.line;
         self.literal_expression(false)?;
         if has_flag(self.cur.token, CALL_EXPRESSION) {
@@ -934,8 +1180,12 @@ impl Parser {
                         }
                     }
                     Token::LeftBracket => {
+                        // `MemberExpression [ Expression[+In] ]`.
+                        let saved = self.flags & flags::FOR;
+                        self.flags &= !flags::FOR;
                         self.get_next_token()?;
                         self.comma_expression()?;
+                        self.flags |= saved;
                         self.push_node_struct(2, Token::MemberAt, line)?;
                         self.match_token(Token::RightBracket)?;
                     }
@@ -946,9 +1196,14 @@ impl Parser {
                         // enclosing arrow (`fxArrowExpression`) onto the nearest
                         // non-arrow function node — the parse-time half of the
                         // enclosing-function synthetic capture-closure fold. The
-                        // scoper's `hoist_call` sets the *scope* eval poison; this
+                        // scoper's hoist `Call` arm sets the *scope* eval poison; this
                         // sets the *node* flag the scoper never wired.
-                        if self.top_access_symbol().as_deref() == Some("eval") {
+                        if self
+                            .top_access_symbol()
+                            .as_ref()
+                            .and_then(SymbolName::as_str)
+                            == Some("eval")
+                        {
                             self.flags |= flags::EVAL;
                         }
                         self.parameters()?;
@@ -994,9 +1249,13 @@ impl Parser {
                                 self.get_next_token()?;
                             }
                             Token::LeftBracket => {
+                                // `OptionalChain [ Expression[+In] ]`.
+                                let saved = self.flags & flags::FOR;
+                                self.flags &= !flags::FOR;
                                 self.push_node_struct(1, Token::Option, line)?;
                                 self.get_next_token()?;
                                 self.comma_expression()?;
+                                self.flags |= saved;
                                 self.push_node_struct(2, Token::MemberAt, line)?;
                                 self.match_token(Token::RightBracket)?;
                             }
@@ -1045,7 +1304,11 @@ impl Parser {
                 self.get_next_token()?;
             }
             Token::Bigint => {
-                let b = self.cur.bigint.clone().expect("bigint lexeme carries a literal");
+                let b = self
+                    .cur
+                    .bigint
+                    .clone()
+                    .expect("bigint lexeme carries a literal");
                 self.push_bigint(b, line);
                 self.get_next_token()?;
             }
@@ -1108,7 +1371,15 @@ impl Parser {
                 self.array_expression()?;
                 self.flags |= saved;
             }
-            Token::LeftParenthesis => self.group_expression(0)?,
+            Token::LeftParenthesis => {
+                // `( Expression[+In] )` — a parenthesized expression resets
+                // `[In]`, so `for ((a in b);;)` is legal. Same save/clear/
+                // restore the class/object/array arms above use (F063).
+                let saved = self.flags & flags::FOR;
+                self.flags &= !flags::FOR;
+                self.group_expression(0)?;
+                self.flags |= saved;
+            }
             Token::Template => {
                 self.push_null();
                 let (s, r) = self.cur_template_strings();
@@ -1137,12 +1408,17 @@ impl Parser {
 
     /// The cooked / raw strings of the current `Template`/`TemplateHead`
     /// lexeme.
+    #[inline(never)]
     fn cur_template_strings(&self) -> (Vec<u16>, Vec<u16>) {
-        (self.cur.string.clone().unwrap_or_default(), self.cur.raw.clone().unwrap_or_default())
+        (
+            self.cur.string.clone().unwrap_or_default(),
+            self.cur.raw.clone().unwrap_or_default(),
+        )
     }
 
     /// `import` in expression position: dynamic `import(...)` or
     /// `import.meta`.
+    #[inline(never)]
     fn import_literal(&mut self, no_call: bool, line: u32) -> PResult<()> {
         self.match_token(Token::Import)?;
         if !no_call && self.cur.token == Token::LeftParenthesis {
@@ -1169,13 +1445,13 @@ impl Parser {
         } else if self.cur.token == Token::Dot {
             self.get_next_token()?;
             if self.cur.token == Token::Identifier
-                && self.cur.symbol.as_deref() == Some("source")
+                && self.cur.symbol.as_ref().and_then(SymbolName::as_str) == Some("source")
                 && !self.cur.escaped
             {
                 return Err(self.unsupported_error("source-phase import"));
             }
             if self.cur.token == Token::Identifier
-                && self.cur.symbol.as_deref() == Some("meta")
+                && self.cur.symbol.as_ref().and_then(SymbolName::as_str) == Some("meta")
                 && !self.cur.escaped
             {
                 self.get_next_token()?;
@@ -1198,6 +1474,7 @@ impl Parser {
     }
 
     /// `super(...)` / `super.x` / `super[e]`.
+    #[inline(never)]
     fn super_literal(&mut self, line: u32) -> PResult<()> {
         self.match_token(Token::Super)?;
         if self.cur.token == Token::LeftParenthesis {
@@ -1227,6 +1504,7 @@ impl Parser {
     /// covers (`async function` / `async (…)` / `async x =>`), or a bare
     /// single-identifier arrow head (`x =>`). Transliterates the
     /// `XS_TOKEN_IDENTIFIER` arm of `fxLiteralExpression`.
+    #[inline(never)]
     fn identifier_literal(&mut self, line: u32) -> PResult<()> {
         let escaped = self.cur.escaped;
         let mut symbol = self.cur.symbol.clone().unwrap_or_default();
@@ -1267,7 +1545,19 @@ impl Parser {
             self.push_node_struct(2, Token::Arg, line)?;
             self.push_node_list(1)?;
             self.push_node_struct(1, Token::ParamsBinding, line)?;
+            // `x => ...` — a single identifier, so this arrow's parameter list
+            // is always SIMPLE. The check in `parser/stmt.rs` reads the shared
+            // flag, so without clearing it an enclosing non-simple list makes
+            // the arrow's own `"use strict"` a SyntaxError:
+            //
+            //     function outer(...rest) { var g = a => { "use strict"; }; }
+            //
+            // which node and XS both accept — the early error is on
+            // ArrowParameters, and these are simple.
+            let enclosing_non_simple = self.flags & flags::NOT_SIMPLE_PARAMETERS;
+            self.flags &= !flags::NOT_SIMPLE_PARAMETERS;
             self.arrow_expression(flag)?;
+            self.flags = (self.flags & !flags::NOT_SIMPLE_PARAMETERS) | enclosing_non_simple;
             return Ok(());
         }
         if symbol == "arguments" {
@@ -1281,6 +1571,7 @@ impl Parser {
     }
 
     /// `fxArrayExpression` — array literal (elision, spread, elements).
+    #[inline(never)]
     fn array_expression(&mut self) -> PResult<()> {
         let mut count = 0usize;
         let mut elision = true;
@@ -1336,6 +1627,7 @@ impl Parser {
     /// string/number keys, `...spread`) and method / accessor / generator
     /// / async shorthand (`{ m() {} }`, `{ get x() {} }`, `{ *g() {} }`,
     /// `{ async f() {} }`).
+    #[inline(never)]
     fn object_expression(&mut self) -> PResult<()> {
         let mut count = 0usize;
         let line = self.cur.line;
@@ -1426,8 +1718,9 @@ impl Parser {
     /// `PropertyAt`). The accessor/generator/async lookahead
     /// (`token2`) is recognized so callers can reject the deferred
     /// method forms precisely.
-    fn property_name(&mut self) -> PResult<(Option<String>, Token, Token, Token)> {
-        let mut symbol: Option<String> = None;
+    #[inline(never)]
+    fn property_name(&mut self) -> PResult<(Option<SymbolName>, Token, Token, Token)> {
+        let mut symbol: Option<SymbolName> = None;
         let mut token1 = Token::NoToken;
         let mut token2 = Token::NoToken;
         let line = self.cur.line;
@@ -1436,7 +1729,11 @@ impl Parser {
         let token0 = self.cur.token;
         if has_flag(token0, IDENTIFIER_NAME) {
             symbol = self.cur.symbol.clone();
-            let ahead_token = self.ahead.as_ref().map(|s| s.token).unwrap_or(Token::NoToken);
+            let ahead_token = self
+                .ahead
+                .as_ref()
+                .map(|s| s.token)
+                .unwrap_or(Token::NoToken);
             let ahead_crlf = self.ahead.as_ref().map(|s| s.crlf).unwrap_or(false);
             if ahead_token == Token::Colon {
                 self.push_symbol(symbol.clone().unwrap_or_default());
@@ -1470,20 +1767,26 @@ impl Parser {
         } else if self.cur.token == Token::Integer {
             match self.push_property_index_integer(self.cur.integer, line) {
                 None => token1 = Token::PropertyAt,
-                Some(s) => { symbol = Some(s); token1 = Token::Property; }
+                Some(s) => {
+                    symbol = Some(s);
+                    token1 = Token::Property;
+                }
             }
         } else if self.cur.token == Token::Number {
             match self.push_property_index_number(self.cur.number, line) {
                 None => token1 = Token::PropertyAt,
-                Some(s) => { symbol = Some(s); token1 = Token::Property; }
+                Some(s) => {
+                    symbol = Some(s);
+                    token1 = Token::Property;
+                }
             }
         } else if self.cur.token == Token::String {
-            let s = crate::ast::units_to_string(&self.cur.string.clone().unwrap_or_default());
+            let s = self.string_property_name()?;
             // `fxStringToIndex`: a string key that is a canonical array
             // index ("0", "1", … up to 2^32-2) codes through the
             // integer-index (`PropertyAt`) path, exactly as XS does; a
             // non-canonical string ("01", "1.0", "x") stays a symbol.
-            if let Some(index) = string_key_to_index(&s) {
+            if let Some(index) = s.as_str().and_then(string_key_to_index) {
                 self.push_property_index(index, line);
                 token1 = Token::PropertyAt;
             } else {
@@ -1519,18 +1822,24 @@ impl Parser {
             } else if self.cur.token == Token::Integer {
                 match self.push_property_index_integer(self.cur.integer, line) {
                     None => token1 = Token::PropertyAt,
-                    Some(s) => { symbol = Some(s); token1 = Token::Property; }
+                    Some(s) => {
+                        symbol = Some(s);
+                        token1 = Token::Property;
+                    }
                 }
                 self.get_next_token()?;
             } else if self.cur.token == Token::Number {
                 match self.push_property_index_number(self.cur.number, line) {
                     None => token1 = Token::PropertyAt,
-                    Some(s) => { symbol = Some(s); token1 = Token::Property; }
+                    Some(s) => {
+                        symbol = Some(s);
+                        token1 = Token::Property;
+                    }
                 }
                 self.get_next_token()?;
             } else if self.cur.token == Token::String {
-                let s = crate::ast::units_to_string(&self.cur.string.clone().unwrap_or_default());
-                if let Some(index) = string_key_to_index(&s) {
+                let s = self.string_property_name()?;
+                if let Some(index) = s.as_str().and_then(string_key_to_index) {
                     self.push_property_index(index, line);
                     token1 = Token::PropertyAt;
                 } else {
@@ -1572,12 +1881,12 @@ impl Parser {
     /// when a symbol was pushed, `None` when an index node was pushed.
     /// Integer tokens are always non-negative from the lexer, so the
     /// symbol branch is the faithful-but-unreached fallback.
-    fn push_property_index_integer(&mut self, value: i32, line: u32) -> Option<String> {
+    fn push_property_index_integer(&mut self, value: i32, line: u32) -> Option<SymbolName> {
         if value >= 0 {
             self.push_property_index(value as u32, line);
             None
         } else {
-            let s = value.to_string();
+            let s = SymbolName::from(value.to_string());
             self.push_symbol(s.clone());
             Some(s)
         }
@@ -1589,14 +1898,14 @@ impl Parser {
     /// at/above 2^32-1) canonicalizes to its `fxNumberToString` symbol
     /// (`Property`). Returns `Some(symbol)` when a symbol was pushed,
     /// `None` when an index node was pushed.
-    fn push_property_index_number(&mut self, value: f64, line: u32) -> Option<String> {
+    fn push_property_index_number(&mut self, value: f64, line: u32) -> Option<SymbolName> {
         if let Some(index) = number_to_index(value) {
             self.push_property_index(index, line);
             None
         } else {
             let s = number_to_ecma_string(value);
             self.push_symbol(s.clone());
-            Some(s)
+            Some(s.into())
         }
     }
 
@@ -1614,6 +1923,7 @@ impl Parser {
     /// `fxTemplateExpression` — a template with substitutions
     /// (`TemplateHead` … `${ expr }` … `TemplateTail`). Leaves a node
     /// list of the items on the stack.
+    #[inline(never)]
     fn template_expression(&mut self) -> PResult<()> {
         let mut count = 0usize;
         let line = self.cur.line;
@@ -1623,12 +1933,27 @@ impl Parser {
         self.push_raw(r, line);
         self.push_node_struct(2, Token::TemplateMiddle, line)?;
         count += 1;
+        // `${ Expression[+In] }` — a substitution resets `[In]`, so
+        // `for (`${a in b}`;;)` is legal (F063).
+        let saved_for = self.flags & flags::FOR;
+        self.flags &= !flags::FOR;
         loop {
             self.get_next_token()?;
-            if self.cur.token != Token::RightBrace {
-                self.comma_expression()?;
-                count += 1;
+            // `TemplateSubstitutionTail` requires an `Expression`, so `${}` is
+            // a spec early error. `fxTemplateExpression` instead SKIPS the
+            // expression when the substitution is empty and pushes the next
+            // `TemplateMiddle` straight after the previous one, which both
+            // accepts invalid source and breaks the alternation
+            // `code_tagged_template` derives its string count from. Rejecting
+            // it is a deliberate divergence from the pinned oracle's parser,
+            // in the direction of the spec, and the alternation becomes an
+            // invariant the parser holds rather than one it happens to
+            // produce (F063).
+            if self.cur.token == Token::RightBrace {
+                return Err(self.error("missing expression"));
             }
+            self.comma_expression()?;
+            count += 1;
             if self.cur.token != Token::RightBrace {
                 return Err(self.error("missing }"));
             }
@@ -1646,6 +1971,7 @@ impl Parser {
                 break;
             }
         }
+        self.flags |= saved_for;
         self.push_node_list(count)?;
         Ok(())
     }
@@ -1675,10 +2001,15 @@ impl Parser {
 
     /// `fxParameters` — a parenthesized argument list (`( a, b, ...c )`),
     /// yielding a `Params` node wrapping the argument list.
+    #[inline(never)]
     fn parameters(&mut self) -> PResult<()> {
         let mut count = 0usize;
         let line = self.cur.line;
         let mut spread_flag = false;
+        // `Arguments : ( ArgumentList[+In] )` — an argument list resets `[In]`,
+        // so `for (f(a in b);;)` is legal (F063).
+        let saved_for = self.flags & flags::FOR;
+        self.flags &= !flags::FOR;
         self.match_token(Token::LeftParenthesis)?;
         while self.cur.token == Token::Spread || has_flag(self.cur.token, BEGIN_EXPRESSION) {
             let param_line = self.cur.line;
@@ -1696,6 +2027,7 @@ impl Parser {
             }
         }
         self.match_token(Token::RightParenthesis)?;
+        self.flags |= saved_for;
         self.push_node_list(count)?;
         self.push_node_struct(1, Token::Params, line)?;
         if spread_flag {
@@ -1705,24 +2037,73 @@ impl Parser {
     }
 
     /// `fxNewExpression` — `new X(...)`, member chains after `new`, and
-    /// `new.target`.
+    /// `new.target`. One [`STATEMENT_COST`] recursion point per `new`.
+    ///
+    /// In XS, `new new new f` recurses here once per `new` without passing
+    /// through the cascade: each `new`'s primary expression is the next
+    /// `new`, which returns before the enclosing one parses its member chain
+    /// and arguments. So the leading `new`s are consumed in a loop instead,
+    /// each charged into `depth` where its recursion was, and finished
+    /// innermost first, each releasing its charge where its recursion returned
+    /// (STACK-DEPTH-REFACTOR.md D3).
+    #[inline(never)]
     fn new_expression(&mut self) -> PResult<()> {
-        let line = self.cur.line;
-        self.match_token(Token::New)?;
-        if self.cur.token == Token::Dot {
-            self.get_next_token()?;
-            if self.is_keyword("target")? {
-                if self.flags & flags::TARGET == 0 {
-                    return Err(self.error("invalid new.target"));
-                }
-                self.get_next_token()?;
-                self.push_node_struct(0, Token::Target, line)?;
-            } else {
-                return Err(self.error("missing target"));
+        // The recursion released every charge as it unwound, an error's
+        // included; on success the loop has released them all already.
+        let depth = self.depth;
+        let result = self.new_expression_chain();
+        self.depth = depth;
+        result
+    }
+
+    /// The body of [`Self::new_expression`], which restores `depth` when this
+    /// returns an error with `new`s still charged.
+    fn new_expression_chain(&mut self) -> PResult<()> {
+        // The lines of the `new`s enclosing the innermost, outermost first.
+        let mut enclosing = Vec::new();
+        let innermost = loop {
+            // `charged!`'s check and charge, for a recursion point released
+            // when its `new` is finished.
+            if self.depth + STATEMENT_COST > PARSER_STACK_BUDGET {
+                return Err(self.error("stack overflow"));
             }
-            return Ok(());
+            self.depth += STATEMENT_COST;
+            let line = self.cur.line;
+            self.match_token(Token::New)?;
+            if self.cur.token == Token::Dot {
+                self.get_next_token()?;
+                if self.is_keyword("target")? {
+                    if self.flags & flags::TARGET == 0 {
+                        return Err(self.error("invalid new.target"));
+                    }
+                    self.get_next_token()?;
+                    self.push_node_struct(0, Token::Target, line)?;
+                } else {
+                    return Err(self.error("missing target"));
+                }
+                // `new.target` is complete as it stands.
+                break None;
+            }
+            if self.cur.token != Token::New {
+                self.literal_expression(true)?;
+                break Some(line);
+            }
+            enclosing.push(line);
+        };
+        if let Some(line) = innermost {
+            self.new_expression_tail(line)?;
         }
-        self.literal_expression(true)?;
+        self.depth -= STATEMENT_COST;
+        while let Some(line) = enclosing.pop() {
+            self.new_expression_tail(line)?;
+            self.depth -= STATEMENT_COST;
+        }
+        Ok(())
+    }
+
+    /// The rest of a `new` once its primary expression is on the stack: the
+    /// member chain, the arguments and the `New` node.
+    fn new_expression_tail(&mut self, line: u32) -> PResult<()> {
         self.check_arrow_function(1)?;
         loop {
             let member_line = self.cur.line;
@@ -1745,8 +2126,12 @@ impl Parser {
                     }
                 }
                 Token::LeftBracket => {
+                    // `MemberExpression [ Expression[+In] ]`.
+                    let saved = self.flags & flags::FOR;
+                    self.flags &= !flags::FOR;
                     self.get_next_token()?;
                     self.comma_expression()?;
+                    self.flags |= saved;
                     self.push_node_struct(2, Token::MemberAt, member_line)?;
                     self.match_token(Token::RightBracket)?;
                 }
@@ -1782,6 +2167,7 @@ impl Parser {
     /// reparsed via [`Self::parameters_binding_from_expressions`]) and,
     /// when `flag` (async) is set but no `=>` follows, an `async(args)`
     /// call.
+    #[inline(never)]
     fn group_expression(&mut self, flag: u32) -> PResult<()> {
         let mut comma_flag = false;
         let mut spread_flag = false;
@@ -1816,6 +2202,23 @@ impl Parser {
             if comma_flag && spread_flag {
                 return Err(self.error("invalid parameters"));
             }
+            // `parameters_binding_from_expressions` raises
+            // `NOT_SIMPLE_PARAMETERS` on the SHARED parser flags, and
+            // `arrow_expression` snapshots `self.flags` into its `saved`
+            // AFTER that — so on exit it restores the flag it was handed and
+            // the arrow's own parameter shape escapes into the enclosing
+            // scope. The next `"use strict"` directive anywhere after it then
+            // fails the `fxBody` non-simple-parameter check that belongs to
+            // this arrow (`parser/stmt.rs`, "invalid directive"):
+            //
+            //     var f = (...args) => 1;
+            //     var g = a => { "use strict"; };  // wrongly a SyntaxError
+            //
+            // A declared function parses its parameters INSIDE its own
+            // save/restore, which is why only arrows leak. Restore the
+            // enclosing function's own value across the arrow.
+            let enclosing_non_simple = self.flags & flags::NOT_SIMPLE_PARAMETERS;
+            self.flags &= !flags::NOT_SIMPLE_PARAMETERS;
             if !self.parameters_binding_from_expressions()? {
                 return Err(self.error("no parameters"));
             }
@@ -1832,6 +2235,7 @@ impl Parser {
                 return Err(self.error("invalid yield"));
             }
             self.arrow_expression(flag)?;
+            self.flags = (self.flags & !flags::NOT_SIMPLE_PARAMETERS) | enclosing_non_simple;
             self.flags |= carry;
             return Ok(());
         }
@@ -1854,6 +2258,12 @@ impl Parser {
             self.push_null();
             self.flags |= saved_await_yield;
             return Err(self.error("missing expression"));
+        }
+        // Spread belongs to arguments, array/object literals, or an arrow's
+        // rest parameter. The arrow and async-call interpretations returned
+        // above; an ordinary parenthesized expression has no spread form.
+        if spread_flag {
+            return Err(self.error("invalid spread"));
         }
         self.push_node_list(count)?;
         self.push_node_struct(1, Token::Expressions, line)?;
@@ -1982,3 +2392,6 @@ mod stmt;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod node_identity_tests;

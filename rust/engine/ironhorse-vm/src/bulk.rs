@@ -1,10 +1,10 @@
-//! The BULK side tables — array items and collection entries — behind
-//! counting accessors (store-seam design § Plan: counted side-table
-//! ref-page accessors).
+//! The BULK side tables — array items, index properties and collection
+//! entries — behind counting accessors (store-seam design § Plan:
+//! counted side-table ref-page accessors).
 //!
 //! The partial collector roots from the pages side-table values
 //! reference. Before this module, finding those pages walked every
-//! side-table entry (O(live), ~1 ms at 480k slots); the two BULK
+//! side-table entry (O(live), ~1 ms at 480k slots); the three BULK
 //! tables carry almost all of that weight. Here their maps are
 //! **private to this module**, and the only mutation routes are
 //! methods that apply symmetric per-page refcount deltas via the same
@@ -21,7 +21,7 @@
 //! [`CollectionData::for_each_entry_mut_chunk_remap`] for the full
 //! collector's CHUNK-offset rewrite, which by contract never changes
 //! which SLOTS a value references (slots do not move; only the chunk
-//! arena compacts) — and the debug parity assertion in the page
+//! arena compacts) — and the store-integrity parity check in the page
 //! projection would catch a violation.
 //!
 //! Neither type implements `Clone`: a bare clone would carry entries
@@ -32,23 +32,25 @@
 use crate::value::{Slot, SlotIndex, SLOTS_PER_PAGE};
 
 /// Per-page reference counts for BULK side-table-held references
-/// (`page -> live reference count`), plus nothing else: the nonzero
+/// (`page -> live reference count`) and a lifetime poison latch: the nonzero
 /// key set IS the collector's bulk root-page set. Owned by the
 /// interpreter beside the tables; threaded into every counted
 /// mutation.
 #[derive(Debug, Default)]
 pub(crate) struct SideRefCounts {
     counts: std::collections::HashMap<u32, u32>,
+    poisoned: std::cell::Cell<bool>,
 }
 
 impl SideRefCounts {
     pub(crate) fn new() -> SideRefCounts {
         SideRefCounts {
             counts: std::collections::HashMap::new(),
+            poisoned: std::cell::Cell::new(false),
         }
     }
 
-    fn page_of(r: SlotIndex) -> Option<u32> {
+    pub(crate) fn page_of(r: SlotIndex) -> Option<u32> {
         // The null sentinel and any out-of-arena index are skipped at
         // READ time by the bitmap bound; skip null here so the map
         // never carries a phantom page for it.
@@ -59,10 +61,39 @@ impl SideRefCounts {
         }
     }
 
+    /// The parity net's comparison: the standing counts against a fresh
+    /// per-page recount of the bulk tables (`walked`, keyed like
+    /// [`Self::page_of`]). Exact counts, not page bits: a missed decrement
+    /// on a page another reference still pins, or a missed increment
+    /// beside an existing one, leaves the page SET unchanged and only the
+    /// count can see it. Reports the lowest mismatching page so the
+    /// diagnostic is deterministic.
+    pub(crate) fn mismatch_against(
+        &self,
+        walked: &std::collections::HashMap<u32, u64>,
+    ) -> Option<crate::gc::SideRefParityMismatch> {
+        let pages: std::collections::BTreeSet<u32> =
+            self.counts.keys().chain(walked.keys()).copied().collect();
+        pages.into_iter().find_map(|page| {
+            let counted = u64::from(self.counts.get(&page).copied().unwrap_or(0));
+            let walked = walked.get(&page).copied().unwrap_or(0);
+            (counted != walked).then_some(crate::gc::SideRefParityMismatch {
+                page,
+                counted,
+                walked,
+            })
+        })
+    }
+
     fn add_slot(&mut self, s: &Slot) {
         s.each_ref_slot(|r| {
             if let Some(page) = Self::page_of(r) {
-                *self.counts.entry(page).or_insert(0) += 1;
+                let n = self.counts.entry(page).or_insert(0);
+                if let Some(next) = n.checked_add(1) {
+                    *n = next;
+                } else {
+                    self.poison();
+                }
             }
         });
     }
@@ -72,20 +103,28 @@ impl SideRefCounts {
             if let Some(page) = Self::page_of(r) {
                 match self.counts.get_mut(&page) {
                     Some(n) if *n > 1 => *n -= 1,
-                    Some(_) => {
+                    Some(1) => {
                         self.counts.remove(&page);
                     }
-                    None => {
+                    _ => {
                         // A decrement without a matching increment is
                         // exactly the corruption class this module
-                        // exists to prevent; fail loudly in debug,
-                        // saturate in release (the parity assertion
-                        // in the page projection is the second net).
-                        debug_assert!(false, "side-ref undercount on page {page}");
+                        // exists to prevent. Refuse collection and
+                        // checkpointing in every build profile, even
+                        // if later mutations restore the page set.
+                        self.poison();
                     }
                 }
             }
         });
+    }
+
+    pub(crate) fn poison(&self) {
+        self.poisoned.set(true);
+    }
+
+    pub(crate) fn is_poisoned(&self) -> bool {
+        self.poisoned.get()
     }
 
     /// OR the counted pages into a page bitmap (the partial
@@ -106,7 +145,6 @@ impl SideRefCounts {
         v.sort_unstable();
         v
     }
-
 }
 
 /// An Array instance's internal state (kept in `Interp::arrays`): the
@@ -119,6 +157,15 @@ impl SideRefCounts {
 pub(crate) struct ArrayData {
     pub(crate) length: u32,
     items: std::collections::BTreeMap<u32, Slot>,
+    /// How many items carry a non-default descriptor flag — a sealed,
+    /// frozen, non-enumerable or non-writable element.
+    ///
+    /// Kept as a COUNT rather than recomputed because
+    /// [`Self::has_attributed_items`] gates the dense fast paths, which run
+    /// per element: an O(items) scan there would make `push` in a loop
+    /// quadratic. Every mutation of the map goes through the counted methods
+    /// below for exactly this reason; there is deliberately no `items_mut`.
+    attributed: u32,
 }
 
 impl ArrayData {
@@ -127,10 +174,61 @@ impl ArrayData {
         &self.items
     }
 
-    /// Mutable access for integrity-level transitions that change only an
-    /// element's descriptor flags, never its value or reference topology.
-    pub(crate) fn items_mut(&mut self) -> &mut std::collections::BTreeMap<u32, Slot> {
-        &mut self.items
+    /// Whether any element carries a non-default descriptor flag.
+    ///
+    /// The dense fast paths ([`Interp::dense_array_this`] and the
+    /// `*_fast_safe` predicates) may only run when this is false. They write
+    /// items directly, without carrying attributes across, so over an
+    /// attributed element they would erase or relocate its flags — turning
+    /// `Object.freeze(a); a.reverse()` into a silent mutation of a frozen
+    /// array. Attributed elements used to be PROMOTED out of the item map by
+    /// `array_define_index`, which broke `items().len() == length` and made
+    /// these paths decline as a side effect; stamping them in place removed
+    /// that accident, so the condition is now stated outright.
+    pub(crate) fn has_attributed_items(&self) -> bool {
+        self.attributed != 0
+    }
+
+    fn count_added(&mut self, value: &Slot) {
+        if value.flag != 0 {
+            self.attributed += 1;
+        }
+    }
+
+    fn count_removed(&mut self, value: &Slot) {
+        if value.flag != 0 {
+            self.attributed -= 1;
+        }
+    }
+
+    /// Set one item's descriptor flags, keeping the attributed count in step.
+    /// Returns false when there is no item at `index`.
+    pub(crate) fn set_item_flag(&mut self, index: u32, flag: u8) -> bool {
+        let Some(item) = self.items.get_mut(&index) else {
+            return false;
+        };
+        let was = item.flag;
+        item.flag = flag;
+        if was == 0 && flag != 0 {
+            self.attributed += 1;
+        } else if was != 0 && flag == 0 {
+            self.attributed -= 1;
+        }
+        true
+    }
+
+    /// OR `mask` into every item's descriptor flags (the template-array
+    /// freeze), keeping the attributed count in step.
+    pub(crate) fn or_all_item_flags(&mut self, mask: u8) {
+        if mask == 0 {
+            return;
+        }
+        for item in self.items.values_mut() {
+            if item.flag == 0 {
+                self.attributed += 1;
+            }
+            item.flag |= mask;
+        }
     }
 
     pub(crate) fn insert_item(
@@ -140,9 +238,12 @@ impl ArrayData {
         refs: &mut SideRefCounts,
     ) -> Option<Slot> {
         refs.add_slot(&value);
+        self.count_added(&value);
         let displaced = self.items.insert(index, value);
         if let Some(old) = &displaced {
             refs.remove_slot(old);
+            let old = *old;
+            self.count_removed(&old);
         }
         displaced
     }
@@ -151,6 +252,8 @@ impl ArrayData {
         let removed = self.items.remove(index);
         if let Some(old) = &removed {
             refs.remove_slot(old);
+            let old = *old;
+            self.count_removed(&old);
         }
         removed
     }
@@ -160,6 +263,7 @@ impl ArrayData {
             refs.remove_slot(s);
         }
         self.items.clear();
+        self.attributed = 0;
     }
 
     /// Decrement every item's refs — the whole-row removal path (the
@@ -182,8 +286,12 @@ impl ArrayData {
         for s in self.items.values() {
             refs.remove_slot(s);
         }
+        self.attributed = 0;
         for s in new_items.values() {
             refs.add_slot(s);
+            if s.flag != 0 {
+                self.attributed += 1;
+            }
         }
         self.items = new_items;
     }
@@ -192,7 +300,9 @@ impl ArrayData {
     /// every value WITHOUT a refs delta, sound because chunk
     /// compaction never changes which SLOTS a value references
     /// (slots do not move). Do not use for anything else — the debug
-    /// parity assertion in the page projection is watching.
+    /// parity check in the page projection is watching, and the
+    /// attributed count is not maintained here, so the callback must not
+    /// change any item's `flag`.
     pub(crate) fn for_each_value_mut_chunk_remap(&mut self, mut f: impl FnMut(&mut Slot)) {
         for s in self.items.values_mut() {
             f(s);
@@ -238,7 +348,7 @@ impl CollKind {
 /// collection: the hash table + insertion-ordered entry list, or the
 /// weak-entry list). Kept in the `Interp::collections` side table
 /// like [`ArrayData`]; entry key/value slots are never swept
-/// underneath it (the stage-2 no-mid-run-GC contract). `entries`
+/// underneath it: collection runs only between cranks. `entries`
 /// preserves insertion order (XS's `list` order, what
 /// `forEach`/iterators visit); Set/WeakSet ignore the value half.
 /// The entry list is private: mutate through the counted methods.
@@ -249,9 +359,9 @@ impl CollKind {
 /// follows a deletion; a delete followed by re-add appends a new
 /// entry at the tail. Tombstones are a LIVE-machine artifact only:
 /// the snapshot view compacts them (see
-/// `Interp::collections_snapshot`), which is sound because iterator
-/// cursors live in the `iterators` side table, an honest `Pending`
-/// ledger row that does not round-trip.
+/// `Interp::collections_snapshot`); `Interp::iterators_snapshot` remaps
+/// cursor positions to live-entry ordinals and preserves retired cursors.
+/// The round-trip contract is exercised by snapshot `iterator_carry.rs`.
 ///
 /// Metering is purely allocation-driven — xsMapSet.c contains no
 /// `mxMeter` calls — so `table_length` tracks XS's power-of-two
@@ -259,10 +369,35 @@ impl CollKind {
 /// `fxNewChunk(length * 8)` on the exact rehash boundaries XS
 /// crosses. Weak collections have no table (their entries hang off
 /// the key object), so `table_length` is unused for them.
+/// Owned SameValueZero keys. Content keys deliberately do not retain chunk
+/// offsets: this derived index survives chunk compaction and is not a GC root.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum CollKey {
+    Empty(u8),
+    Boolean(bool),
+    Number(u64),
+    String(Vec<u8>),
+    BigInt(bool, Vec<u32>),
+    Reference(SlotIndex),
+}
+
+#[derive(Debug, Default)]
+struct CollectionIndex {
+    positions: std::collections::HashMap<std::rc::Rc<CollKey>, usize>,
+    keys: Vec<Option<std::rc::Rc<CollKey>>>,
+    // Snapshot decoding historically admits duplicate keys. Keep subsequent
+    // positions only for that case, preserving first-live lookup on deletion.
+    duplicates: std::collections::HashMap<std::rc::Rc<CollKey>, std::collections::VecDeque<usize>>,
+}
+
 #[derive(Debug)]
 pub(crate) struct CollectionData {
     pub(crate) kind: CollKind,
     entries: Vec<Option<(Slot, Slot)>>,
+    live_count: usize,
+    /// Materialized lazily, including only newly appended entries on each
+    /// lookup. Restoring a collection never faults its content-key chunks.
+    index: std::cell::RefCell<CollectionIndex>,
     pub(crate) table_length: u32,
     /// Bumped by [`Self::clear_entries`] only. A live cursor captures
     /// the generation at creation and dead-ends when it changes —
@@ -281,6 +416,8 @@ impl CollectionData {
         CollectionData {
             kind,
             entries: Vec::new(),
+            live_count: 0,
+            index: std::cell::RefCell::default(),
             table_length,
             generation: 0,
         }
@@ -306,21 +443,51 @@ impl CollectionData {
 
     /// Count of live (non-tombstone) entries — the spec `size`.
     pub(crate) fn live_len(&self) -> usize {
-        self.entries.iter().filter(|entry| entry.is_some()).count()
+        self.live_count
+    }
+
+    pub(crate) fn find(
+        &self,
+        key: &CollKey,
+        mut canonicalize: impl FnMut(&Slot) -> CollKey,
+    ) -> Option<usize> {
+        let mut index = self.index.borrow_mut();
+        for at in index.keys.len()..self.entries.len() {
+            let canonical = self.entries[at].as_ref().map(|(key, _)| {
+                let canonical = std::rc::Rc::new(canonicalize(key));
+                if let std::collections::hash_map::Entry::Vacant(entry) =
+                    index.positions.entry(canonical.clone())
+                {
+                    entry.insert(at);
+                } else {
+                    index
+                        .duplicates
+                        .entry(canonical.clone())
+                        .or_default()
+                        .push_back(at);
+                }
+                canonical
+            });
+            index.keys.push(canonical);
+        }
+        index.positions.get(key).copied()
     }
 
     pub(crate) fn push_entry(&mut self, key: Slot, value: Slot, refs: &mut SideRefCounts) {
         refs.add_slot(&key);
         refs.add_slot(&value);
         self.entries.push(Some((key, value)));
+        self.live_count += 1;
     }
 
     /// Overwrite the value half of the live entry at physical index
-    /// `at`. The caller found `at` via a live-entry scan, so a
+    /// `at`. The caller found `at` via the key index, so a
     /// tombstone here is a logic error.
     pub(crate) fn set_entry_value(&mut self, at: usize, value: Slot, refs: &mut SideRefCounts) {
         refs.add_slot(&value);
-        let entry = self.entries[at].as_mut().expect("set_entry_value on tombstone");
+        let entry = self.entries[at]
+            .as_mut()
+            .expect("set_entry_value on tombstone");
         let old = std::mem::replace(&mut entry.1, value);
         refs.remove_slot(&old);
     }
@@ -339,7 +506,46 @@ impl CollectionData {
         let (k, v) = self.entries[at].take().expect("remove_entry on tombstone");
         refs.remove_slot(&k);
         refs.remove_slot(&v);
+        self.live_count -= 1;
+        let index = self.index.get_mut();
+        if let Some(canonical) = index.keys.get_mut(at).and_then(Option::take) {
+            if index.positions.get(&canonical) == Some(&at) {
+                let next = index
+                    .duplicates
+                    .get_mut(&canonical)
+                    .and_then(|rest| rest.pop_front());
+                if let Some(next) = next {
+                    index.positions.insert(canonical.clone(), next);
+                } else {
+                    index.positions.remove(&canonical);
+                }
+            } else if let Some(rest) = index.duplicates.get_mut(&canonical) {
+                rest.retain(|position| *position != at);
+            }
+            if index
+                .duplicates
+                .get(&canonical)
+                .is_some_and(|rest| rest.is_empty())
+            {
+                index.duplicates.remove(&canonical);
+            }
+        }
         if matches!(self.kind, CollKind::WeakMap | CollKind::WeakSet) {
+            // Weak entries are physically removed (there are no cursors).
+            // Shift cached positions with the existing physical-vector shift.
+            if at < index.keys.len() {
+                index.keys.remove(at);
+                for position in index.positions.values_mut().chain(
+                    index
+                        .duplicates
+                        .values_mut()
+                        .flat_map(|rest| rest.iter_mut()),
+                ) {
+                    if *position > at {
+                        *position -= 1;
+                    }
+                }
+            }
             self.entries.remove(at);
         }
         (k, v)
@@ -349,18 +555,18 @@ impl CollectionData {
     /// the list (XS's purge — reclaiming the memory) and bump the
     /// clear-generation so every live cursor dead-ends instead of
     /// aliasing its old physical index into entries added afterward.
-    /// Before the latch, a cursor at index 1 over a cleared-then-
-    /// repopulated map yielded a wrong SUFFIX of the new entries
-    /// ("a,e,f" where the XS oracle answers "a" — review of the llm
-    /// rebase). Note where the deliberate XS-divergence axis lives:
-    /// plain DELETES tombstone (spec-over-XS; see
-    /// [`Self::remove_entry`]) while CLEAR follows XS exactly.
+    /// Snapshot `iterator_carry.rs::resumed_cleared_cursor_stays_retired`
+    /// checks that this retirement survives a round trip. Plain deletes
+    /// tombstone (spec-over-XS; see [`Self::remove_entry`]), while clear
+    /// follows XS exactly.
     pub(crate) fn clear_entries(&mut self, refs: &mut SideRefCounts) {
         for (k, v) in self.entries.iter().flatten() {
             refs.remove_slot(k);
             refs.remove_slot(v);
         }
         self.entries.clear();
+        self.live_count = 0;
+        *self.index.get_mut() = CollectionIndex::default();
         self.generation = self.generation.wrapping_add(1);
     }
 
@@ -380,8 +586,8 @@ impl CollectionData {
     /// this model made weak deletes physical — are REMOVED, not
     /// tombstoned: a long-lived machine cycling weak-keyed entries
     /// must not grow its physical list by one slot per ever-inserted
-    /// entry (review of the llm rebase). Returns the number of live
-    /// entries dropped.
+    /// entry. `collection_index_tracks_lazy_appends_deletes_clear_and_weak_pruning`
+    /// checks the resulting live index. Returns the number of live entries dropped.
     pub(crate) fn prune_entries(
         &mut self,
         refs: &mut SideRefCounts,
@@ -405,6 +611,10 @@ impl CollectionData {
                 }
             }
         });
+        self.live_count -= dropped as usize;
+        // Pruning compacts the physical positions. Rebuild lazily at the next
+        // lookup, keeping the collector independent of content-key faults.
+        *self.index.get_mut() = CollectionIndex::default();
         dropped
     }
 
@@ -427,13 +637,155 @@ mod tests {
     }
 
     #[test]
+    fn restored_duplicate_keys_keep_first_live_resolution() {
+        for kind in [CollKind::Map, CollKind::WeakMap] {
+            let mut refs = SideRefCounts::new();
+            let mut data = CollectionData::new(kind, 1);
+            let key = CollKey::Reference(SlotIndex(1));
+            for value in 0..3 {
+                data.push_entry(refslot(1), Slot::integer(value), &mut refs);
+            }
+            for value in 0..3 {
+                let at = data.find(&key, |_| key.clone()).unwrap();
+                assert_eq!(data.entries()[at].unwrap().1, Slot::integer(value));
+                data.remove_entry(at, &mut refs);
+            }
+            assert_eq!(data.find(&key, |_| key.clone()), None);
+            assert_eq!(data.live_len(), 0);
+        }
+    }
+
+    #[test]
+    fn weak_delete_shifts_index_frontier_before_unindexed_appends() {
+        let canonical = |key: &Slot| match key.value {
+            Payload::Reference(reference) => CollKey::Reference(reference),
+            _ => unreachable!(),
+        };
+        let mut refs = SideRefCounts::new();
+        let mut data = CollectionData::new(CollKind::WeakMap, 0);
+        data.push_entry(refslot(1), Slot::integer(1), &mut refs);
+        assert_eq!(data.find(&canonical(&refslot(1)), canonical), Some(0));
+        data.push_entry(refslot(2), Slot::integer(2), &mut refs);
+        data.remove_entry(0, &mut refs);
+        data.push_entry(refslot(1), Slot::integer(3), &mut refs);
+        assert_eq!(data.find(&canonical(&refslot(2)), canonical), Some(0));
+        assert_eq!(data.find(&canonical(&refslot(1)), canonical), Some(1));
+    }
+
+    #[test]
+    fn collection_index_tracks_lazy_appends_deletes_clear_and_weak_pruning() {
+        let canonical = |key: &Slot| match key.value {
+            Payload::Reference(reference) => CollKey::Reference(reference),
+            _ => panic!("fixture uses references"),
+        };
+        for kind in [
+            CollKind::Map,
+            CollKind::Set,
+            CollKind::WeakMap,
+            CollKind::WeakSet,
+        ] {
+            let mut refs = SideRefCounts::new();
+            let mut data = CollectionData::new(kind, 1);
+            let calls = std::cell::Cell::new(0);
+            for n in 1..=100 {
+                data.push_entry(refslot(n), Slot::integer(n as i32), &mut refs);
+                assert_eq!(
+                    data.find(&canonical(&refslot(n)), |key| {
+                        calls.set(calls.get() + 1);
+                        canonical(key)
+                    }),
+                    Some((n - 1) as usize)
+                );
+            }
+            assert_eq!(calls.get(), 100, "each stored key is indexed once");
+            data.remove_entry(20, &mut refs);
+            assert_eq!(data.live_len(), 99);
+            assert_eq!(data.find(&canonical(&refslot(21)), canonical), None);
+            let expected = if matches!(kind, CollKind::WeakMap | CollKind::WeakSet) {
+                98
+            } else {
+                99
+            };
+            assert_eq!(
+                data.find(&canonical(&refslot(100)), canonical),
+                Some(expected)
+            );
+            // Delete an entry in the unindexed suffix, then append again.
+            data.push_entry(refslot(101), Slot::undefined(), &mut refs);
+            let last = data.entries().len() - 1;
+            data.remove_entry(last, &mut refs);
+            data.push_entry(refslot(102), Slot::undefined(), &mut refs);
+            assert!(data.find(&canonical(&refslot(102)), canonical).is_some());
+            assert_eq!(data.find(&canonical(&refslot(101)), canonical), None);
+            if matches!(kind, CollKind::WeakMap | CollKind::WeakSet) {
+                let dropped = data.prune_entries(
+                    &mut refs,
+                    |key, _| matches!(key.value, Payload::Reference(SlotIndex(n)) if n % 2 == 0),
+                );
+                assert_eq!(data.live_len(), 100 - dropped as usize);
+                assert_eq!(data.find(&canonical(&refslot(1)), canonical), None);
+                let at = data.find(&canonical(&refslot(100)), canonical).unwrap();
+                assert_eq!(data.entries()[at].unwrap().0, refslot(100));
+            }
+            data.clear_entries(&mut refs);
+            assert_eq!(data.live_len(), 0);
+            assert_eq!(data.generation(), 1);
+            assert_eq!(data.find(&canonical(&refslot(100)), canonical), None);
+            data.push_entry(refslot(100), Slot::undefined(), &mut refs);
+            assert_eq!(data.find(&canonical(&refslot(100)), canonical), Some(0));
+        }
+    }
+
+    #[test]
+    fn parity_mismatch_reports_the_lowest_page_and_exact_counts() {
+        let mut refs = SideRefCounts::new();
+        refs.add_slot(&refslot(10)); // page 0
+        refs.add_slot(&refslot(300)); // page 1
+        refs.add_slot(&refslot(300)); // page 1 again
+        let walked = |pages: &[(u32, u64)]| pages.iter().copied().collect();
+        assert_eq!(refs.mismatch_against(&walked(&[(0, 1), (1, 2)])), None);
+        // A missed decrement on a still-pinned page: the page set agrees,
+        // the count does not.
+        let m = refs.mismatch_against(&walked(&[(0, 1), (1, 1)])).unwrap();
+        assert_eq!((m.page, m.counted, m.walked), (1, 2, 1));
+        // A page the walk sees that the counts never learned about, and
+        // the lowest page wins when several disagree.
+        let m = refs
+            .mismatch_against(&walked(&[(0, 1), (1, 2), (2, 1)]))
+            .unwrap();
+        assert_eq!((m.page, m.counted, m.walked), (2, 0, 1));
+        let m = refs.mismatch_against(&walked(&[(1, 2)])).unwrap();
+        assert_eq!((m.page, m.counted, m.walked), (0, 1, 0));
+    }
+
+    #[test]
+    fn side_ref_undercount_latches_poison_after_counts_recover() {
+        let mut refs = SideRefCounts::new();
+        refs.remove_slot(&refslot(10));
+        assert!(refs.is_poisoned());
+        refs.add_slot(&refslot(10));
+        refs.remove_slot(&refslot(10));
+        assert!(refs.pages_sorted().is_empty());
+        assert!(refs.is_poisoned(), "balanced later writes cannot unpoison");
+    }
+
+    #[test]
+    fn side_ref_overflow_latches_poison_without_wrapping() {
+        let mut refs = SideRefCounts::new();
+        refs.counts.insert(0, u32::MAX);
+        refs.add_slot(&refslot(10));
+        assert_eq!(refs.counts[&0], u32::MAX);
+        assert!(refs.is_poisoned());
+    }
+
+    #[test]
     fn array_mutations_keep_counts_symmetric() {
         let mut refs = SideRefCounts::new();
         let mut a = ArrayData::default();
         a.insert_item(0, refslot(10), &mut refs); // page 0
         a.insert_item(1, refslot(300), &mut refs); // page 1
-        // Displacement: the page-0 ref is decremented when index 0 is
-        // overwritten with a page-2 ref.
+                                                   // Displacement: the page-0 ref is decremented when index 0 is
+                                                   // overwritten with a page-2 ref.
         a.insert_item(0, refslot(600), &mut refs);
         assert_eq!(refs.pages_sorted(), vec![1, 2]);
         // Whole-map replacement decrements everything displaced and

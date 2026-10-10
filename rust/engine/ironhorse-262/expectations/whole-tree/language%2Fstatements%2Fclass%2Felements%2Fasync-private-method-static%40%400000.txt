@@ -1,0 +1,25 @@
+# engine=ironhorse features=default corpus=language/statements/class/elements/async-private-method-static tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/elements/async-private-method-static/await-as-binding-identifier-escaped.js sloppy pass
+language/statements/class/elements/async-private-method-static/await-as-binding-identifier-escaped.js strict pass
+language/statements/class/elements/async-private-method-static/await-as-binding-identifier.js sloppy pass
+language/statements/class/elements/async-private-method-static/await-as-binding-identifier.js strict pass
+language/statements/class/elements/async-private-method-static/await-as-identifier-reference-escaped.js sloppy pass
+language/statements/class/elements/async-private-method-static/await-as-identifier-reference-escaped.js strict pass
+language/statements/class/elements/async-private-method-static/await-as-identifier-reference.js sloppy pass
+language/statements/class/elements/async-private-method-static/await-as-identifier-reference.js strict pass
+language/statements/class/elements/async-private-method-static/await-as-label-identifier-escaped.js sloppy pass
+language/statements/class/elements/async-private-method-static/await-as-label-identifier-escaped.js strict pass
+language/statements/class/elements/async-private-method-static/await-as-label-identifier.js sloppy pass
+language/statements/class/elements/async-private-method-static/await-as-label-identifier.js strict pass
+language/statements/class/elements/async-private-method-static/returns-async-arrow-returns-arguments-from-parent-function.js sloppy pass
+language/statements/class/elements/async-private-method-static/returns-async-arrow-returns-arguments-from-parent-function.js strict pass
+language/statements/class/elements/async-private-method-static/returns-async-arrow-returns-newtarget.js sloppy pass
+language/statements/class/elements/async-private-method-static/returns-async-arrow-returns-newtarget.js strict pass
+language/statements/class/elements/async-private-method-static/returns-async-arrow.js sloppy pass
+language/statements/class/elements/async-private-method-static/returns-async-arrow.js strict pass
+language/statements/class/elements/async-private-method-static/returns-async-function-returns-arguments-from-own-function.js sloppy pass
+language/statements/class/elements/async-private-method-static/returns-async-function-returns-arguments-from-own-function.js strict pass
+language/statements/class/elements/async-private-method-static/returns-async-function-returns-newtarget.js sloppy pass
+language/statements/class/elements/async-private-method-static/returns-async-function-returns-newtarget.js strict pass
+language/statements/class/elements/async-private-method-static/returns-async-function.js sloppy pass
+language/statements/class/elements/async-private-method-static/returns-async-function.js strict pass

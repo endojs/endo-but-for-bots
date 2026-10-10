@@ -1,0 +1,3 @@
+# engine=ironhorse features=default corpus=language/expressions/member-expression tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/member-expression/computed-reference-null-or-undefined.js sloppy pass
+language/expressions/member-expression/computed-reference-null-or-undefined.js strict pass

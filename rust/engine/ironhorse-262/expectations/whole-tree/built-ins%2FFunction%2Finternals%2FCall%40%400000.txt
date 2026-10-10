@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=built-ins/Function/internals/Call tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Function/internals/Call/class-ctor-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Function/internals/Call/class-ctor-realm.js strict skip:shared-positive-test-failure
+built-ins/Function/internals/Call/class-ctor.js sloppy pass
+built-ins/Function/internals/Call/class-ctor.js strict pass

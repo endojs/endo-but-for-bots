@@ -1,0 +1,17 @@
+# engine=ironhorse features=default corpus=built-ins/RegExp/prototype/unicode tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/RegExp/prototype/unicode/cross-realm.js sloppy fail:"error-message-differs:TypeError: oracle=\"TypeError: call: not a function\" ironhorse=\"TypeError: cannot coerce undefined to object\""
+built-ins/RegExp/prototype/unicode/cross-realm.js strict fail:"error-message-differs:TypeError: oracle=\"TypeError: call: not a function\" ironhorse=\"TypeError: cannot coerce undefined to object\""
+built-ins/RegExp/prototype/unicode/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicode/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicode/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicode/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicode/prop-desc.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicode/prop-desc.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicode/this-val-invalid-obj.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicode/this-val-invalid-obj.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicode/this-val-non-obj.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicode/this-val-non-obj.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicode/this-val-regexp-prototype.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicode/this-val-regexp-prototype.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicode/this-val-regexp.js sloppy pass
+built-ins/RegExp/prototype/unicode/this-val-regexp.js strict pass

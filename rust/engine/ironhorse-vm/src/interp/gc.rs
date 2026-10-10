@@ -1,0 +1,448 @@
+//! Whole-machine collection, side-table projections, and arena compaction.
+
+use super::{gc_tables, is_promise_resolving_guard, Interp, PromiseJob, ReactionKind};
+
+impl Interp {
+    fn admit_collection(&self) -> Result<(), crate::gc::GcAdmissionError> {
+        if self.gc_failed {
+            return Err(crate::gc::GcAdmissionError::PreviousCollectionFailed);
+        }
+        if !self.is_quiescent() && !self.fields_at_shared_collection_boundary() {
+            return Err(crate::gc::GcAdmissionError::NotQuiescent);
+        }
+        Ok(())
+    }
+
+    /// The machine's complete GC root set (registers, value stack,
+    /// frames, globals, boot/proto anchors, run stacks, the completion
+    /// register, the pending microtask queue, in-flight combinator
+    /// state reachable from queued jobs, and the strong symbol
+    /// registry) — the root assembly [`Self::collect_garbage`] marks
+    /// from, exposed so store-side collectors (the phase-6
+    /// summary-driven partial collect) can ask "which pages hold
+    /// roots" without re-enumerating machine internals. Sorted and
+    /// deduplicated, so the sequence really is fixed: two of the
+    /// sources below are `HashMap`s whose iteration order varies per
+    /// process, and the determinism claim on
+    /// [`Self::collect_garbage`] must hold by construction, not by
+    /// the mark set happening to be order-independent.
+    pub fn gc_roots(&self) -> Vec<crate::value::SlotIndex> {
+        let mut roots = Vec::new();
+        self.append_gc_roots(&mut roots);
+        roots.sort_unstable_by_key(|r| r.0);
+        roots.dedup();
+        roots
+    }
+
+    /// The boot anchors that appear in NO collector visitor — the Intl and
+    /// Temporal namespace objects and prototype caches, the generator
+    /// function prototypes — paired with whether each is currently a live,
+    /// non-null slot. They are held only transitively, through the rooted
+    /// `intrinsics` values and proto rows, and the GC ground-truth registry
+    /// (`tests/gc_visitation_registry.rs`) classifies every one of them
+    /// `TransitivelyRooted`; that claim is CHECKED by calling this after a
+    /// full collection, when a swept anchor reads back dead. The two lists
+    /// reconcile both ways, so a field can be neither added here without
+    /// its classification nor classified without being probed.
+    #[doc(hidden)]
+    pub fn boot_anchor_liveness(&self) -> Vec<(&'static str, bool)> {
+        let live = |idx: crate::value::SlotIndex| !idx.is_null() && !self.slots.is_free_index(idx);
+        let mut out: Vec<(&'static str, bool)> = vec![
+            ("intl_object", live(self.intl_object)),
+            ("temporal_object", live(self.temporal_object)),
+            ("temporal_now_object", live(self.temporal_now_object)),
+            ("locale_proto", live(self.locale_proto)),
+            ("collator_proto", live(self.collator_proto)),
+            ("list_format_proto", live(self.list_format_proto)),
+            ("plural_rules_proto", live(self.plural_rules_proto)),
+            ("segmenter_proto", live(self.segmenter_proto)),
+            ("segments_proto", live(self.segments_proto)),
+            ("segment_iterator_proto", live(self.segment_iterator_proto)),
+            ("date_time_format_proto", live(self.date_time_format_proto)),
+            ("number_format_proto", live(self.number_format_proto)),
+            ("temporal_instant_proto", live(self.temporal_instant_proto)),
+            (
+                "temporal_duration_proto",
+                live(self.temporal_duration_proto),
+            ),
+            (
+                "temporal_plain_protos",
+                self.temporal_plain_protos.iter().all(|idx| live(*idx)),
+            ),
+            ("temporal_zoned_proto", live(self.temporal_zoned_proto)),
+            (
+                "generator_function_proto",
+                live(self.generator_function_proto),
+            ),
+            ("async_generator_proto", live(self.async_generator_proto)),
+            (
+                "async_generator_function_proto",
+                live(self.async_generator_function_proto),
+            ),
+        ];
+        out.sort_unstable();
+        out
+    }
+
+    /// Collect garbage across the WHOLE machine: arenas plus every
+    /// side table. Roots are [`Self::gc_roots`]; a keyed side-table
+    /// entry is an EDGE from its object, so dead objects drop their
+    /// entries instead of leaking through them; side-table-held chunk
+    /// offsets (function name chunks, ArrayBuffer backing stores,
+    /// string `Slot`s stored outside the arena, the interned `typeof`
+    /// strings) participate in compaction liveness and are rewritten
+    /// like arena-resident strings. Deterministic: trace order is
+    /// worklist order from a fixed (sorted) root sequence, sweep is
+    /// index order.
+    ///
+    /// Only quiescent machines may collect. Refusal changes no state and
+    /// does not queue work; consumers choose when to retry. Collector faults
+    /// remain panics and permanently disqualify the machine.
+    pub fn collect_garbage(&mut self) -> Result<crate::gc::GcStats, crate::gc::GcAdmissionError> {
+        self.admit_collection()?;
+        self.gc_failed = true;
+        self.snapshot_dirt.mark_all();
+        use crate::value::SlotIndex;
+
+        let roots = self.gc_roots();
+
+        let mut hooks = gc_tables!(borrow_gc_tables, self);
+        let stats = crate::gc::collect_full(&mut self.slots, &mut self.chunks, &roots, &mut hooks);
+        let swept = std::mem::take(&mut hooks.swept);
+        let dead: std::collections::HashSet<SlotIndex> = swept.into_iter().collect();
+        hooks.prune_late(&dead);
+        drop(hooks);
+
+        self.compact_code_segments();
+        self.compact_reaction_arenas();
+
+        self.gc_failed = false;
+        Ok(stats)
+    }
+
+    /// Compact `combinators`, `from_async`, and `promise_guards`.
+    /// An arena index is live while some surviving
+    /// holder still names it: a `ReactionKind::Combine`/`FromAsync*`
+    /// on a live promise's pending reactions or a queued job
+    /// (combinators, fromAsync), or a live resolving-function pair's
+    /// `guard` (promise_guards). The compaction keeps live entries in
+    /// index order, re-points every holder onto the dense arena, and
+    /// drops the rest. Runs at the end of both collectors' sweeps —
+    /// deterministic (holder contents only, stable order) and
+    /// guest-invisible (indices never surface; nothing is metered).
+    fn compact_reaction_arenas(&mut self) {
+        use std::collections::BTreeSet;
+        let mut live_comb: BTreeSet<u32> = BTreeSet::new();
+        let mut live_fa: BTreeSet<u32> = BTreeSet::new();
+        {
+            let mut note = |kind: &ReactionKind| match *kind {
+                ReactionKind::Combine(ci, _) | ReactionKind::CombineDirect(ci, _) => {
+                    live_comb.insert(ci);
+                }
+                ReactionKind::FromAsyncNext(fa)
+                | ReactionKind::FromAsyncElem(fa)
+                | ReactionKind::FromAsyncMap(fa)
+                | ReactionKind::FromAsyncClose(fa) => {
+                    live_fa.insert(fa);
+                }
+                _ => {}
+            };
+            for p in self.promises.values() {
+                for r in &p.reactions {
+                    note(&r.kind);
+                }
+            }
+            for j in &self.promise_jobs {
+                if let PromiseJob::Reaction { reaction, .. } = j {
+                    note(&reaction.kind);
+                }
+            }
+        }
+        let live_guards: BTreeSet<usize> = self
+            .promise_functions
+            .values()
+            .filter_map(|d| is_promise_resolving_guard(d.guard).then_some(d.guard))
+            .collect();
+
+        // Cardinality alone does not establish that an index set covers its
+        // arena: an out-of-range index can replace a missing valid one.
+        assert!(
+            live_comb
+                .iter()
+                .all(|&i| (i as usize) < self.combinators.len()),
+            "gc:combinator-index-out-of-arena"
+        );
+        assert!(
+            live_fa
+                .iter()
+                .all(|&i| (i as usize) < self.from_async.len()),
+            "gc:from-async-index-out-of-arena"
+        );
+        assert!(
+            live_guards.iter().all(|&i| i < self.promise_guards.len()),
+            "gc:promise-guard-index-out-of-arena"
+        );
+
+        // Fully-live arenas need no rewrite (every index below the
+        // length is referenced, so every remap would be the identity).
+        if live_comb.len() == self.combinators.len()
+            && live_fa.len() == self.from_async.len()
+            && live_guards.len() == self.promise_guards.len()
+        {
+            return;
+        }
+
+        let comb_map: std::collections::HashMap<u32, u32> = live_comb
+            .iter()
+            .enumerate()
+            .map(|(new, &old)| (old, new as u32))
+            .collect();
+        let fa_map: std::collections::HashMap<u32, u32> = live_fa
+            .iter()
+            .enumerate()
+            .map(|(new, &old)| (old, new as u32))
+            .collect();
+        let guard_map: std::collections::HashMap<usize, usize> = live_guards
+            .iter()
+            .enumerate()
+            .map(|(new, &old)| (old, new))
+            .collect();
+
+        let repoint = |kind: &mut ReactionKind| match kind {
+            ReactionKind::Combine(ci, _) | ReactionKind::CombineDirect(ci, _) => *ci = comb_map[ci],
+            ReactionKind::FromAsyncNext(fa)
+            | ReactionKind::FromAsyncElem(fa)
+            | ReactionKind::FromAsyncMap(fa)
+            | ReactionKind::FromAsyncClose(fa) => *fa = fa_map[fa],
+            _ => {}
+        };
+        for p in self.promises.values_mut() {
+            for r in &mut p.reactions {
+                repoint(&mut r.kind);
+            }
+        }
+        for j in &mut self.promise_jobs {
+            if let PromiseJob::Reaction { reaction, .. } = j {
+                repoint(&mut reaction.kind);
+            }
+        }
+        for d in self.promise_functions.values_mut() {
+            if is_promise_resolving_guard(d.guard) {
+                d.guard = guard_map[&d.guard];
+            }
+        }
+
+        let old = self.combinators.take();
+        *self.combinators = old
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| live_comb.contains(&(*i as u32)))
+            .map(|(_, e)| e)
+            .collect();
+        let old = self.from_async.take();
+        *self.from_async = old
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| live_fa.contains(&(*i as u32)))
+            .map(|(_, e)| e)
+            .collect();
+        let old = self.promise_guards.take();
+        *self.promise_guards = old
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| live_guards.contains(i))
+            .map(|(_, e)| e)
+            .collect();
+    }
+
+    /// Drop code buffers no live guest function references and remap the
+    /// surviving function→segment indices densely.
+    fn compact_code_segments(&mut self) {
+        // Dispatchers and native fences retain segment indices in Rust locals.
+        // Those handles cannot participate in a machine-field remap. Keep code
+        // indices stable while a crank runs or retains a halted activation;
+        // the next collection after a completed crank may compact them.
+        if !self.last_crank_completed {
+            return;
+        }
+        let live: std::collections::BTreeSet<usize> =
+            self.func_segments.values().copied().collect();
+        assert!(
+            live.iter().all(|&i| i < self.code_segments.len()),
+            "gc:code-segment-index-out-of-arena"
+        );
+        if live.len() == self.code_segments.len()
+            && live.iter().copied().eq(0..self.code_segments.len())
+        {
+            return;
+        }
+        let remap: std::collections::BTreeMap<usize, usize> = live
+            .iter()
+            .enumerate()
+            .map(|(new, old)| (*old, new))
+            .collect();
+        let old = self.code_segments.take();
+        *self.code_segments = old
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, segment)| live.contains(&index).then_some(segment))
+            .collect();
+        self.remap_saved_handler_segments(&remap);
+        for segment in self.func_segments.values_mut() {
+            *segment = remap[segment];
+        }
+    }
+}
+
+// Page-granular freeing for the store-side partial collector.
+impl Interp {
+    /// Free every live slot in the given pages (deterministic index
+    /// order) and drop the side-table entries keyed by them — the
+    /// page-granular reclamation the summary-driven partial collector
+    /// performs. The caller (the store layer) has proven the pages
+    /// unreachable from the machine's [`Self::gc_roots`] **plus**
+    /// [`Self::side_table_ref_slots`] via the persisted page-edge
+    /// summaries; chunk space held by freed string slots is reclaimed
+    /// by the next full [`Self::collect_garbage`] (partial collection
+    /// never compacts). Returns the number of slots freed. Freeing
+    /// never dirties: no record byte changes — the reclamation
+    /// travels as free-list state (free-segment rows plus the
+    /// manifest's `free_len`), exactly like a sweep.
+    ///
+    /// Requires quiescence in addition to the caller's reachability proof.
+    /// Admission refusal occurs before any mutation, including dirty flags.
+    pub fn free_pages(&mut self, pages: &[u32]) -> Result<u32, crate::gc::GcAdmissionError> {
+        use crate::value::{SlotIndex, SLOTS_PER_PAGE};
+        self.admit_collection()?;
+        self.gc_failed = true;
+        let mut freed: Vec<SlotIndex> = Vec::new();
+        let mut sorted: Vec<u32> = pages.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        for &page in &sorted {
+            // u64 page math: `page * SLOTS_PER_PAGE` would wrap u32 at
+            // the maximal page index, turning an out-of-range page
+            // into a bogus in-range sweep.
+            let start =
+                (page as u64 * SLOTS_PER_PAGE as u64).min(self.slots.capacity() as u64) as u32;
+            let end =
+                ((start as u64 + SLOTS_PER_PAGE as u64).min(self.slots.capacity() as u64)) as u32;
+            for i in start..end {
+                let idx = SlotIndex(i);
+                if !self.slots.is_free_index(idx) {
+                    self.slots.free(idx);
+                    freed.push(idx);
+                }
+            }
+        }
+        let dead: std::collections::HashSet<SlotIndex> = freed.iter().copied().collect();
+        self.prune_dead_tables(&dead);
+        self.compact_code_segments();
+        self.compact_reaction_arenas();
+        self.gc_failed = false;
+        Ok(freed.len() as u32)
+    }
+
+    /// Every slot index held in a side-table VALUE — the same edge
+    /// set [`Self::collect_garbage`]'s `extra_edges` hook reports,
+    /// but enumerated over every entry regardless of its key's
+    /// liveness. The summary-driven partial collector must root these
+    /// pages: the persisted page-edge summaries carry only ARENA
+    /// edges (`Slot.next` + `Payload::Reference`), so a reference
+    /// held in a Rust-side table — an Array's element map, a Map/Set
+    /// entry, a captured closure record, a bound function's target, a
+    /// suspended generator/async frame, a pending reaction — is
+    /// invisible to the stored graph, and a page reachable only
+    /// through one would otherwise be freed while live.
+    /// Treating every side-table value as a
+    /// page root is strictly conservative: an entry whose key is dead
+    /// keeps its values' pages one partial collection longer; the
+    /// full [`Self::collect_garbage`] reclaims exactly.
+    pub fn side_table_ref_slots(&self) -> Vec<crate::value::SlotIndex> {
+        let mut out: Vec<crate::value::SlotIndex> = Vec::new();
+        self.each_side_table_ref(&mut |r| out.push(r));
+        out.sort_unstable_by_key(|r| r.0);
+        out.dedup();
+        out
+    }
+
+    /// The counted-reference parity net: the standing per-page counts the
+    /// bulk tables' counted accessors maintain (`side_refs`) against a
+    /// fresh recount of the SAME three tables — arrays' items, ordinary
+    /// index properties, and collection entries — enumerated through the
+    /// roster's `bulk` walk. The two sides share no term: the tail
+    /// tables take no part, so a tail reference on a page can neither
+    /// cancel nor mask a bulk discrepancy there, and the comparison is
+    /// on exact counts rather than page bits, so a single missed
+    /// increment or decrement beside a surviving reference is a
+    /// finding even though the page set is unchanged. O(live bulk
+    /// entries), in every build profile; the page projection runs it
+    /// only under `debug_assertions` or `store-integrity`, callers that
+    /// want the check elsewhere call it directly.
+    ///
+    /// What this net cannot see: a reference reachable through a
+    /// side-table row whose field is walked but whose SUBFIELD the row
+    /// policy omits. Both collectors' walks are generated from one
+    /// per-row policy (`gc_slot_row!`), so such an omission is shared
+    /// by every walk and is held by the behavioural twins
+    /// (`gc_side_tables.rs`, `gc_frame_state.rs`, `gc_anchor_truth.rs`),
+    /// not by this comparison.
+    pub fn side_ref_parity(&self) -> Result<(), crate::gc::SideRefParityMismatch> {
+        let mut walked: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
+        self.each_side_table_ref_bulk(&mut |r| {
+            if let Some(page) = crate::bulk::SideRefCounts::page_of(r) {
+                *walked.entry(page).or_insert(0) += 1;
+            }
+        });
+        match self.side_refs.mismatch_against(&walked) {
+            Some(mismatch) => Err(mismatch),
+            None => Ok(()),
+        }
+    }
+
+    /// One flag per [`crate::value::SLOTS_PER_PAGE`]-slot page of the
+    /// arena: whether any side-table value references a slot on it —
+    /// the page-granular projection the summary-driven partial
+    /// collector roots from. Bulk tables use standing page counts;
+    /// the remaining tables are enumerated directly. In debug builds
+    /// and with `store-integrity`, [`Self::side_ref_parity`] verifies
+    /// the standing counts against a fresh bulk-only recount. A
+    /// mismatch or counted-state underflow/overflow permanently
+    /// prevents quiescence and page freeing, and returns all pages as
+    /// roots. Out-of-arena indices (including the null sentinel) fall
+    /// outside the bitmap and are skipped.
+    pub fn side_table_ref_page_bits(&self) -> Vec<bool> {
+        let pages = self.slots.capacity().div_ceil(crate::value::SLOTS_PER_PAGE) as usize;
+        let mut bits = vec![false; pages];
+        // The TAIL tables (functions, promises, iterators, …) stay an
+        // O(small) walk; the BULK tables (array items, ordinary index properties,
+        // and collection entries) use the standing per-page refcounts the
+        // counted accessors maintain (design § Plan: counted
+        // side-table ref-page accessors) — O(pages-with-refs) instead
+        // of O(live entries).
+        self.each_side_table_ref_tail(&mut |r| {
+            if !r.is_null() {
+                if let Some(b) = bits.get_mut((r.0 / crate::value::SLOTS_PER_PAGE) as usize) {
+                    *b = true;
+                }
+            }
+        });
+        self.side_refs.or_into_bits(&mut bits);
+        // Parity net: the standing counts must agree with a fresh
+        // recount of the bulk tables — a missed counted mutation shows
+        // up HERE, before the collector can free a live page or pin a
+        // dead one. Compared without the tail, so a tail reference
+        // cannot mask the finding on a shared page.
+        #[cfg(any(debug_assertions, feature = "store-integrity"))]
+        if self.side_ref_parity().is_err() {
+            self.side_refs.poison();
+        }
+        // Preserve the bitmap API conservatively. Store callers check
+        // quiescence after this projection and return a refusal; other
+        // callers receive no reclaimable pages, and free_pages is gated.
+        if self.side_refs.is_poisoned() {
+            bits.fill(true);
+        }
+        bits
+    }
+}

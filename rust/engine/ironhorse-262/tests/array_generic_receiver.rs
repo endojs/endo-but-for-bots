@@ -117,7 +117,7 @@ fn array_like_at_relative_index() {
 // -------------------------------------------------------------------------
 
 #[test]
-fn sparse_forEach_skips_holes() {
+fn sparse_for_each_skips_holes() {
     agrees("var a = [1, , 3]; var out = []; a.forEach(function (v, i) { out.push(i); }); out.join(',')");
 }
 
@@ -127,7 +127,7 @@ fn sparse_reduce_skips_holes() {
 }
 
 #[test]
-fn sparse_indexOf_skips_holes() {
+fn sparse_index_of_skips_holes() {
     agrees("var a = [1, , 3]; a.indexOf(undefined)");
 }
 
@@ -142,7 +142,7 @@ fn sparse_find_visits_holes_as_undefined() {
 }
 
 #[test]
-fn sparse_lastIndexOf_over_preallocated() {
+fn sparse_last_index_of_over_preallocated() {
     agrees("var a = new Array(4); a[3] = 'z'; a.lastIndexOf('z')");
 }
 

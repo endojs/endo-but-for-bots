@@ -56,12 +56,12 @@
     "@endo/ocapn": "workspace:^",
     "@endo/patterns": "workspace:^",
     "ink": "^7.1.1",
-    "react": "^19.2.8"
+    "react": "^19.3.0"
   },
   "devDependencies": {
     "@endo/lockdown": "workspace:^",
     "@endo/ses-ava": "workspace:^",
-    "@types/react": "^19.2.18",
+    "@types/react": "^19.3.0",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",

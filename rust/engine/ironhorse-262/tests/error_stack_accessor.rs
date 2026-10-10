@@ -40,9 +40,7 @@ fn getter_renders_name_message_and_frames() {
         "function inner() { return new Error('deep'); } \
          function outer() { return inner(); } '' + outer().stack",
     );
-    assert_result_agrees(
-        "var named = new Error('n'); named.name = 'Custom'; '' + named.stack",
-    );
+    assert_result_agrees("var named = new Error('n'); named.name = 'Custom'; '' + named.stack");
 }
 
 #[test]

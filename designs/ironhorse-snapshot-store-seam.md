@@ -3,10 +3,230 @@
 | | |
 |---|---|
 | **Created** | 2026-08-06 |
-| **Updated** | 2026-08-31 |
+| **Updated** | 2026-09-24 |
 | **Author** | Aaron Kumavis (prompted) |
 | **Status** | In Progress |
 | **Builds on** | designs/ironhorse-engine.md (§ Snapshots, requirement 1c) |
+
+**The resident store is trusted (decided 2026-09-24).**
+*This entry describes phase 13, implemented in
+[#1331](https://github.com/endojs/endo-but-for-bots/pull/1331) (§ Phased Implementation).*
+Phase 13 landed in two stages, each reviewed before it landed.
+Stage 1 took the checks off the run-time path without changing the store format: a store it wrote
+still opened and verified on the previous build, so it could have shipped alone.
+Stage 2 removed the machinery behind a store schema bump (schema 36) and migration.
+
+A heap store is the canonical representation of the machine it holds, and Ironhorse trusts it as
+such.
+Whoever can write the store can already write the machine, so no property Ironhorse offers survives
+a store it cannot trust.
+The store's hashes are unkeyed and their formula is documented, so they never stopped anyone who
+can write the file; what they caught was accidental damage.
+Nothing else in the shipped backends detects that: SQLite checksums its WAL frames only for crash
+recovery and checksums no pages unless a checksumming VFS is configured, and the file store has no
+checksums, so under this model bit rot that still decodes goes undetected unless the deployment's
+storage catches it.
+Tamper-evidence and authentication are therefore not goals of Ironhorse or of its store backends.
+A consumer that must accept a heap across a trust boundary builds that assurance outside the store,
+with hashes and signatures over what it exchanges; the canonical export's CAS address (Design
+Decision 6) is the natural thing to sign, at a point where the consumer trusts the store it
+exported from.
+
+Phase 13 retires the integrity machinery the store accumulated:
+
+- the row-hash tree: the leaf hashes of slot pages and chunk extents (phase 5) and of free
+  segments (phase 9), the sealed root, the schema-5 extension that folded the page summaries into
+  it, the schema-28 section tree that binds the small state into it, and the `RootLedger` caches
+  that maintain it (stage 2);
+- the commit seal as a hash, with the commit's recomputation of each batch's seal; its pairing
+  role survives as a random commit token (stage 2, below);
+- every check made against them (stage 1): open-time root recombination and seal re-derivation,
+  the leaf check on every eager row read, lazy fault and free-segment read, SQLite's digest check
+  on every small-state read, and the recombination and seal re-derivation before a checkpoint that
+  refused to launder an at-rest edit into a new root;
+- the torn-read re-checks, a manifest re-read before and after each fault and after resume's
+  reads, which guarded against a second writer, and with them the pin's epoch, seal and leaves
+  (stage 1);
+- the checks on the run-time path that need a pass of their own over stored data (stage 1): the
+  row inventory walk at open, the eager resume's stored-property-id audit, and the checkpoint's
+  read-and-check of never-faulted pages before slot reuse or growth
+  (`validate_backing_before_checkpoint`) together with the backing-generation free map it keeps,
+  which move to the validator;
+- the commit's re-derivation of each page summary from its encoded rows (stage 1), which moves to
+  debug builds and the validator.
+
+Bounds checks that run as part of decoding stay, as guards against engine bugs (below).
+
+The seal also did a job that was not about tampering: it paired a session with the exact store
+state its batch was built on.
+That refused a session checkpointing or collecting against a different store at its own epoch, a
+copy that has since diverged or a caller that routes a session to the wrong store, which would
+otherwise splice two machines' rows and free lists or free live pages on the other store's
+summaries.
+Since stage 2, a random token minted at every commit keeps that pairing without hashing:
+byte-identical copies still pair, and a diverged copy does not; forks with identical content, which
+shared a seal and converged, no longer pair.
+Stores migrated from the same schema-35 state share a token, the first half of their common seal,
+until either commits.
+The pin's re-checks also caught, at the machine's next fault, a second session committing on the
+same store handle; that guard is given up, and such a session is still caught when it next
+checkpoints, by the pairing.
+They caught the same commit on the store a machine was unbound from while it still faults from it,
+where no checkpoint is left to catch it; there the guard stays, as a pairing check on each fault of
+the unbound machine (a manifest read that a bound session's faults do not pay), and starting a
+session on the machine detaches the old backing as soon as it has read what it needs.
+`PersistentMachine` does neither: it drops a session before resuming another and never unbinds a
+machine, and other connections stay excluded (§ SQLite schema and operational discipline).
+
+What stays is what makes a store usable, not what would make it tamper-evident:
+
+- **Compatibility gates at open**: the SQLite `application_id` stamp and the file store's magic,
+  which the backend checks as it opens the file; then format readability, the store schema range
+  (`NeedsMigration` for an older supported schema), the callback-table signature with its boot
+  fingerprint, and the cost table.
+  They ask whether this build can read the store and refuse before anything is restored: a
+  signature, boot-layout or cost-table mismatch, or an older schema that needs migrating, with a
+  typed refusal; a foreign file (another application's database, a file that is not a database, or
+  a foreign file-store magic) as a corrupt store; a read-only SQLite database as unsupported; and a
+  file the backend cannot read as an I/O error.
+- **The decoding restore needs**: the manifest, the small state and the free list, with the
+  decoders' ordinary refusals, and the VM's own restore checks (the free list and live/free
+  accounting as it builds the slot arena, the symbol-key table, the empty stack).
+  Lazy resume sizes its arenas from the manifest's geometry before it reads a row, so its open
+  also checks the live/free accounting and reads the last slot page and chunk extent, refusing a
+  geometry the stored rows do not back before it can size an allocation.
+  Stage 1 makes a fault on a missing row or a failed read (I/O) come back as the store's own error
+  instead of a panic: from resume when restore itself faults (the global-object walk, say), and
+  from a crank or a collection, which the host then rewinds, so a store with a missing row is
+  refused where the row is needed rather than crash-looping the worker.
+- **Cheap guards against engine and caller bugs**: the session/store pairing at checkpoint and
+  collection (on epoch and commit token since stage 2, on epoch and seal before it), the commit's
+  batch geometry checks (with a row-index range check since stage 2) and its succession rules
+  (epoch, cadence, counter monotonicity, schema), one check that each section payload the commit
+  writes is canonical (resume refuses a non-canonical one, so an engine bug there would otherwise
+  write a store its own resume cannot read), the collectors' summary-count check, epoch overflow,
+  and the bounds checks that run inside a decode.
+  Each fault checks its row's exact length and its records' references (W6-14), against the live
+  free map instead of the backing-generation copy and against the geometry last committed.
+  It catches a reference to a slot that is free when the page faults, including one freed earlier
+  in the same session, and one beyond the committed range.
+  It no longer catches a reference to a slot that was free in the store and has been reused since,
+  nor, once a later commit has grown the committed range, one that was out of range when its row
+  was committed; an honest store holds neither, because no live record references a free slot or a
+  slot beyond the arena.
+  Restore bounds-checks the small state (the wave-5 gate) and, on the eager path, the decoded heap
+  (W6-14).
+- **The container path.**
+  Containers are the interchange format and can come from elsewhere, so `import_from_container`
+  still validates a container completely before it writes a store: `read_validated_machine`, whose
+  gates go well beyond Requirement 2's `VERS`/`SIGN`/`METR`, plus the stored-property-id audit.
+  Export reads the trusted store as resume does, so its bytes and CAS address describe the heap as
+  stored; a store that holds an unregistered property id still refuses to export.
+- **Correctness validation, on request** (stage 1).
+  `validate_store` stops being the gate both resume paths run and becomes an explicit check of a
+  store's content, at two levels, each starting with the manifest gates.
+  The metadata-scale level checks the manifest's and small state's own invariants (a nonzero epoch,
+  the symbol-key counter above the name table, an empty stack, and since stage 2 a nonzero commit
+  token), the row inventory, the live/free accounting, the free list, the small state's semantic
+  bounds and the summary count.
+  The full level also decodes and bounds-checks every row, audits stored property ids, re-derives
+  each page summary from its rows and each small-state section digest from its payload, and
+  compares a backend's derived indexes with their sources, through a new `HeapStore` hook that the
+  SQLite backend implements for `edge_pairs`.
+  Both check by decoding and cross-checking, the first over metadata and the small state and the
+  second over everything; neither takes a stored digest as evidence about the content.
+  Tests and fuzz targets run either level.
+  In stage 1 a migration that ran ended with the metadata-scale level; since stage 2 a migration
+  runs its checks on the migrated result before the one write that stores it.
+
+Change detection uses flags and counters, plus one hash kept for performance, the small-state
+section digest; § Incremental checkpoint has the detail.
+
+A store altered at rest is, to Ironhorse, the machine it now describes.
+It opens if it is compatible.
+A defect the engine trips over surfaces as a structured error or as a named panic, which crashes
+the crank (worker death and supervisor recovery); a defect it does not trip over runs, and can
+produce a wrong answer.
+An edit that leaves every record well-formed and every derived structure consistent is, by
+design, undetectable by the production path and by the validator.
+The tests that locked detection of such edits retire, and those whose defect is structural move to
+the validator.
+An offline edit must keep derived state consistent itself (§ SQLite schema and operational
+discipline).
+
+Below this entry, every dated record that describes seals, leaves, roots, or `validate_store` as
+the gate resume runs describes machinery phase 13 retires.
+The normative sections carry inline amendments: Requirement 6, § The seam is three layers,
+§ Store data model, § SQLite schema and operational discipline, § Lazy reification,
+§ Incremental checkpoint, § GC interaction, § Determinism analysis, § Interchange, Alternatives
+item 3, § Seam footprint, Design Decisions 3, 6, 7 and 9, and phases 5, 6, 10 and 13.
+
+**SQLite open trusts the maintained edge index (2026-09-23,
+[#1330](https://github.com/endojs/endo-but-for-bots/issues/1330)).**
+`SqliteHeapStore::open` no longer rebuilds `edge_pairs` from `page_edges` at every open.
+Each commit records its epoch in a `meta` row, `edge_pairs_epoch`, in the transaction that
+maintains the pairs.
+Open trusts the stored index when that marker names the manifest's epoch, so reopening a store
+whose last commit came from this build reads one marker row instead of rebuilding, and writes
+nothing.
+A missing or different marker means no marker-keeping commit wrote the current rows: the store
+predates the table or the marker, or its last commit came from a build that maintains the pairs
+without recording the marker.
+Open rebuilds such a store as every open used to, but never writes the marker itself; only a
+commit records it.
+So a store the caller then refuses (an incompatible boot layout or signature) is left exactly as
+the previous build's open left it, and a crash mid-rebuild leaves the marker stale for the next
+open to rebuild again.
+Open also takes the database's exclusive lock explicitly, with an empty `BEGIN IMMEDIATE`
+transaction, and refuses a read-only database, where that transaction takes no lock.
+The per-open rebuild used to take that lock, and refuse a read-only database, as a side effect;
+without it, a second connection could open and write a store another connection had just opened.
+This retires the review-wave-2 stance that open never trusts the derived index; the 2026-09-24
+trust-model entry above extends the same trust to every row class.
+The marker records which epoch the index was maintained for, not whether its rows are right, so a
+bug in commit-time maintenance would now persist across reopens instead of being repaired at the
+next one.
+Nothing in production reads the index yet (the host's scheduled and explicit collection is
+`full_collect`), which bounds that risk today.
+Deleting the marker from a closed store forces the next open to rebuild the index, and the
+validator's full level (phase 13) compares the index with the summaries.
+
+**F043 section storage increment (schema 28, 2026-09-09).**
+*Phase 13 (the 2026-09-24 trust model) retires the small-state root, its binding into the
+manifest root, the migration's root verification and the seal chain described here; the per-section
+digests stay, as change detection.*
+The small-state root now binds 32 stable section identities through a fixed tree.
+SQLite stores each payload and its identity-bound leaf hash in `small_sections`.
+Schema 26 retains the earlier CESU-8 NAME conversion.
+Schema 27 retains canonical small state and authenticated manifest policy.
+The v27->v28 migration verifies the old monolithic root before atomically replacing
+the manifest and section rows; it preserves every payload byte, epoch, crank count,
+and collection policy; its new seal chains from the old seal.
+Whole-state export and the reference FileStore retain the existing framed encoding.
+Ordinary commits require the current schema; migration is the only schema transition.
+Sparse batches retain omitted sections and replace explicitly supplied payloads.
+Full and sparse batches share the canonical manifest seal, whose authenticated root
+binds the resulting section contents and identities.
+SQLite and MemoryStore write only supplied sections; FileStore merges them for its
+whole-file rewrite.
+The VM now selects dirty sections before extraction, encoding, and hashing (F043).
+Mutable side-table access marks the affected sections, including cross-section dependencies.
+Session-owned baseline tokens detect interpreter replacement and unrelated acknowledgements.
+Only a successful durable checkpoint clears dirt; failed writes retain it for retry.
+Resume preserves normalization dirt until its first successful checkpoint.
+Subsequent unchanged checkpoints skip clean bulk sections.
+The retained-array scaling instrument now passes, and mixed array/collection/name
+counter tests verify skipped extraction and encoding with restored-image parity.
+These guarantees concern incremental section work; FileStore still rewrites its file.
+
+**Snapshot framing hardening (2026-09-09).**
+The previously recorded unchecked section ends in `SmallState::decode` and
+`peek_cost_table_version` now use checked addition and return named refusals for
+overflow or truncation.
+`AtomWriter` checks both individual atom sizes and the accumulated container size
+against the u32 wire limit before writing, with synthetic boundary tests.
+The blob writer still buffers its image and container; it hashes the same buffer
+it writes rather than offering bounded-memory streaming.
 
 Investigation of a seam in the Ironhorse engine's snapshot subsystem
 that lets the whole-heap snapshot artifact be replaced by a database
@@ -26,6 +246,18 @@ amended 2026-07-29): the trait and the arena hooks are **Ironhorse**
 (language execution); the SQLite backend and its file lifecycle are
 **Endor** (platform binding).
 
+## Interpreter follow-up (2026-09-10)
+
+The historical notes below describe the private/dead pending-job probe at review time.
+`Interp::has_pending_jobs` and `Interp::run_promise_jobs` are now public per-machine APIs.
+Draining uses the normal halt channel and invocation receipts, including native-only jobs.
+The common engine trait remains deferred under W6 decision 2.
+`RunOutcome` retains lifetime counters and adds explicit per-invocation fields;
+Endo evaluation receipts cover this evaluation's compilation, linking and execution.
+The deterministic Math feature and generated ICU profile enter boot compatibility;
+ordinary platform Math still has per-binary/per-platform scope.
+See [the implementation record](../rust/engine/DETERMINISM-METERING.md).
+
 ## Status
 
 Phases 1-4 implemented (2026-08-06/07, this branch, PR #963), then
@@ -41,6 +273,11 @@ principal review-driven revisions, recorded as design amendments:
   stores at equal height; the seal chain fails all of them closed
   (`StoreError::BaselineMismatch`). Identical-content forks share a
   seal and converge harmlessly.
+  *Amended by phase 13 (the 2026-09-24 trust model): the seal stops
+  being a hash, and a random commit token minted at every commit takes
+  its place in succession, so forks, diverged copies and foreign stores
+  at equal height still fail closed, and identical copies still pair;
+  forks whose content happens to match no longer converge.*
 - **`StoreSession` owns the machine.** The dirty bitmaps are
   machine-global, so only the session that watched them accumulate may
   commit them; ownership makes machine/session mispairing and
@@ -52,6 +289,11 @@ principal review-driven revisions, recorded as design amendments:
   its row reads — a store advanced by anyone else yields a
   deterministic named crashed crank or a structured error, never a
   chimera heap mixing epochs.
+  *Retired by phase 13 (the 2026-09-24 trust model): a store has one
+  writer (§ SQLite schema and operational discipline), so neither
+  faults nor resume will re-read the manifest; the checkpoint's
+  pairing remains, on epoch and seal and from stage 2 on epoch and
+  commit token.*
 - **Guard-discipline fix (critical):** the string comparison opcodes
   hold two chunk guards at once and now pre-fault both operands, so a
   lazily resumed machine cannot die on `a === b` across extents.
@@ -77,6 +319,10 @@ A follow-up automated review pass (PR #963 Copilot review,
   Content reads now happen only on fault (or eager reify), and the
   fault path's exact-length asserts keep the length half of the
   check enforced at use.
+  *Amended by phase 13 (the 2026-09-24 trust model): the inventory
+  check moves to the explicit validator's metadata-scale level,
+  production open stops running it, and the fault-time length
+  asserts remain.*
 - **Commit presence checks are O(dirty + grown).** A batch that grows
   the geometry must supply every row in the grown region; the check
   now walks only `prior geometry .. new geometry` against a hash set
@@ -91,11 +337,15 @@ A follow-up automated review pass (PR #963 Copilot review,
   byte-identical twin passes succession but leaves the pin (and the
   pinned store's content) exactly where the machine's faults need
   them.
+  (Phase 13 removes the pin's epoch, seal and leaves; the address
+  identity still decides whether a commit advanced the machine's
+  backing.)
 - **`FileStore` temp names are unique per attempt** (pid + process
   sequence), so two writers racing the same path cannot clobber each
   other's staging file; the single-writer-per-path model itself is
   documented at the type, and the second-handle lock stays the seal
-  chain.
+  chain (the epoch and commit-token check against the durable file,
+  since phase 13 retired the seal).
 - **Recorded trade — placeholder allocation at lazy attach.** A lazy
   resume allocates the full dense `Cell` arrays (slots and residency
   bits) up front: O(slot_count) zero-fill before any fault. The
@@ -123,11 +373,17 @@ still left on the lazy paths, and tightened the decoders:
   could not see. Both windows are locked by a deterministic
   interleaving-store harness (`store_checkpoint.rs`) that applies a
   valid successor commit inside the chosen read.
+  *Both re-checks are retired by phase 13 (the 2026-09-24 trust
+  model): the SQLite backend holds its exclusive lock from open to
+  close (explicitly since #1330), so no second connection can commit
+  while a machine is resumed on the store.*
 - **Decoders require exact consumption.** A manifest with bytes after
   its seal, or a small state with bytes after its sixth section, now
   fails closed as corrupt rather than decoding permissively — store
   contents are untrusted, and format evolution goes through the
   schema-version gate, not trailing data.
+  (The 2026-09-24 trust model retires the "untrusted" rationale;
+  exact consumption stays, as format discipline.)
 - The pass re-raised the placeholder-allocation trade (twice); the
   disposition stands as recorded above.
 
@@ -149,6 +405,9 @@ backend's physical representation, so their failure taxonomy is not
 shared.
 
 **Phase 5 landed (2026-08-11, store schema v3): the row-hash tree.**
+*Retired by phase 13 (the 2026-09-24 trust model): the tree, its
+root and every check against them go; the wake-latency instrument
+stays.*
 Every row (slot page, chunk extent, small state) has a SHA-256 leaf;
 the manifest carries the combined root, which the seal signs (the
 seal hashes the full manifest).
@@ -182,6 +441,23 @@ recombine measurable.
 
 **Phase 6 landed (2026-08-11): persisted page-edge summaries and the
 summary-driven partial collector.**
+Partial collection never reclaims chunk space.
+Workers using only this collector must be recycled before reaching their chunk
+ceiling, or run explicit full collection under their consumer's collection policy.
+Consumers requiring replica-identical heaps must coordinate those collections.
+Full collection now packs chain-aligned regions within an extent when at least
+one quarter of the region's bytes are dead, keeping crossing live blocks fixed.
+It encodes reusable interior holes and truncates trailing garbage; the reported
+chunk byte length measures tail reclamation, not reusable interior capacity.
+Format 17 carries free-block markers, and allocation rebuilds its deterministic
+size-and-address index from those markers after resume.
+Unchanged extents retain their backing and residency; changed extents retain
+dirty and unbacked ownership until the appropriate checkpoint.
+The byte vector can retain its allocation after truncation for subsequent reuse.
+This changes relocation policy inside explicit full collection without adding
+allocation-triggered GC.
+The GC schedule remains consumer-owned, as W6 decision 5 records.
+
 Every checkpoint writes per-page outgoing-edge summaries
 (`derive_page_edges` — a pure function of the page's records, NULL
 links excluded), carried in the batch, signed by the seal, and — as
@@ -228,7 +504,7 @@ leaves slot pages clean too — both halves locked by
 `compaction_dirties_only_moved_extents`.
 The full re-key of chunk rows by stable identity — which would also
 de-chain the page summaries phase 6 needs for dropped sequential
-runs — is deferred with this honest note: it changes the slot→chunk
+runs — is deferred with this honest note: it changes the slot->chunk
 reference encoding, the store schema, and the compaction algorithm
 together, and the incremental-dirt cut already removes the
 whole-space recommit cost that motivated it.
@@ -331,7 +607,10 @@ Landed as infrastructure and instruments:
   reachability), so open never trusts the derived index at all —
   wiped-index and moved-pair recovery are both locked by test, and
   the geometry delete mirrors the sealed rows' normalization verbatim
-  (the divergent `OR target >=` disjunct is gone). The
+  (the divergent `OR target >=` disjunct is gone).
+  (Superseded 2026-09-23 by [#1330](https://github.com/endojs/endo-but-for-bots/issues/1330):
+  open now trusts an index whose epoch marker is current and rebuilds
+  only a stale one; see the 2026-09-23 entry.) The
   `summary_page_count` override checks contiguity, not just COUNT
   (gap + phantom row fails closed, locked), and both overrides report
   `Empty` on an uncommitted store exactly like the dense defaults.
@@ -349,7 +628,7 @@ Landed as infrastructure and instruments:
   the answer IS the graph, one bulk blob read plus an in-Rust BFS
   beats per-row query transfer; there is no free lunch. Small answer
   (one edgeless page): the CTE stays flat at ~0.023-0.029 ms while
-  the dense path grows 0.025 → 0.222 ms with the heap — transfer
+  the dense path grows 0.025 -> 0.222 ms with the heap — transfer
   proportional to the ANSWER, the regime the generational mark's
   small mutation sets live in. Phase 11 should therefore use the CTE
   for incremental marks and the dense read for full passes. Cold
@@ -406,8 +685,8 @@ side-table walk is now a single visitor body
 `side_table_ref_page_bits` (the bitmap the partial collector roots
 from) — so the projections cannot drift (also parity-locked by
 `side_table_page_bits_agree_with_slot_enumeration`). Measured: the
-480k-slot enumeration drops 3.6 ms → 1.06 ms and end-to-end partial
-12.4 ms → 8.4 ms, now free-dominated (the amortized term above).
+480k-slot enumeration drops 3.6 ms -> 1.06 ms and end-to-end partial
+12.4 ms -> 8.4 ms, now free-dominated (the amortized term above).
 
 What remains of the decision-side O(live) is the 1.06 ms walk itself.
 Retiring it outright means incremental ref-page counts behind counted
@@ -437,9 +716,13 @@ the cleared set is kept so the negatives are on the record too.
   trusted forever and silently shrank reachability, the class the v5
   sealing exists to refuse. Fixed: open rebuilds `edge_pairs` from
   the sealed rows unconditionally; locked by
-  `edge_pairs_rebuilt_after_count_preserving_desync`.
+  `edge_pairs_rebuilt_after_count_preserving_desync`. (Superseded
+  2026-09-23 by [#1330](https://github.com/endojs/endo-but-for-bots/issues/1330):
+  that test now covers only stores whose epoch marker is stale; see
+  the 2026-09-23 entry, and the 2026-09-24 trust model, which retires
+  the at-rest-edit threat this finding answered.)
 - **Geometry-delete normalization divergence**: the commit-side
-  `DELETE … OR target >= ?1` disjunct differed from the rebuild's
+  `DELETE ... OR target >= ?1` disjunct differed from the rebuild's
   normalization (dead code on honest histories; a crafted shrink
   made it oscillate). Removed — pairs mirror the sealed rows
   verbatim.
@@ -534,7 +817,7 @@ was not — are now actioned.
   loudly instead of silently shifting what the suite builds.
 - **The empty-transition pair clear is bite-locked**
   (`commit_clears_pairs_when_a_page_loses_all_edges`): a page whose
-  summary goes non-empty → empty across commits must shed its stale
+  summary goes non-empty -> empty across commits must shed its stale
   pairs — guarding the commit-side delete behind a non-empty check
   would have passed every prior suite while leaving ghost edges.
 
@@ -593,9 +876,9 @@ Phase 1-2 detail (2026-08-06):
   compaction dirties exactly the new extent range.
   Deviation from the doc as first written: the geometry constants
   live in the **vm** (the bitmaps key to them and the dependency runs
-  snapshot → vm); `ironhorse-snapshot::store` re-exports them.
+  snapshot -> vm); `ironhorse-snapshot::store` re-exports them.
 - `rust/engine/ironhorse-snapshot/src/machine.rs` — the store-backed
-  machine surface: `StoreSession` (the machine↔store pairing pinned
+  machine surface: `StoreSession` (the machine<->store pairing pinned
   by epoch — an addition over the design text, closing the
   dirty-set-against-the-wrong-baseline hazard surfaced during
   implementation), `begin_store_session` (full epoch-1 write, refuses
@@ -626,7 +909,7 @@ Phase 3-4 detail (2026-08-07): lazy reification (`PageSource`,
 Cell-backed by-value slot reads, the ChunkBytes Plain/Lazy enum with
 guard-deref chunk reads, grow-only residency, GC compaction as the
 amortized reifier, `resume_from_store_lazy`); the six-way metamorphic
-determinism suite (five real-JS scenarios × uninterrupted / blob /
+determinism suite (five real-JS scenarios x uninterrupted / blob /
 store-eager / store-lazy / adversarial-prefetch /
 checkpoint-every-crank, agreeing on per-crank results, final
 computrons, and final blob bytes) plus a working-set residency bound
@@ -659,6 +942,9 @@ wake-latency benchmark remain open.
 **Named integrity limitations (review findings, accepted and scoped —
 these bound Requirement 6 and Design Decision 7 to *structural*
 validation):**
+*Retired by the 2026-09-24 trust model: the store stops aiming at
+tamper-evidence, so these record what builds before phase 13 do and
+do not detect.*
 
 1. ~~Row content is not checksummed.~~ **Discharged 2026-08-11 by
    phase 5** (store schema v3): every row has a stored leaf hash, the
@@ -681,6 +967,13 @@ validation):**
    together produces a store that validates as a different machine —
    this is tamper-evidence at row scale, not authentication. The
    blob path keeps its external-CAS-address integrity model.
+   **Retired by phase 13 (the 2026-09-24 trust model):** the
+   row-hash tree goes and row content is trusted as the canonical
+   machine; a flip at rest that leaves every record well-formed
+   resumes as the machine it describes.
+   `length_preserving_flip_at_rest_fails_closed` retires, and
+   `edge_summary_flip_at_rest_fails_closed` moves to the validator's
+   full level, which re-derives each summary from its rows.
 2. **Record semantics are not validated at open.** A structurally
    valid store whose record *contents* are corrupt (a chunk offset
    below the header width, an out-of-range slot index) passes
@@ -689,6 +982,14 @@ validation):**
    crashed crank, not a wrong answer, but not the structured
    open-time error either. Decoding every record at open would defeat
    lazy resume; the panic path is the accepted trade.
+   **Under the 2026-09-24 trust model this becomes the rule for
+   every row class**, not a limitation, and without the promise
+   above: a corrupt record the engine trips over still dies as a
+   named panic, but one it does not trip over is part of the machine
+   and can produce a wrong answer.
+   Production restore bounds-checks references as it decodes them, and
+   the explicit validator's full level decodes and bounds-checks every
+   record.
 
 **Supervisor wiring, first cut (2026-08-18).** The daemon gains the
 store seam's supervisor-side option: `HeapStoreOptions { path,
@@ -712,11 +1013,11 @@ supervisor picks the schedule (replica-visible, like the full
 collector's). The lifecycle test
 (`rust/endo/tests/ironhorse_store_worker.rs`, run by the `build-xsnap`
 CI job, which owns the bundle/toolchain prerequisites) exercises fresh
-open → multi-crank state growth with per-crank epochs → crashed-crank
-rewind → refused divergent-symbol crank (epoch stands) → partial
-collection (durable: a post-resume second collect frees 0) →
-supervisor suspend record (put-back round-trip) → close (WAL folded) →
-reopen from the record with state and epoch chain intact → the
+open -> multi-crank state growth with per-crank epochs -> crashed-crank
+rewind -> refused divergent-symbol crank (epoch stands) -> partial
+collection (durable: a post-resume second collect frees 0) ->
+supervisor suspend record (put-back round-trip) -> close (WAL folded) ->
+reopen from the record with state and epoch chain intact -> the
 signature gate refusing a foreign host surface.
 
 **Two Copilot review passes over the supervisor wiring (2026-08-18),
@@ -845,7 +1146,7 @@ fail-closed.
   reads manifest and leaves inside the one IMMEDIATE transaction —
   the stale-prior scenario is unrepresentable).
 - Three-way backend parity holds at every epoch of a lockstep
-  boot→growth→reopen→collect→reopen→eval sequence: fifteen
+  boot->growth->reopen->collect->reopen->eval sequence: fifteen
   fingerprint fields identical across Memory/File/SQLite (manifest
   with root and seal, small state, inventory, leaf hashes, edge
   summaries, reachability sets including degenerate roots, canonical
@@ -897,12 +1198,12 @@ objects reachable only via an old array's item map, gen freed 0).
   `next_intern_id = names.len()+1`, small state ships `keys`/`symbols`
   empty, and `symbol_key_ids` persists nowhere — so after resume the
   mint counter re-issues ids that persisted slots already occupy.
-  `o[Symbol.for('a')]=1; o[Symbol.for('b')]=2` → suspend/resume →
+  `o[Symbol.for('a')]=1; o[Symbol.for('b')]=2` -> suspend/resume ->
   reading `b` returns `1`. The in-process `RuntimeInternsPresent`
   relink guard is fail-CLOSED live but fail-OPEN after resume (restore
   wiped its evidence), so G2 relink turns the refusal into corruption.
   `sidetable.rs`'s `SymbolKeyIds` row is honestly Pending but its
-  justification ("cannot re-resolve after restore" / "unreachable …
+  justification ("cannot re-resolve after restore" / "unreachable ...
   regardless of restore") is falsified — the behavior is
   MIS-resolution, and nothing fails closed at snapshot, checkpoint, or
   post-resume relink. Disposition: the honest fix persists the intern
@@ -925,7 +1226,7 @@ objects reachable only via an old array's item map, gen freed 0).
   `bind_program_symbols`, never the intrinsic/value-global/
   prototype-method/well-known-symbol installation that lives in
   `link_intrinsics`. A crank that first references a built-in after
-  the linked crank throws (`Math.max` → "undefined variable", even
+  the linked crank throws (`Math.max` -> "undefined variable", even
   inside guest `try`/`catch` — the halt escapes) or silently reads
   `undefined` (`arr.map`), where a fresh-linked machine and XS
   succeed. The `relink_crank` doc claim "re-bind exactly as boot
@@ -945,7 +1246,7 @@ objects reachable only via an old array's item map, gen freed 0).
   hits an unchecked `Vec` index — not a `debug_assert`, so it fires in
   release. Reachable via the container path and the store small-state
   decode. Disposition: validate every restored slot index against
-  `slots.capacity()` in `restore_bulk_side_tables` (→ `Corrupt`),
+  `slots.capacity()` in `restore_bulk_side_tables` (-> `Corrupt`),
   matching `decode_heap`.
 - **P1 (docs, in shipping strings):** the envelope gap statement cites
   the wrong ironhorse-engine roadmap stages — "stage 7 (SES boot
@@ -997,7 +1298,7 @@ objects reachable only via an old array's item map, gen freed 0).
   encoding change would turn into corruption of a store the open then
   declares unsupported.
 - **Migration precedes the signature gate:** open takes no signature
-  and restamps 5→6→7 before `validate_store` checks `SIGN`, so a
+  and restamps 5->6->7 before `validate_store` checks `SIGN`, so a
   mis-pointed newer daemon one-way-migrates a foreign v5 store and
   bricks its rightful older owner (which refuses `schema != 5`).
   Content-preserving, so an ops/bricking hazard, not data loss.
@@ -1013,8 +1314,12 @@ objects reachable only via an old array's item map, gen freed 0).
   no computron-agreement assertions.
 - **A throw to a handler live across a suspend undercharges one
   dispatch** (found by fixing the item above — the computron
-  assertions the suspend-in-try arms lacked failed the moment they were
-  added, which is the whole argument for asserting them). A `try`
+  comparisons the suspend-in-try arms lacked flagged it the moment they
+  were added; note, 2026-09-15: the underlying defect was Iron Horse
+  charging *nothing* for real re-establishment work — an own-cost-model
+  fidelity gap for which the XS delta was the measurement instrument.
+  Computron-agreement is advisory telemetry, not a standing assertion —
+  XS-computron parity is a non-goal). A `try`
   entered before a `yield`/`await` has its handler re-established on
   resume, and XS pays one extra bytecode dispatch to land a throw in
   it; ironhorse paid nothing. Attribution measured per THROW through a
@@ -1045,7 +1350,7 @@ a pre-fix boot heap migrated forward keeps NULL-proto natives (a
 version-silent compat fork); and a cluster of docs-accuracy items
 (systematic 08-18/19 vs 08-24 date skew, a stale `Updated` metadata
 field, false checklist-preamble self-claims, two stale code comments
-the delta's own code contradicts, the phase-12 "~1MB" figure ~2× the
+the delta's own code contradicts, the phase-12 "~1MB" figure ~2x the
 survivors with its concat half traceable to pre-fixture measurement,
 "deciding evidence per row" true for only 2 of 24 rows, and
 `TableFull` omitted from the G2 refusal enumeration).*
@@ -1055,7 +1360,7 @@ iteration order reaches any observable (bytes, roots, seals, free-list
 order); all restore/fault/evict/materialize/ledger/migration/relink/
 collector work is unmetered and the meter is restored verbatim;
 canonical container bytes and the golden blob pin hold (blob
-byte-identical across the 43ca4783→78c5affe→eff933c6 chain, only the
+byte-identical across the 43ca4783->78c5affe->eff933c6 chain, only the
 seal moved per format commit); the ephemeron fixpoint converges
 (3-deep chains survive, cycles reclaim, re-fixpoint frees 0) and
 WeakSet/WeakMap contribute no strong edges; the counted-accessor net
@@ -1063,7 +1368,7 @@ has no mutation bypass (the chunk-remap escape hatch only rewrites
 String/BigInt payloads, never references); generational collect is
 sound for side-table-held references and retention-only (gen-freed ⊆
 partial-freed); migration crash windows are atomic with a genuine
-valid v6 intermediate, the 6→7 splice shifts exactly the two
+valid v6 intermediate, the 6->7 splice shifts exactly the two
 directories, and the v5 fixtures are honest (schema-5 bytes, frozen
 pre-bump); the V6-c ledger's drop-on-failure holds in both owners and
 its incremental tree equals a from-scratch build; H1's empty-dense-vec
@@ -1214,6 +1519,10 @@ Landed so far:
   two-call program, or `handle_alloc_error` where the reservation fails.
   The fuzz generator, which produced rows the new decoder rules reject,
   now generates rows they accept.
+  (Phase 13 takes `validate_store` off both resume paths, but the
+  small-state bounds gate stays on them: stage 1 moves it into lazy
+  resume, eager resume keeps it in `store_to_image`, and the explicit
+  validator keeps it too.)
 - **Test hygiene.** `TempDir` keys on pid plus a per-call counter in all
   four helpers, so concurrent runs of a crate no longer delete each
   other's fixtures — the likely real cause of the "flaky" store failures
@@ -1272,7 +1581,7 @@ Landed so far:
   one ladder step; closing it entirely needs a compare-and-swap in the
   write, which the single-writer premise does not pay for, and that is
   recorded at the method. The progress guard now requires a STRICT
-  advance, closing the CYCLE case (5→6→5→6 never repeated
+  advance, closing the CYCLE case (5->6->5->6 never repeated
   consecutively and spun forever) and bounding the loop by the schema
   range. `store_to_image` gates on the schema before recomputing the
   root, so `root_hash` and `export_to_container` name
@@ -1345,9 +1654,14 @@ and retired KEYS by unifying string keys into the NAME table, so the
 remainder is the Pending rows), and phase 12 (demand-gated, gate
 measured). Entries without a checkbox are stances
 rather than work items.
+A fourth box opened on 2026-09-24 for work, not a gate, and is closed: phase 13,
+which retires the integrity machinery under the trust model.
 
 *Seam and daemon:*
 
+- [x] Phase 13, trust the resident store (stages 1 and 2, implemented in
+  [#1331](https://github.com/endojs/endo-but-for-bots/pull/1331)); see the 2026-09-24 entry at
+  the top and § Phased Implementation.
 - [ ] The Ironhorse worker ENVELOPE protocol (`endor worker -e
   ironhorse`): DEPENDENCY-GATED on ironhorse-engine.md roadmap
   stages 4 (host-function surface) and 7 (SES boot bundle) — this
@@ -1422,7 +1736,7 @@ rather than work items.
   (`ARRY`/`COLL`/`REGY`, emitted only when non-empty — every
   existing container's bytes, golden blob pin included, unchanged)
   and in three new small-state sections (store schema **v7**; the
-  6→7 ladder step appends them empty as a pure 12-byte suffix and
+  6->7 ladder step appends them empty as a pure 12-byte suffix and
   restamps the root; `migrate_store` is now a stepwise ladder, each
   step leaving a complete valid intermediate store). Restore routes
   every insert through the counted accessors so the side-ref page
@@ -1466,12 +1780,14 @@ rather than work items.
   intact, both refusal edges are pinned, and the worker lifecycle
   test now runs a divergent crank through relink live and after
   reopen.
-  STILL OPEN in this workstream: the 3 `Pending` ledger rows —
-  `async_instances`, `async_generators`/`async_gen_run_stack`, and
-  `modules` (generators graduated in schema 21, the promise cluster
-  in schema 23; the async rows are gated meanwhile by the persist
-  gate's reaction-kind and async-generator arms, refusing by name
-  instead of dropping silently).
+  CLOSED since in this workstream: the 3 `Pending` ledger rows —
+  `async_instances` (`ASYN`, schema 24), `modules` (in the shared
+  `FUNC` extension, schema 32) and, last, `async_generators`/
+  `async_gen_run_stack` (carried in `ASYN` after the activations,
+  format 23 / store schema 34; the run stack is quiescence-empty).
+  Generators graduated in schema 21, the promise cluster in schema
+  23. The persist gate's reaction-kind arm now refuses only the
+  `FromAsync*` kinds, by name instead of dropping silently.
   The old intern gap is NOT among them: runtime string keys live in
   the NAME table and symbol keys travel in `SYMB` (id-space
   unification, 2026-08-26), so no interning gates relink or
@@ -1491,7 +1807,7 @@ rather than work items.
   never-materialized page answers the placeholder `undefined`
   exactly as the dense fill did (behavior-preserving by
   construction), and the fault path installs into the page box.
-  Attach cost at 4M slots: 40.4 → 2.9 ms (the honest remainder is
+  Attach cost at 4M slots: 40.4 -> 2.9 ms (the honest remainder is
   the still-dense free/mark bitmaps at ~0.7 ns/slot, recorded
   here). The detached hot path keeps its exact pre-H1 shape — one
   `lazy.is_some()` branch then a direct dense index — after the
@@ -1534,8 +1850,8 @@ rather than work items.
   (`warm_refusal_drops_the_cache_and_recovers`); equivalence locked
   by `root_ledger_apply_equals_scratch_recombination` (grow, shrink,
   stable widths) plus the standing seven-way metamorphic suite.
-  Measured (store_bench, release, same rungs): checkpoint 1.230 →
-  0.752 ms at 60 pages, 2.300 → 1.438 at 236, **6.839 → 0.809 at
+  Measured (store_bench, release, same rungs): checkpoint 1.230 ->
+  0.752 ms at 60 pages, 2.300 -> 1.438 at 236, **6.839 -> 0.809 at
   939** — the pages term is gone (residual = row write + WAL fsync);
   arm relabeled `checkpoint(O-dirty·log)`.
 - [x] ~~Schema migration does not exist~~ Done (deferred pass,
@@ -1549,15 +1865,15 @@ rather than work items.
   untouched (links are opaque history) — and each backend supplies
   the one write it needs via `replace_manifest_for_migration`
   (Memory: swap; File: same-length manifest splice + tmp/rename,
-  possible because `StoreManifest` encodes v5→v6 at identical byte
+  possible because `StoreManifest` encodes v5->v6 at identical byte
   length; SQLite: meta upsert). The **opener** runs `migrate_store`
   explicitly — `FileStore::open` and SQLite `init` do not, since the
   restamp is authorized by a callback-table signature `open` has no
   way to know (review wave 4, F2). Locks: committed v5-era fixtures
   (`.ihstore`, `.container`, `.sqlite` — regenerators stay
   `#[ignore]` so the artifacts remain OLD bytes) plus `migration.rs`
-  in both crates: open→migrate→validate→resume→re-read fixture
-  content ("3")→checkpoint extends the chain; re-migrating is a
+  in both crates: open->migrate->validate->resume->re-read fixture
+  content ("3")->checkpoint extends the chain; re-migrating is a
   no-op and byte-stable; the v5 container imports onto the current
   schema and re-exports byte-identically (the container format is
   schema-independent — the golden blob pin did not move). The
@@ -1572,6 +1888,10 @@ rather than work items.
   authentication (§ threat model): an author who can rewrite rows,
   leaves, root, and seal together still forges a validating store.
   (Accepted stance, not a work item.)
+  *Superseded by the 2026-09-24 trust model, which is where the
+  stance now lives (the "§ threat model" this bullet cites was never
+  written): the store is trusted and aims at no tamper-evidence at
+  all.*
 
 *Engine (ironhorse-vm), named gaps the seam inherits:*
 
@@ -1585,9 +1905,9 @@ rather than work items.
   standing counts plus an O(small) tail walk. Slots never move (only
   chunks compact), so the counts survive full GC via sweep/retain
   decrements alone; the chunk remap keeps a narrow no-delta escape
-  hatch. Measured at 480k slots: enum 1.15 → 0.095 ms (the < 0.1 ms
+  hatch. Measured at 480k slots: enum 1.15 -> 0.095 ms (the < 0.1 ms
   bar), decision path gate+enum+query 0.30 ms, free phase unchanged;
-  attached-mode envelope held (resident ×0.977, faulting ×1.002 of
+  attached-mode envelope held (resident x0.977, faulting x1.002 of
   detached). Locks: a debug parity net in the projection compares
   counts against a fresh enumeration on EVERY call (bite-checked:
   disabling one increment fails two suites), unit symmetry tests in
@@ -1610,9 +1930,9 @@ rather than work items.
   computrons). Trait defaults are dense; the SQLite overrides answer
   the seed from `edge_pairs` and bound the CTE to the region.
   Measured (release, fixed 300-object churn): the INDEXED pass stays
-  near-flat — 0.32/0.34/0.43 ms across 15k→240k slots — while dense
-  and full-partial grow with the page count (0.06→0.21 and
-  0.07→0.35 ms); the full in-memory mark remains the periodic
+  near-flat — 0.32/0.34/0.43 ms across 15k->240k slots — while dense
+  and full-partial grow with the page count (0.06->0.21 and
+  0.07->0.35 ms); the full in-memory mark remains the periodic
   verification pass. Locked by the twin-agreement and no-dirt-noop
   gc_machine tests plus the three-way backend-equivalence arm; the
   timing is a pure function of store content and the session's own
@@ -1621,7 +1941,7 @@ rather than work items.
   (roadmap item 12) — until then chunk compaction slides the whole
   space. DEMAND-GATED per the phase-7 honest note (the incremental-
   dirt cut removed the whole-space recommit that motivated it; the
-  redesign changes the store schema, the slot→chunk encoding, and the
+  redesign changes the store schema, the slot->chunk encoding, and the
   compactor together and "only pays once heaps are large enough that
   compaction I/O dominates checkpoints"), and the gate is now
   MEASURED (`gc_bench::compaction_slide_checkpoint_cost`,
@@ -1692,7 +2012,7 @@ rather than work items.
   schema v15 / format v4): every defining crank lazily promotes its
   bytecode into an owned segment when it defines a function, and
   `FUNC` carries the compact segment set atomically with guest
-  `FuncInfo`, bound-function state, constructor→prototype links, and
+  `FuncInfo`, bound-function state, constructor->prototype links, and
   deleted function metadata. Cross-crank calls now work live, eager,
   lazy and through blobs; eval-defined functions no longer trip a
   persistence gate. Both collectors compact unreferenced code
@@ -1711,7 +2031,7 @@ rather than work items.
     name refused at decode outside the engine's closed
     error-constructor set, emitted only when non-empty so the golden
     blob pin held) + the tenth small-state section (store schema
-    v9; the 8→9 migration appends the one empty section header —
+    v9; the 8->9 migration appends the one empty section header —
     provably content-preserving, since the v8 gates refused any heap
     holding a live row) + `errors_snapshot`/`restore_error_data` on
     both resume paths + the bounds gate covering `ERRD` owners. The
@@ -1729,7 +2049,7 @@ rather than work items.
     `error_own_properties.rs`.
   - [x] The typed-array family LANDED (2026-08-27, store schema
     v10): the `ABUF`/`TARR`/`DVIW` atoms + three more small-state
-    sections (the 9→10 migration appends them empty — the same
+    sections (the 9->10 migration appends them empty — the same
     provably-content-preserving suffix as every ladder step, since
     the v9 gates refused any heap holding a live row). The backing
     BYTES always traveled (an `ArrayBuffer`'s store is a chunk-arena
@@ -1751,7 +2071,7 @@ rather than work items.
     validation biting).
   - [x] The DATA-ONLY language rows LANDED (2026-08-27, store schema
     v11, the `WRAP`/`REGX`/`ARGB`/`TMPR` atoms + four more
-    small-state sections; the 10→11 migration appends them empty):
+    small-state sections; the 10->11 migration appends them empty):
     primitive wrapper boxes (the boxed value is an ordinary slot, so
     its chunk reference joins the bounds walk), regular expressions
     (source/flags/`lastIndex` travel; the compiled program RECOMPILES
@@ -1833,7 +2153,7 @@ rather than work items.
     re-mint on a cache miss: an instance-held collator or format
     answers identically after resume (first-access behavior), and
     only a guest that held the bound function ITSELF degrades,
-    exactly as every held guest function does today. The 11→12
+    exactly as every held guest function does today. The 11->12
     migration appends the two empty sections (a pure 8-byte suffix,
     verify-root-then-restamp). The ledger stands at 18 Pending rows:
     `IntlRecords` and the new `NameFloor` graduated Serialized;
@@ -1863,7 +2183,7 @@ rather than work items.
     born failing on the this-guard TypeErrors), bite-checked three
     ways: dropped rows redden everything, a RAW physical index
     reddens precisely the tombstone-straddle twin, and an unfolded
-    staleness reddens precisely the cleared-cursor twin. The 12→13
+    staleness reddens precisely the cleared-cursor twin. The 12->13
     migration appends the one empty section (a pure 4-byte suffix,
     verify-root-then-restamp); the golden seal re-pinned, the blob
     pin held — container stability restored after v12's deliberate
@@ -1877,7 +2197,7 @@ rather than work items.
     re-derived by boot and omitted; a guest-mutated prototype is
     emitted like any other Date. Decode refuses duplicate or
     descending owners, both adoption paths reject free owners, and
-    the 13→14 migration appends one empty section before restamping.
+    the 13->14 migration appends one empty section before restamping.
     Memory, file, lazy and blob twins live in `date_carry.rs`; the
     codec lock covers arbitrary NaN payload bits. `Dates` graduates
     Serialized and the ledger returns to 17 Pending rows.
@@ -1887,7 +2207,7 @@ rather than work items.
     Guest trap functions ride `FUNC`; memory, file, lazy, blob,
     revocation, and malformed-row locks live in `proxy_carry.rs`.
   - [x] Guest accessors LANDED (2026-08-29, schema v17 / format v6):
-    owner/key→getter/setter mappings travel in `ACCS`; exact boot seeds
+    owner/key->getter/setter mappings travel in `ACCS`; exact boot seeds
     remain restore-derived, while guest redefinitions at those keys
     travel. Guest getter/setter functions ride `FUNC`. Accessors that
     reference runtime native functions owned by a still-Pending row
@@ -1918,8 +2238,8 @@ rather than work items.
   entry remaps identically — the displacement churn is what gives
   the twins teeth).
 - [x] ~~Resource-management METERING is not oracle-exact (wave-6):
-  the DisposableStack paths measure −4..−8 computrons vs XS and the
-  `using` paths −4~~ Done (calibrated 2026-08-27): the suite-wide
+  the DisposableStack paths measure -4..-8 computrons vs XS and the
+  `using` paths -4~~ Done (calibrated 2026-08-27): the suite-wide
   gap decomposed, via a ten-shape dual-run probe, into five clean
   whole-dispatch-unit constants — construct +2
   (`DISPOSABLE_STACK_CONSTRUCT_METERING`), each record-adding
@@ -1928,11 +2248,13 @@ rather than work items.
   (`DISPOSE_USE_RECORD_METERING`), the `using` declaration +1
   (`USING_DECL_METERING`) and +1 more for a real resource
   (`USING_RESOURCE_METERING`) — additive across every combination
-  probed (defer×2+move measured exactly 3×2 beyond the construct).
-  All ten shapes now measure delta 0 and `resource_management.rs`
-  asserts FULL agreement (results and computrons). The async forms
-  share the arm and the charges, pending their own oracle
-  calibration (no async-`using` differential lock exists yet).
+  probed (deferx2+move measured exactly 3x2 beyond the construct).
+  All ten shapes measured delta 0 at calibration time;
+  `resource_management.rs` asserts observable agreement (results),
+  with computron drift advisory per the accuracy-over-parity
+  doctrine — the constants are now Iron Horse's own release costs,
+  and their XS-delta provenance is a record, not a requirement. The
+  async forms share the arm and the charges.
 - [x] ~~Symbol-key id-space EXHAUSTION at the meet: symbol keys mint
   top-down from `u16::MAX` while the name table grows bottom-up, and
   the MEET — same class as the old shared counter's saturation —
@@ -1950,28 +2272,6 @@ rather than work items.
   `JSON.parse` fixture; asserted in release mode too). The widened
   id type remains available as a future format decision if ~64k
   combined keys ever binds a real workload.
-- The async-generator START-REJECT boundary is not yet
-  oracle-exact in COMPUTRONS (results agree): −20 versus XS when
-  the rejecting generator's `next()` is observed directly, −26 on
-  the drain-side twin — a pre-existing mainline gap
-  (fxAsyncGeneratorReject's request processing is uncalibrated),
-  where the plain async function's start-reject −1 IS calibrated
-  away (`ASYNC_START_REJECT_BOUNDARY_METERING`). A calibration
-  ATTEMPT (2026-08-27, the resource-management ten-shape method)
-  measured the full matrix and CONFIRMED the deferral: the residue
-  is not a clean per-operation decomposition — throw+1×`next` −20,
-  +2 −38, +3 −55 (per-extra-request increments −18 then −17, so
-  not a whole-unit constant), the observed-rejection twin −21, the
-  yield-then-throw drain twin −26, while the NORMAL completion
-  path measures −1 and the return-only path +3 (an OVERcharge in
-  the opposite direction) — compensating constants would overfit
-  these shapes and miswire others. The matrix is PINNED
-  (`async_generator_reject_residue_shape_is_pinned` beside the −20
-  pin in `await_in_try.rs`) so drift in ANY direction is a visible
-  flip; calibrating it properly still means tracing XS's
-  fxAsyncGeneratorReject/Resolve request dispatch, deferred until
-  async-generator metering identity is a bar someone holds.
-
 *Tooling and coverage:*
 
 - [x] ~~Deep fuzzing stays a local/scheduled concern; CI runs
@@ -1981,6 +2281,12 @@ rather than work items.
   Actions tab with a custom budget — sharing the smoke lane's corpus
   cache family so the two lanes accrete ONE corpus; the 30 s PR
   tripwire stays as it was.
+  Corrected 2026-09-16: the PR tripwire this item and the paragraph below both
+  describe had in fact been removed from `ci.yml`, so for several waves the
+  only lane was the nightly one — and it ran four pure-Rust targets, not the
+  roster.
+  Both lanes now read their roster from `fuzz/Cargo.toml` and start from the
+  checked-in `ironhorse-fuzz/fuzz/seeds/` corpus.
 - [x] ~~The oracle-linked crate test suites (ironhorse-compile,
   -regexp, -262, the fuzz lib's unit tests) run locally/manually, not
   in CI~~ Done (deferred pass, 2026-08-18): the
@@ -2008,9 +2314,13 @@ rather than work items.
 Landed context for the items above: the
 attached-mode benchmark landed with phase 10's instruments, and the
 cargo-fuzz CI lane landed as the `fuzz-ironhorse` smoke job (30 s per
-decode/round-trip target on every ironhorse-relevant change, corpus
-cached across runs, crash artifacts uploaded on failure; deep fuzzing
-stays a local/scheduled concern). The lane's FIRST run earned trophy
+target on every ironhorse-relevant change, corpus cached across runs,
+crash artifacts uploaded on failure; deep fuzzing stays a local/scheduled
+concern).
+That job was later lost from `ci.yml` and was absent when the architecture
+review measured the lane.
+It is back, and now covers every declared target rather than the decode and
+round-trip ones. The lane's FIRST run earned trophy
 #2: hostile bytecode that enters an async run, pops below the run's
 recorded stack base, then suspends — the frame snapshot's `split_off`
 panicked past the stack end. Both suspend twins (`YIELD`/`AWAIT`) now
@@ -2058,10 +2368,18 @@ reconciliation is recorded here, with its lock.
   did that conversion wholesale: every engine throw routes through
   `raise_js` (which sets `self.exception` and finds the handler), the
   unwind restores the establishing frame's activation (`leave_call`
-  per crossed frame, stack/locals/env cuts), and `Halt::Resume`
+  per crossed frame, stack/locals/env cuts), and `Step::Unwound`
   propagates the handler's resume point out through the Rust-level
-  dispatch nesting to the loop that owns the handler's frame. The
-  floor would now BLOCK correct cross-frame catches, so it is removed;
+  dispatch nesting to the loop that owns the handler's frame. (That
+  "wholesale" claim was recorded here while 29 native sites still built
+  `Halt::Throw` inline, uncatchable and with `self.exception` unset —
+  the architecture review's F004/F005, a known-fixed item found open.
+  The private `Step::Threw` now carries the thrown value through nested dispatch
+  and native catches; only the host boundary constructs and renders `Halt::Throw`.
+  `ironhorse-vm/tests/throw_construction_sites.rs` locks both construction sets.
+  Public `Halt` has no catch or suspension transfers, and the typed activation return
+  replaces the `callback_return_depth` side channel and its snapshot classification.)
+  The floor would now BLOCK correct cross-frame catches, so it is removed;
   `nested_run_unwind_floor.rs` re-pins the STRONGER property — the
   driver's catch catches and the program completes with the thrown
   value, full XS agreement. What survives from the wave-5 work is the
@@ -2085,7 +2403,7 @@ reconciliation is recorded here, with its lock.
   two halves:
   1. **String keys live in the name table.** `intern_key` appends the
      novel name to `symbol_names` — the id IS the new table position —
-     so the id→name map for every string key (program symbol, boot-
+     so the id->name map for every string key (program symbol, boot-
      link intern, guest `o[expr]`/`JSON.parse` key alike) persists via
      the NAME row that already travels, and a crank name equal to a
      runtime-minted name resolves to the minted id, the aliasing-free
@@ -2229,7 +2547,7 @@ wave-3 precedent this section records findings first, fixes land as
 their own pass.
 
 **The verdict in one paragraph.** The mechanisms designed as CLOSED
-systems verified sound: snapshot writer↔restorer symmetry on both blob
+systems verified sound: snapshot writer<->restorer symmetry on both blob
 and store paths (with a proof that boot slot layout is independent of
 the name table, so restore-onto-fresh-boot is correct by construction);
 canonical byte-ordering at every encode site; the relink walker
@@ -2355,8 +2673,8 @@ id-range proxy.
 **W6-8 (P1 latent, determinism) — Compartment endowment seeding
 iterates a `HashMap` into heap construction.** `globals_by_id:
 HashMap<u16, Slot>` (compartment.rs:147) is iterated at :296/:314 into
-`define_global_id` → `create_global_property`, which PREPENDS a
-property-chain slot per binding: with ≥2 endowments, per-process
+`define_global_id` -> `create_global_property`, which PREPENDS a
+property-chain slot per binding: with >=2 endowments, per-process
 SipHash order decides global enumeration order (`for-in`,
 `Object.keys(globalThis)`) and slot-allocation order (snapshot bytes).
 In-tree callers seed zero endowments, so nothing diverges today. Fix
@@ -2375,10 +2693,10 @@ an uninterrupted twin):
 | `defineProperty` getter, `o.x` | halts (`Decode`, by luck) | completes `undefined` | SILENT-WRONG |
 | `Uint8Array` writes; element/length reads | `16` | completes `NaN` | SILENT-WRONG |
 | Error as completion value (render) | `Error: boom` | `[object Object]` | SILENT-WRONG |
-| `new RegExp` / literal, `.test` | works | `Unsupported("…non-regexp-this")` | visible-fail |
-| Set iterator `.next()` | works | `Unsupported("…non-iterator")` | visible-fail |
+| `new RegExp` / literal, `.test` | works | `Unsupported("...non-regexp-this")` | visible-fail |
+| Set iterator `.next()` | works | `Unsupported("...non-iterator")` | visible-fail |
 | resolved promise, `.then` | works | `Unsupported("then:non-promise-this")` | visible-fail |
-| `new Number(5)`, `n + 1` | `6` | `Unsupported("to_primitive…")` | visible-fail |
+| `new Number(5)`, `n + 1` | `6` | `Unsupported("to_primitive...")` | visible-fail |
 | class instance public state; `e.message` | works | works | identical (arena) |
 
 The mechanism: a resumed slot loses its side-table row and degrades to
@@ -2420,7 +2738,7 @@ cannot otherwise produce.
 
 **W6-11 (P2, determinism) — boundary-live register residue creates an
 uninterrupted-vs-resumed ROOT-SET asymmetry.** `result` is rooted by
-design (:39366-39370 — "it survives past the crank … so it is a
+design (:39366-39370 — "it survives past the crank ... so it is a
 root"), `locals`/`id_map` are cleared only by the NEXT crank's
 prologue (:8591-8592) and are rooted meanwhile (:39358-39360) — yet
 none is a ledger row, a documented transient, or restored
@@ -2444,7 +2762,7 @@ admitted.
 **W6-13 (P2, contract) — the armed-meter resume claim is false on the
 armed path.** `meter_host` is a host closure that cannot travel;
 `check_meter` no-ops when it is `None` (:7903-7908); the only re-arm
-API (`arm_meter` → `Meter::begin`, meter.rs:119-124) ZEROES the
+API (`arm_meter` -> `Meter::begin`, meter.rs:119-124) ZEROES the
 restored index. So a resumed "armed" machine either never meter-aborts
 (host not re-wired) or loses its restored computron count (re-wired
 through the only API) — the METR row's "a resumed machine continues
@@ -2477,7 +2795,7 @@ dispatch advances 3, the coder emits a 1-byte op plus a separate
 `INTEGER_1`), desynchronizing the `FUNCTION_LOCAL_METERING` scan —
 metering-only; `remap_ids` and the disassembler are unaffected. (18)
 the eval-bridge relink FAILS OPEN on ids beyond the unit's own atom
-(`relink_program_symbols` :7103-7126 `if let Some … get` with no else)
+(`relink_program_symbols` :7103-7126 `if let Some ... get` with no else)
 where `relink_crank` refuses `MalformedBytecode` — the two walkers
 should agree. (19) `combinators`/`from_async` are append-only arenas
 never pruned, and `promise_guards` grows one flag per resolve pair
@@ -2546,6 +2864,20 @@ field list from source in a build test and diff it against
 `SideTable::ALL` + documented satellite/transient name lists), and a
 GC net that checks against an INDEPENDENTLY DERIVED edge list rather
 than the visitor's own output.
+Status (architecture review F038/F053/F089): the runtime parity net
+now compares the standing bulk counts against a fresh recount of the
+SAME three tables through the roster's `bulk` walk, exact counts and
+no tail term, so a tail reference can neither cancel nor mask a bulk
+discrepancy (`Interp::side_ref_parity`, compiled into every build that
+carries debug assertions or the `store-integrity` feature — the shipped
+worker's configuration — and pinned by `side_ref_parity.rs`); the
+subfield class it
+still cannot see is held by the behavioral twins. The GC registry
+parses the whole production module set derived from the crate's
+`mod` declarations, checks every claim against the field's OWN
+generated policy through `self.<field>`, and proves each
+transitively-rooted boot anchor alive after a collection through
+`Interp::boot_anchor_liveness`.
 
 **4. Assertions that stop one step short of behavior.**
 `armed_meter_state_survives_suspend` asserts the restored MeterState
@@ -2571,12 +2903,24 @@ INTERIOR of the supported region (covered state round-trips
 correctly); none tests its BOUNDARY (uncovered state fails VISIBLY).
 The Pending classification silently relied on per-native `this`
 guards for its safety story, and nobody had ever checked which rows
-actually had one (W6-9's silent-wrong four). Same genre: the store is
-fuzzed at the decoder but no harness forges a store with recomputed
-hashes (W6-14), the eval-bridge walker never sees a crafted unit
-(W6-18), and the metering walker's mis-size cancels out on every
-tested program (W6-17 — a divergence that only fires when a stray
-`0x86` lands in the over-stepped bytes, which no fixture produces).
+actually had one (W6-9's silent-wrong four). Same genre: no harness
+forges a store with recomputed hashes (W6-14), the eval-bridge walker
+never sees a crafted unit (W6-18), and the metering walker's mis-size
+cancels out on every tested program (W6-17 — a divergence that only
+fires when a stray `0x86` lands in the over-stepped bytes, which no
+fixture produces).
+
+This paragraph used to open by reasoning from "the store is fuzzed at the
+decoder", which was false when it was written and stayed false for a wave.
+No `ironhorse-fuzz` target reached `HeapStore`, `StoreManifest::decode`,
+`SmallState::decode` or `validate_store`, and the phase-1 acceptance bar below
+claimed a malformed-store target that did not exist while phases 2 through 12
+were declared done.
+A meta-cause analysis that reasons from an unmet bar is itself an instance of
+the failure it is analysing.
+The target exists now (`fuzz_targets/store_decoder.rs` over
+`ironhorse_fuzz::store`), so the clause is retired rather than corrected in
+place; what is left in this sentence is the part that is still true.
 
 **The meta-cause** is one sentence: the seam's safety rests on
 hand-maintained enumerations (ledger rows, GC visitation arms, gate
@@ -2603,7 +2947,7 @@ bite-checked by reverting the fix under the lock). Statuses:
   plus `async_gen_run_stack` roots); W6-5 (`using` @@dispose, THREE
   oracle-differential locks in `resource_management.rs` — result
   agreement; the suite-wide resource-management METERING gap of
-  −4..−8 computrons vs XS is pre-existing and recorded below); W6-6
+  -4..-8 computrons vs XS is pre-existing and recorded below); W6-6
   (`strict` resets at crank entry; `strict_crank_boundary.rs` with a
   sloppy control); W6-7 (the keep filter compares against an
   installed-names floor advanced by every install pass and RESTORED to
@@ -2627,14 +2971,33 @@ bite-checked by reverting the fix under the lock). Statuses:
   boundary, so uninterrupted and resumed twins root the same set);
   W6-12 (`MachineSnapshot::write_snapshot` now returns `Result`
   through a `persist_gate` carrying the quiescence AND segments
-  checks — the blob verbs refuse what the store verbs refuse);
+  checks — the blob verbs refuse what the store verbs refuse; since
+  2026-09-06 the gate lives on `snapshot_image` itself, the only
+  route from a live machine to its image, running the whole persist
+  predicate set including the stored-key-id audit, so the image data
+  path — `write_machine`, `image_to_batch`, `commit` — never sees a
+  machine the gate refused, and the trait's permissive default is
+  gone (architecture review F047; the incremental
+  `checkpoint_to_store` now runs its inline gate in the same order).
+  The same pass made `is_quiescent` a lifecycle predicate — a
+  `last_crank_completed` latch as its first conjunct, so a
+  table-empty halt at a top-level meter check, the dispatch ceiling
+  or a decode fault is refused too (F011) — and moved the oracle
+  harness's `String(result)` coercion out of `Interp::run`: a Symbol
+  or null-prototype completion is a completion with
+  `RunOutcome::coercion_error` beside it, folded into the oracle's
+  abort shape only by `RunOutcome::host_coerced` in the differential
+  runners (F030/F022));
   W6-13 (`Meter::rearm`/`Interp::rearm_meter` re-arm without zeroing
   the restored index; the lock runs the resumed machine armed to a
   real `MeterAbort`); W6-14 (eager `store_to_image` runs the
   full-image semantic bounds gate; the lazy fault installer
   bounds-checks faulted slot references and dies as a NAMED
   corrupt-store refusal — the lock forges a consistently-sealed
-  hostile store with the crate's own batch writer); W6-15
+  hostile store with the crate's own batch writer; *phase 13 keeps
+  both, as guards against engine bugs that run inside the decode, and
+  moves the fault check from the backing-generation free map to the
+  live one*); W6-15
   (`pending_new_target` disarms on unwind and host escape;
   oracle lock `new_target_hygiene.rs`); W6-16 (`run_bounded`
   scoped); W6-17 (`count_new_locals` sizes `NEW_PROPERTY_AT` as the
@@ -2662,7 +3025,8 @@ bite-checked by reverting the fix under the lock). Statuses:
   (rooted in `gc_roots` / edged in `extra_edges` AND the partial
   enumeration / ephemeron / chunk-remap / weak-keyed with a
   mechanically slot-free value type AND pruning in BOTH sweep
-  paths / documented-transitively-rooted), so a shared omission —
+  paths / transitively-rooted, which `Interp::boot_anchor_liveness`
+  now proves at runtime after a collection), so a shared omission —
   the class the runtime parity net structurally cannot see, and
   exactly how W6-1..4 escaped — fails the moment the field lands;
   `gc_anchor_truth.rs` holds the behavioral GC-vs-plain twins
@@ -2684,10 +3048,11 @@ bite-checked by reverting the fix under the lock). Statuses:
   ACTUAL field list by a mechanical two-way reconciliation test
   (`empty_at_boundary_rows_match_the_quiescence_predicate`,
   bite-checked in both directions), and `async_gen_run_stack`'s
-  quiescence-empty half is documented on the still-Pending
-  `AsyncGenerators` variant it rides. With the schema-11 data-only
-  carries (wrappers, regexps, Temporal records) the count stands at
-  18 honestly-Pending rows.
+  quiescence-empty half is documented on the `AsyncGenerators`
+  variant it rides (Pending until format 23 / store schema 34 carried
+  the instance table in `ASYN`). With the schema-11 data-only
+  carries (wrappers, regexps, Temporal records) the count stood at
+  18 honestly-Pending rows; every row is carried now.
   The lazy backing now carries the attach-time chunk length
   (`SlotArena::lazy_from_parts` takes `chunk_bound`; the resume path
   passes `manifest.chunk_len`), and `ensure_page_resident` refuses a
@@ -2721,8 +3086,13 @@ bite-checked by reverting the fix under the lock). Statuses:
   identity, typed arrays, and an aborting crank agreeing on the
   rendered error and the at-throw computron count.)
 - **W6-23 DECIDED (libm decision-of-record, 2026-08-27):**
-  determinism is scoped PER RELEASE BINARY PER PLATFORM. The Math
-  transcendentals call the platform libm — the engine's one genuine
+  determinism is scoped PER RELEASE BINARY PER PLATFORM.
+  The [engine design Status](ironhorse-engine.md#determinism-scope) states this
+  execution scope for consumers; the cost-table digest is platform-independent
+  data identity, not a cross-platform execution guarantee.
+  [W6 §4](ironhorse-w6-decisions.md#4-determinism-scope--decided-vendor-libm-behind-a-feature)
+  records the subsequent provider decision and its required coverage.
+  The Math transcendentals call the platform libm — the engine's one genuine
   host-environment dependence — and the pinned XS oracle links the
   SAME platform libm, which is what the differential suite's
   bit-exactness rests on; twins on one host are exact regardless.
@@ -2873,7 +3243,7 @@ already stale.
 The dispositions and the landed fixes, each red-first with a
 bite-checked lock:
 
-- **Container format version (finding 1, confirmed → fixed):** the
+- **Container format version (finding 1, confirmed -> fixed):** the
   write stamp moved to 2, marking the side-table atom family, so a
   version-1 exact-match reader refuses these containers instead of
   skipping unknown atoms and silently dropping arrays, collections,
@@ -2887,7 +3257,7 @@ bite-checked lock:
   open gate checks readability rather than equality so older stores
   still open and migrate.
   Both golden pins moved (`format.rs`, `metamorphic_determinism.rs`).
-- **Freed heap records (findings 2+3, confirmed → fixed):** the sweep
+- **Freed heap records (findings 2+3, confirmed -> fixed):** the sweep
   does not scrub records and chunk compaction remaps MARKED slots
   only, so an honest post-GC snapshot holds freed records whose stale
   chunk offsets sit outside the compacted arena — and both the eager
@@ -2898,13 +3268,13 @@ bite-checked lock:
   dual: a side-table row OWNED by a free slot (only craftable — the
   sweep drops rows keyed by freed indices) no longer restores stale
   exotic state onto a slot a later allocation reuses.
-- **`debug_assert!` restore (finding 4, confirmed → fixed):**
+- **`debug_assert!` restore (finding 4, confirmed -> fixed):**
   `restore_side_tables` and `image_to_interp` are fallible now; every
   restore-verb `false` (a regexp that does not recompile, a refused
   cross-check) is a named `Corrupt` error on every build profile,
   never a debug-only panic or a release-mode silent drop
   (`crafted_row_refusals.rs`).
-- **Non-empty `STAC` (finding 5, confirmed → fixed):** the write verbs
+- **Non-empty `STAC` (finding 5, confirmed -> fixed):** the write verbs
   persist only quiescent machines, whose value stack is empty, so a
   populated stack atom/section can only be crafted — and was accepted,
   seeding a machine that could neither run nor checkpoint.
@@ -2913,14 +3283,14 @@ bite-checked lock:
   round earlier by the schema-v13 iterator-cursor carry — `iterators`
   is Serialized, not Pending, and a resumed cursor continues its walk
   (`iterator_carry.rs`).
-- **Meter rearm moves the deadline (finding 7, confirmed → fixed):**
+- **Meter rearm moves the deadline (finding 7, confirmed -> fixed):**
   `rearm_meter` opens a fresh window by design (the interval-change
   form), so sub-interval suspend/resume cycles through it pushed the
   host deadline forward forever.
   The new `reattach_meter_host` reinstalls the callback and leaves all
   three restored counters untouched; the persist-gates lock proves the
   host fires at the ORIGINAL threshold across a suspend.
-- **Migration restamps before compatibility (finding 8, confirmed →
+- **Migration restamps before compatibility (finding 8, confirmed ->
   fixed):** the ladder now peeks the meter's cost-table version from
   the small-state PREFIX (the first six sections, position-stable
   since schema 5) BEFORE the first restamp, refusing with the same
@@ -2930,14 +3300,14 @@ bite-checked lock:
   The root-then-restamp ladder already validated integrity under the
   source schema; the cost table was the one compatibility axis checked
   only after mutation.
-- **Collection geometry (finding 9, confirmed → fixed):**
+- **Collection geometry (finding 9, confirmed -> fixed):**
   `table_length` decode now enforces the engine's own reachable rehash
   geometry — weak kinds carry 0, Map/Set a power of two in
   `[MAP_MIN_TABLE_LENGTH, 2^20]`, and below the cap the live size
   never rests past the grow threshold `(L>>1)+(L>>2)` — refusing the
   crafted values (zero for a populated Map included) whose rehash
   boundaries would diverge consensus-relevant chunk metering.
-- **Additional issues (all confirmed → fixed):** Intl
+- **Additional issues (all confirmed -> fixed):** Intl
   unicode-extension keys must arrive strictly ascending (the
   `BTreeMap` was silently re-canonicalizing crafted order, breaking
   write∘read byte identity); segment boundaries must TILE and COVER
@@ -2951,7 +3321,7 @@ bite-checked lock:
   exception stringification runs under a nested `mxTry` so a throwing
   `toString` cannot re-jump past `fxEndHost`/machine teardown.
 - **Architectural recommendation (a proof-carrying
-  `UntrustedSnapshot → ValidatedSnapshot` pipeline):** direction
+  `UntrustedSnapshot -> ValidatedSnapshot` pipeline):** direction
   accepted, incremental adoption over rewrite.
   The seam already carries the pieces the recommendation names — the
   declarative side-table ledger with per-row coverage classes and its
@@ -2975,6 +3345,14 @@ bite-checked lock:
   A literally infallible restore remains inappropriate until
   boot-derived index rebuilding and lazy page faults carry equivalent
   prepared proofs.
+  *Amended by phase 13 (the 2026-09-24 trust model):* the container
+  half stands, since containers still come from elsewhere; the store
+  half does not.
+  Store adoption stops crossing `validate_store` and opens through the
+  compatibility gates, so an opened store proves compatibility, not
+  validity, and `ValidatedStoreState` becomes what the explicit
+  validator returns, without the row leaves.
+  Restore keeps its `Result`.
 
 ### Review round 2 over the graduation wave (2026-08-31): the open ledger
 
@@ -3465,13 +3843,24 @@ with segments. The design points that fell out of building it:
   `FromAsync*`) names suspended machinery in still-Pending rows;
   every resumable async-FUNCTION suspension is anchored by exactly
   such a reaction on a live promise, so the kind arm is that row's
-  whole gate (and `from_async` needs no carry: live ⇒ refused,
-  unanchored ⇒ unreachable). An async GENERATOR is different — a
+  whole gate (and `from_async` needs no carry: live => refused,
+  unanchored => unreachable). An async GENERATOR is different — a
   guest-held object whose row `.next()` consults in every state, with
   no reaction anchor between yields — so `async_generators` gets a
   refuse-on-hold arm of its own (the W6-9 pattern). Both new arms are
   locked in `persist_gates.rs`; before them, this state was silently
   DROPPED (hidden behind the promise hole this carry closes).
+  Since format 23 / store schema 34 (architecture review F127) the
+  `AsyncAwait` and `AsyncGenerator*` kinds resume: `ASYN` carries the
+  activations and, after them, every live async generator instance
+  (state, suspended frame, queued requests, the active request), so
+  the row-level arm is gone and the kind arm refuses only the
+  `FromAsync*` kinds. An `AsyncGenerator*` reaction must name a
+  carried instance that is serving a request, in the state the kind
+  implies, one anchor per instance; an active request whose awaited
+  promise nobody holds is carried unanchored (it is stuck, not
+  malformed). `async_generator_carry.rs` drives every boundary state
+  through the seven-way twin and refuses every crafted shape.
 - Locks: `promise_carry.rs` (eleven twins over memory/file/blob —
   the P1 render repro, a post-resume resolver call, a pre-suspend
   reaction, the tripped guard, the thenable second pair, mid-flight
@@ -3632,7 +4021,7 @@ end with an unchecked `i + len` from a full-u32 decoded length.
 
 GC visitation over the new atoms; the decode and bounds gates for
 every graduated family; the `ValidatedSnapshot` / `ValidatedStoreState`
-boundary; the v13→v21 migration ladder; and the `FUNC` reconstruction
+boundary; the v13->v21 migration ladder; and the `FUNC` reconstruction
 mechanics.
 
 ## What Is the Problem Being Solved?
@@ -3668,7 +4057,7 @@ and canonical, but wholesale in both directions:
 - **Sleepy workers.** The suspend/resume lifecycle
   ([daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md)) exists
   so idle agents cost nothing; thixotrope's sleepy CapTP workers
-  ([ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md))
+  ([thixotrope](thixotrope.md))
   suspend when quiescent and wake per message.
   Both pay the full-heap round-trip on every sleep/wake cycle, so the
   cost of sleeping grows with accumulated heap state — precisely
@@ -3687,7 +4076,7 @@ and canonical, but wholesale in both directions:
 The heap model was built for this, even though the current writer does
 not exploit it.
 The design's own words (ironhorse-engine § Value and heap model): "An
-index arena also makes snapshots nearly structural … the Ironhorse
+index arena also makes snapshots nearly structural ... the Ironhorse
 heap is already in that form."
 
 - `SlotIndex(u32)` is a stable identity — slots never move — so a slot
@@ -3741,13 +4130,32 @@ time.
    The side-table completeness ledger governs the store schema exactly
    as it governs atoms: a ledger row is `Serialized` only when both
    the atom and the store carry it.
-6. **Fail closed.** A malformed or foreign store is refused at open
+6. **Fail closed.** A ~~malformed or~~ foreign store is refused at open
    with structured errors (the analogue of
-   `NotIronhorse`/`SignatureMismatch`/`CostTableMismatch`), never a
-   wrong answer.
-   An I/O fault after a successful open is a crashed crank — worker
+   `NotIronhorse`/`SignatureMismatch`/`CostTableMismatch`)~~, never a
+   wrong answer~~.
+   ~~An I/O fault after a successful open is a crashed crank — worker
    death and supervisor recovery, the existing story — never silent
-   corruption.
+   corruption.~~
+   *Amended by phase 13 (the 2026-09-24 trust model): fail closed on
+   incompatibility, and trust the content.*
+   A store this build cannot read — a foreign file, an unsupported
+   schema, another host surface, boot layout or cost table — is
+   refused at open with structured errors, as before.
+   A compatible store's content is the machine: open, fault and
+   checkpoint do not re-verify rows, derived state or history, and the
+   store carries no tamper-evidence.
+   A content defect the engine trips over is a structured error or a
+   crashed crank; one it does not trip over is part of the machine and
+   can produce a wrong answer.
+   From stage 1 a failed row read after open, I/O included, is a store
+   error the host rewinds on rather than worker death.
+   Checking that a store's content is well-formed is the explicit
+   validator's job, run by tests, and at its metadata-scale level by a
+   migration (after its writes in stage 1; since stage 2 on the migrated
+   result, before its one write).
+   Containers keep their fail-closed reader (Requirement 2), because
+   the interchange format can come from elsewhere.
 
 ## Design
 
@@ -3804,8 +4212,9 @@ The arenas gain two bitmaps and an optional backing:
   `get_mut`, `slice_mut`, arena growth, compaction rewrite) — and
   deliberately NOT by `free`/sweep/mark, which never change record
   bytes (the reclamation travels as free-list state — since phase 9,
-  leafed segment rows plus the manifest's `free_len`). The
-  checkpoint peeks `dirty_pages()`/`dirty_extents()` and clears only
+  segment rows, leafed until phase 13, plus the manifest's
+  `free_len`).
+  The checkpoint peeks `dirty_pages()`/`dirty_extents()` and clears only
   after a successful commit.
 - **Residency bits + fault hook** (active only when a backing is
   attached): `get`/`payload` consult residency and fault a missing
@@ -3840,10 +4249,10 @@ so the store introduces no second codec:
 
 | Store object | Content | Atom equivalent |
 |---|---|---|
-| Slot page `p` | `SLOTS_PER_PAGE` × 20-byte `slot_codec` records, index order | a fixed span of the `HEAP` record array |
+| Slot page `p` | `SLOTS_PER_PAGE` x 20-byte `slot_codec` records, index order | a fixed span of the `HEAP` record array |
 | Chunk extent `e` | `CHUNK_EXTENT_BYTES` raw bytes of the chunk arena (header discipline included) | a fixed span of `BLOC` |
-| Small state | stack (`STAC`), live count (`HEAP` header), keys/names/symbols (`KEYS`/`NAME`/`SYMB`), meter (`METR`); since phase 9 the free list lives in its own leafed segment rows and small state's free section is empty | the small atoms, verbatim |
-| Manifest | `VERS` + `SIGN` + `CREA` + store schema version + geometry + epoch | the header atoms |
+| Small state | stack (`STAC`), live count (`HEAP` header), keys/names/symbols (`KEYS`/`NAME`/`SYMB`), meter (`METR`); since phase 9 the free list lives in its own segment rows (leafed until phase 13) and small state's free section is empty | the small atoms, verbatim |
+| Manifest | `VERS` + `SIGN` + `CREA` + store schema version + geometry + epoch + durable counters + commit token (schema 36; root and seals before it) | the header atoms |
 | Side tables | one keyed row set per ledger row, as each `Pending` atom lands | the future side-table atoms |
 
 Starting geometry (to be calibrated in phase 2): `SLOTS_PER_PAGE` =
@@ -3851,10 +4260,13 @@ Starting geometry (to be calibrated in phase 2): `SLOTS_PER_PAGE` =
 The free list's LIFO order is load-bearing for deterministic slot
 reuse after resume.
 (Amended by phase 9: the list itself moved out of small state into
-leafed, dirty-diffed segment rows — order preserved exactly — so at
+dirty-diffed segment rows, leafed until phase 13 — order preserved exactly — so at
 quiescence the stack is empty and the tables are small, and "small
 state" stays genuinely small AND O(1) in heap size; it alone is
 rewritten whole per checkpoint.)
+(Since schema 28 a checkpoint writes only the sections that are dirty
+and whose digest changed; the digest outlives phase 13 as change
+detection.)
 
 **Logical identity.** A store state's identity is the SHA-256 of its
 canonical export (the `XS_M` bytes), not of the database file —
@@ -3862,29 +4274,64 @@ SQLite files are not byte-canonical.
 Phase 2 computes it on demand via export; an incrementally maintained
 page-hash tree is named future work for when exporting to hash becomes
 the bottleneck.
+(Phase 5 built that tree, and its manifest root served as an extra
+store-native equality key beside this identity; phase 13 removes it,
+leaving `root_hash`, the SHA-256 of the export, as the only identity,
+computed on demand.)
 
 ### SQLite schema and operational discipline
 
 ```sql
+-- abbreviated; `rust/endo/ironhorse-store-sqlite/src/lib.rs` has the constraints
 CREATE TABLE meta        (key  TEXT    PRIMARY KEY, value BLOB NOT NULL);
 CREATE TABLE slot_pages  (page INTEGER PRIMARY KEY, bytes BLOB NOT NULL);
 CREATE TABLE chunk_exts  (ext  INTEGER PRIMARY KEY, bytes BLOB NOT NULL);
-CREATE TABLE small_state (name TEXT    PRIMARY KEY, bytes BLOB NOT NULL);
+CREATE TABLE small_state (name TEXT    PRIMARY KEY, bytes BLOB NOT NULL); -- before schema 28
 CREATE TABLE side_tables (name TEXT NOT NULL, key BLOB NOT NULL,
                           bytes BLOB NOT NULL, PRIMARY KEY (name, key));
--- phases 5-9 (see the landed blocks):
-CREATE TABLE leaf_hashes (kind INTEGER NOT NULL, idx INTEGER NOT NULL,
-                          hash BLOB NOT NULL, PRIMARY KEY (kind, idx));
+-- phases 6-10 and schema 28 (see the landed blocks); schemas 5 through 35 also kept
+-- leaf_hashes (kind, idx, hash), which the schema-36 migration drops:
 CREATE TABLE page_edges  (page INTEGER PRIMARY KEY, targets BLOB NOT NULL);
 CREATE TABLE free_segs   (seg  INTEGER PRIMARY KEY, bytes BLOB NOT NULL);
+CREATE TABLE edge_pairs  (target INTEGER NOT NULL, page INTEGER NOT NULL,
+                          PRIMARY KEY (target, page)) WITHOUT ROWID;
+CREATE INDEX edge_pairs_by_page ON edge_pairs (page);
+CREATE TABLE small_sections (id INTEGER PRIMARY KEY, bytes BLOB NOT NULL,
+                             hash BLOB NOT NULL); -- the section digest
 ```
 
 - `PRAGMA journal_mode=WAL`; one connection, owned by the worker's
   thread (machines are `!Send`; the store rides the same pinning).
-- `commit(batch)` is one transaction: upsert dirty pages/extents,
-  replace small state, bump `meta.epoch`.
+- `commit(batch)` is one transaction: upsert dirty pages/extents and
+  their metadata, write the batch's small-state sections, and store
+  the batch's manifest (the next epoch).
   A torn checkpoint is impossible by SQLite's atomicity; a resume
   reads a consistent epoch or fails closed.
+- Open refuses a read-only database, takes the database's exclusive
+  lock (an empty `BEGIN IMMEDIATE` under `locking_mode=EXCLUSIVE`, held
+  until close), and trusts the derived `edge_pairs` index when
+  `meta.edge_pairs_epoch`, which every commit rewrites beside the
+  pairs, names the committed epoch.
+  It rebuilds the index from `page_edges` only when that marker is
+  missing or stale, and never writes the marker itself.
+- The exclusive lock, held from open to close (explicitly since
+  #1330), keeps every other connection out while a machine is resumed
+  on the store, which is what phase 13 relies on in place of the
+  torn-read re-checks it retires; the file store documents a
+  single-writer rule instead.
+  A second session on the same connection is a caller bug the lock
+  cannot see; `PersistentMachine` drops a session before resuming
+  another and never unbinds a machine.
+- Under the trust model (phase 13), open trusts what it reads: the maintained `page_edges`
+  summaries, the `edge_pairs` index and the small-state section digests are state like the rows
+  they derive from.
+  An offline edit of a source row must bring what derives from it along: recompute `page_edges`
+  for an edited slot page and delete the `edge_pairs` marker, and recompute the digest
+  (`section_hash`) of an edited section, which the validator's full level re-derives (SQLite
+  checked it on every read before stage 1).
+  Since stage 2 there is no seal or leaf hash to keep current; in a stage-1 store, an edit that
+  left them stale opened on stage 1, but the build before it refused the store at open or at the
+  first fault.
 - Full close before any state-directory suspension or handoff, per the
   shutdown-checkpoint contract, after which the worker-heap DB is a
   single self-contained file.
@@ -3893,7 +4340,7 @@ CREATE TABLE free_segs   (seg  INTEGER PRIMARY KEY, bytes BLOB NOT NULL);
   For store-backed workers the DB file *is* the suspended worker: the
   CAS ephemeral-root bookkeeping of
   [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) is
-  replaced by ordinary file lifecycle (delete the worker ⇒ delete the
+  replaced by ordinary file lifecycle (delete the worker => delete the
   file), while CAS export remains available for archival, migration,
   and sharing.
 
@@ -3905,8 +4352,15 @@ CREATE TABLE free_segs   (seg  INTEGER PRIMARY KEY, bytes BLOB NOT NULL);
    signature, cost-table version, and a page-inventory check (every
    page/extent the geometry promises exists) — failing closed with the
    same taxonomy the container reader uses.
-   Exhaustive open-time validation is what confines later faults to
-   genuine I/O errors.
+   ~~Exhaustive open-time validation is what confines later faults to
+   genuine I/O errors.~~
+   *Amended by phase 13 (the 2026-09-24 trust model):* open runs the
+   compatibility gates and the decoding restore needs; the inventory
+   and the other content checks belong to the explicit validator.
+   A later fault on a malformed row is a crashed crank; from stage 1 a
+   failed row read (a missing row or I/O) is a store error the host
+   rewinds on, and one during restore itself comes back from resume as
+   a structured error.
 2. Read small state; fresh `Interp::new()` boot (intrinsics land at
    their deterministic slot indices, as today); attach the arenas in
    lazy mode: capacity from the manifest, residency clear, no page
@@ -3965,7 +4419,38 @@ At any crank boundary the supervisor (or the suspend verb) may call
 2. Encode small state whole (stack empty at quiescence, meter
    counters); diff the free-list segments against the stored leaves
    so only changed segments travel (phase 9).
+   *Amended by phase 13:* the segments from the one holding the arena's
+   free-list low-water mark on travel instead (never from past the stored
+   length), so unchanged segments are neither re-encoded nor hashed.
 3. `store.commit(batch)` — one transaction, epoch bumped.
+
+*Change detection under phase 13 (the 2026-09-24 trust model).*
+It uses flags and counters, plus one hash kept for performance.
+The flags and counters are the arena dirty bitmaps, section dirt and the epoch; from stage 2 the
+free-list diff, which encoded and hashed every segment at every checkpoint to compare it with the
+previous leaf, became a low-water mark that the slot arena keeps on its free list between
+acknowledged commits, so a checkpoint ships the touched suffix of the list.
+The hash is each small-state section's digest (`section_hash`, an identity-bound SHA-256 and the one
+leaf hash that stays), which lets a checkpoint skip writing a section the VM marked dirty whose
+bytes did not change.
+It saves the write, not the extraction and encoding.
+SQLite stores the digest beside the payload in the commit that writes it, the memory store keeps it
+beside the payload, and the file store recomputes it.
+A session keeps the digests it last committed, so a checkpoint reads none from the store except the
+first one after a resume.
+The digest is kept rather than added, because section dirt is coarse.
+`PersistentMachine` always runs a shared realm, and a machine with shared compartments marks every
+section dirty at every checkpoint, as does any machine after a full collection and at its first
+checkpoint after resume, so without the digest each such checkpoint would rewrite the whole small
+state.
+Comparing against the retained payload bytes would avoid the hash at the cost of holding the small
+state twice; removing the digest waits on precise dirt or on a measurement of that alternative.
+From stage 2 the digests are bound into no root, and from stage 1 nothing checks them on read: the
+store trusts them like its other maintained state.
+They stay collision-resistant because the payloads are guest-influenced, and a collision would let
+a changed section pass for unchanged and drop it from the checkpoint.
+In the resident store, hashing stays only where it pays for itself like this; the CAS address of an
+exported container is the interchange identity, not store machinery.
 
 Costs, stated honestly:
 
@@ -4001,8 +4486,9 @@ Costs, stated honestly:
   Open Question 6.
 - Mark bits remain transient (never stored); sweep continues to push
   free-list entries in deterministic index order; the list travels as
-  leafed segment rows (phase 9), diffed so LIFO churn ships only the
-  tail segment.
+  segment rows (phase 9), diffed so LIFO churn ships only the tail
+  segment (against their leaves until phase 13, by the arena's
+  low-water mark after it).
 
 ### Determinism analysis (the crux)
 
@@ -4011,7 +4497,10 @@ nothing the guest can observe depends on it:
 
 1. **Faults are content-identical cache fills.** A faulted page equals
    the page an eager restore would have installed, bit for bit — same
-   codec, same bytes, validated at open.
+   codec, same stored bytes (this read "validated at open" until
+   phase 13, which the argument never needed: given the single writer
+   the store relies on, eager and lazy restore read the same bytes
+   either way).
    Fault timing changes wall-clock only, which the meter deliberately
    does not observe (the meter is a cost *model*, not a clock).
 2. **Commits happen only between cranks.** The machine never observes
@@ -4053,6 +4542,12 @@ the per-crank computron vector, and the final canonical blob bytes.
   The XS snapshot importer stays out of scope (resolved question 3);
   a future importer would target the container, and `import_from_container`
   would carry it into a store for free.
+- The container's CAS address, the SHA-256 of the canonical export, is
+  the one content hash that identifies a heap, and it is computed only
+  at interchange.
+  It is what a consumer signs or checks when a heap crosses a trust
+  boundary; the resident store itself carries no tamper-evidence since
+  phase 13 (the 2026-09-24 trust model).
 
 ### Side tables: the ledger governs the schema
 
@@ -4062,7 +4557,7 @@ matched pair — its atom in the container grammar *and* its
 `side_tables` rows (or dedicated table) in the store — in the same
 change, with the ledger's `Coverage` naming both.
 Rows keyed by `SlotIndex` (functions, generators, promises,
-collections, …) get `key = slot index` and page-independent lazy
+collections, ...) get `key = slot index` and page-independent lazy
 loading later if profiling demands; initially side tables load eagerly
 at resume (they are per-instance metadata, small relative to the
 arenas) and are rewritten per checkpoint only when dirty (a per-table
@@ -4075,7 +4570,7 @@ dirty flag suffices to start).
 | `ironhorse-vm` | dirty + residency bitmaps, `PageSource` trait, `attach_backing` / `checkpoint` drains | `forbid`, none |
 | `ironhorse-snapshot` | `store` module: `HeapStore`, manifest gates, paged model, memory + file reference stores, `export_to_container` / `import_from_container` | `forbid`, none |
 | `rust/endo` (daemon) | `ironhorse_store_sqlite`: `HeapStore` over rusqlite, file lifecycle, supervisor verbs | daemon already compiles bundled SQLite |
-| `ironhorse-fuzz` | malformed-store decoder target, fault-schedule metamorphic target, checkpoint round-trip target | dev/CI only |
+| `ironhorse-fuzz` | malformed-store decoder target (`store_decoder`), fault-schedule metamorphic target, checkpoint round-trip target | dev/CI only |
 
 ## Alternatives Considered and Rejected
 
@@ -4102,6 +4597,9 @@ dirty flag suffices to start).
    gives the same atomicity in one transaction.
    Its good half is retained as the logical root hash and the
    canonical export.
+   (Phase 13 retires the manifest's Merkle root, which phase 5 added;
+   the logical root hash, `root_hash`, the SHA-256 of the canonical
+   export, remains, and so does the export.)
 4. **Store seam at the atom level only** (store atoms as rows, keep
    wholesale arena rebuild).
    Insufficient alone — it yields incremental *storage* but neither
@@ -4124,7 +4622,7 @@ dirty flag suffices to start).
 | [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) | Preserved lifecycle; gains the store-backed suspend/resume mode and per-crank durability checkpoints |
 | [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) | Precedent and home for daemon-side rusqlite (bundled, WAL defaults) |
 | [daemon-sqlite-shutdown-checkpoint](daemon-sqlite-shutdown-checkpoint.md) | The full-close contract the worker-heap database inherits for suspension, backup, and handoff |
-| [ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md) | Primary consumer: sleepy workers whose sleep/wake cost this seam re-prices |
+| [thixotrope](thixotrope.md) | Primary consumer: sleepy workers whose sleep/wake cost this seam re-prices |
 | [daemon-cas-management](daemon-cas-management.md) | The CAS root bookkeeping that store-backed workers replace with file lifecycle; CAS remains the interchange plane |
 
 ## Phased Implementation
@@ -4135,10 +4633,16 @@ changes an engine observable.
 1. **Store model and identity locks (no vm changes).**
    `ironhorse-snapshot::store`: `HeapStore`, manifest gates, paged
    logical image, `store::memory` + `store::file`, export/import.
-   *Bar:* container → store → container is byte-identical; store
+   *Bar:* container -> store -> container is byte-identical; store
    validation refuses foreign/corrupt/mismatched stores with
    structured errors; malformed-store fuzz target armed (the
    over-allocation trophies generalize to page counts).
+   *Bar met:* the first two on delivery; the fuzz target NOT until
+   `fuzz_targets/store_decoder.rs` landed, long after phases 2-12 were
+   declared done.
+   Recorded here rather than quietly ticked, because an acceptance bar that a
+   later phase's prose then reasons from is worse unmet-and-unmarked than
+   unmet.
 2. **Dirty tracking, checkpoint, SQLite backend, eager store resume.**
    Arena dirty bitmaps; `checkpoint(&mut store)`;
    `ironhorse_store_sqlite` in `rust/endo`; supervisor verbs behind an
@@ -4181,9 +4685,12 @@ free list riding whole in small state.
    closed at fault with a named error; two stores compare equal by
    root without a row read. Land the wake-latency benchmark with this
    phase so 6-9 each have a number to move.
+   *Retired by phase 13:* the tree, its root and the fault-time
+   checks go; the wake-latency benchmark stays.
 6. **Persisted page-edge summaries; generational mark.** Checkpoints
    also write per-page outgoing-reference summaries (computed from
-   the dirty pages already being encoded), sealed with the commit; a
+   the dirty pages already being encoded), sealed with the commit
+   (until phase 13 retires the seal); a
    release-fixed partial collector marks only pages dirtied since the
    last collect plus pages their summaries reach, resolving the rest
    through indexed store queries — including the periodic full
@@ -4200,7 +4707,7 @@ free list riding whole in small state.
    release's own six ways.
 7. **Identity-keyed chunk rows; incremental compaction.** Re-key
    chunk storage by stable chunk identity (a store-schema bump), with
-   the slot→chunk reference encoding and the compaction algorithm
+   the slot->chunk reference encoding and the compaction algorithm
    moving together, so compaction becomes per-chunk row moves —
    indexed updates — never a whole-space slide-and-rewrite, and the
    post-GC checkpoint dirties only chunks that actually moved.
@@ -4234,7 +4741,8 @@ queries, so collection cost tracks the mutation set, not the heap:
 10. **Query-driven reachability + counted side-table roots.**
     LANDED (first half): the page-edge summaries normalized into an
     indexed `(target, page)` pair table, derived and rebuildable,
-    maintained in the same commit transaction as the sealed rows;
+    maintained in the same commit transaction as the rows it derives
+    from (sealed until phase 13);
     reachability and the summary-count gate served through provided
     `HeapStore` methods whose defaults preserve the dense semantics
     (a recursive CTE on SQLite); reverse-edge lookups stay a
@@ -4265,6 +4773,129 @@ queries, so collection cost tracks the mutation set, not the heap:
     retire the whole-space slide and de-chain the dead sequential
     runs the page summaries conservatively keep.
 
+Phase 13 (added 2026-09-24) mostly removes machinery rather than adding it;
+the 2026-09-24 trust-model entry at the top records the decision:
+
+13. **Trust the resident store.** *Implemented in
+    [#1331](https://github.com/endojs/endo-but-for-bots/pull/1331), both stages.*
+    Stage 1 takes the checks off the run-time path and leaves the store format alone, so a store
+    it writes still opens and verifies on the previous build.
+    Open runs the compatibility gates, the decoding restore needs and the bounds checks that run
+    inside it; the small-state bounds gate, which `validate_store` keeps as a validator check,
+    also runs in lazy resume (eager resume keeps it in `store_to_image`), and lazy resume, which
+    sizes its arenas from the manifest's geometry, first checks the live/free accounting and reads
+    the last slot page and chunk extent.
+    A fault reads its row and checks its length and its records' references against the live free
+    map and the committed geometry; the pin's epoch, seal and leaves, the torn-read re-checks and
+    the leaf checks go.
+    The page source reports a failed row read as a typed store fault, which resume turns into its
+    error when restore faults, which a crank, a collection or a flush turns into a store error
+    that the host rewinds on, and which unwinds out of a session begun on a machine unbound from a
+    lazy session, taking the half-read machine with it.
+    A fault while the caller holds the store for a commit, an engine defect, is reported the same
+    way, as an engine-invariant store fault rather than a borrow panic.
+    A checkpoint no longer reads and checks never-faulted pages, keeps no backing-generation free
+    map, and no longer re-verifies stored leaves or the stored root; the commit validates each
+    batch once, keeps the canonical-payload check in release and moves the summary re-derivation
+    to debug builds; SQLite stops re-hashing the small state on read.
+    `validate_store` becomes the explicit validator, at a metadata-scale level and a full level,
+    with a `HeapStore` hook for derived-index parity, and in stage 1 a migration that ran ended
+    with its metadata-scale level.
+    Starting a session on an existing machine detaches its old backing once it has read what it
+    needs, which the pin's epoch and seal used to fence; in stage 1 a commit to the old store
+    between unbinding and that point fell under the second-session case given up in the
+    trust-model entry, and since stage 2 the unbound machine's faults refuse it (below).
+    In stage 1, leaf hashes, roots and seals were still written, and seals still paired sessions
+    by equality, but nothing on the run-time path verified a stored one against the content;
+    stage 2 removed them.
+    For the previous build's sake a stage-1 commit still checked that the root it wrote combined
+    from the leaves it wrote and that its seal derived from its manifest, migration still checked
+    an old store's root and seal before restamping it, and the first checkpoint after a resume
+    still read the stored leaves to build the hash trees.
+    *Stage 1 bar:* no open of a current store, fault or checkpoint verifies a stored digest or
+    root against content (the seal's equality check as a pairing token, and the migration steps'
+    checks, stay until stage 2); a test-only check of the roots, leaves, seals and digests over
+    every store the backend and collection suites write, and a committed fixture written by stage
+    1, show the previous build still opens what stage 1 writes; the seven-way metamorphic suite
+    agrees on every backend; and the validator refuses each structural defect the retired
+    integrity suites planted, with crafted-store tests forcing residency so a fault-time refusal
+    does not depend on when a page faults.
+    Stage 2 removes the machinery behind a store schema bump.
+    It drops the leaf hashes of slot pages, chunk extents and free segments (SQLite's
+    `leaf_hashes` rows, and the file store's three leaf sections, re-laid out behind a new file
+    magic), the manifest's root, seal and parent seal, the small-state section tree, and the
+    `RootLedger` caches, whose leaf maintenance also refused out-of-range batch rows, so
+    `check_batch` gains that row-index check for rows and summaries alike.
+    A random commit token replaces the seal in succession and in the session and collector
+    pairing.
+    It is minted for every commit, epoch 1 included, by whoever builds the batch (the session, or
+    `import_from_container`), is named by the next batch, and must be nonzero and differ from its
+    predecessor.
+    The free-list diff becomes a low-water mark on the arena's free list, lowered at its pops,
+    starting at the list's length when an arena is built, and reset only by a session-owned
+    acknowledgement, so a replaced arena or a stray acknowledgement cannot claim that nothing
+    changed.
+    Migration runs the ladder in memory over the manifest and small state (no step touches rows),
+    seeds the first token from the seal stored before the ladder ran, validates the result against
+    the store's rows, and writes it once through a new atomic hook that compares the manifest it
+    read and empties the leaf storage.
+    The small-state section digests stay, as change detection that nothing on the run-time path
+    verifies (the full validator re-derives them).
+    *Stage 2 bar:* no production open, fault or checkpoint computes a slot-page, chunk-extent,
+    free-segment or root digest (the small-state section digests excepted); checkpoint work stays
+    proportional to dirty rows, with the free-list term the touched suffix instead of the O(free
+    list) encode-and-hash; a schema-35 store written by stage 1 (committed SQLite and file-store
+    fixtures) migrates, resumes and passes both validator levels, while the older committed
+    fixtures keep refusing on their boot layout as they do today; the golden pins that fixed the
+    store's seals move to the export hash and explicit manifest fields; and the well-formed,
+    consistent edits the retired integrity suites planted resume as the machine they describe.
+    *As implemented (store schema 36).*
+    The manifest ends in the 16-byte `CommitToken`; a manifest of an older schema still decodes,
+    in its own layout, for migration, and yields the first half of its seal as the token.
+    `CheckpointBatch::prev_token` names the predecessor, `check_succession` pairs it with the
+    stored token (zero for an empty store) and refuses a zero token or one equal to its
+    predecessor, and the metadata-scale validator refuses a zero stored token.
+    Tokens come from a `CommitTokenSource`: `RandomTokens` (SipHash under the standard library's
+    randomly seeded keys, over a process-wide counter, the clock and the process id), which
+    `import_from_container`, `image_to_batch` and every session use; `mint_token` draws again on
+    zero or the predecessor, and a batch whose own token is zero or its predecessor's is rejected
+    as the caller's defect (`BatchRejected`).
+    A session's `set_token_source`, for tests that need reproducible manifests, exists only in tests
+    and under the `unchecked-tooling` feature, since the pairing relies on tokens being distinct
+    across every store a session could be pointed at.
+    A session retains the section digests it last committed and reads them from the store only at
+    its first checkpoint after a resume; the pairing check keeps them exact across a failed commit,
+    since a checkpoint proceeds only while the store holds the state the session last committed.
+    The slot arena's `acknowledge_free_list` and `free_list_unchanged_prefix` implement the
+    low-water mark, with the acknowledgement an `Rc` identity the arena replaces at each
+    acknowledgement, as `SnapshotBaseline` does.
+    Resume adopts a restored arena with `free_list_baseline`, which keeps the mark the arena was
+    built with, so what restore itself pops still travels; a checkpoint ships the segments from the
+    mark on (and never from past the stored length), and none when the list is the stored one.
+    The migration write is `HeapStore::replace_for_migration(from, to, small)`, which replaces
+    both migration writers; `check_migration_baseline` is the comparison every backend makes, and
+    `migrate_store` makes it first against the handle's own view, since it reads the small state
+    and rows through a handle (a `FileStore`'s cache) that may be behind the durable manifest.
+    An unbound lazy machine, which no checkpoint is left to refuse, checks the pairing on each
+    fault instead: as the session's tracking is dropped (at `StoreSession::into_machine`, or
+    however else the machine left the session) it hands the page source the epoch and token its
+    backing describes and those of the session's own last commit (which differ after a commit
+    through a forwarding wrapper), and a fault from a store holding neither unwinds with that
+    store's `EpochMismatch` or `BaselineMismatch`, so a rebind or a snapshot never persists a
+    mixture of two commits' rows.
+    The file store's layout is `IHSTORE6`, without the three leaf sections; it still reads
+    `IHSTORE5`, and the migration write rewrites the file in the current layout.
+    SQLite stops creating `leaf_hashes`, and the migration write drops the table in the IMMEDIATE
+    transaction that restamps the manifest.
+    The state corpus's store column holds a digest of the manifest with its token zeroed, beside
+    the export hash; the metamorphic golden vector pins the epoch-3 manifest's fields, checks that
+    the store exports the pinned blob, and runs the full validator over the derived state.
+    A shared suite, `store_suite::consistent_edits_resume`, edits a slot page's integer payload, a
+    string's characters in its chunk extent, a free segment's order, a property name in its
+    small-state section (with the digest beside it, where the backend stores one) and the
+    manifest's crank counter, each through the backend's own rows at rest, and every backend
+    resumes the edited machine, eagerly and lazily, after both validator levels pass.
+
 ### Plan: counted side-table ref-page accessors (phase 10 remainder, its own PR)
 
 Goal: retire the last decision-side O(live) term in
@@ -4294,7 +4925,7 @@ Design:
   increment = freeing a live page). Hook-by-convention was rejected
   for exactly this reason.
 - The small-table tail (functions, bound functions, promises,
-  iterators, typed arrays, generators, async instances, …) keeps the
+  iterators, typed arrays, generators, async instances, ...) keeps the
   visitor walk — it is O(small), and partial collection roots from
   counted pages (bulk) ∪ visitor pages (tail).
 - Bulk-removal paths participate: the GC sweeps decrement per
@@ -4341,7 +4972,7 @@ already-wide branch.
 The `HeapStore` seam introduced with the SQLite backend has not
 moved: same pull-based row/metadata reads plus one atomic batch
 commit, same crate layout (backend outside the engine workspace),
-same dependency direction (sqlite → snapshot → vm), engine crates
+same dependency direction (sqlite -> snapshot -> vm), engine crates
 still `forbid(unsafe_code)`/zero-C. It WIDENED, additively: phases
 5/6/9 added four required metadata methods (`leaf_hashes`,
 `page_edges`, `read_free_seg`, `free_leaf_hashes` — each with the
@@ -4353,7 +4984,12 @@ across the branch are additive subsystems (GC wiring, the snapshot/
 enumeration surface, arena bitmaps) plus two named-refusal guards in
 the dispatch loop's suspend arms; hot-path neutrality is held by the
 recorded benchmark gates (detached dispatch unchanged; attached
-×1.009).
+x1.009).
+Phase 13 changes the seam again: it removes the two leaf methods, adds
+a derived-index hook and an atomic migration hook (`replace_for_migration`,
+in place of the two migration writers), takes `RootLedger` out of
+`commit_verified` and its verifier, and replaces the batch's `prev_seal`
+with the commit token.
 
 *Future work beyond phase 12 (out of scope until a consumer demands
 it):* structural sharing of pages across forked workers; store
@@ -4390,6 +5026,9 @@ compaction/vacuum policy.
    fixture are the recorded deferrals. The dense arrays keep their RAM until phase 9's sparse
    backing; eviction is the correctness machinery that makes bounded
    residency possible.
+   *Amended by phase 13:* a re-fault reads the committed bytes with no
+   leaf check, since the pinned leaves go; the backing-geometry refresh
+   stays.
 4. **GC is the amortized reifier and its scheduling is untouched.**
    Collection stays a pure function of release-fixed thresholds; the
    first collect after a lazy resume pays full reification, and a
@@ -4401,13 +5040,38 @@ compaction/vacuum policy.
 6. **Identity is logical, not file bytes.** A store state's identity
    is the SHA-256 of its canonical export, preserving CAS-grade
    content addressing over a non-canonical database file.
-7. **Fail closed at open, crash the crank on later I/O.** Exhaustive
+   *Reaffirmed 2026-09-24:* since phase 13 removed phase 5's manifest
+   root, this is the only identity a heap has, computed on demand.
+7. **Fail closed at open, ~~crash the crank on later I/O~~.** ~~Exhaustive
    open-time validation (manifest + page inventory) confines runtime
    faults to genuine I/O errors, which surface as worker death — the
-   supervisor's existing recovery path — never as a wrong answer.
+   supervisor's existing recovery path — never as a wrong answer.~~
+   *Amended by phase 13 (the 2026-09-24 trust model):* fail closed on
+   incompatibility at open, and trust the content.
+   Open checks compatibility and decodes what restore needs,
+   bounds-checking as it goes, but does not otherwise check content.
+   A later fault on a malformed row is a crashed crank; from stage 1 a
+   failed row read (a missing row or I/O) is a store error the host
+   rewinds on, and one during restore comes back from resume as a
+   structured error.
+   A defect the engine does not trip over is part of the machine the
+   store describes.
+   Content validation is an explicit operation (Design Decision 9).
 8. **Determinism is enforced by metamorphic tests, not argued.** The
    seven-way agreement suite is the acceptance instrument; the analysis
    above only explains why it is expected to pass.
+9. **The resident store is trusted; assurance across trust boundaries
+   lives outside it (2026-09-24).** The store is the canonical machine,
+   so Ironhorse neither re-verifies its content on the production path
+   nor carries tamper-evidence in it: unkeyed hashes never stopped a
+   writer who can recompute them, and accidental damage belongs to
+   the storage layer.
+   Correctness validation stays as an explicit operation, run by tests
+   and by migration over its result, and checks well-formedness without
+   relying on stored digests.
+   In the resident store, hashing stays only where it pays for itself
+   as a performance device (the small-state section digests), and a
+   consumer that needs authentication signs the canonical export.
 
 ## Open Questions
 
@@ -4471,7 +5135,7 @@ compaction/vacuum policy.
      becomes per-chunk row moves (`UPDATE`s over the index) rather
      than a whole-space rewrite — de-globalizing the one GC phase
      that today touches every byte. This is the deep redesign: it
-     changes the store schema, the slot→chunk reference encoding, and
+     changes the store schema, the slot->chunk reference encoding, and
      the compaction algorithm together, and only pays once heaps are
      large enough that compaction I/O dominates checkpoints.
    Prerequisite for the latter two: the side-table chunk-roots
@@ -4484,3 +5148,25 @@ compaction/vacuum policy.
 > investigate adding a seam to the endor ironhorse engine to allow the
 > snapshot to be replaced with a db (eg sqlite), supporting large
 > heaps to be lazily reified and incrementally updated.
+
+The trust-model amendment (2026-09-24) followed from
+[#1330](https://github.com/endojs/endo-but-for-bots/issues/1330)
+("buddy, you gotta trust the snapshot file") and these prompts:
+
+> are there any other cases of this where we are not trusting the
+> content of the heap? its a strange premise. the heap is meant to be
+> the canonical representation. theres not a security model that
+> survives it not being that.
+
+> to be clear we want to keep various validation machinery for use in
+> tests and in some situations (eg prolly good after migration?) but
+> "tamper-evidence" is not appropriate for the heap state. an external
+> system that needs that will build it with hashes and signatures, but
+> thats not the job of ironhorse or the current heapstate implementers
+
+> we dont need the merkelization / hashes. we are interested if the
+> data is correct, but we dont need hashing for this. if we need some
+> dirty detection we can use a flag or incrementing integer, but
+> unclear that its useful somewhere
+
+> hashes are allowed if needed for performance

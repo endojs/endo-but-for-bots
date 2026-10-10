@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/PlainDateTime/prototype/toZonedDateTime tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/PlainDateTime/prototype/toZonedDateTime/disambiguation-undefined.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDateTime/prototype/toZonedDateTime/disambiguation-undefined.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDateTime/prototype/toZonedDateTime/dst-disambiguation.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDateTime/prototype/toZonedDateTime/dst-disambiguation.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDateTime/prototype/toZonedDateTime/multiple-instants.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDateTime/prototype/toZonedDateTime/multiple-instants.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDateTime/prototype/toZonedDateTime/options-undefined.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDateTime/prototype/toZonedDateTime/options-undefined.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDateTime/prototype/toZonedDateTime/order-of-operations.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDateTime/prototype/toZonedDateTime/order-of-operations.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDateTime/prototype/toZonedDateTime/timezone-string-datetime.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDateTime/prototype/toZonedDateTime/timezone-string-datetime.js strict skip:oracle-host-missing-global:Temporal

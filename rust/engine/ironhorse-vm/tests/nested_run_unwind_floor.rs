@@ -17,14 +17,26 @@
 //! The interim fix floored the unwind at the nested run's `jumps_base`
 //! and escaped to the host with the correct thrown value — honest, but
 //! still divergent from XS, which COMPLETES these programs. The llm
-//! rebase superseded the floor: every engine throw now routes through
+//! rebase superseded the floor: every engine throw routes through
 //! `raise_js` (so `self.exception` is populated at the raise), the
 //! unwind restores the establishing frame's activation (`leave_call`
-//! per crossed frame, stack/locals/env cuts), and `Halt::Resume`
+//! per crossed frame, stack/locals/env cuts), and `Step::Unwound`
 //! propagates the handler's resume point out through the Rust-level
 //! dispatch nesting to the loop that owns the handler's frame. These
 //! locks now pin full XS agreement: the driver's catch catches, and
 //! the program completes with the thrown value.
+//!
+//! "Every engine throw routes through `raise_js`" was asserted here as
+//! fact while 29 native sites still built `Halt::Throw` inline (the
+//! architecture review's F004: recorded fixed, regressed). It is now
+//! enforced by the private `Step` type and two source locks:
+//! `throw_construction_sites.rs` pins where `Step::Threw` may be built;
+//! `dispatch_loop_control_transfer.rs` requires raises in the loop to take
+//! the depth test that propagates `Step::Unwound` to the owning activation.
+//! Only the host boundary converts `Step::Threw` to `Halt::Throw` and renders
+//! its value. The public `Halt` cannot carry a catch or suspension transfer.
+//! `Step::Returned` identifies this activation's return, eliminating the
+//! former `callback_return_depth` side channel.
 
 use ironhorse_vm::{run_program_with_symbols, RunOutcome};
 
@@ -35,10 +47,8 @@ fn run(source: &str) -> RunOutcome {
 
 #[test]
 fn an_uncaught_generator_throw_reaches_the_drivers_catch() {
-    let out = run(
-        "function* g() { throw 1; } var it = g(); var r = 0; \
-         try { it.next(); } catch (e) { r = e; } r",
-    );
+    let out = run("function* g() { throw 1; } var it = g(); var r = 0; \
+         try { it.next(); } catch (e) { r = e; } r");
     assert!(
         out.completed,
         "the driver's catch must catch the generator's throw (XS \
@@ -56,11 +66,9 @@ fn an_uncaught_generator_throw_reaches_the_drivers_catch() {
 fn a_nested_generator_throw_reaches_the_drivers_catch() {
     // The same root cause one level deeper, where it used to surface as
     // a stack underflow rather than a wrong exception.
-    let out = run(
-        "function* inner() { throw 1; } \
+    let out = run("function* inner() { throw 1; } \
          function* outer() { var i = inner(); i.next(); yield 0; } \
-         var o = outer(); var r = 0; try { o.next(); } catch (e) { r = e; } r",
-    );
+         var o = outer(); var r = 0; try { o.next(); } catch (e) { r = e; } r");
     assert!(out.completed, "halt: {:?}", out.halt);
     assert_eq!(out.result, "1");
 }
@@ -70,10 +78,8 @@ fn a_generators_own_handler_still_catches() {
     // The handlers the resume rebases onto the live chain sit above the
     // run's `jumps_base`, so the body's own `try` catches first — an
     // unwind that skipped them would break this. Agrees with XS.
-    let out = run(
-        "function* g() { try { throw 1; } catch (e) { yield e; } } \
-         var it = g(); it.next().value",
-    );
+    let out = run("function* g() { try { throw 1; } catch (e) { yield e; } } \
+         var it = g(); it.next().value");
     assert!(out.completed, "halt: {:?}", out.halt);
     assert_eq!(out.result, "1");
 }

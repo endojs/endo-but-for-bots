@@ -26,10 +26,15 @@
 //!     `items` list in source order, leaving the init slots null; the
 //!     desugaring moves to the coder.
 
-use crate::ast::{flags, Item, Node, Value};
-use crate::parser::{ParseError, ParseErrorKind, Parser};
+use crate::ast::str_to_units;
+use ironhorse_text::SymbolName;
+
+use crate::ast::{flags, Item, Value};
+use crate::parser::{charged, ParseError, ParseErrorKind, Parser, STATEMENT_COST};
 use crate::token::{classify_word, Token};
-use crate::token_flags::{has_flag, BEGIN_BINDING, BEGIN_EXPRESSION, BEGIN_STATEMENT, END_STATEMENT, IDENTIFIER_NAME};
+use crate::token_flags::{
+    has_flag, BEGIN_BINDING, BEGIN_EXPRESSION, BEGIN_STATEMENT, END_STATEMENT, IDENTIFIER_NAME,
+};
 
 type PResult<T> = Result<T, ParseError>;
 
@@ -41,7 +46,18 @@ fn item_token(item: &Item) -> Option<Token> {
     }
 }
 
-impl Parser {
+/// What a `for` head's declaration list turned out to be, for the two
+/// questions `for_statement` cannot answer from the node stack alone.
+#[derive(Clone, Copy)]
+pub(crate) struct HeadBindings {
+    /// Some binding was a destructuring pattern with NO initializer.
+    pub(crate) bare_pattern: bool,
+    /// The list is exactly `var <BindingIdentifier> = <expr>`, the one shape
+    /// Annex B B.3.5 permits an initializer on in a `for-in` head.
+    pub(crate) annex_b_var_initializer: bool,
+}
+
+impl Parser<'_> {
     // ================= entry points =================
 
     /// Parse a whole **Script** (`fxProgram`), returning the `Program`
@@ -62,7 +78,7 @@ impl Parser {
                 message: "duplicate __proto__ property".into(),
             });
         }
-        Ok(program)
+        self.finish_tree(program)
     }
 
     /// Parse a whole **Module** (`fxModule`), returning the `Module` node.
@@ -79,7 +95,7 @@ impl Parser {
                 message: "duplicate __proto__ property".into(),
             });
         }
-        Ok(module)
+        self.finish_tree(module)
     }
 
     // ================= program / module / body =================
@@ -193,7 +209,8 @@ impl Parser {
     /// mode. Returns `true` while the prologue continues.
     fn consume_directive(&mut self) -> PResult<bool> {
         let is_use_strict = match self.stack.last() {
-            Some(Item::Node(stmt)) if stmt.token == Token::Statement => match stmt.children.first() {
+            Some(Item::Node(stmt)) if stmt.token == Token::Statement => match stmt.children.first()
+            {
                 Some(Item::Node(expr)) if expr.token == Token::String => {
                     // `mxStringEscapeFlag` is bit 0 of the String node.
                     let escaped = expr.flags & 1 != 0;
@@ -228,7 +245,7 @@ impl Parser {
     /// identifier that is a strict reserved word must be reclassified.
     fn check_strict_keyword(&mut self) -> PResult<()> {
         if let Some(sym) = self.cur.symbol.clone() {
-            let t = classify_word(&sym, true, false, false);
+            let t = classify_word(sym.as_str().unwrap_or(""), true, false, false);
             if t != Token::Identifier {
                 self.cur.token = t;
             }
@@ -262,8 +279,15 @@ impl Parser {
 
     /// `fxStatement`. `block_it` mirrors XS: `1` = a block context (lexical
     /// declarations allowed), `0` = a single-statement slot (loop/if body,
-    /// label), `-1` = program/case body.
+    /// label), `-1` = program/case body. One [`STATEMENT_COST`] recursion
+    /// point: blocks, `if`/loop bodies, labels, `switch` cases, `try`
+    /// clauses and function bodies all nest through here.
+    #[inline(never)]
     pub(crate) fn statement(&mut self, block_it: i32) -> PResult<()> {
+        charged!(self, STATEMENT_COST, self.statement_inner(block_it))
+    }
+
+    fn statement_inner(&mut self, block_it: i32) -> PResult<()> {
         let line = self.cur.line;
         match self.cur.token {
             Token::Semicolon => {
@@ -306,18 +330,18 @@ impl Parser {
                 if block_it == 0 {
                     return Err(self.error("no block"));
                 }
-                self.variable_statement(Token::Const, 0)?;
+                self.variable_statement(Token::Const, 0, false)?;
                 self.semicolon()?;
             }
             Token::Let => {
                 if block_it == 0 {
                     return Err(self.error("no block"));
                 }
-                self.variable_statement(Token::Let, 0)?;
+                self.variable_statement(Token::Let, 0, false)?;
                 self.semicolon()?;
             }
             Token::Var => {
-                self.variable_statement(Token::Var, 0)?;
+                self.variable_statement(Token::Var, 0, false)?;
                 self.semicolon()?;
             }
             Token::Do => self.do_statement()?,
@@ -349,21 +373,28 @@ impl Parser {
                 self.look_ahead_once()?;
                 let is_await_using = !self.ahead_crlf()
                     && self.ahead_token() == Token::Identifier
-                    && self.ahead.as_ref().and_then(|s| s.symbol.as_deref()) == Some("using")
+                    && self
+                        .ahead
+                        .as_ref()
+                        .and_then(|s| s.symbol.as_ref().and_then(SymbolName::as_str))
+                        == Some("using")
                     && !self.ahead.as_ref().is_some_and(|s| s.escaped);
                 if is_await_using {
                     self.look_ahead_twice()?;
                 }
                 let has_binding = is_await_using
                     && !self.ahead2.as_ref().is_some_and(|s| s.crlf)
-                    && matches!(self.ahead2_token(), Token::Identifier | Token::Await | Token::Yield);
+                    && matches!(
+                        self.ahead2_token(),
+                        Token::Identifier | Token::Await | Token::Yield
+                    );
                 if has_binding {
                     self.get_next_token()?;
                     self.cur.token = Token::Using;
                     if block_it <= 0 {
                         return Err(self.error("no block"));
                     }
-                    self.variable_statement(Token::Using, flags::AWAITING)?;
+                    self.variable_statement(Token::Using, flags::AWAITING, false)?;
                     self.flags |= flags::AWAITING;
                     self.semicolon()?;
                 } else {
@@ -395,7 +426,8 @@ impl Parser {
         }
         let sym = self.cur.symbol.clone().unwrap_or_default();
         let escaped = self.cur.escaped;
-        if sym == "async" && !escaped && !self.ahead_crlf() && self.ahead_token() == Token::Function {
+        if sym == "async" && !escaped && !self.ahead_crlf() && self.ahead_token() == Token::Function
+        {
             self.get_next_token()?;
             return self.function_statement(block_it, flags::ASYNC, line);
         }
@@ -409,7 +441,7 @@ impl Parser {
                 if block_it == 0 {
                     return Err(self.error("no block"));
                 }
-                self.variable_statement(Token::Let, 0)?;
+                self.variable_statement(Token::Let, 0, false)?;
                 self.semicolon()?;
                 return Ok(());
             }
@@ -417,13 +449,16 @@ impl Parser {
         if sym == "using"
             && !escaped
             && !self.ahead_crlf()
-            && matches!(self.ahead_token(), Token::Identifier | Token::Await | Token::Yield)
+            && matches!(
+                self.ahead_token(),
+                Token::Identifier | Token::Await | Token::Yield
+            )
         {
             self.cur.token = Token::Using;
             if block_it <= 0 {
                 return Err(self.error("no block"));
             }
-            self.variable_statement(Token::Using, 0)?;
+            self.variable_statement(Token::Using, 0, false)?;
             self.semicolon()?;
             return Ok(());
         }
@@ -517,20 +552,42 @@ impl Parser {
         self.push_node_struct(2, Token::Label, line)
     }
 
+    /// `fxIfStatement`. An `else if` chain is parsed in a loop rather than
+    /// by recursing `statement(0)` → `if_statement` once per branch: each
+    /// branch would otherwise hold a [`STATEMENT_COST`] frame for the whole
+    /// chain, and generated dispatch code reaches hundreds of branches. The
+    /// open levels' `if` lines are kept on a side stack and the right-nested
+    /// `If` nodes are folded innermost-first once the chain's tail is on the
+    /// node stack — exactly the tree, lines and flags the recursion built.
     fn if_statement(&mut self) -> PResult<()> {
-        let line = self.cur.line;
-        self.match_token(Token::If)?;
-        self.match_token(Token::LeftParenthesis)?;
-        self.comma_expression()?;
-        self.match_token(Token::RightParenthesis)?;
-        self.statement(0)?;
-        if self.cur.token == Token::Else {
-            self.match_token(Token::Else)?;
+        let mut open_lines: Vec<u32> = Vec::new();
+        loop {
+            let line = self.cur.line;
+            self.match_token(Token::If)?;
+            self.match_token(Token::LeftParenthesis)?;
+            self.comma_expression()?;
+            self.match_token(Token::RightParenthesis)?;
             self.statement(0)?;
-        } else {
-            self.push_null();
+            open_lines.push(line);
+            if self.cur.token == Token::Else {
+                self.match_token(Token::Else)?;
+                if self.cur.token == Token::If {
+                    // `else if`: the alternate is the next level of the chain
+                    // (`statement(0)` would dispatch straight back here).
+                    continue;
+                }
+                self.statement(0)?;
+            } else {
+                self.push_null();
+            }
+            break;
         }
-        self.push_node_struct(3, Token::If, line)
+        // Each level's `[condition, consequent, alternate]` are the top three
+        // stack items once the level below it has been folded into one node.
+        while let Some(line) = open_lines.pop() {
+            self.push_node_struct(3, Token::If, line)?;
+        }
+        Ok(())
     }
 
     fn return_statement(&mut self) -> PResult<()> {
@@ -658,17 +715,70 @@ impl Parser {
 
     /// `fxVariableStatement` — `var`/`let`/`const` binding list. Leaves the
     /// single binding node, or a `Statements` wrapping several.
-    pub(crate) fn variable_statement(&mut self, token: Token, binding_flags: u32) -> PResult<()> {
+    ///
+    /// `for_binding` says whether THIS call is parsing a `for` head's own
+    /// binding list, which only the caller knows.
+    ///
+    /// Returns whether any binding was a destructuring pattern with NO
+    /// initializer. Outside a `for` head that is rejected here; inside one it
+    /// cannot be decided yet, because `for (var [a] of …)` is legal and
+    /// `for (var [a]; …)` is not, so the answer is handed back to
+    /// [`Self::for_statement`] to settle once the head's shape is known.
+    ///
+    /// The caller passes it rather than this function reading `flags::FOR`.
+    /// That flag is ambient over the WHOLE head, nested function bodies
+    /// included, and a declaration inside one of those is an ordinary
+    /// `VariableStatement` however the head reached it. Reading it let
+    /// `for (()=>{ var [a]; };;)` through: the arrow body's declaration saw the
+    /// flag set and deferred its rejection to `for_statement`, which never
+    /// received the answer, because that call is nested inside
+    /// `comma_expression` rather than being one of the head's own. The flag did
+    /// not even mean one thing — a function EXPRESSION body clears it and an
+    /// arrow body does not, so `for ((function(){ var [a]; });;)` was rejected
+    /// while the arrow form was not. An argument is positional and cannot leak.
+    pub(crate) fn variable_statement(
+        &mut self,
+        token: Token,
+        binding_flags: u32,
+        for_binding: bool,
+    ) -> PResult<HeadBindings> {
         let line = self.cur.line;
         let mut comma_flag = false;
         let mut count = 0usize;
+        let mut bare_pattern = false;
+        let mut identifier_target = false;
         self.match_token(token)?;
         while has_flag(self.cur.token, BEGIN_BINDING) {
             comma_flag = false;
-            self.binding(token, 1 | binding_flags)?;
+            identifier_target = self.binding(token, 1 | binding_flags)?;
+            // `VariableDeclaration : BindingPattern Initializer` and
+            // `LexicalBinding : BindingPattern Initializer` both REQUIRE the
+            // initializer, so `var [a];` and `let {x};` are spec early errors.
+            // `binding` wraps a binding that has one in a `Binding` node, so a
+            // bare `ArrayBinding`/`ObjectBinding` on the stack is one that has
+            // none — and it reached `code_node_inner`'s unsupported-node panic
+            // (coder.rs:1588), which a guest could raise with
+            // `eval("var [a];")` (F063).
+            //
+            // Rejecting is a deliberate divergence from the pinned oracle's
+            // parser, which does not check this either, in the direction of the
+            // spec — the same move as the `for (let x, y in {})` rejection
+            // below. The `ForBinding` grammars take NO initializer, so inside a
+            // `for` head the decision waits for `for_statement`.
+            if matches!(
+                self.top_token(),
+                Some(Token::ArrayBinding | Token::ObjectBinding)
+            ) {
+                if !for_binding {
+                    return Err(self.error("missing binding initializer"));
+                }
+                bare_pattern = true;
+            }
             count += 1;
             if self.cur.token == Token::Comma {
-                self.flags &= !flags::FOR;
+                // `[~In]` covers the whole list, so the flag stays set across
+                // the comma too; clearing it here let `for (var x = 1, y = "a"
+                // in {};;)` through (F063).
                 self.get_next_token()?;
                 comma_flag = true;
             } else {
@@ -685,7 +795,17 @@ impl Parser {
             self.push_node_list(count)?;
             self.push_node_struct(1, Token::Statements, line)?;
         }
-        Ok(())
+        Ok(HeadBindings {
+            bare_pattern,
+            // Annex B B.3.5 admits an initializer on a `for-in` head binding
+            // only for `var` + a single `BindingIdentifier`, in sloppy code.
+            // `count == 1` rules out a list and `identifier_target` rules out a
+            // pattern; `for_statement` checks the token, goal and strictness.
+            annex_b_var_initializer: token == Token::Var
+                && count == 1
+                && identifier_target
+                && self.top_token() == Some(Token::Binding),
+        })
     }
 
     // ================= for =================
@@ -694,6 +814,13 @@ impl Parser {
         let line = self.cur.line;
         let mut await_flag = false;
         let mut expression_flag = false;
+        // See `variable_statement`: a destructuring head binding with no
+        // initializer is legal for `for-in`/`for-of` and an early error for the
+        // three-part `for`, which is not known until the head is parsed.
+        let mut head = HeadBindings {
+            bare_pattern: false,
+            annex_b_var_initializer: false,
+        };
         self.push_null();
         self.match_token(Token::For)?;
         if self.cur.token == Token::Await {
@@ -701,25 +828,43 @@ impl Parser {
             self.match_token(Token::Await)?;
         }
         self.match_token(Token::LeftParenthesis)?;
-        self.look_ahead_once()?;
+        // Only contextual declaration heads need lookahead. Scanning ahead
+        // of a leading slash would tokenize regexp contents as operators
+        // before primary_expression can select the regexp lexical goal.
+        if self.cur.token == Token::Await
+            || (self.cur.token == Token::Identifier
+                && matches!(
+                    self.cur.symbol.as_ref().and_then(SymbolName::as_str),
+                    Some("let" | "using")
+                ))
+        {
+            self.look_ahead_once()?;
+        }
         self.flags |= flags::FOR;
         if self.cur.token == Token::Semicolon {
             self.push_null();
         } else if self.cur.token == Token::Const {
-            self.variable_statement(Token::Const, 0)?;
+            head = self.variable_statement(Token::Const, 0, true)?;
         } else if self.cur.token == Token::Let {
-            self.variable_statement(Token::Let, 0)?;
+            head = self.variable_statement(Token::Let, 0, true)?;
         } else if self.is_keyword("let")? && has_flag(self.ahead_token(), BEGIN_BINDING) {
             self.cur.token = Token::Let;
-            self.variable_statement(Token::Let, 0)?;
+            head = self.variable_statement(Token::Let, 0, true)?;
         } else if self.cur.token == Token::Identifier
-            && self.cur.symbol.as_deref() == Some("using")
+            && self.cur.symbol.as_ref().and_then(SymbolName::as_str) == Some("using")
             && !self.cur.escaped
             && !self.ahead_crlf()
-            && matches!(self.ahead_token(), Token::Identifier | Token::Await | Token::Yield)
+            && matches!(
+                self.ahead_token(),
+                Token::Identifier | Token::Await | Token::Yield
+            )
         {
             self.look_ahead_twice()?;
-            if self.ahead.as_ref().and_then(|s| s.symbol.as_deref()) == Some("of")
+            if self
+                .ahead
+                .as_ref()
+                .and_then(|s| s.symbol.as_ref().and_then(SymbolName::as_str))
+                == Some("of")
                 && !self.ahead.as_ref().is_some_and(|s| s.escaped)
                 && self.ahead2_token() != Token::Assign
             {
@@ -727,27 +872,37 @@ impl Parser {
                 expression_flag = true;
             } else {
                 self.cur.token = Token::Using;
-                self.variable_statement(Token::Using, 0)?;
+                head = self.variable_statement(Token::Using, 0, true)?;
             }
         } else if self.cur.token == Token::Await {
-            self.look_ahead_twice()?;
-            let is_await_using = !self.ahead_crlf()
+            let maybe_await_using = !self.ahead_crlf()
                 && self.ahead_token() == Token::Identifier
-                && self.ahead.as_ref().and_then(|s| s.symbol.as_deref()) == Some("using")
-                && !self.ahead.as_ref().is_some_and(|s| s.escaped)
+                && self
+                    .ahead
+                    .as_ref()
+                    .and_then(|s| s.symbol.as_ref().and_then(SymbolName::as_str))
+                    == Some("using")
+                && !self.ahead.as_ref().is_some_and(|s| s.escaped);
+            if maybe_await_using {
+                self.look_ahead_twice()?;
+            }
+            let is_await_using = maybe_await_using
                 && !self.ahead2.as_ref().is_some_and(|s| s.crlf)
-                && matches!(self.ahead2_token(), Token::Identifier | Token::Await | Token::Yield);
+                && matches!(
+                    self.ahead2_token(),
+                    Token::Identifier | Token::Await | Token::Yield
+                );
             if is_await_using {
                 self.get_next_token()?;
                 self.cur.token = Token::Using;
-                self.variable_statement(Token::Using, flags::AWAITING)?;
+                head = self.variable_statement(Token::Using, flags::AWAITING, true)?;
                 self.flags |= flags::AWAITING;
             } else {
                 self.comma_expression()?;
                 expression_flag = true;
             }
         } else if self.cur.token == Token::Var {
-            self.variable_statement(Token::Var, 0)?;
+            head = self.variable_statement(Token::Var, 0, true)?;
         } else {
             self.comma_expression()?;
             expression_flag = true;
@@ -761,12 +916,47 @@ impl Parser {
                 if !self.check_reference(Token::Assign)? {
                     return Err(self.error("no reference"));
                 }
-            } else if self.top_token() == Some(Token::Binding) {
-                // A `for (const x = 1 in …)` head — an initializer on the
-                // loop binding is an early error.
+            } else if self.top_token() == Some(Token::Binding)
+                && !(self.cur.token == Token::In
+                    && head.annex_b_var_initializer
+                    && self.flags & flags::STRICT == 0)
+            {
+                // An initializer on the loop binding is an early error —
+                // `for (const x = 1 in …)`, `for (let x = 1 of …)`,
+                // `for (var [a] = [] in …)`.
+                //
+                // With ONE exception, which this arm used to refuse too:
+                // Annex B.3.5 keeps `for ( var BindingIdentifier Initializer
+                // in Expression )` legal in sloppy code, and the corpus relies
+                // on it (`language/statements/for-in/head-var-...`). It is
+                // `var` only, `in` only (never `of`), one binding only, an
+                // identifier target only, and non-strict only — `head` carries
+                // the first four, `flags::STRICT` the last. Module code is
+                // strict, so the flag covers that too.
                 return Err(self.error("invalid binding initializer"));
             } else if self.cur.token == Token::In && self.top_token() == Some(Token::Using) {
                 return Err(self.error("invalid using in"));
+            } else if self.top_token() == Some(Token::Statements) {
+                // `for (let x, y in {})` — a for-in/of head declares exactly
+                // ONE binding (`ForDeclaration : LetOrConst ForBinding`), and
+                // `variable_statement` pushes a `Statements` list for more
+                // than one. Upstream XS leaves this unchecked: the
+                // corresponding `fxReportParserError(…, "no reference %s", …)`
+                // in `fxForStatement` is commented out, and the multi-binding
+                // head reaches the coder, where no node description supplies a
+                // `codeAssign`. Here that was `code_assign`'s unreachable arm,
+                // so five shapes (`let`/`const`/`var`, `in`/`of`) PANICKED the
+                // compiler on a spec early error — F063's claim, in the
+                // committed expectations the whole time as
+                // `skip:compiler-unimplemented:parse`.
+                //
+                // Rejecting is a deliberate divergence from the pinned oracle's
+                // parser, in the direction of the spec and of test262
+                // (`language/block-scope/syntax/for-in/`
+                // `disallow-multiple-lexical-bindings*.js`). "no reference" is
+                // the message XS's own live sibling arm uses for the
+                // expression form of the same mistake.
+                return Err(self.error("no reference"));
             }
             let a_token = self.cur.token;
             self.get_next_token()?;
@@ -796,6 +986,13 @@ impl Parser {
             if expression_flag {
                 self.push_node_struct(1, Token::Statement, line)?;
             }
+            if head.bare_pattern {
+                // `for (var [a];;)`. `ForBinding` never takes an initializer,
+                // so the pattern was let through above; a three-part `for`
+                // head is an ordinary `VariableStatement`/`LexicalDeclaration`,
+                // where `BindingPattern` requires one.
+                return Err(self.error("missing binding initializer"));
+            }
             self.match_token(Token::Semicolon)?;
             if has_flag(self.cur.token, BEGIN_EXPRESSION) {
                 self.comma_expression()?;
@@ -819,9 +1016,21 @@ impl Parser {
 
     /// `fxBinding` — one binding target (identifier / object / array),
     /// optionally with an `= initializer`. `flags_arg & 1` enables the
-    /// initializer.
-    pub(crate) fn binding(&mut self, token: Token, flags_arg: u32) -> PResult<()> {
+    /// initializer. One [`STATEMENT_COST`] recursion point: a nested
+    /// destructuring pattern (`[[[a]]]`, `{a: {b: {c}}}`) recurses here per
+    /// level.
+    /// Returns whether the binding TARGET was a plain `BindingIdentifier`
+    /// rather than a destructuring pattern. Annex B B.3.5 admits an
+    /// initializer in a `for-in` head only for the identifier form, so
+    /// `for_statement` needs to tell them apart.
+    #[inline(never)]
+    pub(crate) fn binding(&mut self, token: Token, flags_arg: u32) -> PResult<bool> {
+        charged!(self, STATEMENT_COST, self.binding_inner(token, flags_arg))
+    }
+
+    fn binding_inner(&mut self, token: Token, flags_arg: u32) -> PResult<bool> {
         let line = self.cur.line;
+        let identifier_target = self.cur.token == Token::Identifier;
         if self.cur.token == Token::Identifier {
             let sym = self.cur.symbol.clone().unwrap_or_default();
             self.check_strict_symbol(&sym)?;
@@ -848,12 +1057,16 @@ impl Parser {
             return Err(self.error("missing identifier"));
         }
         if flags_arg & 1 != 0 && self.cur.token == Token::Assign {
-            self.flags &= !flags::FOR;
+            // `[~In]` covers the WHOLE `VariableDeclarationList`, initializers
+            // included: `for ( var VariableDeclarationList[~In] ; … )`. Clearing
+            // the flag here let `for (var x = "a" in {};;)` — a spec early
+            // error — compile. Leaving it set makes the `in` end the head, and
+            // `for_statement`'s existing `Binding` arm rejects it (F063).
             self.get_next_token()?;
             self.assignment_expression()?;
             self.push_node_struct(2, Token::Binding, line)?;
         }
-        Ok(())
+        Ok(identifier_target)
     }
 
     /// `fxArrayBinding` — `[ a, , ...rest ]` destructuring target.
@@ -919,7 +1132,7 @@ impl Parser {
                     Some(_) => a_symbol = true,
                 }
             } else if self.cur.token == Token::String {
-                let s = crate::ast::units_to_string(&self.cur.string.clone().unwrap_or_default());
+                let s = self.string_property_name()?;
                 self.push_symbol(s);
                 a_symbol = true;
             } else if self.cur.token == Token::LeftBracket {
@@ -971,7 +1184,10 @@ impl Parser {
         self.match_token(Token::Spread)?;
         self.binding(token, 0)?;
         if flag != 0
-            && matches!(self.top_token(), Some(Token::ArrayBinding) | Some(Token::ObjectBinding))
+            && matches!(
+                self.top_token(),
+                Some(Token::ArrayBinding) | Some(Token::ObjectBinding)
+            )
         {
             return Err(self.error("invalid rest"));
         }
@@ -983,6 +1199,19 @@ impl Parser {
     pub(crate) fn parameters_binding(&mut self) -> PResult<()> {
         let line = self.cur.line;
         let mut count = 0usize;
+        // A FormalParameters list may not contain an `await` in an async
+        // function, nor a `yield` in a generator — both are spec early
+        // errors, and both are checked HERE rather than in the coder because
+        // this is the one place every function form funnels through. The
+        // arrow form was already rejected (`invalid await` in `parser.rs`);
+        // the declaration and expression forms were not, so
+        // `async function f(a = await 0){}` compiled into a function whose
+        // body silently never ran. Under the module goal it instead reached
+        // the coder with no return target and aborted the compiler, which is
+        // how the F063 audit found it — but the panic was one goal's symptom
+        // and this is the defect.
+        let saved_await_yield = self.flags & (flags::AWAITING | flags::YIELDING);
+        self.flags &= !(flags::AWAITING | flags::YIELDING);
         if self.cur.token == Token::LeftParenthesis {
             self.get_next_token()?;
             while has_flag(self.cur.token, BEGIN_BINDING) {
@@ -1005,6 +1234,14 @@ impl Parser {
         } else {
             return Err(self.error("missing ("));
         }
+        if self.flags & flags::AWAITING != 0 && self.flags & flags::ASYNC != 0 {
+            return Err(self.error("invalid await"));
+        }
+        if self.flags & flags::YIELDING != 0 && self.flags & flags::GENERATOR != 0 {
+            return Err(self.error("invalid yield"));
+        }
+        self.flags &= !(flags::AWAITING | flags::YIELDING);
+        self.flags |= saved_await_yield;
         self.push_node_list(count)?;
         self.push_node_struct(1, Token::ParamsBinding, line)
     }
@@ -1027,8 +1264,11 @@ impl Parser {
             };
             let Some(inner) = inner else { break };
             match item_token(&inner) {
-                Some(Token::Access) | Some(Token::Member) | Some(Token::MemberAt)
-                | Some(Token::PrivateMember) | Some(Token::Undefined) => {
+                Some(Token::Access)
+                | Some(Token::Member)
+                | Some(Token::MemberAt)
+                | Some(Token::PrivateMember)
+                | Some(Token::Undefined) => {
                     item = inner;
                     break;
                 }
@@ -1045,7 +1285,9 @@ impl Parser {
         };
         match tok {
             Token::Binding => {
-                let Item::Node(mut node) = item else { unreachable!() };
+                let Item::Node(mut node) = item else {
+                    unreachable!()
+                };
                 let target = std::mem::replace(&mut node.children[0], Item::Null);
                 match self.binding_from_expression(target, token)? {
                     Some(b) => node.children[0] = b,
@@ -1054,7 +1296,9 @@ impl Parser {
                 Ok(Some(Item::Node(node)))
             }
             Token::ArrayBinding | Token::ObjectBinding => {
-                let Item::Node(mut node) = item else { unreachable!() };
+                let Item::Node(mut node) = item else {
+                    unreachable!()
+                };
                 if let Some(Item::List(list)) = node.children.get_mut(0) {
                     let items = std::mem::take(list);
                     let mut out = Vec::with_capacity(items.len());
@@ -1069,7 +1313,9 @@ impl Parser {
                 Ok(Some(Item::Node(node)))
             }
             Token::PropertyBinding | Token::PropertyBindingAt | Token::RestBinding => {
-                let Item::Node(mut node) = item else { unreachable!() };
+                let Item::Node(mut node) = item else {
+                    unreachable!()
+                };
                 let idx = node.children.len() - 1;
                 let inner = std::mem::replace(&mut node.children[idx], Item::Null);
                 match self.binding_from_expression(inner, token)? {
@@ -1094,17 +1340,29 @@ impl Parser {
                     Item::Node(node) => {
                         let sym = match node.children.first() {
                             Some(Item::Symbol(s)) => s.clone(),
-                            _ => String::new(),
+                            _ => Vec::new(),
                         };
                         (sym, node.line)
                     }
-                    _ => (String::new(), 0),
+                    _ => (Vec::new(), 0),
                 };
-                Ok(Some(self.new_inherited_node(token, line, vec![Item::Symbol(sym)])))
+                Ok(Some(self.new_inherited_node(
+                    token,
+                    line,
+                    vec![Item::Symbol(sym)],
+                )))
             }
-            Token::Member | Token::MemberAt | Token::PrivateMember | Token::Undefined => Ok(Some(item)),
+            Token::Member | Token::MemberAt | Token::PrivateMember | Token::Undefined => {
+                // Assignment patterns may store through property references;
+                // formal parameters must introduce bindings instead. Keep
+                // this distinction recursive so defaults, rest and nested
+                // patterns cannot hide a reference inside an arrow head.
+                Ok((token == Token::Access).then_some(item))
+            }
             Token::Assign => {
-                let Item::Node(mut node) = item else { unreachable!() };
+                let Item::Node(mut node) = item else {
+                    unreachable!()
+                };
                 let reference = std::mem::replace(&mut node.children[0], Item::Null);
                 let binding = match self.binding_from_expression(reference, token)? {
                     Some(b) => b,
@@ -1158,11 +1416,20 @@ impl Parser {
 
     /// `fxArrayBindingFromExpression` — the array-literal → `ArrayBinding`
     /// conversion for an owned array `Item`.
-    fn array_binding_from_expression_node(&mut self, item: Item, token: Token) -> PResult<Option<Item>> {
-        let Item::Node(node) = item else { return Ok(None) };
+    fn array_binding_from_expression_node(
+        &mut self,
+        item: Item,
+        token: Token,
+    ) -> PResult<Option<Item>> {
+        let Item::Node(node) = item else {
+            return Ok(None);
+        };
         let line = node.line;
         let elision = node.flags & flags::ELISION != 0;
-        let Some(Item::List(items)) = node.children.into_iter().next() else { return Ok(None) };
+        let Some(Item::List(items)) = std::mem::take(&mut { node }.children).into_iter().next()
+        else {
+            return Ok(None);
+        };
         let n = items.len();
         let mut out = Vec::with_capacity(n);
         for (i, it) in items.into_iter().enumerate() {
@@ -1191,14 +1458,27 @@ impl Parser {
                 },
             }
         }
-        Ok(Some(self.new_inherited_node(Token::ArrayBinding, line, vec![Item::List(out)])))
+        Ok(Some(self.new_inherited_node(
+            Token::ArrayBinding,
+            line,
+            vec![Item::List(out)],
+        )))
     }
 
     /// `fxObjectBindingFromExpression`.
-    fn object_binding_from_expression_node(&mut self, item: Item, token: Token) -> PResult<Option<Item>> {
-        let Item::Node(node) = item else { return Ok(None) };
+    fn object_binding_from_expression_node(
+        &mut self,
+        item: Item,
+        token: Token,
+    ) -> PResult<Option<Item>> {
+        let Item::Node(node) = item else {
+            return Ok(None);
+        };
         let line = node.line;
-        let Some(Item::List(props)) = node.children.into_iter().next() else { return Ok(None) };
+        let Some(Item::List(props)) = std::mem::take(&mut { node }.children).into_iter().next()
+        else {
+            return Ok(None);
+        };
         let n = props.len();
         let mut out = Vec::with_capacity(n);
         let mut obj_flags = 0u32;
@@ -1206,7 +1486,9 @@ impl Parser {
             match item_token(&prop) {
                 None => return Ok(None),
                 Some(Token::Property) => {
-                    let Item::Node(mut p) = prop else { unreachable!() };
+                    let Item::Node(mut p) = prop else {
+                        unreachable!()
+                    };
                     let value = std::mem::replace(&mut p.children[1], Item::Null);
                     let binding = match self.binding_from_expression(value, token)? {
                         Some(b) => b,
@@ -1217,7 +1499,9 @@ impl Parser {
                     out.push(Item::Node(p));
                 }
                 Some(Token::PropertyAt) => {
-                    let Item::Node(mut p) = prop else { unreachable!() };
+                    let Item::Node(mut p) = prop else {
+                        unreachable!()
+                    };
                     let value = std::mem::replace(&mut p.children[1], Item::Null);
                     let binding = match self.binding_from_expression(value, token)? {
                         Some(b) => b,
@@ -1288,13 +1572,21 @@ impl Parser {
     }
 
     /// `fxRestBindingFromExpression` — a spread element → `RestBinding`.
-    fn rest_binding_from_expression(&mut self, item: Item, token: Token, flag: u32, has_next: bool) -> PResult<Option<Item>> {
+    fn rest_binding_from_expression(
+        &mut self,
+        item: Item,
+        token: Token,
+        flag: u32,
+        has_next: bool,
+    ) -> PResult<Option<Item>> {
         if has_next {
             return Ok(None);
         }
-        let Item::Node(node) = item else { return Ok(None) };
+        let Item::Node(node) = item else {
+            return Ok(None);
+        };
         let line = node.line;
-        let expr = match node.children.into_iter().next() {
+        let expr = match std::mem::take(&mut { node }.children).into_iter().next() {
             Some(e) => e,
             None => return Ok(None),
         };
@@ -1309,7 +1601,11 @@ impl Parser {
             }
             _ => {}
         }
-        Ok(Some(self.new_inherited_node(Token::RestBinding, line, vec![binding])))
+        Ok(Some(self.new_inherited_node(
+            Token::RestBinding,
+            line,
+            vec![binding],
+        )))
     }
 
     // ============ strict-binding early errors ============
@@ -1322,7 +1618,9 @@ impl Parser {
     }
 
     fn check_strict_binding(&mut self, item: &Item) -> PResult<()> {
-        let Item::Node(node) = item else { return Ok(()) };
+        let Item::Node(node) = item else {
+            return Ok(());
+        };
         match node.token {
             Token::Access | Token::Arg | Token::Const | Token::Let | Token::Using | Token::Var => {
                 if let Some(Item::Symbol(s)) = node.children.first() {
@@ -1354,9 +1652,17 @@ impl Parser {
     // ================= functions =================
 
     /// `fxFunctionExpression`.
-    pub(crate) fn function_expression(&mut self, line: u32, symbol_out: Option<&mut Option<String>>, flag: u32) -> PResult<()> {
+    pub(crate) fn function_expression(
+        &mut self,
+        line: u32,
+        symbol_out: Option<&mut Option<SymbolName>>,
+        flag: u32,
+    ) -> PResult<()> {
         let saved = self.flags;
-        self.flags = (saved & (flags::PARSER_FLAGS | flags::STRICT)) | flags::FUNCTION | flags::TARGET | flag;
+        self.flags = (saved & (flags::PARSER_FLAGS | flags::STRICT))
+            | flags::FUNCTION
+            | flags::TARGET
+            | flag;
         let want_symbol = symbol_out.is_some();
         let name = self.function_name(saved, want_symbol, symbol_out)?;
         self.parameters_binding()?;
@@ -1365,7 +1671,12 @@ impl Parser {
         self.push_node_struct(1, Token::Body, line)?;
         self.push_node_struct(3, Token::Function, line)?;
         let root_flags = self.flags
-            & (flags::STRICT | flags::NOT_SIMPLE_PARAMETERS | flags::TARGET | flags::ARGUMENTS | flags::EVAL | flag);
+            & (flags::STRICT
+                | flags::NOT_SIMPLE_PARAMETERS
+                | flags::TARGET
+                | flags::ARGUMENTS
+                | flags::EVAL
+                | flag);
         self.set_root_flags(root_flags);
         if saved & flags::STRICT == 0 && self.flags & flags::STRICT != 0 {
             self.check_strict_function()?;
@@ -1377,9 +1688,17 @@ impl Parser {
     }
 
     /// `fxGeneratorExpression`.
-    pub(crate) fn generator_expression(&mut self, line: u32, symbol_out: Option<&mut Option<String>>, flag: u32) -> PResult<()> {
+    pub(crate) fn generator_expression(
+        &mut self,
+        line: u32,
+        symbol_out: Option<&mut Option<SymbolName>>,
+        flag: u32,
+    ) -> PResult<()> {
         let saved = self.flags;
-        self.flags = (saved & (flags::PARSER_FLAGS | flags::STRICT)) | flags::GENERATOR | flags::TARGET | flag;
+        self.flags = (saved & (flags::PARSER_FLAGS | flags::STRICT))
+            | flags::GENERATOR
+            | flags::TARGET
+            | flag;
         let want_symbol = symbol_out.is_some();
         // Generator name context differs slightly (no generator-yield
         // escape hatch), but the shared helper is faithful for the corpus.
@@ -1392,7 +1711,12 @@ impl Parser {
         self.push_node_struct(1, Token::Body, line)?;
         self.push_node_struct(3, Token::Generator, line)?;
         let root_flags = self.flags
-            & (flags::STRICT | flags::NOT_SIMPLE_PARAMETERS | flags::GENERATOR | flags::ARGUMENTS | flags::EVAL | flag);
+            & (flags::STRICT
+                | flags::NOT_SIMPLE_PARAMETERS
+                | flags::GENERATOR
+                | flags::ARGUMENTS
+                | flags::EVAL
+                | flag);
         self.set_root_flags(root_flags);
         if saved & flags::STRICT == 0 && self.flags & flags::STRICT != 0 {
             self.check_strict_function()?;
@@ -1403,9 +1727,16 @@ impl Parser {
 
     /// The optional function name (`fxFunctionExpression` head). Pushes the
     /// name symbol or `NULL`.
-    fn function_name(&mut self, saved: u32, want_symbol: bool, symbol_out: Option<&mut Option<String>>) -> PResult<()> {
+    fn function_name(
+        &mut self,
+        saved: u32,
+        want_symbol: bool,
+        symbol_out: Option<&mut Option<SymbolName>>,
+    ) -> PResult<()> {
         let is_name = self.cur.token == Token::Identifier
-            || (saved & flags::GENERATOR != 0 && saved & flags::STRICT == 0 && self.cur.token == Token::Yield)
+            || (saved & flags::GENERATOR != 0
+                && saved & flags::STRICT == 0
+                && self.cur.token == Token::Yield)
             || (!want_symbol && self.cur.token == Token::Await);
         if is_name {
             let sym = self.cur.symbol.clone().unwrap_or_default();
@@ -1422,8 +1753,14 @@ impl Parser {
     }
 
     /// The optional generator name (`fxGeneratorExpression` head).
-    fn function_name_generator(&mut self, _saved: u32, want_symbol: bool, symbol_out: Option<&mut Option<String>>) -> PResult<()> {
-        let is_name = self.cur.token == Token::Identifier || (!want_symbol && self.cur.token == Token::Await);
+    fn function_name_generator(
+        &mut self,
+        _saved: u32,
+        want_symbol: bool,
+        symbol_out: Option<&mut Option<SymbolName>>,
+    ) -> PResult<()> {
+        let is_name =
+            self.cur.token == Token::Identifier || (!want_symbol && self.cur.token == Token::Await);
         if is_name {
             let sym = self.cur.symbol.clone().unwrap_or_default();
             self.push_symbol(sym.clone());
@@ -1463,7 +1800,7 @@ impl Parser {
     pub(crate) fn arrow_expression(&mut self, flag: u32) -> PResult<()> {
         let line = self.cur.line;
         let saved = self.flags;
-        self.flags &= !(flags::ASYNC | flags::GENERATOR);
+        self.flags &= !(flags::ASYNC | flags::GENERATOR | flags::FOR);
         self.flags |= flags::ARROW | flag;
         self.match_token(Token::Arrow)?;
         self.push_null();
@@ -1480,7 +1817,12 @@ impl Parser {
         }
         self.push_node_struct(3, Token::Function, line)?;
         let root_flags = self.flags
-            & (flags::STRICT | flags::FIELD | flags::NOT_SIMPLE_PARAMETERS | flags::ARROW | flags::SUPER | flag);
+            & (flags::STRICT
+                | flags::FIELD
+                | flags::NOT_SIMPLE_PARAMETERS
+                | flags::ARROW
+                | flags::SUPER
+                | flag);
         self.set_root_flags(root_flags);
         if saved & flags::STRICT == 0 && self.flags & flags::STRICT != 0 {
             self.check_strict_function()?;
@@ -1496,7 +1838,11 @@ impl Parser {
     /// init-function surgery is folded to the coder (module doc), so the
     /// `constructorInit` / `instanceInit` slots are left null and members
     /// stay in the `items` list in source order.
-    pub(crate) fn class_expression(&mut self, line: u32, symbol_out: Option<&mut Option<String>>) -> PResult<()> {
+    pub(crate) fn class_expression(
+        &mut self,
+        line: u32,
+        symbol_out: Option<&mut Option<SymbolName>>,
+    ) -> PResult<()> {
         let saved = self.flags;
         let mut heritage_flag = false;
         let mut constructor: Option<Item> = None;
@@ -1541,8 +1887,16 @@ impl Parser {
                 if self.cur.token == Token::Static && !self.cur.escaped {
                     self.get_next_token()?;
                     if self.cur.token == Token::Assign || self.cur.token == Token::Semicolon {
+                        // `static` is the FIELD NAME here, not a modifier: the
+                        // token after it is `=` or `;`, so no `ClassElementName`
+                        // followed. The field is therefore an ordinary instance
+                        // field, and `fxClassExpression` says so by reaching its
+                        // `field:` label with `aStaticFlag` still 0
+                        // (`xsSyntaxical.c:2666-2671`). Passing `true` here put
+                        // `class C { static = 1 }`'s field on the CONSTRUCTOR,
+                        // where Node and XS both put it on the instance.
                         self.push_symbol("static".to_string());
-                        self.class_field(prop_line, Token::Property, true)?;
+                        self.class_field(prop_line, Token::Property, false)?;
                         count += 1;
                         continue;
                     }
@@ -1575,7 +1929,9 @@ impl Parser {
                 }
                 let (a_symbol, _t0, a_token1, a_token2) = self.property_name()?;
                 let async_flag = self.property_name_async_flag;
-                if !static_flag && a_symbol.as_deref() == Some("constructor") {
+                if !static_flag
+                    && a_symbol.as_ref().and_then(SymbolName::as_str) == Some("constructor")
+                {
                     self.pop(); // the key symbol
                     if constructor.is_some()
                         || a_token2 == Token::Generator
@@ -1589,10 +1945,14 @@ impl Parser {
                     constructor = Some(self.pop());
                 } else if self.cur.token == Token::LeftParenthesis {
                     let mut method_flag = async_flag;
-                    if a_token1 == Token::PrivateProperty && a_symbol.as_deref() == Some("#constructor") {
+                    if a_token1 == Token::PrivateProperty
+                        && a_symbol.as_ref().and_then(SymbolName::as_str) == Some("#constructor")
+                    {
                         return Err(self.error("invalid method: #constructor"));
                     }
-                    if static_flag && a_symbol.as_deref() == Some("prototype") {
+                    if static_flag
+                        && a_symbol.as_ref().and_then(SymbolName::as_str) == Some("prototype")
+                    {
                         return Err(self.error("invalid static method: prototype"));
                     }
                     if static_flag {
@@ -1611,17 +1971,32 @@ impl Parser {
                         self.function_expression(prop_line, None, flags::SUPER | method_flag)?;
                     }
                     self.push_node_struct(2, a_token1, prop_line)?;
-                    let keep = method_flag & (flags::STATIC | flags::GETTER | flags::SETTER | flags::METHOD);
+                    let keep = method_flag
+                        & (flags::STATIC | flags::GETTER | flags::SETTER | flags::METHOD);
                     self.set_top_flags(keep);
                     count += 1;
                 } else {
-                    if a_token1 == Token::PrivateProperty && a_symbol.as_deref() == Some("#constructor") {
+                    if a_token1 == Token::PrivateProperty
+                        && a_symbol.as_ref().and_then(SymbolName::as_str) == Some("#constructor")
+                    {
                         return Err(self.error("invalid field: #constructor"));
                     }
-                    if a_symbol.as_deref() == Some("constructor") {
+                    if a_symbol.as_ref().and_then(SymbolName::as_str) == Some("constructor") {
                         return Err(self.error("invalid field: constructor"));
                     }
-                    if a_symbol.as_deref() == Some("prototype") {
+                    // ONLY when static. `ClassElement : static FieldDefinition ;`
+                    // is the production whose early error forbids `prototype`
+                    // (ECMA-262 §15.7.1); a non-static `prototype` field is
+                    // ordinary and `class C { prototype = 1; }` is valid source.
+                    // `fxClassExpression` (`xsSyntaxical.c:2733`) tests the
+                    // symbol without consulting its own `aStaticFlag`, and the
+                    // port had carried that over, so both engines refused it.
+                    // A deliberate divergence from the pinned oracle toward the
+                    // spec, the same direction as `for (let x, y in {})` and the
+                    // Annex B `for-in` head initializer on this branch.
+                    if static_flag
+                        && a_symbol.as_ref().and_then(SymbolName::as_str) == Some("prototype")
+                    {
                         return Err(self.error("invalid field: prototype"));
                     }
                     self.class_field(prop_line, a_token1, static_flag)?;
@@ -1681,38 +2056,118 @@ impl Parser {
     /// `constructor(){}`), matching the shape `fxClassExpression` builds.
     fn synthesize_default_constructor(&mut self, heritage_flag: bool, line: u32) {
         let strict = self.flags & flags::INHERITED;
-        let empty_params = || Item::Node(Box::new(Node {
-            token: Token::ParamsBinding,
-            line,
-            flags: strict,
-            children: vec![Item::List(Vec::new())],
-            value: Value::None,
-        }));
+        let empty_params = || {
+            Item::Node(Box::new(self.new_node(
+                Token::ParamsBinding,
+                line,
+                strict,
+                vec![Item::List(Vec::new())],
+                Value::None,
+            )))
+        };
         // name
         let name = Item::Null;
         let (params, body, fflags);
         if heritage_flag {
             // params: (...args)
-            let arg = Item::Node(Box::new(Node { token: Token::Arg, line, flags: strict, children: vec![Item::Symbol("args".to_string()), Item::Null], value: Value::None }));
-            let rest = Item::Node(Box::new(Node { token: Token::RestBinding, line, flags: strict, children: vec![arg], value: Value::None }));
-            params = Item::Node(Box::new(Node { token: Token::ParamsBinding, line, flags: strict, children: vec![Item::List(vec![rest])], value: Value::None }));
+            let arg = Item::Node(Box::new(self.new_node(
+                Token::Arg,
+                line,
+                strict,
+                vec![Item::Symbol(str_to_units("args")), Item::Null],
+                Value::None,
+            )));
+            let rest = Item::Node(Box::new(self.new_node(
+                Token::RestBinding,
+                line,
+                strict,
+                vec![arg],
+                Value::None,
+            )));
+            params = Item::Node(Box::new(self.new_node(
+                Token::ParamsBinding,
+                line,
+                strict,
+                vec![Item::List(vec![rest])],
+                Value::None,
+            )));
             // body: super(...args)
-            let access = Item::Node(Box::new(Node { token: Token::Access, line, flags: strict, children: vec![Item::Symbol("args".to_string())], value: Value::None }));
-            let spread = Item::Node(Box::new(Node { token: Token::Spread, line, flags: strict, children: vec![access], value: Value::None }));
-            let mut sup_params = Node { token: Token::Params, line, flags: strict, children: vec![Item::List(vec![spread])], value: Value::None };
+            let access = Item::Node(Box::new(self.new_node(
+                Token::Access,
+                line,
+                strict,
+                vec![Item::Symbol(str_to_units("args"))],
+                Value::None,
+            )));
+            let spread = Item::Node(Box::new(self.new_node(
+                Token::Spread,
+                line,
+                strict,
+                vec![access],
+                Value::None,
+            )));
+            let mut sup_params = self.new_node(
+                Token::Params,
+                line,
+                strict,
+                vec![Item::List(vec![spread])],
+                Value::None,
+            );
             sup_params.flags |= flags::SPREAD;
-            let sup = Item::Node(Box::new(Node { token: Token::Super, line, flags: strict, children: vec![Item::Node(Box::new(sup_params))], value: Value::None }));
-            let stmt = Item::Node(Box::new(Node { token: Token::Statement, line, flags: strict, children: vec![sup], value: Value::None }));
-            body = Item::Node(Box::new(Node { token: Token::Body, line, flags: strict, children: vec![stmt], value: Value::None }));
+            let sup = Item::Node(Box::new(self.new_node(
+                Token::Super,
+                line,
+                strict,
+                vec![Item::Node(Box::new(sup_params))],
+                Value::None,
+            )));
+            let stmt = Item::Node(Box::new(self.new_node(
+                Token::Statement,
+                line,
+                strict,
+                vec![sup],
+                Value::None,
+            )));
+            body = Item::Node(Box::new(self.new_node(
+                Token::Body,
+                line,
+                strict,
+                vec![stmt],
+                Value::None,
+            )));
             fflags = flags::STRICT | flags::DERIVED | flags::METHOD | flags::TARGET | flags::SUPER;
         } else {
             params = empty_params();
-            let undef = Item::Node(Box::new(Node { token: Token::Undefined, line, flags: strict, children: Vec::new(), value: Value::None }));
-            let stmt = Item::Node(Box::new(Node { token: Token::Statement, line, flags: strict, children: vec![undef], value: Value::None }));
-            body = Item::Node(Box::new(Node { token: Token::Body, line, flags: strict, children: vec![stmt], value: Value::None }));
+            let undef = Item::Node(Box::new(self.new_node(
+                Token::Undefined,
+                line,
+                strict,
+                Vec::new(),
+                Value::None,
+            )));
+            let stmt = Item::Node(Box::new(self.new_node(
+                Token::Statement,
+                line,
+                strict,
+                vec![undef],
+                Value::None,
+            )));
+            body = Item::Node(Box::new(self.new_node(
+                Token::Body,
+                line,
+                strict,
+                vec![stmt],
+                Value::None,
+            )));
             fflags = flags::STRICT | flags::BASE | flags::METHOD | flags::TARGET;
         }
-        let func = Item::Node(Box::new(Node { token: Token::Function, line, flags: fflags, children: vec![name, params, body], value: Value::None }));
+        let func = Item::Node(Box::new(self.new_node(
+            Token::Function,
+            line,
+            fflags,
+            vec![name, params, body],
+            Value::None,
+        )));
         self.push(func);
     }
 
@@ -1780,7 +2235,7 @@ impl Parser {
             Token::Const | Token::Let | Token::Var => {
                 let a_token = self.cur.token;
                 let before = self.stack.len();
-                self.variable_statement(a_token, 0)?;
+                self.variable_statement(a_token, 0, false)?;
                 // Collect specifiers from the just-parsed declaration.
                 let decl = self.stack[before..].to_vec();
                 let mut specs = Vec::new();
@@ -1819,7 +2274,7 @@ impl Parser {
             }
             _ => {
                 if self.cur.token == Token::Identifier
-                    && self.cur.symbol.as_deref() == Some("async")
+                    && self.cur.symbol.as_ref().and_then(SymbolName::as_str) == Some("async")
                     && !self.cur.escaped
                 {
                     self.look_ahead_once()?;
@@ -1841,10 +2296,10 @@ impl Parser {
             return Err(self.error("invalid default"));
         }
         self.flags |= flags::DEFAULT;
-        let mut symbol: Option<String> = None;
+        let mut symbol: Option<SymbolName> = None;
         if self.cur.token == Token::Class {
             self.class_expression(line, Some(&mut symbol))?;
-            let name = symbol.clone().unwrap_or_else(|| "default".to_string());
+            let name = symbol.clone().unwrap_or_else(|| "default".into());
             self.push_symbol(name);
             self.push_node_struct(1, Token::Let, line)?;
             self.swap_nodes();
@@ -1863,7 +2318,7 @@ impl Parser {
             } else {
                 self.function_expression(line, Some(&mut symbol), flag)?;
             }
-            let name = symbol.clone().unwrap_or_else(|| "default".to_string());
+            let name = symbol.clone().unwrap_or_else(|| "default".into());
             self.push_define(name, line);
         } else {
             self.assignment_expression()?;
@@ -1910,7 +2365,7 @@ impl Parser {
 
     /// Emit the `Export` node wrapping a single local specifier (used by
     /// `export class`/`export function`).
-    fn export_local(&mut self, sym: String, line: u32) -> PResult<()> {
+    fn export_local(&mut self, sym: SymbolName, line: u32) -> PResult<()> {
         self.push_symbol(sym);
         self.push_null();
         self.push_node_struct(2, Token::Specifier, line)?;
@@ -1927,13 +2382,13 @@ impl Parser {
         match node.token {
             Token::Const | Token::Let | Token::Var => {
                 if let Some(Item::Symbol(s)) = node.children.first() {
-                    let spec = Item::Node(Box::new(Node {
-                        token: Token::Specifier,
-                        line: node.line,
-                        flags: self.flags & flags::INHERITED,
-                        children: vec![Item::Symbol(s.clone()), Item::Null],
-                        value: Value::None,
-                    }));
+                    let spec = Item::Node(Box::new(self.new_node(
+                        Token::Specifier,
+                        node.line,
+                        self.flags & flags::INHERITED,
+                        vec![Item::Symbol(s.clone()), Item::Null],
+                        Value::None,
+                    )));
                     out.push(spec);
                 }
             }
@@ -2067,7 +2522,7 @@ impl Parser {
     /// `export default async function` lookahead.
     fn is_async_function_ahead(&mut self) -> PResult<bool> {
         if self.cur.token == Token::Identifier
-            && self.cur.symbol.as_deref() == Some("async")
+            && self.cur.symbol.as_ref().and_then(SymbolName::as_str) == Some("async")
             && !self.cur.escaped
         {
             self.look_ahead_once()?;

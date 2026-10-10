@@ -1,0 +1,187 @@
+//! Traversal of stored references to natives that restore cannot reconstruct.
+//!
+//! These policies inspect carried values, including the callable raw indices
+//! in bound functions and proxies. Early host/unsupported-state refusals and
+//! the dirty-page heap scan remain in the admission algorithm.
+use super::*;
+
+macro_rules! persist_run {
+    ($($code:tt)*) => { $($code)* };
+}
+macro_rules! persist_text {
+    ($($code:tt)*) => { stringify!($($code)*) };
+}
+
+macro_rules! persist_holder {
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, none) => {
+        $emit! { false }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, slots) => {
+        $emit! { $vm.$field.iter().any($names) }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, indexed) => {
+        $emit! { $vm.$field.values().flat_map(|a| a.items().iter().map(|(_, v)| v)).any($names) }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, collections) => {
+        $emit! { $vm.$field.values().flat_map(|c| c.entries().iter().flatten().flat_map(|e| [&e.0, &e.1])).any($names) }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, accessors) => {
+        $emit! { $vm.$field.values().any(|d| d.get.as_ref().is_some_and($names) || d.set.as_ref().is_some_and($names)) }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, values) => {
+        $emit! { $vm.$field.values().any($names) }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, bound) => {
+        $emit! { $vm.$field.values().any(|d| $index(d.target.0) || $names(&d.this_arg) || d.args.iter().any($names)) }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, proxies) => {
+        $emit! { $vm.$field.values().any(|p| $index(p.target.0) || $index(p.handler.0)) }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, disposable) => {
+        $emit! { $vm.$field.values().flat_map(|d| d.records.iter()).any(|r| $names(&r.resource) || $names(&r.method)) }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, promises) => {
+        $emit! { $vm.$field.values().any(|p| $names(&p.result) || p.reactions.iter().any(|r| {
+            $names(&r.on_fulfilled) || $names(&r.on_rejected) || $names(&r.resolve) || $names(&r.reject)
+        })) }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, combinators) => {
+        $emit! { $vm.$field.iter().any(|c| $names(&c.resolve) || $names(&c.reject)) }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, generators) => {
+        $emit! { $vm.$field.values().filter_map(|g| g.frame.as_ref()).any(|f| saved_frame_contains(f, $names)) }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, async_instances) => {
+        $emit! { $vm.$field.values().any(|a| a.frame.as_ref().is_some_and(|f| saved_frame_contains(f, $names))
+            || $names(&a.resolve_fn) || $names(&a.reject_fn)) }
+    };
+    // An async generator holds its suspended frame plus a request queue
+    // whose entries carry a value and a resolving-function pair each.
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, async_generators) => {
+        $emit! { $vm.$field.values().any(|g| g.frame.as_ref().is_some_and(|f| saved_frame_contains(f, $names))
+            || g.requests.iter().chain(g.active.as_ref()).any(|r| $names(&r.value) || $names(&r.resolve) || $names(&r.reject))) }
+    };
+    // A queued promise job carries its reaction's four function slots and
+    // the settled value, or a thenable job's four slots. Under shared
+    // compartments the boundary admits queued jobs (the host pumps between
+    // cranks), so the queue is a persisted holder.
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, jobs) => {
+        $emit! { $vm.$field.iter().any(|j| match j {
+            PromiseJob::Reaction { reaction: r, value, .. } => $names(value)
+                || $names(&r.on_fulfilled) || $names(&r.on_rejected) || $names(&r.resolve) || $names(&r.reject),
+            PromiseJob::Thenable { then, thenable, resolve, reject } =>
+                $names(then) || $names(thenable) || $names(resolve) || $names(reject),
+        }) }
+    };
+    // An iterator's iterated object is an internal slot no heap property
+    // mirrors: `Array.prototype.values.call(x)` keeps `ToObject(x)` here.
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, iterators) => {
+        $emit! { $vm.$field.values().any(|s| $index(s.iterable.0)) }
+    };
+    // An `Array.fromAsync` accumulation holds the result capability, the
+    // map function and its `thisArg`, the iterator and its `next`, the
+    // array-like input, and a pending close error — and the accumulator
+    // object as a bare index no heap property mirrors, exactly as an
+    // iterator's iterated object is (architecture finding F127).
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, from_async) => {
+        $emit! { $vm.$field.iter().any(|f| $index(f.target.0)
+            || $names(&f.resolve) || $names(&f.reject) || $names(&f.mapfn)
+            || $names(&f.this_arg) || $names(&f.iterator) || $names(&f.next_method)
+            || $names(&f.array_like) || $names(&f.close_error)) }
+    };
+}
+
+macro_rules! define_persist_holders {
+    (() $vis:vis struct $name:ident {
+        $(#[boot_new($boot_new:expr)]
+          #[gc_root($root:ident)]
+          #[quiescent($boundary:ident)]
+          #[persist_refs($persist:ident)]
+          #[runtime_keys($runtime_keys:ident)]
+          #[gc_hook($phase:ident, $policy:ident)]
+          #[gc_chunk($chunk:ident)]
+          #[gc_slots($shape:ident, $row:ident)]
+          #[gc_weak($weak:ident)]
+          #[snapshot_table($($snapshot:tt)*)]
+          $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
+    } boot_context { $($boot_context:tt)* } external_tables { $($external:tt)* }) => {
+        impl Interp {
+            pub(super) fn persisted_holders_contain(
+                &self, names: &impl Fn(&Slot) -> bool, index: &impl Fn(u32) -> bool,
+            ) -> bool {
+                false $(|| persist_holder!(persist_run, self, $field, names, index, $persist))*
+            }
+        }
+        /// Executed holder predicates for independent structural verification.
+        #[doc(hidden)]
+        pub const PERSIST_HOLDER_SOURCE: &[(&str, &str)] = &[
+            $((stringify!($field), persist_holder!(persist_text, self, $field, names, index, $persist)),)*
+        ];
+    };
+}
+interp_state!(define_persist_holders);
+
+fn saved_frame_contains(f: &SavedFrame, names: &impl Fn(&Slot) -> bool) -> bool {
+    f.locals.iter().any(names)
+        || f.args.iter().any(names)
+        || f.stack_slice.iter().any(names)
+        || names(&f.this_val)
+        || names(&f.env)
+        || names(&f.result)
+        || f.jumps.iter().any(|j| names(&j.env))
+}
+
+// This diagnostic deliberately has a narrower holder set than persist_refs.
+// Keep the historical live-entry and item-value projections unchanged.
+macro_rules! runtime_key_iter {
+    ($emit:ident, $vm:ident, $field:ident, slots) => {
+        $emit! { $vm.$field.iter() }
+    };
+    ($emit:ident, $vm:ident, $field:ident, indexed) => {
+        $emit! { $vm.$field.values().flat_map(|a| a.items().values()) }
+    };
+    ($emit:ident, $vm:ident, $field:ident, collections) => {
+        $emit! { $vm.$field.values().flat_map(|c| c.live_entries().flat_map(|(k, v)| [k, v])) }
+    };
+}
+macro_rules! define_runtime_key_scan {
+    (() $vis:vis struct $name:ident {
+        $(#[boot_new($boot_new:expr)]
+          #[gc_root($root:ident)]
+          #[quiescent($boundary:ident)]
+          #[persist_refs($persist:ident)]
+          #[runtime_keys($runtime_keys:ident)]
+          #[gc_hook($phase:ident, $policy:ident)]
+          #[gc_chunk($chunk:ident)]
+          #[gc_slots($shape:ident, $row:ident)]
+          #[gc_weak($weak:ident)]
+          #[snapshot_table($($snapshot:tt)*)]
+          $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
+    } boot_context { $($boot_context:tt)* } external_tables { $($external:tt)* }) => {
+        define_runtime_key_scan!(@scan []; $(($field, $runtime_keys))*);
+    };
+    (@scan [$($selected:tt)*]; ($field:ident, none) $($rest:tt)*) => {
+        define_runtime_key_scan!(@scan [$($selected)*]; $($rest)*);
+    };
+    (@scan [$($selected:tt)*]; ($field:ident, $policy:ident) $($rest:tt)*) => {
+        define_runtime_key_scan!(@scan [$($selected)* ($field, $policy)]; $($rest)*);
+    };
+    (@scan [$(($field:ident, $policy:ident))*];) => {
+        impl Interp {
+            pub(super) fn runtime_key_tail_min(
+                &self, over: &impl Fn(&Slot) -> Option<u16>,
+            ) -> Option<u16> {
+                std::iter::empty()
+                    $(.chain(runtime_key_iter!(persist_run, self, $field, $policy)))*
+                    .filter_map(over)
+                    .min()
+            }
+        }
+        /// Executed key-holder projections for independent coverage checks.
+        #[doc(hidden)]
+        pub const RUNTIME_KEY_HOLDER_SOURCE: &[(&str, &str)] = &[
+            $((stringify!($field), runtime_key_iter!(persist_text, self, $field, $policy)),)*
+        ];
+    };
+}
+interp_state!(define_runtime_key_scan);

@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=language/expressions/async-generator/forbidden-ext/b1 tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/async-generator/forbidden-ext/b1/async-gen-func-expr-forbidden-ext-direct-access-prop-arguments.js sloppy pass
+language/expressions/async-generator/forbidden-ext/b1/async-gen-func-expr-forbidden-ext-direct-access-prop-caller.js sloppy pass
+language/expressions/async-generator/forbidden-ext/b1/async-gen-named-func-expr-forbidden-ext-direct-access-prop-arguments.js sloppy pass
+language/expressions/async-generator/forbidden-ext/b1/async-gen-named-func-expr-forbidden-ext-direct-access-prop-caller.js sloppy pass

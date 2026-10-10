@@ -13,68 +13,33 @@
 //! anchors every property/intrinsic name it shares, per the
 //! bucket-ordered symbol-table contract the design records.
 
+#[path = "common/twin.rs"]
+mod carry;
 mod common;
+use carry::{compile, sig, twin};
+use ironhorse_snapshot::CommitToken;
 
 use common::TempDir;
+use ironhorse_snapshot::store::HeapStoreCommit;
 
 use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
     MachineSnapshot,
 };
-use ironhorse_snapshot::store::{validate_store, HeapStore, MemoryStore, StoreError};
+use ironhorse_snapshot::store::{validate_store, MemoryStore, StoreError};
 use ironhorse_snapshot::store_file::FileStore;
-use ironhorse_snapshot::{read_machine, write_machine, Signature};
-use ironhorse_vm::{parse_symbols, Interp};
-
-fn sig() -> Signature {
-    Signature::new("ironhorse-worker-v1")
-}
-
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
-    let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
-    (bytecode, parse_symbols(&symbols))
-}
-
-/// Run both cranks uninterrupted, then run them across a
-/// checkpoint/resume split on `store`, and return the two crank-2
-/// completion values (uninterrupted, resumed).
-fn twin(cranks: [&str; 2], store: &mut dyn HeapStore) -> (String, String) {
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
-
-    let mut cont = Interp::new();
-    cont.link_intrinsics(&compiled[0].1);
-    assert!(cont.run(&compiled[0].0).completed, "crank 1 (continuous)");
-    let uninterrupted = cont.run(&compiled[1].0);
-    assert!(uninterrupted.completed, "crank 2 (continuous)");
-
-    let mut m = Interp::new();
-    m.link_intrinsics(&compiled[0].1);
-    assert!(m.run(&compiled[0].0).completed, "crank 1 (store)");
-    let session = begin_store_session(m, &sig(), store)
-        .map_err(|(_, e)| e)
-        .expect("begin");
-    drop(session);
-    let mut session = resume_from_store(store, &sig()).expect("resume");
-    let resumed = session.machine_mut().run(&compiled[1].0);
-    assert!(resumed.completed, "crank 2 (resumed): {:?}", resumed.halt);
-    // The resumed machine must also checkpoint cleanly — its restored
-    // side tables re-serialize into the next commit.
-    checkpoint_to_store(&mut session, &sig(), store).expect("checkpoint after resume");
-    validate_store(store, &sig()).expect("post-crank store validates");
-
-    (uninterrupted.result, resumed.result)
-}
+use ironhorse_snapshot::{read_machine, write_machine_unchecked};
+use ironhorse_vm::Interp;
 
 fn assert_twin(name: &str, cranks: [&str; 2], expect: &str) {
     let mut mem = MemoryStore::new();
-    let (uninterrupted, resumed) = twin(cranks, &mut mem);
-    assert_eq!(uninterrupted, expect, "uninterrupted answer is the real one");
-    assert_eq!(resumed, expect, "resumed equals uninterrupted (memory)");
-
+    let seen = twin(cranks[0], &[cranks[1]], &mut mem);
+    assert!(seen[0].0, "observation completes: {}", seen[0].1);
+    assert_eq!(seen[0].2, expect, "continuous answer is the real one");
     let dir = TempDir::new(name);
     let mut file = FileStore::open(dir.join("heap.ihstore")).unwrap();
-    let (_, resumed) = twin(cranks, &mut file);
-    assert_eq!(resumed, expect, "resumed equals uninterrupted (file)");
+    let seen = twin(cranks[0], &[cranks[1]], &mut file);
+    assert_eq!(seen[0].2, expect);
 }
 
 #[test]
@@ -92,6 +57,32 @@ fn resumed_array_length_and_elements_read_like_uninterrupted() {
         ],
         // 10 + 0 + 18 + 8
         "36",
+    );
+}
+
+/// `%Array.prototype%` is an array and the String, Number and Boolean
+/// prototypes are wrappers from boot. Their rows are boot state, stored only
+/// once a program changes them, so a resume keeps their shape either way.
+#[test]
+fn resumed_exotic_prototypes_keep_their_shape() {
+    assert_twin(
+        "ih-ledger-twin-exotic-pristine",
+        [
+            "var t = 1; t",
+            "var t; t = [Array.isArray(Array.prototype), Array.prototype.length, \
+             String.prototype.length, Number.prototype.valueOf(), \
+             Boolean.prototype.valueOf(), \
+             Object.prototype.toString.call(String.prototype)].join(); t",
+        ],
+        "true,0,0,0,false,[object String]",
+    );
+    assert_twin(
+        "ih-ledger-twin-exotic-changed",
+        [
+            "Array.prototype.push(5, 6); var t = 1; t",
+            "var t; t = [Array.prototype.length, [][1], Array.isArray(Array.prototype)].join(); t",
+        ],
+        "2,6,true",
     );
 }
 
@@ -161,12 +152,13 @@ fn lazy_resumed_tables_survive_a_full_collect() {
          m.set; \
          t = arr.length + arr[9] + m.get(a); t",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
 
     let mut cont = Interp::new();
     cont.link_intrinsics(&compiled[0].1);
     assert!(cont.run(&compiled[0].0).completed);
-    cont.collect_garbage();
+    cont.collect_garbage().unwrap();
     let uninterrupted = cont.run(&compiled[1].0);
     assert!(uninterrupted.completed);
     // 10 + 18 + 30
@@ -183,10 +175,13 @@ fn lazy_resumed_tables_survive_a_full_collect() {
     );
     let mut session =
         ironhorse_snapshot::machine::resume_from_store_lazy(store.clone(), &sig()).expect("lazy");
-    session.machine_mut().collect_garbage();
+    session.machine_mut().collect_garbage().unwrap();
     let resumed = session.machine_mut().run(&compiled[1].0);
     assert!(resumed.completed, "resumed crank 2: {:?}", resumed.halt);
-    assert_eq!(resumed.result, "58", "lazy resume + collect equals uninterrupted");
+    assert_eq!(
+        resumed.result, "58",
+        "lazy resume + collect equals uninterrupted"
+    );
     checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
     validate_store(&*store.borrow(), &sig()).expect("validates");
 }
@@ -206,19 +201,27 @@ fn side_tables_round_trip_the_container_and_stay_canonical() {
     let mut m = Interp::new();
     m.link_intrinsics(&symbols);
     assert!(m.run(&bytecode).completed);
-    let image = m.snapshot_image(&sig());
+    let image = m.snapshot_image_for_testing(&sig()).expect("gated image");
     assert!(!image.arrays.is_empty(), "fixture carries arrays");
     assert!(!image.collections.is_empty(), "fixture carries a Map");
     assert!(!image.registry.is_empty(), "fixture carries a registration");
-    let bytes = write_machine(&image);
+    let bytes = write_machine_unchecked(&image);
     let reread = read_machine(&bytes, &sig()).expect("read back");
     assert_eq!(reread, image, "side tables round-trip the container");
-    assert_eq!(write_machine(&reread), bytes, "canonical bytes");
+    assert_eq!(write_machine_unchecked(&reread), bytes, "canonical bytes");
 
-    let empty = Interp::new().snapshot_image(&sig());
+    let empty = Interp::new()
+        .snapshot_image_for_testing(&sig())
+        .expect("gated image");
     assert!(empty.arrays.is_empty() && empty.collections.is_empty() && empty.registry.is_empty());
-    let empty_bytes = write_machine(&empty);
-    for tag in [b"ARRY".as_slice(), b"COLL".as_slice(), b"REGY".as_slice()] {
+    let empty_bytes = write_machine_unchecked(&empty);
+    // The boot prototypes' array and wrapper rows are boot state.
+    for tag in [
+        b"ARRY".as_slice(),
+        b"COLL".as_slice(),
+        b"REGY".as_slice(),
+        b"WRAP".as_slice(),
+    ] {
         assert!(
             !empty_bytes.windows(4).any(|w| w == tag),
             "side-table-free container carries no ledger atoms",
@@ -327,7 +330,10 @@ fn relink_extends_past_minted_symbol_keys_and_refuses_malformed_bytecode() {
     let relinked3 = m.relink_crank(&b3, &n3).expect("relinks");
     let o3 = m.run(&relinked3);
     assert!(o3.completed, "post-extension read: {:?}", o3.halt);
-    assert_eq!(o3.result, "5", "symbol-keyed slot kept its id across extension");
+    assert_eq!(
+        o3.result, "5",
+        "symbol-keyed slot kept its id across extension"
+    );
 
     // Malformed: bytecode compiled against ONE name, relinked with an
     // EMPTY claimed table — its id 1 has no mapping.
@@ -385,7 +391,10 @@ fn interned_property_keys_round_trip_through_the_store() {
     let mut resumed = resume_from_store(&store, &sig()).expect("symbol keys resume");
     let r = resumed.machine_mut().run(&b_read);
     assert!(r.completed, "resumed read: {:?}", r.halt);
-    assert_eq!(r.result, "1", "the stored symbol id re-binds to the same descriptor");
+    assert_eq!(
+        r.result, "1",
+        "the stored symbol id re-binds to the same descriptor"
+    );
 
     // Computed STRING key across an incremental checkpoint: the minted
     // name rides the NAME table.
@@ -407,7 +416,10 @@ fn interned_property_keys_round_trip_through_the_store() {
     let (b2, _) = compile("var o; var k; var t2; t2 = o[k]; t2");
     let r = resumed.machine_mut().run(&b2);
     assert!(r.completed, "resumed read: {:?}", r.halt);
-    assert_eq!(r.result, "5", "the minted name resolved to the same id after resume");
+    assert_eq!(
+        r.result, "5",
+        "the minted name resolved to the same id after resume"
+    );
 }
 
 /// Review wave 5: interning happens on a LOOKUP, so a program that
@@ -424,9 +436,7 @@ fn interned_property_keys_round_trip_through_the_store() {
 /// stayed refused forever after one `hasOwnProperty` miss.
 #[test]
 fn a_read_miss_mints_an_id_but_stores_none_so_it_still_persists() {
-    let (b0, n0) = compile(
-        "var o = 0; var t = 0; o = {}; t = o.hasOwnProperty('zzz'); t",
-    );
+    let (b0, n0) = compile("var o = 0; var t = 0; o = {}; t = o.hasOwnProperty('zzz'); t");
     let mut m = Interp::new();
     m.link_intrinsics(&n0);
     let o = m.run(&b0);
@@ -468,19 +478,25 @@ fn a_read_miss_mints_an_id_but_stores_none_so_it_still_persists() {
 /// counter — a stored property id outside BOTH key tables (the name
 /// table and the symbol-key table) maps to nothing, can only come from
 /// crafted or torn bytes (or a pre-unification build that persisted a
-/// then-unresumable intern), and is refused as corrupt at adoption
-/// rather than laundered into a session's checkpoints.
+/// then-unresumable intern), and is refused as corrupt wherever foreign
+/// bytes are adopted (a container's decode, its import into a store).
+/// A store is trusted, so a store that already holds one is refused by
+/// the full validator, and the machine it resumes cannot publish it.
 #[test]
 fn the_persistence_audit_reads_the_image_not_the_mint_counter() {
     use ironhorse_snapshot::image::MachineImage;
-    use ironhorse_snapshot::store::{image_to_batch, MemoryStore};
+    use ironhorse_snapshot::store::{image_to_batch_unchecked, MemoryStore};
 
     let (b0, n0) = compile("var o = 0; var t = 0; o = { a: 1 }; t = o.a; t");
     let mut m = Interp::new();
     m.link_intrinsics(&n0);
     assert!(m.run(&b0).completed);
-    let clean: MachineImage = m.snapshot_image(&sig());
-    assert_eq!(clean.stored_unregistered_key_id(), None, "the fixture is clean");
+    let clean: MachineImage = m.snapshot_image_for_testing(&sig()).expect("gated image");
+    assert_eq!(
+        clean.stored_unregistered_key_id(),
+        None,
+        "the fixture is clean"
+    );
 
     // Poison one LIVE slot's key id past the program table — the shape
     // a machine that stored `o[expr]` would have had, and the shape an
@@ -503,9 +519,13 @@ fn the_persistence_audit_reads_the_image_not_the_mint_counter() {
     let mut freed = poisoned.clone();
     freed.slot_free.push(victim as u32);
     freed.slot_live -= 1;
-    assert_eq!(freed.stored_unregistered_key_id(), None, "a free slot names nothing");
+    assert_eq!(
+        freed.stored_unregistered_key_id(),
+        None,
+        "a free slot names nothing"
+    );
 
-    let poisoned_bytes = write_machine(&poisoned);
+    let poisoned_bytes = write_machine_unchecked(&poisoned);
     assert_eq!(
         from_snapshot_bytes(&poisoned_bytes, &sig()).err(),
         Some(ironhorse_snapshot::format::SnapshotError::Corrupt(
@@ -517,11 +537,7 @@ fn the_persistence_audit_reads_the_image_not_the_mint_counter() {
     // The blob→store adoption path refuses it too.
     let mut store = MemoryStore::new();
     assert_eq!(
-        ironhorse_snapshot::store::import_from_container(
-            &poisoned_bytes,
-            &sig(),
-            &mut store,
-        ),
+        ironhorse_snapshot::store::import_from_container(&poisoned_bytes, &sig(), &mut store,),
         Err(StoreError::Snapshot(
             ironhorse_snapshot::format::SnapshotError::Corrupt(
                 "stored property id outside the name and symbol-key tables",
@@ -531,20 +547,33 @@ fn the_persistence_audit_reads_the_image_not_the_mint_counter() {
     );
 
     // And a store that already holds one — committed straight, as a
-    // build predating the gate would have — is refused at the eager
-    // resume rather than laundered into this session's checkpoints.
+    // build predating the gate would have — is what the full validator
+    // refuses; the machine an eager resume adopts from it cannot publish
+    // the id onward.
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch(&poisoned, 1, ""))
+        .commit(&image_to_batch_unchecked(&poisoned, 1, CommitToken::ZERO))
         .expect("the raw commit models an older writer");
     assert_eq!(
-        resume_from_store(&store, &sig()).err(),
+        ironhorse_snapshot::store::validate_store_content(&store, &sig()).err(),
         Some(StoreError::Snapshot(
             ironhorse_snapshot::format::SnapshotError::Corrupt(
                 "stored property id outside the name and symbol-key tables",
             ),
         )),
-        "a poisoned store is not adopted",
+        "the validator refuses a poisoned store",
+    );
+    let session = resume_from_store(&store, &sig()).expect("resume trusts the stored ids");
+    assert!(
+        matches!(
+            session.machine().snapshot_image(&sig()),
+            Err(ironhorse_snapshot::machine::MachineSnapshotError::Snapshot(
+                ironhorse_snapshot::format::SnapshotError::Corrupt(
+                    "stored property id outside the name and symbol-key tables"
+                )
+            ))
+        ),
+        "a machine resumed from a poisoned store cannot publish it"
     );
 }
 
@@ -568,7 +597,11 @@ fn relink_binds_newly_referenced_intrinsics() {
             "1",
         ),
         // A constructor global reached via typeof.
-        ("var x = 5; x", "var x; var t; t = typeof Symbol; t", "function"),
+        (
+            "var x = 5; x",
+            "var x; var t; t = typeof Symbol; t",
+            "function",
+        ),
     ];
     for (c1, c2, expect) in cases {
         let (b1, n1) = compile(c1);
@@ -580,6 +613,56 @@ fn relink_binds_newly_referenced_intrinsics() {
         let relinked = m.relink_crank(&b2, &n2).expect("relink");
         let got = m.run(&relinked);
         assert!(got.completed, "relinked {c2}: {:?}", got.halt);
-        assert_eq!(got.result, expect, "relinked crank binds the built-in: {c2}");
+        assert_eq!(
+            got.result, expect,
+            "relinked crank binds the built-in: {c2}"
+        );
     }
+}
+
+#[test]
+fn checkpoint_baseline_belongs_to_session_after_interpreter_swap() {
+    let signature = sig();
+    let make = |n| {
+        let (code, names) = compile(&format!("var a = [{n}]; a[0]"));
+        let mut interp = Interp::new();
+        interp.link_intrinsics(&names);
+        assert!(interp.run(&code).completed);
+        let mut store = MemoryStore::new();
+        let session = begin_store_session(interp, &signature, &mut store)
+            .map_err(|(_, error)| error)
+            .unwrap();
+        (session, store)
+    };
+    let (mut left, mut left_store) = make(11);
+    let (mut right, mut right_store) = make(22);
+    std::mem::swap(left.machine_mut(), right.machine_mut());
+    for (session, store) in [(&mut left, &mut left_store), (&mut right, &mut right_store)] {
+        let expected = session.machine().snapshot_image(&signature).unwrap();
+        checkpoint_to_store(session, &signature, store).unwrap();
+        let restored = resume_from_store(store, &signature).unwrap();
+        assert_eq!(
+            restored.machine().snapshot_image(&signature).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn external_acknowledgement_cannot_hide_changes_from_session() {
+    let (code, names) = compile("var a = [11]; a[0]");
+    let mut interp = Interp::new();
+    interp.link_intrinsics(&names);
+    assert!(interp.run(&code).completed);
+    let mut store = MemoryStore::new();
+    let mut session = begin_store_session(interp, &sig(), &mut store)
+        .map_err(|(_, error)| error)
+        .unwrap();
+    let (change, _) = compile("var a; a[0] = 22; a[0]");
+    assert!(session.machine_mut().run(&change).completed);
+    let _unrelated_baseline = session.machine_mut().acknowledge_snapshot();
+    let expected = session.machine().snapshot_image(&sig()).unwrap();
+    checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
+    let restored = resume_from_store(&store, &sig()).unwrap();
+    assert_eq!(restored.machine().snapshot_image(&sig()).unwrap(), expected);
 }

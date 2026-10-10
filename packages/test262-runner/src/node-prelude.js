@@ -11,7 +11,7 @@ const { TextDecoder, TextEncoder } = /** @type {any} */ (globalThis).require(
 const test262AssertSymbol = Symbol.for('test262Assert');
 const test262Assert = globalThis[test262AssertSymbol];
 delete globalThis[test262AssertSymbol];
-// @ts-expect-error lockdown-shim initializes this global at module evaluation.
+// `lockdown-shim` initializes this global at module evaluation.
 const sesLockdown = globalThis.lockdown;
 globalThis.assert = test262Assert;
 globalThis.environment = 'node-ses';

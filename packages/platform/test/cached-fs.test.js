@@ -7,26 +7,26 @@
  *
  * `withCachedReads(fs, cas)` is a `Filesystem → Filesystem`
  * transformation that drops into the existing composition algebra.
- * Its read path dispatches `snapshot`, `getInfo`, and the underlying
+ * Its read path dispatches `snapshot`, metadata accessors, and the underlying
  * `read` as a single pipelined CapTP batch, so each wrapper `read`
  * costs exactly one round-trip — same as a plain (uncached) read.
  *
  * Tests:
  *
  *   - **Cache miss** — first read of a file. The transcript shows
- *     `snapshot` + `getInfo` + `read` issued in one batch, then the
- *     background cache populate (`fetch` + `streamBase64`). The
+ *     `snapshot` + metadata + `read` issued in one batch, then the
+ *     background cache populate (`fetch` + a byte-array `stream`). The
  *     speculative `read`'s bytes flow to the caller; the
  *     populating `fetch` runs after the caller has already received
  *     the response.
  *
  *   - **Cache hit** — second read of a file whose hash is in the
- *     CAS. The transcript shows `snapshot` + `getInfo` + a
+ *     CAS. The transcript shows `snapshot` + metadata + a
  *     speculative `read` invocation, but the bytes from that
  *     speculative read **never flow** (`@endo/exo-stream` is
  *     pull-based; the wrapper returns a different reader and the
  *     speculative one is GC'd unused). Concrete assertion: the
- *     hit-side transcript carries no `streamBase64` CTP_CALL.
+ *     hit-side transcript carries no `stream` CTP_CALL.
  *
  *   - **No extra RTT** — by the time the caller's `await` resolves,
  *     the wire has carried exactly one `read` round-trip and the
@@ -38,7 +38,8 @@ import '@endo/init/debug.js';
 
 import test from 'ava';
 import { E } from '@endo/eventual-send';
-import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+import { thawedBytes } from '@endo/immutable-arraybuffer';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -54,6 +55,86 @@ import { makeConnectedPair, settle } from './_captp-pair.js';
 const utf8 = s => new TextEncoder().encode(s);
 const fromUtf8 = b => new TextDecoder().decode(b);
 
+const isCall = method => event =>
+  event.type === 'CTP_CALL' && event.method === method;
+
+/**
+ * Find the `CTP_RETURN` that answers `call`. CapTP question IDs are minted
+ * per side, so require the return to travel in the reverse direction of the
+ * call as well as match its question ID.
+ *
+ * @param {Array<Record<string, unknown>>} transcript
+ * @param {Record<string, unknown>} call
+ * @returns {number} the index of the answering return, or -1 if none
+ */
+const findReturnIndex = (transcript, call) =>
+  transcript.findIndex(
+    event =>
+      event.type === 'CTP_RETURN' &&
+      event.answerID === call.questionID &&
+      event.from === call.to &&
+      event.to === call.from,
+  );
+
+/**
+ * Canonicalize the one race observed in the cache-miss transcript.
+ *
+ * The miss path issues three `stream` calls: first the caller's drain of the
+ * speculative read, then the background populate, then the watcher's drain of
+ * its `events` reader. It also issues one watcher `events` call. The
+ * caller-drain stream and the watcher subscription are independent, so the
+ * caller-drain `stream` return can settle before or after the `events`
+ * return. The
+ * canonical order, the one recorded in the snapshot, puts the `events` return
+ * first. If the stream return landed earlier, move it to the slot immediately
+ * after the `events` return. No event is dropped, and every other event keeps
+ * its relative order.
+ *
+ * The transform throws if the transcript does not have the shape it assumes,
+ * so a changed scenario fails with a clear message instead of an unexplained
+ * snapshot mismatch.
+ *
+ * @param {Array<Record<string, unknown>>} transcript
+ * @returns {Array<Record<string, unknown>>} a reordered copy; the input is
+ *   not mutated
+ */
+const canonicalizeStreamEventsRace = transcript => {
+  const eventsCalls = transcript.filter(isCall('events'));
+  if (eventsCalls.length !== 1) {
+    throw Error(
+      `expected exactly one watcher events call, got ${eventsCalls.length}`,
+    );
+  }
+  const streamCalls = transcript.filter(isCall('stream'));
+  if (streamCalls.length !== 3) {
+    throw Error(
+      `expected three stream calls (caller drain, background populate, watcher events), got ${streamCalls.length}`,
+    );
+  }
+  // The caller drains the speculative read before the background populate
+  // or the watcher opens its own stream, so the first `stream` call is the
+  // caller's.
+  const [eventsCall] = eventsCalls;
+  const [drainCall] = streamCalls;
+
+  const stable = [...transcript];
+  const eventsReturnAt = findReturnIndex(stable, eventsCall);
+  const drainReturnAt = findReturnIndex(stable, drainCall);
+  if (eventsReturnAt < 0) {
+    throw Error(`no return for events call ${eventsCall.questionID}`);
+  }
+  if (drainReturnAt < 0) {
+    throw Error(`no return for stream call ${drainCall.questionID}`);
+  }
+  if (drainReturnAt < eventsReturnAt) {
+    const [drainReturn] = stable.splice(drainReturnAt, 1);
+    // Removing the earlier return shifts the events return back one slot, so
+    // its original index is now the slot immediately after it.
+    stable.splice(eventsReturnAt, 0, drainReturn);
+  }
+  return stable;
+};
+
 const writeBytes = async (writerRef, bytes) => {
   const w = iterateBytesWriter(writerRef);
   await w.next(bytes);
@@ -63,9 +144,12 @@ const writeBytes = async (writerRef, bytes) => {
 const collectBytes = async readerRef => {
   const chunks = [];
   let total = 0;
-  for await (const chunk of iterateBytesReader(readerRef)) {
-    chunks.push(chunk);
-    total += chunk.length;
+  for await (const chunk of iterateReader(readerRef)) {
+    // Thaw each passable byte array: under the immutable-ArrayBuffer shim a
+    // frozen chunk is not a genuine view, so `out.set` would copy zeros.
+    const bytes = thawedBytes(/** @type {Uint8Array} */ (chunk));
+    chunks.push(bytes);
+    total += bytes.length;
   }
   const out = new Uint8Array(total);
   let off = 0;
@@ -113,7 +197,7 @@ test('withCachedReads: miss serves speculative read in one RTT batch, populates 
 
   t.is(cas.size, 1, 'CAS populated after the miss');
 
-  // The wrapper's miss path issues `snapshot` + `getInfo` +
+  // The wrapper's miss path issues `snapshot` + metadata calls +
   // (speculative) `read` in a single pipelined batch. Verify all
   // three CTP_CALLs appear in the read's segment of the
   // transcript before any reply to them lands.
@@ -128,17 +212,93 @@ test('withCachedReads: miss serves speculative read in one RTT batch, populates 
     `snapshot in pipelined batch, got ${callsBefore.join(', ')}`,
   );
   t.true(
-    callsBefore.includes('getInfo'),
-    `getInfo in pipelined batch, got ${callsBefore.join(', ')}`,
+    callsBefore.includes('sha256') && callsBefore.includes('size'),
+    `sha256 and size in pipelined batch, got ${callsBefore.join(', ')}`,
   );
   t.true(
     callsBefore.includes('read'),
     `speculative read in pipelined batch, got ${callsBefore.join(', ')}`,
   );
 
+  const stableTranscript = canonicalizeStreamEventsRace(transcript);
+
   t.snapshot(
-    transcript,
+    stableTranscript,
     'miss transcript: speculative read + background populate',
+  );
+});
+
+test('canonicalizeStreamEventsRace: a raced miss transcript canonicalizes to the snapshot order', t => {
+  const call = (method, questionID, target) => ({
+    from: 'left',
+    method,
+    questionID,
+    target,
+    to: 'right',
+    type: 'CTP_CALL',
+  });
+  const makeReturn = answerID => ({
+    answerID,
+    from: 'right',
+    to: 'left',
+    type: 'CTP_RETURN',
+  });
+  const resolve = (from, to) => ({ from, to, type: 'CTP_RESOLVE' });
+
+  // The tail of the recorded miss transcript, in snapshot order.
+  const canonical = [
+    call('stream', 'q-15', 'o-6'),
+    call('events', 'q-16', 'o-7'),
+    call('stream', 'q-17', 'o-8'),
+    resolve('left', 'right'),
+    resolve('left', 'right'),
+    makeReturn('q-16'),
+    makeReturn('q-15'),
+    call('stream', 'q-18', 'o-9'),
+    makeReturn('q-17'),
+    resolve('left', 'right'),
+    resolve('right', 'left'),
+  ];
+  // The raced shape: the caller-drain stream returns before the watcher
+  // `events` call is even issued.
+  const raced = [
+    canonical[0],
+    makeReturn('q-15'),
+    ...canonical.slice(1, 6),
+    ...canonical.slice(7),
+  ];
+  t.notDeepEqual(raced, canonical);
+  t.deepEqual(canonicalizeStreamEventsRace(raced), canonical);
+  // The canonical order is a fixed point.
+  t.deepEqual(canonicalizeStreamEventsRace(canonical), canonical);
+
+  // A same-numbered question minted by the other side is not the answer to
+  // the caller-drain call, so the return must travel right-to-left.
+  const forged = canonical.map(event =>
+    event.type === 'CTP_RETURN' && event.answerID === 'q-15'
+      ? { ...event, from: 'left', to: 'right' }
+      : event,
+  );
+  t.throws(() => canonicalizeStreamEventsRace(forged), {
+    message: /no return for stream call q-15/,
+  });
+
+  // The transform refuses shapes it does not understand.
+  t.throws(
+    () =>
+      canonicalizeStreamEventsRace([
+        ...canonical,
+        call('stream', 'q-19', 'o-10'),
+      ]),
+    { message: /expected three stream calls/ },
+  );
+  t.throws(
+    () =>
+      canonicalizeStreamEventsRace([
+        ...canonical,
+        call('events', 'q-19', 'o-10'),
+      ]),
+    { message: /expected exactly one watcher events call/ },
   );
 });
 
@@ -176,25 +336,28 @@ test('withCachedReads: hit returns cached bytes without flowing the speculative 
     .filter(e => e.type === 'CTP_CALL')
     .map(e => e.method);
 
-  // The wrapper still dispatches snapshot + getInfo + read in a
-  // batch (it can't know it's a hit before getInfo resolves).
+  // The wrapper still dispatches snapshot + metadata + read in a batch.
   t.true(hitMethods.includes('snapshot'));
-  t.true(hitMethods.includes('getInfo'));
+  t.true(hitMethods.includes('sha256'));
+  t.true(hitMethods.includes('size'));
   t.true(hitMethods.includes('read'));
 
   // The hit signature: the speculative read's PassableBytesReader
-  // is never iterated, so no `streamBase64` CALL ever crosses the
+  // is never iterated, so no byte `stream` CALL ever crosses the
   // wire. This is what makes the cache hit a real win — the bytes
-  // themselves never travel.
+  // themselves never travel. The freshly looked-up File starts its own
+  // watcher, whose `events` reader is drained with `stream` too, so
+  // every `stream` call must be accounted for by an `events` call.
+  t.is(hitMethods.filter(m => m === 'streamBase64').length, 0);
   t.is(
-    hitMethods.filter(m => m === 'streamBase64').length,
-    0,
-    "speculative reader is GC'd unused; no streamBase64 on the wire",
+    hitMethods.filter(m => m === 'stream').length,
+    hitMethods.filter(m => m === 'events').length,
+    "speculative reader is GC'd unused; no byte stream on the wire",
   );
 
   t.snapshot(
     hitTraffic,
-    'hit transcript: snapshot + getInfo + speculative read, no streamBase64',
+    'hit transcript: snapshot + metadata + speculative read, no byte stream',
   );
 });
 
@@ -244,10 +407,12 @@ test('withCachedReads: subsequent reads of different ranges of the same file all
   await settle(5);
 
   // Range reads after the priming should all be hits — no
-  // `streamBase64` should travel.
+  // byte stream should travel.
   const subsequent = transcript.slice(primedEnd);
   const streamCalls = subsequent.filter(
-    e => e.type === 'CTP_CALL' && e.method === 'streamBase64',
+    e =>
+      e.type === 'CTP_CALL' &&
+      (e.method === 'stream' || e.method === 'streamBase64'),
   );
   t.is(
     streamCalls.length,
@@ -256,10 +421,10 @@ test('withCachedReads: subsequent reads of different ranges of the same file all
   );
 });
 
-test('withCachedReads: subsequent reads through the same File cap skip snapshot+getInfo (zero RTT on hit)', async t => {
+test('withCachedReads: subsequent reads through the same File cap skip snapshot metadata (zero RTT on hit)', async t => {
   // After the first read warms both the CAS and the per-File hash
   // cache, a second read on the *same* File cap should serve the
-  // bytes locally without issuing snapshot/getInfo/read.
+  // bytes locally without issuing snapshot/metadata/read.
   const innerFs = makeInMemoryFilesystem();
   await populateFile(innerFs, 'greet.txt', 'hello, world');
   const { bootstrapRef, transcript } = makeConnectedPair(innerFs);
@@ -290,7 +455,7 @@ test('withCachedReads: subsequent reads through the same File cap skip snapshot+
   t.deepEqual(
     secondCalls,
     [],
-    'zero-RTT second read: no snapshot/getInfo/read crosses the wire',
+    'zero-RTT second read: no snapshot/metadata/read crosses the wire',
   );
 });
 

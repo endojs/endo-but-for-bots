@@ -1,0 +1,25 @@
+# engine=ironhorse features=default corpus=built-ins/Math/trunc tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Math/trunc/Math.trunc_Infinity.js sloppy pass
+built-ins/Math/trunc/Math.trunc_Infinity.js strict pass
+built-ins/Math/trunc/Math.trunc_NaN.js sloppy pass
+built-ins/Math/trunc/Math.trunc_NaN.js strict pass
+built-ins/Math/trunc/Math.trunc_NegDecimal.js sloppy pass
+built-ins/Math/trunc/Math.trunc_NegDecimal.js strict pass
+built-ins/Math/trunc/Math.trunc_PosDecimal.js sloppy pass
+built-ins/Math/trunc/Math.trunc_PosDecimal.js strict pass
+built-ins/Math/trunc/Math.trunc_Success.js sloppy pass
+built-ins/Math/trunc/Math.trunc_Success.js strict pass
+built-ins/Math/trunc/Math.trunc_Zero.js sloppy pass
+built-ins/Math/trunc/Math.trunc_Zero.js strict pass
+built-ins/Math/trunc/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Math/trunc/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Math/trunc/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be trunc; name value should be trunc"
+built-ins/Math/trunc/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be trunc; name value should be trunc"
+built-ins/Math/trunc/not-a-constructor.js sloppy pass
+built-ins/Math/trunc/not-a-constructor.js strict pass
+built-ins/Math/trunc/prop-desc.js sloppy pass
+built-ins/Math/trunc/prop-desc.js strict pass
+built-ins/Math/trunc/trunc-sampleTests.js sloppy pass
+built-ins/Math/trunc/trunc-sampleTests.js strict pass
+built-ins/Math/trunc/trunc-specialVals.js sloppy pass
+built-ins/Math/trunc/trunc-specialVals.js strict pass

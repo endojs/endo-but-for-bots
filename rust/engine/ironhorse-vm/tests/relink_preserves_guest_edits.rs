@@ -15,7 +15,7 @@
 
 use ironhorse_vm::Interp;
 
-fn compile(src: &str) -> (Vec<u8>, Vec<String>) {
+fn compile(src: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (b, s) = ironhorse_compile::compile_atoms(src).expect("compiles");
     (b, ironhorse_vm::parse_symbols(&s))
 }
@@ -118,10 +118,44 @@ fn a_runtime_interned_name_does_not_block_a_later_eval_install() {
             &self,
             source: &str,
             strict: bool,
+            raw_budget: u64,
+            charge: &mut dyn FnMut(u64) -> bool,
         ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
-            match ironhorse_compile::compile_atoms_with(source, strict) {
-                Ok((bytecode, symbols)) => Ok(ironhorse_vm::CompiledSource { bytecode, symbols }),
-                Err(_) => Err(ironhorse_vm::SourceCompileError::Syntax(String::new())),
+            match ironhorse_compile::compile_atoms_budgeted_firewalled(
+                source,
+                ironhorse_compile::Goal::Eval,
+                strict,
+                raw_budget,
+                charge,
+            ) {
+                Ok(compiled) => Ok(ironhorse_vm::CompiledSource {
+                    bytecode: compiled.bytecode,
+                    symbols: compiled.symbols,
+                    parse_meter_raw: compiled.parse_meter_raw,
+                    parse_computrons: compiled.parse_computrons,
+                }),
+                Err(ironhorse_compile::CompileError::MeterAbort) => {
+                    Err(ironhorse_vm::SourceCompileError::MeterAbort)
+                }
+                // A caught compiler panic is an engine fault, not a coverage
+                // gap (architecture finding F063).
+                Err(ironhorse_compile::CompileError::Invariant(detail)) => {
+                    Err(ironhorse_vm::SourceCompileError::Invariant(detail))
+                }
+                Err(ironhorse_compile::CompileError::Parse(error)) => match error.kind {
+                    ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                        kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
+                        ..
+                    }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
+                    ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                        kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
+                        ..
+                    }) => Err(ironhorse_vm::SourceCompileError::MeterAbort),
+                    ironhorse_compile::ParseErrorKind::Unsupported => Err(
+                        ironhorse_vm::SourceCompileError::Unsupported(error.to_string()),
+                    ),
+                    _ => Err(ironhorse_vm::SourceCompileError::Syntax(error.message)),
+                },
             }
         }
     }
@@ -135,4 +169,162 @@ fn a_runtime_interned_name_does_not_block_a_later_eval_install() {
     let o = m.run(&b);
     assert!(o.completed, "eval crank: {:?}", o.halt);
     assert_eq!(o.result, "1");
+}
+
+/// F060: name-based partial installation must preserve both descriptor kinds
+/// and deletion, even when a later crank introduces another Error constructor.
+#[test]
+fn relink_preserves_guest_intrinsic_edits() {
+    for target in [
+        "Error.prototype",
+        "Object.getPrototypeOf(Object.getPrototypeOf((async function* () {})()))",
+    ] {
+        let key = if target == "Error.prototype" {
+            "stack"
+        } else {
+            "constructor"
+        };
+        for edit in [
+            format!("Object.defineProperty(target, '{key}', {{value: 73, configurable: true}})"),
+            format!("Object.defineProperty(target, '{key}', {{get: function () {{ return 73; }}, configurable: true}})"),
+            format!("delete target['{key}']"),
+        ] {
+            let deleted = edit.starts_with("delete");
+            let check = if deleted {
+                format!("!Object.prototype.hasOwnProperty.call(target, '{key}')")
+            } else {
+                format!("target['{key}'] === 73")
+            };
+            let (code, names) = compile(&format!("var target = {target}; {edit}; {check}"));
+            let mut vm = Interp::new();
+            let (initial, initial_names) = compile("0");
+            vm.link_intrinsics(&initial_names);
+            assert!(vm.run(&initial).completed);
+            let code = vm.relink_crank(&code, &names).expect("first intrinsic use");
+            let result = vm.run(&code);
+            assert!(result.completed, "{target}: {edit}: {:?}", result.halt);
+            assert_eq!(result.result, "true", "initial edit: {edit}");
+            let (code, names) = compile(&format!("var target; var freshName2A = RangeError; {check}"));
+            let code = vm.relink_crank(&code, &names).expect("relink");
+            let result = vm.run(&code);
+            assert!(result.completed, "{target}: {edit}: {:?}", result.halt);
+            assert_eq!(result.result, "true", "relink reverted: {target}: {edit}");
+        }
+    }
+}
+
+#[test]
+fn growing_links_install_implicit_dependencies_without_reviving_deleted_properties() {
+    for (first, second, completed) in [
+        (
+            "var p = Promise.reject(1);",
+            "var p; p.catch(function () {});",
+            true,
+        ),
+        (
+            "var p = Promise.reject(1);",
+            "var p; p.finally(function () {});",
+            true,
+        ),
+        ("0", "Promise.all([]);", true),
+        ("0", "Promise.resolve({});", true),
+        (
+            "var p = Promise.reject(1); delete Promise.prototype.then;",
+            "var p; p.catch(function () {});",
+            false,
+        ),
+    ] {
+        let (code, names) = compile(first);
+        let mut vm = Interp::new();
+        vm.link_intrinsics(&names);
+        assert!(vm.run(&code).completed);
+        let (code, names) = compile(second);
+        let code = vm.relink_crank(&code, &names).unwrap();
+        let outcome = vm.run(&code);
+        assert_eq!(outcome.completed, completed, "{second}: {:?}", outcome.halt);
+    }
+}
+
+#[test]
+fn set_operations_link_their_implicit_property_reads() {
+    for (expression, expected) in [
+        (
+            "[...new Set([1,2]).union(new Set([2,3]))].join(',')",
+            "1,2,3",
+        ),
+        (
+            "[...new Set([1,2]).intersection(new Set([2,3]))].join(',')",
+            "2",
+        ),
+        (
+            "[...new Set([1,2]).difference(new Set([2,3]))].join(',')",
+            "1",
+        ),
+        (
+            "[...new Set([1,2]).symmetricDifference(new Set([2,3]))].join(',')",
+            "1,3",
+        ),
+        ("new Set([1]).isSubsetOf(new Set([1,2]))", "true"),
+        ("new Set([1,2]).isSupersetOf(new Set([1]))", "true"),
+        ("new Set([1]).isDisjointFrom(new Set([2]))", "true"),
+    ] {
+        for later in [false, true] {
+            let mut vm = Interp::new();
+            let (mut code, names) = compile(expression);
+            if later {
+                let (initial, initial_names) = compile("0");
+                vm.link_intrinsics(&initial_names);
+                assert!(vm.run(&initial).completed);
+                code = vm.relink_crank(&code, &names).unwrap();
+            } else {
+                vm.link_intrinsics(&names);
+            }
+            let outcome = vm.run(&code);
+            assert!(outcome.completed, "{expression}: {outcome:?}");
+            assert_eq!(outcome.result, expected);
+        }
+    }
+    let mut vm = Interp::new();
+    let (initial, names) = compile("delete Set.prototype.size; 0");
+    vm.link_intrinsics(&names);
+    assert!(vm.run(&initial).completed);
+    let (code, names) = compile("new Set([1]).union(new Set([2]))");
+    let code = vm.relink_crank(&code, &names).unwrap();
+    let outcome = vm.run(&code);
+    assert!(!outcome.completed);
+    assert!(format!("{:?}", outcome.halt).contains("other.size is NaN"));
+}
+
+#[test]
+fn collection_size_is_an_observable_brand_checked_accessor() {
+    let (code, names) = compile(
+        r#"
+        var checks = [];
+        for (var C of [Map, Set]) {
+            var d = Object.getOwnPropertyDescriptor(C.prototype, 'size');
+            var value = new C();
+            checks.push(typeof d.get === 'function' && d.set === undefined &&
+                d.configurable && !d.enumerable && d.get.name === 'get size' &&
+                d.get.length === 0 && d.get.call(value) === 0);
+            for (var wrong of [{}, new WeakMap(), new WeakSet(),
+                               C === Map ? new Set() : new Map(),
+                               new Proxy(value, {})]) {
+                try { d.get.call(wrong); checks.push(false); }
+                catch (e) { checks.push(e instanceof TypeError); }
+            }
+            Object.defineProperty(value, 'size', { value: 17 });
+            checks.push(value.size === 17 && Reflect.get(value, 'size') === 17);
+            Object.defineProperty(C.prototype, 'size', { get() { return 23; } });
+            checks.push(new C().size === 23);
+            delete C.prototype.size;
+            checks.push(new C().size === undefined);
+        }
+        checks.every(Boolean)
+        "#,
+    );
+    let mut vm = Interp::new();
+    vm.link_intrinsics(&names);
+    let outcome = vm.run(&code);
+    assert!(outcome.completed, "{outcome:?}");
+    assert_eq!(outcome.result, "true");
 }

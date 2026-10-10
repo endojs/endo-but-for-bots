@@ -263,6 +263,7 @@ test('a rejected form send becomes a failed settlement', async t => {
     form: async () => {
       throw Error('mailroom unavailable');
     },
+    locate: (...path) => E(powers).locate(...path),
     listMessages: () => E(powers).listMessages(),
     followMessages: () => E(powers).followMessages(),
   });

@@ -146,8 +146,13 @@ export const ApprovalPanel = ({ powers, pending, runId }) => {
   const submit = () => {
     setSubmitting(true);
     setError('');
-    E(/** @type {any} */ (powers))
-      .submit(message.number, collectFormValues(fields, values))
+    Promise.resolve()
+      .then(() =>
+        E(/** @type {any} */ (powers)).submit(
+          message.number,
+          collectFormValues(fields, values),
+        ),
+      )
       .then(
         () => {
           setSubmitting(false);

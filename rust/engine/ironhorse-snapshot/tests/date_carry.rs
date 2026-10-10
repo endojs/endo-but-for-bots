@@ -2,74 +2,21 @@
 //! Values travel as raw IEEE-754 bits. `%Date.prototype%` itself has no
 //! `[[DateValue]]` internal slot and therefore never emits a row.
 
+#[path = "common/twin.rs"]
+mod carry;
 mod common;
+use carry::{compile, crank, sig, twin};
 
 use common::TempDir;
 
-use ironhorse_snapshot::image::{read_machine, write_machine};
+use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
 use ironhorse_snapshot::machine::{
-    begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
-    resume_from_store_lazy, MachineSnapshot,
+    begin_store_session, from_snapshot_bytes, resume_from_store_lazy, MachineSnapshot,
 };
-use ironhorse_snapshot::store::{validate_store, HeapStore, MemoryStore};
+use ironhorse_snapshot::store::MemoryStore;
 use ironhorse_snapshot::store_file::FileStore;
-use ironhorse_snapshot::{Signature, SnapshotError};
-use ironhorse_vm::{parse_symbols, Interp};
-
-fn sig() -> Signature {
-    Signature::new("ironhorse-worker-v1")
-}
-
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
-    let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
-    (bytecode, parse_symbols(&symbols))
-}
-
-/// Relink and run one crank, returning `(completed, halt debug, result,
-/// computrons)`. The COMPUTRON count is part of the observation: a
-/// resumed machine that answers correctly while charging differently
-/// has still diverged, and consensus is on the count as much as the
-/// value. Every twin below therefore compares metering too.
-fn crank(m: &mut Interp, source: &str) -> (bool, String, String, u64) {
-    let (bytecode, names) = compile(source);
-    let bytecode = m.relink_crank(&bytecode, &names).expect("relink");
-    let outcome = m.run(&bytecode);
-    (outcome.completed, format!("{:?}", outcome.halt), outcome.result, outcome.computrons)
-}
-
-fn twin(
-    crank1: &str,
-    observations: &[&str],
-    store: &mut dyn HeapStore,
-) -> Vec<(bool, String, String, u64)> {
-    let (bytecode, names) = compile(crank1);
-
-    let mut continuous = Interp::new();
-    continuous.link_intrinsics(&names);
-    assert!(continuous.run(&bytecode).completed);
-    let expected: Vec<_> = observations
-        .iter()
-        .map(|source| crank(&mut continuous, source))
-        .collect();
-
-    let mut suspended = Interp::new();
-    suspended.link_intrinsics(&names);
-    assert!(suspended.run(&bytecode).completed);
-    drop(
-        begin_store_session(suspended, &sig(), store)
-            .map_err(|(_, error)| error)
-            .expect("begin"),
-    );
-    let mut resumed = resume_from_store(store, &sig()).expect("resume");
-    let actual: Vec<_> = observations
-        .iter()
-        .map(|source| crank(resumed.machine_mut(), source))
-        .collect();
-    assert_eq!(actual, expected, "resumed Date state matches continuous");
-    checkpoint_to_store(&mut resumed, &sig(), store).expect("checkpoint");
-    validate_store(store, &sig()).expect("validates");
-    expected
-}
+use ironhorse_snapshot::SnapshotError;
+use ironhorse_vm::Interp;
 
 #[test]
 fn resumed_date_values_and_mutations_match_uninterrupted() {
@@ -89,7 +36,9 @@ fn resumed_date_values_and_mutations_match_uninterrupted() {
     let mut memory = MemoryStore::new();
     let seen = twin(crank1, &observations, &mut memory);
     assert_eq!(
-        seen.iter().map(|(_, _, value, _)| value.as_str()).collect::<Vec<_>>(),
+        seen.iter()
+            .map(|(_, _, value, _)| value.as_str())
+            .collect::<Vec<_>>(),
         expected,
     );
 
@@ -163,7 +112,7 @@ fn duplicate_date_owners_are_refused() {
     let mut image = read_machine(&bytes, &sig()).expect("read");
     let row = image.dates[0].clone();
     image.dates.push(row);
-    match from_snapshot_bytes(&write_machine(&image), &sig()) {
+    match from_snapshot_bytes(&write_machine_unchecked(&image), &sig()) {
         Err(SnapshotError::Corrupt("date side table: owners not strictly ascending")) => {}
         Err(other) => panic!("wrong duplicate-owner refusal: {other:?}"),
         Ok(_) => panic!("duplicate Date owners must not restore"),

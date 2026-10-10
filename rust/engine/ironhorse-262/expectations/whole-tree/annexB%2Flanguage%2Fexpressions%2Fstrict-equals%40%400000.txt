@@ -1,0 +1,2 @@
+# engine=ironhorse features=default corpus=annexB/language/expressions/strict-equals tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/language/expressions/strict-equals/emulates-undefined.js sloppy skip:feature:IsHTMLDDA

@@ -1,0 +1,27 @@
+# engine=ironhorse features=default corpus=built-ins/Reflect/getOwnPropertyDescriptor tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Reflect/getOwnPropertyDescriptor/getOwnPropertyDescriptor.js sloppy pass
+built-ins/Reflect/getOwnPropertyDescriptor/getOwnPropertyDescriptor.js strict pass
+built-ins/Reflect/getOwnPropertyDescriptor/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 2; length value should be 2"
+built-ins/Reflect/getOwnPropertyDescriptor/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 2; length value should be 2"
+built-ins/Reflect/getOwnPropertyDescriptor/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be getOwnPropertyDescriptor; name value should be getOwnPropertyDescriptor"
+built-ins/Reflect/getOwnPropertyDescriptor/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be getOwnPropertyDescriptor; name value should be getOwnPropertyDescriptor"
+built-ins/Reflect/getOwnPropertyDescriptor/not-a-constructor.js sloppy pass
+built-ins/Reflect/getOwnPropertyDescriptor/not-a-constructor.js strict pass
+built-ins/Reflect/getOwnPropertyDescriptor/return-abrupt-from-property-key.js sloppy pass
+built-ins/Reflect/getOwnPropertyDescriptor/return-abrupt-from-property-key.js strict pass
+built-ins/Reflect/getOwnPropertyDescriptor/return-abrupt-from-result.js sloppy pass
+built-ins/Reflect/getOwnPropertyDescriptor/return-abrupt-from-result.js strict pass
+built-ins/Reflect/getOwnPropertyDescriptor/return-from-accessor-descriptor.js sloppy pass
+built-ins/Reflect/getOwnPropertyDescriptor/return-from-accessor-descriptor.js strict pass
+built-ins/Reflect/getOwnPropertyDescriptor/return-from-data-descriptor.js sloppy pass
+built-ins/Reflect/getOwnPropertyDescriptor/return-from-data-descriptor.js strict pass
+built-ins/Reflect/getOwnPropertyDescriptor/symbol-property.js sloppy pass
+built-ins/Reflect/getOwnPropertyDescriptor/symbol-property.js strict pass
+built-ins/Reflect/getOwnPropertyDescriptor/target-is-not-object-throws.js sloppy pass
+built-ins/Reflect/getOwnPropertyDescriptor/target-is-not-object-throws.js strict pass
+built-ins/Reflect/getOwnPropertyDescriptor/target-is-symbol-throws.js sloppy pass
+built-ins/Reflect/getOwnPropertyDescriptor/target-is-symbol-throws.js strict pass
+built-ins/Reflect/getOwnPropertyDescriptor/undefined-own-property.js sloppy pass
+built-ins/Reflect/getOwnPropertyDescriptor/undefined-own-property.js strict pass
+built-ins/Reflect/getOwnPropertyDescriptor/undefined-property.js sloppy pass
+built-ins/Reflect/getOwnPropertyDescriptor/undefined-property.js strict pass

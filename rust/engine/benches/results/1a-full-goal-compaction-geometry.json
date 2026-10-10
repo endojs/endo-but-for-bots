@@ -1,0 +1,163 @@
+{
+  "source_artifact": "rust/engine/benches/results/1a-current-full-goal.json",
+  "source_sha256": "2ad6170bfcb17585e0ce14eda8d71ea1348737cbde6a7d23cdc0384476d3551b",
+  "scope": "Post-hoc geometry analysis of the retained run; no new timing trials.",
+  "columns": [
+    "extents_before",
+    "extents_after",
+    "extent_rows_written",
+    "slot_pages_written"
+  ],
+  "observations": [
+    {
+      "revision": "96db92e2308f0a3712dd0faed7b8663f00c42d29",
+      "n": 500,
+      "garbage_position": "front",
+      "rounds": 6,
+      "geometry": [
+        2,
+        1,
+        1,
+        2
+      ]
+    },
+    {
+      "revision": "96db92e2308f0a3712dd0faed7b8663f00c42d29",
+      "n": 500,
+      "garbage_position": "tail",
+      "rounds": 6,
+      "geometry": [
+        2,
+        1,
+        1,
+        2
+      ]
+    },
+    {
+      "revision": "96db92e2308f0a3712dd0faed7b8663f00c42d29",
+      "n": 2000,
+      "garbage_position": "front",
+      "rounds": 6,
+      "geometry": [
+        5,
+        3,
+        3,
+        2
+      ]
+    },
+    {
+      "revision": "96db92e2308f0a3712dd0faed7b8663f00c42d29",
+      "n": 2000,
+      "garbage_position": "tail",
+      "rounds": 6,
+      "geometry": [
+        5,
+        3,
+        3,
+        2
+      ]
+    },
+    {
+      "revision": "96db92e2308f0a3712dd0faed7b8663f00c42d29",
+      "n": 8000,
+      "garbage_position": "front",
+      "rounds": 6,
+      "geometry": [
+        17,
+        9,
+        9,
+        2
+      ]
+    },
+    {
+      "revision": "96db92e2308f0a3712dd0faed7b8663f00c42d29",
+      "n": 8000,
+      "garbage_position": "tail",
+      "rounds": 6,
+      "geometry": [
+        17,
+        9,
+        9,
+        2
+      ]
+    },
+    {
+      "revision": "e98acdec89042377338b04f2ab46d13ac7d8c578",
+      "n": 500,
+      "garbage_position": "front",
+      "rounds": 6,
+      "geometry": [
+        2,
+        2,
+        1,
+        1
+      ]
+    },
+    {
+      "revision": "e98acdec89042377338b04f2ab46d13ac7d8c578",
+      "n": 500,
+      "garbage_position": "tail",
+      "rounds": 6,
+      "geometry": [
+        2,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "revision": "e98acdec89042377338b04f2ab46d13ac7d8c578",
+      "n": 2000,
+      "garbage_position": "front",
+      "rounds": 6,
+      "geometry": [
+        5,
+        5,
+        3,
+        1
+      ]
+    },
+    {
+      "revision": "e98acdec89042377338b04f2ab46d13ac7d8c578",
+      "n": 2000,
+      "garbage_position": "tail",
+      "rounds": 6,
+      "geometry": [
+        5,
+        3,
+        1,
+        0
+      ]
+    },
+    {
+      "revision": "e98acdec89042377338b04f2ab46d13ac7d8c578",
+      "n": 8000,
+      "garbage_position": "front",
+      "rounds": 6,
+      "geometry": [
+        17,
+        17,
+        9,
+        1
+      ]
+    },
+    {
+      "revision": "e98acdec89042377338b04f2ab46d13ac7d8c578",
+      "n": 8000,
+      "garbage_position": "tail",
+      "rounds": 6,
+      "geometry": [
+        17,
+        9,
+        1,
+        0
+      ]
+    }
+  ],
+  "interpretation": [
+    "GC changed from chunks.compact to chunks.compact_local in 45717727ebe47a6461ed725b7e62bf776af44552. Extent-local compaction preserves crossing live blocks and reusable interior holes.",
+    "The fixture collects before starting the checkpoint timer. The timed checkpoint receives different heap geometry in the two revisions despite identical fixture source.",
+    "Extent row counts do not measure encoded byte counts or total checkpoint work. This analysis neither apportions the timing regression nor changes the failed 1.25 gate.",
+    "The retained free-block index and extent-local policy must not be removed to make this benchmark pass."
+  ]
+}

@@ -1,0 +1,21 @@
+# engine=ironhorse features=default corpus=built-ins/Math/clz32 tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Math/clz32/Math.clz32.js sloppy pass
+built-ins/Math/clz32/Math.clz32.js strict pass
+built-ins/Math/clz32/Math.clz32_1.js sloppy pass
+built-ins/Math/clz32/Math.clz32_1.js strict pass
+built-ins/Math/clz32/Math.clz32_2.js sloppy pass
+built-ins/Math/clz32/Math.clz32_2.js strict pass
+built-ins/Math/clz32/infinity.js sloppy pass
+built-ins/Math/clz32/infinity.js strict pass
+built-ins/Math/clz32/int32bit.js sloppy pass
+built-ins/Math/clz32/int32bit.js strict pass
+built-ins/Math/clz32/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Math/clz32/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Math/clz32/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be clz32; name value should be clz32"
+built-ins/Math/clz32/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be clz32; name value should be clz32"
+built-ins/Math/clz32/nan.js sloppy pass
+built-ins/Math/clz32/nan.js strict pass
+built-ins/Math/clz32/not-a-constructor.js sloppy pass
+built-ins/Math/clz32/not-a-constructor.js strict pass
+built-ins/Math/clz32/prop-desc.js sloppy pass
+built-ins/Math/clz32/prop-desc.js strict pass

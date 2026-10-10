@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=annexB/built-ins/RegExp/legacy-accessors/lastParen tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/built-ins/RegExp/legacy-accessors/lastParen/prop-desc.js sloppy skip:shared-positive-test-failure
+annexB/built-ins/RegExp/legacy-accessors/lastParen/prop-desc.js strict skip:shared-positive-test-failure
+annexB/built-ins/RegExp/legacy-accessors/lastParen/this-cross-realm-constructor.js sloppy skip:shared-positive-test-failure
+annexB/built-ins/RegExp/legacy-accessors/lastParen/this-cross-realm-constructor.js strict skip:shared-positive-test-failure
+annexB/built-ins/RegExp/legacy-accessors/lastParen/this-not-regexp-constructor.js sloppy skip:shared-positive-test-failure
+annexB/built-ins/RegExp/legacy-accessors/lastParen/this-not-regexp-constructor.js strict skip:shared-positive-test-failure
+annexB/built-ins/RegExp/legacy-accessors/lastParen/this-subclass-constructor.js sloppy skip:shared-test262-failure
+annexB/built-ins/RegExp/legacy-accessors/lastParen/this-subclass-constructor.js strict skip:shared-test262-failure

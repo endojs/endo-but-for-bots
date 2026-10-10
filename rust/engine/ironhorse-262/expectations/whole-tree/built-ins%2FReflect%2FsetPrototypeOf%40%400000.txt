@@ -1,0 +1,29 @@
+# engine=ironhorse features=default corpus=built-ins/Reflect/setPrototypeOf tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Reflect/setPrototypeOf/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 2; length value should be 2"
+built-ins/Reflect/setPrototypeOf/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 2; length value should be 2"
+built-ins/Reflect/setPrototypeOf/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be setPrototypeOf; name value should be setPrototypeOf"
+built-ins/Reflect/setPrototypeOf/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be setPrototypeOf; name value should be setPrototypeOf"
+built-ins/Reflect/setPrototypeOf/not-a-constructor.js sloppy pass
+built-ins/Reflect/setPrototypeOf/not-a-constructor.js strict pass
+built-ins/Reflect/setPrototypeOf/proto-is-not-object-and-not-null-throws.js sloppy pass
+built-ins/Reflect/setPrototypeOf/proto-is-not-object-and-not-null-throws.js strict pass
+built-ins/Reflect/setPrototypeOf/proto-is-symbol-throws.js sloppy pass
+built-ins/Reflect/setPrototypeOf/proto-is-symbol-throws.js strict pass
+built-ins/Reflect/setPrototypeOf/return-abrupt-from-result.js sloppy pass
+built-ins/Reflect/setPrototypeOf/return-abrupt-from-result.js strict pass
+built-ins/Reflect/setPrototypeOf/return-false-if-target-and-proto-are-the-same.js sloppy pass
+built-ins/Reflect/setPrototypeOf/return-false-if-target-and-proto-are-the-same.js strict pass
+built-ins/Reflect/setPrototypeOf/return-false-if-target-is-not-extensible.js sloppy pass
+built-ins/Reflect/setPrototypeOf/return-false-if-target-is-not-extensible.js strict pass
+built-ins/Reflect/setPrototypeOf/return-false-if-target-is-prototype-of-proto.js sloppy pass
+built-ins/Reflect/setPrototypeOf/return-false-if-target-is-prototype-of-proto.js strict pass
+built-ins/Reflect/setPrototypeOf/return-true-if-new-prototype-is-set.js sloppy pass
+built-ins/Reflect/setPrototypeOf/return-true-if-new-prototype-is-set.js strict pass
+built-ins/Reflect/setPrototypeOf/return-true-if-proto-is-current.js sloppy pass
+built-ins/Reflect/setPrototypeOf/return-true-if-proto-is-current.js strict pass
+built-ins/Reflect/setPrototypeOf/setPrototypeOf.js sloppy pass
+built-ins/Reflect/setPrototypeOf/setPrototypeOf.js strict pass
+built-ins/Reflect/setPrototypeOf/target-is-not-object-throws.js sloppy pass
+built-ins/Reflect/setPrototypeOf/target-is-not-object-throws.js strict pass
+built-ins/Reflect/setPrototypeOf/target-is-symbol-throws.js sloppy pass
+built-ins/Reflect/setPrototypeOf/target-is-symbol-throws.js strict pass

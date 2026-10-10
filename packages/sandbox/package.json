@@ -22,12 +22,15 @@
     "./types.js": "./src/types.d.ts",
     "./factory.js": "./src/factory.js",
     "./interfaces.js": "./src/interfaces.js",
-    "./package.json": "./package.json"
+    "./xfs-volume-quota.js": "./src/xfs-volume-quota.js",
+    "./package.json": "./package.json",
+    "./observe.js": "./src/observe.js"
   },
   "scripts": {
     "build": "exit 0",
     "test": "ses-ava",
     "test:drivers": "ses-ava test/bwrap.test.js test/podman.test.js",
+    "test:policy:acceptance": "ENDO_SANDBOX_REQUIRE_POLICY=1 ses-ava test/podman.test.js --match='a live slice attests broker-only isolation from kernel state'",
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix && yarn lint:types",

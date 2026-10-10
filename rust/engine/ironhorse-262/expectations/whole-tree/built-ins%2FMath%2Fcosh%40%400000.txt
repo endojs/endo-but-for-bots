@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=built-ins/Math/cosh tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Math/cosh/cosh-specialVals.js sloppy pass
+built-ins/Math/cosh/cosh-specialVals.js strict pass
+built-ins/Math/cosh/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Math/cosh/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Math/cosh/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be cosh; name value should be cosh"
+built-ins/Math/cosh/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be cosh; name value should be cosh"
+built-ins/Math/cosh/not-a-constructor.js sloppy pass
+built-ins/Math/cosh/not-a-constructor.js strict pass
+built-ins/Math/cosh/prop-desc.js sloppy pass
+built-ins/Math/cosh/prop-desc.js strict pass

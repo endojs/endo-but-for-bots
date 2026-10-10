@@ -1,0 +1,77 @@
+# engine=ironhorse features=default corpus=built-ins/RegExp/prototype/unicodeSets tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-01.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-01.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-02.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-02.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-03.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-03.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-04.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-04.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-05.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-05.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-06.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-06.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-07.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-07.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-08.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-08.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-09.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-09.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-10.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-10.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-11.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-11.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-12.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-12.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-13.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-13.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-14.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-14.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-15.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-15.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-16.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-16.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-17.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-17.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-18.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-18.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-19.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-19.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-20.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-20.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-21.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-21.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-22.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-22.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-23.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-23.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-24.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-24.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-25.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-25.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-26.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-26.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-27.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-27.js strict pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-28.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-28.js strict pass
+built-ins/RegExp/prototype/unicodeSets/cross-realm.js sloppy fail:"error-message-differs:TypeError: oracle=\"TypeError: call: not a function\" ironhorse=\"TypeError: cannot coerce undefined to object\""
+built-ins/RegExp/prototype/unicodeSets/cross-realm.js strict fail:"error-message-differs:TypeError: oracle=\"TypeError: call: not a function\" ironhorse=\"TypeError: cannot coerce undefined to object\""
+built-ins/RegExp/prototype/unicodeSets/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicodeSets/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicodeSets/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicodeSets/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicodeSets/prop-desc.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicodeSets/prop-desc.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicodeSets/this-val-invalid-obj.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicodeSets/this-val-invalid-obj.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicodeSets/this-val-non-obj.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicodeSets/this-val-non-obj.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicodeSets/this-val-regexp-prototype.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicodeSets/this-val-regexp-prototype.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicodeSets/this-val-regexp.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/this-val-regexp.js strict pass
+built-ins/RegExp/prototype/unicodeSets/uv-flags-constructor.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/uv-flags-constructor.js strict pass
+built-ins/RegExp/prototype/unicodeSets/uv-flags.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/uv-flags.js strict pass

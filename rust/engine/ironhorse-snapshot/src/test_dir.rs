@@ -7,14 +7,9 @@ pub(crate) struct TempDir(std::path::PathBuf);
 
 impl TempDir {
     pub(crate) fn new(name: &str) -> TempDir {
-        // Per-PROCESS and per-CALL unique: the helper used to key on the
-        // bare name, so two concurrent `cargo test` runs of the same
-        // crate resolved to the SAME directory and the `remove_dir_all`
-        // below deleted each other's fixtures mid-run — a real, and
-        // genuinely confusing, source of "flaky" store failures (review
-        // wave 5). The sibling helpers in `metamorphic_determinism` and
-        // `supervisor_suspend_resume` already keyed on the pid; these
-        // did not.
+        // Per-process and per-call uniqueness prevents concurrent tests
+        // with the same name from deleting each other's fixtures through
+        // `remove_dir_all` below or in `Drop`.
         static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let unique = format!(
             "{name}-{}-{}",

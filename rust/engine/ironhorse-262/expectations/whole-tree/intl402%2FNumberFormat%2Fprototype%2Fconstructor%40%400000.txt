@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=intl402/NumberFormat/prototype/constructor tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/NumberFormat/prototype/constructor/prop-desc.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/constructor/prop-desc.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/constructor/value.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/constructor/value.js strict skip:oracle-host-missing-intl

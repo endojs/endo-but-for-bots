@@ -10,6 +10,17 @@ fn agrees(source: &str) {
     assert!(run.result_agrees, "{source}: {run:?}");
 }
 
+fn assert_ironhorse_result(source: &str, expected: &str) {
+    let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("source compiles");
+    let run = ironhorse_vm::run_program_with_symbols(&bytecode, &symbols);
+    assert!(
+        run.completed,
+        "IronHorse completes {source:?}: {:?}",
+        run.halt
+    );
+    assert_eq!(run.result, expected, "standards-derived case {source:?}");
+}
+
 #[test]
 fn unicode_property_families_and_aliases_execute() {
     for source in [
@@ -28,11 +39,37 @@ fn negation_classes_astral_and_ignore_case_execute_in_u_and_v() {
     for source in [
         "/\\P{ASCII}/u.test('é') && /[^\\p{ASCII}]/u.test('😀')",
         "/^[\\p{Letter}\\p{Number}]+$/u.test('abc123') && /\\p{Emoji}/u.test('😀')",
-        "/^\\p{Lowercase_Letter}$/iu.test('A') && !/^\\P{Lowercase_Letter}$/iu.test('A')",
+        "/^\\p{Lowercase_Letter}$/iu.test('A')",
         "/\\p{Script=Greek}/v.test('α') && /\\P{ASCII}/v.test('é')",
         "/^\\p{Lowercase_Letter}$/iv.test('A') && !/^\\P{Lowercase_Letter}$/iv.test('A')",
     ] {
         agrees(source);
+    }
+}
+
+#[test]
+fn standards_lane_records_the_intended_xs_regexp_divergences() {
+    for (source, expected) in [
+        ("new RegExp('[]', 'v').test('A')", "false"),
+        ("new RegExp('[^]', 'v').test('A')", "true"),
+        ("/^[A]$/iv.test('a')", "true"),
+        ("/^[\\p{Uppercase_Letter}]$/iv.test('a')", "true"),
+        (
+            "/^[\\p{Uppercase_Letter}--A]$/iv.test('A') || !/^[\\p{Uppercase_Letter}--A]$/iv.test('B')",
+            "false",
+        ),
+        ("/^\\P{Lowercase_Letter}$/iu.test('A')", "true"),
+        ("/^\\P{Lowercase_Letter}$/iu.test('a')", "true"),
+        ("/^\\P{Lowercase_Letter}$/iv.test('A')", "false"),
+        ("/^\\P{Uppercase_Letter}$/iu.test('A')", "true"),
+        ("/^\\P{Uppercase_Letter}$/iv.test('A')", "false"),
+        ("/^\\P{ASCII}$/iu.test('A')", "false"),
+        ("/^\\P{ASCII}$/iu.test('k')", "true"),
+        ("/^\\P{ASCII}$/iu.test('K')", "true"),
+        ("/^\\P{ASCII}$/iv.test('k')", "false"),
+        ("/^\\P{ASCII}$/iv.test('K')", "false"),
+    ] {
+        assert_ironhorse_result(source, expected);
     }
 }
 

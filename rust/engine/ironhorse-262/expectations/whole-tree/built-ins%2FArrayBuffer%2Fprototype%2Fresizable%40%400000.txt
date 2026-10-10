@@ -1,0 +1,21 @@
+# engine=ironhorse features=default corpus=built-ins/ArrayBuffer/prototype/resizable tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/ArrayBuffer/prototype/resizable/detached-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resizable/detached-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resizable/invoked-as-accessor.js sloppy pass
+built-ins/ArrayBuffer/prototype/resizable/invoked-as-accessor.js strict pass
+built-ins/ArrayBuffer/prototype/resizable/invoked-as-func.js sloppy pass
+built-ins/ArrayBuffer/prototype/resizable/invoked-as-func.js strict pass
+built-ins/ArrayBuffer/prototype/resizable/length.js sloppy pass
+built-ins/ArrayBuffer/prototype/resizable/length.js strict pass
+built-ins/ArrayBuffer/prototype/resizable/name.js sloppy pass
+built-ins/ArrayBuffer/prototype/resizable/name.js strict pass
+built-ins/ArrayBuffer/prototype/resizable/prop-desc.js sloppy pass
+built-ins/ArrayBuffer/prototype/resizable/prop-desc.js strict pass
+built-ins/ArrayBuffer/prototype/resizable/return-resizable.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resizable/return-resizable.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resizable/this-has-no-arraybufferdata-internal.js sloppy pass
+built-ins/ArrayBuffer/prototype/resizable/this-has-no-arraybufferdata-internal.js strict pass
+built-ins/ArrayBuffer/prototype/resizable/this-is-not-object.js sloppy pass
+built-ins/ArrayBuffer/prototype/resizable/this-is-not-object.js strict pass
+built-ins/ArrayBuffer/prototype/resizable/this-is-sharedarraybuffer.js sloppy pass
+built-ins/ArrayBuffer/prototype/resizable/this-is-sharedarraybuffer.js strict pass

@@ -1,14 +1,14 @@
 //! The XSRE pattern compiler: a faithful transliteration of the
-//! `fxCompileRegExp` pipeline in `xsre.c` — recursive-descent parse into
-//! a term tree, a `measure` pass that assigns each term its byte offset
-//! in the code array, and a `code` pass that emits the integer step
-//! stream the [`crate::matcher`] VM interprets.
+//! `fxCompileRegExp` pipeline in `xsre.c` — a parse into a term tree (XS's
+//! recursive descent, kept here on explicit stacks), a `measure` pass that
+//! assigns each term its byte offset in the code array, and a `code` pass
+//! that emits the integer step stream the [`crate::matcher`] VM interprets.
 //!
 //! Offsets (`step`, `completion`, `loop_off`, `sequel`) are kept in
 //! **bytes** exactly as XS keeps them (`sizeof(txInteger) == 4`), so
-//! the compile meter (`parser->size * XS_PARSE_REGEXP_METERING`) is
-//! bit-exact and the emitted graph is structurally identical, which in
-//! turn makes the matcher's per-step meter bit-exact.
+//! the emitted graph is structurally identical to XS, which in turn
+//! keeps the matcher's per-step meter structurally comparable to XS's
+//! (a calibration aid — XS-computron parity is a non-goal).
 //!
 //! Astral (`> 0xFFFF`) code points remain scalar values under `u`/`v` and are
 //! split into their UTF-16 surrogate pair outside Unicode mode, matching
@@ -16,6 +16,8 @@
 //! and named captures (`(?<name>)` / `\k<name>`) are
 //! ported: a named group codegens identically to its numbered peer, plus a
 //! name-slot operand the matcher records into its runtime `names[]` array.
+
+use std::cell::{Cell, RefCell};
 
 use crate::encoding::{utf8_decode, C_EOF};
 use crate::flags::*;
@@ -25,8 +27,12 @@ use crate::opcode::*;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompileError {
     /// A genuine syntax error — the same outcome XS reports through
-    /// `fxCompileRegExp` returning 0. The string is a short reason.
+    /// `fxCompileRegExp` returning 0. The string includes the consumed-pattern diagnostic context.
     Syntax(String),
+    /// The work budget or its host callback refused further compilation.
+    BudgetExceeded,
+    /// A deterministic compiler storage ceiling was reached.
+    ResourceLimit,
     /// A pin feature this stage has not ported yet. Named, never a wrong
     /// answer (the stage's honest-skip bar).
     Unsupported(&'static str),
@@ -47,7 +53,8 @@ pub struct Program {
     /// `code[4]`: quantifier count.
     pub quantifier_count: usize,
     /// Compile meter in raw 16.16 fixed point:
-    /// `size_bytes * XS_PARSE_REGEXP_METERING`.
+    /// Deterministic parser, set construction, measure, and emission work
+    /// multiplied by `XS_PARSE_REGEXP_METERING` (meter version 2).
     pub compile_meter_raw: u64,
     /// The declared named-capture groups in first-seen (name-slot) order:
     /// `(name, capture_index)`. The JS `RegExp` surface reads this to build
@@ -68,10 +75,98 @@ impl Program {
     }
 }
 
+/// Maximum retained parser nodes and emitted code bytes. These execution
+/// profile limits bound compiler memory independently of computation metering.
+pub const MAX_COMPILE_NODES: usize = 1_000_000;
+pub const MAX_PATTERN_BYTES: usize = 1 << 24;
+pub const MAX_CODE_BYTES: usize = 64 << 20;
+/// Cumulative parser payload allocation allowance, including transient copies.
+/// This conservatively bounds live memory without depending on allocator reuse.
+pub const MAX_COMPILE_PAYLOAD_BYTES: usize = 64 << 20;
+pub const COMPILE_CHECK_STRIDE: u64 = 1024;
+
+/// Compilation result plus work charged even when parsing fails.
+#[derive(Debug)]
+pub struct CompileOutcome {
+    pub result: PResult<Program>,
+    pub work_meter_raw: u64,
+}
+
+/// Validation result plus the same logical work charges as compilation.
+#[derive(Debug)]
+pub struct ValidationOutcome {
+    pub result: PResult<()>,
+    pub work_meter_raw: u64,
+}
+
+#[derive(Debug)]
+enum CompileStop {
+    Budget,
+    Resource,
+}
+
+fn stop(reason: CompileStop) -> ! {
+    std::panic::resume_unwind(Box::new(reason))
+}
+
+struct WorkBudget<'a> {
+    remaining: Cell<u64>,
+    payload_bytes: Cell<usize>,
+    spent: Cell<u64>,
+    checked: Cell<u64>,
+    check: RefCell<Option<&'a mut dyn FnMut(u64) -> bool>>,
+}
+
+impl WorkBudget<'_> {
+    fn allocate(&self, bytes: usize) {
+        let Some(total) = self
+            .payload_bytes
+            .get()
+            .checked_add(bytes)
+            .filter(|n| *n <= MAX_COMPILE_PAYLOAD_BYTES)
+        else {
+            stop(CompileStop::Resource)
+        };
+        self.payload_bytes.set(total);
+    }
+
+    fn charge(&self, units: u64) {
+        let Some(left) = self.remaining.get().checked_sub(units) else {
+            stop(CompileStop::Budget)
+        };
+        let Some(spent) = self
+            .spent
+            .get()
+            .checked_add(units)
+            .filter(|n| *n <= u64::MAX / XS_PARSE_REGEXP_METERING)
+        else {
+            stop(CompileStop::Budget)
+        };
+        self.remaining.set(left);
+        self.spent.set(spent);
+        if spent - self.checked.get() >= COMPILE_CHECK_STRIDE {
+            self.check_now();
+        }
+    }
+
+    fn check_now(&self) {
+        let raw = self.spent.get() * XS_PARSE_REGEXP_METERING;
+        self.checked.set(self.spent.get());
+        if self
+            .check
+            .borrow_mut()
+            .as_mut()
+            .is_some_and(|check| !check(raw))
+        {
+            stop(CompileStop::Budget);
+        }
+    }
+}
+
 type NodeId = usize;
 
 /// A term-tree node. Layout fields (`step`/`completion`/`loop_off`) are
-/// filled by [`Compiler::measure`] and read by [`Compiler::code`],
+/// filled by [`Compiler::measure`] and read by [`Compiler::emit`],
 /// mirroring the `txTermPart` header and the per-term struct fields.
 #[derive(Debug)]
 struct Node {
@@ -148,7 +243,27 @@ enum Kind {
 /// The XS `0x7FFFFFFF` open-max sentinel (`*`, `+`, `{n,}`).
 const MAX_QUANTIFIER: i32 = 0x7FFF_FFFF;
 
-struct Compiler {
+/// The deepest nesting of groups (`(`, `(?:`, `(?=`, `(?<name>`, …) and
+/// `v`-mode nested classes (`[[…]]`) a pattern may have.
+///
+/// XS's recursive-descent parse, measure pass and code pass each recurse
+/// once per nesting level on the native stack, which bounds that recursion
+/// by nothing but its C stack; before this limit, a 10,000-deep group
+/// literal of 20 KB aborted this crate's port. This crate refuses deeper
+/// patterns with a [`CompileError::Syntax`] instead, so the bound is a
+/// counter (deterministic across hosts and build profiles) rather than a
+/// stack-address margin, and it is part of what a release accepts. The limit
+/// is orders of magnitude above real patterns. Its passes keep their own
+/// stacks ([`Compiler::disjunction_parse`], `Compiler::charset_expression`,
+/// [`Compiler::measure`] and [`Compiler::emit`]), so neither nesting nor
+/// pattern *length* (an alternation, a sequence or a `v`-mode class's list of
+/// string alternatives, `[\q{ab|cd|…}]`, which becomes a left-nested
+/// disjunction) is native recursion depth: both cost heap linear in the
+/// pattern.
+pub const MAX_NESTING_DEPTH: u32 = 512;
+
+struct Compiler<'a, 'b, const MATERIALIZE: bool> {
+    work: &'a WorkBudget<'b>,
     pattern: Vec<u8>, // NUL-terminated
     offset: usize,
     character: i64,
@@ -194,9 +309,99 @@ struct Compiler {
     /// after the whole pattern is parsed (a forward reference is legal, so the
     /// slot is not known at the point the reference is read).
     pending_named_refs: Vec<(NodeId, String)>,
+    /// The current group / nested-class nesting depth of the parse, bounded
+    /// by [`MAX_NESTING_DEPTH`] (see [`Compiler::nest`]).
+    depth: u32,
 }
 
 type PResult<T> = Result<T, CompileError>;
+
+/// One open `v`-mode class of [`Compiler::charset_expression`]: the state of
+/// `fxCharSetExpression`'s operator loop, which C keeps on its stack while a
+/// nested class recurses.
+struct ClassLevel {
+    /// Whether the class began with `^`.
+    not: bool,
+    /// The operand the loop is waiting for.
+    awaiting: ClassAwait,
+    /// The left operand, and its range kind.
+    left: NodeId,
+    left_kind: i32,
+    /// The set so far.
+    result: Option<NodeId>,
+}
+
+/// Where a [`ClassLevel`]'s operator loop resumes.
+enum ClassAwait {
+    /// The class's first operand, which decides its operator.
+    First,
+    /// The right side of a `--`.
+    Subtraction,
+    /// The right side of a `&&`.
+    Intersection,
+    /// A range's end, after its start and `-`.
+    RangeEnd,
+    /// The union's next operand.
+    UnionNext,
+}
+
+/// The next move of [`Compiler::charset_expression`]'s loop.
+enum ClassStep {
+    /// Open a class, after its `[`.
+    Open,
+    /// Read an operand for the innermost class.
+    Operand,
+    /// Give the innermost class an operand and its range kind.
+    Feed(NodeId, i32),
+    /// A class closed at its `]` with this set.
+    Close(NodeId),
+}
+
+/// How a group whose disjunction [`Compiler::disjunction_parse`] is parsing
+/// ends: what [`Compiler::group_open`] read before the disjunction and
+/// [`Compiler::group_close`] needs after it.
+enum GroupEnd {
+    /// A lookahead (`direction` 1) or lookbehind (-1) assertion.
+    Assertion { not: bool, direction: i32 },
+    /// `(?:…)`, quantified at the enclosing sequence's capture index.
+    NonCapturing { current_index: i32 },
+    /// A capturing group, numbered or named (`name_slot` -1 when numbered).
+    Capture { current_index: i32, name_slot: i32 },
+    /// A modifier group, whose disjunction is parsed under `modified_flags`.
+    Modifiers {
+        outer_flags: u32,
+        modified_flags: u32,
+    },
+}
+
+/// One disjunction being parsed: the pattern's, or an open group's
+/// (`fxDisjunctionParse`'s and `fxSequenceParse`'s locals, which C keeps on
+/// its stack while a nested group recurses).
+struct Level {
+    /// The group the disjunction belongs to; `None` for the pattern.
+    group: Option<GroupEnd>,
+    /// The character that ends the disjunction: `)`, or [`C_EOF`].
+    terminator: i64,
+    /// The tail of the live-name list before the current alternative.
+    left_addr: i32,
+    /// The alternatives before each `|`, with their name-scope addresses,
+    /// innermost last.
+    pending: Vec<(i32, i32, i32, NodeId)>,
+    /// The current alternative's atoms so far.
+    atoms: Vec<NodeId>,
+}
+
+impl Level {
+    fn new(group: Option<GroupEnd>, terminator: i64, left_addr: i32) -> Self {
+        Level {
+            group,
+            terminator,
+            left_addr,
+            pending: Vec::new(),
+            atoms: Vec::new(),
+        }
+    }
+}
 
 /// Compile `pattern` under the `flags` modifier string (e.g. `"gm"`).
 ///
@@ -204,6 +409,163 @@ type PResult<T> = Result<T, CompileError>;
 /// syntax error, or a named unsupported feature (the stage's honest
 /// skip).
 pub fn compile(pattern: &str, flags: &str) -> PResult<Program> {
+    compile_checked(pattern, flags, u64::MAX, None).result
+}
+
+/// Compile with a work ceiling and an optional callback receiving cumulative
+/// raw work charges. Checks precede charged work; the last partial stride is
+/// reported on both success and syntax failure. Program work is included in
+/// `compile_meter_raw`, so callers subtract already charged callback totals.
+pub fn compile_checked(
+    pattern: &str,
+    flags: &str,
+    budget: u64,
+    check: Option<&mut dyn FnMut(u64) -> bool>,
+) -> CompileOutcome {
+    let (result, work_meter_raw) = checked_work(budget, check, |work| {
+        compile_inner::<true>(pattern.as_bytes(), flags, work, false).map(Compiler::into_program)
+    });
+    CompileOutcome {
+        result,
+        work_meter_raw,
+    }
+}
+
+/// Compile a JavaScript UTF-16 pattern without replacing unpaired surrogates.
+/// Scalar input retains the UTF-8 entry point's work receipt and grammar.
+pub fn compile_units_checked(
+    pattern: &[u16],
+    flags: &str,
+    budget: u64,
+    check: Option<&mut dyn FnMut(u64) -> bool>,
+) -> CompileOutcome {
+    let (result, work_meter_raw) = checked_work(budget, check, |work| {
+        let bytes = pattern_units(pattern, work)?;
+        compile_inner::<true>(&bytes, flags, work, true).map(Compiler::into_program)
+    });
+    CompileOutcome {
+        result,
+        work_meter_raw,
+    }
+}
+
+/// Validate a JavaScript UTF-16 pattern using the compiler's exact grammar.
+pub fn validate_units_checked(
+    pattern: &[u16],
+    flags: &str,
+    budget: u64,
+    check: Option<&mut dyn FnMut(u64) -> bool>,
+) -> ValidationOutcome {
+    let (result, work_meter_raw) = checked_work(budget, check, |work| {
+        let bytes = pattern_units(pattern, work)?;
+        compile_inner::<false>(&bytes, flags, work, true).map(|_| ())
+    });
+    ValidationOutcome {
+        result,
+        work_meter_raw,
+    }
+}
+
+// The parser already decodes non-scalar three-byte sequences. Encode valid
+// pairs as scalar UTF-8 to retain its existing work and offset conventions.
+// Admission precedes both the scan and its temporary allocation. Prepay
+// one byte per unit, then the extra UTF-8 width before encoding each code.
+fn pattern_units(pattern: &[u16], work: &WorkBudget<'_>) -> PResult<Vec<u8>> {
+    if pattern.len() > MAX_PATTERN_BYTES {
+        stop(CompileStop::Resource);
+    }
+    work.charge(pattern.len() as u64);
+    work.check_now();
+    work.allocate(pattern.len().saturating_mul(3));
+    let mut bytes = Vec::with_capacity(pattern.len());
+    for code in char::decode_utf16(pattern.iter().copied()) {
+        match code {
+            Ok(ch) => {
+                work.charge((ch.len_utf8() - ch.len_utf16()) as u64);
+                bytes.extend_from_slice(ch.encode_utf8(&mut [0; 4]).as_bytes());
+            }
+            Err(error) => {
+                let unit = error.unpaired_surrogate();
+                work.charge(2);
+                bytes.extend_from_slice(&[
+                    0xe0 | (unit >> 12) as u8,
+                    0x80 | ((unit >> 6) & 63) as u8,
+                    0x80 | (unit & 63) as u8,
+                ]);
+            }
+        }
+    }
+    Ok(bytes)
+}
+
+/// Validate a pattern and flags without constructing a matcher program.
+/// Uses the same grammar, semantic checks, and resource profile as [`compile()`].
+pub fn validate(pattern: &str, flags: &str) -> PResult<()> {
+    validate_checked(pattern, flags, u64::MAX, None).result
+}
+
+/// Validate without materializing code, retaining compilation's logical work
+/// charges, callback boundaries, and storage admission limits. Keeping those
+/// charges stable lets lexers use this entry without changing their cost table.
+pub fn validate_checked(
+    pattern: &str,
+    flags: &str,
+    budget: u64,
+    check: Option<&mut dyn FnMut(u64) -> bool>,
+) -> ValidationOutcome {
+    let (result, work_meter_raw) = checked_work(budget, check, |work| {
+        compile_inner::<false>(pattern.as_bytes(), flags, work, false).map(|_| ())
+    });
+    ValidationOutcome {
+        result,
+        work_meter_raw,
+    }
+}
+
+fn checked_work<T>(
+    budget: u64,
+    check: Option<&mut dyn FnMut(u64) -> bool>,
+    operation: impl FnOnce(&WorkBudget<'_>) -> PResult<T>,
+) -> (PResult<T>, u64) {
+    let work = WorkBudget {
+        remaining: Cell::new(budget),
+        payload_bytes: Cell::new(0),
+        spent: Cell::new(0),
+        checked: Cell::new(0),
+        check: RefCell::new(check),
+    };
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let result = operation(&work);
+        work.check_now();
+        result
+    }));
+    let result = match result {
+        Ok(result) => result,
+        Err(payload) => match payload.downcast::<CompileStop>() {
+            Ok(reason) => Err(match *reason {
+                CompileStop::Budget => CompileError::BudgetExceeded,
+                CompileStop::Resource => CompileError::ResourceLimit,
+            }),
+            Err(payload) => std::panic::resume_unwind(payload),
+        },
+    };
+    (result, work.spent.get() * XS_PARSE_REGEXP_METERING)
+}
+
+fn compile_inner<'a, 'b, const MATERIALIZE: bool>(
+    pattern: &[u8],
+    flags: &str,
+    work: &'a WorkBudget<'b>,
+    source_prepaid: bool,
+) -> PResult<Compiler<'a, 'b, MATERIALIZE>> {
+    if pattern.len() > MAX_PATTERN_BYTES {
+        stop(CompileStop::Resource);
+    }
+    work.charge(if source_prepaid {
+        flags.len() as u64
+    } else {
+        pattern.len() as u64 + flags.len() as u64
+    });
     let mut parser_flags: u32 = 0;
     // Flag modifier parse (fxCompileRegExp head).
     for c in flags.bytes() {
@@ -216,12 +578,23 @@ pub fn compile(pattern: &str, flags: &str) -> PResult<Program> {
             b'y' if parser_flags & XS_REGEXP_Y == 0 => parser_flags |= XS_REGEXP_Y,
             b'd' if parser_flags & XS_REGEXP_D == 0 => parser_flags |= XS_REGEXP_D,
             b'v' if parser_flags & (XS_REGEXP_U | XS_REGEXP_V) == 0 => parser_flags |= XS_REGEXP_V,
-            _ => return Err(CompileError::Syntax("invalid flags".into())),
+            _ => return Err(CompileError::Syntax(" invalid flags".into())),
         }
     }
-    let mut pattern_bytes = pattern.as_bytes().to_vec();
+    // Literal NUL is a pattern character, not the decoder's terminator.
+    let encoded_len = pattern.len() + pattern.iter().filter(|&&byte| byte == 0).count() + 1;
+    work.allocate(encoded_len);
+    let mut pattern_bytes = Vec::with_capacity(encoded_len);
+    for &byte in pattern {
+        if byte == 0 {
+            pattern_bytes.extend_from_slice(&[0xc0, 0x80]);
+        } else {
+            pattern_bytes.push(byte);
+        }
+    }
     pattern_bytes.push(0);
-    let mut c = Compiler {
+    let mut c = Compiler::<MATERIALIZE> {
+        work,
         pattern: pattern_bytes,
         offset: 0,
         character: 0,
@@ -243,15 +616,33 @@ pub fn compile(pattern: &str, flags: &str) -> PResult<Program> {
         saw_named_group: false,
         named_groups: Vec::new(),
         pending_named_refs: Vec::new(),
+        depth: 0,
     };
     // Core u/v scalar execution and character-valued Unicode properties run
     // for real. Only syntax that actually uses v's string/set-expression
     // extension is marked unsupported at its parse site.
-    c.compile_pattern()
+    c.compile_pattern()?;
+    Ok(c)
 }
 
-impl Compiler {
-    fn compile_pattern(&mut self) -> PResult<Program> {
+impl Compiler<'_, '_, true> {
+    fn into_program(self) -> Program {
+        #[cfg(test)]
+        validation_tests::record_program();
+        Program {
+            code: self.code,
+            capture_count: self.capture_index as usize,
+            name_count: self.name_index as usize,
+            assertion_count: self.assertion_index as usize,
+            quantifier_count: self.quantifier_index as usize,
+            compile_meter_raw: self.work.spent.get() * XS_PARSE_REGEXP_METERING,
+            capture_group_names: self.named_groups,
+        }
+    }
+}
+
+impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
+    fn compile_pattern(&mut self) -> PResult<()> {
         self.next()?;
         let mut term = self.disjunction_parse(C_EOF)?;
         // `fxCompileRegExp`: a named-capture *group* sets XS_REGEXP_N, and
@@ -273,19 +664,22 @@ impl Compiler {
         // is known — `fxCaptureReferenceMeasure` errors on an out-of-range
         // number (e.g. `\11` with fewer than 11 groups; XS reads the whole
         // decimal greedily and rejects, it does not fall back to `\1`).
+        self.work.charge(self.nodes.len() as u64);
         for node in &self.nodes {
             if let Kind::CaptureReference { capture_index, .. } = &node.kind {
-                if *capture_index >= 0 && *capture_index >= self.capture_index {
-                    return Err(self.error("invalid reference number"));
+                if *capture_index != -1 && !(0..self.capture_index).contains(capture_index) {
+                    return Err(self.error(&format!("invalid reference number \\{capture_index}")));
                 }
             }
         }
         // `\k<name>` references resolve against the defined group names
         // (`fxCaptureNameGet`); an unresolved name is `mxInvalidReferenceName`
         // (a dangling groupname — a `SyntaxError`).
+        let name_search_work: u64 = self.capture_names.iter().map(|n| n.len() as u64 + 1).sum();
         for name in &self.named_refs {
+            self.work.charge(name_search_work);
             if !self.capture_names.iter().any(|n| n == name) {
-                return Err(self.error("invalid reference name"));
+                return Err(self.error(&format!("invalid reference name \\k<{name}>")));
             }
         }
         // Resolve each `\k<name>` reference to its group's name slot. The
@@ -294,6 +688,7 @@ impl Compiler {
         // named group completes) maps the slot to the live capture index. A
         // slot always exists here — the dangling-name check above already ran.
         for (node_id, name) in std::mem::take(&mut self.pending_named_refs) {
+            self.work.charge(name_search_work);
             let slot = self
                 .named_groups
                 .iter()
@@ -312,31 +707,45 @@ impl Compiler {
         // trailing match word is accounted, matching fxCompileRegExp).
         let match_offset = self.size;
         self.size += 4;
-        let compile_meter_raw = (self.size as u64) * XS_PARSE_REGEXP_METERING;
-
-        // Allocate and zero the code buffer.
-        let total_words = (self.size / 4) as usize;
-        self.code = vec![0; total_words];
-        self.code[0] = self.flags as i32;
-        self.code[1] = self.capture_index;
-        self.code[2] = self.name_index;
-        self.code[3] = self.assertion_index;
-        self.code[4] = self.quantifier_index;
+        self.prepare_code();
+        self.write_word(0, self.flags as i32);
+        self.write_word(1, self.capture_index);
+        self.write_word(2, self.name_index);
+        self.write_word(3, self.assertion_index);
+        self.write_word(4, self.quantifier_index);
         // Named-capture id slots [5 .. 5+nameIndex) stay 0 here (only the
         // JS surface reads them; the matcher does not).
 
         self.emit(term, 1, match_offset as i32);
-        self.code[(match_offset / 4) as usize] = CX_MATCH_STEP;
+        self.write_word((match_offset / 4) as usize, CX_MATCH_STEP);
 
-        Ok(Program {
-            code: std::mem::take(&mut self.code),
-            capture_count: self.capture_index as usize,
-            name_count: self.name_index as usize,
-            assertion_count: self.assertion_index as usize,
-            quantifier_count: self.quantifier_index as usize,
-            compile_meter_raw,
-            capture_group_names: std::mem::take(&mut self.named_groups),
-        })
+        Ok(())
+    }
+
+    fn prepare_code(&mut self) {
+        if self.size < 0 || self.size as u64 > MAX_CODE_BYTES as u64 {
+            stop(CompileStop::Resource);
+        }
+        self.work.charge(self.size as u64);
+
+        // Both paths admit the same logical code payload. Only compilation
+        // materializes it; validation keeps its code vector unallocated.
+        let total_words = (self.size / 4) as usize;
+        self.work.allocate(total_words * 4);
+        if MATERIALIZE {
+            #[cfg(test)]
+            validation_tests::record_code_words(total_words);
+            self.code
+                .try_reserve_exact(total_words)
+                .unwrap_or_else(|_| stop(CompileStop::Resource));
+            self.code.resize(total_words, 0);
+        }
+    }
+
+    fn write_word(&mut self, at: usize, value: i32) {
+        if MATERIALIZE {
+            self.code[at] = value;
+        }
     }
 
     // ---- pattern lexer primitives (fxPatternParser*) ----
@@ -349,6 +758,7 @@ impl Compiler {
     /// capture-name parsing, expose an astral scalar as its two UTF-16
     /// surrogate code units on successive calls.
     fn next(&mut self) -> PResult<()> {
+        self.work.charge(1);
         if self.surrogate != 0 {
             self.character = self.surrogate;
             self.surrogate = 0;
@@ -371,12 +781,14 @@ impl Compiler {
     }
 
     /// `fxPatternParserDecimal`: fold the current digit into `value`.
+    /// Saturate while consuming every digit; callers refuse values outside
+    /// their representable range instead of interpreting a wrapped value.
     fn decimal(&self, value: &mut u32) -> bool {
         let c = self.character;
         if (b'0' as i64..=b'9' as i64).contains(&c) {
             *value = value
-                .wrapping_mul(10)
-                .wrapping_add((c - b'0' as i64) as u32);
+                .saturating_mul(10)
+                .saturating_add((c - b'0' as i64) as u32);
             true
         } else {
             false
@@ -384,7 +796,32 @@ impl Compiler {
     }
 
     fn error(&self, msg: &str) -> CompileError {
-        CompileError::Syntax(msg.to_string())
+        // xsre.c fxPatternParserError retains at most 80 consumed UTF-8 bytes,
+        // dropping whole code points, before appending the diagnostic reason.
+        let end = self.offset.min(self.pattern.len().saturating_sub(1));
+        let mut start = 0;
+        while end - start > 80 {
+            let (_, next) = utf8_decode(&self.pattern, start);
+            start = next;
+        }
+        let context = String::from_utf8_lossy(&self.pattern[start..end]);
+        let message = format!("{context} {msg}");
+        let bytes = message.as_bytes();
+        CompileError::Syntax(String::from_utf8_lossy(&bytes[..bytes.len().min(255)]).into_owned())
+    }
+
+    /// Enter one nesting level (a group or a `v`-mode nested class),
+    /// refusing to descend past [`MAX_NESTING_DEPTH`]. The parser that
+    /// entered the level leaves it when the level closes. A syntax error
+    /// ends the parse where it stands, and the named-capture re-parse
+    /// follows only a pass that closed every level, so the counter is zero
+    /// again whenever it is next read.
+    fn nest(&mut self) -> PResult<()> {
+        if self.depth >= MAX_NESTING_DEPTH {
+            return Err(self.error("too much nesting"));
+        }
+        self.depth += 1;
+        Ok(())
     }
 
     /// Reset the parse cursor and per-parse tables for `fxCompileRegExp`'s
@@ -540,6 +977,8 @@ impl Compiler {
     /// group's ordinal, used only as the slot's representative index; the live
     /// value is resolved through the matcher's runtime `names[]` array.
     fn put_capture_name(&mut self, name: &str, capture_index: i32) -> i32 {
+        self.work
+            .charge(self.capture_names.iter().map(|n| n.len() as u64 + 1).sum());
         if let Some(pos) = self.capture_names.iter().position(|n| n == name) {
             return pos as i32;
         }
@@ -557,6 +996,7 @@ impl Compiler {
     fn participate_capture_name(&mut self, slot: i32) -> PResult<()> {
         let mut cur = self.participate_first;
         while cur >= 0 {
+            self.work.charge(1);
             let i = cur as usize;
             if self.participate_slot[i] == slot {
                 return Err(self.error("duplicate capture"));
@@ -595,6 +1035,25 @@ impl Compiler {
     }
 
     fn add_node(&mut self, kind: Kind) -> NodeId {
+        self.work.charge(1);
+        if self.nodes.len() >= MAX_COMPILE_NODES {
+            stop(CompileStop::Resource);
+        }
+        self.work.allocate(std::mem::size_of::<Node>());
+        if let Kind::CharSet { chars, strings } = &kind {
+            self.work.allocate(
+                std::mem::size_of_val(chars.as_slice())
+                    + strings
+                        .iter()
+                        .map(|s| {
+                            std::mem::size_of::<Vec<u32>>() + std::mem::size_of_val(s.as_slice())
+                        })
+                        .sum::<usize>(),
+            );
+        }
+        self.nodes
+            .try_reserve(1)
+            .unwrap_or_else(|_| stop(CompileStop::Resource));
         self.nodes.push(Node {
             kind,
             step: 0,
@@ -779,11 +1238,84 @@ impl Compiler {
         }))
     }
 
+    fn charset_unicode_fold_targets(&mut self, property: &[i32], include_members: bool) -> NodeId {
+        let mut mapping_count = 0usize;
+        crate::charcase::for_each_unicode_fold_mapping(|_, _| mapping_count += 1);
+        let allocation = mapping_count
+            .checked_mul(std::mem::size_of::<i32>())
+            .unwrap_or_else(|| stop(CompileStop::Resource));
+        self.work.allocate(allocation);
+        self.work.charge(mapping_count as u64 * 2);
+        let mut targets = Vec::new();
+        targets
+            .try_reserve_exact(mapping_count)
+            .unwrap_or_else(|_| stop(CompileStop::Resource));
+        crate::charcase::for_each_unicode_fold_mapping(|source, target| {
+            if charset_contains(property, source) == include_members {
+                targets.push(target);
+            }
+        });
+        let count = targets.len();
+        self.work
+            .charge(count as u64 * (usize::BITS - count.leading_zeros()) as u64);
+        targets.sort_unstable();
+        targets.dedup();
+
+        let mut chars = Vec::with_capacity(targets.len().saturating_mul(2) + 1);
+        chars.push(0);
+        for target in targets {
+            self.work.charge(1);
+            if chars.len() > 1 && *chars.last().expect("range has an end") == target {
+                *chars.last_mut().expect("range has an end") = target + 1;
+            } else {
+                chars.extend_from_slice(&[target, target + 1]);
+            }
+        }
+        chars[0] = (chars.len() - 1) as i32;
+        self.add_node(Kind::CharSet {
+            chars,
+            strings: Vec::new(),
+        })
+    }
+
+    /// Canonicalize a positive Unicode property for the matcher's folded
+    /// subject representation. This is shared by `u` and `v` ignore-case
+    /// matching and runs before `v`-mode complement or set algebra.
+    fn charset_fold_unicode_property(&mut self, set: NodeId) -> PResult<NodeId> {
+        let (property, strings) = self.charset_parts(set)?;
+        if !strings.is_empty() {
+            return Err(self.error("invalid pattern"));
+        }
+        let folded_targets = self.charset_unicode_fold_targets(&property, true);
+        self.charset_combine(set, folded_targets, MX_CHARSET_UNION_OP)
+    }
+
+    /// Legacy `u` mode applies case folding after complementing a Unicode
+    /// property. The matcher canonicalizes the subject, so retain the raw
+    /// complement and add the canonical target of every folded source that is
+    /// outside the property. `v` mode deliberately keeps complement after
+    /// folding and therefore does not use this path.
+    fn charset_legacy_unicode_property_not(&mut self, set: NodeId) -> PResult<NodeId> {
+        let (property, strings) = self.charset_parts(set)?;
+        if !strings.is_empty() {
+            return Err(self.error("invalid pattern"));
+        }
+        let complement = self.charset_not(set)?;
+        let folded_targets = self.charset_unicode_fold_targets(&property, false);
+        self.charset_combine(complement, folded_targets, MX_CHARSET_UNION_OP)
+    }
+
     /// `fxCharSetCombine`: merge two sorted endpoint lists and their finite
     /// string alternatives under a union/subtract/intersect operation.
     fn charset_combine(&mut self, set1: NodeId, set2: NodeId, op: i32) -> PResult<NodeId> {
         let (c1, s1) = self.charset_parts(set1)?;
         let (c2, s2) = self.charset_parts(set2)?;
+        self.work.charge(
+            c1.len() as u64
+                + c2.len() as u64
+                + (s1.iter().map(|s| s.len() as u64 + 1).sum::<u64>())
+                    .saturating_mul(s2.len() as u64),
+        );
         let count1 = c1[0] as usize;
         let count2 = c2[0] as usize;
         let mut i1 = 1usize;
@@ -838,7 +1370,7 @@ impl Compiler {
                 .collect::<Vec<_>>(),
             _ => unreachable!("known charset combine operation"),
         };
-        Self::sort_strings(&mut strings);
+        self.sort_strings(&mut strings);
         Ok(self.add_node(Kind::CharSet {
             chars: out,
             strings,
@@ -874,18 +1406,37 @@ impl Compiler {
             let fold = self.flags & (XS_REGEXP_U | XS_REGEXP_V) != 0;
             let begin = c1[1];
             let end = c2[1];
-            let mut result = self.charset_empty();
-            let mut ch = begin;
-            while ch <= end {
-                let canon = crate::charcase::canonicalize(ch as i64, fold) as i32;
-                let single = self.add_node(Kind::CharSet {
-                    chars: vec![2, canon, canon + 1],
-                    strings: Vec::new(),
-                });
-                result = self.charset_combine(result, single, MX_CHARSET_UNION_OP)?;
-                ch += 1;
+            let count = (end - begin + 1) as usize;
+            self.work.charge(count as u64);
+            self.work.allocate(count * std::mem::size_of::<i32>());
+            let mut canonical = Vec::new();
+            canonical
+                .try_reserve_exact(count)
+                .map_err(|_| CompileError::ResourceLimit)?;
+            for ch in begin..=end {
+                self.work.charge(1);
+                canonical.push(crate::charcase::canonicalize(ch as i64, fold) as i32);
             }
-            return Ok(result);
+            // Admit a deterministic n*(floor(log2(n))+1) sorting envelope before
+            // sorting, independent of the standard library's comparison count.
+            self.work
+                .charge(count as u64 * (usize::BITS - count.leading_zeros()) as u64);
+            canonical.sort_unstable();
+            canonical.dedup();
+            let mut ranges = vec![0];
+            for ch in canonical {
+                self.work.charge(1);
+                if ranges.len() > 1 && ranges[ranges.len() - 1] == ch {
+                    *ranges.last_mut().unwrap() = ch + 1;
+                } else {
+                    ranges.extend_from_slice(&[ch, ch + 1]);
+                }
+            }
+            ranges[0] = (ranges.len() - 1) as i32;
+            return Ok(self.add_node(Kind::CharSet {
+                chars: ranges,
+                strings: Vec::new(),
+            }));
         }
         Ok(self.add_node(Kind::CharSet {
             chars: vec![2, c1[1], c2[2]],
@@ -897,12 +1448,38 @@ impl Compiler {
     /// erroring if the node is not a character set.
     fn charset_parts(&self, id: NodeId) -> PResult<(Vec<i32>, Vec<Vec<u32>>)> {
         match &self.nodes[id].kind {
-            Kind::CharSet { chars, strings } => Ok((chars.clone(), strings.clone())),
+            Kind::CharSet { chars, strings } => {
+                self.work.charge(
+                    chars.len() as u64 + strings.iter().map(|s| s.len() as u64).sum::<u64>(),
+                );
+                self.work.allocate(
+                    std::mem::size_of_val(chars.as_slice())
+                        + strings
+                            .iter()
+                            .map(|s| {
+                                std::mem::size_of::<Vec<u32>>()
+                                    + std::mem::size_of_val(s.as_slice())
+                            })
+                            .sum::<usize>(),
+                );
+                Ok((chars.clone(), strings.clone()))
+            }
             _ => Err(self.error("invalid pattern")),
         }
     }
 
-    fn sort_strings(strings: &mut Vec<Vec<u32>>) {
+    fn sort_strings(&self, strings: &mut Vec<Vec<u32>>) {
+        let count = strings.len() as u64;
+        let width = strings
+            .iter()
+            .map(|s| s.len() as u64 + 1)
+            .max()
+            .unwrap_or(0);
+        self.work.charge(
+            count
+                .saturating_mul(u64::BITS as u64 - count.leading_zeros() as u64)
+                .saturating_mul(width),
+        );
         strings.sort_by(|left, right| right.len().cmp(&left.len()).then_with(|| right.cmp(left)));
         strings.dedup();
     }
@@ -1006,7 +1583,18 @@ impl Compiler {
         chars.extend_from_slice(endpoints);
         let set = self.add_node(Kind::CharSet { chars, strings });
         self.next()?;
-        if negate {
+        if self.flags & XS_REGEXP_I != 0 && self.flags & (XS_REGEXP_U | XS_REGEXP_V) != 0 {
+            if negate && self.flags & XS_REGEXP_U != 0 {
+                self.charset_legacy_unicode_property_not(set)
+            } else {
+                let set = self.charset_fold_unicode_property(set)?;
+                if negate {
+                    self.charset_not(set)
+                } else {
+                    Ok(set)
+                }
+            }
+        } else if negate {
             self.charset_not(set)
         } else {
             Ok(set)
@@ -1021,7 +1609,7 @@ impl Compiler {
             || c == b'_' as i64)
         {
             if result.len() == 127 {
-                return Err(self.error("property name overflow"));
+                return Err(self.error("name overflow"));
             }
             result.push(self.character as u8 as char);
             self.next()?;
@@ -1215,6 +1803,10 @@ impl Compiler {
                         let single = self.charset_single(current[0] as i64);
                         result = self.charset_combine(result, single, MX_CHARSET_UNION_OP)?;
                     } else if current.len() > 1 {
+                        self.work.allocate(std::mem::size_of::<Vec<u32>>());
+                        strings
+                            .try_reserve(1)
+                            .unwrap_or_else(|_| stop(CompileStop::Resource));
                         strings.push(std::mem::take(&mut current));
                     }
                     if c == b'}' as i64 {
@@ -1233,12 +1825,16 @@ impl Compiler {
                     if self.flags & XS_REGEXP_I != 0 {
                         character = crate::charcase::canonicalize(character, true);
                     }
+                    self.work.allocate(std::mem::size_of::<u32>());
+                    current
+                        .try_reserve(1)
+                        .unwrap_or_else(|_| stop(CompileStop::Resource));
                     current.push(character as u32);
                     self.next()?;
                 }
             }
         }
-        Self::sort_strings(&mut strings);
+        self.sort_strings(&mut strings);
         if let Kind::CharSet {
             strings: target, ..
         } = &mut self.nodes[result].kind
@@ -1251,86 +1847,182 @@ impl Compiler {
     /// `fxCharSetExpression`: the v-mode nested-set grammar, including
     /// subtraction, intersection, ordinary union/ranges, reserved doubled
     /// punctuators, and the no-mixing rule for set operators.
+    ///
+    /// C recurses through `fxCharSetExpression` and `fxCharSetOperand` once
+    /// per nested class, so class nesting was native recursion depth. Here
+    /// each open class is a [`ClassLevel`] holding its operator loop's
+    /// state, and the loop below resumes the innermost level with each
+    /// operand (STACK-DEPTH-REFACTOR.md §4.4 B7): a `[` operand opens a
+    /// level and its `]` closes it, its set becoming the operand the
+    /// enclosing level was waiting for. Every `next`, set operation and
+    /// error happens where the recursion made it. Called after the opening
+    /// `[`; returns at the closing `]`, which the caller consumes.
     fn charset_expression(&mut self) -> PResult<NodeId> {
-        let mut not = false;
-        if self.character == b'^' as i64 {
-            self.next()?;
-            not = true;
-        }
-        let (mut left, mut left_kind) = self.charset_operand()?;
-        let mut result: Option<NodeId> = None;
-        if self.character == b'-' as i64 && self.read8(self.offset) == b'-' {
-            loop {
-                self.next()?;
-                self.next()?;
-                let (right, _) = self.charset_operand()?;
-                result = Some(self.charset_combine(left, right, MX_CHARSET_SUBTRACT_OP)?);
-                if self.character == b']' as i64 {
-                    break;
+        let mut levels: Vec<ClassLevel> = Vec::new();
+        let mut step = ClassStep::Open;
+        loop {
+            step = match step {
+                ClassStep::Open => {
+                    self.nest()?;
+                    let mut not = false;
+                    if self.character == b'^' as i64 {
+                        self.next()?;
+                        not = true;
+                    }
+                    if self.character == b']' as i64 {
+                        let mut result = self.charset_empty();
+                        if not {
+                            result = self.charset_not(result)?;
+                        }
+                        self.depth -= 1;
+                        ClassStep::Close(result)
+                    } else {
+                        levels.push(ClassLevel {
+                            not,
+                            awaiting: ClassAwait::First,
+                            left: 0,
+                            left_kind: 0,
+                            result: None,
+                        });
+                        ClassStep::Operand
+                    }
                 }
-                if self.character == b'-' as i64 && self.read8(self.offset) == b'-' {
-                    left = result.expect("subtraction has a result");
-                    continue;
+                ClassStep::Operand => {
+                    if self.character == b'[' as i64 {
+                        self.next()?;
+                        ClassStep::Open
+                    } else {
+                        let (operand, kind) = self.charset_operand()?;
+                        ClassStep::Feed(operand, kind)
+                    }
                 }
-                return Err(self.error("invalid range"));
-            }
-        } else if self.character == b'&' as i64 && self.read8(self.offset) == b'&' {
-            loop {
-                self.next()?;
-                self.next()?;
-                let (right, _) = self.charset_operand()?;
-                result = Some(self.charset_combine(left, right, MX_CHARSET_INTERSECTION_OP)?);
-                if self.character == b']' as i64 {
-                    break;
+                ClassStep::Feed(operand, kind) => {
+                    let level = levels.last_mut().expect("an open class");
+                    if let Some(result) = self.charset_level_feed(level, operand, kind)? {
+                        let level = levels.pop().expect("an open class");
+                        let mut result = result;
+                        if level.not {
+                            result = self.charset_not(result)?;
+                        }
+                        self.depth -= 1;
+                        ClassStep::Close(result)
+                    } else {
+                        ClassStep::Operand
+                    }
                 }
-                if self.character == b'&' as i64 && self.read8(self.offset) == b'&' {
-                    left = result.expect("intersection has a result");
-                    continue;
-                }
-                return Err(self.error("invalid range"));
-            }
-        } else {
-            loop {
-                if self.character == b'-' as i64 {
-                    self.next()?;
-                    let (right, right_kind) = self.charset_operand()?;
-                    if left_kind != 0 && right_kind != 0 {
+                ClassStep::Close(result) => {
+                    if levels.is_empty() {
+                        return Ok(result);
+                    }
+                    // The operand `[…]` of the enclosing class.
+                    if self.character != b']' as i64 {
                         return Err(self.error("invalid range"));
                     }
-                    left = self.charset_range(left, right)?;
+                    self.next()?;
+                    ClassStep::Feed(result, 1)
                 }
-                result = Some(if let Some(former) = result {
-                    self.charset_combine(former, left, MX_CHARSET_UNION_OP)?
+            };
+        }
+    }
+
+    /// Resume a class's operator loop with the operand it was waiting for.
+    /// Returns the class's set (before a `^` negation) once the loop
+    /// reaches the class's `]`, or `None` when it needs another operand.
+    fn charset_level_feed(
+        &mut self,
+        level: &mut ClassLevel,
+        operand: NodeId,
+        kind: i32,
+    ) -> PResult<Option<NodeId>> {
+        match level.awaiting {
+            ClassAwait::First => {
+                level.left = operand;
+                level.left_kind = kind;
+                if self.character == b'-' as i64 && self.read8(self.offset) == b'-' {
+                    self.next()?;
+                    self.next()?;
+                    level.awaiting = ClassAwait::Subtraction;
+                    return Ok(None);
+                }
+                if self.character == b'&' as i64 && self.read8(self.offset) == b'&' {
+                    self.next()?;
+                    self.next()?;
+                    level.awaiting = ClassAwait::Intersection;
+                    return Ok(None);
+                }
+                self.charset_level_union(level)
+            }
+            ClassAwait::Subtraction | ClassAwait::Intersection => {
+                let (op, punctuator, what) = if matches!(level.awaiting, ClassAwait::Subtraction) {
+                    (MX_CHARSET_SUBTRACT_OP, b'-', "subtraction has a result")
                 } else {
-                    left
-                });
+                    (
+                        MX_CHARSET_INTERSECTION_OP,
+                        b'&',
+                        "intersection has a result",
+                    )
+                };
+                level.result = Some(self.charset_combine(level.left, operand, op)?);
                 if self.character == b']' as i64 {
-                    break;
+                    return Ok(level.result);
                 }
-                (left, left_kind) = self.charset_operand()?;
+                if self.character == punctuator as i64 && self.read8(self.offset) == punctuator {
+                    level.left = level.result.expect(what);
+                    self.next()?;
+                    self.next()?;
+                    return Ok(None);
+                }
+                Err(self.error("invalid range"))
+            }
+            ClassAwait::RangeEnd => {
+                if level.left_kind != 0 && kind != 0 {
+                    return Err(self.error("invalid range"));
+                }
+                level.left = self.charset_range(level.left, operand)?;
+                self.charset_level_union_add(level)
+            }
+            ClassAwait::UnionNext => {
+                level.left = operand;
+                level.left_kind = kind;
+                self.charset_level_union(level)
             }
         }
-        let mut result = result.expect("a v set expression starts with an operand");
-        if not {
-            result = self.charset_not(result)?;
+    }
+
+    /// The top of a class's union loop, with `level.left` its next operand:
+    /// a `-` makes it a range's start.
+    fn charset_level_union(&mut self, level: &mut ClassLevel) -> PResult<Option<NodeId>> {
+        if self.character == b'-' as i64 {
+            self.next()?;
+            level.awaiting = ClassAwait::RangeEnd;
+            return Ok(None);
         }
-        Ok(result)
+        self.charset_level_union_add(level)
+    }
+
+    /// The rest of a class's union loop: add `level.left` to the union, and
+    /// end at the class's `]` or wait for the next operand.
+    fn charset_level_union_add(&mut self, level: &mut ClassLevel) -> PResult<Option<NodeId>> {
+        level.result = Some(if let Some(former) = level.result {
+            self.charset_combine(former, level.left, MX_CHARSET_UNION_OP)?
+        } else {
+            level.left
+        });
+        if self.character == b']' as i64 {
+            return Ok(level.result);
+        }
+        level.awaiting = ClassAwait::UnionNext;
+        Ok(None)
     }
 
     /// `fxCharSetOperand`: one v-mode set operand and its range kind (zero
-    /// for a literal singleton, one for a class/string/nested set).
+    /// for a literal singleton, one for a class/string/nested set), other
+    /// than a nested class, which [`Self::charset_expression`] parses as a
+    /// level.
     fn charset_operand(&mut self) -> PResult<(NodeId, i32)> {
         match self.character {
             C_EOF => Err(self.error("invalid range")),
-            c if c == b'[' as i64 => {
-                self.next()?;
-                let result = self.charset_expression()?;
-                if self.character != b']' as i64 {
-                    return Err(self.error("invalid range"));
-                }
-                self.next()?;
-                Ok((result, 1))
-            }
+            c if c == b'[' as i64 => unreachable!("charset_expression parses nested classes"),
             c if c == b'\\' as i64 => {
                 self.next()?;
                 if self.character == b'q' as i64 {
@@ -1347,7 +2039,13 @@ impl Compiler {
                             || c == b'p' as i64
                             || c == b'P' as i64
                     );
-                    Ok((self.charset_parse_escape(true)?, i32::from(class)))
+                    let result = self.charset_parse_escape(true)?;
+                    let result = if class {
+                        result
+                    } else {
+                        self.charset_canonicalize_single(result)
+                    };
+                    Ok((result, i32::from(class)))
                 }
             }
             c if is_v_maybe_doubled_punctuator(c) => {
@@ -1356,11 +2054,13 @@ impl Compiler {
                 if self.character == character {
                     return Err(self.error("invalid range"));
                 }
-                Ok((self.charset_single(character), 0))
+                let result = self.charset_single(character);
+                Ok((self.charset_canonicalize_single(result), 0))
             }
             c if is_v_reserved_punctuator(c) => Err(self.error("invalid range")),
             _ => {
                 let result = self.charset_single(self.character);
+                let result = self.charset_canonicalize_single(result);
                 self.next()?;
                 Ok((result, 0))
             }
@@ -1503,72 +2203,125 @@ impl Compiler {
             return Ok(None);
         }
         if value > 0x7FFF_FFFF {
-            value = 0x7FFF_FFFF;
+            return Err(CompileError::ResourceLimit);
         }
         Ok(Some(value as i32))
     }
 
-    // ---- the recursive-descent grammar (fxDisjunctionParse etc.) ----
+    // ---- the grammar (fxDisjunctionParse etc.) ----
 
+    /// `fxDisjunctionParse` for the whole pattern, with every group's
+    /// disjunction nested in it, as one loop over a stack of [`Level`]s
+    /// (STACK-DEPTH-REFACTOR.md §4.4 B7).
+    ///
+    /// C recurses through `fxDisjunctionParse`, `fxSequenceParse` and the
+    /// group parsers once per group, so nesting was native recursion depth
+    /// (512 groups needed 229 KB of native stack to compile). Here a `(`
+    /// opens a level, after the depth check ([`Self::nest`]) and the group's
+    /// prefix ([`Self::group_open`]), and its `)` closes it ([`Self::group_close`]),
+    /// whose result is the next atom of the enclosing level; every `next`,
+    /// node and name-scope update happens in the order the recursion made it.
+    ///
+    /// The named-capture scope of each alternative is independent. Before
+    /// parsing the left alternative, remember the tail of the live-name list;
+    /// at the `|`, detach the left alternative's names so the right
+    /// alternative does not see them (a name may recur across
+    /// mutually-exclusive alternatives), then reattach both — the outer scope
+    /// sees the left alternative's names, matching XS's pointer surgery
+    /// exactly (the right's are dropped from the walkable head).
+    ///
+    /// C also recurses once per `|`, so an alternation's length was native
+    /// recursion depth (a 10,000-alternative keyword list overflowed the host
+    /// stack in a debug build). The alternatives are parsed in a loop
+    /// instead, each `|` pushing the frame the C recursion would have kept
+    /// live; unwinding that stack innermost-first then performs exactly the
+    /// node construction and pointer surgery the returns performed, in the
+    /// same order, so the tree and the name tables are identical.
     fn disjunction_parse(&mut self, character: i64) -> PResult<NodeId> {
-        // `fxDisjunctionParse`: the named-capture scope of each alternative is
-        // independent. Before parsing the left alternative, remember the tail
-        // of the live-name list; at the `|`, detach the left alternative's
-        // names so the right alternative does not see them (a name may recur
-        // across mutually-exclusive alternatives), then reattach both — the
-        // outer scope sees the left alternative's names, matching XS's pointer
-        // surgery exactly (the right's are dropped from the walkable head).
-        let left_addr = self.participate_last;
-        let mut result = self.sequence_parse(character)?;
-        if self.character == b'|' as i64 {
-            let right_addr = self.participate_last;
-            let left_named = self.participate_read(left_addr);
-            self.participate_write(left_addr, -1);
-            self.next()?;
-            let left = result;
-            let right = self.disjunction_parse(character)?;
-            result = self.add_node(Kind::Disjunction { left, right });
-            let after_left = self.participate_read(left_addr);
-            self.participate_write(right_addr, after_left);
-            self.participate_write(left_addr, left_named);
+        let mut levels = vec![Level::new(None, character, self.participate_last)];
+        loop {
+            let terminator = levels.last().expect("a level").terminator;
+            // `fxSequenceParse`: the atoms up to the terminator, a `|` or
+            // the end of the pattern.
+            if self.character != C_EOF
+                && self.character != terminator
+                && self.character != b'|' as i64
+            {
+                let current_index = self.capture_index;
+                if self.character == b'(' as i64 {
+                    // A group is one nesting level, left when it closes.
+                    self.nest()?;
+                    let group = self.group_open(current_index)?;
+                    levels.push(Level::new(Some(group), b')' as i64, self.participate_last));
+                } else {
+                    let atom = self.term_parse(current_index)?;
+                    levels.last_mut().expect("a level").atoms.push(atom);
+                }
+                continue;
+            }
+            let level = levels.last_mut().expect("a level");
+            let sequence = self.sequence_node(std::mem::take(&mut level.atoms));
+            if self.character == b'|' as i64 {
+                let right_addr = self.participate_last;
+                let left_named = self.participate_read(level.left_addr);
+                self.participate_write(level.left_addr, -1);
+                self.next()?;
+                level
+                    .pending
+                    .push((level.left_addr, right_addr, left_named, sequence));
+                level.left_addr = self.participate_last;
+                continue;
+            }
+            let mut result = sequence;
+            while let Some((left_addr, right_addr, left_named, left)) = level.pending.pop() {
+                result = self.add_node(Kind::Disjunction {
+                    left,
+                    right: result,
+                });
+                let after_left = self.participate_read(left_addr);
+                self.participate_write(right_addr, after_left);
+                self.participate_write(left_addr, left_named);
+            }
+            if self.character != level.terminator {
+                return Err(self.error("invalid sequence"));
+            }
+            let Some(group) = levels.pop().expect("a level").group else {
+                return Ok(result);
+            };
+            let atom = self.group_close(group, result)?;
+            self.depth -= 1;
+            levels
+                .last_mut()
+                .expect("the enclosing level")
+                .atoms
+                .push(atom);
         }
-        if self.character != character {
-            return Err(self.error("invalid sequence"));
-        }
-        Ok(result)
     }
 
-    fn sequence_parse(&mut self, character: i64) -> PResult<NodeId> {
-        // Collect the ordered atoms, then fold into a right-nested
-        // sequence spine. C threads a mutable `formerBranch->right` into a
-        // right-nested `Seq(a0, Seq(a1, ... an))`; because a `Sequence`
-        // node emits no bytes of its own and simply chains `left` then
-        // `right`, the right-nested fold reproduces the identical measure
-        // offsets and emitted step chain (each atom's sequel is the next
-        // atom's step; the last atom's sequel is the outer sequel).
-        let mut atoms: Vec<NodeId> = Vec::new();
-        while self.character != C_EOF && self.character != character {
-            if self.character == b'|' as i64 {
-                break;
-            }
-            let current_index = self.capture_index;
-            atoms.push(self.term_parse(current_index)?);
-        }
-        if atoms.is_empty() {
-            return Ok(self.add_node(Kind::Empty));
-        }
-        let mut result = *atoms.last().unwrap();
+    /// The end of `fxSequenceParse`: fold an alternative's atoms into a
+    /// right-nested sequence spine. C threads a mutable `formerBranch->right`
+    /// into a right-nested `Seq(a0, Seq(a1, ... an))`; because a `Sequence`
+    /// node emits no bytes of its own and simply chains `left` then `right`,
+    /// the right-nested fold reproduces the identical measure offsets and
+    /// emitted step chain (each atom's sequel is the next atom's step; the
+    /// last atom's sequel is the outer sequel).
+    fn sequence_node(&mut self, atoms: Vec<NodeId>) -> NodeId {
+        let Some(&last) = atoms.last() else {
+            return self.add_node(Kind::Empty);
+        };
+        let mut result = last;
         for &atom in atoms.iter().rev().skip(1) {
             result = self.add_node(Kind::Sequence {
                 left: atom,
                 right: result,
             });
         }
-        Ok(result)
+        result
     }
 
     /// One atom (+ its optional quantifier) of a sequence — the big
-    /// dispatch in `fxSequenceParse`.
+    /// dispatch in `fxSequenceParse` — other than a group, which
+    /// [`Self::disjunction_parse`] parses as a nesting level.
     fn term_parse(&mut self, current_index: i32) -> PResult<NodeId> {
         let ch = self.character;
         if ch == b'^' as i64 {
@@ -1587,7 +2340,7 @@ impl Compiler {
         } else if ch == b'*' as i64 || ch == b'+' as i64 || ch == b'?' as i64 {
             Err(self.error("invalid character"))
         } else if ch == b'(' as i64 {
-            self.group_atom(current_index)
+            unreachable!("disjunction_parse parses groups")
         } else if ch == b')' as i64 {
             Err(self.error("invalid character"))
         } else if ch == b'[' as i64 {
@@ -1604,9 +2357,10 @@ impl Compiler {
             self.next()?;
             self.quantifier_parse(current, current_index)
         } else if ch == b'|' as i64 {
-            // Handled by disjunction_parse; sequence stops here. This is
-            // unreachable because the while-guard covers `character`, but
-            // the '|' case is an explicit break in C.
+            // Handled by disjunction_parse; a sequence stops here. This is
+            // unreachable because disjunction_parse ends the sequence at a
+            // `|` before calling here, but the '|' case is an explicit break
+            // in C.
             Err(self.error("invalid character"))
         } else if (ch == b']' as i64 || ch == b'}' as i64)
             && self.flags & (XS_REGEXP_U | XS_REGEXP_V) != 0
@@ -1675,7 +2429,8 @@ impl Compiler {
                 self.next()?;
             }
             let node = self.add_node(Kind::CaptureReference {
-                capture_index: value as i32,
+                capture_index: i32::try_from(value)
+                    .map_err(|_| self.error("invalid reference number"))?,
                 name_slot: -1,
             });
             self.quantifier_parse(node, current_index)
@@ -1692,184 +2447,265 @@ impl Compiler {
         }
     }
 
-    /// The `(`-prefixed atoms: capturing / non-capturing groups and
-    /// lookaround assertions.
-    fn group_atom(&mut self, mut current_index: i32) -> PResult<NodeId> {
+    /// The prefix of a `(`-prefixed atom (`fxGroupParse`, `fxAssertionParse`,
+    /// `fxCaptureParse`, `fxModifiersParse`) up to its disjunction: the `(`
+    /// and the group's syntax, a capture's index and name, and a modifier
+    /// group's scoped flags. [`Self::disjunction_parse`] then parses the
+    /// disjunction as a nesting level and [`Self::group_close`] finishes the
+    /// group with what this returns.
+    fn group_open(&mut self, mut current_index: i32) -> PResult<GroupEnd> {
         self.next()?;
-        if self.character == b'?' as i64 {
+        if self.character != b'?' as i64 {
+            self.capture_index += 1;
+            current_index += 1;
+            return Ok(GroupEnd::Capture {
+                current_index,
+                name_slot: -1,
+            });
+        }
+        self.next()?;
+        if self.character == b'=' as i64 || self.character == b'!' as i64 {
+            let not = self.character == b'!' as i64;
             self.next()?;
-            if self.character == b'=' as i64 {
+            Ok(GroupEnd::Assertion { not, direction: 1 })
+        } else if self.character == b':' as i64 {
+            self.next()?;
+            Ok(GroupEnd::NonCapturing { current_index })
+        } else if self.character == b'<' as i64 {
+            // Peek past '<': `=`/`!` are lookbehind assertions; anything
+            // else begins a group `<name>`, so latch XS_REGEXP_NAME
+            // BEFORE reading the first name char, matching XS's astral
+            // handling during a name.
+            let peek = self.read8(self.offset);
+            if peek != b'=' && peek != b'!' {
+                self.flags |= XS_REGEXP_NAME;
+            }
+            self.next()?;
+            if self.character == b'=' as i64 || self.character == b'!' as i64 {
+                let not = self.character == b'!' as i64;
                 self.next()?;
-                let term = self.disjunction_parse(b')' as i64)?;
+                return Ok(GroupEnd::Assertion { not, direction: -1 });
+            }
+            // `(?<name>…)` named capture. Validate the name
+            // (`fxCaptureNameParse`) and register it — a repeat is
+            // `mxDuplicateCapture` — then parse the body as a normal
+            // capturing group. It codegens exactly like a numbered
+            // group; the only difference is the name-slot operand on
+            // its completion, which the matcher records into `names[]`
+            // so `\k<name>` and the JS `.groups` object can resolve it.
+            self.saw_named_group = true;
+            self.capture_index += 1;
+            current_index += 1;
+            let name = self.capture_name_parse()?;
+            // `fxCaptureNamePut` then `fxCaptureNameParticipate`: a
+            // duplicate name shares its slot but is a SyntaxError only
+            // when already live in this scope (same alternative), not
+            // when it recurs across sibling disjunction alternatives.
+            let name_slot = self.put_capture_name(&name, current_index);
+            self.participate_capture_name(name_slot)?;
+            Ok(GroupEnd::Capture {
+                current_index,
+                name_slot,
+            })
+        } else {
+            // `Modifiers` (`fxModifiersParse`) is `ModifierFlags`
+            // optionally followed by `- ModifierFlags`, where each side is
+            // a non-repeating run of i/m/s and the two sets are disjoint.
+            // The scoped flags apply to the enclosed disjunction and are
+            // restored at the sequel step (the runtime `cxModifiersStep`
+            // sets the matcher's live `flags` register), so case-folding
+            // (compile-time, baked into charsets) and dot-all/multiline
+            // (runtime) both track the scoped flag word.
+            let mut add = 0u32;
+            let mut remove = 0u32;
+            let mut removing = false;
+            loop {
+                let bit = match self.character {
+                    c if c == b'i' as i64 => Some(XS_REGEXP_I),
+                    c if c == b'm' as i64 => Some(XS_REGEXP_M),
+                    c if c == b's' as i64 => Some(XS_REGEXP_S),
+                    _ => None,
+                };
+                if let Some(bit) = bit {
+                    if (if removing { remove } else { add }) & bit != 0 {
+                        return Err(self.error("invalid modifiers"));
+                    }
+                    if removing {
+                        remove |= bit;
+                    } else {
+                        add |= bit;
+                    }
+                    self.next()?;
+                    continue;
+                }
+                if self.character == b'-' as i64 && !removing {
+                    removing = true;
+                    self.next()?;
+                    continue;
+                }
+                break;
+            }
+            // `(?:...)`-terminated, at least one flag total (`(?-:a)` — both
+            // empty — is `mxInvalidModifiers`), and disjoint add/remove
+            // (checked after consuming both lists, as XS does). An
+            // empty *remove* after `-` is legal (`(?i-:a)`), matching XS.
+            if self.character != b':' as i64 || (add | remove) == 0 || (add & remove) != 0 {
+                return Err(self.error("invalid modifiers"));
+            }
+            self.next()?;
+            let outer_flags = self.flags;
+            let modified_flags = (outer_flags | add) & !remove;
+            // Parse the enclosed disjunction under the scoped flags so its
+            // charsets fold (or not) per the modified `i`, then restore.
+            self.flags = modified_flags;
+            Ok(GroupEnd::Modifiers {
+                outer_flags,
+                modified_flags,
+            })
+        }
+    }
+
+    /// The rest of a `(`-prefixed atom once its disjunction `term` is parsed
+    /// and the parser is at its `)`: the node, and a quantifier where the
+    /// group takes one.
+    fn group_close(&mut self, group: GroupEnd, term: NodeId) -> PResult<NodeId> {
+        match group {
+            GroupEnd::Assertion { not, direction } => {
                 self.next()?;
-                let ai = self.assertion_index;
+                let assertion_index = self.assertion_index;
                 self.assertion_index += 1;
                 Ok(self.add_node(Kind::Assertion {
                     term,
-                    not: false,
-                    direction: 1,
-                    assertion_index: ai,
+                    not,
+                    direction,
+                    assertion_index,
                 }))
-            } else if self.character == b'!' as i64 {
+            }
+            GroupEnd::NonCapturing { current_index } => {
                 self.next()?;
-                let term = self.disjunction_parse(b')' as i64)?;
+                self.quantifier_parse(term, current_index)
+            }
+            GroupEnd::Capture {
+                current_index,
+                name_slot,
+            } => {
                 self.next()?;
-                let ai = self.assertion_index;
-                self.assertion_index += 1;
-                Ok(self.add_node(Kind::Assertion {
+                let capture = self.add_node(Kind::Capture {
                     term,
-                    not: true,
-                    direction: 1,
-                    assertion_index: ai,
-                }))
-            } else if self.character == b':' as i64 {
-                self.next()?;
-                let current = self.disjunction_parse(b')' as i64)?;
-                self.next()?;
-                self.quantifier_parse(current, current_index)
-            } else if self.character == b'<' as i64 {
-                // Peek past '<': `=`/`!` are lookbehind assertions; anything
-                // else begins a group `<name>`, so latch XS_REGEXP_NAME
-                // BEFORE reading the first name char, matching XS's astral
-                // handling during a name.
-                let peek = self.read8(self.offset);
-                if peek != b'=' && peek != b'!' {
-                    self.flags |= XS_REGEXP_NAME;
-                }
-                self.next()?;
-                if self.character == b'=' as i64 {
-                    self.next()?;
-                    let term = self.disjunction_parse(b')' as i64)?;
-                    self.next()?;
-                    let ai = self.assertion_index;
-                    self.assertion_index += 1;
-                    Ok(self.add_node(Kind::Assertion {
-                        term,
-                        not: false,
-                        direction: -1,
-                        assertion_index: ai,
-                    }))
-                } else if self.character == b'!' as i64 {
-                    self.next()?;
-                    let term = self.disjunction_parse(b')' as i64)?;
-                    self.next()?;
-                    let ai = self.assertion_index;
-                    self.assertion_index += 1;
-                    Ok(self.add_node(Kind::Assertion {
-                        term,
-                        not: true,
-                        direction: -1,
-                        assertion_index: ai,
-                    }))
-                } else {
-                    // `(?<name>…)` named capture. Validate the name
-                    // (`fxCaptureNameParse`) and register it — a repeat is
-                    // `mxDuplicateCapture` — then parse the body as a normal
-                    // capturing group. It codegens exactly like a numbered
-                    // group; the only difference is the name-slot operand on
-                    // its completion, which the matcher records into `names[]`
-                    // so `\k<name>` and the JS `.groups` object can resolve it.
-                    self.saw_named_group = true;
-                    self.capture_index += 1;
-                    current_index += 1;
-                    let name = self.capture_name_parse()?;
-                    // `fxCaptureNamePut` then `fxCaptureNameParticipate`: a
-                    // duplicate name shares its slot but is a SyntaxError only
-                    // when already live in this scope (same alternative), not
-                    // when it recurs across sibling disjunction alternatives.
-                    let slot = self.put_capture_name(&name, current_index);
-                    self.participate_capture_name(slot)?;
-                    let term = self.disjunction_parse(b')' as i64)?;
-                    self.next()?;
-                    let capture = self.add_node(Kind::Capture {
-                        term,
-                        capture_index: current_index,
-                        name_slot: slot,
-                    });
-                    self.quantifier_parse(capture, current_index - 1)
-                }
-            } else {
-                // `Modifiers` (`fxModifiersParse`) is `ModifierFlags`
-                // optionally followed by `- ModifierFlags`, where each side is
-                // a non-repeating run of i/m/s and the two sets are disjoint.
-                // The scoped flags apply to the enclosed disjunction and are
-                // restored at the sequel step (the runtime `cxModifiersStep`
-                // sets the matcher's live `flags` register), so case-folding
-                // (compile-time, baked into charsets) and dot-all/multiline
-                // (runtime) both track the scoped flag word.
-                let mut add = 0u32;
-                let mut remove = 0u32;
-                let mut removing = false;
-                loop {
-                    let bit = match self.character {
-                        c if c == b'i' as i64 => Some(XS_REGEXP_I),
-                        c if c == b'm' as i64 => Some(XS_REGEXP_M),
-                        c if c == b's' as i64 => Some(XS_REGEXP_S),
-                        _ => None,
-                    };
-                    if let Some(bit) = bit {
-                        if add & bit != 0 || remove & bit != 0 {
-                            return Err(self.error("duplicate inline modifier"));
-                        }
-                        if removing {
-                            remove |= bit;
-                        } else {
-                            add |= bit;
-                        }
-                        self.next()?;
-                        continue;
-                    }
-                    if self.character == b'-' as i64 && !removing {
-                        removing = true;
-                        self.next()?;
-                        continue;
-                    }
-                    break;
-                }
-                // `(?:...)`-terminated, at least one flag total (`(?-:a)` — both
-                // empty — is `mxInvalidModifiers`), and disjoint add/remove
-                // (the per-flag duplicate check above already enforces that). An
-                // empty *remove* after `-` is legal (`(?i-:a)`), matching XS.
-                if self.character != b':' as i64 || (add | remove) == 0 {
-                    return Err(self.error("invalid inline modifiers"));
-                }
-                self.next()?;
-                let outer_flags = self.flags;
-                let modified_flags = (outer_flags | add) & !remove;
-                // Parse the enclosed disjunction under the scoped flags so its
-                // charsets fold (or not) per the modified `i`, then restore.
-                self.flags = modified_flags;
-                let disjunction = self.disjunction_parse(b')' as i64)?;
+                    capture_index: current_index,
+                    name_slot,
+                });
+                self.quantifier_parse(capture, current_index - 1)
+            }
+            GroupEnd::Modifiers {
+                outer_flags,
+                modified_flags,
+            } => {
                 self.flags = outer_flags;
                 self.next()?;
                 // A modifier group is not itself quantifiable in XS
                 // (`fxModifiersParse` returns without `fxQuantifierParse`); a
                 // following quantifier is a "nothing to repeat" error.
                 Ok(self.add_node(Kind::Modifiers {
-                    disjunction,
+                    disjunction: term,
                     modified_flags: modified_flags as i32,
                     outer_flags: outer_flags as i32,
                 }))
             }
-        } else {
-            self.capture_index += 1;
-            current_index += 1;
-            let term = self.disjunction_parse(b')' as i64)?;
-            self.next()?;
-            let capture = self.add_node(Kind::Capture {
-                term,
-                capture_index: current_index,
-                name_slot: -1,
-            });
-            self.quantifier_parse(capture, current_index - 1)
         }
     }
 
     // ---- the measure pass (fx*Measure) ----
 
-    fn measure(&mut self, id: NodeId, direction: i32) {
-        // Split-borrow: read the kind's child ids first, mutate offsets
-        // after. We recurse by id, so the arena stays coherent.
+    /// `fx*Measure` over the tree from `root`: each node's step offset, and a
+    /// group's completion and a quantifier's loop offsets, in C's order.
+    ///
+    /// C recurses into a group's term and into each atom of a sequence and
+    /// each alternative of a disjunction, so group nesting was native
+    /// recursion depth. The walk is a loop over a stack of [`MeasureWork`]
+    /// (STACK-DEPTH-REFACTOR.md §4.4 B7): [`Self::measure_node`] measures a
+    /// node when its entry is popped, a group's completion waits below its
+    /// term, and the `|` and sequence spines push their next levels where C
+    /// tail-recurses on `right` (recursing per atom made a flat 1,067-atom
+    /// literal overflow a 2 MiB debug stack). Every `size` increment and work
+    /// charge happens in the C order, so the offsets are byte-identical.
+    fn measure(&mut self, root: NodeId, direction: i32) {
+        let mut work = vec![MeasureWork::Node(root, direction)];
+        while let Some(next) = work.pop() {
+            match next {
+                MeasureWork::Node(id, direction) => self.measure_node(id, direction, &mut work),
+                MeasureWork::Disjunction(id, direction) => {
+                    // C: step, size += 12, measure(left), measure(right). The
+                    // pattern's `|` chain is right-nested, but a `v`-mode
+                    // class's string alternatives (`[\q{ab|cd|…}]`,
+                    // `charset_strings_disjunction`) are left-nested, one
+                    // level per alternative, so both sides are spine entries:
+                    // a node's step is assigned before its left side is
+                    // measured, and its right side is measured when the left
+                    // side has finished, which is the C order.
+                    self.work.charge(1);
+                    if let Shape::Disjunction(left, right) = self.child_shape(id) {
+                        self.nodes[id].step = self.size as i32;
+                        self.size += 12; // mxDisjunctionStepSize
+                        work.push(MeasureWork::Disjunction(right, direction));
+                        work.push(MeasureWork::Disjunction(left, direction));
+                    } else {
+                        work.push(MeasureWork::Node(id, direction));
+                    }
+                }
+                MeasureWork::Sequence(id) => {
+                    // Forward: each level measures its left atom, takes that
+                    // atom's step as its own, then continues into `right`.
+                    self.work.charge(1);
+                    if let Shape::Sequence(left, _) = self.child_shape(id) {
+                        work.push(MeasureWork::SequenceLeftMeasured(id));
+                        work.push(MeasureWork::Node(left, 1));
+                    } else {
+                        work.push(MeasureWork::Node(id, 1));
+                    }
+                }
+                MeasureWork::SequenceLeftMeasured(id) => {
+                    let Shape::Sequence(left, right) = self.child_shape(id) else {
+                        unreachable!("a sequence level")
+                    };
+                    let s = self.nodes[left].step;
+                    self.nodes[id].step = s;
+                    work.push(MeasureWork::Sequence(right));
+                }
+                MeasureWork::BackwardSequenceLevel(id, direction) => {
+                    // A backward level whose right side is measured: it takes
+                    // that side's step, then measures its left atom.
+                    let Shape::Sequence(left, right) = self.child_shape(id) else {
+                        unreachable!("a sequence level")
+                    };
+                    let s = self.nodes[right].step;
+                    self.nodes[id].step = s;
+                    work.push(MeasureWork::Node(left, direction));
+                }
+                MeasureWork::Completion(id) => {
+                    self.nodes[id].completion = self.size as i32;
+                    self.size += match self.child_shape(id) {
+                        Shape::Capture(_) => 16, // mxCaptureCompletionSize
+                        Shape::Assertion { not, .. } => {
+                            if not {
+                                8
+                            } else {
+                                12
+                            }
+                        }
+                        Shape::Quantifier(_) => 24, // mxQuantifierCompletionSize
+                        Shape::Modifiers(_) => 12,  // mxModifiersStepSize
+                        _ => unreachable!("only a group has a completion"),
+                    };
+                }
+            }
+        }
+    }
+
+    /// One node of [`Self::measure`]: its own offsets, with the measuring of
+    /// its children and what follows them pushed on `work`.
+    fn measure_node(&mut self, id: NodeId, direction: i32, work: &mut Vec<MeasureWork>) {
+        self.work.charge(1);
         match self.child_shape(id) {
             Shape::Term => {
                 self.nodes[id].step = self.size as i32;
@@ -1879,31 +2715,28 @@ impl Compiler {
                 self.nodes[id].step = self.size as i32;
                 self.size += 8 + ((1 + count) as i64) * 4;
             }
-            Shape::Disjunction(left, right) => {
-                self.nodes[id].step = self.size as i32;
-                self.size += 12; // mxDisjunctionStepSize
-                self.measure(left, direction);
-                self.measure(right, direction);
-            }
-            Shape::Sequence(left, right) => {
-                if direction == 1 {
-                    self.measure(left, direction);
-                    let s = self.nodes[left].step;
-                    self.nodes[id].step = s;
-                    self.measure(right, direction);
-                } else {
-                    self.measure(right, direction);
-                    let s = self.nodes[right].step;
-                    self.nodes[id].step = s;
-                    self.measure(left, direction);
+            Shape::Disjunction(..) => work.push(MeasureWork::Disjunction(id, direction)),
+            Shape::Sequence(..) if direction == 1 => work.push(MeasureWork::Sequence(id)),
+            Shape::Sequence(..) => {
+                // Backward (inside a lookbehind): the rightmost atom is
+                // measured first, then each level, innermost outward, takes
+                // its right side's step and measures its left atom.
+                let mut id = id;
+                loop {
+                    self.work.charge(1);
+                    let Shape::Sequence(_, right) = self.child_shape(id) else {
+                        break;
+                    };
+                    work.push(MeasureWork::BackwardSequenceLevel(id, direction));
+                    id = right;
                 }
+                work.push(MeasureWork::Node(id, direction));
             }
             Shape::Capture(term) => {
                 self.nodes[id].step = self.size as i32;
                 self.size += 12; // mxCaptureStepSize
-                self.measure(term, direction);
-                self.nodes[id].completion = self.size as i32;
-                self.size += 16; // mxCaptureCompletionSize
+                work.push(MeasureWork::Completion(id));
+                work.push(MeasureWork::Node(term, direction));
             }
             Shape::CaptureReference => {
                 self.nodes[id].step = self.size as i32;
@@ -1916,34 +2749,114 @@ impl Compiler {
             } => {
                 self.nodes[id].step = self.size as i32;
                 self.size += if not { 16 } else { 12 };
-                self.measure(term, dir);
-                self.nodes[id].completion = self.size as i32;
-                self.size += if not { 8 } else { 12 };
+                work.push(MeasureWork::Completion(id));
+                work.push(MeasureWork::Node(term, dir));
             }
             Shape::Quantifier(term) => {
                 self.nodes[id].step = self.size as i32;
                 self.size += 20; // mxQuantifierStepSize
                 self.nodes[id].loop_off = self.size as i32;
                 self.size += 24; // mxQuantifierLoopSize
-                self.measure(term, direction);
-                self.nodes[id].completion = self.size as i32;
-                self.size += 24; // mxQuantifierCompletionSize
+                work.push(MeasureWork::Completion(id));
+                work.push(MeasureWork::Node(term, direction));
             }
             Shape::Modifiers(disj) => {
                 // fxModifiersMeasure: an entry step block, the disjunction, then
                 // a sequel step block — each `mxModifiersStepSize` (12 bytes).
                 self.nodes[id].step = self.size as i32;
                 self.size += 12; // mxModifiersStepSize
-                self.measure(disj, direction);
-                self.nodes[id].completion = self.size as i32;
-                self.size += 12; // mxModifiersStepSize
+                work.push(MeasureWork::Completion(id));
+                work.push(MeasureWork::Node(disj, direction));
             }
         }
     }
 
     // ---- the code pass (fx*Code) ----
 
-    fn emit(&mut self, id: NodeId, direction: i32, sequel: i32) {
+    /// `fx*Code` over the tree from `root`, whose sequel is `sequel`, as a
+    /// loop over a stack of [`EmitWork`] like [`Self::measure`]'s: a group's
+    /// completion waits below its term, the `|` and sequence spines push
+    /// their next levels, and every step is emitted, and every work charge
+    /// made, in the C order.
+    fn emit(&mut self, root: NodeId, direction: i8, sequel: i32) {
+        let mut work = vec![EmitWork::Node {
+            id: root,
+            direction,
+            sequel,
+        }];
+        while let Some(next) = work.pop() {
+            match next {
+                EmitWork::Node {
+                    id,
+                    direction,
+                    sequel,
+                } => self.emit_node(id, direction, sequel, &mut work),
+                EmitWork::Disjunction {
+                    id,
+                    direction,
+                    sequel,
+                } => {
+                    // As in `measure`: the right-nested `|` chain and the
+                    // left-nested `v`-mode string alternatives alike, in the
+                    // C order (a node's step, its left side, then its right
+                    // side; the sequel is the same for every alternative).
+                    self.work.charge(1);
+                    if let Shape::Disjunction(left, right) = self.child_shape(id) {
+                        let at = (self.nodes[id].step / 4) as usize;
+                        self.write_word(at, CX_DISJUNCTION_STEP);
+                        self.write_word(at + 1, self.nodes[left].step);
+                        self.write_word(at + 2, self.nodes[right].step);
+                        work.push(EmitWork::Disjunction {
+                            id: right,
+                            direction,
+                            sequel,
+                        });
+                        work.push(EmitWork::Disjunction {
+                            id: left,
+                            direction,
+                            sequel,
+                        });
+                    } else {
+                        work.push(EmitWork::Node {
+                            id,
+                            direction,
+                            sequel,
+                        });
+                    }
+                }
+                EmitWork::Sequence { id, sequel } => {
+                    // Forward: each atom's sequel is the next atom's step; the
+                    // last atom's sequel is the outer sequel.
+                    self.work.charge(1);
+                    if let Shape::Sequence(left, right) = self.child_shape(id) {
+                        let right_step = self.nodes[right].step;
+                        work.push(EmitWork::Sequence { id: right, sequel });
+                        work.push(EmitWork::Node {
+                            id: left,
+                            direction: 1,
+                            sequel: right_step,
+                        });
+                    } else {
+                        work.push(EmitWork::Node {
+                            id,
+                            direction: 1,
+                            sequel,
+                        });
+                    }
+                }
+                EmitWork::Completion {
+                    id,
+                    direction,
+                    sequel,
+                } => self.emit_completion(id, direction, sequel),
+            }
+        }
+    }
+
+    /// One node of [`Self::emit`]: its step, with the emitting of its
+    /// children and of a group's completion pushed on `work`.
+    fn emit_node(&mut self, id: NodeId, direction: i8, sequel: i32, work: &mut Vec<EmitWork>) {
+        self.work.charge(1);
         match self.child_shape(id) {
             Shape::Term => {
                 let opcode = match &self.nodes[id].kind {
@@ -1955,80 +2868,96 @@ impl Compiler {
                     _ => unreachable!(),
                 };
                 let at = (self.nodes[id].step / 4) as usize;
-                self.code[at] = opcode;
-                self.code[at + 1] = sequel;
+                self.write_word(at, opcode);
+                self.write_word(at + 1, sequel);
             }
             Shape::CharSet(count) => {
-                let chars: Vec<i32> = match &self.nodes[id].kind {
-                    Kind::CharSet { chars, .. } => chars.clone(),
+                let chars = match &self.nodes[id].kind {
+                    Kind::CharSet { chars, .. } => chars,
                     _ => unreachable!(),
                 };
-                let at = (self.nodes[id].step / 4) as usize;
-                self.code[at] = if direction == 1 {
-                    CX_CHARSET_FORWARD_STEP
-                } else {
-                    CX_CHARSET_BACKWARD_STEP
-                };
-                self.code[at + 1] = sequel;
-                self.code[at + 2] = count;
-                for i in 0..count as usize {
-                    self.code[at + 3 + i] = chars[1 + i];
+                self.work.charge(chars.len() as u64);
+                if MATERIALIZE {
+                    let chars = chars.clone();
+                    let at = (self.nodes[id].step / 4) as usize;
+                    self.write_word(
+                        at,
+                        if direction == 1 {
+                            CX_CHARSET_FORWARD_STEP
+                        } else {
+                            CX_CHARSET_BACKWARD_STEP
+                        },
+                    );
+                    self.write_word(at + 1, sequel);
+                    self.write_word(at + 2, count);
+                    for i in 0..count as usize {
+                        self.write_word(at + 3 + i, chars[1 + i]);
+                    }
                 }
             }
-            Shape::Disjunction(left, right) => {
-                let at = (self.nodes[id].step / 4) as usize;
-                self.code[at] = CX_DISJUNCTION_STEP;
-                self.code[at + 1] = self.nodes[left].step;
-                self.code[at + 2] = self.nodes[right].step;
-                self.emit(left, direction, sequel);
-                self.emit(right, direction, sequel);
-            }
-            Shape::Sequence(left, right) => {
-                if direction == 1 {
-                    let right_step = self.nodes[right].step;
-                    self.emit(left, direction, right_step);
-                    self.emit(right, direction, sequel);
-                } else {
-                    let left_step = self.nodes[left].step;
-                    self.emit(right, direction, left_step);
-                    self.emit(left, direction, sequel);
+            Shape::Disjunction(..) => work.push(EmitWork::Disjunction {
+                id,
+                direction,
+                sequel,
+            }),
+            Shape::Sequence(..) if direction == 1 => work.push(EmitWork::Sequence { id, sequel }),
+            Shape::Sequence(..) => {
+                // Backward: the rightmost atom is emitted first with the
+                // innermost left atom's step as its sequel, then each left
+                // atom, innermost outward, sequels to the one before it;
+                // the first atom sequels to the outer sequel.
+                let mut id = id;
+                let mut next_sequel = sequel;
+                loop {
+                    self.work.charge(1);
+                    let Shape::Sequence(left, right) = self.child_shape(id) else {
+                        break;
+                    };
+                    work.push(EmitWork::Node {
+                        id: left,
+                        direction,
+                        sequel: next_sequel,
+                    });
+                    next_sequel = self.nodes[left].step;
+                    id = right;
                 }
+                work.push(EmitWork::Node {
+                    id,
+                    direction,
+                    sequel: next_sequel,
+                });
             }
             Shape::Capture(term) => {
-                let (step, completion, capture_index, name_slot) = {
+                let (step, completion, capture_index) = {
                     let n = &self.nodes[id];
-                    let (ci, ns) = match &n.kind {
-                        Kind::Capture {
-                            capture_index,
-                            name_slot,
-                            ..
-                        } => (*capture_index, *name_slot),
+                    let ci = match &n.kind {
+                        Kind::Capture { capture_index, .. } => *capture_index,
                         _ => unreachable!(),
                     };
-                    (n.step, n.completion, ci, ns)
+                    (n.step, n.completion, ci)
                 };
                 let term_step = self.nodes[term].step;
                 let at = (step / 4) as usize;
-                self.code[at] = if direction == 1 {
-                    CX_CAPTURE_FORWARD_STEP
-                } else {
-                    CX_CAPTURE_BACKWARD_STEP
-                };
-                self.code[at + 1] = term_step;
-                self.code[at + 2] = capture_index;
-                self.emit(term, direction, completion);
-                let ct = (completion / 4) as usize;
-                self.code[ct] = if direction == 1 {
-                    CX_CAPTURE_FORWARD_COMPLETION
-                } else {
-                    CX_CAPTURE_BACKWARD_COMPLETION
-                };
-                self.code[ct + 1] = sequel;
-                self.code[ct + 2] = capture_index;
-                // The name-id operand: the group's name slot for a named
-                // capture (so the matcher records `names[slot] = index` on
-                // completion), or -1 for a plain numbered group.
-                self.code[ct + 3] = name_slot;
+                self.write_word(
+                    at,
+                    if direction == 1 {
+                        CX_CAPTURE_FORWARD_STEP
+                    } else {
+                        CX_CAPTURE_BACKWARD_STEP
+                    },
+                );
+                self.write_word(at + 1, term_step);
+                self.write_word(at + 2, capture_index);
+                work.push(EmitWork::Completion {
+                    id,
+                    direction,
+                    sequel,
+                });
+                work.push(EmitWork::Node {
+                    id: term,
+                    direction,
+                    sequel: completion,
+                });
             }
             Shape::CaptureReference => {
                 let (capture_index, name_slot) = match &self.nodes[id].kind {
@@ -2039,17 +2968,20 @@ impl Compiler {
                     _ => unreachable!(),
                 };
                 let at = (self.nodes[id].step / 4) as usize;
-                self.code[at] = if direction == 1 {
-                    CX_CAPTURE_REFERENCE_FORWARD_STEP
-                } else {
-                    CX_CAPTURE_REFERENCE_BACKWARD_STEP
-                };
-                self.code[at + 1] = sequel;
+                self.write_word(
+                    at,
+                    if direction == 1 {
+                        CX_CAPTURE_REFERENCE_FORWARD_STEP
+                    } else {
+                        CX_CAPTURE_REFERENCE_BACKWARD_STEP
+                    },
+                );
+                self.write_word(at + 1, sequel);
                 // A numbered `\N` reference carries its resolved index and a
                 // name-id of -1; a `\k<name>` reference carries index -1 and
                 // its name slot, resolved at match time through `names[]`.
-                self.code[at + 2] = capture_index;
-                self.code[at + 3] = name_slot;
+                self.write_word(at + 2, capture_index);
+                self.write_word(at + 3, name_slot);
             }
             Shape::Assertion {
                 term,
@@ -2069,25 +3001,26 @@ impl Compiler {
                 let term_step = self.nodes[term].step;
                 let at = (step / 4) as usize;
                 if not {
-                    self.code[at] = CX_ASSERTION_NOT_STEP;
-                    self.code[at + 1] = term_step;
-                    self.code[at + 2] = ai;
-                    self.code[at + 3] = sequel;
+                    self.write_word(at, CX_ASSERTION_NOT_STEP);
+                    self.write_word(at + 1, term_step);
+                    self.write_word(at + 2, ai);
+                    self.write_word(at + 3, sequel);
                 } else {
-                    self.code[at] = CX_ASSERTION_STEP;
-                    self.code[at + 1] = term_step;
-                    self.code[at + 2] = ai;
+                    self.write_word(at, CX_ASSERTION_STEP);
+                    self.write_word(at + 1, term_step);
+                    self.write_word(at + 2, ai);
                 }
-                self.emit(term, dir, completion);
-                let ct = (completion / 4) as usize;
-                if not {
-                    self.code[ct] = CX_ASSERTION_NOT_COMPLETION;
-                    self.code[ct + 1] = ai;
-                } else {
-                    self.code[ct] = CX_ASSERTION_COMPLETION;
-                    self.code[ct + 1] = sequel;
-                    self.code[ct + 2] = ai;
-                }
+                work.push(EmitWork::Completion {
+                    id,
+                    direction,
+                    sequel,
+                });
+                work.push(EmitWork::Node {
+                    id: term,
+                    // An assertion's direction is 1 or -1.
+                    direction: dir as i8,
+                    sequel: completion,
+                });
             }
             Shape::Quantifier(term) => {
                 let (
@@ -2127,63 +3060,130 @@ impl Compiler {
                 };
                 let term_step = self.nodes[term].step;
                 let at = (step / 4) as usize;
-                self.code[at] = CX_QUANTIFIER_STEP;
-                self.code[at + 1] = loop_off;
-                self.code[at + 2] = quantifier_index;
-                self.code[at + 3] = min;
-                self.code[at + 4] = max;
+                self.write_word(at, CX_QUANTIFIER_STEP);
+                self.write_word(at + 1, loop_off);
+                self.write_word(at + 2, quantifier_index);
+                self.write_word(at + 3, min);
+                self.write_word(at + 4, max);
                 let lp = (loop_off / 4) as usize;
-                self.code[lp] = if greedy {
-                    CX_QUANTIFIER_GREEDY_LOOP
-                } else {
-                    CX_QUANTIFIER_LAZY_LOOP
-                };
-                self.code[lp + 1] = term_step;
-                self.code[lp + 2] = quantifier_index;
-                self.code[lp + 3] = sequel;
-                self.code[lp + 4] = capture_index + 1;
-                self.code[lp + 5] = capture_index + capture_count;
-                self.emit(term, direction, completion);
-                let ct = (completion / 4) as usize;
-                self.code[ct] = CX_QUANTIFIER_COMPLETION;
-                self.code[ct + 1] = loop_off;
-                self.code[ct + 2] = quantifier_index;
-                self.code[ct + 3] = sequel;
-                self.code[ct + 4] = capture_index + 1;
-                self.code[ct + 5] = capture_index + capture_count;
+                self.write_word(
+                    lp,
+                    if greedy {
+                        CX_QUANTIFIER_GREEDY_LOOP
+                    } else {
+                        CX_QUANTIFIER_LAZY_LOOP
+                    },
+                );
+                self.write_word(lp + 1, term_step);
+                self.write_word(lp + 2, quantifier_index);
+                self.write_word(lp + 3, sequel);
+                self.write_word(lp + 4, capture_index + 1);
+                self.write_word(lp + 5, capture_index + capture_count);
+                work.push(EmitWork::Completion {
+                    id,
+                    direction,
+                    sequel,
+                });
+                work.push(EmitWork::Node {
+                    id: term,
+                    direction,
+                    sequel: completion,
+                });
             }
             Shape::Modifiers(disj) => {
-                let (step, completion, modified_flags, outer_flags) = {
+                let (step, completion, modified_flags) = {
                     let n = &self.nodes[id];
-                    let (mf, of) = match &n.kind {
-                        Kind::Modifiers {
-                            modified_flags,
-                            outer_flags,
-                            ..
-                        } => (*modified_flags, *outer_flags),
+                    let mf = match &n.kind {
+                        Kind::Modifiers { modified_flags, .. } => *modified_flags,
                         _ => unreachable!(),
                     };
-                    (n.step, n.completion, mf, of)
+                    (n.step, n.completion, mf)
                 };
                 let disj_step = self.nodes[disj].step;
                 // Entry: switch the live flags to the scoped word, then flow
                 // into the disjunction (fxModifiersCode).
                 let at = (step / 4) as usize;
-                self.code[at] = CX_MODIFIERS_STEP;
-                self.code[at + 1] = disj_step;
-                self.code[at + 2] = modified_flags;
-                self.emit(disj, direction, completion);
-                // Sequel: restore the outer flags, then flow to the real sequel.
-                let ct = (completion / 4) as usize;
-                self.code[ct] = CX_MODIFIERS_STEP;
-                self.code[ct + 1] = sequel;
-                self.code[ct + 2] = outer_flags;
+                self.write_word(at, CX_MODIFIERS_STEP);
+                self.write_word(at + 1, disj_step);
+                self.write_word(at + 2, modified_flags);
+                work.push(EmitWork::Completion {
+                    id,
+                    direction,
+                    sequel,
+                });
+                work.push(EmitWork::Node {
+                    id: disj,
+                    direction,
+                    sequel: completion,
+                });
             }
         }
     }
 
+    /// The completion of a group whose term [`Self::emit`] has emitted.
+    fn emit_completion(&mut self, id: NodeId, direction: i8, sequel: i32) {
+        let ct = (self.nodes[id].completion / 4) as usize;
+        match self.nodes[id].kind {
+            Kind::Capture {
+                capture_index,
+                name_slot,
+                ..
+            } => {
+                self.write_word(
+                    ct,
+                    if direction == 1 {
+                        CX_CAPTURE_FORWARD_COMPLETION
+                    } else {
+                        CX_CAPTURE_BACKWARD_COMPLETION
+                    },
+                );
+                self.write_word(ct + 1, sequel);
+                self.write_word(ct + 2, capture_index);
+                // The name-id operand: the group's name slot for a named
+                // capture (so the matcher records `names[slot] = index` on
+                // completion), or -1 for a plain numbered group.
+                self.write_word(ct + 3, name_slot);
+            }
+            Kind::Assertion {
+                not,
+                assertion_index: ai,
+                ..
+            } => {
+                if not {
+                    self.write_word(ct, CX_ASSERTION_NOT_COMPLETION);
+                    self.write_word(ct + 1, ai);
+                } else {
+                    self.write_word(ct, CX_ASSERTION_COMPLETION);
+                    self.write_word(ct + 1, sequel);
+                    self.write_word(ct + 2, ai);
+                }
+            }
+            Kind::Quantifier {
+                capture_index,
+                capture_count,
+                quantifier_index,
+                ..
+            } => {
+                let loop_off = self.nodes[id].loop_off;
+                self.write_word(ct, CX_QUANTIFIER_COMPLETION);
+                self.write_word(ct + 1, loop_off);
+                self.write_word(ct + 2, quantifier_index);
+                self.write_word(ct + 3, sequel);
+                self.write_word(ct + 4, capture_index + 1);
+                self.write_word(ct + 5, capture_index + capture_count);
+            }
+            Kind::Modifiers { outer_flags, .. } => {
+                // Sequel: restore the outer flags, then flow to the real sequel.
+                self.write_word(ct, CX_MODIFIERS_STEP);
+                self.write_word(ct + 1, sequel);
+                self.write_word(ct + 2, outer_flags);
+            }
+            _ => unreachable!("only a group has a completion"),
+        }
+    }
+
     /// Classify a node into its measure/code shape, reading child ids and
-    /// charset count without holding a borrow across the recursive calls.
+    /// charset count without holding a borrow while the walk updates nodes.
     fn child_shape(&self, id: NodeId) -> Shape {
         match &self.nodes[id].kind {
             Kind::CharSet { chars, .. } => Shape::CharSet(chars[0]),
@@ -2210,6 +3210,50 @@ impl Compiler {
             Kind::Modifiers { disjunction, .. } => Shape::Modifiers(*disjunction),
         }
     }
+}
+
+/// What [`Compiler::measure`]'s stack holds.
+enum MeasureWork {
+    /// Measure the node, in the direction (`fx*Measure`).
+    Node(NodeId, i32),
+    /// The next node of a `|` spine.
+    Disjunction(NodeId, i32),
+    /// The next level of a forward sequence spine.
+    Sequence(NodeId),
+    /// A forward sequence level whose left atom is measured.
+    SequenceLeftMeasured(NodeId),
+    /// A backward sequence level whose right side is measured.
+    BackwardSequenceLevel(NodeId, i32),
+    /// A group whose term is measured: its completion.
+    Completion(NodeId),
+}
+
+/// What [`Compiler::emit`]'s stack holds.
+///
+/// `direction` is 1 or -1, kept to a byte so that an entry is 16 bytes: a
+/// lookbehind's sequence spine and a class's string alternatives push one
+/// entry per level.
+enum EmitWork {
+    /// Emit the node, in the direction, before its sequel (`fx*Code`).
+    Node {
+        id: NodeId,
+        direction: i8,
+        sequel: i32,
+    },
+    /// The next node of a `|` spine.
+    Disjunction {
+        id: NodeId,
+        direction: i8,
+        sequel: i32,
+    },
+    /// The next level of a forward sequence spine.
+    Sequence { id: NodeId, sequel: i32 },
+    /// A group whose term is emitted: its completion.
+    Completion {
+        id: NodeId,
+        direction: i8,
+        sequel: i32,
+    },
 }
 
 enum Shape {
@@ -2301,3 +3345,182 @@ fn is_v_reserved_punctuator(c: i64) -> bool {
             '(' | ')' | '[' | ']' | '{' | '}' | '/' | '-' | '\\' | '|'
         )
 }
+
+fn charset_contains(chars: &[i32], character: i32) -> bool {
+    let mut low = 0usize;
+    let mut high = chars[0] as usize / 2;
+    while low < high {
+        let middle = (low + high) / 2;
+        let begin = chars[1 + middle * 2];
+        let end = chars[2 + middle * 2];
+        if character < begin {
+            high = middle;
+        } else if character >= end {
+            low = middle + 1;
+        } else {
+            return true;
+        }
+    }
+    false
+}
+
+/// The recursion bounds: nesting is refused past [`MAX_NESTING_DEPTH`] with
+/// a structured error, and pattern *length* — a sequence or alternation of
+/// any size — never becomes native recursion depth.
+#[cfg(test)]
+mod recursion_bounds {
+    use super::*;
+    use crate::matcher::match_regexp;
+
+    /// Parse, measure and emit keep their own stacks, so nesting is not
+    /// native recursion depth: at-limit patterns compile and match on a
+    /// thread far smaller than the engine's contract
+    /// (`ironhorse_vm::NATIVE_STACK_BYTES`), unoptimized. The recursion
+    /// needed about 7 KiB per nesting level here, a few MiB at the limit.
+    fn on_small_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(SMALL_STACK)
+            .spawn(f)
+            .expect("spawn")
+            .join()
+            .expect("the compiler must return, never overflow")
+    }
+
+    const SMALL_STACK: usize = 256 * 1024;
+
+    fn nested(open: &str, close: &str, depth: usize) -> String {
+        format!("{}a{}", open.repeat(depth), close.repeat(depth))
+    }
+
+    #[test]
+    fn group_nesting_at_the_limit_compiles_and_one_deeper_is_a_syntax_error() {
+        on_small_stack(|| {
+            let limit = MAX_NESTING_DEPTH as usize;
+            for (open, close, flags) in [
+                ("(", ")", ""),
+                ("(?:", ")", ""),
+                ("(?=", ")", ""),
+                ("(?!", ")", "u"),
+                ("(?<=", ")", ""),
+                ("(?<!", ")", ""),
+                ("(?i:", ")", ""),
+                ("(?s-i:", ")", "i"),
+                ("(?:", ")*", ""),
+                ("(?:", ")+?", "u"),
+                ("(b|", ")", ""),
+                ("(?<=b|", ")", ""),
+                ("(?:b|(?:c|", "))", ""),
+                ("[", "]", "v"),
+                ("[^[^", "]]", "v"),
+                ("[b--[", "]]", "v"),
+                ("[\\w&&[", "]]", "v"),
+                ("[b[", "]c-d]", "vi"),
+            ] {
+                let limit = if open.matches(['(', '[']).count() == 2 {
+                    limit / 2
+                } else {
+                    limit
+                };
+                let program = compile(&nested(open, close, limit), flags)
+                    .unwrap_or_else(|e| panic!("{open}…{close} at the limit must compile: {e:?}"));
+                let outcome = match_regexp(&program, b"a", 0);
+                if close == ")*" {
+                    assert!(outcome.resource_limit, "nested stars hit the state ceiling");
+                } else {
+                    // `b` minus a set without `a` never contains `a`.
+                    assert_eq!(
+                        outcome.matched,
+                        !open.contains("--"),
+                        "{open}…{close} at the limit must still match as it says"
+                    );
+                }
+                let past = compile(&nested(open, close, limit + 1), flags).map(|_| ());
+                assert!(
+                    matches!(&past, Err(CompileError::Syntax(m)) if m.ends_with(" too much nesting")),
+                    "{open}…{close} one past the limit must be refused: {past:?}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_deep_named_group_reparses_from_depth_zero() {
+        // The non-`u` named-capture path re-parses the whole pattern; the
+        // second pass must start from depth zero, the first having left
+        // every level it entered.
+        on_small_stack(|| {
+            let deep = format!("(?<n>{}a{})\\k<n>", "(".repeat(300), ")".repeat(300));
+            let program = compile(&deep, "").expect("a deep named group re-parses");
+            assert!(match_regexp(&program, b"aa", 0).matched);
+        });
+    }
+
+    #[test]
+    fn sequence_length_is_not_recursion_depth() {
+        // A flat 1,067-atom literal overflowed a 2 MiB debug stack in the
+        // measure pass; the spine is walked iteratively now, so length is
+        // linear time and constant stack. Runs on the default test thread
+        // deliberately.
+        let long = "a".repeat(200_000);
+        let program = compile(&long, "").expect("a long sequence compiles");
+        assert!(match_regexp(&program, long.as_bytes(), 0).matched);
+        // Inside a lookbehind the spine is walked backward.
+        let behind = format!("(?<={})b", "a".repeat(50_000));
+        let program = compile(&behind, "").expect("a long lookbehind sequence compiles");
+        let subject = format!("{}b", "a".repeat(50_000));
+        let outcome = match_regexp(&program, subject.as_bytes(), 0);
+        assert!(outcome.matched);
+        assert_eq!(outcome.captures[0], (50_000, 50_001));
+    }
+
+    #[test]
+    fn alternation_length_is_not_recursion_depth() {
+        // `fxDisjunctionParse` recurses once per `|`; a 10,000-alternative
+        // keyword list overflowed the debug stack. Parsed in a loop now.
+        // Each keyword ends in `_` so no earlier alternative is a prefix of
+        // the subject: only the last one can match.
+        let alternatives: Vec<String> = (0..50_000).map(|i| format!("k{i}_")).collect();
+        let pattern = alternatives.join("|");
+        let program = compile(&pattern, "").expect("a long alternation compiles");
+        let outcome = match_regexp(&program, b"k49999_", 0);
+        assert!(outcome.matched);
+        assert_eq!(outcome.captures[0], (0, 7));
+        // Duplicate names across alternatives are still legal (the
+        // participate-list surgery is replayed innermost-first, as the
+        // recursion's returns performed it) …
+        let program =
+            compile("(?<x>a)|(?<x>b)|(?<x>c)", "").expect("duplicate names across alternatives");
+        assert!(match_regexp(&program, b"c", 0).matched);
+        // … and a duplicate within one scope is still refused.
+        assert!(matches!(
+            compile("(?<x>a)(?<x>b)", "").map(|_| ()),
+            Err(CompileError::Syntax(_))
+        ));
+    }
+
+    #[test]
+    fn class_string_alternatives_are_not_recursion_depth() {
+        // A `v`-mode class's multi-character strings become a *left*-nested
+        // `Disjunction` chain (`charset_strings_disjunction`), one level per
+        // alternative and outside the group-nesting budget: 200,000 of them
+        // (a 1.4 MB pattern) overflowed an 8 MiB optimized stack in the
+        // measure pass, and 5,000 the default debug test thread this runs on
+        // deliberately. The `measure`/`emit` walks keep their own stack now.
+        let strings: Vec<String> = (0..50_000).map(|i| format!("x{i}_")).collect();
+        let pattern = format!("[\\q{{{}}}]", strings.join("|"));
+        let program = compile(&pattern, "v").expect("a class of many strings compiles");
+        let outcome = match_regexp(&program, b"x49999_", 0);
+        assert!(outcome.matched);
+        assert_eq!(outcome.captures[0], (0, 7));
+        // A single-character alternative folds into the set half of the
+        // disjunction (`chars[0] != 0`) rather than the string chain.
+        let mixed = format!("[a\\q{{{}}}]", strings.join("|"));
+        let program = compile(&mixed, "v").expect("strings beside a set compile");
+        assert!(match_regexp(&program, b"a", 0).matched);
+        assert!(match_regexp(&program, b"x7_", 0).matched);
+        assert!(!match_regexp(&program, b"y", 0).matched);
+    }
+}
+
+// The child owns its test gate for recursive source inspection.
+mod validation_tests;

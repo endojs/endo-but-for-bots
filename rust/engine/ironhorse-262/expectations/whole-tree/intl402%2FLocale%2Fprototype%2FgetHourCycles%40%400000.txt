@@ -1,0 +1,21 @@
+# engine=ironhorse features=default corpus=intl402/Locale/prototype/getHourCycles tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Locale/prototype/getHourCycles/branding.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getHourCycles/branding.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getHourCycles/language-priority.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getHourCycles/language-priority.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getHourCycles/likely-subtags-region.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getHourCycles/likely-subtags-region.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getHourCycles/name.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getHourCycles/name.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getHourCycles/output-array-values.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getHourCycles/output-array-values.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getHourCycles/output-array.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getHourCycles/output-array.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getHourCycles/prop-desc.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getHourCycles/prop-desc.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getHourCycles/region-override.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getHourCycles/region-override.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getHourCycles/region-priority.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getHourCycles/region-priority.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getHourCycles/subdivision-region.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getHourCycles/subdivision-region.js strict skip:oracle-host-missing-global:Intl

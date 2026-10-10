@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=built-ins/NativeErrors tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/NativeErrors/cause_property_native_error.js sloppy pass
+built-ins/NativeErrors/cause_property_native_error.js strict pass
+built-ins/NativeErrors/message_property_native_error.js sloppy pass
+built-ins/NativeErrors/message_property_native_error.js strict pass
+built-ins/NativeErrors/nativeerror-tostring-message-throws-symbol.js sloppy pass
+built-ins/NativeErrors/nativeerror-tostring-message-throws-symbol.js strict pass
+built-ins/NativeErrors/nativeerror-tostring-message-throws-toprimitive.js sloppy pass
+built-ins/NativeErrors/nativeerror-tostring-message-throws-toprimitive.js strict pass

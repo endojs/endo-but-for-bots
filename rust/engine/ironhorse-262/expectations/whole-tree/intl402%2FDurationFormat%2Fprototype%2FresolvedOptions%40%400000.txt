@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=intl402/DurationFormat/prototype/resolvedOptions tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/DurationFormat/prototype/resolvedOptions/length.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/prototype/resolvedOptions/length.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/prototype/resolvedOptions/name.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/prototype/resolvedOptions/name.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/prototype/resolvedOptions/prop-desc.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/prototype/resolvedOptions/prop-desc.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/prototype/resolvedOptions/resolved-numbering-system-unicode-extensions-and-options.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/prototype/resolvedOptions/resolved-numbering-system-unicode-extensions-and-options.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/prototype/resolvedOptions/return-keys-order-default.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/prototype/resolvedOptions/return-keys-order-default.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/prototype/resolvedOptions/throw-invoked-as-func.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/prototype/resolvedOptions/throw-invoked-as-func.js strict skip:oracle-host-missing-global:Intl

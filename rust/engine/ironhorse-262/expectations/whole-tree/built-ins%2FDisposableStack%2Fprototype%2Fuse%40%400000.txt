@@ -1,0 +1,39 @@
+# engine=ironhorse features=default corpus=built-ins/DisposableStack/prototype/use tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/DisposableStack/prototype/use/Symbol.dispose-getter.js sloppy pass
+built-ins/DisposableStack/prototype/use/Symbol.dispose-getter.js strict pass
+built-ins/DisposableStack/prototype/use/adds-value.js sloppy pass
+built-ins/DisposableStack/prototype/use/adds-value.js strict pass
+built-ins/DisposableStack/prototype/use/allows-null-value.js sloppy pass
+built-ins/DisposableStack/prototype/use/allows-null-value.js strict pass
+built-ins/DisposableStack/prototype/use/allows-undefined-value.js sloppy pass
+built-ins/DisposableStack/prototype/use/allows-undefined-value.js strict pass
+built-ins/DisposableStack/prototype/use/gets-value-Symbol.dispose-property-once.js sloppy pass
+built-ins/DisposableStack/prototype/use/gets-value-Symbol.dispose-property-once.js strict pass
+built-ins/DisposableStack/prototype/use/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/DisposableStack/prototype/use/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/DisposableStack/prototype/use/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be use; name value should be use"
+built-ins/DisposableStack/prototype/use/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be use; name value should be use"
+built-ins/DisposableStack/prototype/use/not-a-constructor.js sloppy pass
+built-ins/DisposableStack/prototype/use/not-a-constructor.js strict pass
+built-ins/DisposableStack/prototype/use/prop-desc.js sloppy pass
+built-ins/DisposableStack/prototype/use/prop-desc.js strict pass
+built-ins/DisposableStack/prototype/use/puts-value-on-top-of-stack.js sloppy pass
+built-ins/DisposableStack/prototype/use/puts-value-on-top-of-stack.js strict pass
+built-ins/DisposableStack/prototype/use/returns-value.js sloppy pass
+built-ins/DisposableStack/prototype/use/returns-value.js strict pass
+built-ins/DisposableStack/prototype/use/this-does-not-have-internal-disposablestate-throws.js sloppy pass
+built-ins/DisposableStack/prototype/use/this-does-not-have-internal-disposablestate-throws.js strict pass
+built-ins/DisposableStack/prototype/use/this-not-object-throws.js sloppy pass
+built-ins/DisposableStack/prototype/use/this-not-object-throws.js strict pass
+built-ins/DisposableStack/prototype/use/throws-if-disposed.js sloppy pass
+built-ins/DisposableStack/prototype/use/throws-if-disposed.js strict pass
+built-ins/DisposableStack/prototype/use/throws-if-value-Symbol.dispose-property-is-null.js sloppy pass
+built-ins/DisposableStack/prototype/use/throws-if-value-Symbol.dispose-property-is-null.js strict pass
+built-ins/DisposableStack/prototype/use/throws-if-value-Symbol.dispose-property-is-undefined.js sloppy pass
+built-ins/DisposableStack/prototype/use/throws-if-value-Symbol.dispose-property-is-undefined.js strict pass
+built-ins/DisposableStack/prototype/use/throws-if-value-Symbol.dispose-property-not-callable.js sloppy pass
+built-ins/DisposableStack/prototype/use/throws-if-value-Symbol.dispose-property-not-callable.js strict pass
+built-ins/DisposableStack/prototype/use/throws-if-value-missing-Symbol.dispose.js sloppy pass
+built-ins/DisposableStack/prototype/use/throws-if-value-missing-Symbol.dispose.js strict pass
+built-ins/DisposableStack/prototype/use/throws-if-value-not-object.js sloppy pass
+built-ins/DisposableStack/prototype/use/throws-if-value-not-object.js strict pass

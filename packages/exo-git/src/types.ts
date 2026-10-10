@@ -231,6 +231,29 @@ export type GitRemoteCredential =
   | { kind: 'basic'; material: { username: string; password: string } };
 
 /**
+ * What a holder can learn about the credential a remote would push with,
+ * without spending it. `required: false` is the whole record for a remote
+ * that needs no credential; the remaining fields are present only when one
+ * is required. Material is never included.
+ *
+ * `available` and `revoked` move together in every state the daemon can
+ * currently reach: revocation is what drops the material, rotation is what
+ * restores it, and a credential rebuilt after a daemon restart starts out
+ * revoked as well. So `revoked: true` reads as "unusable until rotated", not
+ * as "an operator deliberately revoked this" — this record says whether the
+ * credential works, never why it does not.
+ */
+export type RemoteCredentialHealth =
+  | { required: false }
+  | {
+      required: true;
+      kind: 'bearer' | 'basic';
+      audience: string;
+      available: boolean;
+      revoked: boolean;
+    };
+
+/**
  * The reusable "authority to talk to this remote" half of a
  * GitRemote.
  *
@@ -251,6 +274,7 @@ export type GitRemoteEndpoint = {
     operation: string,
     version: number | undefined,
   ) => void;
+  credentialHealth: () => RemoteCredentialHealth;
   watchChange: (onChange: () => void) => (() => void) | undefined;
 };
 
@@ -327,6 +351,7 @@ export type RemoteSnapshot = NormalizedRemotePolicy & { name: string };
 export type GitRemote = {
   help: (method?: string) => string;
   inspect: () => Promise<RemoteSnapshot>;
+  credentialHealth: () => Promise<RemoteCredentialHealth>;
   fetch: (options?: {
     prune?: boolean;
     tags?: boolean;

@@ -1,0 +1,21 @@
+# engine=ironhorse features=default corpus=built-ins/FinalizationRegistry/prototype/unregister tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/FinalizationRegistry/prototype/unregister/custom-this.js sloppy skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/unregister/custom-this.js strict skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/unregister/length.js sloppy skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/unregister/length.js strict skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/unregister/name.js sloppy skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/unregister/name.js strict skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/unregister/not-a-constructor.js sloppy skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/unregister/not-a-constructor.js strict skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/unregister/prop-desc.js sloppy skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/unregister/prop-desc.js strict skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/unregister/this-does-not-have-internal-cells-throws.js sloppy skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/unregister/this-does-not-have-internal-cells-throws.js strict skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/unregister/this-not-object-throws.js sloppy skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/unregister/this-not-object-throws.js strict skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/unregister/throws-when-unregisterToken-cannot-be-held-weakly.js sloppy skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/unregister/throws-when-unregisterToken-cannot-be-held-weakly.js strict skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/unregister/unregister-object-token.js sloppy skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/unregister/unregister-object-token.js strict skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/unregister/unregister-symbol-token.js sloppy fail:"abort-type divergence: oracle threw \"TypeError: token: not an object\" ironhorse threw \"ReferenceError: get FinalizationRegistry: undefined variable\""
+built-ins/FinalizationRegistry/prototype/unregister/unregister-symbol-token.js strict fail:"abort-type divergence: oracle threw \"TypeError: token: not an object\" ironhorse threw \"ReferenceError: get FinalizationRegistry: undefined variable\""

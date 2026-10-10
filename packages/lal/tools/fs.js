@@ -69,11 +69,24 @@ export const fsToolDefs = harden([
       'Find paths recursively within a search-capable filesystem capability. ' +
       'The glob dialect supports `*` within one path segment and `**` across ' +
       'segments; every other character, including `?`, is literal. ' +
-      'Arguments: petNameOrPath, pattern (string).',
-    params: M.splitRecord({
-      petNameOrPath: NameOrPathShape,
-      pattern: M.string(),
-    }),
+      '`**` reports a directory symlink but does not descend through it, so ' +
+      'the walk covers the tree rather than the link graph; a segment that ' +
+      'names a path still follows one, so ' +
+      '"node_modules/@endo/*/src/**/*.js" reaches through workspace links. ' +
+      'Set followSymlinks to sweep through links as well (`rg -L`) — expect ' +
+      'a much larger result set, since in a workspace checkout every ' +
+      'node_modules link points back into the tree. ' +
+      'Arguments: petNameOrPath, pattern (string), ' +
+      'followSymlinks (optional boolean).',
+    params: M.splitRecord(
+      {
+        petNameOrPath: NameOrPathShape,
+        pattern: M.string(),
+      },
+      {
+        followSymlinks: M.boolean(),
+      },
+    ),
   },
   {
     name: 'grep',
@@ -83,7 +96,8 @@ export const fsToolDefs = harden([
       'restrict files with a glob pattern and cap the number of results. ' +
       'Returns { file, line, text } records with 1-based line numbers. ' +
       'Arguments: petNameOrPath, pattern (string), glob (optional string), ' +
-      'maxResults (optional positive number).',
+      'maxResults (optional positive number), ' +
+      'followSymlinks (optional boolean).',
     params: M.splitRecord(
       {
         petNameOrPath: NameOrPathShape,
@@ -91,6 +105,11 @@ export const fsToolDefs = harden([
       },
       {
         glob: M.string(),
+        // Governs only the walk that finds the files — the implicit one when
+        // no `glob` is given, or the `glob` enumeration when one is. Files
+        // named by that walk are read either way, so this never changes what
+        // happens to a file once it has been found. See the `glob` tool.
+        followSymlinks: M.boolean(),
         // A positive finite count. Bare `M.number()` admits `NaN`/`+/-Infinity`
         // (Endo's pass-style treats them as valid numbers), and the daemon's cap
         // (`matches.length >= maxResults`) only defaults on `undefined`, so those

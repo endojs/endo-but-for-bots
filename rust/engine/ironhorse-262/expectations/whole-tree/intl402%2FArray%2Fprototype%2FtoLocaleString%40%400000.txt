@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=intl402/Array/prototype/toLocaleString tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Array/prototype/toLocaleString/calls-toLocaleString-number-elements.js sloppy pass
+intl402/Array/prototype/toLocaleString/calls-toLocaleString-number-elements.js strict pass
+intl402/Array/prototype/toLocaleString/invoke-element-tolocalestring.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Actual [] and expected [undefined, undefined] should have the same contents. must invoke element toLocaleString with expected arguments when provided no arguments"
+intl402/Array/prototype/toLocaleString/invoke-element-tolocalestring.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Actual [] and expected [undefined, undefined] should have the same contents. must invoke element toLocaleString with expected arguments when provided no arguments"

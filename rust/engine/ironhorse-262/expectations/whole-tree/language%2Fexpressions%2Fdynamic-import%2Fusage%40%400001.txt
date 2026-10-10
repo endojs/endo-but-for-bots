@@ -1,0 +1,17 @@
+# engine=ironhorse features=default corpus=language/expressions/dynamic-import/usage tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/dynamic-import/usage/syntax-nested-block-labeled-returns-thenable.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/usage/syntax-nested-block-labeled-returns-thenable.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/usage/syntax-nested-block-labeled-specifier-tostring.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/usage/syntax-nested-block-labeled-specifier-tostring.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/usage/top-level-import-then-eval-gtbndng-indirect-update-dflt.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/usage/top-level-import-then-eval-gtbndng-indirect-update-dflt.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/usage/top-level-import-then-eval-gtbndng-indirect-update.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/usage/top-level-import-then-eval-gtbndng-indirect-update.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/usage/top-level-import-then-eval-script-code-host-resolves-module-code.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/usage/top-level-import-then-eval-script-code-host-resolves-module-code.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/usage/top-level-import-then-is-call-expression-square-brackets.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/usage/top-level-import-then-is-call-expression-square-brackets.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/usage/top-level-import-then-returns-thenable.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/usage/top-level-import-then-returns-thenable.js strict skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/usage/top-level-import-then-specifier-tostring.js sloppy skip:unsupported-opcode:module:dynamic-import
+language/expressions/dynamic-import/usage/top-level-import-then-specifier-tostring.js strict skip:unsupported-opcode:module:dynamic-import

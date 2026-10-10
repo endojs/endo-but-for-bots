@@ -1,8 +1,8 @@
 //! The **snapshot store seam** (design
-//! `designs/ironhorse-snapshot-store-seam.md`, phase 1): the paged
+//! `designs/ironhorse-snapshot-store-seam.md`): the paged
 //! logical image and the [`HeapStore`] trait that lets the whole-heap
-//! snapshot artifact be replaced by a keyed store, so a later phase can
-//! checkpoint dirty pages incrementally and reify large heaps lazily.
+//! snapshot artifact be replaced by a keyed store for incremental dirty-page
+//! checkpoints and lazy heap reification.
 //!
 //! The seam sits **below the atom grammar and above the arenas**: pages
 //! and extents reuse the existing canonical encodings (the
@@ -22,36 +22,40 @@
 //! | Small state | stack, free list, keys/names/symbols, meter | `STAC`, the `HEAP` header, `KEYS`/`NAME`/`SYMB`, `METR` |
 //! | Manifest | version + signature + creation + geometry + epoch | `VERS`/`SIGN`/`CREA` |
 //!
-//! The free list is persisted verbatim — its LIFO order is load-bearing
-//! for deterministic slot reuse after resume — and at quiescence the
-//! stack is empty and the tables are small, so the small state is
-//! genuinely small and travels whole on every commit.
+//! The free list is persisted verbatim in segments: its LIFO order is
+//! load-bearing for deterministic slot reuse after resume. The 32 small-state
+//! sections include BULK side tables, so they need not be small. Schema 28
+//! checkpoints send only changed sections; full framing remains the import
+//! and export representation.
 //!
-//! # Fail-closed discipline
+//! # Trust and fail-closed discipline
 //!
-//! A store is validated **exhaustively at open** ([`validate_store`]):
-//! the manifest gates (ironhorse magic, format + store schema version,
-//! host callback-table signature), the meter's cost-table version, the
-//! live/free/count accounting, and a full page/extent inventory (every
-//! row the geometry promises must exist with the exact expected
-//! length). Exhaustive open-time validation is what confines later
-//! faults to genuine I/O errors — a store that opened cannot produce a
-//! wrong answer, only a crashed crank. Every decoder clamps
-//! pre-reservations to what the payload can hold, the same
-//! malformed-count discipline as [`crate::image`]'s fuzz trophies.
+//! A resident store is the machine it holds, and resume trusts it (the
+//! store-seam design's trust model). Open runs the compatibility gates
+//! ([`check_open_gates`]: format readability, the schema range, the signature
+//! with its boot fingerprint) and the cost-table gate, and decodes what the
+//! restore needs; the decoders and the restore guard it against engine bugs
+//! with ordinary bounds checks. Free-list segments and small state are read
+//! up front; lazy resume avoids eagerly loading slot and chunk rows, and each
+//! later fault checks its row's length and references in the VM's fault
+//! installer. A row read that fails there unwinds as the store's own error
+//! (`crate::machine::StoreFault`); a row that does not decode is a named
+//! crashed crank. [`validate_store`] and [`validate_store_content`] check a
+//! store's correctness on request. Every decoder clamps pre-reservations to
+//! what the payload can hold, as in the malformed-count regressions in
+//! [`crate::image`].
 //!
 //! Like the rest of the crate this module is `forbid(unsafe_code)` and
-//! dependency-free; the SQLite backend lives daemon-side behind this
-//! trait (design § Crate and dependency layout), and the in-crate
+//! keeps backend dependencies behind the store trait. SQLite lives daemon-side
+//! (design § Crate and dependency layout), and the in-crate
 //! reference stores are [`MemoryStore`] here and
 //! [`crate::store_file::FileStore`].
 
 use crate::format::{Signature, SnapshotError, Version};
-use crate::image::{
-    decode_stack, decode_strings, decode_u32s, encode_stack, encode_strings, encode_u32s,
-    CreationParams, MachineImage, MeterImage,
-};
+use crate::image::encode_names;
+use crate::image::{decode_strings, CreationParams, MachineImage, MeterImage};
 use crate::slot_codec::{decode_slots, encode_slot, SLOT_RECORD_BYTES};
+use ironhorse_vm::SymbolName;
 use ironhorse_vm::{Slot, COST_TABLE_VERSION};
 
 /// The canonical page/extent geometry, owned by the vm because the
@@ -65,20 +69,21 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// The store schema version, independent of the snapshot
 /// [`crate::format::IRONHORSE_FORMAT_VERSION`] (which governs the record
 /// encodings both containers share). Bumped on any change to the page
-/// geometry, the manifest layout, the small-state layout, the
-/// addition of a persisted row class, or a change to the integrity
-/// root's or seal's inputs — the phase-6 near-miss (a new persisted
-/// row class with no bump) is exactly what the widened trigger list
-/// exists to prevent.
+/// geometry, the manifest layout, the small-state layout, or the
+/// addition or removal of a persisted row class. A new persisted row class
+/// must not silently change the interpretation of an existing schema stamp.
+///
+/// Schemas 5 through 35 carried an integrity root over row-leaf hashes and
+/// a commit-seal chain, which the store-seam design's phase 13 retired
+/// (schema 36); the notes below describe them as they were.
 ///
 /// v5: page-edge summaries joined the integrity root (with a section
 /// geometry header and length-prefixed edge entries in both the root
-/// and the seal encodings), and commit verifies summaries against the
-/// rows they travel with.
+/// and the seal encodings), and commit verified summaries against the
+/// rows they travel with (in debug builds only since phase 13's stage 1).
 ///
-/// v6: the flat root became per-class Merkle trees ([`compute_root`];
-/// same leaves, new combination), enabling O(dirty·log n) commit
-/// maintenance. v5→v6 migration verifies then restamps in place.
+/// v6: the flat root became per-class Merkle trees (same leaves, new
+/// combination), enabling O(dirty·log n) commit maintenance.
 ///
 /// v7 (the side-table ledger): the small state grew three sections —
 /// arrays, collections, `Symbol.for` registry — so resumed machines
@@ -86,7 +91,29 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// sections EMPTY (a pure 12-byte suffix; a v6-era machine had
 /// nothing persisted in them by definition) and restamps the root for
 /// the changed small leaf.
-pub const STORE_SCHEMA_VERSION: u32 = 23;
+/// v26: NAME entries use canonical XS CESU-8 instead of UTF-8. Migration
+/// converts the name section and recomputes the root, preserving all ids.
+/// v27 binds the manifest core and collection cadence into the seal, which
+/// open verified until phase 13's stage 1, and admits one canonical
+/// encoding of small state.
+/// v28 binds the 32 small-state payloads independently under a fixed section tree.
+/// Migration from v27 preserves payload bytes and export framing.
+/// v29: FUNC persists surviving boot-native name chunk locations.
+/// v30: GENR and ASYN may carry explicit saved-handler code segments.
+/// v31: PRMS may carry the first reported unhandled rejection.
+/// v32: FUNC may carry the shared Realm, environment, module, root and job graph.
+/// v33: shared FUNC may also carry stable host-service identities and captures.
+/// v34: ASYN may carry async generator instances after the activations, and
+/// the `AsyncGenerator*` reaction kinds resume. Migration is an identity
+/// restamp: an older ASYN payload has no generator trailer.
+/// v35: ASYN may carry the `Array.fromAsync` accumulations after the generator
+/// trailer, and the `FromAsync*` reaction kinds resume. Migration is an
+/// identity restamp: an older ASYN payload has no fromAsync trailer.
+/// v36 (phase 13, stage 2): the row-leaf hashes, the integrity root and the
+/// commit seal are gone, and the manifest carries a random [`CommitToken`]
+/// in their place. Migration seeds the token from the stored seal and
+/// drops the leaf storage; rows and small-state payloads are unchanged.
+pub const STORE_SCHEMA_VERSION: u32 = 36;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -98,14 +125,18 @@ pub const STORE_SCHEMA_MIN_SUPPORTED: u32 = 5;
 /// mismatched store fails with exactly the vocabulary the container
 /// reader uses.
 #[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StoreError {
-    /// The machine is not at a quiescent crank boundary (wave-6 W6-10):
+    /// The machine is not at a quiescent crank boundary:
     /// its last crank halted. Rewind or complete a crank before
     /// persisting.
     MachineNotQuiescent,
-    /// The heap holds live state in a SILENT-WRONG Pending side table
-    /// (wave-6 W6-9): a resumed machine would answer wrong values, so
-    /// persist refuses by name until the row's atom lands.
+    /// A live Machine operation failed (for example, host-root allocation).
+    /// This does not classify the stored heap as corrupt.
+    MachineOperation(String),
+    /// The heap holds unsupported live state identified by
+    /// `Interp::stored_unpersistable_row_at_checkpoint`. Persistence
+    /// refuses by row name rather than resume with missing state.
     PendingStateUnsupported { row: &'static str },
     /// The store has no committed epoch yet (a fresh store). Callers
     /// that require content (resume, export) fail on this; the first
@@ -114,7 +145,36 @@ pub enum StoreError {
     /// An underlying I/O failure, rendered as text so the error stays
     /// `Eq`-comparable in tests (the pattern [`crate::machine`] uses for
     /// its own error split).
+    ///
+    /// Classified [`StoreFailure::Transient`], with one known limitation:
+    /// the `std::io::ErrorKind` is destroyed at construction (`io_err`,
+    /// `store_file.rs`), so a permanent medium failure — `PermissionDenied`,
+    /// `NotFound` — is indistinguishable here from a retryable one. Carrying
+    /// the kind means reshaping this variant across the SQLite backend in the
+    /// other workspace; until then a supervisor should bound its retries
+    /// rather than trust this class to terminate them.
     Io(String),
+    /// A backend that cannot serve this operation at all — an in-place
+    /// migration on a store whose medium does not support one, or a SQLite
+    /// store opened on a read-only database. Deterministic and permanent,
+    /// which is why it is not [`StoreError::Io`]: a retry loop over a
+    /// capability refusal never terminates.
+    Unsupported(&'static str),
+    /// The CALLER's [`CheckpointBatch`] failed validation. The store is not
+    /// implicated: this is a malformed request, and the inner error names
+    /// which check it failed.
+    ///
+    /// Batch validation reuses the same vocabulary as at-rest verification
+    /// (`RowLength`, `SummaryMismatch`, `MissingRow`), so without this
+    /// wrapper a rejected commit would classify as a poisoned store and tell
+    /// a supervisor to tear down a healthy session.
+    BatchRejected(Box<StoreError>),
+    /// The VM reported that its own state is wrong
+    /// (`ironhorse_vm::Halt::EngineInvariant` or `Halt::Panic`), or a lazy
+    /// fault found the store borrowed for a commit (a checkpoint that
+    /// walked a page it never faulted). Never a refusal: the machine
+    /// cannot be trusted to continue.
+    EngineInvariant(String),
     /// A decode/validation failure in the shared snapshot vocabulary
     /// (version, signature, cost-table, corrupt payload).
     Snapshot(SnapshotError),
@@ -132,10 +192,15 @@ pub enum StoreError {
     /// exactly one (or does not start at 1 on an empty store) — the
     /// split-brain / replayed-batch guard.
     EpochMismatch { expected: u64, found: u64 },
-    /// A commit whose `prev_seal` does not match the stored manifest's
-    /// seal, or a session whose recorded seal no longer matches the
-    /// store — an equal-epoch fork, copy, or foreign store (the
-    /// adversarial-review finding a bare epoch counter cannot catch).
+    /// A commit whose `prev_token` does not match the stored manifest's
+    /// [`CommitToken`], or a session whose recorded token no longer
+    /// matches the store — an equal-epoch fork, copy, or foreign store that
+    /// a bare epoch counter cannot distinguish. Also raised by
+    /// [`HeapStore::replace_for_migration`] when the durable manifest is no
+    /// longer the one the migration read, and by [`migrate_store`] when the
+    /// handle it reads through shows another. The values are token hex, or
+    /// a manifest's schema, epoch and token. Classified
+    /// [`StoreFailure::Refused`].
     BaselineMismatch { expected: String, found: String },
     /// A first (full-write) checkpoint was aimed at a store that
     /// already holds an epoch. Adopting existing content is the resume
@@ -152,13 +217,188 @@ pub enum StoreError {
     /// based on them, so a short vector (a truncated table) must fail
     /// closed rather than read as "no outgoing edges".
     SummaryCount { expected: u32, found: u32 },
-    /// A batch's page-edge summary disagrees with the page row it
-    /// travels beside (or a summary travels without its row / a row
-    /// without its summary). Commit recomputes every traveling
-    /// summary from the row's records — the summaries must stay a
-    /// pure function of row content, or the collector's stored
-    /// reachability diverges from the heap it frees from.
+    /// A page-edge summary disagrees with the page row it describes (or a
+    /// summary travels without its row / a row without its summary). A
+    /// debug build's commit recomputes every traveling summary from the
+    /// row's records, and the full validator every stored one — the
+    /// summaries must stay a pure function of row content, or the
+    /// collector's stored reachability diverges from the heap it frees
+    /// from.
     SummaryMismatch { page: u32 },
+}
+
+/// What a caller holding a [`StoreError`] should do about it.
+///
+/// A supervisor at the daemon seam has exactly three responses available, and
+/// before this classifier existed it could not tell them apart: every store
+/// failure arrived as one opaque string (review finding F157). The variant
+/// alone is not enough either — a caller would have to re-derive this table
+/// from every variant and keep it in step by hand.
+///
+/// Classification is a property of the failure, not of the caller, so it lives
+/// beside the variants and [`StoreError::classify`] is an exhaustive match: a
+/// new variant does not compile until it states its answer.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum StoreFailure {
+    /// The medium failed and the same call may succeed later: I/O. This is
+    /// the only class for which a retry is meaningful — but see
+    /// [`StoreError::Io`], which cannot yet separate a permanent medium
+    /// failure from a retryable one, so bound the retries.
+    Transient,
+    /// A deterministic refusal: the answer will not change on its own.
+    /// Either a gate the caller has to satisfy (quiesce, migrate, adopt
+    /// rather than overwrite), an identity that will never match this engine,
+    /// or a malformed request. Retrying is a busy-loop.
+    ///
+    /// [`StoreError::Empty`] lands here and is often not a failure at all —
+    /// a fresh store answering "nothing yet". A caller that can create one
+    /// should test for it by variant rather than by class.
+    Refused,
+    /// The stored state contradicts itself, so nothing read from it can be
+    /// trusted: a container that will not parse, a geometry that promises rows
+    /// the store cannot produce, page summaries that disagree with the rows
+    /// they travel beside. Tear the session down rather than resume; a partial
+    /// read is the failure mode this class exists to prevent.
+    Poisoned,
+}
+
+impl StoreError {
+    /// How a caller should respond to this failure. See [`StoreFailure`].
+    pub fn classify(&self) -> StoreFailure {
+        match self {
+            // The medium, and only the medium. A capability the backend does
+            // not have is `Unsupported`, not this.
+            StoreError::Io(_) => StoreFailure::Transient,
+
+            // Gates the caller can satisfy, and identities that will not
+            // change: deterministic either way.
+            StoreError::MachineNotQuiescent
+            | StoreError::MachineOperation(_)
+            | StoreError::PendingStateUnsupported { .. }
+            | StoreError::Empty
+            | StoreError::Unsupported(_)
+            | StoreError::EpochMismatch { .. }
+            | StoreError::BaselineMismatch { .. }
+            | StoreError::NotEmpty { .. }
+            | StoreError::NeedsMigration { .. } => StoreFailure::Refused,
+
+            // The caller's request was malformed. The inner error names which
+            // check failed, but the store itself is uninvolved, so the class
+            // is the wrapper's and not the inner error's.
+            StoreError::BatchRejected(_) => StoreFailure::Refused,
+
+            // The store's own content disagrees with itself.
+            StoreError::MissingRow(_, _)
+            | StoreError::RowLength { .. }
+            | StoreError::SummaryCount { .. }
+            | StoreError::SummaryMismatch { .. }
+            | StoreError::EngineInvariant(_) => StoreFailure::Poisoned,
+
+            // A decode failure splits the same way one level down: structural
+            // damage poisons, a compatibility answer refuses. `VersionError`
+            // splits again for the same reason — a truncated `VERS` atom is
+            // damage, a version this engine will not read is an answer.
+            StoreError::Snapshot(e) => match e {
+                SnapshotError::Atom(_)
+                | SnapshotError::Signature(_)
+                | SnapshotError::MissingAtom(_)
+                | SnapshotError::Corrupt(_) => StoreFailure::Poisoned,
+                SnapshotError::Version(v) => {
+                    use crate::format::VersionError as V;
+                    match v {
+                        V::Truncated | V::TrailingBytes => StoreFailure::Poisoned,
+                        V::NotIronhorse(_)
+                        | V::UnsupportedVersion(_)
+                        | V::SlotWidthMismatch { .. }
+                        | V::UnsupportedEndian(_) => StoreFailure::Refused,
+                    }
+                }
+                SnapshotError::BootLayoutMismatch { .. }
+                | SnapshotError::SignatureMismatch { .. }
+                | SnapshotError::CostTableMismatch { .. } => StoreFailure::Refused,
+            },
+        }
+    }
+}
+
+impl std::fmt::Display for StoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StoreError::MachineNotQuiescent => {
+                write!(f, "machine is not at a quiescent crank boundary")
+            }
+            StoreError::MachineOperation(what) => write!(f, "machine operation failed: {what}"),
+            StoreError::PendingStateUnsupported { row } => {
+                write!(f, "heap holds live {row}: that side table does not travel")
+            }
+            StoreError::Empty => write!(f, "store has no committed epoch"),
+            StoreError::Io(what) => write!(f, "store io error: {what}"),
+            StoreError::Unsupported(what) => write!(f, "backend cannot {what}"),
+            StoreError::BatchRejected(inner) => write!(f, "commit batch rejected: {inner}"),
+            StoreError::EngineInvariant(what) => {
+                write!(f, "engine invariant violated: {what}")
+            }
+            StoreError::Snapshot(e) => write!(f, "store snapshot error: {e}"),
+            StoreError::MissingRow(kind, index) => {
+                write!(f, "store is missing {kind} row {index}")
+            }
+            StoreError::RowLength {
+                kind,
+                index,
+                expected,
+                found,
+            } => write!(
+                f,
+                "{kind} row {index} is {found} bytes, geometry promises {expected}"
+            ),
+            // Neutral about which actor holds which value, for the same
+            // reason as `BaselineMismatch` below: `check_epoch`
+            // (`store.rs`) expects the store's next epoch and finds the
+            // batch's, while `checkpoint_to_store_core` (`machine.rs:884`)
+            // expects the SESSION's and finds the STORE's. Naming sides
+            // would be right at one site and reversed at the other.
+            StoreError::EpochMismatch { expected, found } => {
+                write!(f, "epoch mismatch: expected {expected}, found {found}")
+            }
+            // Deliberately neutral about WHICH side is which. The
+            // construction sites agree that `expected` is the value the
+            // caller required and `found` is the value it met, but they do
+            // not agree on whose value that is: at the checkpoint's pairing
+            // the expectation is a session's tracked token and the finding
+            // is the store's, and at the commit's succession check the
+            // expectation is the store's and the finding is the batch's.
+            // Naming a side here would be right at some sites and actively
+            // misleading at others.
+            StoreError::BaselineMismatch { expected, found } => {
+                write!(f, "baseline mismatch: expected {expected}, found {found}")
+            }
+            StoreError::NotEmpty { epoch } => write!(
+                f,
+                "first checkpoint aimed at a store already holding epoch {epoch}"
+            ),
+            StoreError::NeedsMigration { found } => {
+                write!(f, "store schema {found} needs migration before use")
+            }
+            StoreError::SummaryCount { expected, found } => write!(
+                f,
+                "page-edge summary vector holds {found} entries, geometry promises {expected}"
+            ),
+            StoreError::SummaryMismatch { page } => {
+                write!(f, "page {page}'s edge summary disagrees with its row")
+            }
+        }
+    }
+}
+
+impl std::error::Error for StoreError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            StoreError::Snapshot(e) => Some(e),
+            StoreError::BatchRejected(e) => Some(e.as_ref()),
+            _ => None,
+        }
+    }
 }
 
 impl From<SnapshotError> for StoreError {
@@ -191,7 +431,7 @@ pub struct StoreManifest {
     pub slot_live: u32,
     /// Chunk-arena byte length. May shrink across a GC compaction.
     pub chunk_len: u64,
-    /// Total free-list entries (store seam phase 9): the free list
+    /// Total free-list entries: the free list
     /// lives in dirty-diffed segment rows, and this is their geometry
     /// the same way `slot_count` is the pages'.
     pub free_len: u32,
@@ -204,10 +444,9 @@ pub struct StoreManifest {
     /// counter, which is what makes it resume-invariant: a replica that
     /// suspends mid-window resumes with the same absolute count and so
     /// collects after exactly the same cranks as one that never
-    /// suspended. Review wave 5 measured the alternative — a
-    /// session-local `cranks_since_collect` that `open()` zeroed made an
-    /// ordinary suspend/resume fork the durable heap, with identical
-    /// per-crank results and computrons hiding it.
+    /// suspended. A session-local counter reset by `open()` would change
+    /// collection timing after resume and could change the durable heap
+    /// even when per-crank results and computrons still agree.
     ///
     /// Absolute rather than "since the last collection" so the schedule
     /// cannot drift: two replicas at the same crank total agree on
@@ -219,22 +458,152 @@ pub struct StoreManifest {
     /// Reads 0 from a schema-7 store, which is correct: such a store
     /// predates the counter, and 0 is where a fresh one starts.
     pub cranks: u64,
-    /// The **row-hash tree root** (store seam design, phase 5): SHA-256
-    /// (hex) over the small-state leaf and every row leaf
-    /// ([`combine_root`]). Unlike the seal — which chains commit
-    /// *deltas* — the root attests the store's complete CURRENT
-    /// content, so a length-preserving byte flip at rest fails closed
-    /// (at open for a leaf flip, at first read for a row flip)
-    /// instead of resuming a different machine. Store-native identity;
-    /// the CAS blob key remains SHA-256 of the canonical export.
-    pub root: String,
-    /// The commit-seal chain: SHA-256 (hex) over the previous seal and
-    /// this commit's content ([`seal_commit`]). Together with
-    /// [`check_succession`] it binds every commit to the exact store
-    /// state it was computed against — an epoch number alone cannot
-    /// distinguish forks, copies, or unrelated stores at equal height.
-    /// The seal hashes the whole manifest, so it also signs `root`.
-    pub seal: String,
+    /// Replica-visible collection interval; zero disables scheduled collection.
+    pub collect_every: u32,
+    /// Successful durable collection events, including explicit collections.
+    pub collections: u64,
+    /// The token of the commit that wrote this manifest (schema 36). Each
+    /// batch names the token of the store state it was built on, and
+    /// [`check_succession`] pairs the two by equality, so a session cannot
+    /// commit into a copy that has since diverged, or into another store at
+    /// its own epoch: an epoch number alone cannot tell those apart. The
+    /// token says nothing about the content; the store-seam design's trust
+    /// model trusts the content. A manifest of an older schema reads its
+    /// token from the first half of the commit seal it carried.
+    pub token: CommitToken,
+}
+
+/// A commit's pairing token: 16 random bytes, minted for every commit
+/// (epoch 1 included) by whoever builds its batch, recorded in the
+/// manifest, and named by the next batch as its predecessor. A committed
+/// token is never zero and never equal to the one before it. It replaced
+/// the commit seal's one job that was not about tampering: pairing a
+/// session with the store state its batch was built on. Byte-identical
+/// copies of a store share their token and still pair; a copy that has
+/// taken a commit of its own does not.
+#[derive(Copy, Clone, Default, PartialEq, Eq, Hash)]
+pub struct CommitToken(pub [u8; 16]);
+
+impl CommitToken {
+    /// The predecessor of a store's first commit.
+    pub const ZERO: CommitToken = CommitToken([0; 16]);
+
+    /// Whether this is [`Self::ZERO`], which no commit may carry.
+    pub fn is_zero(&self) -> bool {
+        self.0 == [0; 16]
+    }
+
+    /// Lowercase hex, 32 characters.
+    pub fn to_hex(&self) -> String {
+        let mut s = String::with_capacity(32);
+        for b in self.0 {
+            s.push(char::from_digit((b >> 4) as u32, 16).unwrap());
+            s.push(char::from_digit((b & 0xf) as u32, 16).unwrap());
+        }
+        s
+    }
+
+    /// The token an older-schema manifest carries: the first 16 bytes of
+    /// its hex commit seal. A store written before schema 36 always has a
+    /// seal of at least that length.
+    fn from_legacy_seal(seal: &str) -> Result<CommitToken, StoreError> {
+        let digits = seal.as_bytes();
+        if digits.len() < 32 {
+            return Err(SnapshotError::Corrupt("store manifest seal shorter than a token").into());
+        }
+        let nibble = |c: u8| -> Result<u8, StoreError> {
+            (c as char)
+                .to_digit(16)
+                .map(|d| d as u8)
+                .ok_or(SnapshotError::Corrupt("store manifest seal not hex").into())
+        };
+        let mut token = [0u8; 16];
+        for (i, byte) in token.iter_mut().enumerate() {
+            *byte = (nibble(digits[2 * i])? << 4) | nibble(digits[2 * i + 1])?;
+        }
+        Ok(CommitToken(token))
+    }
+
+    /// The seal an older-schema manifest is written with when this build
+    /// encodes one (test and tooling fixtures): the token's hex, padded to
+    /// a seal's 64 characters, which [`Self::from_legacy_seal`] reads back.
+    fn to_legacy_seal(self) -> String {
+        let mut seal = self.to_hex();
+        seal.push_str(&"0".repeat(32));
+        seal
+    }
+}
+
+impl std::fmt::Debug for CommitToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CommitToken({})", self.to_hex())
+    }
+}
+
+impl std::fmt::Display for CommitToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.to_hex())
+    }
+}
+
+/// Where commit tokens come from. The default, [`RandomTokens`], draws them
+/// from randomly keyed hasher state; tests inject their own.
+///
+/// The pairing of a session with its store is token equality, so tokens
+/// must be distinct across every store state a session could be pointed
+/// at, not just from their predecessor: a source that repeats itself on two
+/// copies of a store lets a session commit to the copy it did not read.
+pub trait CommitTokenSource {
+    /// The next token. [`mint_token`] refuses zero and the predecessor, and
+    /// draws again.
+    fn next_token(&mut self) -> CommitToken;
+}
+
+/// The default [`CommitTokenSource`]: 128 bits from two SipHash states
+/// keyed from the operating system's randomness (the standard library's
+/// `RandomState`, whose keys are drawn per thread and advanced at every
+/// use), over a process-wide counter, the process id and the clock. Tokens
+/// need to be distinct, not secret.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RandomTokens;
+
+impl CommitTokenSource for RandomTokens {
+    fn next_token(&mut self) -> CommitToken {
+        use std::hash::{BuildHasher, Hasher};
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let state = std::collections::hash_map::RandomState::new();
+        let mut halves = [0u64; 2];
+        for (lane, half) in halves.iter_mut().enumerate() {
+            let mut h = state.build_hasher();
+            h.write_u64(count);
+            h.write_u128(nanos);
+            h.write_u32(std::process::id());
+            h.write_usize(lane);
+            *half = h.finish();
+        }
+        let mut token = [0u8; 16];
+        token[..8].copy_from_slice(&halves[0].to_be_bytes());
+        token[8..].copy_from_slice(&halves[1].to_be_bytes());
+        CommitToken(token)
+    }
+}
+
+/// Mint the token of a commit whose predecessor is `prev`: nonzero and
+/// distinct from `prev`. A source that keeps returning either is broken,
+/// and this panics rather than spin on it: [`RandomTokens`] cannot, and
+/// an injected source is test tooling.
+pub fn mint_token(source: &mut dyn CommitTokenSource, prev: CommitToken) -> CommitToken {
+    for _ in 0..64 {
+        let token = source.next_token();
+        if !token.is_zero() && token != prev {
+            return token;
+        }
+    }
+    panic!("commit token source keeps returning zero or the predecessor");
 }
 
 /// Slot pages a `slot_count`-record arena occupies (the last page may
@@ -272,7 +641,14 @@ impl StoreManifest {
     /// big-endian: the 10-byte `VERS` payload, `store_schema` (u32),
     /// signature (u32 length + bytes), the 8-byte `CREA` payload,
     /// `slot_count` (u32), `slot_live` (u32), `chunk_len` (u64),
-    /// `epoch` (u64).
+    /// `free_len` (u32), `epoch` (u64), `cranks` (u64), `collect_every`
+    /// (u32), `collections` (u64) and the 16-byte commit token.
+    ///
+    /// A manifest stamped with an older schema encodes that schema's
+    /// layout, the root and seal strings in place of the token (an empty
+    /// root, and a seal [`CommitToken::to_legacy_seal`] reads back), with
+    /// each schema's tail fields: this build writes one only for test and
+    /// tooling fixtures that stand in for an older store.
     pub fn encode(&self) -> Vec<u8> {
         let mut v = Vec::new();
         v.extend_from_slice(&self.version.encode());
@@ -286,20 +662,29 @@ impl StoreManifest {
         v.extend_from_slice(&self.chunk_len.to_be_bytes());
         v.extend_from_slice(&self.free_len.to_be_bytes());
         v.extend_from_slice(&self.epoch.to_be_bytes());
-        let rb = self.root.as_bytes();
-        v.extend_from_slice(&(rb.len() as u32).to_be_bytes());
-        v.extend_from_slice(rb);
-        let sb = self.seal.as_bytes();
-        v.extend_from_slice(&(sb.len() as u32).to_be_bytes());
-        v.extend_from_slice(sb);
+        if self.store_schema >= 36 {
+            v.extend_from_slice(&self.cranks.to_be_bytes());
+            v.extend_from_slice(&self.collect_every.to_be_bytes());
+            v.extend_from_slice(&self.collections.to_be_bytes());
+            v.extend_from_slice(&self.token.0);
+            return v;
+        }
+        // The legacy layout: an empty root, then the seal.
+        v.extend_from_slice(&0u32.to_be_bytes());
+        let seal = self.token.to_legacy_seal();
+        v.extend_from_slice(&(seal.len() as u32).to_be_bytes());
+        v.extend_from_slice(seal.as_bytes());
         // Schema 8 tail, appended AFTER the seal and ONLY when the
         // stamp says 8 — symmetric with the decoder, which reads it
-        // under the same condition. The symmetry is load-bearing for
-        // the ladder: `migrate_v6_to_v7` writes a manifest stamped 7,
-        // and encoding a tail there would produce bytes its own decoder
-        // rejects as trailing garbage, breaking the intermediate step.
+        // under the same condition.
         if self.store_schema >= 8 {
             v.extend_from_slice(&self.cranks.to_be_bytes());
+        }
+        if self.store_schema >= 27 {
+            v.extend_from_slice(&self.collect_every.to_be_bytes());
+            v.extend_from_slice(&self.collections.to_be_bytes());
+            // An empty parent seal.
+            v.extend_from_slice(&0u32.to_be_bytes());
         }
         v
     }
@@ -344,14 +729,12 @@ impl StoreManifest {
             )));
         }
         let sig_len = u32::from_be_bytes(take4(&mut i)?) as usize;
-        if i + sig_len > p.len() {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "store manifest signature truncated",
-            )));
-        }
-        let signature =
-            Signature::decode(&p[i..i + sig_len]).map_err(SnapshotError::Signature)?;
-        i += sig_len;
+        let sig_end = i
+            .checked_add(sig_len)
+            .filter(|&end| end <= p.len())
+            .ok_or(SnapshotError::Corrupt("store manifest signature truncated"))?;
+        let signature = Signature::decode(&p[i..sig_end]).map_err(SnapshotError::Signature)?;
+        i = sig_end;
         let crea_hi = take4(&mut i)?;
         let crea_lo = take4(&mut i)?;
         let mut crea = [0u8; 8];
@@ -361,28 +744,64 @@ impl StoreManifest {
         let slot_count = u32::from_be_bytes(take4(&mut i)?);
         let slot_live = u32::from_be_bytes(take4(&mut i)?);
         let chunk_len = u64::from_be_bytes(take8(&mut i)?);
+        // A chunk offset is a u32, so no arena this format describes is
+        // longer. This is only the coarse bound; open's tail-row check
+        // ties the length to the stored rows before a lazy arena is sized
+        // from it.
+        if chunk_len > u64::from(u32::MAX) {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store manifest chunk length exceeds the chunk offset space",
+            )));
+        }
         let free_len = u32::from_be_bytes(take4(&mut i)?);
         let epoch = u64::from_be_bytes(take8(&mut i)?);
+        if store_schema >= 36 {
+            let cranks = u64::from_be_bytes(take8(&mut i)?);
+            let collect_every = u32::from_be_bytes(take4(&mut i)?);
+            let collections = u64::from_be_bytes(take8(&mut i)?);
+            let mut token = [0u8; 16];
+            token[..8].copy_from_slice(&take8(&mut i)?);
+            token[8..].copy_from_slice(&take8(&mut i)?);
+            if i != p.len() {
+                return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                    "store manifest trailing bytes",
+                )));
+            }
+            return Ok(StoreManifest {
+                version,
+                store_schema,
+                signature,
+                creation,
+                slot_count,
+                slot_live,
+                chunk_len,
+                free_len,
+                epoch,
+                cranks,
+                collect_every,
+                collections,
+                token: CommitToken(token),
+            });
+        }
+        // An older schema's layout, read for migration: the root and the
+        // parent seal are dropped, and the seal yields the token.
         let root_len = u32::from_be_bytes(take4(&mut i)?) as usize;
-        if i + root_len > p.len() {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "store manifest root truncated",
-            )));
-        }
-        let root = std::str::from_utf8(&p[i..i + root_len])
-            .map_err(|_| SnapshotError::Corrupt("store manifest root not utf8"))?
-            .to_string();
-        i += root_len;
+        let root_end = i
+            .checked_add(root_len)
+            .filter(|&end| end <= p.len())
+            .ok_or(SnapshotError::Corrupt("store manifest root truncated"))?;
+        std::str::from_utf8(&p[i..root_end])
+            .map_err(|_| SnapshotError::Corrupt("store manifest root not utf8"))?;
+        i = root_end;
         let seal_len = u32::from_be_bytes(take4(&mut i)?) as usize;
-        if i + seal_len > p.len() {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "store manifest seal truncated",
-            )));
-        }
-        let seal = std::str::from_utf8(&p[i..i + seal_len])
+        let seal_end = i
+            .checked_add(seal_len)
+            .filter(|&end| end <= p.len())
+            .ok_or(SnapshotError::Corrupt("store manifest seal truncated"))?;
+        let seal = std::str::from_utf8(&p[i..seal_end])
             .map_err(|_| SnapshotError::Corrupt("store manifest seal not utf8"))?
             .to_string();
-        i += seal_len;
+        i = seal_end;
         // Schema 8 added the completed-crank counter as a tail field.
         // An older store simply does not carry it, and 0 is the right
         // reading: it predates the counter, and 0 is where a fresh
@@ -393,9 +812,26 @@ impl StoreManifest {
         } else {
             0
         };
-        // Store contents are untrusted; a manifest that decodes but
-        // carries extra bytes is malformed, not forward-compatible —
-        // format evolution goes through the schema version gate above.
+        let (collect_every, collections) = if store_schema >= 27 {
+            let every = u32::from_be_bytes(take4(&mut i)?);
+            let collections = u64::from_be_bytes(take8(&mut i)?);
+            let len = u32::from_be_bytes(take4(&mut i)?) as usize;
+            let end = i
+                .checked_add(len)
+                .ok_or(SnapshotError::Corrupt("manifest parent seal length"))?;
+            let bytes = p
+                .get(i..end)
+                .ok_or(SnapshotError::Corrupt("manifest parent seal truncated"))?;
+            std::str::from_utf8(bytes)
+                .map_err(|_| SnapshotError::Corrupt("manifest parent seal not utf8"))?;
+            i = end;
+            (every, collections)
+        } else {
+            (0, 0)
+        };
+        // The encoding is canonical: a manifest that decodes but carries
+        // extra bytes is malformed, not forward-compatible — format
+        // evolution goes through the schema version gate above.
         if i != p.len() {
             return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                 "store manifest trailing bytes",
@@ -412,73 +848,20 @@ impl StoreManifest {
             free_len,
             epoch,
             cranks,
-            root,
-            seal,
+            collect_every,
+            collections,
+            token: CommitToken::from_legacy_seal(&seal)?,
         })
     }
-}
-
-/// Compute a commit's seal: SHA-256 (hex) over the previous seal, the
-/// manifest's core fields, the small state, and every row in the batch
-/// (index-tagged, in the batch's sorted order). Two commits agree in
-/// seal only if their whole lineage and content agree, which is what
-/// lets [`check_succession`] refuse equal-epoch forks.
-pub fn seal_commit(
-    prev_seal: &str,
-    manifest_core: &StoreManifest,
-    small: &[u8],
-    slot_pages: &[(u32, Vec<u8>)],
-    chunk_extents: &[(u32, Vec<u8>)],
-    free_segs: &[(u32, Vec<u8>)],
-    page_edges: &[(u32, Vec<u32>)],
-) -> String {
-    let mut h = crate::sha256::Sha256::new();
-    h.update(prev_seal.as_bytes());
-    // The COMPLETE manifest with only the seal field cleared (that is
-    // what is being computed): version, store schema, host callback
-    // signature, and creation parameters are store identity — two
-    // stores with identical rows but different signatures must not
-    // share a seal, or the pairing guard would pass a session against
-    // another host's store (the PR-review finding).
-    let mut sealed = manifest_core.clone();
-    sealed.seal = String::new();
-    h.update(&sealed.encode());
-    h.update(small);
-    for (i, bytes) in slot_pages {
-        h.update(b"P");
-        h.update(&i.to_be_bytes());
-        h.update(bytes);
-    }
-    for (i, bytes) in chunk_extents {
-        h.update(b"X");
-        h.update(&i.to_be_bytes());
-        h.update(bytes);
-    }
-    for (i, bytes) in free_segs {
-        h.update(b"F");
-        h.update(&i.to_be_bytes());
-        h.update(bytes);
-    }
-    for (i, targets) in page_edges {
-        h.update(b"E");
-        h.update(&i.to_be_bytes());
-        // Length prefix (v5): entries are variable-width, so without
-        // it two different summary lists could serialize to one byte
-        // stream (unreachable at sane page indices, but framing
-        // should be structural, not incidental).
-        h.update(&(targets.len() as u32).to_be_bytes());
-        for t in targets {
-            h.update(&t.to_be_bytes());
-        }
-    }
-    crate::sha256::hex(&h.finalize())
 }
 
 /// A page's outgoing edge summary: the sorted, deduplicated set of
 /// pages its records reference (self-edges excluded — a page trivially
 /// reaches itself). A pure function of the page's records, so stored
-/// summaries are recomputable from content — the phase-6 determinism
-/// lock.
+/// summaries are recomputable from content. The engine derives them;
+/// [`check_batch`] re-derives each supplied one from its page's records in
+/// debug builds only, and [`validate_store_content`] re-derives every
+/// stored one on request.
 pub fn derive_page_edges(page: u32, records: &[Slot]) -> Vec<u32> {
     let mut targets = std::collections::BTreeSet::new();
     for r in records {
@@ -532,31 +915,8 @@ pub(crate) fn bfs_pages(
     seen
 }
 
-/// Recompute a batch's seal after direct surgery on its contents —
-/// test/tooling support. Legitimate producers ([`image_to_batch`],
-/// the machine checkpoint) seal correctly by construction; a mutated
-/// batch without a reseal fails [`check_succession`]'s recomputation.
-pub fn reseal_batch(batch: &mut CheckpointBatch) {
-    batch.manifest.seal = seal_commit(
-        &batch.prev_seal,
-        &batch.manifest,
-        &batch.small,
-        &batch.slot_pages,
-        &batch.chunk_extents,
-        &batch.free_segs,
-        &batch.page_edges,
-    );
-}
-
-/// Row-leaf domain tags for the [`leaf_hash`] tree: slot page, chunk
-/// extent, free-list segment, small state.
-pub const LEAF_PAGE: u8 = b'P';
-pub const LEAF_EXT: u8 = b'X';
-pub const LEAF_FREE: u8 = b'F';
-pub const LEAF_SMALL: u8 = b'S';
-
-/// Free-list entries per stored segment (store seam phase 9): the
-/// free list leaves small state and becomes dirty-diffed segment rows,
+/// Free-list entries per stored segment: the free list is stored in
+/// dirty-diffed segment rows,
 /// so LIFO churn rewrites only the tail segment and per-commit
 /// small-state bytes are O(1) in heap size.
 pub const FREE_SEG_ENTRIES: u32 = 4096;
@@ -594,493 +954,91 @@ pub fn encode_all_free_segs(free: &[u32]) -> Vec<(u32, Vec<u8>)> {
         .collect()
 }
 
-/// One leaf of the row-hash tree: SHA-256 over the domain tag, the
-/// big-endian row index, and the row's exact stored bytes.
-pub fn leaf_hash(kind: u8, index: u32, bytes: &[u8]) -> [u8; 32] {
-    let mut h = crate::sha256::Sha256::new();
-    h.update(&[kind]);
-    h.update(&index.to_be_bytes());
-    h.update(bytes);
-    h.finalize()
-}
-
-// ---- The v6 ROOT TREE (store schema 6) --------------------------
-//
-// Schema 5's root was a FLAT hash over every leaf, so every commit
-// re-read every stored leaf to recombine it — the measured O(pages)
-// seal-metadata term. Schema 6 keeps the SAME leaves but combines
-// them through one binary Merkle tree per row class (slot pages,
-// chunk extents, free segments, page-edge summaries), with the
-// interior nodes PERSISTED beside the leaves: a commit recomputes
-// only the dirty leaves' root paths — O(dirty · log n) selective
-// reads — and the full recombination remains the open-time
-// validator. An odd node at any level is hashed with itself
-// (duplicate-last), and an empty class contributes a tagged empty
-// root, so widths are unambiguous given the counts the combined
-// root also covers.
-
-/// Class tags for the four leaf trees (also the node-hash domain
-/// separators).
-pub const TREE_PAGES: u8 = b'p';
-pub const TREE_EXTS: u8 = b'x';
-pub const TREE_FREES: u8 = b'f';
-pub const TREE_EDGES: u8 = b's';
-
-/// The page-edge summary row's LEAF hash (the other classes reuse
-/// [`leaf_hash`] over their raw bytes; summaries hash their decoded
-/// target list exactly as the v5 flat root did).
-pub fn edge_leaf_hash(index: u32, targets: &[u32]) -> [u8; 32] {
-    let mut h = crate::sha256::Sha256::new();
-    h.update(b"E");
-    h.update(&index.to_be_bytes());
-    h.update(&(targets.len() as u32).to_be_bytes());
-    for t in targets {
-        h.update(&t.to_be_bytes());
-    }
-    h.finalize()
-}
-
-fn tree_node_hash(tag: u8, level: u32, left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
-    let mut h = crate::sha256::Sha256::new();
-    h.update(&[b'N', tag]);
-    h.update(&level.to_be_bytes());
-    h.update(left);
-    h.update(right);
-    h.finalize()
-}
-
-fn tree_empty_root(tag: u8) -> [u8; 32] {
-    let mut h = crate::sha256::Sha256::new();
-    h.update(&[b'0', tag]);
-    h.finalize()
-}
-
-/// Build every interior level of a class tree from its leaves —
-/// `levels[0]` is the level ABOVE the leaves; the last level has one
-/// node, the class root. Empty or single-leaf input builds no
-/// levels (the class root is [`tree_empty_root`] or the leaf).
-pub fn build_class_tree(tag: u8, leaves: &[[u8; 32]]) -> Vec<Vec<[u8; 32]>> {
-    let mut levels: Vec<Vec<[u8; 32]>> = Vec::new();
-    let mut level_no = 0u32;
-    loop {
-        let cur: &[[u8; 32]] = match levels.last() {
-            None => leaves,
-            Some(l) => l,
-        };
-        if cur.len() <= 1 {
-            break;
-        }
-        let mut next: Vec<[u8; 32]> = Vec::with_capacity(cur.len().div_ceil(2));
-        for pair in cur.chunks(2) {
-            let right = pair.get(1).unwrap_or(&pair[0]);
-            next.push(tree_node_hash(tag, level_no, &pair[0], right));
-        }
-        levels.push(next);
-        level_no += 1;
-    }
-    levels
-}
-
-/// The class root given its leaves and interior levels.
-pub fn class_tree_root(tag: u8, leaves: &[[u8; 32]], levels: &[Vec<[u8; 32]>]) -> [u8; 32] {
-    match (leaves.len(), levels.last()) {
-        (0, _) => tree_empty_root(tag),
-        (_, None) => leaves[0],
-        (_, Some(top)) => top[0],
-    }
-}
-
-/// Recompute the interior paths for `dirty` leaf indices in place —
-/// the O(dirty · log n) incremental maintenance a v6 commit performs.
-/// `levels` must describe the SAME leaf count as `leaves` (a commit
-/// that grows or shrinks a class rebuilds via [`build_class_tree`] —
-/// width changes reshape every level's tail, and rebuild cost is
-/// bounded by the growth the commit already paid for).
-pub fn update_class_tree(
-    tag: u8,
-    leaves: &[[u8; 32]],
-    levels: &mut [Vec<[u8; 32]>],
-    dirty: &[u32],
-) {
-    let mut touched: Vec<u32> = dirty.to_vec();
-    touched.sort_unstable();
-    touched.dedup();
-    for k in 0..levels.len() {
-        let (read_below, level): (&[[u8; 32]], &mut Vec<[u8; 32]>) = if k == 0 {
-            let (first, _) = levels.split_at_mut(1);
-            (leaves, &mut first[0])
-        } else {
-            let (below, above) = levels.split_at_mut(k);
-            (&below[k - 1][..], &mut above[0])
-        };
-        let width = read_below.len();
-        let mut parents: Vec<u32> = Vec::with_capacity(touched.len());
-        for &i in &touched {
-            let pair = i & !1;
-            let l = read_below[pair as usize];
-            let r = if ((pair + 1) as usize) < width {
-                read_below[(pair + 1) as usize]
-            } else {
-                l
-            };
-            level[(i / 2) as usize] = tree_node_hash(tag, k as u32, &l, &r);
-            if parents.last() != Some(&(i / 2)) {
-                parents.push(i / 2);
-            }
-        }
-        touched = parents;
-    }
-}
-
-/// The CURRENT-schema root over full leaf/summary vectors — schema
-/// 6's class-tree combination. The v5 flat formula stays available
-/// as [`combine_root`] for migration verification only.
-pub fn compute_root(
-    small_leaf: &[u8; 32],
-    pages: &[[u8; 32]],
-    exts: &[[u8; 32]],
-    frees: &[[u8; 32]],
-    edges: &[Vec<u32>],
-) -> String {
-    let edge_leaves: Vec<[u8; 32]> = edges
-        .iter()
-        .enumerate()
-        .map(|(i, t)| edge_leaf_hash(i as u32, t))
-        .collect();
-    let pr = class_tree_root(TREE_PAGES, pages, &build_class_tree(TREE_PAGES, pages));
-    let xr = class_tree_root(TREE_EXTS, exts, &build_class_tree(TREE_EXTS, exts));
-    let fr = class_tree_root(TREE_FREES, frees, &build_class_tree(TREE_FREES, frees));
-    let sr = class_tree_root(TREE_EDGES, &edge_leaves, &build_class_tree(TREE_EDGES, &edge_leaves));
-    combine_class_roots(
-        small_leaf,
-        [pages.len() as u32, exts.len() as u32, frees.len() as u32],
-        [&pr, &xr, &fr, &sr],
-    )
-}
-
-/// The v6 combined root: counts, the small-state leaf, and the four
-/// class-tree roots (page, extent, free, edge order). The counts bind
-/// the widths, exactly as the v5 flat root's count header did.
-pub fn combine_class_roots(
-    small_leaf: &[u8; 32],
-    counts: [u32; 3],
-    roots: [&[u8; 32]; 4],
-) -> String {
-    let mut h = crate::sha256::Sha256::new();
-    h.update(b"C6");
-    for n in counts {
-        h.update(&n.to_be_bytes());
-    }
-    h.update(small_leaf);
-    for r in roots {
-        h.update(r);
-    }
-    crate::sha256::hex(&h.finalize())
-}
-
-/// A live copy of the store's root metadata — the four leaf-hash
-/// vectors, the small-state leaf, and the class-tree interior levels.
-/// The levels are a DERIVED CACHE: only the leaves persist anywhere;
-/// a ledger rebuilds them at construction and maintains them
-/// incrementally. Holding one across commits is what turns per-commit
-/// root maintenance from "re-read and re-hash every stored leaf" into
-/// O(dirty · log n): [`RootLedger::apply`] patches exactly the
-/// traveling rows' leaves and recomputes only their root paths.
+/// Tag a [`check_batch`] failure as the CALLER's, not the store's.
 ///
-/// Coherence discipline: build a ledger only from VERIFIED state (an
-/// open-time validation, or vectors a full [`apply_batch`] just
-/// recombined) and advance it only by the commits its owner performs;
-/// on ANY failed or refused commit the owner must DROP it and rebuild
-/// on the next slow path — never patch around a failure. The
-/// (epoch, seal) pairing guards refuse interleaved foreign commits,
-/// so a live ledger cannot silently diverge from the store it
-/// mirrors; what it deliberately trades away is [`apply_batch`]'s
-/// per-commit re-hash of untouched leaves, moving at-rest-edit
-/// detection to the open-time validator and the per-read row/leaf
-/// verification (the v6 design's stated discipline).
-pub struct RootLedger {
-    small_leaf: [u8; 32],
-    pages: Vec<[u8; 32]>,
-    exts: Vec<[u8; 32]>,
-    frees: Vec<[u8; 32]>,
-    edge_leaves: Vec<[u8; 32]>,
-    pages_levels: Vec<Vec<[u8; 32]>>,
-    exts_levels: Vec<Vec<[u8; 32]>>,
-    frees_levels: Vec<Vec<[u8; 32]>>,
-    edges_levels: Vec<Vec<[u8; 32]>>,
-}
-
-impl std::fmt::Debug for RootLedger {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RootLedger")
-            .field("widths", &self.widths())
-            .finish_non_exhaustive()
+/// Batch validation reuses the at-rest vocabulary (`RowLength`,
+/// `SummaryMismatch`, `MissingRow`), which read as a poisoned store when they
+/// describe stored content. A rejected commit is a malformed request against a
+/// healthy store, and a supervisor that cannot tell the two apart tears down a
+/// session it should merely have refused.
+fn reject_batch(e: StoreError) -> StoreError {
+    // Already tagged: do not double-wrap.
+    if matches!(e, StoreError::BatchRejected(_)) {
+        return e;
     }
-}
-
-impl RootLedger {
-    /// Build from full leaf vectors and raw page-edge summaries
-    /// (hashing the edge leaves and every interior level once —
-    /// O(n), the constructor's price; commits then pay O(dirty·log)).
-    pub fn build(
-        small: &[u8],
-        pages: Vec<[u8; 32]>,
-        exts: Vec<[u8; 32]>,
-        frees: Vec<[u8; 32]>,
-        edges: &[Vec<u32>],
-    ) -> RootLedger {
-        let edge_leaves: Vec<[u8; 32]> = edges
-            .iter()
-            .enumerate()
-            .map(|(i, t)| edge_leaf_hash(i as u32, t))
-            .collect();
-        let pages_levels = build_class_tree(TREE_PAGES, &pages);
-        let exts_levels = build_class_tree(TREE_EXTS, &exts);
-        let frees_levels = build_class_tree(TREE_FREES, &frees);
-        let edges_levels = build_class_tree(TREE_EDGES, &edge_leaves);
-        RootLedger {
-            small_leaf: leaf_hash(LEAF_SMALL, 0, small),
-            pages,
-            exts,
-            frees,
-            edge_leaves,
-            pages_levels,
-            exts_levels,
-            frees_levels,
-            edges_levels,
-        }
-    }
-
-    /// The prior free-segment leaves — the checkpoint producer's
-    /// dirty-diff baseline, read before [`Self::apply`] advances them.
-    pub fn free_leaves(&self) -> &[[u8; 32]] {
-        &self.frees
-    }
-
-    /// Current class widths `[pages, exts, frees]` — the prior-length
-    /// argument [`check_batch`] wants.
-    pub fn widths(&self) -> [usize; 3] {
-        [self.pages.len(), self.exts.len(), self.frees.len()]
-    }
-
-    /// The combined root over the ledger's current state.
-    pub fn root(&self) -> String {
-        combine_class_roots(
-            &self.small_leaf,
-            [
-                self.pages.len() as u32,
-                self.exts.len() as u32,
-                self.frees.len() as u32,
-            ],
-            [
-                &class_tree_root(TREE_PAGES, &self.pages, &self.pages_levels),
-                &class_tree_root(TREE_EXTS, &self.exts, &self.exts_levels),
-                &class_tree_root(TREE_FREES, &self.frees, &self.frees_levels),
-                &class_tree_root(TREE_EDGES, &self.edge_leaves, &self.edges_levels),
-            ],
-        )
-    }
-
-    /// Advance the ledger by one commit's rows and return the new
-    /// root. Pure maintenance — admission is [`check_batch`]'s job
-    /// and root comparison is the caller's; an out-of-range row index
-    /// still fails closed here rather than panicking. A class whose
-    /// width changed rebuilds its levels (the reshape touches every
-    /// level's tail; the cost is bounded by the growth the commit
-    /// already shipped); an unchanged-width class updates only the
-    /// dirty leaves' paths.
-    pub fn apply(
-        &mut self,
-        manifest: &StoreManifest,
-        small: &[u8],
-        slot_pages: &[(u32, Vec<u8>)],
-        chunk_extents: &[(u32, Vec<u8>)],
-        free_segs: &[(u32, Vec<u8>)],
-        page_edges: &[(u32, Vec<u32>)],
-    ) -> Result<String, StoreError> {
-        fn patch_class(
-            tag: u8,
-            kind: &'static str,
-            leaves: &mut Vec<[u8; 32]>,
-            levels: &mut Vec<Vec<[u8; 32]>>,
-            new_width: usize,
-            dirty: &[(u32, [u8; 32])],
-        ) -> Result<(), StoreError> {
-            for (i, _) in dirty {
-                if *i as usize >= new_width {
-                    return Err(StoreError::MissingRow(kind, *i));
-                }
-            }
-            if new_width != leaves.len() {
-                leaves.resize(new_width, [0u8; 32]);
-                for (i, h) in dirty {
-                    leaves[*i as usize] = *h;
-                }
-                *levels = build_class_tree(tag, leaves);
-            } else if !dirty.is_empty() {
-                let mut indices: Vec<u32> = Vec::with_capacity(dirty.len());
-                for (i, h) in dirty {
-                    leaves[*i as usize] = *h;
-                    indices.push(*i);
-                }
-                update_class_tree(tag, leaves, levels, &indices);
-            }
-            Ok(())
-        }
-        let page_dirty: Vec<(u32, [u8; 32])> = slot_pages
-            .iter()
-            .map(|(i, b)| (*i, leaf_hash(LEAF_PAGE, *i, b)))
-            .collect();
-        let ext_dirty: Vec<(u32, [u8; 32])> = chunk_extents
-            .iter()
-            .map(|(i, b)| (*i, leaf_hash(LEAF_EXT, *i, b)))
-            .collect();
-        let free_dirty: Vec<(u32, [u8; 32])> = free_segs
-            .iter()
-            .map(|(i, b)| (*i, leaf_hash(LEAF_FREE, *i, b)))
-            .collect();
-        let edge_dirty: Vec<(u32, [u8; 32])> = page_edges
-            .iter()
-            .map(|(i, t)| (*i, edge_leaf_hash(*i, t)))
-            .collect();
-        let n_pages = slot_page_count(manifest.slot_count) as usize;
-        patch_class(
-            TREE_PAGES,
-            "slot page",
-            &mut self.pages,
-            &mut self.pages_levels,
-            n_pages,
-            &page_dirty,
-        )?;
-        patch_class(
-            TREE_EXTS,
-            "chunk extent",
-            &mut self.exts,
-            &mut self.exts_levels,
-            chunk_extent_count(manifest.chunk_len) as usize,
-            &ext_dirty,
-        )?;
-        patch_class(
-            TREE_FREES,
-            "free segment",
-            &mut self.frees,
-            &mut self.frees_levels,
-            free_seg_count(manifest.free_len) as usize,
-            &free_dirty,
-        )?;
-        patch_class(
-            TREE_EDGES,
-            "page-edge summary",
-            &mut self.edge_leaves,
-            &mut self.edges_levels,
-            n_pages,
-            &edge_dirty,
-        )?;
-        self.small_leaf = leaf_hash(LEAF_SMALL, 0, small);
-        Ok(self.root())
-    }
-}
-
-/// The v5 flat root, kept ONLY so migration can verify a v5 store
-/// against its own stored root before restamping: SHA-256 (hex) over
-/// a section geometry header, the small-state leaf, every page,
-/// extent, and free-segment leaf in index order, and every page-edge
-/// summary. The counts header makes the section boundaries structural
-/// (two stores with different `(pages, exts, frees)` splits of one
-/// leaf sequence must not share a root), and the edge section puts
-/// the summaries under the same at-rest integrity as the rows — both
-/// properties [`compute_root`] carries forward.
-pub fn combine_root(
-    small_leaf: &[u8; 32],
-    pages: &[[u8; 32]],
-    exts: &[[u8; 32]],
-    frees: &[[u8; 32]],
-    edges: &[Vec<u32>],
-) -> String {
-    let mut h = crate::sha256::Sha256::new();
-    h.update(b"C");
-    h.update(&(pages.len() as u32).to_be_bytes());
-    h.update(&(exts.len() as u32).to_be_bytes());
-    h.update(&(frees.len() as u32).to_be_bytes());
-    h.update(small_leaf);
-    for l in pages {
-        h.update(l);
-    }
-    for l in exts {
-        h.update(l);
-    }
-    for l in frees {
-        h.update(l);
-    }
-    for (i, targets) in edges.iter().enumerate() {
-        h.update(b"E");
-        h.update(&(i as u32).to_be_bytes());
-        h.update(&(targets.len() as u32).to_be_bytes());
-        for t in targets {
-            h.update(&t.to_be_bytes());
-        }
-    }
-    crate::sha256::hex(&h.finalize())
+    StoreError::BatchRejected(Box::new(e))
 }
 
 /// The batch admission checks — the shared per-commit verification
 /// every backend runs BEFORE persisting anything, so all three refuse
-/// the same batches for the same reasons (the review's parity
-/// findings: free-segment grown-region and summary coupling were
-/// previously checked in some backends and not others):
+/// the same batches for the same reasons. The shared `commit_contract`
+/// tests exercise these gates across backends:
 ///
-/// 1. Grown-region presence: every row of a grown geometry region
+/// 1. Row indices: every traveling row and page-edge summary lies inside
+///    the batch's own geometry, since a backend writes rows by index; and
+///    that geometry is one [`StoreManifest::decode`] accepts, since a
+///    backend writes the manifest the store's next open decodes.
+/// 2. Grown-region presence: every row of a grown geometry region
 ///    (pages, extents, free segments alike) must travel in the batch
 ///    — O(grown), prior rows exist by induction.
-/// 2. Row lengths against the batch's OWN manifest geometry — a
-///    short/long row otherwise hashes into a self-consistent root and
-///    fails only at the next open (deferred fail-closed).
-/// 3. Summary coupling (v5): page-edge summaries travel for EXACTLY
-///    the traveling page rows, and each equals
-///    [`derive_page_edges`] of the row beside it — recomputed here,
-///    so stored summaries are derivation-verified at every write.
+/// 3. Row lengths against the batch's OWN manifest geometry, so a short
+///    or long row is refused here rather than when a later resume or
+///    fault reads it.
+/// 4. Summary coupling (v5): page-edge summaries travel for EXACTLY
+///    the traveling page rows, and in debug builds each is re-derived
+///    from the row beside it ([`derive_page_edges`]); the full
+///    validator re-derives every stored summary.
 ///
-/// Everything [`apply_batch`] verifies EXCEPT its item 4 (the root
-/// recombination), phrased against the prior state's leaf-vector
-/// LENGTHS (`[pages, exts, frees]`) rather than the vectors — the
-/// checks never read prior leaf contents, so the [`RootLedger`] fast
-/// path, holding only cached leaves, runs the identical gauntlet.
-///
-/// NOT a complete gate on its own: a row whose index is past the
-/// batch's geometry has an expected length of 0 (the length functions
-/// return 0 past the end) and an empty edge summary derives correctly,
-/// so a zero-length out-of-range row passes every check here (review
-/// wave 4, P3c). It is refused downstream — by the maintenance stage on
-/// both paths, `MissingRow` either way, probe-confirmed — so this is a
-/// note for a future backend, not a live hole: a backend that treats
-/// `check_batch` as the whole admission gate and then writes rows by
-/// index must range-check them itself, or this function must grow the
-/// index-range check.
+/// The prior geometry is the stored manifest's. The section payloads are
+/// validated by [`check_succession`], once per commit.
 pub fn check_batch(
-    prior: Option<(&StoreManifest, [usize; 3])>,
+    prior: Option<&StoreManifest>,
     batch: &CheckpointBatch,
 ) -> Result<(), StoreError> {
+    if batch.manifest.chunk_len > u64::from(u32::MAX) {
+        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "store manifest chunk length exceeds the chunk offset space",
+        )));
+    }
     let n_pages = slot_page_count(batch.manifest.slot_count) as usize;
     let n_exts = chunk_extent_count(batch.manifest.chunk_len) as usize;
     let n_frees = free_seg_count(batch.manifest.free_len) as usize;
-    let [prior_pages_len, prior_exts_len, prior_frees_len] =
-        prior.map(|(_, lens)| lens).unwrap_or([0, 0, 0]);
+    let [prior_pages_len, prior_exts_len, prior_frees_len] = prior.map_or([0, 0, 0], |prev| {
+        [
+            slot_page_count(prev.slot_count) as usize,
+            chunk_extent_count(prev.chunk_len) as usize,
+            free_seg_count(prev.free_len) as usize,
+        ]
+    });
 
-    // The grown-region checks below key off the PRIOR LEAF VECTORS'
-    // lengths while the boundary checks key off the PRIOR MANIFEST's
-    // geometry. Every backend maintains leaves sized to its stored
-    // manifest (and open-time validation re-checks it), but the two
-    // baselines arrive through different arguments — assert the
-    // coupling so a desynced caller fails closed HERE instead of
-    // skewing which rows the two checks require (wave-3 finding).
-    if let Some((prev, _)) = prior {
-        if prior_pages_len != slot_page_count(prev.slot_count) as usize
-            || prior_exts_len != chunk_extent_count(prev.chunk_len) as usize
-            || prior_frees_len != free_seg_count(prev.free_len) as usize
-        {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "prior leaf tables disagree with the prior manifest geometry",
-            )));
+    // Every traveling row inside the new geometry: a backend writes rows
+    // by index, and one past the geometry would survive in the store
+    // (the commit drops only rows past the new geometry's end, which is
+    // exactly where such a row claims to be).
+    for (kind, count, indices) in [
+        (
+            "slot page",
+            n_pages,
+            batch.slot_pages.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+        ),
+        (
+            "chunk extent",
+            n_exts,
+            batch.chunk_extents.iter().map(|(i, _)| *i).collect(),
+        ),
+        (
+            "free segment",
+            n_frees,
+            batch.free_segs.iter().map(|(i, _)| *i).collect(),
+        ),
+        (
+            "page-edge summary",
+            n_pages,
+            batch.page_edges.iter().map(|(i, _)| *i).collect(),
+        ),
+    ] {
+        if let Some(&index) = indices.iter().find(|&&i| i as usize >= count) {
+            return Err(StoreError::MissingRow(kind, index));
         }
     }
 
@@ -1106,7 +1064,7 @@ pub fn check_batch(
         }
     }
 
-    // Boundary rows (the second review pass's finding): the growth
+    // Boundary rows: the growth
     // checks above cover indexes the new geometry ADDS, but a total
     // (`slot_count`/`chunk_len`/`free_len`) that changes WITHIN an
     // existing row changes that row's geometry-derived length without
@@ -1118,7 +1076,7 @@ pub fn check_batch(
     // Every legitimate producer already satisfies this: growth writes
     // the tail page, compaction rewrites the tail extent, free churn
     // ships the changed segments.
-    if let Some((prev, _)) = prior {
+    if let Some(prev) = prior {
         fn require_boundaries(
             kind: &'static str,
             count0: u32,
@@ -1204,167 +1162,76 @@ pub fn check_batch(
         }
     }
 
-    let rows_by_page: std::collections::HashMap<u32, &Vec<u8>> =
-        batch.slot_pages.iter().map(|(p, b)| (*p, b)).collect();
     let edge_pages: std::collections::HashSet<u32> =
         batch.page_edges.iter().map(|(p, _)| *p).collect();
     if let Some(&odd) = batch_pages.symmetric_difference(&edge_pages).next() {
         return Err(StoreError::SummaryMismatch { page: odd });
     }
-    for (i, targets) in &batch.page_edges {
-        let bytes = rows_by_page[i];
-        let records = decode_slots(bytes)
-            .map_err(|_| StoreError::Snapshot(SnapshotError::Corrupt("store slot page record")))?;
-        if derive_page_edges(*i, &records) != *targets {
-            return Err(StoreError::SummaryMismatch { page: *i });
+    // Re-deriving each summary from its encoded rows guards the engine's
+    // own derivation, which the checkpoint runs on the records in hand;
+    // debug builds keep it, and `validate_store_content` re-derives every
+    // stored summary.
+    if cfg!(debug_assertions) {
+        let rows_by_page: std::collections::HashMap<u32, &Vec<u8>> =
+            batch.slot_pages.iter().map(|(p, b)| (*p, b)).collect();
+        for (i, targets) in &batch.page_edges {
+            let bytes = rows_by_page[i];
+            let records = decode_slots(bytes).map_err(|_| {
+                StoreError::Snapshot(SnapshotError::Corrupt("store slot page record"))
+            })?;
+            if derive_page_edges(*i, &records) != *targets {
+                return Err(StoreError::SummaryMismatch { page: *i });
+            }
         }
     }
     Ok(())
 }
 
-/// Apply a batch to a store's PRIOR leaf/summary state and return the
-/// new root: [`check_batch`]'s admission gauntlet, then leaf/summary
-/// maintenance and a FULL from-scratch root recombination against
-/// `batch.manifest.root` — a mis-rooted batch fails closed, and a
-/// prior leaf edited at rest fails the recombination HERE rather than
-/// laundering into this commit's sealed root. This is the reference
-/// commit path (Memory and File stores always take it); a backend
-/// holding a live [`RootLedger`] may replace the recombination with
-/// the ledger's O(dirty · log n) maintenance, trading this check's
-/// at-rest-edit detection for the open-time validator's.
-///
-/// `pages`/`exts`/`frees`/`edges` are the PRIOR vectors (sized to the
-/// stored geometry by invariant); on success they hold the new state.
-pub fn apply_batch(
-    pages: &mut Vec<[u8; 32]>,
-    exts: &mut Vec<[u8; 32]>,
-    frees: &mut Vec<[u8; 32]>,
-    edges: &mut Vec<Vec<u32>>,
-    prior: Option<&StoreManifest>,
-    batch: &CheckpointBatch,
-) -> Result<String, StoreError> {
-    check_batch(
-        prior.map(|p| (p, [pages.len(), exts.len(), frees.len()])),
-        batch,
-    )?;
-    let n_pages = slot_page_count(batch.manifest.slot_count) as usize;
-    let n_exts = chunk_extent_count(batch.manifest.chunk_len) as usize;
-    let n_frees = free_seg_count(batch.manifest.free_len) as usize;
-
-    pages.resize(n_pages, [0u8; 32]);
-    exts.resize(n_exts, [0u8; 32]);
-    frees.resize(n_frees, [0u8; 32]);
-    for (i, bytes) in &batch.slot_pages {
-        let slot = pages
-            .get_mut(*i as usize)
-            .ok_or(StoreError::MissingRow("slot page", *i))?;
-        *slot = leaf_hash(LEAF_PAGE, *i, bytes);
-    }
-    for (i, bytes) in &batch.chunk_extents {
-        let slot = exts
-            .get_mut(*i as usize)
-            .ok_or(StoreError::MissingRow("chunk extent", *i))?;
-        *slot = leaf_hash(LEAF_EXT, *i, bytes);
-    }
-    for (i, bytes) in &batch.free_segs {
-        let slot = frees
-            .get_mut(*i as usize)
-            .ok_or(StoreError::MissingRow("free segment", *i))?;
-        *slot = leaf_hash(LEAF_FREE, *i, bytes);
-    }
-    edges.resize(n_pages, Vec::new());
-    for (i, targets) in &batch.page_edges {
-        let slot = edges
-            .get_mut(*i as usize)
-            .ok_or(StoreError::MissingRow("page-edge summary", *i))?;
-        *slot = targets.clone();
-    }
-    let small_leaf = leaf_hash(LEAF_SMALL, 0, &batch.small);
-    let root = compute_root(&small_leaf, pages, exts, frees, edges);
-    if root != batch.manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: root,
-            found: batch.manifest.root.clone(),
-        });
-    }
-    Ok(root)
+// Accumulate declarations in their historical order, which also determines
+// derived Debug output. Codec ordering remains an independent roster policy.
+macro_rules! define_small_state_chain {
+    (($d:tt); $($section:ident => $next:ident, $(#[$attr:meta])* $field:ident: $ty:ty;)*) => {
+        macro_rules! small_state_fields {
+            $(($section; [$d ($d declared:tt)*]) => {
+                small_state_fields!($next; [$d ($d declared)* $(#[$attr])* pub $field: $ty,]);
+            };)*
+            (End; [$d ($d declared:tt)*]) => {
+                /// The whole-on-every-commit remainder of the machine state: the value
+                /// stack, the slot free list, the key/name/symbol tables, the meter,
+                /// and (store schema 7, the side-table ledger) the bulk side tables
+                /// and `Symbol.for` registry. Each section reuses its atom payload
+                /// encoding verbatim.
+                #[derive(Clone, Debug, PartialEq)]
+                pub struct SmallState { $d ($d declared)* }
+            };
+        }
+        small_state_fields!(Stack; []);
+    };
 }
-
-/// The whole-on-every-commit remainder of the machine state: the value
-/// stack, the slot free list, the key/name/symbol tables, the meter,
-/// and (store schema 7, the side-table ledger) the bulk side tables
-/// and `Symbol.for` registry. Each section reuses its atom payload
-/// encoding verbatim.
-#[derive(Clone, Debug, PartialEq)]
-pub struct SmallState {
-    pub stack: Vec<Slot>,
-    pub slot_free: Vec<u32>,
-    pub keys: Vec<String>,
-    pub names: Vec<String>,
-    /// The symbol-key id table (see [`crate::image::SymbolKeyImage`]).
-    pub symbols: crate::image::SymbolKeyImage,
-    pub meter: MeterImage,
-    /// The arrays side table (schema 7; the `ARRY` atom's encoding).
-    /// Whole-on-every-commit like the stack — O(side tables) bytes per
-    /// checkpoint; dirty-diffed side-table ROWS are the named upgrade
-    /// if attached machines carry bulk state wide enough to measure.
-    pub arrays: Vec<crate::image::ArrayImage>,
-    /// The collections side table (schema 7; the `COLL` encoding).
-    pub collections: Vec<crate::image::CollectionImage>,
-    /// The `Symbol.for` registry (schema 7; the `REGY` encoding).
-    pub registry: Vec<crate::image::RegistryImage>,
-    /// The error-data side table (schema 9; the `ERRD` encoding).
-    pub errors: Vec<crate::image::ErrorImage>,
-    /// The array-buffers side table (schema 10; the `ABUF` encoding).
-    pub buffers: Vec<crate::image::BufferImage>,
-    /// The typed-arrays side table (schema 10; the `TARR` encoding).
-    pub typed_arrays: Vec<crate::image::TypedArrayImage>,
-    /// The data-views side table (schema 10; the `DVIW` encoding).
-    pub data_views: Vec<crate::image::DataViewImage>,
-    /// The primitive-wrapper side table (schema 11; the `WRAP` encoding).
-    pub wrappers: Vec<crate::image::WrapperImage>,
-    /// The regexp side table (schema 11; the `REGX` encoding).
-    pub regexps: Vec<crate::image::RegExpImage>,
-    /// Date `[[DateValue]]` records (schema 14; the `DATE` encoding).
-    pub dates: Vec<crate::image::DateImage>,
-    /// Atomic retained guest-callability state (schema 15; `FUNC`).
-    pub function_state: ironhorse_vm::FunctionStateSnapshot,
-    /// Proxy internal slots and revoker links (schema 16; `PROX`).
-    pub proxy_state: ironhorse_vm::ProxyStateSnapshot,
-    /// Guest accessor getter/setter mappings (schema 17; `ACCS`).
-    pub accessors: Vec<ironhorse_vm::AccessorRow>,
-    /// Runtime Intl bound-function links (schema 18; `IBFN`).
-    pub intl_bound_functions: Vec<ironhorse_vm::IntlBoundFunctionRow>,
-    /// Private values and accessors (schema 19; `PRIV`).
-    pub private_elements: ironhorse_vm::PrivateElementSnapshot,
-    /// Explicit resource-management stacks (schema 20; `DISP`).
-    pub disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
-    /// Synchronous generator saved activations (schema 21; `GENR`).
-    pub generators: Vec<ironhorse_vm::GeneratorRow>,
-    /// The promise cluster (schema 23; `PRMS`).
-    pub promise_cluster: ironhorse_vm::PromiseClusterSnapshot,
-    /// The arguments-exotic brand owners (schema 11; the `ARGB` encoding).
-    pub arguments_brands: Vec<u32>,
-    /// The Temporal record tables (schema 11; the `TMPR` encoding).
-    pub temporal: crate::image::TemporalImage,
-    /// The Intl record tables (schema 12; the `INTL` encoding).
-    pub intl: ironhorse_vm::IntlTables,
-    /// The installed-names floor (schema 12; the `NFLR` semantics:
-    /// `None` — an empty section — restores the conservative
-    /// full-table default).
-    pub name_floor: Option<u32>,
-    /// The built-in iterator cursors (schema 13; the `ITER` encoding).
-    pub iterators: Vec<ironhorse_vm::IteratorRow>,
+macro_rules! define_small_state {
+    ($($section:ident {
+        image_field: $field:ident,
+        builder: $builder:ident,
+        live: [$($live:tt)*],
+        bounds: [$($bounds:tt)*],
+        gate: [$($gate:tt)*],
+        restore: [$($restore:tt)*],
+        initialize: [$($next:ident; $(#[$attr:meta])* $init_field:ident: $ty:ty = $init:expr)?],
+        $($rest:tt)*
+    })*) => {
+        define_small_state_chain!(($); $($($section => $next, $(#[$attr])* $init_field: $ty;)?) *);
+    };
 }
+crate::snapshot_roster::snapshot_payloads!(define_small_state);
 
 impl SmallState {
-    /// Serialize: twenty-eight sections, each `u32` length-prefixed, in
+    /// Encode the 32 payloads separately, without framing, in
     /// the fixed order stack, free list, keys, names, symbols, meter,
     /// arrays, collections, registry, errors, buffers, typed arrays,
     /// data views, wrappers, regexps, arguments brands, temporal,
     /// intl, name floor, iterators, dates, function state, proxy state,
     /// accessors, Intl bound functions, private elements, disposable stacks,
-    /// generators
+    /// generators, error frames, promises, async instances, and index properties
     /// (arrays/collections/registry since store schema 7 — the
     /// side-table ledger; the 6→7 migration appends them empty, a
     /// pure 12-byte suffix — errors since schema 9, the typed-array
@@ -1377,359 +1244,125 @@ impl SmallState {
     /// in schema 17, Intl bound functions in schema 18, and private
     /// elements in schema 19, disposable stacks in schema 20,
     /// synchronous generators in schema 21, error frames in schema 22,
-    /// and the promise cluster in schema 23 the same
-    /// way). Since store schema v4 the free-list section is
+    /// the promise cluster in schema 23, and async activations in schema 24
+    /// the same way). Since store schema v4 the free-list section is
     /// always EMPTY in stored small state — the list lives in
-    /// dirty-diffed segment rows (phase 9) — but the section slot
+    /// dirty-diffed segment rows — but the section slot
     /// stays so the layout is stable; the atom container path still
     /// carries the list via the image, not this encoding.
+    pub fn encode_sections(&self) -> [Vec<u8>; 32] {
+        crate::store_sections::SmallSection::ALL.map(|section| self.encode_section(section))
+    }
+
+    pub fn encode_section(&self, section: crate::store_sections::SmallSection) -> Vec<u8> {
+        #[cfg(test)]
+        crate::machine::extraction_counts::encode(section);
+        crate::snapshot_roster::encode_payload(self, section)
+    }
+
+    /// Encode all section payloads with the legacy framing, byte-for-byte.
     pub fn encode(&self) -> Vec<u8> {
-        let sections: [Vec<u8>; 30] = [
-            encode_stack(&self.stack),
-            encode_u32s(&[]),
-            encode_strings(&self.keys),
-            encode_strings(&self.names),
-            crate::image::encode_symbol_keys(&self.symbols),
-            self.meter.encode(),
-            crate::image::encode_arrays(&self.arrays),
-            crate::image::encode_collections(&self.collections),
-            crate::image::encode_registry(&self.registry),
-            crate::image::encode_errors(&self.errors),
-            crate::image::encode_buffers(&self.buffers),
-            crate::image::encode_typed_arrays(&self.typed_arrays),
-            crate::image::encode_data_views(&self.data_views),
-            crate::image::encode_wrappers(&self.wrappers),
-            crate::image::encode_regexps(&self.regexps),
-            crate::image::encode_arguments_brands(&self.arguments_brands),
-            crate::image::encode_temporal(&self.temporal),
-            crate::image::encode_intl(&self.intl),
-            match self.name_floor {
-                Some(floor) => floor.to_be_bytes().to_vec(),
-                None => Vec::new(),
-            },
-            crate::image::encode_iterators(&self.iterators),
-            crate::image::encode_dates(&self.dates),
-            crate::image::encode_function_state(&self.function_state),
-            crate::image::encode_proxy_state(&self.proxy_state),
-            crate::image::encode_accessors(&self.accessors),
-            crate::image::encode_intl_bound_functions(&self.intl_bound_functions),
-            crate::image::encode_private_elements(&self.private_elements),
-            crate::image::encode_disposable_stacks(&self.disposable_stacks),
-            crate::image::encode_generators(&self.generators),
-            crate::image::encode_error_frames(&self.errors),
-            crate::image::encode_promise_cluster(&self.promise_cluster),
-        ];
         let mut v = Vec::new();
-        for s in sections {
+        for s in self.encode_sections() {
             v.extend_from_slice(&(s.len() as u32).to_be_bytes());
             v.extend_from_slice(&s);
         }
         v
     }
 
-    /// Decode the twenty-eight sections. Every section length is
+    /// Decode the sections, in the order the encoder appends them. Every
+    /// section length is
     /// bounds-checked against the remaining payload before it is
     /// sliced.
     pub fn decode(p: &[u8]) -> Result<SmallState, StoreError> {
-        let mut i = 0usize;
-        let mut section = |name: &'static str| -> Result<&[u8], StoreError> {
-            if i + 4 > p.len() {
-                return Err(StoreError::Snapshot(SnapshotError::Corrupt(name)));
-            }
-            let len = u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]) as usize;
-            i += 4;
-            if i + len > p.len() {
-                return Err(StoreError::Snapshot(SnapshotError::Corrupt(name)));
-            }
-            let s = &p[i..i + len];
-            i += len;
-            Ok(s)
-        };
-        let stack = decode_stack(section("small state stack section")?)?;
-        let slot_free = decode_u32s(section("small state free-list section")?)?;
-        let keys = decode_strings(section("small state keys section")?)?;
-        let names = decode_strings(section("small state names section")?)?;
-        let symbols = crate::image::decode_symbol_keys(section("small state symbols section")?)
-            .map_err(StoreError::Snapshot)?;
-        let meter = MeterImage::decode(section("small state meter section")?)?;
-        // Schema-7 sections (the side-table ledger). An EMPTY section
-        // (zero length, distinct from an empty LIST's 4-byte count
-        // header) is accepted as the empty table: it is exactly what
-        // the 6→7 migration appends, and it keeps that append a pure
-        // suffix rather than a re-encode of bytes the old root signed.
-        let arrays_bytes = section("small state arrays section")?;
-        let arrays = if arrays_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_arrays(arrays_bytes)?
-        };
-        let collections_bytes = section("small state collections section")?;
-        let collections = if collections_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_collections(collections_bytes)?
-        };
-        let registry_bytes = section("small state registry section")?;
-        let registry = if registry_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_registry(registry_bytes)?
-        };
-        // Schema-9 section (the error-data row), same empty-section
-        // rule: the 8→9 migration appends exactly this.
-        let errors_bytes = section("small state errors section")?;
-        let mut errors = if errors_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_errors(errors_bytes)?
-        };
-        // Schema-10 sections (the typed-array family), same rule.
-        let buffers_bytes = section("small state buffers section")?;
-        let buffers = if buffers_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_buffers(buffers_bytes)?
-        };
-        let typed_arrays_bytes = section("small state typed-arrays section")?;
-        let typed_arrays = if typed_arrays_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_typed_arrays(typed_arrays_bytes)?
-        };
-        let data_views_bytes = section("small state data-views section")?;
-        let data_views = if data_views_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_data_views(data_views_bytes)?
-        };
-        // Schema-11 sections (the data-only language rows), same rule.
-        let wrappers_bytes = section("small state wrappers section")?;
-        let wrappers = if wrappers_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_wrappers(wrappers_bytes)?
-        };
-        let regexps_bytes = section("small state regexps section")?;
-        let regexps = if regexps_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_regexps(regexps_bytes)?
-        };
-        let arguments_bytes = section("small state arguments section")?;
-        let arguments_brands = if arguments_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_arguments_brands(arguments_bytes)?
-        };
-        let temporal_bytes = section("small state temporal section")?;
-        let temporal = if temporal_bytes.is_empty() {
-            crate::image::TemporalImage::default()
-        } else {
-            crate::image::decode_temporal(temporal_bytes)?
-        };
-        // Schema-12 sections (the Intl record tables and the
-        // installed-names floor), same rule.
-        let intl_bytes = section("small state intl section")?;
-        let intl = if intl_bytes.is_empty() {
-            ironhorse_vm::IntlTables::default()
-        } else {
-            crate::image::decode_intl(intl_bytes).map_err(StoreError::Snapshot)?
-        };
-        let floor_bytes = section("small state name-floor section")?;
-        let name_floor = match floor_bytes.len() {
-            0 => None,
-            4 => Some(u32::from_be_bytes([
-                floor_bytes[0],
-                floor_bytes[1],
-                floor_bytes[2],
-                floor_bytes[3],
-            ])),
-            _ => {
-                return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                    "small state name-floor section size",
-                )))
-            }
-        };
-        // A floor past the name table cannot come from an honest
-        // suspension (the store mirror of `read_machine`'s check).
-        if name_floor.is_some_and(|floor| floor as usize > names.len()) {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "installed-names floor past the name table",
-            )));
+        let small = Self::decode_legacy(p)?;
+        if small.encode() != p {
+            return Err(SnapshotError::Corrupt("non-canonical small state").into());
         }
-        // And an explicit floor AT the table length is non-canonical:
-        // writers emit the fully-installed state as an EMPTY section
-        // (the store mirror of `read_machine`'s NFLR gate — review).
-        if name_floor.is_some_and(|floor| floor as usize == names.len()) {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "installed-names floor: non-canonical explicit full floor",
-            )));
-        }
-        // Schema-13 section (the iterator cursors), same rule.
-        let iterators_bytes = section("small state iterators section")?;
-        let iterators = if iterators_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_iterators(iterators_bytes).map_err(StoreError::Snapshot)?
-        };
-        // Schema-14 Date records, same empty-section migration rule.
-        let dates_bytes = section("small state dates section")?;
-        let dates = if dates_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_dates(dates_bytes).map_err(StoreError::Snapshot)?
-        };
-        // Schema-15 atomic retained function state.
-        let function_bytes = section("small state function section")?;
-        let function_state = if function_bytes.is_empty() {
-            ironhorse_vm::FunctionStateSnapshot::default()
-        } else {
-            crate::image::decode_function_state(function_bytes).map_err(StoreError::Snapshot)?
-        };
-        // Schema-16 proxy state.
-        let proxy_bytes = section("small state proxy section")?;
-        let proxy_state = if proxy_bytes.is_empty() {
-            ironhorse_vm::ProxyStateSnapshot::default()
-        } else {
-            crate::image::decode_proxy_state(proxy_bytes).map_err(StoreError::Snapshot)?
-        };
-        // Schema-17 guest accessors.
-        let accessor_bytes = section("small state accessor section")?;
-        let accessors = if accessor_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_accessors(accessor_bytes).map_err(StoreError::Snapshot)?
-        };
-        // Schema-18 Intl bound-function links.
-        let intl_bound_bytes = section("small state Intl bound-function section")?;
-        let intl_bound_functions = if intl_bound_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_intl_bound_functions(intl_bound_bytes)
-                .map_err(StoreError::Snapshot)?
-        };
-        // Schema-19 private elements.
-        let private_bytes = section("small state private-element section")?;
-        let private_elements = if private_bytes.is_empty() {
-            ironhorse_vm::PrivateElementSnapshot::default()
-        } else {
-            crate::image::decode_private_elements(private_bytes).map_err(StoreError::Snapshot)?
-        };
-        // Schema-20 disposable stacks.
-        let disposable_bytes = section("small state disposable-stack section")?;
-        let disposable_stacks = if disposable_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_disposable_stacks(disposable_bytes)
-                .map_err(StoreError::Snapshot)?
-        };
-        // Schema-21 synchronous generator activations.
-        let generator_bytes = section("small state generator section")?;
-        let generators = if generator_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_generators(generator_bytes).map_err(StoreError::Snapshot)?
-        };
-        // Schema-22 error CONSTRUCTION frames. Their own section for
-        // the same reason they get their own atom: appending one
-        // section is the migration this ladder already knows how to
-        // do, where widening the schema-9 error rows would have been a
-        // rewrite of a section in the middle.
-        let error_frames_bytes = section("small state error-frames section")?;
-        if !error_frames_bytes.is_empty() {
-            for (owner, frames) in crate::image::decode_error_frames(error_frames_bytes)
-                .map_err(StoreError::Snapshot)?
-            {
-                let Some(row) = errors.iter_mut().find(|e| e.owner == owner) else {
-                    return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                        "error-frame side table: owner has no error row",
-                    )));
-                };
-                row.frames = frames;
-            }
-        }
-        // Schema-23 promise cluster, same empty-section migration rule.
-        let promise_bytes = section("small state promise section")?;
-        let promise_cluster = if promise_bytes.is_empty() {
-            ironhorse_vm::PromiseClusterSnapshot::default()
-        } else {
-            crate::image::decode_promise_cluster(promise_bytes).map_err(StoreError::Snapshot)?
-        };
-        // Same exact-consumption rule as the manifest: thirty
-        // sections and nothing after them, or the small state fails
-        // closed.
-        if i != p.len() {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "small state trailing bytes",
-            )));
-        }
-        Ok(SmallState {
-            stack,
-            slot_free,
-            keys,
-            names,
-            symbols,
-            meter,
-            arrays,
-            collections,
-            registry,
-            errors,
-            buffers,
-            typed_arrays,
-            data_views,
-            wrappers,
-            regexps,
-            dates,
-            function_state,
-            proxy_state,
-            accessors,
-            intl_bound_functions,
-            private_elements,
-            disposable_stacks,
-            generators,
-            promise_cluster,
-            arguments_brands,
-            temporal,
-            intl,
-            name_floor,
-            iterators,
-        })
+        Ok(small)
+    }
+
+    fn decode_legacy(p: &[u8]) -> Result<SmallState, StoreError> {
+        crate::snapshot_roster::decode_legacy_payloads(p)
     }
 }
 
-/// One atomic checkpoint: the full (tiny) manifest and small state,
-/// plus only the **dirty** slot pages and chunk extents, already
+/// One atomic checkpoint: the full manifest, full or sparse small-state
+/// sections, and only the **dirty** slot pages and chunk extents, already
 /// encoded. `commit` applies all of it or none of it, and drops any
 /// stored row beyond the new geometry (a chunk arena may shrink across
 /// a GC compaction; stale rows must not survive to satisfy a later,
 /// larger geometry).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CheckpointBatch {
-    /// The seal of the store state this batch was computed against
-    /// (empty for the epoch-1 full write into an empty store). Every
-    /// backend refuses a batch whose `prev_seal` differs from the
-    /// stored manifest's seal ([`check_succession`]).
-    pub prev_seal: String,
+    /// The commit token of the store state this batch was computed
+    /// against ([`CommitToken::ZERO`] for the epoch-1 full write into an
+    /// empty store). Every backend refuses a batch whose `prev_token`
+    /// differs from the stored manifest's token ([`check_succession`]).
+    /// The batch's own token rides in its manifest.
+    pub prev_token: CommitToken,
     pub manifest: StoreManifest,
-    /// Encoded [`SmallState`].
+    /// Full encoded [`SmallState`] when `small_updates` is absent.
     pub small: Vec<u8>,
+    /// Sparse section replacements. When present, `small` must be empty.
+    /// Omission preserves a section; an explicit empty payload replaces it.
+    pub small_updates: Option<Vec<crate::store_sections::SectionUpdate>>,
     /// `(page index, encoded records)` for each dirty slot page.
     pub slot_pages: Vec<(u32, Vec<u8>)>,
     /// `(extent index, raw bytes)` for each dirty chunk extent.
     pub chunk_extents: Vec<(u32, Vec<u8>)>,
-    /// `(segment index, encoded entries)` for each dirty free-list
-    /// segment (store seam phase 9). Dirty-diffed at checkpoint via
-    /// the leaf tree, so LIFO churn carries only the tail segment.
+    /// `(segment index, encoded entries)` for each free-list segment the
+    /// checkpoint may have changed: those from the arena's low-water mark
+    /// on, so LIFO churn carries only the tail segment.
     pub free_segs: Vec<(u32, Vec<u8>)>,
     /// `(page index, sorted outgoing page targets)` for each dirty
-    /// slot page — the **persisted page-edge summaries** (phase 6):
+    /// slot page — the **persisted page-edge summaries**:
     /// which pages this page's records reference. Derived purely from
-    /// the page's records ([`derive_page_edges`]), sealed with the
-    /// commit, and the substrate for reachability-as-indexed-queries
+    /// the page's records ([`derive_page_edges`]), committed with them,
+    /// and the substrate for reachability-as-indexed-queries
     /// ([`reachable_pages`]) — a collector consulting them never
     /// faults row content.
     pub page_edges: Vec<(u32, Vec<u32>)>,
 }
+
+/// An admitted batch. Only the shared commit gate can construct this
+/// token; backend hooks receive no batch until succession, geometry and
+/// summary coupling have passed.
+pub struct VerifiedCommit<'a> {
+    batch: &'a CheckpointBatch,
+}
+
+impl<'a> VerifiedCommit<'a> {
+    /// Consume admission, yielding the immutable batch.
+    pub fn batch(self) -> &'a CheckpointBatch {
+        self.batch
+    }
+}
+
+/// A backend invokes this gate with its current manifest while holding its
+/// transaction or exclusive commit access. The returned token is the only
+/// way the hook obtains the batch it will persist.
+pub type CommitVerifier<'a> =
+    dyn FnMut(Option<&StoreManifest>) -> Result<VerifiedCommit<'a>, StoreError> + 'a;
+
+/// Non-overridable checkpoint admission for every [`HeapStore`]. The blanket
+/// implementation prevents backend implementations from replacing the gate.
+pub trait HeapStoreCommit: HeapStore {
+    /// Apply a checkpoint through the shared admission gauntlet. The backend
+    /// supplies its baseline under commit isolation and only sees the batch
+    /// after verification succeeds. Nothing stored is re-derived here: the
+    /// store is trusted (the store-seam design's trust model), and the
+    /// succession check pairs the batch with the stored state by its token.
+    fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
+        self.commit_verified(&mut |stored| {
+            check_succession(stored, batch)?;
+            check_batch(stored, batch).map_err(reject_batch)?;
+            Ok(VerifiedCommit { batch })
+        })
+    }
+}
+
+impl<S: HeapStore + ?Sized> HeapStoreCommit for S {}
 
 /// The keyed snapshot store: point reads by page/extent index and one
 /// atomic batch commit. Implementations: [`MemoryStore`] (tests and
@@ -1747,34 +1380,37 @@ pub trait HeapStore {
     fn manifest(&self) -> Result<StoreManifest, StoreError>;
     /// The encoded [`SmallState`] of the current epoch.
     fn read_small_state(&self) -> Result<Vec<u8>, StoreError>;
+    /// Fixed-size section hash inventory. Whole-state fallback is for reference
+    /// backends; database backends override this without reading payloads.
+    fn small_section_hashes(
+        &self,
+    ) -> Result<[[u8; 32]; crate::store_sections::SMALL_SECTION_COUNT], StoreError> {
+        Ok(*crate::store_sections::SectionLeaves::from_payloads(
+            &crate::store_sections::split_small_state(&self.read_small_state()?)?,
+        )
+        .hashes())
+    }
     /// The raw bytes of slot page `page`.
     fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError>;
     /// The raw bytes of chunk extent `ext`.
     fn read_chunk_extent(&self, ext: u32) -> Result<Vec<u8>, StoreError>;
     /// Row lengths WITHOUT row contents, index-ordered: `(slot page
-    /// byte lengths, chunk extent byte lengths)`. The open-time
-    /// inventory validates against this so a lazy resume does no
-    /// O(heap) content I/O (the PR-review finding); backends serve it
+    /// byte lengths, chunk extent byte lengths)`. The metadata-scale
+    /// validator ([`validate_store`]) checks the row inventory against
+    /// this without O(heap) slot/chunk content I/O; backends serve it
     /// from metadata (directory entries, `length(bytes)` aggregates).
     fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError>;
-    /// The stored row-leaf hashes, index-ordered (pages, extents) —
-    /// 32 bytes per row, so metadata-scale like [`Self::inventory`].
-    /// Maintained by `commit` via [`apply_batch_leaves`]; the open-time
-    /// validation recombines them against the manifest root, and the
-    /// fault path verifies each row read against its leaf.
-    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError>;
-    /// The raw bytes of free-list segment `seg` (phase 9).
+    /// The raw bytes of free-list segment `seg`.
     fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError>;
-    /// The stored free-segment leaf hashes, index-ordered (phase 9).
-    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError>;
-    /// The stored page-edge summaries, index-ordered (phase 6): one
+    /// The stored page-edge summaries, index-ordered: one
     /// sorted target list per slot page. Metadata-scale; maintained by
     /// `commit` from the batch's `page_edges`.
     fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError>;
-    /// Apply one checkpoint atomically. Must enforce the epoch
-    /// discipline via [`check_epoch`] and drop rows beyond the new
-    /// geometry.
-    fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError>;
+    /// Acquire commit isolation (or enforce a documented single-writer contract),
+    /// invoke `verify` with the current manifest, then atomically persist
+    /// the batch it admits. This hook has no raw batch argument, so it
+    /// cannot accidentally skip the common verification step.
+    fn commit_verified(&mut self, verify: &mut CommitVerifier<'_>) -> Result<(), StoreError>;
     /// How many page-edge summaries the store holds — the geometry
     /// gate the partial collector checks before deciding anything
     /// from the summaries (a truncated store must fail closed, not
@@ -1790,7 +1426,7 @@ pub trait HeapStore {
     /// however small the answer). Backends with an indexed edge
     /// representation override it with a query whose transfer is
     /// proportional to the ANSWER — the SQLite backend serves it as a
-    /// recursive CTE over its normalized pairs (phase 10), with
+    /// recursive CTE over its normalized pairs, with
     /// dense/CTE parity locked by test. Roots appear in the result
     /// even when out of range (they are edgeless), on both paths.
     fn reachable_page_set(
@@ -1800,60 +1436,56 @@ pub trait HeapStore {
         Ok(bfs_pages(&self.page_edges()?, roots.iter().copied()))
     }
 
+    /// Compare the backend's own derived indexes with the state they are
+    /// derived from, for [`validate_store_content`]: the SQLite backend
+    /// checks its normalized `edge_pairs` against the page-edge
+    /// summaries. Provided: a backend that derives no index has nothing
+    /// to compare.
+    fn check_derived_indexes(&self) -> Result<(), StoreError> {
+        Ok(())
+    }
+
     /// Re-read the manifest from DURABLE state, bypassing any cached
     /// view this handle holds.
     ///
-    /// [`migrate_store`] decides each ladder step from this rather than
-    /// from [`Self::manifest`]. Since `open()` stopped migrating, the
-    /// gap between opening a store and upgrading it is caller-controlled
-    /// and unbounded, so a handle that cached a v5 header at open can
-    /// reach the ladder long after another handle upgraded the file —
-    /// and splice a stale intermediate manifest onto a newer body,
-    /// bricking it (review wave 5). Reading durably instead, that handle
-    /// sees the current schema and correctly reports nothing to do.
+    /// [`migrate_store`] starts from this rather than from
+    /// [`Self::manifest`]. Since `open()` stopped migrating, the gap
+    /// between opening a store and upgrading it is caller-controlled and
+    /// unbounded, so a handle that cached an old header at open can reach
+    /// the ladder long after another handle upgraded the file. Reading
+    /// durably instead, that handle sees the current schema and correctly
+    /// reports nothing to do. A handle whose cached view is behind the
+    /// durable manifest is refused before the migration reads from it, and
+    /// [`Self::replace_for_migration`]'s comparison closes the remaining
+    /// window.
     ///
     /// The default is [`Self::manifest`], which is exact for a backend
     /// that holds no cache — the in-memory and SQLite stores both read
     /// their state on every call. `FileStore`, which caches its header,
     /// overrides it.
-    ///
-    /// This narrows the window to the width of one ladder step; closing
-    /// it entirely needs a compare-and-swap in the write, which the
-    /// single-writer premise this seam documents does not pay for.
     fn reread_manifest(&self) -> Result<StoreManifest, StoreError> {
         self.manifest()
     }
 
-    /// Replace the stored manifest VERBATIM — [`migrate_store`]'s
-    /// write surface and nothing else's: it bypasses succession
-    /// because a migration restamps the schema and root FORMULA of
-    /// unchanged content. Implementations persist atomically. The
-    /// default refuses, so read-only or exotic backends stay honest.
-    fn replace_manifest_for_migration(
+    /// [`migrate_store`]'s one write, and nothing else's: replace the
+    /// stored manifest and small state with `to` and `small`, verbatim,
+    /// and drop any row-leaf hashes an older schema kept. It bypasses
+    /// succession, because a migration restamps unchanged rows.
+    ///
+    /// One atomic write, made only while the durable manifest still equals
+    /// `from`, the one the migration read; otherwise it refuses with
+    /// [`StoreError::BaselineMismatch`] and writes nothing, so a second
+    /// handle's migration or commit in between is never overwritten. The
+    /// small state is stored in `to`'s layout. The default refuses, so
+    /// read-only or exotic backends stay honest.
+    fn replace_for_migration(
         &mut self,
-        manifest: &StoreManifest,
-    ) -> Result<(), StoreError> {
-        let _ = manifest;
-        Err(StoreError::Io(
-            "this backend does not support in-place migration".to_string(),
-        ))
-    }
-
-    /// Replace the stored manifest AND small state together, verbatim
-    /// — the write surface for ladder steps that rewrite the small
-    /// state (6→7's ledger-section append). One atomic write: a
-    /// manifest stamped v7 must never be paired with a v6 small (its
-    /// root would not recombine). Same contract and default refusal
-    /// as [`Self::replace_manifest_for_migration`].
-    fn replace_manifest_and_small_for_migration(
-        &mut self,
-        manifest: &StoreManifest,
+        from: &StoreManifest,
+        to: &StoreManifest,
         small: &[u8],
     ) -> Result<(), StoreError> {
-        let _ = (manifest, small);
-        Err(StoreError::Io(
-            "this backend does not support in-place migration".to_string(),
-        ))
+        let _ = (from, to, small);
+        Err(StoreError::Unsupported("migrate a manifest in place"))
     }
 
     /// The subset of `targets` with at least one inbound edge from a
@@ -1894,11 +1526,7 @@ pub trait HeapStore {
         let wset: std::collections::BTreeSet<u32> = within.iter().copied().collect();
         let edges = self.page_edges()?;
         let mut seen: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
-        let mut frontier: Vec<u32> = roots
-            .iter()
-            .copied()
-            .filter(|r| wset.contains(r))
-            .collect();
+        let mut frontier: Vec<u32> = roots.iter().copied().filter(|r| wset.contains(r)).collect();
         for &r in &frontier {
             seen.insert(r);
         }
@@ -1915,762 +1543,310 @@ pub trait HeapStore {
     }
 }
 
-/// Upgrade a decodable OLDER store in place to the current schema.
-/// Returns true when a migration ran, false when the store was
-/// already current (or empty). Forward only — validation refuses
-/// anything newer than current. v5 → v6: verify the stored FLAT
-/// root (the v5 formula) over the stored leaves, recompute the v6
-/// class-tree root over the SAME leaves, and stamp the manifest with
-/// schema 6 and the new root. The SEAL is left exactly as stored:
-/// historical seals are opaque chain links, and the next commit
-/// chains from the stored seal precisely as it would have.
-///
-/// Restamping is authorized by the SAME callback-table signature the
-/// resume path checks: a store whose signature is incompatible with
-/// `expected_sig` is refused HERE, before any bytes change, so a
-/// mis-pointed daemon can never one-way restamp a foreign store out
-/// from under its rightful owner (review wave 4, F2). Migration
-/// therefore lives with the caller that knows the signature — the
-/// raw `open()` no longer runs it — and this is the reason it takes
-/// `expected_sig` rather than reading only the store.
 /// Peek the meter's cost-table version from a small-state PREFIX: the
 /// first six sections (stack, free list, keys, names, symbols, meter)
 /// have held the same positions since schema 5, every ladder step
 /// appends sections strictly AFTER them, and the peek never reads the
 /// schema-variable tail — so it decodes identically under every
-/// schema [`migrate_store`] supports. See the cost-table gate there
-/// (review finding 8).
+/// schema [`migrate_store`] supports. See the cost-table gate there.
 fn peek_cost_table_version(p: &[u8]) -> Result<String, StoreError> {
     let mut i = 0usize;
-    let mut section = |name: &'static str| -> Result<&[u8], StoreError> {
-        if i + 4 > p.len() {
+    let mut read_small_section = |name: &'static str| -> Result<&[u8], StoreError> {
+        if p.len() - i < 4 {
             return Err(StoreError::Snapshot(SnapshotError::Corrupt(name)));
         }
         let len = u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]) as usize;
         i += 4;
-        if i + len > p.len() {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(name)));
-        }
-        let s = &p[i..i + len];
-        i += len;
+        // The wire length can exhaust usize on 32-bit targets.
+        let end = match i.checked_add(len).filter(|&end| end <= p.len()) {
+            Some(end) => end,
+            None => return Err(StoreError::Snapshot(SnapshotError::Corrupt(name))),
+        };
+        let s = &p[i..end];
+        i = end;
         Ok(s)
     };
-    for name in [
-        "small state stack section",
-        "small state free-list section",
-        "small state keys section",
-        "small state names section",
-        "small state symbols section",
-    ] {
-        let _ = section(name)?;
-    }
-    let meter = MeterImage::decode(section("small state meter section")?)?;
+    let _ = read_small_section("small state stack section")?;
+    let _ = read_small_section("small state free-list section")?;
+    let _ = read_small_section("small state keys section")?;
+    let _ = read_small_section("small state names section")?;
+    let _ = read_small_section("small state symbols section")?;
+    let meter = MeterImage::decode(read_small_section("small state meter section")?)?;
     Ok(meter.cost_table_version)
 }
 
+/// Upgrade a decodable OLDER store in place to the current schema.
+/// Returns true when a migration ran, false when the store was
+/// already current (or empty). Forward only — open refuses anything
+/// newer than current.
+///
+/// The ladder runs in memory, over the manifest and the small state (no
+/// step touches a row), starting from the durable manifest
+/// ([`HeapStore::reread_manifest`]). The result is checked against the
+/// store's rows at the metadata scale ([`validate_store`]'s checks) and
+/// then written once, through [`HeapStore::replace_for_migration`], which
+/// refuses if the store moved since the migration read it and drops the
+/// row-leaf hashes the old schema kept. The small state and rows come
+/// through the handle, so a handle whose view is behind the durable
+/// manifest (a `FileStore` another handle has written since it loaded) is
+/// refused with [`StoreError::BaselineMismatch`] before anything is read.
+/// A stale handle onto a store that is already current gets `false`, and
+/// its resume refuses with [`StoreError::NeedsMigration`] until it reopens.
+/// A crash before that write leaves the store exactly as it was; a store
+/// is never half migrated. The first commit token is the first half of the
+/// seal the store carried ([`StoreManifest::token`]).
+///
+/// Restamping is authorized by the SAME callback-table signature the
+/// resume path checks: a store whose signature is incompatible with
+/// `expected_sig` is refused HERE, before any bytes change, so a
+/// mis-pointed daemon can never one-way restamp a foreign store out
+/// from under its rightful owner. Migration therefore lives with the
+/// caller that knows the signature — the
+/// raw `open()` no longer runs it — and this is the reason it takes
+/// `expected_sig` rather than reading only the store.
 pub fn migrate_store(
     store: &mut dyn HeapStore,
     expected_sig: &Signature,
 ) -> Result<bool, StoreError> {
-    let manifest = match store.manifest() {
+    // DURABLE, not the handle's cached view: another handle may have
+    // upgraded the store since this one opened it.
+    let from = match store.reread_manifest() {
         Ok(m) => m,
         Err(StoreError::Empty) => return Ok(false),
         Err(e) => return Err(e),
     };
-    if manifest.store_schema == STORE_SCHEMA_VERSION {
+    from.signature.check_boot()?;
+    expected_sig.check_boot()?;
+    if from.store_schema == STORE_SCHEMA_VERSION {
         return Ok(false);
     }
-    if !(STORE_SCHEMA_MIN_SUPPORTED..STORE_SCHEMA_VERSION).contains(&manifest.store_schema) {
+    if !(STORE_SCHEMA_MIN_SUPPORTED..STORE_SCHEMA_VERSION).contains(&from.store_schema) {
         return Err(StoreError::Snapshot(SnapshotError::Corrupt(
             "unsupported store schema version",
         )));
     }
-    // Signature gate BEFORE the first restamp: only a daemon that
-    // could actually resume this store (compatible callback table)
-    // may upgrade it. An incompatible signature fails closed with the
-    // same error `validate_store` would raise, leaving the store's
-    // bytes untouched for its rightful owner.
-    if !manifest.signature.is_compatible_with(expected_sig) {
+    // Signature gate BEFORE the write: only a daemon that could actually
+    // resume this store (compatible callback table) may upgrade it. An
+    // incompatible signature fails closed with the same error the open
+    // gates would raise, leaving the store's bytes untouched for its
+    // rightful owner.
+    if !from.signature.is_compatible_with(expected_sig) {
         return Err(StoreError::Snapshot(SnapshotError::SignatureMismatch {
             expected: expected_sig.clone(),
-            found: manifest.signature.clone(),
+            found: from.signature.clone(),
         }));
     }
-    // Cost-table gate BEFORE the first restamp too (review finding 8):
-    // a store whose meter ran under a different cost table can NEVER
-    // resume on this engine — `validate_store` refuses it after any
-    // migration — so restamping it forward first would wedge it: the
-    // new implementation still refuses it and the old one no longer
-    // recognizes the schema. Refuse here, bytes untouched, with the
-    // same error `validate_store` would raise. The peek parses only
-    // the small-state PREFIX (the first six sections, whose positions
-    // every supported schema shares), so it works under the SOURCE
-    // schema without decoding the schema-variable tail.
-    let cost = peek_cost_table_version(&store.read_small_state()?)?;
+    // The small state and the rows come through the handle, which may
+    // serve them from a view older than the durable manifest: the write
+    // would then pair the durable rows with a stale small state.
+    check_migration_baseline(&store.manifest()?, &from)?;
+    // Cost-table gate BEFORE the write too: a store whose meter ran under
+    // a different cost table can NEVER resume on this engine — open
+    // refuses it after any migration — so restamping it forward would
+    // wedge it: the new implementation still refuses it and the old one
+    // no longer recognizes the schema. Refuse here, bytes untouched, with
+    // the same error open would raise. The peek parses only the
+    // small-state PREFIX (the first six sections, whose positions every
+    // supported schema shares), so it works under the SOURCE schema
+    // without decoding the schema-variable tail.
+    let mut small = store.read_small_state()?;
+    let cost = peek_cost_table_version(&small)?;
     if cost != COST_TABLE_VERSION {
         return Err(StoreError::Snapshot(SnapshotError::CostTableMismatch {
             expected: COST_TABLE_VERSION.to_string(),
             found: cost,
         }));
     }
-    // The ladder: one verified in-place step at a time, each leaving a
-    // COMPLETE valid store of the intermediate schema — a crash
-    // between steps resumes the ladder at the next open, never a
-    // half-migrated hybrid.
-    let mut migrated = false;
-    let mut prev_schema = None;
-    loop {
-        // DURABLE, not the handle's cached view: another handle may have
-        // upgraded the store since this one opened it, and stepping from
-        // a stale schema would splice an older manifest onto a newer body
-        // (review wave 5). A backend with no cache answers identically.
-        let manifest = store.reread_manifest()?;
-        let schema = manifest.store_schema;
-        // Progress guard: every ladder step must ADVANCE the stored
-        // schema, strictly. A backend whose migration write silently
-        // no-ops (returns Ok without persisting) would otherwise spin
-        // here forever (review wave 4, F5) — and one that CYCLES,
-        // 5→6→5→6, evaded the equal-to-previous form this replaces
-        // while spinning just as hard (review wave 5). Strict advance
-        // over a bounded schema range also bounds the loop by
-        // construction, so no separate step counter is needed.
-        if prev_schema.is_some_and(|prev| schema <= prev) {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "migration did not advance the store schema",
-            )));
-        }
-        prev_schema = Some(schema);
-        match schema {
-            v if v == STORE_SCHEMA_VERSION => return Ok(migrated),
-            5 => migrate_v5_to_v6(store)?,
-            6 => migrate_v6_to_v7(store)?,
-            7 => migrate_v7_to_v8(store)?,
-            8 => migrate_v8_to_v9(store)?,
-            9 => migrate_v9_to_v10(store)?,
-            10 => migrate_v10_to_v11(store)?,
-            11 => migrate_v11_to_v12(store)?,
-            12 => migrate_v12_to_v13(store)?,
-            13 => migrate_v13_to_v14(store)?,
-            14 => migrate_v14_to_v15(store)?,
-            15 => migrate_v15_to_v16(store)?,
-            16 => migrate_v16_to_v17(store)?,
-            17 => migrate_v17_to_v18(store)?,
-            18 => migrate_v18_to_v19(store)?,
-            19 => migrate_v19_to_v20(store)?,
-            20 => migrate_v20_to_v21(store)?,
-            21 => migrate_v21_to_v22(store)?,
-            22 => migrate_v22_to_v23(store)?,
-            _ => {
+    let mut manifest = from.clone();
+    while manifest.store_schema < STORE_SCHEMA_VERSION {
+        migrate_step(&mut manifest, &mut small)?;
+    }
+    // The one write happens only for a result that passes the
+    // metadata-scale checks against the store's own rows.
+    validate_state(&*store, manifest.clone(), &small, expected_sig)?;
+    store.replace_for_migration(&from, &manifest, &small)?;
+    Ok(true)
+}
+
+/// One ladder step, in memory: advance `manifest` and `small` by one
+/// schema. Every step leaves the rows alone.
+fn migrate_step(manifest: &mut StoreManifest, small: &mut Vec<u8>) -> Result<(), StoreError> {
+    let schema = manifest.store_schema;
+    match schema {
+        // 5 → 6 changed only the retired root's formula.
+        5 => {}
+        // 7 → 8: the durable crank counter. 0 is the honest reading of a
+        // store that predates it: a schedule derived from it begins at
+        // the migration rather than pretending to a history it never
+        // recorded.
+        7 => manifest.cranks = 0,
+        // 25 → 26: NAME entries become canonical XS CESU-8.
+        25 => *small = names_to_cesu8(small)?,
+        // 26 → 27: one canonical encoding of the small state.
+        26 => *small = SmallState::decode_legacy(small)?.encode(),
+        // 27 → 28 split the retired small-state leaf into sections over the
+        // same payloads, and 28 through 35 are identity restamps (payloads
+        // that an older schema could not carry are simply absent). 35 → 36
+        // drops the root, the seal and the leaves, which the manifest
+        // decode and `replace_for_migration` take care of.
+        27..=35 => {}
+        _ => match LADDER.iter().find(|&&(target, _)| target - 1 == schema) {
+            Some(&(_, extra_len)) => small.resize(small.len() + extra_len, 0),
+            None => {
                 return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                     "unsupported store schema version",
                 )))
             }
+        },
+    }
+    manifest.store_schema = schema + 1;
+    Ok(())
+}
+
+/// Target schema and empty-section suffix length for content-preserving steps.
+/// Each section starts with a zero u32 byte length. These historical widths
+/// must remain fixed even when the current small-state format grows.
+const LADDER: &[(u32, usize)] = &[
+    (7, 12),  // Side-table ledger: three sections.
+    (9, 4),   // Error data.
+    (10, 12), // Array buffers, typed arrays, and DataViews.
+    (11, 16), // Wrappers, regexps, arguments, and template records.
+    (12, 8),  // Intl records and installed-names floor.
+    (13, 4),  // Iterator cursors.
+    (14, 4),  // Date values.
+    (15, 4),  // Retained callable metadata.
+    (16, 4),  // Proxy slots and revoker links.
+    (17, 4),  // Guest accessor mappings.
+    (18, 4),  // Intl bound-function links.
+    (19, 4),  // Private values and accessors.
+    (20, 4),  // Resource-management stacks.
+    (21, 4),  // Generator activations.
+    (22, 4),  // Error frames.
+    (23, 4),  // Promise cluster.
+    (24, 4),  // Async activations.
+    (25, 4),  // Indexed properties.
+];
+
+// Separate the address arithmetic from slicing so its usize boundary can be
+// exercised without allocating an address-space-sized legacy snapshot.
+fn name_migration_section_end(cursor: usize, len: usize) -> Result<usize, SnapshotError> {
+    cursor
+        .checked_add(len)
+        .ok_or(SnapshotError::Corrupt("name migration length"))
+}
+
+/// The 25 → 26 step's small state: section 3, NAME, re-encoded as
+/// canonical XS CESU-8, every other section byte for byte.
+fn names_to_cesu8(small: &[u8]) -> Result<Vec<u8>, StoreError> {
+    let mut cursor = 0usize;
+    let mut new_small = Vec::new();
+    for index in 0..4 {
+        let header = small
+            .get(cursor..cursor + 4)
+            .ok_or(SnapshotError::Corrupt("name migration header"))?;
+        let len = u32::from_be_bytes(header.try_into().unwrap()) as usize;
+        cursor += 4;
+        let end = name_migration_section_end(cursor, len)?;
+        let section = small
+            .get(cursor..end)
+            .ok_or(SnapshotError::Corrupt("name migration body"))?;
+        if index == 3 {
+            let names: Vec<SymbolName> = decode_strings(section)?
+                .into_iter()
+                .map(SymbolName::from)
+                .collect();
+            let encoded = encode_names(&names);
+            new_small.extend_from_slice(&(encoded.len() as u32).to_be_bytes());
+            new_small.extend_from_slice(&encoded);
+        } else {
+            new_small.extend_from_slice(header);
+            new_small.extend_from_slice(section);
         }
-        migrated = true;
+        cursor = end;
     }
+    new_small.extend_from_slice(&small[cursor..]);
+    Ok(new_small)
 }
 
-/// Ladder step 5→6: same leaves, new root FORMULA (flat combine →
-/// per-class trees). Verifies the v5 content against its OWN flat
-/// root first — never migrating what does not verify — then restamps
-/// schema + v6-formula root. Small state and every row are untouched.
-fn migrate_v5_to_v6(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let small_leaf = leaf_hash(LEAF_SMALL, 0, &small);
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = combine_root(&small_leaf, &pages, &exts, &frees, &edges);
-    if old != manifest.root {
-        // Convention (matching validate_store / apply_batch): `expected`
-        // is the root recomputed from content, `found` the root the
-        // manifest claims (review wave 4, F4).
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    manifest.store_schema = 6;
-    manifest.root = compute_root(&small_leaf, &pages, &exts, &frees, &edges);
-    store.replace_manifest_for_migration(&manifest)
-}
-
-/// Ladder step 6→7 (the side-table ledger): the small state grows the
-/// three ledger sections EMPTY — a pure 12-byte suffix of zero-length
-/// section headers, provably content-preserving (nothing a v6-era
-/// machine persisted lives in them). Verifies the v6 content against
-/// its stored root first, then writes the new small and the restamped
-/// manifest (new small leaf → new root) through the backend's one
-/// atomic migration write.
-fn migrate_v6_to_v7(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
-    if old != manifest.root {
-        // `expected` = recomputed root, `found` = manifest's claim
-        // (review wave 4, F4).
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 12]);
-    manifest.store_schema = 7;
-    manifest.root = compute_root(
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// Ladder step 7→8 (the durable crank counter): the manifest grows one
-/// `u64` tail field and nothing else moves. Content-preserving by
-/// construction — the ROOT is computed over the small-state leaf and the
-/// row leaves, and the manifest is in neither, so the root this step
-/// writes is the root it read. The seal is left exactly as stored, like
-/// every other step: historical seals are opaque chain links.
-///
-/// `cranks` starts at 0, which is the honest reading of a store that
-/// predates the counter: it never recorded one, and a schedule derived
-/// from it begins at the migration rather than pretending to a history
-/// it cannot know.
-fn migrate_v7_to_v8(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
-    if old != manifest.root {
-        // `expected` = recomputed root, `found` = manifest's claim.
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    manifest.store_schema = 8;
-    manifest.cranks = 0;
-    // Same small state, same root — but the MANIFEST changes length, so
-    // this goes through the write that can shift the file's directory
-    // offsets rather than the same-length splice.
-    store.replace_manifest_and_small_for_migration(&manifest, &small)
-}
-
-/// Ladder step 8→9 (the error-data row): the small state grows the one
-/// `ERRD` section EMPTY — a pure 4-byte suffix of a zero-length section
-/// header, provably content-preserving (nothing a v8-era machine
-/// persisted lives in it: the persist gates refused any heap holding a
-/// live error row). Verifies the v8 content against its stored root
-/// first, then writes the new small and the restamped manifest through
-/// the backend's one atomic migration write — the `migrate_v6_to_v7`
-/// pattern exactly.
-fn migrate_v8_to_v9(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
-    if old != manifest.root {
-        // `expected` = recomputed root, `found` = manifest's claim.
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 9;
-    manifest.root = compute_root(
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// Ladder step 9→10 (the typed-array family): the small state grows
-/// the three `ABUF`/`TARR`/`DVIW` sections EMPTY — a pure 12-byte
-/// suffix of zero-length section headers, provably content-preserving
-/// (nothing a v9-era machine persisted lives in them: the persist
-/// gates refused any heap holding a live row). The `migrate_v6_to_v7`
-/// pattern exactly.
-fn migrate_v9_to_v10(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
-    if old != manifest.root {
-        // `expected` = recomputed root, `found` = manifest's claim.
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 12]);
-    manifest.store_schema = 10;
-    manifest.root = compute_root(
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// Ladder step 10→11 (the data-only language rows): the small state
-/// grows the four `WRAP`/`REGX`/`ARGB`/`TMPR` sections EMPTY — a pure
-/// 16-byte suffix of zero-length section headers, content-preserving
-/// by the same argument as every ladder step (a v10-era machine
-/// persisted nothing in them: these rows were silently dropped by
-/// resume, which is exactly what the carry fixes going forward). The
-/// `migrate_v6_to_v7` pattern exactly.
-fn migrate_v10_to_v11(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
-    if old != manifest.root {
-        // `expected` = recomputed root, `found` = manifest's claim.
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 16]);
-    manifest.store_schema = 11;
-    manifest.root = compute_root(
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// 11 → 12: the Intl record tables (the ledger's `IntlRecords`
-/// graduation) and the installed-names floor join the small state.
-/// Both new sections append EMPTY — a pure 8-byte suffix (two
-/// zero-length section headers), content-preserving by construction:
-/// the v11 persist path had no Intl atom and (before the
-/// accessor-seed exemption that landed with schema 12) any
-/// Intl-touching heap was refused at persist by the `accessors` gate,
-/// and an absent floor restores to exactly the full-table default
-/// every v11 resume already used. Verify the store against its OWN
-/// root first, then restamp schema and root together.
-fn migrate_v11_to_v12(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
-    if old != manifest.root {
-        // `expected` = recomputed root, `found` = manifest's claim.
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 8]);
-    manifest.store_schema = 12;
-    manifest.root = compute_root(
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// 12 → 13: the built-in iterator cursors join the small state (the
-/// ledger's `Iterators` graduation). The one new section appends
-/// EMPTY — a pure 4-byte suffix, content-preserving by construction:
-/// the v12 persist path had no `ITER` atom, and iterator rows a v12
-/// resume dropped were the visible-fail class the carry retires.
-/// Verify the store against its OWN root first, then restamp schema
-/// and root together.
-fn migrate_v12_to_v13(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
-    if old != manifest.root {
-        // `expected` = recomputed root, `found` = manifest's claim.
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 13;
-    manifest.root = compute_root(
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// 13 → 14: Date `[[DateValue]]` records join the small state. The
-/// new section appends empty: v13 did not serialize guest Date records,
-/// while the untouched `%Date.prototype%` seed is rebuilt by boot.
-fn migrate_v13_to_v14(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 14;
-    manifest.root = compute_root(
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// 14 → 15: the atomic retained guest-callability cluster joins the
-/// small state. Schema 14 did not carry callable metadata or defining
-/// bytecode, so the migration appends one empty section.
-fn migrate_v14_to_v15(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 15;
-    manifest.root = compute_root(
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// 15 → 16: proxy internal slots and revoker links join the small
-/// state. Schema 15 refused live proxies, so appending an empty section
-/// is content-preserving.
-fn migrate_v15_to_v16(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 16;
-    manifest.root = compute_root(
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// 16 → 17: guest accessor mappings join the small state. Schema 16
-/// refused every non-boot accessor, so the appended empty section is
-/// content-preserving.
-fn migrate_v16_to_v17(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 17;
-    manifest.root = compute_root(
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// 17 → 18: Intl bound-function links join the small state. Older
-/// snapshots deliberately dropped these caches, so the new section is
-/// an empty content-preserving suffix.
-fn migrate_v17_to_v18(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 18;
-    manifest.root = compute_root(
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// 18 → 19: private values/accessors join the small state. Older
-/// snapshots dropped these rows, so migration appends an empty section.
-fn migrate_v18_to_v19(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 19;
-    manifest.root = compute_root(
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// 19 → 20: explicit resource-management stacks join the small state.
-fn migrate_v19_to_v20(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 20;
-    manifest.root = compute_root(
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// 20 → 21: synchronous generator activations join the small state.
-/// Schema 21 -> 22: append the (empty) error-frames section. Content
-/// preserving -- a v21 store's errors carried no frames, and an empty
-/// section decodes to exactly that.
-fn migrate_v21_to_v22(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 22;
-    manifest.root = compute_root(
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-fn migrate_v20_to_v21(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 21;
-    manifest.root = compute_root(
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// Schema 22 -> 23: append the (empty) promise-cluster section.
-/// Content preserving -- a v22 store's persist gate refused any
-/// machine holding promise state a resume would lose, so the section
-/// it never wrote decodes to exactly the empty cluster it enforced.
-fn migrate_v22_to_v23(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 23;
-    manifest.root = compute_root(
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// The epoch discipline every [`HeapStore::commit`] enforces: the first
-/// commit into an empty store is epoch 1; every later commit advances
-/// the stored epoch by exactly one. Anything else is a replayed or
-/// forked batch and fails closed.
+/// The succession discipline every [`HeapStoreCommit::commit`] enforces:
+/// the first commit into an empty store is epoch 1 and names
+/// [`CommitToken::ZERO`] as its predecessor; every later commit advances the
+/// stored epoch by exactly one and names the stored token. A batch's own
+/// token is nonzero and differs from its predecessor, so the next batch can
+/// tell the two states apart. Anything else is a replayed or forked batch
+/// and fails closed.
 pub fn check_succession(
     stored: Option<&StoreManifest>,
     batch: &CheckpointBatch,
 ) -> Result<(), StoreError> {
+    // The batch's own token is the caller's defect (a broken token source,
+    // a hand-built batch), not the store's.
+    if batch.manifest.token.is_zero() {
+        return Err(reject_batch(
+            SnapshotError::Corrupt("commit token must be nonzero").into(),
+        ));
+    }
+    if batch.manifest.token == batch.prev_token {
+        return Err(reject_batch(
+            SnapshotError::Corrupt("commit token must differ from its predecessor").into(),
+        ));
+    }
+
+    if let Some(previous) = stored {
+        if previous.collect_every != batch.manifest.collect_every {
+            return Err(SnapshotError::Corrupt("collection cadence mismatch").into());
+        }
+        if batch.manifest.cranks < previous.cranks
+            || batch.manifest.collections < previous.collections
+        {
+            return Err(SnapshotError::Corrupt("durable counter regression").into());
+        }
+    }
+    if let Some(prior) = stored {
+        if prior.store_schema < STORE_SCHEMA_VERSION {
+            return Err(StoreError::NeedsMigration {
+                found: prior.store_schema,
+            });
+        }
+        if prior.store_schema > STORE_SCHEMA_VERSION {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "unsupported store schema version",
+            )));
+        }
+    }
+    if batch.manifest.store_schema != STORE_SCHEMA_VERSION {
+        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "checkpoint requires current store schema",
+        )));
+    }
     check_epoch(stored.map(|m| m.epoch), batch.manifest.epoch)?;
-    let expected = stored.map(|m| m.seal.as_str()).unwrap_or("");
-    if batch.prev_seal != expected {
+    // The pairing: a batch names the token of the store state it was
+    // built on, compared by equality.
+    let expected = stored.map_or(CommitToken::ZERO, |m| m.token);
+    if batch.prev_token != expected {
         return Err(StoreError::BaselineMismatch {
-            expected: expected.to_string(),
-            found: batch.prev_seal.clone(),
+            expected: expected.to_hex(),
+            found: batch.prev_token.to_hex(),
         });
     }
-    // The batch's own seal must actually hash this batch:
-    // `CheckpointBatch` is a public type, so without recomputation a
-    // forged constant seal could stitch divergent stores into one
-    // apparent lineage and defeat the equal-epoch fork guard (the
-    // PR-review finding). Every backend calls this before persisting.
-    let recomputed = seal_commit(
-        &batch.prev_seal,
-        &batch.manifest,
-        &batch.small,
-        &batch.slot_pages,
-        &batch.chunk_extents,
-        &batch.free_segs,
-        &batch.page_edges,
-    );
-    if batch.manifest.seal != recomputed {
-        return Err(StoreError::BaselineMismatch {
-            expected: recomputed,
-            found: batch.manifest.seal.clone(),
-        });
-    }
+    // The commit's one validation of the section payloads it writes:
+    // each must decode and re-encode to itself, because resume refuses a
+    // non-canonical one, so an engine bug here would otherwise write a
+    // store its own resume cannot read.
+    crate::store_sections::validate_batch(batch, stored.is_none())?;
     Ok(())
 }
 
 pub fn check_epoch(stored: Option<u64>, batch_epoch: u64) -> Result<(), StoreError> {
     // A decoded manifest may legally carry u64::MAX; an exhausted
     // epoch is corrupt input, not a wrap to epoch 0.
-    let expected = match stored {
-        None => 1,
-        Some(e) => e.checked_add(1).ok_or(StoreError::Snapshot(
-            crate::format::SnapshotError::Corrupt("store epoch exhausted"),
-        ))?,
-    };
+    let expected =
+        match stored {
+            None => 1,
+            Some(e) => e.checked_add(1).ok_or(StoreError::Snapshot(
+                crate::format::SnapshotError::Corrupt("store epoch exhausted"),
+            ))?,
+        };
     if batch_epoch != expected {
         return Err(StoreError::EpochMismatch {
             expected,
@@ -2683,8 +1859,8 @@ pub fn check_epoch(stored: Option<u64>, batch_epoch: u64) -> Result<(), StoreErr
 // --- image ↔ paged form ---
 
 /// Split a flat record array into `(page, bytes)` rows for every page —
-/// the full (epoch-1) batch shape. Later phases produce dirty subsets
-/// from the arena's dirty bitmap instead.
+/// the full (epoch-1) batch shape. `checkpoint_to_store` produces dirty
+/// subsets from the arena's dirty bitmap instead.
 pub fn encode_all_slot_pages(slots: &[Slot]) -> Vec<(u32, Vec<u8>)> {
     let count = slots.len() as u32;
     let pages = slot_page_count(count);
@@ -2729,9 +1905,51 @@ pub fn encode_chunk_extent(chunks: &[u8], ext: u32) -> Vec<u8> {
 /// The full-write batch of a [`MachineImage`] at `epoch` — every page,
 /// every extent. This is the first-checkpoint and
 /// [`import_from_container`] shape; incremental batches are built by
-/// the machine surface from dirty bits.
-pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> CheckpointBatch {
-    let mut manifest = StoreManifest {
+/// the machine surface from dirty bits. The batch names `prev_token` as its
+/// predecessor ([`CommitToken::ZERO`] for an empty store) and carries a
+/// fresh token from [`RandomTokens`].
+///
+/// ```compile_fail
+/// use ironhorse_snapshot::{CommitToken, MachineImage, image_to_batch};
+/// fn unchecked_batch(image: &MachineImage) { image_to_batch(image, 1, CommitToken::ZERO); }
+/// ```
+pub fn image_to_batch(
+    image: &crate::image::GatedImage,
+    epoch: u64,
+    prev_token: CommitToken,
+) -> CheckpointBatch {
+    image_to_batch_with_cadence(image, epoch, prev_token, 0, &mut RandomTokens)
+}
+
+/// Build an arbitrary full batch for adversarial tooling, without a live gate.
+/// Normal persistence uses [`image_to_batch`] and its immutable proof token.
+#[cfg(any(test, feature = "unchecked-tooling"))]
+pub fn image_to_batch_unchecked(
+    image: &MachineImage,
+    epoch: u64,
+    prev_token: CommitToken,
+) -> CheckpointBatch {
+    encode_image_batch(image, epoch, prev_token, 0, &mut RandomTokens)
+}
+
+pub(crate) fn image_to_batch_with_cadence(
+    image: &crate::image::GatedImage,
+    epoch: u64,
+    prev_token: CommitToken,
+    collect_every: u32,
+    tokens: &mut dyn CommitTokenSource,
+) -> CheckpointBatch {
+    encode_image_batch(image.image(), epoch, prev_token, collect_every, tokens)
+}
+
+fn encode_image_batch(
+    image: &MachineImage,
+    epoch: u64,
+    prev_token: CommitToken,
+    collect_every: u32,
+    tokens: &mut dyn CommitTokenSource,
+) -> CheckpointBatch {
+    let manifest = StoreManifest {
         version: image.version.clone(),
         store_schema: STORE_SCHEMA_VERSION,
         signature: image.signature.clone(),
@@ -2744,40 +1962,11 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
         // A container carries no crank history — importing one starts
         // the cadence schedule from zero, exactly like a fresh store.
         cranks: 0,
-        root: String::new(),
-        seal: String::new(),
+        collect_every,
+        collections: 0,
+        token: mint_token(tokens, prev_token),
     };
-    let small = SmallState {
-        stack: image.stack.clone(),
-        slot_free: image.slot_free.clone(),
-        keys: image.keys.clone(),
-        names: image.names.clone(),
-        symbols: image.symbols.clone(),
-        meter: image.meter.clone(),
-        arrays: image.arrays.clone(),
-        collections: image.collections.clone(),
-        registry: image.registry.clone(),
-        errors: image.errors.clone(),
-        buffers: image.buffers.clone(),
-        typed_arrays: image.typed_arrays.clone(),
-        data_views: image.data_views.clone(),
-        wrappers: image.wrappers.clone(),
-        regexps: image.regexps.clone(),
-        dates: image.dates.clone(),
-        function_state: image.function_state.clone(),
-        proxy_state: image.proxy_state.clone(),
-        accessors: image.accessors.clone(),
-        intl_bound_functions: image.intl_bound_functions.clone(),
-        private_elements: image.private_elements.clone(),
-        disposable_stacks: image.disposable_stacks.clone(),
-        generators: image.generators.clone(),
-        promise_cluster: image.promise_cluster.clone(),
-        arguments_brands: image.arguments_brands.clone(),
-        temporal: image.temporal.clone(),
-        intl: image.intl.clone(),
-        name_floor: image.name_floor,
-        iterators: image.iterators.clone(),
-    };
+    let small = crate::snapshot_roster::small_from_image(image);
     let small_bytes = small.encode();
     let slot_pages = encode_all_slot_pages(&image.slots);
     let chunk_extents = encode_all_chunk_extents(&image.chunks);
@@ -2789,43 +1978,11 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
             (page, derive_page_edges(page, &image.slots[start..end]))
         })
         .collect();
-    // Root first (a full batch carries every row), then the seal —
-    // which hashes the whole manifest and therefore signs the root.
-    let pages: Vec<[u8; 32]> = slot_pages
-        .iter()
-        .map(|(i, b)| leaf_hash(LEAF_PAGE, *i, b))
-        .collect();
-    let exts: Vec<[u8; 32]> = chunk_extents
-        .iter()
-        .map(|(i, b)| leaf_hash(LEAF_EXT, *i, b))
-        .collect();
-    let frees: Vec<[u8; 32]> = free_segs
-        .iter()
-        .map(|(i, b)| leaf_hash(LEAF_FREE, *i, b))
-        .collect();
-    // A full batch's summaries are dense by construction — the root's
-    // edge section (v5) combines over them in page order.
-    let dense_edges: Vec<Vec<u32>> = page_edges.iter().map(|(_, t)| t.clone()).collect();
-    manifest.root = compute_root(
-        &leaf_hash(LEAF_SMALL, 0, &small_bytes),
-        &pages,
-        &exts,
-        &frees,
-        &dense_edges,
-    );
-    manifest.seal = seal_commit(
-        prev_seal,
-        &manifest,
-        &small_bytes,
-        &slot_pages,
-        &chunk_extents,
-        &free_segs,
-        &page_edges,
-    );
     CheckpointBatch {
-        prev_seal: prev_seal.to_string(),
+        prev_token,
         manifest,
         small: small_bytes,
+        small_updates: None,
         slot_pages,
         chunk_extents,
         free_segs,
@@ -2833,285 +1990,21 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
     }
 }
 
-/// Read a whole store back into the plain-data [`MachineImage`] — the
-/// eager-reify path, and the bridge to the atom container. The inverse
-/// of [`image_to_batch`] + [`HeapStore::commit`].
-pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError> {
-    let manifest = store.manifest()?;
-    // Schema gate FIRST. The root below is recomputed with the CURRENT
-    // formula, so a merely-old store fails the root check and gets
-    // reported as `BaselineMismatch` — "this store is corrupt" — when
-    // the truth is that it needs migrating. `root_hash` and
-    // `export_to_container` ride this path, so that misdiagnosis reached
-    // callers who had done nothing wrong (review wave 5).
-    if manifest.store_schema < STORE_SCHEMA_VERSION {
-        return Err(StoreError::NeedsMigration {
-            found: manifest.store_schema,
-        });
-    }
-    if manifest.store_schema > STORE_SCHEMA_VERSION {
-        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-            "unsupported store schema version",
-        )));
-    }
-    let small_bytes = store.read_small_state()?;
-    let small = SmallState::decode(&small_bytes)?;
-    if manifest.cost_gate_mismatch(&small) {
-        return Err(StoreError::Snapshot(SnapshotError::CostTableMismatch {
-            expected: COST_TABLE_VERSION.to_string(),
-            found: small.meter.cost_table_version.clone(),
-        }));
-    }
-    // The semantic bounds gate runs in TWO places: `validate_store`
-    // covers the stack/side-table/symbol references on BOTH resume
-    // paths (wave 5), and the HEAP rows are covered per path — the
-    // full-image gate at the end of this function for the eager path
-    // (wave-6 W6-14: leaf hashes prove bytes authentic-to-commit, not
-    // in-arena, so a consistently-resealed hostile store passed here
-    // and panicked at the first collection), and a per-page slot-ref
-    // bound at the lazy fault installer (the chunk-offset half of the
-    // lazy path is a recorded remainder — the slot-ref bound removes
-    // the collector-panic vector).
-
-    // Row-content integrity (phase 5, completed by the review wave):
-    // every row read below — INCLUDING the small state — is checked
-    // against its stored leaf hash, and the whole leaf/summary set is
-    // recombined against the sealed root first, so eager reification —
-    // and the export/root_hash paths riding on it, which deliberately
-    // skip `validate_store` — cannot absorb a length-preserving flip
-    // or a coordinated row+leaf edit at rest.
-    let (leaf_pages, leaf_exts) = store.leaf_hashes()?;
-    let leaf_frees_all = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    if edges.len() != slot_page_count(manifest.slot_count) as usize {
-        return Err(StoreError::SummaryCount {
-            expected: slot_page_count(manifest.slot_count),
-            found: edges.len() as u32,
-        });
-    }
-    let small_leaf = leaf_hash(LEAF_SMALL, 0, &small_bytes);
-    let root = compute_root(&small_leaf, &leaf_pages, &leaf_exts, &leaf_frees_all, &edges);
-    if root != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: root,
-            found: manifest.root.clone(),
-        });
-    }
-
-    let pages = slot_page_count(manifest.slot_count);
-    // Clamp the pre-reservation: the manifest count is untrusted until
-    // the row reads below confirm it (the over-allocation trophy class;
-    // export/root_hash reach here without validate_store).
-    let mut slots: Vec<Slot> = Vec::with_capacity((manifest.slot_count as usize).min(1 << 16));
-    for page in 0..pages {
-        let bytes = store.read_slot_page(page)?;
-        let expected = slot_page_len(manifest.slot_count, page) * SLOT_RECORD_BYTES;
-        if bytes.len() != expected {
-            return Err(StoreError::RowLength {
-                kind: "slot page",
-                index: page,
-                expected,
-                found: bytes.len(),
-            });
-        }
-        if leaf_pages.get(page as usize).copied() != Some(leaf_hash(LEAF_PAGE, page, &bytes)) {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "store slot page fails its leaf hash",
-            )));
-        }
-        slots.extend(
-            decode_slots(&bytes)
-                .map_err(|_| SnapshotError::Corrupt("store slot page record"))?,
-        );
-    }
-
-    let exts = chunk_extent_count(manifest.chunk_len);
-    // Same clamp discipline as the slot reservation above.
-    let mut chunks: Vec<u8> = Vec::with_capacity((manifest.chunk_len as usize).min(1 << 24));
-    for ext in 0..exts {
-        let bytes = store.read_chunk_extent(ext)?;
-        let expected = chunk_extent_len(manifest.chunk_len, ext);
-        if bytes.len() != expected {
-            return Err(StoreError::RowLength {
-                kind: "chunk extent",
-                index: ext,
-                expected,
-                found: bytes.len(),
-            });
-        }
-        if leaf_exts.get(ext as usize).copied() != Some(leaf_hash(LEAF_EXT, ext, &bytes)) {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "store chunk extent fails its leaf hash",
-            )));
-        }
-        chunks.extend_from_slice(&bytes);
-    }
-
-    let free_leaves = leaf_frees_all;
-    let mut slot_free: Vec<u32> = Vec::with_capacity((manifest.free_len as usize).min(1 << 16));
-    for seg in 0..free_seg_count(manifest.free_len) {
-        let bytes = store.read_free_seg(seg)?;
-        let expected = free_seg_len(manifest.free_len, seg) * 4;
-        if bytes.len() != expected {
-            return Err(StoreError::RowLength {
-                kind: "free segment",
-                index: seg,
-                expected,
-                found: bytes.len(),
-            });
-        }
-        if free_leaves.get(seg as usize).copied() != Some(leaf_hash(LEAF_FREE, seg, &bytes)) {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "store free segment fails its leaf hash",
-            )));
-        }
-        slot_free.extend(
-            bytes
-                .chunks_exact(4)
-                .map(|c| u32::from_be_bytes(c.try_into().unwrap())),
-        );
-    }
-
-    crate::image::check_image_slot_bounds(
-        &slots,
-        &small.stack,
-        &small.arrays,
-        &small.collections,
-        &small.registry,
-        &small.errors,
-        &small.buffers,
-        &small.typed_arrays,
-        &small.data_views,
-        &crate::image::LangRows {
-            wrappers: &small.wrappers,
-            regexps: &small.regexps,
-            dates: &small.dates,
-            function_state: &small.function_state,
-            proxy_state: &small.proxy_state,
-            accessors: &small.accessors,
-            intl_bound_functions: &small.intl_bound_functions,
-            private_elements: &small.private_elements,
-            disposable_stacks: &small.disposable_stacks,
-            generators: &small.generators,
-            promise_cluster: &small.promise_cluster,
-            arguments_brands: &small.arguments_brands,
-            temporal: &small.temporal,
-            intl: &small.intl,
-        },
-        &small.iterators,
-        small.names.len(),
-        &small.symbols,
-        slots.len() as u32,
-        chunks.len(),
-        &slot_free,
-    )
-    .map_err(StoreError::Snapshot)?;
-
-    Ok(MachineImage {
-        version: manifest.version,
-        signature: manifest.signature,
-        creation: manifest.creation,
-        chunks,
-        slots,
-        slot_free,
-        slot_live: manifest.slot_live,
-        stack: small.stack,
-        keys: small.keys,
-        names: small.names,
-        symbols: small.symbols,
-        meter: small.meter,
-        arrays: small.arrays,
-        collections: small.collections,
-        registry: small.registry,
-        errors: small.errors,
-        buffers: small.buffers,
-        typed_arrays: small.typed_arrays,
-        data_views: small.data_views,
-        wrappers: small.wrappers,
-        regexps: small.regexps,
-        dates: small.dates,
-        function_state: small.function_state,
-        proxy_state: small.proxy_state,
-        accessors: small.accessors,
-        intl_bound_functions: small.intl_bound_functions,
-        private_elements: small.private_elements,
-        disposable_stacks: small.disposable_stacks,
-        generators: small.generators,
-        promise_cluster: small.promise_cluster,
-        arguments_brands: small.arguments_brands,
-        temporal: small.temporal,
-        intl: small.intl,
-        name_floor: small.name_floor,
-        iterators: small.iterators,
-    })
-}
-
-impl StoreManifest {
-    fn cost_gate_mismatch(&self, small: &SmallState) -> bool {
-        small.meter.cost_table_version != COST_TABLE_VERSION
-    }
-}
-
-/// The verified row-leaf hashes [`validate_store`] hands back so the
-/// resume paths can verify every later row read against them without
-/// re-trusting the store.
-#[derive(Clone, Debug)]
-pub struct StoreLeaves {
-    pub pages: Vec<[u8; 32]>,
-    pub exts: Vec<[u8; 32]>,
-    pub frees: Vec<[u8; 32]>,
-}
-
-/// Proof that a store's manifest, small state, geometry, free set, row
-/// inventory, and integrity metadata passed the complete open-time gate.
-///
-/// Fields are private so resume code cannot accidentally mix validated pieces
-/// with values read from another epoch. Lazy page contents remain validated at
-/// fault against the leaves carried here.
-#[derive(Clone, Debug)]
-pub struct ValidatedStoreState {
-    manifest: StoreManifest,
-    small: SmallState,
-    leaves: StoreLeaves,
-}
-
-impl ValidatedStoreState {
-    /// The validated manifest pinned by this state.
-    pub fn manifest(&self) -> &StoreManifest {
-        &self.manifest
-    }
-
-    /// The validated decoded small state.
-    pub fn small(&self) -> &SmallState {
-        &self.small
-    }
-
-    pub(crate) fn into_parts(self) -> (StoreManifest, SmallState, StoreLeaves) {
-        (self.manifest, self.small, self.leaves)
-    }
-}
-
-/// Validate a store exhaustively: manifest gates, signature, meter
-/// cost-table version, live/free/count accounting, the full row
-/// inventory (existence and exact length of every page and extent the
-/// geometry promises), leaf/summary recombination against the sealed
-/// root, and the reassembled free list's semantic gates. Returns one
-/// [`ValidatedStoreState`] so resume cannot mix those proven pieces
-/// with values read from another epoch.
-///
-/// This is the open-time gate that makes later read faults pure I/O
-/// errors (design decision 7): after `validate_store` succeeds, every
-/// row a lazy fault can ask for has been proven present and
-/// well-sized.
-pub fn validate_store(
-    store: &dyn HeapStore,
+/// The compatibility gates open runs before restoring anything: format
+/// readability, the store schema range ([`StoreError::NeedsMigration`] for
+/// an older supported schema), and the callback-table signature with its
+/// boot fingerprint. They ask whether this build can read the store, not
+/// whether its content is right: under the store-seam design's trust model
+/// the store is the machine it holds. The cost-table gate needs the small
+/// state and runs where it is decoded.
+pub fn check_open_gates(
+    manifest: &StoreManifest,
     expected_sig: &Signature,
-) -> Result<ValidatedStoreState, StoreError> {
-    let manifest = store.manifest()?;
-    // Readability, not equality with the write stamp (review finding
-    // 1's flip side): an older READABLE format version opens — its
+) -> Result<(), StoreError> {
+    // Readability, not equality with the write stamp: an older
+    // READABLE format version opens — its
     // atoms are a subset with the same encodings, and the schema
-    // ladder below migrates its sections — while a newer one was
+    // ladder migrates its sections — while a newer one was
     // already refused at manifest decode. The next checkpoint restamps
     // the manifest at the current version.
     if !manifest.version.is_readable() {
@@ -3133,25 +2026,297 @@ pub fn validate_store(
             "unsupported store schema version",
         )));
     }
+    manifest.signature.check_boot()?;
+    expected_sig.check_boot()?;
     if !manifest.signature.is_compatible_with(expected_sig) {
         return Err(StoreError::Snapshot(SnapshotError::SignatureMismatch {
             expected: expected_sig.clone(),
             found: manifest.signature.clone(),
         }));
     }
-    if manifest.epoch == 0 {
-        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-            "store manifest epoch 0",
-        )));
-    }
+    Ok(())
+}
 
-    let small_bytes = store.read_small_state()?;
-    let mut small = SmallState::decode(&small_bytes)?;
+/// What a lazy resume reads before it restores anything: the manifest, and
+/// the decoded small state with the free list reassembled from its segment
+/// rows, both past [`check_open_gates`] and the cost-table gate.
+pub(crate) struct OpenedStore {
+    pub(crate) manifest: StoreManifest,
+    pub(crate) small: SmallState,
+}
+
+/// Open a store for a lazy resume: the compatibility gates, then the
+/// decoding restore needs (the small state, with the cost-table gate, and
+/// the free list). Nothing is re-verified; the restore's own checks (the
+/// VM's free-list and accounting checks as it builds the slot arena, its
+/// symbol-key table and empty-stack checks) and the caller's small-state
+/// bounds gate guard it against engine bugs.
+///
+/// The lazy arenas are sized from the manifest's geometry before any row
+/// is read, so open ties the geometry to the rows first: the live/free
+/// accounting, and the last slot page and chunk extent present at the
+/// lengths the geometry gives them ([`check_tail_rows`]). Two row reads,
+/// not the inventory walk, refuse a garbled count before it can size an
+/// allocation.
+pub(crate) fn open_store(
+    store: &dyn HeapStore,
+    expected_sig: &Signature,
+) -> Result<OpenedStore, StoreError> {
+    let manifest = store.manifest()?;
+    // The gates before the read: a store this build cannot open is refused
+    // as such, without paying for (or failing on) its small state.
+    check_open_gates(&manifest, expected_sig)?;
+    let small = store.read_small_state()?;
+    open_state(store, manifest, &small, expected_sig)
+}
+
+/// [`open_store`] over a manifest and an encoded small state the caller
+/// supplies, with the store's rows: a migration opens its in-memory result
+/// this way before writing it.
+fn open_state(
+    store: &dyn HeapStore,
+    manifest: StoreManifest,
+    small: &[u8],
+    expected_sig: &Signature,
+) -> Result<OpenedStore, StoreError> {
+    check_open_gates(&manifest, expected_sig)?;
+    let mut small = SmallState::decode(small)?;
     if manifest.cost_gate_mismatch(&small) {
         return Err(StoreError::Snapshot(SnapshotError::CostTableMismatch {
             expected: COST_TABLE_VERSION.to_string(),
             found: small.meter.cost_table_version.clone(),
         }));
+    }
+    small.slot_free = read_free_list(store, &manifest)?;
+    check_accounting(&manifest)?;
+    check_tail_rows(store, &manifest)?;
+    Ok(OpenedStore { manifest, small })
+}
+
+/// Every record is live or on the free list.
+fn check_accounting(manifest: &StoreManifest) -> Result<(), StoreError> {
+    if manifest.free_len as u64 + manifest.slot_live as u64 != manifest.slot_count as u64 {
+        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "store live/free/count accounting mismatch",
+        )));
+    }
+    Ok(())
+}
+
+/// The last slot page and the last chunk extent the manifest's geometry
+/// promises exist at the lengths it gives them. A geometry that promises
+/// more rows than the store holds fails here, on its tail row.
+fn check_tail_rows(store: &dyn HeapStore, manifest: &StoreManifest) -> Result<(), StoreError> {
+    if let Some(page) = slot_page_count(manifest.slot_count).checked_sub(1) {
+        let found = store.read_slot_page(page)?.len();
+        let expected = slot_page_len(manifest.slot_count, page) * SLOT_RECORD_BYTES;
+        if found != expected {
+            return Err(StoreError::RowLength {
+                kind: "slot page",
+                index: page,
+                expected,
+                found,
+            });
+        }
+    }
+    if let Some(ext) = chunk_extent_count(manifest.chunk_len).checked_sub(1) {
+        let found = store.read_chunk_extent(ext)?.len();
+        let expected = chunk_extent_len(manifest.chunk_len, ext);
+        if found != expected {
+            return Err(StoreError::RowLength {
+                kind: "chunk extent",
+                index: ext,
+                expected,
+                found,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Reassemble the free list from its segment rows. Each row must have the
+/// length the manifest's `free_len` gives it — the decoding needs that
+/// much — but nothing else about the entries is checked here.
+fn read_free_list(store: &dyn HeapStore, manifest: &StoreManifest) -> Result<Vec<u32>, StoreError> {
+    // Clamp the pre-reservation: the manifest count is confirmed only by
+    // the row reads below.
+    let mut free: Vec<u32> = Vec::with_capacity((manifest.free_len as usize).min(1 << 16));
+    for seg in 0..free_seg_count(manifest.free_len) {
+        let bytes = store.read_free_seg(seg)?;
+        let expected = free_seg_len(manifest.free_len, seg) * 4;
+        if bytes.len() != expected {
+            return Err(StoreError::RowLength {
+                kind: "free segment",
+                index: seg,
+                expected,
+                found: bytes.len(),
+            });
+        }
+        free.extend(
+            bytes
+                .chunks_exact(4)
+                .map(|c| u32::from_be_bytes(c.try_into().unwrap())),
+        );
+    }
+    Ok(free)
+}
+
+/// Read a whole store back into the plain-data [`MachineImage`] — the
+/// eager-reify path, and the bridge to the atom container. The inverse
+/// of [`image_to_batch`] + [`HeapStoreCommit::commit`].
+///
+/// Reads and decodes every row and runs the decoding's bounds checks
+/// (every row's exact length, the heap records' references and chunk
+/// offsets, the small state's references, buffer lengths against their
+/// chunk headers) as guards against engine bugs, and verifies nothing
+/// beyond them: under the store-seam design's trust model the store is the
+/// machine it holds, so export and [`root_hash`], which ride this path,
+/// describe the heap as stored. [`validate_store_content`] is the explicit
+/// check.
+pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError> {
+    store_to_image_at(store, &store.manifest()?)
+}
+
+/// [`store_to_image`] over a manifest the caller has already read.
+pub(crate) fn store_to_image_at(
+    store: &dyn HeapStore,
+    manifest: &StoreManifest,
+) -> Result<MachineImage, StoreError> {
+    // Schema gate first: an older store needs migrating, and its small
+    // state would not decode under the current section layout.
+    // `root_hash` and `export_to_container` ride this path, so they must
+    // report the distinction between migration and corruption too.
+    if manifest.store_schema < STORE_SCHEMA_VERSION {
+        return Err(StoreError::NeedsMigration {
+            found: manifest.store_schema,
+        });
+    }
+    if manifest.store_schema > STORE_SCHEMA_VERSION {
+        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "unsupported store schema version",
+        )));
+    }
+    let small = SmallState::decode(&store.read_small_state()?)?;
+    if manifest.cost_gate_mismatch(&small) {
+        return Err(StoreError::Snapshot(SnapshotError::CostTableMismatch {
+            expected: COST_TABLE_VERSION.to_string(),
+            found: small.meter.cost_table_version.clone(),
+        }));
+    }
+
+    let pages = slot_page_count(manifest.slot_count);
+    // Clamp the pre-reservation: the manifest count is confirmed only by
+    // the row reads below (the over-allocation trophy class).
+    let mut slots: Vec<Slot> = Vec::with_capacity((manifest.slot_count as usize).min(1 << 16));
+    for page in 0..pages {
+        let bytes = store.read_slot_page(page)?;
+        let expected = slot_page_len(manifest.slot_count, page) * SLOT_RECORD_BYTES;
+        if bytes.len() != expected {
+            return Err(StoreError::RowLength {
+                kind: "slot page",
+                index: page,
+                expected,
+                found: bytes.len(),
+            });
+        }
+        slots.extend(
+            decode_slots(&bytes).map_err(|_| SnapshotError::Corrupt("store slot page record"))?,
+        );
+    }
+
+    let exts = chunk_extent_count(manifest.chunk_len);
+    // Same clamp discipline as the slot reservation above.
+    let mut chunks: Vec<u8> = Vec::with_capacity((manifest.chunk_len as usize).min(1 << 24));
+    for ext in 0..exts {
+        let bytes = store.read_chunk_extent(ext)?;
+        let expected = chunk_extent_len(manifest.chunk_len, ext);
+        if bytes.len() != expected {
+            return Err(StoreError::RowLength {
+                kind: "chunk extent",
+                index: ext,
+                expected,
+                found: bytes.len(),
+            });
+        }
+        chunks.extend_from_slice(&bytes);
+    }
+
+    let slot_free = read_free_list(store, manifest)?;
+    let image =
+        crate::snapshot_roster::image_from_small(small, manifest.clone(), chunks, slots, slot_free);
+    crate::image::check_machine_image_bounds(&image)?;
+    crate::image::check_buffer_chunk_lengths(&image.buffers, &image.chunks)?;
+    Ok(image)
+}
+
+impl StoreManifest {
+    fn cost_gate_mismatch(&self, small: &SmallState) -> bool {
+        small.meter.validate().is_err()
+    }
+}
+
+/// A store's manifest and decoded small state (the free list reassembled
+/// from its segment rows), as [`validate_store`] checked them.
+#[derive(Clone, Debug)]
+pub struct ValidatedStoreState {
+    manifest: StoreManifest,
+    small: SmallState,
+}
+
+impl ValidatedStoreState {
+    /// The validated manifest.
+    pub fn manifest(&self) -> &StoreManifest {
+        &self.manifest
+    }
+
+    /// The validated decoded small state.
+    pub fn small(&self) -> &SmallState {
+        &self.small
+    }
+}
+
+/// Check a store's correctness at the metadata scale: the compatibility
+/// gates, then the manifest's and small state's own invariants (a nonzero
+/// epoch and token, the symbol-key counter above the name table, an empty
+/// stack), the live/free accounting, the row inventory (every promised
+/// slot page and chunk extent exists at its exact length, from metadata
+/// rather than contents), the summary count, the free list (in range and
+/// distinct) and the small state's semantic bounds against the manifest's
+/// geometry.
+///
+/// This is an explicit check, not a gate: the resume paths do not run it,
+/// because under the store-seam design's trust model the store is the
+/// machine it holds. Tests and fuzz targets run it, and [`migrate_store`]
+/// runs it over its result before writing. [`validate_store_content`] also
+/// reads and checks every row.
+pub fn validate_store(
+    store: &dyn HeapStore,
+    expected_sig: &Signature,
+) -> Result<ValidatedStoreState, StoreError> {
+    let manifest = store.manifest()?;
+    check_open_gates(&manifest, expected_sig)?;
+    let small = store.read_small_state()?;
+    validate_state(store, manifest, &small, expected_sig)
+}
+
+/// [`validate_store`] over a manifest and an encoded small state the
+/// caller supplies, with the store's rows.
+fn validate_state(
+    store: &dyn HeapStore,
+    manifest: StoreManifest,
+    small: &[u8],
+    expected_sig: &Signature,
+) -> Result<ValidatedStoreState, StoreError> {
+    let OpenedStore { manifest, small } = open_state(store, manifest, small, expected_sig)?;
+    if manifest.token.is_zero() {
+        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "store manifest commit token zero",
+        )));
+    }
+    if manifest.epoch == 0 {
+        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "store manifest epoch 0",
+        )));
     }
     // The symbol-key counter must clear the name table — the store
     // mirror of `read_machine`'s check (a counter at or below the
@@ -3161,28 +2326,20 @@ pub fn validate_store(
             "symbol-key table: counter inside the name table",
         )));
     }
-    // Quiescence, the store mirror of `read_machine`'s STAC gate
-    // (review finding 5): checkpoints only ever commit quiescent
-    // machines, whose value stack is empty, so a populated stack
-    // section can only be crafted.
+    // Quiescence, the store mirror of `read_machine`'s STAC gate:
+    // checkpoints only ever commit quiescent machines, whose value stack
+    // is empty.
     if !small.stack.is_empty() {
         return Err(StoreError::Snapshot(SnapshotError::Corrupt(
             "STAC not empty at a quiescent boundary",
         )));
     }
 
-    // Accounting: every record is live or on the free list. The count
-    // side uses the manifest's free_len (the list itself is segment
-    // rows, reassembled below, where the per-entry checks run).
-    if manifest.free_len as u64 + manifest.slot_live as u64 != manifest.slot_count as u64 {
-        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-            "store live/free/count accounting mismatch",
-        )));
-    }
+    // The live/free accounting and the tail rows were checked by
+    // `open_store`.
 
     // Row inventory: every promised row exists at its exact length —
-    // from METADATA, not contents, so validation (and therefore lazy
-    // resume) does no O(heap) row I/O.
+    // from METADATA, not contents, so this level does no O(heap) row I/O.
     let (page_lens, ext_lens) = store.inventory()?;
     let n_pages = slot_page_count(manifest.slot_count);
     if page_lens.len() != n_pages as usize {
@@ -3201,7 +2358,10 @@ pub fn validate_store(
     }
     let n_exts = chunk_extent_count(manifest.chunk_len);
     if ext_lens.len() != n_exts as usize {
-        return Err(StoreError::MissingRow("chunk extent", ext_lens.len() as u32));
+        return Err(StoreError::MissingRow(
+            "chunk extent",
+            ext_lens.len() as u32,
+        ));
     }
     for (ext, found) in ext_lens.iter().enumerate() {
         let expected = chunk_extent_len(manifest.chunk_len, ext as u32);
@@ -3214,150 +2374,96 @@ pub fn validate_store(
             });
         }
     }
-
-    // Row-hash tree (phase 5) + page-edge summaries (v5): the stored
-    // leaves AND summaries must recombine to the manifest's sealed
-    // root — metadata-scale (32 bytes per leaf, a few words per
-    // summary). Row CONTENT is then verified against these leaves at
-    // the point of read (eager reify or lazy fault), so a
-    // length-preserving flip at rest — in a row, a leaf, or a
-    // summary — can never resume a different machine or shrink the
-    // partial collector's reachability.
-    let (leaf_pages, leaf_exts, leaf_frees) = {
-        let (p, e) = store.leaf_hashes()?;
-        (p, e, store.free_leaf_hashes()?)
-    };
-    let n_frees = free_seg_count(manifest.free_len);
-    if leaf_pages.len() != n_pages as usize
-        || leaf_exts.len() != n_exts as usize
-        || leaf_frees.len() != n_frees as usize
-    {
-        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-            "store leaf-hash inventory disagrees with geometry",
-        )));
-    }
-    let edges = store.page_edges()?;
-    if edges.len() != n_pages as usize {
+    // One page-edge summary per slot page, the count the collectors check
+    // before deciding anything from the summaries.
+    let summaries = store.summary_page_count()?;
+    if summaries != n_pages {
         return Err(StoreError::SummaryCount {
             expected: n_pages,
-            found: edges.len() as u32,
+            found: summaries,
         });
     }
-    let small_leaf = leaf_hash(LEAF_SMALL, 0, &small_bytes);
-    let root = compute_root(&small_leaf, &leaf_pages, &leaf_exts, &leaf_frees, &edges);
-    if root != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: root,
-            found: manifest.root.clone(),
-        });
-    }
-
-    // Reassemble the free list from its segment rows (phase 9), each
-    // verified against its leaf; the accounting checks above already
-    // ran against this list. This is the one O(free-list) exception
-    // to the metadata-only row discipline above: the machine needs
-    // the list in memory at wake, so the read is inherent, not
-    // incidental (the review's honesty note on the "no O(heap) row
-    // I/O" claim).
-    let mut free: Vec<u32> = Vec::with_capacity((manifest.free_len as usize).min(1 << 16));
-    for seg in 0..n_frees {
-        let bytes = store.read_free_seg(seg)?;
-        let expected = free_seg_len(manifest.free_len, seg) * 4;
-        if bytes.len() != expected {
-            return Err(StoreError::RowLength {
-                kind: "free segment",
-                index: seg,
-                expected,
-                found: bytes.len(),
-            });
-        }
-        if leaf_frees.get(seg as usize).copied() != Some(leaf_hash(LEAF_FREE, seg, &bytes)) {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "store free segment fails its leaf hash",
-            )));
-        }
-        free.extend(
-            bytes
-                .chunks_exact(4)
-                .map(|c| u32::from_be_bytes(c.try_into().unwrap())),
-        );
-    }
-    if free.iter().any(|&f| f >= manifest.slot_count) {
+    // The free list `open_store` reassembled: in range and distinct. A
+    // duplicated free index passes the accounting check but aliases one
+    // record to two allocations after resume; with distinctness, the
+    // accounting makes the live/free partition exact.
+    if small.slot_free.iter().any(|&f| f >= manifest.slot_count) {
         return Err(StoreError::Snapshot(SnapshotError::Corrupt(
             "store free-list index out of range",
         )));
     }
-    // Distinctness: a duplicated free index passes the sum check but
-    // aliases one record to two allocations after resume (the
-    // adversarial-review aliasing finding). With distinctness, the sum
-    // check makes the live/free partition exact.
     {
-        let mut seen = std::collections::HashSet::with_capacity(free.len());
-        if !free.iter().all(|f| seen.insert(*f)) {
+        let mut seen = std::collections::HashSet::with_capacity(small.slot_free.len());
+        if !small.slot_free.iter().all(|f| seen.insert(*f)) {
             return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                 "store free-list contains duplicate indices",
             )));
         }
     }
-    small.slot_free = free;
 
-    // Semantic bounds gate for everything the small state carries —
-    // stack, symbols, and the side tables — against the manifest's
-    // geometry. It lives HERE, not in `store_to_image`, because
-    // `validate_store` is the one function BOTH resume paths run:
-    // gating the eager path alone left `resume_from_store_lazy` (the
-    // path `PersistentMachine` actually opens) accepting a crafted
-    // store that then panics the collector in release (review wave 5).
-    // It runs AFTER the free-list reassembly above so the free set is
-    // in hand: a side-table row owned by a free slot is refused, while
-    // freed heap records stay opaque (review findings 2+3). The heap
-    // ROWS are not read at validation time by design — their records
-    // are bounds-checked as they fault, with the same free-record
-    // skip.
-    crate::image::check_image_slot_bounds(
-        &[],
-        &small.stack,
-        &small.arrays,
-        &small.collections,
-        &small.registry,
-        &small.errors,
-        &small.buffers,
-        &small.typed_arrays,
-        &small.data_views,
-        &crate::image::LangRows {
-            wrappers: &small.wrappers,
-            regexps: &small.regexps,
-            dates: &small.dates,
-            function_state: &small.function_state,
-            proxy_state: &small.proxy_state,
-            accessors: &small.accessors,
-            intl_bound_functions: &small.intl_bound_functions,
-            private_elements: &small.private_elements,
-            disposable_stacks: &small.disposable_stacks,
-            generators: &small.generators,
-            promise_cluster: &small.promise_cluster,
-            arguments_brands: &small.arguments_brands,
-            temporal: &small.temporal,
-            intl: &small.intl,
-        },
-        &small.iterators,
-        small.names.len(),
-        &small.symbols,
+    // Semantic bounds for everything the small state carries — stack,
+    // symbols, and the side tables — against the manifest's geometry. It
+    // runs after the free-list checks so the free set is sound: a
+    // side-table row owned by a free slot is refused, while freed heap
+    // records stay opaque.
+    crate::image::check_small_state_bounds(
+        &small,
         manifest.slot_count,
         manifest.chunk_len as usize,
-        &small.slot_free,
     )
     .map_err(StoreError::Snapshot)?;
 
-    Ok(ValidatedStoreState {
-        manifest,
-        small,
-        leaves: StoreLeaves {
-            pages: leaf_pages,
-            exts: leaf_exts,
-            frees: leaf_frees,
-        },
-    })
+    Ok(ValidatedStoreState { manifest, small })
+}
+
+/// Check a store's correctness completely: [`validate_store`]'s
+/// metadata-scale checks, then every row read, decoded and bounds-checked
+/// (as [`store_to_image`] does), the stored property ids audited against
+/// the name and symbol-key tables, each page-edge summary re-derived from
+/// its page's records, each small-state section digest re-derived from its
+/// payload, and the backend's derived indexes compared with their sources
+/// ([`HeapStore::check_derived_indexes`]). It reads the whole store.
+///
+/// A section digest is checked here as a cache that change detection
+/// relies on, against the payload it was derived from, never as evidence
+/// about the payload: a store whose content was edited consistently
+/// passes, because under the store-seam design's trust model it is the
+/// machine it now describes.
+pub fn validate_store_content(
+    store: &dyn HeapStore,
+    expected_sig: &Signature,
+) -> Result<ValidatedStoreState, StoreError> {
+    let state = validate_store(store, expected_sig)?;
+    let image = store_to_image_at(store, &state.manifest)?;
+    if image.stored_unregistered_key_id().is_some() {
+        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "stored property id outside the name and symbol-key tables",
+        )));
+    }
+    let edges = store.page_edges()?;
+    if edges.len() != slot_page_count(state.manifest.slot_count) as usize {
+        return Err(StoreError::SummaryCount {
+            expected: slot_page_count(state.manifest.slot_count),
+            found: edges.len() as u32,
+        });
+    }
+    for (page, targets) in edges.iter().enumerate() {
+        let start = page * SLOTS_PER_PAGE as usize;
+        let end = image.slots.len().min(start + SLOTS_PER_PAGE as usize);
+        if derive_page_edges(page as u32, &image.slots[start..end]) != *targets {
+            return Err(StoreError::SummaryMismatch { page: page as u32 });
+        }
+    }
+    let derived = crate::store_sections::SectionLeaves::from_payloads(
+        &crate::store_sections::split_small_state(&store.read_small_state()?)?,
+    );
+    if store.small_section_hashes()? != *derived.hashes() {
+        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "small-state section digest disagrees with its payload",
+        )));
+    }
+    store.check_derived_indexes()?;
+    Ok(state)
 }
 
 // --- container ↔ store (the identity locks) ---
@@ -3368,13 +2474,20 @@ pub fn validate_store(
 /// content identity (design decision 6) and full interchange with the
 /// blob path.
 pub fn export_to_container(store: &dyn HeapStore) -> Result<Vec<u8>, StoreError> {
-    Ok(crate::image::write_machine(&store_to_image(store)?))
+    Ok(crate::image::write_machine(
+        &crate::image::GatedImage::new(store_to_image(store)?)?,
+    )?)
 }
 
 /// Seed a store from canonical container bytes (a full epoch-1 write),
 /// enforcing the container gates against `expected_sig` exactly as
 /// [`crate::image::read_machine`] does. The identity lock is
-/// `export_to_container(import_from_container(bytes)) == bytes`.
+/// `export_to_container(import_from_container(bytes)) == bytes` for canonical
+/// current-writer output. Accepted legacy Number NaN encodings normalize on
+/// import/export, changing content identity once; raw buffer bytes do not.
+/// The container gates are the check: the store this writes is then trusted
+/// like any other (the store-seam design's trust model).
+/// Untouched legacy pages need not be rewritten until checkpoint dirties them.
 pub fn import_from_container(
     bytes: &[u8],
     expected_sig: &Signature,
@@ -3384,14 +2497,18 @@ pub fn import_from_container(
     // The blob half of the id-space audit: nothing may ADOPT a
     // container whose heap stores a property id outside both key
     // tables — crafted or torn bytes, or a pre-unification blob that
-    // persisted a then-unresumable intern (review wave 5). The scan is
+    // persisted a then-unresumable intern. The scan is
     // O(heap) and this path already decoded the whole image.
     if image.stored_unregistered_key_id().is_some() {
         return Err(StoreError::Snapshot(SnapshotError::Corrupt(
             "stored property id outside the name and symbol-key tables",
         )));
     }
-    store.commit(&image_to_batch(&image, 1, ""))
+    store.commit(&image_to_batch(
+        &crate::image::GatedImage::new(image)?,
+        1,
+        CommitToken::ZERO,
+    ))
 }
 
 /// The store state's **logical identity**: the SHA-256 of its canonical
@@ -3408,17 +2525,42 @@ pub fn root_hash(store: &dyn HeapStore) -> Result<String, StoreError> {
 
 // --- the in-memory reference store ---
 
-/// What one [`MemoryStore::commit`] wrote, for the incremental-
-/// checkpoint acceptance tests (the phase-2 bar: commit cost is
-/// proportional to dirty rows, measured, not asserted from hope).
+/// What one [`HeapStoreCommit::commit`] wrote, for the incremental-
+/// checkpoint acceptance tests in `tests/store_checkpoint.rs` that
+/// check writes scale with the changed state.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct CommitStats {
     pub slot_pages_written: usize,
     pub chunk_extents_written: usize,
-    /// Free-list segment rows written — the phase-9 proportionality
-    /// axis (LIFO churn must rewrite only the tail segment), which
-    /// the review found asserted in prose and observed by nothing.
+    /// Free-list segment rows written, so tests can verify that LIFO
+    /// churn rewrites only the affected tail segments.
     pub free_segs_written: usize,
+    pub small_sections_written: usize,
+    pub small_bytes_written: usize,
+}
+
+/// The comparison every [`HeapStore::replace_for_migration`] makes before
+/// writing: the durable manifest must still be `from`, the one the
+/// migration read. A second handle's migration or commit in between
+/// changed its schema or its epoch and token. [`migrate_store`] also makes
+/// it before it reads, with the handle's own view as `stored`.
+pub fn check_migration_baseline(
+    stored: &StoreManifest,
+    from: &StoreManifest,
+) -> Result<(), StoreError> {
+    if stored != from {
+        let label = |m: &StoreManifest| {
+            format!(
+                "schema {} epoch {} token {}",
+                m.store_schema, m.epoch, m.token
+            )
+        };
+        return Err(StoreError::BaselineMismatch {
+            expected: label(from),
+            found: label(stored),
+        });
+    }
+    Ok(())
 }
 
 /// The in-memory [`HeapStore`]: the reference semantics every backend
@@ -3426,12 +2568,13 @@ pub struct CommitStats {
 #[derive(Default)]
 pub struct MemoryStore {
     manifest: Option<StoreManifest>,
+    /// The whole framed small state of a store stamped before schema 28,
+    /// which kept it as one leaf; empty once `sections` holds it.
     small: Vec<u8>,
+    sections: Option<[Vec<u8>; crate::store_sections::SMALL_SECTION_COUNT]>,
+    section_leaves: Option<crate::store_sections::SectionLeaves>,
     slot_pages: std::collections::HashMap<u32, Vec<u8>>,
     chunk_extents: std::collections::HashMap<u32, Vec<u8>>,
-    leaf_pages: Vec<[u8; 32]>,
-    leaf_exts: Vec<[u8; 32]>,
-    leaf_frees: Vec<[u8; 32]>,
     free_segs: std::collections::HashMap<u32, Vec<u8>>,
     edges: Vec<Vec<u32>>,
     last_commit: CommitStats,
@@ -3453,21 +2596,31 @@ impl HeapStore for MemoryStore {
         self.manifest.clone().ok_or(StoreError::Empty)
     }
 
-    fn replace_manifest_for_migration(
+    fn replace_for_migration(
         &mut self,
-        manifest: &StoreManifest,
-    ) -> Result<(), StoreError> {
-        self.manifest = Some(manifest.clone());
-        Ok(())
-    }
-
-    fn replace_manifest_and_small_for_migration(
-        &mut self,
-        manifest: &StoreManifest,
+        from: &StoreManifest,
+        to: &StoreManifest,
         small: &[u8],
     ) -> Result<(), StoreError> {
-        self.manifest = Some(manifest.clone());
-        self.small = small.to_vec();
+        check_migration_baseline(&self.manifest()?, from)?;
+        let sections = if to.store_schema >= 28 {
+            let refs = crate::store_sections::split_small_state(small)?;
+            Some(std::array::from_fn(|id| refs[id].to_vec()))
+        } else {
+            None
+        };
+        self.section_leaves = sections.as_ref().map(|rows| {
+            crate::store_sections::SectionLeaves::from_payloads(&std::array::from_fn(|id| {
+                rows[id].as_slice()
+            }))
+        });
+        self.sections = sections;
+        self.small = if self.sections.is_some() {
+            Vec::new()
+        } else {
+            small.to_vec()
+        };
+        self.manifest = Some(to.clone());
         Ok(())
     }
 
@@ -3475,13 +2628,28 @@ impl HeapStore for MemoryStore {
         if self.manifest.is_none() {
             return Err(StoreError::Empty);
         }
-        Ok(self.small.clone())
+        if let Some(sections) = &self.sections {
+            crate::store_sections::frame_small_state(&std::array::from_fn(|id| {
+                sections[id].as_slice()
+            }))
+        } else {
+            Ok(self.small.clone())
+        }
+    }
+
+    fn small_section_hashes(
+        &self,
+    ) -> Result<[[u8; 32]; crate::store_sections::SMALL_SECTION_COUNT], StoreError> {
+        self.section_leaves
+            .as_ref()
+            .map(|leaves| *leaves.hashes())
+            .ok_or(StoreError::Empty)
     }
 
     fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
         // Empty-store gate for point-read parity across backends: an
         // uncommitted store is `Empty`; `MissingRow` means a committed
-        // store lacks the row (the review's parity table).
+        // store lacks the row.
         if self.manifest.is_none() {
             return Err(StoreError::Empty);
         }
@@ -3524,13 +2692,6 @@ impl HeapStore for MemoryStore {
         Ok((pages, exts))
     }
 
-    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
-        if self.manifest.is_none() {
-            return Err(StoreError::Empty);
-        }
-        Ok((self.leaf_pages.clone(), self.leaf_exts.clone()))
-    }
-
     fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
         if self.manifest.is_none() {
             return Err(StoreError::Empty);
@@ -3548,35 +2709,24 @@ impl HeapStore for MemoryStore {
             .ok_or(StoreError::MissingRow("free segment", seg))
     }
 
-    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
-        if self.manifest.is_none() {
-            return Err(StoreError::Empty);
-        }
-        Ok(self.leaf_frees.clone())
-    }
-
-    fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
-        check_succession(self.manifest.as_ref(), batch)?;
-        // The shared per-commit verification (grown-region presence,
-        // row lengths, summary coupling, leaf/summary maintenance,
-        // root recombination) runs on CLONES first — a refused batch
-        // must leave the store untouched.
+    fn commit_verified(&mut self, verify: &mut CommitVerifier<'_>) -> Result<(), StoreError> {
+        let batch = verify(self.manifest.as_ref())?.batch();
         let pages = slot_page_count(batch.manifest.slot_count);
         let exts = chunk_extent_count(batch.manifest.chunk_len);
-        let mut leaf_pages = self.leaf_pages.clone();
-        let mut leaf_exts = self.leaf_exts.clone();
-        let mut leaf_frees = self.leaf_frees.clone();
+        let next_sections =
+            crate::store_sections::updated_leaves(self.section_leaves.as_ref(), batch)?;
+        let updates = crate::store_sections::batch_updates(batch)?;
         let mut edges = self.edges.clone();
-        apply_batch(&mut leaf_pages, &mut leaf_exts, &mut leaf_frees, &mut edges, self.manifest.as_ref(), batch)?;
+        edges.resize(pages as usize, Vec::new());
+        for (page, targets) in &batch.page_edges {
+            edges[*page as usize] = targets.clone();
+        }
         for (page, bytes) in &batch.slot_pages {
             self.slot_pages.insert(*page, bytes.clone());
         }
         for (ext, bytes) in &batch.chunk_extents {
             self.chunk_extents.insert(*ext, bytes.clone());
         }
-        self.leaf_pages = leaf_pages;
-        self.leaf_exts = leaf_exts;
-        self.leaf_frees = leaf_frees;
         self.edges = edges;
         for (seg, bytes) in &batch.free_segs {
             self.free_segs.insert(*seg, bytes.clone());
@@ -3587,12 +2737,23 @@ impl HeapStore for MemoryStore {
         // compaction; slot pages are monotone but the sweep is uniform).
         self.slot_pages.retain(|&p, _| p < pages);
         self.chunk_extents.retain(|&e, _| e < exts);
-        self.small = batch.small.clone();
+        let rows = self
+            .sections
+            .get_or_insert_with(|| std::array::from_fn(|_| Vec::new()));
+        let small_sections_written = updates.len();
+        let small_bytes_written = updates.iter().map(|u| u.bytes.len()).sum();
+        for update in updates {
+            rows[update.section.id() as usize] = update.bytes;
+        }
+        self.section_leaves = Some(next_sections);
+        self.small.clear();
         self.manifest = Some(batch.manifest.clone());
         self.last_commit = CommitStats {
             slot_pages_written: batch.slot_pages.len(),
             chunk_extents_written: batch.chunk_extents.len(),
             free_segs_written: batch.free_segs.len(),
+            small_sections_written,
+            small_bytes_written,
         };
         Ok(())
     }
@@ -3601,9 +2762,246 @@ impl HeapStore for MemoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image::{read_machine, write_machine};
+    use crate::image::{encode_strings, read_machine};
     use crate::machine::MachineSnapshot;
     use ironhorse_vm::Interp;
+
+    #[test]
+    fn name_floor_section_has_exact_width() {
+        use crate::store_sections::SmallSection;
+        let bytes = image_to_batch_unchecked(&ran_image(), 1, CommitToken::ZERO).small;
+        let mut small = SmallState::decode(&bytes).unwrap();
+        small.names = vec![SymbolName::from("name")];
+        let encode = |floor: Vec<u8>| {
+            let mut sections = small.encode_sections();
+            sections[SmallSection::NameFloor as usize] = floor;
+            let mut out = Vec::new();
+            for section in sections {
+                out.extend_from_slice(&(section.len() as u32).to_be_bytes());
+                out.extend_from_slice(&section);
+            }
+            out
+        };
+        for floor in [vec![], vec![0; 4]] {
+            assert!(SmallState::decode(&encode(floor)).is_ok());
+        }
+        for length in [1, 2, 3, 5, 8] {
+            assert_eq!(
+                SmallState::decode(&encode(vec![0; length])).unwrap_err(),
+                StoreError::Snapshot(SnapshotError::Corrupt(
+                    "small state name-floor section size"
+                ))
+            );
+        }
+    }
+
+    /// Exercise the actual decoder and migration prefix reader with short
+    /// headers, truncated payloads, and a wire length that overflows usize
+    /// after the header on 32-bit targets. The intact image is a control.
+    #[test]
+    fn small_section_framing_refusals() {
+        let bytes = image_to_batch_unchecked(&ran_image(), 1, CommitToken::ZERO).small;
+        let small = SmallState::decode(&bytes).unwrap();
+        assert_eq!(
+            peek_cost_table_version(&bytes).unwrap(),
+            small.meter.cost_table_version
+        );
+        let sections = small.encode_sections();
+        let mut prefix = Vec::new();
+        for (section, payload) in sections.iter().enumerate() {
+            let mut malformed = Vec::new();
+            for header_bytes in 0..4 {
+                let mut short = prefix.clone();
+                short.extend_from_slice(&(payload.len() as u32).to_be_bytes()[..header_bytes]);
+                malformed.push(short);
+            }
+            let mut oversized = prefix.clone();
+            oversized.extend_from_slice(&u32::MAX.to_be_bytes());
+            malformed.push(oversized);
+            if !payload.is_empty() {
+                let mut short = prefix.clone();
+                short.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+                short.extend_from_slice(&payload[..payload.len() - 1]);
+                malformed.push(short);
+            }
+            for bytes in malformed {
+                let error = SmallState::decode(&bytes).unwrap_err();
+                if section < 6 {
+                    assert_eq!(peek_cost_table_version(&bytes).unwrap_err(), error);
+                }
+                match section {
+                    0 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state stack section"))
+                    ),
+                    1 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state free-list section"
+                        ))
+                    ),
+                    2 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state keys section"))
+                    ),
+                    3 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state names section"))
+                    ),
+                    4 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state symbols section"))
+                    ),
+                    5 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state meter section"))
+                    ),
+                    6 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state arrays section"))
+                    ),
+                    7 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state collections section"
+                        ))
+                    ),
+                    8 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state registry section"
+                        ))
+                    ),
+                    9 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state errors section"))
+                    ),
+                    10 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state buffers section"))
+                    ),
+                    11 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state typed-arrays section"
+                        ))
+                    ),
+                    12 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state data-views section"
+                        ))
+                    ),
+                    13 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state wrappers section"
+                        ))
+                    ),
+                    14 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state regexps section"))
+                    ),
+                    15 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state arguments section"
+                        ))
+                    ),
+                    16 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state temporal section"
+                        ))
+                    ),
+                    17 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state intl section"))
+                    ),
+                    18 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state name-floor section"
+                        ))
+                    ),
+                    19 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state iterators section"
+                        ))
+                    ),
+                    20 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state dates section"))
+                    ),
+                    21 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state function section"
+                        ))
+                    ),
+                    22 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state proxy section"))
+                    ),
+                    23 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state accessor section"
+                        ))
+                    ),
+                    24 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state Intl bound-function section"
+                        ))
+                    ),
+                    25 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state private-element section"
+                        ))
+                    ),
+                    26 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state disposable-stack section"
+                        ))
+                    ),
+                    27 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state generator section"
+                        ))
+                    ),
+                    28 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state error-frames section"
+                        ))
+                    ),
+                    29 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state promise section"))
+                    ),
+                    30 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state async section"))
+                    ),
+                    31 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state index-props section"
+                        ))
+                    ),
+                    _ => unreachable!(),
+                }
+            }
+            prefix.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+            prefix.extend_from_slice(payload);
+        }
+        assert_eq!(prefix, bytes);
+    }
 
     fn sig() -> Signature {
         Signature::new("ironhorse-store-test-v1")
@@ -3621,7 +3019,173 @@ mod tests {
         let mut m = Interp::new();
         let a = m.run(&PROG_A);
         assert!(a.completed);
-        m.snapshot_image(&sig())
+        m.snapshot_image_for_testing(&sig()).expect("gated image")
+    }
+
+    #[test]
+    fn error_frames_require_an_error_owner_in_both_formats() {
+        use crate::format::ERRD;
+        use crate::image::{encode_errors, write_machine_unchecked, ErrorImage};
+        use crate::store_sections::SmallSection;
+        use crate::{AtomReader, AtomWriter};
+        let mut image = ran_image();
+        image.errors = vec![ErrorImage {
+            owner: 1,
+            name: "Error".into(),
+            message: None,
+            frames: vec!["origin".into()],
+        }];
+        let bytes = write_machine_unchecked(&image);
+        assert_eq!(read_machine(&bytes, &sig()).unwrap(), image);
+        let reader = AtomReader::parse(&bytes).unwrap();
+        assert!(reader.find(ERRD).is_some());
+        let mut writer = AtomWriter::new();
+        for atom in reader.atoms() {
+            if atom.tag != ERRD {
+                writer.atom(atom.tag, atom.payload).unwrap();
+            }
+        }
+        assert_eq!(
+            read_machine(&writer.finish().unwrap(), &sig()),
+            Err(SnapshotError::Corrupt(
+                "error-frame side table: owner has no error row"
+            ))
+        );
+
+        let bytes = image_to_batch_unchecked(&image, 1, CommitToken::ZERO).small;
+        let small = SmallState::decode(&bytes).unwrap();
+        assert_eq!(small.errors, image.errors);
+        let mut sections = small.encode_sections();
+        sections[SmallSection::Errors as usize] = encode_errors(&[]);
+        let mut bytes = Vec::new();
+        for section in sections {
+            bytes.extend_from_slice(&(section.len() as u32).to_be_bytes());
+            bytes.extend_from_slice(&section);
+        }
+        assert_eq!(
+            SmallState::decode(&bytes).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt(
+                "error-frame side table: owner has no error row"
+            ))
+        );
+    }
+
+    #[test]
+    fn symbol_counter_must_clear_names_in_both_formats() {
+        use crate::image::write_machine_unchecked;
+        let mut image = ran_image();
+        image.names = vec![SymbolName::from("name")];
+        image.name_floor = None;
+        image.symbols.next_id = 2;
+        assert_eq!(
+            read_machine(&write_machine_unchecked(&image), &sig()).unwrap(),
+            image
+        );
+        let mut store = MemoryStore::new();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
+            .unwrap();
+        validate_store(&store, &sig()).unwrap();
+        for next_id in [0, 1] {
+            let mut invalid = image.clone();
+            invalid.symbols.next_id = next_id;
+            assert_eq!(
+                read_machine(&write_machine_unchecked(&invalid), &sig()),
+                Err(SnapshotError::Corrupt(
+                    "symbol-key table: counter inside the name table"
+                ))
+            );
+            let mut store = MemoryStore::new();
+            store
+                .commit(&image_to_batch_unchecked(&invalid, 1, CommitToken::ZERO))
+                .unwrap();
+            assert_eq!(
+                validate_store(&store, &sig()).unwrap_err(),
+                StoreError::Snapshot(SnapshotError::Corrupt(
+                    "symbol-key table: counter inside the name table"
+                ))
+            );
+            // Both resume paths refuse it as the restore rebuilds the table.
+            assert_eq!(
+                crate::machine::resume_from_store(&store, &sig()).unwrap_err(),
+                StoreError::Snapshot(SnapshotError::Corrupt("symbol-key table does not restore"))
+            );
+            assert_eq!(
+                crate::machine::resume_from_store_lazy(
+                    std::rc::Rc::new(std::cell::RefCell::new(store)),
+                    &sig()
+                )
+                .unwrap_err(),
+                StoreError::Snapshot(SnapshotError::Corrupt("symbol-key table does not restore"))
+            );
+        }
+    }
+
+    #[test]
+    fn append_migrations_add_exactly_their_empty_sections() {
+        // Independent historical wire contract: target schema / added bytes.
+        // Pin individual steps so moving four bytes between adjacent steps
+        // cannot pass merely because a complete v5-to-current migration works.
+        const EXPECTED: &[(u32, usize)] = &[
+            (7, 12),
+            (9, 4),
+            (10, 12),
+            (11, 16),
+            (12, 8),
+            (13, 4),
+            (14, 4),
+            (15, 4),
+            (16, 4),
+            (17, 4),
+            (18, 4),
+            (19, 4),
+            (20, 4),
+            (21, 4),
+            (22, 4),
+            (23, 4),
+            (24, 4),
+            (25, 4),
+        ];
+        assert_eq!(LADDER, EXPECTED);
+        let base = image_to_batch_unchecked(&ran_image(), 1, CommitToken::ZERO).manifest;
+        for &(target, extra_len) in EXPECTED {
+            let mut manifest = StoreManifest {
+                store_schema: target - 1,
+                ..base.clone()
+            };
+            let mut small = vec![0x71, 0x00, 0xff];
+            migrate_step(&mut manifest, &mut small).unwrap();
+            let mut expected_small = vec![0x71, 0x00, 0xff];
+            expected_small.extend(vec![0; extra_len]);
+            assert_eq!(small, expected_small);
+            assert_eq!(
+                manifest,
+                StoreManifest {
+                    store_schema: target,
+                    ..base.clone()
+                }
+            );
+        }
+        // Every other step leaves the small state alone, except the two
+        // that rewrite it (25 and 26), and 7 resets the crank counter.
+        for schema in STORE_SCHEMA_MIN_SUPPORTED..STORE_SCHEMA_VERSION {
+            if LADDER.iter().any(|&(target, _)| target == schema + 1)
+                || schema == 25
+                || schema == 26
+            {
+                continue;
+            }
+            let mut manifest = StoreManifest {
+                store_schema: schema,
+                cranks: 9,
+                ..base.clone()
+            };
+            let mut small = vec![0x71, 0x00, 0xff];
+            migrate_step(&mut manifest, &mut small).unwrap();
+            assert_eq!(small, [0x71, 0x00, 0xff]);
+            assert_eq!(manifest.store_schema, schema + 1);
+            assert_eq!(manifest.cranks, if schema == 7 { 0 } else { 9 });
+        }
     }
 
     #[test]
@@ -3630,7 +3194,10 @@ mod tests {
         assert_eq!(slot_page_count(1), 1);
         assert_eq!(slot_page_count(SLOTS_PER_PAGE), 1);
         assert_eq!(slot_page_count(SLOTS_PER_PAGE + 1), 2);
-        assert_eq!(slot_page_len(SLOTS_PER_PAGE + 1, 0), SLOTS_PER_PAGE as usize);
+        assert_eq!(
+            slot_page_len(SLOTS_PER_PAGE + 1, 0),
+            SLOTS_PER_PAGE as usize
+        );
         assert_eq!(slot_page_len(SLOTS_PER_PAGE + 1, 1), 1);
         assert_eq!(slot_page_len(SLOTS_PER_PAGE + 1, 2), 0);
         let e = CHUNK_EXTENT_BYTES as u64;
@@ -3657,13 +3224,38 @@ mod tests {
             free_len: 5,
             epoch: 3,
             cranks: 41,
-            root: "r00t".to_string(),
-            seal: "abc123".to_string(),
+            collect_every: 3,
+            collections: 7,
+            token: CommitToken([0x5a; 16]),
         };
         let bytes = m.encode();
         let back = StoreManifest::decode(&bytes).unwrap();
         assert_eq!(back, m);
         assert_eq!(back.cranks, 41, "the schema-8 crank counter round-trips");
+
+        // A chunk length past the u32 chunk-offset space is refused at
+        // decode, before anything can size an arena by it; the largest
+        // addressable length decodes.
+        for (chunk_len, fits) in [
+            (u64::from(u32::MAX), true),
+            (u64::from(u32::MAX) + 1, false),
+        ] {
+            let long = StoreManifest {
+                chunk_len,
+                ..m.clone()
+            };
+            let decoded = StoreManifest::decode(&long.encode());
+            if fits {
+                assert_eq!(decoded.unwrap(), long);
+            } else {
+                assert_eq!(
+                    decoded.unwrap_err(),
+                    StoreError::Snapshot(SnapshotError::Corrupt(
+                        "store manifest chunk length exceeds the chunk offset space"
+                    ))
+                );
+            }
+        }
 
         // A foreign VERS magic fails closed through the shared gate.
         let mut foreign = bytes.clone();
@@ -3677,35 +3269,227 @@ mod tests {
         // before any reservation (malformed-count discipline).
         let mut huge = bytes.clone();
         huge[14..18].copy_from_slice(&u32::MAX.to_be_bytes());
-        match StoreManifest::decode(&huge) {
+        assert_eq!(
+            StoreManifest::decode(&huge),
             Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "store manifest signature truncated",
-            ))) => {}
-            other => panic!("expected truncated signature, got {other:?}"),
-        }
+                "store manifest signature truncated"
+            )))
+        );
 
         // Exact consumption: a decodable manifest followed by any
         // trailing byte is malformed, not forward-compatible.
         let mut trailing = bytes.clone();
         trailing.push(0);
-        match StoreManifest::decode(&trailing) {
+        assert_eq!(
+            StoreManifest::decode(&trailing),
             Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "store manifest trailing bytes",
-            ))) => {}
-            other => panic!("expected trailing-byte refusal, got {other:?}"),
+                "store manifest trailing bytes"
+            )))
+        );
+
+        // Every field past the signature is fixed-width, ending in the
+        // 16-byte token; cut at every byte.
+        let signature_end = 18 + m.signature.encode().len();
+        let epoch_end = signature_end + 36;
+        assert_eq!(epoch_end + 36, bytes.len());
+        for length in 0..bytes.len() {
+            let result = StoreManifest::decode(&bytes[..length]);
+            if (18..signature_end).contains(&length) {
+                assert_eq!(
+                    result,
+                    Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                        "store manifest signature truncated"
+                    )))
+                );
+            } else {
+                assert_eq!(
+                    result,
+                    Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                        "store manifest truncated"
+                    ))),
+                    "prefix {length}"
+                );
+            }
         }
+        for schema in [STORE_SCHEMA_MIN_SUPPORTED - 1, STORE_SCHEMA_VERSION + 1] {
+            let mut invalid = bytes.clone();
+            invalid[10..14].copy_from_slice(&schema.to_be_bytes());
+            assert_eq!(
+                StoreManifest::decode(&invalid),
+                Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                    "unsupported store schema version"
+                )))
+            );
+        }
+
+        // An older schema's layout, read for migration: this build writes
+        // it (for fixtures) with an empty root and a seal the token reads
+        // back from, and each schema carries its own tail fields.
+        for schema in [STORE_SCHEMA_MIN_SUPPORTED, 7, 8, 26, 27, 35] {
+            let legacy = StoreManifest {
+                store_schema: schema,
+                cranks: if schema >= 8 { 41 } else { 0 },
+                collect_every: if schema >= 27 { 3 } else { 0 },
+                collections: if schema >= 27 { 7 } else { 0 },
+                ..m.clone()
+            };
+            assert_eq!(StoreManifest::decode(&legacy.encode()).unwrap(), legacy);
+        }
+        // A legacy manifest as an older build wrote it: the root and the
+        // parent seal are read and dropped, and the token is the first half
+        // of the seal.
+        let legacy_bytes = |root: &[u8], seal: &[u8], parent: &[u8]| {
+            let mut v = StoreManifest {
+                store_schema: 35,
+                ..m.clone()
+            }
+            .encode();
+            v.truncate(epoch_end);
+            v.extend_from_slice(&(root.len() as u32).to_be_bytes());
+            v.extend_from_slice(root);
+            v.extend_from_slice(&(seal.len() as u32).to_be_bytes());
+            v.extend_from_slice(seal);
+            v.extend_from_slice(&41u64.to_be_bytes());
+            v.extend_from_slice(&3u32.to_be_bytes());
+            v.extend_from_slice(&7u64.to_be_bytes());
+            v.extend_from_slice(&(parent.len() as u32).to_be_bytes());
+            v.extend_from_slice(parent);
+            v
+        };
+        let (root, seal, parent) = (
+            b"r00t".as_slice(),
+            b"00112233445566778899aabbccddeeff0123456789abcdef0123456789abcdef".as_slice(),
+            b"parent".as_slice(),
+        );
+        let bytes = legacy_bytes(root, seal, parent);
+        assert_eq!(
+            StoreManifest::decode(&bytes).unwrap(),
+            StoreManifest {
+                store_schema: 35,
+                token: CommitToken([
+                    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
+                    0xdd, 0xee, 0xff
+                ]),
+                ..m.clone()
+            }
+        );
+        for short in [&seal[..31], b""] {
+            assert_eq!(
+                StoreManifest::decode(&legacy_bytes(root, short, parent)),
+                Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                    "store manifest seal shorter than a token"
+                )))
+            );
+        }
+        assert_eq!(
+            StoreManifest::decode(&legacy_bytes(
+                root,
+                &b"0011223344556677889g".repeat(2),
+                parent
+            )),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store manifest seal not hex"
+            )))
+        );
+        let root_start = epoch_end + 4;
+        let root_end = root_start + root.len();
+        let seal_start = root_end + 4;
+        let seal_end = seal_start + seal.len();
+        let parent_start = seal_end + 24;
+        assert_eq!(parent_start + parent.len(), bytes.len());
+        for length in 0..bytes.len() {
+            let result = StoreManifest::decode(&bytes[..length]);
+            if (18..signature_end).contains(&length) {
+                assert_eq!(
+                    result,
+                    Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                        "store manifest signature truncated"
+                    )))
+                );
+            } else if (root_start..root_end).contains(&length) {
+                assert_eq!(
+                    result,
+                    Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                        "store manifest root truncated"
+                    )))
+                );
+            } else if (seal_start..seal_end).contains(&length) {
+                assert_eq!(
+                    result,
+                    Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                        "store manifest seal truncated"
+                    )))
+                );
+            } else if length >= parent_start {
+                assert_eq!(
+                    result,
+                    Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                        "manifest parent seal truncated"
+                    )))
+                );
+            } else {
+                assert_eq!(
+                    result,
+                    Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                        "store manifest truncated"
+                    ))),
+                    "prefix {length}"
+                );
+            }
+        }
+        let mut invalid = bytes.clone();
+        invalid[root_start..root_end].fill(0xff);
+        assert_eq!(
+            StoreManifest::decode(&invalid),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store manifest root not utf8"
+            )))
+        );
+        invalid = bytes.clone();
+        invalid[seal_start..seal_end].fill(0xff);
+        assert_eq!(
+            StoreManifest::decode(&invalid),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store manifest seal not utf8"
+            )))
+        );
+        invalid = bytes.clone();
+        invalid[parent_start] = 0xff;
+        assert_eq!(
+            StoreManifest::decode(&invalid),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "manifest parent seal not utf8"
+            )))
+        );
+        invalid = bytes.clone();
+        invalid[root_start - 4..root_start].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert_eq!(
+            StoreManifest::decode(&invalid),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store manifest root truncated"
+            )))
+        );
+        invalid = bytes;
+        invalid[seal_start - 4..seal_start].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert_eq!(
+            StoreManifest::decode(&invalid),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store manifest seal truncated"
+            )))
+        );
     }
 
     #[test]
     fn small_state_round_trips() {
         let s = SmallState {
+            index_props: Vec::new(),
             stack: vec![Slot::boolean(true), Slot::integer(-4)],
             slot_free: vec![9, 2, 5],
             keys: vec!["dyn".to_string()],
-            names: vec!["Object".to_string(), "x".to_string()],
+            names: vec!["Object".into(), "x".into()],
             symbols: crate::image::SymbolKeyImage {
-                next_id: u16::MAX - 2,
-                pairs: vec![(u16::MAX - 1, 11), (u16::MAX, 22)],
+                next_id: u16::MAX - 3,
+                pairs: vec![(u16::MAX - 2, 11), (u16::MAX - 1, 22)],
             },
             meter: MeterImage::current(),
             arrays: Vec::new(),
@@ -3718,17 +3502,17 @@ mod tests {
             wrappers: Vec::new(),
             regexps: Vec::new(),
             dates: Vec::new(),
-            function_state: ironhorse_vm::FunctionStateSnapshot::default(),
-            proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
+            function_state: ironhorse_vm::snapshot_api::FunctionStateSnapshot::default(),
+            proxy_state: ironhorse_vm::snapshot_api::ProxyStateSnapshot::default(),
             accessors: Vec::new(),
             intl_bound_functions: Vec::new(),
-            private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
+            private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
             generators: Vec::new(),
-            promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
+            promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: crate::image::TemporalImage::default(),
-            intl: ironhorse_vm::IntlTables::default(),
+            intl: ironhorse_vm::snapshot_api::IntlTables::default(),
             name_floor: None,
             iterators: Vec::new(),
         };
@@ -3742,6 +3526,7 @@ mod tests {
     #[test]
     fn small_state_truncation_fails_closed() {
         let s = SmallState {
+            index_props: Vec::new(),
             stack: vec![],
             slot_free: vec![],
             keys: vec![],
@@ -3758,17 +3543,17 @@ mod tests {
             wrappers: Vec::new(),
             regexps: Vec::new(),
             dates: Vec::new(),
-            function_state: ironhorse_vm::FunctionStateSnapshot::default(),
-            proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
+            function_state: ironhorse_vm::snapshot_api::FunctionStateSnapshot::default(),
+            proxy_state: ironhorse_vm::snapshot_api::ProxyStateSnapshot::default(),
             accessors: Vec::new(),
             intl_bound_functions: Vec::new(),
-            private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
+            private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
             generators: Vec::new(),
-            promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
+            promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: crate::image::TemporalImage::default(),
-            intl: ironhorse_vm::IntlTables::default(),
+            intl: ironhorse_vm::snapshot_api::IntlTables::default(),
             name_floor: None,
             iterators: Vec::new(),
         };
@@ -3783,10 +3568,10 @@ mod tests {
         // malformed, not ignorable.
         let mut trailing = bytes.clone();
         trailing.push(0);
-        match SmallState::decode(&trailing) {
-            Err(StoreError::Snapshot(SnapshotError::Corrupt("small state trailing bytes"))) => {}
-            other => panic!("expected trailing-byte refusal, got {other:?}"),
-        }
+        assert_eq!(
+            SmallState::decode(&trailing).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt("small state trailing bytes"))
+        );
     }
 
     #[test]
@@ -3814,7 +3599,7 @@ mod tests {
     #[test]
     fn container_import_export_is_byte_identical() {
         let image = ran_image();
-        let bytes = write_machine(&image);
+        let bytes = crate::image::write_machine_unchecked(&image);
 
         let mut store = MemoryStore::new();
         import_from_container(&bytes, &sig(), &mut store).expect("imports");
@@ -3826,13 +3611,55 @@ mod tests {
         assert_eq!(read_machine(&exported, &sig()).unwrap(), image);
     }
 
+    #[test]
+    fn legacy_nan_import_normalizes_numbers_but_preserves_chunk_bytes() {
+        use ironhorse_vm::{ChunkArena, Payload, Slot};
+        let raw = 0xfff0_0000_0000_0001u64;
+        let mut image = ran_image();
+        image.version.format_version = 15;
+        image.function_state.native_names = None;
+        let slot_index = image.slots.len();
+        image.slots.push(Slot::number(f64::NAN));
+        image.slot_live += 1;
+        let mut chunks = ChunkArena::from_image(image.chunks);
+        chunks.alloc(&raw.to_be_bytes());
+        image.chunks = chunks.raw_vec();
+        let canonical = crate::image::write_machine_unchecked(&image);
+        let record = crate::slot_codec::encode_slots(&[Slot::number(f64::NAN)]);
+        let offsets: Vec<_> = canonical
+            .windows(record.len())
+            .enumerate()
+            .filter_map(|(i, bytes)| (bytes == record).then_some(i))
+            .collect();
+        assert_eq!(offsets.len(), 1);
+        let mut legacy = canonical.clone();
+        legacy[offsets[0] + 10..offsets[0] + 18].copy_from_slice(&raw.to_be_bytes());
+        let decoded = read_machine(&legacy, &sig()).unwrap();
+        let Payload::Number(n) = decoded.slots[slot_index].value else {
+            panic!("expected number")
+        };
+        assert_eq!(n.to_bits(), raw);
+        assert_eq!(crate::image::write_machine_unchecked(&decoded), canonical);
+        let mut store = MemoryStore::new();
+        import_from_container(&legacy, &sig(), &mut store).unwrap();
+        validate_store(&store, &sig()).unwrap();
+        assert_eq!(export_to_container(&store).unwrap(), canonical);
+        assert_eq!(store_to_image(&store).unwrap().chunks, image.chunks);
+        assert_eq!(
+            crate::image::write_machine_unchecked(&read_machine(&canonical, &sig()).unwrap()),
+            canonical
+        );
+    }
+
     /// A machine image survives the paged form exactly (every page and
     /// extent, partial tails included).
     #[test]
     fn image_batch_store_image_round_trips() {
         let image = ran_image();
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1, "")).expect("commits");
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
+            .expect("commits");
         let back = store_to_image(&store).expect("reads back");
         assert_eq!(back, image);
     }
@@ -3841,7 +3668,9 @@ mod tests {
     fn validate_accepts_a_committed_store() {
         let image = ran_image();
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
+            .unwrap();
         let validated = validate_store(&store, &sig()).expect("validates");
         let manifest = validated.manifest();
         let small = validated.small();
@@ -3863,7 +3692,9 @@ mod tests {
     fn validate_fails_closed_on_signature_mismatch() {
         let image = ran_image();
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
+            .unwrap();
         match validate_store(&store, &Signature::new("other-host")) {
             Err(StoreError::Snapshot(SnapshotError::SignatureMismatch { .. })) => {}
             other => panic!("expected signature mismatch, got {other:?}"),
@@ -3875,7 +3706,21 @@ mod tests {
         let mut image = ran_image();
         image.meter.cost_table_version = "ironhorse-meter-999".to_string();
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        assert!(matches!(
+            store.commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO)),
+            Err(StoreError::Snapshot(
+                SnapshotError::CostTableMismatch { .. }
+            ))
+        ));
+        store
+            .commit(&image_to_batch_unchecked(
+                &ran_image(),
+                1,
+                CommitToken::ZERO,
+            ))
+            .unwrap();
+        store.sections.as_mut().unwrap()
+            [crate::store_sections::SmallSection::Meter.id() as usize] = image.meter.encode();
         match validate_store(&store, &sig()) {
             Err(StoreError::Snapshot(SnapshotError::CostTableMismatch { .. })) => {}
             other => panic!("expected cost-table mismatch, got {other:?}"),
@@ -3883,10 +3728,398 @@ mod tests {
     }
 
     #[test]
+    fn store_refuses_matching_version_with_changed_weights() {
+        let mut image = ran_image();
+        image.meter.cost_table_digest[0] ^= 1;
+        let mut store = MemoryStore::new();
+        assert!(matches!(
+            store.commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO)),
+            Err(StoreError::Snapshot(
+                SnapshotError::CostTableMismatch { .. }
+            ))
+        ));
+        store
+            .commit(&image_to_batch_unchecked(
+                &ran_image(),
+                1,
+                CommitToken::ZERO,
+            ))
+            .unwrap();
+        store.sections.as_mut().unwrap()
+            [crate::store_sections::SmallSection::Meter.id() as usize] = image.meter.encode();
+        assert!(matches!(
+            validate_store(&store, &sig()),
+            Err(StoreError::Snapshot(
+                SnapshotError::CostTableMismatch { .. }
+            ))
+        ));
+        store.manifest.as_mut().unwrap().store_schema = STORE_SCHEMA_VERSION - 1;
+        assert!(matches!(
+            migrate_store(&mut store, &sig()),
+            Err(StoreError::Snapshot(
+                SnapshotError::CostTableMismatch { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn manifest_version_and_epoch_have_exact_refusals() {
+        let mut store = MemoryStore::new();
+        store
+            .commit(&image_to_batch_unchecked(
+                &ran_image(),
+                1,
+                CommitToken::ZERO,
+            ))
+            .unwrap();
+        validate_store(&store, &sig()).unwrap();
+        let original = store.manifest.clone();
+        store.manifest.as_mut().unwrap().version.format_version = u32::MAX;
+        assert_eq!(
+            validate_store(&store, &sig()).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt("store version stamp mismatch"))
+        );
+        store.manifest = original;
+        store.manifest.as_mut().unwrap().epoch = 0;
+        assert_eq!(
+            validate_store(&store, &sig()).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt("store manifest epoch 0"))
+        );
+    }
+
+    /// Eager reification reads the rows as stored: under the store-seam
+    /// design's trust model a length-preserving edit at rest is the
+    /// machine the store now describes, and the store keeps no row digest
+    /// that could disagree with it.
+    #[test]
+    fn eager_store_reads_rows_as_stored() {
+        let mut image = ran_image();
+        image.slot_free.push(image.slots.len() as u32);
+        image.slots.push(Slot::undefined());
+        let mut store = MemoryStore::new();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
+            .unwrap();
+        let control = store_to_image(&store).unwrap();
+        let last = store.chunk_extents[&0].len() - 1;
+        store.chunk_extents.get_mut(&0).unwrap()[last] ^= 1;
+        let edited = store_to_image(&store).unwrap();
+        assert_eq!(edited.chunks[last], control.chunks[last] ^ 1);
+        validate_store(&store, &sig()).unwrap();
+    }
+
+    /// The shared consistent-edit suite on the reference store, whose rows
+    /// at rest are its maps.
+    #[test]
+    fn consistent_edits_resume_on_the_reference_store() {
+        crate::store_suite::consistent_edits_resume(
+            MemoryStore::new(),
+            |mut store, kind, index, _old, new| {
+                let rows = match kind {
+                    "slot page" => &mut store.slot_pages,
+                    "chunk extent" => &mut store.chunk_extents,
+                    "free segment" => &mut store.free_segs,
+                    "small section" => {
+                        let sections = store.sections.as_mut().expect("a sectioned small state");
+                        sections[index as usize] = new.to_vec();
+                        let payloads = std::array::from_fn(|id| &sections[id][..]);
+                        store.section_leaves = Some(
+                            crate::store_sections::SectionLeaves::from_payloads(&payloads),
+                        );
+                        return store;
+                    }
+                    "manifest" => {
+                        store.manifest = Some(StoreManifest::decode(new).unwrap());
+                        return store;
+                    }
+                    other => panic!("no {other} rows here"),
+                };
+                rows.insert(index, new.to_vec());
+                store
+            },
+        );
+    }
+
+    /// The small-state section digests are change detection: the full
+    /// validator re-derives them from their payloads, and nothing on the
+    /// run-time path does.
+    #[test]
+    fn a_stale_section_digest_is_refused_by_the_full_validator_only() {
+        let mut store = MemoryStore::new();
+        store
+            .commit(&image_to_batch_unchecked(
+                &ran_image(),
+                1,
+                CommitToken::ZERO,
+            ))
+            .unwrap();
+        validate_store_content(&store, &sig()).unwrap();
+        store.section_leaves = Some(crate::store_sections::SectionLeaves::from_hashes(
+            [[0; 32]; crate::store_sections::SMALL_SECTION_COUNT],
+        ));
+        validate_store(&store, &sig()).unwrap();
+        store_to_image(&store).unwrap();
+        assert_eq!(
+            validate_store_content(&store, &sig()).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt(
+                "small-state section digest disagrees with its payload"
+            ))
+        );
+    }
+
+    #[test]
+    fn succession_metadata_has_exact_refusals() {
+        let image = ran_image();
+        let first = image_to_batch_unchecked(&image, 1, CommitToken::ZERO);
+        check_succession(None, &first).unwrap();
+        let previous = first.manifest;
+        let next = image_to_batch_unchecked(&image, 2, previous.token);
+        check_succession(Some(&previous), &next).unwrap();
+        let mut invalid = next.clone();
+        invalid.manifest.collect_every = previous.collect_every + 1;
+        assert_eq!(
+            check_succession(Some(&previous), &invalid),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "collection cadence mismatch"
+            )))
+        );
+        for collections in [false, true] {
+            let mut prior = previous.clone();
+            if collections {
+                prior.collections = next.manifest.collections + 1;
+            } else {
+                prior.cranks = next.manifest.cranks + 1;
+            }
+            assert_eq!(
+                check_succession(Some(&prior), &next),
+                Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                    "durable counter regression"
+                )))
+            );
+            // Equality is permitted: a checkpoint need not complete a crank.
+            let mut equal = next.clone();
+            equal.manifest.collections = prior.collections;
+            equal.manifest.cranks = prior.cranks;
+            check_succession(Some(&prior), &equal).unwrap();
+        }
+        assert_eq!(check_epoch(Some(u64::MAX - 1), u64::MAX), Ok(()));
+        for attempted in [0, 1, u64::MAX] {
+            assert_eq!(
+                check_epoch(Some(u64::MAX), attempted),
+                Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                    "store epoch exhausted"
+                )))
+            );
+        }
+    }
+
+    /// The token pairing: a batch names the stored token (zero for an
+    /// empty store) as its predecessor, and carries a token of its own that
+    /// is nonzero and differs from that predecessor.
+    #[test]
+    fn succession_pairs_batches_on_the_commit_token() {
+        let image = ran_image();
+        let first = image_to_batch_unchecked(&image, 1, CommitToken::ZERO);
+        assert!(!first.manifest.token.is_zero());
+        let previous = first.manifest.clone();
+        let next = image_to_batch_unchecked(&image, 2, previous.token);
+        assert_ne!(next.manifest.token, previous.token);
+        let other = CommitToken([0xab; 16]);
+        let mismatch = |expected: CommitToken, found: CommitToken| {
+            Err(StoreError::BaselineMismatch {
+                expected: expected.to_hex(),
+                found: found.to_hex(),
+            })
+        };
+        let mut invalid = first.clone();
+        invalid.prev_token = other;
+        assert_eq!(
+            check_succession(None, &invalid),
+            mismatch(CommitToken::ZERO, other)
+        );
+        invalid = next.clone();
+        invalid.prev_token = other;
+        assert_eq!(
+            check_succession(Some(&previous), &invalid),
+            mismatch(previous.token, other)
+        );
+        invalid = next.clone();
+        invalid.prev_token = CommitToken::ZERO;
+        assert_eq!(
+            check_succession(Some(&previous), &invalid),
+            mismatch(previous.token, CommitToken::ZERO)
+        );
+        invalid = next.clone();
+        invalid.manifest.token = CommitToken::ZERO;
+        assert_eq!(
+            check_succession(Some(&previous), &invalid),
+            Err(StoreError::BatchRejected(Box::new(StoreError::Snapshot(
+                SnapshotError::Corrupt("commit token must be nonzero")
+            ))))
+        );
+        invalid = next.clone();
+        invalid.manifest.token = previous.token;
+        assert_eq!(
+            check_succession(Some(&previous), &invalid),
+            Err(StoreError::BatchRejected(Box::new(StoreError::Snapshot(
+                SnapshotError::Corrupt("commit token must differ from its predecessor")
+            ))))
+        );
+        // The pairing is equality and nothing more: any other token the
+        // store holds is refused, and any fresh token is accepted.
+        invalid = next.clone();
+        invalid.manifest.token = other;
+        check_succession(Some(&previous), &invalid).unwrap();
+        let mut stored = previous.clone();
+        stored.token = other;
+        assert_eq!(
+            check_succession(Some(&stored), &next),
+            mismatch(other, previous.token)
+        );
+    }
+
+    /// Minting refuses zero and the predecessor, and gives up on a source
+    /// that returns nothing else.
+    #[test]
+    fn mint_token_redraws_zero_and_the_predecessor() {
+        struct Script(Vec<CommitToken>);
+        impl CommitTokenSource for Script {
+            fn next_token(&mut self) -> CommitToken {
+                self.0.remove(0)
+            }
+        }
+        let prev = CommitToken([1; 16]);
+        let fresh = CommitToken([2; 16]);
+        let mut source = Script(vec![CommitToken::ZERO, prev, fresh]);
+        assert_eq!(mint_token(&mut source, prev), fresh);
+        let mut stuck = Script(vec![prev; 64]);
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            mint_token(&mut stuck, prev)
+        }))
+        .is_err());
+        let mut random = RandomTokens;
+        let drawn: std::collections::HashSet<CommitToken> = (0..64)
+            .map(|_| mint_token(&mut random, CommitToken::ZERO))
+            .collect();
+        assert_eq!(drawn.len(), 64);
+        assert!(!drawn.contains(&CommitToken::ZERO));
+        assert_eq!(fresh.to_hex(), "02".repeat(16));
+    }
+
+    #[test]
+    fn free_lists_require_valid_distinct_indices() {
+        let mut valid = ran_image();
+        for _ in 0..2 {
+            valid.slot_free.push(valid.slots.len() as u32);
+            valid.slots.push(Slot::undefined());
+        }
+        let mut store = MemoryStore::new();
+        store
+            .commit(&image_to_batch_unchecked(&valid, 1, CommitToken::ZERO))
+            .unwrap();
+        validate_store(&store, &sig()).unwrap();
+        for duplicate in [false, true] {
+            let mut invalid = valid.clone();
+            let last = invalid.slot_free.len() - 1;
+            invalid.slot_free[last] = if duplicate {
+                invalid.slot_free[last - 1]
+            } else {
+                invalid.slots.len() as u32
+            };
+            let mut store = MemoryStore::new();
+            store
+                .commit(&image_to_batch_unchecked(&invalid, 1, CommitToken::ZERO))
+                .unwrap();
+            // Both resume paths refuse the free list as they build the slot
+            // arena from it, without the validator.
+            assert_eq!(
+                crate::machine::resume_from_store(&store, &sig()).unwrap_err(),
+                StoreError::Snapshot(SnapshotError::Corrupt("invalid slot arena image"))
+            );
+            let shared = std::rc::Rc::new(std::cell::RefCell::new(store));
+            assert_eq!(
+                crate::machine::resume_from_store_lazy(shared.clone(), &sig()).unwrap_err(),
+                StoreError::Snapshot(SnapshotError::Corrupt("invalid lazy arena metadata"))
+            );
+            let store = std::rc::Rc::try_unwrap(shared).ok().unwrap().into_inner();
+            if duplicate {
+                assert_eq!(
+                    validate_store(&store, &sig()).unwrap_err(),
+                    StoreError::Snapshot(SnapshotError::Corrupt(
+                        "store free-list contains duplicate indices"
+                    ))
+                );
+            } else {
+                assert_eq!(
+                    validate_store(&store, &sig()).unwrap_err(),
+                    StoreError::Snapshot(SnapshotError::Corrupt(
+                        "store free-list index out of range"
+                    ))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_slot_record_is_rejected_by_decoding() {
+        let mut store = MemoryStore::new();
+        store
+            .commit(&image_to_batch_unchecked(
+                &ran_image(),
+                1,
+                CommitToken::ZERO,
+            ))
+            .unwrap();
+        store_to_image(&store).unwrap();
+        let bytes = store.slot_pages.get_mut(&0).unwrap();
+        bytes[0] = 200; // not a Kind discriminant
+        assert_eq!(
+            store_to_image(&store).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt("store slot page record"))
+        );
+    }
+
+    /// No commit writes a zero token, and the validator names one; resume
+    /// trusts it, and the next commit names it as its predecessor.
+    #[test]
+    fn validate_refuses_a_zero_commit_token() {
+        let mut store = MemoryStore::new();
+        store
+            .commit(&image_to_batch_unchecked(
+                &ran_image(),
+                1,
+                CommitToken::ZERO,
+            ))
+            .unwrap();
+        validate_store(&store, &sig()).unwrap();
+        store.manifest.as_mut().unwrap().token = CommitToken::ZERO;
+        assert_eq!(
+            validate_store(&store, &sig()).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt("store manifest commit token zero"))
+        );
+        assert_eq!(
+            crate::machine::resume_from_store(&store, &sig())
+                .unwrap()
+                .token(),
+            CommitToken::ZERO
+        );
+        store
+            .commit(&image_to_batch_unchecked(
+                &ran_image(),
+                2,
+                CommitToken::ZERO,
+            ))
+            .unwrap();
+        validate_store(&store, &sig()).unwrap();
+    }
+
+    #[test]
     fn validate_fails_closed_on_missing_row() {
         let image = ran_image();
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
+            .unwrap();
         // Drop a promised page: the inventory scan must name it.
         store.slot_pages.remove(&0);
         assert_eq!(
@@ -3899,7 +4132,9 @@ mod tests {
     fn validate_fails_closed_on_row_length_mismatch() {
         let image = ran_image();
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
+            .unwrap();
         let short = store.slot_pages.get(&0).unwrap()[..SLOT_RECORD_BYTES].to_vec();
         store.slot_pages.insert(0, short);
         match validate_store(&store, &sig()) {
@@ -3913,21 +4148,497 @@ mod tests {
     }
 
     #[test]
+    fn name_migration_section_end_refuses_address_overflow() {
+        for (cursor, len, expected) in [
+            (0, 0, 0),
+            (4, 0, 4),
+            (4, usize::MAX - 4, usize::MAX),
+            (usize::MAX, 0, usize::MAX),
+        ] {
+            assert_eq!(name_migration_section_end(cursor, len), Ok(expected));
+        }
+        for (cursor, len) in [(4, usize::MAX - 3), (4, usize::MAX), (usize::MAX, 1)] {
+            assert_eq!(
+                name_migration_section_end(cursor, len),
+                Err(SnapshotError::Corrupt("name migration length"))
+            );
+        }
+    }
+
+    #[test]
+    fn image_transfer_takes_free_list_from_arena_segments() {
+        let image = ran_image();
+        let manifest = image_to_batch_unchecked(&image, 1, CommitToken::ZERO).manifest;
+        let mut small = crate::snapshot_roster::small_from_image(&image);
+        // A retired small-state payload must not override the reconstructed
+        // arena's free-list segments, even if supplied by legacy tooling.
+        small.slot_free = vec![u32::MAX];
+        let rebuilt = crate::snapshot_roster::image_from_small(
+            small,
+            manifest,
+            image.chunks.clone(),
+            image.slots.clone(),
+            image.slot_free.clone(),
+        );
+        assert_eq!(rebuilt, image);
+    }
+
+    #[test]
+    fn legacy_decoder_preserves_section_order_and_truncation_errors() {
+        let canonical = image_to_batch_unchecked(&ran_image(), 1, CommitToken::ZERO).small;
+        // Historical framing order, independent of the roster and atom order.
+        let labels = [
+            "small state stack section",
+            "small state free-list section",
+            "small state keys section",
+            "small state names section",
+            "small state symbols section",
+            "small state meter section",
+            "small state arrays section",
+            "small state collections section",
+            "small state registry section",
+            "small state errors section",
+            "small state buffers section",
+            "small state typed-arrays section",
+            "small state data-views section",
+            "small state wrappers section",
+            "small state regexps section",
+            "small state arguments section",
+            "small state temporal section",
+            "small state intl section",
+            "small state name-floor section",
+            "small state iterators section",
+            "small state dates section",
+            "small state function section",
+            "small state proxy section",
+            "small state accessor section",
+            "small state Intl bound-function section",
+            "small state private-element section",
+            "small state disposable-stack section",
+            "small state generator section",
+            "small state error-frames section",
+            "small state promise section",
+            "small state async section",
+            "small state index-props section",
+        ];
+        let sections = crate::store_sections::split_small_state(&canonical).unwrap();
+        let mut offset = 0;
+        for (payload, label) in sections.iter().zip(labels) {
+            for cut in [offset, offset + 3] {
+                assert_eq!(
+                    SmallState::decode_legacy(&canonical[..cut]).unwrap_err(),
+                    StoreError::Snapshot(SnapshotError::Corrupt(label))
+                );
+            }
+            if !payload.is_empty() {
+                let cut = offset + 4 + payload.len() - 1;
+                assert_eq!(
+                    SmallState::decode_legacy(&canonical[..cut]).unwrap_err(),
+                    StoreError::Snapshot(SnapshotError::Corrupt(label))
+                );
+            }
+            offset += 4 + payload.len();
+        }
+        assert_eq!(offset, canonical.len());
+        let mut trailing = canonical;
+        trailing.push(0);
+        assert_eq!(
+            SmallState::decode_legacy(&trailing).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt("small state trailing bytes"))
+        );
+    }
+
+    #[test]
+    fn every_appended_table_accepts_legacy_empty_payload_only_at_migration_boundary() {
+        let canonical = image_to_batch_unchecked(&ran_image(), 1, CommitToken::ZERO).small;
+        let sections = crate::store_sections::split_small_state(&canonical).unwrap();
+        // IDs 6 onward were appended as zero-width migration suffixes.
+        // ID 18 is the optional floor: empty is already its canonical form.
+        for id in (6..32).filter(|id| *id != 18) {
+            let mut legacy_sections = sections;
+            legacy_sections[id] = &[];
+            let legacy = crate::store_sections::frame_small_state(&legacy_sections).unwrap();
+            let decoded = SmallState::decode_legacy(&legacy).unwrap();
+            let normalized = decoded.encode();
+            assert_ne!(
+                normalized, legacy,
+                "section {id} requires canonical payload"
+            );
+            assert_eq!(
+                SmallState::decode(&legacy).unwrap_err(),
+                StoreError::Snapshot(SnapshotError::Corrupt("non-canonical small state"))
+            );
+            assert_eq!(
+                SmallState::decode(&normalized).unwrap(),
+                decoded,
+                "section {id}"
+            );
+        }
+    }
+
+    #[test]
+    fn name_migration_requires_complete_section_headers_and_bodies() {
+        // Migration interprets only NAME; opaque earlier sections and the tail
+        // must survive byte-for-byte. This tests the individual migration step.
+        let mut small = Vec::new();
+        let mut headers = Vec::new();
+        for section in [
+            vec![1],
+            vec![2, 3],
+            vec![4],
+            encode_strings(&["name".into()]),
+        ] {
+            headers.push(small.len());
+            small.extend_from_slice(&(section.len() as u32).to_be_bytes());
+            small.extend_from_slice(&section);
+        }
+        let end = small.len();
+        small.extend_from_slice(b"opaque tail");
+        let migrated = names_to_cesu8(&small).unwrap();
+        assert_eq!(&migrated[..headers[3]], &small[..headers[3]]);
+        assert!(migrated.ends_with(b"opaque tail"));
+        let names = encode_names(&[SymbolName::from("name")]);
+        let mut expected = small[..headers[3]].to_vec();
+        expected.extend_from_slice(&(names.len() as u32).to_be_bytes());
+        expected.extend_from_slice(&names);
+        expected.extend_from_slice(b"opaque tail");
+        assert_eq!(migrated, expected);
+        let mut manifest = image_to_batch_unchecked(&ran_image(), 1, CommitToken::ZERO).manifest;
+        manifest.store_schema = 25;
+        let mut stepped = small.clone();
+        migrate_step(&mut manifest, &mut stepped).unwrap();
+        assert_eq!((manifest.store_schema, stepped), (26, expected));
+        for (index, &header) in headers.iter().enumerate() {
+            for cut in header..header + 4 {
+                assert_eq!(
+                    names_to_cesu8(&small[..cut]),
+                    Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                        "name migration header"
+                    )))
+                );
+            }
+            let body_end = headers.get(index + 1).copied().unwrap_or(end);
+            for cut in header + 4..body_end {
+                assert_eq!(
+                    names_to_cesu8(&small[..cut]),
+                    Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                        "name migration body"
+                    )))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn small_state_rejects_legacy_empty_sections_until_migrated() {
+        let mut store = MemoryStore::new();
+        store
+            .commit(&image_to_batch_unchecked(
+                &ran_image(),
+                1,
+                CommitToken::ZERO,
+            ))
+            .unwrap();
+        let canonical = store.read_small_state().unwrap();
+        let mut offset = 0;
+        for _ in 0..6 {
+            let len =
+                u32::from_be_bytes(canonical[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4 + len;
+        }
+        // The arrays table is empty, but its canonical encoding has a count.
+        assert_eq!(&canonical[offset..offset + 8], &[0, 0, 0, 4, 0, 0, 0, 0]);
+        let mut legacy = canonical.clone();
+        legacy.drain(offset + 4..offset + 8);
+        legacy[offset..offset + 4].copy_from_slice(&0u32.to_be_bytes());
+        assert_eq!(
+            SmallState::decode(&legacy).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt("non-canonical small state"))
+        );
+        assert_eq!(
+            SmallState::decode_legacy(&legacy).unwrap().encode(),
+            canonical
+        );
+        let current = store.manifest().unwrap();
+        let old = StoreManifest {
+            store_schema: 26,
+            ..current.clone()
+        };
+        store
+            .replace_for_migration(&current, &old, &legacy)
+            .unwrap();
+        assert!(migrate_store(&mut store, &sig()).unwrap());
+        validate_store_content(&store, &sig()).unwrap();
+        assert_eq!(store.read_small_state().unwrap(), canonical);
+        assert_eq!(store.manifest().unwrap(), current);
+    }
+
+    #[test]
     fn validate_fails_closed_on_accounting_mismatch() {
         let image = ran_image();
-        let mut batch = image_to_batch(&image, 1, "");
-        // Corrupt the live count so live + free != count — resealed,
-        // so the accounting gate (not the seal check) is what trips.
-        batch.manifest.slot_live += 1;
-        reseal_batch(&mut batch);
+        let mut corrupt = image.clone();
+        corrupt.slot_live += 1;
+        let mut store = MemoryStore::new();
+        store
+            .commit(&image_to_batch_unchecked(&corrupt, 1, CommitToken::ZERO))
+            .unwrap();
+        assert_eq!(
+            validate_store(&store, &sig()).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt(
+                "store live/free/count accounting mismatch"
+            ))
+        );
+        // Both resume paths refuse it too: eager resume as the slot arena is
+        // built, lazy resume at open, before the arenas are sized.
+        assert_eq!(
+            crate::machine::resume_from_store(&store, &sig()).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt("invalid slot arena image"))
+        );
+        assert_eq!(
+            crate::machine::resume_from_store_lazy(
+                std::rc::Rc::new(std::cell::RefCell::new(store)),
+                &sig()
+            )
+            .unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt(
+                "store live/free/count accounting mismatch"
+            ))
+        );
+    }
+
+    /// A migration validates its result against the store's rows at the
+    /// metadata scale before its one write: a defect no ladder step reads
+    /// (here, the live/free accounting) refuses the migration and leaves
+    /// the store as it was.
+    #[test]
+    fn a_migration_refuses_what_the_metadata_scale_validator_refuses_before_writing() {
+        let mut corrupt = ran_image();
+        corrupt.slot_live += 1;
+        let mut store = MemoryStore::new();
+        store
+            .commit(&image_to_batch_unchecked(&corrupt, 1, CommitToken::ZERO))
+            .unwrap();
+        // Restamp it one identity step back, so the ladder runs.
+        let current = store.manifest().unwrap();
+        let old = StoreManifest {
+            store_schema: STORE_SCHEMA_VERSION - 1,
+            ..current.clone()
+        };
+        let small = store.read_small_state().unwrap();
+        store.replace_for_migration(&current, &old, &small).unwrap();
+        assert_eq!(
+            migrate_store(&mut store, &sig()).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt(
+                "store live/free/count accounting mismatch"
+            ))
+        );
+        assert_eq!(store.manifest().unwrap(), old, "nothing is written");
+        assert_eq!(store.read_small_state().unwrap(), small);
+    }
+
+    /// A reference store with one read skewed: a durable manifest that reads
+    /// one way while the handle's reads show another (`reread`), or a small
+    /// state that cannot be read (`small_unreadable`).
+    struct ProbeStore {
+        inner: MemoryStore,
+        reread: Option<StoreManifest>,
+        small_unreadable: bool,
+    }
+
+    impl HeapStore for ProbeStore {
+        fn manifest(&self) -> Result<StoreManifest, StoreError> {
+            self.inner.manifest()
+        }
+        fn reread_manifest(&self) -> Result<StoreManifest, StoreError> {
+            match &self.reread {
+                Some(manifest) => Ok(manifest.clone()),
+                None => self.inner.reread_manifest(),
+            }
+        }
+        fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
+            if self.small_unreadable {
+                return Err(StoreError::Io("small state unreadable".to_string()));
+            }
+            self.inner.read_small_state()
+        }
+        fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
+            self.inner.read_slot_page(page)
+        }
+        fn read_chunk_extent(&self, ext: u32) -> Result<Vec<u8>, StoreError> {
+            self.inner.read_chunk_extent(ext)
+        }
+        fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
+            self.inner.inventory()
+        }
+        fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
+            self.inner.read_free_seg(seg)
+        }
+        fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
+            self.inner.page_edges()
+        }
+        fn commit_verified(&mut self, verify: &mut CommitVerifier<'_>) -> Result<(), StoreError> {
+            self.inner.commit_verified(verify)
+        }
+        fn replace_for_migration(
+            &mut self,
+            from: &StoreManifest,
+            to: &StoreManifest,
+            small: &[u8],
+        ) -> Result<(), StoreError> {
+            self.inner.replace_for_migration(from, to, small)
+        }
+    }
+
+    /// A migration refuses a store that moved since it read the durable
+    /// manifest (another handle's migration or commit): before it reads
+    /// through a handle whose view is not that manifest, and in the write
+    /// itself, a compare-and-swap on it. Either way nothing is written.
+    #[test]
+    fn a_migration_refuses_a_store_that_moved_since_it_read_it() {
+        let mut inner = MemoryStore::new();
+        inner
+            .commit(&image_to_batch_unchecked(
+                &ran_image(),
+                1,
+                CommitToken::ZERO,
+            ))
+            .unwrap();
+        let current = inner.manifest().unwrap();
+        let small = inner.read_small_state().unwrap();
+        let stale = StoreManifest {
+            store_schema: STORE_SCHEMA_VERSION - 1,
+            ..current.clone()
+        };
+        // An unreadable small state: the refusal comes before the read.
+        let mut store = ProbeStore {
+            inner,
+            reread: Some(stale.clone()),
+            small_unreadable: true,
+        };
+        let label = |m: &StoreManifest| {
+            format!(
+                "schema {} epoch {} token {}",
+                m.store_schema, m.epoch, m.token
+            )
+        };
+        assert_eq!(
+            migrate_store(&mut store, &sig()).unwrap_err(),
+            StoreError::BaselineMismatch {
+                expected: label(&stale),
+                found: label(&current),
+            }
+        );
+        assert_eq!(store.inner.manifest().unwrap(), current);
+        assert_eq!(store.inner.read_small_state().unwrap(), small);
+        // The hook itself, on the reference store: it compares `from` with
+        // the stored manifest, an empty store has nothing to replace, and a
+        // matching one is replaced verbatim.
+        assert_eq!(
+            store.inner.replace_for_migration(&stale, &current, &small),
+            Err(StoreError::BaselineMismatch {
+                expected: label(&stale),
+                found: label(&current),
+            })
+        );
+        assert_eq!(store.inner.manifest().unwrap(), current);
+        assert_eq!(
+            MemoryStore::new().replace_for_migration(&current, &stale, &small),
+            Err(StoreError::Empty)
+        );
+        store
+            .inner
+            .replace_for_migration(&current, &stale, &small)
+            .unwrap();
+        assert_eq!(store.inner.manifest().unwrap(), stale);
+    }
+
+    /// Open and the metadata-scale validator answer the compatibility gates
+    /// before they read the small state, so a store this build cannot open
+    /// is refused as such, even when its small state cannot be read.
+    #[test]
+    fn the_open_gates_run_before_the_small_state_is_read() {
+        let mut inner = MemoryStore::new();
+        inner
+            .commit(&image_to_batch_unchecked(
+                &ran_image(),
+                1,
+                CommitToken::ZERO,
+            ))
+            .unwrap();
+        let current = inner.manifest().unwrap();
+        let older = StoreManifest {
+            store_schema: STORE_SCHEMA_VERSION - 1,
+            ..current.clone()
+        };
+        let small = inner.read_small_state().unwrap();
+        inner
+            .replace_for_migration(&current, &older, &small)
+            .unwrap();
+        let store = ProbeStore {
+            inner,
+            reread: None,
+            small_unreadable: true,
+        };
+        let needs = || StoreError::NeedsMigration {
+            found: STORE_SCHEMA_VERSION - 1,
+        };
+        assert_eq!(validate_store(&store, &sig()).err(), Some(needs()));
+        assert_eq!(open_store(&store, &sig()).err(), Some(needs()));
+    }
+
+    /// Lazy resume sizes its arenas from the manifest's geometry, so open
+    /// refuses a geometry that promises rows the store does not hold, on
+    /// the tail row, before anything is allocated from it.
+    #[test]
+    fn lazy_open_refuses_a_geometry_its_tail_rows_do_not_back() {
+        let image = ran_image();
+        let batch = image_to_batch_unchecked(&image, 1, CommitToken::ZERO);
+        let lazy = |store: MemoryStore| {
+            crate::machine::resume_from_store_lazy(
+                std::rc::Rc::new(std::cell::RefCell::new(store)),
+                &sig(),
+            )
+            .map(drop)
+        };
+        let pages = slot_page_count(batch.manifest.slot_count);
+        let exts = chunk_extent_count(batch.manifest.chunk_len);
+        assert!(pages > 0 && exts > 0, "the fixture has rows of both kinds");
+        for (label, edit, refusal) in [
+            (
+                "slot count",
+                (|m: &mut StoreManifest| {
+                    m.slot_count += 1 << 30;
+                    m.slot_live += 1 << 30;
+                }) as fn(&mut StoreManifest),
+                StoreError::MissingRow("slot page", pages - 1 + (1 << 22)),
+            ),
+            (
+                "chunk length",
+                |m: &mut StoreManifest| m.chunk_len += 1 << 30,
+                StoreError::MissingRow("chunk extent", exts - 1 + (1 << 14)),
+            ),
+        ] {
+            let mut store = MemoryStore::new();
+            store.commit(&batch).unwrap();
+            edit(store.manifest.as_mut().unwrap());
+            assert_eq!(lazy(store).unwrap_err(), refusal, "{label}");
+        }
+        // The tail row at the wrong length is refused the same way.
         let mut store = MemoryStore::new();
         store.commit(&batch).unwrap();
-        match validate_store(&store, &sig()) {
-            Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "store live/free/count accounting mismatch",
-            ))) => {}
-            other => panic!("expected accounting mismatch, got {other:?}"),
+        let manifest = store.manifest.as_mut().unwrap();
+        if chunk_extent_len(manifest.chunk_len, exts - 1) > 1 {
+            manifest.chunk_len -= 1;
+        } else {
+            manifest.chunk_len += 1;
         }
+        assert!(matches!(
+            lazy(store).unwrap_err(),
+            StoreError::RowLength {
+                kind: "chunk extent",
+                ..
+            }
+        ));
     }
 
     /// A shrink (the GC-compaction shape) drops stale rows: a later
@@ -3936,12 +4647,14 @@ mod tests {
     fn commit_drops_rows_beyond_the_new_geometry() {
         let image = ran_image();
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
+            .unwrap();
         let exts_before = chunk_extent_count(store.manifest().unwrap().chunk_len);
 
         // Same machine state, chunk arena "compacted" to empty. A real
         // compaction rewrites every stored chunk offset with the bytes
-        // it moves; mirror that coherence (the wave-6 W6-14 heap gate
+        // it moves; mirror that coherence (the image bounds gate
         // refuses an image whose slots point into chunks it lacks) by
         // degrading chunk-bearing slots to chunk-free values in place —
         // chain links, ids, and accounting untouched.
@@ -3956,9 +4669,9 @@ mod tests {
         // Function name chunks are external chunk holders. This
         // geometry-only fixture drops the corresponding function rows
         // together with the arena bytes.
-        shrunk.function_state = ironhorse_vm::FunctionStateSnapshot::default();
-        let prev = store.manifest().unwrap().seal;
-        let mut batch = image_to_batch(&shrunk, 2, &prev);
+        shrunk.function_state = ironhorse_vm::snapshot_api::FunctionStateSnapshot::default();
+        let prev = store.manifest().unwrap().token;
+        let mut batch = image_to_batch_unchecked(&shrunk, 2, prev);
         batch.chunk_extents.clear(); // nothing to write; drop-only
         store.commit(&batch).unwrap();
 
@@ -3972,7 +4685,7 @@ mod tests {
     fn memory_store_reports_commit_stats() {
         let image = ran_image();
         let mut store = MemoryStore::new();
-        let batch = image_to_batch(&image, 1, "");
+        let batch = image_to_batch_unchecked(&image, 1, CommitToken::ZERO);
         store.commit(&batch).unwrap();
         assert_eq!(
             store.last_commit_stats(),
@@ -3980,14 +4693,17 @@ mod tests {
                 slot_pages_written: batch.slot_pages.len(),
                 chunk_extents_written: batch.chunk_extents.len(),
                 free_segs_written: batch.free_segs.len(),
+                small_sections_written: crate::store_sections::SMALL_SECTION_COUNT,
+                small_bytes_written: batch.small.len()
+                    - 4 * crate::store_sections::SMALL_SECTION_COUNT,
             }
         );
     }
 
     /// The segment split at exactly the `FREE_SEG_ENTRIES` boundary
     /// (and one past it, and empty): counts, per-segment lengths, and
-    /// ORDER-exact reassembly — the LIFO reuse order is load-bearing
-    /// (review follow-up: the 4096/4097 edges had no direct lock).
+    /// ORDER-exact reassembly: the LIFO reuse order determines allocation
+    /// identity after resume.
     #[test]
     fn free_seg_boundaries_split_and_reassemble_exactly() {
         let b = FREE_SEG_ENTRIES;
@@ -4015,19 +4731,20 @@ mod tests {
 
     #[test]
     fn commit_refuses_a_geometry_change_that_omits_the_affected_tail_row() {
-        // The second review pass's finding: the grown-region check
+        // The grown-region check
         // covers indexes the new geometry ADDS, but a total that
         // changes WITHIN the existing tail row changes that row's
         // geometry-derived length without adding any index. A crafted
-        // batch that shrinks `chunk_len` inside the same extent,
-        // omits that extent, and seals correctly over the retained
-        // prior leaf must be refused at COMMIT — not discovered at
-        // the next open as a length mismatch.
+        // batch that shrinks `chunk_len` inside the same extent and
+        // omits that extent must be refused at COMMIT — not discovered
+        // at the next open as a length mismatch.
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let image1 = m.snapshot_image(&sig());
+        let image1 = m.snapshot_image_for_testing(&sig()).expect("gated image");
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image1, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image1, 1, CommitToken::ZERO))
+            .unwrap();
         let prev = store.manifest().unwrap();
 
         let mut image2 = image1.clone();
@@ -4040,277 +4757,90 @@ mod tests {
 
         // A well-formed batch for the shrunk image commits fine (the
         // tail extent travels with its new length)…
-        let good = image_to_batch(&image2, 2, &prev.seal);
+        let good = image_to_batch_unchecked(&image2, 2, prev.token);
         assert!(
             good.chunk_extents.iter().any(|(e, _)| *e == tail_ext),
             "image_to_batch ships the affected tail extent"
         );
         {
             let mut s2 = MemoryStore::new();
-            s2.commit(&image_to_batch(&image1, 1, "")).unwrap();
-            s2.commit(&image_to_batch(&image2, 2, &prev.seal)).unwrap();
+            s2.commit(&image_to_batch_unchecked(&image1, 1, CommitToken::ZERO))
+                .unwrap();
+            let token = s2.manifest().unwrap().token;
+            s2.commit(&image_to_batch_unchecked(&image2, 2, token))
+                .unwrap();
         }
 
-        // …but the same batch with the tail extent OMITTED (and the
-        // seal recomputed, so succession passes) is refused with the
-        // precise missing-row error.
-        let mut crafted = image_to_batch(&image2, 2, &prev.seal);
+        // …but the same batch with the tail extent OMITTED is refused
+        // with the precise missing-row error.
+        let mut crafted = image_to_batch_unchecked(&image2, 2, prev.token);
         crafted.chunk_extents.retain(|(e, _)| *e != tail_ext);
-        reseal_batch(&mut crafted);
+        // Wrapped: the omission is in the CALLER's batch, so the store is
+        // not implicated and a supervisor should refuse the request rather
+        // than tear the session down.
         assert_eq!(
             store.commit(&crafted),
-            Err(StoreError::MissingRow("chunk extent", tail_ext)),
+            Err(StoreError::BatchRejected(Box::new(StoreError::MissingRow(
+                "chunk extent",
+                tail_ext
+            )))),
             "the boundary row must travel when its expected length changes"
         );
     }
 
+    /// Every traveling row and summary must lie inside the batch's own
+    /// geometry: a backend writes rows by index, and one past the end would
+    /// survive in the store. The refusal is the caller's, and nothing is
+    /// written.
     #[test]
-    fn class_tree_incremental_equals_scratch() {
-        // The v6 property lock: updating dirty paths in place agrees
-        // with a from-scratch build, across widths (odd, power-of-two,
-        // single, empty) and dirt patterns — the equivalence every
-        // incremental commit rests on.
-        let leaf = |i: u32, salt: u8| -> [u8; 32] { leaf_hash(salt, i, &i.to_be_bytes()) };
-        for width in [0u32, 1, 2, 3, 4, 5, 7, 8, 9, 63, 64, 65, 200] {
-            let mut leaves: Vec<[u8; 32]> = (0..width).map(|i| leaf(i, b'a')).collect();
-            let mut levels = build_class_tree(TREE_PAGES, &leaves);
-            let scratch_root = class_tree_root(TREE_PAGES, &leaves, &levels);
-            // Deterministic pseudo-dirt: every third index, then the
-            // edges, then a single middle index.
-            for dirt in [
-                (0..width).step_by(3).collect::<Vec<u32>>(),
-                if width > 0 { vec![0, width - 1] } else { vec![] },
-                if width > 2 { vec![width / 2] } else { vec![] },
-            ] {
-                if dirt.is_empty() {
-                    continue;
-                }
-                for &i in &dirt {
-                    leaves[i as usize] = leaf(i, b'b');
-                }
-                update_class_tree(TREE_PAGES, &leaves, &mut levels, &dirt);
-                let expect_levels = build_class_tree(TREE_PAGES, &leaves);
-                assert_eq!(levels, expect_levels, "width {width}, dirt {dirt:?}");
-                assert_eq!(
-                    class_tree_root(TREE_PAGES, &leaves, &levels),
-                    class_tree_root(TREE_PAGES, &leaves, &expect_levels),
-                );
-            }
-            let _ = scratch_root;
-        }
-    }
-
-    #[test]
-    fn class_trees_are_domain_separated() {
-        let leaves: Vec<[u8; 32]> = (0..5).map(|i| leaf_hash(b'z', i, b"x")).collect();
-        let a = class_tree_root(TREE_PAGES, &leaves, &build_class_tree(TREE_PAGES, &leaves));
-        let b = class_tree_root(TREE_EXTS, &leaves, &build_class_tree(TREE_EXTS, &leaves));
-        assert_ne!(a, b, "same leaves, different class tags, different roots");
-        assert_ne!(
-            tree_empty_root(TREE_PAGES),
-            tree_empty_root(TREE_EXTS),
-            "empty roots are tagged too"
-        );
-    }
-
-    #[test]
-    fn root_ledger_apply_equals_scratch_recombination() {
-        // The V6-c lock: a ledger advanced by `apply` agrees with a
-        // from-scratch `compute_root` over hand-patched full vectors,
-        // across geometry changes (grow, shrink, stable width) and
-        // dirt in every class. The manifest is a real one with its
-        // geometry fields overridden — only the counts drive the math.
-        let mut m = Interp::new();
-        assert!(m.run(&PROG_A).completed);
-        let image = m.snapshot_image(&sig());
-        let template = image_to_batch(&image, 1, "").manifest;
-
-        let leaf_bytes = |i: u32, salt: u8| -> Vec<u8> { vec![salt, i as u8, (i >> 8) as u8] };
-        let mut small = b"small-0".to_vec();
-        let mut pages: Vec<[u8; 32]> = Vec::new();
-        let mut exts: Vec<[u8; 32]> = Vec::new();
-        let mut frees: Vec<[u8; 32]> = Vec::new();
-        let mut edges: Vec<Vec<u32>> = Vec::new();
-        let mut ledger = RootLedger::build(
-            &small,
-            pages.clone(),
-            exts.clone(),
-            frees.clone(),
-            &edges,
-        );
-
-        // (n_pages, n_exts, n_frees, salt): grow from empty, grow
-        // more, stable-width dirt, shrink, mixed.
-        for (step, &(n_pages, n_exts, n_frees, salt)) in [
-            (3u32, 2u32, 1u32, b'a'),
-            (8, 5, 4, b'b'),
-            (8, 5, 4, b'c'),
-            (2, 1, 1, b'd'),
-            (5, 5, 2, b'e'),
-        ]
-        .iter()
-        .enumerate()
-        {
-            let mut manifest = template.clone();
-            manifest.slot_count = n_pages * SLOTS_PER_PAGE;
-            manifest.chunk_len = n_exts as u64 * CHUNK_EXTENT_BYTES as u64;
-            manifest.free_len = n_frees * FREE_SEG_ENTRIES;
-            small = format!("small-{salt}").into_bytes();
-
-            // Dirt: every grown row (the admission rule), plus row 0
-            // of each nonempty class on stable steps.
-            let dirty_rows = |prior: usize, n: u32| -> Vec<u32> {
-                let mut v: Vec<u32> = (prior as u32..n).collect();
-                if v.is_empty() && n > 0 {
-                    v.push(0);
-                }
-                v
-            };
-            let slot_rows: Vec<(u32, Vec<u8>)> = dirty_rows(pages.len().min(n_pages as usize), n_pages)
-                .into_iter()
-                .map(|i| (i, leaf_bytes(i, salt)))
-                .collect();
-            let ext_rows: Vec<(u32, Vec<u8>)> = dirty_rows(exts.len().min(n_exts as usize), n_exts)
-                .into_iter()
-                .map(|i| (i, leaf_bytes(i, salt ^ 1)))
-                .collect();
-            let free_rows: Vec<(u32, Vec<u8>)> = dirty_rows(frees.len().min(n_frees as usize), n_frees)
-                .into_iter()
-                .map(|i| (i, leaf_bytes(i, salt ^ 2)))
-                .collect();
-            let edge_rows: Vec<(u32, Vec<u32>)> = slot_rows
-                .iter()
-                .map(|(i, _)| (*i, vec![*i, i + salt as u32]))
-                .collect();
-
-            // Model: hand-patch the full vectors.
-            pages.resize(n_pages as usize, [0u8; 32]);
-            exts.resize(n_exts as usize, [0u8; 32]);
-            frees.resize(n_frees as usize, [0u8; 32]);
-            edges.resize(n_pages as usize, Vec::new());
-            for (i, b) in &slot_rows {
-                pages[*i as usize] = leaf_hash(LEAF_PAGE, *i, b);
-            }
-            for (i, b) in &ext_rows {
-                exts[*i as usize] = leaf_hash(LEAF_EXT, *i, b);
-            }
-            for (i, b) in &free_rows {
-                frees[*i as usize] = leaf_hash(LEAF_FREE, *i, b);
-            }
-            for (i, t) in &edge_rows {
-                edges[*i as usize] = t.clone();
-            }
-            let scratch = compute_root(
-                &leaf_hash(LEAF_SMALL, 0, &small),
-                &pages,
-                &exts,
-                &frees,
-                &edges,
-            );
-            let incremental = ledger
-                .apply(&manifest, &small, &slot_rows, &ext_rows, &free_rows, &edge_rows)
-                .unwrap();
-            assert_eq!(incremental, scratch, "step {step}");
-            assert_eq!(ledger.root(), scratch, "step {step} re-read");
-            assert_eq!(ledger.widths(), [
-                n_pages as usize,
-                n_exts as usize,
-                n_frees as usize
-            ]);
-        }
-
-        // An out-of-range row fails closed instead of panicking.
-        let manifest = {
-            let mut m2 = template.clone();
-            m2.slot_count = 2 * SLOTS_PER_PAGE;
-            m2.chunk_len = 0;
-            m2.free_len = 0;
-            m2
-        };
-        assert_eq!(
-            ledger.apply(&manifest, &small, &[(9, vec![1])], &[], &[], &[]),
-            Err(StoreError::MissingRow("slot page", 9)),
-        );
-    }
-
-    #[test]
-    fn root_ledger_tracks_real_batches() {
-        // Tie the ledger to the real pipeline: build from the epoch-1
-        // batch's rows, then apply the epoch-2 batch — the ledger's
-        // root must equal the root `image_to_batch` computed and the
-        // store accepted.
-        let mut m = Interp::new();
-        assert!(m.run(&PROG_A).completed);
-        let image1 = m.snapshot_image(&sig());
+    fn commit_refuses_rows_and_summaries_past_the_batch_geometry() {
+        let image = ran_image();
         let mut store = MemoryStore::new();
-        let batch1 = image_to_batch(&image1, 1, "");
-        store.commit(&batch1).unwrap();
-
-        let mut ledger = RootLedger::build(&batch1.small, Vec::new(), Vec::new(), Vec::new(), &[]);
-        let root1 = ledger
-            .apply(
-                &batch1.manifest,
-                &batch1.small,
-                &batch1.slot_pages,
-                &batch1.chunk_extents,
-                &batch1.free_segs,
-                &batch1.page_edges,
-            )
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
             .unwrap();
-        assert_eq!(root1, batch1.manifest.root);
-
-        assert!(m.run(&PROG_A).completed, "second crank grows the heap");
-        let image2 = m.snapshot_image(&sig());
-        let batch2 = image_to_batch(&image2, 2, &store.manifest().unwrap().seal);
-        store.commit(&batch2).unwrap();
-        let root2 = ledger
-            .apply(
-                &batch2.manifest,
-                &batch2.small,
-                &batch2.slot_pages,
-                &batch2.chunk_extents,
-                &batch2.free_segs,
-                &batch2.page_edges,
-            )
-            .unwrap();
-        assert_eq!(root2, batch2.manifest.root);
-        assert_eq!(root2, store.manifest().unwrap().root);
-    }
-
-    #[test]
-    fn commit_refuses_a_desynced_prior_leaf_baseline() {
-        // The wave-3 coupling assertion: the grown-region checks key
-        // off the prior LEAF VECTORS' lengths while the boundary
-        // checks key off the prior MANIFEST's geometry. The backends
-        // keep the two equal by construction; `apply_batch` itself
-        // now refuses a caller whose baselines disagree instead of
-        // letting its two checks require different rows.
-        let mut m = Interp::new();
-        assert!(m.run(&PROG_A).completed);
-        let image1 = m.snapshot_image(&sig());
-        let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image1, 1, "")).unwrap();
         let prev = store.manifest().unwrap();
-
-        let batch = image_to_batch(&image1, 2, &prev.seal);
-        let mut pages = store.leaf_pages.clone();
-        let mut exts = store.leaf_exts.clone();
-        let mut frees = store.leaf_frees.clone();
-        let mut edges = store.edges.clone();
-        pages.pop(); // desync: one leaf short of the manifest's geometry
+        let batch = image_to_batch_unchecked(&image, 2, prev.token);
+        let pages = slot_page_count(batch.manifest.slot_count);
+        let exts = chunk_extent_count(batch.manifest.chunk_len);
+        let frees = free_seg_count(batch.manifest.free_len);
+        let mut page = batch.clone();
+        page.slot_pages.push((pages, batch.slot_pages[0].1.clone()));
+        page.page_edges.push((pages, Vec::new()));
+        let mut summary = batch.clone();
+        summary.page_edges.push((pages + 3, Vec::new()));
+        let mut extent = batch.clone();
+        extent.chunk_extents.push((exts, vec![0; 4]));
+        let mut segment = batch.clone();
+        segment.free_segs.push((frees, Vec::new()));
+        for (bad, kind, index) in [
+            (page, "slot page", pages),
+            (summary, "page-edge summary", pages + 3),
+            (extent, "chunk extent", exts),
+            (segment, "free segment", frees),
+        ] {
+            assert_eq!(
+                store.commit(&bad),
+                Err(StoreError::BatchRejected(Box::new(StoreError::MissingRow(
+                    kind, index
+                )))),
+                "{kind}"
+            );
+            assert_eq!(store.manifest().unwrap(), prev);
+        }
+        // A chunk length past the chunk offset space: the decoder refuses
+        // such a manifest, so a backend that wrote it could not reopen.
+        let mut long = batch.clone();
+        long.manifest.chunk_len = u64::from(u32::MAX) + 1;
         assert_eq!(
-            apply_batch(
-                &mut pages,
-                &mut exts,
-                &mut frees,
-                &mut edges,
-                Some(&prev),
-                &batch
-            ),
-            Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "prior leaf tables disagree with the prior manifest geometry"
-            ))),
+            store.commit(&long),
+            Err(StoreError::BatchRejected(Box::new(StoreError::Snapshot(
+                SnapshotError::Corrupt(
+                    "store manifest chunk length exceeds the chunk offset space"
+                )
+            )))),
         );
+        assert_eq!(store.manifest().unwrap(), prev);
+        store.commit(&batch).unwrap();
     }
-
 }

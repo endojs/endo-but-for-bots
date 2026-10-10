@@ -1,0 +1,25 @@
+# engine=ironhorse features=default corpus=intl402/Segmenter/prototype/segment/containing tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Segmenter/prototype/segment/containing/branding.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/containing/branding.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/containing/breakable-input.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/containing/breakable-input.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/containing/index-throws.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Segmenter/prototype/segment/containing/index-throws.js strict skip:oracle-host-missing-global:Intl
+intl402/Segmenter/prototype/segment/containing/iswordlike.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/containing/iswordlike.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/containing/length.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/containing/length.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/containing/name.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/containing/name.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/containing/one-index.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/containing/one-index.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/containing/out-of-bound-index.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/containing/out-of-bound-index.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/containing/prop-desc.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/containing/prop-desc.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/containing/unbreakable-input.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/containing/unbreakable-input.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/containing/word-iswordlike.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/containing/word-iswordlike.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/prototype/segment/containing/zero-index.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Segmenter/prototype/segment/containing/zero-index.js strict skip:oracle-host-missing-global:Intl

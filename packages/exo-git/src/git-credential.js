@@ -16,6 +16,8 @@ import {
   GitCredentialControllerInterface,
 } from './interfaces.js';
 
+/** @import { GitRemoteCredential } from './types.js' */
+
 /**
  * @typedef {'bearer' | 'basic'} GitCredentialKind
  */
@@ -35,6 +37,31 @@ import {
  * @property {(material: GitCredentialMaterial) => void} rotate
  * @property {() => void} revoke
  */
+
+/**
+ * The one predicate for "is there material here a transport could actually
+ * authenticate with", returned as the transport-ready credential so callers
+ * that need the material keep its narrowed type. Both readers of credential
+ * liveness go through this: `GitCredentialController.inspect()` and
+ * `GitRemote.credentialHealth()` report `available` by it, and
+ * `ensureCredentialUsable()` hands its result to transport. Splitting them
+ * would let a holder be told `available: true` by one and
+ * `Git credential material is unavailable` by the other.
+ *
+ * @param {GitCredentialKind} kind
+ * @param {GitCredentialMaterial} material
+ * @returns {GitRemoteCredential | undefined}
+ */
+export const gitCredentialFromMaterial = (kind, material) => {
+  if (kind === 'bearer' && 'token' in material) {
+    return harden({ kind: 'bearer', material });
+  }
+  if (kind === 'basic' && 'username' in material && 'password' in material) {
+    return harden({ kind: 'basic', material });
+  }
+  return undefined;
+};
+harden(gitCredentialFromMaterial);
 
 /**
  * @type {WeakMap<object, GitCredentialRecord>}
@@ -95,7 +122,9 @@ const makeGitCredentialController = record =>
       return harden({
         kind: record.kind,
         audience: record.audience,
-        available: !Object.hasOwn(record.getMaterial(), 'unavailable'),
+        available:
+          gitCredentialFromMaterial(record.kind, record.getMaterial()) !==
+          undefined,
         revoked: record.isRevoked(),
       });
     },

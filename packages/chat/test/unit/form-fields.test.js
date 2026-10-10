@@ -26,6 +26,11 @@ test('every other field stays text', t => {
   t.is(fieldKind({ name: 'plain' }), 'text');
   t.is(fieldKind({ name: 'odd', pattern: 'not-a-pattern' }), 'text');
   t.is(fieldKind({ name: 'null', pattern: null }), 'text');
+  // The flattened shape a pattern used to degrade to when a form formula was
+  // persisted raw. The daemon now stores fields as capdata, so the tag
+  // survives and nothing produces this; a field that somehow still carries it
+  // is unanswerable whatever control is drawn, so it stays text.
+  t.is(fieldKind({ name: 'stale', pattern: { payload: 'boolean' } }), 'text');
 });
 
 test('a boolean field starts false unless it defaults to true', t => {
@@ -89,4 +94,17 @@ test('the old string-only collection would have failed that gate', t => {
   // Regression guard: this is what the UI used to send.
   t.throws(() => mustMatch('true', M.boolean(), 'approved'));
   t.throws(() => mustMatch('', M.boolean(), 'approved'));
+});
+
+test('bounded natural-number fields submit typed bigint budgets', t => {
+  const pattern = M.and(M.nat(), M.lte(0xffff_ffffn));
+  const fields = harden([{ name: 'remaining', pattern }]);
+  for (const text of ['0', '2', '4294967295']) {
+    const result = collectFormValues(fields, { remaining: text });
+    t.is(result.remaining, BigInt(text));
+    t.notThrows(() => mustMatch(result.remaining, pattern));
+  }
+  for (const text of ['', '-1', '1.5', '4294967296', 'Infinity', '0x2']) {
+    t.throws(() => collectFormValues(fields, { remaining: text }));
+  }
 });

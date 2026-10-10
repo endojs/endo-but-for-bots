@@ -68,7 +68,7 @@ test.afterEach(() => {
   testDocument.body.innerHTML = '';
 });
 
-test.serial('choose screen lists all eleven space types', async t => {
+test.serial('choose screen lists all twelve space types', async t => {
   const { $container } = await setup();
   const modes = [...$container.querySelectorAll('.space-type-card')].map(c =>
     c.getAttribute('data-mode'),
@@ -85,6 +85,7 @@ test.serial('choose screen lists all eleven space types', async t => {
     'floot',
     'workflow',
     'secrets',
+    'management',
   ]);
 });
 
@@ -102,7 +103,7 @@ test.serial(
 
     $container.querySelector('.add-space-back').click();
     await waitFor(() => !!$container.querySelector('.add-space-choose'));
-    t.is($container.querySelectorAll('.space-type-card').length, 11);
+    t.is($container.querySelectorAll('.space-type-card').length, 12);
   },
 );
 
@@ -177,6 +178,17 @@ test.serial('secret blobs form submits with the secrets layout', async t => {
   await waitFor(() => submitted.length > 0);
   t.is(submitted[0].layout, 'secrets');
   t.is(submitted[0].name, 'secrets');
+});
+
+test.serial('hosted endo form submits with the management layout', async t => {
+  const { $container, submitted } = await setup();
+  $container.querySelector('[data-mode="management"]').click();
+  await waitFor(() => !!$container.querySelector('.add-space-form'));
+
+  submitForm($container);
+  await waitFor(() => submitted.length > 0);
+  t.is(submitted[0].layout, 'management');
+  t.is(submitted[0].name, 'hosted-endo');
 });
 
 test.serial('an empty handle shows a validation error', async t => {

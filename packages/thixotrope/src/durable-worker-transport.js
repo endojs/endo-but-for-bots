@@ -3,6 +3,7 @@
 import harden from '@endo/harden';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { Fail, q } from '@endo/errors';
+import { WorkerHaltError } from './worker-engine.js';
 
 /**
  * @import {WorkerEngine, WorkerIncarnation} from './worker-engine.js'
@@ -60,6 +61,7 @@ import { Fail, q } from '@endo/errors';
  *   it. If a future engine surfaces its own dormancy signal, it can
  *   feed this same seam.
  * @param {string} [options.debugLabel]
+ * @param {() => void} [options.onFatal] retire the failed logical session
  */
 export const makeDurableWorkerTransport = ({
   workerId,
@@ -68,6 +70,7 @@ export const makeDurableWorkerTransport = ({
   onFrame,
   idleSleepMs = undefined,
   debugLabel = undefined,
+  onFatal = () => {},
 }) => {
   typeof onFrame === 'function' ||
     Fail`durable worker transport requires an onFrame callback`;
@@ -82,6 +85,18 @@ export const makeDurableWorkerTransport = ({
   let outboundBase = 0;
   /** Absolute journal index of the next host→worker frame to deliver. */
   let deliveredUpTo = 0;
+  let deliveredHubSequence = String(store.getMeta().hubDelivery ?? '0');
+  let receivedHubSequence = BigInt(deliveredHubSequence);
+  for (const entry of store.readJournal()) {
+    if (
+      typeof entry === 'object' &&
+      entry !== null &&
+      typeof entry.hubSequence === 'string'
+    ) {
+      const n = BigInt(entry.hubSequence);
+      if (n > receivedHubSequence) receivedHubSequence = n;
+    }
+  }
   /**
    * The operation chain: deliveries, wakes, parks, crashes, and
    * retirement all serialize here.
@@ -167,6 +182,12 @@ export const makeDurableWorkerTransport = ({
     if (dying !== undefined) {
       Promise.resolve(dying.terminate()).catch(() => {});
     }
+    if (error instanceof WorkerHaltError) {
+      // Preserve the last snapshot for inspection, but do not endlessly
+      // replay an input known to exhaust its budget or hit an engine gap.
+      store.setMeta({ ...store.getMeta(), failure: error.message });
+      onFatal();
+    }
     throw error;
   };
 
@@ -194,6 +215,7 @@ export const makeDurableWorkerTransport = ({
     }
     seenOutbound = 0;
     const meta = store.getMeta();
+    if (meta.failure !== undefined) throw new WorkerHaltError(meta.failure);
     outboundBase = meta.outboundBase ?? 0;
     const snapshotRef = meta.snapshot?.ref ?? null;
     const cut = meta.snapshot?.cut ?? 0;
@@ -215,9 +237,12 @@ export const makeDurableWorkerTransport = ({
       }
       const entries = store.readJournal(cut);
       deliveredUpTo = cut;
-      for (const b64 of entries) {
+      deliveredHubSequence = String(meta.hubDelivery ?? '0');
+      for (const entry of entries) {
+        const b64 = typeof entry === 'string' ? entry : entry.b64;
         // eslint-disable-next-line no-await-in-loop
         await started.deliver(harden({ t: 'f', b64 }));
+        if (typeof entry !== 'string') deliveredHubSequence = entry.hubSequence;
         deliveredUpTo += 1;
       }
     } catch (error) {
@@ -227,16 +252,27 @@ export const makeDurableWorkerTransport = ({
   };
 
   const connection = harden({
-    /** @param {Uint8Array} bytes one OCapN frame toward the worker */
-    write: bytes => {
-      if (destroyed) {
-        return;
+    /**
+     * @param {Uint8Array} bytes one OCapN frame toward the worker
+     * @param {string} [hubSequence] durable outbox sequence, decimal bigint
+     */
+    write: (bytes, hubSequence) => {
+      if (destroyed || store.getMeta().failure !== undefined) {
+        return false;
       }
+      if (
+        hubSequence !== undefined &&
+        BigInt(hubSequence) <= receivedHubSequence
+      )
+        return true;
       const b64 = encodeBase64(bytes);
       const index = store.journalLength();
       // Journal before the duct: a frame the OCapN layer believes it
       // sent must survive any crash from here on.
-      store.appendJournal(b64);
+      store.appendJournal(
+        hubSequence === undefined ? b64 : { b64, hubSequence },
+      );
+      if (hubSequence !== undefined) receivedHubSequence = BigInt(hubSequence);
       enqueue(async () => {
         if (destroyed) {
           return;
@@ -257,12 +293,14 @@ export const makeDurableWorkerTransport = ({
           abandonIncarnation(error);
         }
         deliveredUpTo = index + 1;
+        if (hubSequence !== undefined) deliveredHubSequence = hubSequence;
       }).catch(error => {
         console.error(
           `thixotrope worker transport ${debugName}: delivery failed`,
           error,
         );
       });
+      return true;
     },
     end: () => {
       destroyed = true;
@@ -302,6 +340,7 @@ export const makeDurableWorkerTransport = ({
           ...store.getMeta(),
           snapshot: { ref, cut },
           outboundBase,
+          hubDelivery: deliveredHubSequence,
         });
         store.truncateJournal(cut);
         if (
@@ -321,7 +360,7 @@ export const makeDurableWorkerTransport = ({
     workerId,
     debugLabel,
     /** One host→worker OCapN frame: journal, then deliver in order. */
-    write: (/** @type {Uint8Array} */ bytes) => connection.write(bytes),
+    write: connection.write,
     /** Stop accepting frames; deliveries in flight drain. */
     end: () => connection.end(),
     isAwake: () => incarnation !== undefined,

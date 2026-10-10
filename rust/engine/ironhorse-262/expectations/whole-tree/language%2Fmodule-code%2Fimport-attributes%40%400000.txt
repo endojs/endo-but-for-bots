@@ -1,0 +1,14 @@
+# engine=ironhorse features=default corpus=language/module-code/import-attributes tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/module-code/import-attributes/allow-nlt-before-with.js sloppy skip:module:resolution-linking
+language/module-code/import-attributes/early-dup-attribute-key-export.js sloppy skip:compiler-unimplemented:parse
+language/module-code/import-attributes/early-dup-attribute-key-import-nobinding.js sloppy skip:compiler-unimplemented:parse
+language/module-code/import-attributes/early-dup-attribute-key-import-withbinding.js sloppy skip:compiler-unimplemented:parse
+language/module-code/import-attributes/import-attribute-empty.js sloppy skip:compiler-unimplemented:module
+language/module-code/import-attributes/import-attribute-key-identifiername.js sloppy skip:module:resolution-linking
+language/module-code/import-attributes/import-attribute-key-string-double.js sloppy skip:module:resolution-linking
+language/module-code/import-attributes/import-attribute-key-string-single.js sloppy skip:module:resolution-linking
+language/module-code/import-attributes/import-attribute-many.js sloppy skip:module:resolution-linking
+language/module-code/import-attributes/import-attribute-newlines.js sloppy skip:module:resolution-linking
+language/module-code/import-attributes/import-attribute-trlng-comma.js sloppy skip:module:resolution-linking
+language/module-code/import-attributes/import-attribute-value-string-double.js sloppy skip:module:resolution-linking
+language/module-code/import-attributes/import-attribute-value-string-single.js sloppy skip:module:resolution-linking

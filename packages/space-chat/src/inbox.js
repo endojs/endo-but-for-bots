@@ -811,8 +811,10 @@ const FormBody = ({ message, powers, setError }) => {
   const [values, setValues] = useState(() => initialFormValues(fieldArray));
 
   const submitForm = () => {
-    E(powers)
-      .submit(number, collectFormValues(fieldArray, values))
+    Promise.resolve()
+      .then(() =>
+        E(powers).submit(number, collectFormValues(fieldArray, values)),
+      )
       .catch(err => {
         setError(` ${/** @type {Error} */ (err).message}`);
       });

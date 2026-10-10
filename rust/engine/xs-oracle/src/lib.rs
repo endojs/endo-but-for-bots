@@ -35,6 +35,13 @@ struct XsOracleResultRaw {
     /// fixed `result` buffer. Greater than `RESULT_BUF_CAP - 1` means `result`
     /// holds a truncated prefix.
     result_len: u32,
+    exit_status: i32,
+    /// XS's own heap accounting at the end of the run: slots (which XS
+    /// accounts at 32 bytes each) and the byte arena's size. The footprint
+    /// half of the engine design's performance envelope needs an XS side to
+    /// compare against, and had none.
+    heap_count: u32,
+    chunks_size: u32,
 }
 
 impl Default for XsOracleResultRaw {
@@ -50,16 +57,22 @@ impl Default for XsOracleResultRaw {
             result: [0u8; RESULT_BUF_CAP],
             error: [0u8; 256],
             result_len: 0,
+            exit_status: 0,
+            heap_count: 0,
+            chunks_size: 0,
         }
     }
 }
 
 extern "C" {
-    fn xs_oracle_run(
+    fn xs_oracle_run_timed(
         source: *const c_char,
         source_len: u32,
         out: *mut XsOracleResultRaw,
+        timing: *mut OracleTiming,
     ) -> c_int;
+    fn xs_oracle_is_resource_abort(status: i32) -> c_int;
+    fn xs_oracle_run(source: *const c_char, source_len: u32, out: *mut XsOracleResultRaw) -> c_int;
     fn xs_oracle_compile_module(
         source: *const c_char,
         source_len: u32,
@@ -68,6 +81,9 @@ extern "C" {
     fn xs_oracle_run_module(
         dir: *const c_char,
         main_rel: *const c_char,
+        setup: *const c_char,
+        setup_len: u32,
+        setup_out: *mut XsOracleResultRaw,
         out: *mut XsOracleResultRaw,
     ) -> c_int;
     fn xs_oracle_free(out: *mut XsOracleResultRaw);
@@ -76,6 +92,13 @@ extern "C" {
         source_lens: *const u32,
         crank_count: u32,
         outs: *mut XsOracleResultRaw,
+    ) -> c_int;
+    fn xs_oracle_run_scripts(
+        sources: *const *const c_char,
+        source_lens: *const u32,
+        script_count: u32,
+        outs: *mut XsOracleResultRaw,
+        checkpoint: c_int,
     ) -> c_int;
     fn xs_oracle_regexp(
         pattern: *const c_char,
@@ -238,6 +261,34 @@ pub struct OracleOutcome {
     /// Raw run-only meterIndex (16.16 fixed point), for diagnosing
     /// fractional (built-in step) metering.
     pub meter_raw: u32,
+    /// Original XS machine abort status; zero for ordinary guest exceptions.
+    pub exit_status: i32,
+    /// XS's live slot count at the end of the run. XS accounts a slot at 32
+    /// bytes, which is where `xs_accounted_heap_bytes` comes from.
+    ///
+    /// DIAGNOSTIC ONLY. Nothing in the differential comparison reads this, so
+    /// it cannot produce a trophy; it exists so the footprint half of the
+    /// design's performance envelope has an XS side to compare against, which
+    /// it did not (architecture findings F106/F122).
+    pub heap_count: u32,
+    /// XS's byte-arena size at the end of the run, the counterpart of this
+    /// engine's chunk arena. Diagnostic only, as above.
+    pub chunks_size: u32,
+}
+
+impl OracleOutcome {
+    /// XS's own heap figure for this run, in bytes: slots at XS's 32-byte
+    /// accounting unit, plus the byte arena.
+    pub fn xs_accounted_heap_bytes(&self) -> u64 {
+        self.heap_count as u64 * 32 + self.chunks_size as u64
+    }
+}
+
+/// Whether an explicit XS abort status means memory or stack exhaustion.
+/// Guest unhandled exceptions/rejections and ordinary throws are excluded.
+pub fn is_resource_abort(status: i32) -> bool {
+    // Safety: the C function only compares its integer against XS enum values.
+    unsafe { xs_oracle_is_resource_abort(status) != 0 }
 }
 
 /// Compile `source` to XS bytecode and run it on XS.
@@ -273,8 +324,7 @@ pub fn run(source: &str) -> Option<OracleOutcome> {
         Vec::new()
     } else {
         unsafe {
-            std::slice::from_raw_parts(raw.symbols as *const u8, raw.symbols_size as usize)
-                .to_vec()
+            std::slice::from_raw_parts(raw.symbols as *const u8, raw.symbols_size as usize).to_vec()
         }
     };
 
@@ -287,6 +337,9 @@ pub fn run(source: &str) -> Option<OracleOutcome> {
         error: cstr_field(&raw.error),
         computrons: raw.computrons as u64,
         meter_raw: raw.meter_raw,
+        exit_status: raw.exit_status,
+        heap_count: raw.heap_count,
+        chunks_size: raw.chunks_size,
     };
 
     // Safety: frees the heap buffers the shim allocated; we have copied
@@ -296,8 +349,34 @@ pub fn run(source: &str) -> Option<OracleOutcome> {
     Some(outcome)
 }
 
-/// Convert (and free) one shim result slot into an owned outcome —
-/// the same copy-out [`run`] performs inline.
+/// Benchmark-only monotonic timings for a successful XS program.
+/// Compilation includes parse and code generation. Execution includes script
+/// preparation, execution, promise jobs, and completion rendering; machine
+/// creation, bytecode capture, and teardown are outside both intervals.
+/// A zero interval indicates an unavailable clock or an incomplete phase.
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct OracleTiming {
+    pub compile_ns: u64,
+    pub execute_ns: u64,
+}
+
+/// Run with phase timings without changing the ordinary oracle's clock behavior.
+/// Failed executions are returned as outcomes, never interpreted as fast samples.
+pub fn run_timed(source: &str) -> Option<(OracleOutcome, OracleTiming)> {
+    let len = u32::try_from(source.len()).ok()?;
+    let mut raw = XsOracleResultRaw::default();
+    let mut timing = OracleTiming::default();
+    // Safety: source remains valid for len bytes throughout this synchronous
+    // call; both output objects match their C layouts and are exclusively owned.
+    let rc = unsafe { xs_oracle_run_timed(source.as_ptr().cast(), len, &mut raw, &mut timing) };
+    if rc != 0 {
+        return None;
+    }
+    Some((outcome_from_raw(&mut raw), timing))
+}
+
+/// Convert and free one shim result slot, as [`run`] does inline.
 fn outcome_from_raw(raw: &mut XsOracleResultRaw) -> OracleOutcome {
     let bytecode = if raw.code.is_null() || raw.code_size == 0 {
         Vec::new()
@@ -311,8 +390,7 @@ fn outcome_from_raw(raw: &mut XsOracleResultRaw) -> OracleOutcome {
         Vec::new()
     } else {
         unsafe {
-            std::slice::from_raw_parts(raw.symbols as *const u8, raw.symbols_size as usize)
-                .to_vec()
+            std::slice::from_raw_parts(raw.symbols as *const u8, raw.symbols_size as usize).to_vec()
         }
     };
     let outcome = OracleOutcome {
@@ -328,6 +406,9 @@ fn outcome_from_raw(raw: &mut XsOracleResultRaw) -> OracleOutcome {
         error: cstr_field(&raw.error),
         computrons: raw.computrons as u64,
         meter_raw: raw.meter_raw,
+        exit_status: raw.exit_status,
+        heap_count: raw.heap_count,
+        chunks_size: raw.chunks_size,
     };
     // Safety: frees the shim's heap buffers; copied out above.
     unsafe { xs_oracle_free(raw as *mut _) };
@@ -352,8 +433,9 @@ pub fn run_cranks(sources: &[&str]) -> Option<Vec<OracleOutcome>> {
         .map(|s| s.as_bytes().as_ptr() as *const c_char)
         .collect();
     let lens: Vec<u32> = sources.iter().map(|s| s.as_bytes().len() as u32).collect();
-    let mut raws: Vec<XsOracleResultRaw> =
-        (0..sources.len()).map(|_| XsOracleResultRaw::default()).collect();
+    let mut raws: Vec<XsOracleResultRaw> = (0..sources.len())
+        .map(|_| XsOracleResultRaw::default())
+        .collect();
     // Safety: `ptrs`/`lens`/`raws` are valid for `sources.len()` slots;
     // the C side reads the sources by (pointer, length) and writes only
     // within each out slot and heap buffers we copy out and free.
@@ -363,6 +445,49 @@ pub fn run_cranks(sources: &[&str]) -> Option<Vec<OracleOutcome>> {
             lens.as_ptr(),
             sources.len() as u32,
             raws.as_mut_ptr(),
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    Some(raws.iter_mut().map(outcome_from_raw).collect())
+}
+
+/// Run separately compiled setup and case scripts in one realm, draining
+/// microtasks only after the final script. Setup cannot be shadowed by the
+/// case's declarations, and raw case directives/hashbangs remain intact.
+/// An exception stops the sequence; subsequent outcomes are not completed.
+pub fn run_scripts(sources: &[&str]) -> Option<Vec<OracleOutcome>> {
+    run_scripts_with_checkpoint(sources, true)
+}
+
+/// Like `run_scripts`, optionally ending before the final job checkpoint.
+/// This lets a parse-negative module validate setup without running jobs that
+/// would never run after its early error.
+pub fn run_scripts_with_checkpoint(
+    sources: &[&str],
+    checkpoint: bool,
+) -> Option<Vec<OracleOutcome>> {
+    if sources.is_empty() {
+        return Some(Vec::new());
+    }
+    let count = u32::try_from(sources.len()).ok()?;
+    let ptrs: Vec<_> = sources.iter().map(|s| s.as_ptr().cast()).collect();
+    let lens: Vec<u32> = sources
+        .iter()
+        .map(|s| u32::try_from(s.len()))
+        .collect::<Result<_, _>>()
+        .ok()?;
+    let mut raws: Vec<_> = (0..count).map(|_| XsOracleResultRaw::default()).collect();
+    // Safety: source buffers and output slots remain live for this synchronous
+    // call, whose C implementation bounds every access by count and lens.
+    let rc = unsafe {
+        xs_oracle_run_scripts(
+            ptrs.as_ptr(),
+            lens.as_ptr(),
+            count,
+            raws.as_mut_ptr(),
+            i32::from(checkpoint),
         )
     };
     if rc != 0 {
@@ -383,6 +508,8 @@ pub struct ModuleOutcome {
     pub compiled: bool,
     /// The parse error message when the C parser surfaced one directly.
     pub error: String,
+    /// Original XS machine abort status; zero for ordinary guest exceptions.
+    pub exit_status: i32,
 }
 
 /// Compile `source` as a **Module** goal on XS and return its bytecode
@@ -424,8 +551,7 @@ pub fn compile_module(source: &str) -> Option<ModuleOutcome> {
         Vec::new()
     } else {
         unsafe {
-            std::slice::from_raw_parts(raw.symbols as *const u8, raw.symbols_size as usize)
-                .to_vec()
+            std::slice::from_raw_parts(raw.symbols as *const u8, raw.symbols_size as usize).to_vec()
         }
     };
 
@@ -444,6 +570,7 @@ pub fn compile_module(source: &str) -> Option<ModuleOutcome> {
         symbols,
         compiled: raw.ok != 0 && emitted_module_record,
         error: cstr_field(&raw.error),
+        exit_status: raw.exit_status,
     };
 
     // Safety: frees the heap buffers the shim allocated; we have copied
@@ -478,6 +605,8 @@ pub struct ModuleRunOutcome {
     pub computrons: u64,
     /// Raw meterIndex (16.16 fixed point).
     pub meter_raw: u32,
+    /// Original XS machine abort status; zero for ordinary guest exceptions.
+    pub exit_status: i32,
 }
 
 /// Link and evaluate the module rooted at `dir`/`main_rel` on XS and
@@ -498,15 +627,43 @@ pub struct ModuleRunOutcome {
 /// the machine); a rejection is a normal `ModuleRunOutcome` with
 /// `completed == false`.
 pub fn run_module_dir(dir: &std::path::Path, main_rel: &str) -> Option<ModuleRunOutcome> {
+    run_module_dir_with_setup(dir, main_rel, "")?.ok()
+}
+
+/// Evaluate a setup Script before linking the entry module, with a single final
+/// job checkpoint. A setup failure is returned separately so it cannot satisfy
+/// a module's expected negative outcome.
+pub fn run_module_dir_with_setup(
+    dir: &std::path::Path,
+    main_rel: &str,
+    setup: &str,
+) -> Option<Result<ModuleRunOutcome, OracleOutcome>> {
     let dir_c = std::ffi::CString::new(dir.as_os_str().to_str()?).ok()?;
     let main_c = std::ffi::CString::new(main_rel).ok()?;
     let mut raw = XsOracleResultRaw::default();
     // Safety: both C strings outlive the call; the C side writes only
     // within `raw` and heap buffers it also frees on the module path
     // (module runs capture no bytecode, so there is nothing for us to free).
-    let rc = unsafe { xs_oracle_run_module(dir_c.as_ptr(), main_c.as_ptr(), &mut raw as *mut _) };
+    let mut setup_raw = XsOracleResultRaw::default();
+    let setup_len = u32::try_from(setup.len()).ok()?;
+    let rc = unsafe {
+        xs_oracle_run_module(
+            dir_c.as_ptr(),
+            main_c.as_ptr(),
+            setup.as_ptr().cast(),
+            setup_len,
+            &mut setup_raw,
+            &mut raw,
+        )
+    };
     if rc != 0 {
         return None;
+    }
+    let setup_outcome = outcome_from_raw(&mut setup_raw);
+    if !setup_outcome.completed {
+        // Safety: release any partial module result even when setup aborts.
+        unsafe { xs_oracle_free(&mut raw) };
+        return Some(Err(setup_outcome));
     }
     let outcome = ModuleRunOutcome {
         completed: raw.ok != 0,
@@ -514,10 +671,11 @@ pub fn run_module_dir(dir: &std::path::Path, main_rel: &str) -> Option<ModuleRun
         error: cstr_field(&raw.error),
         computrons: raw.computrons as u64,
         meter_raw: raw.meter_raw,
+        exit_status: raw.exit_status,
     };
     // Safety: frees any heap buffers the shim allocated (none on this path).
     unsafe { xs_oracle_free(&mut raw as *mut _) };
-    Some(outcome)
+    Some(Ok(outcome))
 }
 
 fn cstr_field(buf: &[u8]) -> String {
@@ -528,6 +686,44 @@ fn cstr_field(buf: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn separate_scripts_defer_jobs_until_the_subject() {
+        let sources = [
+            "globalThis.phase = 'setup'; Promise.resolve().then(() => { phase = 'job'; }); void 0;",
+            "phase",
+        ];
+        let scripted = run_scripts(&sources).expect("oracle");
+        assert!(scripted.iter().all(|run| run.completed));
+        assert_eq!(scripted[1].result, "setup");
+        let cranks = run_cranks(&sources).expect("oracle");
+        assert_eq!(
+            cranks[1].result, "job",
+            "existing crank checkpoints are unchanged"
+        );
+    }
+
+    #[test]
+    fn separate_script_capture_marks_truncated_completions() {
+        let runs = run_scripts(&["void 0;", "'x'.repeat(20000)"]).expect("oracle");
+        assert!(runs[1].completed);
+        assert!(runs[1].result_truncated);
+        assert_eq!(runs[1].result.len(), RESULT_BUF_CAP - 1);
+    }
+
+    #[test]
+    fn module_setup_failures_are_distinct_from_module_rejections() {
+        for source in ["throw new TypeError('setup failure');", "const = ;"] {
+            // Setup fails before path resolution, so no fixture is necessary.
+            let failure =
+                run_module_dir_with_setup(std::path::Path::new("."), "absent.mjs", source)
+                    .expect("oracle")
+                    .expect_err("the setup failure must not become a module rejection");
+            assert!(!failure.completed);
+            assert_eq!(failure.exit_status, 0);
+            assert!(!failure.error.is_empty());
+        }
+    }
 
     /// Regression for continuous-fuzz finding `493390fc03979205`: a completion
     /// value longer than the old 1024-byte capture buffer used to be silently
@@ -542,9 +738,16 @@ mod tests {
         // usable buffer, comfortably inside the current one.
         let out = run("'x'.repeat(2000)").expect("oracle machine must start");
         assert!(out.completed, "program completes: {}", out.error);
-        assert_eq!(out.result.len(), 2000, "the full string is captured, not a 1023-byte prefix");
+        assert_eq!(
+            out.result.len(),
+            2000,
+            "the full string is captured, not a 1023-byte prefix"
+        );
         assert!(out.result.bytes().all(|b| b == b'x'));
-        assert!(!out.result_truncated, "a result within the buffer is not flagged truncated");
+        assert!(
+            !out.result_truncated,
+            "a result within the buffer is not flagged truncated"
+        );
     }
 
     /// Materialize `files` into a unique temp dir, run `main` as a module
@@ -569,8 +772,14 @@ mod tests {
         let o = run_module_graph(
             "fulfill",
             &[
-                ("dep.js", "export const x = 41; export function inc(n){ return n + 1; }"),
-                ("main.mjs", "import { x, inc } from './dep.js'; globalThis.result = inc(x);"),
+                (
+                    "dep.js",
+                    "export const x = 41; export function inc(n){ return n + 1; }",
+                ),
+                (
+                    "main.mjs",
+                    "import { x, inc } from './dep.js'; globalThis.result = inc(x);",
+                ),
             ],
             "main.mjs",
         );
@@ -592,7 +801,11 @@ mod tests {
             "main.mjs",
         );
         assert!(!o.completed, "throwing dependency must reject");
-        assert!(o.error.contains("boom"), "reason should carry the throw, got {:?}", o.error);
+        assert!(
+            o.error.contains("boom"),
+            "reason should carry the throw, got {:?}",
+            o.error
+        );
     }
 
     #[test]
@@ -612,7 +825,11 @@ mod tests {
             ],
             "main.mjs",
         );
-        assert!(o.completed, "dynamic import + meta should fulfill, err={:?}", o.error);
+        assert!(
+            o.completed,
+            "dynamic import + meta should fulfill, err={:?}",
+            o.error
+        );
         assert_eq!(o.result, "v7:object");
     }
 
@@ -624,6 +841,28 @@ mod tests {
         assert!(!o.bytecode.is_empty(), "bytecode should be captured");
         // A trivial program still costs a handful of dispatches.
         assert!(o.computrons > 0, "run computrons should be nonzero");
+    }
+
+    #[test]
+    fn numeric_inputs_cross_the_integer_boundary_without_undefined_conversion() {
+        for (source, expected) in [
+            ("2147483647", "2147483647"),
+            ("2147483648", "2147483648"),
+            ("-2147483648", "-2147483648"),
+            ("-2147483649", "-2147483649"),
+            ("1e308 + 1e308", "Infinity"),
+            ("1e309", "Infinity"),
+            ("JSON.parse('3000000000')", "3000000000"),
+            ("JSON.parse('1e309')", "Infinity"),
+        ] {
+            let outcome = run(source).expect("oracle machine must start");
+            assert!(
+                outcome.completed,
+                "numeric boundary program {source:?} completes: {}",
+                outcome.error
+            );
+            assert_eq!(outcome.result, expected, "numeric boundary {source:?}");
+        }
     }
 
     #[test]
@@ -671,6 +910,19 @@ mod tests {
         let o = regexp("(", "", "abc", 0).expect("machine");
         assert!(!o.compiled);
         assert!(!o.error.is_empty(), "should carry an error message");
+    }
+
+    #[test]
+    fn regexp_literal_rejection_preserves_its_diagnostic() {
+        // Exercise the lexer -> fxReportParserError path, not the RegExp
+        // constructor. Its formerly overlapping snprintf erased this message
+        // on glibc and changed the differential harness's skip disposition.
+        let outcome = run(r"/\1/;").expect("oracle machine");
+        assert!(!outcome.completed);
+        assert_eq!(
+            outcome.error,
+            r"SyntaxError: \1 invalid reference number \1"
+        );
     }
 
     #[test]
@@ -823,6 +1075,33 @@ mod tests {
     }
 
     #[test]
+    fn script_cleanup_covers_throws_and_host_aborts() {
+        // ASAN catches duplicate cleanup; Linux LeakSanitizer catches missing
+        // cleanup at process exit. fxAbort skips fxRunScript's inner catch,
+        // unlike an ordinary JS throw. Exercise both sides of that ownership
+        // boundary, including failures after fxRunScript has already freed it.
+        let abort = "var d=Object.getOwnPropertyDescriptor(Iterator.prototype,'constructor');\
+var o={};Object.defineProperty(o,'constructor',d);o.constructor=1;";
+        for source in [
+            "throw new Error('ordinary');".to_owned(),
+            abort.to_owned(),
+            format!("Promise.resolve().then(function(){{{abort}}}); 'queued';"),
+            "({toString(){throw new Error('coercion')}})".to_owned(),
+            format!("({{toString(){{{abort}}}}})"),
+        ] {
+            let outcome = run(&source).expect("machine must start");
+            assert!(!outcome.completed, "must fail safely: {source}");
+            let cranks = run_cranks(&["'first'", &source, "'unreachable'"])
+                .expect("crank machine must start");
+            assert!(cranks[0].completed);
+            assert_eq!(cranks[0].result, "first");
+            assert!(!cranks[1].completed, "second crank must fail: {source}");
+            assert!(cranks[2].bytecode.is_empty(), "must stop at failing crank");
+        }
+        assert_eq!(run("1 + 2").expect("fresh machine").result, "3");
+    }
+
+    #[test]
     fn script_goal_still_rejects_top_level_export() {
         // The script entry is UNCHANGED by the module addition: a top-level
         // `export` remains a SyntaxError there (goal separation intact).
@@ -849,7 +1128,11 @@ mod tests {
             "'use strict'; let y = 3; y",
         ] {
             let o = run(src).expect("machine");
-            assert!(o.completed, "script {src:?} should complete, err={:?}", o.error);
+            assert!(
+                o.completed,
+                "script {src:?} should complete, err={:?}",
+                o.error
+            );
             assert!(
                 !o.bytecode.is_empty(),
                 "script {src:?} must still emit bytecode"

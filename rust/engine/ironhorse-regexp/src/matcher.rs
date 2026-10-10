@@ -2,7 +2,9 @@
 //! (`xsre.c`). It interprets the integer step stream the [`crate::compile`]
 //! pass emits, using an explicit state stack for backtracking, and meters
 //! `XS_REGEXP_METERING` per dispatched step — the matcher's consensus
-//! cost, and the number the parity suite pins bit-exact against the pin.
+//! cost, deterministic per release (Iron Horse's own frozen value; drift
+//! against the XS pin is advisory telemetry — XS-computron parity is a
+//! non-goal).
 //!
 //! The C engine keeps its backtrack states as a linked list threaded
 //! through the machine stack or `c_malloc`; the safe port keeps them in a
@@ -16,10 +18,27 @@ use crate::flags::*;
 use crate::opcode::*;
 
 /// `gxLineCharacters` (xsre.c): the line terminators, as charset ranges.
-const LINE_CHARACTERS: [i32; 7] = [6, 0x000A, 0x000A + 1, 0x000D, 0x000D + 1, 0x2028, 0x2029 + 1];
+const LINE_CHARACTERS: [i32; 7] = [
+    6,
+    0x000A,
+    0x000A + 1,
+    0x000D,
+    0x000D + 1,
+    0x2028,
+    0x2029 + 1,
+];
 /// `gxWordCharacters` (xsre.c): the `\w` set, as charset ranges.
-const WORD_CHARACTERS: [i32; 9] =
-    [8, b'0' as i32, b'9' as i32 + 1, b'A' as i32, b'Z' as i32 + 1, b'_' as i32, b'_' as i32 + 1, b'a' as i32, b'z' as i32 + 1];
+const WORD_CHARACTERS: [i32; 9] = [
+    8,
+    b'0' as i32,
+    b'9' as i32 + 1,
+    b'A' as i32,
+    b'Z' as i32 + 1,
+    b'_' as i32,
+    b'_' as i32 + 1,
+    b'a' as i32,
+    b'z' as i32 + 1,
+];
 
 /// The outcome of running a compiled pattern over a subject.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +55,13 @@ pub struct MatchOutcome {
     pub names: Vec<i32>,
     /// Match meter in raw 16.16 fixed point: `steps * XS_REGEXP_METERING`.
     pub match_meter_raw: u64,
+    /// `true` when the caller's check callback refused further work
+    /// ([`match_regexp_checked`]): the match was abandoned mid-way,
+    /// `matched` is `false`, and `captures`/`names` are meaningless. The
+    /// A finite dispatch budget or an invalid reference operand can also set it.
+    pub aborted: bool,
+    /// The deterministic scratch or backtracking storage ceiling was reached.
+    pub resource_limit: bool,
 }
 
 impl MatchOutcome {
@@ -88,25 +114,129 @@ fn match_character(chars: &[i32], base_at: usize, count: i32, character: i64) ->
     false
 }
 
+/// How many matcher steps run between two consultations of the check
+/// callback [`match_regexp_checked`] is given. A release constant: it
+/// decides only *where* an armed crank can be interrupted inside a match,
+/// never what the match meters, so it is not part of the cost table.
+pub const MATCH_CHECK_STRIDE: u64 = 1024;
+/// Independent of metering: bounds retained states and their capture snapshots.
+pub const MAX_MATCH_STATES: usize = 65_536;
+pub const MAX_MATCH_BYTES: usize = 64 << 20;
+
+fn save_captures(
+    states: &mut Vec<State>,
+    captures: &[(i32, i32)],
+    base_bytes: usize,
+) -> Option<Vec<(i32, i32)>> {
+    let state_bytes = std::mem::size_of::<State>().checked_add(std::mem::size_of_val(captures))?;
+    let count = states.len().checked_add(1)?;
+    if count > MAX_MATCH_STATES
+        || base_bytes.checked_add(count.checked_mul(state_bytes)?)? > MAX_MATCH_BYTES
+    {
+        return None;
+    }
+    states.try_reserve(1).ok()?;
+    let mut saved = Vec::new();
+    saved.try_reserve_exact(captures.len()).ok()?;
+    saved.extend_from_slice(captures);
+    Some(saved)
+}
+
 /// Match a compiled `program` against `subject` (the caller's UTF-8 or XS
 /// CESU-8 byte spelling, no trailing NUL needed) starting at byte offset
 /// `start`.
+///
+/// Unchecked: runs to completion however much backtracking the pattern
+/// does. A metered caller uses [`match_regexp_checked`].
 pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutcome {
+    match_regexp_checked(program, subject, start, None)
+}
+
+/// [`match_regexp`] with an interruption seam (architecture review
+/// F012): every [`MATCH_CHECK_STRIDE`] steps the matcher calls `check`
+/// with the raw meter it has accumulated so far, and a `false` return
+/// abandons the match with [`MatchOutcome::aborted`] set. This is what
+/// lets an armed computation meter halt a catastrophic backtracking
+/// match (`/(a+)+b/` over a long run of `a`) instead of waiting for it
+/// to finish. `None` is exactly [`match_regexp`]: the step stream, the
+/// meter, and the outcome are bit-identical, so unmetered differential
+/// runs are unaffected.
+pub fn match_regexp_checked(
+    program: &Program,
+    subject: &[u8],
+    start: i32,
+    check: Option<&mut dyn FnMut(u64) -> bool>,
+) -> MatchOutcome {
+    match_regexp_budgeted(program, subject, start, u64::MAX, check)
+}
+
+/// Match with a finite dispatch budget, even when no callback is attached.
+/// Callbacks receive cumulative raw work every `MATCH_CHECK_STRIDE` steps;
+/// the outcome also includes the final partial stride.
+pub fn match_regexp_budgeted(
+    program: &Program,
+    subject: &[u8],
+    start: i32,
+    mut work_budget: u64,
+    mut check: Option<&mut dyn FnMut(u64) -> bool>,
+) -> MatchOutcome {
     let code = &program.code;
     let stop = subject.len() as i32;
     let base_flags = code[0];
     let capture_count = program.capture_count;
     let name_count = program.name_count;
 
+    let base_bytes = [
+        (capture_count, std::mem::size_of::<(i32, i32)>()),
+        (name_count, std::mem::size_of::<i32>()),
+        (
+            program.assertion_count,
+            std::mem::size_of::<AssertionData>(),
+        ),
+        (
+            program.quantifier_count,
+            std::mem::size_of::<QuantifierData>(),
+        ),
+    ]
+    .into_iter()
+    .try_fold(0usize, |sum, (n, width)| {
+        sum.checked_add(n.checked_mul(width)?)
+    });
+    let Some(base_bytes) = base_bytes.filter(|n| *n <= MAX_MATCH_BYTES) else {
+        return MatchOutcome {
+            matched: false,
+            captures: Vec::new(),
+            names: Vec::new(),
+            match_meter_raw: 0,
+            aborted: false,
+            resource_limit: true,
+        };
+    };
+
     let mut captures: Vec<(i32, i32)> = vec![(-1, -1); capture_count];
     let mut names: Vec<i32> = vec![-1; name_count];
-    let mut assertions: Vec<AssertionData> =
-        vec![AssertionData { offset: 0, first_state: 0 }; program.assertion_count];
-    let mut quantifiers: Vec<QuantifierData> =
-        vec![QuantifierData { min: 0, max: 0, offset: 0 }; program.quantifier_count];
+    let mut assertions: Vec<AssertionData> = vec![
+        AssertionData {
+            offset: 0,
+            first_state: 0
+        };
+        program.assertion_count
+    ];
+    let mut quantifiers: Vec<QuantifierData> = vec![
+        QuantifierData {
+            min: 0,
+            max: 0,
+            offset: 0
+        };
+        program.quantifier_count
+    ];
     let mut states: Vec<State> = Vec::new();
 
     let mut meter: u64 = 0;
+    // Steps until the next consultation of `check` (unused unchecked).
+    let mut until_check: u64 = MATCH_CHECK_STRIDE;
+    let mut aborted = false;
+    let mut resource_limit = false;
     let mut result = false;
     let mut start = start;
 
@@ -128,7 +258,22 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                 let at = (step / 4) as usize;
                 let which = code[at];
                 let mut p = at + 1; // operand cursor (past the opcode)
+                if work_budget == 0 || meter > u64::MAX - XS_REGEXP_METERING {
+                    aborted = true;
+                    break 'scan;
+                }
+                work_budget -= 1;
                 meter += XS_REGEXP_METERING;
+                if let Some(check) = check.as_mut() {
+                    until_check -= 1;
+                    if until_check == 0 {
+                        until_check = MATCH_CHECK_STRIDE;
+                        if !check(meter) {
+                            aborted = true;
+                            break 'scan;
+                        }
+                    }
+                }
 
                 // Set to true by a step that decides to backtrack.
                 let mut pop = false;
@@ -161,7 +306,18 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                         assertions[ai].offset = offset;
                         assertions[ai].first_state = states.len();
                         let sequel = code[p];
-                        states.push(State { step: sequel, offset, flags, captures: captures.clone() });
+                        let Some(saved_captures) =
+                            save_captures(&mut states, &captures, base_bytes)
+                        else {
+                            resource_limit = true;
+                            break 'scan;
+                        };
+                        states.push(State {
+                            step: sequel,
+                            offset,
+                            flags,
+                            captures: saved_captures,
+                        });
                     }
                     CX_ASSERTION_NOT_COMPLETION => {
                         let ai = code[p] as usize;
@@ -209,12 +365,19 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                         let mut e = code[p];
                         if e < 0 {
                             let f = code[p + 1];
-                            e = names[f as usize];
+                            let Some(&capture) = names.get(f as usize) else {
+                                aborted = true;
+                                break 'scan;
+                            };
+                            e = capture;
                             if e < 0 {
                                 continue; // matched empty (unset named ref)
                             }
                         }
-                        let cap = captures[e as usize];
+                        let Some(&cap) = captures.get(e as usize) else {
+                            aborted = true;
+                            break 'scan;
+                        };
                         let (mut from, to) = (cap.0, cap.1);
                         if from >= 0 && to >= 0 {
                             // Deliberately still `offset - (to - from)`, the
@@ -242,7 +405,9 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                                 let mut g = target;
                                 let mut ok = true;
                                 while from < to {
-                                    if get_character(subject, g as usize, flags as u32) != get_character(subject, from as usize, flags as u32) {
+                                    if get_character(subject, g as usize, flags as u32)
+                                        != get_character(subject, from as usize, flags as u32)
+                                    {
                                         ok = false;
                                         break;
                                     }
@@ -264,12 +429,19 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                         let mut e = code[p];
                         if e < 0 {
                             let f = code[p + 1];
-                            e = names[f as usize];
+                            let Some(&capture) = names.get(f as usize) else {
+                                aborted = true;
+                                break 'scan;
+                            };
+                            e = capture;
                             if e < 0 {
                                 continue;
                             }
                         }
-                        let cap = captures[e as usize];
+                        let Some(&cap) = captures.get(e as usize) else {
+                            aborted = true;
+                            break 'scan;
+                        };
                         let (mut from, to) = (cap.0, cap.1);
                         if from >= 0 && to >= 0 {
                             // The matched text need not occupy the same number
@@ -290,13 +462,15 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                                     ok = false;
                                     break;
                                 }
-                                if get_character(subject, g as usize, flags as u32) != get_character(subject, from as usize, flags as u32) {
+                                if get_character(subject, g as usize, flags as u32)
+                                    != get_character(subject, from as usize, flags as u32)
+                                {
                                     ok = false;
                                     break;
                                 }
                                 g = find_character(subject, g as usize, 1, flags as u32) as i32;
-                                from = find_character(subject, from as usize, 1, flags as u32)
-                                    as i32;
+                                from =
+                                    find_character(subject, from as usize, 1, flags as u32) as i32;
                             }
                             if ok {
                                 offset = g;
@@ -311,10 +485,15 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                         if offset == 0 {
                             pop = true;
                         } else {
-                            let e = find_character(subject, offset as usize, -1, flags as u32)
-                                as i32;
+                            let e =
+                                find_character(subject, offset as usize, -1, flags as u32) as i32;
                             let count = code[p];
-                            if !match_character(code, p + 1, count, get_character(subject, e as usize, flags as u32)) {
+                            if !match_character(
+                                code,
+                                p + 1,
+                                count,
+                                get_character(subject, e as usize, flags as u32),
+                            ) {
                                 pop = true;
                             } else {
                                 offset = e;
@@ -328,7 +507,12 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                             pop = true;
                         } else {
                             let count = code[p];
-                            if !match_character(code, p + 1, count, get_character(subject, offset as usize, flags as u32)) {
+                            if !match_character(
+                                code,
+                                p + 1,
+                                count,
+                                get_character(subject, offset as usize, flags as u32),
+                            ) {
                                 pop = true;
                             } else {
                                 offset = find_character(subject, offset as usize, 1, flags as u32)
@@ -340,7 +524,18 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                         step = code[p];
                         p += 1;
                         let sequel = code[p];
-                        states.push(State { step: sequel, offset, flags, captures: captures.clone() });
+                        let Some(saved_captures) =
+                            save_captures(&mut states, &captures, base_bytes)
+                        else {
+                            resource_limit = true;
+                            break 'scan;
+                        };
+                        states.push(State {
+                            step: sequel,
+                            offset,
+                            flags,
+                            captures: saved_captures,
+                        });
                     }
                     CX_EMPTY_STEP => {
                         step = code[p];
@@ -407,7 +602,18 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                             step = sequel;
                         } else {
                             if quantifiers[qi].min == 0 {
-                                states.push(State { step: sequel, offset, flags, captures: captures.clone() });
+                                let Some(saved_captures) =
+                                    save_captures(&mut states, &captures, base_bytes)
+                                else {
+                                    resource_limit = true;
+                                    break 'scan;
+                                };
+                                states.push(State {
+                                    step: sequel,
+                                    offset,
+                                    flags,
+                                    captures: saved_captures,
+                                });
                             }
                             if from <= to {
                                 for i in from..=to {
@@ -429,7 +635,18 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                         if quantifiers[qi].max == 0 {
                             step = sequel;
                         } else if quantifiers[qi].min == 0 {
-                            states.push(State { step, offset, flags, captures: captures.clone() });
+                            let Some(saved_captures) =
+                                save_captures(&mut states, &captures, base_bytes)
+                            else {
+                                resource_limit = true;
+                                break 'scan;
+                            };
+                            states.push(State {
+                                step,
+                                offset,
+                                flags,
+                                captures: saved_captures,
+                            });
                             step = sequel;
                         } else if from <= to {
                             for i in from..=to {
@@ -455,7 +672,11 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                             }
                             step = sequel;
                         } else {
-                            quantifiers[qi].min = if quantifiers[qi].min == 0 { 0 } else { quantifiers[qi].min - 1 };
+                            quantifiers[qi].min = if quantifiers[qi].min == 0 {
+                                0
+                            } else {
+                                quantifiers[qi].min - 1
+                            };
                             quantifiers[qi].max = if quantifiers[qi].max == 0x7FFF_FFFF {
                                 0x7FFF_FFFF
                             } else if quantifiers[qi].max == 0 {
@@ -525,7 +746,14 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
         }
     }
 
-    MatchOutcome { matched: result, captures, names, match_meter_raw: meter }
+    MatchOutcome {
+        matched: result && !aborted && !resource_limit,
+        captures,
+        names,
+        match_meter_raw: meter,
+        aborted,
+        resource_limit,
+    }
 }
 
 /// `(offset == boundary) ? 0 : \w-membership of the char before/at
@@ -541,5 +769,39 @@ fn word_at(subject: &[u8], offset: i32, boundary: i32, flags: i32) -> bool {
     } else {
         offset as usize
     };
-    match_character(&WORD_CHARACTERS, 1, WORD_CHARACTERS[0], get_character(subject, at, flags as u32))
+    match_character(
+        &WORD_CHARACTERS,
+        1,
+        WORD_CHARACTERS[0],
+        get_character(subject, at, flags as u32),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compile::compile;
+
+    #[test]
+    fn invalid_reference_operands_abort_in_both_directions() {
+        for opcode in [
+            CX_CAPTURE_REFERENCE_FORWARD_STEP,
+            CX_CAPTURE_REFERENCE_BACKWARD_STEP,
+        ] {
+            // A minimal program enters a reference and then accepts. A bad
+            // operand must neither panic nor reach that accepting step.
+            for (capture, name) in [(-1, -1), (-1, 0), (-1, i32::MAX), (1, -1), (i32::MAX, -1)] {
+                let mut program = compile("", "").unwrap();
+                program.code.truncate(5);
+                program
+                    .code
+                    .extend([opcode, 36, capture, name, CX_MATCH_STEP]);
+                let out = match_regexp(&program, b"", 0);
+                assert!(
+                    out.aborted && !out.matched,
+                    "{opcode}: {capture}, {name}: {out:?}"
+                );
+            }
+        }
+    }
 }

@@ -55,7 +55,8 @@
     "eslint-plugin-eslint-comments": "catalog:dev",
     "eslint-plugin-import": "catalog:dev",
     "expect-type": "^1.4.0",
-    "prettier": "^3.9.6",
+    "fast-check": "^4.0.0",
+    "prettier": "^3.9.9",
     "ses": "workspace:^",
     "typescript": "catalog:dev"
   },

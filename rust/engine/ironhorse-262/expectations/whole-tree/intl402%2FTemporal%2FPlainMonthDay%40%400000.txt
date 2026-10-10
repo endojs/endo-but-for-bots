@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/PlainMonthDay tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/PlainMonthDay/canonicalize-calendar.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/canonicalize-calendar.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/future-calendar.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: bangla is not yet supported Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: bangla is not yet supported Expected a RangeError to be thrown but no exception was thrown at all\""
+intl402/Temporal/PlainMonthDay/future-calendar.js strict fail:"abort-value-differs: oracle=\"Test262Error: bangla is not yet supported Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: bangla is not yet supported Expected a RangeError to be thrown but no exception was thrown at all\""

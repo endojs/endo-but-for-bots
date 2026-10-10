@@ -17,7 +17,10 @@
 //! every crank redeclares the same globals in the same order so
 //! positional ids line up.
 
+#[path = "common/twin.rs"]
+mod carry;
 mod common;
+use carry::{compile, crank, sig, twin};
 
 use common::TempDir;
 
@@ -25,61 +28,9 @@ use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
     MachineSnapshot,
 };
-use ironhorse_snapshot::store::{validate_store, HeapStore, MemoryStore};
+use ironhorse_snapshot::store::{validate_store, MemoryStore};
 use ironhorse_snapshot::store_file::FileStore;
-use ironhorse_snapshot::Signature;
-use ironhorse_vm::{parse_symbols, Interp};
-
-fn sig() -> Signature {
-    Signature::new("ironhorse-worker-v1")
-}
-
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
-    let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
-    (bytecode, parse_symbols(&symbols))
-}
-
-/// Relink and run one crank, returning `(completed, halt debug, result,
-/// computrons)`. The COMPUTRON count is part of the observation: a
-/// resumed machine that answers correctly while charging differently
-/// has still diverged.
-fn crank(m: &mut Interp, src: &str) -> (bool, String, String, u64) {
-    let (b, n) = compile(src);
-    let b = m.relink_crank(&b, &n).expect("relink");
-    let o = m.run(&b);
-    (o.completed, format!("{:?}", o.halt), o.result, o.computrons)
-}
-
-/// Run crank 1 and then the observation cranks uninterrupted, and the
-/// same cranks across a checkpoint/resume split on `store`; assert the
-/// observations agree pairwise and return the continuous ones.
-fn twin(
-    crank1: &str,
-    observations: &[&str],
-    store: &mut dyn HeapStore,
-) -> Vec<(bool, String, String, u64)> {
-    let (b1, n1) = compile(crank1);
-
-    let mut cont = Interp::new();
-    cont.link_intrinsics(&n1);
-    assert!(cont.run(&b1).completed, "crank 1 (continuous)");
-    let continuous: Vec<_> = observations.iter().map(|s| crank(&mut cont, s)).collect();
-
-    let mut m = Interp::new();
-    m.link_intrinsics(&n1);
-    assert!(m.run(&b1).completed, "crank 1 (store)");
-    let session = begin_store_session(m, &sig(), store)
-        .map_err(|(_, e)| e)
-        .expect("begin (live promise state persists now)");
-    drop(session);
-    let mut session = resume_from_store(store, &sig()).expect("resume");
-    let resumed: Vec<_> = observations
-        .iter()
-        .map(|s| crank(session.machine_mut(), s))
-        .collect();
-    assert_eq!(continuous, resumed, "resumed observes exactly as uninterrupted");
-    continuous
-}
+use ironhorse_vm::Interp;
 
 /// The full twin over memory and file stores; asserts the continuous
 /// observations are also the real answers.
@@ -90,7 +41,10 @@ fn assert_twin(name: &str, crank1: &str, observations: &[&str], expect: &[(bool,
         .iter()
         .map(|(c, h, r, _)| (*c, if *c { r.as_str() } else { h.as_str() }))
         .collect();
-    assert_eq!(got, expect, "the continuous observations are the real answers");
+    assert_eq!(
+        got, expect,
+        "the continuous observations are the real answers"
+    );
 
     let dir = TempDir::new(name);
     let mut file = FileStore::open(dir.join("heap.ihstore")).unwrap();
@@ -152,6 +106,27 @@ fn a_custom_capability_executor_survives_resume() {
              catch (e) { e instanceof TypeError }",
         ],
         &[(true, "function::2:r5"), (true, "true")],
+    );
+}
+
+/// A retained executor survives even when its constructor never called it.
+/// The never-called sentinel must remain distinct from a call with undefined.
+#[test]
+fn an_uncalled_capability_executor_survives_resume() {
+    assert_twin(
+        "ih-prms-uncalled-capability-executor",
+        "var ex=0;var t='';function C(e){ex=e;return {}} \
+         try{Promise.resolve.call(C,1)}catch(e){t=e.message}t",
+        &[
+            "var ex;var t;typeof ex+':'+ex.length+':'+t",
+            "var ex;var t;ex();ex(function(){},function(){});t='captured';t",
+            "var ex;var t;try{ex()}catch(e){t=e.message}t",
+        ],
+        &[
+            (true, "function:2:executor not called"),
+            (true, "captured"),
+            (true, "executor already called"),
+        ],
     );
 }
 
@@ -423,9 +398,9 @@ fn a_finally_await_reaction_restores_the_original_value_after_resume() {
     );
 }
 
-/// The unhandled-rejection latch (`ever_handled`) travels: a rejection
+/// The live handled-state predicate (`ever_handled`) travels: a rejection
 /// nothing observed stays reportable after the split, and a late
-/// `.catch` both reads the stored reason and clears the report — on
+/// `.catch` both reads the stored reason and clears the live predicate — on
 /// the resumed machine exactly as on the uninterrupted one.
 #[test]
 fn the_unhandled_rejection_latch_survives_resume() {
@@ -438,8 +413,15 @@ fn the_unhandled_rejection_latch_survives_resume() {
     let mut cont = Interp::new();
     cont.link_intrinsics(&n1);
     assert!(cont.run(&b1).completed, "crank 1 (continuous)");
-    assert!(cont.has_unhandled_rejection(), "the fixture rejects unobserved");
-    let cont_obs = (crank(&mut cont, observe), cont.has_unhandled_rejection(), crank(&mut cont, read));
+    assert!(
+        cont.has_unhandled_rejection(),
+        "the fixture rejects unobserved"
+    );
+    let cont_obs = (
+        crank(&mut cont, observe),
+        cont.has_unhandled_rejection(),
+        crank(&mut cont, read),
+    );
 
     let mut m = Interp::new();
     m.link_intrinsics(&n1);
@@ -461,8 +443,11 @@ fn the_unhandled_rejection_latch_survives_resume() {
         crank(session.machine_mut(), read),
     );
     assert_eq!(cont_obs, res_obs, "twin observations agree");
-    assert!(!cont_obs.1, "the late catch clears the report");
-    assert_eq!(cont_obs.2 .2, "caught:boom", "the stored reason reaches the handler");
+    assert!(!cont_obs.1, "the late catch clears the live predicate");
+    assert_eq!(
+        cont_obs.2 .2, "caught:boom",
+        "the stored reason reaches the handler"
+    );
 }
 
 /// A resumed machine holding restored promise rows must checkpoint
@@ -495,11 +480,17 @@ fn a_resumed_machine_checkpoints_its_restored_promise_rows() {
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint after resume");
     validate_store(&store, &sig()).expect("post-crank store validates");
     let mut session = resume_from_store(&store, &sig()).expect("second resume");
-    let (done, _, _, _) = crank(session.machine_mut(), "var p; var res; var g; var t; res(3); 0");
+    let (done, _, _, _) = crank(
+        session.machine_mut(),
+        "var p; var res; var g; var t; res(3); 0",
+    );
     assert!(done);
     let (done, _, result, _) = crank(session.machine_mut(), "var p; var res; var g; var t; g");
     assert!(done);
-    assert_eq!(result, "3", "the twice-resumed resolver still settles its promise");
+    assert_eq!(
+        result, "3",
+        "the twice-resumed resolver still settles its promise"
+    );
 }
 
 /// The blob verbs share the carry: suspend to container bytes, rebuild,
@@ -523,9 +514,55 @@ fn blob_snapshot_carries_the_promise_cluster_too() {
     let mut m = Interp::new();
     m.link_intrinsics(&n1);
     assert!(m.run(&b1).completed, "crank 1 (blob)");
-    let bytes = m.write_snapshot(&sig()).expect("suspend with live promise state");
+    let bytes = m
+        .write_snapshot(&sig())
+        .expect("suspend with live promise state");
     let mut r = from_snapshot_bytes(&bytes, &sig()).expect("rebuild");
     let resumed: Vec<_> = obs.iter().map(|s| crank(&mut r, s)).collect();
     assert_eq!(resumed, continuous, "blob twin agrees");
     assert_eq!(continuous[1].2, "42");
+}
+
+#[test]
+fn historical_rejection_report_survives_gc_blob_eager_and_lazy_restore() {
+    use ironhorse_snapshot::machine::resume_from_store_lazy;
+    use ironhorse_vm::value::{Kind, Payload};
+    use std::{cell::RefCell, rc::Rc};
+
+    for expression in ["'\\ud800'", "({ toString: function () { throw 99; } })"] {
+        let (code, names) = compile(&format!("var p = Promise.reject({expression});"));
+        let mut vm = Interp::new();
+        vm.link_intrinsics(&names);
+        let first = vm.run(&code);
+        assert!(first.completed);
+        let owner = first.unhandled_rejection.unwrap().0;
+        assert!(crank(&mut vm, "var p; p.catch(function () {}); p = null;").0);
+        assert!(!vm.has_unhandled_rejection());
+        vm.collect_garbage().unwrap();
+        let bytes = vm.write_snapshot(&sig()).unwrap();
+        let mut blob = from_snapshot_bytes(&bytes, &sig()).unwrap();
+        let mut store = MemoryStore::new();
+        drop(
+            begin_store_session(vm, &sig(), &mut store)
+                .map_err(|(_, e)| e)
+                .unwrap(),
+        );
+        let mut eager = resume_from_store(&store, &sig()).unwrap();
+        let mut lazy = resume_from_store_lazy(Rc::new(RefCell::new(store)), &sig()).unwrap();
+        for resumed in [&mut blob, eager.machine_mut(), lazy.machine_mut()] {
+            resumed.collect_garbage().unwrap();
+            assert!(!resumed.has_unhandled_rejection());
+            let (reported, reason) = resumed.unhandled_rejection().unwrap();
+            assert_eq!(reported, owner);
+            assert!(resumed.gc_roots().contains(&owner));
+            if expression.starts_with("\'") {
+                let Payload::String(chunk) = reason.value else {
+                    panic!("string reason");
+                };
+                assert_eq!(resumed.chunks().slice(chunk, 2)[..], [0xd8, 0x00]);
+            } else {
+                assert_eq!(reason.kind, Kind::Reference);
+            }
+        }
+    }
 }

@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=built-ins/Math/ceil tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Math/ceil/S15.8.2.6_A1.js sloppy pass
+built-ins/Math/ceil/S15.8.2.6_A1.js strict pass
+built-ins/Math/ceil/S15.8.2.6_A2.js sloppy pass
+built-ins/Math/ceil/S15.8.2.6_A2.js strict pass
+built-ins/Math/ceil/S15.8.2.6_A3.js sloppy pass
+built-ins/Math/ceil/S15.8.2.6_A3.js strict pass
+built-ins/Math/ceil/S15.8.2.6_A4.js sloppy pass
+built-ins/Math/ceil/S15.8.2.6_A4.js strict pass
+built-ins/Math/ceil/S15.8.2.6_A5.js sloppy pass
+built-ins/Math/ceil/S15.8.2.6_A5.js strict pass
+built-ins/Math/ceil/S15.8.2.6_A6.js sloppy pass
+built-ins/Math/ceil/S15.8.2.6_A6.js strict pass
+built-ins/Math/ceil/S15.8.2.6_A7.js sloppy pass
+built-ins/Math/ceil/S15.8.2.6_A7.js strict pass
+built-ins/Math/ceil/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Math/ceil/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Math/ceil/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be ceil; name value should be ceil"
+built-ins/Math/ceil/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be ceil; name value should be ceil"
+built-ins/Math/ceil/not-a-constructor.js sloppy pass
+built-ins/Math/ceil/not-a-constructor.js strict pass
+built-ins/Math/ceil/prop-desc.js sloppy pass
+built-ins/Math/ceil/prop-desc.js strict pass

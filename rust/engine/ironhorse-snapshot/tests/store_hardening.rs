@@ -26,15 +26,17 @@
 //! All randomness is a seeded LCG: every run is reproducible from the
 //! printed seed.
 
+use ironhorse_snapshot::store::HeapStoreCommit;
+use ironhorse_snapshot::CommitToken;
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use ironhorse_snapshot::format::Signature;
 use ironhorse_snapshot::image::{MachineImage, MeterImage};
 use ironhorse_snapshot::store::{
-    chunk_extent_count, image_to_batch, seal_commit, slot_page_count, store_to_image,
-    validate_store, CheckpointBatch, HeapStore, MemoryStore, SmallState, StoreManifest,
-    STORE_SCHEMA_VERSION,
+    chunk_extent_count, image_to_batch_unchecked, mint_token, slot_page_count, store_to_image,
+    validate_store, validate_store_content, CheckpointBatch, HeapStore, MemoryStore, RandomTokens,
+    SmallState, StoreManifest, STORE_SCHEMA_VERSION,
 };
 use ironhorse_snapshot::store_file::FileStore;
 use ironhorse_snapshot::{Version, SLOT_RECORD_BYTES};
@@ -46,6 +48,65 @@ mod common;
 
 fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
+}
+
+/// Resume a corrupted store file both ways. Eager resume reads and decodes
+/// every row first, so it must answer with a structured result, never a
+/// panic. A lazy resume that then touches every row may also die at a
+/// fault, but only by name: as a store fault, or as the fault installer's
+/// or the page decoder's own refusal. Under the store-seam design's trust
+/// model neither path runs the validator first. Returns whether the lazy
+/// resume attached a machine, so a caller can tell that the touches ran.
+fn resume_outcomes_are_structured_or_named(path: &std::path::Path) -> bool {
+    use ironhorse_snapshot::machine::{
+        catch_store_fault, resume_from_store, resume_from_store_lazy,
+    };
+    if let Ok(store) = FileStore::open(path) {
+        let eager = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = resume_from_store(&store, &sig());
+        }));
+        if let Err(payload) = eager {
+            panic!(
+                "eager resume panicked on a corrupted store: {:?}",
+                panic_message(payload.as_ref())
+            );
+        }
+    }
+    let mut attached = false;
+    if let Ok(store) = FileStore::open(path) {
+        let shared = Rc::new(RefCell::new(store));
+        let lazy = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            catch_store_fault(|| {
+                let session = resume_from_store_lazy(shared.clone(), &sig())?;
+                attached = true;
+                let manifest = shared.borrow().manifest()?;
+                for page in 0..slot_page_count(manifest.slot_count) {
+                    session.machine().slots().touch_page(page);
+                }
+                for ext in 0..chunk_extent_count(manifest.chunk_len) {
+                    session.machine().chunks().touch_extent(ext);
+                }
+                Ok(())
+            })
+        }));
+        if let Err(payload) = lazy {
+            let message = panic_message(payload.as_ref());
+            assert!(
+                message.contains("lazy heap fault")
+                    || message.contains("(corrupt or torn store row)"),
+                "an anonymous panic from a lazy resume of a corrupted store: {message:?}"
+            );
+        }
+    }
+    attached
+}
+
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+        .unwrap_or_default()
 }
 
 /// A deterministic LCG (Knuth's MMIX constants); no external dep, no
@@ -79,7 +140,7 @@ impl Machine {
         }
     }
 
-    fn image(&self, epoch_names: &[String]) -> MachineImage {
+    fn image(&self, epoch_names: &[ironhorse_vm::SymbolName]) -> MachineImage {
         MachineImage::from_arenas(
             sig(),
             &self.heap.slots,
@@ -105,7 +166,10 @@ impl Machine {
                 let len = rng.below(200) as usize + 1;
                 let byte = (rng.next() & 0xff) as u8;
                 let off = self.heap.chunks.alloc(&vec![byte; len]);
-                let idx = self.heap.slots.alloc(Slot::of(Kind::String, Payload::String(off)));
+                let idx = self
+                    .heap
+                    .slots
+                    .alloc(Slot::of(Kind::String, Payload::String(off)));
                 self.live.push(idx);
             }
             // Mutate a random live slot in place.
@@ -164,7 +228,7 @@ fn incremental_batch(
     m: &Machine,
     store: &dyn HeapStore,
     epoch: u64,
-    prev_seal: &str,
+    prev_token: CommitToken,
 ) -> CheckpointBatch {
     let slots = &m.heap.slots;
     let chunks = &m.heap.chunks;
@@ -187,10 +251,12 @@ fn incremental_batch(
         // This harness builds batches directly, outside the cadence, so
         // it records no crank history.
         cranks: 0,
-        root: String::new(),
-        seal: String::new(),
+        collect_every: 0,
+        collections: 0,
+        token: mint_token(&mut RandomTokens, prev_token),
     };
     let small = SmallState {
+        index_props: Vec::new(),
         stack: Vec::new(),
         slot_free: slots.free_list().to_vec(),
         keys: Vec::new(),
@@ -207,17 +273,17 @@ fn incremental_batch(
         wrappers: Vec::new(),
         regexps: Vec::new(),
         dates: Vec::new(),
-        function_state: ironhorse_vm::FunctionStateSnapshot::default(),
-        proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
+        function_state: ironhorse_vm::snapshot_api::FunctionStateSnapshot::default(),
+        proxy_state: ironhorse_vm::snapshot_api::ProxyStateSnapshot::default(),
         accessors: Vec::new(),
         intl_bound_functions: Vec::new(),
-        private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
+        private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
         disposable_stacks: Vec::new(),
         generators: Vec::new(),
-        promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
+        promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
         arguments_brands: Vec::new(),
         temporal: ironhorse_snapshot::image::TemporalImage::default(),
-        intl: ironhorse_vm::IntlTables::default(),
+        intl: ironhorse_vm::snapshot_api::IntlTables::default(),
         name_floor: None,
         iterators: Vec::new(),
     };
@@ -246,70 +312,18 @@ fn incremental_batch(
         .map(|e| (e, chunks.extent_bytes(e)))
         .collect();
     let small_bytes = small.encode();
-    // Free segments: diff against stored leaves, exactly as the
-    // machine surface does.
-    let prior_frees = store.free_leaf_hashes().unwrap_or_default();
+    // Free segments: the ones whose bytes differ from the stored rows, or
+    // that the store does not hold yet.
     let free_segs: Vec<(u32, Vec<u8>)> =
         ironhorse_snapshot::store::encode_all_free_segs(slots.free_list())
             .into_iter()
-            .filter(|(i, bytes)| {
-                prior_frees.get(*i as usize).copied()
-                    != Some(ironhorse_snapshot::store::leaf_hash(
-                        ironhorse_snapshot::store::LEAF_FREE,
-                        *i,
-                        bytes,
-                    ))
-            })
+            .filter(|(i, bytes)| store.read_free_seg(*i).ok().as_ref() != Some(bytes))
             .collect();
-    let mut manifest = manifest;
-    // Root maintenance exactly as checkpoint_to_store performs it:
-    // prior stored leaves/summaries + this batch's dirty ones (v6:
-    // the class trees recombine over the full leaf sets).
-    let (mut lp, mut le) = store.leaf_hashes().unwrap_or_default();
-    let mut lf = prior_frees.clone();
-    let mut edges_all = store.page_edges().unwrap_or_default();
-    lp.resize(ironhorse_snapshot::store::slot_page_count(manifest.slot_count) as usize, [0u8; 32]);
-    le.resize(chunk_extent_count(manifest.chunk_len) as usize, [0u8; 32]);
-    lf.resize(
-        ironhorse_snapshot::store::free_seg_count(manifest.free_len) as usize,
-        [0u8; 32],
-    );
-    for (i, bytes) in &slot_pages {
-        lp[*i as usize] = ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_PAGE, *i, bytes);
-    }
-    for (i, bytes) in &chunk_extents {
-        le[*i as usize] = ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_EXT, *i, bytes);
-    }
-    for (i, bytes) in &free_segs {
-        lf[*i as usize] = ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_FREE, *i, bytes);
-    }
-    edges_all.resize(
-        ironhorse_snapshot::store::slot_page_count(manifest.slot_count) as usize,
-        Vec::new(),
-    );
-    for (i, targets) in &page_edges {
-        edges_all[*i as usize] = targets.clone();
-    }
-    manifest.root = ironhorse_snapshot::store::compute_root(
-        &ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_SMALL, 0, &small_bytes),
-        &lp,
-        &le,
-        &lf,
-        &edges_all,
-    );
-    manifest.seal = seal_commit(
-        prev_seal,
-        &manifest,
-        &small_bytes,
-        &slot_pages,
-        &chunk_extents,
-        &free_segs,
-        &page_edges,
-    );
     CheckpointBatch {
-        prev_seal: prev_seal.to_string(),
+        prev_token,
         manifest,
         small: small_bytes,
+        small_updates: None,
         slot_pages,
         chunk_extents,
         free_segs,
@@ -335,7 +349,7 @@ fn randomized_schedules_keep_store_equal_to_live_arenas() {
         for _ in 0..600 {
             m.step(&mut rng);
         }
-        let full = image_to_batch(&m.image(&[]), 1, "");
+        let full = image_to_batch_unchecked(&m.image(&[]), 1, CommitToken::ZERO);
         // The full batch encodes the whole arenas, so the live dirty
         // bits are consumed by it.
         m.heap.slots.clear_dirty();
@@ -350,8 +364,8 @@ fn randomized_schedules_keep_store_equal_to_live_arenas() {
                 m.step(&mut rng);
             }
             epoch += 1;
-            let prev = mem_store.manifest().unwrap().seal;
-            let batch = incremental_batch(&m, &mem_store, epoch, &prev);
+            let prev = mem_store.manifest().unwrap().token;
+            let batch = incremental_batch(&m, &mem_store, epoch, prev);
             m.heap.slots.clear_dirty();
             m.heap.chunks.clear_dirty();
             mem_store.commit(&batch).unwrap();
@@ -401,7 +415,10 @@ fn randomized_fault_schedules_reify_identically() {
     }
     let image = m.image(&[]);
     let store = Rc::new(RefCell::new(MemoryStore::new()));
-    store.borrow_mut().commit(&image_to_batch(&image, 1, "")).unwrap();
+    store
+        .borrow_mut()
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
+        .unwrap();
     let manifest = store.borrow().manifest().unwrap();
 
     struct Src(Rc<RefCell<MemoryStore>>);
@@ -426,8 +443,7 @@ fn randomized_fault_schedules_reify_identically() {
             source.clone(),
             manifest.chunk_len,
         );
-        let chunks =
-            ironhorse_vm::ChunkArena::lazy_from_parts(manifest.chunk_len as usize, source);
+        let chunks = ironhorse_vm::ChunkArena::lazy_from_parts(manifest.chunk_len as usize, source);
 
         // Random partial touches in random order…
         let pages = slot_page_count(manifest.slot_count);
@@ -446,13 +462,10 @@ fn randomized_fault_schedules_reify_identically() {
 }
 
 /// Arm 1: single-byte corruptions and truncations of a committed store
-/// file never panic: they fail closed with a structured error. Since
-/// phase 5 (row leaves) and v5 (small state and page-edge summaries in
-/// the root), content flips refuse at validate/read rather than
-/// decoding to a different machine — the "decoded" outcome is reserved
-/// for flips in the handful of open-time-unverifiable manifest bytes
-/// (the stored seal string, the epoch), which the seal chain catches
-/// at the next commit instead.
+/// file never panic: they fail closed with a structured error or decode.
+/// Under the store-seam design's trust model a flip that leaves the store
+/// well-formed decodes to the machine it now describes (a chunk byte, the
+/// commit token); structural damage refuses at open or in the validator.
 #[test]
 fn corrupted_store_files_never_panic() {
     let mut rng = Lcg(0xDEAD);
@@ -463,7 +476,13 @@ fn corrupted_store_files_never_panic() {
     let dir = common::TempDir::new("ironhorse-hardening-corrupt");
     let path = dir.join("heap.ihstore");
     let mut store = FileStore::open(&path).unwrap();
-    store.commit(&image_to_batch(&m.image(&[]), 1, "")).unwrap();
+    store
+        .commit(&image_to_batch_unchecked(
+            &m.image(&[]),
+            1,
+            CommitToken::ZERO,
+        ))
+        .unwrap();
     drop(store);
     let pristine = std::fs::read(&path).unwrap();
 
@@ -483,14 +502,12 @@ fn corrupted_store_files_never_panic() {
         std::fs::write(&path, &bytes).unwrap();
         match FileStore::open(&path) {
             Err(_) => outcomes[0] += 1,
-            Ok(s) => match validate_store(&s, &sig()) {
+            Ok(s) => match validate_store_content(&s, &sig()) {
                 Err(_) => outcomes[1] += 1,
-                Ok(_) => match store_to_image(&s) {
-                    Err(_) => outcomes[1] += 1,
-                    Ok(_) => outcomes[2] += 1,
-                },
+                Ok(_) => outcomes[2] += 1,
             },
         }
+        resume_outcomes_are_structured_or_named(&path);
     }
     println!(
         "corruption sweep: {} refused at open, {} refused at validate/read, {} decoded",
@@ -524,7 +541,9 @@ fn dirty_fraction_sweep_commits_exactly_the_touched_pages() {
         ironhorse_snapshot::image::SymbolKeyImage::default(),
     );
     let mut store = MemoryStore::new();
-    store.commit(&image_to_batch(&image, 1, "")).unwrap();
+    store
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
+        .unwrap();
     slots.clear_dirty();
 
     let pages = slot_page_count(slots.capacity()) as usize;
@@ -544,8 +563,8 @@ fn dirty_fraction_sweep_commits_exactly_the_touched_pages() {
             },
             live: Vec::new(),
         };
-        let prev = store.manifest().unwrap().seal;
-        let batch = incremental_batch(&m, &store, epoch, &prev);
+        let prev = store.manifest().unwrap().token;
+        let batch = incremental_batch(&m, &store, epoch, prev);
         slots = m.heap.slots;
         slots.clear_dirty();
         store.commit(&batch).unwrap();
@@ -581,19 +600,22 @@ fn corrupted_store_headers_never_panic() {
     let dir = common::TempDir::new("ironhorse-hardening-corrupt-header");
     let path = dir.join("heap.ihstore");
     let mut store = FileStore::open(&path).unwrap();
-    store.commit(&image_to_batch(&m.image(&[]), 1, "")).unwrap();
+    store
+        .commit(&image_to_batch_unchecked(
+            &m.image(&[]),
+            1,
+            CommitToken::ZERO,
+        ))
+        .unwrap();
     drop(store);
     let pristine = std::fs::read(&path).unwrap();
 
     // The whole structural span, computed by walking the actual
-    // layout: magic, manifest block, small-state block (v5 put the
-    // small state under its leaf and the root, so flips there now
-    // REFUSE rather than legitimately decode), counts, directories,
-    // leaf-hash blocks, page-edge summaries (v5: root-verified, and
-    // their nested length fields get the hostile-count treatment the
-    // review found untested), free segments, and free-leaf hashes.
-    // Only blob content is out of scope here — arm 1 samples it, and
-    // its flips refuse at read via the row leaves.
+    // layout: magic, manifest block, small-state block, counts,
+    // directories, page-edge summaries (their nested length fields get
+    // the hostile-count treatment the review found untested), and free
+    // segments. Only blob content is out of scope here — arm 1 samples
+    // it.
     let be32 = |b: &[u8], at: usize| u32::from_be_bytes(b[at..at + 4].try_into().unwrap()) as usize;
     let mlen = be32(&pristine, 8);
     let manifest_end = 12 + mlen;
@@ -602,7 +624,7 @@ fn corrupted_store_headers_never_panic() {
     let n_pages = be32(&pristine, small_end);
     let n_exts = be32(&pristine, small_end + 4);
     let dir_end = small_end + 8 + 12 * (n_pages + n_exts);
-    let mut cursor = dir_end + 32 * (n_pages + n_exts);
+    let mut cursor = dir_end;
     for _ in 0..n_pages {
         let len = be32(&pristine, cursor);
         cursor += 4 + 4 * len;
@@ -613,7 +635,6 @@ fn corrupted_store_headers_never_panic() {
         let len = be32(&pristine, cursor);
         cursor += 4 + len;
     }
-    cursor += 32 * n_frees;
     let structural = cursor; // everything before the first blob
 
     let mut outcomes = [0usize; 3];
@@ -632,33 +653,32 @@ fn corrupted_store_headers_never_panic() {
         std::fs::write(&path, &bytes).unwrap();
         match FileStore::open(&path) {
             Err(_) => outcomes[0] += 1,
-            Ok(s) => match validate_store(&s, &sig()) {
+            Ok(s) => match validate_store_content(&s, &sig()) {
                 Err(_) => outcomes[1] += 1,
-                Ok(_) => match store_to_image(&s) {
-                    Err(_) => outcomes[1] += 1,
-                    Ok(_) => outcomes[2] += 1,
-                },
+                Ok(_) => outcomes[2] += 1,
             },
         }
+        resume_outcomes_are_structured_or_named(&path);
     }
     // Sanity: the arm actually exercises refusal paths. The clean
-    // remainder is real and bounded: flips inside the stored seal
-    // string or the epoch decode as a structurally valid store at
-    // open — the seal is a chain link, verifiable only against the
-    // NEXT commit's `prev_seal` (where `check_succession` enforces
-    // it), never against the store's own content at open. Everything
-    // the root covers (leaves, summaries, small state) refuses here.
+    // remainder is real and bounded: under the store-seam design's
+    // trust model a flip inside the commit token decodes as a
+    // structurally valid store, as do flips in the epoch or counters.
+    // Structural damage (lengths, counts, the small state's encoding,
+    // a summary that no longer matches its page) refuses here.
     assert!(
         outcomes[0] + outcomes[1] > 250,
         "structural corruption should overwhelmingly refuse: {outcomes:?}"
     );
 }
 
-/// v5 deterministic lock: a flip inside the stored page-edge section
-/// refuses at open or validation — never a silent reachability shrink.
-/// The summaries decide what `partial_collect` FREES, so they sit
-/// under the root exactly like row leaves; before v5 this flip passed
-/// every gate (the review's fail-open finding).
+/// v5 deterministic lock, moved to the validator: a flip inside the
+/// stored page-edge section refuses at open or in the full validator,
+/// which re-derives every summary from its page's records. The
+/// summaries decide what `partial_collect` FREES; under the store-seam
+/// design's trust model nothing re-checks them at run time, so an
+/// offline edit must keep them consistent, and the validator is where
+/// one that did not shows up.
 #[test]
 fn edge_summary_flip_at_rest_fails_closed() {
     // A reference chain crossing three pages, so the summaries are
@@ -686,7 +706,9 @@ fn edge_summary_flip_at_rest_fails_closed() {
     let dir = common::TempDir::new("ironhorse-hardening-edge-flip");
     let path = dir.join("heap.ihstore");
     let mut store = FileStore::open(&path).unwrap();
-    store.commit(&image_to_batch(&image, 1, "")).unwrap();
+    store
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
+        .unwrap();
     drop(store);
     let pristine = std::fs::read(&path).unwrap();
 
@@ -700,7 +722,7 @@ fn edge_summary_flip_at_rest_fails_closed() {
     let n_pages = be32(&pristine, small_end);
     let n_exts = be32(&pristine, small_end + 4);
     let dir_end = small_end + 8 + 12 * (n_pages + n_exts);
-    let edges_start = dir_end + 32 * (n_pages + n_exts);
+    let edges_start = dir_end;
     let mut edges_end = edges_start;
     for _ in 0..n_pages {
         let len = be32(&pristine, edges_end);
@@ -720,12 +742,15 @@ fn edge_summary_flip_at_rest_fails_closed() {
         std::fs::write(&path, &bytes).unwrap();
         let refused = match FileStore::open(&path) {
             Err(_) => true,
-            Ok(s) => validate_store(&s, &sig()).is_err(),
+            Ok(s) => validate_store_content(&s, &sig()).is_err(),
         };
         assert!(refused, "edge-section flip at byte {pos} must fail closed");
         tried += 1;
     }
-    assert!(tried >= 4, "the sweep must cover a real section, got {tried}");
+    assert!(
+        tried >= 4,
+        "the sweep must cover a real section, got {tried}"
+    );
 }
 
 /// Review wave 4, H1-a: a lazy arena that has grown PAST its backed row
@@ -772,7 +797,10 @@ fn evict_refuses_a_page_holding_records_past_the_backed_rows() {
     // Fully backed and clean: page 0 evicts, as it always has. (The
     // guard must not cost the RAM win on a quiescent resumed arena.)
     slots.touch_page(0);
-    assert!(slots.evict_page(0), "a fully backed clean page still evicts");
+    assert!(
+        slots.evict_page(0),
+        "a fully backed clean page still evicts"
+    );
     slots.touch_page(0);
 
     // Now grow past the backing WITHOUT advancing it — the appended
@@ -820,11 +848,14 @@ fn evict_refuses_a_page_holding_records_past_the_backed_rows() {
 /// so the lazy path `PersistentMachine` actually opens accepted crafted
 /// bytes and panicked the collector in release.
 ///
-/// These assert the REFUSAL at each untrusted boundary, so removing a
-/// call site fails a test rather than waiting for a hostile store.
+/// These assert the REFUSAL at each boundary, so removing a call site
+/// fails a test rather than waiting for a crafted store. Under the
+/// store-seam design's trust model the store gates are guards against
+/// engine bugs rather than tamper-evidence, but an out-of-range index is
+/// still one the collector cannot safely traverse.
 #[test]
 fn crafted_slot_indices_are_refused_at_both_untrusted_boundaries() {
-    use ironhorse_snapshot::image::{read_machine, write_machine};
+    use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
 
     // An honest small machine, then one poisoned index per arm.
     let mut m = Machine::new();
@@ -849,7 +880,10 @@ fn crafted_slot_indices_are_refused_at_both_untrusted_boundaries() {
         }),
         ("stack Reference", {
             let mut i = honest.clone();
-            i.stack = vec![Slot::of(Kind::Reference, Payload::Reference(SlotIndex(n + 900_000)))];
+            i.stack = vec![Slot::of(
+                Kind::Reference,
+                Payload::Reference(SlotIndex(n + 900_000)),
+            )];
             i
         }),
         ("registry descriptor", {
@@ -861,30 +895,39 @@ fn crafted_slot_indices_are_refused_at_both_untrusted_boundaries() {
             i
         }),
     ] {
-        let bytes = write_machine(&poison);
+        let bytes = write_machine_unchecked(&poison);
         assert!(
             read_machine(&bytes, &sig()).is_err(),
             "the container decoder must refuse a crafted {what}",
         );
     }
 
-    // --- boundary 2: validate_store, which BOTH resume paths run ---
+    // --- boundary 2: the store path's decoding bounds checks ---
     // Side tables travel in the small state, so they reach the store
-    // path; poison one and commit it behind a resealed manifest, exactly
-    // as an attacker with write access would.
+    // path; poison one and commit it. Both resume paths run the small
+    // state's bounds gate (the lazy one on its own, the eager one inside
+    // `store_to_image`), and so does the validator.
     let mut store = MemoryStore::new();
     let mut poisoned = honest.clone();
     poisoned.registry = vec![ironhorse_snapshot::image::RegistryImage {
         key: b"k".to_vec(),
         descriptor: n + 1_000_000,
     }];
-    let mut batch = image_to_batch(&poisoned, 1, "");
-    ironhorse_snapshot::store::reseal_batch(&mut batch);
-    store.commit(&batch).expect("a crafted batch commits — the store is not the gate");
-    match validate_store(&store, &sig()) {
-        Err(_) => {}
-        Ok(_) => panic!("validate_store must refuse a crafted side-table index"),
-    }
+    let batch = image_to_batch_unchecked(&poisoned, 1, CommitToken::ZERO);
+    store
+        .commit(&batch)
+        .expect("a crafted batch commits — the store is not the gate");
+    // Each boundary refuses by the bounds gate's own name, so removing
+    // the gate from any of them fails here rather than on a later check.
+    const REFUSED: ironhorse_snapshot::store::StoreError =
+        ironhorse_snapshot::store::StoreError::Snapshot(
+            ironhorse_snapshot::SnapshotError::Corrupt("slot index out of arena bounds"),
+        );
+    assert_eq!(
+        validate_store(&store, &sig()).err(),
+        Some(REFUSED),
+        "validate_store must refuse a crafted side-table index"
+    );
 
     // And the assertion that actually motivated the move: the LAZY
     // resume — the path `PersistentMachine` opens — must refuse. Wave 4
@@ -892,14 +935,72 @@ fn crafted_slot_indices_are_refused_at_both_untrusted_boundaries() {
     // exact call accepted the crafted store and then panicked the
     // collector in release.
     let shared = std::rc::Rc::new(RefCell::new(store));
-    match ironhorse_snapshot::machine::resume_from_store_lazy(shared.clone(), &sig()) {
-        Err(_) => {}
-        Ok(_) => panic!("the LAZY resume must refuse a crafted side-table index"),
-    }
-    // The eager path refuses too — it shares `validate_store`.
+    assert_eq!(
+        ironhorse_snapshot::machine::resume_from_store_lazy(shared.clone(), &sig()).err(),
+        Some(REFUSED),
+        "the LAZY resume must refuse a crafted side-table index"
+    );
+    // The eager path refuses too, in `store_to_image`'s bounds gate.
     let borrowed = shared.borrow();
-    match ironhorse_snapshot::machine::resume_from_store(&*borrowed, &sig()) {
-        Err(_) => {}
-        Ok(_) => panic!("the eager resume must refuse a crafted side-table index"),
+    assert_eq!(
+        ironhorse_snapshot::machine::resume_from_store(&*borrowed, &sig()).err(),
+        Some(REFUSED),
+        "the eager resume must refuse a crafted side-table index"
+    );
+}
+
+/// Arm 5: the resume paths over a real machine's store. The synthetic
+/// machine the arms above use has no boot heap, so neither resume path
+/// gets past the restore's boot-footprint gate on it. This arm corrupts a
+/// store a booted machine wrote, rows included, and requires both resume
+/// paths to answer as `resume_outcomes_are_structured_or_named` says.
+#[test]
+fn corrupted_real_machine_stores_resume_structured_or_named() {
+    use ironhorse_snapshot::machine::{begin_store_session, resume_from_store};
+    let (code, symbols) = ironhorse_compile::compile_atoms(
+        "var o = 0; var a = 0; var m = 0; var s = 0; var i = 0; \
+         o = { name: 'kept', n: 1 }; a = []; m = new Map(); \
+         for (i = 0; i < 300; i = i + 1) { a[i] = { v: i, s: 'str-' + i }; m.set(i, a[i]); } \
+         s = 'tail'; s",
+    )
+    .unwrap();
+    let mut machine = ironhorse_vm::Interp::new();
+    machine.link_intrinsics(&ironhorse_vm::parse_symbols(&symbols));
+    assert!(machine.run(&code).completed);
+    let dir = common::TempDir::new("ironhorse-hardening-real-resume");
+    let path = dir.join("heap.ihstore");
+    let mut store = FileStore::open(&path).unwrap();
+    drop(
+        begin_store_session(machine, &sig(), &mut store)
+            .map_err(|(_, e)| e)
+            .unwrap(),
+    );
+    drop(store);
+    let pristine = std::fs::read(&path).unwrap();
+    resume_from_store(&FileStore::open(&path).unwrap(), &sig())
+        .expect("the pristine store resumes");
+    assert!(resume_outcomes_are_structured_or_named(&path));
+
+    let mut rng = Lcg(0xFACE);
+    let mut attached = 0;
+    let trials = 300u64;
+    for i in 0..trials {
+        let mut bytes = pristine.clone();
+        if i % 5 == 4 {
+            let cut = rng.below(bytes.len() as u64) as usize;
+            bytes.truncate(cut);
+        } else {
+            let pos = rng.below(bytes.len() as u64) as usize;
+            bytes[pos] ^= 1u8 << rng.below(8);
+        }
+        std::fs::write(&path, &bytes).unwrap();
+        attached += resume_outcomes_are_structured_or_named(&path) as u32;
     }
+    println!("real-machine resume sweep: {attached} of {trials} lazy resumes attached");
+    // Many corruptions stop at open or in the restore; enough must reach
+    // an attached machine for the touches to have run.
+    assert!(
+        attached > trials as u32 / 4,
+        "too few corruptions reached an attached lazy machine: {attached}"
+    );
 }

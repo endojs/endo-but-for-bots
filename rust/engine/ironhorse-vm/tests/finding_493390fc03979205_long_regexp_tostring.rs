@@ -19,8 +19,7 @@
 /// frozen. (Bytecode + symbols only — no oracle, no submodule.)
 const BYTECODE: &[u8] = include_bytes!("fixtures/finding-493390fc03979205.bytecode.bin");
 const SYMBOLS: &[u8] = include_bytes!("fixtures/finding-493390fc03979205.symbols.bin");
-const EXPECTED_RESULT: &str =
-    include_str!("fixtures/finding-493390fc03979205.expected-result.txt");
+const EXPECTED_RESULT: &str = include_str!("fixtures/finding-493390fc03979205.expected-result.txt");
 
 #[test]
 fn long_regexp_tostring_result_is_not_panicked_or_truncated() {

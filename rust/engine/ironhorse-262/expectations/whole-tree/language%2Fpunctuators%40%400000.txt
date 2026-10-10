@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=language/punctuators tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/punctuators/S7.7_A1.js sloppy pass
+language/punctuators/S7.7_A1.js strict pass
+language/punctuators/S7.7_A2_T1.js sloppy pass
+language/punctuators/S7.7_A2_T1.js strict pass
+language/punctuators/S7.7_A2_T10.js sloppy pass
+language/punctuators/S7.7_A2_T10.js strict pass
+language/punctuators/S7.7_A2_T2.js sloppy pass
+language/punctuators/S7.7_A2_T2.js strict pass
+language/punctuators/S7.7_A2_T3.js sloppy pass
+language/punctuators/S7.7_A2_T3.js strict pass
+language/punctuators/S7.7_A2_T4.js sloppy pass
+language/punctuators/S7.7_A2_T4.js strict pass
+language/punctuators/S7.7_A2_T5.js sloppy pass
+language/punctuators/S7.7_A2_T5.js strict pass
+language/punctuators/S7.7_A2_T6.js sloppy pass
+language/punctuators/S7.7_A2_T6.js strict pass
+language/punctuators/S7.7_A2_T7.js sloppy pass
+language/punctuators/S7.7_A2_T7.js strict pass
+language/punctuators/S7.7_A2_T8.js sloppy pass
+language/punctuators/S7.7_A2_T8.js strict pass
+language/punctuators/S7.7_A2_T9.js sloppy pass
+language/punctuators/S7.7_A2_T9.js strict pass

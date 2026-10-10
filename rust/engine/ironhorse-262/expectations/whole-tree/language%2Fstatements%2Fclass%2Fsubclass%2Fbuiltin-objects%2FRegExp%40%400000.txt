@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=language/statements/class/subclass/builtin-objects/RegExp tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/subclass/builtin-objects/RegExp/lastIndex.js sloppy pass
+language/statements/class/subclass/builtin-objects/RegExp/lastIndex.js strict pass
+language/statements/class/subclass/builtin-objects/RegExp/regular-subclassing.js sloppy pass
+language/statements/class/subclass/builtin-objects/RegExp/regular-subclassing.js strict pass
+language/statements/class/subclass/builtin-objects/RegExp/super-must-be-called.js sloppy pass
+language/statements/class/subclass/builtin-objects/RegExp/super-must-be-called.js strict pass

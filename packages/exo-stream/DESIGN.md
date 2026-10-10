@@ -81,7 +81,7 @@ mirrored in data flow direction.
 
 | Module | Function | Role |
 |--------|----------|------|
-| `bytes-reader-from-iterator.js` | `bytesReaderFromIterator(bytesIterator, options?)` | Responder: wraps `AsyncIterator<Uint8Array>` as `PassableBytesReader` Exo (base64 encoding). |
+| `bytes-reader-from-iterator.js` | `bytesReaderFromIterator(bytesIterator, options?)` | Responder: wraps `AsyncIterator<Uint8Array>` as `PassableBytesReader` Exo (byte arrays via `stream()`, base64 via `streamBase64()`). |
 | `iterate-bytes-reader.js` | `iterateBytesReader(bytesReaderRef, options?)` | Initiator: converts remote `PassableBytesReader` to local `AsyncIterableIterator<Uint8Array>` (base64 decoding). |
 
 ### Bytes Writer Modules
@@ -163,6 +163,42 @@ acknowledgement chain carries `TRead` (data):
 - **Initiator** (`iterateReader`): sends `undefined` syn nodes to request values,
   receives data on the ack chain.
 
+The responder pump walks the synchronization chain independently of its
+pulls. A walker turns each resolved node into credit, one node per turn, and
+notices a return node as soon as it reaches it, even behind credit the
+initiator prefetched with `buffer > 0`. Once the walker has observed the close
+the pump issues no further pull and discards the unspent credit. So a producer
+that blocks on its next value is released as soon as that value arrives, not
+`buffer` values later; a producer that answers as fast as the walker walks
+still pays the credit granted before the close, as it did when the chain was
+walked in lockstep. Within one stream, `iterator.return()` is called at most
+once, and only between pulls, never over a pending `next()`.
+
+A local producer can supply `cancelPending` to `makeReaderPump`,
+`readerFromIterator`, or `bytesReaderFromIterator`.
+The walker invokes this hook once when it observes a close or synchronization
+failure, including while a pull is pending.
+The hook must interrupt the underlying operation so the pull settles without
+another source value; returning a promise also lets the hook report completion
+of its cancellation work.
+The value loop waits for the pull and cancellation before calling `return()`;
+it never overlaps iterator operations or acknowledges cleanup before it completes.
+An observed close takes precedence over the interrupted pull's value or completion,
+and its argument is still passed to `return()`.
+The hook receives a unique cancellation error; if it rejects an interrupted pull,
+it must use that exact error to identify the interruption as a normal close.
+Other pull errors, including errors from a generator's `finally`, remain failures.
+A failure thrown or rejected by the cancellation hook rejects a normal close; a synchronization failure keeps its
+original error even if cancellation or cleanup also fails.
+The same hook is invoked on a local pump failure, before cleanup.
+
+Cancellation is cooperative and local: the wire protocol is unchanged.
+A source without this hook, or one whose hook cannot settle its pending operation,
+still waits for that operation.
+A race against a close promise cannot by itself release the underlying resource.
+As with the iterator itself, the hook belongs to the source wrapped by this reader;
+independently cancellable consumers need independently owned source subscriptions.
+
 ### Writer Flow
 
 For a Writer, the synchronization chain carries `TWrite` (data). When the
@@ -235,8 +271,11 @@ without waiting for the acknowledge chain to resolve first, avoiding datalock.
 
 The `streamBase64()` method exists to support graceful migration:
 
-1. **Current**: `streamBase64()` yields base64 strings
-2. **Future**: When CapTP supports binary, implement `stream()` yielding `Uint8Array`
+1. **Before**: `streamBase64()` yields base64 strings
+2. **Current**: bytes readers made with `bytesReaderFromIterator()` also
+   implement `stream()`, yielding passable byte arrays (frozen `Uint8Array`s
+   over immutable `ArrayBuffer`s). Bytes writers still use `streamBase64()`
+   only.
 3. **Migration**:
    - Responders implement both `stream()` and `streamBase64()`
    - Initiators elect to migrate from `iterateBytesReader()` to `iterateReader()`,

@@ -8,6 +8,10 @@
 export {};
 
 /**
+ * `pending` marks a submission the host has accepted but not yet run: it is
+ * queued behind the turn in flight, and `pendingId` identifies it to
+ * `sendPendingNow`, `editPending` and `cancelPending`.
+ *
  * @typedef {{
  *   role: 'user' | 'assistant' | 'tool',
  *   text?: string,
@@ -15,6 +19,8 @@ export {};
  *   name?: string,
  *   args?: string,
  *   result?: string | null,
+ *   pending?: boolean,
+ *   pendingId?: number,
  *   meta?: { mail?: { from?: string } },
  * }} FlootMessage
  */
@@ -44,6 +50,11 @@ export {};
  *   title: string,
  *   description?: string,
  *   default?: boolean,
+ *   defaultReasoningEffort?: string | null,
+ *   backendId?: string,
+ *   modelId?: string,
+ *   selectionId?: string,
+ *   reasoningEfforts?: string[],
  * }} FlootModel
  */
 
@@ -74,6 +85,15 @@ export {};
  *   thresholdPct?: number,
  *   transcript?: string,
  *   replayingText?: string,
+ *   micError?: string,
+ *   ttsSettings?: {
+ *     voice: string, speed: number, noiseScale: number, noiseW: number,
+ *     sentenceSilence: number,
+ *   },
+ *   ttsConfiguration?: {
+ *     voices: Array<{ id: string, name: string }>,
+ *     ranges: Record<string, { min: number, max: number, step: number }>,
+ *   },
  * }} FlootVoiceState
  */
 
@@ -103,12 +123,17 @@ export {};
  * @property {(listener: () => void) => () => void} subscribe
  * @property {(text?: string) => void} send
  * @property {() => void} stop
+ * @property {(pendingId: number) => void} [sendPendingNow]
+ * @property {(pendingId: number, text: string) => void} [editPending]
+ * @property {(pendingId: number) => void} [cancelPending]
  * @property {(id: string) => void} selectSession
- * @property {(presetId?: string, model?: string) => void} newSession
+ * @property {(presetId?: string, model?: string, reasoningEffort?: string) => void} newSession
  * @property {(id: string, title: string) => void} renameSession
  * @property {(id: string) => void} deleteSession
  * @property {() => void} toggleMic
  * @property {() => void} toggleTts
+ * @property {(name: 'voice' | 'speed' | 'noiseScale' | 'noiseW' |
+ *   'sentenceSilence', value: string | number) => void} setTtsSetting
  * @property {(text: string) => void} replayMessage
  * @property {() => void} toggleSettings
  * @property {(text: string) => void} setInput

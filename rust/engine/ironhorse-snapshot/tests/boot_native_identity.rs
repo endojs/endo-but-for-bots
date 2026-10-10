@@ -15,77 +15,31 @@
 //! uninterrupted-vs-resumed twins are the difference, and they run on
 //! the container path and both store paths.
 
+#[path = "common/twin.rs"]
+mod carry;
 mod common;
 
+use carry::{compile, crank, sig, twin};
 use common::TempDir;
 
-use ironhorse_snapshot::machine::{
-    begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
-    MachineSnapshot,
-};
-use ironhorse_snapshot::store::{validate_store, HeapStore, MemoryStore};
+use ironhorse_snapshot::machine::{from_snapshot_bytes, MachineSnapshot};
+use ironhorse_snapshot::store::MemoryStore;
 use ironhorse_snapshot::store_file::FileStore;
-use ironhorse_snapshot::Signature;
-use ironhorse_vm::{parse_symbols, Interp};
-
-fn sig() -> Signature {
-    Signature::new("ironhorse-worker-v1")
-}
-
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
-    let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
-    (bytecode, parse_symbols(&symbols))
-}
-
-/// Relink and run one crank, returning `(completed, halt debug, result,
-/// computrons)`. The COMPUTRON count is part of the observation: a
-/// resumed machine that answers correctly while charging differently
-/// has still diverged, and consensus is on the count as much as the
-/// value. Every twin below therefore compares metering too.
-fn crank(m: &mut Interp, src: &str) -> (bool, String, String, u64) {
-    let (b, n) = compile(src);
-    let b = m.relink_crank(&b, &n).expect("relink");
-    let o = m.run(&b);
-    (o.completed, format!("{:?}", o.halt), o.result, o.computrons)
-}
-
-fn continuous(crank1: &str, observations: &[&str]) -> Vec<(bool, String, String, u64)> {
-    let (b1, n1) = compile(crank1);
-    let mut m = Interp::new();
-    m.link_intrinsics(&n1);
-    assert!(m.run(&b1).completed, "crank 1 (continuous)");
-    observations.iter().map(|s| crank(&mut m, s)).collect()
-}
-
-fn store_twin(crank1: &str, observations: &[&str], store: &mut dyn HeapStore) -> Vec<(bool, String, String, u64)> {
-    let (b1, n1) = compile(crank1);
-    let mut m = Interp::new();
-    m.link_intrinsics(&n1);
-    assert!(m.run(&b1).completed, "crank 1 (store)");
-    drop(
-        begin_store_session(m, &sig(), store)
-            .map_err(|(_, e)| e)
-            .expect("begin"),
-    );
-    let mut session = resume_from_store(store, &sig()).expect("resume");
-    let seen: Vec<_> = observations
-        .iter()
-        .map(|s| crank(session.machine_mut(), s))
-        .collect();
-    checkpoint_to_store(&mut session, &sig(), store).expect("checkpoint after resume");
-    validate_store(store, &sig()).expect("post-crank store validates");
-    seen
-}
+use ironhorse_vm::Interp;
 
 /// Every path agrees with the uninterrupted machine, and the
 /// uninterrupted machine gives the answers we actually expect.
 fn assert_twin(name: &str, crank1: &str, observations: &[&str], expect: &[&str]) {
-    let cont = continuous(crank1, observations);
+    let mut mem = MemoryStore::new();
+    let cont = twin(crank1, observations, &mut mem);
     for got in &cont {
         assert!(got.0, "observation completes uninterrupted: {}", got.1);
     }
     let got: Vec<&str> = cont.iter().map(|(_, _, r, _)| r.as_str()).collect();
-    assert_eq!(got, expect, "the continuous observations are the real answers");
+    assert_eq!(
+        got, expect,
+        "the continuous observations are the real answers"
+    );
 
     let (b1, n1) = compile(crank1);
     let mut m = Interp::new();
@@ -96,13 +50,10 @@ fn assert_twin(name: &str, crank1: &str, observations: &[&str], expect: &[&str])
     let blob: Vec<_> = observations.iter().map(|s| crank(&mut r, s)).collect();
     assert_eq!(blob, cont, "blob twin agrees");
 
-    let mut mem = MemoryStore::new();
-    assert_eq!(store_twin(crank1, observations, &mut mem), cont, "store twin agrees");
-
     let dir = TempDir::new(name);
     let mut file = FileStore::open(dir.join("heap.ihstore")).unwrap();
     assert_eq!(
-        store_twin(crank1, observations, &mut file),
+        twin(crank1, observations, &mut file),
         cont,
         "file-store twin agrees"
     );
@@ -148,5 +99,47 @@ fn a_resumed_builtin_iterator_is_still_its_own_iterable() {
             "var it; var t; var n = 0; for (var e of it) { n = n + 1; } t = n; t",
         ],
         &["function", "1"],
+    );
+}
+
+#[test]
+fn a_resumed_primitive_boolean_still_boxes_to_boolean_prototype() {
+    // `boolean_proto` is the same class of handle as the three
+    // `@@iterator` values above: a `SlotIndex` the interpreter holds
+    // outside the heap, which resume re-derives only because
+    // `create_intrinsics` records it BELOW `boot_slot_count`. Recorded
+    // at link time instead, a resumed machine would carry
+    // `SlotIndex::NULL`, the boxing arms' `is_null` guard would fall
+    // through, and `true.toString()` would throw again on the resumed
+    // side alone — green uninterrupted, broken after a suspend, which is
+    // the defect class this whole file exists for. Both spellings of the
+    // access, so neither read path can regress silently.
+    assert_twin(
+        "ih-boot-native-boolproto",
+        "var t = 0; t = 7; t",
+        &[
+            "var t; t = true.toString(); t",
+            "var t; t = String(false.valueOf()); t",
+            "var t; t = true['toString'](); t",
+            "var t; var k = 'valueOf'; t = String(true[k]()); t",
+            "var t; t = String(true.constructor === Boolean); t",
+            // The siblings, so a resume that lost one wrapper-prototype
+            // handle while keeping another is still caught here.
+            "var t; t = (42).toString(2); t",
+            "var t; t = (1n).toString(); t",
+            "var t; t = Symbol('t').toString(); t",
+            "var t; t = String('abc'.length); t",
+        ],
+        &[
+            "true",
+            "false",
+            "true",
+            "true",
+            "true",
+            "101010",
+            "1",
+            "Symbol(t)",
+            "3",
+        ],
     );
 }

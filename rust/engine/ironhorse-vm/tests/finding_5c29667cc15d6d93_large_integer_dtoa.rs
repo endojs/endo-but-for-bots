@@ -57,7 +57,11 @@ fn large_integer_result_renders_shortest_round_tripping_decimal() {
     // atom is `27 << 23`; the triple unary minus collapses to a single negate.
     let a: f64 = (27_i64 << 23) as f64; // 226492416
     let value = (-(-(-a))) * (-(-(-a)));
-    assert_eq!(value.to_bits(), FINDING_VALUE.to_bits(), "program value is 729*2^46");
+    assert_eq!(
+        value.to_bits(),
+        FINDING_VALUE.to_bits(),
+        "program value is 729*2^46"
+    );
 
     // The port renders the ECMA-262 shortest decimal, exactly as V8/Node does.
     assert_eq!(

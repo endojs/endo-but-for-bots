@@ -8,7 +8,8 @@
   "files": [
     "types.d.ts",
     "test/git-authority-types.test-d.ts",
-    "test/mount-types.test-d.ts"
+    "test/mount-types.test-d.ts",
+    "test/secret-types.test-d.ts"
   ],
   "include": ["test/*.test-d.ts"]
 }

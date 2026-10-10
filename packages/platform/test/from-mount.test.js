@@ -423,9 +423,7 @@ test('snapshot fetches Mount content into a BlobRef', async t => {
   await E(opened).close();
   const file = await E(root).lookup('x');
   const blob = await E(file).snapshot();
-  const info = await E(blob).getInfo();
-  t.is(info.algorithm, 'sha256');
-  t.is(info.size, 4n);
+  t.is(await E(blob).size(), 4n);
 });
 
 test('xattrs on Mount-adapted FS: unset xattr reports ENODATA', async t => {

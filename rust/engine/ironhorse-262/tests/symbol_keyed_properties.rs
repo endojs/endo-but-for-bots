@@ -53,9 +53,7 @@ fn distinct_symbols_are_distinct_keys() {
         "var a = Symbol(); var b = Symbol(); var o = {}; o[a] = 1; o[b] = 2; o[b]",
     );
     // A well-known symbol is a distinct key from a fresh user symbol.
-    assert_result_agrees(
-        "var s = Symbol(); var o = {}; o[s] = 1; o[Symbol.iterator] = 2; o[s]",
-    );
+    assert_result_agrees("var s = Symbol(); var o = {}; o[s] = 1; o[Symbol.iterator] = 2; o[s]");
 }
 
 // -------------------------------------------------------------------------
@@ -123,7 +121,27 @@ fn symbol_in_and_delete() {
 fn object_keys_excludes_symbol_keys() {
     // A symbol key does not appear in `Object.keys` (string-key enumeration),
     // so a string-keyed object with an extra symbol key keeps its string count.
-    assert_result_agrees("var s = Symbol(); var o = { a: 1, b: 2 }; o[s] = 3; Object.keys(o).length");
+    assert_result_agrees(
+        "var s = Symbol(); var o = { a: 1, b: 2 }; o[s] = 3; Object.keys(o).length",
+    );
     assert_result_agrees("var s = Symbol(); var o = {}; o[s] = 3; Object.keys(o).length");
     assert_result_agrees("var s = Symbol(); var o = { a: 1 }; o[s] = 3; Object.keys(o)[0]");
+}
+
+#[test]
+fn get_own_property_descriptor_on_a_symbol_receiver_is_undefined() {
+    // `Object.getOwnPropertyDescriptor(sym, k)` ToObject-wraps the symbol in a
+    // Symbol exotic with NO own properties, so `[[GetOwnProperty]]` is
+    // `undefined` for every key. A `Symbol` is `Kind::Symbol` +
+    // `Payload::Reference(descriptor)`, so an unguarded `Payload::Reference`
+    // arm would instead narrow the symbol to its internal descriptor slot and
+    // probe THAT — a latent divergence this locks against. (`String(...)`
+    // renders the `undefined` result so the dual-run compares a primitive.)
+    assert_result_agrees("String(Object.getOwnPropertyDescriptor(Symbol('a'), 'x'))");
+    assert_result_agrees(
+        "var s=Symbol('a'); typeof Object.getOwnPropertyDescriptor(s, 'description')",
+    );
+    assert_result_agrees(
+        "Object.getOwnPropertyDescriptor(Symbol.iterator, 'toString') === undefined",
+    );
 }

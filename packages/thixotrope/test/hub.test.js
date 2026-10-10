@@ -1,7 +1,7 @@
 // @ts-check
 
 /**
- * The OCapN hub (`@endo/ocapn/hub`): the non-reifying core of the
+ * The Thixotrope hub (`src/hub.js`): the non-reifying core of the
  * next-generation thixotrope daemon. The hub is not a client — it holds
  * only c-list tables and forwards every message by structural
  * transcoding (slot rewriting), with bootstrap `fetch` as its only
@@ -14,9 +14,9 @@ import test from '@endo/ses-ava/test.js';
 import harden from '@endo/harden';
 import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { E } from '@endo/eventual-send';
-import { makeOcapnHub } from '@endo/ocapn/hub';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
+import { makeOcapnHub } from '../src/hub.js';
 import { makePipeNetwork } from '../src/pipe-network.js';
 import { makeWorkerPeer } from '../src/worker-peer.js';
 import { makeTestOcapn } from './_util.js';
@@ -388,6 +388,27 @@ test('retirement tombstones exports, breaks pending listens, and frees the key',
     { message: /retired/ },
     'imports of the retired incarnation still break after key reuse',
   );
+});
+
+test('retirement breaks a forwarded call before its target can reply', async t => {
+  const hub = makeOcapnHub({ codec: syrupCodec });
+  const workerId = 'a'.repeat(32);
+  const attached = await attachWorker(hub, workerId, 'callee');
+  const caller = await attachClient(hub, 'c'.repeat(32), 'caller');
+  t.teardown(() => attached.worker.shutdown());
+  t.teardown(() => caller.client.shutdown());
+  hub.publish('worker', { session: workerId, position: 0n });
+  const bootstrap = caller.session.getBootstrap();
+  const shell = await E(E(bootstrap).fetch(bytesOf('worker'))).fetch(
+    SHELL_SWISSNUM,
+  );
+  const counter = await E(shell).evaluate(COUNTER_SOURCE);
+  attached.detach();
+  const pending = E(counter).incr();
+  // An ordered round trip to the hub proves the call entered its queue.
+  await E(bootstrap).fetch(bytesOf('worker'));
+  hub.retireSession(workerId);
+  await t.throwsAsync(() => pending, { message: /retired/ });
 });
 
 test('frames toward a detached durable worker queue across a hub restart', async t => {

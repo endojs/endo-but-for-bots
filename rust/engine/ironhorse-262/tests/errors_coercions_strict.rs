@@ -82,6 +82,7 @@ fn aggregate_error_consumes_general_iterables_in_specification_order() {
         "new AggregateError('ab').errors.join(',')",
         "var a=[];a.length=2;a[1]=3;var e=new AggregateError(a);e.errors.length+':'+String(e.errors[0])+':'+e.errors[1]",
         "(function(a){a=9;return new AggregateError(arguments).errors[0]})(3)",
+        "(function(){arguments.length=1;return new AggregateError(arguments).errors.join(',')})(1,2)",
         "var log=[];var source={n:0,[Symbol.iterator]:function(){log.push('i');return this},next:function(){log.push('n');return this.n++<1?{value:7,done:false}:{done:true}}};var message={toString:function(){log.push('m');return 'boom'}};var e=new AggregateError(source,message);e.message+':'+e.errors[0]+':'+log.join('')",
         "var log=[];var a=[1,2];a[Symbol.iterator]=function(){log.push('i');return [8][Symbol.iterator]()};var e=new AggregateError(a);e.errors.join(',')+':'+log.join('')",
         "var gets=0;var source={ [Symbol.iterator]:function(){var n=0;return {get next(){gets++;return function(){return n++<1?{value:6,done:false}:{done:true}}}}}};new AggregateError(source).errors[0]+':'+gets",
@@ -134,12 +135,40 @@ fn global_descriptors_are_live_environment_bindings() {
         "var hidden=1;Object.defineProperty(this,'x',{configurable:true,get:function(){return hidden},set:function(v){hidden=v}});x=7;x+':'+hidden",
         "var hidden=3;Object.defineProperties(this,{x:{get:function(){return hidden}},y:{value:4}});x+y",
         "var x=1;Object.defineProperty(this,'x',{writable:false});x=2;x",
-        "'use strict';var x=1;Object.defineProperty(globalThis,'x',{writable:false});try{x=2;false}catch(e){e instanceof TypeError&&x===1}",
         "var marker={};Object.defineProperty(this,'x',{get:function(){throw marker}});try{x;false}catch(e){e===marker}",
         "Object.defineProperty(this,'x',{configurable:true,value:undefined});delete this.x;typeof x",
     ] {
         assert_result_agrees(source);
     }
+
+    // The strict twin of the `writable:false` case is the one program class
+    // where the oracle is not the reference: the shim compiles every source
+    // with the `eval` builtin's flags, under which a *strict* program's
+    // top-level `var` is a frame local that `Object.defineProperty(globalThis,
+    // ...)` cannot touch, so the oracle answers `false` (no TypeError, `x`
+    // rebound to 2). ECMA-262 GlobalDeclarationInstantiation makes the `var`
+    // a global-object property for a Script, strict or not, so the strict
+    // write throws and `x` stays 1 — the Script goal Ironhorse compiles
+    // (`ironhorse-vm/tests/hardened_js_boundary.rs`; README § "Script goal
+    // vs. the oracle's eval framing"). Pin both sides so the divergence is
+    // recorded, not hidden.
+    let strict = "'use strict';var x=1;Object.defineProperty(globalThis,'x',{writable:false});try{x=2;false}catch(e){e instanceof TypeError&&x===1}";
+    assert!(ironhorse_compile::script_goal_deviates(strict));
+    let run = dual_run(strict).expect("the XS oracle machine must start");
+    assert_eq!(
+        run.agreement,
+        Agreement::BothComplete,
+        "{:?}",
+        run.ironhorse_halt
+    );
+    assert_eq!(
+        run.ironhorse_result, "true",
+        "the strict Script must throw and keep x"
+    );
+    assert_eq!(
+        run.oracle_result, "false",
+        "the eval-framed oracle keeps x local"
+    );
 }
 
 #[test]

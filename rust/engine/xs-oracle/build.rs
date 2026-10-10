@@ -1,7 +1,8 @@
 //! Build the XS oracle: compile the c/moddable XS engine (the pin
 //! the endor daemon builds today) with the same feature defines as
 //! the xsnap crate, plus the xs_shim.c bridge, into one static
-//! library. This is the only place the engine workspace touches C.
+//! library, with the checked source overlays below. This is the
+//! only place the engine workspace touches C.
 //!
 //! We deliberately compile libxs here rather than depending on the
 //! xsnap crate as a Cargo path dependency: xsnap's lib.rs includes
@@ -14,6 +15,13 @@
 
 use std::env;
 use std::path::PathBuf;
+
+// Retain the upstream source suffix so the existing upstream-only UBSAN
+// ignorelist applies to this checked copy. ASAN remains enabled, and neither
+// xs_shim.c nor xsnap-platform.c moves under this path. The sanitizer scope
+// regression reads this constant to probe the actual generated source path.
+const LEXICAL_OVERLAY_PATH: &str = "c/moddable/xs/sources/xsLexical.c";
+const JSON_OVERLAY_PATH: &str = "c/moddable/xs/sources/xsJSON.c";
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -41,18 +49,54 @@ fn main() {
         );
     }
 
-    // Exactly the source set and flags xsnap uses, so the oracle's
-    // XS is bit-identical to the engine ironhorse replaces.
+    // The source set and feature flags match xsnap. Checked lexical overlays
+    // below remove platform-dependent undefined behavior.
     let sources = [
-        "xsAll.c", "xsAPI.c", "xsArguments.c", "xsArray.c", "xsAtomics.c",
-        "xsBigInt.c", "xsBoolean.c", "xsCode.c", "xsCommon.c", "xsDataView.c",
-        "xsDate.c", "xsDebug.c", "xsDefaults.c", "xsdtoa.c", "xsError.c",
-        "xsFunction.c", "xsGenerator.c", "xsGlobal.c", "xsJSON.c", "xsLexical.c",
-        "xsLockdown.c", "xsMapSet.c", "xsMarshall.c", "xsMath.c", "xsMemory.c",
-        "xsModule.c", "xsNumber.c", "xsObject.c", "xsPlatforms.c", "xsProfile.c",
-        "xsPromise.c", "xsProperty.c", "xsProxy.c", "xsre.c", "xsRegExp.c",
-        "xsRun.c", "xsScope.c", "xsScript.c", "xsSnapshot.c", "xsSourceMap.c",
-        "xsString.c", "xsSymbol.c", "xsSyntaxical.c", "xsTree.c", "xsType.c",
+        "xsAll.c",
+        "xsAPI.c",
+        "xsArguments.c",
+        "xsArray.c",
+        "xsAtomics.c",
+        "xsBigInt.c",
+        "xsBoolean.c",
+        "xsCode.c",
+        "xsCommon.c",
+        "xsDataView.c",
+        "xsDate.c",
+        "xsDebug.c",
+        "xsDefaults.c",
+        "xsdtoa.c",
+        "xsError.c",
+        "xsFunction.c",
+        "xsGenerator.c",
+        "xsGlobal.c",
+        "xsJSON.c",
+        "xsLexical.c",
+        "xsLockdown.c",
+        "xsMapSet.c",
+        "xsMarshall.c",
+        "xsMath.c",
+        "xsMemory.c",
+        "xsModule.c",
+        "xsNumber.c",
+        "xsObject.c",
+        "xsPlatforms.c",
+        "xsProfile.c",
+        "xsPromise.c",
+        "xsProperty.c",
+        "xsProxy.c",
+        "xsre.c",
+        "xsRegExp.c",
+        "xsRun.c",
+        "xsScope.c",
+        "xsScript.c",
+        "xsSnapshot.c",
+        "xsSourceMap.c",
+        "xsString.c",
+        "xsSymbol.c",
+        "xsSyntaxical.c",
+        "xsTree.c",
+        "xsType.c",
     ];
 
     let mut build = cc::Build::new();
@@ -82,6 +126,10 @@ fn main() {
         .define("mxCESU8", Some("1"))
         .define("mxStringInfoCacheLength", Some("4"))
         .flag("-fno-common")
+        // XS reads Number storage through integer pointers (for example,
+        // fxSumEntry hashes a NaN immediately after canonicalizing it).
+        // Preserve those aliasing accesses under optimized GCC builds.
+        .flag("-fno-strict-aliasing")
         .flag("-Wno-misleading-indentation")
         .flag("-Wno-implicit-fallthrough")
         .flag("-Wno-unused-parameter")
@@ -89,9 +137,73 @@ fn main() {
         .flag("-Wno-unused-variable")
         .opt_level(2);
 
+    // xsLexical.c passes parser->buffer as the `%s` argument to
+    // fxReportParserError, which formats back into that same buffer. Overlapping
+    // snprintf input/output is undefined: glibc loses the message while Darwin
+    // retains it. Copy into parser-owned storage before the formatter runs.
+    // Keep the pinned submodule untouched and fail closed if its call changes.
+    let lexical_path = xs_sources.join("xsLexical.c");
+    let lexical = std::fs::read_to_string(&lexical_path).expect("read pinned xsLexical.c");
+    let old = "fxReportParserError(parser, parser->states[0].line, \"%s\", parser->buffer);";
+    let new = "fxReportParserError(parser, parser->states[0].line, \"%s\", fxNewParserString(parser, parser->buffer, mxStringLength(parser->buffer)));";
+    assert_eq!(
+        lexical.matches(old).count(),
+        1,
+        "pinned XS RegExp diagnostic call changed; review the lexical overlay"
+    );
+    let lexical = lexical.replacen(old, new, 1);
+
+    // fxGetNextNumber used to convert every double to txInteger before
+    // checking whether the value was exactly integral. C leaves conversion of
+    // NaN, infinity, and finite out-of-range values undefined. Keep the pin
+    // untouched, but classify only a finite signed-32-bit value through the
+    // integer path so the optimized oracle remains a defined reference.
+    let old = "\tparser->states[2].number = theNumber;\n\tparser->states[2].integer = (txInteger)parser->states[2].number;\n\ttheNumber = parser->states[2].integer;\n\tif (parser->states[2].number == theNumber)\n\t\tparser->states[2].token = XS_TOKEN_INTEGER;\n\telse\n\t\tparser->states[2].token = XS_TOKEN_NUMBER;";
+    let new = "\tparser->states[2].number = theNumber;\n\tif (c_isfinite(parser->states[2].number) && (-2147483648.0 <= parser->states[2].number) && (parser->states[2].number <= 2147483647.0)) {\n\t\tparser->states[2].integer = (txInteger)parser->states[2].number;\n\t\ttheNumber = parser->states[2].integer;\n\t\tif (parser->states[2].number == theNumber)\n\t\t\tparser->states[2].token = XS_TOKEN_INTEGER;\n\t\telse\n\t\t\tparser->states[2].token = XS_TOKEN_NUMBER;\n\t}\n\telse {\n\t\tparser->states[2].integer = 0;\n\t\tparser->states[2].token = XS_TOKEN_NUMBER;\n\t}";
+    assert_eq!(
+        lexical.matches(old).count(),
+        1,
+        "pinned XS numeric classification changed; review the lexical overlay"
+    );
+    let lexical = lexical.replacen(old, new, 1);
+
+    let lexical_overlay =
+        PathBuf::from(env::var_os("OUT_DIR").expect("Cargo OUT_DIR")).join(LEXICAL_OVERLAY_PATH);
+    std::fs::create_dir_all(lexical_overlay.parent().expect("lexical overlay parent"))
+        .expect("create checked upstream overlay directory");
+    std::fs::write(&lexical_overlay, lexical).expect("write checked xsLexical.c overlay");
+
+    // JSON.parse repeats the same classify-by-cast operation. Keep its runtime
+    // numeric result defined too; otherwise a now-correct literal in a corpus
+    // assertion merely exposes the parser's separate out-of-range cast.
+    let json_path = xs_sources.join("xsJSON.c");
+    let json = std::fs::read_to_string(&json_path).expect("read pinned xsJSON.c");
+    let old = "\t\t\ttheParser->number = fxStringToNumber(the, the->nameBuffer, 0);\n\t\t\ttheParser->integer = (txInteger)theParser->number;\n\t\t\tnumber = theParser->integer;\n\t\t\tif ((theParser->number == number) && (theParser->number != -0))\n\t\t\t\ttheParser->token = XS_JSON_TOKEN_INTEGER;\n\t\t\telse\n\t\t\t\ttheParser->token = XS_JSON_TOKEN_NUMBER;";
+    let new = "\t\t\ttheParser->number = fxStringToNumber(the, the->nameBuffer, 0);\n\t\t\tif (c_isfinite(theParser->number) && (-2147483648.0 <= theParser->number) && (theParser->number <= 2147483647.0)) {\n\t\t\t\ttheParser->integer = (txInteger)theParser->number;\n\t\t\t\tnumber = theParser->integer;\n\t\t\t\tif ((theParser->number == number) && (theParser->number != -0))\n\t\t\t\t\ttheParser->token = XS_JSON_TOKEN_INTEGER;\n\t\t\t\telse\n\t\t\t\t\ttheParser->token = XS_JSON_TOKEN_NUMBER;\n\t\t\t}\n\t\t\telse {\n\t\t\t\ttheParser->integer = 0;\n\t\t\t\ttheParser->token = XS_JSON_TOKEN_NUMBER;\n\t\t\t}";
+    assert_eq!(
+        json.matches(old).count(),
+        1,
+        "pinned XS JSON numeric classification changed; review the source overlay"
+    );
+    let json_overlay =
+        PathBuf::from(env::var_os("OUT_DIR").expect("Cargo OUT_DIR")).join(JSON_OVERLAY_PATH);
+    std::fs::create_dir_all(json_overlay.parent().expect("JSON overlay parent"))
+        .expect("create checked upstream overlay directory");
+    std::fs::write(&json_overlay, json.replacen(old, new, 1))
+        .expect("write checked xsJSON.c overlay");
+
+    // These sources include only headers resolved through xs_sources above.
     for source in &sources {
-        build.file(xs_sources.join(source));
+        if *source == "xsLexical.c" {
+            build.file(&lexical_overlay);
+        } else if *source == "xsJSON.c" {
+            build.file(&json_overlay);
+        } else {
+            build.file(xs_sources.join(source));
+        }
     }
+    println!("cargo:rerun-if-changed={}", lexical_path.display());
+    println!("cargo:rerun-if-changed={}", json_path.display());
     build.file(&platform_source);
     build.file(manifest_dir.join("csrc/xs_shim.c"));
     build.compile("xsoracle");
@@ -99,6 +211,9 @@ fn main() {
     println!("cargo:rerun-if-changed=csrc/xs_shim.c");
     println!("cargo:rerun-if-changed=csrc/xsoracle-platform.h");
     println!("cargo:rerun-if-changed=build.rs");
+    // CFLAGS carries the ignorelist path, so track its contents as well. A
+    // changed exclusion must rebuild the C objects, including in cached CI.
+    println!("cargo:rerun-if-changed=../scripts/oracle-sanitizer-ignorelist.txt");
     println!("cargo:rerun-if-changed={}", platform_source.display());
     println!("cargo:rustc-link-lib=m");
     println!("cargo:rustc-link-lib=pthread");

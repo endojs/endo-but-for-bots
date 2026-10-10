@@ -4,20 +4,25 @@
 //! continue with silently missing exotic state), and not accepted into
 //! a machine that cannot safely run or checkpoint.
 
+#[path = "common/compile.rs"]
+mod guest_compile;
+use guest_compile::compile;
+use ironhorse_snapshot::CommitToken;
+
+use std::borrow::Borrow;
+
 use ironhorse_snapshot::format::SnapshotError;
-use ironhorse_snapshot::image::{read_machine, write_machine};
+use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
 use ironhorse_snapshot::machine::{from_snapshot_bytes, MachineSnapshot};
-use ironhorse_snapshot::store::{image_to_batch, validate_store, HeapStore, MemoryStore, StoreError};
+use ironhorse_snapshot::store::HeapStoreCommit;
+use ironhorse_snapshot::store::{
+    image_to_batch_unchecked, validate_store, HeapStore, MemoryStore, StoreError,
+};
 use ironhorse_snapshot::Signature;
 use ironhorse_vm::Interp;
 
 fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
-}
-
-fn compile(src: &str) -> (Vec<u8>, Vec<String>) {
-    let (b, s) = ironhorse_compile::compile_atoms(src).expect("compiles");
-    (b, ironhorse_vm::parse_symbols(&s))
 }
 
 fn quiescent_machine(src: &str) -> Interp {
@@ -27,6 +32,80 @@ fn quiescent_machine(src: &str) -> Interp {
     let o = m.run(&b);
     assert!(o.completed, "fixture crank: {:?}", o.halt);
     m
+}
+
+/// A read-only external store can expose bytes that the current commit gate
+/// would never admit. Keep adoption validation independent of writer admission.
+struct CraftedSmallStore<B, C> {
+    backing: B,
+    batch: C,
+}
+
+impl<B: Borrow<MemoryStore>, C: Borrow<ironhorse_snapshot::store::CheckpointBatch>> HeapStore
+    for CraftedSmallStore<B, C>
+{
+    fn manifest(&self) -> Result<ironhorse_snapshot::store::StoreManifest, StoreError> {
+        Ok(self.batch.borrow().manifest.clone())
+    }
+    fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
+        Ok(self.batch.borrow().small.clone())
+    }
+    fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
+        self.backing.borrow().read_slot_page(page)
+    }
+    fn read_chunk_extent(&self, ext: u32) -> Result<Vec<u8>, StoreError> {
+        self.backing.borrow().read_chunk_extent(ext)
+    }
+    fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
+        self.backing.borrow().inventory()
+    }
+    fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
+        self.backing.borrow().read_free_seg(seg)
+    }
+    fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
+        self.backing.borrow().page_edges()
+    }
+    fn commit_verified(
+        &mut self,
+        _verify: &mut ironhorse_snapshot::store::CommitVerifier<'_>,
+    ) -> Result<(), StoreError> {
+        panic!("the crafted store is read-only")
+    }
+}
+
+fn expect_commit_and_external_store_refusal(
+    honest: &ironhorse_snapshot::image::MachineImage,
+    crafted: &ironhorse_snapshot::image::MachineImage,
+    message: &'static str,
+) {
+    let mut store = MemoryStore::new();
+    store
+        .commit(&image_to_batch_unchecked(honest, 1, CommitToken::ZERO))
+        .unwrap();
+    let prior_manifest = store.manifest().unwrap();
+    let prior_image = ironhorse_snapshot::store::store_to_image(&store).unwrap();
+    let prior_small = store.read_small_state().unwrap();
+    let prior_edges = store.page_edges().unwrap();
+    let batch = image_to_batch_unchecked(crafted, 2, prior_manifest.token);
+    assert!(matches!(
+        store.commit(&batch),
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(found))) if found == message
+    ));
+    assert_eq!(store.manifest().unwrap(), prior_manifest);
+    assert_eq!(
+        ironhorse_snapshot::store::store_to_image(&store).unwrap(),
+        prior_image
+    );
+    assert_eq!(store.read_small_state().unwrap(), prior_small);
+    assert_eq!(store.page_edges().unwrap(), prior_edges);
+    let external = CraftedSmallStore {
+        backing: &store,
+        batch: &batch,
+    };
+    assert!(matches!(
+        validate_store(&external, &sig()),
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(found))) if found == message
+    ));
 }
 
 /// Finding 4: a persisted regexp whose source is structurally valid
@@ -39,9 +118,12 @@ fn a_regexp_row_that_cannot_recompile_is_refused_with_a_structured_error() {
     let m = quiescent_machine("var re = 0; var t = 0; re = /a(b+)c/g; t = 7; t");
     let bytes = m.write_snapshot(&sig()).expect("writes");
     let mut image = read_machine(&bytes, &sig()).expect("reads");
-    assert!(!image.regexps.is_empty(), "the fixture persisted its regexp row");
-    image.regexps[0].source = "(".to_string();
-    let crafted = write_machine(&image);
+    assert!(
+        !image.regexps.is_empty(),
+        "the fixture persisted its regexp row"
+    );
+    image.regexps[0].source = "(".into();
+    let crafted = write_machine_unchecked(&image);
     match from_snapshot_bytes(&crafted, &sig()) {
         Err(SnapshotError::Corrupt("regexp side table: persisted source does not compile")) => {}
         Err(other) => panic!("refused, but not by the adoption validator: {other:?}"),
@@ -49,7 +131,7 @@ fn a_regexp_row_that_cannot_recompile_is_refused_with_a_structured_error() {
     }
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
         .expect("the raw commit models a crafted writer");
     match validate_store(&store, &sig()) {
         Err(StoreError::Snapshot(SnapshotError::Corrupt(
@@ -70,9 +152,12 @@ fn a_populated_stack_atom_is_refused_at_container_read() {
     let m = quiescent_machine("var t = 0; t = 1; t");
     let bytes = m.write_snapshot(&sig()).expect("writes");
     let mut image = read_machine(&bytes, &sig()).expect("reads");
-    assert!(image.stack.is_empty(), "an honest snapshot has an empty stack");
+    assert!(
+        image.stack.is_empty(),
+        "an honest snapshot has an empty stack"
+    );
     image.stack = vec![ironhorse_vm::Slot::undefined()];
-    let crafted = write_machine(&image);
+    let crafted = write_machine_unchecked(&image);
     match from_snapshot_bytes(&crafted, &sig()) {
         Err(SnapshotError::Corrupt("STAC not empty at a quiescent boundary")) => {}
         Err(other) => panic!("refused, but not by the quiescence gate: {other:?}"),
@@ -82,8 +167,8 @@ fn a_populated_stack_atom_is_refused_at_container_read() {
 
 /// The store mirror of the STAC gate: a raw commit carrying a
 /// populated stack section (a crafted store, or a writer predating the
-/// gate) is refused at `validate_store` — the one function both
-/// resume paths run.
+/// gate) is refused by `validate_store`, and by both resume paths as
+/// the restore adopts the stack.
 #[test]
 fn a_populated_stack_section_is_refused_at_store_validation() {
     let m = quiescent_machine("var t = 0; t = 1; t");
@@ -92,7 +177,7 @@ fn a_populated_stack_section_is_refused_at_store_validation() {
     image.stack = vec![ironhorse_vm::Slot::undefined()];
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
         .expect("the raw commit models a crafted writer");
     match validate_store(&store, &sig()) {
         Err(StoreError::Snapshot(SnapshotError::Corrupt(
@@ -101,6 +186,21 @@ fn a_populated_stack_section_is_refused_at_store_validation() {
         Err(other) => panic!("refused, but not by the quiescence gate: {other:?}"),
         Ok(_) => panic!("a populated stack section must not validate"),
     }
+    assert!(matches!(
+        ironhorse_snapshot::machine::resume_from_store(&store, &sig()),
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "arena restore failed"
+        )))
+    ));
+    assert!(matches!(
+        ironhorse_snapshot::machine::resume_from_store_lazy(
+            std::rc::Rc::new(std::cell::RefCell::new(store)),
+            &sig()
+        ),
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "arena restore failed"
+        )))
+    ));
 }
 
 /// Finding 9: `table_length` mirrors XS's power-of-two rehash
@@ -117,7 +217,10 @@ fn a_crafted_collection_table_geometry_is_refused() {
     );
     let bytes = m.write_snapshot(&sig()).expect("writes");
     let image = read_machine(&bytes, &sig()).expect("reads");
-    assert!(!image.collections.is_empty(), "the fixture persisted its Map row");
+    assert!(
+        !image.collections.is_empty(),
+        "the fixture persisted its Map row"
+    );
     let expect = |crafted: &[u8], want: &'static str| match from_snapshot_bytes(crafted, &sig()) {
         Err(SnapshotError::Corrupt(msg)) if msg == want => {}
         Err(other) => panic!("refused, but not by the geometry gate ({want}): {other:?}"),
@@ -127,14 +230,14 @@ fn a_crafted_collection_table_geometry_is_refused() {
     let mut zeroed = image.clone();
     zeroed.collections[0].table_length = 0;
     expect(
-        &write_machine(&zeroed),
+        &write_machine_unchecked(&zeroed),
         "collections side table: unreachable rehash geometry",
     );
     // Not a power of two.
     let mut lopsided = image.clone();
     lopsided.collections[0].table_length = 3;
     expect(
-        &write_machine(&lopsided),
+        &write_machine_unchecked(&lopsided),
         "collections side table: unreachable rehash geometry",
     );
     // A power of two whose grow threshold the live size already
@@ -142,11 +245,11 @@ fn a_crafted_collection_table_geometry_is_refused() {
     let mut starved = image.clone();
     starved.collections[0].table_length = 1;
     expect(
-        &write_machine(&starved),
+        &write_machine_unchecked(&starved),
         "collections side table: live size past the grow threshold",
     );
     // And the honest row still restores.
-    assert!(from_snapshot_bytes(&write_machine(&image), &sig()).is_ok());
+    assert!(from_snapshot_bytes(&write_machine_unchecked(&image), &sig()).is_ok());
 }
 
 /// Additional review finding: an explicit `NFLR` equal to the
@@ -165,26 +268,17 @@ fn an_explicit_full_name_floor_is_refused_as_non_canonical() {
         "an honest writer canonicalizes the full floor as an absent atom"
     );
     image.name_floor = Some(image.names.len() as u32);
-    match from_snapshot_bytes(&write_machine(&image), &sig()) {
-        Err(SnapshotError::Corrupt(
-            "installed-names floor: non-canonical explicit full floor",
-        )) => {}
+    match from_snapshot_bytes(&write_machine_unchecked(&image), &sig()) {
+        Err(SnapshotError::Corrupt("installed-names floor: non-canonical explicit full floor")) => {
+        }
         Err(other) => panic!("refused, but not by the canonicality gate: {other:?}"),
         Ok(_) => panic!("a non-canonical explicit floor must not restore"),
     }
-    // The store mirror: the same crafted floor in a raw-committed
-    // small state is refused at validation.
-    let mut store = MemoryStore::new();
-    store
-        .commit(&image_to_batch(&image, 1, ""))
-        .expect("the raw commit models a crafted writer");
-    match validate_store(&store, &sig()) {
-        Err(StoreError::Snapshot(SnapshotError::Corrupt(
-            "installed-names floor: non-canonical explicit full floor",
-        ))) => {}
-        Err(other) => panic!("refused, but not by the canonicality gate: {other:?}"),
-        Ok(_) => panic!("a non-canonical explicit floor must not validate"),
-    }
+    expect_commit_and_external_store_refusal(
+        &read_machine(&bytes, &sig()).unwrap(),
+        &image,
+        "installed-names floor: non-canonical explicit full floor",
+    );
 }
 
 /// The store mirror of the generator resume-cursor gate: the shared
@@ -203,7 +297,11 @@ fn a_generator_resume_cursor_outside_its_body_is_refused_at_store_validation() {
     );
     let bytes = m.write_snapshot(&sig()).expect("writes");
     let mut image = read_machine(&bytes, &sig()).expect("reads");
-    assert_eq!(image.generators.len(), 1, "the fixture persisted its generator");
+    assert_eq!(
+        image.generators.len(),
+        1,
+        "the fixture persisted its generator"
+    );
 
     let owner = image.generators[0].frame.as_ref().unwrap().cur_func;
     let segment = image
@@ -218,7 +316,7 @@ fn a_generator_resume_cursor_outside_its_body_is_refused_at_store_validation() {
 
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
         .expect("the raw commit models a crafted writer");
     match validate_store(&store, &sig()) {
         Err(StoreError::Snapshot(SnapshotError::Corrupt(
@@ -243,12 +341,14 @@ fn a_generator_resume_cursor_outside_its_body_is_refused_at_store_validation() {
 /// well formed — same version, same atoms, same everything but the
 /// signature the writer stamped.
 #[test]
-fn a_container_from_a_foreign_boot_layout_is_refused() {
+fn a_container_from_a_foreign_host_layout_is_refused() {
     let m = quiescent_machine("var t = 0; t = 41 + 1; t");
-    // A different engine build: same wire schema, different boot layout,
+    // A different host callback layout: same wire schema and boot layout,
     // therefore a different signature.
     let other_build = Signature::new("ironhorse-worker-v1-boot2");
-    let bytes = m.write_snapshot(&other_build).expect("the other build writes");
+    let bytes = m
+        .write_snapshot(&other_build)
+        .expect("the other build writes");
 
     // Sanity: the bytes are honest under their OWN signature, so the
     // refusal below is about the signature and nothing else.
@@ -260,19 +360,62 @@ fn a_container_from_a_foreign_boot_layout_is_refused() {
             assert_eq!(found, other_build);
         }
         Err(other) => panic!("refused, but not by the signature gate: {other:?}"),
-        Ok(_) => panic!("a container from a foreign boot layout must not adopt"),
+        Ok(_) => panic!("a container from a foreign host layout must not adopt"),
     }
 
     // And the store path refuses at open, likewise before adoption.
     let mut store = MemoryStore::new();
     let image = read_machine(&bytes, &other_build).expect("reads under its own signature");
     store
-        .commit(&image_to_batch(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
         .expect("the raw commit models the other build's writer");
     match validate_store(&store, &sig()) {
         Err(StoreError::Snapshot(SnapshotError::SignatureMismatch { .. })) => {}
         Err(other) => panic!("store refused, but not by the signature gate: {other:?}"),
-        Ok(_) => panic!("a store from a foreign boot layout must not validate"),
+        Ok(_) => panic!("a store from a foreign host layout must not validate"),
+    }
+}
+
+#[test]
+fn boot_mismatch_is_distinct_and_cannot_be_bypassed_by_the_expected_signature() {
+    let m = quiescent_machine("1");
+    let honest = m.snapshot_image_for_testing(&sig()).unwrap();
+    let mut changed = sig().encode();
+    changed[4] ^= 1; // same host, different engine-derived layout
+    let foreign = Signature::decode(&changed).unwrap();
+    let legacy = Signature::decode(b"ironhorse-worker-v1|ironhorse-boot=21").unwrap();
+    for signature in [foreign, legacy] {
+        assert!(
+            m.write_snapshot(&signature).is_err(),
+            "writer cannot stamp a foreign boot"
+        );
+        let mut image = honest.clone();
+        image.signature = signature.clone();
+        let bytes = write_machine_unchecked(&image);
+        for expected in [sig(), signature.clone()] {
+            assert!(matches!(
+                from_snapshot_bytes(&bytes, &expected),
+                Err(SnapshotError::BootLayoutMismatch { .. })
+            ));
+            let mut store = MemoryStore::new();
+            store
+                .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
+                .unwrap();
+            assert!(matches!(
+                validate_store(&store, &expected),
+                Err(StoreError::Snapshot(
+                    SnapshotError::BootLayoutMismatch { .. }
+                ))
+            ));
+            let before = store.manifest().unwrap();
+            assert!(matches!(
+                ironhorse_snapshot::store::migrate_store(&mut store, &expected),
+                Err(StoreError::Snapshot(
+                    SnapshotError::BootLayoutMismatch { .. }
+                ))
+            ));
+            assert_eq!(store.manifest().unwrap(), before);
+        }
     }
 }
 
@@ -338,8 +481,7 @@ fn non_canonical_container_encodings_are_refused() {
     }
     let mut empty = plain_bytes.clone();
     empty.splice(at..at, atom.iter().copied());
-    let grown =
-        (u32::from_be_bytes([empty[0], empty[1], empty[2], empty[3]]) + 12).to_be_bytes();
+    let grown = (u32::from_be_bytes([empty[0], empty[1], empty[2], empty[3]]) + 12).to_be_bytes();
     empty[0..4].copy_from_slice(&grown);
     match read_machine(&empty, &sig()) {
         Err(SnapshotError::Corrupt(msg)) if msg.contains("present but empty") => {}
@@ -366,12 +508,8 @@ fn non_canonical_container_encodings_are_refused() {
     // BEFORE the fixed atoms instead of after them.
     let mut misordered = plain_bytes.clone();
     misordered.splice(8..8, atom.iter().copied());
-    let grown = (u32::from_be_bytes([
-        misordered[0],
-        misordered[1],
-        misordered[2],
-        misordered[3],
-    ]) + 12)
+    let grown = (u32::from_be_bytes([misordered[0], misordered[1], misordered[2], misordered[3]])
+        + 12)
         .to_be_bytes();
     misordered[0..4].copy_from_slice(&grown);
     match read_machine(&misordered, &sig()) {
@@ -466,7 +604,7 @@ fn finally_wrapper_fixture() -> Interp {
 }
 
 fn expect_container_refusal(image: &ironhorse_snapshot::image::MachineImage, msg: &str) {
-    let crafted = write_machine(image);
+    let crafted = write_machine_unchecked(image);
     match from_snapshot_bytes(&crafted, &sig()) {
         Err(SnapshotError::Corrupt(m)) if m == msg => {}
         Err(other) => panic!("expected Corrupt({msg:?}), got {other:?}"),
@@ -485,18 +623,74 @@ fn an_async_flavored_reaction_kind_is_refused_and_the_store_path_shares_the_gate
         .iter_mut()
         .find(|p| !p.reactions.is_empty())
         .expect("the fixture holds a pending reaction");
-    row.reactions[0].kind = 3; // AsyncAwait — a still-Pending frame
-    expect_container_refusal(&image, "promise cluster: reaction kind does not resume");
+    // `FromAsyncNext` DECODES since format 24 (architecture finding F127),
+    // so the refusal moved from the kind byte to the anchor: it must name a
+    // carried accumulation, and this fixture carries none. The native-kind
+    // payload shape is required first, exactly as for an async-generator kind.
+    let reaction = &mut row.reactions[0];
+    reaction.kind = 7;
+    reaction.b = 0;
+    reaction.on_fulfilled = ironhorse_vm::Slot::undefined();
+    reaction.on_rejected = ironhorse_vm::Slot::undefined();
+    reaction.resolve = ironhorse_vm::Slot::undefined();
+    reaction.reject = ironhorse_vm::Slot::undefined();
+    expect_container_refusal(
+        &image,
+        "fromAsync reaction: missing or duplicate accumulation",
+    );
+    // An ANCHOR check is an adoption check, not a commit check: the store
+    // admits the payload structurally and refuses it when a machine is built
+    // from it, exactly as the async-generator arm below does.
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch(&image, 1, ""))
-        .expect("the raw commit models a crafted writer");
-    match validate_store(&store, &sig()) {
-        Err(StoreError::Snapshot(SnapshotError::Corrupt(
-            "promise cluster: reaction kind does not resume",
-        ))) => {}
-        other => panic!("the store path must share the reaction-kind gate: {other:?}"),
-    }
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
+        .unwrap();
+    assert!(matches!(
+        validate_store(&store, &sig()),
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(found)))
+            if found == "fromAsync reaction: missing or duplicate accumulation"
+    ));
+    // A kind past every carry is still refused on the byte itself.
+    let mut image = read_machine(&bytes, &sig()).expect("reads");
+    let row = image
+        .promise_cluster
+        .promises
+        .iter_mut()
+        .find(|p| !p.reactions.is_empty())
+        .expect("the fixture holds a pending reaction");
+    row.reactions[0].kind = 13;
+    expect_container_refusal(&image, "promise cluster: reaction kind does not resume");
+    // An async-generator kind decodes, but must name a carried instance
+    // that is serving a request; this fixture carries none.
+    let mut image = read_machine(&bytes, &sig()).expect("reads");
+    let row = image
+        .promise_cluster
+        .promises
+        .iter_mut()
+        .find(|p| !p.reactions.is_empty())
+        .expect("the fixture holds a pending reaction");
+    let reaction = &mut row.reactions[0];
+    reaction.kind = 4;
+    reaction.b = 0;
+    reaction.on_fulfilled = ironhorse_vm::Slot::undefined();
+    reaction.on_rejected = ironhorse_vm::Slot::undefined();
+    reaction.resolve = ironhorse_vm::Slot::undefined();
+    reaction.reject = ironhorse_vm::Slot::undefined();
+    expect_container_refusal(
+        &image,
+        "async generator reaction: missing or duplicate instance",
+    );
+    // A cross-table gate: the store admits the payload structurally and
+    // refuses it at adoption, like every other anchor check.
+    let mut store = MemoryStore::new();
+    store
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
+        .unwrap();
+    assert!(matches!(
+        validate_store(&store, &sig()),
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(found)))
+            if found == "async generator reaction: missing or duplicate instance"
+    ));
 }
 
 #[test]
@@ -529,13 +723,10 @@ fn a_finally_reaction_requires_a_constructor_after_restore() {
         .find(|r| r.kind == 1)
         .expect("the fixture holds a pending FinallyReturn reaction")
         .on_rejected = ironhorse_vm::Slot::of(
-            ironhorse_vm::Kind::Reference,
-            ironhorse_vm::Payload::Reference(ironhorse_vm::SlotIndex(array)),
-        );
-    expect_container_refusal(
-        &image,
-        "side-table restore: malformed promise capability",
+        ironhorse_vm::Kind::Reference,
+        ironhorse_vm::Payload::Reference(ironhorse_vm::SlotIndex(array)),
     );
+    expect_container_refusal(&image, "side-table restore: malformed promise capability");
 }
 
 #[test]
@@ -558,7 +749,10 @@ fn a_resolving_function_with_a_crafted_guard_or_promise_is_refused() {
     let m = promise_fixture();
     let bytes = m.write_snapshot(&sig()).expect("writes");
     let image = read_machine(&bytes, &sig()).expect("reads");
-    assert!(!image.promise_cluster.functions.is_empty(), "resolvers persisted");
+    assert!(
+        !image.promise_cluster.functions.is_empty(),
+        "resolvers persisted"
+    );
 
     let mut oor = image.clone();
     oor.promise_cluster.functions[0].guard = oor.promise_cluster.guards.len() as u32;
@@ -574,7 +768,10 @@ fn a_resolving_function_with_a_crafted_guard_or_promise_is_refused() {
         .unwrap()
         + 1;
     orphan.promise_cluster.functions[0].promise = absent;
-    expect_container_refusal(&orphan, "promise cluster: resolving function names no promise row");
+    expect_container_refusal(
+        &orphan,
+        "promise cluster: resolving function names no promise row",
+    );
 
     // An unreferenced guard cannot come from the compacting writer.
     let mut sparse = image.clone();
@@ -631,12 +828,40 @@ fn a_crafted_capability_executor_home_is_refused() {
         "promise cluster: malformed capability executor home",
     );
 
+    // Exactly one never-called sentinel cannot arise from a callback: both
+    // capture fields are initialized together, even for an empty call.
+    let home = image.promise_cluster.functions[executor].promise as usize;
+    let first = image.slots[home].next.0 as usize;
+    let second = image.slots[first].next.0 as usize;
+    for field in [first, second] {
+        let mut mixed = image.clone();
+        let sentinel = ironhorse_vm::value::Slot::uninitialized();
+        mixed.slots[field].kind = sentinel.kind;
+        mixed.slots[field].value = sentinel.value;
+        expect_container_refusal(&mixed, "promise cluster: mixed capability executor state");
+        let mut store = MemoryStore::new();
+        store
+            .commit(&image_to_batch_unchecked(&mixed, 1, CommitToken::ZERO))
+            .expect("crafted store");
+        assert!(
+            ironhorse_snapshot::machine::resume_from_store(&store, &sig()).is_err(),
+            "mixed capability state must not resume"
+        );
+        assert!(
+            ironhorse_snapshot::machine::resume_from_store_lazy(
+                std::rc::Rc::new(std::cell::RefCell::new(store)),
+                &sig()
+            )
+            .is_err(),
+            "mixed capability state must not resume lazily"
+        );
+    }
+
     // A merely in-bounds object is not a capability record. Adoption must
     // verify both hidden capture fields rather than resurrecting a callable
     // executor that reads unrelated heap state.
     let mut missing_fields = image;
-    missing_fields.promise_cluster.functions[executor].promise =
-        missing_fields.arrays[0].owner;
+    missing_fields.promise_cluster.functions[executor].promise = missing_fields.arrays[0].owner;
     expect_container_refusal(
         &missing_fields,
         "side-table restore: malformed promise cluster",
@@ -676,8 +901,7 @@ fn a_crafted_finally_wrapper_home_is_refused() {
     // A structurally in-bounds object is not a valid capture home. The image
     // decoder establishes shape; adoption verifies the required hidden fields.
     let mut missing_fields = image.clone();
-    missing_fields.promise_cluster.functions[wrappers[0]].promise =
-        missing_fields.arrays[0].owner;
+    missing_fields.promise_cluster.functions[wrappers[0]].promise = missing_fields.arrays[0].owner;
     expect_container_refusal(
         &missing_fields,
         "side-table restore: malformed promise cluster",
@@ -687,10 +911,7 @@ fn a_crafted_finally_wrapper_home_is_refused() {
     // that reads a missing `[[PromiseFinallyValue]]` capture.
     let mut wrong_kind = image;
     wrong_kind.promise_cluster.functions[wrappers[0]].guard = u32::MAX - 2;
-    expect_container_refusal(
-        &wrong_kind,
-        "side-table restore: malformed promise cluster",
-    );
+    expect_container_refusal(&wrong_kind, "side-table restore: malformed promise cluster");
 }
 
 #[test]
@@ -698,7 +919,11 @@ fn a_crafted_combinator_row_is_refused() {
     let m = combinator_fixture();
     let bytes = m.write_snapshot(&sig()).expect("writes");
     let image = read_machine(&bytes, &sig()).expect("reads");
-    assert_eq!(image.promise_cluster.combinators.len(), 1, "one live combinator");
+    assert_eq!(
+        image.promise_cluster.combinators.len(),
+        1,
+        "one live combinator"
+    );
 
     let mut kind = image.clone();
     kind.promise_cluster.combinators[0].kind = 4;
@@ -708,13 +933,19 @@ fn a_crafted_combinator_row_is_refused() {
     let mut sparse = image.clone();
     let extra = sparse.promise_cluster.combinators[0];
     sparse.promise_cluster.combinators.push(extra);
-    expect_container_refusal(&sparse, "promise cluster: combinators not densely referenced");
+    expect_container_refusal(
+        &sparse,
+        "promise cluster: combinators not densely referenced",
+    );
 
     // `remaining` below the pending element reactions would underflow
     // at the drain (each settling element decrements it once).
     let mut low = image.clone();
     low.promise_cluster.combinators[0].remaining = 0;
-    expect_container_refusal(&low, "promise cluster: remaining below its pending reactions");
+    expect_container_refusal(
+        &low,
+        "promise cluster: remaining below its pending reactions",
+    );
 
     // The results accumulator must name an `ARRY` row — the element
     // drain writes through the dense store (the view-names-a-buffer-row
@@ -722,7 +953,10 @@ fn a_crafted_combinator_row_is_refused() {
     // not an Array.
     let mut results = image;
     results.promise_cluster.combinators[0].results = results.promise_cluster.promises[0].owner;
-    expect_container_refusal(&results, "promise cluster: combinator's results Array has no row");
+    expect_container_refusal(
+        &results,
+        "promise cluster: combinator's results Array has no row",
+    );
 }
 
 /// The two-sided collision property: `PRMS` restores its resolving
@@ -746,8 +980,11 @@ fn a_resolver_crafted_onto_a_guest_function_slot_is_refused() {
         .promise_cluster
         .functions
         .sort_unstable_by_key(|row| row.function);
-    image.promise_cluster.functions.dedup_by_key(|row| row.function);
-    let crafted = write_machine(&image);
+    image
+        .promise_cluster
+        .functions
+        .dedup_by_key(|row| row.function);
+    let crafted = write_machine_unchecked(&image);
     match from_snapshot_bytes(&crafted, &sig()) {
         Err(SnapshotError::Corrupt("side-table restore: malformed retained function state")) => {}
         Err(other) => panic!("the FUNC collision check must refuse the crafted slot: {other:?}"),
@@ -776,7 +1013,10 @@ fn a_crafted_combine_element_shape_is_refused() {
         .find(|r| r.kind == 2)
         .expect("a pending element reaction");
     r.b = u32::MAX;
-    expect_container_refusal(&oor, "promise cluster: element index outside the results Array");
+    expect_container_refusal(
+        &oor,
+        "promise cluster: element index outside the results Array",
+    );
 
     // A kind-byte mutation cannot turn an ordinary queued reaction into a
     // synchronous callback. A direct callback must carry the private bridge's
@@ -853,7 +1093,7 @@ fn a_crafted_reaction_capability_is_refused() {
     let image = read_machine(&bytes, &sig()).expect("reads");
     fn reaction_of(
         img: &mut ironhorse_snapshot::image::MachineImage,
-    ) -> &mut ironhorse_vm::PromiseReactionRow {
+    ) -> &mut ironhorse_vm::snapshot_api::PromiseReactionRow {
         img.promise_cluster
             .promises
             .iter_mut()
@@ -948,7 +1188,10 @@ fn a_combinator_remaining_outside_its_element_count_is_refused() {
     // combinator stays pending forever.
     let mut inflated = image.clone();
     inflated.promise_cluster.combinators[0].remaining = u32::MAX;
-    expect_container_refusal(&inflated, "promise cluster: remaining outside its element count");
+    expect_container_refusal(
+        &inflated,
+        "promise cluster: remaining outside its element count",
+    );
 
     // A race never decrements, so its remaining must EQUAL the count.
     let mr = quiescent_machine(
@@ -961,7 +1204,10 @@ fn a_combinator_remaining_outside_its_element_count_is_refused() {
     let mut race = read_machine(&bytes, &sig()).expect("reads");
     assert_eq!(race.promise_cluster.combinators[0].kind, 2, "a race row");
     race.promise_cluster.combinators[0].remaining -= 1;
-    expect_container_refusal(&race, "promise cluster: remaining outside its element count");
+    expect_container_refusal(
+        &race,
+        "promise cluster: remaining outside its element count",
+    );
 }
 
 #[test]
@@ -1033,5 +1279,169 @@ fn a_present_but_empty_compound_atom_is_refused() {
     match read_machine(&empty, &sig()) {
         Err(SnapshotError::Corrupt("TMPR atom present but empty; the writer omits it")) => {}
         other => panic!("a present-but-empty TMPR must be refused: {other:?}"),
+    }
+}
+
+fn indexed_row_refusal(case: &str, expected: &'static str) {
+    use ironhorse_snapshot::machine::{resume_from_store, resume_from_store_lazy};
+    use ironhorse_vm::{ChunkOffset, Kind, Payload, Slot, SlotIndex};
+    // Supply an unreachable guest object explicitly; correctly retained boot
+    // natives must not be the source of this fixture's free slot.
+    let mut machine = quiescent_machine(
+        "var disposable = {}; disposable = null; var indexed = {0: 7}; indexed[0]",
+    );
+    machine.collect_garbage().unwrap();
+    let honest = read_machine(&machine.write_snapshot(&sig()).unwrap(), &sig()).unwrap();
+    assert_eq!(honest.index_props.len(), 1);
+    let mut image = honest.clone();
+    let free = *image
+        .slot_free
+        .first()
+        .expect("fixture has spare arena slots");
+    match case {
+        "owner bounds" => image.index_props[0].owner = image.slots.len() as u32,
+        "free owner" => image.index_props[0].owner = free,
+        "reference bounds" => {
+            image.index_props[0].items[0].1 = Slot::of(
+                Kind::Reference,
+                Payload::Reference(SlotIndex(image.slots.len() as u32)),
+            )
+        }
+        "free reference" => {
+            image.index_props[0].items[0].1 =
+                Slot::of(Kind::Reference, Payload::Reference(SlotIndex(free)))
+        }
+        "chunk bounds" => {
+            image.index_props[0].items[0].1 = Slot::of(
+                Kind::String,
+                Payload::String(ChunkOffset(image.chunks.len() as u32 + 4)),
+            )
+        }
+        "property id" => {
+            let bad = (1..u16::MAX)
+                .find(|id| {
+                    usize::from(*id) > image.names.len()
+                        && !image.symbols.pairs.iter().any(|(symbol, _)| symbol == id)
+                })
+                .unwrap();
+            image.index_props[0].items[0].1.id = bad;
+            assert_eq!(image.stored_unregistered_key_id(), Some(bad));
+        }
+        _ => unreachable!(),
+    }
+    let mut backing = MemoryStore::new();
+    backing
+        .commit(&image_to_batch_unchecked(&honest, 1, CommitToken::ZERO))
+        .unwrap();
+    let manifest = backing.manifest().unwrap();
+    let batch = image_to_batch_unchecked(&image, 2, manifest.token);
+    let mut failures = Vec::new();
+    if !matches!(from_snapshot_bytes(&write_machine_unchecked(&image), &sig()),
+        Err(SnapshotError::Corrupt(message)) if message == expected)
+    {
+        failures.push("container adoption");
+    }
+    let external = CraftedSmallStore { backing, batch };
+    if !matches!(validate_store(&external, &sig()),
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(message))) if message == expected)
+    {
+        failures.push("store validation");
+    }
+    if !matches!(resume_from_store(&external, &sig()),
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(message))) if message == expected)
+    {
+        failures.push("eager resume");
+    }
+    if !matches!(resume_from_store_lazy(std::rc::Rc::new(std::cell::RefCell::new(external)), &sig()),
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(message))) if message == expected)
+    {
+        failures.push("lazy resume");
+    }
+    assert!(failures.is_empty(), "{case} missed by {failures:?}");
+}
+
+#[test]
+fn indexed_owner_must_be_in_bounds() {
+    indexed_row_refusal("owner bounds", "slot index out of arena bounds");
+}
+#[test]
+fn indexed_owner_must_be_live() {
+    indexed_row_refusal("free owner", "side table names a free slot");
+}
+#[test]
+fn indexed_reference_must_be_in_bounds() {
+    indexed_row_refusal("reference bounds", "slot index out of arena bounds");
+}
+#[test]
+fn indexed_reference_must_be_live() {
+    indexed_row_refusal("free reference", "slot index out of arena bounds");
+}
+#[test]
+fn indexed_chunk_reference_must_be_in_bounds() {
+    indexed_row_refusal("chunk bounds", "chunk offset out of arena bounds");
+}
+#[test]
+fn indexed_property_id_must_be_registered() {
+    indexed_row_refusal(
+        "property id",
+        "stored property id outside the name and symbol-key tables",
+    );
+}
+
+#[test]
+fn malformed_global_reconstruction_is_refused_by_vm_adoption() {
+    use ironhorse_vm::{Kind, Payload};
+    let machine = quiescent_machine("globalThis");
+    let image = machine.snapshot_image_for_testing(&sig()).unwrap();
+    let id = image
+        .names
+        .iter()
+        .position(|name| name == "globalThis")
+        .unwrap() as u16
+        + 1;
+    let root = image
+        .slots
+        .iter()
+        .find_map(|slot| {
+            if slot.id == id {
+                if let Payload::Reference(owner) = slot.value {
+                    return Some(owner);
+                }
+            }
+            None
+        })
+        .unwrap();
+    for cyclic in [false, true] {
+        let mut image = image.clone();
+        if cyclic {
+            let property = image.slots[root.0 as usize].next;
+            image.slots[property.0 as usize].next = property;
+        } else {
+            image.slots[root.0 as usize].kind = Kind::Integer;
+            image.slots[root.0 as usize].value = Payload::Integer(0);
+        }
+        assert!(matches!(
+            from_snapshot_bytes(&write_machine_unchecked(&image), &sig()),
+            Err(SnapshotError::Corrupt("arena restore failed"))
+        ));
+        let mut store = MemoryStore::new();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
+            .unwrap();
+        assert!(matches!(
+            ironhorse_snapshot::machine::resume_from_store(&store, &sig()),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "arena restore failed"
+            )))
+        ));
+        assert!(matches!(
+            ironhorse_snapshot::machine::resume_from_store_lazy(
+                std::rc::Rc::new(std::cell::RefCell::new(store)),
+                &sig()
+            ),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "arena restore failed"
+            )))
+        ));
     }
 }

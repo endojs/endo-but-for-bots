@@ -17,9 +17,11 @@
 //! ```
 //!
 //! The instrument prints medians and ratios; the phase-3 gate's
-//! detached half lives in `ironhorse-vm/tests/dispatch_bench.rs` and
+//! detached half lives in `ironhorse-snapshot/tests/dispatch_bench.rs` and
 //! is unaffected by attachment (detached machines pay one
 //! always-false branch).
+
+mod bench_support;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -34,7 +36,7 @@ fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
 }
 
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
+fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("fixture compiles");
     (bytecode, parse_symbols(&symbols))
 }
@@ -59,7 +61,11 @@ fn attached_vs_detached_hot_crank() {
                acc";
     let (b_build, names) = compile(build);
     let (b_hot, _) = compile(hot);
-    const ROUNDS: usize = 9;
+    // Each round is a crank of a few tens of milliseconds. Twenty-one rounds,
+    // as every timing fixture now takes, narrow the median's spread between
+    // runs of one binary on a shared host (`benches/results/
+    // repin-3a30ab1e9.json`, `noise`).
+    const ROUNDS: usize = 21;
 
     // Arm 1: detached (no store anywhere).
     let mut detached = Interp::new();
@@ -99,10 +105,10 @@ fn attached_vs_detached_hot_crank() {
     {
         let m = resident.machine();
         for page in 0..slot_page_count(manifest.slot_count) {
-            m.slots.touch_page(page);
+            m.slots().touch_page(page);
         }
         for ext in 0..chunk_extent_count(manifest.chunk_len) {
-            m.chunks.touch_extent(ext);
+            m.chunks().touch_extent(ext);
         }
     }
     let resident_ms: Vec<f64> = (0..ROUNDS)
@@ -132,8 +138,25 @@ fn attached_vs_detached_hot_crank() {
         })
         .collect();
 
-    let (d, r, f) = (median(detached_ms), median(resident_ms), median(faulting_ms));
+    let (d, r, f) = (
+        median(detached_ms),
+        median(resident_ms),
+        median(faulting_ms),
+    );
+    for (name, value) in [
+        ("attached_detached_ms", d),
+        ("attached_resident_ms", r),
+        ("attached_faulting_ms", f),
+    ] {
+        bench_support::report(name, value);
+    }
     println!("detached hot crank median:          {d:.3} ms");
-    println!("attached-resident hot crank median: {r:.3} ms  (x{:.3} of detached)", r / d);
-    println!("attached-faulting hot crank median: {f:.3} ms  (x{:.3} of detached)", f / d);
+    println!(
+        "attached-resident hot crank median: {r:.3} ms  (x{:.3} of detached)",
+        r / d
+    );
+    println!(
+        "attached-faulting hot crank median: {f:.3} ms  (x{:.3} of detached)",
+        f / d
+    );
 }

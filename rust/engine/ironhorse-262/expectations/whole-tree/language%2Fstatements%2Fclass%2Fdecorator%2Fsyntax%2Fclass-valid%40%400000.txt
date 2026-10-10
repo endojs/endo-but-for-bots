@@ -1,0 +1,3 @@
+# engine=ironhorse features=default corpus=language/statements/class/decorator/syntax/class-valid tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/decorator/syntax/class-valid/decorator-member-expr-private-identifier.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid character @\" ironhorse=\"SyntaxError\""
+language/statements/class/decorator/syntax/class-valid/decorator-member-expr-private-identifier.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid character @\" ironhorse=\"SyntaxError\""

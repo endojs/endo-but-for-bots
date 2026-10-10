@@ -60,6 +60,8 @@ import { E } from '@endo/eventual-send';
 import { makeError, X, q } from '@endo/errors';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
+import { toCurrentSpecifier } from './current-specifier.js';
+
 /** @import { FarRef } from '@endo/eventual-send' */
 
 /**
@@ -94,10 +96,9 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
  * @property {(readerRef: any) => AsyncIterator<any>} [iterateMessages]
  */
 
-const CREDENTIALS_MODULE_SPECIFIER = new URL(
-  './claude-credentials-module.js',
-  import.meta.url,
-).href;
+const CREDENTIALS_MODULE_SPECIFIER = toCurrentSpecifier(
+  new URL('./claude-credentials-module.js', import.meta.url).href,
+);
 
 const FactoryInterface = M.interface('ClaudeCredentialsFactory', {
   help: M.call().optional(M.string()).returns(M.string()),
@@ -121,9 +122,17 @@ const CredentialsInterface = M.interface('ClaudeCredentials', {
  * Credential kinds. `apiKey` is a raw Anthropic API key
  * (`ANTHROPIC_API_KEY`); `oauthToken` is the short-lived OAuth access
  * token Claude Code accepts headlessly (`CLAUDE_CODE_OAUTH_TOKEN`, as
- * minted by `claude setup-token`).
+ * minted by `claude setup-token`); `subscription` is a Max/Pro
+ * subscription value presented to `claude --bare` through an
+ * `apiKeyHelper` (the only credential path `--bare` honors) — the kind
+ * `@endo/claude` requires and neither of the other two provides
+ * (`--bare` ignores `CLAUDE_CODE_OAUTH_TOKEN`; `apiKey` is the metered
+ * path the subscription premise excludes). A `subscription` credential
+ * is settings-file-shaped, not env-var-shaped, so the env-var-routed
+ * `ClaudeClient` slice (`claude-client-module.js`) refuses it; it is
+ * consumed by `@endo/claude`'s `renderApiKeyHelperSettings`.
  */
-const CREDENTIAL_KINDS = harden(['apiKey', 'oauthToken']);
+const CREDENTIAL_KINDS = harden(['apiKey', 'oauthToken', 'subscription']);
 
 const FORM_DESCRIPTION = 'Create Claude Credentials';
 
@@ -137,7 +146,7 @@ const FORM_FIELDS = harden([
     name: 'kind',
     label: 'Credential kind',
     default: 'apiKey',
-    example: 'apiKey | oauthToken',
+    example: 'apiKey | oauthToken | subscription',
   },
   {
     name: 'apiKey',

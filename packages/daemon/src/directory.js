@@ -7,6 +7,11 @@ import { makeExo } from '@endo/exo';
 import { q } from '@endo/errors';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+
+import {
+  cancelPendingIterator,
+  makeCancelableIterator,
+} from './cancelable-iterator.js';
 import {
   externalizeId,
   internalizeLocator,
@@ -22,11 +27,90 @@ import {
   petNamePathFrom,
 } from './pet-name.js';
 import { makeDeferredTasks } from './deferred-tasks.js';
-import { directoryHelp, makeHelp } from './help-text.js';
+import { directoryHelp, readableNameHubHelp, makeHelp } from './help-text.js';
 
-import { DirectoryInterface } from './interfaces.js';
+import { DirectoryInterface, ReadableNameHubInterface } from './interfaces.js';
 
-/** @import { DaemonCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, ContentLocatable, ContentIdentity, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, StoreController } from './types.js' */
+/** @import { DaemonCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, ContentLocatable, ContentIdentity, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, ReadableNameHub, StoreController } from './types.js' */
+
+// A read-only view of a name hub: a local in-daemon exo that forwards only the
+// readable hub methods (help / has / list / lookup / maybeLookup) to the
+// backing hub. The exo carries the canonical `ReadableNameHubInterface`
+// guard, so malformed / extra / wrong-typed arguments from a less-trusted
+// holder are rejected at THIS boundary — before they reach the backing hub —
+// rather than only downstream. `harden`/`Far` gives passability but no argument
+// guard, which is why this is a guarded `makeExo` and not a bare `Far`.
+//
+// This is a plain local exo rather than a worker-hosted evaluation formula: it
+// carries no formula identity and pins no worker, so a less-trusted holder
+// cannot loop `readOnly()` into unbounded worker spawn or an unreclaimable pin.
+// The consequence — the view cannot be pet-named, stored, or independently
+// revoked, and does not survive a daemon restart — is intentional for this
+// directory slice; a later slice of the #1125 stack that needs a first-class,
+// storable formula identity introduces it in the slice that consumes it. See
+// the reconciliation note in the PR body against kriskowal's #1125 direction.
+//
+// `help` routes through the shared `@endo/helpdown` `makeHelp` over the
+// `help.md`-generated `readableNameHubHelp` record, exactly like every other
+// daemon exo (so `help.md` owns this text and it cannot drift). `makeHelp` does
+// an own-property lookup, so a caller-supplied method name (`help('constructor')`,
+// `help('toString')`) cannot reach an inherited `Object.prototype` value. `help`
+// is a synchronous self-description of the read-only surface (the guard requires
+// a string return, and a remote forward would resolve to a promise); the four
+// read methods forward to the backing hub and keep their promise/any returns.
+//
+// `assertLive` is the liveness gate. The view forwards to a `hub` record that
+// closes over the backing directory's live machinery, but it carries no formula
+// identity, so formula collection's `disconnectRetainersHolding` sever path
+// (which only reaches formula-backed holders) cannot reach it. Without this
+// gate a holder's reads would keep resolving from the surviving closure after
+// the grantor collected the backing directory — a capability the daemon
+// believes it revoked. Gating every forward on the grantor's context
+// cancellation makes the view severable, mirroring `mount.js`'s `assertLive()`.
+
+/**
+ * Mint a read-only `ReadableNameHub` view over a backing name hub. The view is
+ * a local exo carrying the canonical `ReadableNameHubInterface` guard; it
+ * forwards the five readable methods to `hub` and exposes no mutators. `help`
+ * routes through the shared `makeHelp` (own-property lookup, so a caller-supplied
+ * method name cannot walk `Object.prototype`). Every forward is gated on
+ * `assertLive` so collection of the backing capability severs the view.
+ *
+ * @param {Pick<NameHub, 'has' | 'list' | 'lookup' | 'maybeLookup'>} hub
+ * @param {() => void} [assertLive] Throws if the backing capability has been
+ *   canceled; defaults to a no-op for a hub with no collection lifecycle.
+ * @returns {ReadableNameHub}
+ */
+export const makeReadOnlyDirectoryView = (hub, assertLive = () => {}) => {
+  const help = makeHelp(readableNameHubHelp);
+  return /** @type {ReadableNameHub} */ (
+    /** @type {unknown} */ (
+      makeExo(
+        'ReadableNameHub',
+        ReadableNameHubInterface,
+        /** @type {any} */ ({
+          help: (/** @type {string | undefined} */ method) => help(method),
+          has: (...path) => {
+            assertLive();
+            return E(hub).has(...path);
+          },
+          list: (...path) => {
+            assertLive();
+            return E(hub).list(...path);
+          },
+          lookup: path => {
+            assertLive();
+            return E(hub).lookup(path);
+          },
+          maybeLookup: path => {
+            assertLive();
+            return E(hub).maybeLookup(path);
+          },
+        }),
+      )
+    )
+  );
+};
 
 /**
  * @param {object} args
@@ -202,6 +286,23 @@ export const makeDirectoryMaker = ({
       }
       const hub = /** @type {NameHub} */ (await lookup(petNamePath));
       return E(hub).list();
+    };
+
+    /** @type {EndoDirectory['listValues']} */
+    const listValues = async () => {
+      // Capture every value through the same lookup path clients use, but do
+      // all name enumeration and root lookup synchronously in this exo turn.
+      // This is an atomic snapshot with respect to other directory messages:
+      // no mutation can interleave between list() and the lookup of a name.
+      const names = controller.list();
+      const values = names.map(name => {
+        try {
+          return lookup(name);
+        } catch (error) {
+          return Promise.reject(error);
+        }
+      });
+      return harden(values);
     };
 
     /** @type {EndoDirectory['listIdentifiers']} */
@@ -390,23 +491,34 @@ export const makeDirectoryMaker = ({
     };
 
     /** @type {EndoDirectory['followNameChanges']} */
-    const followNameChanges = async function* followNameChanges(
-      ...petNamePath
-    ) {
-      assertNames(petNamePath);
-      if (petNamePath.length === 0) {
-        for await (const change of controller.followNameChanges()) {
+    const followNameChanges = (...petNamePath) =>
+      makeCancelableIterator(async function* followChanges(setCancelPending) {
+        assertNames(petNamePath);
+        if (petNamePath.length === 0) {
+          const subscription = controller.followNameChanges();
+          try {
+            const cancellation = setCancelPending(() =>
+              cancelPendingIterator(subscription),
+            );
+            if (cancellation !== undefined) await cancellation;
+            for await (const change of subscription) {
+              yield await enrichWithType(change);
+            }
+          } finally {
+            await subscription.return(undefined);
+          }
+          return undefined;
+        }
+        // Remote hubs expose their own stream protocol; cancellation here only
+        // reaches local root subscriptions, not a remote hub's pending work.
+        const hub = /** @type {NameHub} */ (await lookup(petNamePath));
+        for await (const change of /** @type {AsyncIterable<PetStoreNameChange>} */ (
+          await E(hub).followNameChanges()
+        )) {
           yield await enrichWithType(change);
         }
-        return;
-      }
-      const hub = /** @type {NameHub} */ (await lookup(petNamePath));
-      for await (const change of /** @type {AsyncIterable<PetStoreNameChange>} */ (
-        await E(hub).followNameChanges()
-      )) {
-        yield await enrichWithType(change);
-      }
-    };
+        return undefined;
+      });
 
     /** @type {EndoDirectory['remove']} */
     const remove = async (...petNamePath) => {
@@ -565,6 +677,7 @@ export const makeDirectoryMaker = ({
       reverseLocate,
       followLocatorNameChanges,
       list,
+      listValues,
       listIdentifiers,
       listLocators,
       locateContent,
@@ -623,6 +736,7 @@ export const makeDirectoryMaker = ({
       locate,
       reverseLocate,
       list,
+      listValues,
       listIdentifiers,
       listLocators,
       lookup,
@@ -632,6 +746,37 @@ export const makeDirectoryMaker = ({
       copy,
       makeDirectory,
     } = directory;
+
+    // The read-only view is memoized per directory: the first `readOnly()` call
+    // mints the local exo; every later call returns the same object. The view is
+    // a plain in-daemon exo (no worker, no formula, no pin). Because
+    // `@endo/captp` defaults `gcImports = false`, a guest looping `readOnly()`
+    // over an unmemoized mint would retain one export-table slot per call until
+    // the connection closes, so this memo is that bound, not merely a stable
+    // identity convenience.
+    /** @type {ReadableNameHub | undefined} */
+    let readOnlyView;
+
+    // Liveness gate for the read-only view: the view carries no formula identity,
+    // so formula collection's sever path cannot reach it. Trip a flag when this
+    // directory's context is canceled so the view stops forwarding reads once
+    // the backing directory is collected — a capability handed to a less-trusted
+    // holder must not outlive revocation of the capability it attenuates. Key the
+    // gate off `context.cancelled` (rejected synchronously inside `cancel`) rather
+    // than an `onCancel` hook: the hook drain is serial over `hooks.reverse()`, so
+    // a hook-driven flag would flip only behind every later-registered peer hook —
+    // a peer that awaits a slow teardown, or never settles, would keep this view
+    // forwarding to an already-revoked directory. `.catch` on `cancelled` trips the
+    // flag one microtask after rejection regardless of drain order.
+    let cancelled = false;
+    void context.cancelled.catch(() => {
+      cancelled = true;
+    });
+    const assertReadOnlyViewLive = () => {
+      if (cancelled) {
+        throw new Error('Directory has been revoked');
+      }
+    };
 
     return makeExo(
       'EndoDirectory',
@@ -645,10 +790,15 @@ export const makeDirectoryMaker = ({
         followLocatorNameChanges: locator =>
           readerFromIterator(directory.followLocatorNameChanges(locator)),
         list,
+        listValues,
         listIdentifiers,
         listLocators,
-        followNameChanges: () =>
-          readerFromIterator(directory.followNameChanges()),
+        followNameChanges: () => {
+          const iterator = directory.followNameChanges();
+          return readerFromIterator(iterator, {
+            cancelPending: () => cancelPendingIterator(iterator),
+          });
+        },
         lookup,
         maybeLookup: directory.maybeLookup,
         reverseLookup,
@@ -661,6 +811,26 @@ export const makeDirectoryMaker = ({
         readText: directory.readText,
         maybeReadText: directory.maybeReadText,
         writeText: directory.writeText,
+        // Mint a read-only `ReadableNameHub` view. Attenuation is SHALLOW:
+        // the view withholds this directory's OWN mutators, but `lookup`/
+        // `maybeLookup` on it forward to the backing directory and return any
+        // nested directory / agent handle / worker as the live, fully-writable
+        // object — not a further-attenuated view. The narrowing therefore
+        // reaches only one hop: a holder can mutate any writable capability the
+        // backing directory names, including a name bound back to this directory
+        // itself or an ancestor, which voids the narrowing entirely. This is
+        // documented on `ReadableNameHub.lookup` in types.d.ts; callers needing
+        // a recursively read-only surface must re-attenuate results themselves.
+        readOnly: async () => {
+          assertReadOnlyViewLive();
+          if (readOnlyView === undefined) {
+            readOnlyView = makeReadOnlyDirectoryView(
+              harden({ has, list, lookup, maybeLookup: directory.maybeLookup }),
+              assertReadOnlyViewLive,
+            );
+          }
+          return readOnlyView;
+        },
       }),
     );
   };

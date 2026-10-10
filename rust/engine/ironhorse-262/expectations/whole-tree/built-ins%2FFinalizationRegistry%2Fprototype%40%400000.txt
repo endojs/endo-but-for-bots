@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=built-ins/FinalizationRegistry/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/FinalizationRegistry/prototype/Symbol.toStringTag.js sloppy skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/Symbol.toStringTag.js strict skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/constructor.js sloppy skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/constructor.js strict skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/prop-desc.js sloppy skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/prop-desc.js strict skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/proto.js sloppy skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/FinalizationRegistry/prototype/proto.js strict skip:ironhorse-missing-global:FinalizationRegistry

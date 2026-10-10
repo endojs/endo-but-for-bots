@@ -31,8 +31,8 @@ pub const CX_MODIFIERS_STEP: i32 = 23;
 
 /// `XS_REGEXP_METERING` (`xsCommon.h`): the 16.16 fixed-point cost of
 /// dispatching one match step.
-pub const XS_REGEXP_METERING: u64 = 1 << 16;
+pub use ironhorse_meter::XS_REGEXP_METERING;
 
 /// `XS_PARSE_REGEXP_METERING` (`xsCommon.h`): the per-byte compile cost;
 /// `fxCompileRegExp` charges `size * XS_PARSE_REGEXP_METERING`.
-pub const XS_PARSE_REGEXP_METERING: u64 = 1 << 10;
+pub use ironhorse_meter::XS_PARSE_REGEXP_METERING;

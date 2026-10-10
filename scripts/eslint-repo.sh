@@ -39,14 +39,14 @@
 # therefore remain part of lint coverage. Extra arguments are forwarded to
 # each invocation, so `scripts/eslint-repo.sh --fix` fixes the whole repository.
 #
-# ESLINT_BUCKET_SIZE (default 10) tunes how many packages share one process.
+# ESLINT_BUCKET_SIZE (default 6) tunes how many packages share one process.
 # Lower it if a future large pull request ever pressures a bucket into the
 # ceiling; raise it to trade a wider safety margin for fewer processes.
 #
 # Exits non-zero if any batch reports errors.
 set -eu
 
-: "${ESLINT_BUCKET_SIZE:=10}"
+: "${ESLINT_BUCKET_SIZE:=6}"
 
 status=0
 

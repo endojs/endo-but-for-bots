@@ -32,8 +32,10 @@ fn exact_fuzz_input_source_getter_does_not_allocate() {
         output.result, EXPECTED_RESULT,
         "the source getter must preserve the completion value"
     );
+    // Meter version 2 adds parser and source-copy work; pin raw units so a spurious
+    // 96-unit source allocation cannot hide in computron rounding.
     assert_eq!(
-        output.computrons, 36,
+        output.meter_raw, 4_140_960,
         "an unescaped source getter must reuse the existing source string"
     );
 }

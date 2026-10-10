@@ -1,0 +1,671 @@
+//! Intrinsic reflection and constructor probes exercised by the SES bootstrap.
+mod common;
+use common::TestCompiler;
+
+use ironhorse_vm::{parse_symbols, Interp};
+
+fn result(source: &str) -> String {
+    std::thread::Builder::new()
+        .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)
+        .spawn({
+            let source = source.to_string();
+            move || {
+                let (code, symbols) = ironhorse_compile::compile_atoms(&source).unwrap();
+                let mut machine = Interp::new();
+                machine.set_source_compiler(std::rc::Rc::new(TestCompiler));
+                machine.link_intrinsics(&parse_symbols(&symbols));
+                let outcome = machine.run(&code);
+                assert!(outcome.completed, "{:?}", outcome.halt);
+                outcome.result
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
+#[test]
+fn buffer_accessors_can_be_captured_and_brand_check_the_receiver() {
+    assert_eq!(
+        result(
+            r#"
+        var b = new ArrayBuffer(12), v = new DataView(b, 3, 5);
+        var get = (p, n) => Object.getOwnPropertyDescriptor(p, n).get;
+        var a = get(ArrayBuffer.prototype, 'byteLength');
+        var d = get(DataView.prototype, 'byteLength');
+        var o = get(DataView.prototype, 'byteOffset');
+        var r = get(DataView.prototype, 'buffer');
+        var caught = 0;
+        for (var f of [a, d, o, r]) { try { f.call({}) } catch(e) { caught += e instanceof TypeError; } }
+        [a.call(b), d.call(v), o.call(v), r.call(v) === b, caught].join(':')
+    "#
+        ),
+        "12:5:3:true:4"
+    );
+}
+
+#[test]
+fn generator_function_prototype_exposes_the_shared_generator_prototype() {
+    assert_eq!(
+        result(
+            r#"
+        var f = function*() { yield 42; };
+        var p = Object.getPrototypeOf(f);
+        var d = Object.getOwnPropertyDescriptor(p, 'prototype');
+        [d.value === Object.getPrototypeOf(f.prototype), d.writable, d.enumerable,
+         d.configurable, p.prototype.next.call(f()).value].join(':')
+    "#
+        ),
+        "true:false:false:true:42"
+    );
+}
+
+#[test]
+fn collection_constructor_detection_throws_catchable_type_errors() {
+    assert_eq!(
+        result(
+            r#"
+        var n = 0;
+        for (var C of [Map, Set, WeakMap, WeakSet]) {
+            try { C(); } catch(e) { n += e instanceof TypeError; }
+            var c = new C();
+            n += typeof c === 'object';
+        }
+        n
+    "#
+        ),
+        "8"
+    );
+}
+
+#[test]
+fn in_links_computed_intrinsic_names_without_resurrecting_deleted_members() {
+    assert_eq!(
+        result(
+            r#"
+        var name = 'to' + 'String';
+        var before = name in {};
+        delete Object.prototype[name];
+        var after = name in {};
+        [before, after, 'ent' + 'ries' in new Map()].join(':')
+    "#
+        ),
+        "true:false:true"
+    );
+}
+
+#[test]
+fn short_eval_does_not_lower_the_intrinsic_install_floor() {
+    assert_eq!(
+        result(
+            r#"
+        var p = Iterator.prototype;
+        var old = Reflect.ownKeys(p);
+        for (var key of old) { if(key !== Symbol.iterator) delete p[key]; }
+        (0, eval)('1');
+        Reflect.ownKeys(p).map(String).join(',')
+    "#
+        ),
+        "Symbol(Symbol.iterator)"
+    );
+}
+
+#[test]
+fn async_generator_inherits_a_distinct_async_iterator_prototype() {
+    assert_eq!(
+        result(
+            r#"
+        var f = async function*() {};
+        var g = Object.getPrototypeOf(f).prototype;
+        var p = Object.getPrototypeOf(g);
+        var o = {};
+        [p !== Object.prototype, Object.getPrototypeOf(p) === Object.prototype,
+         p[Symbol.asyncIterator].call(o) === o].join(':')
+    "#
+        ),
+        "true:true:true"
+    );
+}
+
+#[test]
+fn computed_compound_assignment_preserves_reference_and_evaluates_key_once() {
+    assert_eq!(
+        result(
+            r#"
+        var o = {n: 3}, calls = 0;
+        var key = () => { calls++; return 'n'; };
+        var a = o[key()] += 4;
+        var b = o[key()] ||= 99;
+        var c = o[key()] &&= 11;
+        [a, b, c, o.n, calls].join(':')
+    "#
+        ),
+        "7:7:11:11:3"
+    );
+}
+
+#[test]
+fn intrinsic_reflection_materializes_symbol_keys_before_freeze() {
+    assert_eq!(
+        result(
+            r#"
+        const prototype = Array.prototype;
+        const keys = Reflect.ownKeys(prototype);
+        const symbol = Symbol.unscopables;
+        const present = keys.includes(symbol);
+        delete prototype[symbol];
+        Object.freeze(prototype);
+        const before = Reflect.ownKeys(prototype).length;
+        eval("Array.prototype[Symbol.unscopables]; Array.prototype['to' + 'Sorted'];");
+        [present, Object.isFrozen(prototype), prototype[symbol] === undefined,
+         Reflect.ownKeys(prototype).length === before].join(':')
+    "#
+        ),
+        "true:true:true:true"
+    );
+}
+
+#[test]
+fn later_intrinsic_linking_preserves_frozen_descriptors() {
+    assert_eq!(
+        result(
+            r#"
+        const protos = [Array.prototype, Error.prototype,
+          Object.getPrototypeOf((async function* () {})()).constructor.prototype];
+        protos.forEach(Object.freeze);
+        const before = protos.map(p => Reflect.ownKeys(p).length);
+        eval("new Intl.NumberFormat(); Object.getOwnPropertyDescriptor(Error.prototype, 'stack');");
+        protos.map((p, i) => Object.isFrozen(p) && Reflect.ownKeys(p).length === before[i]).join(':')
+    "#
+        ),
+        "true:true:true"
+    );
+}
+
+#[test]
+fn frozen_global_is_not_extended_by_computed_intrinsic_names() {
+    assert_eq!(
+        result(
+            r#"
+        (() => {
+            const global = globalThis;
+            Object.freeze(global);
+            const count = Reflect.ownKeys(global).length;
+            const name = ['Weak', 'Set'].join('');
+            const constructor = global[name];
+            return [typeof constructor, Object.isFrozen(global), Reflect.ownKeys(global).length === count].join(':');
+        })()
+    "#
+        ),
+        "function:true:true"
+    );
+}
+
+#[test]
+fn buffer_named_reads_honor_accessor_replacement_deletion_and_shadowing() {
+    assert_eq!(
+        result(
+            r#"
+        const buffer = new ArrayBuffer(12), view = new DataView(buffer, 3, 5);
+        const cases = [[buffer, ArrayBuffer.prototype, 'byteLength'],
+            [view, DataView.prototype, 'byteLength'],
+            [view, DataView.prototype, 'byteOffset'],
+            [view, DataView.prototype, 'buffer']];
+        const direct = [(x) => x.byteLength, (x) => x.byteLength,
+            (x) => x.byteOffset, (x) => x.buffer];
+        cases.map(([instance, prototype, key], i) => {
+            const read = direct[i];
+            Object.defineProperty(prototype, key, {get() { return 99; }});
+            const replaced = read(instance) === 99 && Reflect.get(instance, key) === 99;
+            delete prototype[key];
+            const deleted = read(instance) === undefined && Reflect.get(instance, key) === undefined;
+            Object.defineProperty(instance, key, {value: 42});
+            return replaced && deleted && read(instance) === 42 && Reflect.get(instance, key) === 42;
+        }).join(':')
+    "#
+        ),
+        "true:true:true:true"
+    );
+}
+
+/// The guest Hardened-JavaScript surface the ENGINE does not implement, and
+/// the realm profile that decides whether the shim can supply it instead.
+///
+/// `designs/ironhorse-ses-compartment-equivalence.md` measures ironhorse as
+/// having no guest `lockdown` and no guest `Compartment`. Both are true of the
+/// engine's own bindings, and neither is the whole story: the real `ses` shim
+/// installs both, and `packages/thixotrope` already ships that configuration
+/// (`scripts/bundle-ironhorse-worker.mjs` bundles `ses`, deletes
+/// `polyfills.js`'s `harden` so the shim can install its own, and calls
+/// `lockdown({ errorTaming: 'safe', reporting: 'none', overrideTaming: 'min' })`).
+///
+/// What decides whether the shim can supply it is WHEN the freeze happens, not
+/// which constructor was used. `Interp::new()` and
+/// `Machine::unfrozen_with_start_global_names` leave the intrinsics mutable and the
+/// shim repairs and then freezes them itself. `Machine::new()` freezes them at
+/// construction, and the SES bundle then cannot rewrite a descriptor it needs
+/// to (see `FROZEN_REALM_FORECLOSURE` for exactly where that stops it, which
+/// is NOT `repairIntrinsics`).
+///
+/// That used to make the two mutually exclusive -- the multi-compartment
+/// `Machine` API came only with the construction-time freeze. Deferring the
+/// freeze removes the exclusion: see
+/// `an_unfrozen_machine_takes_the_shim_and_keeps_its_compartments`.
+fn thixotrope_ses_boot() -> Option<String> {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../packages/thixotrope/dist-ironhorse/boot.js"
+    );
+    match std::fs::read_to_string(path) {
+        Ok(source) => Some(source),
+        Err(_) => {
+            assert!(
+                std::env::var_os("IRONHORSE_SES_SHIM_REQUIRED").is_none(),
+                "IRONHORSE_SES_SHIM_REQUIRED is set but {path} is absent: the lane \
+                 claims to have run `yarn workspace @endo/thixotrope \
+                 build:ironhorse-bundles` and did not"
+            );
+            eprintln!(
+                "ses-shim: dist-ironhorse/boot.js absent \u{2014} run \
+                 `yarn workspace @endo/thixotrope build:ironhorse-bundles` to run this"
+            );
+            None
+        }
+    }
+}
+
+/// The realm profile, as a single line.
+///
+/// `hardenTraverses` is the one entry that is not a `typeof`, and it is the
+/// point of the census rather than a flourish. Every configuration here has
+/// SOME `harden` -- the engine binds its own, the shim installs its own, and a
+/// pre-lockdown stand-in is a third -- so `typeof harden` is `function`
+/// throughout and pins nothing. What distinguishes them is whether `harden`
+/// walks prototype chains, which is what makes it a security primitive rather
+/// than an `Object.freeze` alias: a hardened object whose prototype is still
+/// extensible has methods anyone holding that prototype can replace.
+///
+/// The probe hardens `{ __proto__: proto }` where `proto` itself has a NULL
+/// prototype, and asks whether `proto` came out frozen. The null link is
+/// load-bearing: a probe built on `{}` would walk to `Object.prototype` and
+/// freeze the intrinsic graph, which is exactly the pre-lockdown freeze the
+/// prologue exists to avoid -- the census would corrupt the realm it measures
+/// and take `frozenObjectProto` with it.
+const SES_CENSUS: &str = "['lockdown','harden','Compartment']\
+    .map(function(n){ return n + '=' + (typeof globalThis[n]); }).join(' ') \
+    + ' hardenTraverses=' + (function(){ \
+        if (typeof globalThis.harden !== 'function') { return 'n/a'; } \
+        var proto = { __proto__: null }; \
+        try { globalThis.harden({ __proto__: proto }); } \
+        catch (e) { return 'threw:' + e.message; } \
+        return String(Object.isFrozen(proto)); \
+      })() \
+    + ' frozenObjectProto=' + Object.isFrozen(Object.prototype)";
+
+/// What a realm frozen before the prologue runs reports, verbatim.
+///
+/// Named rather than inlined because it is a PROPERTY OF WHICH REPAIR THE
+/// PROLOGUE ATTEMPTS FIRST AGAINST A SEALED SLOT, not of the shim: reorder
+/// `packages/ironhorse-prelude/prelude.js` and this string changes without
+/// anything being wrong. The assertion below says what must not change -- that
+/// the boot forecloses at all -- and this says where it currently does.
+///
+/// Not the prologue's first statement, which is `delete globalThis.harden`:
+/// that one SUCCEEDS even here, because `Machine::new`'s freeze seals the
+/// intrinsic graph and not the start global's own properties.
+///
+/// As of the lazy Iterator helpers, the prologue refuses NOTHING. Its only
+/// other operation against a sealed slot was the `Iterator.prototype` sweep,
+/// which existed because the five lazy helpers halted uncatchably; they are
+/// implemented, so the sweep is gone and the prologue runs to completion even
+/// here. Foreclosure moves one layer later, into the SES bundle -- the third
+/// value this constant has held.
+///
+/// NOT in `repairIntrinsics`, which two earlier revisions of this comment
+/// claimed. `lockdown()` is never reached. The abort happens while the SES
+/// bundle's MODULE GRAPH is still evaluating, at `@endo/immutable-arraybuffer`'s
+/// module-scope install (`packages/immutable-arraybuffer/src/shim.js`, pulled in
+/// unconditionally by `packages/ses/src/lockdown.js`), on its first
+/// `defineProperties` against the frozen `ArrayBuffer.prototype`. Measured:
+/// evaluating the bundle TRUNCATED before its trailing `lockdown({...})` call
+/// still throws this, and `globalThis.lockdown` is still identically the
+/// engine's binding afterwards -- so `ses/src/lockdown-shim.js`, which assigns
+/// that global at module scope, had not finished either. The census asserted
+/// after the failure says the same thing in the other direction, and the two
+/// used to contradict each other.
+///
+/// Two things follow that the message itself does not say. The realm is
+/// foreclosed CLEANLY rather than half-repaired, but by one statement's margin:
+/// that install aborts just before the loop which would have replaced the
+/// TypedArray constructors on the start global, and those writes WOULD have
+/// succeeded, leaving emulated constructors over un-shimmed prototypes. And
+/// this foreclosure point is contingent on the engine not implementing the
+/// Immutable ArrayBuffer proposal -- once `ArrayBuffer.prototype.sliceToImmutable`
+/// exists natively, that install's `if` guard is false, the bundle proceeds
+/// further, and this constant moves again.
+const FROZEN_REALM_FORECLOSURE: &str = "ERROR: invalid descriptor";
+
+/// `eval_wrapped`'s shape: an engine halt is not catchable, so a `'ok'` here
+/// means the program ran to completion and threw nothing.
+///
+/// The initializer is load-bearing, not decoration. These cranks share one
+/// realm, and a bare `var __e;` does not reset a binding an earlier crank
+/// already created -- so a second `wrapped()` call after a first one threw
+/// would report the FIRST error again, in helpers whose whole job is to pin an
+/// error string. Every caller currently uses it once per realm, so this is a
+/// trap rather than a live bug; an adversarial review sprang it while probing.
+fn wrapped(source: &str) -> String {
+    format!(
+        "var __e = undefined; try {{ {source} }} catch(e) {{ __e = e; }} \
+         __e ? ('ERROR: ' + __e.message) : 'ok'"
+    )
+}
+
+#[test]
+fn the_ses_shim_supplies_the_guest_surface_on_an_unfrozen_realm() {
+    let Some(boot) = thixotrope_ses_boot() else {
+        return;
+    };
+    std::thread::Builder::new()
+        .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)
+        .spawn(move || {
+            let mut machine = Interp::new();
+            machine.set_source_compiler(std::rc::Rc::new(TestCompiler));
+            let mut crank = |source: &str| {
+                let (code, symbols) = ironhorse_compile::compile_atoms_goal(
+                    source,
+                    ironhorse_compile::Goal::Script,
+                    false,
+                )
+                .expect("compiles");
+                let names = parse_symbols(&symbols);
+                let code = if machine.program_symbol_names().is_empty() {
+                    machine.link_intrinsics(&names);
+                    code
+                } else {
+                    machine.relink_crank(&code, &names).expect("relinks")
+                };
+                let outcome = machine.run(&code);
+                assert!(outcome.completed, "{source:.60}: {:?}", outcome.halt);
+                outcome.result
+            };
+
+            // **`Compartment` has now made the trip too, and this revision
+            // is the one that paid for it.** The guest constructor landed
+            // (`designs/ironhorse-guest-compartment.md`), so the assertion
+            // below reads `Compartment=function` BEFORE the shim is evaluated
+            // and the term no longer means "the shim installed it". Two others
+            // made the same trip earlier: `harden=function` never
+            // discriminated (every configuration here has one), and
+            // `lockdown=function` stopped discriminating when
+            // `create_hardened_globals` began binding one on every realm. Each
+            // was replaced by something that still moves -- the
+            // `hardenTraverses` probe for the first, an identity comparison
+            // against a stashed engine binding for the second.
+            //
+            // `Compartment` discriminated only for as long as the engine
+            // bound none. `create_compartment` (`fx_Compartment`,
+            // `xsModule.c:2864`) makes it `function` on both sides of the
+            // shim's evaluation, so the term says nothing on its own. The
+            // repair is the one directly below, and it is in place: stash
+            // `globalThis.__engineCompartment` before the shim and compare by
+            // identity after.
+            assert_eq!(
+                crank(SES_CENSUS),
+                "lockdown=function harden=function Compartment=function \
+                 hardenTraverses=true frozenObjectProto=false",
+                "the engine binds its own lockdown, its own harden -- which \
+                 traverses, it is a port of XS's fx_hardenFreezeAndTraverse -- \
+                 and its own Compartment"
+            );
+            // **None of `lockdown`, `harden` or `Compartment` discriminates
+            // any more, so pin all three by identity.** Each census term used
+            // to mean "the shim installed this". Each is now `function` on
+            // both sides of the shim's evaluation and says nothing about whose
+            // it is: `create_hardened_globals` binds `lockdown` and `harden`
+            // (`designs/ironhorse-native-lockdown.md`) and `create_compartment`
+            // binds `Compartment`
+            // (`designs/ironhorse-guest-compartment.md`). Only
+            // `frozenObjectProto` still moves on its own.
+            //
+            // So stash all three engine bindings and compare each against its
+            // OWN counterpart. An earlier revision stashed only
+            // `__engineLockdown` and then compared `harden` against it, which
+            // is `false` however `harden` was built -- a vacuous term in a
+            // test whose purpose is to catch exactly that.
+            crank(
+                "globalThis.__engineLockdown = globalThis.lockdown; \
+                 globalThis.__engineHarden = globalThis.harden; \
+                 globalThis.__engineCompartment = globalThis.Compartment; 0",
+            );
+            assert_eq!(crank(&wrapped(&boot)), "ok", "the ses shim must evaluate");
+            assert_eq!(
+                crank(SES_CENSUS),
+                "lockdown=function harden=function Compartment=function \
+                 hardenTraverses=true frozenObjectProto=true",
+                "the shim must install what the engine does not, and freeze -- and \
+                 the harden it leaves behind must still traverse prototypes"
+            );
+            assert_eq!(
+                crank(
+                    "[typeof globalThis.lockdown, typeof globalThis.harden, \
+                      typeof globalThis.Compartment, \
+                      globalThis.lockdown === globalThis.__engineLockdown, \
+                      globalThis.harden === globalThis.__engineHarden, \
+                      globalThis.Compartment === globalThis.__engineCompartment]\
+                       .join(' ')"
+                ),
+                "function function function false false false",
+                "the shim REPLACED all three of the engine's bindings with its \
+                 own, and all three are still callable afterwards; a typeof \
+                 census sees none of the three replacements"
+            );
+            // Not merely present: usable, with its own globals and its own
+            // evaluator. The `__options__` sigil selects the modern
+            // constructor signature; a bare object is the legacy
+            // `(globals, modules, options)` positional form
+            // (`packages/ses/src/compartment.js:294-316`).
+            assert_eq!(
+                crank(
+                    "var c = new Compartment({ __options__: true, globals: { x: 5 } }); \
+                     [c.evaluate('x'), c.evaluate('1 + 1'), typeof x].join(':')"
+                ),
+                "5:2:undefined",
+                "a shim Compartment must evaluate against its own globals, and \
+                 must not leak them into the realm that made it"
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn a_natively_frozen_realm_forecloses_the_ses_shim() {
+    let Some(boot) = thixotrope_ses_boot() else {
+        return;
+    };
+    std::thread::Builder::new()
+        .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)
+        .spawn(move || {
+            let machine = ironhorse_vm::Machine::new();
+            machine
+                .set_source_compiler(std::rc::Rc::new(TestCompiler))
+                .expect("machine takes a compiler");
+            let start = machine.start_compartment();
+            let crank = |source: &str| {
+                let (code, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
+                let outcome = start.evaluate_with_symbols(&code, &symbols);
+                assert!(outcome.completed, "{source:.60}: {:?}", outcome.halt);
+                outcome.result
+            };
+            assert!(
+                crank(SES_CENSUS).ends_with("frozenObjectProto=true"),
+                "Machine::new freezes the intrinsic graph at construction"
+            );
+            // Stash the engine's `Compartment` BEFORE the shim runs, so the
+            // census term below can be read by identity rather than by
+            // `typeof` -- which now says `function` either way.
+            crank("globalThis.__engineCompartment = globalThis.Compartment; 0");
+            // The boot forecloses one layer LATER than the previous revision
+            // of this pin, and the message moved with it.
+            //
+            // That revision caught the prologue being bundled into a strict
+            // module: `delete Iterator.prototype.map` on a frozen intrinsic
+            // had returned false silently under the old sloppy-mode splice,
+            // and strict mode throws, so the prologue stopped at its own sweep
+            // and the bundle never ran.
+            //
+            // The sweep is now gone -- it existed only because the five lazy
+            // Iterator helpers halted uncatchably, and they are implemented --
+            // so the prologue completes and the SES bundle gets to run. It
+            // then aborts inside its own module graph, well before
+            // `lockdown()`; `FROZEN_REALM_FORECLOSURE` names the statement and
+            // the measurement. All three revisions are foreclosure; what moves
+            // is which layer gets there first, which is exactly what that
+            // constant is documented to track.
+            assert_eq!(
+                crank(&wrapped(&boot)),
+                FROZEN_REALM_FORECLOSURE,
+                "the shim is expected to fail on a realm frozen before it runs; \
+                 if it now succeeds, the repair path has changed and \
+                 designs/ironhorse-ses-compartment-equivalence.md must say so"
+            );
+            // The message alone would also match an unrelated prologue bug, so
+            // pin the outcome too: the shim installed nothing, and the realm is
+            // left with NO `harden` at all. The prologue's `delete` of the
+            // engine's own succeeded -- see `FROZEN_REALM_FORECLOSURE`, whose
+            // note explains why that one statement works on a frozen realm --
+            // and the `lockdown()` that would have installed the shim's was
+            // never reached. That is the honest report of a half-applied prologue,
+            // and it is why this realm profile is foreclosed rather than
+            // merely degraded: a guest here would have neither hardener.
+            //
+            // `lockdown` is still `function`, and it is the ENGINE's, not the
+            // shim's: `create_hardened_globals` binds one on every realm. A
+            // `typeof` census can say no more than that, and an earlier
+            // revision of this comment read more into it -- that such a realm
+            // "has a native `lockdown()`" and so "the option now exists". It
+            // does not. This is a `Machine::new()` realm, which performs the
+            // whole lockdown operation at construction and sets `locked_down`
+            // while doing it; the guest's first call is therefore refused as a
+            // second one. The name is bound and calling it throws.
+            // `native_lockdown.rs::a_frozen_machine_runs_the_whole_lockdown_at_construction`
+            // pins the refusal together with the reach it costs nothing:
+            // construction already rewired the constructors, so there is no
+            // work the refused call would have done.
+            assert_eq!(
+                crank(SES_CENSUS),
+                "lockdown=function harden=undefined Compartment=function \
+                 hardenTraverses=n/a frozenObjectProto=true"
+            );
+            // `Compartment=function` here is the ENGINE's, like `lockdown`
+            // beside it: the shim aborted before installing its own. Identity
+            // says so where `typeof` cannot -- this realm stashed the engine's
+            // binding before the shim ran, and it is still the same object.
+            assert_eq!(
+                crank("globalThis.Compartment === globalThis.__engineCompartment"),
+                "true",
+                "the bound Compartment is the ENGINE's; the shim installed nothing"
+            );
+            // `lockdown=function` above is the weak term: the engine binds one
+            // on every realm, so it is `function` whether the shim ran or not.
+            // CALL it, and the message says whose it is -- the engine's refuses
+            // a machine that locked down at construction, where the shim's
+            // would have said `Already locked down ... (SES_MULTIPLE_INSTANCES)`
+            // had it installed.
+            assert_eq!(
+                crank(
+                    "try { lockdown(); 'returned' } \
+                     catch (e) { e.name + ': ' + e.message }"
+                ),
+                "TypeError: lockdown already called",
+                "the bound lockdown is the ENGINE's, and the machine already ran it"
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// The two profiles stop excluding each other when the freeze is deferred.
+///
+/// `Machine::new` froze the intrinsics at construction, which is what made the
+/// shim fail on it. `Machine::unfrozen_with_start_global_names` builds the same
+/// shared realm and leaves the graph mutable, so the guest's own `lockdown()`
+/// can repair and freeze it -- and the multi-compartment API survives, which
+/// a bare `Interp` does not offer.
+#[test]
+fn an_unfrozen_machine_takes_the_shim_and_keeps_its_compartments() {
+    let Some(boot) = thixotrope_ses_boot() else {
+        return;
+    };
+    std::thread::Builder::new()
+        .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)
+        .spawn(move || {
+            let machine = ironhorse_vm::Machine::unfrozen_with_start_global_names(None);
+            machine
+                .set_source_compiler(std::rc::Rc::new(TestCompiler))
+                .expect("machine takes a compiler");
+            assert!(!machine.intrinsics().is_locked_down());
+            let start = machine.start_compartment();
+            let crank = |c: &ironhorse_vm::Compartment, source: &str| {
+                let (code, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
+                let outcome = c.evaluate_with_symbols(&code, &symbols);
+                assert!(outcome.completed, "{source:.60}: {:?}", outcome.halt);
+                outcome.result
+            };
+            assert_eq!(
+                crank(&start, SES_CENSUS),
+                "lockdown=undefined harden=function Compartment=function \
+                 hardenTraverses=true frozenObjectProto=false",
+                "an UNFROZEN machine does not bind the engine's `lockdown`: \
+                 `freeze == false` means the SES shim owns the operation, and \
+                 the shim installs its own when it evaluates. The harden it \
+                 does bind traverses. It DOES bind the engine's `Compartment`: \
+                 unlike `lockdown`, constructing one mutates nothing in the \
+                 shared graph, so it neither widens the pre-freeze window \
+                 `new_shared_realm_machine_configured` documents nor depends \
+                 on the freeze having happened. \
+                 `designs/ironhorse-guest-compartment.md` states the rule"
+            );
+            crank(
+                &start,
+                "globalThis.__engineCompartment = globalThis.Compartment; 0",
+            );
+            assert_eq!(
+                crank(&start, &wrapped(&boot)),
+                "ok",
+                "the shim must evaluate"
+            );
+            assert_eq!(
+                crank(&start, SES_CENSUS),
+                "lockdown=function harden=function Compartment=function \
+                 hardenTraverses=true frozenObjectProto=true",
+                "the guest's own lockdown must install and freeze, and leave a \
+                 harden that traverses prototypes"
+            );
+            assert_eq!(
+                crank(
+                    &start,
+                    "globalThis.Compartment === globalThis.__engineCompartment"
+                ),
+                "false",
+                "the shim REPLACED the engine's Compartment; the census term \
+                 reads `function` on both sides and cannot see that"
+            );
+            // The engine's multi-compartment API still works, and the guest's
+            // freeze reached the graph the sibling shares.
+            let sibling = machine.new_compartment();
+            assert_eq!(
+                crank(&sibling, "Object.isFrozen(Object.prototype)"),
+                "true",
+                "a sibling sees the graph the guest froze"
+            );
+            assert_eq!(crank(&start, "var here = 1; here"), "1");
+            assert_eq!(crank(&sibling, "typeof here"), "undefined");
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

@@ -56,6 +56,9 @@ export const makeWriterPump = (iterable, options = {}) => {
 
     (async () => {
       await null;
+      // `iterator.return()` is called at most once per stream, whichever path
+      // gets there first.
+      let released = false;
       try {
         for (let i = 0; ; i += 1) {
           // Pre-ack flow control for buffer iterations
@@ -74,6 +77,7 @@ export const makeWriterPump = (iterable, options = {}) => {
             // Initiator done - close local iterator
             let returnValue = synNode.value;
             if (iterator.return) {
+              released = true;
               const returned =
                 /** @type {IteratorReturnResult<TWriteReturn>} */ (
                   await iterator.return(returnValue)
@@ -109,8 +113,14 @@ export const makeWriterPump = (iterable, options = {}) => {
           }
         }
       } catch (err) {
-        if (iterator.return) {
-          await iterator.return();
+        if (iterator.return && !released) {
+          released = true;
+          try {
+            await iterator.return();
+          } catch {
+            // The initiator sees the error that ended the stream, not one
+            // its cleanup raised on top of it.
+          }
         }
         // Abort: resolve tail with rejection
         ackResolve(Promise.reject(err));

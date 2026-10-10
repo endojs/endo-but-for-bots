@@ -44,6 +44,7 @@ const commitFile = async (repoRoot, content, message) => {
 };
 
 test('native polling watcher preserves rapid external commit advancement', async t => {
+  t.timeout(60_000);
   const repoRoot = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), 'git-root-follow-'),
   );
@@ -62,6 +63,7 @@ test('native polling watcher preserves rapid external commit advancement', async
     ),
   );
   const roots = iterateReader(E(git).followRootChanges());
+  t.teardown(() => roots.return());
   t.deepEqual(await roots.next(), {
     done: false,
     value: { type: 'snapshot', revision: 0n, position: null },
@@ -101,18 +103,11 @@ test('native polling watcher preserves rapid external commit advancement', async
     await E(await E(first.position.root).root()).lookup('root.txt')
   );
   const firstBlob = await E(firstFile).snapshot();
-  const firstInfo = await E(firstBlob).getInfo();
-  const { stdout: firstBlobOid } = await execFileAsync(
-    'git',
-    ['rev-parse', `${commit1}:root.txt`],
-    { cwd: repoRoot },
-  );
-  t.is(firstInfo.hash, firstBlobOid.trim());
-
-  await roots.return();
+  t.is(await E(firstBlob).text(), 'one\n');
 });
 
 test('native watcher reports a non-fast-forward root replacement as a single transition', async t => {
+  t.timeout(60_000);
   const repoRoot = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), 'git-root-replace-'),
   );
@@ -131,6 +126,7 @@ test('native watcher reports a non-fast-forward root replacement as a single tra
     ),
   );
   const roots = iterateReader(E(git).followRootChanges());
+  t.teardown(() => roots.return());
   t.deepEqual(await roots.next(), {
     done: false,
     value: { type: 'snapshot', revision: 0n, position: null },
@@ -154,17 +150,47 @@ test('native watcher reports a non-fast-forward root replacement as a single tra
   }
   const supersededRevision = latest.toRevision;
 
-  // Reset to the base and commit a sibling: the new tip shares the base's
-  // history but is not a descendant of the superseded tip, so the backend
-  // cannot walk a fast-forward range and must surface the replacement as one
-  // explicit transition rather than a chain of intermediate commits.
-  await execFileAsync('git', ['reset', '--hard', base], { cwd: repoRoot });
-  const replacement = await commitFile(
-    repoRoot,
-    'replacement\n',
-    'replacement',
+  // Build a sibling commit without moving the observed ref, then publish it
+  // atomically. Resetting to base first would expose a real intermediate tip
+  // that the polling watcher could correctly report as another transition.
+  await fs.promises.writeFile(path.join(repoRoot, 'root.txt'), 'replacement\n');
+  await execFileAsync('git', ['add', 'root.txt'], { cwd: repoRoot });
+  const { stdout: replacementTree } = await execFileAsync(
+    'git',
+    ['write-tree'],
+    {
+      cwd: repoRoot,
+    },
   );
+  const { stdout: replacementCommit } = await execFileAsync(
+    'git',
+    [
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit-tree',
+      replacementTree.trim(),
+      '-p',
+      base,
+      '-m',
+      'replacement',
+    ],
+    { cwd: repoRoot },
+  );
+  const replacement = replacementCommit.trim();
+  const { stdout: commonAncestor } = await execFileAsync(
+    'git',
+    ['merge-base', superseded, replacement],
+    { cwd: repoRoot },
+  );
+  t.is(commonAncestor.trim(), base);
   t.not(replacement, superseded);
+  await execFileAsync(
+    'git',
+    ['update-ref', 'refs/heads/main', replacement, superseded],
+    { cwd: repoRoot },
+  );
 
   const replaced = /** @type {GitRootTransition} */ (
     (await within(roots.next(), 'replacement tip')).value
@@ -177,5 +203,10 @@ test('native watcher reports a non-fast-forward root replacement as a single tra
   });
   t.not(latest.position.tree.hash, replaced.position.tree.hash);
 
-  await roots.return();
+  // The earlier root still resolves the superseded content after replacement.
+  const supersededFile = /** @type {any} */ (
+    await E(await E(latest.position.root).root()).lookup('root.txt')
+  );
+  const supersededBlob = await E(supersededFile).snapshot();
+  t.is(await E(supersededBlob).text(), 'superseded\n');
 });

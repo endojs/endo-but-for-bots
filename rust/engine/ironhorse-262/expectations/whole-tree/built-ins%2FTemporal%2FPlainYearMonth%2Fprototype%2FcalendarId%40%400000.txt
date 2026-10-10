@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/PlainYearMonth/prototype/calendarId tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/PlainYearMonth/prototype/calendarId/basic.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainYearMonth/prototype/calendarId/basic.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainYearMonth/prototype/calendarId/branding.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainYearMonth/prototype/calendarId/branding.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainYearMonth/prototype/calendarId/prop-desc.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainYearMonth/prototype/calendarId/prop-desc.js strict skip:oracle-host-missing-global:Temporal

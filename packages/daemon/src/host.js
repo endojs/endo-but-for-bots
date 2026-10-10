@@ -5,7 +5,7 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
-/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoDirectory, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeAgentOptions, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 /** @import { makeSecretManager } from './secret-manager.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
 
@@ -20,24 +20,16 @@ import {
   makeGitRemoteEndpoint,
 } from '@endo/exo-git';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+
+import { cancelPendingIterator } from './cancelable-iterator.js';
 import {
   assertPetName,
   assertPetNamePath,
   namePathFrom,
   petNamePathFrom,
 } from './pet-name.js';
-import {
-  assertFormulaNumber,
-  parseId,
-  formatId,
-} from './formula-identifier.js';
-import {
-  formatLocator,
-  formatLocatorWithHints,
-  idFromLocator,
-  internalizeLocator,
-  parseLocator,
-} from './locator.js';
+import { parseId } from './formula-identifier.js';
+import { idFromLocator, internalizeLocator } from './locator.js';
 import { toHex, fromHex } from './hex.js';
 import { makePetSitter } from './pet-sitter.js';
 
@@ -76,17 +68,22 @@ const assertPowersNameOrPath = nameOrPath => {
 };
 
 /**
- * Normalizes host or guest options, providing default values.
- * @param {MakeHostOrGuestOptions | undefined} opts
- * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath }}
+ * Normalizes options for provisioning either a host or a guest, filling in
+ * default values.
+ * @param {MakeAgentOptions | undefined} opts
+ * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath, pins?: EndoDirectory, networks?: EndoDirectory }}
  */
 const normalizeHostOrGuestOptions = opts => {
   const agentName = /** @type {NameOrPath | undefined} */ (opts?.agentName);
+  const pins = opts?.pins;
+  const networks = opts?.networks;
   return {
     introducedNames: /** @type {Record<Name, PetName>} */ (
       opts?.introducedNames ?? Object.create(null)
     ),
     ...(agentName !== undefined && { agentName }),
+    ...(pins !== undefined && { pins }),
+    ...(networks !== undefined && { networks }),
   };
 };
 
@@ -319,6 +316,7 @@ harden(normalizeHttpClientPolicy);
  * @param {DaemonCore['formulateGitCredential']} args.formulateGitCredential
  * @param {DaemonCore['formulateGitRemote']} args.formulateGitRemote
  * @param {DaemonCore['formulateInvitation']} args.formulateInvitation
+ * @param {DaemonCore['acceptInvitation']} args.acceptInvitation
  * @param {DaemonCore['formulateDirectoryForStore']} args.formulateDirectoryForStore
  * @param {DaemonCore['getPeerIdForNodeIdentifier']} args.getPeerIdForNodeIdentifier
  * @param {DaemonCore['formulateChannel']} args.formulateChannel
@@ -333,7 +331,6 @@ harden(normalizeHttpClientPolicy);
  * @param {NodeNumber} args.localNodeNumber
  * @param {(node: string) => boolean} args.isLocalKey
  * @param {DaemonCore['getAgentIdForHandleId']} args.getAgentIdForHandleId
- * @param {(publicKey: string, daemonNode: string) => void} [args.writeRemoteAgentKey]
  * @param {DaemonCore['pinTransient']} [args.pinTransient]
  * @param {DaemonCore['unpinTransient']} [args.unpinTransient]
  * @param {DaemonCore['getFormulaGraphSnapshot']} [args.getFormulaGraphSnapshot]
@@ -371,6 +368,7 @@ export const makeHostMaker = ({
   formulateGitCredential,
   formulateGitRemote,
   formulateInvitation,
+  acceptInvitation,
   formulateDirectoryForStore,
   getPeerIdForNodeIdentifier,
   formulateChannel,
@@ -396,10 +394,6 @@ export const makeHostMaker = ({
     throw makeError(X`gitClone not wired into makeHostMaker`);
   },
   getIdForRef = /** @param {unknown} _ref */ _ref => undefined,
-  writeRemoteAgentKey = /** @param {string} _pk @param {string} _dn */ (
-    _pk,
-    _dn,
-  ) => {},
   pinTransient = /** @param {any} _id */ _id => {},
   unpinTransient = /** @param {any} _id */ _id => {},
   getFormulaGraphSnapshot = /** @param {any[]} _ids */ async _ids =>
@@ -491,13 +485,21 @@ export const makeHostMaker = ({
     // The id no longer participates in any special-name lookup;
     // `getFormula(identifier)` is the user-facing replacement.
     // See `designs/formula-inspector.md` "Removing the `@info` name hub".
-    // Only the daemon's root host manages secrets. `formulateEndo` omits
-    // `hostHandleId`, which `formulateNumberedHost` then defaults to the
-    // host's own handle, while `makeChildHost` always passes the parent's —
-    // so this is exhaustive. Withholding `@secrets` from a child host is
-    // namespace hygiene, not containment: a child already reaches the root
-    // host through its ambient `@endo`, so it is a full-authority peer.
-    // See designs/daemon-secret-manager.md § Summary.
+    // Only the daemon's root host carries the root-only special names
+    // `@endo` and `@secrets`. `formulateEndo` omits `hostHandleId`, which
+    // `formulateNumberedHost` then defaults to the host's own handle, while
+    // `makeChildHost` always passes the parent's — so this test is exhaustive.
+    //
+    // Withholding `@endo` from a non-root (child) host IS a trust boundary:
+    // the `endo` facet's `host()` returns the root principal, so an ambient
+    // `@endo` on a child let `E(child).lookup('@endo')` then `E(endo).host()`
+    // act as the root — making `provideHost` children full-authority peers
+    // rather than lower-trust principals (issue #1128). Because `specialNames`
+    // is recomputed from the formula at every host realization and never
+    // persisted, this load-time guard also fixes already-persisted ("old")
+    // child host formulas — no migration needed. Withholding `@secrets` is by
+    // contrast namespace hygiene, not containment. See #1128 and
+    // designs/daemon-secret-manager.md § Summary.
     const isRootHost = hostHandleId === undefined || hostHandleId === handleId;
 
     /** @type {Record<string, FormulaIdentifier>} */
@@ -509,13 +511,13 @@ export const makeHostMaker = ({
       '@main': mainWorkerId,
       '@node': nodeWorkerId,
       '@registry': registryId,
-      '@endo': endoId,
       '@nets': networksDirectoryId,
       '@planes': planesDirectoryId,
       '@pins': pinsDirectoryId,
       '@none': leastAuthorityId,
     };
     if (isRootHost) {
+      specialNames['@endo'] = endoId;
       specialNames['@secrets'] = hostId;
     }
     if (mailHubId !== undefined) {
@@ -1861,15 +1863,39 @@ export const makeHostMaker = ({
       const agent = await provide(agentId, 'agent');
       await Promise.all(
         Object.entries(introducedNames).map(async ([parentName, childName]) => {
-          const introducedId = petStore.identifyLocal(
-            /** @type {Name} */ (parentName),
-          );
+          const introducedId = await E(directory).identify(parentName);
           if (introducedId === undefined) {
             return;
           }
           await agent.storeIdentifier([childName], introducedId);
         }),
       );
+    };
+
+    /**
+     * Resolve and validate a caller-selected pins or networks directory.
+     * Hosts and guests deliberately share this option contract.
+     *
+     * @param {'provideHost' | 'provideGuest'} operation
+     * @param {'pins' | 'networks'} kind
+     * @param {EndoDirectory | undefined} candidate
+     * @returns {Promise<FormulaIdentifier | undefined>}
+     */
+    const getAgentDirectoryId = async (operation, kind, candidate) => {
+      if (candidate === undefined) {
+        return undefined;
+      }
+      const id = getIdForRef(candidate);
+      if (id === undefined) {
+        throw makeError(
+          `${operation}: ${kind} must be a daemon-minted directory`,
+        );
+      }
+      const formula = await getFormulaForId(id);
+      if (formula.type !== 'directory') {
+        throw makeError(`${operation}: ${kind} must be a directory`);
+      }
+      return id;
     };
 
     /**
@@ -1931,12 +1957,17 @@ export const makeHostMaker = ({
 
     /**
      * @param {NameOrPath} [petName]
-     * @param {MakeHostOrGuestOptions} [opts]
+     * @param {MakeAgentOptions} [opts]
      * @returns {Promise<{id: FormulaIdentifier, value: Promise<EndoHost>}>}
      */
     const makeChildHost = async (
       petName,
-      { introducedNames = Object.create(null), agentName = undefined } = {},
+      {
+        introducedNames = Object.create(null),
+        agentName = undefined,
+        pins = undefined,
+        networks = undefined,
+      } = {},
     ) => {
       let host = await getNamedAgent(petName, 'host');
       if (host === undefined) {
@@ -1945,12 +1976,22 @@ export const makeHostMaker = ({
           : petName
             ? `host:${petName}`
             : 'host';
+        const selectedPinsDirectoryId = await getAgentDirectoryId(
+          'provideHost',
+          'pins',
+          pins,
+        );
+        const selectedNetworksDirectoryId = await getAgentDirectoryId(
+          'provideHost',
+          'networks',
+          networks,
+        );
         const { value, id } =
           // Behold, recursion:
           await formulateHost(
             endoId,
-            networksDirectoryId,
-            pinsDirectoryId,
+            selectedNetworksDirectoryId ?? networksDirectoryId,
+            selectedPinsDirectoryId ?? pinsDirectoryId,
             getDeferredTasksForAgent(
               petName,
               /** @type {NameOrPath | undefined} */ (agentName),
@@ -1988,12 +2029,17 @@ export const makeHostMaker = ({
 
     /**
      * @param {NameOrPath} [handleName]
-     * @param {MakeHostOrGuestOptions} [opts]
+     * @param {MakeAgentOptions} [opts]
      * @returns {Promise<{id: FormulaIdentifier, value: Promise<EndoGuest>}>}
      */
     const makeGuest = async (
       handleName,
-      { introducedNames = Object.create(null), agentName = undefined } = {},
+      {
+        introducedNames = Object.create(null),
+        agentName = undefined,
+        pins = undefined,
+        networks = undefined,
+      } = {},
     ) => {
       let guest = await getNamedAgent(handleName, 'guest');
       if (guest === undefined) {
@@ -2002,6 +2048,16 @@ export const makeHostMaker = ({
           : handleName
             ? `guest:${handleName}`
             : 'guest';
+        const guestPinsDirectoryId = await getAgentDirectoryId(
+          'provideGuest',
+          'pins',
+          pins,
+        );
+        const guestNetworksDirectoryId = await getAgentDirectoryId(
+          'provideGuest',
+          'networks',
+          networks,
+        );
         const { value, id } =
           // Behold, recursion:
           await formulateGuest(
@@ -2012,6 +2068,8 @@ export const makeHostMaker = ({
               /** @type {NameOrPath | undefined} */ (agentName),
             ),
             guestLabel,
+            guestPinsDirectoryId,
+            guestNetworksDirectoryId,
           );
         guest = { value: Promise.resolve(value), id };
       }
@@ -2088,140 +2146,83 @@ export const makeHostMaker = ({
     };
 
     /**
-     * @param {NameOrPath} guestName
+     * @param {NameOrPath} correspondentName
      */
-    const invite = async guestName => {
-      const { namePath, petName: guestPetName } = petNamePathFrom(guestName);
-      // We must immediately retain a formula under guestName so that we
+    const invite = async correspondentName => {
+      const { namePath, petName: correspondentPetName } =
+        petNamePathFrom(correspondentName);
+      // We must immediately retain a formula under correspondentName so that we
       // preserve the invitation across restarts, but we must replace the
-      // guestName with the handle of the guest that accepts the invitation.
-      // We need to return the locator for the invitation regardless of what
-      // we store.
-      // Overwriting the guestName must cancel the pending invitation (consume
-      // once) so that the invitation can no longer modify the petStore entry
-      // for the guestName.
-      // A path nests the invitation (and, once redeemed, the guest)
+      // correspondentName with the handle of the correspondent that accepts the
+      // invitation. We need to return the locator for the invitation regardless
+      // of what we store.
+      // Overwriting the correspondentName must cancel the pending invitation
+      // (consume once) so that the invitation can no longer modify the petStore
+      // entry for the correspondentName.
+      // A path nests the invitation (and, once redeemed, the correspondent)
       // inside a directory; the parent directory must already exist.
       /** @type {DeferredTasks<InvitationDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
       tasks.push(identifiers =>
         namePath.length === 1
-          ? petStore.storeIdentifier(guestPetName, identifiers.invitationId)
+          ? petStore.storeIdentifier(
+              correspondentPetName,
+              identifiers.invitationId,
+            )
           : E(directory).storeIdentifier(namePath, identifiers.invitationId),
       );
       const { value } = await formulateInvitation(
         hostId,
         handleId,
-        guestName,
+        correspondentName,
         tasks,
       );
       return value;
     };
 
     /**
+     * Redeem an invitation locator into THIS host. Acceptance binds the
+     * inviter's handle reciprocally under `correspondentName` — no synthetic
+     * local guest is minted. Shares one implementation with `EndoGuest.accept`
+     * via the daemon-core `acceptInvitation` helper, which carries the whole
+     * register-peer / record-agent-key / bind sequence so the contract does not
+     * fork by facet.
      * @param {string} invitationLocator
-     * @param {NameOrPath} guestName
+     * @param {NameOrPath} correspondentName
      */
-    const accept = async (invitationLocator, guestName) => {
-      // A path nests the accepted guest inside a directory; the parent
+    const accept = async (invitationLocator, correspondentName) => {
+      // A path nests the accepted connection inside a directory; the parent
       // directory must already exist.
-      const { namePath: guestNamePath, petName: guestLeaf } =
-        petNamePathFrom(guestName);
-      const {
-        number: invitationNumber,
-        node: peerKey,
-        hints,
-      } = parseLocator(invitationLocator);
-      const url = new URL(invitationLocator);
-      const remoteHandleNumber = url.searchParams.get('from');
-      // The remote handle's node may differ from the peer key when
-      // agent keys are used as formula nodes.
-      const remoteHandleNodeParam = url.searchParams.get('fromNode');
-
-      if (!remoteHandleNumber) {
-        throw makeError(`Invitation must have a "from" parameter`);
-      }
-      assertFormulaNumber(remoteHandleNumber);
-
-      /** @type {PeerInfo} */
-      const peerInfo = {
-        node: peerKey,
-        addresses: hints,
-      };
-      // eslint-disable-next-line no-use-before-define
-      await addPeerInfo(peerInfo);
-
-      // Register the remote agent key so we can route to its daemon.
-      if (remoteHandleNodeParam && remoteHandleNodeParam !== peerKey) {
-        writeRemoteAgentKey(remoteHandleNodeParam, peerKey);
-      }
-
-      const invitationId = formatId({
-        number: invitationNumber,
-        node: peerKey,
+      const { namePath: correspondentNamePath } =
+        petNamePathFrom(correspondentName);
+      return acceptInvitation({
+        invitationLocator,
+        acceptingHandleId: handleId,
+        acceptingNetworksDirectoryId: networksDirectoryId,
+        bindCorrespondent: async remoteHandleLocator => {
+          await null;
+          // Snapshot whatever `correspondentName` held before this speculative
+          // bind so a rejected invitation can restore it rather than clobber a
+          // pre-existing correspondent bound under the same name.
+          const priorLocator = await E(directory).locate(
+            ...correspondentNamePath,
+          );
+          await E(directory).storeLocator(
+            correspondentNamePath,
+            remoteHandleLocator,
+          );
+          return async () => {
+            if (priorLocator === undefined) {
+              await E(directory).remove(...correspondentNamePath);
+            } else {
+              await E(directory).storeLocator(
+                correspondentNamePath,
+                priorLocator,
+              );
+            }
+          };
+        },
       });
-
-      const { number: handleNumber, node: handleNode } = parseId(handleId);
-      // eslint-disable-next-line no-use-before-define
-      const { addresses: hostAddresses } = await getPeerInfo();
-      const handleLocatorWithoutHandleNode = formatLocatorWithHints(
-        formatId({ number: handleNumber, node: localNodeNumber }),
-        'handle',
-        hostAddresses,
-      );
-      const handleUrl = new URL(handleLocatorWithoutHandleNode);
-      // Include the handle's node if it differs from the daemon node
-      // (i.e. it uses an agent key).
-      if (handleNode !== localNodeNumber) {
-        handleUrl.searchParams.set('handleNode', handleNode);
-      }
-      const handleLocator = handleUrl.href;
-
-      const invitation = await provide(invitationId, 'invitation');
-      // The remote invitation ignores this name (`_hostNameFromGuest`),
-      // so the leaf pet name suffices for the protocol.
-      await E(invitation).accept(handleLocator, guestLeaf);
-
-      // Create a local guest with a regular pet store.
-      // Pin the guest handle via deferred task to prevent premature
-      // collection, then store the durable name after the lock releases.
-      /** @type {import('./types.js').DeferredTasks<import('./types.js').AgentDeferredTaskParams>} */
-      const guestTasks = makeDeferredTasks();
-      guestTasks.push(async identifiers => pinTransient(identifiers.handleId));
-      const { id: localGuestId } = await formulateGuest(
-        hostId,
-        handleId,
-        guestTasks,
-        `guest:${guestLeaf}`,
-      );
-
-      // Look up the local guest's handle from its formula so we can
-      // name it.  Incarnating the handle transitively incarnates the
-      // guest.
-      const localGuestFormula =
-        /** @type {import('./types.js').GuestFormula} */ (
-          await getFormulaForId(localGuestId)
-        );
-
-      // Store the durable name and release the transient pin.
-      await E(directory).storeIdentifier(
-        ['@pins', `guest-${guestLeaf}`],
-        localGuestFormula.handle,
-      );
-      await unpinTransient(localGuestFormula.handle);
-
-      // Store the remote handle under guestName for mail delivery.
-      // Use the handle's actual node (which may be an agent key) if
-      // provided, falling back to the daemon node.
-      const remoteHandleNode = remoteHandleNodeParam || peerKey;
-      const remoteHandleId = formatId({
-        number: /** @type {import('./types.js').FormulaNumber} */ (
-          remoteHandleNumber
-        ),
-        node: /** @type {import('./types.js').NodeNumber} */ (remoteHandleNode),
-      });
-      const remoteHandleLocator = formatLocator(remoteHandleId, 'handle');
-      await E(directory).storeLocator(guestNamePath, remoteHandleLocator);
     };
 
     /** @type {EndoHost['cancel']} */
@@ -2366,6 +2367,7 @@ export const makeHostMaker = ({
       locate,
       reverseLocate,
       list: directoryList,
+      listValues,
       listIdentifiers,
       listLocators,
       locateContent,
@@ -2657,6 +2659,7 @@ export const makeHostMaker = ({
       locate,
       reverseLocate,
       list,
+      listValues,
       listIdentifiers,
       listLocators,
       locateContent,
@@ -2758,11 +2761,15 @@ export const makeHostMaker = ({
         },
         followMessages: async () => {
           const iterator = host.followMessages();
-          return readerFromIterator(/** @type {any} */ (iterator));
+          return readerFromIterator(/** @type {any} */ (iterator), {
+            cancelPending: () => cancelPendingIterator(iterator),
+          });
         },
         followNameChanges: async () => {
           const iterator = host.followNameChanges();
-          return readerFromIterator(iterator);
+          return readerFromIterator(iterator, {
+            cancelPending: () => cancelPendingIterator(iterator),
+          });
         },
         followPeerChanges: async () => {
           const iterator = await host.followPeerChanges();

@@ -11,13 +11,28 @@ fn decode_operand(op: Opcode, code: &[u8], pc: usize) -> String {
     let rd_u2 = |o: usize| u16::from_le_bytes([code[pc + o], code[pc + o + 1]]) as u32;
     use Opcode::*;
     match op {
-        XS_CODE_INTEGER_1 | XS_CODE_BRANCH_1 | XS_CODE_BRANCH_ELSE_1 | XS_CODE_BRANCH_IF_1
-        | XS_CODE_CATCH_1 | XS_CODE_CODE_1 => format!("{}", rd_s1(1)),
-        XS_CODE_RESERVE_1 | XS_CODE_GET_LOCAL_1 | XS_CODE_SET_LOCAL_1 | XS_CODE_VAR_LOCAL_1
-        | XS_CODE_LET_LOCAL_1 | XS_CODE_CONST_LOCAL_1 | XS_CODE_PULL_LOCAL_1
-        | XS_CODE_GET_CLOSURE_1 | XS_CODE_SET_CLOSURE_1 | XS_CODE_VAR_CLOSURE_1
-        | XS_CODE_LET_CLOSURE_1 | XS_CODE_CONST_CLOSURE_1 | XS_CODE_PULL_CLOSURE_1
-        | XS_CODE_STORE_1 | XS_CODE_RETRIEVE_1 | XS_CODE_UNWIND_1 => format!("#{}", code[pc + 1]),
+        XS_CODE_INTEGER_1
+        | XS_CODE_BRANCH_1
+        | XS_CODE_BRANCH_ELSE_1
+        | XS_CODE_BRANCH_IF_1
+        | XS_CODE_CATCH_1
+        | XS_CODE_CODE_1 => format!("{}", rd_s1(1)),
+        XS_CODE_RESERVE_1
+        | XS_CODE_GET_LOCAL_1
+        | XS_CODE_SET_LOCAL_1
+        | XS_CODE_VAR_LOCAL_1
+        | XS_CODE_LET_LOCAL_1
+        | XS_CODE_CONST_LOCAL_1
+        | XS_CODE_PULL_LOCAL_1
+        | XS_CODE_GET_CLOSURE_1
+        | XS_CODE_SET_CLOSURE_1
+        | XS_CODE_VAR_CLOSURE_1
+        | XS_CODE_LET_CLOSURE_1
+        | XS_CODE_CONST_CLOSURE_1
+        | XS_CODE_PULL_CLOSURE_1
+        | XS_CODE_STORE_1
+        | XS_CODE_RETRIEVE_1
+        | XS_CODE_UNWIND_1 => format!("#{}", code[pc + 1]),
         XS_CODE_STRING_1 => {
             let len = code[pc + 1] as usize;
             let s = &code[pc + 2..pc + 2 + len.min(code.len() - pc - 2)];
@@ -61,7 +76,11 @@ fn main() {
             Some(o) => {
                 println!(
                     "SRC {:?}\n  compiled={} err={:?} nbytes={} bytes={:02x?}",
-                    src, o.compiled, o.error, o.bytecode.len(), o.bytecode
+                    src,
+                    o.compiled,
+                    o.error,
+                    o.bytecode.len(),
+                    o.bytecode
                 );
                 print!("{}", disasm(&o.bytecode));
             }

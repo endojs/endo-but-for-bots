@@ -1,0 +1,21 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/ZonedDateTime/prototype/toString tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/ZonedDateTime/prototype/toString/calendarname-always.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/toString/calendarname-always.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/toString/calendarname-auto.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/toString/calendarname-auto.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/toString/calendarname-critical.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/toString/calendarname-critical.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/toString/calendarname-never.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/toString/calendarname-never.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/toString/calendarname-undefined.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/toString/calendarname-undefined.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/toString/calendarname-wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/toString/calendarname-wrong-type.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/toString/dst-roundingmode-halfexpand.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/toString/dst-roundingmode-halfexpand.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/toString/options-combinations.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/toString/options-combinations.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/toString/options-undefined.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/toString/options-undefined.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/toString/timezone.js sloppy skip:oracle-host-missing-intl
+intl402/Temporal/ZonedDateTime/prototype/toString/timezone.js strict skip:oracle-host-missing-intl

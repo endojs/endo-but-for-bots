@@ -1,9 +1,15 @@
 // @ts-check
 
 import harden from '@endo/harden';
+
+import {
+  cancelPendingIterator,
+  makeCancelableIterator,
+} from './cancelable-iterator.js';
 import { makeChangeTopic } from './pubsub.js';
 import { parseId, assertValidId } from './formula-identifier.js';
 import { makeBidirectionalMultimap } from './multimap.js';
+
 /** @import { BidirectionalMultimap, DaemonDatabase, IdChangesTopic, Name, NameChangesTopic, PetName, PetStore, PetStoreIdNameChange, PetStoreNameChange, PetStorePowers } from './types.js' */
 
 /**
@@ -129,20 +135,32 @@ export const makePetStoreMaker = daemonDb => {
     };
 
     /** @type {PetStore['followNameChanges']} */
-    const followNameChanges = async function* currentAndSubsequentNames() {
-      const subscription = nameChangesTopic.subscribe();
-      for (const name of idsToPetNames.getAll().sort()) {
-        const idRecord = parseId(
-          /** @type {string} */ (idsToPetNames.getKey(name)),
-        );
+    const followNameChanges = () =>
+      makeCancelableIterator(
+        async function* currentAndSubsequentNames(setCancelPending) {
+          const subscription = nameChangesTopic.subscribe();
+          try {
+            const cancellation = setCancelPending(() =>
+              cancelPendingIterator(subscription),
+            );
+            if (cancellation !== undefined) await cancellation;
+            for (const name of idsToPetNames.getAll().sort()) {
+              const idRecord = parseId(
+                /** @type {string} */ (idsToPetNames.getKey(name)),
+              );
 
-        yield {
-          add: name,
-          value: idRecord,
-        };
-      }
-      yield* subscription;
-    };
+              yield {
+                add: name,
+                value: idRecord,
+              };
+            }
+            yield* subscription;
+          } finally {
+            await subscription.return(undefined);
+          }
+          return undefined;
+        },
+      );
 
     /** @type {PetStore['followIdNameChanges']} */
     const followIdNameChanges = async function* currentAndSubsequentIds(id) {

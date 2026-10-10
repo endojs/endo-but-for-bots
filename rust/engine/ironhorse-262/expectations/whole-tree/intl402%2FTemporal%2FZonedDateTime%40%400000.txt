@@ -1,0 +1,29 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/ZonedDateTime tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/ZonedDateTime/canonicalize-calendar.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/canonicalize-calendar.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/construct-non-utc-non-iso.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/construct-non-utc-non-iso.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/etc-timezone.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/etc-timezone.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/future-calendar.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: bangla is not yet supported Expected a RangeError but got a ReferenceError"
+intl402/Temporal/ZonedDateTime/future-calendar.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: bangla is not yet supported Expected a RangeError but got a ReferenceError"
+intl402/Temporal/ZonedDateTime/iana-legacy-names.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/iana-legacy-names.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/legacy-non-iana.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Time zone: ACT Expected a RangeError but got a ReferenceError"
+intl402/Temporal/ZonedDateTime/legacy-non-iana.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Time zone: ACT Expected a RangeError but got a ReferenceError"
+intl402/Temporal/ZonedDateTime/links-backward.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/links-backward.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/links-backzone.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/links-backzone.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/links-etcetera.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/links-etcetera.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/links.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/links.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/non-canonical-utc.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/non-canonical-utc.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/supported-values-of.js sloppy skip:oracle-host-missing-intl
+intl402/Temporal/ZonedDateTime/supported-values-of.js strict skip:oracle-host-missing-intl
+intl402/Temporal/ZonedDateTime/timezone-case-insensitive.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/timezone-case-insensitive.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/timezone-ids-basic.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/timezone-ids-basic.js strict skip:oracle-host-missing-global:Temporal

@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/PlainMonthDay/prototype/toJSON tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/PlainMonthDay/prototype/toJSON/calendarname.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/prototype/toJSON/calendarname.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/prototype/toJSON/year-format.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/prototype/toJSON/year-format.js strict skip:oracle-host-missing-global:Temporal

@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=intl402/Locale/prototype/collation tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Locale/prototype/collation/branding.js sloppy skip:oracle-host-missing-intl
+intl402/Locale/prototype/collation/branding.js strict skip:oracle-host-missing-intl
+intl402/Locale/prototype/collation/name.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/collation/name.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/collation/prop-desc.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/collation/prop-desc.js strict skip:oracle-host-missing-global:Intl

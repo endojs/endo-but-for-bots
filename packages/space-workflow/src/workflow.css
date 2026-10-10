@@ -330,6 +330,22 @@
   font-size: 0.8rem;
 }
 
+/* Age label in the runs rail. The rail is newest-first, so this is what tells
+   you whether "newest" means minutes or months. */
+.wf-rail-age {
+  font-size: 0.7rem;
+  opacity: 0.55;
+}
+
+/* A forward edge that skips a column is routed through a lane of its own in
+   each column it crosses, rather than drawn as a chord over whatever sits in
+   between. Dashed and dimmed so the column-to-column flow stays the thing you
+   read first. */
+.wf-edge-routed {
+  opacity: 0.6;
+  stroke-dasharray: 4 3;
+}
+
 /* An approval waiting on you is the only actionable thing on this screen, so it
    goes above the diagram rather than below it. The statechart is now tall
    enough (routing edges around states costs vertical space) that the panel sat

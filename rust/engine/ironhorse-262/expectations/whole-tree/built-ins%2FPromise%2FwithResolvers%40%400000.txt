@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=built-ins/Promise/withResolvers tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Promise/withResolvers/ctx-ctor.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Promise/withResolvers/ctx-ctor.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Promise/withResolvers/ctx-non-ctor.js sloppy pass
+built-ins/Promise/withResolvers/ctx-non-ctor.js strict pass
+built-ins/Promise/withResolvers/ctx-non-object.js sloppy pass
+built-ins/Promise/withResolvers/ctx-non-object.js strict pass
+built-ins/Promise/withResolvers/promise.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Promise/withResolvers/promise.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Promise/withResolvers/resolvers.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Promise/withResolvers/resolvers.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Promise/withResolvers/result.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Promise/withResolvers/result.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"

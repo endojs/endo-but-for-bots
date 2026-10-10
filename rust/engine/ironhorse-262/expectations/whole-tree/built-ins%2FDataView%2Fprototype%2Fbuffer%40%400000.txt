@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=built-ins/DataView/prototype/buffer tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/DataView/prototype/buffer/detached-buffer.js sloppy pass
+built-ins/DataView/prototype/buffer/detached-buffer.js strict pass
+built-ins/DataView/prototype/buffer/invoked-as-accessor.js sloppy pass
+built-ins/DataView/prototype/buffer/invoked-as-accessor.js strict pass
+built-ins/DataView/prototype/buffer/invoked-as-func.js sloppy pass
+built-ins/DataView/prototype/buffer/invoked-as-func.js strict pass
+built-ins/DataView/prototype/buffer/length.js sloppy pass
+built-ins/DataView/prototype/buffer/length.js strict pass
+built-ins/DataView/prototype/buffer/name.js sloppy pass
+built-ins/DataView/prototype/buffer/name.js strict pass
+built-ins/DataView/prototype/buffer/prop-desc.js sloppy pass
+built-ins/DataView/prototype/buffer/prop-desc.js strict pass
+built-ins/DataView/prototype/buffer/return-buffer-sab.js sloppy pass
+built-ins/DataView/prototype/buffer/return-buffer-sab.js strict pass
+built-ins/DataView/prototype/buffer/return-buffer.js sloppy pass
+built-ins/DataView/prototype/buffer/return-buffer.js strict pass
+built-ins/DataView/prototype/buffer/this-has-no-dataview-internal-sab.js sloppy pass
+built-ins/DataView/prototype/buffer/this-has-no-dataview-internal-sab.js strict pass
+built-ins/DataView/prototype/buffer/this-has-no-dataview-internal.js sloppy pass
+built-ins/DataView/prototype/buffer/this-has-no-dataview-internal.js strict pass
+built-ins/DataView/prototype/buffer/this-is-not-object.js sloppy pass
+built-ins/DataView/prototype/buffer/this-is-not-object.js strict pass

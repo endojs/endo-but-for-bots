@@ -1,0 +1,17 @@
+# engine=ironhorse features=default corpus=built-ins/Symbol/prototype/valueOf tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Symbol/prototype/valueOf/length.js sloppy pass
+built-ins/Symbol/prototype/valueOf/length.js strict pass
+built-ins/Symbol/prototype/valueOf/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be valueOf; name value should be valueOf"
+built-ins/Symbol/prototype/valueOf/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be valueOf; name value should be valueOf"
+built-ins/Symbol/prototype/valueOf/not-a-constructor.js sloppy pass
+built-ins/Symbol/prototype/valueOf/not-a-constructor.js strict pass
+built-ins/Symbol/prototype/valueOf/prop-desc.js sloppy pass
+built-ins/Symbol/prototype/valueOf/prop-desc.js strict pass
+built-ins/Symbol/prototype/valueOf/this-val-non-obj.js sloppy pass
+built-ins/Symbol/prototype/valueOf/this-val-non-obj.js strict pass
+built-ins/Symbol/prototype/valueOf/this-val-obj-non-symbol.js sloppy pass
+built-ins/Symbol/prototype/valueOf/this-val-obj-non-symbol.js strict pass
+built-ins/Symbol/prototype/valueOf/this-val-obj-symbol.js sloppy pass
+built-ins/Symbol/prototype/valueOf/this-val-obj-symbol.js strict pass
+built-ins/Symbol/prototype/valueOf/this-val-symbol.js sloppy pass
+built-ins/Symbol/prototype/valueOf/this-val-symbol.js strict pass

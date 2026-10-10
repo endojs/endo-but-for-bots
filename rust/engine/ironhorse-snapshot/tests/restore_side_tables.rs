@@ -22,18 +22,13 @@
 //! `ironhorse-compile` pipeline (no oracle needed), which emits both the bytecode
 //! and the `SYMB` atom, exactly as `dual_run` links a program.
 
+#[path = "common/compile.rs"]
+mod guest_compile;
+use guest_compile::compile;
+
 use ironhorse_snapshot::format::Signature;
 use ironhorse_snapshot::machine::{from_snapshot_bytes, MachineSnapshot};
-use ironhorse_vm::{parse_symbols, Interp};
-
-/// Compile guest `source` to `(bytecode, program symbol names)` — the two
-/// halves `Interp::link_intrinsics` + `Interp::run` consume. Panics if the
-/// pure-Rust compiler cannot lower the source (the fixtures below are chosen
-/// to compile cleanly).
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
-    let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
-    (bytecode, parse_symbols(&symbols))
-}
+use ironhorse_vm::Interp;
 
 fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
@@ -65,13 +60,18 @@ fn runtime_global_survives_suspend_resume() {
     let mut m1 = Interp::new();
     m1.link_intrinsics(&names1);
     m1.run(&crank1);
-    let bytes = m1.write_snapshot(&sig()).expect("quiescent machine snapshots");
+    let bytes = m1
+        .write_snapshot(&sig())
+        .expect("quiescent machine snapshots");
     drop(m1);
 
     let mut m2 = from_snapshot_bytes(&bytes, &sig()).expect("machine restores from bytes");
     let resumed = m2.run(&crank2);
 
-    assert!(resumed.completed, "resumed crank 2 completes (global resolved)");
+    assert!(
+        resumed.completed,
+        "resumed crank 2 completes (global resolved)"
+    );
     assert_eq!(
         resumed.result, baseline.result,
         "resumed run reads the runtime global identically to the uninterrupted run",
@@ -100,7 +100,9 @@ fn symbol_tables_rebuilt_at_restore() {
     // Sanity: the live machine reads the global by name (uses `symbol_ids`).
     assert_eq!(m1.global_string("x").as_deref(), Some("5"));
 
-    let bytes = m1.write_snapshot(&sig()).expect("quiescent machine snapshots");
+    let bytes = m1
+        .write_snapshot(&sig())
+        .expect("quiescent machine snapshots");
     drop(m1);
     let m2 = from_snapshot_bytes(&bytes, &sig()).expect("machine restores from bytes");
 
@@ -255,4 +257,30 @@ fn mapped_arguments_cells_survive_blob_restore() {
     assert!(resumed.completed, "resumed crank 2");
     assert_eq!(resumed.result, baseline.result);
     assert_eq!(resumed.computrons, baseline.computrons);
+}
+
+#[test]
+fn null_prototype_owners_and_values_survive_restore() {
+    let (code, names) = compile(
+        "var o={0:7}, a=[o], m=new Map([[o,a]]); function f(){return 11;} \
+         Object.setPrototypeOf(o,null); Object.setPrototypeOf(a,null); \
+         Object.setPrototypeOf(m,null); Object.setPrototypeOf(f,null); \
+         Object.setPrototypeOf(globalThis,null); 0",
+    );
+    let mut original = Interp::new();
+    original.link_intrinsics(&names);
+    assert!(original.run(&code).completed);
+    let bytes = original.write_snapshot(&sig()).unwrap();
+    let mut restored = from_snapshot_bytes(&bytes, &sig()).unwrap();
+    let (code, names) = compile(
+        "[o[0],a[0][0],Map.prototype.get.call(m,o)[0][0],f(), \
+         [o,a,m,f,globalThis].every(x=>Object.getPrototypeOf(x)===null)].join(':')",
+    );
+    for vm in [&mut original, &mut restored] {
+        let linked = vm.relink_crank(&code, &names).unwrap();
+        let outcome = vm.run(&linked);
+        assert!(outcome.completed, "{outcome:?}");
+        assert_eq!(outcome.result, "7:7:7:11:true");
+    }
+    assert_eq!(original.meter_index(), restored.meter_index());
 }

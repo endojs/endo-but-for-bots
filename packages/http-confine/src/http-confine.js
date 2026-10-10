@@ -7,6 +7,7 @@ import { makeError, q, X } from '@endo/errors';
  * @import {
  *   ConfinedRequest,
  *   ConfinedResponse,
+ *   ConfinedResponseSummary,
  *   FetchLike,
  *   FetchLikeBodyReader,
  *   FetchLikeResponse,
@@ -431,6 +432,87 @@ export const resolveRedirect = (response, origins) => {
 freeze(resolveRedirect);
 
 /**
+ * Copy response headers into a plain record before anything hardens them.
+ * Node's Undici `Headers` fills an internal sorted cache the first time it is
+ * iterated, so a `Headers` that was deep-hardened while still empty throws
+ * `TypeError: Cannot assign to read only property 'Symbol(headers map sorted)'`
+ * at the first read, in the reader's frame rather than at the harden.
+ *
+ * Names are lowercased, so a repeated name keeps its last value. Undici already
+ * joins repeats with `, ` when it iterates, except `set-cookie`, which it
+ * yields once per cookie and which therefore survives only as its last value.
+ *
+ * @param {Headers | Record<string, string> | Iterable<[string, string]> | undefined} headers
+ * @returns {Record<string, string>}
+ */
+export const snapshotHeaders = headers => {
+  /** @type {Record<string, string>} */
+  const record = {};
+  /**
+   * @param {string} key
+   * @param {string} value
+   */
+  const setHeader = (key, value) => {
+    Object.defineProperty(record, key.toLowerCase(), {
+      value: String(value),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  };
+  if (
+    headers &&
+    typeof (
+      /** @type {Iterable<[string, string]>} */ (headers)[Symbol.iterator]
+    ) === 'function'
+  ) {
+    for (const [key, value] of /** @type {Iterable<[string, string]>} */ (
+      headers
+    )) {
+      setHeader(key, value);
+    }
+  } else if (
+    headers &&
+    typeof (/** @type {Headers} */ (headers).forEach) === 'function'
+  ) {
+    /** @type {Headers} */ (headers).forEach((value, key) => {
+      setHeader(key, value);
+    });
+  } else {
+    for (const [key, value] of Object.entries(headers || {})) {
+      setHeader(key, value);
+    }
+  }
+  return freeze(record);
+};
+freeze(snapshotHeaders);
+
+/**
+ * Project a transport response to inert data. By the time a response is
+ * summarized its body has already been drained into bounded bytes, so the
+ * summary carries no `body`: the transport object never escapes the
+ * confinement, and nothing downstream can harden a host object with lazy
+ * internals. See {@link snapshotHeaders} for the failure this avoids.
+ *
+ * @param {FetchLikeResponse} response
+ * @returns {ConfinedResponseSummary}
+ */
+export const snapshotResponse = response => {
+  const status = Number(response.status || 0);
+  return freeze({
+    status,
+    statusText: String(response.statusText || ''),
+    // A fetch-like may omit `ok`; `FetchLikeResponse` marks it optional. Fall
+    // back to the definition the platform uses rather than reporting a 200 as
+    // not ok.
+    ok: response.ok ?? (status >= 200 && status < 300),
+    headers: snapshotHeaders(response.headers),
+    url: String(response.url || ''),
+  });
+};
+freeze(snapshotResponse);
+
+/**
  * @param {{ timeoutMs: number, cancellation?: Promise<never> }} opts
  * @returns {{ signal: AbortSignal, dispose: () => void }}
  */
@@ -445,6 +527,10 @@ export const makeRequestSignal = ({ timeoutMs, cancellation }) => {
       () => controller.abort(),
     );
   }
+  // Object.freeze, not freeze: the shallow freeze is load-bearing. Deep
+  // hardening reaches the host AbortSignal, and `controller.abort()` then
+  // throws `Cannot assign to read only property 'Symbol(kAborted)'`. Same
+  // hazard that snapshotResponse avoids for the transport response.
   return Object.freeze({
     signal: controller.signal,
     dispose: () => {
@@ -565,7 +651,7 @@ export const makeHttpConfinement = (policy, { fetch, now }) => {
       const bytes = await limited.stream;
       assertNotRevoked();
       return freeze({
-        response,
+        response: snapshotResponse(response),
         bytes,
         truncated: limited.truncated(),
         maxResponseBytes,

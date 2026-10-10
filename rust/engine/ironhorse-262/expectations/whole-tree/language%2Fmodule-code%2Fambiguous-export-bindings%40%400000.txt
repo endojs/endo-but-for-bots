@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=language/module-code/ambiguous-export-bindings tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/module-code/ambiguous-export-bindings/error-export-from-named-as.js sloppy skip:module:resolution-linking
+language/module-code/ambiguous-export-bindings/error-export-from-named.js sloppy skip:module:resolution-linking
+language/module-code/ambiguous-export-bindings/error-import-named-as.js sloppy skip:module:resolution-linking
+language/module-code/ambiguous-export-bindings/error-import-named.js sloppy skip:module:resolution-linking
+language/module-code/ambiguous-export-bindings/import-and-export-propagates-binding.js sloppy skip:unsupported-opcode:module:static-linking
+language/module-code/ambiguous-export-bindings/namespace-unambiguous-if-export-star-as-from-and-import-star-as-and-export.js sloppy skip:unsupported-opcode:module:static-linking
+language/module-code/ambiguous-export-bindings/namespace-unambiguous-if-export-star-as-from.js sloppy skip:unsupported-opcode:module:static-linking
+language/module-code/ambiguous-export-bindings/namespace-unambiguous-if-import-source-and-export.js sloppy skip:unsupported-opcode:module:static-linking
+language/module-code/ambiguous-export-bindings/namespace-unambiguous-if-import-star-as-and-export.js sloppy skip:unsupported-opcode:module:static-linking
+language/module-code/ambiguous-export-bindings/omitted-from-namespace.js sloppy skip:unsupported-opcode:module:static-linking

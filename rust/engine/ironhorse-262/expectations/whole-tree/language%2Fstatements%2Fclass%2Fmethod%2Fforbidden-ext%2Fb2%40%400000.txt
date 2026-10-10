@@ -1,0 +1,4 @@
+# engine=ironhorse features=default corpus=language/statements/class/method/forbidden-ext/b2 tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/method/forbidden-ext/b2/cls-decl-meth-forbidden-ext-indirect-access-own-prop-caller-get.js sloppy pass
+language/statements/class/method/forbidden-ext/b2/cls-decl-meth-forbidden-ext-indirect-access-own-prop-caller-value.js sloppy pass
+language/statements/class/method/forbidden-ext/b2/cls-decl-meth-forbidden-ext-indirect-access-prop-caller.js sloppy pass

@@ -15,7 +15,7 @@ import nodePath from 'node:path';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
 
-import { makeFsMounter } from '../mount-caplet.js';
+import { makeFsMounter, mountIdentity } from '../mount-caplet.js';
 
 // A caller-supplied socketPath must live inside the socket directory
 // (defaults to os.tmpdir() when XDG_RUNTIME_DIR is unset), so build the
@@ -32,6 +32,8 @@ const flush = () => new Promise(resolve => setTimeout(resolve, 10));
  * @param {Record<string, string>} [opts.env]
  * @param {Promise<never>} [opts.cancelledP]
  * @param {(bin: string, argv: string[], nth: number) => Promise<unknown>} [opts.runBehavior]
+ * @param {number} [opts.uid]
+ * @param {number} [opts.gid]
  */
 const makeHarness = (opts = {}) => {
   const calls = { run: [], makeDir: [], removeDir: [], bridges: [] };
@@ -49,8 +51,8 @@ const makeHarness = (opts = {}) => {
     calls.removeDir.push(p);
     return Promise.resolve();
   };
-  const makeBridge = ({ fs, socketPath, cancelled }) => {
-    const rec = { fs, socketPath, cancelled, started: 0, stopped: 0 };
+  const makeBridge = ({ fs, socketPath, cancelled, uid, gid }) => {
+    const rec = { fs, socketPath, cancelled, uid, gid, started: 0, stopped: 0 };
     calls.bridges.push(rec);
     return Far('FakeBridge', {
       async start() {
@@ -68,12 +70,26 @@ const makeHarness = (opts = {}) => {
     makeDir,
     removeDir,
     makeBridge,
+    uid: opts.uid,
+    gid: opts.gid,
   });
   return { mounter, calls };
 };
 
+test("mountIdentity reports the worker's own uid/gid", t => {
+  t.deepEqual(mountIdentity({ getuid: () => 501, getgid: () => 20 }), {
+    uid: 501,
+    gid: 20,
+  });
+});
+
+test('mountIdentity falls back to 1000 where the platform has no uid/gid', t => {
+  // Windows: `process.getuid`/`getgid` are undefined rather than throwing.
+  t.deepEqual(mountIdentity({}), { uid: 1000, gid: 1000 });
+});
+
 test('mount builds the 9P mount argv, makes the dir, and starts the bridge', async t => {
-  const { mounter, calls } = makeHarness();
+  const { mounter, calls } = makeHarness({ uid: 999, gid: 998 });
   const h = await E(mounter).mount(
     fakeFs(),
     '/mnt/x',
@@ -83,6 +99,8 @@ test('mount builds the 9P mount argv, makes the dir, and starts the bridge', asy
   t.deepEqual(calls.makeDir[0], { p: '/mnt/x', o: { recursive: true } });
   t.is(calls.bridges.length, 1);
   t.is(calls.bridges[0].socketPath, SOCK);
+  t.is(calls.bridges[0].uid, 999);
+  t.is(calls.bridges[0].gid, 998);
   t.is(calls.bridges[0].started, 1);
 
   t.is(calls.run.length, 1);

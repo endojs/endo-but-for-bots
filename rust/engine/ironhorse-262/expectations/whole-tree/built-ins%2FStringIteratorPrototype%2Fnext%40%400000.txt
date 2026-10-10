@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=built-ins/StringIteratorPrototype/next tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/StringIteratorPrototype/next/length.js sloppy pass
+built-ins/StringIteratorPrototype/next/length.js strict pass
+built-ins/StringIteratorPrototype/next/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be next; name value should be next"
+built-ins/StringIteratorPrototype/next/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be next; name value should be next"
+built-ins/StringIteratorPrototype/next/next-iteration-surrogate-pairs.js sloppy pass
+built-ins/StringIteratorPrototype/next/next-iteration-surrogate-pairs.js strict pass
+built-ins/StringIteratorPrototype/next/next-iteration.js sloppy pass
+built-ins/StringIteratorPrototype/next/next-iteration.js strict pass
+built-ins/StringIteratorPrototype/next/next-missing-internal-slots.js sloppy pass
+built-ins/StringIteratorPrototype/next/next-missing-internal-slots.js strict pass

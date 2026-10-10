@@ -1,0 +1,1305 @@
+//! The single Realm and the machine's compartment environments.
+use super::*;
+
+/// Release the in-progress latch on success, refusal, or host unwinding.
+struct LockdownGuard(std::rc::Rc<crate::Intrinsics>);
+
+impl LockdownGuard {
+    fn enter(intrinsics: &std::rc::Rc<crate::Intrinsics>) -> Option<Self> {
+        if intrinsics.locking_down.replace(true) {
+            return None;
+        }
+        Some(Self(intrinsics.clone()))
+    }
+}
+
+impl Drop for LockdownGuard {
+    fn drop(&mut self) {
+        self.0.locking_down.set(false);
+    }
+}
+
+/// The machine's single Realm: shared primordials and its default environment.
+/// The default environment is also the start compartment's environment.
+pub struct Realm {
+    intrinsics: std::rc::Rc<crate::Intrinsics>,
+    default_global: crate::SlotIndex,
+}
+impl Realm {
+    pub(super) fn new(default_global: crate::SlotIndex) -> Self {
+        Self {
+            intrinsics: Default::default(),
+            default_global,
+        }
+    }
+    pub fn intrinsics(&self) -> &std::rc::Rc<crate::Intrinsics> {
+        &self.intrinsics
+    }
+    pub fn global_object(&self) -> crate::SlotIndex {
+        self.default_global
+    }
+}
+
+/// A global environment and its host evaluation policy within an interpreter.
+/// Heap coordinates and property-key identities belong to the owning machine.
+pub struct CompartmentEnvironment {
+    pub(super) global_obj: crate::value::SlotIndex,
+    pub(super) modules: std::rc::Rc<std::cell::RefCell<crate::ModuleGraph>>,
+    /// Names this environment has bound on its global object, including
+    /// bindings later deleted. The symbol table and intrinsic prototypes are
+    /// shared across compartments, but this history is per global object.
+    pub(super) binding_names: std::collections::BTreeSet<u16>,
+    pub(super) global_props: std::collections::HashMap<u16, crate::value::SlotIndex>,
+    /// The compartment's `globalLexicals` (`fx_Compartment`,
+    /// `xsModule.c:3030`), by interned key id.
+    ///
+    /// A scope BETWEEN this environment's global object and the source
+    /// evaluated in it: a lexical shadows a global of the same name, and is
+    /// invisible on `globalThis` -- `constructor/globalLexicals-properties.js`
+    /// asserts both halves, and `prototype/evaluate/environments.js` asserts
+    /// that a write to a lexical does not create a global.
+    ///
+    /// Each value is a standalone arena slot holding the binding's current
+    /// value, NOT a property linked into the global object's chain, which is
+    /// what keeps it off `getOwnPropertyNames(globalThis)`. `XS_DONT_SET_FLAG`
+    /// on that slot makes the binding `const`, taken from the source
+    /// descriptor's writability at construction: XS reads per-name writability
+    /// off the descriptor, and the corpus's `shared` entry (a `value` with no
+    /// `writable`) is the case that must throw on assignment.
+    ///
+    /// Empty for every environment but a guest compartment's. The host
+    /// `Compartment` API has no `globalLexicals` option.
+    pub(super) global_lexicals: std::collections::HashMap<u16, crate::value::SlotIndex>,
+    pub(super) owner: Option<std::rc::Weak<()>>,
+    /// Which intrinsic names may be BOUND as globals in this environment --
+    /// the live filter, and the authority: `interp/link.rs` consults exactly
+    /// this, at initial linking and at every later relink. `None` binds the
+    /// standard set; `Some(list)` binds only those names, plus `globalThis`.
+    ///
+    /// It is per-environment, and environments DO NOT INHERIT. Each
+    /// compartment creates its own environment and `create_environment`
+    /// assigns this outright, so a compartment declaring `None` is
+    /// unrestricted however narrow the machine's start realm is, and one
+    /// declaring a list may name something the start realm omitted
+    /// (`tests/realms.rs`). A machine-wide list looks like a ceiling and is
+    /// not one.
+    ///
+    /// The mechanism is the whole of it, and it is small: the binding is
+    /// created or it is not. Nothing leaves the intrinsic graph, so every
+    /// denied intrinsic stays reachable by any route that is not a bare name
+    /// -- `({}).constructor.constructor` still reaches `Function` under
+    /// `Some(vec![])`. This is not SES's `permits.js`, which governs which
+    /// PROPERTIES of intrinsics survive lockdown and is enforced by deletion.
+    pub(super) global_names: Option<std::collections::BTreeSet<SymbolName>>,
+    pub(super) unhandled_rejection: Option<crate::value::SlotIndex>,
+    pub(super) compiler_required: bool,
+    pub(super) shared_compiler: Option<std::rc::Weak<dyn SourceCompiler>>,
+    pub(super) source_compiler: Option<std::rc::Rc<dyn SourceCompiler>>,
+}
+
+impl CompartmentEnvironment {
+    pub(super) fn new(global_obj: crate::value::SlotIndex) -> Self {
+        Self {
+            global_obj,
+            global_props: Default::default(),
+            global_lexicals: Default::default(),
+            binding_names: Default::default(),
+            modules: Default::default(),
+            source_compiler: None,
+            shared_compiler: None,
+            compiler_required: false,
+            global_names: None,
+            owner: None,
+            unhandled_rejection: None,
+        }
+    }
+}
+
+impl Interp {
+    pub(crate) fn attach_compiler_registry(
+        &mut self,
+        registry: &std::rc::Rc<crate::compartment::CompilerRegistry>,
+    ) {
+        self.compiler_registry = std::rc::Rc::downgrade(registry);
+    }
+
+    pub(crate) fn set_default_compiler(&mut self, compiler: &std::rc::Rc<dyn SourceCompiler>) {
+        self.environment_context_mut(self.realm.global_object())
+            .unwrap()
+            .compiler_required = true;
+        self.environment_context_mut(self.realm.global_object())
+            .expect("default environment")
+            .shared_compiler = Some(std::rc::Rc::downgrade(compiler));
+    }
+
+    pub(crate) fn set_shared_compiler(&mut self, compiler: &std::rc::Rc<dyn SourceCompiler>) {
+        self.environment.compiler_required = true;
+        self.environment.shared_compiler = Some(std::rc::Rc::downgrade(compiler));
+    }
+
+    /// Mint this environment's own copy of an intrinsic that must be bound to
+    /// it rather than shared -- `eval`, `Function`, and `Compartment`.
+    ///
+    /// XS mints exactly these three per compartment (`fx_Compartment`,
+    /// `xsModule.c:2923-2956`), and `test/Compartment/prototype/globalThis/defaults.js`
+    /// observes it: every own global of a fresh compartment is the outer
+    /// realm's BY IDENTITY except `Compartment`, `Function`, `eval` and the
+    /// value globals. The copy shares the original's `ctor_prototype`, so
+    /// `%Compartment.prototype%` stays one object and a compartment made by a
+    /// nested compartment carries the same brand.
+    pub(super) fn compartment_evaluator(&mut self, original: crate::SlotIndex) -> crate::SlotIndex {
+        let Some(mut info) = self.functions.get(&original).cloned() else {
+            return original;
+        };
+        if !self.shared_compartments
+            || !matches!(
+                info.native,
+                Some(Native::Eval | Native::Function | Native::Compartment)
+            )
+        {
+            return original;
+        }
+        info.global_env = self.environment.global_obj;
+        let function = self.slots.alloc(Slot::instance(self.function_proto));
+        self.functions.insert(function, info);
+        if let Some(proto) = self.ctor_prototype.get(&original).copied() {
+            self.ctor_prototype.insert(function, proto);
+            if let Some(id) = self.prototype_key_id {
+                self.set_own_unmetered_with_flag(
+                    function,
+                    id,
+                    Slot::of(Kind::Reference, Payload::Reference(proto)),
+                    XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG,
+                );
+            }
+        }
+        function
+    }
+
+    /// Perform the freeze [`Self::new_shared_realm_machine_configured`] skipped.
+    /// Idempotent: a graph already locked down is left alone, as `fx_lockdown`
+    /// is NOT (it throws `TypeError("lockdown already called")`,
+    /// `xsLockdown.c:90-92`) -- this is the embedder's operation, not the
+    /// guest's, and an embedder that cannot tell is the one calling it twice.
+    ///
+    /// NOT atomic. The roots are hardened in sequence, so a refusal partway
+    /// through returns `Err` with the earlier roots already frozen while
+    /// `locked_down` stays false -- that flag reporting false does not mean
+    /// the graph is still fully mutable.
+    ///
+    /// **Retrying is NOT a recovery.** An earlier revision said so, reasoning
+    /// that a hardened root is idempotent. The case that actually gets here
+    /// refutes it: a Proxy whose `preventExtensions` trap returns false refuses
+    /// the same root on every attempt, so the retry throws forever instead of
+    /// converging. The embedder's recourse is to discard the realm, not to call
+    /// again. The guest-facing [`Self::do_lockdown`] makes the same failure
+    /// uncatchable for the same reason.
+    pub(crate) fn lock_down_intrinsics(&mut self) -> Result<(), crate::Halt> {
+        if self.realm.intrinsics().locked_down.get() {
+            return Ok(());
+        }
+        let _guard =
+            LockdownGuard::enter(self.realm.intrinsics()).ok_or(crate::Halt::MachineBusy)?;
+        if self.realm.intrinsics().hardening.get() {
+            return Err(crate::Halt::MachineBusy);
+        }
+        // Step 2 before step 5, the same order and the same operation the guest
+        // `lockdown()` performs -- a graph hardened WITHOUT it still hands
+        // `({}).constructor.constructor` the real evaluator. See
+        // [`Self::poison_function_constructors`].
+        //
+        // The stand-ins need no separate hardening: they are boot instances, so
+        // the root enumeration `new_shared_realm_machine_configured` took at
+        // construction already contains them.
+        //
+        // If step 5 refuses, `locked_down` stays false. A proxy may already
+        // have changed the graph, so a failed realm must be discarded.
+        let minted = self.poison_function_constructors();
+        let roots = self.realm.intrinsics().roots.clone();
+        for root in roots {
+            // Unlike the construction-time freeze this can legitimately fail:
+            // the graph has been reachable by a guest, which may have made an
+            // intrinsic non-extensible or installed a Proxy that refuses the
+            // definition. A failed `do_harden` revokes the traversal marks
+            // placed under it, so a later walk retries rather than
+            // short-circuiting, but it cannot undo property freezes already
+            // performed.
+            // Earlier roots and part of this root's graph may remain frozen
+            // while `locked_down` is still false. Calling again does not fix
+            // that -- see the retraction above.
+            self.do_harden(&[], Slot::of(Kind::Reference, Payload::Reference(root)))
+                .map_err(|step| match step {
+                    Step::Host(halt) => halt,
+                    _ => crate::Halt::Refused("lockdown:intrinsic-graph"),
+                })?;
+        }
+        // Hardening walks the roots through the MOP, so a guest Proxy can have
+        // run and put the real evaluator back -- see
+        // [`Self::reassert_function_constructors`].
+        self.reassert_function_constructors(&minted);
+        self.mark_lockdown_complete();
+        Ok(())
+    }
+
+    /// The guest `lockdown()` (`fx_lockdown`, `xsLockdown.c:74-205`), bound by
+    /// [`Self::create_hardened_globals`] as [`NativeMethod::GlobalLockdown`].
+    ///
+    /// Three of `fx_lockdown`'s five steps, in XS's order. The two that are
+    /// absent presuppose a guest `Compartment`, which ironhorse does not have:
+    /// the compartment-global template (`:105-119`, `:139`) and the `Math`
+    /// duplicate that is pulled into it (`:130-137`). `Date`'s half of step 4
+    /// survives as `Date.prototype.constructor`, which step 2 below covers;
+    /// `Math.random` is not implemented on ironhorse, so there is nothing
+    /// there to secure. `designs/ironhorse-native-lockdown.md` § Scope
+    /// boundary states both, and what they cost.
+    ///
+    /// **The direct write is the contract, not the order.** An earlier revision
+    /// of this comment said "rewire, then harden" was load-bearing. Mutation
+    /// testing refuted it: inverting the two steps changes no observable
+    /// behaviour and fails no test. The reason is
+    /// [`Self::force_locked_down_constructor`], which assigns the slot rather
+    /// than defining the property, so a frozen `Function.prototype` is no
+    /// obstacle whenever the write happens.
+    ///
+    /// The order IS load-bearing for a JS implementation, which is why the
+    /// claim was plausible: `do_harden` walks prototype chains, so after any
+    /// harden `Function.prototype.constructor` is
+    /// `{writable: false, configurable: false}` and `[[DefineOwnProperty]]`
+    /// must refuse it -- exactly how the SES shim's `lockdown()` fails on
+    /// ironhorse, with `TypeError: invalid descriptor` out of
+    /// `tame-function-constructors.js`. XS sidesteps that by writing the slot
+    /// (`fx_lockdown_aux`, `:52`), and so does this. `lockdown_still_rewires_a_
+    /// prototype_the_guest_has_already_hardened` is the test, and what it
+    /// guards is the write path: replace it with an ordinary define and that
+    /// test goes red.
+    pub(super) fn do_lockdown(&mut self, code: &[u8]) -> Result<Slot, Step> {
+        // Step 1, idempotence (`:88-92`). XS throws; the HOST-side
+        // [`Self::lock_down_intrinsics`] deliberately does not, because it is
+        // the embedder's operation and an embedder that cannot tell whether it
+        // has run is the one calling it twice. A guest can tell, so the guest
+        // boundary takes XS's answer. The two share one flag and differ only
+        // here; `designs/ironhorse-native-lockdown.md` § Decisions, as taken
+        // records the split as deliberate.
+        if self.realm.intrinsics().locked_down.get() {
+            return Err(self.catchable_type_error_msg("lockdown already called".into()));
+        }
+        // A nested lockdown reached from a Proxy trap inside step 5 would
+        // report success over the outer call's unfinished roots. XS's early
+        // mxProgram flag also refuses reentry; keep our transient guard
+        // separate from the persisted successful-completion marker.
+        let Some(_guard) = LockdownGuard::enter(self.realm.intrinsics()) else {
+            return Err(self.catchable_type_error_msg("lockdown already called".into()));
+        };
+        // A first lockdown can also arrive from an unrelated outer `harden`,
+        // whose trap is running guest code in a graph it has not finished
+        // freezing. Refuse before step 2 rather than rewire the constructors
+        // underneath a walk that can still throw. `revoke_harden_marks` is
+        // what keeps that walk's marks from being mistaken for a completed
+        // freeze; this guard is the narrower statement that `lockdown()` does
+        // not start from inside one, which is also XS's answer.
+        if self.realm.intrinsics().hardening.get() {
+            return Err(self.catchable_type_error_msg("lockdown cannot start during harden".into()));
+        }
+
+        // **No compartment check here: neither SES nor XS has one.** An
+        // earlier revision refused when
+        // `environment.global_obj != realm.global_object()`. That was both
+        // unfaithful (SES puts `lockdown` on every global and relies on
+        // idempotence) and unsound (it read the AMBIENT environment, which a
+        // guest steers by queueing a promise job -- measured
+        // `LOCKED AFTER JOB = true`). The invariant now lives in
+        // `new_shared_realm_machine_configured`: a machine that can hold
+        // compartments is already locked down, so a compartment's call meets
+        // step 1 above, and an unfrozen machine does not bind `lockdown` at
+        // all.
+
+        // Step 2, poison the function-family constructors (`:94-103`, `:127`).
+        // XS calls `fx_lockdown_aux` six times; five of those prototypes exist
+        // here (`Compartment.prototype` does not), and the `length` each
+        // inert constructor carries is the one the constructor it replaces
+        // carried -- 1 for the function family, 7 for `Date`.
+        //
+        // Collect the pairs for the post-harden re-assertion. Each stand-in's
+        // own surface is frozen before it becomes reachable by guest code.
+        // The stand-ins are BOOT objects (`create_locked_down_constructors`),
+        // so this step mints no new native stand-ins -- which keeps a locked-down
+        // machine snapshottable. `Interp::locked_down_constructors` has the
+        // measurement.
+        let minted = self.poison_function_constructors();
+
+        // Step 5, harden (`:141-200`). XS walks an enumerated list of
+        // intrinsics; ironhorse hardens every primordial instance, which is
+        // wider, and is the same set
+        // [`Self::new_shared_realm_machine_configured`] freezes when it
+        // freezes at construction.
+        //
+        // A shared-realm machine already carries that enumeration in
+        // `Intrinsics::roots`. A plain `Interp::new()` machine -- what
+        // `endot-ih`, `ironhorse-xst` and the conformance harness run -- does
+        // not: `Realm::new` gives it an empty one. Deriving it here from
+        // `boot_slot_count` rather than from `slots.capacity()` is the whole
+        // difference between "freeze the primordials" and "freeze every object
+        // the guest has allocated so far", because by the time a guest calls
+        // `lockdown()` the arena is full of guest objects and the
+        // construction-time filter no longer discriminates.
+        let mut roots = self.realm.intrinsics().roots.clone();
+        if roots.is_empty() {
+            roots = (0..self.boot_slot_count)
+                .map(crate::value::SlotIndex)
+                .filter(|&root| root != self.environment.global_obj && root != self.template_cache)
+                .filter(|&root| self.slots.get(root).kind == Kind::Instance)
+                .collect();
+        }
+        roots.extend(minted.iter().map(|&(_, inert)| inert));
+        for root in roots {
+            // **A partial freeze is a hard failure, not a catchable one.**
+            //
+            // The roots are hardened one at a time with no rollback, so a
+            // refusal at root `k` leaves `0..k` frozen while `locked_down` is
+            // still false. A guest that could CATCH that would hold a realm
+            // which is partly frozen and simultaneously reports itself
+            // unlocked -- and would go on running in it. There is no useful
+            // thing for it to do with that.
+            //
+            // An earlier revision propagated the throw and told the caller to
+            // retry, on the reasoning that a hardened root is idempotent so a
+            // second call completes the freeze. **That is false**, and the
+            // case that refutes it is the one that gets here in the first
+            // place: a Proxy whose `preventExtensions` trap returns false
+            // refuses the same root on every attempt, so `lockdown()` throws
+            // forever rather than converging. Advertising retry as the
+            // recovery pointed callers at a loop that cannot terminate.
+            //
+            // So step 5's refusal unwinds the run instead. `Halt::Refused` is
+            // uncatchable by construction, which is the contract this wants:
+            // succeed, or fail once and stop. `lockdown:intrinsic-graph` is
+            // the label `lock_down_intrinsics` already uses for exactly this
+            // condition, and it is classified in `REFUSED_LABELS` --
+            // "recognized but refused under the current execution profile".
+            //
+            // **This is a deliberate divergence from XS**, recorded in
+            // `designs/ironhorse-native-lockdown.md` § Oracle divergences:
+            // `fx_lockdown`'s harden calls are a straight-line sequence whose
+            // failure propagates as an ordinary catchable exception. Matching
+            // that would mean reproducing a state a guest cannot safely
+            // continue from, which is not a fidelity worth having.
+            //
+            // A genuine engine halt -- heap exhaustion, a meter overflow --
+            // propagates unchanged; only a guest-visible refusal is converted.
+            if let Err(step) =
+                self.do_harden(code, Slot::of(Kind::Reference, Payload::Reference(root)))
+            {
+                return Err(match step {
+                    Step::Host(halt) => Step::Host(halt),
+                    _ => Step::Host(crate::Halt::Refused("lockdown:intrinsic-graph")),
+                });
+            }
+        }
+
+        // Re-assert step 2 after step 5, which can have run guest code
+        // through a Proxy trap -- see `reassert_function_constructors`.
+        self.reassert_function_constructors(&minted);
+        self.mark_lockdown_complete();
+        Ok(Slot::undefined())
+    }
+
+    /// `fx_lockdown_aux` (`xsLockdown.c:52-72`): replace `prototype`'s
+    /// `constructor` with an inert stand-in that throws on call AND on
+    /// construct, carrying `length` = `arity` and a `prototype` property
+    /// pointing back at `prototype`. Returns the instance it minted.
+    ///
+    /// The write goes through `set_own_unmetered_with_flag`, which overwrites
+    /// a property's kind, value and flag without consulting the descriptor it
+    /// is replacing. That is deliberate and it is the point of the function:
+    /// XS assigns the slot directly (`slot->kind = constructor->kind`),
+    /// bypassing `[[DefineOwnProperty]]`, so the step still works on a
+    /// prototype a guest has already frozen. Nothing reaches this path except
+    /// `lockdown()` itself.
+    ///
+    /// The existing property's FLAG is preserved, because XS writes only kind
+    /// and value. So `Function.prototype.constructor` stays
+    /// `{writable: true, enumerable: false, configurable: true}` across the
+    /// rewiring and becomes non-writable only when step 5 hardens it -- which
+    /// is the order a `verifyProperty` case observes.
+    ///
+    /// **Except the accessor bits, which must be cleared.** "Preserve the flag"
+    /// is the right rule only because of how XS represents an accessor: there
+    /// it is `slot->kind == XS_ACCESSOR_KIND` with the getter and setter IN the
+    /// slot value, so `fx_lockdown_aux`'s `slot->kind = constructor->kind;
+    /// slot->value = constructor->value;` (`xsLockdown.c:68-69`) converts an
+    /// accessor into a data property as a side effect of the assignment.
+    /// Ironhorse keeps accessorness in the flag byte
+    /// (`XS_GETTER_FLAG|XS_SETTER_FLAG`) with the callables in the `accessors`
+    /// side table, so preserving the flag verbatim preserves ACCESSORNESS while
+    /// writing a data payload underneath -- a slot that reads as a getter and
+    /// holds a reference.
+    ///
+    /// That is not a cosmetic mismatch. `ordinary_get` consults the side table
+    /// first, so a guest that runs
+    /// `Object.defineProperty(Function.prototype, 'constructor', {get: ...})`
+    /// before `lockdown()` keeps its evaluator: the getter still answers, the
+    /// inert constructor is never seen, and `lockdown()` returns normally and
+    /// reports success. Three lines of setup defeated the entire operation
+    /// until adversarial review found it; `lockdown_poisons_an_accessor_constructor`
+    /// is the regression test.
+    /// The prototypes `lockdown()` poisons and the `length` each stand-in
+    /// carries -- 1 for the function family, 7 for `Date` (`xsLockdown.c:95-127`).
+    /// Shared by `create_locked_down_constructors` (which mints) and
+    /// `do_lockdown` step 2 (which wires), so the two cannot drift.
+    pub(super) fn locked_down_prototypes(&self) -> [(crate::value::SlotIndex, u32); 6] {
+        [
+            (self.async_function_proto, 1),
+            (self.async_generator_function_proto, 1),
+            (self.function_proto, 1),
+            (self.generator_function_proto, 1),
+            (self.date_proto, 7),
+            // `fx_lockdown` step 2's fifth call. Absent until ironhorse had a
+            // guest `Compartment` to have a prototype
+            // (`designs/ironhorse-guest-compartment.md`); `length` 1, from the
+            // constructor it replaces, as `fx_lockdown_aux` takes it.
+            //
+            // `SlotIndex::NULL` is skipped by both callers, so a machine built
+            // before `create_compartment` runs -- or one where it returned
+            // early -- mints and wires nothing dangling here.
+            (self.compartment_proto, 1),
+        ]
+    }
+
+    /// Step 2 of the lockdown operation (`fx_lockdown`, `xsLockdown.c:94-103`,
+    /// `:127`): install the inert stand-ins as `constructor` on the
+    /// function-family and `Date` prototypes. Returns the `(prototype, inert)`
+    /// pairs that were wired, so the caller can re-assert them after step 5.
+    ///
+    /// **Every path that freezes the intrinsic graph must call this**, not just
+    /// the guest `lockdown()`. Hardening alone is step 5; it makes the
+    /// primordials immutable but leaves `Function.prototype.constructor`
+    /// pointing at the real evaluator, so
+    /// `({}).constructor.constructor('return 1')()` still compiles source. For
+    /// a year that was `Machine`'s actual behaviour: it froze at construction,
+    /// reported `is_locked_down()`, and handed every compartment a working
+    /// evaluator through a shared prototype -- exactly the reach
+    /// `CompartmentOptions::global_names` says it cannot close.
+    ///
+    /// The native stand-ins are minted during boot by
+    /// [`Self::create_locked_down_constructors`], below `boot_slot_count`, so a
+    /// machine stays snapshottable after the graph is locked down. Wiring is
+    /// deliberately not boot work -- see
+    /// [`Self::wire_locked_down_constructor`].
+    pub(super) fn poison_function_constructors(
+        &mut self,
+    ) -> Vec<(crate::value::SlotIndex, crate::value::SlotIndex)> {
+        let minted: Vec<(crate::value::SlotIndex, crate::value::SlotIndex)> = self
+            .locked_down_prototypes()
+            .into_iter()
+            .map(|(prototype, _)| prototype)
+            .zip(self.locked_down_constructors.clone())
+            .filter(|&(prototype, _)| prototype != crate::value::SlotIndex::NULL)
+            .collect();
+        for &(prototype, inert) in &minted {
+            self.wire_locked_down_constructor(prototype, inert);
+        }
+        minted
+    }
+
+    /// Re-apply step 2 after step 5, because hardening can run GUEST CODE.
+    ///
+    /// `do_harden` walks each root through the MOP -- `mop_prevent_extensions`,
+    /// `mop_own_keys`, `mop_get_own_property_read` -- and every one of those
+    /// enters a Proxy trap. A guest that hangs a proxy off a root hardened
+    /// EARLY (`Object.prototype` is the lowest-indexed one) gets its trap
+    /// called while `Function.prototype` is still writable, and
+    /// `Object.defineProperty(Function.prototype, 'constructor', {value: Function})`
+    /// from inside that trap puts the real evaluator back. `lockdown()` then
+    /// completes, reports success, and leaves the reach open permanently --
+    /// measured, before this existed, as
+    /// `lockdown=returned undefined | reach=returned 2`.
+    ///
+    /// The re-assert closes the window rather than trying to police it: no
+    /// ordering of steps 2 and 5 can help, because the guest code runs BETWEEN
+    /// them by construction. [`Self::force_locked_down_constructor`] ignores the
+    /// descriptor it overwrites, so this works on the now-frozen prototype and
+    /// is idempotent when nothing interfered -- the ordinary case, where it
+    /// rewrites the same reference over itself. The flag is re-read there, so
+    /// the property keeps the non-writable, non-configurable shape step 5 just
+    /// gave it.
+    pub(super) fn reassert_function_constructors(
+        &mut self,
+        minted: &[(crate::value::SlotIndex, crate::value::SlotIndex)],
+    ) {
+        for &(prototype, inert) in minted {
+            self.force_locked_down_constructor(prototype, inert, true);
+        }
+    }
+
+    /// Record successful completion in a private boot slot as well as the
+    /// host-facing realm flag. Only the slot is carried by persistence.
+    /// Step 2's reachable constructor edges cannot establish completion:
+    /// proxy traps run before step 5 finishes and can make that step fail.
+    fn mark_lockdown_complete(&mut self) {
+        self.slots.get_mut(self.lockdown_complete).value = Payload::Boolean(true);
+        self.realm.intrinsics().locked_down.set(true);
+    }
+
+    pub(super) fn mint_locked_down_constructor(&mut self, arity: u32) -> crate::value::SlotIndex {
+        let inert = self.slots.alloc(Slot::instance(self.function_proto));
+        let name_chunk = self.alloc_str_text("");
+        self.functions.insert(
+            inert,
+            FuncInfo {
+                native: Some(Native::LockedDownConstructor),
+                name_chunk,
+                arity,
+                ..FuncInfo::default()
+            },
+        );
+        inert
+    }
+
+    /// Give a boot-minted stand-in its prototype and install it as
+    /// `prototype.constructor`. Step 2's work, never boot's: registering
+    /// `ctor_prototype` during `create_intrinsics` makes boot's own
+    /// constructor wiring install lockdown's effect at boot.
+    fn wire_locked_down_constructor(
+        &mut self,
+        prototype: crate::value::SlotIndex,
+        inert: crate::value::SlotIndex,
+    ) {
+        self.ctor_prototype.insert(inert, prototype);
+        let prototype_id = self.intern_static_key_unmetered("prototype");
+        self.prototype_key_id.get_or_insert(prototype_id);
+        // XS_GET_ONLY (`xsAll.h:2126`), the flags `fx_lockdown_aux` passes to
+        // `fxNextSlotProperty`.
+        self.set_own_unmetered_with_flag(
+            inert,
+            prototype_id,
+            Slot::of(Kind::Reference, Payload::Reference(prototype)),
+            XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG,
+        );
+        // Freeze the stand-in's own surface before step 5 can enter guest
+        // Proxy traps. Non-extensibility alone blocks new properties and
+        // prototype changes, but still permits replacing configurable `name`
+        // and `length` with guest getters. Materialize and seal those metadata
+        // slots without traversing Function.prototype or running guest code.
+        for name in ["name", "length"] {
+            let id = self.intern_static_key_unmetered(name);
+            self.materialize_function_meta_slot(inert, id);
+            let property = self.find_property(inert, id).expect("stand-in metadata");
+            self.slots.get_mut(property).flag |= XS_DONT_SET_FLAG | XS_DONT_DELETE_FLAG;
+        }
+        self.slots.get_mut(inert).flag |= XS_DONT_PATCH_FLAG;
+        // `seal = false`: step 2 preserves the property's existing
+        // writable/configurable shape, so `Function.prototype.constructor`
+        // becomes non-writable only when step 5 hardens it -- the order a
+        // `verifyProperty` case observes.
+        self.force_locked_down_constructor(prototype, inert, false);
+    }
+
+    /// Write `prototype.constructor = inert` through the privileged path,
+    /// whatever is currently there. Used to install the stand-in and again
+    /// after step 5 has run (and possibly run guest code) -- see the re-assert
+    /// loop in [`Self::do_lockdown`].
+    ///
+    /// The current flag is preserved minus the accessor bits, so the property
+    /// keeps whatever writable/enumerable/configurable shape it has at the
+    /// moment of the call, and a stale `accessors` row can never outrank the
+    /// data value this writes.
+    ///
+    /// **When the property is ABSENT the default is `0`, not `XS_DONT_ENUM_FLAG`.**
+    /// A guest can run `delete Function.prototype.constructor` before
+    /// `lockdown()`, and then step 2 CREATES the property rather than
+    /// rewriting one. XS reaches that case through
+    /// `mxBehaviorSetProperty(..., XS_OWN)` -> `fxOrdinarySetProperty`
+    /// (`xsType.c`), whose creation branch allocates with `fxNewSlot`, and a
+    /// fresh XS slot carries no flags at all. So XS's re-created `constructor`
+    /// is ENUMERABLE, and stays enumerable through step 5 (hardening clears
+    /// writable and configurable, not enumerable). Measured against the oracle:
+    /// `delete Function.prototype.constructor; lockdown()` leaves
+    /// `e=true w=false c=false` on XS. Defaulting to `XS_DONT_ENUM_FLAG` here
+    /// gave `e=false` and was a real divergence;
+    /// `a_deleted_constructor_is_recreated_enumerable` is the regression test.
+    fn force_locked_down_constructor(
+        &mut self,
+        prototype: crate::value::SlotIndex,
+        inert: crate::value::SlotIndex,
+        seal: bool,
+    ) {
+        let constructor_id = self.intern_static_key_unmetered("constructor");
+        self.constructor_id.get_or_insert(constructor_id);
+        // **Materialize first, or "absent" means the wrong thing.** Prototype
+        // members are installed LAZILY: `boot.rs` records them in
+        // `proto_methods`/`proto_data` and
+        // [`Self::materialize_intrinsic_own_surface`] installs them on demand,
+        // driven from `mop_own_keys`. On a pristine realm nothing has asked for
+        // `Function.prototype.constructor` yet, so `find_property` answers
+        // `None` for a property that DOES exist in the spec sense and is about
+        // to be installed with `XS_DONT_ENUM_FLAG`.
+        //
+        // Without this call the fallback below fires in the COMMON case rather
+        // than the deleted one, and the realm ends up with an ENUMERABLE
+        // `constructor` on every function-family prototype. Measured against
+        // the oracle before the fix: `Object.keys(Function.prototype)` was
+        // `["constructor"]` here against XS's `[]`, `for (k in function(){})`
+        // yielded `constructor`, and `Object.assign({}, Function.prototype)`
+        // threw where XS returns. That is a worse bug than the one the `0`
+        // default was introduced to fix, and it was introduced by fixing it.
+        //
+        // This is boot work and it refuses a sealed object, so on the
+        // post-step-5 re-assert (where the prototype is frozen) it is a no-op —
+        // and it must be, because by then the property exists and the flag read
+        // finds it.
+        self.materialize_intrinsic_own_surface(prototype);
+        let found = self
+            .find_property(prototype, constructor_id)
+            .map_or(0, |p| self.slots.get(p).flag)
+            & !(XS_GETTER_FLAG | XS_SETTER_FLAG);
+        // **The post-harden call SEALS, whatever it finds.**
+        //
+        // The `0` default above is right for step 2, where it reproduces XS's
+        // freshly-created slot. On the re-assert it is a complete defeat of the
+        // operation, and the path there is short: a Proxy trap firing inside
+        // step 5 runs `delete Function.prototype.constructor` while that
+        // prototype is still configurable. The walk then freezes a prototype
+        // with NO constructor, `find_property` answers `None` for a genuinely
+        // absent property, and the re-assert recreates it writable and
+        // configurable on a prototype that had just been hardened.
+        //
+        // Measured before this: `lockdown()` returned success and left
+        // `writable=true configurable=true`, `Function.prototype.constructor =
+        // Function` put the evaluator straight back
+        // (`({}).constructor.constructor('return 1+1')()` = `2`), and
+        // `Object.isFrozen(Function.prototype)` read **false** -- the re-assert
+        // had un-frozen the prototype it exists to protect.
+        //
+        // So the re-assert keeps only the enumerable bit and forces the two
+        // integrity bits. In every case but the deleted one it is a no-op,
+        // because step 5 has already set them. Enumerability is carried rather
+        // than forced for the same reason step 2 defaults to `0`: a `constructor`
+        // that had to be re-created is enumerable, which is what XS produces for
+        // the pre-lockdown delete and what
+        // `a_deleted_constructor_is_recreated_enumerable` pins.
+        let flag = if seal {
+            (found & XS_DONT_ENUM_FLAG) | XS_DONT_SET_FLAG | XS_DONT_DELETE_FLAG
+        } else {
+            found
+        };
+        self.accessors.remove(&(prototype, constructor_id));
+        self.set_own_unmetered_with_flag(
+            prototype,
+            constructor_id,
+            Slot::of(Kind::Reference, Payload::Reference(inert)),
+            flag,
+        );
+    }
+
+    pub(crate) fn realm(&self) -> &std::rc::Rc<Realm> {
+        &self.realm
+    }
+
+    /// Build the complete intrinsic graph before any guest can observe it.
+    /// Program-local symbol operands will be relinked to this machine table.
+    pub(crate) fn new_shared_realm_machine() -> Self {
+        Self::new_shared_realm_machine_with_global_names(None)
+    }
+
+    pub(crate) fn new_shared_realm_machine_with_global_names(
+        global_names: Option<&[String]>,
+    ) -> Self {
+        Self::new_shared_realm_machine_configured(global_names, true)
+    }
+
+    /// `freeze = false` builds the shared realm and leaves its intrinsic graph
+    /// MUTABLE, for a guest that brings its own `lockdown()` -- the `ses` shim
+    /// repairs intrinsics before freezing them, and cannot do that to a graph
+    /// already frozen (`tests/ses_boot_intrinsics.rs`). Nothing else differs:
+    /// the roots are still enumerated, so [`Self::lock_down_intrinsics`] can
+    /// perform the same freeze later, and `Intrinsics::is_locked_down` reports
+    /// which state the graph is in.
+    ///
+    /// The window this opens is real. Until the freeze happens the primordials
+    /// are shared and writable, so two compartments of the same machine can
+    /// signal through them. A caller that takes this path is responsible for
+    /// locking down -- by guest `lockdown()` or by
+    /// [`Self::lock_down_intrinsics`] -- before it admits a second
+    /// compartment. SES has the same window before its own `lockdown()` and
+    /// the same rule about it.
+    pub(crate) fn new_shared_realm_machine_configured(
+        global_names: Option<&[String]>,
+        freeze: bool,
+    ) -> Self {
+        let mut machine = Self::new();
+        machine.set_global_names(global_names);
+        // **An unfrozen machine does not bind the engine's `lockdown`.**
+        //
+        // `freeze == false` means exactly one thing: the host intends the SES
+        // shim to lock this realm down, which is why the graph is left mutable
+        // (`repairIntrinsics` cannot repair an already-frozen graph). The shim
+        // installs its own `globalThis.lockdown` when it evaluates, so the
+        // engine's would be overwritten anyway -- and until it is, it is a
+        // realm-wide mutation reachable from any compartment of a machine that
+        // by construction has not locked down yet.
+        //
+        // That is the whole of the compartment problem, and this is where it
+        // belongs. In SES a compartment DOES see `lockdown` -- `permits.js`
+        // lists it in `universalPropertyNames`, "properties of all global
+        // objects" -- and it is powerless there only because a compartment
+        // cannot exist before lockdown has run, so the call meets the
+        // idempotence check. XS has the same shape from the other side:
+        // `fx_lockdown` itself builds `mxCompartmentGlobal` (`:139`).
+        // A frozen machine reproduces that faithfully, because `locked_down`
+        // is already true when its first compartment is made. An unfrozen one
+        // cannot, so it does not offer the operation at all.
+        //
+        // A plain `Interp::new()` -- `endot-ih`, `ironhorse-xst`, the
+        // conformance harness, `packages/thixotrope` -- is untouched by this
+        // and keeps its guest `lockdown`; it has no compartments to protect it
+        // from.
+        if !freeze {
+            machine.intrinsics.remove("lockdown");
+        }
+        let mut names: Vec<SymbolName> = crate::default_keys::DEFAULT_KEYS
+            .iter()
+            .copied()
+            .chain(machine.intrinsics.keys().copied())
+            .chain(machine.proto_methods.iter().map(|(_, name, _)| *name))
+            .chain(machine.proto_data.iter().map(|(_, name, _)| *name))
+            .chain(machine.proto_value_data.iter().map(|(_, name, _)| *name))
+            .map(SymbolName::from)
+            .collect();
+        names.sort();
+        names.dedup();
+        machine.link_intrinsics(&names);
+        // Before guest execution every allocated instance is primordial, except
+        // the host global and the engine's writable tagged-template cache.
+        // Enumerating the arena also includes non-global async/generator and
+        // iterator families with no forward edge from a named constructor.
+        let roots: Vec<_> = (0..machine.slots.capacity())
+            .map(crate::value::SlotIndex)
+            .filter(|&root| {
+                root != machine.environment.global_obj && root != machine.template_cache
+            })
+            .filter(|&root| machine.slots.get(root).kind == Kind::Instance)
+            .collect();
+        if freeze {
+            // Step 2 of the lockdown operation, AFTER the enumeration above and
+            // before the harden below.
+            //
+            // Freezing is step 5. On its own it makes the primordials immutable
+            // and leaves `Function.prototype.constructor` pointing at the real
+            // evaluator, so `({}).constructor.constructor('return 1')()`
+            // compiles source in every compartment of a machine that reports
+            // `is_locked_down()` -- past `global_names`, which
+            // `CompartmentOptions` documents as unable to close that route. A
+            // machine that freezes at construction therefore has to perform
+            // BOTH steps at construction; this is the one place a `Machine` can,
+            // because the guest `lockdown()` it would otherwise need meets step
+            // 1's idempotence check and is refused.
+            //
+            // **After the enumeration, and that ordering is load-bearing.**
+            // `force_locked_down_constructor` materializes each prototype's own
+            // surface first, which installs one lazily-held member and so
+            // allocates ONE instance -- at an arena index that depends on how
+            // many property slots `install_intrinsic_bindings` wrote, which
+            // `global_names` changes. `Interp::restore_shared_machine` validates
+            // a snapshot's stored `intrinsic_roots` against a reference machine
+            // built by `new_shared_realm_machine()`, with NO global names, on
+            // the premise that construction-time instance indices do not depend
+            // on them. Enumerating after step 2 put that instance in the roots
+            // and broke the premise: a `PersistentMachine` opened with
+            // `global_names` snapshotted roots ending at 1544 where the
+            // reference ended at 1602, and the reopen failed with
+            // `Corrupt("restore session did not validate")` /
+            // `shared primordial profile mismatch`
+            // (`rust/endo/tests/ironhorse_runtime_compiler.rs`, and
+            // `shared_machine.rs::a_machine_with_global_names_survives_a_snapshot_round_trip`
+            // now pins it inside this workspace).
+            //
+            // Leaving it out of `roots` costs nothing: it hangs off a prototype
+            // that IS a root, and `do_harden` is transitive.
+            //
+            // `freeze == false` deliberately skips step 2 altogether. That
+            // machine is built for the SES shim, which repairs intrinsics before
+            // freezing them and installs its own inert constructors while doing
+            // so (`tame-function-constructors.js`); poisoning first would hand
+            // `repairIntrinsics` a graph it does not expect. Such a machine does
+            // not bind the engine's `lockdown` either -- see below -- so the two
+            // halves stay together.
+            //
+            // No re-assert afterwards: no guest code can run here. The harden
+            // below is `expect`-ed as infallible precisely because the graph is
+            // pristine, which is the same premise that says no Proxy trap can
+            // fire.
+            let minted = machine.poison_function_constructors();
+            debug_assert_eq!(minted.len(), machine.locked_down_prototypes().len());
+            for &root in &roots {
+                machine
+                    .do_harden(&[], Slot::of(Kind::Reference, Payload::Reference(root)))
+                    .expect("pristine intrinsic graph must admit transitive freezing");
+            }
+            machine.mark_lockdown_complete();
+        }
+        machine.realm = std::rc::Rc::new(Realm {
+            intrinsics: std::rc::Rc::new(crate::Intrinsics {
+                roots,
+                locked_down: std::cell::Cell::new(freeze),
+                locking_down: std::cell::Cell::new(false),
+                hardening: std::cell::Cell::new(false),
+                harden_marks: std::cell::RefCell::new(Vec::new()),
+            }),
+            default_global: machine.environment.global_obj,
+        });
+        machine
+            .environment
+            .binding_names
+            .extend(machine.environment.global_props.keys().copied());
+        machine.shared_compartments = true;
+        // NO evaluator is pinned to the default global environment.
+        //
+        // `link_intrinsics` routes every global binding through
+        // `compartment_evaluator`, which mints each compartment a copy of
+        // `eval` and `Function` homed to its own global. That copy is not the
+        // only way to reach an evaluator. The ORIGINAL stays reachable through
+        // any object's prototype chain --
+        // `({}).constructor.constructor`, `(function(){}).constructor` -- and
+        // `%GeneratorFunction%`, `%AsyncFunction%` and
+        // `%AsyncGeneratorFunction%` have no global binding at all
+        // (`boot.rs:1153`), so they are reachable ONLY that way.
+        //
+        // A `global_env` set here is therefore observed, not overwritten:
+        // `call_native` (`invoke.rs:171`, the switch at `:186`) switches to it before running
+        // `create_dynamic_function`. Pinning it to the default global let a
+        // compartment compile against the default realm in both directions --
+        // `({}).constructor.constructor('return answer')()` read the default
+        // `answer` where `Function('return answer')()` read its own, and an
+        // assignment in such a body defined its global ON the default realm.
+        //
+        // Left NULL, `switch_environment` no-ops (`:201-203`) and the dynamic
+        // function is created in whichever environment called for it. That is
+        // the only answer that is not arbitrary here: compartments share one
+        // realm and one frozen intrinsic graph, so a shared evaluator has no
+        // realm of its own to belong to.
+        //
+        // On a FROZEN machine this is now unobservable for the three unnamed
+        // families: step 2 above replaced each prototype's `.constructor` with
+        // the inert stand-in (`fx_lockdown_aux`, `xsLockdown.c:52`), so the only
+        // route to them is gone and the only reachable evaluators are the
+        // per-compartment `eval` and `Function`. It still decides the question
+        // on an UNFROZEN machine, where those routes remain open by design --
+        // `ironhorse-runtime`'s
+        // `shared_dynamic_constructors_use_the_calling_compartments_evaluator_service`
+        // drives all four families there.
+        machine.meter = Meter::new();
+        machine
+    }
+}
+
+impl CompartmentEnvironment {
+    /// This realm's actual global object, in its owning machine's arena.
+    pub fn global_object(&self) -> crate::value::SlotIndex {
+        self.global_obj
+    }
+}
+
+impl Interp {
+    pub(super) fn capture_global_environment(&self) -> crate::SlotIndex {
+        if self.shared_compartments {
+            self.environment.global_obj
+        } else {
+            crate::SlotIndex::NULL
+        }
+    }
+
+    pub(super) fn switch_environment(&mut self, target: crate::SlotIndex) {
+        if target.is_null() || target == self.environment.global_obj {
+            return;
+        }
+        let environment = self
+            .inactive_environments
+            .remove(&target)
+            .expect("captured compartment environment must remain reachable");
+        let old = std::mem::replace(&mut self.environment, environment);
+        self.inactive_environments.insert(old.global_obj, old);
+    }
+
+    pub(crate) fn current_environment_id(&self) -> crate::SlotIndex {
+        self.environment.global_obj
+    }
+
+    pub(crate) fn activate_environment(&mut self, target: crate::SlotIndex) -> Result<(), Halt> {
+        self.switch_environment(target);
+        Ok(())
+    }
+
+    pub(crate) fn create_environment(
+        &mut self,
+        global_names: Option<std::collections::BTreeSet<SymbolName>>,
+        owner: std::rc::Weak<()>,
+        modules: std::rc::Rc<std::cell::RefCell<crate::ModuleGraph>>,
+    ) -> Result<crate::value::SlotIndex, Halt> {
+        let previous = self.environment.global_obj;
+        let installing = self.installing_intrinsics;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let global = self
+                .slots
+                .alloc(Slot::instance(crate::value::SlotIndex::NULL));
+            let mut realm = CompartmentEnvironment::new(global);
+            realm.global_names = global_names;
+            realm.owner = Some(owner);
+            realm.modules = modules;
+            let old = std::mem::replace(&mut self.environment, realm);
+            self.inactive_environments.insert(old.global_obj, old);
+            let names = self.symbol_names.to_vec();
+            self.install_environment_global_bindings(&names);
+            self.environment
+                .binding_names
+                .extend(self.environment.global_props.keys().copied());
+            global
+        }));
+        match result {
+            Ok(global) => Ok(global),
+            Err(payload) => {
+                self.installing_intrinsics = installing;
+                let partial = self.environment.global_obj;
+                if partial != previous {
+                    self.switch_environment(previous);
+                    self.discard_inactive_environment(partial);
+                }
+                if payload.is::<crate::value::HeapExhausted>() {
+                    Err(Halt::HeapExhausted)
+                } else {
+                    std::panic::resume_unwind(payload)
+                }
+            }
+        }
+    }
+
+    /// Remove an environment whose construction did not commit.
+    ///
+    /// The caller must first switch back to a surviving environment. The
+    /// environment owns the per-compartment evaluator copies minted while its
+    /// intrinsic bindings were installed, so discard those authoritative side
+    /// table rows with it. Arena slots are ordinary unreachable garbage after
+    /// these roots and edges are gone and are reclaimed by the next collection.
+    pub(super) fn discard_inactive_environment(&mut self, target: crate::value::SlotIndex) {
+        debug_assert_ne!(self.environment.global_obj, target);
+        let removed = self.inactive_environments.remove(&target);
+        debug_assert!(removed.is_some(), "discarded environment must be inactive");
+        let evaluators: Vec<_> = self
+            .functions
+            .iter()
+            .filter(|(_, function)| function.global_env == target)
+            .map(|(id, _)| *id)
+            .collect();
+        for evaluator in evaluators {
+            self.functions.remove(&evaluator);
+            self.ctor_prototype.remove(&evaluator);
+        }
+        if let Some(registry) = self.compiler_registry.upgrade() {
+            // A provisional child inherits from a still-live caller, so this
+            // removes only the child's ownership row rather than dropping the
+            // last strong compiler reference inside the interpreter borrow.
+            let retired = registry.borrow_mut().remove(&target);
+            drop(retired);
+        }
+    }
+
+    pub(crate) fn set_realm_meter(
+        &mut self,
+        meter: Meter,
+        host: Option<Box<dyn FnMut(u64) -> bool>>,
+    ) {
+        self.meter = meter;
+        self.n_dispatched = 0;
+        self.meter_host = host;
+    }
+
+    pub(crate) fn detach_realm_host(&mut self) -> Option<Box<dyn FnMut(u64) -> bool>> {
+        self.meter_host.take()
+    }
+
+    pub(crate) fn detach_realm_compiler(&mut self) -> Option<std::rc::Rc<dyn SourceCompiler>> {
+        self.environment.source_compiler.take()
+    }
+
+    pub(crate) fn take_realm_meter(&mut self) -> (Meter, Option<Box<dyn FnMut(u64) -> bool>>) {
+        (std::mem::take(&mut self.meter), self.meter_host.take())
+    }
+
+    pub(crate) fn environment_symbol(&mut self, name: SymbolName) -> Result<u16, Halt> {
+        if !self.symbol_ids.contains_key(&name) && !self.has_guest_key_capacity(1) {
+            return Err(Halt::HeapExhausted);
+        }
+        Ok(self.intern_program_symbol(name))
+    }
+
+    pub(crate) fn relink_unlinked_realm_program(&mut self, code: &[u8]) -> Result<Vec<u8>, Halt> {
+        let (site_order, accesses) = Self::template_site_accesses(code)
+            .map_err(|_| Halt::Decode(DecodeError::InvalidSymbols))?;
+        let mut new_names = std::collections::BTreeSet::new();
+        crate::opcode::remap_ids(code, |id| {
+            if id != 0 {
+                let name = SymbolName::from(format!("\0bytecode-id-{id}"));
+                if !self.symbol_ids.contains_key(&name) {
+                    new_names.insert(name);
+                }
+            }
+            Some(id)
+        })
+        .ok_or(Halt::Decode(DecodeError::InvalidSymbols))?;
+        if !self.has_guest_key_capacity(new_names.len() + site_order.len()) {
+            return Err(Halt::HeapExhausted);
+        }
+        let mut remapped = crate::opcode::remap_ids(code, |id| {
+            if id == 0 {
+                Some(0)
+            } else {
+                self.environment_symbol(SymbolName::from(format!("\0bytecode-id-{id}")))
+                    .ok()
+            }
+        })
+        .ok_or(Halt::Decode(DecodeError::InvalidSymbols))?;
+        self.apply_template_site_ids(&mut remapped, site_order, accesses)
+            .map_err(|_| Halt::Decode(DecodeError::InvalidSymbols))?;
+        Ok(remapped)
+    }
+
+    /// Read-only identity inspection; getters and guest coercions never run.
+    pub(crate) fn environment_global_identity(
+        &self,
+        realm: crate::value::SlotIndex,
+        name: &str,
+    ) -> Option<crate::value::SlotIndex> {
+        let realm = if realm == self.environment.global_obj {
+            &self.environment
+        } else {
+            self.inactive_environments.get(&realm)?
+        };
+        let id = self.symbol_ids.get(name)?;
+        let prop = self.slots.get(*realm.global_props.get(id)?);
+        if prop.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
+            return None;
+        }
+        match prop.value {
+            Payload::Reference(reference) if prop.kind == Kind::Reference => Some(reference),
+            _ => None,
+        }
+    }
+}
+
+impl Interp {
+    /// Host entry abandons the previous failed activation, never queued jobs.
+    /// Native reentry remains excluded by the outer Machine borrow.
+    pub(crate) fn reap_environments(&mut self) -> Result<(), Halt> {
+        if self.gc_failed {
+            return Err(Halt::EngineInvariant("gc:previous-collection-failed"));
+        }
+        self.reset_activation();
+        self.identity_roots
+            .retain(|_, owner| owner.strong_count() != 0);
+        Ok(())
+    }
+
+    pub(crate) fn discard_promise_jobs(&mut self) {
+        self.reset_activation();
+        self.promise_jobs.clear();
+        self.pending_rejections.clear();
+    }
+
+    pub(crate) fn prepare_collection(&mut self) -> Result<(), Halt> {
+        self.reap_environments()?;
+        self.switch_environment(self.realm.global_object());
+        Ok(())
+    }
+
+    pub(crate) fn live_environment_ids(&self) -> std::collections::HashSet<crate::SlotIndex> {
+        self.inactive_environments
+            .keys()
+            .copied()
+            .chain(std::iter::once(self.environment.global_obj))
+            .collect()
+    }
+
+    pub(crate) fn pin_identity(&mut self, object: crate::SlotIndex) -> std::rc::Rc<()> {
+        if let Some(lease) = self
+            .identity_roots
+            .get(&object)
+            .and_then(std::rc::Weak::upgrade)
+        {
+            return lease;
+        }
+        let lease = std::rc::Rc::new(());
+        self.identity_roots
+            .insert(object, std::rc::Rc::downgrade(&lease));
+        lease
+    }
+
+    pub(super) fn environment_context_mut(
+        &mut self,
+        id: crate::SlotIndex,
+    ) -> Option<&mut CompartmentEnvironment> {
+        if self.environment.global_obj == id {
+            Some(&mut self.environment)
+        } else {
+            self.inactive_environments.get_mut(&id)
+        }
+    }
+
+    pub(crate) fn rejection_values(&self) -> Vec<(crate::SlotIndex, crate::SlotIndex, Slot)> {
+        let mut reports: Vec<_> = std::iter::once(&self.environment)
+            .chain(self.inactive_environments.values())
+            .filter_map(|environment| {
+                environment.unhandled_rejection.map(|promise| {
+                    (
+                        environment.global_obj,
+                        promise,
+                        self.promises[&promise].result,
+                    )
+                })
+            })
+            .collect();
+        reports.sort_by_key(|(environment, _, _)| environment.0);
+        reports
+    }
+
+    pub(crate) fn acknowledge_rejections(&mut self) {
+        self.environment.unhandled_rejection = None;
+        for environment in self.inactive_environments.values_mut() {
+            environment.unhandled_rejection = None;
+        }
+    }
+
+    pub(crate) fn root_value(
+        &mut self,
+        mut value: Slot,
+    ) -> Result<(crate::SlotIndex, std::rc::Rc<()>), Halt> {
+        value.next = crate::SlotIndex::NULL;
+        value.flag = 0;
+        value.id = 0;
+        let root = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.slots.alloc(value)
+        })) {
+            Ok(root) => root,
+            Err(payload) if payload.is::<crate::value::HeapExhausted>() => {
+                return Err(Halt::HeapExhausted)
+            }
+            Err(payload) => std::panic::resume_unwind(payload),
+        };
+        let lease = self.pin_identity(root);
+        Ok((root, lease))
+    }
+
+    pub(crate) fn global_value_root(
+        &mut self,
+        environment: crate::SlotIndex,
+        name: &str,
+    ) -> Option<(crate::SlotIndex, std::rc::Rc<()>)> {
+        let id = *self.symbol_ids.get(name)?;
+        let global = self.environment_context(environment)?.global_obj;
+        let prop = self.find_property(global, id)?;
+        let value = self.slots.get(prop);
+        if value.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
+            return None;
+        }
+        self.root_value(value).ok()
+    }
+
+    pub(crate) fn rooted_value(&self, root: crate::SlotIndex) -> Slot {
+        self.slots.get(root)
+    }
+
+    pub(crate) fn environment_context(
+        &self,
+        id: crate::SlotIndex,
+    ) -> Option<&CompartmentEnvironment> {
+        if self.environment.global_obj == id {
+            Some(&self.environment)
+        } else {
+            self.inactive_environments.get(&id)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standalone_context_associations_are_derived_without_wire_fields() {
+        let mut machine = Interp::new();
+        let (code, symbols) = ironhorse_compile::compile_atoms("var release; var p = new Promise(r => release = r); async function f(){await p} f(); function* g(){yield 1} var it = g(); 0").unwrap();
+        machine.link_intrinsics(&crate::parse_symbols(&symbols));
+        assert!(machine.run(&code).completed);
+        assert!(machine
+            .functions
+            .values()
+            .all(|function| function.global_env.is_null()));
+        assert!(machine
+            .promises
+            .values()
+            .all(|promise| promise.global_env.is_null()));
+        let frames: Vec<_> = machine
+            .async_instances
+            .values()
+            .filter_map(|row| row.frame.as_ref())
+            .chain(
+                machine
+                    .generators
+                    .values()
+                    .filter_map(|row| row.frame.as_ref()),
+            )
+            .collect();
+        assert!(frames.len() >= 2);
+        assert!(frames.iter().all(|frame| frame.global_env.is_null()));
+        assert!(!machine.shared_compartments);
+        assert!(machine.inactive_environments.is_empty());
+    }
+
+    #[test]
+    fn unlinked_template_sites_are_unique_across_compilations() {
+        let mut machine = Interp::new_shared_realm_machine();
+        let code = [
+            Opcode::XS_CODE_TEMPLATE_CACHE as u8,
+            Opcode::XS_CODE_GET_PROPERTY as u8,
+            1,
+            0,
+        ];
+        let first = machine.relink_unlinked_realm_program(&code).unwrap();
+        let second = machine.relink_unlinked_realm_program(&code).unwrap();
+        assert_ne!(&first[2..4], &second[2..4]);
+        let ordinary = machine
+            .environment_symbol(SymbolName::from("\0bytecode-id-1"))
+            .unwrap();
+        assert_ne!(&first[2..4], ordinary.to_le_bytes().as_slice());
+    }
+
+    #[test]
+    fn raw_template_admission_preserves_the_reserved_key_space() {
+        let mut machine = Interp::new_shared_realm_machine();
+        let code = [
+            Opcode::XS_CODE_TEMPLATE_CACHE as u8,
+            Opcode::XS_CODE_GET_PROPERTY as u8,
+            1,
+            0,
+        ];
+        machine.next_symbol_key_id = (machine.symbol_names.len() + PROPERTY_KEY_RESERVE + 1) as u16;
+        let before = machine.symbol_names.to_vec();
+        assert_eq!(
+            machine.relink_unlinked_realm_program(&code),
+            Err(Halt::HeapExhausted)
+        );
+        assert_eq!(machine.symbol_names.as_slice(), before.as_slice());
+    }
+
+    #[test]
+    fn complete_primordial_graph_admits_freezing() {
+        let mut machine = Interp::new_shared_realm_machine();
+        assert_eq!(machine.stored_unpersistable_row(), None);
+        assert_eq!(machine.stored_unpersistable_row_at_checkpoint(), None);
+        let roots: Vec<_> = machine.intrinsics.values().copied().collect();
+        for root in roots {
+            assert!(machine.test_integrity_level(&[], root, true).unwrap());
+        }
+        assert!(!machine
+            .test_integrity_level(&[], machine.environment.global_obj, true)
+            .unwrap());
+    }
+}

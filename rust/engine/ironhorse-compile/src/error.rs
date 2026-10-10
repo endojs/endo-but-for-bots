@@ -20,6 +20,8 @@ pub struct LexError {
 /// `fxReportParserError` / `fxReportMemoryError` site in `xsLexical.c`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LexErrorKind {
+    /// Compilation exhausted its deterministic work allowance.
+    MeterLimit,
     /// A byte sequence that is not a legal UTF-8 lead/continuation as XS
     /// decodes it (`fxGetNextCode`, "invalid character").
     InvalidCharacter(u32),
@@ -45,6 +47,10 @@ pub enum LexErrorKind {
     /// A `*` immediately after the opening `/` of a regexp (would open a
     /// comment), per XS's `fxGetNextRegExp` guard.
     InvalidRegExp,
+    /// Regexp compilation refused computation; never a guest SyntaxError.
+    RegExpBudgetExceeded,
+    /// Regexp compilation exceeded its deterministic storage profile.
+    RegExpResourceLimit,
     /// A `@` outside XS's host (`mxCFlag`) mode.
     InvalidAtSign,
     /// A single `\` (or `\` not followed by `.`) where XS expects `\u`.
@@ -57,9 +63,15 @@ pub enum LexErrorKind {
 
 impl fmt::Display for LexError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "line {}: {}", self.line, self.kind)
+    }
+}
+
+impl fmt::Display for LexErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use LexErrorKind::*;
-        write!(f, "line {}: ", self.line)?;
-        match &self.kind {
+        match self {
+            MeterLimit => write!(f, "compilation meter limit"),
             InvalidCharacter(c) => write!(f, "invalid character {}", c),
             InvalidEscape => write!(f, "invalid escape"),
             InvalidNumber => write!(f, "invalid number"),
@@ -70,6 +82,8 @@ impl fmt::Display for LexError {
             UnterminatedRegExp => write!(f, "end of file in regular expression"),
             LineTerminatorInRegExp => write!(f, "end of line in regular expression"),
             InvalidRegExp => write!(f, "invalid regular expression"),
+            RegExpBudgetExceeded => write!(f, "regexp work budget exhausted"),
+            RegExpResourceLimit => write!(f, "regexp storage limit exhausted"),
             InvalidAtSign => write!(f, "invalid character @"),
             UnexpectedCharacter(c) => write!(f, "invalid character {}", c),
             Overflow => write!(f, "buffer overflow"),

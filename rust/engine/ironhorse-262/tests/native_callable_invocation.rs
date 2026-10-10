@@ -11,6 +11,8 @@
 //! `result_agrees`) per the accuracy-over-parity doctrine — computron agreement
 //! is advisory for these re-entrant native invocations.
 
+mod w2_meter_support;
+
 use ironhorse_262::{dual_run, Agreement};
 
 /// Assert a program completes on BOTH engines with the SAME completion value.
@@ -31,18 +33,11 @@ fn agrees(source: &str) {
     );
 }
 
-fn agrees_exact(source: &str) {
+fn agrees_version_four(source: &str) {
     let run = dual_run(source).expect("the XS oracle machine must start");
     assert_eq!(run.agreement, Agreement::BothComplete, "{source}: {run:?}");
     assert!(run.result_agrees, "{source}: {run:?}");
-    assert!(
-        run.computrons_agree,
-        "{source}: oracle={} ({}) ironhorse={} ({})",
-        run.oracle_computrons,
-        run.oracle_meter_raw,
-        run.ironhorse_computrons,
-        run.ironhorse_meter_raw,
-    );
+    w2_meter_support::assert_raw(source, run.ironhorse_meter_raw);
 }
 
 #[test]
@@ -58,7 +53,7 @@ fn callable_proxy_dispatch_is_metered_at_each_call_layer() {
         "var p=new Proxy(Math.max,{});p(1,2)",
         "var p=new Proxy(Math.max,{});p.call(null,1,2)",
     ] {
-        agrees_exact(source);
+        agrees_version_four(source);
     }
 }
 
@@ -85,10 +80,76 @@ fn native_apply_forwards_dense_array() {
          Math.max.apply(null,a)+':'+log.join(',')",
     );
     agrees("(function(){return Math.max.apply(null,arguments)})(2,9,4)");
+    agrees("(function(a){return (function(x){return x}).apply(null,arguments)})(1)");
+    agrees("(function(){delete arguments[1];arguments.length=1;return Math.max.apply(null,arguments)})(3,9)");
+    agrees("(function(){Object.defineProperty(arguments,'length',{get:function(){return 1}});return Math.max.apply(null,arguments)})(3,9)");
     agrees(
         "var log=[];var args=new Proxy({length:2,0:3,1:8},{get:function(t,k){log.push(k);return t[k]}}); \
          Math.max.apply(null,args)+':'+log.join(',')",
     );
+}
+
+/// An `arguments` object is backed by the same `arrays` side table as a real
+/// Array, so every apply-side fast path keyed on that table used to answer out
+/// of raw compact storage. `Get(arguments, "length")` is an ordinary own data
+/// property: assigning, deleting, or redefining it has to be honoured, and a
+/// mapped parameter cell has to be dereferenced rather than forwarded.
+#[test]
+fn apply_reads_arguments_length_through_the_property_mop() {
+    // Deleted: `length` falls off the object entirely, so the walk is empty.
+    agrees("(function(){delete arguments.length;return Math.max.apply(null,arguments)})(3,9)");
+    // Redefined as a shorter data property: the tail argument is dropped.
+    agrees(
+        "(function(){Object.defineProperty(arguments,'length',{value:1}); \
+         return Math.max.apply(null,arguments)})(3,9)",
+    );
+    // Assigned past the arity: the walk reads absent indices as `undefined`.
+    agrees("(function(){arguments.length=3;return String(Math.max.apply(null,arguments))})(3,9)");
+    // A throwing `length` accessor propagates out of CreateListFromArrayLike.
+    agrees(
+        "(function(){Object.defineProperty(arguments,'length',{get:function(){ \
+         throw new RangeError('x')}}); \
+         try{Math.max.apply(null,arguments)}catch(e){return e instanceof RangeError}})(3,9)",
+    );
+    // The same reads through the other CreateListFromArrayLike callers: an
+    // abstract `Reflect.apply`, an Array generic, and a Proxy over arguments.
+    agrees("(function(){arguments.length=1;return Reflect.apply(Math.max,null,arguments)})(3,9)");
+    agrees("(function(a){a=9;return Array.prototype.concat.apply([],arguments)[0]})(3)");
+    agrees(
+        "(function(a){a=9;var p=new Proxy(arguments,{}); \
+         return (function(x){return x}).apply(null,p)})(3)",
+    );
+}
+
+#[test]
+fn apply_array_like_reads_have_version_four_costs() {
+    for source in [
+        "Math.max.apply(null,{length:2,0:3,1:8})",
+        "Math.max.apply(null,[,8])",
+        "(function(a,b){return a+b}).apply(null,{length:2,0:3,1:8})",
+        "var f=(function(a,b){return a+b}).bind(null);f.apply(null,{length:2,0:3,1:8})",
+        "(function(){return Math.max.apply(null,arguments)})(3,8)",
+    ] {
+        agrees_version_four(source);
+    }
+}
+
+/// Pin the calibrated credits below whole-computron rounding. Sparse arrays
+/// and bound callees have independent raw residuals, covered above only at
+/// whole-computron precision.
+#[test]
+fn apply_array_like_credits_have_version_four_raw_costs() {
+    for source in [
+        "Math.max.apply(null,{length:2,0:3,1:8})",
+        "(function(a,b){return a+b}).apply(null,{length:2,0:3,1:8})",
+        "(function(){return Math.max.apply(null,arguments)})(3,8)",
+    ] {
+        let run = dual_run(source).expect("the XS oracle machine must start");
+        assert_eq!(run.agreement, Agreement::BothComplete, "{source}: {run:?}");
+        assert!(run.result_agrees, "{source}: {run:?}");
+        assert!(run.observables_agree(), "{source}: {run:?}",);
+        w2_meter_support::assert_raw(source, run.ironhorse_meter_raw);
+    }
 }
 
 #[test]
@@ -335,9 +396,7 @@ fn apply_array_like_arg_array() {
         "function f() { return String(arguments[0]) + '/' + arguments.length; } \
          f.apply(null, {length: 2})",
     );
-    agrees(
-        "function f(a,b){return String(a)+':'+b}var args=[,2];f.apply(null,args)",
-    );
+    agrees("function f(a,b){return String(a)+':'+b}var args=[,2];f.apply(null,args)");
     agrees(
         "function f(a){return a}var old=Array.prototype[0];Array.prototype[0]=6; \
          var args=new Array(1),r=f.apply(null,args); \

@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=built-ins/ArrayBuffer/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/ArrayBuffer/prototype/Symbol.toStringTag.js sloppy pass
+built-ins/ArrayBuffer/prototype/Symbol.toStringTag.js strict pass
+built-ins/ArrayBuffer/prototype/constructor.js sloppy pass
+built-ins/ArrayBuffer/prototype/constructor.js strict pass

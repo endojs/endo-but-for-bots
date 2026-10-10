@@ -15,6 +15,8 @@
   "exclude": [
     "**/tmp/**",
     "**/dist/**",
+    "**/dist-ironhorse/**",
+    "**/dist-xs/**",
     "**/node_modules/**",
     "packages/chacha12-fast-check-test",
     "packages/chat",
@@ -51,6 +53,7 @@
     "packages/skel",
     "packages/stream-types-test",
     "packages/syrup",
+    "packages/ironhorse-prelude/",
     "packages/test262-runner/",
     "packages/where",
     "packages/space-whylip",

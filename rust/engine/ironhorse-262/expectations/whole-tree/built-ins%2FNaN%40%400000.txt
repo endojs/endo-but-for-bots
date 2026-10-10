@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=built-ins/NaN tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/NaN/15.1.1.1-0.js sloppy pass
+built-ins/NaN/15.1.1.1-0.js strict pass
+built-ins/NaN/S15.1.1.1_A1.js sloppy pass
+built-ins/NaN/S15.1.1.1_A1.js strict pass
+built-ins/NaN/S15.1.1.1_A2_T2.js sloppy pass
+built-ins/NaN/S15.1.1.1_A3_T2.js sloppy pass
+built-ins/NaN/S15.1.1.1_A4.js sloppy pass
+built-ins/NaN/S15.1.1.1_A4.js strict pass
+built-ins/NaN/prop-desc.js sloppy pass
+built-ins/NaN/prop-desc.js strict pass

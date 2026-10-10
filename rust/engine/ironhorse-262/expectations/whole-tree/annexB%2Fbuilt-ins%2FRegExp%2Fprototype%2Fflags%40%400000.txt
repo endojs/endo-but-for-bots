@@ -1,0 +1,3 @@
+# engine=ironhorse features=default corpus=annexB/built-ins/RegExp/prototype/flags tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/built-ins/RegExp/prototype/flags/order-after-compile.js sloppy skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/flags/order-after-compile.js strict skip:shared-test262-failure

@@ -1,0 +1,15 @@
+# engine=ironhorse features=default corpus=built-ins/Symbol/prototype/description tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Symbol/prototype/description/description-symboldescriptivestring.js sloppy pass
+built-ins/Symbol/prototype/description/description-symboldescriptivestring.js strict pass
+built-ins/Symbol/prototype/description/descriptor.js sloppy pass
+built-ins/Symbol/prototype/description/descriptor.js strict pass
+built-ins/Symbol/prototype/description/get.js sloppy pass
+built-ins/Symbol/prototype/description/get.js strict pass
+built-ins/Symbol/prototype/description/is-not-own-property.js sloppy pass
+built-ins/Symbol/prototype/description/is-not-own-property.js strict pass
+built-ins/Symbol/prototype/description/this-val-non-symbol.js sloppy pass
+built-ins/Symbol/prototype/description/this-val-non-symbol.js strict pass
+built-ins/Symbol/prototype/description/this-val-symbol.js sloppy pass
+built-ins/Symbol/prototype/description/this-val-symbol.js strict pass
+built-ins/Symbol/prototype/description/wrapper.js sloppy pass
+built-ins/Symbol/prototype/description/wrapper.js strict pass

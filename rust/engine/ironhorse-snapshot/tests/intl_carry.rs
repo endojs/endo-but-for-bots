@@ -17,69 +17,21 @@
 //! branded-instance `this` check — the twins diverge, the red this
 //! suite was born failing.
 
+#[path = "common/twin.rs"]
+mod carry;
 mod common;
+use carry::{compile, crank, sig, twin};
 
 use common::TempDir;
 
-use ironhorse_snapshot::image::{read_machine, write_machine};
+use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
 use ironhorse_snapshot::machine::{
-    begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
-    MachineSnapshot,
+    begin_store_session, checkpoint_to_store, from_snapshot_bytes, MachineSnapshot,
 };
-use ironhorse_snapshot::store::{validate_store, HeapStore, MemoryStore};
+use ironhorse_snapshot::store::{validate_store, MemoryStore};
 use ironhorse_snapshot::store_file::FileStore;
-use ironhorse_snapshot::{Signature, SnapshotError};
-use ironhorse_vm::{parse_symbols, Interp};
-
-fn sig() -> Signature {
-    Signature::new("ironhorse-worker-v1")
-}
-
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
-    let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
-    (bytecode, parse_symbols(&symbols))
-}
-
-/// Relink and run one crank, returning `(completed, halt debug, result,
-/// computrons)`. The COMPUTRON count is part of the observation: a
-/// resumed machine that answers correctly while charging differently
-/// has still diverged, and consensus is on the count as much as the
-/// value. Every twin below therefore compares metering too.
-fn crank(m: &mut Interp, src: &str) -> (bool, String, String, u64) {
-    let (b, n) = compile(src);
-    let b = m.relink_crank(&b, &n).expect("relink");
-    let o = m.run(&b);
-    (o.completed, format!("{:?}", o.halt), o.result, o.computrons)
-}
-
-/// Run crank 1 and the observation cranks uninterrupted, and the same
-/// cranks across a checkpoint/resume split on `store`; assert the
-/// observations agree pairwise and return the continuous ones.
-fn twin(crank1: &str, observations: &[&str], store: &mut dyn HeapStore) -> Vec<(bool, String, String, u64)> {
-    let (b1, n1) = compile(crank1);
-
-    let mut cont = Interp::new();
-    cont.link_intrinsics(&n1);
-    assert!(cont.run(&b1).completed, "crank 1 (continuous)");
-    let continuous: Vec<_> = observations.iter().map(|s| crank(&mut cont, s)).collect();
-
-    let mut m = Interp::new();
-    m.link_intrinsics(&n1);
-    assert!(m.run(&b1).completed, "crank 1 (store)");
-    let session = begin_store_session(m, &sig(), store)
-        .map_err(|(_, e)| e)
-        .expect("begin");
-    drop(session);
-    let mut session = resume_from_store(store, &sig()).expect("resume");
-    let resumed: Vec<_> = observations
-        .iter()
-        .map(|s| crank(session.machine_mut(), s))
-        .collect();
-    assert_eq!(continuous, resumed, "resumed observes exactly as uninterrupted");
-    checkpoint_to_store(&mut session, &sig(), store).expect("checkpoint after resume");
-    validate_store(store, &sig()).expect("post-crank store validates");
-    continuous
-}
+use ironhorse_snapshot::SnapshotError;
+use ironhorse_vm::Interp;
 
 fn assert_twin(name: &str, crank1: &str, observations: &[&str], expect: &[&str]) {
     let mut mem = MemoryStore::new();
@@ -88,7 +40,10 @@ fn assert_twin(name: &str, crank1: &str, observations: &[&str], expect: &[&str])
         assert!(got.0, "observation completes: {:?}", got.1);
     }
     let got: Vec<&str> = seen.iter().map(|(_, _, r, _)| r.as_str()).collect();
-    assert_eq!(got, expect, "the continuous observations are the real answers");
+    assert_eq!(
+        got, expect,
+        "the continuous observations are the real answers"
+    );
 
     let dir = TempDir::new(name);
     let mut file = FileStore::open(dir.join("heap.ihstore")).unwrap();
@@ -105,9 +60,7 @@ fn resumed_collator_compares_like_uninterrupted() {
         "ih-intl-twin-collator",
         "var c = 0; var t = 0; \
          c = new Intl.Collator('en', { sensitivity: 'base' }); t = 7; t",
-        &[
-            "var c; var t; t = c.compare('a', 'B') + ':' + c.resolvedOptions().sensitivity; t",
-        ],
+        &["var c; var t; t = c.compare('a', 'B') + ':' + c.resolvedOptions().sensitivity; t"],
         &["-1:base"],
     );
 }
@@ -275,10 +228,8 @@ fn malformed_intl_bound_function_rows_are_refused() {
     let mut image = read_machine(&bytes, &sig()).expect("read IBFN");
     assert_eq!(image.intl_bound_functions.len(), 1);
     image.intl_bound_functions[0].kind = 9;
-    match from_snapshot_bytes(&write_machine(&image), &sig()) {
-        Err(SnapshotError::Corrupt(
-            "Intl bound-function state: unknown kind",
-        )) => {}
+    match from_snapshot_bytes(&write_machine_unchecked(&image), &sig()) {
+        Err(SnapshotError::Corrupt("Intl bound-function state: unknown kind")) => {}
         Err(other) => panic!("wrong Intl-bound refusal: {other:?}"),
         Ok(_) => panic!("unknown Intl bound-function kind must not restore"),
     }
@@ -351,7 +302,11 @@ fn a_guest_bind_over_an_intl_bound_function_resumes_on_every_path() {
     );
     let mut session =
         ironhorse_snapshot::machine::resume_from_store_lazy(store.clone(), &sig()).expect("lazy");
-    assert_eq!(crank(session.machine_mut(), obs), continuous, "lazy twin agrees");
+    assert_eq!(
+        crank(session.machine_mut(), obs),
+        continuous,
+        "lazy twin agrees"
+    );
     checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut())
         .expect("checkpoint after lazy resume");
 }

@@ -25,8 +25,7 @@
 /// frozen. (Bytecode + symbols only — no oracle, no submodule.)
 const BYTECODE: &[u8] = include_bytes!("fixtures/finding-a136f9038a1001fb.bytecode.bin");
 const SYMBOLS: &[u8] = include_bytes!("fixtures/finding-a136f9038a1001fb.symbols.bin");
-const EXPECTED_RESULT: &str =
-    include_str!("fixtures/finding-a136f9038a1001fb.expected-result.txt");
+const EXPECTED_RESULT: &str = include_str!("fixtures/finding-a136f9038a1001fb.expected-result.txt");
 
 #[test]
 fn regexp_source_result_is_not_panicked_or_truncated() {

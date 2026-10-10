@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=language/statements/debugger tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/debugger/expression.js sloppy pass
+language/statements/debugger/expression.js strict pass
+language/statements/debugger/statement.js sloppy pass
+language/statements/debugger/statement.js strict pass

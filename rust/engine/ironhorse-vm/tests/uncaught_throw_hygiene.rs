@@ -8,7 +8,7 @@
 
 use ironhorse_vm::Interp;
 
-fn compile(src: &str) -> (Vec<u8>, Vec<String>) {
+fn compile(src: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (b, s) = ironhorse_compile::compile_atoms(src).expect("compiles");
     (b, ironhorse_vm::parse_symbols(&s))
 }
@@ -47,5 +47,9 @@ fn an_uncaught_super_argument_throw_does_not_poison_the_next_cranks_new_target()
     assert_eq!(
         result, "true",
         "the stale super target leaked into the next crank's new.target"
+    );
+    assert!(
+        m.is_quiescent(),
+        "the next crank must retire abandoned frames"
     );
 }

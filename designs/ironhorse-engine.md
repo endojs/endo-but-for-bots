@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-02 |
+| **Updated** | 2026-09-13 |
 | **Author** | endolinbot (prompted) |
 | **Status** | Approved (2026-07-02, program supervisor `port-xs-to-rust-memory-safe-engine`; all ten open questions resolved, see § Resolved Questions) |
 | **Revised** | 2026-07-04 — **metering doctrine: accuracy over parity** (maintainer directive). The meter is Ironhorse's own release-versioned deterministic cost model, a proxy for real (wall-clock) execution cost, NOT a reproduction of XS's computron counts. The XS differential oracle is retained for **result** correctness only; computron comparison is demoted to advisory telemetry. This selects the "stated determinism-equivalence proof" branch the § Prompt already permitted. See § Metering (requirement 1a) and § Agoric consensus compatibility for the authoritative statement. |
@@ -16,6 +17,42 @@ snapshots. This document is stage 1 of the supervised program
 `port-xs-to-rust-memory-safe-engine`; the implementation accretes
 onto the same branch and pull request as this design.
 
+## Status
+
+Current-state audit: 2026-09-09, base `96db92e23`.
+GC policy incorporates the W6 decision at `d38196799`.
+This ledger separates implemented surfaces from the roadmap's acceptance bars.
+Historical measurements are retained in
+[`rust/engine/CHANGELOG.md`](../rust/engine/CHANGELOG.md); they are evidence at
+named tips, not a fresh whole-tree conformance run.
+The [architecture guide](../rust/engine/ARCHITECTURE.md) describes the current
+crate graph and seams; [W6 decisions](ironhorse-w6-decisions.md) record Realm
+extraction, engine-trait deferral, transcendental providers and consumer-owned GC policy.
+
+| Roadmap stage | Implementation | Acceptance and deviations |
+|---|---|---|
+| 1. Thin slice | Landed | Interpreter, meter and oracle harness exist. The early corpus passed historically; present release costs are pinned by oracle-free golden tests. Shared frozen intrinsics are implemented; full SES boot and parity acceptance remain stage-4 work. |
+| 2. Object model and control flow | Partial | Broad opcode, object, closure and exception support exists. Exact GC exists but is not the production collection path; chunk reclamation remains open. W6 decision 5 assigns GC scheduling to the engine consumer. |
+| 3. Built-ins | Partial | RegExp, promises, BigInt, collections, Intl and Temporal exist. Covered cases are not full built-ins conformance; platform Math is per binary/platform; `deterministic-math` carries cross-host execution. |
+| 4. Hardened JavaScript | Partial — bar not met | Object integrity operations exist (`harden`, `petrify`, faithful to `xsLockdown.c`). Shared Realm extraction is implemented. The boot-bundle half of the acceptance is measured and met (`ironhorse-262/tests/stage4_ses_boot.rs`); SES parity acceptance remains open and named skips are not passing acceptance. The deliverable column assumes the native route, which is now an open choice: `rust/thixotrope-ironhorse-worker` already reaches guest `lockdown` and `Compartment` through the SES shim instead, and the two routes exclude each other — [ironhorse-ses-compartment-equivalence](ironhorse-ses-compartment-equivalence.md). |
+| 5. Compiler port | Landed; full bar not reverified | Lexer, parser, scoper and coder are the default compiler. Historical byte-identity measurements cover named corpora; budgeted compilation and golden costs now share the runtime release identity. No fresh full-conformance oracle run is claimed here. |
+| 6. Snapshots | Partial | Container/store persistence, checked restore and supervisor tests exist. Historically accepted subset expanded substantially; live activations and unsupported side-table states still fail closed. Complete daemon worker protocol integration remains open. |
+| 7. Debugger | Not started as an accepted engine surface | No standalone debugger crate or reproduced xsbug/CapTP acceptance is present. Orchestration labels such as "stage-7 child" in historical evidence do not name this roadmap stage. |
+| 8. Parity closure and hardening | Partial — bar not met | Debug/release/macOS, sanitizer and benchmark gates exist. Full result equality, the XS-relative performance/footprint envelope and daemon benchmark arm remain open. |
+| 9. Ecosystem validation | Not started as a completed campaign | No zero-divergence daemon/Agoric corpus acceptance record establishes this bar. |
+
+### Determinism scope
+
+**`deterministic-math` carries cross-host execution determinism.**
+It selects the versioned software libm provider and is enabled by `consensus`.
+Matching release, initial state, inputs and host policy are still required.
+The ordinary platform-provider default remains scoped per binary/platform.
+The canonical cost-table SHA-256 identity describes weights, while the boot
+fingerprint also distinguishes provider and locked ICU data profiles.
+This qualification applies to every "deterministic per release" claim below.
+W6 §4 and [the implementation record](../rust/engine/DETERMINISM-METERING.md)
+record C1–C4 prerequisites, C7 oracle scope, and independent cross-host vectors.
+
 ## Feasibility Verdict
 
 **Feasible, with the risk front-loaded into the first two stages.**
@@ -28,10 +65,10 @@ release-versioned cost model** — is testable within weeks, not
 years. Two sub-properties are separated (see § Metering): (a)
 *result correctness*, the semantic port, which the differential
 oracle checks against XS on every commit (completion kind, value,
-error identity); and (b) *meter determinism per release*, which is a
-construction guarantee — a frozen increment-point set with a frozen
-cost table means identical inputs give identical computrons on every
-host and build. The meter's *purpose* is to be the best available
+error identity); and (b) *meter determinism within a release binary and
+platform*, for matching initial state, input and host policy.
+The frozen increment points and table do not establish execution equivalence
+across different math providers, platforms or builds. The meter's *purpose* is to be the best available
 deterministic proxy for real (wall-clock) execution cost, not to
 reproduce XS's computron counts; XS-computron parity is an explicit
 non-goal. The roadmap below front-loads a differential harness that
@@ -56,6 +93,22 @@ Kill criteria, named up front:
   XS) proves unreachable by more than 2x after the planned
   optimization pass.
 
+  This criterion is LIVE and, as of 2026-09-16, partially
+  instrumented rather than unevaluable (F106/F122).
+  The throughput half is measured: `benches/xs_compare.py`
+  `--check-micro` fails above 2.0x geometric mean on the
+  microbenchmark corpus, nightly.
+  The four-variant daemon arm remains blocked on the worker
+  protocol, and `bench-daemon.js` reports that blocker rather than
+  timing a substitute.
+  Both footprint clauses are measured too: code size at about 6x
+  against a 2x bar, and heap between 0.2x and 2.5x against a 1.1x
+  bar depending on whether the workload churns.
+  So the criterion has an early-warning device for the first time,
+  on the throughput clause; it does not yet have one on the whole
+  envelope, and the README's acceptance table records stage 8 as
+  BAR NOT MET.
+
 ## What Is the Problem Being Solved?
 
 Endo and agoric-sdk trust XS with their most security-critical
@@ -79,14 +132,12 @@ native Compartment support.
 
 ## Ground Truth: What Is Being Ported
 
-Measured against `Moddable-OpenSource/moddable` at `23b4d6b0a65f`
-(moddable **8.3.1**, 2026-07-07). The pin began at `48ee02d8cfe0`
-(8.2.3, 2026-06-17 — the lineage `rust/endo/xsnap/build.rs` compiles
-today) and was bumped to 8.3.1 by the `port-xs-oracle-bump-8-3-1`
-job, deliberately leading xsnap so the port is measured against the
-newer engine semantics (see `rust/engine/README.md` § Upstream
-moddable delta tracking for the per-commit deltas the bump re-bases
-onto the bar).
+The source reference is `Moddable-OpenSource/moddable` at
+`23b4d6b0a65f35209d9118c4c13c6c9b3e68784d` (Moddable 8.3.1).
+This is also the superproject's current `c/moddable` gitlink.
+The original 8.2.3-to-8.3.1 bump narrative is preserved in
+[`rust/engine/CHANGELOG.md`](../rust/engine/CHANGELOG.md).
+The measurements below describe the XS reference, not the Rust resident layout.
 
 **Interpreter.** `fxRunID` in `xs/sources/xsRun.c` is a single
 ~4,000-line dispatch loop, computed-goto under GCC/Clang and a
@@ -171,6 +222,17 @@ provides the native `Compartment` constructor with `evaluate`,
 `import`, `importNow`, and a per-compartment `globalThis` over
 shared frozen intrinsics. XS is the only engine with a native
 Hardened JavaScript implementation.
+
+Only `Compartment` is a realm intrinsic, though. `fxCreateMachine`
+binds none of the other four: each embedder installs the subset it
+wants, and `fx_lockdown` fetches the *guest* `harden` off the global,
+so installing `lockdown` without `harden` yields a `lockdown` that
+faults. The endor daemon installs none of them and never calls
+`lockdown()`; `rust/thixotrope-xs-worker` installs `harden` and
+`lockdown` and does. So "XS implements SES natively" is a fact about
+the implementation, not about any particular XS realm in this tree —
+see
+[ironhorse-ses-compartment-equivalence](ironhorse-ses-compartment-equivalence.md).
 
 **Conformance.** On the 2026-07-02 test262.fyi run (53,404 tests),
 XS passes 81.57% overall, but the number is dominated by the
@@ -263,47 +325,27 @@ ships a mixed C/Rust engine to production.
 
 ## Architecture
 
-```mermaid
-graph TD
-    subgraph rust/engine workspace
-        VM[ironhorse-vm<br/>slot+chunk arenas, GC,<br/>interpreter, meter]
-        SES[ironhorse-ses<br/>lockdown, harden,<br/>Compartment natives]
-        SNAP[ironhorse-snapshot<br/>atom reader/writer]
-        DBG[ironhorse-debug<br/>xsbug XML protocol]
-        CC[ironhorse-compile<br/>lexer, parser, coder<br/>stage 5+]
-        ORACLE[xs-oracle<br/>XS FFI harness<br/>dev/CI only, unsafe here]
-        T262[ironhorse-262<br/>dual-run test262 harness]
-        FUZZ[ironhorse-fuzz<br/>cargo-fuzz targets]
-    end
-    XSNAP[xsnap crate<br/>Machine API]
-    ENDO[endo crate<br/>supervisor, workers]
-    CX[c/moddable submodule<br/>XS]
-    VM --> SES
-    VM --> SNAP
-    VM --> DBG
-    CC --> VM
-    ORACLE --> CX
-    T262 --> VM
-    T262 --> ORACLE
-    FUZZ --> VM
-    FUZZ --> ORACLE
-    XSNAP --> VM
-    XSNAP --> CX
-    ENDO --> XSNAP
-```
+The implemented topology is the nine-member workspace listed in
+[`rust/engine/ARCHITECTURE.md`](../rust/engine/ARCHITECTURE.md).
+`ironhorse-meter` owns the digest-pinned weights and `ironhorse-text` owns CESU-8
+symbol-name conversion; neither a separate SES crate nor a debugger crate exists.
+`rust/endo` embeds IronHorse directly alongside its separate xsnap integration.
+The SQLite store backend belongs to the outer workspace and links bundled SQLite.
+See the architecture guide for dependency direction and runtime versus test edges.
+
 
 ### Value and heap model
 
 The single largest safety re-architecture: XS's pointer-linked
 slot graph becomes an index-based arena.
 
-- A `SlotIndex(u32)` replaces `txSlot*`; the slot heap is a Rust
-  arena of 32-byte slot records with a free list, exactly XS's
-  "slots never move" semantics. Slot records pack kind, flag, ID,
-  the `next` index, and a 16-byte payload, accessed only through
-  typed accessors; the packing preserves XS's 32-byte-per-slot
-  accounting so `currentHeapCount` and slot-growth behavior stay
-  comparable.
+- A `SlotIndex(u32)` replaces `txSlot*`; slots live in an arena with a free list.
+  Rust `Slot` has no stable `repr(C)` contract and is 24 bytes on the audited
+  64-bit build, not XS's 32-byte resident record.
+  The snapshot codec serializes fields into a separate fixed-width wire record;
+  Rust struct layout is not the snapshot ABI.
+  XS accounting constants do not measure resident slots, bookkeeping vectors or
+  side-table allocations, so they cannot establish the footprint acceptance bar.
 - A `ChunkOffset(u32)` replaces chunk pointers; the chunk heap is
   a growable byte arena with the same `txChunk` header discipline
   and slide-compaction during GC (offsets are rewritten exactly
@@ -341,11 +383,20 @@ Ironhorse heap is already in that form.
 
 ### Interpreter and dispatch
 
-A `match` over a `#[repr(u8)]` opcode enum, compiled by LLVM to a
-jump table; interpreter state (stack top, frame, scope, code
-cursor) lives in a small register struct threaded through the
-loop, mirroring `mxSaveState`/`mxRestoreState` at allocation and
-call boundaries. No JIT, ever (requirement 4): no code generation,
+A `match` over a `#[repr(u8)]` opcode enum is compiled by LLVM to a jump table.
+The current implementation keeps the program counter local to `dispatch_at_inner`
+and the stack, frame registers, and scope state on `Interp`, alongside its arenas
+and side tables.
+The declaration in
+[`interp/state.rs`](../rust/engine/ironhorse-vm/src/interp/state.rs) generates those
+fields and their GC hook inventory.
+Call boundaries save caller state in `CallerState`; suspended activations carry a
+`SavedFrame`.
+Any future register-localization optimization must be evaluated against the
+[`dispatch_bench` controls](../rust/engine/benches/README.md), rather than assuming
+that a separate small register struct already provides that benefit.
+
+No JIT, ever (requirement 4): no code generation,
 no execution-count-dependent behavior, no fast paths whose cost
 differs from the metered count. Tail-call threaded dispatch (the
 unstable `become` feature) is a possible later optimization behind
@@ -360,23 +411,27 @@ that geometry.
 
 ### Metering (requirement 1a)
 
-**Doctrine (2026-07-04, maintainer directive): accuracy over
-parity.** The meter's purpose is to be the best available
-**deterministic proxy for real (wall-clock) execution cost**, not
-to reproduce XS's computron counts. XS-computron parity is an
-explicit non-goal. Two properties are separated, and only the first
-is unconditional:
+**Doctrine (2026-07-04, maintainer directive; reaffirmed
+2026-09-15): accuracy over parity.** The meter's purpose is to be
+the best available **deterministic proxy for real (wall-clock)
+execution cost**, not to reproduce XS's computron counts. To that
+end Iron Horse's meter MAY diverge from XS's computron counts.
+XS-computron parity is an explicit **non-goal — not a deferred
+goal**: no future stage, defect item, or test may reintroduce it as
+a bar (an optional XS-compatible meter *version* remains possible
+under § Agoric consensus compatibility, conditional (c), which is a
+compatibility surface, not a parity requirement on the native
+meter). Two properties are separated:
 
-- **Determinism per release (unconditional, and the property
-  consensus needs).** Within a released Ironhorse version the meter is
-  frozen: a fixed set of increment points with a fixed per-point
-  **cost table**, so identical inputs produce identical computrons
-  on every host, architecture, and build. Any two runs of the same
-  release meter identically. This is a *construction* guarantee (a
-  pure function of the frozen table and the deterministic
-  interpreter), not a bit-exactness proven against a foreign engine
-  — which is why it is cheap and total rather than a long-tail
-  chase.
+- **Determinism within a release binary and platform.**
+  The frozen increment points and integer weights determine the charge for a
+  given execution trace.
+  Identical initial state, input and host policy on the same binary/platform
+  must produce identical computrons.
+  The table's canonical digest is platform-independent, but the trace can depend
+  on platform transcendental results; a release name alone does not guarantee
+  identical execution on every host, architecture or build.
+  See [Determinism scope](#determinism-scope) and W6 §4 for the provider decision.
 - **Accuracy across releases (recalibrated, versioned).** The cost
   table is a *model* of real execution cost. It is recalibrated
   between releases as measurement improves, and every recalibration
@@ -395,20 +450,30 @@ release-versioned cost table, not XS's constants:
 | Bytecode dispatch | `mxBreak` metering variant in `xsRun.c` | cost-table entry, per opcode |
 | Built-in operation step | `mxMeterOne`/`mxMeterSome` on the `mx*` operation macros | cost-table entry, per built-in step |
 | Allocation | slot alloc (`XS_SLOT_ALLOCATION_METERING`) / chunk byte (`XS_CHUNK_ALLOCATION_METERING`) | cost-table entry |
-| Parse unit | `fxMeterSome` calls from the parser | cost-table entry |
+| Compilation | source admission, tokens, scope/code/optimizer work | shared frozen entries; incremental host budget |
 
-**Deriving and freezing the cost table.** The weights are not
-hand-copied from XS; they are calibration constants derived from the
-cost-calibration instrumentation (sibling plan
-[ironhorse-meter-opcode-cost-instrumentation](ironhorse-meter-opcode-cost-instrumentation.md)),
-which measures per-opcode and per-builtin-step real cost on a named
-reference platform. The measured costs are reduced to a frozen integer weight
-table checked into the release and stamped with an `ironhorse-meter-N`
-version. A recalibration re-runs that instrumentation and bumps the
-version; the previous table remains addressable by its version so
-old metered outcomes stay reproducible. Because the table is
-integer and frozen per release, metering is fully deterministic
-without needing to match any external reference.
+**Deriving and freezing the cost table.**
+The shipped weights are XS-derived historical estimates, now reified in
+`rust/engine/ironhorse-meter` with a fixed-order table and a pinned SHA-256 digest.
+They have not yet been calibrated against measured Ironhorse wall-clock cost.
+Source compilation now shares the running crank's budget from before the first
+source-sized allocation through serialization.
+`CompiledSource` reports whole and raw front-end costs already charged by its
+incremental callback; `eval` and `Function` must not debit those reports again.
+The Endo fresh and persistent seams start the budget before compilation and
+preserve its baseline and consultation window through execution.
+A compiler budget refusal is a host `MeterAbort`, never a catchable syntax error.
+The compiler contains a private unwind to stop nested infallible coder loops
+immediately and rejects `panic=abort` builds; unrelated panics propagate unchanged.
+
+The [cost-calibration instrumentation](ironhorse-meter-opcode-cost-instrumentation.md)
+is the path to future evidence-based calibration, not evidence already obtained.
+A weight or charging-point change requires a new `ironhorse-meter-N` release and
+an explicit update to the local golden corpus.
+Snapshots carry both the release name and actual table digest and refuse a mismatch.
+Older name-only meters cannot establish which weights produced them and are refused.
+The oracle certifies observable results; all oracle computron comparisons,
+including the legacy `--gate-meter-exact` option, are advisory drift telemetry.
 
 **String-op weights are re-based to UTF-16 (2026-07-06).** With
 string storage revised to UTF-16 code units (§ Value and heap
@@ -417,14 +482,13 @@ compare, index, slice, char access — are expressed against the
 representation's real cost shape: **O(n) in code-unit length** for
 the length-proportional operations, **O(1) for a single code-unit
 access** (the cursor and fast-path machinery CESU-8 indexing
-required no longer exists to meter). The weights are derived from
-the cost-calibration instrumentation (sibling plan
-[ironhorse-meter-opcode-cost-instrumentation](ironhorse-meter-opcode-cost-instrumentation.md))
-and the live calibration work
-(`xs2rust-endor-meter-calibration-stage-c1`) measuring the UTF-16
-implementation — **not** CESU-8 byte lengths, and not values chosen
-to match the oracle's counts. Like every other entry they are
-frozen per release and recalibrated only across releases with an
+required no longer exists to meter).
+Future calibrated weights will derive from the
+[cost-calibration instrumentation](ironhorse-meter-opcode-cost-instrumentation.md)
+and a timing driver measuring the UTF-16 implementation, rather than CESU-8 byte
+lengths or values chosen to match the oracle's counts.
+C1 currently supplies histogram/model scaffolding only.
+Like every other entry, weights are frozen per release and changed only with an
 `ironhorse-meter-N` bump.
 
 **Check points and abort.** Checks happen at XS's loop-closing
@@ -437,6 +501,46 @@ the Ironhorse cost table), deterministic per release, and is **not**
 required to coincide with XS's abort point. A metering-limit abort
 is therefore an ironhorse-meter outcome, not an oracle-checked parity
 fact.
+
+Two release-defined check points sit outside the dispatch loop
+(architecture review finding 2, F012 and F014).
+The regexp matcher consults the host every `MATCH_CHECK_STRIDE`
+steps of a match, charging what the match has accumulated so far, so
+an armed crank limit can halt a catastrophic backtracking match
+instead of waiting for it to finish; the charge is the same
+`match_meter_raw` armed or un-armed, so the stride changes when the
+meter is consulted and never what is counted; like every consultation
+point it is outside the `METR` cost-table gate, which covers what a
+program is charged, not where it can be interrupted.
+And the check point is fail-closed: a meter that is armed (the
+snapshot carries `interval != 0`) but has no host attached aborts at
+its first check rather than running unbounded, because the host
+callback cannot travel in a snapshot and a restored machine that
+skipped every arm form used to report itself metered while
+consulting nobody.
+
+**The shipped embedder arms the meter.** The `rust/endo` seam runs
+every crank under a `MeterBounds` policy: armed by default with a
+per-crank computron limit, consulted on a fixed cadence, enforced
+against the machine's absolute meter as `crank start + limit`, with
+the check window re-based at every crank start (as xsnap resets its
+meter per crank) and the host reattached on every resume and rewind
+through the persistent path.
+Re-basing per crank is what makes a refusal a pure function of the
+crank's own cost and the policy, whatever the machine's suspend,
+rewind, or migration history.
+Un-metered execution is an explicit `MeterBounds::Unbounded` opt-in.
+The policy is consensus-relevant like the checkpoint cadence, and like
+the cadence it is not recorded in the store (only the armed interval
+rides the `METR` atom, never the limit): replicas must agree on it out
+of band to refuse the same cranks.
+The meter checks loops, regexp work and routed allocation/operation admission.
+[W2 allocation](../rust/engine/architecture-review/2026-09-06/W2-ALLOCATION.md)
+added slot/chunk ceilings, fallible guest-sized reservations and uncatchable
+`HeapExhausted` stops.
+These bound arenas and selected scratch/collection paths, not total process memory
+or aggregate side-table allocation.
+Allocation-pressure collection and chunk reclamation remain open.
 
 **The oracle is result-only; computrons are advisory telemetry.**
 The differential harness compares **results** (completion kind,
@@ -451,32 +555,32 @@ with XS is never an acceptance gate. XS's hand-tuned
 parity obligation the port must reproduce weight-for-weight; where a
 built-in's port keeps them, it is to preserve the meter's *internal*
 consistency across fast and slow paths within an Ironhorse release, not
-to match XS. What must hold unconditionally is that Ironhorse is
-*internally* deterministic per release (the differential harness
-plus cross-platform CI verify computron stability across runs and
-platforms); cross-engine computron equality with XS is neither
+to match XS. Ironhorse must be
+*internally* deterministic within the stated binary/platform scope (the differential harness
+and golden vectors verify computron stability for their covered inputs;
+cross-platform coverage does not prove arbitrary executions equivalent); cross-engine computron equality with XS is neither
 required nor pursued.
 
-The `Machine` metering API (`begin_metering`, `end_metering`,
-`current_meter`, `current_computrons`, `set_meter`,
-`run_promise_jobs_metered`, `set_crank_limit`) is preserved
-verbatim, so the crank lifecycle, admission gate, and meter-report
-envelopes of the [metering design](daemon-xs-worker-metering.md)
-carry over without supervisor changes; the C callback and
-thread-local `CRANK_LIMIT` become a safe closure and a machine
-field.
+The actual embedder seam arms a meter host closure and supplies compilation budgets.
+The Endo wrapper starts the crank budget before compilation and retains it through
+execution; persistent failures rewind to the last checkpoint.
+It does not preserve the xsnap metering method list verbatim or use a thread-local
+`CRANK_LIMIT` as a shared engine abstraction.
+See [W4's implementation record](../rust/engine/architecture-review/2026-09-06/W4-IMPLEMENTATION.md)
+and `rust/endo/src/ironhorse_engine.rs` for the wired lifecycle.
 
 ### Agoric consensus compatibility (the doctrine's binding question)
 
 Agoric metering is consensus-critical: computron counts drive
 gas/fees and must be identical across all validators, or the chain
-halts. "Accuracy over XS-parity" is safe for consensus **iff Ironhorse's
-meter is itself the consensus meter and every validator runs the
-same Ironhorse release** — which is exactly the *determinism per release*
-property above: same release ⇒ same frozen cost table ⇒ identical
-computrons ⇒ consensus holds. The doctrine does not weaken consensus
-determinism; it relocates the reference from "XS's counts" to "this
-Ironhorse release's counts."
+halts.
+Adopting Ironhorse as the consensus meter requires coordinated release identity
+**and** the current execution scope: matching release binary, platform, initial
+state, input and host policy.
+A shared table alone does not imply a shared execution trace or identical computrons.
+Heterogeneous-platform consensus requires the provider work and coverage recorded
+in W6 §4; a coordinated release label does not supply that guarantee by itself.
+The reference is Ironhorse's own release costs, not equality with XS's counts.
 
 **Decision — (b): Ironhorse ships its own release-versioned native meter
 that consumers, Agoric included, adopt at a coordinated upgrade
@@ -517,22 +621,25 @@ legacy meter on a running fleet.
 
 ### Snapshots (requirement 1c)
 
-Ironhorse writes and reads the XS atom container grammar (`XS_M` over
-`VERS`/`SIGN`/`CREA`/`BLOC`/`HEAP`/`STAC`/`KEYS`/`NAME`/`SYMB`)
-with an Ironhorse `VERS` discriminator and the host signature scheme
-unchanged (append-only callback table, signature bump on layout
-change, per the [snapshot design](daemon-xs-worker-snapshot.md)).
-Because the heap is index-based, the writer is a serializer, not a
-relocator; reading streams through the same
-`write_snapshot_to_file`/`from_snapshot_file`/`suspend_to_cas`
-surface the xsnap crate exposes today, so the supervisor's
-suspend/resume and CAS integration are untouched.
+Ironhorse writes an `XS_M`-shaped container with its own version discriminator,
+field codec, meter identity and mechanical boot fingerprint.
+The current atom grammar is
+[`CANONICAL_ATOM_ORDER`](../rust/engine/ironhorse-snapshot/src/format.rs), not a
+second hand-maintained tag list in this document.
+Slot records are serialized field by field; Rust resident layout is not the ABI.
+The container codec and paged `HeapStore` representation have distinct version gates.
+`MachineSnapshot` provides file/CAS operations, while `rust/endo` embeds the
+persistent engine directly; this is not an unchanged xsnap supervisor API.
+Production writes materialize encoded buffers, so the file helper is not a
+streaming, constant-memory serializer.
+See the [architecture guide](../rust/engine/ARCHITECTURE.md#seam-2-heapstore) for
+validation, checkpoints, rollback and the remaining daemon worker-protocol gap.
 
 **The format question.** Reading *XS-produced* snapshots is more
 tractable than it first appears, because the on-disk form is
 already position-independent (indices, offsets, and callback-table
 ordinals rather than raw pointers); an importer is a decoder from
-32-byte slot images and chunk data into Ironhorse arenas, not a
+field-encoded slot images and chunk data into Ironhorse arenas, not a
 layout-compatibility exercise. It is still real work (every slot
 kind's union arm must be decoded, both endiannesses and the
 version matrix handled), and no Ironhorse use case requires migrating
@@ -545,7 +652,7 @@ question 3: out of scope for the build phase).
 
 ### Debugger (requirement 1b)
 
-Ironhorse implements the xsbug wire protocol byte-compatibly: the same
+The stage-7 target is to implement the xsbug wire protocol byte-compatibly: the same
 XML elements, the same CRLF framing, the same command set
 (including breakpoint conditions, hit counts, and profiling), so
 `xsbug`, the headless `xsbug-node` client, and the endo
@@ -567,22 +674,92 @@ breakpoint lands in stage 7 rather than as a C patch.
 Native, from the start, as in XS: `lockdown`, `harden`, `petrify`,
 and `mutabilities` port from `xsLockdown.c`; `Compartment` ports
 from `xsModule.c` with per-compartment globals and evaluators over
-shared frozen intrinsics. The stage 1 slice already carves the
-architectural seams these need: intrinsics are created once per
-machine and referenced per-realm, every evaluator is reachable for
-per-compartment replacement, and `harden`'s transitive freeze
-worklist operates on the slot arena. The acceptance bar is that
+shared frozen intrinsics. `harden`'s transitive freeze worklist
+operates on the slot arena. The acceptance bar is that
 the endor daemon's actual boot sequence (`polyfills.js`, then
 `ses_boot.js` lockdown, then the HandledPromise shim, per
 [daemon-endor-architecture](daemon-endor-architecture.md) §
 Unified runner) runs identically on both engines, plus the SES
 test suites XS itself is exercised against.
 
+**Realm implementation (2026-09-13).**
+The public `Machine`, `Compartment`, and `Intrinsics` surface remains.
+Machine owns execution, arenas, canonical keys, code, and an ordered promise queue.
+One Realm holds shared frozen primordials and a default environment, also used by
+`Machine::start_compartment()`; other compartments have distinct global environments.
+Intrinsics contains primordial references and lockdown state, with no interpreter.
+Boot initializes and freezes the complete graph once; BootTemplate is removed.
+
+Functions and suspended frames capture their defining compartment environment.
+Nested A -> B -> A calls and promise callbacks use the dispatcher context stack.
+Host reentry is refused under the exclusive machine borrow.
+Rooted host values preserve ordinary reference identity and survive collection;
+raw arena coordinates are refused as endowments.
+Host rebindings preserve property identity and respect descriptors and integrity.
+Compartment evaluators retain their target globals; shared prototype-linked dynamic
+constructors use the default Realm evaluator service configured on Machine.
+Machine owns compiler services outside the execution core to break host capture cycles.
+
+GC retains environments reachable from handles, functions, and queued jobs.
+Dropping a compartment does not abandon its queued work; Machine provides an explicit
+pump and discard operation, including metered continuation without resetting charges.
+Names and tagged-template cache entries remain machine lifetime costs.
+Intrinsic permits restrict global bindings, not transitive capabilities.
+
+Shared Machine snapshots carry the single Realm, environment and defining-code
+associations, queued jobs, rejection reports, static module state and host roots.
+The Endo persistent path now uses the same Machine through `SharedStoreSession`,
+including lazy resume, checkpoints, collection and rewind.
+Restoration requires explicit host policy before adoption and supports handle
+reacquisition; it never pumps queued jobs during snapshot or restore.
+Old standalone worker stores are explicitly refused before migration writes.
+The snapshot row contract is now `snapshot_api::ROW_SCHEMA_VERSION`, while `interp`
+is private and the arena accessors remain read-only.
+The common `JsMachine` engine trait stays deferred under W6 decision 2.
+Host-callable registration now binds stable name/ABI identities to Machine-owned
+services and creates compartment functions with GC-visible captures.
+Scoped call values and the ordinary dispatcher support nested guest calls and callbacks;
+container/store recipes require explicit service reattachment before execution.
+Full daemon SES acceptance remains separate from these implemented seams.
+See the [architecture guide](../rust/engine/ARCHITECTURE.md) for the implemented
+boundary, retained costs and release rules.
+
+The same review's integrity findings (F015 `harden` stale marks,
+F057 frozen globals writable by bare name, F058 exotic objects
+unfreezable, F061 the `with` and descriptor paths bypassing the
+`mop_*` seam) are pinned by
+`rust/engine/ironhorse-vm/tests/hardened_js_boundary.rs`, and the
+`with` seam additionally by
+`rust/engine/ironhorse-262/tests/with_statement_mop.rs`, which gates
+it against the pinned XS oracle.
+Two of the five were already fixed on the mainline when this work
+began — F015 by the `harden` mark-clearing loop, and F058 whole —
+so their entries here are pins, not repairs.
+The review's descriptor-path evidence for F061 did not reproduce:
+`descriptor_from_object` already routes through `mop_get`, and
+`Reflect.ownKeys` agrees between a function and a trapless proxy
+over it.
+The test262 `$262` host object, whose `detachArrayBuffer` is a
+memory-detach primitive no hardened realm should carry (F143), is
+no longer part of the boot: a default machine has no `$262`, and the
+conformance harness installs it explicitly through
+`Interp::install_test262_host` (pinned by
+`rust/engine/ironhorse-vm/tests/test262_host_gate.rs`; the snapshot
+boot-layout generation was bumped for the boot-metadata change).
+One divergence stays open there: `ironhorse-compile` scopes a
+strict-mode *program's* top-level `var` as a frame local rather than
+a global-object property, so `'use strict'; var g = 1;` leaves
+`globalThis.g` undefined; that is a compiler question for the
+differential harness, not an interpreter integrity gap.
+
 ### Minimizing `unsafe` (requirement 2)
 
 The budget is zero in shipped engine crates, enforced by
-`#![forbid(unsafe_code)]` on `ironhorse-vm`, `ironhorse-ses`,
-`ironhorse-snapshot`, `ironhorse-debug`, `ironhorse-compile`, and `ironhorse-262`.
+`#![forbid(unsafe_code)]` on every library root in the `rust/engine` workspace
+except the audited `xs-oracle` FFI harness, checked by the Cargo-metadata test.
+Some harness binary roots lack that declaration; the check does not claim otherwise.
+This is a workspace-source rule, not a claim that transitive dependencies or
+the daemon contain no C.
 The index-arena design is what makes this achievable: no raw
 pointers, no self-referential structures, no `unsafe` GC.
 
@@ -590,6 +767,7 @@ pointers, no self-referential structures, no `unsafe` GC.
 |---|---|---|
 | `ironhorse-vm` and other engine crates | No (`forbid`) | The headline property; index arenas remove the need |
 | `xs-oracle` | Yes | FFI to XS via the existing xsnap `ffi.rs`; dev and CI only, never linked into a shipped engine |
+| `ironhorse-store-sqlite` (outer workspace) | Bundled SQLite through `rusqlite` | Production persistence backend; outside the engine workspace unsafe budget |
 | `xsnap` crate glue | Existing FFI remains until the C engine is retired; Ironhorse paths add none | Audited seam, shrinking over time |
 
 Any future proposal to introduce `unsafe` into an engine crate (a
@@ -609,9 +787,20 @@ this addresses is concrete: the class of bugs like the host-frame
 off-by-one documented in
 [daemon-rust-xs-performance](daemon-rust-xs-performance.md) (raw
 slot-pointer arithmetic silently reading wrong stack slots) is
-unrepresentable against typed arena accessors. CI enforcement:
-Miri on the arena and GC test suites, ASAN/UBSAN on the oracle
-harness (the remaining C), and the fuzz targets below. Logic bugs
+unrepresentable against typed arena accessors.
+CI enforcement is `forbid(unsafe_code)`, ordinary arena/GC unit tests, the fuzz
+targets below, and ASAN/UBSAN instrumentation scoped to the C oracle harness.
+The oracle sanitizer runner compiles all XS and shim C objects with Clang and
+links the sanitizer runtimes into the Rust harness; it does not instrument Rust.
+UBSAN excludes the pinned upstream `c/moddable/xs/sources/` directory, whose
+unaligned loads and pointer arithmetic triggered the initial reports.
+ASAN still checks those sources, and both sanitizers check our shim and platform
+layer; executable C fault probes enforce that exclusion boundary.
+The runner and CI check fail on every remaining report; the sanitizer lane is
+blocking after applying this source-scoped exemption.
+There is no Miri CI lane, and ordinary unit-test names are not Miri evidence.
+This W0 amendment (2026-09-08, F034) replaces the earlier unimplemented Miri gate.
+Logic bugs
 (a wrong index reaching a kind-checked accessor) remain possible
 and surface as deterministic panics, which the supervisor already
 treats as worker death; a panic is a crashed crank, not a
@@ -633,16 +822,18 @@ allocation-faithfulness canary, but a computron difference against
 XS is not, by itself, a failing test (per the accuracy-over-parity
 doctrine, § Metering). Ironhorse's own metering acceptance is
 *determinism*: the harness re-runs metered tests and confirms
-identical computrons across runs and platforms for the same build.
+identical computrons across repeated runs of the same binary and platform.
+Cross-platform equality remains subject to the [determinism scope](#determinism-scope).
 Matching the *fail* vector matters as much as the pass vector: a
 test Ironhorse passes that XS fails is a semantic divergence and gets
 an exceptions-ledger entry or a fix, never a silent "improvement".
 
 Coverage bootstraps by section, tracking the stage ladder:
-stage-scoped curated lists (checked into `ironhorse-262/corpora/`)
-grow into whole-section runs, and CI publishes the agreement
-percentage per section so progress toward parity is a monotone,
-visible number.
+the committed cases now live under
+`packages/test262-runner/test262/test/ironhorse/`, with module fixtures in
+`ironhorse-262/corpora-modules/` and coverage policy in `ironhorse-262/expectations/`.
+Reports and expectation checks expose covered cases and named gaps; historical
+covered counts are not current measurements.
 
 **Completion-phase convergence (maintainer directive, 2026-07-02,
 PR #600).** Toward the completion of the port, the bespoke stage
@@ -653,8 +844,8 @@ design
 specs both halves — the case shape and `features:`-marker gating,
 the meter assertions kept out of test bodies, and the `endot-ih`
 runner that subsumes this harness with the differential oracle as
-its Ironhorse extension. That milestone is parked behind the remaining
-build stages; nothing in it changes the stage bars above.
+its Ironhorse extension. The `endot-ih` runner and fixture conversion have landed; this does not
+by itself meet the complete SES or full-conformance acceptance bars.
 
 **Corpus source: the monorepo's `packages/test262-runner`, not a
 separate pinned submodule** (maintainer directive, 2026-07-03,
@@ -662,9 +853,9 @@ PR #600 review). The repo already carries a curated, pinned
 test262 subset under `packages/test262-runner/test262/` (the tc39
 `test` and `harness` trees plus additional Moddable and Hardened
 JavaScript tests) and a `test262-harness`-driven runner that today
-proves XS↔Node HardenedJS parity by running the tests marked with
+proves XS<->Node HardenedJS parity by running the tests marked with
 the `ses-xs-parity` feature on both the `xst` (XS) and `node`
-hosts against a SES prelude. ironhorse-262 drives its Ironhorse↔XS
+hosts against a SES prelude. ironhorse-262 drives its Ironhorse<->XS
 **pass-vector (result) parity** off that **same** tree and the
 **same** `ses-xs-parity` feature markers (recording computrons as
 advisory telemetry, § Metering) rather than pinning a
@@ -681,7 +872,7 @@ like `c/moddable`" plan. As Ironhorse's SES/Compartment surface lands
 (stage 4), the `ses-xs-parity`-tagged tests become directly
 runnable on Ironhorse through the runner's host abstraction (a third
 host alongside `xst` and `node`); until then ironhorse-262's curated
-`corpora/` lists are the stage-scoped bootstrap that converges onto
+historical corpus lists were the stage-scoped bootstrap that converged onto
 that shared tree.
 
 ### Fuzzability (requirement 7)
@@ -720,32 +911,59 @@ Fuzzing starts in stage 1 (targets 1 and 2 exist as soon as the
 interpreter subset does) and runs nightly in CI with a checked-in
 corpus and a trophies ledger.
 
+This sentence described an intent for longer than it described the tree, and
+the gap was invisible because each half was true somewhere (F039).
+The nightly lane existed but ran four pure-Rust targets and none of the
+differential ones; "checked-in corpus" was contradicted by
+`ironhorse-fuzz/fuzz/.gitignore`, which excluded `corpus/`, so the only corpus
+lived in a GitHub Actions cache and an eviction reset the search to zero
+silently.
+
+What is true now, stated narrowly.
+Both lanes read their roster from `fuzz/Cargo.toml`, so every declared target
+is fuzzed: `ironhorse-deep-fuzz.yml` for minutes per target nightly, and a
+`fuzz-ironhorse` tripwire in `ci.yml` for seconds per target on every
+engine-relevant pull request.
+`ironhorse-fuzz/fuzz/seeds/` is a checked-in, *derived* seed corpus, built from
+the engine's own writers by
+`cargo run -p ironhorse-fuzz --bin write-seed-corpus` and held current by a
+test, so it cannot go stale the way a collected corpus does.
+What is NOT checked in is the accreted corpus: `corpus/` is still a gitignored
+working directory that lives in the Actions cache, so an eviction still costs
+whatever the search has found since the seeds.
+That is a smaller claim than "a checked-in corpus" and it is the one that
+holds.
+
+Two clauses in item 1 above remain UNMET and are not made true by any of this:
+the generators are `arbitrary`-driven now, but there is no corpus splicing in
+the Fuzzilli style.
+Recorded here because the failure this passage is correcting was precisely a
+true half standing in for a false one.
+
 ### Endor integration (requirement 8)
 
-The seam is the existing `Machine` API in `rust/endo/xsnap/src/`
-(`new`, `eval`, `define_function`, `register_powers`,
-`register_worker_io`, `run_promise_jobs`, `quiesce`, metering and
-snapshot methods, `run_debugger`, `import_archive`): Ironhorse
-implements the same surface behind an engine selection, so the
-supervisor, the worker platforms, the reactive pump, suspend and
-resume, and the embedded JS bundles are engine-agnostic. Worker
-platform selection (the `spawn` verb's `platform` field) gains an
-orthogonal engine axis surfaced through the existing `-e` flag of
-`Ironhorse worker` and `Ironhorse run` (`-e xs` today; `-e ironhorse`
-selects the Rust engine), letting both engines coexist through
-the whole result-parity campaign.
+**Current status:** direct embedding exists in `rust/endo/src/ironhorse_engine.rs`;
+the common engine trait is deferred under W6 decision 2, and the complete worker
+deliver protocol and host-function/SES boot surface remain open.
+The implemented entry points are Endo's `ironhorse_engine::Machine` and
+`PersistentMachine`, backed by the VM and snapshot crates.
+The VM's `Machine` owns shared Realm execution state; it is not the xsnap supervisor
+wrapper of the same name.
+No shared trait makes the XS and Ironhorse supervisor APIs interchangeable.
+Engine selection supports direct Ironhorse execution, while full worker delivery,
+host powers, debugger transport and archive execution retain separate acceptance work.
 
 Reconciliation with the design cluster, per document:
 
 | Design | Reconciliation |
 |---|---|
-| [daemon-endor-architecture](daemon-endor-architecture.md) | `Machine` API preserved; machine-runner threads and `!Send` pinning unchanged initially (a Send-able Rust machine is a possible later relaxation; resolved question 8 keeps `!Send`); the `shared` platform is the primary beneficiary of memory safety |
-| [daemon-rust-xs-performance](daemon-rust-xs-performance.md) | The three-variant benchmark gains a fourth variant (Rust supervisor + Ironhorse engine) and is the performance-envelope harness; the `fxHasPendingJobs` check-and-reset global latch is replaced by a per-machine pending-jobs query with identical pump-loop semantics; the host-frame off-by-one bug class is designed out |
-| [daemon-xs-worker-metering](daemon-xs-worker-metering.md) | Crank lifecycle, admission gate, meter-report envelope, and the `Machine` metering API unchanged; `xsnap-platform.c` helpers (`fxAbort` longjmp, metered promise drain) become safe Rust equivalents |
-| [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) | Streaming write/read, CAS layout, callback-table signature discipline, and suspend/resume verbs unchanged; Ironhorse snapshots carry an Ironhorse `VERS` |
-| [daemon-xs-worker-debugger](daemon-xs-worker-debugger.md) | Layers 2 through 6 (bus verbs, DebugSession, Debugger exo, UI, hot-attach) untouched; layer 1's C hooks become the `DebugTransport` trait; break-on-uncaught becomes native |
-| [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) and host powers | Host functions register through the same host-function table and alias names; the snapshot callback-table (append-only, signature-bumped) discipline carries over |
-| [endor-run-expanded](endor-run-expanded.md) | Archive and CAS execution paths sit above the `Machine` API and work unchanged under `-e ironhorse` |
+| [daemon-endor-architecture](daemon-endor-architecture.md) | Ironhorse is embedded directly through its own wrappers. Thread pinning remains; the full worker protocol and common engine abstraction are not wired. |
+| [daemon-rust-xs-performance](daemon-rust-xs-performance.md) | Engine benchmarks exist, but the complete XS supervisor pump has not been replaced by an interchangeable Ironhorse implementation. |
+| [daemon-xs-worker-metering](daemon-xs-worker-metering.md) | Ironhorse owns `Meter`, `MeterBounds` and per-crank reports. Dynamic compilation and dispatch share the live budget; these are separate Rust entry points, not the XS metering API. |
+| [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) | `MachineSnapshot` and `HeapStore` implement buffered container encoding, CAS/store operations and validated standalone restore. Shared Machine state also round-trips; XS callback streaming remains separate. |
+| [daemon-xs-worker-debugger](daemon-xs-worker-debugger.md) | Centralized VM raises are available; the transport and complete xsbug/supervisor integration remain later work. |
+| [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) and host powers | Machine host-callable registration and persisted name/ABI recipes are implemented. Daemon-specific powers still require service adapters and explicit restore policy. |
+| [endor-run-expanded](endor-run-expanded.md) | Direct source execution exists. Archive/CAS worker execution must be verified through its Ironhorse path; it does not follow automatically from a shared `Machine` API. |
 
 ### Performance and footprint envelope
 
@@ -761,6 +979,32 @@ its actual goals:
 - **Footprint**: heap within 1.1x (the slot accounting is
   identical by construction; overhead can come only from arena
   bookkeeping); engine code size within 2x of `libxs.a`.
+
+  *Measured 2026-09-16, and both halves of this clause need
+  amending rather than repeating (F106/F122).*
+  "The slot accounting is identical by construction" was never
+  true: the engine's record is 24 bytes, XS accounts 32, and the
+  per-slot bookkeeping vectors, the chunk arena and the side
+  tables sit outside the accounting entirely.
+  `SlotArena::resident_byte_size` is the honest slot term now, and
+  the comparison has an XS side: the oracle shim reports
+  `currentHeapCount` and `currentChunksSize`, so
+  `ironhorse-262/tests/xs_footprint_bench.rs` can measure both
+  engines over one workload.
+  The answer is not one number. On property access, calls and
+  string work the engine sits near 0.2x XS, which is mostly XS
+  booting a larger intrinsics set. On allocation churn it sits near
+  2.5x, above the bar — and that is precisely where the
+  parenthesis fails, because nothing collects within a crank, so
+  churned garbage is still resident at the boundary.
+  The residue of F010/F076 now has a measured cost.
+  The code-size half now has an instrument,
+  `benches/code_size.py`, and the answer is about **6x**, not
+  within 2x — static-library text against static-library text,
+  an upper bound on a linked artifact.
+  The bar stands as the design's target; what has changed is that
+  it is a measurement rather than an assertion, and the measurement
+  says the target is a long way off.
 - **Latency**: no regression on the pump-loop properties the
   performance design fought for (no sleeps, no polling).
 
@@ -779,86 +1023,19 @@ the Compartment seam, and bootstraps test262, before any breadth.
 | Stage | Deliverable | Acceptance bar |
 |---|---|---|
 | 1. Thin slice: interpreter core + meter + oracle harness | `ironhorse-vm` arenas and value model; interpreter for the arithmetic/logic/branch/call/stack opcode subset; meter with the release-versioned cost table and XS check points; `xs-oracle` compiling source with XS and executing bytecode on both engines; a primordial `Compartment.evaluate` (fresh globals, shared intrinsics seam, no modules); `ironhorse-262` dual-run skeleton with the stage corpus; fuzz targets 1 and 2 | **Result** agreement with the oracle on the stage corpus; meter deterministic per release (identical computrons across repeated runs of the same build); computron-vs-XS recorded as advisory telemetry only; `forbid(unsafe_code)` holds outside `xs-oracle` |
-| 2. Object model and control flow | Objects, prototypes, property ops, closures, exceptions (jump-chain with JS/host flags), full 245-opcode coverage (built-ins stubbed); GC v1 (mark-sweep + chunk compaction) | test262 `language/` dual-run agreement on the covered grammar; GC test suite under Miri |
+| 2. Object model and control flow | Objects, prototypes, property ops, closures, exceptions (jump-chain with JS/host flags), full 245-opcode coverage (built-ins stubbed); GC v1 (mark-sweep + chunk compaction) | test262 `language/` dual-run agreement on the covered grammar; ordinary GC test suite (`forbid(unsafe_code)`), no Miri gate |
 | 3. Built-ins | Object/Array/String (built CESU-8; re-based to UTF-16 by the 2026-07-06 revision — § Value and heap model)/Math (canonical NaN)/JSON/Map/Set/TypedArray/BigInt; promises and job queue with the pump-loop latch semantics; RegExp port decision executed (resolved question 6: port `xsre`) | Built-ins sections dual-run **result** agreement; meter deterministic per release (computron-vs-XS advisory); the `mxMeterSome` fast-path annotations, where kept, preserve the meter's internal fast/slow-path consistency within an Ironhorse release rather than matching XS |
-| 4. Hardened JavaScript | `lockdown`, `harden`, `petrify`, `mutabilities`; full native `Compartment` + module machinery (ModuleSource, module maps); async/generators complete | The endor daemon boot bundles (`polyfills.js`, `ses_boot.js`, HandledPromise) run identically on both engines; SES conformance suites pass |
+| 4. Hardened JavaScript | `lockdown`, `harden`, `petrify`, `mutabilities`; full native `Compartment` + module machinery (ModuleSource, module maps); async/generators complete — **or** the equivalent guest surface supplied by the SES shim, which is the open choice | First clause **met**: the endor daemon boot bundles (`polyfills.js`, `ses_boot.js`, HandledPromise) run identically on both engines, measured by `ironhorse-262/tests/stage4_ses_boot.rs`. Second clause open and the live one: SES conformance suites pass |
 | 5. Compiler port | `ironhorse-compile`: lexer, parser, scoper, coder replacing the oracle compiler; parse metering | Byte-identical bytecode versus the oracle compiler on the full conformance corpus; parse metering deterministic per release (parse computrons stable across runs; computron-vs-XS advisory); parser fuzz target armed |
 | 6. Snapshots | `ironhorse-snapshot` atom writer/reader; `Machine` snapshot surface; suspend/resume through the supervisor; meter state across suspend | Round-trip invariance under fuzzing; supervisor suspend/resume integration test passes on `-e ironhorse` |
 | 7. Debugger | xsbug protocol; `DebugTransport` over the envelope bus; instruments; break-on-uncaught | The existing 11 Rust debug-protocol tests and 16 CapTP debugger tests pass unmodified against Ironhorse; xsbug connects |
-| 8. Parity closure and hardening | test262 result-parity per the requirement 6 bar; nightly differential fuzzing at full breadth; performance pass to the envelope; fourth benchmark variant wired; engine selection documented | Pass-vector (result) equality with the oracle; meter determinism verified across runs and platforms; computron-vs-XS characterized as calibration telemetry, not gated; envelope met |
+| 8. Parity closure and hardening | test262 result-parity per the requirement 6 bar; nightly differential fuzzing at full breadth; performance pass to the envelope; fourth benchmark variant wired; engine selection documented | Pass-vector (result) equality with the oracle; meter determinism verified for repeated same-binary/platform runs, with cross-platform vectors measuring their covered cases; computron-vs-XS characterized as calibration telemetry, not gated; envelope met |
 | 9. Ecosystem validation (fork-scoped) | Differential replay of real workload corpora: endo daemon integration suites, and agoric contract corpora on the `kriscendobot/agoric-sdk` fork tooling only (no upstream interaction) | Zero **result** divergence on the corpora (computron divergence recorded as calibration telemetry, not a failure); divergences triaged to the exceptions ledger or fixed |
 
 Stages 1 through 4 keep the oracle compiler in the loop, which is
 deliberate: interpreter behavior and compiler behavior are separated
 so a *result* divergence (or a flagged advisory computron/allocation
 drift) always has exactly one suspect.
-
-**Doctrine-transition note (2026-07-04).** The acceptance bars above
-are restated to **result agreement + a deterministic-per-release
-meter**, per the accuracy-over-parity doctrine (§ Metering),
-superseding the earlier "(result, computron) parity against XS"
-framing. The landed-stage records below (stage 2a, stage 2b, and the
-in-flight stage 3) were built and accepted under the *superseded*
-parity doctrine, and did in fact achieve bit-exact computron
-agreement with XS on their covered grammars. That evidence is
-**retained** — as a strong *result*-correctness and
-allocation-faithfulness signal and as free calibration data — but it
-is no longer the bar: those stages already satisfy, a fortiori, the
-weaker result-agreement bar, and future stages are held only to
-result agreement plus meter determinism. No landed work is
-invalidated by the doctrine change; the historical amendment prose
-below is preserved as written, with its "bit-exact computron parity"
-language read as the (now advisory) evidence it produced, not as a
-standing requirement.
-
-**Stage-2 amendment (supervisor, 2026-07-02).** Stage 2 executes as two
-sub-stages on this PR, because the stage-2 build established — and the
-supervisor verified against the pin's `xsMemory.c` — that bit-exact
-computron parity on *any* program that allocates at run time requires
-the allocation-faithful object heap first: XS meters every `fxNewSlot`
-(`XS_SLOT_ALLOCATION_METERING`, 1<<8), every chunk byte
-(`XS_CHUNK_ALLOCATION_METERING`, 1), and built-in steps (1<<14) on the
-property paths, so the count depends on the engine's exact allocation
-sequence, not just its dispatch sequence. **Stage 2a (landed):** program
-frame + scope/variable/loop interpreter over compiler-emitted bytecode,
-GC v1 (mark-sweep + chunk slide-compaction, Miri-green), real
-`Compartment.evaluate` global binding, and the instruction-length
-walker; its new grammar is verified for **result agreement only** and
-deliberately kept out of the bit-exact corpus rather than faked.
-**Stage 2b (next):** the object model — instances, prototypes, property
-behaviors, closures via heap cells, exceptions' jump-chain, call/return
-frame switching, full 245-opcode coverage (built-ins stubbed) — with
-allocation-faithful metering; the original stage-2 acceptance bar
-(bit-exact test262 `language/` dual-run agreement on the covered
-grammar) is 2b's bar, and the 2a grammar graduates into the bit-exact
-corpus as the heap makes its computrons faithful. Meter-check placement
-moves with the frame machinery: per the pin's `xsRun.c`, checks belong
-at the `mxFirstCode` sites (call entry, return-into-a-JS-caller, catch
-resume) and at backward branches; XS runs **no** check when
-END/RETURN exits to the C caller, and `fxBeginMetering` scales the
-host's interval `<<16` and resets `meterIndex` — both to be matched
-exactly (stage-2a review findings 1 and 2).
-
-**Stage-2b complete (2026-07-03).** The three-part 2b orchestration landed:
-child 1 the allocation-faithful object heap, child 2 call/return frame
-switching and closures via heap cells, child 3 exceptions (the XS
-jump-buffer chain with the JS/host flag reduced to a structural predicate:
-`catch`/`uncatch`/`exception`/`throw`/`rethrow`, uncaught propagation to the
-host boundary with its measured host-escape metering), full 245-opcode
-decode+dispatch coverage (built-ins stubbed — each opcode executes with
-faithful stack/frame/meter effects where its semantics need no built-in, or
-halts `Unsupported` self-naming where they do), and the tightened
-`DualRun::is_bit_exact` (a shared abort compares thrown value AND computrons,
-like the completion arm). The stage-2 acceptance bar is met as the real
-test262 `language/` dual-run runner (`ironhorse_262::test262`): every test it
-runs end-to-end agrees bit-exactly (result/thrown-value AND computron) with
-the XS oracle — **zero divergence** — with the covered/skipped split
-stated honestly (each skip named by the unsupported opcode or built-in gap,
-never folded into a pass rate). The covered grammar is what stage 2b models;
-the built-ins the bulk of `language/` needs arrive in later stages, growing
-the covered count against the same zero-divergence bar. The differential
-fuzz grammar now spans objects, calls, closures, and thrown-and-caught
-exceptions, all bit-exact.
 
 **Stage-3 decomposition (supervisor, 2026-07-03).** The stage-2b review
 (s5, all acceptance evidence independently reproduced; all three s4
@@ -886,7 +1063,7 @@ meter's internal fast/slow-path consistency within a release):
    width-not-depth geometry) so stack-exhaustion aborts are bit-exact —
    deterministic stack overflow is consensus-relevant in the xsnap
    lineage — and decompose the measured `FUNCTION_*` definition
-   constants analytically to retire the ≤~288-raw per-definition
+   constants analytically to retire the <=~288-raw per-definition
    residuals.
 2. **fundamentals** — constructor calls (`to_instance`/`new`/`target`/
    `instantiate`), Object, Function.prototype (`call`/`apply`/`bind`/
@@ -907,20 +1084,22 @@ meter's internal fast/slow-path consistency within a release):
    KLOC cost the verdict priced in), RegExp built-in + literals, and a
    structure-aware regex fuzz target.
 
-**GC roots contract (recorded by the s5 review).** `Heap::collect(roots)`
-is deliberately standalone in stage 2 (never called mid-run; the arenas
-grow without pressure). Whichever stage wires collection into the
-allocation path MUST pass a root set covering the interpreter's side
-tables — `functions[*].closures` environments, saved `CallerState`
-activations, `CatchJump` snapshots, and `global_props` — not just the
-value stack and scope, or arena-index reuse corrupts silently. The
-trigger points must also be deterministic (collection fires on
-allocation pressure at fixed thresholds), so that within an Ironhorse
-release collection scheduling cannot perturb the meter — i.e., it
-preserves determinism per release (§ Metering). If GC-driven
-allocation is a metered event in the cost table, its scheduling must
-be a pure function of the release's fixed thresholds, not of
-wall-clock or host state.
+**GC roots and scheduling contract (updated by Phase 1G/2B).**
+Whole-machine collection must trace the interpreter's complete retained graph, including
+side tables and suspended continuations; arena-index reuse must never rely only on the
+value stack and scope.
+The supported boundary is quiescence, as specified in
+[collection only at quiescence](ironhorse-quiescent-gc.md).
+A halted crank must be rewound or discarded before collection; allocation does not trigger
+emergency collection inside guest execution.
+
+[W6 decision 5](ironhorse-w6-decisions.md#5-gc-schedule--decided-engine-consumer-policy)
+supersedes the former requirement for release-fixed allocation-pressure thresholds.
+The consumer chooses explicit, delivery, pressure, idle, or timed requests.
+Consumers requiring replica-identical heaps must coordinate collection events and recovery
+across resume; equal guest input and release alone do not establish equal heap bytes under
+different schedules.
+Existing meter accounting and authenticated store cadence remain required.
 
 ## Dependencies
 
@@ -958,10 +1137,10 @@ wall-clock or host state.
 5. **Meter is a release-versioned accuracy model, not XS-parity
    (accuracy over parity, 2026-07-04).** The meter's purpose is to
    be the best available deterministic proxy for real wall-clock
-   cost. Determinism is *per release* (a frozen, versioned cost
-   table); the table is calibrated for accuracy and recalibrated
-   across releases as an `ironhorse-meter-N` bump. Internal determinism
-   is unconditional; XS-computron parity is a non-goal; the
+   cost. Determinism is scoped per release binary per platform.
+   The frozen table is currently an XS-derived estimate; future calibration
+   changes ship as an `ironhorse-meter-N` bump.
+   XS-computron parity is a non-goal; the
    `c/moddable` oracle checks *results*, with computrons kept as
    advisory telemetry (§ Metering).
 6. **Rust-native snapshots first; XS import as optional bounded
@@ -978,7 +1157,8 @@ wall-clock or host state.
    and after, for as long as the differential oracle earns its keep.
 9. **Agoric consensus by coordinated ironhorse-native upgrade, option
    (b).** Ironhorse's own release-versioned meter is the consensus meter
-   (every validator on the same release meters identically); Agoric
+   (subject to the release-binary/platform scope and matching state, input and
+   host policy); Agoric
    adopts it at a coordinated upgrade boundary, exactly as every
    `xs-meter-N` bump has shipped. No XS-computron-compatible mode is
    a build-phase goal; one can be added later only as a conditional,
@@ -1022,8 +1202,8 @@ annotations inline mark exactly what changed.
    `xs-meter-N` bump at a chain upgrade; mixed-fleet bit-exactness
    would force decision 1 onto the divergent fork oracle and make
    the strictly harder target load-bearing for no operational
-   gain. What remains unconditional is internal determinism per
-   release. *(Reinforced 2026-07-04: this question is now
+   gain. Internal determinism remains required within the release-binary
+   and platform scope, with matching initial state, input and host policy. *(Reinforced 2026-07-04: this question is now
    load-bearing for the accuracy-over-parity doctrine — it is the
    mechanism (option (b)) by which "accuracy over XS-parity" stays
    consensus-safe. The former "published equivalence corpus against
@@ -1057,11 +1237,11 @@ annotations inline mark exactly what changed.
    XS snapshot importer would transcode at import. The xsnap
    crate's `cesu8.rs` codec remains where it serves the XS
    boundary; it is no longer Ironhorse's heap encoding.
-5. **The 32-byte slot-record layout holds.** Kind + flag + ID +
-   next-index + 16-byte payload fits in 32 bytes; holding it keeps
-   `currentHeapCount` semantics and snapshot slot images aligned
-   with the oracle. A roomier Rust enum is not worth divergent
-   heap accounting.
+5. **Slot memory layout is distinct from serialization.**
+   The Rust record is 24 bytes on the audited 64-bit build and has no stable
+   representation guarantee; the codec writes its wire fields explicitly.
+   XS's 32-byte accounting is not a resident-memory measurement.
+   The stage-8 footprint envelope therefore needs a separate instrument.
 6. **RegExp: port `xsre`.** RegExp execution is metered and
    guest-reachable, and an off-the-shelf engine such as `regress`
    has different internals, hence subtle **semantic** drift and a
@@ -1102,7 +1282,7 @@ annotations inline mark exactly what changed.
    stay `-e xs` / `-e endor-rs`, and `endor-xs` / `endor-rs` /
    `endocr` name the resulting build variants. **Open — routed to
    the maintainer, not resolved here:** the user-facing CLI binary
-   was renamed `endor` → `endot`
+   was renamed `endor` -> `endot`
    ([issuecomment-4900059356](https://github.com/endojs/endo-but-for-bots/pull/600#issuecomment-4900059356)),
    which this north-star reads against — if `endor` is to name the
    Rust Endo tool, the `endot` binary rename likely wants reverting
@@ -1122,37 +1302,39 @@ annotations inline mark exactly what changed.
    `endor-xs` / `endor-rs` / `endocr` are retired as variant names
    (the combined C-and-Rust build is now just "the `xs-oracle`
    harness", still the sole place C is compiled in). The full
-   before→after map: crates `endor-vm` → `ironhorse-vm`,
-   `endor-compile` → `ironhorse-compile`, `endor-snapshot` →
-   `ironhorse-snapshot`, `endor-regexp` → `ironhorse-regexp`,
-   `endor-262` → `ironhorse-262`, `endor-fuzz` → `ironhorse-fuzz`,
-   `endor-oracle` → `xs-oracle` (the oracle binds the XS engine, so
-   it names what it binds); the test262 runner `endor-xst` →
-   `endot-ih`; the cargo feature `endor-engine` →
-   `ironhorse-engine`; the daemon seam module `endor_engine` →
+   before->after map: crates `endor-vm` -> `ironhorse-vm`,
+   `endor-compile` -> `ironhorse-compile`, `endor-snapshot` ->
+   `ironhorse-snapshot`, `endor-regexp` -> `ironhorse-regexp`,
+   `endor-262` -> `ironhorse-262`, `endor-fuzz` -> `ironhorse-fuzz`,
+   `endor-oracle` -> `xs-oracle` (the oracle binds the XS engine, so
+   it names what it binds); the test262 runner `endor-xst` ->
+   `endot-ih`; the cargo feature `endor-engine` ->
+   `ironhorse-engine`; the daemon seam module `endor_engine` ->
    `ironhorse_engine`; the snapshot image magic
-   `ENDOR_MAGIC`/`b"ENDR"` → `IRONHORSE_MAGIC`/`b"IRON"`; the
-   differential labels `ENDOR-REJECTED` / `ENDOR-ONLY-ACCEPT` →
+   `ENDOR_MAGIC`/`b"ENDR"` -> `IRONHORSE_MAGIC`/`b"IRON"`; the
+   differential labels `ENDOR-REJECTED` / `ENDOR-ONLY-ACCEPT` ->
    `IRONHORSE-REJECTED` / `IRONHORSE-ONLY-ACCEPT`; the corpus
    feature labels `endor-dual-run`, `endor-meter-exact`,
-   `endor-meter-determinism` → `ironhorse-dual-run`,
+   `endor-meter-determinism` -> `ironhorse-dual-run`,
    `ironhorse-meter-exact`, `ironhorse-meter-determinism`; the host
-   script `yarn test262:endor` → `yarn test262:ironhorse`; this
-   document family `xs2rust-endor-*.md` → `ironhorse-*.md`. The
+   script `yarn test262:endor` -> `yarn test262:ironhorse`; this
+   document family `xs2rust-endor-*.md` -> `ironhorse-*.md`. The
    `endor` daemon binary, the tool-facing design docs
    (`daemon-endor-architecture`, `endor-run-expanded`,
-   `endor-npm-registry-proxy`, …), and `ENDOR_REGISTRY_LIVE_TEST`
+   `endor-npm-registry-proxy`, ...), and `ENDOR_REGISTRY_LIVE_TEST`
    keep their names — they name the binding, not the engine.
    Retained transitional identifiers, deliberately not rewritten:
    the branch `xs2rust-endor`; historical job basenames
    (`xs2rust-endor-strings-utf16`, `xs2rust-endor-build-stage3`,
    `port-endor-oracle-bump-8-3-1`,
-   `xs2rust-endor-meter-calibration-stage-c1`…`-c4`); the program
+   `xs2rust-endor-meter-calibration-stage-c1`...`-c4`); the program
    name `port-xs-to-rust-memory-safe-engine`; commit messages; the
    quoted 2026-07-17 directive above; and the verification-ledger
-   blockquotes in `rust/engine/README.md`, whose crate names and
+   blockquotes in `rust/engine/CHANGELOG.md`, whose crate names and
    `ENDOR-*` labels record what the tools were called at those
    measured tips.
+   The current acceptance record is the [Status section](#status), not those
+   historical blockquotes.
 8. **Machines stay `!Send`.** Preserving thread-pinned parity
    with today's runner model keeps the port's behavior envelope
    identical; cross-thread machine migration is a separate
@@ -1170,19 +1352,42 @@ annotations inline mark exactly what changed.
    on `xsnap`, because xsnap's `lib.rs` embeds gitignored generated
    SES bundles absent from a fresh checkout and its `ffi.rs`
    declares the pre-drift argument-free `fxInitializeSharedCluster`.
-   The recorded `c/moddable` submodule gitlink (`5516726…`, not
-   fetchable upstream) is deliberately **not** bumped by this
-   program: correcting it requires the matching `xsnap` `ffi.rs`
-   arity fix and belongs to a dedicated maintenance change. The
-   oracle's build pin is `23b4d6b0a65f` (8.3.1) per § Ground Truth —
-   bumped from the original `48ee02d8cfe0` (8.2.3) by the
-   `port-xs-oracle-bump-8-3-1` job — with the reproduction
-   procedure in `rust/engine/README.md`.
-10. **Intl is omitted (`intl402` stays out), matching the
-    oracle.** Parity with XS is the acceptance bar and XS
-    deliberately omits Intl. Adding an ICU4X-backed Intl later is
-    meter-affecting and therefore version-gated behind a meter
-    bump; no seam is reserved for it beyond that rule.
+   *Amended 2026-09-09:* the superproject gitlink has since been bumped to
+   `23b4d6b0a65f35209d9118c4c13c6c9b3e68784d` (Moddable 8.3.1), matching
+   the oracle build pin.
+   Populate it with `git submodule update --init --depth 1 c/moddable` from
+   the repository root; see the engine README for a full-fetch fallback.
+10. **Intl and Temporal are retained in the consensus engine (amended 2026-09-10).**
+    This supersedes the original omission decision for both globals.
+    They already supply deterministic language behavior, retained instance records,
+    and snapshot state; removing them would retract shipped guest capabilities.
+    Intl uses in-tree locale tables and pinned ICU normalization/segmentation data,
+    with no host locale or dynamic database lookup.
+    Temporal uses engine-owned calendar/zone rules; `Temporal.Now` returns the Unix
+    epoch and its system zone is UTC, with no host clock or zone database.
+    This choice accepts maintenance of those tables, algorithms and persisted records.
+    It does not claim full ECMA-402 or Temporal conformance.
+
+    The pinned XS oracle omits both globals.
+    Only its exact missing-global failures qualify for the corresponding harness
+    carveouts; unrelated exceptions must remain failures.
+    Oracle-free semantic, carry/resume and fixed-clock tests provide positive evidence;
+    an oracle skip is never counted as differential agreement.
+
+    Supported releases use checked lockfiles and bundled ICU data.
+    `scripts/intl-profile.py` generates the guest-visible data identity from the
+    resolved ICU closure (versions, checksums, edges and requested root features).
+    CI checks both workspaces and rejects stale generation.
+    Today's dependency graph keeps a fixed legacy alias; that alias must never be
+    reassigned to an upgraded graph.
+    The identity enters the boot fingerprint, making incompatible snapshot resume fail.
+    In-tree locale/calendar/zone changes still need an explicit profile release;
+    custom ICU data or downstream feature overrides are outside this supported profile.
+    Review provider/data upgrades against semantic tests, state/receipt goldens and
+    compatibility fixtures; do not silently regenerate pins to accept drift.
+    Meter weights need a new release when charging semantics change, while a provider
+    identity changes independently even when the weight table does not.
+    See [the implementation record](../rust/engine/DETERMINISM-METERING.md).
 
 ## Prompt
 

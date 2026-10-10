@@ -3,11 +3,12 @@
 import { makeCancelKit } from '@endo/cancel';
 import { E } from '@endo/eventual-send';
 
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
 import { makeEndoClient, purge, restart, start, stop } from '../index.js';
+import { removeRepoTree } from './_git-fixture.js';
 
 /** @param {string} root */
 const makeConfig = root => ({
@@ -42,7 +43,9 @@ export const makeProvisioningFixture = async t => {
   t.teardown(async () => {
     await stop(config);
     await closeClients();
-    await rm(root, { recursive: true, force: true });
+    // These suites init, commit into and push between real repositories
+    // under this root, so the delete races git's background packing.
+    await removeRepoTree(root);
   });
 
   await mkdir(workspace);

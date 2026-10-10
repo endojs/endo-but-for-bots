@@ -9,72 +9,21 @@
 //! discipline (`functions_carry.rs`, `iterator_carry.rs`), and the
 //! crafted rows exercise the decode gates from the refusing side.
 
+#[path = "common/twin.rs"]
+mod carry;
 mod common;
+use carry::{compile, crank, sig, twin};
 
 use common::TempDir;
 
-use ironhorse_snapshot::image::{read_machine, write_machine};
+use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
 use ironhorse_snapshot::machine::{
-    begin_store_session, from_snapshot_bytes, resume_from_store, resume_from_store_lazy,
-    MachineSnapshot,
+    begin_store_session, from_snapshot_bytes, resume_from_store_lazy, MachineSnapshot,
 };
-use ironhorse_snapshot::store::{HeapStore, MemoryStore};
+use ironhorse_snapshot::store::MemoryStore;
 use ironhorse_snapshot::store_file::FileStore;
-use ironhorse_snapshot::{Signature, SnapshotError};
-use ironhorse_vm::{parse_symbols, Interp};
-
-fn sig() -> Signature {
-    Signature::new("ironhorse-worker-v1")
-}
-
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
-    let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
-    (bytecode, parse_symbols(&symbols))
-}
-
-/// Relink and run one crank, returning `(completed, halt debug, result,
-/// computrons)`. The COMPUTRON count is part of the observation: a
-/// resumed machine that answers correctly while charging differently
-/// has still diverged, and consensus is on the count as much as the
-/// value. Every twin below therefore compares metering too.
-fn crank(machine: &mut Interp, source: &str) -> (bool, String, String, u64) {
-    let (bytecode, names) = compile(source);
-    let bytecode = machine.relink_crank(&bytecode, &names).expect("relink");
-    let outcome = machine.run(&bytecode);
-    (outcome.completed, format!("{:?}", outcome.halt), outcome.result, outcome.computrons)
-}
-
-fn twin(
-    first: &str,
-    observations: &[&str],
-    store: &mut dyn HeapStore,
-) -> Vec<(bool, String, String, u64)> {
-    let (bytecode, names) = compile(first);
-
-    let mut continuous = Interp::new();
-    continuous.link_intrinsics(&names);
-    assert!(continuous.run(&bytecode).completed);
-    let expected: Vec<_> = observations
-        .iter()
-        .map(|source| crank(&mut continuous, source))
-        .collect();
-
-    let mut suspended = Interp::new();
-    suspended.link_intrinsics(&names);
-    assert!(suspended.run(&bytecode).completed);
-    drop(
-        begin_store_session(suspended, &sig(), store)
-            .map_err(|(_, error)| error)
-            .expect("a suspended generator is carried state now, not a refusal"),
-    );
-    let mut resumed = resume_from_store(store, &sig()).expect("resume");
-    let actual: Vec<_> = observations
-        .iter()
-        .map(|source| crank(resumed.machine_mut(), source))
-        .collect();
-    assert_eq!(actual, expected, "resumed generator walks exactly as uninterrupted");
-    expected
-}
+use ironhorse_snapshot::SnapshotError;
+use ironhorse_vm::Interp;
 
 fn assert_memory_and_file(name: &str, first: &str, observations: &[&str], expected: &[&str]) {
     let mut memory = MemoryStore::new();
@@ -83,7 +32,9 @@ fn assert_memory_and_file(name: &str, first: &str, observations: &[&str], expect
         assert!(got.0, "observation completes: {:?}", got.1);
     }
     assert_eq!(
-        seen.iter().map(|(_, _, value, _)| value.as_str()).collect::<Vec<_>>(),
+        seen.iter()
+            .map(|(_, _, value, _)| value.as_str())
+            .collect::<Vec<_>>(),
         expected,
         "the continuous observations are the real answers"
     );
@@ -183,10 +134,8 @@ fn generator_return_runs_a_pre_checkpoint_finally_after_resume() {
         "var it = 0; var cleaned = 0; var t = 0; \
          function* g() { try { yield 1; yield 2; } finally { cleaned = 'ran'; } } \
          it = g(); it.next(); t = 7; t",
-        &[
-            "var it; var cleaned; var t; var r = 0; \
-             r = it.return(9); t = r.value + ':' + r.done + ':' + cleaned; t",
-        ],
+        &["var it; var cleaned; var t; var r = 0; \
+             r = it.return(9); t = r.value + ':' + r.done + ':' + cleaned; t"],
         &["9:true:ran"],
     );
 }
@@ -200,9 +149,7 @@ fn sibling_generators_keep_independent_frames() {
         "var a = 0; var b = 0; var t = 0; \
          function* g(start) { var n = start; while (true) { n = n + (yield n); } } \
          a = g(100); b = g(200); a.next(); b.next(); a.next(1); t = 7; t",
-        &[
-            "var a; var b; var t; t = a.next(1).value + ':' + b.next(5).value; t",
-        ],
+        &["var a; var b; var t; t = a.next(1).value + ':' + b.next(5).value; t"],
         &["102:205"],
     );
 }
@@ -221,7 +168,11 @@ fn blob_resume_continues_a_generator() {
     let bytes = machine.write_snapshot(&sig()).expect("snapshot");
     let mut resumed = from_snapshot_bytes(&bytes, &sig()).expect("restore");
     assert_eq!(
-        crank(&mut resumed, "var it; var t; var r = 0; r = it.next(); t = r.value + ':' + r.done; t").2,
+        crank(
+            &mut resumed,
+            "var it; var t; var r = 0; r = it.next(); t = r.value + ':' + r.done; t"
+        )
+        .2,
         "2:false"
     );
 }
@@ -274,10 +225,14 @@ fn malformed_generator_rows_are_refused() {
     assert!(machine.run(&bytecode).completed);
     let bytes = machine.write_snapshot(&sig()).expect("snapshot");
     let image = read_machine(&bytes, &sig()).expect("read GENR");
-    assert_eq!(image.generators.len(), 1, "the fixture persisted its generator row");
+    assert_eq!(
+        image.generators.len(),
+        1,
+        "the fixture persisted its generator row"
+    );
 
     let expect = |crafted: &ironhorse_snapshot::image::MachineImage, want: &'static str| {
-        match from_snapshot_bytes(&write_machine(crafted), &sig()) {
+        match from_snapshot_bytes(&write_machine_unchecked(crafted), &sig()) {
             Err(SnapshotError::Corrupt(msg)) if msg == want => {}
             Err(other) => panic!("refused, but not by the named gate ({want}): {other:?}"),
             Ok(_) => panic!("crafted generator rows must not restore ({want})"),
@@ -297,7 +252,7 @@ fn malformed_generator_rows_are_refused() {
     expect(&duplicated, "generators: owners not strictly ascending");
 
     // And the honest row still restores.
-    assert!(from_snapshot_bytes(&write_machine(&image), &sig()).is_ok());
+    assert!(from_snapshot_bytes(&write_machine_unchecked(&image), &sig()).is_ok());
 }
 
 /// The resume cursor and every saved-handler target must name an
@@ -342,7 +297,10 @@ fn generator_pcs_outside_the_owning_body_are_refused() {
         starts.push(pc as u64);
         pc += ironhorse_vm::instruction_len(code, pc).expect("honest body sizes");
     }
-    assert!(starts.len() > 2, "the fixture body has several instructions");
+    assert!(
+        starts.len() > 2,
+        "the fixture body has several instructions"
+    );
 
     // A sibling body in the SAME segment, and one of its starts that
     // is not also a start of ours.
@@ -365,7 +323,7 @@ fn generator_pcs_outside_the_owning_body_are_refused() {
     assert!(!starts.contains(&operand), "an operand byte is not a start");
 
     let expect = |crafted: &ironhorse_snapshot::image::MachineImage, want: &'static str| {
-        match from_snapshot_bytes(&write_machine(crafted), &sig()) {
+        match from_snapshot_bytes(&write_machine_unchecked(crafted), &sig()) {
             Err(SnapshotError::Corrupt(msg)) if msg == want => {}
             Err(other) => panic!("refused, but not by the named gate ({want}): {other:?}"),
             Ok(_) => panic!("a crafted generator pc must not restore ({want})"),
@@ -384,7 +342,7 @@ fn generator_pcs_outside_the_owning_body_are_refused() {
         crafted.generators[0].frame.as_mut().unwrap().resume_pc = pc;
         assert!(
             matches!(
-                from_snapshot_bytes(&write_machine(&crafted), &sig()),
+                from_snapshot_bytes(&write_machine_unchecked(&crafted), &sig()),
                 Err(SnapshotError::Corrupt(CURSOR))
             ),
             "resume_pc at {name} must be refused"
@@ -399,8 +357,9 @@ fn generator_pcs_outside_the_owning_body_are_refused() {
         .as_mut()
         .unwrap()
         .jumps
-        .push(ironhorse_vm::SavedJumpRow {
+        .push(ironhorse_vm::snapshot_api::SavedJumpRow {
             target_pc: starts[1],
+            segment: None,
             stack_offset: 0,
             locals_len: frame.locals.len() as u64,
             id_map: Vec::new(),
@@ -409,7 +368,7 @@ fn generator_pcs_outside_the_owning_body_are_refused() {
             flag: 1,
         });
     assert!(
-        from_snapshot_bytes(&write_machine(&with_handler), &sig()).is_ok(),
+        from_snapshot_bytes(&write_machine_unchecked(&with_handler), &sig()).is_ok(),
         "the honest handler still restores"
     );
     for pc in [code.len() as u64, body_end, operand, sibling_start] {
@@ -444,7 +403,7 @@ fn generator_pcs_outside_the_owning_body_are_refused() {
     expect(&overflow, HANDLER);
 
     // The honest image is untouched by all of it.
-    assert!(from_snapshot_bytes(&write_machine(&image), &sig()).is_ok());
+    assert!(from_snapshot_bytes(&write_machine_unchecked(&image), &sig()).is_ok());
 }
 
 /// The sibling-body arm above has a one-level-down twin: a NESTED
@@ -486,11 +445,11 @@ fn a_generator_pc_inside_a_nested_body_is_refused() {
 
     let mut crafted = image.clone();
     crafted.generators[0].frame.as_mut().unwrap().resume_pc = nested;
-    match from_snapshot_bytes(&write_machine(&crafted), &sig()) {
+    match from_snapshot_bytes(&write_machine_unchecked(&crafted), &sig()) {
         Err(SnapshotError::Corrupt("generator frame: invalid resume cursor or scope map")) => {}
         Err(other) => panic!("refused, but not by the named gate: {other:?}"),
         Ok(_) => panic!("a cursor inside a nested body must not restore"),
     }
     // The honest image still restores.
-    assert!(from_snapshot_bytes(&write_machine(&image), &sig()).is_ok());
+    assert!(from_snapshot_bytes(&write_machine_unchecked(&image), &sig()).is_ok());
 }

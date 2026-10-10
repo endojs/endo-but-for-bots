@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=built-ins/Function/internals/Construct tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Function/internals/Construct/base-ctor-revoked-proxy-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Function/internals/Construct/base-ctor-revoked-proxy-realm.js strict skip:shared-positive-test-failure
+built-ins/Function/internals/Construct/base-ctor-revoked-proxy.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Function/internals/Construct/base-ctor-revoked-proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Function/internals/Construct/derived-return-val-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Function/internals/Construct/derived-return-val-realm.js strict skip:shared-positive-test-failure
+built-ins/Function/internals/Construct/derived-return-val.js sloppy pass
+built-ins/Function/internals/Construct/derived-return-val.js strict pass
+built-ins/Function/internals/Construct/derived-this-uninitialized-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Function/internals/Construct/derived-this-uninitialized-realm.js strict skip:shared-positive-test-failure
+built-ins/Function/internals/Construct/derived-this-uninitialized.js sloppy pass
+built-ins/Function/internals/Construct/derived-this-uninitialized.js strict pass

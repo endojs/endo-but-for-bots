@@ -57,12 +57,14 @@
   content to a capability (WritableTree, etc.)
 - `editText(petNameOrPath, fileName, edits)` — Apply unique-match text
   replacements and return a unified diff
-- `glob(petNameOrPath, pattern)` — Find paths recursively within a
-  search-capable filesystem capability (`*` is segment-local and `**`
-  crosses segments; `?` is literal)
-- `grep(petNameOrPath, pattern, glob?, maxResults?)` — Search file contents
-  with a flagless ECMAScript regular expression, optionally restricting the
-  file set with a glob
+- `glob(petNameOrPath, pattern, followSymlinks?)` — Find paths recursively
+  within a search-capable filesystem capability (`*` is segment-local and `**`
+  crosses segments; `?` is literal). `**` reports a directory symlink but does
+  not descend through it; name the path in a segment to reach through one, or
+  set `followSymlinks` to sweep through all of them
+- `grep(petNameOrPath, pattern, glob?, maxResults?, followSymlinks?)` — Search
+  file contents with a flagless ECMAScript regular expression, optionally
+  restricting the file set with a glob
 
 ## Code Evaluation
 

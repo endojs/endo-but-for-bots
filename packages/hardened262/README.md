@@ -103,6 +103,46 @@ When that support lands, parity proceeds in three gated changes:
    evidence showing that breaking that passing module changes its baseline
    outcome before the change is accepted.
 
+### Native Ironhorse lockdown regression gate
+
+From `rust/engine`, run:
+
+```sh
+cargo test -p ironhorse-262 --test native_lockdown_corpora
+```
+
+This integration test reads this package's original test files, harness includes,
+and `baseline/ironhorse/lockdownSloppy` and `lockdownStrict` lists directly.
+It runs the compatible script cases through `xst::run_case` with native lockdown
+and no SES prelude, comparing each mode with the existing baseline in both
+directions.
+Known failures remain visible in the test diagnostics; they are not counted as
+passing coverage.
+Each selected mode must have a body outcome: missing executions, setup failures,
+and structural or infrastructure skips cannot satisfy a known failure.
+The runner's `shared-positive-test-failure` classification is the sole exception
+to rejecting skips: it means both engines executed a positive test and aborted,
+which this package's existing baseline records as a failure.
+Any new case, missing baseline entry, pass-to-failure regression, or improvement
+requires review of the shared baseline.
+
+The gate inventories Compartment and module API cases as excluded because native
+lockdown does not implement those APIs.
+It also respects the corpus's scenario flags, including `onlyRaw` and host
+restrictions.
+It does not claim the SES shim's lockdown options, locale taming, guest-realm
+attenuation, or module loading.
+The compatible cases exercise intrinsic metadata and methods, frozen function
+constructors, recursive hardening, private fields, and binary-data operations.
+
+The same integration test also runs the existing 29 `stage4-harden` cases from
+`packages/test262-runner/test262` after native lockdown, using that corpus's
+original harness.
+Their assertion cases retain their original expected values; their raw cases
+check agreement with the XS oracle's completion and observable result.
+Both sources are reused in place, so updates to their assertions automatically
+reach the native lockdown gate.
+
 ## Relationship to the rest of the repository
 
 This package is a **third, distinct** test262-shaped instrument, complementary

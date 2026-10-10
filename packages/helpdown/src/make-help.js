@@ -26,11 +26,11 @@ export const makeHelp = (helpText, fallbacks = []) => {
    * @returns {string}
    */
   const help = (methodName = '') => {
-    if (methodName in helpText) {
+    if (Object.hasOwn(helpText, methodName)) {
       return helpText[methodName];
     }
     for (const fallback of fallbacks) {
-      if (methodName in fallback) {
+      if (Object.hasOwn(fallback, methodName)) {
         return fallback[methodName];
       }
     }

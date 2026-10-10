@@ -5,6 +5,10 @@
 //! carry serializes those buffers with function, constructor, bound
 //! function, and deleted-metadata rows.
 
+#[path = "common/compile.rs"]
+mod guest_compile;
+use guest_compile::compile;
+
 use ironhorse_snapshot::machine::{begin_store_session, checkpoint_to_store, resume_from_store};
 use ironhorse_snapshot::store::MemoryStore;
 use ironhorse_snapshot::Signature;
@@ -12,11 +16,6 @@ use ironhorse_vm::Interp;
 
 fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
-}
-
-fn compile(src: &str) -> (Vec<u8>, Vec<String>) {
-    let (b, s) = ironhorse_compile::compile_atoms(src).expect("compiles");
-    (b, ironhorse_vm::parse_symbols(&s))
 }
 
 /// The in-test source bridge: the same wiring the conformance harness
@@ -27,10 +26,44 @@ impl ironhorse_vm::SourceCompiler for TestCompiler {
         &self,
         source: &str,
         strict: bool,
+        raw_budget: u64,
+        charge: &mut dyn FnMut(u64) -> bool,
     ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
-        match ironhorse_compile::compile_atoms_with(source, strict) {
-            Ok((bytecode, symbols)) => Ok(ironhorse_vm::CompiledSource { bytecode, symbols }),
-            Err(_) => Err(ironhorse_vm::SourceCompileError::Syntax(String::new())),
+        match ironhorse_compile::compile_atoms_budgeted_firewalled(
+            source,
+            ironhorse_compile::Goal::Eval,
+            strict,
+            raw_budget,
+            charge,
+        ) {
+            Ok(compiled) => Ok(ironhorse_vm::CompiledSource {
+                bytecode: compiled.bytecode,
+                symbols: compiled.symbols,
+                parse_meter_raw: compiled.parse_meter_raw,
+                parse_computrons: compiled.parse_computrons,
+            }),
+            Err(ironhorse_compile::CompileError::MeterAbort) => {
+                Err(ironhorse_vm::SourceCompileError::MeterAbort)
+            }
+            // A caught compiler panic is an engine fault, not a coverage
+            // gap (architecture finding F063).
+            Err(ironhorse_compile::CompileError::Invariant(detail)) => {
+                Err(ironhorse_vm::SourceCompileError::Invariant(detail))
+            }
+            Err(ironhorse_compile::CompileError::Parse(error)) => match error.kind {
+                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                    kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
+                    ..
+                }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
+                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                    kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
+                    ..
+                }) => Err(ironhorse_vm::SourceCompileError::MeterAbort),
+                ironhorse_compile::ParseErrorKind::Unsupported => Err(
+                    ironhorse_vm::SourceCompileError::Unsupported(error.to_string()),
+                ),
+                _ => Err(ironhorse_vm::SourceCompileError::Syntax(error.message)),
+            },
         }
     }
 }
@@ -47,7 +80,7 @@ fn without_a_compiler_eval_halts_before_any_segment_exists() {
     assert!(!o.completed);
     assert_eq!(
         o.halt,
-        ironhorse_vm::Halt::Unsupported("eval:no-compiler"),
+        ironhorse_vm::Halt::NotImplemented("eval:no-compiler"),
         "the honest no-compiler gap, not a segment"
     );
     assert!(m.live_dynamic_segment_function().is_none());
@@ -56,7 +89,8 @@ fn without_a_compiler_eval_halts_before_any_segment_exists() {
 /// A live eval-defined function begins, resumes, and remains callable.
 #[test]
 fn live_eval_function_persists_from_begin() {
-    let (b, n) = compile("var f = 0; f = eval('(function (x) { return x * 2; })'); var t = 0; t = f(4); t");
+    let (b, n) =
+        compile("var f = 0; f = eval('(function (x) { return x * 2; })'); var t = 0; t = f(4); t");
     let mut m = Interp::new();
     m.link_intrinsics(&n);
     m.set_source_compiler(std::rc::Rc::new(TestCompiler));
@@ -75,7 +109,10 @@ fn live_eval_function_persists_from_begin() {
     );
     let mut resumed = resume_from_store(&store, &sig()).expect("resume");
     let (b2, n2) = compile("var f; var t; t = f(5); t");
-    let b2 = resumed.machine_mut().relink_crank(&b2, &n2).expect("relink");
+    let b2 = resumed
+        .machine_mut()
+        .relink_crank(&b2, &n2)
+        .expect("relink");
     let out = resumed.machine_mut().run(&b2);
     assert!(out.completed, "resumed eval function: {:?}", out.halt);
     assert_eq!(out.result, "10");
@@ -94,15 +131,24 @@ fn eval_crank_checkpoints_its_retained_function() {
         .map_err(|(_, e)| e)
         .expect("a compiler alone is not a segment: clean begin");
     let (b1, n1) = compile("var f; var t; f = eval('(function () { return 7; })'); t = f(); t");
-    let b1 = session.machine_mut().relink_crank(&b1, &n1).expect("relinks");
+    let b1 = session
+        .machine_mut()
+        .relink_crank(&b1, &n1)
+        .expect("relinks");
     let o = session.machine_mut().run(&b1);
     assert!(o.completed, "eval crank: {:?}", o.halt);
     assert_eq!(o.result, "7");
-    assert_eq!(checkpoint_to_store(&mut session, &sig(), &mut store).unwrap(), 2);
+    assert_eq!(
+        checkpoint_to_store(&mut session, &sig(), &mut store).unwrap(),
+        2
+    );
     drop(session);
     let mut resumed = resume_from_store(&store, &sig()).expect("resume");
     let (b2, n2) = compile("var f; var t; t = f(); t");
-    let b2 = resumed.machine_mut().relink_crank(&b2, &n2).expect("relink");
+    let b2 = resumed
+        .machine_mut()
+        .relink_crank(&b2, &n2)
+        .expect("relink");
     let out = resumed.machine_mut().run(&b2);
     assert!(out.completed, "resumed eval function: {:?}", out.halt);
     assert_eq!(out.result, "7");
@@ -113,9 +159,7 @@ fn eval_crank_checkpoints_its_retained_function() {
 /// persists again.
 #[test]
 fn collected_eval_function_persists_again() {
-    let (b, n) = compile(
-        "var t = 0; t = (eval('(function (x) { return x + 1; })'))(1); t",
-    );
+    let (b, n) = compile("var t = 0; t = (eval('(function (x) { return x + 1; })'))(1); t");
     let mut m = Interp::new();
     m.link_intrinsics(&n);
     m.set_source_compiler(std::rc::Rc::new(TestCompiler));
@@ -123,7 +167,7 @@ fn collected_eval_function_persists_again() {
     assert!(o.completed, "eval crank: {:?}", o.halt);
     assert_eq!(o.result, "2");
     // The function never escaped to a root; collect it.
-    m.collect_garbage();
+    m.collect_garbage().unwrap();
     assert!(
         m.live_dynamic_segment_function().is_none(),
         "the collector pruned the dead eval function's segment entry"
@@ -162,7 +206,10 @@ fn cross_crank_function_reference_works_live_and_resumed() {
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
     drop(session);
     let mut resumed = resume_from_store(&store, &sig()).expect("resume");
-    let b2r = resumed.machine_mut().relink_crank(&b2, &n2).expect("relink");
+    let b2r = resumed
+        .machine_mut()
+        .relink_crank(&b2, &n2)
+        .expect("relink");
     let r = resumed.machine_mut().run(&b2r);
     assert!(r.completed, "resumed cross-crank call: {:?}", r.halt);
     assert_eq!(r.result, "42");

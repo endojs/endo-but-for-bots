@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/ZonedDateTime/prototype/dayOfYear tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/ZonedDateTime/prototype/dayOfYear/basic.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/dayOfYear/basic.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/dayOfYear/branding.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/dayOfYear/branding.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/dayOfYear/prop-desc.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/dayOfYear/prop-desc.js strict skip:oracle-host-missing-global:Temporal

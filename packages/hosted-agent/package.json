@@ -1,0 +1,67 @@
+{
+  "name": "@endo/hosted-agent",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Provider-neutral capability contracts for hosted agent backends",
+  "keywords": [],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/hosted-agent"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "main": "src/hosted-backend.js",
+  "exports": {
+    ".": "./src/hosted-backend.js",
+    "./account.js": "./src/account.js",
+    "./account-oracle.js": "./src/account-oracle.js",
+    "./turn-ledger.js": "./src/turn-ledger.js",
+    "./package.json": "./package.json",
+    "./provider-broker.js": "./src/provider-broker.js",
+    "./provider-transport.js": "./src/provider-transport.js",
+    "./provider-http.js": "./src/provider-http.js",
+    "./provider-pipe.js": "./src/provider-pipe.js",
+    "./provider-worker.js": "./src/provider-worker.js",
+    "./provider-listener-runtime.js": "./src/provider-listener-runtime.js",
+    "./provider-lease-issuer.js": "./src/provider-lease-issuer.js",
+    "./secret-rotator.js": "./src/secret-rotator.js"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "yarn lint:eslint --fix",
+    "lint:eslint": "eslint '**/*.js'",
+    "lint:types": "tsc",
+    "test": "ava"
+  },
+  "dependencies": {
+    "@endo/captp": "workspace:^",
+    "@endo/errors": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
+    "@endo/exo": "workspace:^",
+    "@endo/init": "workspace:^",
+    "@endo/netstring": "workspace:^",
+    "@endo/patterns": "workspace:^",
+    "@endo/sandbox": "workspace:^",
+    "@endo/stream-node": "workspace:^"
+  },
+  "devDependencies": {
+    "@endo/far": "workspace:^",
+    "@endo/ses-ava": "workspace:^",
+    "ava": "catalog:dev",
+    "esbuild": "0.28.2",
+    "eslint": "catalog:dev",
+    "typescript": "catalog:dev"
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.*"
+    ],
+    "timeout": "2m"
+  }
+}

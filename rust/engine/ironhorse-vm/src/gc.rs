@@ -1,6 +1,6 @@
 //! GC v1: exact, non-generational mark-and-sweep over the slot arena,
-//! plus slide-compaction of the chunk arena (design § Value and heap
-//! model; roadmap stage 2, "GC v1").
+//! plus extent-local compaction of the chunk arena (design § Value and heap
+//! model).
 //!
 //! XS's collector (`fxCollect` in `xsMemory.c`) marks from the machine
 //! roots (stack, globals, keys, host roots), sweeps unmarked slots to
@@ -8,7 +8,7 @@
 //! shape, re-expressed over index arenas so it is `forbid(unsafe_code)`
 //! safe: the mark phase is a worklist trace over [`SlotArena`] edges,
 //! the sweep returns unmarked records to the free list, and the chunk
-//! compaction slides live blocks and rewrites the `ChunkOffset`s the
+//! compaction slides live blocks within eligible regions and rewrites the `ChunkOffset`s the
 //! surviving string slots hold — exactly where XS rewrites pointers.
 //!
 //! Because the heap is index-based, a stale index reaching a
@@ -18,6 +18,50 @@
 //! confidence).
 
 use crate::value::{ChunkArena, ChunkOffset, SlotArena, SlotIndex};
+
+/// A whole-machine collection request refused before any mutation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GcAdmissionError {
+    /// Execution has not reached a supported, quiescent boundary.
+    NotQuiescent,
+    /// A previous collector failure permanently disqualified this machine.
+    PreviousCollectionFailed,
+}
+
+impl std::fmt::Display for GcAdmissionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NotQuiescent => "collection requires a quiescent machine",
+            Self::PreviousCollectionFailed => "collection after failed garbage collection",
+        })
+    }
+}
+
+impl std::error::Error for GcAdmissionError {}
+
+/// One page on which the standing counted side-table reference count
+/// disagrees with a fresh enumeration of the bulk tables — the
+/// counted-reference parity net's finding (see
+/// `Interp::side_ref_parity`). `counted` is what the incrementally
+/// maintained counts say; `walked` is what the bulk tables actually hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SideRefParityMismatch {
+    pub page: u32,
+    pub counted: u64,
+    pub walked: u64,
+}
+
+impl std::fmt::Display for SideRefParityMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "counted side-table references on page {} disagree with the bulk tables: counted {}, walked {}",
+            self.page, self.counted, self.walked
+        )
+    }
+}
+
+impl std::error::Error for SideRefParityMismatch {}
 
 /// The machine heap: the slot arena and the chunk arena the collector
 /// operates over together. The interpreter threads one of these as its
@@ -39,7 +83,8 @@ pub struct GcStats {
     pub slots_live: u32,
     /// Chunk-arena bytes before compaction.
     pub chunk_bytes_before: usize,
-    /// Chunk-arena bytes after compaction.
+    /// Logical chunk-arena length after compaction. Interior reusable holes
+    /// still occupy addresses, so this measures tail truncation only.
     pub chunk_bytes_after: usize,
 }
 
@@ -52,7 +97,7 @@ impl Heap {
     }
 
     /// Collect: mark everything reachable from `roots`, sweep the rest,
-    /// then slide-compact the chunk arena and rewrite the surviving
+    /// then compact the chunk arena extent-locally and rewrite the surviving
     /// string slots' offsets.
     pub fn collect(&mut self, roots: &[SlotIndex]) -> GcStats {
         struct NoHooks;
@@ -75,7 +120,8 @@ pub trait GcHooks {
     /// `idx` was reclaimed; the machine drops entries keyed by it.
     fn swept(&mut self, idx: SlotIndex);
     /// Enumerate every chunk offset held outside the slot arena.
-    /// Called twice: before compaction (liveness) and after (rewrite).
+    /// Called before compaction for liveness, and again for rewriting only
+    /// when at least one chunk offset moves.
     fn external_chunk_refs(&mut self, visit: &mut dyn FnMut(&mut ChunkOffset));
     /// One EPHEMERON round: report slots that become reachable only
     /// because some already-marked state conditions them — a WeakMap
@@ -95,8 +141,7 @@ pub trait GcHooks {
     }
 }
 
-/// The full collection the machine wires (the side-table liveness fix
-/// from the adversarial review): mark/sweep/compact over the two
+/// The full collection the machine wires: mark/sweep/compact over the two
 /// arenas, extended with the machine state the arenas cannot see.
 ///
 /// - `extra_edges(idx, visit)` is called once per newly marked slot;
@@ -110,10 +155,15 @@ pub trait GcHooks {
 /// - `external_chunk_refs(visit)` enumerates every chunk offset the
 ///   machine holds **outside** the slot arena (a function's name
 ///   chunk, an ArrayBuffer's backing store, a string `Slot` stored in
-///   a side table or on the value stack). It is called twice: before
-///   compaction so those chunks count as live, and after so they are
-///   rewritten to their new offsets — exactly the treatment
-///   arena-resident string slots get.
+///   a side table or on the value stack). It is called before compaction
+///   so those chunks count as live, and again only when offsets move so
+///   they are rewritten — exactly the treatment arena-resident string slots get.
+///
+/// This raw-arena primitive is for standalone heaps and collector implementations.
+/// It does not establish an interpreter's quiescence or supply its side-table
+/// roots. Do not apply it to an `Interp`'s public arenas: use
+/// [`crate::Interp::collect_garbage`] for supported whole-machine collection.
+/// Public arena access is a low-level mutation escape hatch, not a checked VM API.
 pub fn collect_full(
     slots: &mut SlotArena,
     chunks: &mut ChunkArena,
@@ -168,8 +218,8 @@ pub fn collect_full(
     let slots_reclaimed = slots.sweep_each(&mut |idx| hooks.swept(idx));
 
     // --- compact chunks: gather the offsets the surviving string
-    // slots AND the machine's external holders reference, slide them
-    // down, and rewrite every holder. ---
+    // slots AND the machine's external holders reference, reclaim within
+    // extents, and rewrite the holders of blocks that actually moved. ---
     let mut live_offsets: Vec<ChunkOffset> = Vec::new();
     for i in 0..slots.capacity() {
         let idx = SlotIndex(i);
@@ -180,30 +230,26 @@ pub fn collect_full(
         }
     }
     hooks.external_chunk_refs(&mut |off: &mut ChunkOffset| live_offsets.push(*off));
-    let remap = chunks.compact(&live_offsets);
-    for i in 0..slots.capacity() {
-        let idx = SlotIndex(i);
-        if slots.is_marked(idx) {
-            if let Some(off) = slots.get(idx).chunk_ref() {
-                if let Some(&new_off) = remap.get(&off) {
-                    // Identity remaps (compaction moved nothing here)
-                    // must not go through `get_mut`, whose conservative
-                    // dirty-marking would re-dirty every string-holding
-                    // slot page on every collection — the phase-7
-                    // "write only what moved" bound applies to slot
-                    // pages exactly as it does to chunk extents.
-                    if new_off != off {
+    let remap = chunks.compact_local(&live_offsets);
+    // A no-movement collection needs no second arena scan or holder walk.
+    // The compactor emits entries only for offsets that actually changed.
+    if !remap.is_empty() {
+        for i in 0..slots.capacity() {
+            let idx = SlotIndex(i);
+            if slots.is_marked(idx) {
+                if let Some(off) = slots.get(idx).chunk_ref() {
+                    if let Some(&new_off) = remap.get(&off) {
                         slots.get_mut(idx).set_chunk_ref(new_off);
                     }
                 }
             }
         }
+        hooks.external_chunk_refs(&mut |off: &mut ChunkOffset| {
+            if let Some(&new_off) = remap.get(off) {
+                *off = new_off;
+            }
+        });
     }
-    hooks.external_chunk_refs(&mut |off: &mut ChunkOffset| {
-        if let Some(&new_off) = remap.get(off) {
-            *off = new_off;
-        }
-    });
 
     GcStats {
         slots_reclaimed,
@@ -285,6 +331,38 @@ mod tests {
     }
 
     #[test]
+    fn external_chunk_holders_are_revisited_only_when_offsets_move() {
+        struct Hooks {
+            offset: ChunkOffset,
+            visits: usize,
+        }
+        impl GcHooks for Hooks {
+            fn extra_edges(&self, _: SlotIndex, _: &mut dyn FnMut(SlotIndex)) {}
+            fn swept(&mut self, _: SlotIndex) {}
+            fn external_chunk_refs(&mut self, visit: &mut dyn FnMut(&mut ChunkOffset)) {
+                self.visits += 1;
+                visit(&mut self.offset);
+            }
+        }
+        for moved in [false, true] {
+            let mut chunks = ChunkArena::new();
+            if moved {
+                chunks.alloc(b"dead");
+            }
+            let offset = chunks.alloc(b"live");
+            chunks.clear_dirty();
+            let mut hooks = Hooks { offset, visits: 0 };
+            collect_full(&mut SlotArena::new(), &mut chunks, &[], &mut hooks);
+            assert_eq!(hooks.visits, if moved { 2 } else { 1 });
+            assert_eq!(hooks.offset, ChunkOffset(4));
+            assert_eq!(&*chunks.payload(hooks.offset), b"live");
+            if !moved {
+                assert!(chunks.dirty_extents().is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn sweeps_unreachable_slots() {
         let mut h = Heap::new();
         let root = h.slots.alloc(Slot::integer(1));
@@ -304,7 +382,9 @@ mod tests {
         // root -> a (via next) -> b (via Reference payload)
         let mut h = Heap::new();
         let b = h.slots.alloc(Slot::integer(99));
-        let a = h.slots.alloc(Slot::of(Kind::Reference, Payload::Reference(b)));
+        let a = h
+            .slots
+            .alloc(Slot::of(Kind::Reference, Payload::Reference(b)));
         let mut root_slot = Slot::integer(0);
         root_slot.next = a;
         let root = h.slots.alloc(root_slot);
@@ -321,8 +401,13 @@ mod tests {
         // a <-> b cycle, both reachable from root; the mark bit must
         // stop the trace from looping.
         let mut h = Heap::new();
-        let a = h.slots.alloc(Slot::of(Kind::Reference, Payload::Reference(SlotIndex::NULL)));
-        let b = h.slots.alloc(Slot::of(Kind::Reference, Payload::Reference(a)));
+        let a = h.slots.alloc(Slot::of(
+            Kind::Reference,
+            Payload::Reference(SlotIndex::NULL),
+        ));
+        let b = h
+            .slots
+            .alloc(Slot::of(Kind::Reference, Payload::Reference(a)));
         h.slots.get_mut(a).value = Payload::Reference(b);
         let stats = h.collect(&[a]);
         assert_eq!(stats.slots_reclaimed, 0, "the whole cycle is live");
@@ -374,11 +459,13 @@ mod tests {
         // same sign+magnitude bytes.
         let mut h = Heap::new();
         let _dead = h.chunks.alloc(&[0u8, 7, 0, 0, 0]); // dead `7n`
-        // keep `-4294967297n` = 0x1_0000_0001, two limbs, negative.
+                                                        // keep `-4294967297n` = 0x1_0000_0001, two limbs, negative.
         let keep_bytes = [1u8, 0x01, 0, 0, 0, 0x01, 0, 0, 0];
         let keep_off = h.chunks.alloc(&keep_bytes);
         let _dead2 = h.chunks.alloc(&[0u8, 9, 0, 0, 0]); // dead `9n`
-        let keep = h.slots.alloc(Slot::of(Kind::BigInt, Payload::BigInt(keep_off)));
+        let keep = h
+            .slots
+            .alloc(Slot::of(Kind::BigInt, Payload::BigInt(keep_off)));
 
         let before = h.chunks.byte_size();
         let stats = h.collect(&[keep]);
@@ -389,12 +476,16 @@ mod tests {
             stats.chunk_bytes_after
         );
         let new_off = h.slots.get(keep).chunk_ref().unwrap();
-        assert_eq!(&*h.chunks.payload(new_off), &keep_bytes, "BigInt digits survive relocation");
+        assert_eq!(
+            &*h.chunks.payload(new_off),
+            &keep_bytes,
+            "BigInt digits survive relocation"
+        );
     }
 
     #[test]
     fn traces_an_instance_property_chain() {
-        // The stage-2b object-heap shape: an instance whose `next` chains
+        // An object-heap instance whose `next` chains
         // Property slots, one holding a Reference to a second instance.
         // Everything reachable from the root instance survives; a
         // detached instance + property are swept.
@@ -415,9 +506,15 @@ mod tests {
         h.slots.get_mut(dead_inst).next = dead_prop;
 
         let stats = h.collect(&[root]);
-        assert_eq!(stats.slots_reclaimed, 2, "the detached instance + its property are swept");
+        assert_eq!(
+            stats.slots_reclaimed, 2,
+            "the detached instance + its property are swept"
+        );
         assert!(h.slots.is_marked(inner), "Reference-held instance kept");
-        assert!(h.slots.is_marked(pa) && h.slots.is_marked(pb), "the property chain is kept");
+        assert!(
+            h.slots.is_marked(pa) && h.slots.is_marked(pb),
+            "the property chain is kept"
+        );
         assert!(!h.slots.is_marked(dead_inst) && !h.slots.is_marked(dead_prop));
         // The chain is intact after the collection.
         assert_eq!(h.slots.get(root).next, pa);
@@ -433,8 +530,14 @@ mod tests {
         let obj = h.slots.alloc(Slot::instance(proto));
         let _garbage = h.slots.alloc(Slot::instance(SlotIndex::NULL));
         let stats = h.collect(&[obj]);
-        assert_eq!(stats.slots_reclaimed, 1, "only the unrelated instance is swept");
-        assert!(h.slots.is_marked(proto), "the prototype is kept through the instance edge");
+        assert_eq!(
+            stats.slots_reclaimed, 1,
+            "only the unrelated instance is swept"
+        );
+        assert!(
+            h.slots.is_marked(proto),
+            "the prototype is kept through the instance edge"
+        );
     }
 
     #[test]

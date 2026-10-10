@@ -29,7 +29,7 @@
     "lint": "yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix",
     "lint:eslint": "eslint '**/*.js'",
-    "test": "exit 0"
+    "test": "ava"
   },
   "dependencies": {
     "@endo/errors": "workspace:^",
@@ -39,6 +39,7 @@
     "@endo/pass-style": "workspace:^"
   },
   "devDependencies": {
+    "@endo/init": "workspace:^",
     "ava": "catalog:dev",
     "eslint": "catalog:dev"
   },

@@ -1,0 +1,75 @@
+//! Release and persistence compatibility: version ownership and upgrade rules.
+//!
+//! # Meter and compiler policy
+//!
+//! `COST_TABLE_VERSION` is owned by `ironhorse-meter/src/lib.rs` and re-exported
+//! by [`ironhorse_vm::meter`]. A weight, charging-point or admission-policy change
+//! requires an appended `releases::PINNED` entry, a new release literal and a
+//! deliberate update of runtime/compiler/carried-state golden vectors together.
+//! Never replace a historical release pin. Equal weight digests do not imply
+//! equal charging policies: multiple release names can share one digest.
+//! [`crate::image::MeterImage::validate`] requires both name and digest equality.
+//!
+//! `PARSE_METER_RELEASE` in `ironhorse-compile/src/meter.rs` is an alias of
+//! `COST_TABLE_VERSION`, not an independent counter. Compiler accounting changes
+//! use the same release procedure; a separate parse version must not be revived.
+//!
+//! # Storage encodings
+//!
+//! [`crate::format::IRONHORSE_FORMAT_VERSION`] governs container encoding and
+//! interpretation. Change it when the wire contract changes, with explicit reader
+//! support or refusal. [`crate::format::IRONHORSE_FORMAT_VERSION_MIN_READ`] names
+//! the readable range, not an unconditional execution-compatibility promise.
+//! Meter, callback signature and boot identity checks apply independently.
+//!
+//! [`crate::store::STORE_SCHEMA_VERSION`] governs the paged-store representation,
+//! manifest and small-state layout. A change needs a schema bump plus a verified
+//! migration step or explicit refusal. [`crate::store::migrate_store`] advances
+//! monotonically through supported schemas in memory and checks the result against
+//! the stored rows before its one write. It does not translate execution semantics
+//! across meter releases.
+//!
+//! [`ironhorse_vm::snapshot_api::ROW_SCHEMA_VERSION`] owns the capture/restore
+//! declarations. `tests/row_schema.rs` fingerprints row fields, order, aliases
+//! and Intl records and checks `fixtures/row_schema_releases.tsv`. A row change
+//! requires a new row version and an appended ledger entry advancing both wire
+//! versions, plus migration/refusal checks and the carried-state golden suite.
+//! CI compares the ledger prefix and wire constants with the PR base revision
+//! (`scripts/check-row-schema.py`), rejecting repins and reused wire releases.
+//! Do not replace historical pins. Encoding-only releases may advance either
+//! wire version without changing the row schema. Row release 1 records the
+//! existing format 20/store 31 contract without changing persisted bytes.
+//!
+//! # Intl data and derived identity
+//!
+//! Generated `ironhorse-vm/src/intl_profile.rs` exposes `INTL_DATA_VERSION` as
+//! `Intl.__ironhorseDataVersion`. `scripts/intl-profile.py` binds the in-tree
+//! profile to locked ICU versions, checksums, dependency edges and root features;
+//! CI rejects stale generation. Custom data builds are outside this profile.
+//! In-tree locale algorithm/table changes still require deliberate release review.
+//!
+//! **Release review, 2026-09-16.** `Intl.NumberFormat` compact notation
+//! landed with in-tree CLDR `en` affixes and a corrected rounding carry
+//! (architecture finding F062). Guest-visible output changed —
+//! `{notation:'compact'}.format(12345)` went from `12,345` to `12K`, and a
+//! magnitude below the least kept place now rounds away from zero where it
+//! reported zero — so a snapshot written before resumes after with a
+//! matching boot fingerprint and a different answer for the same program.
+//! The fingerprint does not move because `INTL_DATA_VERSION` binds the ICU
+//! DEPENDENCY graph and these tables are ours, which is exactly the case
+//! the sentence above reserves for review rather than for automation.
+//! Recorded here because the alternative is that it is recorded nowhere.
+//!
+//! [`ironhorse_vm::Interp::boot_fingerprint`] hashes ordered intrinsic layout,
+//! the Intl profile and the selected deterministic Math provider. SIGN therefore
+//! refuses incompatible profiles before execution. A matching cost-table digest
+//! alone does not establish execution compatibility.
+//!
+//! # Upgrade consequence
+//!
+//! Old-meter heaps cannot resume on the new engine merely by migrating their
+//! container/store schema. Retain the old executable to drain/export state, or
+//! reboot from an approved initial state under an explicit worker transition plan.
+//! There is no general cross-meter heap translator. Execution determinism remains
+//! scoped per release binary per platform, with matching initial state, inputs and
+//! host policy; a platform-independent weight digest is not an execution guarantee.

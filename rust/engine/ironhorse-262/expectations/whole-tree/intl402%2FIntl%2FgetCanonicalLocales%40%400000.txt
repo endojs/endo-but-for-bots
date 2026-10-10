@@ -1,0 +1,77 @@
+# engine=ironhorse features=default corpus=intl402/Intl/getCanonicalLocales tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Intl/getCanonicalLocales/Locale-object.js sloppy skip:oracle-host-missing-intl
+intl402/Intl/getCanonicalLocales/Locale-object.js strict skip:oracle-host-missing-intl
+intl402/Intl/getCanonicalLocales/canonicalized-tags.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/canonicalized-tags.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/canonicalized-unicode-ext-seq.js sloppy skip:oracle-host-missing-intl
+intl402/Intl/getCanonicalLocales/canonicalized-unicode-ext-seq.js strict skip:oracle-host-missing-intl
+intl402/Intl/getCanonicalLocales/complex-language-subtag-replacement.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/complex-language-subtag-replacement.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/complex-region-subtag-replacement.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/complex-region-subtag-replacement.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/descriptor.js sloppy skip:oracle-host-missing-intl
+intl402/Intl/getCanonicalLocales/descriptor.js strict skip:oracle-host-missing-intl
+intl402/Intl/getCanonicalLocales/duplicates.js sloppy skip:oracle-host-missing-intl
+intl402/Intl/getCanonicalLocales/duplicates.js strict skip:oracle-host-missing-intl
+intl402/Intl/getCanonicalLocales/elements-not-reordered.js sloppy skip:oracle-host-missing-intl
+intl402/Intl/getCanonicalLocales/elements-not-reordered.js strict skip:oracle-host-missing-intl
+intl402/Intl/getCanonicalLocales/error-cases.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+intl402/Intl/getCanonicalLocales/error-cases.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+intl402/Intl/getCanonicalLocales/get-locale.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error but got a RangeError\""
+intl402/Intl/getCanonicalLocales/get-locale.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error but got a RangeError\""
+intl402/Intl/getCanonicalLocales/getCanonicalLocales.js sloppy skip:oracle-host-missing-intl
+intl402/Intl/getCanonicalLocales/getCanonicalLocales.js strict skip:oracle-host-missing-intl
+intl402/Intl/getCanonicalLocales/grandfathered.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/grandfathered.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/has-property.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error but got a RangeError\""
+intl402/Intl/getCanonicalLocales/has-property.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error but got a RangeError\""
+intl402/Intl/getCanonicalLocales/invalid-tags.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Language tag:  Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: Language tag: cmn-hans-cn-t-u-ca-u Expected a RangeError to be thrown but no exception was thrown at all\""
+intl402/Intl/getCanonicalLocales/invalid-tags.js strict fail:"abort-value-differs: oracle=\"Test262Error: Language tag:  Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: Language tag: cmn-hans-cn-t-u-ca-u Expected a RangeError to be thrown but no exception was thrown at all\""
+intl402/Intl/getCanonicalLocales/length.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/length.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/locales-is-not-a-string.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/locales-is-not-a-string.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/main.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/main.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/name.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/name.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/non-iana-canon.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/non-iana-canon.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/overriden-arg-length.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: should throw if locales.length throws Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: should throw if locales.length throws Expected a Test262Error but got a RangeError\""
+intl402/Intl/getCanonicalLocales/overriden-arg-length.js strict fail:"abort-value-differs: oracle=\"Test262Error: should throw if locales.length throws Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: should throw if locales.length throws Expected a Test262Error but got a RangeError\""
+intl402/Intl/getCanonicalLocales/overriden-push.js sloppy skip:oracle-host-missing-intl
+intl402/Intl/getCanonicalLocales/overriden-push.js strict skip:oracle-host-missing-intl
+intl402/Intl/getCanonicalLocales/preferred-grandfathered.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/preferred-grandfathered.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/preferred-variant.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/preferred-variant.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/returned-object-is-an-array.js sloppy skip:oracle-host-missing-intl
+intl402/Intl/getCanonicalLocales/returned-object-is-an-array.js strict skip:oracle-host-missing-intl
+intl402/Intl/getCanonicalLocales/returned-object-is-mutable.js sloppy skip:oracle-host-missing-intl
+intl402/Intl/getCanonicalLocales/returned-object-is-mutable.js strict skip:oracle-host-missing-intl
+intl402/Intl/getCanonicalLocales/to-string.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/to-string.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/transformed-ext-canonical.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/transformed-ext-canonical.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/transformed-ext-invalid.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: en-t Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: en-t Expected a RangeError to be thrown but no exception was thrown at all\""
+intl402/Intl/getCanonicalLocales/transformed-ext-invalid.js strict fail:"abort-value-differs: oracle=\"Test262Error: en-t Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: en-t Expected a RangeError to be thrown but no exception was thrown at all\""
+intl402/Intl/getCanonicalLocales/transformed-ext-valid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/transformed-ext-valid.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-calendar.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-calendar.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-col-strength.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-col-strength.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-measurement-system.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-measurement-system.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-region.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-region.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-subdivision.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-subdivision.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-timezone.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-timezone.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-yes-to-true.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-yes-to-true.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/unicode-ext-key-with-digit.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: Expected a RangeError to be thrown but no exception was thrown at all\""
+intl402/Intl/getCanonicalLocales/unicode-ext-key-with-digit.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: Expected a RangeError to be thrown but no exception was thrown at all\""
+intl402/Intl/getCanonicalLocales/weird-cases.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/weird-cases.js strict skip:oracle-host-missing-global:Intl

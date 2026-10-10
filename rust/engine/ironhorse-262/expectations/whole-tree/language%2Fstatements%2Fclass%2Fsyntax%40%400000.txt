@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=language/statements/class/syntax tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/syntax/class-body-has-direct-super-class-heritage.js sloppy pass
+language/statements/class/syntax/class-body-has-direct-super-class-heritage.js strict pass
+language/statements/class/syntax/class-body-method-definition-super-property.js sloppy pass
+language/statements/class/syntax/class-body-method-definition-super-property.js strict pass
+language/statements/class/syntax/class-declaration-binding-identifier-class-element-list.js sloppy pass
+language/statements/class/syntax/class-declaration-binding-identifier-class-element-list.js strict pass
+language/statements/class/syntax/class-declaration-computed-method-definition.js sloppy pass
+language/statements/class/syntax/class-declaration-computed-method-definition.js strict pass
+language/statements/class/syntax/class-declaration-computed-method-generator-definition.js sloppy pass
+language/statements/class/syntax/class-declaration-computed-method-generator-definition.js strict pass
+language/statements/class/syntax/class-declaration-heritage-identifier-reference-class-element-list.js sloppy pass
+language/statements/class/syntax/class-declaration-heritage-identifier-reference-class-element-list.js strict pass
+language/statements/class/syntax/class-expression-binding-identifier-opt-class-element-list.js sloppy pass
+language/statements/class/syntax/class-expression-binding-identifier-opt-class-element-list.js strict pass
+language/statements/class/syntax/class-expression-heritage-identifier-reference.js sloppy pass
+language/statements/class/syntax/class-expression-heritage-identifier-reference.js strict pass
+language/statements/class/syntax/class-expression.js sloppy pass
+language/statements/class/syntax/class-expression.js strict pass
+language/statements/class/syntax/class-method-propname-constructor.js sloppy pass
+language/statements/class/syntax/class-method-propname-constructor.js strict pass
+language/statements/class/syntax/escaped-static.js sloppy pass
+language/statements/class/syntax/escaped-static.js strict pass

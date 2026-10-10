@@ -9,8 +9,13 @@
 
 #![cfg(feature = "ironhorse-engine")]
 
-use endo::ironhorse_engine::engine::{CadencePolicy, HeapStoreOptions, MachineError, PersistentMachine};
+use endo::ironhorse_engine::engine::{
+    CadencePolicy, HeapStoreOptions, MachineError, MeterBounds, PersistentMachine, Refusal,
+    StoreError, StoreFailure,
+};
 use endo::supervisor::Supervisor;
+use ironhorse_snapshot::format::SnapshotError;
+use ironhorse_snapshot::store::{CommitToken, StoreManifest};
 
 #[test]
 fn store_backed_worker_lifecycle_through_the_supervisor() {
@@ -19,6 +24,8 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
         path: dir.path().join("worker-heap.sqlite"),
         signature: "endor-ironhorse-worker-v1".to_string(),
         cadence: CadencePolicy::default(),
+        meter: MeterBounds::default(),
+        global_names: None,
     };
 
     // --- Fresh open: epoch 1 is the boot machine. -------------------
@@ -56,33 +63,54 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
     // The throw arrives AFTER a mutation; neither the mutation nor the
     // crank survives — the machine rewinds to epoch 3's state and the
     // epoch does not advance.
-    match machine.eval("var n; var junk; var i; var probe; i = probe.v + probe.w; n = n + 1000; throw n;") {
+    match machine
+        .eval("var n; var junk; var i; var probe; i = probe.v + probe.w; n = n + 1000; throw n;")
+    {
         Err(MachineError::Halt(_)) => {}
         other => panic!("expected a halt, got {other:?}"),
     }
-    assert_eq!(machine.epoch().expect("epoch"), 3, "no checkpoint for a crashed crank");
+    assert_eq!(
+        machine.epoch().expect("epoch"),
+        3,
+        "no checkpoint for a crashed crank"
+    );
     let outcome = machine
         .eval("var n; var junk; var i; var probe; i = probe.v + probe.w; n")
         .expect("crank after rewind");
-    assert_eq!(outcome.result, "101", "the partial crank's effects are gone");
+    assert_eq!(
+        outcome.result, "101",
+        "the partial crank's effects are gone"
+    );
     assert_eq!(machine.epoch().expect("epoch"), 4);
 
     // --- Per-crank RELINKING (side-table ledger G2). -----------------
     // A crank whose compiled table differs from the persisted one used
     // to be refused; now its ID operands are rewritten onto the
     // persisted table (new names append) and it runs like any other.
-    let outcome = machine.eval("var zzz = 1; zzz").expect("misaligned crank relinks");
+    let outcome = machine
+        .eval("var zzz = 1; zzz")
+        .expect("misaligned crank relinks");
     assert_eq!(outcome.result, "1");
-    assert_eq!(machine.epoch().expect("epoch"), 5, "the relinked crank checkpointed");
+    assert_eq!(
+        machine.epoch().expect("epoch"),
+        5,
+        "the relinked crank checkpointed"
+    );
     // The prior names still bind their state after the extension…
     let outcome = machine
         .eval("var n; var junk; var i; var probe; i = probe.v + probe.w; n")
         .expect("prior-name crank after the relink");
-    assert_eq!(outcome.result, "101", "prior state addressable after extension");
+    assert_eq!(
+        outcome.result, "101",
+        "prior state addressable after extension"
+    );
     assert_eq!(machine.epoch().expect("epoch"), 6);
     // …and the appended name persisted with its value.
     let outcome = machine.eval("var zzz; zzz").expect("appended-name crank");
-    assert_eq!(outcome.result, "1", "the appended global survived its crank");
+    assert_eq!(
+        outcome.result, "1",
+        "the appended global survived its crank"
+    );
     assert_eq!(machine.epoch().expect("epoch"), 7);
 
     // --- Partial collection at the boundary. ------------------------
@@ -94,7 +122,11 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
     // epoch advances.
     let freed = machine.collect().expect("partial collect");
     assert!(freed > 0, "the dropped chain is reclaimable: {freed}");
-    assert_eq!(machine.epoch().expect("epoch"), 8, "the collection checkpointed");
+    assert_eq!(
+        machine.epoch().expect("epoch"),
+        8,
+        "the collection checkpointed"
+    );
 
     // --- Suspend through the supervisor. ----------------------------
     // The database is the durable state: the suspend record carries
@@ -110,17 +142,28 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
     sup.put_suspended(handle, suspended);
     assert!(sup.is_suspended(handle), "the record survives a put-back");
     let suspended = sup.take_suspended(handle).expect("suspended record, again");
-    assert!(suspended.sha256.is_empty(), "store-backed workers have no CAS key");
-    let heap_store = suspended.heap_store.expect("the record carries the heap path");
+    assert!(
+        suspended.sha256.is_empty(),
+        "store-backed workers have no CAS key"
+    );
+    let heap_store = suspended
+        .heap_store
+        .expect("the record carries the heap path");
 
     // --- Resume from the suspend record. ----------------------------
     let mut machine = PersistentMachine::open(&HeapStoreOptions {
         path: heap_store,
         signature: options.signature.clone(),
         cadence: CadencePolicy::default(),
+        meter: MeterBounds::default(),
+        global_names: None,
     })
     .expect("resume open");
-    assert_eq!(machine.epoch().expect("epoch"), 8, "the epoch chain continues");
+    assert_eq!(
+        machine.epoch().expect("epoch"),
+        8,
+        "the epoch chain continues"
+    );
     let outcome = machine
         .eval("var n; var junk; var i; var probe; i = probe.v + probe.w; n = n + 1")
         .expect("crank after resume");
@@ -138,9 +181,25 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
         path: dir.path().join("worker-heap.sqlite"),
         signature: "some-other-host-surface".to_string(),
         cadence: CadencePolicy::default(),
+        meter: MeterBounds::default(),
+        global_names: None,
     }) {
-        Err(MachineError::Store(e)) => {
-            assert!(e.contains("Signature"), "refused by the signature gate: {e}");
+        // The signature gate, asserted by structure rather than by a
+        // substring of a Debug rendering: a foreign callback table is an
+        // intact store answering "not mine", so it must classify as a
+        // refusal and not as corruption (review finding F157).
+        Err(error @ MachineError::Store(_)) => {
+            assert_eq!(error.store_failure(), Some(StoreFailure::Refused));
+            let MachineError::Store(source) = &error else {
+                unreachable!()
+            };
+            assert!(
+                matches!(
+                    **source,
+                    StoreError::Snapshot(SnapshotError::SignatureMismatch { .. })
+                ),
+                "refused by the signature gate: {source}"
+            );
         }
         Ok(_) => panic!("a foreign signature must be refused"),
         Err(other) => panic!("expected a store refusal, got {other}"),
@@ -161,15 +220,23 @@ fn an_empty_first_crank_does_not_link_the_table() {
         path: dir.path().join("worker-heap.sqlite"),
         signature: "endor-ironhorse-worker-v1".to_string(),
         cadence: CadencePolicy::default(),
+        meter: MeterBounds::default(),
+        global_names: None,
     };
     let mut machine = PersistentMachine::open(&options).expect("fresh open");
     let outcome = machine.eval("1 + 2").expect("literal crank");
     assert_eq!(outcome.result, "3");
-    assert_eq!(machine.epoch().expect("epoch"), 2, "the literal crank checkpointed");
+    assert_eq!(
+        machine.epoch().expect("epoch"),
+        2,
+        "the literal crank checkpointed"
+    );
 
     // LIVE: the first NAMED crank links now (before the fix this arm
     // refused with SymbolMismatch while the reopened path accepted).
-    let outcome = machine.eval("var q = 0; q = 7; q").expect("named crank, live");
+    let outcome = machine
+        .eval("var q = 0; q = 7; q")
+        .expect("named crank, live");
     assert_eq!(outcome.result, "7");
     assert_eq!(machine.epoch().expect("epoch"), 3);
     machine.close().expect("close");
@@ -201,6 +268,8 @@ fn cadence_policy_defers_flushes_and_schedules_collections() {
             checkpoint_every: 3,
             collect_every: 0,
         },
+        meter: MeterBounds::default(),
+        global_names: None,
     };
 
     // --- Deferred flushes. ------------------------------------------
@@ -217,7 +286,9 @@ fn cadence_policy_defers_flushes_and_schedules_collections() {
     // --- The widened rewind window. ---------------------------------
     // One deferred good crank, then a halting crank: the rewind
     // discards BOTH (back to the flush at n == 3).
-    machine.eval("var n; n = n + 1; n").expect("crank 4 (deferred)");
+    machine
+        .eval("var n; n = n + 1; n")
+        .expect("crank 4 (deferred)");
     assert_eq!(machine.epoch().expect("epoch"), 2, "crank 4 deferred");
     match machine.eval("var n; n = n + 100; throw n;") {
         Err(MachineError::Halt(_)) => {}
@@ -243,10 +314,18 @@ fn cadence_policy_defers_flushes_and_schedules_collections() {
     // The cadence has resumed, so this crank defers again; close makes
     // it durable.
     machine.eval("var n; n").expect("crank 6 (deferred again)");
-    assert_eq!(machine.epoch().expect("epoch"), 3, "cadence resumed after the rewind");
+    assert_eq!(
+        machine.epoch().expect("epoch"),
+        3,
+        "cadence resumed after the rewind"
+    );
     machine.close().expect("close flushes");
     let mut machine = PersistentMachine::open(&options).expect("reopen");
-    assert_eq!(machine.epoch().expect("epoch"), 4, "close's final flush landed");
+    assert_eq!(
+        machine.epoch().expect("epoch"),
+        4,
+        "close's final flush landed"
+    );
     let out = machine.eval("var n; n").expect("state after reopen");
     assert_eq!(out.result, "3");
     machine.close().expect("close");
@@ -266,14 +345,26 @@ fn cadence_policy_defers_flushes_and_schedules_collections() {
     let base_opts = HeapStoreOptions {
         path: dir.path().join("cadence-collect-base.sqlite"),
         signature: "endor-ironhorse-worker-v1".to_string(),
-        cadence: CadencePolicy { checkpoint_every: 1, collect_every: 0 },
+        cadence: CadencePolicy {
+            checkpoint_every: 1,
+            collect_every: 0,
+        },
+        meter: MeterBounds::default(),
+        global_names: None,
     };
     let mut base = PersistentMachine::open(&base_opts).expect("open base");
     base.eval(build).expect("baseline garbage crank");
     base.eval("var junk; var i; i").expect("baseline crank 2");
-    assert_eq!(base.epoch().expect("epoch"), 3, "baseline: no scheduled collect");
+    assert_eq!(
+        base.epoch().expect("epoch"),
+        3,
+        "baseline: no scheduled collect"
+    );
     let baseline_freed = base.collect().expect("baseline manual collect");
-    assert!(baseline_freed > 0, "the workload IS reclaimable: {baseline_freed}");
+    assert!(
+        baseline_freed > 0,
+        "the workload IS reclaimable: {baseline_freed}"
+    );
     base.close().expect("close base");
 
     // Scheduled: collect_every=2 fires the durable collection at crank
@@ -284,11 +375,20 @@ fn cadence_policy_defers_flushes_and_schedules_collections() {
     let sched_opts = HeapStoreOptions {
         path: dir.path().join("cadence-collect-sched.sqlite"),
         signature: "endor-ironhorse-worker-v1".to_string(),
-        cadence: CadencePolicy { checkpoint_every: 1, collect_every: 2 },
+        cadence: CadencePolicy {
+            checkpoint_every: 1,
+            collect_every: 2,
+        },
+        meter: MeterBounds::default(),
+        global_names: None,
     };
     let mut sched = PersistentMachine::open(&sched_opts).expect("open sched");
     sched.eval(build).expect("garbage crank");
-    assert_eq!(sched.epoch().expect("epoch"), 2, "flushed, not yet collected");
+    assert_eq!(
+        sched.epoch().expect("epoch"),
+        2,
+        "flushed, not yet collected"
+    );
     sched.eval("var junk; var i; i").expect("second crank");
     assert_eq!(
         sched.epoch().expect("epoch"),
@@ -296,7 +396,10 @@ fn cadence_policy_defers_flushes_and_schedules_collections() {
         "the scheduled collection checkpointed after the flush",
     );
     let after_schedule = sched.collect().expect("manual collect");
-    assert_eq!(after_schedule, 0, "the schedule already reclaimed the chain");
+    assert_eq!(
+        after_schedule, 0,
+        "the schedule already reclaimed the chain"
+    );
     sched.close().expect("close sched");
 }
 
@@ -310,7 +413,12 @@ fn collect_every_is_not_starved_by_throwing_cranks() {
     let options = HeapStoreOptions {
         path: dir.path().join("starve-heap.sqlite"),
         signature: "endor-ironhorse-worker-v1".to_string(),
-        cadence: CadencePolicy { checkpoint_every: 1, collect_every: 2 },
+        cadence: CadencePolicy {
+            checkpoint_every: 1,
+            collect_every: 2,
+        },
+        meter: MeterBounds::default(),
+        global_names: None,
     };
     let mut machine = PersistentMachine::open(&options).expect("open");
     // Crank 1 (completed): builds reclaimable garbage. epoch 1 -> 2.
@@ -333,7 +441,9 @@ fn collect_every_is_not_starved_by_throwing_cranks() {
     // Crank 2 (completed) is the SECOND durable crank since the last
     // collect, so the schedule MUST fire: flush (epoch 3) + the
     // collection's checkpoint (epoch 4).
-    machine.eval("var junk; var i; i").expect("second good crank");
+    machine
+        .eval("var junk; var i; i")
+        .expect("second good crank");
     assert_eq!(
         machine.epoch().expect("epoch"),
         4,
@@ -360,7 +470,12 @@ fn checkpoint_every_is_not_starved_by_throwing_cranks() {
     let options = HeapStoreOptions {
         path: dir.path().join("starve-checkpoint.sqlite"),
         signature: "endor-ironhorse-worker-v1".to_string(),
-        cadence: CadencePolicy { checkpoint_every: 3, collect_every: 0 },
+        cadence: CadencePolicy {
+            checkpoint_every: 3,
+            collect_every: 0,
+        },
+        meter: MeterBounds::default(),
+        global_names: None,
     };
     let mut machine = PersistentMachine::open(&options).expect("open");
     let start = machine.epoch().expect("epoch");
@@ -394,17 +509,21 @@ fn checkpoint_every_is_not_starved_by_throwing_cranks() {
 }
 
 /// A healthy machine reports no failed scheduled collections. The
-/// counter itself is the signal a supervisor polls; driving a REAL
-/// collection failure needs a fault seam the SQLite backend does not
-/// have, so the failure path is reviewed rather than tested, and this
-/// pins the accessor and its clean baseline.
+/// counter itself is the signal a supervisor polls. The SQLite trigger
+/// regression below separately exercises a real checkpoint failure; this
+/// test pins the accessor and its clean baseline.
 #[test]
 fn a_healthy_machine_reports_no_failed_collections() {
     let dir = tempfile::tempdir().expect("temp dir");
     let options = HeapStoreOptions {
         path: dir.path().join("collect-signal.sqlite"),
         signature: "endor-ironhorse-worker-v1".to_string(),
-        cadence: CadencePolicy { checkpoint_every: 1, collect_every: 2 },
+        cadence: CadencePolicy {
+            checkpoint_every: 1,
+            collect_every: 2,
+        },
+        meter: MeterBounds::default(),
+        global_names: None,
     };
     let mut machine = PersistentMachine::open(&options).expect("open");
     for i in 0..4 {
@@ -412,11 +531,9 @@ fn a_healthy_machine_reports_no_failed_collections() {
             .eval(&format!("var junk = 0; junk = {{ v: {i} }}; junk = 0; {i}"))
             .expect("crank");
     }
-    assert_eq!(
-        machine.failed_collections(),
-        (0, None),
-        "the scheduled collections all succeeded"
-    );
+    let (failures, last) = machine.failed_collections();
+    assert_eq!(failures, 0, "the scheduled collections all succeeded");
+    assert!(last.is_none(), "{last:?}");
     machine.close().expect("close");
 }
 
@@ -460,6 +577,8 @@ fn the_collect_schedule_survives_a_suspend() {
         path: path_a.clone(),
         signature: "ironhorse-worker-v1".to_string(),
         cadence: policy(),
+        meter: MeterBounds::default(),
+        global_names: None,
     })
     .expect("open A");
     for i in 0..CRANKS {
@@ -476,6 +595,8 @@ fn the_collect_schedule_survives_a_suspend() {
             path: path_b.clone(),
             signature: "ironhorse-worker-v1".to_string(),
             cadence: policy(),
+            meter: MeterBounds::default(),
+            global_names: None,
         })
         .expect("open B");
         b.eval(&prog(i)).expect("B crank");
@@ -483,8 +604,9 @@ fn the_collect_schedule_survives_a_suspend() {
     }
 
     // Same durable state, reached through completely different suspend
-    // histories. Roots are the store-native identity; free_len is the
-    // collector's own footprint, and is what forked before the fix.
+    // histories. The canonical export's hash is the store's identity;
+    // free_len is the collector's own footprint, and is what forked before
+    // the fix.
     let ma = read_manifest(&path_a);
     let mb = read_manifest(&path_b);
     // The fork assertions come FIRST so a regression names the property
@@ -494,8 +616,24 @@ fn the_collect_schedule_survives_a_suspend() {
         "the collect schedule forked across the suspend (free lists differ)"
     );
     assert_eq!(
-        ma.root, mb.root,
-        "the collect schedule forked across the suspend (roots differ)"
+        read_identity(&path_a),
+        read_identity(&path_b),
+        "the collect schedule forked across the suspend (heaps differ)"
+    );
+    // Field for field, apart from the token each commit mints at random and
+    // the epoch, which counts commits rather than the schedule.
+    assert_eq!(
+        StoreManifest {
+            token: CommitToken::ZERO,
+            epoch: 0,
+            ..ma.clone()
+        },
+        StoreManifest {
+            token: CommitToken::ZERO,
+            epoch: 0,
+            ..mb.clone()
+        },
+        "the collect schedule forked across the suspend (manifests differ)"
     );
     // And the counter that carries the schedule really is durable.
     assert_eq!(ma.cranks, CRANKS as u64, "A recorded every completed crank");
@@ -504,8 +642,356 @@ fn the_collect_schedule_survives_a_suspend() {
 }
 
 /// Read a store's manifest without going through a machine.
-fn read_manifest(path: &std::path::Path) -> ironhorse_snapshot::store::StoreManifest {
+fn read_manifest(path: &std::path::Path) -> StoreManifest {
     use ironhorse_snapshot::store::HeapStore;
     let store = ironhorse_store_sqlite::SqliteHeapStore::open(path).expect("open for manifest");
     store.manifest().expect("manifest")
+}
+
+/// A store's logical identity, the SHA-256 of its canonical export,
+/// without going through a machine.
+fn read_identity(path: &std::path::Path) -> String {
+    let store = ironhorse_store_sqlite::SqliteHeapStore::open(path).expect("open for identity");
+    ironhorse_snapshot::store::root_hash(&store).expect("identity")
+}
+
+#[test]
+fn collection_policy_and_events_are_durable_and_reopen_refuses_drift() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut options = HeapStoreOptions {
+        path: dir.path().join("collection-policy.sqlite"),
+        signature: "collection-policy-v1".to_string(),
+        cadence: CadencePolicy {
+            checkpoint_every: 1,
+            collect_every: 2,
+        },
+        meter: MeterBounds::default(),
+        global_names: None,
+    };
+    let mut machine = PersistentMachine::open(&options).unwrap();
+    machine.eval("var x = 1; x").unwrap();
+    machine.eval("x += 1; x").unwrap();
+    machine.close().unwrap();
+    let scheduled = read_manifest(&options.path);
+    assert_eq!(scheduled.cranks, 2);
+    assert_eq!(scheduled.collect_every, 2);
+    assert_eq!(scheduled.collections, 1);
+    let mut machine = PersistentMachine::open(&options).unwrap();
+    machine.collect().unwrap();
+    machine.close().unwrap();
+    let explicit = read_manifest(&options.path);
+    assert_eq!(explicit.collections, 2);
+    assert_eq!(
+        explicit.epoch,
+        scheduled.epoch + 1,
+        "the explicit collection committed once"
+    );
+    options.cadence.collect_every = 3;
+    assert!(matches!(
+        PersistentMachine::open(&options),
+        Err(MachineError::Refused(Refusal::CadenceMismatch {
+            stored: 2,
+            requested: 3
+        }))
+    ));
+    assert_eq!(read_manifest(&options.path), explicit);
+    options.cadence.collect_every = 2;
+    let mut reopened = PersistentMachine::open(&options).unwrap();
+    reopened.eval("x += 1; x").unwrap();
+    reopened.eval("x += 1; x").unwrap();
+    reopened.close().unwrap();
+    assert_eq!(read_manifest(&options.path).collections, 3);
+}
+
+#[test]
+fn explicit_full_collection_reclaims_chunk_storage_across_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let options = HeapStoreOptions {
+        path: dir.path().join("full-gc.sqlite"),
+        signature: "full-gc".to_string(),
+        cadence: CadencePolicy::default(),
+        meter: MeterBounds::default(),
+        global_names: None,
+    };
+    let mut machine = PersistentMachine::open(&options).unwrap();
+    machine
+        .eval("var keep='live'; var s=''; for(var i=0;i<500;i++){s=s+'abcdefgh';} s=null;")
+        .unwrap();
+    machine.close().unwrap();
+    let before = read_manifest(&options.path);
+    let mut machine = PersistentMachine::open(&options).unwrap();
+    machine.collect().unwrap();
+    machine.close().unwrap();
+    let after = read_manifest(&options.path);
+    assert!(after.chunk_len < before.chunk_len / 2);
+    assert_eq!(after.collections, before.collections + 1);
+    let mut machine = PersistentMachine::open(&options).unwrap();
+    assert_eq!(machine.eval("keep").unwrap().result, "live");
+    machine.close().unwrap();
+}
+
+#[test]
+fn scheduled_collection_checkpoint_failure_preserves_the_committed_delivery() {
+    let dir = tempfile::tempdir().unwrap();
+    let options = HeapStoreOptions {
+        path: dir.path().join("failed-full-gc.sqlite"),
+        signature: "failed-full-gc".to_string(),
+        cadence: CadencePolicy {
+            checkpoint_every: 1,
+            collect_every: 1,
+        },
+        meter: MeterBounds::default(),
+        global_names: None,
+    };
+    let machine = PersistentMachine::open(&options).unwrap();
+    machine.close().unwrap();
+    let fault = rusqlite::Connection::open(&options.path).unwrap();
+    // Permit the delivery checkpoint, then fail the collection checkpoint
+    // inside SQLite's transaction. The failed update cannot persist its counter.
+    fault
+        .execute_batch(
+            "CREATE TABLE fault_count (n INTEGER); INSERT INTO fault_count VALUES(0);
+        CREATE TRIGGER fail_collection BEFORE UPDATE ON meta
+        WHEN NEW.key='manifest' AND (SELECT n FROM fault_count)=1
+        BEGIN SELECT RAISE(ABORT, 'injected collection checkpoint failure'); END;
+        CREATE TRIGGER count_checkpoint AFTER UPDATE ON meta WHEN NEW.key='manifest'
+        BEGIN UPDATE fault_count SET n=n+1; END;",
+        )
+        .unwrap();
+    drop(fault);
+    let mut machine = PersistentMachine::open(&options).unwrap();
+    let out = machine.eval("var deliveries=0; deliveries+=1; var s=''; for(var i=0;i<300;i++){s+='abcdefgh';} s=null; deliveries").unwrap();
+    assert_eq!(
+        out.result, "1",
+        "delivery succeeded despite later collection failure"
+    );
+    assert_eq!(machine.failed_collections().0, 1);
+    // The accessor hands back the error, not a rendering of it: this is the
+    // only way a supervisor observes a failed SCHEDULED collection, so it is
+    // the one place F157 most needed closing. A store fault classifies, and
+    // the store's own error is still reachable underneath.
+    let injected = machine
+        .failed_collections()
+        .1
+        .expect("the scheduled collection failed");
+    assert_eq!(injected.store_failure(), Some(StoreFailure::Transient));
+    assert!(
+        injected.to_string().contains("injected collection"),
+        "{injected}"
+    );
+    assert_eq!(machine.epoch().unwrap(), 2);
+    machine.close().unwrap();
+    let committed = read_manifest(&options.path);
+    assert_eq!(committed.cranks, 1);
+    assert_eq!(committed.collections, 0);
+    let fault = rusqlite::Connection::open(&options.path).unwrap();
+    fault
+        .execute_batch(
+            "DROP TRIGGER fail_collection; DROP TRIGGER count_checkpoint; DROP TABLE fault_count;",
+        )
+        .unwrap();
+    drop(fault);
+    let mut machine = PersistentMachine::open(&options).unwrap();
+    machine.collect().unwrap();
+    machine.close().unwrap();
+    let retried = read_manifest(&options.path);
+    assert_eq!(
+        retried.cranks, 1,
+        "retry did not redeliver the committed crank"
+    );
+    assert_eq!(retried.collections, 1);
+    assert!(retried.chunk_len < committed.chunk_len / 2);
+    let mut machine = PersistentMachine::open(&options).unwrap();
+    assert_eq!(machine.eval("deliveries").unwrap().result, "1");
+    machine.close().unwrap();
+}
+
+/// A worker store whose committed string spans several chunk extents, with
+/// one extent inside the string's payload deleted while the store is
+/// closed. Open trusts the store (the store-seam design's trust model), so
+/// it finds nothing wrong with a row it does not read. Returns the options
+/// and the missing extent's index.
+fn store_with_a_missing_extent(dir: &std::path::Path) -> (HeapStoreOptions, u32) {
+    let options = HeapStoreOptions {
+        path: dir.join("worker-heap.sqlite"),
+        signature: "endor-ironhorse-worker-v1".to_string(),
+        cadence: CadencePolicy::default(),
+        meter: MeterBounds::default(),
+        global_names: None,
+    };
+    let mut machine = PersistentMachine::open(&options).expect("fresh open");
+    let outcome = machine
+        .eval("var s = 0; var n = 0; var j = 0; s = 'x'.repeat(150000); s.length")
+        .expect("crank 1");
+    assert_eq!(outcome.result, "150000");
+    machine.close().expect("close");
+
+    // The string is the last large allocation, so the extent before the
+    // last one lies inside it.
+    let conn = rusqlite::Connection::open(&options.path).unwrap();
+    let extents: i64 = conn
+        .query_row("SELECT COUNT(*) FROM chunk_exts", [], |r| r.get(0))
+        .unwrap();
+    assert!(extents >= 3, "the string spans several extents: {extents}");
+    let missing = extents - 2;
+    assert_eq!(
+        conn.execute("DELETE FROM chunk_exts WHERE ext = ?1", [missing])
+            .unwrap(),
+        1
+    );
+    drop(conn);
+    (options, missing as u32)
+}
+
+/// The store's own error for a missing chunk extent, as `PersistentMachine`
+/// reports it.
+fn assert_missing_extent(error: &MachineError, missing: u32) {
+    assert_eq!(error.store_failure(), Some(StoreFailure::Poisoned));
+    let MachineError::Store(source) = error else {
+        panic!("expected the store's error, got {error:?}");
+    };
+    assert_eq!(
+        **source,
+        StoreError::MissingRow("chunk extent", missing),
+        "the store's own error: {source}"
+    );
+}
+
+/// A row the store cannot produce, found by a crank's lazy fault, comes
+/// back as the store's own error instead of crashing the worker; the
+/// machine rewinds to its last checkpoint and keeps serving cranks that do
+/// not need the row.
+#[test]
+fn a_crank_that_faults_a_missing_row_gets_the_stores_error_and_rewinds() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (options, missing) = store_with_a_missing_extent(dir.path());
+    let mut machine = PersistentMachine::open(&options).expect("open does not read the extent");
+    let epoch = machine.epoch().expect("epoch");
+    // The crank writes `n` before it faults, so only a rewind brings `n`
+    // back to its committed 0.
+    let error = machine
+        .eval(
+            "var s; var n; var j; n = 1000; \
+             for (j = 0; j < s.length; j = j + 1000) { n = n + s.charCodeAt(j); } n",
+        )
+        .expect_err("the crank faults the missing extent");
+    assert_missing_extent(&error, missing);
+    assert_eq!(
+        machine.epoch().expect("epoch"),
+        epoch,
+        "the failed crank committed nothing"
+    );
+    assert_eq!(
+        machine
+            .eval("var s; var n; var j; n + 2")
+            .expect("the rewound machine keeps serving")
+            .result,
+        "2",
+        "the machine rewound to its last checkpoint"
+    );
+    machine.close().expect("close");
+}
+
+/// A collection's chunk compaction walks every block header, so it reads
+/// every extent that holds one, including extents no crank touched. With
+/// one of them deleted while the store was closed (open reads only the
+/// first and the tail extents), the collection reports the store's own
+/// error rather than a collector panic, and rewinds like a failed crank.
+#[test]
+fn a_collection_that_faults_a_missing_row_gets_the_stores_error_and_rewinds() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let options = HeapStoreOptions {
+        path: dir.path().join("worker-heap.sqlite"),
+        signature: "endor-ironhorse-worker-v1".to_string(),
+        cadence: CadencePolicy::default(),
+        meter: MeterBounds::default(),
+        global_names: None,
+    };
+    let mut machine = PersistentMachine::open(&options).expect("fresh open");
+    // Thousands of small strings: block headers in every extent they span.
+    let outcome = machine
+        .eval(
+            "var s = []; var n = 0; var i = 0; \
+             for (i = 0; i < 6000; i = i + 1) { s.push('str-' + i + '-padding-padding'); } \
+             for (i = 0; i < 6000; i = i + 2) { s[i] = 0; } s.length",
+        )
+        .expect("crank 1");
+    assert_eq!(outcome.result, "6000");
+    machine.close().expect("close");
+    let conn = rusqlite::Connection::open(&options.path).unwrap();
+    let extents: i64 = conn
+        .query_row("SELECT COUNT(*) FROM chunk_exts", [], |r| r.get(0))
+        .unwrap();
+    assert!(extents >= 4, "the strings span several extents: {extents}");
+    let missing = extents / 2;
+    assert_eq!(
+        conn.execute("DELETE FROM chunk_exts WHERE ext = ?1", [missing])
+            .unwrap(),
+        1
+    );
+    drop(conn);
+
+    let mut machine = PersistentMachine::open(&options).expect("open does not read the extent");
+    let epoch = machine.epoch().expect("epoch");
+    let error = machine
+        .collect()
+        .expect_err("the collection faults the missing extent");
+    assert_missing_extent(&error, missing as u32);
+    assert_eq!(
+        machine.epoch().expect("epoch"),
+        epoch,
+        "the failed collection committed nothing"
+    );
+    assert_eq!(
+        machine
+            .eval("var n; n + 2")
+            .expect("the rewound machine keeps serving")
+            .result,
+        "2"
+    );
+    machine.close().expect("close");
+}
+
+/// A row read that fails while open restores the machine (the restore
+/// faults the pages it walks) comes back from open as the store's own
+/// error, as one a crank's fault finds does.
+#[test]
+fn an_open_that_faults_a_missing_row_gets_the_stores_error() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let options = HeapStoreOptions {
+        path: dir.path().join("worker-heap.sqlite"),
+        signature: "endor-ironhorse-worker-v1".to_string(),
+        cadence: CadencePolicy::default(),
+        meter: MeterBounds::default(),
+        global_names: None,
+    };
+    let mut machine = PersistentMachine::open(&options).expect("fresh open");
+    assert_eq!(
+        machine.eval("var x = 41; x + 1").expect("crank 1").result,
+        "42"
+    );
+    machine.close().expect("close");
+
+    // Page 0, not the tail page that open itself reads: the restore
+    // faults it.
+    let conn = rusqlite::Connection::open(&options.path).unwrap();
+    assert_eq!(
+        conn.execute("DELETE FROM slot_pages WHERE page = 0", [])
+            .unwrap(),
+        1
+    );
+    drop(conn);
+
+    let Err(error) = PersistentMachine::open(&options) else {
+        panic!("open restored a machine without its first slot page");
+    };
+    assert_eq!(error.store_failure(), Some(StoreFailure::Poisoned));
+    let MachineError::Store(source) = &error else {
+        panic!("expected the store's error, got {error:?}");
+    };
+    assert_eq!(
+        **source,
+        StoreError::MissingRow("slot page", 0),
+        "the store's own error: {source}"
+    );
 }

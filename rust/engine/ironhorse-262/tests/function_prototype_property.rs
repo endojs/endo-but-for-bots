@@ -30,9 +30,7 @@ fn assert_result_agrees(source: &str) {
 
 #[test]
 fn prototype_identity_links_reads_and_instances() {
-    assert_result_agrees(
-        "function T() {} '' + (T.prototype === Object.getPrototypeOf(new T()))",
-    );
+    assert_result_agrees("function T() {} '' + (T.prototype === Object.getPrototypeOf(new T()))");
     assert_result_agrees("function T() {} function U() {} '' + (T.prototype === U.prototype)");
     assert_result_agrees("function T() {} '' + (typeof T.prototype)");
     assert_result_agrees(
@@ -44,7 +42,9 @@ fn prototype_identity_links_reads_and_instances() {
 #[test]
 fn prototype_augmentation_reaches_instances() {
     assert_result_agrees("function T() {} T.prototype.x = 7; '' + new T().x");
-    assert_result_agrees("function T() {} T.prototype.m = function () { return 3; }; '' + new T().m()");
+    assert_result_agrees(
+        "function T() {} T.prototype.m = function () { return 3; }; '' + new T().m()",
+    );
     assert_result_agrees("function T() {} var i = new T(); T.prototype.x = 1; '' + i.x");
     assert_result_agrees(
         "function T() {} T.prototype.toString = function () { return 'custom'; }; '' + new T()",
@@ -62,9 +62,7 @@ fn prototype_reassignment_re_points_new_instances() {
 #[test]
 fn generator_and_method_shapes_mirror_xs() {
     assert_result_agrees("function* g() {} '' + (typeof g.prototype)");
-    assert_result_agrees(
-        "function* g() {} g.prototype.extra = 5; var it = g(); '' + it.extra",
-    );
+    assert_result_agrees("function* g() {} g.prototype.extra = 5; var it = g(); '' + it.extra");
     assert_result_agrees("var o = { m() {} }; '' + (typeof o.m.prototype)");
     assert_result_agrees("var a = () => 1; '' + (typeof a.prototype)");
     assert_result_agrees("async function h() {} '' + (typeof h.prototype)");

@@ -1,0 +1,60 @@
+name: IronHorse oracle sanitizers
+
+on:
+  push:
+    branches: [master, llm]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    uses: $/.github/workflows/ci-changes.yml
+
+  oracle-sanitizers:
+    name: ironhorse-oracle-sanitizers
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['oracle-sanitizers']) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Pinned XS source is excluded only from UBSAN; our bridge keeps both
+    # sanitizers, and ASAN continues to instrument the upstream interpreter.
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch pinned XS oracle
+        run: git submodule update --init --depth 1 c/moddable
+
+      - name: Install Clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+
+      - name: Build instrumented oracle test targets
+        run: bash rust/engine/scripts/test-oracle-sanitizers.sh --no-run
+
+      - name: Run ASAN and UBSAN over the C oracle
+        id: sanitizers
+        run: bash rust/engine/scripts/test-oracle-sanitizers.sh
+
+      - name: Report sanitizer outcome
+        if: always()
+        env:
+          OUTCOME: ${{ steps.sanitizers.outcome }}
+        run: |
+          echo "Oracle ASAN/UBSAN result: $OUTCOME." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$OUTCOME" != success ]; then
+            echo '::error::Oracle sanitizer run did not pass. Inspect the diagnostics; only pinned XS source is excluded from UBSAN.'
+          fi

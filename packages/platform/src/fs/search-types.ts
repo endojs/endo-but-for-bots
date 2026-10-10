@@ -39,12 +39,22 @@ export type GlobOptions = {
   batchSize?: number;
   /** Include directory entries in results (default `true`). */
   includeDirectories?: boolean;
+  /**
+   * Let `**` descend through symbolic links to directories (default `false`).
+   * A link is reported as an entry either way; this governs only recursion
+   * through it, which turns the walk from a tree into a link graph. Segments
+   * that name a path follow links regardless, being bounded by pattern depth.
+   * Corresponds to `rg -L`.
+   */
+  followSymlinks?: boolean;
 };
 
 export type GrepOptions = {
   deniedSegments?: Array<string>;
   confinementRoot?: string;
   batchSize?: number;
+  /** Applies to the implicit `**` walk when `paths` is omitted. */
+  followSymlinks?: boolean;
   /** Stop after this many matches; `undefined` means unbounded (streaming). */
   maxResults?: number;
 };
@@ -71,6 +81,18 @@ export type Search = {
       | Iterable<string>
       | Promise<Iterable<string>>
       | AsyncIterable<Array<string>>,
+    options?: GrepOptions,
+  ) => AsyncGenerator<Array<GrepMatch>>;
+  /**
+   * Fused glob+grep: enumerate files matching `globPattern` and search each for
+   * `regexSource`. The native-override seam a platform with a single fused
+   * enumerate-and-scan walk substitutes; the JS reference composes `globPaths`
+   * into `grepFiles`. Honors the same deny/confinement/`maxResults` rules.
+   */
+  glorp: (
+    root: string,
+    globPattern: string,
+    regexSource: string,
     options?: GrepOptions,
   ) => AsyncGenerator<Array<GrepMatch>>;
 };

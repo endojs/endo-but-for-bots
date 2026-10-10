@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=built-ins/Number/prototype/toLocaleString tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Number/prototype/toLocaleString/length.js sloppy pass
+built-ins/Number/prototype/toLocaleString/length.js strict pass
+built-ins/Number/prototype/toLocaleString/name.js sloppy pass
+built-ins/Number/prototype/toLocaleString/name.js strict pass
+built-ins/Number/prototype/toLocaleString/not-a-constructor.js sloppy pass
+built-ins/Number/prototype/toLocaleString/not-a-constructor.js strict pass
+built-ins/Number/prototype/toLocaleString/prop-desc.js sloppy pass
+built-ins/Number/prototype/toLocaleString/prop-desc.js strict pass

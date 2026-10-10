@@ -17,9 +17,12 @@
   "type": "module",
   "exports": {
     ".": "./agent.js",
+    "./src/container-mounts.js": "./src/container-mounts.js",
     "./src/stream.js": "./src/stream.js",
     "./providers/index.js": "./providers/index.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./dev-review.js": "./dev-review.js",
+    "./review-charts.js": "./review-charts.js"
   },
   "scripts": {
     "build": "exit 0",
@@ -30,18 +33,22 @@
     "test": "ava"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.120.0",
+    "@anthropic-ai/sdk": "^0.128.0",
     "@endo/conversation-tree": "workspace:^",
+    "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/exo-stream": "workspace:^",
     "@endo/fae": "workspace:^",
     "@endo/far": "workspace:^",
+    "@endo/hosted-agent": "workspace:^",
     "@endo/lal": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^"
   },
   "devDependencies": {
+    "@endo/captp": "workspace:^",
+    "@endo/claude-sandbox": "workspace:^",
     "@endo/cli": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "@endo/workflow": "workspace:^",

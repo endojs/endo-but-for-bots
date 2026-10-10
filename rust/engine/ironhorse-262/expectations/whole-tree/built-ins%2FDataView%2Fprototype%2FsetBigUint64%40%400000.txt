@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=built-ins/DataView/prototype/setBigUint64 tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/DataView/prototype/setBigUint64/immutable-buffer.js sloppy skip:shared-positive-test-failure
+built-ins/DataView/prototype/setBigUint64/immutable-buffer.js strict skip:shared-positive-test-failure
+built-ins/DataView/prototype/setBigUint64/not-a-constructor.js sloppy pass
+built-ins/DataView/prototype/setBigUint64/not-a-constructor.js strict pass
+built-ins/DataView/prototype/setBigUint64/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/DataView/prototype/setBigUint64/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable

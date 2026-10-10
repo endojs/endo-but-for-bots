@@ -6,11 +6,17 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[lints]
+workspace = true
+
 [lib]
 name = "ironhorse_vm"
 path = "src/lib.rs"
 
 [dependencies]
+libm = { version = "=0.2.16", optional = true, default-features = false, features = ["force-soft-floats"] }
+ironhorse-meter = { path = "../ironhorse-meter" }
+ironhorse-text = { path = "../ironhorse-text" }
 # The engine-internal XSRE matcher (child 8). ironhorse-vm links it as the
 # JavaScript `RegExp` surface (child 9): construction compiles a pattern
 # with `compile`, and `exec`/`test`/the String regex methods drive
@@ -20,6 +26,8 @@ icu_normalizer = "=2.2.0"
 icu_segmenter = "=2.2.0"
 
 [dev-dependencies]
+# W6 C4 compares the candidate provider before runtime selection is enabled.
+libm = { version = "=0.2.16", default-features = false, features = ["force-soft-floats"] }
 # Source-level regression locks (`tests/`) need guest JS turned into
 # bytecode + a symbols atom, and the portable fuzz regressions compile
 # their generated source the same way. `ironhorse-compile` is the
@@ -27,13 +35,23 @@ icu_segmenter = "=2.2.0"
 # XS nor c/moddable nor libclang; it does not depend on this crate, so
 # the edge is not a cycle.
 ironhorse-compile = { path = "../ironhorse-compile" }
+# The production eval bridge (`IronhorseSourceCompiler`), so the tests that
+# drive eval through the guest surface measure the path the daemon and the
+# stack-lanes probe run. A development edge back to this crate: integration
+# tests link the one `ironhorse_vm` that `ironhorse-runtime` links.
+ironhorse-runtime = { path = "../ironhorse-runtime" }
 
 [features]
-# Off by default. The determinism firewall (design
-# `designs/ironhorse-meter-opcode-cost-instrumentation.md` § firewall):
-# no default/release/snapshot/consensus build enables this; only the
-# dev-only calibration binary and the calibration CI job turn it on. With
-# the feature off the `CostRecorder` is a zero-sized no-op and the metered
-# hot loop is instruction-identical to the pre-instrumentation build.
+# Off by default; only the isolated test-ironhorse-calibration CI job and local
+# instrumentation runs enable this. Consensus builds reject the feature.
+# No timing driver exists yet. The disabled recorder is zero-sized; the planned
+# instruction-identical object-code firewall proof is not established by that test.
 default = []
 cost-calibration = []
+# Shipping workers opt in; instrumentation cannot unify into this configuration.
+consensus = ["deterministic-math"]
+# Pure-Rust, software-only provider. Default builds retain platform compatibility.
+deterministic-math = ["dep:libm"]
+# Validate counted bulk roots against a full walk before partial collection,
+# including release builds. The worker enables this integrity boundary.
+store-integrity = []

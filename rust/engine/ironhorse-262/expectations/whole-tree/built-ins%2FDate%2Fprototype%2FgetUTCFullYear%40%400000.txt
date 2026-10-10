@@ -1,0 +1,17 @@
+# engine=ironhorse features=default corpus=built-ins/Date/prototype/getUTCFullYear tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Date/prototype/getUTCFullYear/length.js sloppy pass
+built-ins/Date/prototype/getUTCFullYear/length.js strict pass
+built-ins/Date/prototype/getUTCFullYear/name.js sloppy pass
+built-ins/Date/prototype/getUTCFullYear/name.js strict pass
+built-ins/Date/prototype/getUTCFullYear/not-a-constructor.js sloppy pass
+built-ins/Date/prototype/getUTCFullYear/not-a-constructor.js strict pass
+built-ins/Date/prototype/getUTCFullYear/prop-desc.js sloppy pass
+built-ins/Date/prototype/getUTCFullYear/prop-desc.js strict pass
+built-ins/Date/prototype/getUTCFullYear/this-value-invalid-date.js sloppy pass
+built-ins/Date/prototype/getUTCFullYear/this-value-invalid-date.js strict pass
+built-ins/Date/prototype/getUTCFullYear/this-value-non-date.js sloppy pass
+built-ins/Date/prototype/getUTCFullYear/this-value-non-date.js strict pass
+built-ins/Date/prototype/getUTCFullYear/this-value-non-object.js sloppy pass
+built-ins/Date/prototype/getUTCFullYear/this-value-non-object.js strict pass
+built-ins/Date/prototype/getUTCFullYear/this-value-valid-date.js sloppy pass
+built-ins/Date/prototype/getUTCFullYear/this-value-valid-date.js strict pass

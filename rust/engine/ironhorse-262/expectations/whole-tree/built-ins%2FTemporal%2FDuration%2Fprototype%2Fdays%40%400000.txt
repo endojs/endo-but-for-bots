@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/Duration/prototype/days tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/Duration/prototype/days/basic.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/days/basic.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/days/blank-duration.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/days/blank-duration.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/days/branding.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/prototype/days/branding.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/prototype/days/prop-desc.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/prototype/days/prop-desc.js strict skip:oracle-host-missing-global:Temporal

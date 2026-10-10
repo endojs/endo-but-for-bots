@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=language/import tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/import/dup-bound-names.js sloppy pass
+language/import/escaped-as-import-specifier.js sloppy pass
+language/import/escaped-as-namespace-import.js sloppy pass
+language/import/escaped-from.js sloppy pass

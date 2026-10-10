@@ -31,7 +31,7 @@
   },
   "dependencies": {
     "@endo/harden": "workspace:^",
-    "monaco-editor": "^0.56.0"
+    "monaco-editor": "^0.57.0"
   },
   "devDependencies": {
     "eslint": "catalog:dev"

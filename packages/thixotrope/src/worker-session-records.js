@@ -25,7 +25,10 @@ import { Far } from '@endo/far';
  *   function is restored separately (resolver obligations re-attach),
  *   so they are recorded as `{ kind: 'internal' }` and re-seat as
  *   tombstones that only keep the position space aligned; calls to one
- *   fail loudly.
+ *   fail loudly. Ephemeral host observers use this non-revivable description
+ *   too: their closures are never persisted or recreated. Their owner must
+ *   cancel guest subscriptions on disconnect and discard old ephemeral
+ *   subscriptions on supervisor restart.
  *
  * Descriptions are keyed by export slot in the endpoint's worker-store
  * tables record; resolver obligations ride along (promise targets

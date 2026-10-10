@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=intl402/PluralRules/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/PluralRules/prototype/bind.js sloppy skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/bind.js strict skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/builtins.js sloppy skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/builtins.js strict skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/properties.js sloppy skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/properties.js strict skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/prototype.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Intl.PluralRules.prototype is not an object that has been initialized as an Intl.PluralRules Expected a TypeError but got a ReferenceError"
+intl402/PluralRules/prototype/prototype.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Intl.PluralRules.prototype is not an object that has been initialized as an Intl.PluralRules Expected a TypeError but got a ReferenceError"

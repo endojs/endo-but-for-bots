@@ -9,65 +9,15 @@
 //! pass, and names the guest interned itself), and must resurrect
 //! nothing the guest deleted.
 
+#[path = "common/twin.rs"]
+mod carry;
 mod common;
+use carry::twin;
 
 use common::TempDir;
 
-use ironhorse_snapshot::machine::{begin_store_session, checkpoint_to_store, resume_from_store};
-use ironhorse_snapshot::store::{validate_store, HeapStore, MemoryStore};
+use ironhorse_snapshot::store::MemoryStore;
 use ironhorse_snapshot::store_file::FileStore;
-use ironhorse_snapshot::Signature;
-use ironhorse_vm::{parse_symbols, Interp};
-
-fn sig() -> Signature {
-    Signature::new("ironhorse-worker-v1")
-}
-
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
-    let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
-    (bytecode, parse_symbols(&symbols))
-}
-
-/// Relink and run one crank, returning `(completed, halt debug, result,
-/// computrons)`. The COMPUTRON count is part of the observation: a
-/// resumed machine that answers correctly while charging differently
-/// has still diverged, and consensus is on the count as much as the
-/// value. Every twin below therefore compares metering too.
-fn crank(m: &mut Interp, src: &str) -> (bool, String, String, u64) {
-    let (b, n) = compile(src);
-    let b = m.relink_crank(&b, &n).expect("relink");
-    let o = m.run(&b);
-    (o.completed, format!("{:?}", o.halt), o.result, o.computrons)
-}
-
-/// Run crank 1 and the observation cranks uninterrupted, and the same
-/// cranks across a checkpoint/resume split on `store`; assert the
-/// observations agree pairwise and return the continuous ones.
-fn twin(crank1: &str, observations: &[&str], store: &mut dyn HeapStore) -> Vec<(bool, String, String, u64)> {
-    let (b1, n1) = compile(crank1);
-
-    let mut cont = Interp::new();
-    cont.link_intrinsics(&n1);
-    assert!(cont.run(&b1).completed, "crank 1 (continuous)");
-    let continuous: Vec<_> = observations.iter().map(|s| crank(&mut cont, s)).collect();
-
-    let mut m = Interp::new();
-    m.link_intrinsics(&n1);
-    assert!(m.run(&b1).completed, "crank 1 (store)");
-    let session = begin_store_session(m, &sig(), store)
-        .map_err(|(_, e)| e)
-        .expect("begin");
-    drop(session);
-    let mut session = resume_from_store(store, &sig()).expect("resume");
-    let resumed: Vec<_> = observations
-        .iter()
-        .map(|s| crank(session.machine_mut(), s))
-        .collect();
-    assert_eq!(continuous, resumed, "resumed observes exactly as uninterrupted");
-    checkpoint_to_store(&mut session, &sig(), store).expect("checkpoint after resume");
-    validate_store(store, &sig()).expect("post-crank store validates");
-    continuous
-}
 
 fn assert_twin(name: &str, crank1: &str, observations: &[&str], expect: &[&str]) {
     let mut mem = MemoryStore::new();
@@ -76,7 +26,10 @@ fn assert_twin(name: &str, crank1: &str, observations: &[&str], expect: &[&str])
         assert!(got.0, "observation completes: {:?}", got.1);
     }
     let got: Vec<&str> = seen.iter().map(|(_, _, r, _)| r.as_str()).collect();
-    assert_eq!(got, expect, "the continuous observations are the real answers");
+    assert_eq!(
+        got, expect,
+        "the continuous observations are the real answers"
+    );
 
     let dir = TempDir::new(name);
     let mut file = FileStore::open(dir.join("heap.ihstore")).unwrap();
@@ -100,7 +53,8 @@ fn a_resumed_non_growing_crank_installs_the_boot_interned_backlog() {
 
 /// A name the GUEST interned (a `JSON.parse` key naming an intrinsic):
 /// same discipline — the non-growing observation reaches the global
-/// only through the floor-gated backlog pass.
+/// only through the relink backlog pass. Intrinsic surfaces use the carried
+/// floor; per-environment globals use their binding history.
 #[test]
 fn a_resumed_non_growing_crank_installs_a_guest_interned_name() {
     assert_twin(
@@ -108,6 +62,21 @@ fn a_resumed_non_growing_crank_installs_a_guest_interned_name() {
         "var o = 0; var t = 0; o = JSON.parse('{\"Math\":1}'); t = 7; t",
         &["var o; var t; t = typeof Math; t"],
         &["object"],
+    );
+}
+
+/// A runtime-interned intrinsic global can be created and deleted without a
+/// static property-name atom. Its per-environment binding history remains
+/// authoritative on both the next live relink and after restore.
+#[test]
+fn a_runtime_interned_deleted_global_stays_deleted_across_resume() {
+    assert_twin(
+        "ih-floor-twin-deleted-global",
+        "var k = String.fromCharCode(77, 97, 116, 104); \
+         var o = JSON.parse('{\"' + k + '\":1}'); \
+         delete globalThis[k]; 0",
+        &["typeof Math"],
+        &["undefined"],
     );
 }
 
@@ -127,9 +96,9 @@ fn a_deleted_seed_accessor_stays_deleted_across_resume() {
     );
 }
 
-/// A computed boot-default name goes through the same floor-gated intrinsic
-/// installation path as reflection. Once the guest deletes the installed
-/// property, neither a non-growing relink nor restore may recreate it.
+/// A computed boot-default name goes through the floor-gated shared-intrinsic
+/// installation path. Once the guest deletes the installed property, neither
+/// a non-growing relink nor restore may recreate it.
 #[test]
 fn a_computed_intrinsic_name_and_its_deletion_survive_resume() {
     assert_twin(

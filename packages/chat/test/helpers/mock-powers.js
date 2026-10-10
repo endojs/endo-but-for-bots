@@ -43,7 +43,7 @@ import { makePromiseKit } from '@endo/promise-kit';
  *   `followNameChanges` event, simulating the daemon's type-enrichment path.
  * @property {(name: string) => void} removeName - Remove a pet name
  * @property {(name: string, value: unknown, id?: string) => void} setValue
- * @property {Array<{ to: string, strings: string[], edgeNames: string[], petNames: string[] }>} sentMessages
+ * @property {Array<{ to: string | string[], strings: string[], edgeNames: string[], petNames: string[] }>} sentMessages
  * @property {Array<{ method: string, args: unknown[] }>} calls - Record of
  *   every method invocation on the mock; the inventory-component tests assert
  *   on the shape of cancel / copy / move calls to pin the path-argument
@@ -77,7 +77,7 @@ export const makeMockPowers = ({
   /** @type {Array<(value: { add: string, type?: string } | { remove: string }) => void>} */
   const nameChangeResolvers = [];
 
-  /** @type {Array<{ to: string, strings: string[], edgeNames: string[], petNames: string[] }>} */
+  /** @type {Array<{ to: string | string[], strings: string[], edgeNames: string[], petNames: string[] }>} */
   const sentMessages = [];
 
   /** @type {Array<{ method: string, args: unknown[] }>} */
@@ -189,6 +189,15 @@ export const makeMockPowers = ({
      */
     locate(...path) {
       calls.push({ method: 'locate', args: path });
+      // The daemon's `locate` is variadic over name-path SEGMENTS and runs
+      // `assertNames`, which rejects a segment containing "/". Joining here
+      // without that check would make `locate('a/b')` and `locate('a', 'b')`
+      // indistinguishable and hide the caller bug the daemon would reject.
+      for (const segment of path) {
+        if (segment.includes('/')) {
+          throw new Error(`Invalid name ${JSON.stringify(segment)}`);
+        }
+      }
       const key = path.join('/');
       return locators.get(key);
     },
@@ -278,7 +287,7 @@ export const makeMockPowers = ({
 
     /**
      * Send a message.
-     * @param {string} to
+     * @param {string | string[]} to - A pet name or a pet-name path
      * @param {string[]} strings
      * @param {string[]} edgeNames
      * @param {string[]} petNames

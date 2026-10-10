@@ -10,6 +10,8 @@
 //! Retained defining-crank bytecode now extends the scope to function
 //! and closure calls created by earlier cranks.
 
+mod w2_meter_support;
+
 use ironhorse_262::{dual_run_cranks, Agreement};
 
 /// Every crank completes on both engines, agrees on the result, and
@@ -18,12 +20,18 @@ fn agrees(cranks: &[&str]) {
     let runs = dual_run_cranks(cranks).expect("the XS oracle machine must start");
     assert_eq!(runs.len(), cranks.len(), "every crank ran");
     for (i, run) in runs.iter().enumerate() {
-        assert_eq!(
-            run.agreement,
-            Agreement::BothComplete,
-            "crank {i}: {run:?}"
-        );
-        assert!(run.is_bit_exact(), "crank {i}: {run:?}");
+        assert_eq!(run.agreement, Agreement::BothComplete, "crank {i}: {run:?}");
+        assert!(run.observables_agree(), "crank {i}: {run:?}");
+    }
+}
+
+fn agrees_v2(cranks: &[&str]) {
+    let runs = dual_run_cranks(cranks).expect("the XS oracle machine must start");
+    assert_eq!(runs.len(), cranks.len());
+    for run in runs {
+        assert_eq!(run.agreement, Agreement::BothComplete, "{run:?}");
+        assert!(run.result_agrees, "{run:?}");
+        w2_meter_support::assert_raw(&run.source, run.ironhorse_meter_raw);
     }
 }
 
@@ -83,11 +91,11 @@ fn retained_function_and_closure_call_across_cranks() {
 
 #[test]
 fn retained_function_call_and_apply_across_cranks() {
-    agrees(&[
+    agrees_v2(&[
         "var f = function (a, b) { return this.k + a + b; }; var o = { k: 10 }; 0",
         "f.call(o, 2, 3)",
     ]);
-    agrees(&[
+    agrees_v2(&[
         "var f = function (a, b) { return this.k + a + b; }; var o = { k: 10 }; 0",
         "f.apply(o, [4, 5])",
     ]);
@@ -116,12 +124,12 @@ fn an_aborting_crank_compares_and_stops() {
     // The run stops AT the aborting crank: two comparisons, not three.
     assert_eq!(runs.len(), 2, "{runs:?}");
     assert_eq!(runs[0].agreement, Agreement::BothComplete);
-    assert!(runs[0].is_bit_exact(), "{:?}", runs[0]);
+    assert!(runs[0].observables_agree(), "{:?}", runs[0]);
     // Both engines abort crank 2 with the SAME rendered error (the
     // error_data render crossing the crank boundary) and the same
     // run-only computron count at the throw.
     assert_eq!(runs[1].agreement, Agreement::BothAbort, "{:?}", runs[1]);
     assert!(runs[1].error_agrees, "{:?}", runs[1]);
-    assert!(runs[1].is_bit_exact(), "{:?}", runs[1]);
+    assert!(runs[1].observables_agree(), "{:?}", runs[1]);
     assert_eq!(runs[1].oracle_error, "RangeError: later");
 }

@@ -3,6 +3,7 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { EndoHost } from '@endo/daemon' */
+/** @import { IterateReaderOptions } from '@endo/exo-stream' */
 /** @import { HopPolicy, HopState, HeatEvent } from './composite-heat-engine.js' */
 
 /**
@@ -245,7 +246,7 @@ harden(ReplyContextBar);
  * @param {HTMLElement} options.$sendButton - Send button element
  * @param {HTMLElement} options.$chatBar - Chat bar element (for submitting class)
  * @param {typeof import('@endo/eventual-send').E} options.E - Eventual send function
- * @param {(ref: unknown) => AsyncIterable<unknown>} options.iterateReader - Ref iterator factory
+ * @param {(ref: unknown, options?: IterateReaderOptions) => AsyncIterable<unknown>} options.iterateReader - Ref iterator factory
  * @param {ERef<EndoHost>} options.powers - Powers object
  * @param {(value: unknown, id?: string, petNamePath?: string[], messageContext?: { number: bigint, edgeName: string }) => void | Promise<void>} [options.showValue] - Display a value
  * @param {() => boolean} [options.shouldHandleEnter] - Optional callback to check if Enter should be handled
@@ -442,6 +443,9 @@ export const sendFormComponent = ({
             /** @type {Parameters<typeof iterateReader>[0]} */ (
               /** @type {unknown} */ (eventsRef)
             ),
+            // Prefetch a window so a burst of heat events does not cost a
+            // round-trip acknowledgement each.
+            { buffer: 64 },
           );
           (async () => {
             for await (const event of eventIter) {
@@ -684,14 +688,24 @@ export const sendFormComponent = ({
       });
 
       setSubmitting(true);
+      // The daemon treats a recipient STRING as a single pet-name segment
+      // (namePathFrom does not split on "/"), so a nested recipient like
+      // `floot/controller-profile/session-…` must be handed over as a path
+      // array or it fails with `Invalid name`. Mirror the `identify` calls
+      // below, which already split on "/".
+      const conversationRecipient =
+        typeof conversationPetName === 'string'
+          ? conversationPetName.split('/')
+          : conversationPetName;
       E(powers)
-        .send(conversationPetName, messageStrings, edgeNames, petNames)
+        .send(conversationRecipient, messageStrings, edgeNames, petNames)
         .then(
           () => {
-            // `lastRecipient` is consumed downstream as a string (token
-            // insertion, navigation); the wired caller always supplies a
-            // string pet name here, never a path array.
-            lastRecipient = /** @type {string} */ (conversationPetName);
+            // `lastRecipient` is consumed downstream as a string — token
+            // insertion, navigation, and the `to.split('/')` on the plain-send
+            // path below. `getConversationPetName` may return a path array, so
+            // join the path back rather than storing the array form.
+            lastRecipient = conversationRecipient.join('/');
             tokenComponent.clear();
             clearError();
           },
@@ -773,8 +787,11 @@ export const sendFormComponent = ({
     const navigateAfterSend = firstStringEmpty && petNames.length > 0;
 
     setSubmitting(true);
+    // Split the recipient into a path so nested targets (e.g.
+    // `floot/controller-profile/session-…`) resolve — the daemon validates a
+    // recipient string as a single name segment and rejects embedded "/".
     E(powers)
-      .send(to, messageStrings, messageEdgeNames, messagePetNames)
+      .send(to.split('/'), messageStrings, messageEdgeNames, messagePetNames)
       .then(
         () => {
           lastRecipient = to;

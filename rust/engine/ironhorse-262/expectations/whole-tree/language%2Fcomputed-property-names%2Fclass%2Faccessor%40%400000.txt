@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=language/computed-property-names/class/accessor tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/computed-property-names/class/accessor/getter-duplicates.js sloppy pass
+language/computed-property-names/class/accessor/getter-duplicates.js strict pass
+language/computed-property-names/class/accessor/getter.js sloppy pass
+language/computed-property-names/class/accessor/getter.js strict pass
+language/computed-property-names/class/accessor/setter-duplicates.js sloppy pass
+language/computed-property-names/class/accessor/setter-duplicates.js strict pass
+language/computed-property-names/class/accessor/setter.js sloppy pass
+language/computed-property-names/class/accessor/setter.js strict pass

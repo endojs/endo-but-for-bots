@@ -1,0 +1,45 @@
+{
+  "name": "@endo/ironhorse-prelude",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Ironhorse SES prologue: the engine repairs the ses shim needs before it runs",
+  "keywords": [],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/endojs/endo/tree/master/packages/ironhorse-prelude#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/ironhorse-prelude"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "main": "./prelude.js",
+  "exports": {
+    ".": "./prelude.js",
+    "./codec-polyfill.js": "./codec-polyfill.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
+    "lint:eslint": "eslint .",
+    "lint:types": "tsc",
+    "test": "exit 0",
+    "test:xs": "exit 0"
+  },
+  "devDependencies": {
+    "eslint": "catalog:dev",
+    "typescript": "catalog:dev"
+  },
+  "files": [
+    "prelude.js",
+    "codec-polyfill.js"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

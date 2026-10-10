@@ -1,0 +1,6 @@
+[toolchain]
+# The daemon's iroh dependency requires Rust 1.91. Keep this compiler pin in
+# sync with rust/engine/rust-toolchain.toml; CI pins rustfmt/clippy separately.
+channel = "1.91.1"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

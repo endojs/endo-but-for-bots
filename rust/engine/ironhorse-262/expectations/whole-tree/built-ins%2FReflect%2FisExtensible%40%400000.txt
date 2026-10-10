@@ -1,0 +1,17 @@
+# engine=ironhorse features=default corpus=built-ins/Reflect/isExtensible tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Reflect/isExtensible/isExtensible.js sloppy pass
+built-ins/Reflect/isExtensible/isExtensible.js strict pass
+built-ins/Reflect/isExtensible/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Reflect/isExtensible/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Reflect/isExtensible/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be isExtensible; name value should be isExtensible"
+built-ins/Reflect/isExtensible/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be isExtensible; name value should be isExtensible"
+built-ins/Reflect/isExtensible/not-a-constructor.js sloppy pass
+built-ins/Reflect/isExtensible/not-a-constructor.js strict pass
+built-ins/Reflect/isExtensible/return-abrupt-from-result.js sloppy pass
+built-ins/Reflect/isExtensible/return-abrupt-from-result.js strict pass
+built-ins/Reflect/isExtensible/return-boolean.js sloppy pass
+built-ins/Reflect/isExtensible/return-boolean.js strict pass
+built-ins/Reflect/isExtensible/target-is-not-object-throws.js sloppy pass
+built-ins/Reflect/isExtensible/target-is-not-object-throws.js strict pass
+built-ins/Reflect/isExtensible/target-is-symbol-throws.js sloppy pass
+built-ins/Reflect/isExtensible/target-is-symbol-throws.js strict pass

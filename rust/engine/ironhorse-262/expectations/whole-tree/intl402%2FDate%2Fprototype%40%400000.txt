@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=intl402/Date/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Date/prototype/returns-same-results-as-DateTimeFormat.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Date/prototype/returns-same-results-as-DateTimeFormat.js strict skip:oracle-host-missing-global:Intl
+intl402/Date/prototype/taint-Intl-DateTimeFormat.js sloppy skip:oracle-host-missing-intl
+intl402/Date/prototype/taint-Intl-DateTimeFormat.js strict skip:oracle-host-missing-intl
+intl402/Date/prototype/this-value-invalid-date.js sloppy pass
+intl402/Date/prototype/this-value-invalid-date.js strict pass
+intl402/Date/prototype/this-value-non-date.js sloppy pass
+intl402/Date/prototype/this-value-non-date.js strict pass
+intl402/Date/prototype/throws-same-exceptions-as-DateTimeFormat.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Date.prototype.toLocaleString didn't throw exception for locales null. Expected a ReferenceError to be thrown but no exception was thrown at all\" ironhorse=\"Test262Error: Date.prototype.toLocaleString didn't throw exception for locales null. Expected a TypeError to be thrown but no exception was thrown at all\""
+intl402/Date/prototype/throws-same-exceptions-as-DateTimeFormat.js strict fail:"abort-value-differs: oracle=\"Test262Error: Date.prototype.toLocaleString didn't throw exception for locales null. Expected a ReferenceError to be thrown but no exception was thrown at all\" ironhorse=\"Test262Error: Date.prototype.toLocaleString didn't throw exception for locales null. Expected a TypeError to be thrown but no exception was thrown at all\""

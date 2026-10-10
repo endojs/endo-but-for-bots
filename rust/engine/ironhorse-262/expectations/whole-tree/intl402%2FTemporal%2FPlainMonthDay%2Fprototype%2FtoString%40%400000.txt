@@ -1,0 +1,17 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/PlainMonthDay/prototype/toString tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/PlainMonthDay/prototype/toString/calendarname-always.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/prototype/toString/calendarname-always.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/prototype/toString/calendarname-auto.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/prototype/toString/calendarname-auto.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/prototype/toString/calendarname-critical.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/prototype/toString/calendarname-critical.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/prototype/toString/calendarname-never.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/prototype/toString/calendarname-never.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/prototype/toString/calendarname-undefined.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/prototype/toString/calendarname-undefined.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/prototype/toString/calendarname-wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/prototype/toString/calendarname-wrong-type.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/prototype/toString/options-undefined.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/prototype/toString/options-undefined.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/prototype/toString/year-format.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/prototype/toString/year-format.js strict skip:oracle-host-missing-global:Temporal

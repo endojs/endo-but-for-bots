@@ -147,7 +147,15 @@ test.serial(
     t.false($window.classList.contains('flipped'), 'starts on front face');
 
     pressKey('F');
-    await tick(20);
+    // `flipFace` sets the class synchronously and only then awaits
+    // `ensureBackFaceRendered`, so poll for the getFormula call as well: a poll
+    // on the class alone returns before the fetch it is meant to wait for, and
+    // a fixed tick budget can expire before it on a loaded CI runner.
+    await waitFor(
+      () =>
+        $window.classList.contains('flipped') &&
+        calls.some(c => c.method === 'getFormula'),
+    );
 
     t.true($window.classList.contains('flipped'), 'flipped to back after F');
     const getFormulaCalls = calls.filter(c => c.method === 'getFormula');
@@ -228,7 +236,9 @@ test.serial(
     const $worker = $parent.querySelector('.formula-view-reference');
     t.truthy($worker);
     $worker.click();
-    await tick(30);
+    // Resolving the reference is asynchronous, so wait for the call rather than
+    // for a fixed budget that a loaded CI runner can outrun.
+    await waitFor(() => calls.some(c => c.method === 'lookupById'));
 
     // lookupById is the call that resolves the reference target.
     const lookupCalls = calls.filter(c => c.method === 'lookupById');

@@ -1,0 +1,21 @@
+# engine=ironhorse features=default corpus=built-ins/Reflect/preventExtensions tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Reflect/preventExtensions/always-return-true-from-ordinary-object.js sloppy pass
+built-ins/Reflect/preventExtensions/always-return-true-from-ordinary-object.js strict pass
+built-ins/Reflect/preventExtensions/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Reflect/preventExtensions/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Reflect/preventExtensions/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be preventExtensions; name value should be preventExtensions"
+built-ins/Reflect/preventExtensions/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be preventExtensions; name value should be preventExtensions"
+built-ins/Reflect/preventExtensions/not-a-constructor.js sloppy pass
+built-ins/Reflect/preventExtensions/not-a-constructor.js strict pass
+built-ins/Reflect/preventExtensions/prevent-extensions.js sloppy pass
+built-ins/Reflect/preventExtensions/prevent-extensions.js strict pass
+built-ins/Reflect/preventExtensions/preventExtensions.js sloppy pass
+built-ins/Reflect/preventExtensions/preventExtensions.js strict pass
+built-ins/Reflect/preventExtensions/return-abrupt-from-result.js sloppy pass
+built-ins/Reflect/preventExtensions/return-abrupt-from-result.js strict pass
+built-ins/Reflect/preventExtensions/return-boolean-from-proxy-object.js sloppy pass
+built-ins/Reflect/preventExtensions/return-boolean-from-proxy-object.js strict pass
+built-ins/Reflect/preventExtensions/target-is-not-object-throws.js sloppy pass
+built-ins/Reflect/preventExtensions/target-is-not-object-throws.js strict pass
+built-ins/Reflect/preventExtensions/target-is-symbol-throws.js sloppy pass
+built-ins/Reflect/preventExtensions/target-is-symbol-throws.js strict pass

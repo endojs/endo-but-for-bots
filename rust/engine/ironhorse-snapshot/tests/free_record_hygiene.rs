@@ -8,6 +8,10 @@
 //! locked by the in-crate `free_records_are_opaque_and_free_owners_
 //! are_refused` unit test.)
 
+#[path = "common/compile.rs"]
+mod guest_compile;
+use guest_compile::compile;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -21,11 +25,6 @@ use ironhorse_vm::Interp;
 
 fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
-}
-
-fn compile(src: &str) -> (Vec<u8>, Vec<String>) {
-    let (b, s) = ironhorse_compile::compile_atoms(src).expect("compiles");
-    (b, ironhorse_vm::parse_symbols(&s))
 }
 
 fn crank(m: &mut Interp, src: &str) -> String {
@@ -56,12 +55,15 @@ fn post_gc_machine() -> Interp {
     assert_eq!(o.result, "4096");
     let r = crank(&mut m, "var keep; var junk; var t; junk = 0; t = keep; t");
     assert_eq!(r, "kept");
-    let stats = m.collect_garbage();
+    let stats = m.collect_garbage().unwrap();
     assert!(
         stats.chunk_bytes_after < stats.chunk_bytes_before,
         "the fixture must compact chunks out from under the freed strings: {stats:?}"
     );
-    assert!(stats.slots_reclaimed > 0, "and free their slot records: {stats:?}");
+    assert!(
+        stats.slots_reclaimed > 0,
+        "and free their slot records: {stats:?}"
+    );
     m
 }
 
@@ -70,7 +72,9 @@ fn post_gc_machine() -> Interp {
 fn a_post_gc_snapshot_with_stale_freed_records_round_trips_the_blob_path() {
     let m = post_gc_machine();
     let live_probe = "var keep; var t; t = keep + '!'; t";
-    let bytes = m.write_snapshot(&sig()).expect("the writer serializes as-is");
+    let bytes = m
+        .write_snapshot(&sig())
+        .expect("the writer serializes as-is");
     let mut m2 = from_snapshot_bytes(&bytes, &sig())
         .expect("freed records are opaque: the read gate must accept an honest post-GC image");
     assert_eq!(crank(&mut m2, live_probe), "kept!");
@@ -108,7 +112,7 @@ fn a_post_gc_checkpoint_resumes_lazily_and_faults_every_page() {
     drop(session);
     let shared = Rc::new(RefCell::new(store));
     let mut resumed = resume_from_store_lazy(shared, &sig()).expect("lazy resume");
-    resumed.machine().slots.ensure_all_resident();
+    resumed.machine().slots().ensure_all_resident();
     assert_eq!(
         crank(resumed.machine_mut(), "var keep; var t; t = keep + '.'; t"),
         "kept."

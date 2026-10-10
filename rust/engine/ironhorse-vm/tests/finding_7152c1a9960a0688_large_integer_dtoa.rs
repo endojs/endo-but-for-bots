@@ -62,7 +62,10 @@ fn large_integer_result_renders_shortest_round_tripping_decimal() {
         "program value is the finding's exactly-representable double",
     );
     // The `|| 1015021568` right operand is dead: the left value is nonzero.
-    assert_ne!(value, 0.0, "left operand of || is truthy, so it is the result");
+    assert_ne!(
+        value, 0.0,
+        "left operand of || is truthy, so it is the result"
+    );
 
     // The port renders the ECMA-262 shortest decimal, exactly as V8/Node does.
     assert_eq!(

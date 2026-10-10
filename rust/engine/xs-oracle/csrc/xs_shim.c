@@ -28,6 +28,7 @@
 #include "xsAll.h"
 #include "xsScript.h"
 #include <pthread.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -51,6 +52,15 @@ typedef struct {
 	 * against the port must not read a divergence from the truncation — the
 	 * differential check skips such a case honestly (finding 493390fc0397). */
 	txU4 result_len;
+	txS4 exit_status; /* original fxAbort status; zero for ordinary JS throws */
+	/* XS's own heap accounting at the end of the run, so the footprint half
+	 * of the engine design's performance envelope ("heap within 1.1x") has
+	 * an XS side to compare against. Both are plain txMachine counters
+	 * (xsAll.h): heap_count is slots, which XS accounts at 32 bytes each,
+	 * and chunks_size is the byte arena. Diagnostic only — nothing in the
+	 * differential comparison reads them, so they cannot make a trophy. */
+	txU4 heap_count;
+	txU4 chunks_size;
 } EndorOracleResult;
 
 static int gEndorClusterReady = 0;
@@ -94,6 +104,15 @@ static void fx_endor_detachArrayBuffer(txMachine *the)
 	mxTypeError("this is no ArrayBuffer instance");
 }
 
+/* Classify only resource exits, not guest rejection/exception exits. Keeping
+ * this beside XS's headers avoids duplicating its enum numbering in Rust. */
+int xs_oracle_is_resource_abort(txS4 status)
+{
+	return (status == XS_NOT_ENOUGH_MEMORY_EXIT)
+		|| (status == XS_JAVASCRIPT_STACK_OVERFLOW_EXIT)
+		|| (status == XS_NATIVE_STACK_OVERFLOW_EXIT);
+}
+
 /*
  * Best-effort stringification of the caught mxException into `buf`.
  * Every mxCatch in this shim wants the thrown value as text, but
@@ -106,8 +125,6 @@ static void fx_endor_detachArrayBuffer(txMachine *the)
  */
 static void endor_error_from_exception(txMachine *the, char *buf, size_t max)
 {
-	if (mxException.kind == XS_UNDEFINED_KIND)
-		return;
 	mxTry(the) {
 		mxPush(mxException);
 		fxToString(the, the->stack);
@@ -292,10 +309,36 @@ static void xs_oracle_delete_machine(txMachine *the)
  * negative on a machine-level failure.  A thrown JS exception or a
  * syntax error is a normal outcome reported through out->ok == 0.
  */
-int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
+typedef struct {
+	txU8 compile_ns;
+	txU8 execute_ns;
+} EndorOracleTiming;
+
+static txU8 endor_monotonic_ns(void)
+{
+	struct timespec now;
+	if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+		return 0;
+	return (txU8)now.tv_sec * 1000000000ULL + (txU8)now.tv_nsec;
+}
+
+static txU8 endor_elapsed_ns(txU8 started)
+{
+	txU8 ended = endor_monotonic_ns();
+	return started && ended >= started ? ended - started : 0;
+}
+
+static int xs_oracle_run_impl(const char *source, txU4 sourceLen,
+	EndorOracleResult *out, EndorOracleTiming *timing)
 {
 	txMachine *the;
+	txU8 started = 0;
+	/* A machine abort skips fxRunScript's ordinary exception cleanup.
+	 * Keep its allocation reachable across the outer mxCatch longjmp. */
+	txScript *volatile script = C_NULL;
 	memset(out, 0, sizeof(*out));
+	if (timing)
+		memset(timing, 0, sizeof(*timing));
 
 	the = xs_oracle_create_machine("xs-oracle");
 	if (!the)
@@ -305,7 +348,6 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 	{
 		mxTry(the) {
 			txStringCStream stream;
-			txScript *script;
 			txSlot *module;
 			txSlot *realm;
 			txSlot *result;
@@ -372,8 +414,13 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 			stream.size = (txSize)sourceLen;
 
 			/* Compile (parse+code). Parse metering is discarded below. */
+			if (timing)
+				started = endor_monotonic_ns();
 			script = fxParseScript(the, &stream, fxStringCGetter,
 				mxProgramFlag | mxEvalFlag);
+
+			if (timing)
+				timing->compile_ns = endor_elapsed_ns(started);
 
 			/* Capture the emitted bytecode before running. */
 			out->code_size = (txU4)script->codeSize;
@@ -395,8 +442,11 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 
 			/* Measure the run only. */
 			the->meterIndex = 0;
+			if (timing)
+				started = endor_monotonic_ns();
 			fxRunScript(the, script, mxRealmGlobal(realm), C_NULL,
 				mxRealmClosures(realm)->value.reference, C_NULL, module);
+			script = C_NULL; /* fxRunScript freed it; jobs may abort too. */
 			/* Pump-loop latch: drain the promise job queue with metering
 			 * still accumulating, modeling the host-driven microtask drain
 			 * the ironhorse embedding performs after a crank (design § promises,
@@ -417,6 +467,8 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 			}
 			out->computrons = the->meterIndex >> 16;
 			out->meter_raw = (txU4)the->meterIndex;
+			out->heap_count = (txU4)the->currentHeapCount;
+			out->chunks_size = (txU4)the->currentChunksSize;
 
 			/* fxRunScript leaves the completion value on the stack top. */
 			result = the->stack;
@@ -431,9 +483,16 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 			}
 			mxPop();
 			out->ok = 1;
+			if (timing)
+				timing->execute_ns = endor_elapsed_ns(started);
 		}
 		mxCatch(the) {
 			out->ok = 0;
+			out->exit_status = the->exitStatus;
+			/* Ordinary JS throws are freed by fxRunScript. fxAbort instead
+			 * sets exitStatus and jumps straight here, bypassing that free. */
+			if (the->exitStatus)
+				fxDeleteScript(script);
 			/* Record the run-only computron count reached at the point of
 			 * an uncaught throw, exactly as the normal-completion path
 			 * does. meterIndex was reset to 0 immediately before
@@ -447,6 +506,8 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 			 * not only the completion path (stage-2a review observation 3). */
 			out->computrons = the->meterIndex >> 16;
 			out->meter_raw = (txU4)the->meterIndex;
+			out->heap_count = (txU4)the->currentHeapCount;
+			out->chunks_size = (txU4)the->currentChunksSize;
 			/* mxException holds the thrown value; stringify best-effort. */
 			endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
 		}
@@ -454,6 +515,17 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 	fxEndHost(the);
 	xs_oracle_delete_machine(the);
 	return 0;
+}
+
+int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
+{
+	return xs_oracle_run_impl(source, sourceLen, out, C_NULL);
+}
+
+int xs_oracle_run_timed(const char *source, txU4 sourceLen,
+	EndorOracleResult *out, EndorOracleTiming *timing)
+{
+	return xs_oracle_run_impl(source, sourceLen, out, timing);
 }
 
 void xs_oracle_free(EndorOracleResult *out)
@@ -489,10 +561,11 @@ void xs_oracle_free(EndorOracleResult *out)
  * the aborting crank). Every out slot must be released with
  * xs_oracle_free regardless.
  */
-int xs_oracle_run_cranks(const char **sources, const txU4 *sourceLens,
-	txU4 crankCount, EndorOracleResult *outs)
+static int xs_oracle_run_sources(const char **sources, const txU4 *sourceLens,
+	txU4 crankCount, EndorOracleResult *outs, txBoolean drainEach, txBoolean drainLast)
 {
 	txMachine *the;
+	txScript *volatile script = C_NULL;
 	/* Survives the mxCatch longjmp, so the catch attributes the throw
 	 * to the crank that raised it. */
 	volatile txU4 crank_i = 0;
@@ -547,7 +620,6 @@ int xs_oracle_run_cranks(const char **sources, const txU4 *sourceLens,
 			for (crank_i = 0; crank_i < crankCount; crank_i++) {
 				EndorOracleResult *out = &outs[crank_i];
 				txStringCStream stream;
-				txScript *script;
 				txSlot *module;
 				txSlot *realm;
 				txSlot *result;
@@ -580,19 +652,23 @@ int xs_oracle_run_cranks(const char **sources, const txU4 *sourceLens,
 				the->meterIndex = 0;
 				fxRunScript(the, script, mxRealmGlobal(realm), C_NULL,
 					mxRealmClosures(realm)->value.reference, C_NULL, module);
-				/* Per-crank microtask drain (the pump-loop latch). */
-				while (the->promiseJobs) {
+				script = C_NULL; /* No live parser allocation during jobs. */
+				/* Test setup shares one checkpoint with the final case. */
+				while ((drainEach || (drainLast && crank_i + 1 == crankCount)) && the->promiseJobs) {
 					the->promiseJobs = 0;
 					fxRunPromiseJobs(the);
 				}
 				out->computrons = the->meterIndex >> 16;
 				out->meter_raw = (txU4)the->meterIndex;
+				out->heap_count = (txU4)the->currentHeapCount;
+				out->chunks_size = (txU4)the->currentChunksSize;
 
 				result = the->stack;
 				fxToString(the, result);
 				{
 					txString s = result->value.string;
 					if (s) {
+						out->result_len = (txU4)c_strlen(s);
 						strncpy(out->result, s, ENDOR_RESULT_MAX - 1);
 						out->result[ENDOR_RESULT_MAX - 1] = 0;
 					}
@@ -603,15 +679,34 @@ int xs_oracle_run_cranks(const char **sources, const txU4 *sourceLens,
 		}
 		mxCatch(the) {
 			EndorOracleResult *out = &outs[crank_i];
+			if (the->exitStatus)
+				fxDeleteScript(script);
 			out->ok = 0;
+			out->exit_status = the->exitStatus;
 			out->computrons = the->meterIndex >> 16;
 			out->meter_raw = (txU4)the->meterIndex;
+			out->heap_count = (txU4)the->currentHeapCount;
+			out->chunks_size = (txU4)the->currentChunksSize;
 			endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
 		}
 	}
 	fxEndHost(the);
 	xs_oracle_delete_machine(the);
 	return 0;
+}
+
+/* Existing crank semantics keep their checkpoint after every script. */
+int xs_oracle_run_cranks(const char **sources, const txU4 *sourceLens,
+	txU4 count, EndorOracleResult *outs)
+{
+	return xs_oracle_run_sources(sources, sourceLens, count, outs, 1, 1);
+}
+
+/* Separately compiled scripts, one final microtask checkpoint (xst262 order). */
+int xs_oracle_run_scripts(const char **sources, const txU4 *sourceLens,
+	txU4 count, EndorOracleResult *outs, txBoolean checkpoint)
+{
+	return xs_oracle_run_sources(sources, sourceLens, count, outs, 0, checkpoint);
 }
 
 /*
@@ -643,6 +738,7 @@ int xs_oracle_run_cranks(const char **sources, const txU4 *sourceLens,
 int xs_oracle_compile_module(const char *source, txU4 sourceLen, EndorOracleResult *out)
 {
 	txMachine *the;
+	txScript *volatile script = C_NULL;
 	memset(out, 0, sizeof(*out));
 
 	the = xs_oracle_create_machine("xs-oracle-module");
@@ -653,7 +749,6 @@ int xs_oracle_compile_module(const char *source, txU4 sourceLen, EndorOracleResu
 	{
 		mxTry(the) {
 			txStringCStream stream;
-			txScript *script;
 
 			stream.buffer = (txString)source;
 			stream.offset = 0;
@@ -683,6 +778,7 @@ int xs_oracle_compile_module(const char *source, txU4 sourceLen, EndorOracleResu
 				 * returns C_NULL when errorCount is nonzero and there is no
 				 * console). Report a rejection, not a machine failure. */
 				out->ok = 0;
+				out->exit_status = the->exitStatus;
 				strncpy(out->error, "SyntaxError: module parse failed",
 					ENDOR_ERROR_MAX - 1);
 				out->error[ENDOR_ERROR_MAX - 1] = 0;
@@ -690,9 +786,13 @@ int xs_oracle_compile_module(const char *source, txU4 sourceLen, EndorOracleResu
 		}
 		mxCatch(the) {
 			out->ok = 0;
+			out->exit_status = the->exitStatus;
 			endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
 		}
 	}
+	/* Compile-only never transfers ownership to fxRunScript. The result
+	 * contains independent copies, so release the parser allocation. */
+	fxDeleteScript(script);
 	fxEndHost(the);
 	xs_oracle_delete_machine(the);
 	return 0;
@@ -714,6 +814,8 @@ int xs_oracle_compile_module(const char *source, txU4 sourceLen, EndorOracleResu
  * into another thread's machine. `__thread` scopes the latch to the
  * running machine's thread. */
 static __thread txSlot *gEndorModuleLatch = C_NULL;
+/* Undefined is a valid rejection reason, so it cannot encode fulfillment. */
+static __thread txBoolean gEndorModuleRejected = 0;
 
 static void xs_oracle_module_fulfilled(txMachine *the)
 {
@@ -722,8 +824,10 @@ static void xs_oracle_module_fulfilled(txMachine *the)
 
 static void xs_oracle_module_rejected(txMachine *the)
 {
-	if (gEndorModuleLatch)
+	if (gEndorModuleLatch) {
+		gEndorModuleRejected = 1;
 		*gEndorModuleLatch = *mxArgv(0);
+	}
 }
 
 /*
@@ -771,9 +875,13 @@ static void xs_oracle_module_rejected(txMachine *the)
  * a machine-level failure (out of memory creating the machine).
  */
 int xs_oracle_run_module(const char *dir, const char *mainRel,
+	const char *setup, txU4 setupLen, EndorOracleResult *setupOut,
 	EndorOracleResult *out)
 {
 	txMachine *the;
+	volatile txBoolean rendering_rejection = 0;
+	txScript *volatile setupScript = C_NULL;
+	memset(setupOut, 0, sizeof(*setupOut));
 	memset(out, 0, sizeof(*out));
 
 	the = xs_oracle_create_machine("xs-oracle-run-module");
@@ -791,6 +899,7 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 		mxPushUndefined();
 		latch = the->stack;
 		gEndorModuleLatch = latch;
+		gEndorModuleRejected = 0;
 
 		mxTry(the) {
 			char path[C_PATH_MAX];
@@ -817,6 +926,25 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 					fxID(the, "mutabilities"), XS_DONT_ENUM_FLAG);
 				mxPop();
 			}
+
+			/* The harness/native lockdown is a Script evaluated before the
+			 * module is linked; module declarations cannot shadow setup.
+			 * Do not checkpoint jobs until the module's normal drain. */
+			if (setupLen) {
+				txStringCStream stream;
+				stream.buffer = (txString)setup;
+				stream.offset = 0;
+				stream.size = (txSize)setupLen;
+				setupScript = fxParseScript(the, &stream, fxStringCGetter,
+					mxProgramFlag | mxEvalFlag);
+				module = mxProgram.value.reference;
+				realm = mxModuleInstanceInternal(module)->value.module.realm;
+				fxRunScript(the, setupScript, mxRealmGlobal(realm), C_NULL,
+					mxRealmClosures(realm)->value.reference, C_NULL, module);
+				setupScript = C_NULL;
+				mxPop();
+			}
+			setupOut->ok = 1;
 
 			/* Resolve dir + '/' + mainRel to an absolute path so XS keys the
 			 * entry module (and every relative specifier off it) by a stable
@@ -868,18 +996,18 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 
 			out->computrons = the->meterIndex >> 16;
 			out->meter_raw = (txU4)the->meterIndex;
+			out->heap_count = (txU4)the->currentHeapCount;
+			out->chunks_size = (txU4)the->currentChunksSize;
 
-			if (latch->kind != XS_UNDEFINED_KIND) {
+			if (gEndorModuleRejected) {
 				/* The import promise rejected: stringify the latched reason. */
 				out->ok = 0;
-				mxPushSlot(latch);
-				fxToString(the, the->stack);
-				if (the->stack->value.string) {
-					strncpy(out->error, the->stack->value.string,
-						ENDOR_ERROR_MAX - 1);
-					out->error[ENDOR_ERROR_MAX - 1] = 0;
-				}
-				mxPop();
+				out->exit_status = the->exitStatus;
+				/* Rendering may throw or exhaust the stack; it must not
+				 * replace the original rejection's recorded status. */
+				rendering_rejection = 1;
+				mxException = *latch;
+				endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
 			}
 			else {
 				/* Fulfilled: the graph evaluated. Read the guest-observable
@@ -900,13 +1028,31 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 		mxCatch(the) {
 			/* A synchronous throw escaping fxRunImport (before the promise
 			 * machinery caught it) is still a normal rejection outcome. */
-			out->computrons = the->meterIndex >> 16;
-			out->meter_raw = (txU4)the->meterIndex;
-			out->ok = 0;
-			endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
+			if (!setupOut->ok) {
+				if (the->exitStatus && setupScript)
+					fxDeleteScript(setupScript);
+				setupOut->exit_status = the->exitStatus;
+				endor_error_from_exception(the, setupOut->error, ENDOR_ERROR_MAX);
+			}
+			else if (rendering_rejection) {
+				/* fxExitToHost skips nested mxTry frames on resource abort.
+				 * Keep the already captured guest rejection and its meter. */
+				strncpy(out->error, "(exception stringification threw)", ENDOR_ERROR_MAX - 1);
+				out->error[ENDOR_ERROR_MAX - 1] = 0;
+			}
+			else {
+				out->computrons = the->meterIndex >> 16;
+				out->meter_raw = (txU4)the->meterIndex;
+				out->heap_count = (txU4)the->currentHeapCount;
+				out->chunks_size = (txU4)the->currentChunksSize;
+				out->ok = 0;
+				out->exit_status = the->exitStatus;
+				endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
+			}
 		}
 	}
 	gEndorModuleLatch = C_NULL;
+	gEndorModuleRejected = 0;
 	fxEndHost(the);
 	xs_oracle_delete_machine(the);
 	return 0;

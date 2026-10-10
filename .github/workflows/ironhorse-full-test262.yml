@@ -1,14 +1,11 @@
-# The full-test262 Ironhorse conformance sweep described in
-# designs/ironhorse-test262-convergence.md. This is an explicitly invokable workflow.
-# An indicative run at 14f26d0a6 on a 32-vCPU host with jobs=16 and the XS oracle
-# enabled took 16m30s; later watchdog/quarantine changes and slower runners can
-# change that wall clock. It remains dispatch-only so ordinary
-# PR/push CI does not absorb that cost. Dispatch it from the Actions tab; a bounded
-# subtree (e.g. built-ins/Proxy) is the default so a manual run is quick, and
-# `full` runs the whole tree.
+# A bounded, resumable whole-tree sweep runs nightly with a committed
+# per-mode expectation ratchet. Manual bounded subtrees remain useful for
+# investigation; ordinary PR CI gates the complete checked-in Ironhorse corpus.
 name: Ironhorse full test262 sweep
 
 on:
+  schedule:
+    - cron: '17 3 * * *'
   workflow_dispatch:
     inputs:
       subtree:
@@ -47,6 +44,74 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  xs-microbenchmarks:
+    name: XS microbenchmark comparison
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: '0'
+      RUST_MIN_STACK: '33554432'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Test report validation
+        run: python3 -m unittest discover -s rust/engine/benches -p 'test_*.py'
+      - name: Test XS timing equivalence
+        working-directory: rust/engine
+        run: cargo test --locked -p xs-oracle --test timing
+      - name: Measure XS microbenchmark slice
+        # Report the 2x microbenchmark result independently of command
+        # success. The complete stage-8 envelope still lacks its
+        # four-variant daemon measurement; throughput, code size and heap
+        # footprint are all measured now (F106/F122).
+        run: python3 rust/engine/benches/xs_compare.py --output xs-microbenchmarks.json
+      - name: Measure engine code size against XS
+        # Reported, not gated: the engine is far outside the design's 2x bar
+        # and a failing check would say nothing the number does not.
+        if: always()
+        run: python3 rust/engine/benches/code_size.py --output engine-code-size.json
+      - name: Upload comparison report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: xs-microbenchmarks
+          path: |
+            xs-microbenchmarks.json
+            engine-code-size.json
+          if-no-files-found: warn
+  unified-resolution:
+    name: engine suites under the root resolution
+    runs-on: ubuntu-latest
+    # A fresh resolve plus a cold build of the engine and the XS oracle.
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: '0'
+      RUST_MIN_STACK: '33554432'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Self-test the unified-resolution builder
+        run: python3 rust/engine/scripts/test-unified-resolution.py
+      - name: Run the engine's suites under the root workspace's resolution
+        # The repository has two workspaces and two lockfiles. The
+        # lockfile-agreement check (in ci.yml, per pull request) proves they
+        # AGREE; this proves the engine's own suites PASS under the
+        # resolution the shipped `endor` binary links, which nothing did
+        # before — `cargo test -p ironhorse-vm` from the repo root refuses,
+        # because the engine crates are not root-workspace members
+        # (architecture finding F070).
+        #
+        # Scheduled rather than per-pull-request: this is a cold build of the
+        # whole engine, and the cheap per-pull-request protection is the
+        # agreement check.
+        run: python3 rust/engine/scripts/check-unified-resolution.py
+
   sweep:
     name: sweep
     runs-on: ubuntu-latest
@@ -80,9 +145,11 @@ jobs:
         run: |
           set -euo pipefail
           arguments=(--output "$GITHUB_WORKSPACE/test262-report" --jobs "${JOBS:-4}" --oracle "${ORACLE:-on}")
-          SUBTREE="${SUBTREE:-built-ins/Proxy}"
+          SUBTREE="${SUBTREE:-full}"
           if [ "${SUBTREE}" != "full" ]; then
             arguments+=(--subtree "${SUBTREE}")
+          elif [ "${ORACLE:-on}" = "on" ]; then
+            arguments+=(--expectations-dir "$GITHUB_WORKSPACE/rust/engine/ironhorse-262/expectations/whole-tree")
           fi
           bash rust/engine/ironhorse-262/scripts/full-run.sh "${arguments[@]}"
 
@@ -131,6 +198,220 @@ jobs:
             test262-report/logs/**
             test262-report/attempts/**
             test262-report/quarantines/**
+            test262-report/ratchets/**
             test262-report/discovery.txt
             test262-report/pending.txt
+          if-no-files-found: warn
+
+  # In-process engine instruments only. The fourth daemon arm is explicitly
+  # blocked on F054 host-function registration and the stage-4 SES boot bundle.
+  benchmarks:
+    name: Performance baselines and scaling
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # Match the documented local before/after measurement environment.
+      CARGO_INCREMENTAL: '0'
+      RUST_MIN_STACK: '33554432'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The baseline revision is remeasured on the same host as the candidate.
+          fetch-depth: 0
+      - name: Test benchmark checker
+        run: python3 -m unittest discover -s rust/engine/benches -p 'test_*.py'
+      - name: Check snapshot performance baselines
+        run: |
+          set -euo pipefail
+          python3 rust/engine/benches/run.py --reference-baseline --check-baseline --output benchmark-report.json 2>&1 | tee benchmark.log
+      - name: Check native stack height
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          python3 rust/engine/benches/stack_height.py --check --output stack-height-report.json 2>&1 | tee stack-height.log
+      - name: Check elapsed time and computron scaling
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test scaling_bench -- --ignored --nocapture --test-threads=1 2>&1 | tee scaling.log
+      - name: Check unchanged checkpoint scaling
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test checkpoint_scaling_bench -- --ignored --nocapture --test-threads=1 2>&1 | tee checkpoint-scaling.log
+      - name: Check existing-property update scaling
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test property_lookup_bench -- --ignored --nocapture --test-threads=1 2>&1 | tee property-lookup.log
+      - name: Check compiler scaling
+        id: compiler_scaling
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path rust/engine/Cargo.toml --locked --release --no-fail-fast -p ironhorse-compile --test compiler_growth_policy --test performance_bench --test compile_budget_bench -- --include-ignored --nocapture --test-threads=1 2>&1 | tee compiler-scaling.log
+      - name: Diagnose failed compiler scaling
+        if: ${{ !cancelled() && steps.compiler_scaling.outcome == 'failure' }}
+        run: |
+          set -euo pipefail
+          python3 rust/engine/benches/profile_compile.py 2>&1 | tee compiler-phases.log
+      - name: Check shared-bytecode lifecycle scaling
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test lifecycle_bench -- --ignored --nocapture --test-threads=1 2>&1 | tee lifecycle.log
+      - name: Measure property and call classification
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test classification_bench -- --ignored --nocapture --test-threads=1 2>&1 | tee classification.log
+      - name: Upload performance measurements
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ironhorse-performance
+          path: |
+            benchmark-report.json
+            benchmark.log
+            stack-height-report.json
+            stack-height.log
+            scaling.log
+            compiler-scaling.log
+            compiler-phases.log
+            lifecycle.log
+            classification.log
+            property-lookup.log
+            checkpoint-scaling.log
+          if-no-files-found: error
+
+  # STACK-DEPTH-REFACTOR.md §5, Phase 0: the corpus of rust/engine/stack-lanes
+  # under Wasmtime (lane A), Node and workerd with V8's tiers pinned (lane B),
+  # the per-function frame report (lane C) and the grammar sweep. Lanes A and
+  # B compare every case's output with the native probe's byte for byte and
+  # fail on a trap their expected-trap lists do not name; the ceilings and
+  # the sweep's pins must still hold; lane C is trend only. The marks and
+  # frame sizes are uploaded for the ratchet that lowers the lanes' stacks as
+  # the refactor phases land.
+  stack-lanes:
+    name: Stack lanes (Wasmtime, Node, workerd)
+    runs-on: ubuntu-latest
+    # Three engine builds (native, wasm with build-std, native again with
+    # -Z emit-stack-sizes) and the whole corpus on three hosts.
+    timeout-minutes: 180
+    env:
+      CARGO_INCREMENTAL: '0'
+      WASMTIME_VERSION: v49.0.0
+      WASMTIME_SHA256: a956c279ac6e80109369a285db30fc46f68239fa1bbeb03ccfa8e913bbca85fc
+      WORKERD_VERSION: 1.20260930.2
+      WORKERD_SHA256: 108de4d66cbb7d3bb283afdcda5d8f570b653170bf7e559ae554e766bb515afb
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Cache Cargo downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-stack-lanes-cargo-${{ hashFiles('rust/engine/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-stack-lanes-cargo-
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.x
+      - name: Install the pinned toolchain's wasm target, rust-src and llvm-tools
+        # The wasm probe is built with -Zbuild-std (WASM-BLOCKERS.md B1), which
+        # needs rust-src; lane C reads native frame sizes with llvm-readobj.
+        # rustup picks the channel from rust/engine/rust-toolchain.toml.
+        working-directory: rust/engine
+        run: |
+          set -euo pipefail
+          rustup target add wasm32-wasip1
+          rustup component add rust-src llvm-tools
+      - name: Install Wasmtime
+        run: |
+          set -euo pipefail
+          archive="wasmtime-${WASMTIME_VERSION}-x86_64-linux"
+          curl -fsSL -o wasmtime.tar.xz \
+            "https://github.com/bytecodealliance/wasmtime/releases/download/${WASMTIME_VERSION}/${archive}.tar.xz"
+          echo "${WASMTIME_SHA256}  wasmtime.tar.xz" | sha256sum --check
+          tar -xJf wasmtime.tar.xz
+          echo "WASMTIME=${GITHUB_WORKSPACE}/${archive}/wasmtime" >> "$GITHUB_ENV"
+      - name: Install workerd
+        # The binary is the platform package's one file; the `workerd`
+        # wrapper package only resolves it in a postinstall, which the
+        # repository's npm posture (no lifecycle scripts) would skip. The
+        # package tarball is fetched from the registry like the Wasmtime
+        # release, pinned by version and checked against its SHA-256, rather
+        # than installed ad hoc outside a lockfile.
+        run: |
+          set -euo pipefail
+          curl -fsSL -o workerd-linux-64.tgz \
+            "https://registry.npmjs.org/@cloudflare/workerd-linux-64/-/workerd-linux-64-${WORKERD_VERSION}.tgz"
+          echo "${WORKERD_SHA256}  workerd-linux-64.tgz" | sha256sum --check
+          mkdir -p workerd-linux-64
+          tar -xzf workerd-linux-64.tgz -C workerd-linux-64
+          echo "WORKERD=${GITHUB_WORKSPACE}/workerd-linux-64/package/bin/workerd" >> "$GITHUB_ENV"
+      - name: Test the lane scripts
+        run: python3 -m unittest discover -s rust/engine/stack-lanes -p 'test_*.py'
+      - name: Build the probe, native and wasm
+        working-directory: rust/engine/stack-lanes
+        run: python3 build_probe.py
+      - name: Check the corpus ceilings
+        working-directory: rust/engine/stack-lanes
+        run: |
+          set -euo pipefail
+          python3 ceilings.py --no-build --table 2>&1 | tee ceilings.log
+      - name: Lane A, Wasmtime
+        if: ${{ !cancelled() }}
+        working-directory: rust/engine/stack-lanes
+        run: |
+          set -euo pipefail
+          python3 lane_a.py --no-build --shard all --output lane-a.json 2>&1 | tee lane-a.log
+      - name: Lane B, Node
+        if: ${{ !cancelled() }}
+        working-directory: rust/engine/stack-lanes
+        run: |
+          set -euo pipefail
+          python3 lane_b_node.py --no-build --shard all --paint --output lane-b-node.json 2>&1 | tee lane-b-node.log
+      - name: Lane B, workerd
+        if: ${{ !cancelled() }}
+        working-directory: rust/engine/stack-lanes
+        run: |
+          set -euo pipefail
+          python3 lane_b_workerd.py --no-build --shard all --paint --output lane-b-workerd.json 2>&1 | tee lane-b-workerd.log
+      - name: Lane C, frames, slopes and the tier mix
+        if: ${{ !cancelled() }}
+        working-directory: rust/engine/stack-lanes
+        run: |
+          set -euo pipefail
+          python3 lane_c.py --no-build --output lane-c.json 2>&1 | tee lane-c.log
+      - name: Grammar sweep
+        if: ${{ !cancelled() }}
+        working-directory: rust/engine/stack-lanes
+        run: |
+          set -euo pipefail
+          python3 sweep.py --no-build --check --output sweep.json 2>&1 | tee sweep.log
+      - name: Upload lane reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ironhorse-stack-lanes
+          path: |
+            rust/engine/stack-lanes/ceilings.log
+            rust/engine/stack-lanes/lane-a.json
+            rust/engine/stack-lanes/lane-a.log
+            rust/engine/stack-lanes/lane-b-node.json
+            rust/engine/stack-lanes/lane-b-node.log
+            rust/engine/stack-lanes/lane-b-workerd.json
+            rust/engine/stack-lanes/lane-b-workerd.log
+            rust/engine/stack-lanes/lane-c.json
+            rust/engine/stack-lanes/lane-c.log
+            rust/engine/stack-lanes/sweep.json
+            rust/engine/stack-lanes/sweep.log
           if-no-files-found: warn

@@ -24,7 +24,13 @@ import { SettingsPanel } from './SettingsPanel.js';
 const useControllerState = controller => {
   const [, setTick] = useState(0);
   // Mount-once: the controller instance is stable for this mount.
-  useEffect(() => controller.subscribe(() => setTick(t => t + 1)), []);
+  useEffect(() => {
+    const unsubscribe = controller.subscribe(() => setTick(t => t + 1));
+    // Initial CapTP reads can finish between render and effect installation.
+    // Re-read after subscribing so that notification gap cannot strand loading.
+    setTick(t => t + 1);
+    return unsubscribe;
+  }, []);
   return controller.getState();
 };
 
@@ -38,7 +44,7 @@ const formatTokens = (/** @type {number} */ n) => {
  * @param {{
  *   presets: FlootPreset[],
  *   models: FlootModel[],
- *   onPick: (id: string, model: string) => void,
+ *   onPick: (id: string, model: string, reasoningEffort?: string) => void,
  *   onClose: () => void,
  * }} props
  * @returns {VNode}
@@ -48,6 +54,11 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
   // so picking a preset alone still creates a session with a sensible model.
   const preferred = models.find(m => m.default) || models[0];
   const [model, setModel] = useState(preferred ? preferred.id : '');
+  const [reasoningEffort, setReasoningEffort] = useState(
+    preferred?.defaultReasoningEffort || preferred?.reasoningEfforts?.[0] || '',
+  );
+  const selectedModel = models.find(candidate => candidate.id === model);
+  const reasoningEfforts = selectedModel?.reasoningEfforts || [];
   return h(
     'div',
     { class: 'floot-modal-backdrop', onClick: onClose },
@@ -69,8 +80,17 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
               {
                 class: 'floot-model-select',
                 value: model,
-                onChange: (/** @type {FlootSafeEvent} */ e) =>
-                  setModel(e.target.value),
+                onChange: (/** @type {FlootSafeEvent} */ e) => {
+                  const next = models.find(
+                    candidate => candidate.id === e.target.value,
+                  );
+                  setModel(e.target.value);
+                  setReasoningEffort(
+                    next?.defaultReasoningEffort ||
+                      next?.reasoningEfforts?.[0] ||
+                      '',
+                  );
+                },
               },
               models.map(m =>
                 h(
@@ -78,6 +98,25 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
                   { key: m.id, value: m.id },
                   `${m.title}${m.default ? ' (default)' : ''}`,
                 ),
+              ),
+            ),
+          )
+        : null,
+      reasoningEfforts.length
+        ? h(
+            'label',
+            { class: 'floot-modal-field' },
+            h('span', { class: 'floot-modal-label' }, 'Reasoning'),
+            h(
+              'select',
+              {
+                class: 'floot-model-select',
+                value: reasoningEffort,
+                onChange: (/** @type {FlootSafeEvent} */ e) =>
+                  setReasoningEffort(e.target.value),
+              },
+              reasoningEfforts.map(effort =>
+                h('option', { key: effort, value: effort }, effort),
               ),
             ),
           )
@@ -92,7 +131,7 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
               type: 'button',
               key: p.id,
               class: 'floot-preset-card',
-              onClick: () => onPick(p.id, model),
+              onClick: () => onPick(p.id, model, reasoningEffort || undefined),
             },
             h('div', { class: 'floot-preset-name' }, p.title),
             h('div', { class: 'floot-preset-desc' }, p.description || ''),
@@ -114,6 +153,10 @@ export const FlootApp = ({ controller }) => {
   const [modalOpen, setModalOpen] = useState(false);
   const [titleEditing, setTitleEditing] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
+  // Debug view: reveal each turn's raw structured output (assistant content,
+  // tool calls and results) as JSON. Local to this mount — a pure view toggle
+  // over the same snapshot, so it needs no controller/host plumbing.
+  const [debug, setDebug] = useState(false);
 
   const { sessions, activeSessionId, presets, models, usage, status } = state;
   const active = sessions.find(s => s.id === activeSessionId);
@@ -121,10 +164,15 @@ export const FlootApp = ({ controller }) => {
   const onNew = () => {
     // Skip the modal only when there is nothing to choose — a single preset and
     // no model alternatives. Multiple models alone still warrant the picker.
-    if (presets.length <= 1 && models.length <= 1) {
+    if (
+      presets.length <= 1 &&
+      models.length <= 1 &&
+      (models[0]?.reasoningEfforts?.length || 0) <= 1
+    ) {
       controller.newSession(
         presets[0] ? presets[0].id : undefined,
         models[0] ? models[0].id : undefined,
+        models[0]?.reasoningEfforts?.[0],
       );
       setDrawerOpen(false);
     } else {
@@ -134,10 +182,11 @@ export const FlootApp = ({ controller }) => {
   const pickPreset = (
     /** @type {string} */ id,
     /** @type {string} */ model,
+    /** @type {string | undefined} */ reasoningEffort,
   ) => {
     setModalOpen(false);
     setDrawerOpen(false);
-    controller.newSession(id, model);
+    controller.newSession(id, model, reasoningEffort);
   };
 
   const commitTitle = () => {
@@ -194,6 +243,18 @@ export const FlootApp = ({ controller }) => {
       'button',
       {
         type: 'button',
+        class: `floot-header-btn${debug ? ' on' : ''}`,
+        'aria-label': 'Toggle raw debug view',
+        'aria-pressed': debug ? 'true' : 'false',
+        title: 'Raw model output (debug)',
+        onClick: () => setDebug(d => !d),
+      },
+      '</>',
+    ),
+    h(
+      'button',
+      {
+        type: 'button',
         class: `floot-header-btn${state.settingsOpen ? ' on' : ''}`,
         'aria-label': 'Settings & transcription',
         onClick: () => controller.toggleSettings(),
@@ -228,8 +289,8 @@ export const FlootApp = ({ controller }) => {
       { class: 'floot-main' },
       header,
       state.settingsOpen
-        ? h(SettingsPanel, { state })
-        : h(MessageList, { state, controller }),
+        ? h(SettingsPanel, { state, controller })
+        : h(MessageList, { state, controller, debug }),
       statusBar,
       h(ComposeBar, { state, controller }),
     ),

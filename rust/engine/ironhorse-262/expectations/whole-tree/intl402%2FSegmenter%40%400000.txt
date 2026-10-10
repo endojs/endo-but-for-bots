@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=intl402/Segmenter tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Segmenter/ctor-custom-get-prototype-poison-throws.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a Test262Error but got a ReferenceError"
+intl402/Segmenter/ctor-custom-get-prototype-poison-throws.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a Test262Error but got a ReferenceError"
+intl402/Segmenter/ctor-custom-prototype.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/ctor-custom-prototype.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/ctor-default-prototype.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/ctor-default-prototype.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
+intl402/Segmenter/proto-from-ctor-realm.js strict skip:shared-positive-test-failure

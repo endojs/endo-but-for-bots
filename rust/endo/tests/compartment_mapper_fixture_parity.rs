@@ -129,13 +129,13 @@ use Disposition::{DurableExclude, Exercise, PendingExclude};
 /// name, returning the ratchet to 32 exercised fixtures.
 const EXERCISED_FLOOR: usize = 32;
 
-/// Every `fixtures-*` directory under
-/// `packages/compartment-mapper/test`, each accounted for exactly
-/// once. Kept in directory-name order.
+/// Every fixture directory under `packages/compartment-mapper/test`, each
+/// accounted for exactly once. Kept in directory-name order.
 ///
-/// INVARIANT: this list is the complete, exact set of `fixtures-*`
-/// directories. The `no_unaccounted_fixture_drift` test enforces it
-/// against the real tree in both directions.
+/// INVARIANT: this list is the complete, exact set of top-level `fixtures-*`
+/// directories and shared `fixtures/node-modules/*` directories. The
+/// `no_unaccounted_fixture_drift` test enforces it against the real tree in
+/// both directions.
 const MANIFEST: &[(&str, Disposition)] = &[
     (
         "fixtures-0",
@@ -250,7 +250,7 @@ const MANIFEST: &[(&str, Disposition)] = &[
         },
     ),
     (
-        "fixtures-nested-pkg",
+        "fixtures/node-modules/nested-package-json",
         Exercise {
             entry: "node_modules/app/index.js",
         },
@@ -268,7 +268,7 @@ const MANIFEST: &[(&str, Disposition)] = &[
         },
     ),
     (
-        "fixtures-noble",
+        "fixtures/node-modules/noble-hashes",
         DurableExclude {
             reason: "compartment-mapper-internal: conditional exports plus require()-based deps combined with a policy/naming strategy that is not a walker concern",
         },
@@ -367,15 +367,27 @@ fn fixtures_root() -> PathBuf {
     })
 }
 
-/// The `fixtures-*` directory names actually present on disk.
+/// The fixture directory names actually present on disk.
 fn on_disk_fixture_dirs(root: &Path) -> BTreeSet<String> {
-    std::fs::read_dir(root)
+    let mut fixtures: BTreeSet<String> = std::fs::read_dir(root)
         .unwrap_or_else(|e| panic!("cannot read fixtures root {}: {e}", root.display()))
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.path().is_dir())
         .filter_map(|entry| entry.file_name().into_string().ok())
         .filter(|name| name.starts_with("fixtures-"))
-        .collect()
+        .collect();
+    let shared_root = root.join("fixtures/node-modules");
+    fixtures.extend(
+        std::fs::read_dir(&shared_root)
+            .unwrap_or_else(|e| {
+                panic!("cannot read shared fixtures {}: {e}", shared_root.display())
+            })
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.path().is_dir())
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .map(|name| format!("fixtures/node-modules/{name}")),
+    );
+    fixtures
 }
 
 /// The `fixtures-*` directory names accounted for in [`MANIFEST`].

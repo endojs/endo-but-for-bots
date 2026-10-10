@@ -247,6 +247,8 @@ const developerTimedOut = harden([
  *   deploy child's params, substituted against this run's scope
  * @param {any} [options.submissionShape] - guard a submission must match
  *   to count as work the panel can review; anything else costs a round
+ * @param {string} [options.submissionInstructions] - expected answer contract
+ * @param {string} [options.invalidSubmissionFeedback] - correction for an invalid answer
  * @param {Record<string, any>} [options.captureOnSubmit] - assign applied
  *   to a matching submission, lifting it out of the answer into context
  */
@@ -257,6 +259,8 @@ export const makeReviewedChangeChart = ({
   deployEndowments = ['performer', 'operator'],
   deployParams,
   submissionShape = carriesHead,
+  submissionInstructions = 'When the work is done, answer with { head, notes }, where head is the git object the panel should review.',
+  invalidSubmissionFeedback = malformedSubmission[0].feedback,
   captureOnSubmit = { head: { $event: 'value.head' } },
 }) => {
   const proposes = deploy !== undefined;
@@ -317,12 +321,12 @@ export const makeReviewedChangeChart = ({
             to: 'developer',
             what: {
               description:
-                'Implement {$params.title} (round {$ctx.round}, ' +
-                '{$ctx.remaining} review rounds remaining). ' +
-                'Summary: {$params.summary}. Base: {$params.base}. ' +
-                'Review feedback so far: {$ctx.feedback}. ' +
-                'When the work is done, answer with { head, notes }, where ' +
-                'head is the git object the panel should review.',
+                `Implement {$params.title} (round {$ctx.round}, ` +
+                `{$ctx.remaining} review rounds remaining). ` +
+                `Summary: {$params.summary}. Base: {$params.base}. ` +
+                `Review feedback so far: {$ctx.feedback}. ${
+                  submissionInstructions
+                }`,
             },
             outcome: 'submitted',
             failure: 'submit-failed',
@@ -349,7 +353,13 @@ export const makeReviewedChangeChart = ({
               assign: {
                 round: { $inc: 1n },
                 remaining: { $inc: -1n },
-                feedback: malformedSubmission,
+                feedback: [
+                  {
+                    reviewer: 'engine',
+                    approve: false,
+                    feedback: invalidSubmissionFeedback,
+                  },
+                ],
               },
             },
           ],
@@ -718,6 +728,10 @@ export const reviewedNixosChangeChart = makeReviewedChangeChart({
   name: 'reviewed-nixos-change',
   version: 1,
   deploy: nixosConfigChangeChart,
+  submissionInstructions:
+    'When the work is done, answer with { head, files: [{ path, text }] }. Include the complete contents of every file to stage; the panel reviews these exact files.',
+  invalidSubmissionFeedback:
+    'Expected { head: string, files: [{ path: string, text: string }] }. Supply the complete staged file contents as well as the head.',
   deployParams: {
     title: { $params: 'title' },
     summary: { $params: 'summary' },

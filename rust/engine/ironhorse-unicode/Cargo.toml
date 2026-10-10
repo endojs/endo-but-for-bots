@@ -1,0 +1,10 @@
+[package]
+name = "ironhorse-unicode"
+description = "Shared XS Unicode identifier classification, independent of the compiler and regexp engine."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

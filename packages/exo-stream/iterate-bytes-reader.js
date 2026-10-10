@@ -61,6 +61,11 @@ export const iterateBytesReader = (bytesReaderRef, options = {}) => {
   // Call streamBase64() - returns a promise for the acknowledge chain head
   /** @type {Promise<StreamNode<string, TReadReturn>>} */
   let nodePromise = E(bytesReaderRef).streamBase64(synHead);
+  // Each link is observed only by the following pull; mark it handled so an
+  // abandoned iterator does not surface a peer disconnection as an unhandled
+  // rejection.
+  // See iterate-reader.js.
+  nodePromise.catch(() => {});
 
   /** @type {Promise<IteratorResult<Uint8Array, TReadReturn>> | null} */
   let terminalPromise = null;
@@ -168,6 +173,8 @@ export const iterateBytesReader = (bytesReaderRef, options = {}) => {
       nodePromise = /** @type {Promise<StreamNode<string, TReadReturn>>} */ (
         nextPromiseOrNull
       );
+      // Mark the new link handled, as for the head above.
+      nodePromise.catch(() => {});
 
       return harden({ done: false, value });
     } catch (error) {

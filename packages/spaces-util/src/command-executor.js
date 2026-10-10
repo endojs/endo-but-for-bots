@@ -482,7 +482,14 @@ export const createCommandExecutor = ({
 
         case 'dm': {
           const { recipient, message } = params;
-          await E(powers).send(String(recipient), [String(message)], [], []);
+          // Split into a path so nested recipients resolve; the daemon rejects
+          // a recipient string containing "/" as a single name segment.
+          await E(powers).send(
+            String(recipient).split('/'),
+            [String(message)],
+            [],
+            [],
+          );
           return {
             success: true,
             message: `Direct message sent to "${recipient}"`,

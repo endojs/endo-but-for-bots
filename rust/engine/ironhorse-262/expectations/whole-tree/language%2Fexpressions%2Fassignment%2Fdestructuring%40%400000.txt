@@ -1,0 +1,16 @@
+# engine=ironhorse features=default corpus=language/expressions/assignment/destructuring tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/assignment/destructuring/default-expr-throws-iterator-return-get-throws.js sloppy pass
+language/expressions/assignment/destructuring/default-expr-throws-iterator-return-get-throws.js strict pass
+language/expressions/assignment/destructuring/default-expr-throws-iterator-return-is-not-callable.js sloppy pass
+language/expressions/assignment/destructuring/default-expr-throws-iterator-return-is-not-callable.js strict pass
+language/expressions/assignment/destructuring/iterator-destructuring-property-reference-target-evaluation-order.js sloppy pass
+language/expressions/assignment/destructuring/iterator-destructuring-property-reference-target-evaluation-order.js strict pass
+language/expressions/assignment/destructuring/keyed-destructuring-property-reference-target-evaluation-order-with-bindings.js sloppy pass
+language/expressions/assignment/destructuring/keyed-destructuring-property-reference-target-evaluation-order.js sloppy pass
+language/expressions/assignment/destructuring/keyed-destructuring-property-reference-target-evaluation-order.js strict pass
+language/expressions/assignment/destructuring/obj-prop-__proto__dup.js sloppy pass
+language/expressions/assignment/destructuring/obj-prop-__proto__dup.js strict pass
+language/expressions/assignment/destructuring/target-assign-throws-iterator-return-get-throws.js sloppy pass
+language/expressions/assignment/destructuring/target-assign-throws-iterator-return-get-throws.js strict pass
+language/expressions/assignment/destructuring/target-assign-throws-iterator-return-is-not-callable.js sloppy pass
+language/expressions/assignment/destructuring/target-assign-throws-iterator-return-is-not-callable.js strict pass

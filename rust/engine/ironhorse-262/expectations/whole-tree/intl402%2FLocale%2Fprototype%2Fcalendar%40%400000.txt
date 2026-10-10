@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=intl402/Locale/prototype/calendar tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Locale/prototype/calendar/branding.js sloppy skip:oracle-host-missing-intl
+intl402/Locale/prototype/calendar/branding.js strict skip:oracle-host-missing-intl
+intl402/Locale/prototype/calendar/canonicalize.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/calendar/canonicalize.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/calendar/name.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/calendar/name.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/calendar/prop-desc.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/calendar/prop-desc.js strict skip:oracle-host-missing-global:Intl

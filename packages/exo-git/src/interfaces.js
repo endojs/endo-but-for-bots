@@ -246,15 +246,35 @@ const RemoteControllerSnapshotShape = M.splitRecord(
 
 const GitCredentialKindShape = M.or('bearer', 'basic');
 
+// What can be said about a credential without saying any of its material.
+// `GitCredentialController.inspect()` returns exactly this, and
+// `RemoteCredentialHealth` carries it under `required: true`.
+const GitCredentialLivenessShape = harden({
+  kind: GitCredentialKindShape,
+  audience: M.string(),
+  available: M.boolean(),
+  revoked: M.boolean(),
+});
+
 const GitCredentialSnapshotShape = M.splitRecord(
-  {
-    kind: GitCredentialKindShape,
-    audience: M.string(),
-    available: M.boolean(),
-    revoked: M.boolean(),
-  },
+  GitCredentialLivenessShape,
   {},
   harden({}),
+);
+
+// `GitRemote.credentialHealth()` lets a holder see a dead credential before a
+// push fails on it. The two arms are exclusive, mirroring the
+// `RemoteCredentialHealth` union: `{ required: false }` is the whole record
+// for a remote that needs no credential, and only the `required: true` arm
+// carries liveness. No arm admits a `material` key, because the rest pattern
+// of each is the empty record.
+const RemoteCredentialHealthShape = M.or(
+  M.splitRecord({ required: M.eq(false) }, {}, harden({})),
+  M.splitRecord(
+    { required: M.eq(true), ...GitCredentialLivenessShape },
+    {},
+    harden({}),
+  ),
 );
 
 // `GitReadWriteCommitOptionsShape` is the argument-sensitive authority split:
@@ -506,6 +526,7 @@ export const GitTreeInterface = M.interface('EndoGitTree', {
 });
 
 export const GitRemoteInterface = M.interface('GitRemote', {
+  credentialHealth: M.callWhen().returns(RemoteCredentialHealthShape),
   fetch: M.callWhen()
     .optional(M.recordOf(M.string(), M.any()))
     .returns(RemoteOperationResultShape),

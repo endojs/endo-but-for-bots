@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=built-ins/Atomics/load tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Atomics/load/bad-range.js sloppy skip:unsupported-opcode:atomics:access-index
+built-ins/Atomics/load/bad-range.js strict skip:unsupported-opcode:atomics:access-index
+built-ins/Atomics/load/descriptor.js sloppy pass
+built-ins/Atomics/load/descriptor.js strict pass
+built-ins/Atomics/load/expected-return-value.js sloppy pass
+built-ins/Atomics/load/expected-return-value.js strict pass
+built-ins/Atomics/load/good-views.js sloppy skip:unsupported-opcode:atomics:access-index
+built-ins/Atomics/load/good-views.js strict skip:unsupported-opcode:atomics:access-index
+built-ins/Atomics/load/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 2; length value should be 2"
+built-ins/Atomics/load/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 2; length value should be 2"
+built-ins/Atomics/load/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be load; name value should be load"
+built-ins/Atomics/load/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be load; name value should be load"
+built-ins/Atomics/load/non-shared-bufferdata.js sloppy pass
+built-ins/Atomics/load/non-shared-bufferdata.js strict pass
+built-ins/Atomics/load/non-shared-int-views-throws.js sloppy skip:unsupported-opcode:atomics:non-integer-typedarray
+built-ins/Atomics/load/non-shared-int-views-throws.js strict skip:unsupported-opcode:atomics:non-integer-typedarray
+built-ins/Atomics/load/non-views.js sloppy skip:unsupported-opcode:atomics:non-typedarray
+built-ins/Atomics/load/non-views.js strict skip:unsupported-opcode:atomics:non-typedarray
+built-ins/Atomics/load/not-a-constructor.js sloppy pass
+built-ins/Atomics/load/not-a-constructor.js strict pass
+built-ins/Atomics/load/validate-arraytype-before-index-coercion.js sloppy skip:unsupported-opcode:atomics:non-integer-typedarray
+built-ins/Atomics/load/validate-arraytype-before-index-coercion.js strict skip:unsupported-opcode:atomics:non-integer-typedarray

@@ -1,0 +1,65 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/PlainTime/compare tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/PlainTime/compare/argument-cast.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/argument-cast.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/argument-number.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: A number (1) is not a valid ISO string for PlainTime (first argument) Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: A number (1) is not a valid ISO string for PlainTime (first argument) Expected a TypeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/PlainTime/compare/argument-number.js strict fail:"abort-value-differs: oracle=\"Test262Error: A number (1) is not a valid ISO string for PlainTime (first argument) Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: A number (1) is not a valid ISO string for PlainTime (first argument) Expected a TypeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/PlainTime/compare/argument-propertybag-optional-properties.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/argument-propertybag-optional-properties.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/argument-string-calendar-annotation-invalid-key.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: annotation keys must be lowercase: 00:00[U-CA=iso8601] - invalid capitalized key, time-only (first argument) Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: annotation keys must be lowercase: 00:00[U-CA=iso8601] - invalid capitalized key, time-only (first argument) Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/PlainTime/compare/argument-string-calendar-annotation-invalid-key.js strict fail:"abort-value-differs: oracle=\"Test262Error: annotation keys must be lowercase: 00:00[U-CA=iso8601] - invalid capitalized key, time-only (first argument) Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: annotation keys must be lowercase: 00:00[U-CA=iso8601] - invalid capitalized key, time-only (first argument) Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/PlainTime/compare/argument-string-calendar-annotation.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/argument-string-calendar-annotation.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/argument-string-critical-unknown-annotation.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: reject unknown annotation with critical flag: 00:00[!foo=bar] (first argument) Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: reject unknown annotation with critical flag: 00:00[!foo=bar] (first argument) Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/PlainTime/compare/argument-string-critical-unknown-annotation.js strict fail:"abort-value-differs: oracle=\"Test262Error: reject unknown annotation with critical flag: 00:00[!foo=bar] (first argument) Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: reject unknown annotation with critical flag: 00:00[!foo=bar] (first argument) Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/PlainTime/compare/argument-string-date-with-utc-offset.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/compare/argument-string-date-with-utc-offset.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/compare/argument-string-minus-sign.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: variant minus sign: 1976-11-18T15:23:30.12−02:00 (first argument) Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: variant minus sign: −009999-11-18T15:23:30.12 (first argument) Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/PlainTime/compare/argument-string-minus-sign.js strict fail:"abort-value-differs: oracle=\"Test262Error: variant minus sign: 1976-11-18T15:23:30.12−02:00 (first argument) Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: variant minus sign: −009999-11-18T15:23:30.12 (first argument) Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/PlainTime/compare/argument-string-multiple-calendar.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: reject more than one calendar annotation if any critical: 00:00[u-ca=iso8601][!u-ca=iso8601] (first argument) Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: reject more than one calendar annotation if any critical: 00:00[u-ca=iso8601][!u-ca=iso8601] (first argument) Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/PlainTime/compare/argument-string-multiple-calendar.js strict fail:"abort-value-differs: oracle=\"Test262Error: reject more than one calendar annotation if any critical: 00:00[u-ca=iso8601][!u-ca=iso8601] (first argument) Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: reject more than one calendar annotation if any critical: 00:00[u-ca=iso8601][!u-ca=iso8601] (first argument) Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/PlainTime/compare/argument-string-multiple-time-zone.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: reject more than one time zone annotation: 00:00[UTC][UTC] (first argument) Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: reject more than one time zone annotation: 00:00[UTC][UTC] (first argument) Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/PlainTime/compare/argument-string-multiple-time-zone.js strict fail:"abort-value-differs: oracle=\"Test262Error: reject more than one time zone annotation: 00:00[UTC][UTC] (first argument) Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: reject more than one time zone annotation: 00:00[UTC][UTC] (first argument) Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/PlainTime/compare/argument-string-no-implicit-midnight.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/argument-string-no-implicit-midnight.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/argument-string-time-designator-required-for-disambiguation.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/compare/argument-string-time-designator-required-for-disambiguation.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/compare/argument-string-time-separators.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/compare/argument-string-time-separators.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/compare/argument-string-time-zone-annotation.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/compare/argument-string-time-zone-annotation.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/compare/argument-string-too-many-decimals.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: no more than 9 decimal places are allowed (first arg) Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/PlainTime/compare/argument-string-too-many-decimals.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: no more than 9 decimal places are allowed (first arg) Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/PlainTime/compare/argument-string-unknown-annotation.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/argument-string-unknown-annotation.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/argument-string-with-time-designator.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/compare/argument-string-with-time-designator.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/compare/argument-string-with-utc-designator.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/argument-string-with-utc-designator.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/argument-wrong-type.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: undefined does not convert to a valid ISO string (first argument) Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: undefined does not convert to a valid ISO string (first argument) Expected a TypeError but got a RangeError\""
+built-ins/Temporal/PlainTime/compare/argument-wrong-type.js strict fail:"abort-value-differs: oracle=\"Test262Error: undefined does not convert to a valid ISO string (first argument) Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: undefined does not convert to a valid ISO string (first argument) Expected a TypeError but got a RangeError\""
+built-ins/Temporal/PlainTime/compare/argument-zoneddatetime-negative-epochnanoseconds.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/compare/argument-zoneddatetime-negative-epochnanoseconds.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/compare/basic.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/basic.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/builtin.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/builtin.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/exhaustive.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/exhaustive.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/leap-second.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/compare/leap-second.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/compare/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/length.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/name.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/no-fractional-minutes-hours.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Fractional minutes not allowed in time string (first argument) Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/PlainTime/compare/no-fractional-minutes-hours.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Fractional minutes not allowed in time string (first argument) Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/PlainTime/compare/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/PlainTime/compare/not-a-constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/PlainTime/compare/plaintime-propertybag-no-time-units.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: TypeError if no properties are present Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/PlainTime/compare/plaintime-propertybag-no-time-units.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: TypeError if no properties are present Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/PlainTime/compare/prop-desc.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/prop-desc.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/use-internal-slots.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/use-internal-slots.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/compare/year-zero.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/compare/year-zero.js strict skip:oracle-host-missing-global:Temporal

@@ -1,0 +1,622 @@
+//! Every named corruption refusal needs an assertion or a reviewed exception.
+//! This deliberately has no Rust-parser dependency: unknown dynamic producers
+//! fail closed, and the lexer ignores comments and string contents as code.
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+
+#[derive(Clone, Debug, PartialEq)]
+enum Token {
+    Word(String),
+    String(String),
+    Punct(char),
+}
+fn lex(source: &str) -> Vec<Token> {
+    let bytes = source.as_bytes();
+    let mut i = 0;
+    let mut out = Vec::new();
+    while i < bytes.len() {
+        if bytes[i].is_ascii_whitespace() {
+            i += 1;
+        } else if bytes[i..].starts_with(b"//") {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+        } else if bytes[i..].starts_with(b"/*") {
+            i += 2;
+            let mut depth = 1;
+            while depth > 0 {
+                assert!(i < bytes.len(), "unterminated comment");
+                if bytes[i..].starts_with(b"/*") {
+                    depth += 1;
+                    i += 2;
+                } else if bytes[i..].starts_with(b"*/") {
+                    depth -= 1;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+        } else if bytes[i] == b'"'
+            || (bytes[i] == b'r' && {
+                let mut quote = i + 1;
+                while bytes.get(quote) == Some(&b'#') {
+                    quote += 1;
+                }
+                bytes.get(quote) == Some(&b'"')
+            })
+        {
+            let raw = bytes[i] == b'r';
+            let mut hashes = 0;
+            if raw {
+                i += 1;
+                while bytes[i] == b'#' {
+                    hashes += 1;
+                    i += 1;
+                }
+            }
+            assert_eq!(bytes[i], b'"');
+            i += 1;
+            let mut value = Vec::new();
+            loop {
+                assert!(i < bytes.len(), "unterminated string");
+                if bytes[i] == b'"'
+                    && (!raw || bytes.get(i + 1..i + 1 + hashes) == Some(&vec![b'#'; hashes]))
+                {
+                    i += 1 + hashes;
+                    break;
+                }
+                if !raw && bytes[i] == b'\\' {
+                    i += 1;
+                    value.push(match bytes[i] {
+                        b'n' => b'\n',
+                        b'r' => b'\r',
+                        b't' => b'\t',
+                        b => b,
+                    });
+                } else {
+                    value.push(bytes[i]);
+                }
+                i += 1;
+            }
+            out.push(Token::String(String::from_utf8(value).unwrap()));
+        } else if bytes[i] == b'\''
+            && (bytes.get(i + 2) == Some(&b'\'')
+                || (bytes.get(i + 1) == Some(&b'\\') && bytes.get(i + 3) == Some(&b'\'')))
+        {
+            i += if bytes[i + 1] == b'\\' { 4 } else { 3 };
+        } else if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
+            let start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            out.push(Token::Word(source[start..i].into()));
+        } else {
+            out.push(Token::Punct(bytes[i] as char));
+            i += 1;
+        }
+    }
+    out
+}
+fn word(t: &Token, s: &str) -> bool {
+    matches!(t, Token::Word(w) if w == s)
+}
+fn end_group(tokens: &[Token], start: usize) -> usize {
+    let close = match tokens[start] {
+        Token::Punct('(') => ')',
+        Token::Punct('{') => '}',
+        Token::Punct('[') => ']',
+        _ => panic!("expected group"),
+    };
+    let mut i = start + 1;
+    while i < tokens.len() {
+        match tokens[i] {
+            Token::Punct(c) if c == close => return i,
+            Token::Punct('(' | '{' | '[') => i = end_group(tokens, i),
+            _ => {}
+        }
+        i += 1;
+    }
+    panic!("unclosed group");
+}
+// Split arguments at top-level commas; nested calls are not label expressions.
+fn arguments(tokens: &[Token]) -> Vec<&[Token]> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < tokens.len() {
+        match tokens[i] {
+            Token::Punct('(' | '{' | '[') => i = end_group(tokens, i),
+            Token::Punct(',') => {
+                out.push(&tokens[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if start < tokens.len() {
+        out.push(&tokens[start..]);
+    }
+    out
+}
+fn literal_labels(tokens: &[Token]) -> Option<BTreeSet<String>> {
+    if let [Token::String(name)] = tokens {
+        return Some(BTreeSet::from([name.clone()]));
+    }
+    // The two conditional promise-cluster labels have literal-only branches.
+    if tokens.first().is_some_and(|t| word(t, "if")) {
+        let open = tokens.iter().position(|t| *t == Token::Punct('{'))?;
+        let close = end_group(tokens, open);
+        if !tokens.get(close + 1).is_some_and(|t| word(t, "else"))
+            || tokens.get(close + 2) != Some(&Token::Punct('{'))
+        {
+            return None;
+        }
+        let last = end_group(tokens, close + 2);
+        if last + 1 != tokens.len() {
+            return None;
+        }
+        let [Token::String(a)] = &tokens[open + 1..close] else {
+            return None;
+        };
+        let [Token::String(b)] = &tokens[close + 3..last] else {
+            return None;
+        };
+        return Some(BTreeSet::from([a.clone(), b.clone()]));
+    }
+    None
+}
+fn source_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            source_files(&path, out);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+}
+fn split_tests(tokens: &[Token]) -> (Vec<Token>, Vec<Token>) {
+    let marker = lex("#[cfg(test)] mod");
+    let mut production = Vec::new();
+    let mut tests = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if tokens[i..].starts_with(&marker)
+            && matches!(tokens.get(i + marker.len() + 1), Some(Token::Punct('{')))
+        {
+            let start = i + marker.len() + 1;
+            let end = end_group(tokens, start);
+            tests.extend_from_slice(&tokens[start + 1..end]);
+            i = end + 1;
+        } else {
+            production.push(tokens[i].clone());
+            i += 1;
+        }
+    }
+    (production, tests)
+}
+// Expand only the audited roster label edge for the refusal inventory. The
+// normal scanner still checks every other producer, including the framing
+// closure's two Corrupt(name) forwarding sites.
+fn expand_roster_labels(tokens: &[Token]) -> Vec<Token> {
+    fn unique(tokens: &[Token], pattern: &str) -> usize {
+        let pattern = lex(pattern);
+        let positions: Vec<_> = tokens
+            .windows(pattern.len())
+            .enumerate()
+            .filter(|(_, window)| *window == pattern)
+            .map(|(at, _)| at)
+            .collect();
+        assert_eq!(
+            positions.len(),
+            1,
+            "roster wiring must occur once: {pattern:?}"
+        );
+        positions[0]
+    }
+    let marker = "macro_rules! snapshot_payloads";
+    let start = unique(tokens, marker) + lex(marker).len();
+    assert_eq!(tokens[start], Token::Punct('{'));
+    let end = end_group(tokens, start);
+    let body = &tokens[start + 1..end];
+    let mut labels = BTreeSet::new();
+    for at in 0..body.len() {
+        if word(&body[at], "legacy_label") {
+            assert_eq!(body[at + 1], Token::Punct(':'));
+            let Token::String(label) = &body[at + 2] else {
+                panic!("roster legacy labels must be literal");
+            };
+            assert_eq!(body[at + 3], Token::Punct(','));
+            assert!(labels.insert(label.clone()), "duplicate legacy label");
+        }
+    }
+    assert!(!labels.is_empty());
+    unique(tokens, "legacy_label: $legacy_label: literal");
+    unique(tokens, "snapshot_payloads!(define_payloads)");
+    let call = "read_small_section($legacy_label)";
+    let at = unique(tokens, call);
+    let mut expanded = tokens[..at].to_vec();
+    for label in labels {
+        expanded.extend([
+            Token::Word("read_small_section".into()),
+            Token::Punct('('),
+            Token::String(label),
+            Token::Punct(')'),
+            Token::Punct(';'),
+        ]);
+    }
+    expanded.extend_from_slice(&tokens[at + lex(call).len()..]);
+    expanded
+}
+
+#[test]
+fn roster_labels_reject_dynamic_or_disconnected_wiring() {
+    let (production, _) = split_tests(&lex(include_str!("../src/snapshot_roster.rs")));
+    let expanded = expand_roster_labels(&production);
+    let (names, _) = inventory(&expanded);
+    assert!(names.contains("small state stack section"));
+    assert!(names.contains("small state index-props section"));
+    for (from, to) in [
+        (
+            "legacy_label: \"small state stack section\"",
+            "legacy_label: dynamic",
+        ),
+        (
+            "read_small_section($legacy_label)",
+            "read_small_section(dynamic)",
+        ),
+        (
+            "snapshot_payloads!(define_payloads)",
+            "snapshot_payloads!(unconnected)",
+        ),
+    ] {
+        let source = include_str!("../src/snapshot_roster.rs");
+        assert!(source.contains(from));
+        let (changed, _) = split_tests(&lex(&source.replacen(from, to, 1)));
+        assert!(std::panic::catch_unwind(|| expand_roster_labels(&changed)).is_err());
+    }
+}
+
+fn inventory(tokens: &[Token]) -> (BTreeSet<String>, BTreeMap<String, usize>) {
+    inventory_in(tokens, false)
+}
+fn inventory_in(
+    tokens: &[Token],
+    section_module: bool,
+) -> (BTreeSet<String>, BTreeMap<String, usize>) {
+    let mut names = BTreeSet::new();
+    let mut forwarded = BTreeMap::new();
+    for i in 0..tokens.len().saturating_sub(1) {
+        let direct = word(&tokens[i], "Corrupt");
+        let wrapper = [
+            "file_corrupt",
+            "read_small_section",
+            "ascending",
+            "present_and_non_empty",
+            "read_block",
+            "row_len",
+            "skip_leaves",
+        ]
+        .iter()
+        .any(|w| word(&tokens[i], w))
+            || (section_module && word(&tokens[i], "corrupt"));
+        let cursor = i >= 3 && tokens[i - 3..=i] == lex("Cursor::new");
+        assert!(
+            !direct || tokens[i + 1] == Token::Punct('('),
+            "Corrupt constructor aliases are not supported by the refusal registry"
+        );
+        if wrapper || cursor {
+            let declaration = (i > 0 && word(&tokens[i - 1], "fn"))
+                || (i > 0 && word(&tokens[i - 1], "mut") && tokens[i + 1] == Token::Punct('='))
+                || (i > 0 && word(&tokens[i - 1], "let") && tokens[i + 1] == Token::Punct('='));
+            assert!(
+                declaration || tokens[i + 1] == Token::Punct('('),
+                "refusal wrapper aliases are not supported: {:?}",
+                tokens[i]
+            );
+        }
+        if !(direct || wrapper || cursor) || tokens[i + 1] != Token::Punct('(') {
+            continue;
+        }
+        // Function declarations describe dynamic forwarding, not call sites.
+        if i > 0 && word(&tokens[i - 1], "fn") {
+            continue;
+        }
+        let end = end_group(tokens, i + 1);
+        // Match ARMS are not call sites either, and are recognisable from the
+        // token that follows the group: `=>` ends the pattern, `|` continues
+        // an or-pattern, and `if` opens a guard. None of the three can follow
+        // a CALL — `f(x) if ..` and `f(x) => ..` are not expressions anywhere
+        // in Rust — so this cannot skip a producer.
+        //
+        // A pattern destructures a value some producer already built, and
+        // that producer is inventoried at ITS own site; counting the arm too
+        // would double-count it, while refusing the arm would force a
+        // classifier to abandon exhaustiveness. Skipping it here keeps the
+        // audited list below to forwarding EXPRESSIONS, which is what a
+        // construction has to be.
+        let after_group = tokens.get(end + 1);
+        let arm = (matches!(after_group, Some(Token::Punct('=')))
+            && matches!(tokens.get(end + 2), Some(Token::Punct('>'))))
+            || matches!(after_group, Some(Token::Punct('|')))
+            || after_group.is_some_and(|t| word(t, "if"));
+        if arm {
+            continue;
+        }
+        let all_args = arguments(&tokens[i + 2..end]);
+        let label_index = if cursor
+            || ["present_and_non_empty", "read_block", "row_len"]
+                .iter()
+                .any(|w| word(&tokens[i], w))
+        {
+            1
+        } else if ["ascending", "skip_leaves"]
+            .iter()
+            .any(|w| word(&tokens[i], w))
+        {
+            2
+        } else {
+            0
+        };
+        let args = *all_args
+            .get(label_index)
+            .expect("missing refusal label argument");
+        if let Some(literals) = literal_labels(args) {
+            names.extend(literals);
+        } else {
+            // These are the complete, audited forwarding expressions. Adding
+            // another expression must extend this registry's data-flow model.
+            let dynamic = if direct {
+                ["self.what", "what", "name", "message", "&'static str"]
+                    .iter()
+                    .any(|s| args == lex(s))
+            } else {
+                word(&tokens[i], "file_corrupt") && args == lex("what")
+            };
+            assert!(
+                dynamic,
+                "unregistered dynamic refusal producer: {:?}({args:?})",
+                tokens[i]
+            );
+            *forwarded
+                .entry(format!("{:?}({args:?})", tokens[i]))
+                .or_insert(0) += 1;
+        }
+    }
+    (names, forwarded)
+}
+// Recognize only a positive, literal expected error, not arbitrary mentions
+// inside a condition or an assertion's diagnostic message.
+fn expected_label(tokens: &[Token]) -> Option<String> {
+    let open = tokens.iter().position(|t| *t == Token::Punct('('))?;
+    if open == 0 || end_group(tokens, open) + 1 != tokens.len() {
+        return None;
+    }
+    if !tokens[..open]
+        .iter()
+        .all(|t| matches!(t, Token::Word(_) | Token::Punct(':')))
+    {
+        return None;
+    }
+    let inside = &tokens[open + 1..tokens.len() - 1];
+    if word(&tokens[open - 1], "Corrupt") {
+        if let [Token::String(label)] = inside {
+            return Some(label.clone());
+        }
+    } else if ["Err", "Snapshot", "BatchRejected"]
+        .iter()
+        .any(|w| word(&tokens[open - 1], w))
+        // `BatchRejected` boxes the refusal it names, so `Box::new(..)` passes
+        // through too: only a chain of these wrappers ending in a literal
+        // `Corrupt(..)` counts.
+        || (open >= 4 && word(&tokens[open - 4], "Box") && word(&tokens[open - 1], "new"))
+    {
+        return expected_label(inside);
+    }
+    None
+}
+fn asserted(tokens: &[Token]) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for i in 0..tokens.len().saturating_sub(2) {
+        if !["assert", "assert_eq"].iter().any(|w| word(&tokens[i], w))
+            || tokens[i + 1] != Token::Punct('!')
+        {
+            continue;
+        }
+        let end = end_group(tokens, i + 2);
+        let args = arguments(&tokens[i + 3..end]);
+        if word(&tokens[i], "assert_eq") && args.len() >= 2 {
+            let a = expected_label(args[0]);
+            let b = expected_label(args[1]);
+            match (a, b) {
+                (Some(label), None) | (None, Some(label)) => {
+                    names.insert(label);
+                }
+                _ => {}
+            }
+        } else if let Some(condition) = args.first() {
+            if condition.len() < 3
+                || !word(&condition[0], "matches")
+                || condition[1] != Token::Punct('!')
+                || condition[2] != Token::Punct('(')
+                || end_group(condition, 2) + 1 != condition.len()
+            {
+                continue;
+            }
+            let matches = arguments(&condition[3..condition.len() - 1]);
+            if matches.len() == 2 {
+                if let Some(label) = expected_label(matches[1]) {
+                    names.insert(label);
+                }
+            }
+        }
+    }
+    names
+}
+#[test]
+fn every_named_corruption_is_asserted_or_explicitly_allowlisted() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    source_files(&root.join("src"), &mut files);
+    let mut names = BTreeSet::new();
+    let mut coverage = BTreeSet::new();
+    for path in files {
+        let (production, tests) = split_tests(&lex(&std::fs::read_to_string(&path).unwrap()));
+        let production = if path.file_name().unwrap() == "snapshot_roster.rs" {
+            expand_roster_labels(&production)
+        } else {
+            production
+        };
+        let (found, forwarded) = inventory_in(
+            &production,
+            path.file_name().unwrap() == "store_sections.rs",
+        );
+        let expected: &[(&str, &str, usize)] = match path.file_name().unwrap().to_str().unwrap() {
+            "image.rs" => &[("Corrupt", "self.what", 7), ("Corrupt", "what", 2)],
+            "store.rs" => &[("Corrupt", "name", 2)],
+            "snapshot_roster.rs" => &[("Corrupt", "name", 2)],
+            "store_sections.rs" => &[("Corrupt", "message", 1)],
+            "store_file.rs" => &[("Corrupt", "what", 1), ("file_corrupt", "what", 5)],
+            "format.rs" => &[("Corrupt", "&'static str", 1)],
+            _ => &[],
+        };
+        let expected: BTreeMap<_, _> = expected
+            .iter()
+            .map(|(callee, args, count)| {
+                (
+                    format!("{:?}({:?})", Token::Word((*callee).into()), lex(args)),
+                    *count,
+                )
+            })
+            .collect();
+        assert_eq!(
+            forwarded,
+            expected,
+            "forwarding sites changed in {}: audit their call-site inventory",
+            path.display()
+        );
+        names.extend(found);
+        coverage.extend(asserted(&tests));
+    }
+    let mut tests = Vec::new();
+    source_files(&root.join("tests"), &mut tests);
+    for path in tests {
+        if path.file_name().unwrap() != "refusal_registry.rs" {
+            coverage.extend(asserted(&lex(&std::fs::read_to_string(path).unwrap())));
+        }
+    }
+    let mut exceptions = BTreeSet::new();
+    for line in include_str!("refusal_allowlist.tsv")
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+    {
+        let (name, reason) = line.split_once('\t').expect("name<TAB>reason");
+        assert!(reason.len() >= 20, "explain the exception for {name}");
+        assert!(names.contains(name), "stale exception: {name}");
+        assert!(
+            !coverage.contains(name),
+            "remove now-covered exception: {name}"
+        );
+        assert!(
+            exceptions.insert(name.to_owned()),
+            "duplicate exception: {name}"
+        );
+    }
+    let uncovered: Vec<_> = names
+        .difference(&coverage)
+        .filter(|n| !exceptions.contains(*n))
+        .cloned()
+        .collect();
+    assert!(
+        uncovered.is_empty(),
+        "unasserted Corrupt names (add a regression assertion or explain an exception):\n{}",
+        uncovered.join("\n")
+    );
+    assert!(names.len() > 100, "inventory unexpectedly empty");
+}
+#[test]
+fn scanner_detects_new_refusals_and_ignores_comments() {
+    assert_eq!(
+        inventory(&lex(
+            "Err(SnapshotError::Corrupt(\"new refusal\")) // Corrupt(\"fake\")"
+        ))
+        .0,
+        BTreeSet::from(["new refusal".into()])
+    );
+    assert!(asserted(&lex("let expected = Corrupt(\"not asserted\");")).is_empty());
+    assert_eq!(
+        asserted(&lex(
+            "assert!(matches!(result, Err(Corrupt(\"covered\"))));"
+        )),
+        BTreeSet::from(["covered".into()])
+    );
+}
+#[test]
+#[should_panic(expected = "unregistered dynamic refusal producer")]
+fn new_dynamic_producers_require_registry_support() {
+    inventory(&lex("SnapshotError::Corrupt(new_dynamic_name)"));
+}
+
+#[test]
+fn mixed_dynamic_labels_are_rejected() {
+    for source in [
+        "Corrupt(if flag { \"known\" } else { new_dynamic_name })",
+        "Corrupt(name.unwrap_or(\"fallback\"))",
+        "Cursor::new(\"unrelated\", dynamic_name)",
+        "present_and_non_empty(make_rows(\"unrelated\"), dynamic_name)",
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| inventory(&lex(source))).is_err(),
+            "{source}"
+        );
+    }
+    assert!(asserted(&lex("assert_ne!(result, Err(Corrupt(\"not covered\")));")).is_empty());
+}
+
+#[test]
+fn constructor_aliases_are_rejected() {
+    for source in [
+        "use SnapshotError::Corrupt as Invalid; Invalid(\"new label\")",
+        "let refuse = SnapshotError::Corrupt; refuse(\"new label\")",
+    ] {
+        assert!(std::panic::catch_unwind(|| inventory(&lex(source))).is_err());
+    }
+}
+
+#[test]
+fn negative_assertions_and_wrapper_aliases_do_not_count() {
+    for source in [
+        "assert!(result != Err(Corrupt(\"x\")))",
+        "assert_eq!(matches!(result, Err(Corrupt(\"x\"))), false)",
+        "assert!(!matches!(result, Err(Corrupt(\"x\"))))",
+        "assert!(true, \"diagnostic {:?}\", Corrupt(\"x\"))",
+    ] {
+        assert!(asserted(&lex(source)).is_empty(), "{source}");
+    }
+    for source in [
+        "let fail = file_corrupt; fail(\"x\")",
+        "let cursor = Cursor::new; cursor(bytes, \"x\")",
+    ] {
+        assert!(std::panic::catch_unwind(|| inventory(&lex(source))).is_err());
+    }
+}
+
+#[test]
+fn section_wrapper_literal_labels_are_inventoried() {
+    assert_eq!(
+        inventory_in(&lex("corrupt(\"section refusal\")"), true).0,
+        BTreeSet::from(["section refusal".into()])
+    );
+}
+
+#[test]
+fn section_wrapper_dynamic_labels_and_aliases_are_rejected() {
+    for source in [
+        "corrupt(dynamic_name)",
+        "corrupt(message)",
+        "let fail = corrupt; fail(\"x\")",
+    ] {
+        assert!(std::panic::catch_unwind(|| inventory_in(&lex(source), true)).is_err());
+    }
+}

@@ -44,6 +44,21 @@ export const helpTextEntries = harden([
         'maybeReadText(petNameOrPath) -> Promise<string | undefined>\nRead text content, returning undefined if not found.\nSame as readText but returns undefined instead of throwing.',
       writeText:
         'writeText(petNameOrPath, content) -> Promise<void>\nWrite text content by pet name or path.\nFor a single name, creates a ReadableBlob and binds the name.\nFor a multi-segment path, writes through the mount.\nExample: writeText(["my-blob"], "hello")\nExample: writeText(["my-mount", "output.txt"], "hello")',
+      readOnly:
+        "readOnly() -> Promise<ReadableNameHub>\nMint a read-only ReadableNameHub view of this directory.\nThe view exposes only the readable surface (help, has, list, lookup, maybeLookup) and withholds every mutator.\nAttenuation is shallow: only this directory's own mutators are withheld. A looked-up value is returned live, so a nested directory (or any name bound back to a writable capability, including one naming this directory itself or an ancestor) comes back fully writable; the narrowing reaches only one hop, not the transitively reachable name graph. A holder needing a recursively read-only surface must re-attenuate results itself.\nThe view is transient: it lives only within the running daemon, carries no formula identity, and cannot be named, stored, or re-reached after a restart. After the backing directory is revoked the view forwards no further reads; but a capability already returned by an earlier lookup is unaffected (and, per the shallow-attenuation caveat above, may itself remain fully writable).",
+    },
+  ],
+  [
+    'ReadableNameHub',
+    {
+      '': 'ReadableNameHub - A read-only view of a name hub.\n\nExposes only the readable surface (has, list, lookup, maybeLookup) of the\nbacking directory; every mutator is withheld. Attenuation is shallow: a\nlooked-up nested directory (or any name bound back to a writable capability) is\nreturned live and writable, not a further read-only view.',
+      help: 'help(methodName?) -> string\nDescribe this cap, or one of its methods.',
+      has: 'has(...path) -> Promise<boolean>\nWhether a name or path resolves in the backing hub.',
+      list: 'list(...path) -> Promise<string[]>\nThe names at a path in the backing hub.',
+      lookup:
+        'lookup(nameOrPath) -> Promise<unknown>\nResolve a name or path to its value. The result is live: a nested directory\ncomes back fully writable, so this narrowing reaches only one hop.',
+      maybeLookup:
+        'maybeLookup(nameOrPath) -> Promise<unknown | undefined>\nResolve a name or path, or undefined if absent.',
     },
   ],
   [
@@ -101,6 +116,10 @@ export const helpTextEntries = harden([
         'maybeReadText(petNameOrPath) -> Promise<string | undefined>\nRead text content, returning undefined if not found.\nSame as readText but returns undefined instead of throwing.',
       writeText:
         'writeText(petNameOrPath, content) -> Promise<void>\nWrite text content by pet name or path.\nFor a single name, creates a ReadableBlob and binds the name.\nFor a multi-segment path, writes through the mount.\nExample: writeText(["my-blob"], "hello")\nExample: writeText(["my-mount", "output.txt"], "hello")',
+      invite:
+        'invite(correspondentName) -> Promise<Invitation>\nMint a single-use invitation whose locator names this guest\'s own handle, so an\nacceptor becomes a peer of this guest (not of the top host). Bind the acceptor\nunder correspondentName once they accept. Hand the returned invitation\'s\nlocate() string to the invitee out of band.\nExample: invite("new-neighbor")',
+      accept:
+        'accept(invitationLocator, correspondentName) -> Promise<void>\nRedeem an invitation locator into this guest, binding the relationship to the\ncalling guest — no replacement guest is minted. This guest accepts as itself;\nthe inviter\'s handle is bound under correspondentName, a pet name this guest\nchooses (the inviter chooses its own independently, so they may differ).\nExample: accept(invitationLocator, "my-neighbor")',
     },
   ],
   [
@@ -113,9 +132,9 @@ export const helpTextEntries = harden([
       storeValue:
         'storeValue(value, petNameOrPath) -> Promise<void>\nStore a passable value (number, string, array, record, etc.) with a name.\n- storeValue(42, "answer") stores the number 42\n- storeValue({x: 1, y: 2}, "point") stores a record',
       provideGuest:
-        'provideGuest(petName?, options?) -> Promise<EndoGuest>\nCreate or retrieve a confined guest agent.\n- provideGuest() creates an anonymous guest\n- provideGuest("my-guest") creates/retrieves a named guest\nOptions: { introducedNames: { guestName: hostName } }',
+        'provideGuest(petName?, options?) -> Promise<EndoGuest>\nCreate or retrieve a confined guest agent.\n- provideGuest() creates an anonymous guest\n- provideGuest("my-guest") creates/retrieves a named guest\nOptions: { agentName, introducedNames, pins, networks }',
       provideHost:
-        'provideHost(petName?, options?) -> Promise<EndoHost>\nCreate or retrieve another host agent.\n- provideHost() creates an anonymous host\n- provideHost("my-host") creates/retrieves a named host',
+        'provideHost(petName?, options?) -> Promise<EndoHost>\nCreate or retrieve another host agent.\n- provideHost() creates an anonymous host\n- provideHost("my-host") creates/retrieves a named host\nOptions: { agentName, introducedNames, pins, networks }',
       provideWorker:
         'provideWorker(petNamePath) -> Promise<EndoWorker>\nCreate or retrieve a worker for running code.\nWorkers are isolated JavaScript environments.',
       evaluate:
@@ -139,9 +158,9 @@ export const helpTextEntries = harden([
       adoptFromLocator:
         'adoptFromLocator(locator, petNameOrPath) -> Promise<void>\nAdopt a value from a locator that includes connection hints.\nParses the locator to extract peer info, establishes a connection if needed,\nand writes the formula ID into the local pet store.\nExample: adoptFromLocator("endo://node.../formula@hint?type=channel", "remote-channel")',
       invite:
-        'invite(guestName) -> Promise<Invitation>\nCreate an invitation for a guest to connect.',
+        "invite(correspondentName) -> Promise<Invitation>\nMint a single-use invitation and bind the correspondent under correspondentName\nonce they accept. Hand the returned invitation's locate() string to the invitee\nout of band.",
       accept:
-        'accept(invitationId, guestHandleId, guestName) -> Promise<void>\nAccept an invitation, creating a connection.',
+        "accept(invitationLocator, correspondentName) -> Promise<void>\nRedeem an invitation locator, binding the inviter's handle reciprocally under\ncorrespondentName — no synthetic local guest is minted.",
       endow:
         'endow(messageNumber, bindings, workerName?, resultName?) -> Promise<void>\nBind capabilities to a guest\'s code definition and evaluate it.\nThis is the host-side counterpart to the guest\'s define() method.\n\n- messageNumber: The definition message number\n- bindings: Record mapping slot names to pet names, e.g. { counter: "my-counter" }\n- workerName: Optional worker to use for evaluation\n- resultName: Optional pet name to store the result\n\nThe host decides which capabilities to provide for each slot.\nThe code proposed by the guest runs with these host-chosen bindings.\n\nExample: endow(0, { counter: "my-counter" })',
       form: 'form(recipientName, description, fields) -> Promise<void>\nSend a structured form to another agent.\nThe form appears in the recipient\'s inbox. They can submit values using submit().\n\n- recipientName: Pet name or path of the recipient\n- description: Human-readable description of what the form is for\n- fields: Array of field definitions, e.g. [{ name: "email", label: "Your email" }]\n\nExample: form("@host", "Configure settings", [{ name: "name", label: "Name" }, { name: "email", label: "Email" }])',
@@ -166,16 +185,21 @@ export const helpTextEntries = harden([
   [
     'EndoReadable',
     {
-      '': 'EndoReadable - A readable blob of binary data.\n\nBlobs store binary content with a content-addressed hash.\nUse text() to read as a string, json() to parse as JSON,\nstreamBase64() for streaming access, or getInfo()/fetch()\nfor the content-addressed range-I/O surface.',
+      '': 'EndoReadable - A readable blob of binary data.\n\nBlobs store binary content with a content-addressed hash.\nUse text() to read as a string, json() to parse as JSON,\nstreamBase64() for base64 streaming, bytes() for byte streaming,\nor byteRange() / textRange() for attenuation.',
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.',
-      getInfo:
-        'getInfo() -> Promise<{ algorithm, hash, size }>\nThe content-addressed identity of the blob in one round-trip:\nalgorithm ("sha256"), hash (base64), and size (bigint bytes).\nLets a caller consult a local content store before fetching.',
-      fetch:
-        'fetch(offset, length) -> Promise<PassableBytesReader>\nRead the byte range [offset, offset + length) without\nstreaming the whole blob. offset and length are bigints;\nthe range is clamped at end-of-content.',
+      sha256:
+        'sha256() -> Promise<string>\nReturn the SHA-256 digest of the selected bytes as base64.',
+      size: 'size() -> Promise<bigint>\nReturn the selected byte length.',
+      bytes:
+        'bytes() -> Promise<PassableBytesReader>\nStream all selected bytes.',
       streamBase64:
         'streamBase64(syndicationPromise) -> Promise\nStream the blob content as base64 chunks, driven by the\nsyndication promise (the reader-pump flow-control protocol).\nUse for large files to avoid loading everything into memory.',
       text: 'text() -> Promise<string>\nRead the entire blob as a UTF-8 string.',
       json: 'json() -> Promise<any>\nRead and parse the blob as JSON.',
+      byteRange:
+        'byteRange(start, end) -> EndoReadable\nAttenuate to the half-open byte interval [start, end) of this blob.\nReturns a new EndoReadable with exactly the authority to read the selected\nbytes; ranges compose (a range of a range intersects) and start === end selects\nan empty blob. start and end are bigints. Construction reads no bytes, so it\nresolves synchronously.',
+      textRange:
+        "textRange(startLine, endLine) -> Promise<EndoReadable>\nAttenuate to lines [startLine, endLine) (0-based, end-exclusive, LF boundaries,\nCRLF preserved) of the blob's bytes.\nReturns a new EndoReadable over the corresponding byte slice; it reads bytes to\nfind the line boundaries, so it resolves asynchronously.",
     },
   ],
   [
@@ -207,53 +231,52 @@ export const helpTextEntries = harden([
   [
     'ReadableTree',
     {
-      '': 'ReadableTree - A read-only tree of files and subdirectories.\n\nAn immutable, content-addressed directory: entries cannot be added, removed,\nor modified. lookup() returns EndoReadable values for files and nested\nReadableTree values for subdirectories. Its identity is available via sha256()\nor, uniformly with blobs, via getInfo().',
+      '': 'ReadableTree - A read-only tree of files and subdirectories.\n\nAn immutable, content-addressed directory: entries cannot be added, removed,\nor modified. lookup() returns EndoReadable values for files and nested\nReadableTree values for subdirectories. Its identity is available via sha256().',
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.',
       sha256:
         "sha256() -> string\nThe content address of the tree's manifest, as base64.",
-      getInfo:
-        'getInfo() -> Promise<{ algorithm, hash, size }>\nThe content-addressed identity of the tree in one round-trip: algorithm\n("sha256"), hash (base64, the same value as sha256()), and size (the byte\nlength of the tree\'s own manifest). The uniform identity accessor shared with\nblobs, so generic code can read a content hash off any blob or tree.',
-      has: 'has(...names) -> Promise<boolean>\nCheck if an entry exists at the given path.\nnames: string[] - Path segments.\nExample: has("index.html") → true\nExample: has("assets", "style.css") → true',
-      list: 'list(...names) -> Promise<string[]>\nList entry names at the given path (or root).\nnames: string[] - Path segments (optional, defaults to root).\nExample: list() → ["index.html", "app.js", "assets"]\nExample: list("assets") → ["style.css", "logo.png"]',
+      size: "size() -> Promise<bigint>\nReturn the byte length of the tree's own manifest.",
+      has: 'has(...names) -> Promise<boolean>\nCheck if an entry exists at the given path.\nnames: string[] - Path segments.\nExample: has("index.html") -> true\nExample: has("assets", "style.css") -> true',
+      list: 'list(...names) -> Promise<string[]>\nList entry names at the given path (or root).\nnames: string[] - Path segments (optional, defaults to root).\nExample: list() -> ["index.html", "app.js", "assets"]\nExample: list("assets") -> ["style.css", "logo.png"]',
       lookup:
-        'lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>\nGet the value at a name or path.\nnameOrPath: string | string[] - Name or path segments.\nReturns EndoReadable for files, ReadableTree for subdirectories.\nExample: lookup("index.html") → EndoReadable\nExample: lookup(["assets", "style.css"]) → EndoReadable',
+        'lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>\nGet the value at a name or path.\nnameOrPath: string | string[] - Name or path segments.\nReturns EndoReadable for files, ReadableTree for subdirectories.\nExample: lookup("index.html") -> EndoReadable\nExample: lookup(["assets", "style.css"]) -> EndoReadable',
     },
   ],
   [
     'EndoMount',
     {
-      '': 'EndoMount - Live mutable access to a filesystem directory.\n\nPaths: an array is a sequence of segments (["src", "foo.js"]); a plain\nstring is a SINGLE name — segments must not contain "/", so\nreadText("src/foo.js") is rejected. entry("src/foo.js") is the one method\nthat splits a slash-joined string; its token works anywhere a path does.\n\nAll paths are confined to the mount root. Symlinks that escape\nthe root are invisible. Use readOnly() for an attenuated view.\n\nWell-known credential and configuration names (such as .ssh, .aws,\n.env, and .gnupg) are restricted: naming one in a path throws\n"Access denied", and list() and followNameChanges() omit them.\nMatching is case-insensitive. Ordinary dotfiles like .gitignore stay\naccessible. The set can be replaced when the mount is created.',
+      '': 'EndoMount - Live mutable access to a filesystem directory.\n\nPaths: an array is a sequence of segments (["src", "foo.js"]); a plain\nstring is a single name. These forms are equivalent for one name. Segments\nmust not contain "/", so readText("src/foo.js") is rejected; pass\nreadText(["src", "foo.js"]) for a nested path.\n\nAll paths are confined to the mount root. Symlinks that escape\nthe root are invisible. Use readOnly() for an attenuated view.\n\nWell-known credential and configuration names (such as .ssh, .aws,\n.env, and .gnupg) are restricted: naming one in a path throws\n"Access denied", and list() and followNameChanges() omit them.\nMatching is case-insensitive. Ordinary dotfiles like .gitignore stay\naccessible. The set can be replaced when the mount is created.',
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.',
       kind: 'kind() -> "directory"\nReturn the structural kind of this lookup result.\nUse this before choosing directory-only or file-only methods.',
       entry:
-        'entry(path) -> EndoMountEntry\nMint a path token for this mount.\npath: string | string[] — The one mount API where a string is slash-joined:\nentry("dir/file.txt") splits on "/" into segments; an array of segments is\nalso accepted.\nPass the token to any path-taking method: readText(entry("src/foo.js")).',
+        'entry(path) -> EndoMountEntry\nMint a path token for this mount.\npath: string | string[] — One name or an array of names. A string is\nequivalent to a one-element array and is never split on "/".\nPass the token to any path-taking method: readText(entry(["src", "foo.js"])).',
       has: 'has(...pathSegments | entry) -> Promise<boolean>\nCheck if a path exists within the mount.\nEither pass path segments (has("dir", "file.txt")) or a single EndoMountEntry.',
       list: 'list(...pathSegments) -> Promise<string[]>\nList directory entries at the given path.\nEach argument is one path segment: list("subdir").\nCall with no arguments to list the root.\nEntries with symlinks escaping the mount root are excluded.',
-      glob: 'glob(pattern) -> Promise<string[]>\nRecursively enumerate paths matching a glob pattern, relative to this mount face.\npattern: string — Slash-separated segments. The only metacharacters are `*` and `**`.\n`*` matches zero or more characters within one segment (never `/`, and it does match\nleading-dot names); `**` as a whole segment matches zero or more directory levels,\nand a trailing `**` additionally matches file descendants, not only directories.\nEvery other character, including `?`, `[`, `]`, `{`, `}`, and `+`, is a literal.\nDenied names (such as .ssh, .aws, .env) never appear, even when named literally.\nEntries whose symlinks escape the mount root are excluded. Results include\ndirectories as well as files, are sorted by UTF-16 code unit, and are capped at\n10,000 with silent truncation.\nExample: glob("**/*.js") → all JavaScript files at any depth.\nExample: glob("src/*") → the immediate children of src.',
-      grep: 'grep(pattern, paths?, options?) -> Promise<Array<{ file, line, text }>>\nSearch file contents for a regular expression across selected files.\npattern: string — An ECMAScript RegExp source, evaluated as new RegExp(pattern) with no flags.\npaths: string[] | Promise<string[]> — Which files to search. Pass a glob result to compose\nthe two — grep(pattern, glob("src/**/*.js")) — since glob is an independent producer of\npaths (the promise is awaited for you). Omit it to search every file under the mount face.\noptions.maxResults: number — Cap on the number of match records (default 1000).\nEach matching line yields one { file, line, text } record: file is the mount-face-relative\npath, line is 1-based, and text is the whole line with any trailing carriage return stripped\n(CRLF normalization). A path that is denied, escapes the mount, is a directory, or cannot\nbe read is skipped silently.\nExample: grep("TODO", glob("src/**/*.js")) → every TODO line under src.\nExample: grep("^export") → up to 1000 exported-symbol lines across the whole mount.',
+      glob: 'glob(pattern, options?) -> Promise<string[]>\nRecursively enumerate paths matching a glob pattern, relative to this mount face.\npattern: string — Slash-separated segments. The only metacharacters are `*` and `**`.\n`*` matches zero or more characters within one segment (never `/`, and it does match\nleading-dot names); `**` as a whole segment matches zero or more directory levels,\nand a trailing `**` additionally matches file descendants, not only directories.\nEvery other character, including `?`, `[`, `]`, `{`, `}`, and `+`, is a literal.\nDenied names (such as .ssh, .aws, .env) never appear, even when named literally.\nSymlinks that escape the mount root, or resolve into a denied directory, are\nexcluded. Results include directories as well as files, are sorted by UTF-16 code\nunit, and are capped at 10,000 with silent truncation.\n`**` reports a symlink to a directory but does not descend through it, so the walk\ncovers the tree and not the link graph; a segment that names a path still follows one,\nso glob("node_modules/@endo/*/src/**/*.js") reaches through workspace links.\noptions.followSymlinks: boolean — Let `**` descend through directory symlinks too\n(default false). This is `rg -L`, and like it, the sweep can become very large: in a\nworkspace checkout every node_modules link points back into the tree, so the walk\nenumerates every route to every package rather than every file.\nExample: glob("**/*.js") → all JavaScript files at any depth.\nExample: glob("src/*") → the immediate children of src.',
+      grep: 'grep(pattern, paths?, options?) -> Promise<Array<{ file, line, text }>>\nSearch file contents for a regular expression across selected files.\npattern: string — An ECMAScript RegExp source, evaluated as new RegExp(pattern) with no flags.\nNOTE: a caller-supplied source may catastrophically backtrack and stall the daemon;\nsupply trusted patterns.\npaths: string[] | Promise<string[]> — Which files to search. Await a glob result to\ncompose the two — grep(pattern, await glob("src/**/*.js")) — since glob is an\nindependent producer of paths. Omit it to search every file under the mount face.\noptions.maxResults: number — Non-negative safe-integer cap on the number of match\nrecords (default 1000). NaN, Infinity, negatives, and fractions are rejected.\noptions.followSymlinks: boolean — Applies only when paths is omitted, to the implicit\nwalk that finds the files (see glob); a path you pass in is named, so it is always read.\nEach matching line yields one { file, line, text } record: file is the mount-face-relative\npath, line is 1-based, and text is the whole line with any trailing carriage return stripped\n(CRLF normalization). A path that is denied, escapes the mount, resolves into a denied\ndirectory, is a directory, or cannot be read is skipped silently.\nExample: grep("TODO", await glob("src/**/*.js")) → every TODO line under src.\nExample: grep("^export") → up to 1000 exported-symbol lines across the whole mount.',
       glorp:
-        'glorp(glob, grep, options?) -> Promise<Array<{ file, line, text }>>\nFused glob+grep: enumerate the files matching the glob pattern, then search them for the grep pattern.\nglob: string — A glob pattern (same dialect as glob()); the files it matches are the search set.\ngrep: string — An ECMAScript RegExp source (same as grep()); the pattern each matched file is searched for.\nBoth patterns are required, so the whole operation is one call whose two patterns a native filesystem\nlayer can push down and fuse into a single enumerate-and-scan pass. It returns the same\n{ file, line, text } records as grep and honors the same confinement and deny-pattern filtering.\noptions.maxResults: number — Cap on the number of match records (default 1000).\nglorp(g, p) is the fused equivalent of grep(p, glob(g)); prefer it when you have both patterns up front.\nExample: glorp("src/**/*.js", "TODO") → every TODO line under src.',
+        'glorp(globPattern, grepPattern, options?) -> Promise<Array<{ file, line, text }>>\nFused glob+grep: enumerate the files matching the glob pattern, then search them\nfor the grep pattern in one call.\nglobPattern: string — A glob pattern (same dialect as glob()); selects the search set.\ngrepPattern: string — An ECMAScript RegExp source (same as grep()); the pattern each\nmatched file is searched for. NOTE: same ReDoS hazard as grep — supply trusted patterns.\nBoth patterns are required, so a native filesystem layer can fuse the enumerate-and-scan\ninto a single pass. It returns the same { file, line, text } records as grep and honors\nthe same confinement and deny-pattern filtering. The glob enumeration is capped at\n10,000 files (silent truncation), then grep\'s maxResults caps the match records.\noptions.maxResults: number — Non-negative safe-integer cap on match records (default 1000).\noptions.followSymlinks: boolean — Passed to the glob half only (see glob); the grep half\nreceives the enumerated paths, which are named and so always read.\nglorp(g, p) is the fused equivalent of grep(p, glob(g)); prefer it when you have both patterns up front.\nExample: glorp("src/**/*.js", "TODO") → every TODO line in a .js file under src.',
       lookup:
-        'lookup(path) -> Promise<EndoMount | EndoMountFile>\nResolve a path within the mount.\npath: string | string[] | EndoMountEntry — A string is one segment; an array\nis a sequence of segments. For a slash-joined nested path, use\nlookup(entry("dir/file.txt")) or pass lookup(["dir", "file.txt"]).\nReturns EndoMount for directories, EndoMountFile for files.',
+        'lookup(path) -> Promise<EndoMount | EndoMountFile>\nResolve a path within the mount.\npath: string | string[] | EndoMountEntry — A string is one segment; an array\nis a sequence of segments. For a nested path, pass\nlookup(["dir", "file.txt"]) or an entry minted from that array.\nReturns EndoMount for directories, EndoMountFile for files.',
       readText:
-        'readText(path) -> Promise<string>\nRead a file as UTF-8 text.\npath: string | string[] — One segment, or an array of segments; a\nslash-joined string is rejected (see entry()).\nThrows if the file does not exist.',
+        'readText(path) -> Promise<string>\nRead a file as UTF-8 text.\npath: string | string[] — One segment, or an array of segments; a string\ncontaining a slash is rejected.\nThrows if the file does not exist.',
       maybeReadText:
-        'maybeReadText(path) -> Promise<string | undefined>\nRead a file as UTF-8 text, returning undefined if missing.\npath: string | string[] — One segment, or an array of segments; a\nslash-joined string is rejected (see entry()).',
+        'maybeReadText(path) -> Promise<string | undefined>\nRead a file as UTF-8 text, returning undefined if missing.\npath: string | string[] — One segment, or an array of segments; a string\ncontaining a slash is rejected.',
       writeText:
-        'writeText(path, content) -> Promise<void>\nWrite UTF-8 text to a file at the given path.\npath: string | string[] — One segment, or an array of segments; a\nslash-joined string is rejected (see entry()).\ncontent: string — Text content to write.\nCreates parent directories as needed. Throws if read-only.',
+        'writeText(path, content) -> Promise<void>\nWrite UTF-8 text to a file at the given path.\npath: string | string[] — One segment, or an array of segments; a string\ncontaining a slash is rejected.\ncontent: string — Text content to write.\nCreates parent directories as needed. Throws if read-only.',
       remove:
-        'remove(path) -> Promise<void>\nRemove a file or empty directory.\npath: string | string[] — One segment, or an array of segments; a\nslash-joined string is rejected (see entry()).',
-      move: 'move(from, to) -> Promise<void>\nRename an entry within the mount.\nfrom, to: string | string[] — One segment, or an array of segments; a\nslash-joined string is rejected (see entry()).',
+        'remove(path) -> Promise<void>\nRemove a file or empty directory.\npath: string | string[] — One segment, or an array of segments; a string\ncontaining a slash is rejected.',
+      move: 'move(from, to) -> Promise<void>\nRename an entry within the mount.\nfrom, to: string | string[] — One segment, or an array of segments; a string\ncontaining a slash is rejected.',
       makeDirectory:
-        'makeDirectory(path) -> Promise<EndoMount>\nCreate a directory (and missing parents) at the given path; returns a sub-mount.\npath: string | string[] | EndoMountEntry — One segment, an array of segments, or a mount entry; a slash-joined string is rejected (see entry()).',
+        'makeDirectory(path) -> Promise<EndoMount>\nCreate a directory (and missing parents) at the given path; returns a sub-mount.\npath: string | string[] | EndoMountEntry — One segment, an array of segments,\nor a mount entry; a string containing a slash is rejected.',
       followNameChanges:
         "followNameChanges(...pathSegments) -> AsyncIterator\nSubscribe to entry-name changes within the named subdirectory.\nFirst yields existing entries in alphabetical order as\n{ add: name, type: 'file' | 'directory' } records, then yields\n{ add, type } and { remove } diffs as entries appear or disappear.\nShallow (immediate children only) and confinement-filtered.\nReleases the underlying OS watcher when the iterator is dropped.",
       makeFile:
-        'makeFile(path, content?) -> Promise<void>\nCreate a file at the given path, with optional initial text content.\npath: string | string[] | EndoMountEntry — One segment, an array of segments, or a mount entry; a slash-joined string is rejected (see entry()).\ncontent: string (optional) — Initial text content. An existing file is truncated when content is provided. For binary content, use `write(path, readableBlob)`.',
+        'makeFile(path, content?) -> Promise<void>\nCreate a file at the given path, with optional initial text content.\npath: string | string[] | EndoMountEntry — One segment, an array of segments,\nor a mount entry; a string containing a slash is rejected.\ncontent: string (optional) — Initial text content. An existing file is truncated when content is provided. For binary content, use `write(path, readableBlob)`.',
       write:
-        'write(path, value) -> Promise<void>\nMaterialize a ReadableBlob or ReadableTree at the given path.\npath: string | string[] | EndoMountEntry — One segment, an array of segments, or a mount entry; a slash-joined string is rejected (see entry()).\nvalue: ReadableBlob | ReadableTree — Source remotable; blobs are written as bytes, trees recurse.',
+        'write(path, value) -> Promise<void>\nMaterialize a ReadableBlob or ReadableTree at the given path.\npath: string | string[] | EndoMountEntry — One segment, an array of segments,\nor a mount entry; a string containing a slash is rejected.\nvalue: ReadableBlob | ReadableTree — Source remotable; blobs are written as bytes, trees recurse.',
       copy: 'copy(from, to) -> Promise<void>\nCopy a node within the mount.\nfrom: string | string[] | EndoMountEntry — Source name, path segments, or mount entry.\nto: string | string[] | EndoMountEntry — Destination name, path segments, or mount entry.\nBoth endpoints are confinement-checked.',
-      stat: 'stat(path) -> Promise<EndoMountStat | undefined>\nQuery metadata for a path within the mount.\npath: string | string[] | EndoMountEntry — One segment, an array of segments, or a mount entry; a slash-joined string is rejected (see entry()).\nReturns undefined when the path is missing or escapes the mount.',
+      stat: 'stat(path) -> Promise<EndoMountStat | undefined>\nQuery metadata for a path within the mount.\npath: string | string[] | EndoMountEntry — One segment, an array of segments,\nor a mount entry; a string containing a slash is rejected.\nReturns undefined when the path is missing or escapes the mount.',
       readOnly:
         'readOnly() -> ReadableTree\nReturns a structural ReadableTree view (has, list, lookup) of this mount.\nMount-specific extensions (entry, stat, readText, makeFile) are not on the view.',
       snapshot:
@@ -263,14 +286,19 @@ export const helpTextEntries = harden([
   [
     'EndoMountFile',
     {
-      '': 'EndoMountFile - A file within a mounted directory.\n\nA live, host-backed file. Read it with text() / json() / streamBase64(),\ninspect and range-read it with getInfo() / fetch(), write it with\nwriteText() / append() / writeBytes(), or snapshot() it into the content\nstore. kind() returns "file" and stat() returns the bigint-nanosecond metadata\nrecord.',
+      '': 'EndoMountFile - A file within a mounted directory.\n\nA live, host-backed file. Read it with text() / json() / streamBase64(),\ninspect and read it with sha256() / size() / bytes(), write it with\nwriteText() / append() / writeBytes(), or snapshot() it into the content\nstore. kind() returns "file" and stat() returns the bigint-nanosecond metadata\nrecord.',
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.',
       kind: 'kind() -> "file"\nReturn the structural kind of this lookup result.',
       list: 'list() -> never\nNot available on a file.\nUse text() to read its contents.',
-      getInfo:
-        'getInfo() -> Promise<{ algorithm, hash, size }>\nThe content-addressed identity of the file\'s current bytes in one\nround-trip: algorithm ("sha256"), hash (base64), and size (bigint).\nRecomputed each call, since the live file may change.',
-      fetch:
-        'fetch(offset, length) -> Promise<PassableBytesReader>\nRead the byte range [offset, offset + length) of the live file without\nstreaming the whole thing. offset and length are bigints; the range is\nclamped at end-of-content.',
+      sha256:
+        "sha256() -> Promise<string>\nReturn the SHA-256 digest of the file's current bytes as base64.",
+      size: 'size() -> Promise<bigint>\nReturn the current byte length.',
+      bytes:
+        'bytes() -> Promise<PassableBytesReader>\nStream all current bytes.',
+      byteRange:
+        'byteRange(start, end) -> ReadableBlobView\nAttenuate to the half-open byte interval [start, end) of the live file.\nReturns a read-only ReadableBlob view with exactly the authority to read the\nselected bytes; ranges compose (a range of a range intersects) and the view\nstill observes the live file subject to the fixed interval. start and end are\nbigints. Construction reads no bytes, so it resolves synchronously.',
+      textRange:
+        "textRange(startLine, endLine) -> Promise<ReadableBlobView>\nAttenuate to lines [startLine, endLine) (0-based, end-exclusive, LF boundaries,\nCRLF preserved) of the live file's current bytes.\nReturns a read-only ReadableBlob view over the corresponding byte slice; it\nreads bytes to find the line boundaries, so it resolves asynchronously.",
       text: 'text() -> Promise<string>\nRead the file content as a UTF-8 string.',
       streamBase64:
         'streamBase64(syndicationPromise) -> Promise\nStream the file content as base64 chunks, driven by the syndication\npromise (the reader-pump flow-control protocol).',
@@ -282,7 +310,7 @@ export const helpTextEntries = harden([
       writeBytes:
         'writeBytes(readableRef) -> Promise<void>\nWrite bytes from an async iterator. Throws if read-only.',
       readOnly:
-        'readOnly() -> ReadableBlob\nReturns a structural ReadableBlob view (text, json, streamBase64, getInfo,\nfetch) of this file. The view is a write-disabled face over the live file,\nnot a snapshot. Mount-specific extensions (stat, snapshot) are not on it.',
+        'readOnly() -> ReadableBlob\nReturns a structural ReadableBlob view (text, json, streamBase64, sha256,\nsize, bytes) of this file. The view is a write-disabled face over the live file,\nnot a snapshot. Mount-specific extensions (stat, snapshot) are not on it.',
     },
   ],
 ]);

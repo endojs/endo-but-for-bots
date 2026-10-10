@@ -19,7 +19,8 @@ import { makeTool } from '../tool.js';
 /**
  * The push tier (daemon-agent-tools § Phase 3). `makeGitRemoteTool` closes over
  * a single granted `GitRemote` capability and emits the `fetch` / `pull` /
- * `push` tools — plus a credential-free `inspect` — as canonical `ToolRecord`s.
+ * `push` tools — plus a credential-free `inspect` and `credentialHealth` — as
+ * canonical `ToolRecord`s.
  *
  * This is the network + credential layer's tool seam. Every bound the model can
  * reach — the endpoint URL, the allowed directions, the fetch/push refspecs,
@@ -93,6 +94,16 @@ const gitRemoteToolSchemas = harden({
       "Report this remote's policy bounds: the endpoint URL, the allowed " +
       'directions (fetch/push), the fetch and push refspecs, and the ' +
       'force/tags/delete flags. Reveals no credential material.',
+    parameters: NO_ARGS,
+  },
+  credentialHealth: {
+    description:
+      'Report whether the credential this remote would push with is usable ' +
+      'right now, without spending it. Returns { required: false } for a ' +
+      'remote that needs no credential, otherwise { required: true, kind, ' +
+      'audience, available, revoked }. Call this before a push to find a ' +
+      'dead credential without the push being what discovers it. Reveals no ' +
+      'credential material.',
     parameters: NO_ARGS,
   },
   fetch: {

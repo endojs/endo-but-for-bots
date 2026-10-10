@@ -1,0 +1,6 @@
+# engine=ironhorse features=default corpus=built-ins/ShadowRealm/WrappedFunction tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/ShadowRealm/WrappedFunction/length-throws-typeerror.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/WrappedFunction/length.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/WrappedFunction/name-throws-typeerror.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/WrappedFunction/name.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/WrappedFunction/throws-typeerror-on-revoked-proxy.js sloppy skip:feature:ShadowRealm

@@ -1,0 +1,15 @@
+# engine=ironhorse features=default corpus=intl402/Number/prototype/toLocaleString tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Number/prototype/toLocaleString/builtin.js sloppy pass
+intl402/Number/prototype/toLocaleString/builtin.js strict pass
+intl402/Number/prototype/toLocaleString/default-options-object-prototype.js sloppy skip:oracle-host-missing-intl
+intl402/Number/prototype/toLocaleString/default-options-object-prototype.js strict skip:oracle-host-missing-intl
+intl402/Number/prototype/toLocaleString/length.js sloppy pass
+intl402/Number/prototype/toLocaleString/length.js strict pass
+intl402/Number/prototype/toLocaleString/returns-same-results-as-NumberFormat.js sloppy skip:oracle-host-missing-intl
+intl402/Number/prototype/toLocaleString/returns-same-results-as-NumberFormat.js strict skip:oracle-host-missing-intl
+intl402/Number/prototype/toLocaleString/taint-Intl-NumberFormat.js sloppy skip:oracle-host-missing-intl
+intl402/Number/prototype/toLocaleString/taint-Intl-NumberFormat.js strict skip:oracle-host-missing-intl
+intl402/Number/prototype/toLocaleString/this-number-value.js sloppy pass
+intl402/Number/prototype/toLocaleString/this-number-value.js strict pass
+intl402/Number/prototype/toLocaleString/throws-same-exceptions-as-NumberFormat.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Number.prototype.toLocaleString didn't throw exception for locales null. Expected a ReferenceError to be thrown but no exception was thrown at all"
+intl402/Number/prototype/toLocaleString/throws-same-exceptions-as-NumberFormat.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Number.prototype.toLocaleString didn't throw exception for locales null. Expected a ReferenceError to be thrown but no exception was thrown at all"

@@ -1,26 +1,23 @@
 //! The scanner, a transliteration of `fxGetNextTokenAux` and friends in
 //! `c/moddable/xs/sources/xsLexical.c` at the oracle pin.
 //!
-//! It reads a `&str` and yields [`Lexeme`]s. The control flow — which
+//! It reads scalar UTF-8 or JavaScript UTF-16 and yields [`Lexeme`]s. The control flow — which
 //! character opens which token, how numbers and strings and templates
 //! and regular expressions are scanned, how line terminators and the
 //! ASI-relevant `crlf` flag are tracked, how contextual keywords are
 //! classified — follows XS statement for statement so the parser and
 //! coder built on top see EXACTLY what XS sees.
 //!
-//! Two deliberate departures from XS, neither affecting the token
-//! stream this stage is judged on (byte-identity is child-1-out-of-scope):
-//! ironhorse decodes the source as UTF-8 scalar values rather than CESU-8
-//! (astral characters are single `char`s, so XS's surrogate-pair
-//! combining is a no-op on valid UTF-8), and cooked/raw strings are
-//! `String`s rather than CESU-8 byte runs. Regexp *validation* stays with
-//! `ironhorse-regexp`; this scanner only delimits the literal (raw body +
-//! flags), exactly as `fxGetNextRegExp` does before handing off.
+//! Valid surrogate pairs are combined while scanning source; lone surrogates
+//! remain distinct code values. Cooked and raw strings retain UTF-16 units.
+//! Regexp validation uses `ironhorse-regexp` after this scanner delimits the
+//! literal body and flags.
 
 use crate::error::{LexError, LexErrorKind};
 use crate::meter::ParseMeter;
 use crate::token::{classify_word, Token};
-use crate::unicode::{is_identifier_first, is_identifier_next};
+use ironhorse_text::SymbolName;
+use ironhorse_unicode::{is_identifier_first, is_identifier_next};
 
 /// The end-of-input sentinel, XS's `(txU4)C_EOF`.
 const EOF: u32 = 0xFFFF_FFFF;
@@ -57,7 +54,7 @@ pub struct Lexeme {
     pub escaped: bool,
     /// The cooked string value, for `String`/`Template*`/regexp body,
     /// carried as UTF-16 code units so lone surrogates from `\u` escapes
-    /// survive to the coder's CESU-8 emission (see [`ast::Value::Str`]).
+    /// survive to the coder's CESU-8 emission (see [`crate::Value::Str`]).
     pub string: Option<Vec<u16>>,
     /// The raw (pre-cook) string value, for `String`/`Template*`, likewise
     /// UTF-16 code units.
@@ -71,7 +68,7 @@ pub struct Lexeme {
     /// The BigInt literal, for `Bigint`.
     pub bigint: Option<BigIntLiteral>,
     /// The identifier / keyword / private-name text, for word tokens.
-    pub symbol: Option<String>,
+    pub symbol: Option<SymbolName>,
     /// A legacy (non-simple) octal string escape or `\8`/`\9` occurred —
     /// XS's `mxStringLegacyFlag`, a sloppy-mode-only allowance.
     pub legacy_octal: bool,
@@ -106,8 +103,8 @@ impl Lexeme {
 /// The lexer. Holds the character cursor (XS's `character`/`lookahead`
 /// two-char window), the running line, the mode flags XS keeps in
 /// `parser->flags`, and the parse meter threaded from the first token.
-pub struct Lexer {
-    chars: Vec<char>,
+pub struct Lexer<'a> {
+    chars: Vec<u32>,
     /// Byte offset of each char in `chars`, plus a final total-length
     /// entry so `offsets[i]` is always valid up to `chars.len()`.
     offsets: Vec<usize>,
@@ -133,19 +130,51 @@ pub struct Lexer {
     /// member-name exception in `fxGetNextKeyword`.
     prev_token: Token,
     /// The parse meter (ironhorse's own frozen cost table).
-    meter: ParseMeter,
+    meter: ParseMeter<'a>,
 }
 
-impl Lexer {
+impl<'a> Lexer<'a> {
     /// A fresh lexer over `source`, in sloppy mode with the host `@`
     /// token disabled (ordinary-JS defaults).
-    pub fn new(source: &str) -> Lexer {
-        let chars: Vec<char> = source.chars().collect();
+    pub fn new(source: &str) -> Lexer<'a> {
+        Self::with_meter(source, ParseMeter::new())
+    }
+
+    pub(crate) fn with_meter(source: &str, meter: ParseMeter<'a>) -> Lexer<'a> {
+        // Admission precedes both eager source-sized allocations and scanning,
+        // including a single huge comment/string with no intervening token.
+        meter.source(source.len());
+        let chars: Vec<u32> = source.chars().map(u32::from).collect();
+        Self::from_codes(chars, meter)
+    }
+
+    pub(crate) fn with_units(source: &[u16], meter: ParseMeter<'a>) -> Lexer<'a> {
+        // Price the same UTF-8 width for scalar source under either API;
+        // unpaired UTF-16 units occupy three bytes in the source encoding.
+        // Each UTF-16 unit contributes at least one byte. Admit this bound
+        // before scanning, then admit each additional encoded byte before
+        // retaining the decoded code point. Scalar totals match with_meter.
+        meter.source(source.len());
+        let mut codes = Vec::new();
+        for decoded in char::decode_utf16(source.iter().copied()) {
+            let (code, width, units) = match decoded {
+                Ok(ch) => (u32::from(ch), ch.len_utf8(), ch.len_utf16()),
+                Err(error) => (u32::from(error.unpaired_surrogate()), 3, 1),
+            };
+            if width > units {
+                meter.source(width - units);
+            }
+            codes.push(code);
+        }
+        Self::from_codes(codes, meter)
+    }
+
+    fn from_codes(chars: Vec<u32>, meter: ParseMeter<'a>) -> Lexer<'a> {
         let mut offsets = Vec::with_capacity(chars.len() + 1);
         let mut b = 0usize;
-        for c in &chars {
+        for &code in &chars {
             offsets.push(b);
-            b += c.len_utf8();
+            b += char::from_u32(code).map_or(3, char::len_utf8);
         }
         offsets.push(b);
         let mut lexer = Lexer {
@@ -161,7 +190,7 @@ impl Lexer {
             generator_ctx: false,
             host: false,
             prev_token: Token::NoToken,
-            meter: ParseMeter::new(),
+            meter,
         };
         // Prime the two-char window (XS calls fxGetNextCharacter twice).
         lexer.la = lexer.read_code();
@@ -191,7 +220,7 @@ impl Lexer {
     }
 
     /// The parse meter, for telemetry after a scan.
-    pub fn meter(&self) -> &ParseMeter {
+    pub fn meter(&self) -> &ParseMeter<'a> {
         &self.meter
     }
 
@@ -199,7 +228,7 @@ impl Lexer {
 
     fn read_code(&mut self) -> u32 {
         if self.next_index < self.chars.len() {
-            let c = self.chars[self.next_index] as u32;
+            let c = self.chars[self.next_index];
             self.next_index += 1;
             c
         } else {
@@ -286,8 +315,13 @@ impl Lexer {
     /// Produce the next token, transliterating `fxGetNextTokenAux`, and
     /// charge the parse meter once for it (including EOF).
     pub fn next(&mut self) -> Result<Lexeme, LexError> {
+        if !self.meter.charge_token() {
+            return Err(LexError {
+                line: self.line,
+                kind: LexErrorKind::MeterLimit,
+            });
+        }
         let lexeme = self.scan()?;
-        self.meter.charge_token();
         self.prev_token = lexeme.token;
         Ok(lexeme)
     }
@@ -321,294 +355,294 @@ impl Lexer {
                     self.advance();
                 }
                 c if c <= 0x7F => match c as u8 {
-                b'0' => {
-                    self.scan_zero(&mut st)?;
-                }
-                b'1'..=b'9' => {
-                    self.scan_number_e(&mut st, false)?;
-                }
-                b'.' => {
-                    self.advance();
-                    let c = self.ch;
-                    if c == b'.' as u32 {
+                    b'0' => {
+                        self.scan_zero(&mut st)?;
+                    }
+                    b'1'..=b'9' => {
+                        self.scan_number_e(&mut st, false)?;
+                    }
+                    b'.' => {
+                        self.advance();
+                        let c = self.ch;
+                        if c == b'.' as u32 {
+                            self.advance();
+                            if self.ch == b'.' as u32 {
+                                st.token = Token::Spread;
+                                self.advance();
+                            } else {
+                                return Err(self.err(LexErrorKind::UnexpectedCharacter(self.ch)));
+                            }
+                        } else if (b'0' as u32..=b'9' as u32).contains(&c) {
+                            self.scan_number_e(&mut st, true)?;
+                        } else {
+                            st.token = Token::Dot;
+                        }
+                    }
+                    b',' => {
+                        st.token = Token::Comma;
+                        self.advance();
+                    }
+                    b';' => {
+                        st.token = Token::Semicolon;
+                        self.advance();
+                    }
+                    b':' => {
+                        st.token = Token::Colon;
+                        self.advance();
+                    }
+                    b'?' => {
                         self.advance();
                         if self.ch == b'.' as u32 {
-                            st.token = Token::Spread;
+                            if !(b'0' as u32..=b'9' as u32).contains(&self.la) {
+                                st.token = Token::Chain;
+                                self.advance();
+                            } else {
+                                st.token = Token::QuestionMark;
+                            }
+                        } else if self.ch == b'?' as u32 {
+                            st.token = Token::Coalesce;
                             self.advance();
-                        } else {
-                            return Err(self.err(LexErrorKind::UnexpectedCharacter(self.ch)));
-                        }
-                    } else if (b'0' as u32..=b'9' as u32).contains(&c) {
-                        self.scan_number_e(&mut st, true)?;
-                    } else {
-                        st.token = Token::Dot;
-                    }
-                }
-                b',' => {
-                    st.token = Token::Comma;
-                    self.advance();
-                }
-                b';' => {
-                    st.token = Token::Semicolon;
-                    self.advance();
-                }
-                b':' => {
-                    st.token = Token::Colon;
-                    self.advance();
-                }
-                b'?' => {
-                    self.advance();
-                    if self.ch == b'.' as u32 {
-                        if !(b'0' as u32..=b'9' as u32).contains(&self.la) {
-                            st.token = Token::Chain;
-                            self.advance();
+                            if self.ch == b'=' as u32 {
+                                st.token = Token::CoalesceAssign;
+                                self.advance();
+                            }
                         } else {
                             st.token = Token::QuestionMark;
                         }
-                    } else if self.ch == b'?' as u32 {
-                        st.token = Token::Coalesce;
-                        self.advance();
-                        if self.ch == b'=' as u32 {
-                            st.token = Token::CoalesceAssign;
-                            self.advance();
-                        }
-                    } else {
-                        st.token = Token::QuestionMark;
                     }
-                }
-                b'(' => {
-                    st.token = Token::LeftParenthesis;
-                    self.advance();
-                }
-                b')' => {
-                    st.token = Token::RightParenthesis;
-                    self.advance();
-                }
-                b'[' => {
-                    st.token = Token::LeftBracket;
-                    self.advance();
-                }
-                b']' => {
-                    st.token = Token::RightBracket;
-                    self.advance();
-                }
-                b'{' => {
-                    st.token = Token::LeftBrace;
-                    self.advance();
-                }
-                b'}' => {
-                    st.token = Token::RightBrace;
-                    self.advance();
-                }
-                b'=' => {
-                    self.advance();
-                    if self.ch == b'=' as u32 {
+                    b'(' => {
+                        st.token = Token::LeftParenthesis;
+                        self.advance();
+                    }
+                    b')' => {
+                        st.token = Token::RightParenthesis;
+                        self.advance();
+                    }
+                    b'[' => {
+                        st.token = Token::LeftBracket;
+                        self.advance();
+                    }
+                    b']' => {
+                        st.token = Token::RightBracket;
+                        self.advance();
+                    }
+                    b'{' => {
+                        st.token = Token::LeftBrace;
+                        self.advance();
+                    }
+                    b'}' => {
+                        st.token = Token::RightBrace;
+                        self.advance();
+                    }
+                    b'=' => {
                         self.advance();
                         if self.ch == b'=' as u32 {
-                            st.token = Token::StrictEqual;
+                            self.advance();
+                            if self.ch == b'=' as u32 {
+                                st.token = Token::StrictEqual;
+                                self.advance();
+                            } else {
+                                st.token = Token::Equal;
+                            }
+                        } else if self.ch == b'>' as u32 {
+                            st.token = Token::Arrow;
                             self.advance();
                         } else {
-                            st.token = Token::Equal;
+                            st.token = Token::Assign;
                         }
-                    } else if self.ch == b'>' as u32 {
-                        st.token = Token::Arrow;
-                        self.advance();
-                    } else {
-                        st.token = Token::Assign;
                     }
-                }
-                b'<' => {
-                    self.advance();
-                    if self.ch == b'<' as u32 {
+                    b'<' => {
                         self.advance();
-                        if self.ch == b'=' as u32 {
-                            st.token = Token::LeftShiftAssign;
+                        if self.ch == b'<' as u32 {
+                            self.advance();
+                            if self.ch == b'=' as u32 {
+                                st.token = Token::LeftShiftAssign;
+                                self.advance();
+                            } else {
+                                st.token = Token::LeftShift;
+                            }
+                        } else if self.ch == b'=' as u32 {
+                            st.token = Token::LessEqual;
                             self.advance();
                         } else {
-                            st.token = Token::LeftShift;
+                            st.token = Token::Less;
                         }
-                    } else if self.ch == b'=' as u32 {
-                        st.token = Token::LessEqual;
-                        self.advance();
-                    } else {
-                        st.token = Token::Less;
                     }
-                }
-                b'>' => {
-                    self.advance();
-                    if self.ch == b'>' as u32 {
+                    b'>' => {
                         self.advance();
                         if self.ch == b'>' as u32 {
                             self.advance();
-                            if self.ch == b'=' as u32 {
-                                st.token = Token::UnsignedRightShiftAssign;
+                            if self.ch == b'>' as u32 {
+                                self.advance();
+                                if self.ch == b'=' as u32 {
+                                    st.token = Token::UnsignedRightShiftAssign;
+                                    self.advance();
+                                } else {
+                                    st.token = Token::UnsignedRightShift;
+                                }
+                            } else if self.ch == b'=' as u32 {
+                                st.token = Token::SignedRightShiftAssign;
                                 self.advance();
                             } else {
-                                st.token = Token::UnsignedRightShift;
+                                st.token = Token::SignedRightShift;
                             }
                         } else if self.ch == b'=' as u32 {
-                            st.token = Token::SignedRightShiftAssign;
+                            st.token = Token::MoreEqual;
                             self.advance();
                         } else {
-                            st.token = Token::SignedRightShift;
+                            st.token = Token::More;
                         }
-                    } else if self.ch == b'=' as u32 {
-                        st.token = Token::MoreEqual;
-                        self.advance();
-                    } else {
-                        st.token = Token::More;
                     }
-                }
-                b'!' => {
-                    self.advance();
-                    if self.ch == b'=' as u32 {
+                    b'!' => {
                         self.advance();
                         if self.ch == b'=' as u32 {
-                            st.token = Token::StrictNotEqual;
+                            self.advance();
+                            if self.ch == b'=' as u32 {
+                                st.token = Token::StrictNotEqual;
+                                self.advance();
+                            } else {
+                                st.token = Token::NotEqual;
+                            }
+                        } else {
+                            st.token = Token::Not;
+                        }
+                    }
+                    b'~' => {
+                        st.token = Token::BitNot;
+                        self.advance();
+                    }
+                    b'&' => {
+                        self.advance();
+                        if self.ch == b'=' as u32 {
+                            st.token = Token::BitAndAssign;
+                            self.advance();
+                        } else if self.ch == b'&' as u32 {
+                            st.token = Token::And;
+                            self.advance();
+                            if self.ch == b'=' as u32 {
+                                st.token = Token::AndAssign;
+                                self.advance();
+                            }
+                        } else {
+                            st.token = Token::BitAnd;
+                        }
+                    }
+                    b'|' => {
+                        self.advance();
+                        if self.ch == b'=' as u32 {
+                            st.token = Token::BitOrAssign;
+                            self.advance();
+                        } else if self.ch == b'|' as u32 {
+                            st.token = Token::Or;
+                            self.advance();
+                            if self.ch == b'=' as u32 {
+                                st.token = Token::OrAssign;
+                                self.advance();
+                            }
+                        } else {
+                            st.token = Token::BitOr;
+                        }
+                    }
+                    b'^' => {
+                        self.advance();
+                        if self.ch == b'=' as u32 {
+                            st.token = Token::BitXorAssign;
                             self.advance();
                         } else {
-                            st.token = Token::NotEqual;
+                            st.token = Token::BitXor;
                         }
-                    } else {
-                        st.token = Token::Not;
                     }
-                }
-                b'~' => {
-                    st.token = Token::BitNot;
-                    self.advance();
-                }
-                b'&' => {
-                    self.advance();
-                    if self.ch == b'=' as u32 {
-                        st.token = Token::BitAndAssign;
-                        self.advance();
-                    } else if self.ch == b'&' as u32 {
-                        st.token = Token::And;
+                    b'+' => {
                         self.advance();
                         if self.ch == b'=' as u32 {
-                            st.token = Token::AndAssign;
+                            st.token = Token::AddAssign;
                             self.advance();
-                        }
-                    } else {
-                        st.token = Token::BitAnd;
-                    }
-                }
-                b'|' => {
-                    self.advance();
-                    if self.ch == b'=' as u32 {
-                        st.token = Token::BitOrAssign;
-                        self.advance();
-                    } else if self.ch == b'|' as u32 {
-                        st.token = Token::Or;
-                        self.advance();
-                        if self.ch == b'=' as u32 {
-                            st.token = Token::OrAssign;
-                            self.advance();
-                        }
-                    } else {
-                        st.token = Token::BitOr;
-                    }
-                }
-                b'^' => {
-                    self.advance();
-                    if self.ch == b'=' as u32 {
-                        st.token = Token::BitXorAssign;
-                        self.advance();
-                    } else {
-                        st.token = Token::BitXor;
-                    }
-                }
-                b'+' => {
-                    self.advance();
-                    if self.ch == b'=' as u32 {
-                        st.token = Token::AddAssign;
-                        self.advance();
-                    } else if self.ch == b'+' as u32 {
-                        st.token = Token::Increment;
-                        self.advance();
-                    } else {
-                        st.token = Token::Add;
-                    }
-                }
-                b'-' => {
-                    self.advance();
-                    if self.ch == b'=' as u32 {
-                        st.token = Token::SubtractAssign;
-                        self.advance();
-                    } else if self.ch == b'-' as u32 {
-                        st.token = Token::Decrement;
-                        self.advance();
-                    } else {
-                        st.token = Token::Subtract;
-                    }
-                }
-                b'*' => {
-                    self.advance();
-                    if self.ch == b'=' as u32 {
-                        st.token = Token::MultiplyAssign;
-                        self.advance();
-                    } else if self.ch == b'*' as u32 {
-                        self.advance();
-                        if self.ch == b'=' as u32 {
-                            st.token = Token::ExponentiationAssign;
+                        } else if self.ch == b'+' as u32 {
+                            st.token = Token::Increment;
                             self.advance();
                         } else {
-                            st.token = Token::Exponentiation;
+                            st.token = Token::Add;
                         }
-                    } else {
-                        st.token = Token::Multiply;
                     }
-                }
-                b'/' => {
-                    self.advance();
-                    if self.ch == b'*' as u32 {
-                        self.scan_block_comment(&mut st)?;
-                    } else if self.ch == b'/' as u32 {
-                        self.scan_line_comment();
-                    } else if self.ch == b'=' as u32 {
-                        st.token = Token::DivideAssign;
+                    b'-' => {
                         self.advance();
-                    } else {
-                        st.token = Token::Divide;
+                        if self.ch == b'=' as u32 {
+                            st.token = Token::SubtractAssign;
+                            self.advance();
+                        } else if self.ch == b'-' as u32 {
+                            st.token = Token::Decrement;
+                            self.advance();
+                        } else {
+                            st.token = Token::Subtract;
+                        }
                     }
-                }
-                b'%' => {
-                    self.advance();
-                    if self.ch == b'=' as u32 {
-                        st.token = Token::ModuloAssign;
+                    b'*' => {
                         self.advance();
-                    } else {
-                        st.token = Token::Modulo;
+                        if self.ch == b'=' as u32 {
+                            st.token = Token::MultiplyAssign;
+                            self.advance();
+                        } else if self.ch == b'*' as u32 {
+                            self.advance();
+                            if self.ch == b'=' as u32 {
+                                st.token = Token::ExponentiationAssign;
+                                self.advance();
+                            } else {
+                                st.token = Token::Exponentiation;
+                            }
+                        } else {
+                            st.token = Token::Multiply;
+                        }
                     }
-                }
-                b'"' | b'\'' => {
-                    let c = self.ch;
-                    self.advance();
-                    self.scan_string(&mut st, c)?;
-                    st.token = Token::String;
-                    self.advance();
-                }
-                b'`' => {
-                    self.advance();
-                    self.scan_string(&mut st, b'`' as u32)?;
-                    if self.ch == b'{' as u32 {
-                        st.token = Token::TemplateHead;
-                    } else {
-                        st.token = Token::Template;
+                    b'/' => {
+                        self.advance();
+                        if self.ch == b'*' as u32 {
+                            self.scan_block_comment(&mut st)?;
+                        } else if self.ch == b'/' as u32 {
+                            self.scan_line_comment();
+                        } else if self.ch == b'=' as u32 {
+                            st.token = Token::DivideAssign;
+                            self.advance();
+                        } else {
+                            st.token = Token::Divide;
+                        }
                     }
-                    self.advance();
-                }
-                b'@' => {
-                    if self.host {
-                        st.token = Token::Host;
-                    } else {
-                        return Err(self.err(LexErrorKind::InvalidAtSign));
+                    b'%' => {
+                        self.advance();
+                        if self.ch == b'=' as u32 {
+                            st.token = Token::ModuloAssign;
+                            self.advance();
+                        } else {
+                            st.token = Token::Modulo;
+                        }
                     }
-                    self.advance();
-                }
-                _ => {
-                    self.scan_identifier(&mut st)?;
-                }
+                    b'"' | b'\'' => {
+                        let c = self.ch;
+                        self.advance();
+                        self.scan_string(&mut st, c)?;
+                        st.token = Token::String;
+                        self.advance();
+                    }
+                    b'`' => {
+                        self.advance();
+                        self.scan_string(&mut st, b'`' as u32)?;
+                        if self.ch == b'{' as u32 {
+                            st.token = Token::TemplateHead;
+                        } else {
+                            st.token = Token::Template;
+                        }
+                        self.advance();
+                    }
+                    b'@' => {
+                        if self.host {
+                            st.token = Token::Host;
+                        } else {
+                            return Err(self.err(LexErrorKind::InvalidAtSign));
+                        }
+                        self.advance();
+                    }
+                    _ => {
+                        self.scan_identifier(&mut st)?;
+                    }
                 },
                 _ => {
                     self.scan_identifier(&mut st)?;
@@ -667,7 +701,9 @@ impl Lexer {
         }
         let bytes = body.as_bytes();
         if bytes.first() == Some(&b'#') || bytes.first() == Some(&b'@') {
-            if let Some(rest) = body.strip_prefix("#line ").or_else(|| body.strip_prefix("@line "))
+            if let Some(rest) = body
+                .strip_prefix("#line ")
+                .or_else(|| body.strip_prefix("@line "))
             {
                 // "@line N" or "@line N \"path\"": reset the line counter.
                 let mut n: u32 = 0;
@@ -727,7 +763,12 @@ impl Lexer {
     /// Port of `fxGetNextDigits`: read a run of digits (via `pred`),
     /// allowing single `_` separators between digit groups but rejecting
     /// leading/trailing/doubled ones and (when `empty`) an empty run.
-    fn scan_digits<F>(&mut self, buf: &mut String, mut pred: F, mut empty: bool) -> Result<(), LexError>
+    fn scan_digits<F>(
+        &mut self,
+        buf: &mut String,
+        mut pred: F,
+        mut empty: bool,
+    ) -> Result<(), LexError>
     where
         F: FnMut(u32) -> bool,
     {
@@ -846,14 +887,22 @@ impl Lexer {
         if dot {
             buf.push('.');
         }
-        self.scan_digits(&mut buf, |c| (b'0' as u32..=b'9' as u32).contains(&c), false)?;
+        self.scan_digits(
+            &mut buf,
+            |c| (b'0' as u32..=b'9' as u32).contains(&c),
+            false,
+        )?;
         let mut had_fraction = dot;
         if !dot && self.ch == b'.' as u32 {
             dot = true;
             had_fraction = true;
             buf.push('.');
             self.advance();
-            self.scan_digits(&mut buf, |c| (b'0' as u32..=b'9' as u32).contains(&c), false)?;
+            self.scan_digits(
+                &mut buf,
+                |c| (b'0' as u32..=b'9' as u32).contains(&c),
+                false,
+            )?;
         }
         let mut c = self.ch;
         if c == b'e' as u32 || c == b'E' as u32 {
@@ -926,23 +975,22 @@ impl Lexer {
     /// delimiter `c` (`"`, `'`, or `` ` ``), then cook escapes. On entry
     /// `self.ch` is the first body char.
     fn scan_string(&mut self, st: &mut Lexeme, c: u32) -> Result<(), LexError> {
-        let mut raw = String::new();
+        let mut raw = Vec::<u32>::new();
         loop {
             match self.ch {
                 EOF => return Err(self.err(LexErrorKind::UnterminatedString)),
                 10 => {
-                    self.line += 1;
                     if c == b'`' as u32 {
-                        raw.push('\n');
+                        raw.push('\n' as u32);
                         self.advance();
                     } else {
                         return Err(self.err(LexErrorKind::LineTerminatorInString));
                     }
+                    self.line += 1;
                 }
                 13 => {
-                    self.line += 1;
                     if c == b'`' as u32 {
-                        raw.push('\n');
+                        raw.push('\n' as u32);
                         self.advance();
                         if self.ch == 10 {
                             self.advance();
@@ -950,10 +998,11 @@ impl Lexer {
                     } else {
                         return Err(self.err(LexErrorKind::LineTerminatorInString));
                     }
+                    self.line += 1;
                 }
                 0x2028 | 0x2029 => {
                     self.line += 1;
-                    raw.push(char::from_u32(self.ch).unwrap());
+                    raw.push(self.ch);
                     self.advance();
                 }
                 ch if ch == c => break,
@@ -962,21 +1011,21 @@ impl Lexer {
                     if c == b'`' as u32 && self.ch == b'{' as u32 {
                         break;
                     }
-                    raw.push('$');
+                    raw.push('$' as u32);
                 }
                 ch if ch == b'\\' as u32 => {
                     st.escaped = true;
-                    raw.push('\\');
+                    raw.push('\\' as u32);
                     self.advance();
                     match self.ch {
                         10 | 0x2028 | 0x2029 => {
                             self.line += 1;
-                            raw.push(char::from_u32(self.ch).unwrap());
+                            raw.push(self.ch);
                             self.advance();
                         }
                         13 => {
                             self.line += 1;
-                            raw.push('\n');
+                            raw.push('\n' as u32);
                             self.advance();
                             if self.ch == 10 {
                                 self.advance();
@@ -984,18 +1033,25 @@ impl Lexer {
                         }
                         EOF => { /* trailing backslash: leave raw ending in '\\' */ }
                         other => {
-                            raw.push(char::from_u32(other).unwrap());
+                            raw.push(other);
                             self.advance();
                         }
                     }
                 }
                 other => {
-                    raw.push(char::from_u32(other).unwrap());
+                    raw.push(other);
                     self.advance();
                 }
             }
         }
-        st.raw = Some(crate::ast::str_to_units(&raw));
+        let raw_units = || {
+            let mut units = Vec::new();
+            for &code in &raw {
+                push_unit(&mut units, code);
+            }
+            units
+        };
+        st.raw = Some(raw_units());
         if st.escaped {
             let (cooked, legacy, error) = self.cook_string(&raw, c == b'`' as u32);
             st.legacy_octal = legacy;
@@ -1004,7 +1060,7 @@ impl Lexer {
         } else {
             // The raw body is verbatim UTF-8 source (no lone surrogates),
             // so its code units are the cooked value too.
-            st.string = Some(crate::ast::str_to_units(&raw));
+            st.string = Some(raw_units());
         }
         Ok(())
     }
@@ -1012,8 +1068,13 @@ impl Lexer {
     /// Port of `fxGetNextString`'s cooking pass: resolve escapes in `raw`,
     /// returning `(cooked, legacy_octal, error)`. `template` gates the
     /// legacy-octal-in-template error XS raises.
-    fn cook_string(&self, raw: &str, template: bool) -> (Vec<u16>, bool, bool) {
-        let chars: Vec<char> = raw.chars().collect();
+    fn cook_string(&self, raw: &[u32], template: bool) -> (Vec<u16>, bool, bool) {
+        // The sentinel is only used for escape classification below; literal
+        // emission always reads the original code, including surrogates.
+        let chars: Vec<char> = raw
+            .iter()
+            .map(|&code| char::from_u32(code).unwrap_or('\u{FFFD}'))
+            .collect();
         let mut out: Vec<u16> = Vec::new();
         let mut legacy = false;
         let mut error = false;
@@ -1077,8 +1138,7 @@ impl Lexer {
                     '0'..='7' => {
                         let first = chars[i] as u32 - '0' as u32;
                         i += 1;
-                        let next_is_digit =
-                            i < chars.len() && ('0'..='9').contains(&chars[i]);
+                        let next_is_digit = i < chars.len() && ('0'..='9').contains(&chars[i]);
                         if first == 0 && !next_is_digit {
                             out.push(0);
                         } else {
@@ -1099,16 +1159,16 @@ impl Lexer {
                     }
                     '8' | '9' => {
                         legacy = true;
-                        push_char_unit(&mut out, chars[i]);
+                        push_unit(&mut out, raw[i]);
                         i += 1;
                     }
-                    other => {
-                        push_char_unit(&mut out, other);
+                    _ => {
+                        push_unit(&mut out, raw[i]);
                         i += 1;
                     }
                 }
             } else {
-                push_char_unit(&mut out, chars[i]);
+                push_unit(&mut out, raw[i]);
                 i += 1;
             }
         }
@@ -1133,7 +1193,12 @@ impl Lexer {
         }
         self.advance();
         st.end = self.ch_offset;
-        self.meter.charge_token();
+        if !self.meter.charge_token() {
+            return Err(LexError {
+                line: self.line,
+                kind: LexErrorKind::MeterLimit,
+            });
+        }
         self.prev_token = st.token;
         Ok(st)
     }
@@ -1149,7 +1214,7 @@ impl Lexer {
         let mut st = Lexeme::blank();
         st.line = self.line;
         st.start = self.ch_offset;
-        let mut body = String::new();
+        let mut source_units = Vec::new();
         let mut backslash = false;
         let mut bracket = false;
         let mut first = true;
@@ -1192,7 +1257,7 @@ impl Lexer {
             } else {
                 backslash = false;
             }
-            body.push(char::from_u32(c).unwrap());
+            push_unit(&mut source_units, c);
             if pending {
                 pending = false;
             } else {
@@ -1201,7 +1266,6 @@ impl Lexer {
             c = self.ch;
             first = false;
         }
-        st.string = Some(crate::ast::str_to_units(&body));
         // Flags: XS advances past the closing '/', then reads id-continue.
         let mut flags = String::new();
         loop {
@@ -1220,16 +1284,43 @@ impl Lexer {
         // accepts but whose matcher code ironhorse has not ported yet) is not a
         // syntax error, so the literal stands and accept/reject still agrees
         // with the oracle.
-        match ironhorse_regexp::compile::compile(&body, &flags) {
-            Ok(_) | Err(ironhorse_regexp::compile::CompileError::Unsupported(_)) => {}
-            Err(ironhorse_regexp::compile::CompileError::Syntax(_)) => {
-                return Err(self.err(LexErrorKind::InvalidRegExp));
+        let mut charged = 0;
+        let mut check = |raw: u64| {
+            let admitted = self.meter.charge_raw(raw - charged);
+            charged = raw;
+            admitted
+        };
+        let outcome = ironhorse_regexp::validate_units_checked(
+            &source_units,
+            &flags,
+            u64::MAX,
+            Some(&mut check),
+        );
+        if !self.meter.charge_raw(outcome.work_meter_raw - charged) {
+            return Err(self.err(LexErrorKind::RegExpBudgetExceeded));
+        }
+        match outcome.result {
+            Ok(_) | Err(ironhorse_regexp::CompileError::Unsupported(_)) => {}
+            Err(ironhorse_regexp::CompileError::Syntax(_)) => {
+                return Err(self.err(LexErrorKind::InvalidRegExp))
+            }
+            Err(ironhorse_regexp::CompileError::BudgetExceeded) => {
+                return Err(self.err(LexErrorKind::RegExpBudgetExceeded))
+            }
+            Err(ironhorse_regexp::CompileError::ResourceLimit) => {
+                return Err(self.err(LexErrorKind::RegExpResourceLimit))
             }
         }
+        st.string = Some(source_units);
         st.modifier = Some(flags);
         st.token = Token::Regexp;
         st.end = self.ch_offset;
-        self.meter.charge_token();
+        if !self.meter.charge_token() {
+            return Err(LexError {
+                line: self.line,
+                kind: LexErrorKind::MeterLimit,
+            });
+        }
         self.prev_token = st.token;
         Ok(st)
     }
@@ -1274,12 +1365,12 @@ impl Lexer {
                     }
                 } else {
                     if private {
-                        st.symbol = Some(buf.clone());
+                        st.symbol = Some(buf.clone().into());
                         st.token = Token::PrivateIdentifier;
                     } else {
                         // fxGetNextKeyword: after '.'/'?.' a word is always
                         // an identifier (member name), never a keyword.
-                        st.symbol = Some(buf.clone());
+                        st.symbol = Some(buf.clone().into());
                         if self.prev_token == Token::Dot || self.prev_token == Token::Chain {
                             st.token = Token::Identifier;
                         } else {
@@ -1379,13 +1470,6 @@ fn push_unit(out: &mut Vec<u16>, value: u32) {
         out.push((0xD800 + (v >> 10)) as u16);
         out.push((0xDC00 + (v & 0x3FF)) as u16);
     }
-}
-
-/// Push a verbatim source `char` (astral scalars are single `char`s in
-/// valid UTF-8 input) as its UTF-16 code units.
-fn push_char_unit(out: &mut Vec<u16>, c: char) {
-    let mut buf = [0u16; 2];
-    out.extend_from_slice(c.encode_utf16(&mut buf));
 }
 
 /// Port of `fxParseHexEscape`: exactly two hex digits from `chars[*i]`.

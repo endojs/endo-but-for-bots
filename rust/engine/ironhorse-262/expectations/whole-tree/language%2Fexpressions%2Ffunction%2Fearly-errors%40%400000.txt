@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=language/expressions/function/early-errors tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/function/early-errors/invalid-names-call-expression-bad-reference.js sloppy pass
+language/expressions/function/early-errors/invalid-names-call-expression-bad-reference.js strict pass
+language/expressions/function/early-errors/invalid-names-call-expression-this.js sloppy pass
+language/expressions/function/early-errors/invalid-names-call-expression-this.js strict pass
+language/expressions/function/early-errors/invalid-names-member-expression-bad-reference.js sloppy pass
+language/expressions/function/early-errors/invalid-names-member-expression-bad-reference.js strict pass
+language/expressions/function/early-errors/invalid-names-member-expression-this.js sloppy pass
+language/expressions/function/early-errors/invalid-names-member-expression-this.js strict pass

@@ -8,6 +8,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { FlootApp } from '@endo/space-floot';
 import { h, renderConfined, unmount } from './setup-preact-container.js';
+import { makeScreenWakeLock } from './wake-lock.js';
 
 // The view's controller/state/message shapes are defined (and enforced at the
 // `h(FlootApp, …)` boundary) by `@endo/space-floot`'s own types; like the other
@@ -15,18 +16,21 @@ import { h, renderConfined, unmount } from './setup-preact-container.js';
 // them.
 
 // ── Background turns ─────────────────────────────────────────────────────────
-// A Floot turn keeps running on the daemon even after you leave its space: the
-// reply reader is consumed by a background loop kept HERE, outside any component
-// instance, so unmounting a Floot space never returns the reader (which would
-// abort the agent) — the turn finishes and persists in the background. Keeping
-// the loop module-level also lets a remounted component reattach to a still-
-// streaming reply and show a "thinking" indicator. The entry is removed once the
-// turn ends, so a finished reply simply falls back to getHistory().
+// A Floot turn runs on the daemon (`session.startTurn`). This side is a view: it
+// pulls the turn's disposable `watch()` stream and stops the turn only by
+// calling `cancel()`. Dropping the stream — unmount, tab close, gateway loss —
+// detaches this viewer and leaves the turn running to finish and persist.
+// The loop is kept HERE, outside any component instance, so a remounted
+// component reattaches to the accumulated state of a still-streaming reply and
+// shows a "thinking" indicator. The entry is removed once the turn ends, so a
+// finished reply simply falls back to getHistory().
 /**
  * @typedef {{ role: 'assistant' | 'tool', text?: string, id?: string,
  *   name?: string, args?: string, result?: string | null }} TurnMessage
  * @typedef {{
  *   sessionId: string,
+ *   ref: Promise<any>,
+ *   retire: () => void,
  *   messages: TurnMessage[],
  *   streamingText: string,
  *   phase: string,
@@ -38,24 +42,37 @@ import { h, renderConfined, unmount } from './setup-preact-container.js';
  *   stop: () => void,
  * }} FlootTurn
  */
-/** @type {Map<string, FlootTurn>} */
-const inFlightTurns = new Map();
+/** @type {WeakMap<object, Map<string, FlootTurn>>} */
+const inFlightTurns = new WeakMap();
+
+/** @param {object} factory */
+const turnsForFactory = factory => {
+  let turns = inFlightTurns.get(factory);
+  if (!turns) {
+    turns = new Map();
+    inFlightTurns.set(factory, turns);
+  }
+  return turns;
+};
 
 /**
- * Consume a reply reader in the background, accumulating renderable turn state
- * and notifying subscribers as events arrive. Survives component unmount.
+ * Watch a daemon-owned turn in the background, accumulating renderable turn
+ * state and notifying subscribers as events arrive. Survives component unmount.
  *
- * @param {string} key registry key (factory path + session id)
+ * @param {Map<string, FlootTurn>} registry
+ * @param {string} key session id
  * @param {string} sessionId
- * @param {any} reader the reply reader returned by session.converse()
+ * @param {any} turnRef the FlootTurn returned by session.startTurn()
  * @returns {FlootTurn}
  */
-const startFlootTurn = (key, sessionId, reader) => {
-  // Stream the reply over the exo-stream protocol rather than one CapTP round
+const startFlootTurn = (registry, key, sessionId, turnRef) => {
+  // Stream the view over the exo-stream protocol rather than one CapTP round
   // trip per event. `buffer` primes the synchronize chain; the responder is a
   // buffered channel, so it acknowledges eagerly regardless — the pre-resolved
   // nodes only save the first round trip.
-  const replies = iterateReader(reader, { buffer: 8 });
+  const repliesP = E(turnRef)
+    .watch()
+    .then(view => iterateReader(view, { buffer: 8 }));
   /** @type {Set<(ev: { type: string }) => void>} */
   const listeners = new Set();
   /** @type {TurnMessage[]} */
@@ -86,6 +103,14 @@ const startFlootTurn = (key, sessionId, reader) => {
   /** @type {FlootTurn} */
   const turn = {
     sessionId,
+    ref: Promise.resolve(turnRef),
+    retire() {
+      // Retiring an obsolete observation never cancels daemon execution.
+      if (registry.get(key) === turn) registry.delete(key);
+      emit({ type: 'superseded' });
+      listeners.clear();
+      void repliesP.then(reader => reader.return()).catch(() => {});
+    },
     messages,
     streamingText: '',
     phase: 'thinking',
@@ -100,19 +125,48 @@ const startFlootTurn = (key, sessionId, reader) => {
     stop() {
       if (stopped) return;
       stopped = true;
-      // Closing the stream fires the producer's onClose, which aborts the
-      // in-flight agent turn (stops token generation and tool rounds).
-      replies.return().catch(() => {});
+      // Cancelling is the only thing that stops the turn: dropping the view
+      // stream would just detach this viewer and leave it generating.
+      E(turnRef)
+        .cancel()
+        .catch(error => {
+          stopped = false;
+          turn.error = error instanceof Error ? error.message : String(error);
+          emit({ type: 'abort' });
+        });
     },
   };
-  inFlightTurns.set(key, turn);
+  registry.set(key, turn);
 
   (async () => {
     try {
-      for await (const raw of replies) {
+      for await (const raw of await repliesP) {
         const value = /** @type {any} */ (raw);
-        if (stopped) break;
-        if (value.type === 'delta') {
+        if (value.type === 'snapshot') {
+          // A view opens on the turn's state as of the moment `watch()` ran, so
+          // no event is lost to the round trip and a reattaching component
+          // repaints a turn already in progress. Adopt it wholesale.
+          const { status } = value;
+          messages.length = 0;
+          // The snapshot arrives hardened; a pending tool message is still
+          // waiting for its result to be written into it, so keep copies.
+          messages.push(
+            ...status.messages.map((/** @type {TurnMessage} */ message) => ({
+              ...message,
+            })),
+          );
+          pendingTools.clear();
+          for (const message of messages) {
+            if (message.role === 'tool' && message.id && !message.result) {
+              pendingTools.set(message.id, message);
+            }
+          }
+          turn.streamingText = status.streamingText;
+          turn.phase = status.phase;
+          turn.usage = status.usage;
+          turn.error = status.error;
+          emit({ type: 'snapshot' });
+        } else if (value.type === 'delta') {
           turn.streamingText += value.text;
           emit({ type: 'delta' });
         } else if (value.type === 'final') {
@@ -170,7 +224,7 @@ const startFlootTurn = (key, sessionId, reader) => {
       emit({ type: 'abort' });
     } finally {
       turn.done = true;
-      inFlightTurns.delete(key);
+      if (registry.get(key) === turn) registry.delete(key);
       emit({ type: 'done' });
       resolveDone();
     }
@@ -314,9 +368,9 @@ const makeAudioChannel = () => {
 };
 harden(makeAudioChannel);
 
-// A text feed the chat pushes reply text into: streaming reply
-// deltas while a turn runs, or a finished message's full text for replay. The
-// remote TTS object consumes the deltas and returns an audio stream.
+// A text feed the chat pushes a finished message's full text into for replay.
+// The remote TTS object consumes it and returns an audio stream. (A live turn
+// is spoken by the daemon instead, from its own view of the turn.)
 // Wire (APPEND deltas): { type:'delta', text } | { type:'end' } | { type:'abort' }
 const makeTextFeed = () => {
   const { push, reader, isClosed } = makeBufferedReader();
@@ -379,6 +433,9 @@ const JUNK_PHRASES = harden(
 
 const DEFAULT_TITLE = 'New chat';
 const DEFAULT_PRESET_ID = 'general';
+// How long after the last voice-settings change to persist it and restart any
+// speech in progress with it.
+const TTS_SETTINGS_COMMIT_MS = 300;
 
 /**
  * Floot Chat Space, host wrapper. Resolves a Floot factory from the
@@ -395,20 +452,25 @@ const DEFAULT_PRESET_ID = 'general';
  * the view (see packages/space-floot/DESIGN.md).
  *
  * The factory owns every session; the UI never sees the backing guests. Its
- * interface is `createSession(title?, presetId?, model?) -> facet`,
- * `listSessions() -> [{id,title,createdAt,presetId,model}]`, `getSession(id) ->
- * facet`, `renameSession(id,title)`, `deleteSession(id)`, `listPresets()`,
- * `listModels() -> [{id,title,description,default}]`. A session facet exposes
- * `converse(input) -> replyReader`, `getHistory()`, `getInfo()`, and
+ * interface includes record-form
+ * `createSession({title,presetId,backendId,modelId,reasoningEffort}) -> facet`,
+ * `listSessions()` with backend/model/reasoning/lifecycle metadata,
+ * `listBackends()`, `listModels(backendId?)`, `getSession(id) -> facet`,
+ * `renameSession(id,title)`, `deleteSession(id)`, and `listPresets()`.
+ * A session facet exposes
+ * `startTurn(input) -> FlootTurn`, `getHistory()`, `getInfo()`, and
  * `getUsage()`.
  *
  * When `audioPath` is given, it resolves a speech-to-text object and enables a
  * mic: speech is captured as 16 kHz mono PCM, streamed to
  * `transcribe(audioReader) -> textReader`, and the transcript fills the compose
  * box live; on end the assembled message is sent. When `ttsPath` is given, it
- * resolves a text-to-speech object: reply deltas are streamed to
- * `synthesize(textReader) -> audioReader` (raw s16le mono PCM, one event per
- * sentence) and played back via Web Audio as they arrive.
+ * resolves a text-to-speech object and hands it to the daemon: a spoken reply
+ * is a view of the turn the daemon speaks (`turn.speak(ttsServer, options)`),
+ * so reply text never round-trips through this browser to be heard; the audio
+ * stream that comes back (raw s16le mono PCM) is played via Web Audio as it
+ * arrives. Voice and Piper controls come from the object's `getConfiguration()`
+ * and are kept as whole-Floot preferences on the factory, cached per device.
  *
  * @param {HTMLElement} $parent
  * @param {unknown} rootPowers
@@ -457,10 +519,41 @@ export const flootComponent = (
   // Spoken replies on by default when a TTS object is wired; toggled by the
   // speaker button. Replay buttons work regardless of this live-speech setting.
   let ttsEnabled = hasTts;
+  /**
+   * @typedef {{
+   *   voice: string, speed: number, noiseScale: number, noiseW: number,
+   *   sentenceSilence: number,
+   * }} TtsSettings
+   */
+  /**
+   * @typedef {'speed' | 'noiseScale' | 'noiseW' | 'sentenceSilence'}
+   *   NumericTtsSetting
+   */
+  // Piper's own defaults: the seed until the TTS object's configuration and
+  // the whole-Floot preferences arrive (see the load at mount), and the
+  // fallback for a value the object neither accepts nor replaces.
+  const ttsSeed = harden({
+    speed: 1,
+    noiseScale: 0.667,
+    noiseW: 0.8,
+    sentenceSilence: 0.2,
+  });
+  /** @type {TtsSettings} */
+  let ttsSettings = { voice: '', ...ttsSeed };
+  /**
+   * @type {{
+   *   voices: Array<{ id: string, name: string }>,
+   *   ranges: Record<string, { min: number, max: number, step: number }>,
+   * }}
+   */
+  let ttsConfiguration = { voices: [], ranges: {} };
+  // Per-device cache of the settings, keyed by the TTS object so two wired
+  // objects with different voices do not share one.
+  const ttsStorageKey = `floot-tts:${(ttsPath || []).join('/')}`;
 
   // ── View-model state (read by getState, mutated by the host engine) ─────────
   /**
-   * @typedef {{ role: 'user' | 'assistant', text?: string,
+   * @typedef {{ role: 'user' | 'assistant' | 'tool', text?: string,
    *   meta?: { mail?: { from?: string } },
    *   name?: string, args?: string, result?: string | null }} HistoryMessage
    * @typedef {{ id: string, title: string, createdAt: number, presetId: string,
@@ -502,7 +595,16 @@ export const flootComponent = (
   // ── Subscription / snapshot plumbing ────────────────────────────────────────
   /** @type {Set<() => void>} */
   const listeners = new Set();
+  // Assigned for real further down, once every binding it reads exists (see
+  // "Screen wake lock"). A no-op until then, because `notify` runs during setup
+  // and reaching a `let` before its declaration would throw.
+  let updateWakeLock = () => {};
   const notify = () => {
+    try {
+      updateWakeLock();
+    } catch {
+      // the screen is a nicety; it must not stall the engine either
+    }
     for (const fn of [...listeners]) {
       try {
         fn();
@@ -515,6 +617,23 @@ export const flootComponent = (
     status = s;
     notify();
   };
+  const saveTtsSettings = () => {
+    try {
+      window.localStorage.setItem(ttsStorageKey, JSON.stringify(ttsSettings));
+    } catch {
+      // Storage may be unavailable in a private or embedded browser context.
+    }
+  };
+  // The synthesis options handed to the TTS object (directly for a replay,
+  // through the daemon for a spoken turn). An unset voice means its default.
+  const currentTtsOptions = () =>
+    harden({
+      ...(ttsSettings.voice ? { voice: ttsSettings.voice } : {}),
+      speed: ttsSettings.speed,
+      noiseScale: ttsSettings.noiseScale,
+      noiseW: ttsSettings.noiseW,
+      sentenceSilence: ttsSettings.sentenceSilence,
+    });
 
   const getActiveSession = () =>
     sessions.find(s => s.id === activeSessionId) || null;
@@ -531,29 +650,43 @@ export const flootComponent = (
     return session.facet;
   };
 
-  // Registry key for a session's background turn. Scoped by the factory path so
-  // two Floot spaces pointing at different factories can't collide on a shared
-  // session id.
-  const turnKey = (/** @type {string} */ id) =>
-    `${profilePath.join(' ')} ${id}`;
   const liveTurnFor = (/** @type {string} */ id) => {
-    const turn = inFlightTurns.get(turnKey(id));
+    const turn = turnsForFactory(factory).get(id);
     return turn && !turn.done ? turn : null;
   };
 
+  /** @param {any[]} history
+   * @returns {HistoryMessage[]} */
+  const historyMessages = history => {
+    return history.map((/** @type {any} */ m) =>
+      m.role === 'tool'
+        ? { role: 'tool', name: m.name, args: m.args, result: m.result }
+        : {
+            role: m.role === 'user' ? 'user' : 'assistant',
+            text: m.content,
+            ...(m.meta ? { meta: m.meta } : {}),
+          },
+    );
+  };
+
   // Pull the spoken transcript for a session from its guest into the cache.
-  const loadHistory = async (/** @type {FlootSession} */ session) => {
+  const loadHistory = async (
+    /** @type {FlootSession} */ session,
+    historyP = E(facetFor(session)).getHistory(),
+    accept = () => true,
+  ) => {
+    const previousMessages = session.messages;
+    const previousLength = previousMessages.length;
     try {
-      const history = await E(facetFor(session)).getHistory();
-      session.messages = history.map((/** @type {any} */ m) =>
-        m.role === 'tool'
-          ? { role: 'tool', name: m.name, args: m.args, result: m.result }
-          : {
-              role: m.role === 'user' ? 'user' : 'assistant',
-              text: m.content,
-              ...(m.meta ? { meta: m.meta } : {}),
-            },
-      );
+      const history = await historyP;
+      // A new submission or refresh takes precedence over stale history I/O.
+      if (
+        !accept() ||
+        session.messages !== previousMessages ||
+        session.messages.length !== previousLength
+      )
+        return;
+      session.messages = historyMessages(history);
     } catch {
       // leave whatever we have; history just won't repaint
     }
@@ -565,13 +698,20 @@ export const flootComponent = (
    * @param {string} [title]
    * @param {string} [presetId]
    * @param {string} [model]
+   * @param {string} [reasoningEffort]
    */
-  const createSession = async (title, presetId, model) => {
-    const facet = await E(factory).createSession(
-      title || DEFAULT_TITLE,
-      presetId,
-      model,
+  const createSession = async (title, presetId, model, reasoningEffort) => {
+    const requiresRecordForm = Boolean(
+      reasoningEffort || (model && model.includes(':')),
     );
+    const facet = requiresRecordForm
+      ? await E(factory).createSession({
+          title: title || DEFAULT_TITLE,
+          ...(presetId ? { presetId } : {}),
+          ...(model ? { model } : {}),
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+        })
+      : await E(factory).createSession(title || DEFAULT_TITLE, presetId, model);
     const info = await E(facet).getInfo();
     /** @type {FlootSession} */
     const session = {
@@ -634,7 +774,21 @@ export const flootComponent = (
     const session = getActiveSession();
     const liveTurn = session ? liveTurnFor(session.id) : null;
     const base = session ? session.messages : [];
-    const allMessages = liveTurn ? [...base, ...liveTurn.messages] : base;
+    const sent = liveTurn ? [...base, ...liveTurn.messages] : base;
+    // Queued submissions render after the live turn's output: they run after
+    // it, and hiding them until then reads as a swallowed message. The view
+    // lifts them out by `pending` and puts them below the thinking indicator.
+    const queued = session
+      ? queuedSends
+          .filter(q => q.sessionId === session.id)
+          .map(q => ({
+            role: /** @type {const} */ ('user'),
+            text: q.text,
+            pending: true,
+            pendingId: q.id,
+          }))
+      : [];
+    const allMessages = [...sent.map(toViewMessage), ...queued];
     return harden({
       sessions: sessions.map(s => ({
         id: s.id,
@@ -660,7 +814,7 @@ export const flootComponent = (
         description: m.description,
         default: m.default,
       })),
-      messages: allMessages.map(toViewMessage),
+      messages: allMessages,
       streamingText: liveTurn ? liveTurn.streamingText : '',
       phase: liveTurn ? liveTurn.phase : '',
       busy: Boolean(liveTurn),
@@ -683,6 +837,12 @@ export const flootComponent = (
         thresholdPct: PCT(meterThreshold),
         transcript: voiceTranscript,
         replayingText,
+        micError,
+        ttsSettings: { ...ttsSettings },
+        ttsConfiguration: {
+          voices: ttsConfiguration.voices.map(voice => ({ ...voice })),
+          ranges: { ...ttsConfiguration.ranges },
+        },
       },
       objects: {
         controller: profilePath.join('/'),
@@ -696,10 +856,37 @@ export const flootComponent = (
   let cancelled = false;
   let busy = false;
   let turnCancelled = false;
+  // Submissions accepted while a turn is still running (typed mid-stream, or a
+  // voice utterance after a soft barge-in) queue on submitChain. They must stay
+  // VISIBLE while queued: submit() clears the compose box immediately, and the
+  // optimistic session push only happens once the queued turn actually starts,
+  // so without this the message vanishes until the prior turn finishes.
+  //
+  // The queue is per-mount, unlike the turn registry above, which deliberately
+  // survives unmount. Leaving the space therefore drops whatever had not run
+  // yet, while the turn it was queued behind keeps going — the pre-existing
+  // behaviour, now more visible because the message looked accepted. Making it
+  // survive means holding the queue beside `inFlightTurns`; until then, a
+  // message queued behind a long turn is only as durable as the tab.
+  /** @type {Array<{ id: number, sessionId: string, text: string }>} */
+  let queuedSends = [];
+  let nextQueuedSendId = 1;
+
+  /**
+   * Forget a queued placeholder. Reports whether it was still there, so the
+   * caller can repaint only when something actually changed.
+   *
+   * @param {number} id 0 for "no placeholder was made"
+   * @returns {boolean}
+   */
+  const dropQueued = id => {
+    if (!id || !queuedSends.some(q => q.id === id)) return false;
+    queuedSends = queuedSends.filter(q => q.id !== id);
+    return true;
+  };
+
   /** @type {FlootTurn | null} */
   let activeTurn = null;
-  /** @type {(() => void) | null} */
-  let unsubscribeTurn = null;
   // Detaches this component's view from the active turn without stopping it
   // (used on unmount so the turn keeps running in the background).
   /** @type {(() => void) | null} */
@@ -709,11 +896,10 @@ export const flootComponent = (
   let submitChain = Promise.resolve();
   /** @type {Promise<void> | null} */
   let turnPromise = null;
-
-  // The text feed driving live spoken replies for the current turn (null when
-  // TTS is off or idle). Aborting it ends synthesis; stopTts() halts playback.
-  /** @type {ReturnType<typeof makeTextFeed> | null} */
-  let turnTtsFeed = null;
+  let opening = harden({});
+  let viewReady = Promise.resolve();
+  /** @type {WeakMap<FlootSession, FlootTurn>} */
+  const displayedPrompts = new WeakMap();
 
   // Cancel the in-flight turn (Stop button or voice barge-in). Returns a promise
   // that resolves once the turn has fully unwound.
@@ -723,21 +909,17 @@ export const flootComponent = (
     // Stop button: explicitly tear the turn down (unlike leaving the space,
     // which lets it keep running in the background).
     if (activeTurn) activeTurn.stop();
-    if (turnTtsFeed) turnTtsFeed.abort();
     stopTts(); // also silences any spoken reply in progress
     return turnPromise || Promise.resolve();
   };
 
   // Voice barge-in: the user started speaking over a live reply. Unlike the Stop
   // button's hard cancel, don't abort the turn — just silence its spoken reply
-  // and let it finish in the background (and in history). The user's interjection
-  // is queued after it (submitChain waits on the running turn).
+  // (dropping the audio stream is what tells the daemon to stop speaking it)
+  // and let it finish in the background (and in history). The user's
+  // interjection is queued after it (submitChain waits on the running turn).
   const softBargeIn = () => {
     if (!busy) return;
-    if (turnTtsFeed) {
-      turnTtsFeed.abort();
-      turnTtsFeed = null;
-    }
     stopTts();
     setStatus('continuing in background…');
   };
@@ -749,52 +931,60 @@ export const flootComponent = (
   /**
    * @param {FlootTurn} turn
    * @param {FlootSession} session
-   * @param {boolean} [speakLive] feed reply deltas to TTS
    * @returns {Promise<void>}
    */
-  const attachTurnView = (turn, session, speakLive = false) => {
+  const attachTurnView = (turn, session) => {
     busy = true;
     turnCancelled = false;
     activeTurn = turn;
     sessionStatus.delete(session.id);
-    // On reattach the bubble already shows what streamed before; only speak text
-    // that arrives from here on.
-    let lastSpoken = turn.streamingText.length;
     setStatus(`${turn.phase || 'thinking'}…`);
     if (turn.usage) usage = turn.usage;
     notify();
 
     return new Promise(resolve => {
+      let detached = false;
+      let unsubscribe = () => {};
       const detach = () => {
-        if (unsubscribeTurn) {
-          unsubscribeTurn();
-          unsubscribeTurn = null;
+        if (detached) return;
+        detached = true;
+        unsubscribe();
+        if (detachActiveTurnView === detach) {
+          detachActiveTurnView = null;
+          activeTurn = null;
+          busy = false;
+          notify();
         }
-        detachActiveTurnView = null;
-        if (activeTurn === turn) activeTurn = null;
-        busy = false;
-        notify();
         resolve();
       };
       detachActiveTurnView = detach;
 
       /** @param {{ type: string }} ev */
       const onEvent = ev => {
-        // Ignore events for a session we're no longer viewing (defensive; the
-        // busy guard normally blocks switching mid-turn).
+        if (detached) return;
+        if (ev.type === 'superseded') {
+          detach();
+          // Another view may retire our shared observation. Reconcile this
+          // component too, before its released submissions resume.
+          // eslint-disable-next-line no-use-before-define
+          openActiveHistory();
+          return;
+        }
+        // Attachment completion is independent of selection and history I/O.
+        // Deletion can change selection while the old turn is still unwinding.
+        if (ev.type === 'done' && activeSessionId !== turn.sessionId) {
+          detach();
+          return;
+        }
         if (activeSessionId !== turn.sessionId) return;
-        if (ev.type === 'delta' || ev.type === 'final') {
-          if (
-            speakLive &&
-            turnTtsFeed &&
-            turn.streamingText.length > lastSpoken
-          ) {
-            turnTtsFeed.delta(turn.streamingText.slice(lastSpoken));
-            lastSpoken = turn.streamingText.length;
-          }
+        if (ev.type === 'snapshot') {
+          // The turn's state as of the moment this view opened. Repaint from
+          // it; speech, if any, is the daemon's own view of the same turn.
+          if (turn.usage) usage = turn.usage;
+          setStatus(`${turn.phase || 'thinking'}…`);
+        } else if (ev.type === 'delta' || ev.type === 'final') {
           notify();
         } else if (ev.type === 'tool_call') {
-          lastSpoken = 0;
           notify();
         } else if (ev.type === 'tool_result') {
           notify();
@@ -808,11 +998,6 @@ export const flootComponent = (
           notify();
         } else if (ev.type === 'done') {
           const stopped = turnCancelled;
-          if (turnTtsFeed) {
-            if (turn.error) turnTtsFeed.abort();
-            else turnTtsFeed.end();
-            turnTtsFeed = null;
-          }
           if (turn.error) {
             sessionStatus.set(turn.sessionId, 'error');
             status = `error: ${turn.error}`;
@@ -827,22 +1012,29 @@ export const flootComponent = (
           notify();
           // Repaint from the daemon's canonical transcript (now including this
           // turn's persisted reply) so the turn's output is never double-shown.
-          loadHistory(session).then(() => {
-            notify();
-            detach();
+          detach();
+          void loadHistory(session).then(() => {
+            if (!cancelled && activeSessionId === session.id) notify();
           });
         }
       };
-      unsubscribeTurn = turn.subscribe(onEvent);
+      unsubscribe = turn.subscribe(onEvent);
       // Settle immediately if the turn finished between start and subscribe.
       if (turn.done) onEvent({ type: 'done' });
     });
   };
 
-  const runConverse = async (/** @type {string} */ text) => {
+  /**
+   * @param {string} text
+   * @param {number} [queuedId] the placeholder this turn is running, if any
+   */
+  const runConverse = async (text, queuedId = 0) => {
     let session = getActiveSession();
     if (!session) session = await createSession();
 
+    // The queued placeholder is superseded by the optimistic session push
+    // below — the same text, now part of the running turn's transcript.
+    dropQueued(queuedId);
     session.messages.push({ role: 'user', text });
     // Sending a message is an explicit "follow along" intent — re-stick.
     stick = true;
@@ -854,18 +1046,20 @@ export const flootComponent = (
     }
     notify();
 
-    // Speak the reply as it streams: feed deltas to the TTS object and play the
-    // returned audio stream. Sentence-by-sentence, so audio starts mid-reply.
+    // Start the turn on the daemon — it keeps running if this space is left —
+    // then render it through the shared view. A spoken reply is a second view
+    // of the same turn, which the daemon speaks (see speakTurn).
     const speakLive = ttsEnabled && Boolean(ttsServer);
-    if (speakLive) {
-      turnTtsFeed = makeTextFeed();
-      playAudioStream(E(ttsServer).synthesize(turnTtsFeed.reader));
-    }
-    // Start the turn in the background — it owns the reply reader and keeps
-    // running if this space is left — then render it through the shared view.
-    const reader = E(facetFor(session)).converse(text);
-    const turn = startFlootTurn(turnKey(session.id), session.id, reader);
-    await attachTurnView(turn, session, speakLive);
+    const turnRef = E(facetFor(session)).startTurn(text);
+    const turn = startFlootTurn(
+      turnsForFactory(factory),
+      session.id,
+      session.id,
+      turnRef,
+    );
+    displayedPrompts.set(session, turn);
+    if (speakLive) speakTurn(turn);
+    await attachTurnView(turn, session);
   };
 
   // Serialize submissions so an auto-sent voice utterance can't overlap a typed
@@ -879,45 +1073,174 @@ export const flootComponent = (
     pendingUtterance = '';
     const text = (raw || '').trim();
     if (!text) return submitChain;
+    // Create/resume the audio context now, still inside the user's Send
+    // gesture: a browser refuses autoplay when the first resume happens only
+    // after the remote round trips that start the turn and its speech.
+    if (ttsEnabled && ttsServer) prepareTts();
     inputText = '';
+    const submittedSessionId = activeSessionId;
+    // Stand a placeholder up now, so the message is visible for as long as it
+    // waits. Without an active session nothing is queued ahead of it, so it
+    // dispatches straight away and needs none.
+    let queuedId = 0;
+    if (submittedSessionId) {
+      queuedId = nextQueuedSendId;
+      nextQueuedSendId += 1;
+      queuedSends.push({ id: queuedId, sessionId: submittedSessionId, text });
+    }
     notify();
-    submitChain = submitChain.then(() => {
-      turnPromise = runConverse(text);
-      return turnPromise.catch(() => {});
+    submitChain = submitChain.then(async () => {
+      try {
+        // A shared observation can be superseded while we await its completion.
+        // Join the replacement view and turn too before dispatching queued
+        // input.
+        for (;;) {
+          const ready = viewReady;
+          // eslint-disable-next-line no-await-in-loop
+          await ready;
+          if (
+            cancelled ||
+            (submittedSessionId && activeSessionId !== submittedSessionId)
+          )
+            return;
+          const previous = turnPromise;
+          // eslint-disable-next-line no-await-in-loop
+          if (previous) await previous;
+          if (
+            cancelled ||
+            (submittedSessionId && activeSessionId !== submittedSessionId)
+          )
+            return;
+          if (ready === viewReady && previous === turnPromise) break;
+        }
+        // Read the text back off the placeholder at the moment the turn starts,
+        // rather than closing over what was typed: a queued message can be
+        // edited or deleted while it waits, and the edit has to be what
+        // actually runs. A missing placeholder means it was deleted — skip the
+        // turn entirely.
+        let queuedText = text;
+        if (queuedId) {
+          const queued = queuedSends.find(q => q.id === queuedId);
+          if (!queued) return;
+          queuedText = queued.text;
+        }
+        turnPromise = runConverse(queuedText, queuedId).catch(error => {
+          if (!cancelled) setStatus(`error: ${error.message}`);
+        });
+        await turnPromise;
+      } finally {
+        // However this entry exits — deleted, superseded session, or the turn
+        // having adopted it — the placeholder must not outlive it.
+        if (dropQueued(queuedId) && !cancelled) notify();
+      }
     });
     return submitChain;
   };
 
+  /**
+   * Rewrite a queued submission while it waits. No effect once its turn has
+   * started: the placeholder is gone by then.
+   *
+   * @param {number} id
+   * @param {string} raw
+   */
+  const editPending = (id, raw) => {
+    const text = (raw || '').trim();
+    // An empty edit is a no-op rather than a delete: deleting has its own
+    // button, and losing a message by clearing the box would be a surprising
+    // way to lose one.
+    if (!text) return;
+    if (!queuedSends.some(q => q.id === id)) return;
+    queuedSends = queuedSends.map(q => (q.id === id ? { ...q, text } : q));
+    notify();
+  };
+
+  /**
+   * Drop a queued submission before it runs. Its chain entry is already
+   * scheduled, so removing the placeholder is what cancels it: the entry finds
+   * nothing and skips its turn.
+   *
+   * @param {number} id
+   */
+  const cancelPending = id => {
+    if (dropQueued(id)) notify();
+  };
+
   // ── Session actions (controller callbacks) ──────────────────────────────────
   const openActiveHistory = () => {
+    const generation = harden({});
+    opening = generation;
     // Opening a session starts at the latest message.
     stick = true;
     const session = getActiveSession();
     if (!session) {
+      viewReady = Promise.resolve();
       usage = null;
       notify();
       return;
     }
     showSessionTokens(session);
-    // If this session has a turn still running in the background (e.g. it was
-    // left mid-reply and we've returned to the space), reattach to its live
-    // stream. The busy guard keeps this from firing during another turn.
-    const reattach = () => {
-      const turn = liveTurnFor(session.id);
-      if (turn && !busy) {
-        turnPromise = attachTurnView(turn, session);
+    const stillSelected = () =>
+      !cancelled && opening === generation && activeSessionId === session.id;
+    viewReady = (async () => {
+      // Recover the daemon's handle after a reload or transport loss. The
+      // browser registry is only a cache; it is never the source of liveness.
+      const current = await E(facetFor(session)).getCurrentTurn();
+      if (!stillSelected()) return;
+      let turn = liveTurnFor(session.id);
+      if (turn && (!current || (await turn.ref) !== current.turn)) {
+        if (!stillSelected()) return;
+        turn.retire();
+        turn = null;
       }
-    };
-    if (!session.loaded) {
-      loadHistory(session).then(() => {
-        if (activeSessionId === session.id) {
-          notify();
-          reattach();
-        }
-      });
-    } else {
-      reattach();
-    }
+      if (!stillSelected()) return;
+      if (!current) {
+        await loadHistory(session);
+        if (stillSelected()) notify();
+        return;
+      }
+      if (!turn) {
+        turn = startFlootTurn(
+          turnsForFactory(factory),
+          session.id,
+          session.id,
+          current.turn,
+        );
+      }
+      if (displayedPrompts.get(session) !== turn) {
+        const adoptedTurn = turn;
+        const prompt =
+          typeof current.input === 'string'
+            ? [{ role: /** @type {const} */ ('user'), text: current.input }]
+            : [];
+        session.messages = prompt;
+        session.loaded = false;
+        displayedPrompts.set(session, turn);
+        // Discovery exposes the handle before queued mail establishes history.
+        // Observe/cancel now; install only this turn's baseline when it arrives.
+        void Promise.resolve(current.history)
+          .then(history => {
+            if (
+              !stillSelected() ||
+              adoptedTurn.done ||
+              liveTurnFor(session.id) !== adoptedTurn ||
+              displayedPrompts.get(session) !== adoptedTurn
+            )
+              return;
+            session.messages = [...historyMessages(history), ...prompt];
+            session.loaded = true;
+            notify();
+          })
+          .catch(error => {
+            if (stillSelected() && liveTurnFor(session.id) === adoptedTurn)
+              setStatus(`error: ${error.message}`);
+          });
+      }
+      if (!busy) turnPromise = attachTurnView(turn, session);
+      notify();
+    })().catch(error => {
+      if (stillSelected()) setStatus(`error: ${error.message}`);
+    });
   };
 
   const selectSession = (/** @type {string} */ id) => {
@@ -926,6 +1249,7 @@ export const flootComponent = (
     // keep speaking over the session we're switching to.
     stopTts();
     activeSessionId = id;
+    turnPromise = null;
     setStatus('Ready.');
     openActiveHistory();
   };
@@ -940,7 +1264,11 @@ export const flootComponent = (
     sessions = sessions.filter(s => s.id !== id);
     sessionStatus.delete(id);
     if (activeSessionId === id) {
+      // Deletion owns daemon teardown; the UI need not wait for it to release
+      // its attachment or submission queue. Late events cannot affect a new view.
+      if (detachActiveTurnView) detachActiveTurnView();
       activeSessionId = sessions.length ? sessions[0].id : null;
+      turnPromise = null;
     }
     E(factory)
       .deleteSession(id)
@@ -952,10 +1280,11 @@ export const flootComponent = (
   /**
    * @param {string} [presetId]
    * @param {string} [model]
+   * @param {string} [reasoningEffort]
    */
-  const newSession = (presetId, model) => {
+  const newSession = (presetId, model, reasoningEffort) => {
     if (busy) return;
-    createSession(undefined, presetId, model)
+    createSession(undefined, presetId, model, reasoningEffort)
       .then(() => {
         stick = true;
         notify();
@@ -980,6 +1309,9 @@ export const flootComponent = (
   let micActive = false; // mic open and listening
   let speaking = false; // currently inside a detected utterance
   let calibrating = false;
+  // Actionable guidance shown when the browser/OS denies mic access (distinct
+  // from the transient status line, since it needs to persist until retried).
+  let micError = '';
   let noiseFloor = 0;
   let calibStart = 0;
   let speechStart = 0;
@@ -1065,12 +1397,31 @@ export const flootComponent = (
         ? `${pendingUtterance} ${text}`
         : text;
     }
+    // The recognizer's last result can land after the mic was switched off —
+    // the audio reader closes, and the final arrives behind it. A torn-down
+    // utterance neither repopulates the compose box nor arms a send: turning
+    // the mic off mid-sentence means "not that", not "send it in a second".
+    if (!micActive) {
+      pendingUtterance = '';
+      inputText = '';
+      notify();
+      return;
+    }
+    // Keep the buffered utterance visible in the compose box for the whole
+    // grace window. Blanking it made recognized speech vanish for about a
+    // second before it sent, which reads as a swallowed message.
+    inputText = pendingUtterance;
+    notify();
     if (resumeTimer) clearTimeout(resumeTimer);
     if (!pendingUtterance) return;
     resumeTimer = window.setTimeout(() => {
       resumeTimer = 0;
-      const full = pendingUtterance.trim();
       pendingUtterance = '';
+      // The buffer has been sitting in the compose box as ordinary editable
+      // text for the whole grace window, so the box IS the buffer: a correction
+      // typed there is what sends, and clearing it cancels the send. Sending
+      // what was recognized instead would silently discard the edit.
+      const full = inputText.trim();
       if (full) submit(full);
     }, VAD.RESUME_GRACE_MS);
   };
@@ -1137,13 +1488,14 @@ export const flootComponent = (
     silenceStart = 0;
     const tooShort = Date.now() - speechStart < VAD.MIN_SPEECH_MS;
     if (tooShort) {
-      // A blip below the minimum-speech duration — discard as noise.
+      // A blip below the minimum-speech duration — discard as noise, but keep
+      // any buffered continuation visible rather than blanking the box.
       if (channel)
         E(channel.reader)
           .return()
           .catch(() => {});
       channel = null;
-      inputText = '';
+      inputText = pendingUtterance;
       notify();
       return;
     }
@@ -1225,6 +1577,29 @@ export const flootComponent = (
 
   const startMic = async () => {
     if (micActive || !audioServer) return;
+    // Preflight the two environment failures that deny the mic *without* a
+    // browser prompt, so the user gets an explanation instead of silence:
+    //   1. a non-secure context (mic is HTTPS/localhost only), and
+    //   2. a browser that doesn't expose `mediaDevices` (privacy hardening,
+    //      or an embedded webview with the API stripped).
+    if (typeof window !== 'undefined' && window.isSecureContext === false) {
+      micError =
+        'Microphone needs a secure (https) connection. Open this page over https and try again.';
+      notify();
+      return;
+    }
+    const media =
+      typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined;
+    if (!media || typeof media.getUserMedia !== 'function') {
+      micError =
+        `This browser isn't exposing microphone access. Check the browser's ` +
+        `privacy/shields settings for this site, or try another browser.`;
+      notify();
+      return;
+    }
+    // Still inside the tap: prime the audio context now, since a hands-free
+    // reply starts from the utterance timer, not a gesture.
+    if (ttsEnabled && ttsServer) prepareTts();
     micActive = true;
     calibrating = true;
     calibStart = Date.now();
@@ -1232,9 +1607,12 @@ export const flootComponent = (
     noiseFloor = 0;
     preroll = [];
     inputText = '';
+    micError = '';
     setStatus('calibrating microphone…');
     try {
-      mediaStream = await navigator.mediaDevices.getUserMedia({
+      // Called synchronously off the tap (no await precedes it) so the user
+      // gesture that mobile browsers require is still in effect.
+      mediaStream = await media.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
@@ -1267,7 +1645,87 @@ export const flootComponent = (
     } catch (err) {
       micActive = false;
       calibrating = false;
-      setStatus(`mic error: ${/** @type {Error} */ (err).message}`);
+      const name = /** @type {Error} */ (err).name;
+      const message = /** @type {Error} */ (err).message;
+      if (name === 'NotAllowedError' || name === 'SecurityError') {
+        // Say where the block is, as far as this browser will tell. A site
+        // permission of 'denied' means the browser's site settings. Chrome
+        // names a prompt the user closed ("dismissed") and a microphone the
+        // OS withheld from the browser app ("denied by system", with the site
+        // permission still 'granted' — the "set to Ask, yet no prompt" case).
+        // Anything else — 'prompt', or a browser with no microphone
+        // permission query at all (Firefox) — could be either place, and the
+        // guidance says so instead of guessing.
+        let permState = '';
+        try {
+          const permStatus = await navigator.permissions?.query?.(
+            /** @type {any} */ ({ name: 'microphone' }),
+          );
+          permState = permStatus?.state || '';
+        } catch {
+          // Permissions API unsupported, or 'microphone' isn't a known name on
+          // this browser — leave permState empty and give generic guidance.
+        }
+        const android =
+          typeof navigator !== 'undefined' &&
+          /android/i.test(navigator.userAgent || '');
+        // A home-screen install (PWA/WebAPK, or a Chrome shortcut) has its own
+        // app entry, so its mic permission lives under that app in the
+        // system's settings — not necessarily under the browser the user
+        // thinks of.
+        const standalone =
+          (typeof window !== 'undefined' &&
+            !!window.matchMedia?.('(display-mode: standalone)')?.matches) ||
+          /** @type {any} */ (navigator).standalone === true;
+        const appNote = standalone
+          ? ` (This is installed to your home screen, so its microphone ` +
+            `permission is under that installed app in ${
+              android ? 'Android Settings → Apps' : 'the system settings'
+            }, which may differ from the browser.)`
+          : '';
+        const osLevel = /system/i.test(message) || permState === 'granted';
+        if (permState === 'denied') {
+          micError =
+            `Microphone blocked for this site. Tap the address-bar lock → ` +
+            `Permissions → Microphone → Allow (or “Reset permissions”), ` +
+            `reload, then tap 🎤 again.${appNote}`;
+        } else if (/dismissed/i.test(message)) {
+          micError =
+            'The microphone prompt was closed without an answer. Tap 🎤 ' +
+            'again and choose Allow.';
+        } else if (osLevel && android) {
+          micError =
+            `The browser tried to ask for the microphone but got no answer, ` +
+            `so the block is at the phone’s OS level. Enable Android Settings ` +
+            `→ Apps → (your browser) → Permissions → Microphone, and turn on ` +
+            `the system “Microphone access” switch (swipe down → Privacy / ` +
+            `Quick Settings). Then tap 🎤 again.${appNote}`;
+        } else if (osLevel) {
+          micError =
+            `The system withheld the microphone from this browser. Allow it ` +
+            `in the operating system’s microphone privacy settings (on a Mac: ` +
+            `System Settings → Privacy & Security → Microphone), then tap 🎤 ` +
+            `again.${appNote}`;
+        } else {
+          micError =
+            `Microphone access was refused. Allow the microphone when the ` +
+            `browser asks; if it never asks, check this site’s permissions ` +
+            `(address-bar lock → Permissions → Microphone) and ${
+              android
+                ? 'the phone’s Settings → Apps → (your browser) → Permissions'
+                : 'the operating system’s microphone privacy setting'
+            } for this browser, then tap 🎤 again.${appNote}`;
+        }
+      } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+        micError = 'No microphone was found on this device.';
+      } else if (name === 'NotReadableError') {
+        micError =
+          'The microphone is in use by another app. Close it and tap 🎤 again.';
+      } else {
+        micError = `Could not start the microphone: ${message}`;
+      }
+      setStatus('microphone unavailable');
+      notify();
     }
   };
 
@@ -1278,11 +1736,14 @@ export const flootComponent = (
     if (rafId) cancelAnimationFrame(rafId);
     rafId = 0;
     abortUtterance();
-    // Drop any buffered voice continuation that never got sent.
+    // Drop any buffered voice continuation that never got sent — including its
+    // compose-box mirror, so no orphaned text lingers after the mic is off. A
+    // box the user has since typed into is theirs, and is left alone.
     if (resumeTimer) {
       clearTimeout(resumeTimer);
       resumeTimer = 0;
     }
+    if (pendingUtterance && inputText === pendingUtterance) inputText = '';
     pendingUtterance = '';
     if (processor) processor.onaudioprocess = null;
     try {
@@ -1318,11 +1779,64 @@ export const flootComponent = (
   // caplet's onClose and aborts piper mid-utterance).
   /** @type {any} */
   let ttsActiveStream = null;
+  // The turn whose spoken view is playing, so a settings change can restart
+  // its speech; null while playback is idle or a replay is speaking.
+  /** @type {FlootTurn | null} */
+  let ttsSpeechTurn = null;
   let ttsNextStart = 0;
   let ttsSpeaking = false;
 
+  // ── Screen wake lock ────────────────────────────────────────────────────────
+  // A voice session is long stretches with no touch input — the mic is open, a
+  // reply is being spoken, or a turn is running — which is exactly when a phone
+  // dims and locks. Hold the screen while the app is genuinely busy and release
+  // it the moment it is not: an always-on lock would trade a screen complaint
+  // for a battery one.
+  //
+  // Host-side on purpose. The confined space has no `navigator` by design and
+  // should not gain one; this component already owns the imperative half (mic,
+  // Web Audio, the VAD loop) and already sees every state change through
+  // `notify`. Declared below `busy`, `micActive` and `ttsSpeaking` so the reader
+  // never reaches them in their temporal dead zone.
+  const wakeLockDoc = $parent.ownerDocument;
+  const screenWakeLock = makeScreenWakeLock({
+    getApi: () => globalThis.navigator?.wakeLock,
+    isVisible: () => wakeLockDoc.visibilityState === 'visible',
+  });
+
+  updateWakeLock = () => {
+    screenWakeLock.set(!cancelled && Boolean(micActive || ttsSpeaking || busy));
+  };
+
+  // The browser drops the lock when the page is hidden and does not restore it.
+  // Registered with the other listeners at mount, below, so a throw during setup
+  // cannot strand it on the document with no disposer to remove it.
+  const onVisibilityChange = () => screenWakeLock.refresh();
+
+  // Each request for playback. stopTts() bumps it too, so a request that
+  // resumes after the audio context resumed (mute, Stop, barge-in, or unmount
+  // meanwhile) finds itself superseded and lets go of its stream instead of
+  // starting it.
+  let ttsRequestSeq = 0;
+
+  // Create/resume the audio context. Also called synchronously from the Send
+  // gesture (see submit) so autoplay is allowed by the time audio arrives.
+  const prepareTts = () => {
+    try {
+      if (!ttsCtx) ttsCtx = new AudioContext();
+    } catch {
+      // No Web Audio here (a stripped-down webview): replies stay text-only.
+      return Promise.resolve();
+    }
+    if (ttsCtx.state === 'suspended') {
+      return ttsCtx.resume().catch(() => {});
+    }
+    return Promise.resolve();
+  };
+
   const stopTts = () => {
     ttsPlaybackId += 1;
+    ttsRequestSeq += 1;
     for (const src of ttsSources) {
       try {
         src.onended = null;
@@ -1339,6 +1853,7 @@ export const flootComponent = (
       ttsActiveStream.return().catch(() => {});
       ttsActiveStream = null;
     }
+    ttsSpeechTurn = null;
     if (ttsSpeaking) {
       ttsSpeaking = false;
       notify();
@@ -1379,6 +1894,7 @@ export const flootComponent = (
       ttsSources = ttsSources.filter(s => s !== src);
       if (!ttsSources.length && ttsSpeaking) {
         ttsSpeaking = false;
+        if (!ttsActiveStream) ttsSpeechTurn = null;
         notify();
       }
     };
@@ -1386,18 +1902,33 @@ export const flootComponent = (
 
   // Pull synthesized audio from a TTS stream and play it back in order. Resolves
   // when the stream ends or playback is superseded by a newer stopTts().
-  const playAudioStream = async (/** @type {any} */ audioReader) => {
+  // `speechTurn` names the turn being spoken (null for a replay of a finished
+  // message), so a settings change can restart its speech.
+  const playAudioStream = async (
+    /** @type {any} */ audioReader,
+    /** @type {FlootTurn | null} */ speechTurn = null,
+  ) => {
     if (!ttsServer) return;
-    if (!ttsCtx) ttsCtx = new AudioContext();
-    if (ttsCtx.state === 'suspended') {
-      try {
-        await ttsCtx.resume();
-      } catch {
-        // best effort
-      }
+    ttsRequestSeq += 1;
+    const mySeq = ttsRequestSeq;
+    await prepareTts();
+    if (
+      cancelled ||
+      !ttsCtx ||
+      mySeq !== ttsRequestSeq ||
+      (speechTurn && !ttsEnabled)
+    ) {
+      // Superseded, muted, or unmounted while the audio context resumed:
+      // release the daemon-side branch rather than leave it synthesizing for
+      // nobody.
+      iterateReader(audioReader)
+        .return()
+        .catch(() => {});
+      return;
     }
     // Begin a fresh session: bump the token and adopt this reader.
     stopTts();
+    ttsSpeechTurn = speechTurn;
     const myId = ttsPlaybackId;
     const audio = iterateReader(audioReader, { buffer: 4 });
     ttsActiveStream = audio;
@@ -1412,11 +1943,18 @@ export const flootComponent = (
           break;
         }
       }
-    } catch {
-      // stream torn down (close) — playback already scheduled stays
+    } catch (err) {
+      // The iteration throws only when the stream could not start (no such
+      // voice, TTS unreachable) or its transport failed; a stopTts() close
+      // ends it cleanly and an in-band abort is a value. Say so, unless this
+      // playback was superseded meanwhile. Audio already scheduled plays out.
+      if (!cancelled && myId === ttsPlaybackId) {
+        setStatus(`speech failed: ${/** @type {Error} */ (err).message}`);
+      }
     } finally {
       if (myId === ttsPlaybackId && ttsActiveStream === audio) {
         ttsActiveStream = null;
+        if (!ttsSources.length) ttsSpeechTurn = null;
       }
     }
   };
@@ -1430,7 +1968,9 @@ export const flootComponent = (
     feed.end();
     replayingText = text;
     notify();
-    playAudioStream(E(ttsServer).synthesize(feed.reader)).finally(() => {
+    playAudioStream(
+      E(ttsServer).synthesize(feed.reader, currentTtsOptions()),
+    ).finally(() => {
       if (replayingText === text) {
         replayingText = '';
         notify();
@@ -1441,14 +1981,75 @@ export const flootComponent = (
   // Toggle spoken replies. Turning it off mid-reply silences the current one.
   const toggleTts = () => {
     ttsEnabled = !ttsEnabled;
-    if (!ttsEnabled) {
-      if (turnTtsFeed) {
-        turnTtsFeed.abort();
-        turnTtsFeed = null;
-      }
+    if (ttsEnabled) {
+      // Still inside the tap: prime the audio context for the hands-free
+      // path, whose replies start from the utterance timer, not a gesture.
+      if (ttsServer) prepareTts();
+    } else {
       stopTts();
     }
     notify();
+  };
+
+  // Ask the daemon for a spoken view of a turn and play it. Called again with
+  // new settings it restarts speech: the fresh view opens on everything the
+  // turn has said so far, and adopting its stream drops the previous one —
+  // which is what tells the daemon that branch is no longer wanted. A speak()
+  // that rejects (no such voice, TTS unreachable) just ends the iteration in
+  // playAudioStream; the text reply is unaffected.
+  const speakTurn = (/** @type {FlootTurn} */ turn) => {
+    if (!ttsServer) return;
+    playAudioStream(E(turn.ref).speak(ttsServer, currentTtsOptions()), turn);
+  };
+
+  // Mirror the settings to the whole-Floot preferences so the change follows
+  // the user across sessions and devices. Best-effort: the per-device cache
+  // already applied it, and an older factory simply rejects the call.
+  const mirrorTtsSettings = () => {
+    E(factory)
+      .setVoicePreferences(harden({ ...ttsSettings }))
+      .catch(() => {});
+  };
+  // A range slider fires one input event per pixel, and every restart
+  // re-speaks the reply so far; commit after the last change in a burst.
+  let ttsSettingsTimer = 0;
+  // Set once the user changes a setting here, so the settings load still in
+  // flight at mount (see below) cannot snap their choice back.
+  let ttsSettingsDirty = false;
+  const commitTtsSettings = () => {
+    ttsSettingsTimer = 0;
+    mirrorTtsSettings();
+    const speechTurn = ttsSpeechTurn;
+    // Restart only a reply still being produced. For one that has finished,
+    // a restart would be the whole reply from the top; its tail plays out and
+    // the new settings apply from the next reply (or a replay).
+    if (
+      speechTurn &&
+      speechTurn === activeTurn &&
+      (ttsSpeaking || ttsActiveStream)
+    ) {
+      speakTurn(speechTurn);
+    }
+  };
+  const setTtsSetting = (
+    /** @type {keyof TtsSettings} */ name,
+    /** @type {string | number} */ raw,
+  ) => {
+    ttsSettingsDirty = true;
+    if (name === 'voice') {
+      ttsSettings = { ...ttsSettings, voice: `${raw}` };
+    } else {
+      const value = Number(raw);
+      if (!Number.isFinite(value)) return;
+      ttsSettings = { ...ttsSettings, [name]: value };
+    }
+    saveTtsSettings();
+    notify();
+    if (ttsSettingsTimer) clearTimeout(ttsSettingsTimer);
+    ttsSettingsTimer = window.setTimeout(
+      commitTtsSettings,
+      TTS_SETTINGS_COMMIT_MS,
+    );
   };
 
   // ── Controller (the view's only handle on the host engine) ───────────────────
@@ -1464,14 +2065,35 @@ export const flootComponent = (
     stop() {
       cancelTurn();
     },
+    // Queue-jump for the pending submission at the head of the queue. It is
+    // already scheduled on submitChain directly behind the turn in flight, so
+    // "send now" is precisely "cut that turn short": cancelling releases it.
+    //
+    // Only the head. Every entry runs the message it was scheduled with, so
+    // cancelling on behalf of a LATER one would end a turn that is not in front
+    // of it — throwing away that reply — and still leave it waiting. The view
+    // offers the control on the head row alone; this is the check that makes
+    // that a rule rather than a convention.
+    sendPendingNow(/** @type {number} */ id) {
+      const head = queuedSends.find(q => q.sessionId === activeSessionId);
+      if (!busy || !head || head.id !== id) return;
+      cancelTurn();
+    },
+    editPending(/** @type {number} */ id, /** @type {string} */ text) {
+      editPending(id, text);
+    },
+    cancelPending(/** @type {number} */ id) {
+      cancelPending(id);
+    },
     selectSession(/** @type {string} */ id) {
       selectSession(id);
     },
     newSession(
       /** @type {string | undefined} */ presetId,
       /** @type {string | undefined} */ model,
+      /** @type {string | undefined} */ reasoningEffort,
     ) {
-      newSession(presetId, model);
+      newSession(presetId, model, reasoningEffort);
     },
     renameSession(/** @type {string} */ id, /** @type {string} */ title) {
       renameSession(id, title);
@@ -1485,6 +2107,12 @@ export const flootComponent = (
     },
     toggleTts() {
       toggleTts();
+    },
+    setTtsSetting(
+      /** @type {keyof TtsSettings} */ name,
+      /** @type {string | number} */ value,
+    ) {
+      setTtsSetting(name, value);
     },
     replayMessage(/** @type {string} */ text) {
       replayMessage(text);
@@ -1507,7 +2135,12 @@ export const flootComponent = (
   $mount.style.height = '100%';
   $parent.appendChild($mount);
 
-  renderConfined(h(FlootApp, { controller }), $mount);
+  // `target` is opted in so a published capability URL in a reply opens in a
+  // new tab as the tool promises: the renderer admits only `_self`/`_blank`
+  // for it and forces `rel="noopener noreferrer"`, so nothing else widens.
+  renderConfined(h(FlootApp, { controller }), $mount, {
+    allowedAttrs: ['target'],
+  });
 
   // Sticky-bottom transcript scrolling lives HOST-side: the confined view cannot
   // touch DOM nodes (the renderer strips refs), so the host owns `$mount` and
@@ -1523,6 +2156,7 @@ export const flootComponent = (
     stick = dist <= STICK_THRESHOLD_PX;
   };
   $mount.addEventListener('scroll', onScrollCapture, true);
+  wakeLockDoc.addEventListener('visibilitychange', onVisibilityChange);
   const scrollObserver = new MutationObserver(() => {
     if (!stick) return;
     const el = /** @type {HTMLElement | null} */ (
@@ -1536,11 +2170,107 @@ export const flootComponent = (
     characterData: true,
   });
 
+  // ── Voice settings ───────────────────────────────────────────────────────────
+  // Build the controls from the TTS object's own configuration (voices, ranges,
+  // defaults) and seed them by precedence: the whole-Floot preferences on the
+  // factory, then this device's cache, then the object's defaults. An older
+  // factory has no preferences call — that reads as "unset" — and an older or
+  // swapped TTS object without getConfiguration() still synthesizes with its
+  // defaults, so both failures are tolerated.
+  if (ttsServer) {
+    Promise.all([
+      E(ttsServer).getConfiguration(),
+      E(factory)
+        .getVoicePreferences()
+        .catch(() => ({})),
+    ])
+      .then(([config, serverPrefs]) => {
+        if (cancelled) return;
+        const voices = Array.isArray(config?.voices) ? config.voices : [];
+        const defaults = config?.defaults || {};
+        const ranges = config?.ranges || {};
+        /** @type {Record<string, unknown>} */
+        let saved = {};
+        try {
+          const raw = window.localStorage.getItem(ttsStorageKey);
+          if (raw) saved = JSON.parse(raw);
+        } catch {
+          // Ignore unavailable storage and malformed old settings.
+        }
+        const prefs = /** @type {Record<string, unknown>} */ (
+          serverPrefs || {}
+        );
+        const pick = (/** @type {string} */ key) => prefs[key] ?? saved[key];
+        const voiceIds = new Set(voices.map(voice => voice.id));
+        // A setting the user changed while this load was in flight wins over
+        // what it fetched: a selection must not snap back. Either way the
+        // values are held to the object's voices and ranges.
+        /** @type {TtsSettings} */
+        const next = ttsSettingsDirty
+          ? { ...ttsSettings }
+          : {
+              voice: `${pick('voice') || defaults.voice || ''}`,
+              speed: Number(pick('speed') ?? defaults.speed ?? ttsSeed.speed),
+              noiseScale: Number(
+                pick('noiseScale') ?? defaults.noiseScale ?? ttsSeed.noiseScale,
+              ),
+              noiseW: Number(
+                pick('noiseW') ?? defaults.noiseW ?? ttsSeed.noiseW,
+              ),
+              sentenceSilence: Number(
+                pick('sentenceSilence') ??
+                  defaults.sentenceSilence ??
+                  ttsSeed.sentenceSilence,
+              ),
+            };
+        if (!voiceIds.has(next.voice)) {
+          next.voice = `${defaults.voice || voices[0]?.id || ''}`;
+        }
+        /** @type {NumericTtsSetting[]} */
+        const numericSettings = [
+          'speed',
+          'noiseScale',
+          'noiseW',
+          'sentenceSilence',
+        ];
+        for (const name of numericSettings) {
+          const range = ranges[name];
+          const value = next[name];
+          if (
+            !Number.isFinite(value) ||
+            (range && (value < Number(range.min) || value > Number(range.max)))
+          ) {
+            // Back to the object's default — or, should it not name one,
+            // Piper's.
+            next[name] = Number(defaults[name] ?? ttsSeed[name]);
+          }
+        }
+        ttsSettings = next;
+        ttsConfiguration = { voices, ranges };
+        // Warm the per-device cache with the resolved values so a later
+        // offline load still reflects the whole-Floot choice.
+        saveTtsSettings();
+        notify();
+      })
+      .catch(() => {
+        // Older/swapped TTS objects can still synthesize with defaults.
+      });
+  }
+
   // ── Initial load ─────────────────────────────────────────────────────────────
   // Load the session list from the factory (most-recent first), seeding a
   // default session if the factory has none, then repaint the active history.
-  (async () => {
+  let recoveryRefreshTimer;
+  // A session stuck in a non-ready lifecycle (a failed creation, a hosted
+  // backend that is no longer installed) never becomes ready on its own, and
+  // the factory only recovers at startup. Poll a bounded number of times with
+  // a widening delay, then stop and let the user get on with a new session
+  // rather than spinning on three CapTP round trips forever.
+  const RECOVERY_ATTEMPTS = 8;
+  let recoveryAttempt = 0;
+  const loadInitialSessions = async () => {
     try {
+      factory = await factory;
       const [metas, presetList, modelList] = await Promise.all([
         E(factory).listSessions(),
         E(factory)
@@ -1550,7 +2280,15 @@ export const flootComponent = (
       ]);
       presets = presetList;
       models = modelList;
-      sessions = [...metas]
+      // `listSessions()` is a remote call, so its result is unknown here;
+      // materialize it once as an array both the filter and the recovery
+      // check below can read.
+      const allMetas = /** @type {any[]} */ ([...metas]);
+      const readyMetas = allMetas.filter(
+        (/** @type {any} */ meta) =>
+          !meta.lifecycle || meta.lifecycle === 'ready',
+      );
+      sessions = readyMetas
         .sort(
           (/** @type {any} */ a, /** @type {any} */ b) =>
             (b.createdAt || 0) - (a.createdAt || 0),
@@ -1565,27 +2303,91 @@ export const flootComponent = (
           facet: null,
           loaded: false,
         }));
+      if (
+        !sessions.length &&
+        allMetas.length > 0 &&
+        recoveryAttempt < RECOVERY_ATTEMPTS
+      ) {
+        recoveryAttempt += 1;
+        setStatus(
+          `Recovering sessions… (${recoveryAttempt}/${RECOVERY_ATTEMPTS})`,
+        );
+        recoveryRefreshTimer = setTimeout(
+          () => {
+            // The user may have created a session and started talking while
+            // this was armed. Reloading would replace the session list and
+            // reset the active session out from under them.
+            if (!cancelled && !sessions.length) void loadInitialSessions();
+          },
+          250 * 2 ** (recoveryAttempt - 1),
+        );
+        return;
+      }
+      recoveryAttempt = 0;
+      const strandedCount = allMetas.length - sessions.length;
       if (!sessions.length) {
         await createSession();
       } else {
         activeSessionId = sessions[0].id;
       }
-      setStatus('Ready.');
+      // Say so rather than reporting a clean "Ready." over sessions the
+      // factory could not revive; they are still listed by the factory and an
+      // operator has to deal with them.
+      setStatus(
+        strandedCount > 0
+          ? `Ready. ${strandedCount} session(s) could not be recovered.`
+          : 'Ready.',
+      );
       openActiveHistory();
     } catch (err) {
       setStatus(`error: ${/** @type {Error} */ (err).message}`);
     }
-  })();
+  };
+  void loadInitialSessions();
+
+  // Mail-driven workflow completions do not have a UI reply stream. Refresh
+  // idle history so the readiness message appears while this space is open.
+  // Never overwrite an optimistic/in-flight user turn with an older snapshot.
+  let historyTimer;
+  const refreshMailHistory = async () => {
+    const session = getActiveSession();
+    if (session && !busy && !liveTurnFor(session.id)) {
+      const previousCount = session.messages.length;
+      await loadHistory(
+        session,
+        undefined,
+        () => !cancelled && !busy && !liveTurnFor(session.id),
+      );
+      if (
+        !cancelled &&
+        activeSessionId === session.id &&
+        session.messages.length > previousCount
+      ) {
+        notify();
+      }
+    }
+    if (!cancelled) historyTimer = setTimeout(refreshMailHistory, 3000);
+  };
+  historyTimer = setTimeout(refreshMailHistory, 3000);
 
   return () => {
     cancelled = true;
+    wakeLockDoc.removeEventListener('visibilitychange', onVisibilityChange);
+    // `cancelled` is set, so this releases rather than re-requests.
+    updateWakeLock();
+    clearTimeout(historyTimer);
+    if (recoveryRefreshTimer !== undefined) {
+      clearTimeout(recoveryRefreshTimer);
+    }
     // Leave any in-flight turn running in the background — just detach our view
     // (don't return the reader, which would abort the agent). The turn finishes
     // and persists; a later remount reattaches or falls back to history.
     if (detachActiveTurnView) detachActiveTurnView();
-    if (turnTtsFeed) {
-      turnTtsFeed.abort();
-      turnTtsFeed = null;
+    if (ttsSettingsTimer) {
+      // A change still waiting for its burst to end is not lost with the tab.
+      clearTimeout(ttsSettingsTimer);
+      ttsSettingsTimer = 0;
+      mirrorTtsSettings();
     }
     stopMic();
     stopTts();

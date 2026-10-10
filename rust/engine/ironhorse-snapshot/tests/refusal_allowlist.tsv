@@ -1,0 +1,4 @@
+# Explicit baseline exceptions for named Corrupt refusals.
+# These are coverage debt, not permission to accept the corrupt input.
+# The registry removes an exception when a direct literal assertion is added.
+# New labels require a regression assertion or an individually reviewed entry.

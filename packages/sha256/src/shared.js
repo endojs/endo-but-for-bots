@@ -126,3 +126,25 @@ export const makeSha256Into = sha256 => {
   return harden(sha256Into);
 };
 harden(makeSha256Into);
+
+/**
+ * The asynchronous analogue of `makeSha256Into`, for the async builds
+ * (`@endo/sha256/async`).  The destination is validated synchronously so a
+ * bad `out`/`offset` rejects on the calling turn rather than after the
+ * digest resolves, and the digest is length-checked before it is written so
+ * a short backing digest cannot leave stale destination bytes behind a
+ * return of 32 — the same discipline as the synchronous helper.
+ *
+ * @param {(bytes: Uint8Array) => Promise<Uint8Array>} sha256Async
+ * @returns {(out: Uint8Array, bytes: Uint8Array, offset?: number) => Promise<number>}
+ */
+export const makeSha256IntoAsync = sha256Async => {
+  const sha256IntoAsync = async (out, bytes, offset = 0) => {
+    assertRoomForDigest(out, offset);
+    const raw = await sha256Async(bytes);
+    out.set(assertDigest(raw, 'the digest backing'), offset);
+    return DIGEST_LENGTH;
+  };
+  return harden(sha256IntoAsync);
+};
+harden(makeSha256IntoAsync);

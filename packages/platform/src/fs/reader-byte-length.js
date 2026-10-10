@@ -6,7 +6,7 @@ import harden from '@endo/harden';
 
 /**
  * Count the bytes a reader will yield, by draining it. This is the fallback
- * `getInfo().size` path for a content store whose `fetch()` result does not
+ * `size()` path for a content store whose reader does not
  * surface a cheap `size()` (e.g. a simple in-memory store); the real
  * content-store backing supplies `size()` from a stat, so the drain only runs
  * where the bytes are already in memory.

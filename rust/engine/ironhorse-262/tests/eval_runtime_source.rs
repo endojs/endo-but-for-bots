@@ -54,7 +54,10 @@ fn eval_runs_statements_with_realm_side_effects() {
     // `var` hoists onto the realm global; a following read sees it.
     assert_oracle_result("(0, eval)('var t = 5; t * t')", "25");
     // A loop runs to completion in the shared realm.
-    assert_oracle_result("(0, eval)('var s = 0; for (var i = 0; i < 5; i++) s += i; s')", "10");
+    assert_oracle_result(
+        "(0, eval)('var s = 0; for (var i = 0; i < 5; i++) s += i; s')",
+        "10",
+    );
     // let/const lexical bindings evaluate in the eval scope.
     assert_oracle_result("(0, eval)('let a = 1; const b = 2; a + b')", "3");
     // An eval mutating an outer global is observable after it returns.
@@ -172,7 +175,10 @@ fn eval_nests_and_calls_functions_within_the_unit() {
     // eval within eval (nested bridge invocation).
     assert_oracle_result("(0, eval)('(0, eval)(\"3 + 4\")')", "7");
     // A callback defined in the eval drives a native method.
-    assert_oracle_result("(0, eval)('[1,2,3].map(function (x) { return x * 2; }).join(\",\")')", "2,4,6");
+    assert_oracle_result(
+        "(0, eval)('[1,2,3].map(function (x) { return x * 2; }).join(\",\")')",
+        "2,4,6",
+    );
 }
 
 #[test]
@@ -180,7 +186,10 @@ fn eval_defined_function_outlives_the_eval_call() {
     // The completion is a function whose body lives in the eval's own buffer;
     // calling it AFTER eval returns must dispatch over that persisted buffer
     // (the lifetime seam), not the caller's.
-    assert_oracle_result("var f = (0, eval)('(function (a, b) { return a + b; })'); f(4, 5)", "9");
+    assert_oracle_result(
+        "var f = (0, eval)('(function (a, b) { return a + b; })'); f(4, 5)",
+        "9",
+    );
     // An eval-defined function calling back into a top-level function.
     assert_oracle_result("function g() { return 9; } (0, eval)('g() + 1')", "10");
 }

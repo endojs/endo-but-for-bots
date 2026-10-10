@@ -1,0 +1,3 @@
+# engine=ironhorse features=default corpus=built-ins/DataView/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/DataView/prototype/Symbol.toStringTag.js sloppy pass
+built-ins/DataView/prototype/Symbol.toStringTag.js strict pass

@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/ZonedDateTime/prototype/minute tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/ZonedDateTime/prototype/minute/balance-negative-time-units.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/minute/balance-negative-time-units.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/minute/basic.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/minute/basic.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/minute/branding.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/minute/branding.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/minute/prop-desc.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/minute/prop-desc.js strict skip:oracle-host-missing-global:Temporal

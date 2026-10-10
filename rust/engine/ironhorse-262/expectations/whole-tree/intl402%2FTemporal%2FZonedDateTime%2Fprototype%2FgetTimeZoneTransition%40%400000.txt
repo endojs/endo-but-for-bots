@@ -1,0 +1,19 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/ZonedDateTime/prototype/getTimeZoneTransition tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/nanoseconds-subtracted-or-added-at-dst-transition.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/nanoseconds-subtracted-or-added-at-dst-transition.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/no-future-transitions.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/no-future-transitions.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/no-transitions-named-timezone.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/no-transitions-named-timezone.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/result-type.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/result-type.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/rule-change-without-offset-transition.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/rule-change-without-offset-transition.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/specific-tzdb-values.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/specific-tzdb-values.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/subtract-second-and-nanosecond-from-last-transition.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/subtract-second-and-nanosecond-from-last-transition.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/transition-at-instant-boundaries.js sloppy skip:oracle-host-missing-intl
+intl402/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/transition-at-instant-boundaries.js strict skip:oracle-host-missing-intl
+intl402/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/transitions-close-together.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/transitions-close-together.js strict skip:oracle-host-missing-global:Temporal

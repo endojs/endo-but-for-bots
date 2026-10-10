@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=language/statements/empty tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/empty/S12.3_A1.js sloppy pass
+language/statements/empty/S12.3_A1.js strict pass
+language/statements/empty/cptn-value.js sloppy pass
+language/statements/empty/cptn-value.js strict pass

@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=built-ins/Atomics/isLockFree tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Atomics/isLockFree/corner-cases.js sloppy pass
+built-ins/Atomics/isLockFree/corner-cases.js strict pass
+built-ins/Atomics/isLockFree/descriptor.js sloppy pass
+built-ins/Atomics/isLockFree/descriptor.js strict pass
+built-ins/Atomics/isLockFree/expected-return-value.js sloppy pass
+built-ins/Atomics/isLockFree/expected-return-value.js strict pass
+built-ins/Atomics/isLockFree/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Atomics/isLockFree/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Atomics/isLockFree/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be isLockFree; name value should be isLockFree"
+built-ins/Atomics/isLockFree/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be isLockFree; name value should be isLockFree"
+built-ins/Atomics/isLockFree/not-a-constructor.js sloppy pass
+built-ins/Atomics/isLockFree/not-a-constructor.js strict pass

@@ -1,0 +1,80 @@
+# IronHorse architecture reviews
+
+Point-in-time architecture reviews of the IronHorse engine (`rust/engine`).
+
+Each review lives in its own directory named by the date it was published, and
+is pinned to the commit it was conducted against.
+A review's **analysis is a snapshot**: its findings, line numbers and quotations
+describe the commit it was written against and are not rewritten as the engine
+moves on.
+What a review may gain is a **revision**: a re-verification pass that records,
+per finding, whether it is still open at some later commit, without restating
+the original analysis.
+A review may be revised more than once; each revision is named, in the table
+below and in the review's own metadata, and the review says which findings each
+revision closed.
+A revision never replaces an earlier one's record: the status a finding held at
+every revised commit stays in the document.
+Read every citation against the reviewed commit, not against the current tree:
+
+```sh
+git show 97d8de25:rust/engine/ironhorse-vm/src/interp.rs | sed -n '10938,10960p'
+```
+
+## Reviews
+
+| Published | Reviewed commit | Last revised | Scope | Findings | Review |
+|---|---|---|---|---|---|
+| 2026-09-20 | [`62b907421`](https://github.com/endojs/endo-but-for-bots/commit/62b907421) | — | `rust/engine`, the Endo IronHorse integration and SQLite store, pinned XS oracle sources, CI and current design contracts | 9 current: 1 high, 6 medium, 2 low; new, inherited and deliberate limits are reported separately | [2026-09-20](2026-09-20/ARCHITECTURE-REVIEW.md) |
+| 2026-09-06 | [`97d8de25`](https://github.com/endojs/endo-but-for-bots/commit/97d8de25) | **2026-09-17** against [`2c69bf78d`](https://github.com/endojs/endo-but-for-bots/commit/2c69bf78d): a third RESOLUTION pass the same day — F127 closed, both clauses, with the review finding that the carry as first written turned a refusal into a host panic on any queued `Array.fromAsync` job — leaving 182 fixed, 6 partial, 1 open, 2 held ([open-findings index](2026-09-06/OPEN-FINDINGS.md)). Earlier: 2026-09-17 against [`e1038c189`](https://github.com/endojs/endo-but-for-bots/commit/e1038c189), a second resolution pass — F068 advanced to partial and F063/F119 gained the instruments their claims lacked — leaving 181 fixed, 7 partial, 1 open, 2 held; 2026-09-17 against [`0b25cdba9`](https://github.com/endojs/endo-but-for-bots/commit/0b25cdba9), the first resolution pass, closing nine (181 / 8 / 2); 2026-09-16 against [`7753a4b9`](https://github.com/endojs/endo-but-for-bots/commit/7753a4b9) (172 / 15 / 4); 2026-09-08 against [`1b130df7`](https://github.com/endojs/endo-but-for-bots/commit/1b130df7) (83 / 47 / 61); 2026-09-08 against [`c14706d3`](https://github.com/endojs/endo-but-for-bots/commit/c14706d3) (51 / 39 / 101); 2026-09-07 against [`6c1e1d6b`](https://github.com/endojs/endo-but-for-bots/commit/6c1e1d6b) (37 / 32 / 122); 2026-09-06 against [`f109e8f4`](https://github.com/endojs/endo-but-for-bots/commit/f109e8f4) (10 / 11 / 170) | `rust/engine`, plus `rust/endo/ironhorse-store-sqlite` and `rust/endo/src/ironhorse_engine.rs` | 191 verified: 6 critical, 57 high, 73 medium, 55 low | [2026-09-06](2026-09-06/ARCHITECTURE-REVIEW.md) |
+
+## What a review directory contains
+
+| Path | Contents |
+|---|---|
+| `<date>/ARCHITECTURE-REVIEW.md` | The review: architecture as built, findings by theme, and a sequenced program of work. Start here. |
+| `<date>/README.md` | Index of that review's companion documents, and its method. |
+| `<date>/lenses/*.md` | One report per architectural concern, verbatim, with the reviewers' executable probes. |
+| `<date>/maps/*.md` | One map per region of the tree, verbatim, each recording what its reader did not read. |
+
+The summary is self-contained.
+The lens reports and region maps are kept as evidence: they carry the
+mechanism-level detail and the raw candidate findings, including leads that did
+not survive verification.
+
+## Adding a review
+
+Create `rust/engine/architecture-review/<YYYY-MM-DD>/` with the layout above,
+and add a row to the Reviews table naming the commit reviewed and the finding
+counts.
+Do not rewrite a previous review's analysis to match a newer engine: supersede
+it with a new review, so the record of what was true at each commit stays
+intact.
+
+## Revising a review
+
+When the engine has moved but a fresh review is not warranted, revise the
+existing one rather than letting it rot: re-verify each finding against the new
+commit, and record per finding whether it is fixed, partially fixed or still
+open.
+Keep the original analysis, claims and line numbers as written; add the new
+status alongside them, and note the revision date and base commit in the
+review's metadata, in its Revision history, and in the Reviews table above.
+
+A revision and a **resolution pass** are different things, and a review that
+carries both should say which it is recording.
+A revision re-verifies findings against a commit the engine reached on its
+own; a resolution pass sets out to close them, so its statuses describe work
+done in response to the review rather than work it found already done. A
+resolution pass owes two things a revision does not: every status names the
+test that holds its claim, and where a fix is narrower than the finding's own
+recommendation, it says so in its own words rather than reporting closure.
+A resolution pass that only reports its successes is the failure mode these
+reviews keep finding.
+
+Two rules make a revision trustworthy.
+Keep the severities the original verification settled on, changing them only
+where a finding is fixed: a re-verification pass is one judgement, and silently
+re-rating findings against it inflates the review.
+Say what the revision did not do, since a revision is not a re-review and finds
+nothing new in surfaces added since.

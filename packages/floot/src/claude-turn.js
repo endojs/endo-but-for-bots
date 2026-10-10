@@ -12,8 +12,8 @@
 // conversation-context assembly are all bypassed, and the events streamed back
 // (text, tool_use, tool_result, result) are surfaced for display only.
 //
-// Abort: when the Floot reply consumer stops (UI Stop / barge-in), the reply
-// channel's onClose aborts `signal`; we close the CLI reader in response,
+// Abort: when the turn is cancelled (UI Stop / barge-in, via
+// `FlootTurn.cancel`), `signal` aborts; we close the CLI reader in response,
 // which kills the in-flight `claude -p` process in the sandbox.
 
 import { E } from '@endo/eventual-send';
@@ -73,6 +73,19 @@ export const makeClaudeEventTranslator = writer => {
   let errorReason;
   /** @type {{ inputTokens: number, outputTokens: number } | undefined} */
   let usage;
+  // With `--include-partial-messages`, text arrives first as Anthropic
+  // content-block deltas and is repeated in the complete assistant event(s)
+  // for the same message (the CLI emits one assistant record per content
+  // block). Remember which messages streamed — by the id `message_start`
+  // announces and assistant records carry — so the UI/TTS branches receive
+  // each character exactly once whatever order the records interleave in (a
+  // thinking-only record between a message's deltas and its text record, say).
+  // The boolean is the fallback for a wire without message ids.
+  /** @type {string | undefined} */
+  let streamingMessageId;
+  /** @type {Set<string>} */
+  const streamedMessageIds = new Set();
+  let streamedCurrentAssistant = false;
 
   const handle = event => {
     if (!event || typeof event !== 'object') return;
@@ -83,13 +96,41 @@ export const makeClaudeEventTranslator = writer => {
         if (event.subtype === 'init') w.setPhase('claude session starting');
         break;
       }
+      case 'stream_event': {
+        const streamEvent = event.event;
+        if (streamEvent?.type === 'message_start') {
+          const id = streamEvent.message?.id;
+          streamingMessageId = typeof id === 'string' ? id : undefined;
+          streamedCurrentAssistant = false;
+        } else if (
+          streamEvent?.type === 'content_block_delta' &&
+          streamEvent.delta?.type === 'text_delta' &&
+          streamEvent.delta.text
+        ) {
+          const text = `${streamEvent.delta.text}`;
+          streamed += text;
+          if (streamingMessageId !== undefined) {
+            streamedMessageIds.add(streamingMessageId);
+          }
+          streamedCurrentAssistant = true;
+          w.delta(text);
+        }
+        break;
+      }
       case 'assistant': {
         const blocks = event.message?.content;
         if (!Array.isArray(blocks)) break;
+        const messageId = event.message?.id;
+        const alreadyStreamed =
+          typeof messageId === 'string'
+            ? streamedMessageIds.has(messageId)
+            : streamedCurrentAssistant;
         for (const block of blocks) {
           if (block?.type === 'text' && block.text) {
-            streamed += `${block.text}`;
-            w.delta(`${block.text}`);
+            if (!alreadyStreamed) {
+              streamed += `${block.text}`;
+              w.delta(`${block.text}`);
+            }
           } else if (block?.type === 'tool_use') {
             const id = `${block.id || ''}`;
             const name = `${block.name || 'tool'}`;
@@ -97,6 +138,7 @@ export const makeClaudeEventTranslator = writer => {
             w.toolCall({ id, name, args: JSON.stringify(block.input ?? {}) });
           }
         }
+        streamedCurrentAssistant = false;
         break;
       }
       case 'user': {

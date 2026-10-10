@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=language/computed-property-names/class/method tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/computed-property-names/class/method/constructor-can-be-generator.js sloppy pass
+language/computed-property-names/class/method/constructor-can-be-generator.js strict pass
+language/computed-property-names/class/method/constructor-can-be-getter.js sloppy pass
+language/computed-property-names/class/method/constructor-can-be-getter.js strict pass
+language/computed-property-names/class/method/constructor-can-be-setter.js sloppy pass
+language/computed-property-names/class/method/constructor-can-be-setter.js strict pass
+language/computed-property-names/class/method/constructor-duplicate-1.js sloppy pass
+language/computed-property-names/class/method/constructor-duplicate-1.js strict pass
+language/computed-property-names/class/method/constructor-duplicate-2.js sloppy pass
+language/computed-property-names/class/method/constructor-duplicate-2.js strict pass
+language/computed-property-names/class/method/constructor-duplicate-3.js sloppy pass
+language/computed-property-names/class/method/constructor-duplicate-3.js strict pass
+language/computed-property-names/class/method/constructor.js sloppy pass
+language/computed-property-names/class/method/constructor.js strict pass
+language/computed-property-names/class/method/generator.js sloppy pass
+language/computed-property-names/class/method/generator.js strict pass
+language/computed-property-names/class/method/number.js sloppy pass
+language/computed-property-names/class/method/number.js strict pass
+language/computed-property-names/class/method/string.js sloppy pass
+language/computed-property-names/class/method/string.js strict pass
+language/computed-property-names/class/method/symbol.js sloppy pass
+language/computed-property-names/class/method/symbol.js strict pass

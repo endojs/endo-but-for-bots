@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=built-ins/GeneratorPrototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/GeneratorPrototype/Symbol.toStringTag.js sloppy pass
+built-ins/GeneratorPrototype/Symbol.toStringTag.js strict pass
+built-ins/GeneratorPrototype/constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"Iterator\"] (){[native code]}», «[object GeneratorFunction]») to be true"
+built-ins/GeneratorPrototype/constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"Iterator\"] (){[native code]}», «[object GeneratorFunction]») to be true"

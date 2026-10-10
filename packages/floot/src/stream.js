@@ -35,10 +35,14 @@ import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
  * @param {(() => void) | null} [onClose] Fires when the consumer stops pulling
  *   (reader.return/throw) before the stream finished, so the producer (the
  *   in-flight agent turn) can be aborted rather than left generating for no one.
- * @returns {{ writer: object, reader: object }}
+ *   A daemon-owned turn passes nothing: nobody but the turn's owner may end it,
+ *   and the owner uses `close` below.
+ * @returns {{ writer: object, reader: object, close: () => void }} `close`
+ *   finishes the channel from the producer's side, ending a local drain of
+ *   `reader` that no terminal event would otherwise release.
  */
 export const makeReplyChannel = (onClose = null) => {
-  const { push, reader } = makeBufferedReader({ onClose });
+  const { push, reader, close } = makeBufferedReader({ onClose });
 
   const writer = harden({
     /** @param {string} phase */
@@ -76,6 +80,6 @@ export const makeReplyChannel = (onClose = null) => {
     abort: reason => push({ type: 'abort', reason: `${reason}` }),
   });
 
-  return { writer, reader };
+  return harden({ writer, reader, close });
 };
 harden(makeReplyChannel);

@@ -10,11 +10,21 @@
 //!   structure-aware generator produces a subset-grammar program from
 //!   raw fuzzer bytes; `differential_check` feeds identical source to
 //!   ironhorse and the XS oracle and compares completion kind, result
-//!   string, and computron count. Any divergence is a finding.
+//!   string. Computrons are release-pinned independently, not compared to XS.
 //! - **Target 2, bytecode decoder fuzzing**: `decoder_is_panic_free`
 //!   drives arbitrary/truncated bytes through the decoder and
 //!   interpreter, which must degrade to a `Halt::Decode`, never panic
 //!   (XS treats bytecode as trusted; ironhorse's loader must not).
+//!
+//! **Trophies pin the PROGRAM, not the bytes.** A regression here records the
+//! minimized fuzz input in a comment and asserts over the program that input
+//! folded to, as a literal or a `tests/fixtures/*.program.js` file. The bytes
+//! alone are not a durable lock: a change to the generator — making the cursor
+//! finite, drawing the expression depth from the input (F040) — re-folds every
+//! recorded input, and the trophy would then exercise a different program
+//! under the same name, silently. The program text is what the divergence
+//! lives in and is independent of how it was reached. Structural guards on a
+//! pinned constant ("is this a product") cannot fail and are not carried.
 //!
 //! **When an arm finds a trophy** (a minimized, fixed divergence), it lands a
 //! durable regression, not a change to a generator: a source-level divergence
@@ -24,6 +34,9 @@
 //! `rust/engine/README.md` and the regression tree's `README.md`.
 
 use ironhorse_vm::{disassemble, run_program, run_program_bounded};
+
+mod comparison;
+use comparison::{compare_observations, results_agree};
 
 /// Stage-3b XSRE matcher fuzz arm (child 8/9): a structure-aware regexp
 /// generator + differential check of `ironhorse-regexp` against the pin.
@@ -39,89 +52,180 @@ pub use snapshot::{
     RoundtripDivergence,
 };
 
+/// The store-seam decoder fuzz arm over `StoreManifest::decode`,
+/// `SmallState::decode`, `validate_store` and the adoption path — the
+/// targets the store-seam design's phase-1 acceptance bar names.
+pub mod store;
+pub use store::{export_adopt_is_identity, store_decoder_is_error_free, store_succession_is_total};
+
+/// The checked-in, derived seed corpus for every libFuzzer target, so
+/// coverage survives a cache eviction instead of silently resetting.
+pub mod seeds;
+
+/// The multi-crank differential arm: fuzzer bytes folded into a crank
+/// SEQUENCE on one live machine per engine, so cross-crank coverage scales
+/// the way the single-crank path already does.
+pub mod cranks;
+pub use cranks::{
+    crank_sequence_differential_is_clean, differential_check_cranks, gen_crank_sequence,
+    CrankDivergence,
+};
+
 /// A cursor over fuzzer-provided bytes, used to drive the grammar
-/// deterministically (a minimal `arbitrary::Unstructured`).
+/// deterministically.
+///
+/// Backed by [`arbitrary::Unstructured`], which is **finite**: once the
+/// input is spent every further draw reads zero, and a generator settles
+/// into its terminal arms instead of looping back over bytes it has already
+/// consumed. That finiteness is the whole point. The hand-rolled cursor this
+/// replaces indexed `data[pos % data.len()]`, so a four-byte input was an
+/// infinitely long one and every generator reached full depth from it —
+/// which defeats libFuzzer's length feedback, the signal that teaches the
+/// fuzzer that a longer input buys deeper structure. With wraparound, adding
+/// a byte changed the program arbitrarily rather than extending it, so the
+/// search could not climb (F040).
+///
+/// The API is deliberately the same two draws the 190 existing call sites
+/// use, so the change is in the byte source rather than in any grammar.
+/// Callers that want the shape to stay rich must feed enough bytes; the
+/// in-crate sweeps do, and several of them assert a diversity floor.
 struct Bytes<'a> {
-    data: &'a [u8],
-    pos: usize,
+    u: arbitrary::Unstructured<'a>,
 }
 
 impl<'a> Bytes<'a> {
     fn new(data: &'a [u8]) -> Self {
-        Bytes { data, pos: 0 }
-    }
-    fn next(&mut self) -> u8 {
-        if self.data.is_empty() {
-            return 0;
+        Bytes {
+            u: arbitrary::Unstructured::new(data),
         }
-        let b = self.data[self.pos % self.data.len()];
-        self.pos = self.pos.wrapping_add(1);
-        b
+    }
+    /// One byte, or zero once the input is exhausted.
+    fn next(&mut self) -> u8 {
+        self.u.arbitrary::<u8>().unwrap_or(0)
     }
     fn choice(&mut self, n: u8) -> u8 {
-        self.next() % n
+        if n == 0 {
+            0
+        } else {
+            self.next() % n
+        }
+    }
+    /// Whether the fuzzer's bytes are spent. A generator uses this to stop
+    /// growing a sequence rather than to change what it emits, so the
+    /// grammar stays the same shape at every length.
+    fn spent(&self) -> bool {
+        self.u.is_empty()
     }
 }
+
+/// The ceiling on the fuzzer-chosen expression depth. Bounds generation
+/// time and stack; the depth *within* it is the fuzzer's to pick, so a
+/// deeper nest is reachable by search rather than fixed at 4 forever
+/// (F040). Coding is recursive, so this stays well inside the compiler's
+/// own nesting budget.
+const MAX_EXPR_DEPTH: u8 = 8;
+
+/// The ceiling on a generated program's SIZE, in characters.
+///
+/// Depth alone is the wrong bound. `gen_expr`'s conditional arm has THREE
+/// recursive children, so the node count grows as 3^depth and depth 8 admits
+/// 6,561 leaves: an all-`0x07` input folds into a fifty-thousand-character
+/// program. That is not a useful fuzz input — it is a slow one, and on a
+/// target whose budget is seconds per iteration a handful of them is the
+/// whole budget.
+///
+/// The budget is spent DURING generation rather than checked after it. The
+/// obvious alternative — generate, and regenerate at a shallower depth if
+/// the result is too big — inverts the length gradient this crate just
+/// finished restoring: past a couple of kilobytes of conditional-heavy
+/// input, a longer input bought a SHALLOWER program and eventually a program
+/// invariant to length entirely. That is the F040 pathology pointed the
+/// other way. Spending a budget as the tree is built keeps growth monotone:
+/// a subtree that would overrun collapses to an atom, and the rest of the
+/// program is unaffected.
+const MAX_PROGRAM_CHARS: usize = 4_096;
 
 /// Structure-aware generator: fold raw bytes into a program in the
 /// stage-1 subset grammar (integer/number/boolean literals combined
 /// with the implemented arithmetic, bitwise, comparison, logic, unary,
-/// and conditional operators). `depth` bounds recursion so generation
-/// terminates.
+/// and conditional operators).
+///
+/// The recursion bound is drawn from the input rather than fixed, so the
+/// generator can emit both a bare literal and a deep nest, and libFuzzer
+/// can search the depth dimension. Generation still terminates: the drawn
+/// depth is capped at [`MAX_EXPR_DEPTH`] and decreases on every descent.
 pub fn gen_program(data: &[u8]) -> String {
     let mut b = Bytes::new(data);
-    gen_expr(&mut b, 4)
+    let depth = 1 + b.choice(MAX_EXPR_DEPTH);
+    let mut budget = MAX_PROGRAM_CHARS;
+    gen_expr_budgeted(&mut b, depth, &mut budget)
 }
 
-fn gen_expr(b: &mut Bytes, depth: u8) -> String {
-    if depth == 0 {
-        return gen_atom(b);
+/// `gen_expr` under a shared character budget.
+///
+/// Each node charges itself before recursing; a node that cannot afford its
+/// own punctuation emits an atom instead. One pass, no regeneration, and the
+/// bound holds by construction rather than by a post-hoc check.
+fn gen_expr_budgeted(b: &mut Bytes, depth: u8, budget: &mut usize) -> String {
+    // The widest fixed cost of a non-atom node: `(` + ` op ` + `)` for the
+    // binary arms, and more for the conditional. Charged up front so a node
+    // that cannot pay degenerates rather than overrunning.
+    const NODE_COST: usize = 16;
+    if depth == 0 || *budget < NODE_COST {
+        let atom = gen_atom(b);
+        *budget = budget.saturating_sub(atom.len());
+        return atom;
     }
+    *budget -= NODE_COST;
+    gen_expr_node(b, depth, budget)
+}
+
+fn gen_expr_node(b: &mut Bytes, depth: u8, budget: &mut usize) -> String {
     match b.choice(9) {
         0 => {
             let op = ["+", "-", "*", "/", "%"][b.choice(5) as usize];
             format!(
                 "({} {} {})",
-                gen_expr(b, depth - 1),
+                gen_expr_budgeted(b, depth - 1, budget),
                 op,
-                gen_expr(b, depth - 1)
+                gen_expr_budgeted(b, depth - 1, budget)
             )
         }
         1 => {
             let op = ["&", "|", "^", "<<", ">>", ">>>"][b.choice(6) as usize];
             format!(
                 "({} {} {})",
-                gen_expr(b, depth - 1),
+                gen_expr_budgeted(b, depth - 1, budget),
                 op,
-                gen_expr(b, depth - 1)
+                gen_expr_budgeted(b, depth - 1, budget)
             )
         }
         2 => {
             let op = ["<", "<=", ">", ">=", "===", "!==", "==", "!="][b.choice(8) as usize];
             format!(
                 "({} {} {})",
-                gen_expr(b, depth - 1),
+                gen_expr_budgeted(b, depth - 1, budget),
                 op,
-                gen_expr(b, depth - 1)
+                gen_expr_budgeted(b, depth - 1, budget)
             )
         }
         3 => {
             let op = ["&&", "||"][b.choice(2) as usize];
             format!(
                 "({} {} {})",
-                gen_expr(b, depth - 1),
+                gen_expr_budgeted(b, depth - 1, budget),
                 op,
-                gen_expr(b, depth - 1)
+                gen_expr_budgeted(b, depth - 1, budget)
             )
         }
-        4 => format!("(-{})", gen_expr(b, depth - 1)),
-        5 => format!("(!{})", gen_expr(b, depth - 1)),
-        6 => format!("(~{})", gen_expr(b, depth - 1)),
+        4 => format!("(-{})", gen_expr_budgeted(b, depth - 1, budget)),
+        5 => format!("(!{})", gen_expr_budgeted(b, depth - 1, budget)),
+        6 => format!("(~{})", gen_expr_budgeted(b, depth - 1, budget)),
         7 => format!(
             "({} ? {} : {})",
-            gen_expr(b, depth - 1),
-            gen_expr(b, depth - 1),
-            gen_expr(b, depth - 1)
+            gen_expr_budgeted(b, depth - 1, budget),
+            gen_expr_budgeted(b, depth - 1, budget),
+            gen_expr_budgeted(b, depth - 1, budget)
         ),
         _ => gen_atom(b),
     }
@@ -132,9 +236,8 @@ fn gen_expr(b: &mut Bytes, depth: u8) -> String {
 /// returning one of the bindings. Every generated program is valid and
 /// terminating (the loop bound is a small literal and the counter only
 /// increments), exercising the frame/scope/variable/loop opcodes the
-/// differential harness compares on results. Computrons are not yet
-/// bit-exact for this surface (run-time allocation metering awaits the
-/// faithful heap), so [`differential_check_result_only`] drives it.
+/// differential harness compares on results (XS cost drift is advisory
+/// everywhere), so [`differential_check_result_only`] drives it.
 pub fn gen_statement_program(data: &[u8]) -> String {
     let mut b = Bytes::new(data);
     let seed0 = (b.next() % 20) as i32 - 5;
@@ -161,7 +264,7 @@ pub fn gen_statement_program(data: &[u8]) -> String {
 /// Structure-aware generator for the **stage-2b surface**: valid,
 /// terminating programs that exercise the object model, user-function
 /// calls, closures, and thrown-and-caught exceptions — the machinery this
-/// stage made **bit-exact** (result AND computron), so the generated
+/// stage made **result-gated** (XS cost drift advisory), so the generated
 /// programs are driven by the full [`differential_check`], not the
 /// result-only variant. Every branch stays inside the small-integer domain
 /// (values bounded, only `+`/`-`/`*`, no division) so results and their
@@ -248,7 +351,7 @@ fn gen_closure_program(b: &mut Bytes) -> String {
 /// Thrown-and-caught exceptions: a caught throw whose value is used, a try
 /// with no throw, or a try/catch/finally that observes both paths.
 /// Exercises `catch`/`throw`/`exception`/`uncatch` and the finally
-/// status-temporary skeleton — all caught (so `BothComplete`, bit-exact).
+/// status-temporary skeleton — all caught (so `BothComplete`, result-gated).
 fn gen_exception_program(b: &mut Bytes) -> String {
     let n = small_int(b);
     let m = small_int(b);
@@ -264,7 +367,7 @@ fn gen_exception_program(b: &mut Bytes) -> String {
 }
 
 /// Structure-aware generator for the **stage-3 arrays surface**: the array
-/// exotic object's grammar that is **bit-exact** (result AND computron) —
+/// exotic object's grammar that is **result-gated** (XS cost drift advisory) —
 /// array literals (with holes), computed index get/set over the item chunk,
 /// and the `length` accessor get/set. Deliberately excludes the honest-skip
 /// cases (integer-indexed *ordinary* objects, runtime-minted string keys,
@@ -324,8 +427,7 @@ pub fn gen_stage3_arrays_program(data: &[u8]) -> String {
 }
 
 /// Structure-aware generator for the **dense `Array.prototype` mutation
-/// methods** (`push`/`pop`/`indexOf`) — the fast paths that are bit-exact
-/// (result AND computron). It always builds a **dense** literal (no holes, so
+/// methods** (`push`/`pop`/`indexOf`) — the fast paths that are result-gated (XS cost drift advisory). It always builds a **dense** literal (no holes, so
 /// `fxCheckArray`'s fast path applies), then applies a method and observes its
 /// return value, the resulting array, or the length. Excludes `join` (its
 /// per-element `ToString` metering is a later increment) and sparse receivers
@@ -493,7 +595,7 @@ pub fn gen_stage3_array_methods_program(data: &[u8]) -> String {
 
 /// Structure-aware generator for the **array iterator objects**
 /// (`values`/`keys`/`entries` + `next` over the reused result object) — the
-/// bit-exact (result AND computron) explicit-iterator grammar. Builds a dense
+/// result-gated (XS cost drift advisory) explicit-iterator grammar. Builds a dense
 /// literal, opens an iterator of one of the three kinds, advances it a bounded
 /// number of `next()` calls (possibly past the end to reach `done`), and reads
 /// `.value` or `.done` off the final result. Rides the full symbol-linking
@@ -519,7 +621,7 @@ pub fn gen_stage3_array_iterators_program(data: &[u8]) -> String {
 }
 
 /// Structure-aware generator for **`for-of` over an array literal** — the
-/// bit-exact (result AND computron) iteration grammar. Builds a dense literal
+/// result-gated (XS cost drift advisory) iteration grammar. Builds a dense literal
 /// and a bounded reduce/count loop over it. The loop body stays inside the
 /// overflow-safe small-integer domain (`+`/`-`/`*`), so results are
 /// unambiguous. Rides the full symbol-linking differential check.
@@ -539,6 +641,111 @@ pub fn gen_stage3_for_of_program(data: &[u8]) -> String {
         1 => format!("var n=0; for (var x of {}) n=n+1; n", lit),
         // String concatenation of the elements.
         _ => format!("var s=\"\"; for (var x of {}) s=s+x; s", lit),
+    }
+}
+
+/// Draw one **UTF-16 code unit** from the fuzzer's bytes, as the
+/// `\uXXXX` escape that names it in JavaScript source.
+///
+/// This is the alphabet the crate did not have (F040). Every other
+/// generator here draws from `b"abcdefghijklmnopqrstuvwxyz"`, so no input
+/// the crate could produce contained a non-ASCII code unit, and the whole
+/// UTF-8/UTF-16 boundary — the 2026-07-06 decision, surrogate handling, the
+/// regexp code-unit/byte remap — was unreachable *by construction*.
+///
+/// The draw is weighted rather than uniform over `0..=0xFFFF`: ASCII stays
+/// the common case so programs remain mostly legible, while the corners
+/// that actually break transcoders — a lone high surrogate, a lone low
+/// surrogate, a BMP non-ASCII code point, `U+FFFF` — each have their own
+/// arm. An escape keeps the *Rust* source valid UTF-8 while the JavaScript
+/// *string value* carries the code unit, which is the only way to write a
+/// lone surrogate at all.
+fn gen_code_unit(b: &mut Bytes) -> String {
+    let unit: u16 = match b.choice(8) {
+        // ASCII, the ordinary case.
+        0 | 1 | 2 => 0x20 + (b.next() % 0x5f) as u16,
+        // Latin-1 supplement and friends: two UTF-8 bytes, one code unit.
+        3 => 0x80 + b.next() as u16,
+        // BMP beyond Latin-1: three UTF-8 bytes, one code unit.
+        4 => 0x0800 + ((b.next() as u16) << 4 | (b.next() & 0x0f) as u16),
+        // A lone HIGH surrogate: valid UTF-16 in JavaScript, not encodable
+        // as a Rust `char` at all.
+        5 => 0xd800 + (b.next() as u16 % 0x400),
+        // A lone LOW surrogate.
+        6 => 0xdc00 + (b.next() as u16 % 0x400),
+        // The non-characters at the top of the BMP.
+        _ => 0xfff0 + (b.next() % 0x10) as u16,
+    };
+    format!("\\u{unit:04x}")
+}
+
+/// A bounded JavaScript string literal body over the code-unit alphabet.
+///
+/// Stops early once the fuzzer's bytes are [`Bytes::spent`], so the literal
+/// grows with the input rather than being padded out of wrapped bytes —
+/// which is what gives libFuzzer a length gradient to climb.
+fn gen_code_unit_literal(b: &mut Bytes, max: usize) -> String {
+    let n = (b.next() as usize) % (max + 1);
+    let mut out = String::new();
+    for _ in 0..n {
+        if b.spent() {
+            break;
+        }
+        // A surrogate PAIR, sometimes, so astral code points are reachable
+        // and not only the lone halves.
+        if b.choice(6) == 0 {
+            let high = 0xd800 + (b.next() as u16 % 0x400);
+            let low = 0xdc00 + (b.next() as u16 % 0x400);
+            out.push_str(&format!("\\u{high:04x}\\u{low:04x}"));
+        } else {
+            out.push_str(&gen_code_unit(b));
+        }
+    }
+    out
+}
+
+/// Structure-aware generator for the **UTF-16 code-unit surface**: string
+/// values built from the full code-unit alphabet — lone surrogates, valid
+/// pairs, BMP non-ASCII, non-characters — observed through operations whose
+/// results are *numbers and booleans*.
+///
+/// The observable choice is deliberate. The code units themselves must reach
+/// the engines, which the escapes do; but a completion value that renders a
+/// lone surrogate would stress the oracle harness's own transport rather
+/// than either engine's semantics, and 17 of the 24 checked-in trophies were
+/// already harness artifacts rather than port defects. Comparing lengths,
+/// code-unit values, indices and equality keeps the differential pointed at
+/// the engines while the inputs stay adversarial.
+pub fn gen_code_unit_string_program(data: &[u8]) -> String {
+    let mut b = Bytes::new(data);
+    let s = gen_code_unit_literal(&mut b, 6);
+    match b.choice(8) {
+        // Code-unit length: the single most load-bearing number in the
+        // UTF-8/UTF-16 boundary decision.
+        0 => format!("\"{s}\".length"),
+        1 => {
+            let i = b.next() % 8;
+            format!("\"{s}\".charCodeAt({i})")
+        }
+        2 => {
+            let i = b.next() % 8;
+            format!("\"{s}\".codePointAt({i})")
+        }
+        // Concatenation must be code-unit-wise, not code-point-wise: two
+        // lone halves that meet at a seam do NOT become one code point.
+        3 => format!("(\"{s}\" + \"{s}\").length"),
+        4 => {
+            let i = b.next() % 8;
+            format!("\"{s}\".slice({i}).length")
+        }
+        5 => format!("\"{s}\".indexOf(\"{}\")", gen_code_unit(&mut b)),
+        // `JSON.stringify` has its own well-formed-string escaping rule for
+        // lone surrogates; its output LENGTH says whether it applied.
+        6 => format!("JSON.stringify(\"{s}\").length"),
+        _ => {
+            let t = gen_code_unit_literal(&mut b, 6);
+            format!("(\"{s}\" === \"{t}\")")
+        }
     }
 }
 
@@ -568,7 +775,7 @@ pub fn gen_stage3_string_for_of_program(data: &[u8]) -> String {
 /// Structure-aware generator for the **stage-3 text-math-json** surface: the
 /// `Math` statics, `String.prototype` methods over the CESU-8 chunk, the
 /// `Number` predicates, `parseInt`/`parseFloat`/`isNaN`, and `JSON.stringify`
-/// of a primitive — every emitted program bit-exact (result AND computron)
+/// of a primitive — every emitted program result-gated (XS cost drift advisory)
 /// against the pin. Only the raw-clean subset is drawn (numeric `Math` args,
 /// ASCII strings so case/`.length`/index math stays byte==unit, string search/
 /// parse arguments, non-negative small `repeat` counts, decimal `toString`),
@@ -652,8 +859,7 @@ pub fn gen_stage3_text_math_program(data: &[u8]) -> String {
 
 /// Structure-aware generator for the **stage-3b json-metering** surface:
 /// `JSON.stringify` over a structured (object/array) value built recursively
-/// from primitives, objects, and arrays — every emitted program bit-exact
-/// (serialized value AND computron) against the pin. Draws only the raw-clean
+/// from primitives, objects, and arrays — every emitted program result-gated on the serialized value (XS cost drift advisory) against the pin. Draws only the raw-clean
 /// subset: numeric/boolean/null/ASCII-string leaves, string keys, and bounded
 /// depth/breadth, avoiding the self-named corners (callable values,
 /// `toJSON`/wrapper objects, a replacer/space argument). Depth and breadth are
@@ -714,8 +920,7 @@ pub fn gen_json_structured_program(data: &[u8]) -> String {
 
 /// Structure-aware generator for the **stage-3b json-metering** parse surface:
 /// `JSON.parse(text)` over well-formed JSON text built recursively from
-/// primitives, arrays, and objects — every emitted program bit-exact (result
-/// AND computron) against the pin. The JSON is emitted as a JS double-quoted
+/// primitives, arrays, and objects — every emitted program result-gated (XS cost drift advisory) against the pin. The JSON is emitted as a JS double-quoted
 /// string literal (the parser reads its bytes); depth/breadth can go deeper than
 /// the stringify arm because the argument is a single string literal, not a
 /// nested object literal (so the object-literal construction drift is absent).
@@ -770,8 +975,7 @@ pub fn gen_json_parse_program(data: &[u8]) -> String {
 
 /// Structure-aware generator for the **stage-3b promises** surface: a
 /// fulfilled resolution chain over `Promise`, its `resolve` static, and
-/// `then`/`catch`, driven to the pump-loop drain — bit-exact (result AND
-/// computron) against the pin. A source promise (`Promise.resolve(n)`, a
+/// `then`/`catch`, driven to the pump-loop drain — result-gated (XS cost drift advisory) against the pin. A source promise (`Promise.resolve(n)`, a
 /// `new Promise` whose executor synchronously resolves, or a never-settling
 /// pending promise) is followed by a bounded chain of reactions; each handler
 /// is either an assignment to the observed variable `x`, an integer return
@@ -785,7 +989,7 @@ pub fn gen_json_parse_program(data: &[u8]) -> String {
 /// `mxMeter` site in `xsPromise.c`, whose per-entry cost grows with the
 /// unhandled-list length) never fires more than the single-entry case the
 /// constants absorb. Rejection routing (`then(undefined, h)` / `catch`) is
-/// covered bit-exact by the curated corpus, which bounds it to a single
+/// covered by the curated corpus, which bounds it to a single
 /// rejection. Rides the full symbol-linking differential check.
 pub fn gen_stage3b_promise_program(data: &[u8]) -> String {
     let mut b = Bytes::new(data);
@@ -945,7 +1149,7 @@ pub fn gen_stage3_for_in_program(data: &[u8]) -> String {
 }
 
 /// Structure-aware generator for the **re-entrant `Array.prototype.forEach`** —
-/// the callback-taking method driven bit-exactly by `run_callback`. Builds a
+/// the callback-taking method driven through `run_callback`. Builds a
 /// dense array and a `forEach` whose callback accumulates over an outer
 /// closed-over variable (`+`/`-`/`*`, overflow-safe), observing the result.
 /// Rides the full symbol-linking differential check.
@@ -1009,8 +1213,7 @@ pub fn gen_stage3_reentrant_program(data: &[u8]) -> String {
 
 /// Structure-aware generator for the **stage-3b keyed-collection iteration**
 /// surface — Map/Set `forEach`, `entries`/`keys`/`values` iterators, and
-/// `for-of` / spread over a Map or Set, every emitted program bit-exact (result
-/// AND computron) against the pin. Builds a small Map or Set of distinct small
+/// `for-of` / spread over a Map or Set, every emitted program result-gated (XS cost drift advisory) against the pin. Builds a small Map or Set of distinct small
 /// integer entries (so the covered `SameValueZero` / allocation path is
 /// exercised without a mid-iteration mutation), then draws one observation:
 /// a `forEach` accumulation, a stepped iterator, a `for-of` reduce/count, or a
@@ -1122,8 +1325,7 @@ fn bigint_operand(b: &mut Bytes) -> String {
 /// (same-type only — a mixed BigInt/Number arithmetic op is a TypeError, so it
 /// is deliberately never generated), unary minus, strict/loose equality
 /// (including BigInt-vs-Number `==`/`!=`), both-BigInt relational order,
-/// `typeof`, and decimal rendering — every form bit-exact (result AND
-/// computron). Rides the plain [`differential_check`] (no built-in symbol
+/// `typeof`, and decimal rendering — every form result-gated (XS cost drift advisory). Rides the plain [`differential_check`] (no built-in symbol
 /// references appear). Composes an accumulation chain so the digit-step and
 /// allocation metering ride the hot path.
 pub fn gen_stage3_bigint_program(data: &[u8]) -> String {
@@ -1184,8 +1386,7 @@ pub fn gen_stage3_bigint_program(data: &[u8]) -> String {
 }
 
 /// Stage-3b binary-data grammar (child 3/9): the ArrayBuffer construct +
-/// `byteLength` accessor surface that is **bit-exact** (result AND
-/// computron) against XS. Every arm builds `new ArrayBuffer(n)` over a
+/// `byteLength` accessor surface that is **result-gated** (XS cost drift advisory) against XS. Every arm builds `new ArrayBuffer(n)` over a
 /// spread of byte lengths (so the 8-byte chunk-alignment boundary is
 /// crossed) and reads `.byteLength`, exercising the constant native frame
 /// plus the `fxNewChunk(n)` backing store. Rides the full symbol-linking
@@ -1318,11 +1519,11 @@ pub fn gen_stage3b_binary_program(data: &[u8]) -> String {
 }
 
 /// Stage-3b fundamentals-followup grammar (child 4/9): the post-arrays
-/// fundamentals surfaces that are **bit-exact** (result AND computron) vs
+/// fundamentals surfaces that are **result-gated** (XS cost drift advisory) vs
 /// XS — a user function's `.length`/`.name`, `Function.prototype.bind`
 /// (create + call), `Function.prototype.apply` with a dense array,
 /// `Symbol.prototype.toString`/`String(symbol)`/`Symbol.for`/`keyFor`, and
-/// `AggregateError`. Every arm is a valid, always-bit-exact program (the
+/// `AggregateError`. Every arm is a valid, always-covered program (the
 /// honest-skip corners — `new boundFn`, a primitive `this`, a sparse array,
 /// a non-array apply argument, a bound-of-bound *call* — are deliberately not
 /// generated). Rides [`differential_check_with_symbols`] (the built-ins and
@@ -1425,7 +1626,7 @@ pub fn gen_stage3b_fundamentals_followup_program(data: &[u8]) -> String {
         // the target (dispatch the target with the bound this/args prepended),
         // NOT re-execute the program from pc 0 (the whole-program-from-pc-0
         // abort / divergent completion this arm regresses). Emits the
-        // bit-exact callback-driving Array-method sites over a bound callback,
+        // covered callback-driving Array-method sites over a bound callback,
         // with 0 or 1 bound leading args.
         8 => {
             let bound_list = if b.choice(2) == 0 {
@@ -1502,7 +1703,7 @@ pub fn gen_stage3b_object_statics_program(data: &[u8]) -> String {
         .copied();
     let absent_key = ABSENT[(b.next() as usize) % ABSENT.len()];
     // Genuinely-novel names (absent from XS's boot key table AND the literal)
-    // — a computed read/`hasOwnProperty` of one is bit-exact `undefined`/false,
+    // — a computed read/`hasOwnProperty` of one is exactly `undefined`/false,
     // interning exactly one key slot. A boot default key (`toString`, …) read
     // by a *computed* key self-names (ironhorse cannot tell an unlinked inherited
     // built-in from an absent own), so the computed-access arms draw only from
@@ -1571,7 +1772,7 @@ pub fn gen_stage3b_object_statics_program(data: &[u8]) -> String {
             None => format!("var o={}; var k=\"{}\"; typeof o[k]", obj, novel_key),
         },
         // Computed string member read of a genuinely-novel key: interns one
-        // key slot and reads bit-exact `undefined` (absent-own, no inherited).
+        // key slot and reads exactly `undefined` (absent-own, no inherited).
         8 => format!("var o={}; var k=\"{}\"; typeof o[k]", obj, novel_key),
         // `key in o` for a present key ⇒ `true` (an own-hit chain walk).
         9 => match present_key {
@@ -1634,57 +1835,63 @@ pub struct Divergence {
     pub detail: String,
 }
 
-/// Whether two completion result strings denote the same guest value.
+/// The one decision every differential body makes before comparing anything:
+/// does ironhorse's halt take the run out of the comparison, and in which
+/// direction?
 ///
-/// Byte-identical strings agree. Beyond that, a **Number** completion is
-/// compared by its IEEE-754 double rather than its decimal spelling. XS's
-/// `fx_dtoa` renders some large integer-valued doubles in a non-shortest,
-/// exact-integer form — finding `d99d263fcf6ca7a7` reproduced
-/// `327155712 * ((327155712 * (729808896 % 603979776)) % 729808896)`, whose
-/// value is the exactly-representable double `57632001481506816`, which XS
-/// prints verbatim (17 digits). ironhorse — like V8/SpiderMonkey and
-/// ECMA-262 §6.1.6.1.20's "k is as small as possible" — prints the *shortest*
-/// round-tripping decimal, `57632001481506820` (16 digits). Both spellings
-/// parse back to the identical double, so the two engines computed the same
-/// value and disagree only on rendering; forcing byte-identity would make
-/// ironhorse reproduce XS's non-shortest, non-conformant rendering.
+/// * [`Halt::NotImplemented`] or `Halt::Refused` with a label registered in
+///   its matching category is skip-eligible
+///   halt (`Some(Ok(()))`): the engine declined an unported opcode, built-in,
+///   or value shape, so the program is uncovered ground, not a finding. The
+///   exemption is granted by that allowlist, not by the halt: an `Unsupported`
+///   whose label is not registered is a divergence (`Some(Err(_))`), so the
+///   engine cannot widen its own exemption by reaching for a new string.
+/// * [`Halt::EngineInvariant`] is **never** skip-eligible (`Some(Err(_))`):
+///   one of the interpreter's own guards (a value-stack or frame underflow, a
+///   suspended instance with no frame, an unrecognized resolving function)
+///   fired on bytecode the oracle compiled and ran. That is a defect in the
+///   port whatever the oracle then did — it is reported even when the oracle
+///   also aborted, where the completion comparison alone would agree, and it
+///   is reported before the oracle's truncated-result carve-out, which is
+///   about the oracle's capture buffer and says nothing about the engine.
+/// * Anything else (`None`) proceeds to the completion / result comparison (XS cost drift is advisory).
 ///
-/// Comparing the parsed doubles suppresses that spurious spelling divergence
-/// while still flagging every genuine value divergence: two *different*
-/// doubles never share a parse (a decimal string parses to exactly one
-/// nearest double), so `a.to_bits() == b.to_bits()` fails the moment the
-/// engines actually computed different numbers.
-fn results_agree(oracle: &str, ironhorse: &str) -> bool {
-    if oracle == ironhorse {
-        return true;
+/// [`Halt::NotImplemented`]: ironhorse_vm::Halt::NotImplemented
+/// [`Halt::EngineInvariant`]: ironhorse_vm::Halt::EngineInvariant
+fn halt_precheck(source: &str, halt: &ironhorse_vm::Halt) -> Option<Result<(), Divergence>> {
+    match halt {
+        ironhorse_vm::Halt::Panic(ironhorse_vm::PanicKind::EngineFault { message, .. }) => {
+            Some(Err(Divergence {
+                source: source.to_string(),
+                detail: format!("engine fault: {message}"),
+            }))
+        }
+        ironhorse_vm::Halt::NotImplemented(label)
+            if ironhorse_vm::halt_labels::is_not_implemented_label(label) =>
+        {
+            Some(Ok(()))
+        }
+        ironhorse_vm::Halt::Refused(label)
+            if ironhorse_vm::halt_labels::is_refused_label(label) =>
+        {
+            Some(Ok(()))
+        }
+        ironhorse_vm::Halt::NotImplemented(label) | ironhorse_vm::Halt::Refused(label) => {
+            Some(Err(Divergence {
+                source: source.to_string(),
+                detail: format!("unregistered declined label: {label}"),
+            }))
+        }
+        ironhorse_vm::Halt::EngineInvariant(label) => Some(Err(Divergence {
+            source: source.to_string(),
+            detail: format!("engine invariant violated: {label}"),
+        })),
+        _ => None,
     }
-    match (as_ecma_number(oracle), as_ecma_number(ironhorse)) {
-        (Some(a), Some(b)) => a.to_bits() == b.to_bits(),
-        _ => false,
-    }
-}
-
-/// Parse a completion string as the ECMAScript `String()` of a finite
-/// Number, or `None` when it is not a plain decimal Number spelling — so
-/// `"Infinity"`, `"NaN"`, booleans, and string results fall through to the
-/// byte comparison in [`results_agree`] (and `Infinity`/`NaN` already match
-/// byte-for-byte anyway). The character allow-list is what keeps Rust's
-/// float parser from accepting `inf`/`nan`/`infinity`, which JS never prints.
-fn as_ecma_number(s: &str) -> Option<f64> {
-    if s.is_empty() {
-        return None;
-    }
-    if !s
-        .bytes()
-        .all(|b| b.is_ascii_digit() || matches!(b, b'+' | b'-' | b'.' | b'e' | b'E'))
-    {
-        return None;
-    }
-    s.parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
 /// Target 1 body: run `source` on both engines, returning `Err` on any
-/// completion / result / computron divergence. `Ok(())` also covers the
+/// completion / result divergence. XS computrons are advisory. `Ok(())` also covers the
 /// legitimate "ironhorse reached an opcode outside the stage-1 subset" case
 /// (a generated program using an unimplemented feature is not a
 /// correctness bug), which keeps the target honest about scope.
@@ -1695,58 +1902,67 @@ pub fn differential_check(source: &str) -> Result<(), Divergence> {
     };
     let ironhorse = run_program(&oracle.bytecode);
 
-    // Out-of-subset opcode: not a divergence, just uncovered ground.
-    if let ironhorse_vm::Halt::Unsupported(_) = ironhorse.halt {
-        return Ok(());
+    // Out-of-subset opcode: not a divergence, just uncovered ground. An
+    // engine-invariant halt is the opposite: a finding before any comparison.
+    if let Some(verdict) = halt_precheck(source, &ironhorse.halt) {
+        return verdict;
     }
 
-    if oracle.completed != ironhorse.completed {
-        return Err(Divergence {
-            source: source.to_string(),
-            detail: format!(
-                "completion: oracle={} ironhorse={} (halt {:?})",
-                oracle.completed, ironhorse.completed, ironhorse.halt
-            ),
-        });
-    }
-    if oracle.completed {
-        if !results_agree(&oracle.result, &ironhorse.result) {
-            return Err(Divergence {
-                source: source.to_string(),
-                detail: format!(
-                    "result: oracle={:?} ironhorse={:?}",
-                    oracle.result, ironhorse.result
-                ),
-            });
-        }
-        if oracle.computrons != ironhorse.computrons {
-            return Err(Divergence {
-                source: source.to_string(),
-                detail: format!(
-                    "computrons: oracle={} ironhorse={}",
-                    oracle.computrons, ironhorse.computrons
-                ),
-            });
-        }
-    }
-    Ok(())
+    compare_observations(
+        (oracle.completed, &oracle.result, oracle.computrons),
+        (ironhorse.completed, &ironhorse.result, ironhorse.computrons),
+    )
+    .map(|_computron_advisory| ())
+    .map_err(|detail| Divergence {
+        source: source.into(),
+        detail,
+    })
 }
 
 /// Differential check that **links the program's symbol table** before
-/// running on ironhorse (`run_program_with_symbols`), the full result+computron
-/// comparison. Required for any grammar whose bytecode references a named
+/// running on ironhorse (`run_program_with_symbols`), comparing observable
+/// results and independently checking armed/unarmed meter consistency. Required for any grammar whose bytecode references a named
 /// property or intrinsic the engine must recognize by name — the stage-3
 /// arrays surface needs it so `length` routes to the array length semantics
 /// (a bare [`differential_check`] runs without symbols, where `arr.length`
 /// would be read as an ordinary numeric-id property and diverge).
 pub fn differential_check_with_symbols(source: &str) -> Result<(), Divergence> {
+    differential_check_symbols_mode(source)
+}
+
+/// Compatibility entry point for existing fuzz targets. All symbol-linked
+/// families use the same semantics and armed/unarmed checks; XS computron
+/// equality cannot gate an IronHorse cost-table recalibration.
+pub fn differential_check_meter_v4(source: &str) -> Result<(), Divergence> {
+    differential_check_with_symbols(source)
+}
+
+fn differential_check_symbols_mode(source: &str) -> Result<(), Divergence> {
     let oracle = match xs_oracle::run(source) {
         Some(o) => o,
         None => return Ok(()),
     };
     let ironhorse = ironhorse_vm::run_program_with_symbols(&oracle.bytecode, &oracle.symbols);
-    if let ironhorse_vm::Halt::Unsupported(_) = ironhorse.halt {
-        return Ok(());
+    {
+        let mut armed = ironhorse_vm::Interp::new();
+        armed.link_intrinsics(&ironhorse_vm::parse_symbols(&oracle.symbols));
+        armed.arm_meter(1, Box::new(|_| true));
+        let outcome = armed.run(&oracle.bytecode).host_coerced();
+        if outcome.completed != ironhorse.completed
+            || outcome.halt != ironhorse.halt
+            || outcome.result != ironhorse.result
+            || outcome.meter_raw != ironhorse.meter_raw
+        {
+            return Err(Divergence {
+                source: source.into(),
+                detail: format!(
+                    "armed/unarmed disagreement: armed={outcome:?} unarmed={ironhorse:?}"
+                ),
+            });
+        }
+    }
+    if let Some(verdict) = halt_precheck(source, &ironhorse.halt) {
+        return verdict;
     }
     // The oracle captures the completion value into a fixed-size buffer; when
     // the value is longer than that buffer, `oracle.result` is a truncated
@@ -1758,42 +1974,20 @@ pub fn differential_check_with_symbols(source: &str) -> Result<(), Divergence> {
     if oracle.result_truncated {
         return Ok(());
     }
-    if oracle.completed != ironhorse.completed {
-        return Err(Divergence {
-            source: source.to_string(),
-            detail: format!(
-                "completion: oracle={} ironhorse={} (halt {:?})",
-                oracle.completed, ironhorse.completed, ironhorse.halt
-            ),
-        });
-    }
-    if oracle.completed {
-        if !results_agree(&oracle.result, &ironhorse.result) {
-            return Err(Divergence {
-                source: source.to_string(),
-                detail: format!(
-                    "result: oracle={:?} ironhorse={:?}",
-                    oracle.result, ironhorse.result
-                ),
-            });
-        }
-        if oracle.computrons != ironhorse.computrons {
-            return Err(Divergence {
-                source: source.to_string(),
-                detail: format!(
-                    "computrons: oracle={} ironhorse={}",
-                    oracle.computrons, ironhorse.computrons
-                ),
-            });
-        }
-    }
-    Ok(())
+    compare_observations(
+        (oracle.completed, &oracle.result, oracle.computrons),
+        (ironhorse.completed, &ironhorse.result, ironhorse.computrons),
+    )
+    .map(|_computron_advisory| ())
+    .map_err(|detail| Divergence {
+        source: source.into(),
+        detail,
+    })
 }
 
 /// Differential check for the **stage-2 allocating surface**: compares
-/// completion kind and result string, but not computrons, which are not
-/// yet bit-exact while run-time slot/chunk allocation metering awaits
-/// the faithful heap (`ironhorse_vm::interp` § Metering scope). A result or
+/// completion kind and result string, never computrons (XS cost drift is
+/// advisory everywhere — XS-computron parity is a non-goal). A result or
 /// completion divergence on a valid generated program is still a real
 /// finding — the frame/scope/loop semantics must match XS.
 pub fn differential_check_result_only(source: &str) -> Result<(), Divergence> {
@@ -1802,8 +1996,8 @@ pub fn differential_check_result_only(source: &str) -> Result<(), Divergence> {
         None => return Ok(()),
     };
     let ironhorse = run_program(&oracle.bytecode);
-    if let ironhorse_vm::Halt::Unsupported(_) = ironhorse.halt {
-        return Ok(());
+    if let Some(verdict) = halt_precheck(source, &ironhorse.halt) {
+        return verdict;
     }
     // A completion value longer than the oracle's fixed capture buffer is a
     // truncated prefix on the oracle side; comparing it against the port's
@@ -1831,6 +2025,170 @@ pub fn differential_check_result_only(source: &str) -> Result<(), Divergence> {
         });
     }
     Ok(())
+}
+
+/// A structure-aware generator, as a plain function pointer so the roster
+/// below can be a `const` table rather than a `match` that drifts.
+type GenFn = fn(&[u8]) -> String;
+/// The differential check a generated surface admits.
+///
+/// Today this distinguishes exactly one entry: `differential_check` compares
+/// computrons bit-for-bit as well as results, and the bigint arm is the only
+/// roster member that admits it. `differential_check_with_symbols` and
+/// `differential_check_meter_v4` are currently the same function under two
+/// names, so the other eighteen entries run one check spelled two ways. The
+/// pairing is still worth carrying per entry: it records which bar each
+/// surface is claimed to meet, and the names diverge again the moment
+/// `meter_v4` does.
+type CheckFn = fn(&str) -> Result<(), Divergence>;
+
+/// **The stage-3 roster**: every structure-aware generator in the crate,
+/// paired with the differential check its surface admits.
+///
+/// This table exists so the generators have a libFuzzer lane at all. Before
+/// it, seventeen of the crate's generators were driven only by the fixed
+/// deterministic seed sweeps in the test module below — real oracle
+/// differential coverage, but no coverage-guided mutation, no persistent
+/// corpus, and no nightly lane (F040). A sweep finds what its seeds happen
+/// to reach; a fuzzer searches.
+///
+/// Two tests hold the roster honest: one sweeps every entry through its own
+/// check so a mispaired (too strong) check fails loudly, and one scans this
+/// file's own source so a generator added without a roster entry fails
+/// rather than silently keeping its sweep-only coverage.
+pub const STAGE3_SURFACES: &[(&str, GenFn, CheckFn)] = &[
+    (
+        "gen_stage3_arrays_program",
+        gen_stage3_arrays_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_stage3_array_methods_program",
+        gen_stage3_array_methods_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_stage3_array_iterators_program",
+        gen_stage3_array_iterators_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_stage3_for_of_program",
+        gen_stage3_for_of_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_stage3_string_for_of_program",
+        gen_stage3_string_for_of_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_code_unit_string_program",
+        gen_code_unit_string_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_stage3_text_math_program",
+        gen_stage3_text_math_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_json_structured_program",
+        gen_json_structured_program,
+        differential_check_meter_v4,
+    ),
+    (
+        "gen_json_parse_program",
+        gen_json_parse_program,
+        differential_check_meter_v4,
+    ),
+    (
+        "gen_stage3b_promise_program",
+        gen_stage3b_promise_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_stage3b_regexp_program",
+        gen_stage3b_regexp_program,
+        differential_check_meter_v4,
+    ),
+    (
+        "gen_stage3_spread_program",
+        gen_stage3_spread_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_stage3_reentrant_program",
+        gen_stage3_reentrant_program,
+        differential_check_meter_v4,
+    ),
+    (
+        "gen_stage3_collections_program",
+        gen_stage3_collections_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_stage3_bigint_program",
+        gen_stage3_bigint_program,
+        differential_check,
+    ),
+    (
+        "gen_stage3b_binary_program",
+        gen_stage3b_binary_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_stage3b_fundamentals_followup_program",
+        gen_stage3b_fundamentals_followup_program,
+        differential_check_meter_v4,
+    ),
+    (
+        "gen_stage3b_object_statics_program",
+        gen_stage3b_object_statics_program,
+        differential_check_meter_v4,
+    ),
+    (
+        "gen_stage3_for_in_program",
+        gen_stage3_for_in_program,
+        differential_check_with_symbols,
+    ),
+];
+
+/// The stage-3 surface target body: the first byte selects a surface from
+/// [`STAGE3_SURFACES`] and the rest drives that surface's generator, so one
+/// libFuzzer target covers the whole roster and the fuzzer can learn which
+/// selector byte reaches which grammar.
+pub fn stage3_surface_differential(data: &[u8]) -> Result<(), Divergence> {
+    let Some((&selector, body)) = data.split_first() else {
+        return Ok(());
+    };
+    let (_, generate, check) = STAGE3_SURFACES[selector as usize % STAGE3_SURFACES.len()];
+    check(&generate(body))
+}
+
+/// The surface name a given input selects, for a trophy's report.
+pub fn stage3_surface_name(data: &[u8]) -> &'static str {
+    match data.split_first() {
+        None => "none",
+        Some((&selector, _)) => STAGE3_SURFACES[selector as usize % STAGE3_SURFACES.len()].0,
+    }
+}
+
+/// Assert the XS oracle actually starts.
+///
+/// Every `differential_check*` in this crate returns `Ok(())` when
+/// `xs_oracle::run` yields `None` — the oracle machine failed to start,
+/// which is a harness condition rather than an agreement. That is the right
+/// behaviour for a fuzz target, which must not report a trophy because a
+/// submodule is missing, but it means a sweep that counts non-divergences
+/// counts oracle no-starts as passes: a tree with no `c/moddable` checkout
+/// would run the whole corpus, compare nothing, and go green.
+///
+/// One test calling this closes the class for the whole crate. If the oracle
+/// cannot start, THAT test fails and every other sweep's silence is
+/// explained; without it the silence reads as agreement.
+pub fn oracle_is_live() -> bool {
+    xs_oracle::run("1 + 1").is_some_and(|o| o.completed && o.result == "2")
 }
 
 /// A dispatch-count ceiling for the decoder fuzz harness. The un-metered
@@ -1872,7 +2230,8 @@ pub fn decoder_is_panic_free(bytes: &[u8]) -> usize {
 //    a panic. Totality of the parser is the invariant the whole compiler
 //    (scoper, coder) and the differential target below lean on.
 //  - **Compile differential** ([`compile_differential_check`]): the same
-//    source through `ironhorse_compile::compile` and the XS oracle compiler,
+//    source through `ironhorse_compile::compile_with` (the eval-goal entry,
+//    the goal the oracle shim compiles) and the XS oracle compiler,
 //    comparing accept/reject agreement and — on accepts — byte identity.
 //    An oracle process crash (`run` returns `None`) is a NAMED outcome
 //    ([`CompileFuzzOutcome::OracleUnavailable`]), not a harness abort.
@@ -1949,8 +2308,13 @@ pub fn compile_differential_check(source: &str) -> CompileFuzzOutcome {
 
     // The coder still `panic!`s on unported constructs; catch it so a fold
     // is a named rejection, not a fuzzer abort.
+    // The eval-goal entry: the oracle shim compiles every source with the
+    // `eval` builtin's flags, so this is the entry its bytes are identical
+    // to. ironhorse's Script goal (`compile`) knowingly hoists a strict
+    // program's top-level `var`/function declarations to the global object
+    // (see `ironhorse_compile::Goal`), which is not a byte finding.
     let ironhorse = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ironhorse_compile::compile(source)
+        ironhorse_compile::compile_with(source, false)
     }));
     let ironhorse_bytes: Option<Vec<u8>> = match &ironhorse {
         Ok(Ok(b)) => Some(b.clone()),
@@ -1988,6 +2352,77 @@ pub fn compile_differential_check(source: &str) -> CompileFuzzOutcome {
 mod tests {
     use super::*;
 
+    /// The discard decision every differential body makes first: a declined
+    /// (`NotImplemented` or `Refused`) halt is an honest skip; an engine-invariant halt
+    /// is a finding before any comparison, so it cannot hide behind an
+    /// oracle that also aborted; everything else goes on to be compared.
+    #[test]
+    fn halt_precheck_skips_only_declined_halts() {
+        use ironhorse_vm::Halt;
+        // A registered declined label (a literal, a helper's label, an opcode
+        // mnemonic) is the honest skip; an unregistered one is a finding.
+        for label in ["eval:no-compiler", "native-call:Proxy", "call"] {
+            assert!(
+                matches!(
+                    halt_precheck("1", &Halt::NotImplemented(label)),
+                    Some(Ok(()))
+                ),
+                "{label} is registered and must skip"
+            );
+        }
+        match halt_precheck("1", &Halt::NotImplemented("sneak:new-exemption")) {
+            Some(Err(divergence)) => assert_eq!(
+                divergence.detail,
+                "unregistered declined label: sneak:new-exemption"
+            ),
+            other => panic!("an unregistered label must be a divergence, got {other:?}"),
+        }
+        assert!(matches!(
+            halt_precheck("1", &Halt::Refused("property-key:id-space-exhausted")),
+            Some(Ok(()))
+        ));
+        for wrong in [
+            Halt::NotImplemented("property-key:id-space-exhausted"),
+            Halt::Refused("eval:no-compiler"),
+            Halt::Refused("sneak:new-exemption"),
+        ] {
+            assert!(
+                matches!(halt_precheck("1", &wrong), Some(Err(_))),
+                "{wrong:?}"
+            );
+        }
+        // This precheck precedes completion comparisons: even a source that
+        // the oracle also aborts cannot excuse an internal Rust defect.
+        let fault = Halt::Panic(ironhorse_vm::PanicKind::EngineFault {
+            message: "synthetic defect".into(),
+            location: None,
+        });
+        assert!(matches!(halt_precheck("throw 1", &fault), Some(Err(_))));
+        match halt_precheck("1", &Halt::EngineInvariant("add:stack-underflow")) {
+            Some(Err(divergence)) => {
+                assert_eq!(divergence.source, "1");
+                assert_eq!(
+                    divergence.detail,
+                    "engine invariant violated: add:stack-underflow"
+                );
+            }
+            other => panic!("engine invariant must be a divergence, got {other:?}"),
+        }
+        for halt in [
+            Halt::Return,
+            Halt::synthetic_throw("TypeError"),
+            Halt::MeterAbort,
+            Halt::StepLimit(1),
+            Halt::StackOverflow(1),
+            Halt::Decode(ironhorse_vm::DecodeError::ProgramCounterOutOfBounds { pc: 0, len: 0 }),
+        ] {
+            assert!(
+                halt_precheck("1", &halt).is_none(),
+                "{halt:?} must proceed to the comparison"
+            );
+        }
+    }
+
     /// Regression for continuous-fuzz finding `66facfd52ae8c673` (target
     /// `differential_source`). The exact 3-byte minimized input folds into
     /// arithmetic whose result is the exactly representable double
@@ -1998,16 +2433,12 @@ mod tests {
     /// must suppress the false divergence.
     #[test]
     fn finding_66facfd52ae8c673_large_integer_dtoa_agrees() {
-        let data: &[u8] = include_bytes!(
-            "../tests/fixtures/finding-66facfd52ae8c673.input.bin"
-        );
-        assert_eq!(
-            data.len(),
-            3,
-            "the minimized finding remains exactly three bytes"
-        );
-
-        let program = gen_program(data);
+        // Input: tests/fixtures/finding-66facfd52ae8c673.input.bin (3 bytes).
+        // The PROGRAM those bytes folded to under the generator of the
+        // day is the durable lock; making the generator cursor finite
+        // (F040) re-folds the input, while the divergence lives in the
+        // program text.
+        let program = r#"((((226492416 + 25.27) << (838860800 << 226492416)) * ((226492416 + 25.27) << (838860800 << 226492416))) + (((25.27 * 25.27) + (838860800 << 226492416)) << ((226492416 + 25.27) << (838860800 << 226492416))))"#.to_string();
         match differential_check(&program) {
             Ok(()) => {}
             Err(divergence) => panic!(
@@ -2031,11 +2462,13 @@ mod tests {
     fn finding_d99d263fcf6ca7a7_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // 749f2021f82cf2664d886690b5e87184f084e600df531f9ab232e3f64e09a4f9).
-        let data: &[u8] = &[0x2d, 0x57, 0x27, 0x48, 0x86];
-        let prog = gen_program(data);
-        // Confirm we are still exercising the finding: the generated program
-        // is the large-integer arithmetic whose value overflows 2^53.
-        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        // Input: [0x2d, 0x57, 0x27, 0x48, 0x86]
+        // The PROGRAM the minimized fuzz input above folded to under the
+        // generator of the day. The program is the lock, not the bytes:
+        // making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in
+        // the program text and is independent of how it was reached.
+        let prog = r#"((729808896 && (729808896 && (-83 && 327155712))) * (((-83 && 327155712) * (729808896 % 603979776)) % 729808896))"#.to_string();
         match differential_check(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding d99d263fcf6ca7a7 must not diverge: {:?}", d),
@@ -2059,14 +2492,46 @@ mod tests {
     fn finding_314f811064b8febb_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // 4f6dc01326c7629a715a037a135e47010efe913a121ae02b43846601c850a1a5).
-        let data: &[u8] = &[0x75, 0x6c, 0x74, 0x7b, 0x2d];
-        let prog = gen_program(data);
-        // Confirm we are still exercising the finding: the generated program
-        // is the large-magnitude division chain whose value overflows 2^53.
-        assert!(prog.contains('/'), "finding program is a division chain: {}", prog);
+        // Input: [0x75, 0x6c, 0x74, 0x7b, 0x2d]
+        // The PROGRAM the minimized fuzz input above folded to under the
+        // generator of the day. The program is the lock, not the bytes:
+        // making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in
+        // the program text and is independent of how it was reached.
+        let prog = r#"(377487360 / (377487360 / (377487360 / (-5 / 981467136))))"#.to_string();
         match differential_check(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 314f811064b8febb must not diverge: {:?}", d),
+        }
+    }
+
+    /// Regression for the CI tripwire crash of 2026-09-18 (target
+    /// `differential_source`, artifact
+    /// `crash-7fc45770f3c4e8e481b84f9caca3f0a5408c319b`, 101 bytes).
+    ///
+    /// NOT the rendering-only class the neighbours above pin, and not the
+    /// one-ulp ARITHMETIC divergence it first looks like. Both engines computed
+    /// the SAME double: byte-identical IEEE-754
+    /// (`247,255,255,255,255,199,102,195`), and both answer `true` to
+    /// `expr === -51298814505516984`.
+    ///
+    /// XS rendered `-51298814505516980`, which is the exact midpoint between
+    /// that double and its neighbour `-51298814505516976`. Its mantissa is odd,
+    /// so ties-to-even reads that spelling back as the neighbour and
+    /// `results_agree` saw two different doubles. The cause is `ROUND_BIASED`
+    /// (`xsdtoa.c:56`), which lets XS accept a boundary spelling whatever the
+    /// parity and read it back by rounding up --
+    /// `ironhorse-vm/tests/oracle_dtoa_round_trip_divergence.rs` characterises
+    /// the class. `results_agree` now treats a boundary spelling as ambiguous,
+    /// which is what it is.
+    #[test]
+    fn finding_7fc45770f3c4e8e4_biased_tie_spelling_agrees() {
+        // The PROGRAM the crash input folded to under the generator of the
+        // day, which is the durable lock rather than the bytes.
+        let prog = r#"(-(((((-70 || 26) + (true - true)) + ((true - true) - (true - true))) + (((true - true) - (true - true)) - ((0 + 1) - (226492416 * 226492416)))) + ((((226492416 * 226492416) * (226492416 * 2088763392)) * (!(226492416 || 226492416))) * (((false ^ 176160768) + (true + 104)) * (~(true % 1.44))))))"#.to_string();
+        match differential_check(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 7fc45770f3c4e8e4 must not diverge: {:?}", d),
         }
     }
 
@@ -2085,11 +2550,13 @@ mod tests {
     fn finding_5c29667cc15d6d93_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // 203db557fe4893accc7f29b36e0fc723551a7494f0c33a65e809ec88045449e2).
-        let data: &[u8] = &[0xe1, 0x1b, 0xdc, 0xdc, 0xdc];
-        let prog = gen_program(data);
-        // Confirm we are still exercising the finding: the generated program
-        // is the large-integer product whose value overflows 2^53.
-        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        // Input: [0xe1, 0x1b, 0xdc, 0xdc, 0xdc]
+        // The PROGRAM the minimized fuzz input above folded to under the
+        // generator of the day. The program is the lock, not the bytes:
+        // making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in
+        // the program text and is independent of how it was reached.
+        let prog = r#"((-(-(-226492416))) * (-(-(-226492416))))"#.to_string();
         match differential_check(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 5c29667cc15d6d93 must not diverge: {:?}", d),
@@ -2105,15 +2572,20 @@ mod tests {
     /// the identical Number.
     #[test]
     fn finding_67a52af412f03a7b_large_integer_dtoa_agrees() {
-        let data = include_bytes!(
-            "../../ironhorse-vm/tests/fixtures/finding-67a52af412f03a7b-input.bin"
-        );
-        let program = gen_program(data);
-        assert_eq!(program, "(226492416 * 226492416)");
+        // Input: ../../ironhorse-vm/tests/fixtures/finding-67a52af412f03a7b-input.bin
+        // The PROGRAM those bytes folded to under the generator of the day.
+        // The program is the lock, not the bytes: making the generator
+        // cursor finite (F040) re-folds every recorded input, while the
+        // divergence this trophy pins lives in the program text and is
+        // independent of how it was reached.
+        let program = "(226492416 * 226492416)".to_string();
         match differential_check(&program) {
             Ok(()) => {}
             Err(divergence) => {
-                panic!("finding 67a52af412f03a7b must not diverge: {:?}", divergence)
+                panic!(
+                    "finding 67a52af412f03a7b must not diverge: {:?}",
+                    divergence
+                )
             }
         }
     }
@@ -2137,11 +2609,13 @@ mod tests {
     fn finding_7289e31013d074ec_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // 6abb2fe734124222bc19e12518fa968a59f254edea3c9ed262414cb4637c736f).
-        let data: &[u8] = &[0xd8, 0x7f, 0x33, 0xba];
-        let prog = gen_program(data);
-        // Confirm we are still exercising the finding: the generated program
-        // is the large-integer product whose value overflows 2^53.
-        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        // Input: [0xd8, 0x7f, 0x33, 0xba]
+        // The PROGRAM the minimized fuzz input above folded to under the
+        // generator of the day. The program is the lock, not the bytes:
+        // making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in
+        // the program text and is independent of how it was reached.
+        let prog = r#"((~(~(1560281088 * true))) * ((~(1560281088 * true)) << ((~true) << (true << true))))"#.to_string();
         match differential_check(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 7289e31013d074ec must not diverge: {:?}", d),
@@ -2165,11 +2639,13 @@ mod tests {
     fn finding_783be6e6106bad98_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // 95c5064e49e6c191f7f9b8be24270555d12b04c226cbc72c01406e024ff39008).
-        let data: &[u8] = &[0x00, 0x00, 0x66, 0x69, 0x27, 0x44];
-        let prog = gen_program(data);
-        // Confirm we are still exercising the finding: the generated program
-        // is the large-integer product whose value overflows 2^53.
-        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        // Input: [0x00, 0x00, 0x66, 0x69, 0x27, 0x44]
+        // The PROGRAM the minimized fuzz input above folded to under the
+        // generator of the day. The program is the lock, not the bytes:
+        // making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in
+        // the program text and is independent of how it was reached.
+        let prog = r#"((((true + 327155712) && (!true)) || ((~570425344) * (true + 327155712))) + (!((570425344 || true) + (327155712 * -128))))"#.to_string();
         match differential_check(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 783be6e6106bad98 must not diverge: {:?}", d),
@@ -2195,11 +2671,13 @@ mod tests {
     fn finding_284de587e16bce32_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // 05b1ea60cf0ed92291daeb24a160652baaa07e231d88d84f48548d261b517c33).
-        let data: &[u8] = &[0x00, 0xfc, 0x00, 0x01, 0xb1, 0x5d, 0x00, 0x00, 0x00];
-        let prog = gen_program(data);
-        // Confirm we are still exercising the finding: the generated program
-        // is the large-integer product whose value overflows 2^53.
-        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        // Input: [0x00, 0xfc, 0x00, 0x01, 0xb1, 0x5d, 0x00, 0x00, 0x00]
+        // The PROGRAM the minimized fuzz input above folded to under the
+        // generator of the day. The program is the lock, not the bytes:
+        // making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in
+        // the program text and is independent of how it was reached.
+        let prog = r#"(((~(true && true)) - ((780140544 - true) * (true + true))) * ((~(true && true)) - ((780140544 - true) * (true + true))))"#.to_string();
         match differential_check(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 284de587e16bce32 must not diverge: {:?}", d),
@@ -2226,11 +2704,13 @@ mod tests {
     fn finding_7152c1a9960a0688_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // f8b5e31e69a227500b3733aebdfffee49512debf2bb863c825991a4435652bc1).
-        let data: &[u8] = &[0x27, 0x79, 0x00, 0x00, 0x00, 0x57, 0x2d, 0x08];
-        let prog = gen_program(data);
-        // Confirm we are still exercising the finding: the generated program is
-        // the large-integer product whose value overflows 2^53.
-        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        // Input: [0x27, 0x79, 0x00, 0x00, 0x00, 0x57, 0x2d, 0x08]
+        // The PROGRAM the minimized fuzz input above folded to under the
+        // generator of the day. The program is the lock, not the bytes:
+        // making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in
+        // the program text and is independent of how it was reached.
+        let prog = r#"((((1015021568 / true) * (377487360 + -89)) + (-(true + 377487360))) || 1015021568)"#.to_string();
         match differential_check(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 7152c1a9960a0688 must not diverge: {:?}", d),
@@ -2257,11 +2737,14 @@ mod tests {
     fn finding_7277b0fc4a72d8d6_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // 0792c486c29a77190658d061a90fc215ba1777bce94464d104c93a508dc0d08b).
-        let data: &[u8] = &[0x3f, 0xf7, 0xde];
-        let prog = gen_program(data);
-        // Confirm we are still exercising the finding: the generated program
-        // is the large-integer product whose value overflows 2^53.
-        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        // Input: [0x3f, 0xf7, 0xde]
+        // The PROGRAM the minimized fuzz input above folded to under the
+        // generator of the day. The program is the lock, not the bytes:
+        // making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in
+        // the program text and is independent of how it was reached.
+        let prog = r#"((~((~2071986176) * (~2071986176))) * (~((~2071986176) * (~2071986176))))"#
+            .to_string();
         match differential_check(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 7277b0fc4a72d8d6 must not diverge: {:?}", d),
@@ -2279,15 +2762,22 @@ mod tests {
     /// `.source` accessor), already covered by that fix (larger buffer + honest
     /// skip on overflow): the exact finding input must check clean, not diverge.
     #[test]
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
     fn finding_a136f9038a1001fb_regexp_source_agrees() {
         // The exact minimized fuzz input (sha256
         // d3bc62680a221ff9518c4aad6b03787bded65b75091e3b1dd34b1451e7a5835c).
-        let data: &[u8] = &[0x2c, 0x2c, 0x2c, 0xd4, 0x88];
-        let prog = gen_stage3b_regexp_program(data);
-        // Confirm we are still exercising the finding: a RegExp `.source`
-        // accessor whose rendered pattern overflows the old 1023-byte buffer.
-        assert!(prog.ends_with(".source"), "finding program is a RegExp.source: {}", prog);
-        match differential_check_with_symbols(&prog) {
+        // Input: [0x2c, 0x2c, 0x2c, 0xd4, 0x88]
+        // The PROGRAM those bytes folded to under the generator of the day,
+        // kept beside them as the durable lock. The program is the lock, not
+        // the bytes: making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in the
+        // program text and is independent of how it was reached. It is a
+        // fixture rather than a literal because it is over a kilobyte —
+        // which is the point of the trophy.
+        let prog = include_str!("../tests/fixtures/finding-a136f9038a1001fb.program.js")
+            .trim_end()
+            .to_string();
+        match differential_check_meter_v4(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding a136f9038a1001fb must not diverge: {:?}", d),
         }
@@ -2304,20 +2794,22 @@ mod tests {
     /// `493390fc03979205`, already covered by that finding's causal fix (larger
     /// buffer + honest skip on overflow). The exact input must check clean.
     #[test]
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
     fn finding_ab889c8f6184c60d_regexp_source_agrees() {
         // The exact minimized fuzz input (sha256
         // e31b5a31b37ce02cba6b665098b0d9844e248e95e89f252910a4ec2660412e07).
-        let data =
-            include_bytes!("../tests/fixtures/finding-ab889c8f6184c60d.input.bin");
-        let prog = gen_stage3b_regexp_program(data);
-        // Confirm we are still exercising the finding: a RegExp `.source`
-        // accessor whose rendered pattern overflows the old 1023-byte buffer.
-        assert!(
-            prog.ends_with(".source"),
-            "finding program is a RegExp.source: {}",
-            prog
-        );
-        match differential_check_with_symbols(&prog) {
+        // Input: tests/fixtures/finding-ab889c8f6184c60d.input.bin
+        // The PROGRAM those bytes folded to under the generator of the day,
+        // kept beside them as the durable lock. The program is the lock, not
+        // the bytes: making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in the
+        // program text and is independent of how it was reached. It is a
+        // fixture rather than a literal because it is over a kilobyte —
+        // which is the point of the trophy.
+        let prog = include_str!("../tests/fixtures/finding-ab889c8f6184c60d.program.js")
+            .trim_end()
+            .to_string();
+        match differential_check_meter_v4(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding ab889c8f6184c60d must not diverge: {:?}", d),
         }
@@ -2332,17 +2824,22 @@ mod tests {
     /// oracle fix from same-class finding `493390fc03979205` (larger buffer
     /// plus an honest skip on overflow) must keep this distinct input clean.
     #[test]
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
     fn finding_2276f4edebdcb3bb_regexp_source_agrees() {
         // The exact minimized fuzz input (sha256
         // 4f0d6ca037b3a7536fa8e0595f92fd251fbd6aa459d916652f87a3e9f7ad111e).
-        let data =
-            include_bytes!("../tests/fixtures/finding-2276f4edebdcb3bb.input.bin");
-        let program = gen_stage3b_regexp_program(data);
-        assert!(
-            program.ends_with(".source"),
-            "finding program must exercise RegExp.source"
-        );
-        match differential_check_with_symbols(&program) {
+        // Input: tests/fixtures/finding-2276f4edebdcb3bb.input.bin
+        // The PROGRAM those bytes folded to under the generator of the day,
+        // kept beside them as the durable lock. The program is the lock, not
+        // the bytes: making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in the
+        // program text and is independent of how it was reached. It is a
+        // fixture rather than a literal because it is over a kilobyte —
+        // which is the point of the trophy.
+        let program = include_str!("../tests/fixtures/finding-2276f4edebdcb3bb.program.js")
+            .trim_end()
+            .to_string();
+        match differential_check_meter_v4(&program) {
             Ok(()) => {}
             Err(divergence) => {
                 panic!("finding 2276f4edebdcb3bb must not diverge: {divergence:?}")
@@ -2359,39 +2856,27 @@ mod tests {
     /// oracle fix from same-class finding `493390fc03979205` (larger buffer
     /// plus an honest skip on overflow) must keep this distinct input clean.
     #[test]
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
     fn finding_6f0b586a80019097_regexp_source_agrees() {
         // The exact minimized fuzz input (sha256
         // 7637ee2cbd7ed3fbb4ceb06ff0e8fc37f4e64308a503b6f8bb388e2fbf965497).
-        let data =
-            include_bytes!("../tests/fixtures/finding-6f0b586a80019097.input.bin");
-        let program = gen_stage3b_regexp_program(data);
-        assert!(
-            program.ends_with(".source"),
-            "finding program must exercise RegExp.source"
-        );
-        match differential_check_with_symbols(&program) {
+        // Input: tests/fixtures/finding-6f0b586a80019097.input.bin
+        // The PROGRAM those bytes folded to under the generator of the day,
+        // kept beside them as the durable lock. The program is the lock, not
+        // the bytes: making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in the
+        // program text and is independent of how it was reached. It is a
+        // fixture rather than a literal because it is over a kilobyte —
+        // which is the point of the trophy.
+        let program = include_str!("../tests/fixtures/finding-6f0b586a80019097.program.js")
+            .trim_end()
+            .to_string();
+        match differential_check_meter_v4(&program) {
             Ok(()) => {}
             Err(divergence) => {
                 panic!("finding 6f0b586a80019097 must not diverge: {divergence:?}")
             }
         }
-    }
-
-    #[test]
-    fn results_agree_on_equal_doubles_spelled_differently() {
-        // The finding's two renderings of the same double.
-        assert!(results_agree("57632001481506816", "57632001481506820"));
-        // A genuine value divergence is still caught.
-        assert!(!results_agree("57632001481506816", "57632001481506824"));
-        assert!(!results_agree("3", "4"));
-        // Non-numeric completions compare byte-for-byte.
-        assert!(results_agree("true", "true"));
-        assert!(!results_agree("true", "false"));
-        assert!(!results_agree("Infinity", "1e999"));
-        // `Infinity`/`NaN` are not parsed as numbers (they match as strings).
-        assert!(as_ecma_number("Infinity").is_none());
-        assert!(as_ecma_number("NaN").is_none());
-        assert!(as_ecma_number("").is_none());
     }
 
     /// Regression for continuous-fuzz finding `493390fc03979205` (target
@@ -2403,15 +2888,22 @@ mod tests {
     /// (larger buffer + honest skip on overflow) the exact finding input must
     /// check clean, not diverge.
     #[test]
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
     fn finding_493390fc03979205_long_regexp_tostring_agrees() {
         // The exact minimized fuzz input (sha256
         // 450a95b7db1bd744fc94f63a2842714b4e8bf996f97d589fb8aeef172dabbcf7).
-        let data: &[u8] = &[0x08, 0x74, 0x74, 0x2a];
-        let prog = gen_stage3b_regexp_program(data);
-        // Confirm we are still exercising the finding: a RegExp.toString()
-        // whose rendered source overflows the old 1023-byte buffer.
-        assert!(prog.contains(".toString()"), "finding program is a RegExp.toString(): {}", prog);
-        match differential_check_with_symbols(&prog) {
+        // Input: [0x08, 0x74, 0x74, 0x2a]
+        // The PROGRAM those bytes folded to under the generator of the day,
+        // kept beside them as the durable lock. The program is the lock, not
+        // the bytes: making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in the
+        // program text and is independent of how it was reached. It is a
+        // fixture rather than a literal because it is over a kilobyte —
+        // which is the point of the trophy.
+        let prog = include_str!("../tests/fixtures/finding-493390fc03979205.program.js")
+            .trim_end()
+            .to_string();
+        match differential_check_meter_v4(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 493390fc03979205 must not diverge: {:?}", d),
         }
@@ -2428,15 +2920,22 @@ mod tests {
     /// (larger buffer + honest skip on overflow): the exact finding input must
     /// check clean, not diverge.
     #[test]
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
     fn finding_3ea435c58b4c588e_regexp_tostring_agrees() {
         // The exact minimized fuzz input (sha256
         // 9df4e2b4ff1278d84c09d3caad69d47b90401dae21573f6d581a7085716e1638).
-        let data: &[u8] = &[0x8c, 0x8c, 0x8c, 0xa2];
-        let prog = gen_stage3b_regexp_program(data);
-        // Confirm we are still exercising the finding: a RegExp.toString()
-        // whose rendered source overflows the old 1023-byte buffer.
-        assert!(prog.contains(".toString()"), "finding program is a RegExp.toString(): {}", prog);
-        match differential_check_with_symbols(&prog) {
+        // Input: [0x8c, 0x8c, 0x8c, 0xa2]
+        // The PROGRAM those bytes folded to under the generator of the day,
+        // kept beside them as the durable lock. The program is the lock, not
+        // the bytes: making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in the
+        // program text and is independent of how it was reached. It is a
+        // fixture rather than a literal because it is over a kilobyte —
+        // which is the point of the trophy.
+        let prog = include_str!("../tests/fixtures/finding-3ea435c58b4c588e.program.js")
+            .trim_end()
+            .to_string();
+        match differential_check_meter_v4(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 3ea435c58b4c588e must not diverge: {:?}", d),
         }
@@ -2454,16 +2953,33 @@ mod tests {
     /// honest skip on overflow): the exact finding input must check clean, not
     /// diverge.
     #[test]
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
     fn finding_91afec2d990bc402_regexp_source_agrees() {
         // The exact minimized fuzz input (sha256
         // 1e9756cef3b0a9372ae74719ccae857a781982d0e8f656b3b506555534670419).
-        let data: &[u8] = &[0x5c, 0x5c, 0x5c, 0x34];
-        let prog = gen_stage3b_regexp_program(data);
-        // Confirm we are still exercising the finding: a RegExp `.source`
-        // whose rendered value overflows the old 1024-byte buffer.
-        assert!(prog.ends_with(".source"), "finding program is a RegExp.source: {}", prog);
-        assert!(prog.len() > 1024, "finding program overflows the old buffer: {}", prog.len());
-        match differential_check_with_symbols(&prog) {
+        // Input: [0x5c, 0x5c, 0x5c, 0x34]
+        // The PROGRAM those bytes folded to under the generator of the day,
+        // kept beside them as the durable lock. The program is the lock, not
+        // the bytes: making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in the
+        // program text and is independent of how it was reached. It is a
+        // fixture rather than a literal because it is over a kilobyte —
+        // which is the point of the trophy.
+        let prog = include_str!("../tests/fixtures/finding-91afec2d990bc402.program.js")
+            .trim_end()
+            .to_string();
+        // The trophy's defining property, kept as a guard against a
+        // careless edit to the fixture: a `.source` rendering that
+        // overflows the old 1024-byte oracle capture buffer. The SHAPE
+        // guards these tests used to carry ("is it a product", "does it end
+        // in .source") were checks on a generator's output; against a pinned
+        // constant they cannot fail, so they are gone.
+        assert!(
+            prog.len() > 1024,
+            "finding program overflows the old buffer: {}",
+            prog.len()
+        );
+        match differential_check_meter_v4(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 91afec2d990bc402 must not diverge: {:?}", d),
         }
@@ -2472,12 +2988,12 @@ mod tests {
     #[test]
     fn generated_programs_agree_with_oracle() {
         // Sweep a spread of seeds; every generated subset program must
-        // hold bit-exact (result, computron) agreement.
+        // hold result agreement (XS cost drift is advisory).
         let mut checked = 0;
         for seed in 0u32..300 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(4 + (seed % 12)) {
+            for k in 0..(16 + (seed % 48)) {
                 buf.push(data[(k as usize) % 4].wrapping_add(k as u8));
             }
             let prog = gen_program(&buf);
@@ -2498,8 +3014,8 @@ mod tests {
         for seed in 0u32..300 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(6 + (seed % 10)) {
-                buf.push(data[(k as usize) % 4].wrapping_add(k as u8 * 7));
+            for k in 0..(24 + (seed % 40)) {
+                buf.push(data[(k as usize) % 4].wrapping_add((k as u8).wrapping_mul(7)));
             }
             let prog = gen_statement_program(&buf);
             match differential_check_result_only(&prog) {
@@ -2511,7 +3027,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3_arrays_programs_agree_bit_exact() {
+    fn generated_stage3_arrays_programs_agree() {
         // The stage-3 arrays generator's literals, indexed get/set, grow, and
         // length get/set programs must ALL agree with XS bit-for-bit
         // (result AND computron): the array item chunk's allocation metering
@@ -2527,7 +3043,7 @@ mod tests {
             // reads are never starved (a short buffer biases the shape).
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(7))
@@ -2569,7 +3085,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3_array_methods_agree_bit_exact() {
+    fn generated_stage3_array_methods_agree() {
         // The dense push/pop/indexOf fast paths meter their mxMeterSome
         // annotations and chunk (re)size faithfully, so they ride the full
         // result+computron differential (symbol-linked, since the method
@@ -2581,7 +3097,7 @@ mod tests {
         for seed in 0u32..600 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(5))
@@ -2614,7 +3130,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3_array_iterators_agree_bit_exact() {
+    fn generated_stage3_array_iterators_agree() {
         // The array iterator objects (values/keys/entries + next over the
         // reused result object) meter their fxNewIteratorInstance creation and
         // per-next yield/element-read faithfully, so they ride the full
@@ -2627,7 +3143,7 @@ mod tests {
         for seed in 0u32..600 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(11))
@@ -2660,7 +3176,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3_for_of_programs_agree_bit_exact() {
+    fn generated_stage3_for_of_programs_agree() {
         // for-of over an array literal drives fxGetIterator + the values
         // iterator's per-element next() protocol, all metered faithfully, so
         // it rides the full result+computron differential. Sweep a spread of
@@ -2672,7 +3188,7 @@ mod tests {
         for seed in 0u32..600 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(13))
@@ -2705,7 +3221,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3_string_for_of_programs_agree_bit_exact() {
+    fn generated_stage3_string_for_of_programs_agree() {
         // for-of over a string drives fxGetIterator + the string iterator's
         // per-code-point next() (a fresh one-char result string per step), all
         // metered faithfully over an ASCII (single-byte BMP) alphabet, so it
@@ -2716,7 +3232,7 @@ mod tests {
         for seed in 0u32..600 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(13))
@@ -2748,11 +3264,273 @@ mod tests {
         }
     }
 
+    /// The size cap must bound the program WITHOUT inverting the length
+    /// gradient it was added beside.
+    ///
+    /// The first attempt at this cap regenerated at a shallower depth when
+    /// the program came out too big, and on conditional-heavy input a longer
+    /// input then bought a shallower program — eventually a program
+    /// completely invariant to input length. That is the F040 pathology
+    /// pointed the other way, and nothing measured it. This does.
     #[test]
-    fn generated_stage3_text_math_programs_agree_bit_exact() {
+    fn the_size_cap_bounds_without_inverting_the_length_gradient() {
+        // The conditional arm (`byte % 9 == 7`) is the one whose node count
+        // grows as 3^depth; it is where the old cap misbehaved.
+        for byte in [0x07u8, 61, 70, 0xff] {
+            let mut sizes = Vec::new();
+            for len in [1usize, 2, 4, 16, 64, 512, 2048, 8192, 65536] {
+                let program = gen_program(&vec![byte; len]);
+                assert!(
+                    program.len() <= MAX_PROGRAM_CHARS,
+                    "byte {byte:#x} len {len}: {} chars exceeds the cap",
+                    program.len()
+                );
+                sizes.push((len, program.len()));
+            }
+            // Monotone non-decreasing in input length. Not strictly
+            // increasing — the grammar saturates, and a cap that is reached
+            // is allowed to stay reached — but never SHRINKING, which is the
+            // defect.
+            for pair in sizes.windows(2) {
+                let ((short, small), (long, large)) = (pair[0], pair[1]);
+                assert!(
+                    large >= small,
+                    "byte {byte:#x}: {long} bytes of input produced a SMALLER \
+                     program ({large}) than {short} bytes did ({small}); the \
+                     size cap is inverting the length gradient"
+                );
+            }
+        }
+    }
+
+    /// And the cap must actually bind on the input that motivated it.
+    #[test]
+    fn the_size_cap_binds_on_the_deepest_grammar() {
+        let program = gen_program(&vec![0x07u8; 8192]);
+        assert!(program.len() <= MAX_PROGRAM_CHARS);
+        assert!(
+            program.len() > MAX_PROGRAM_CHARS / 4,
+            "the cap is so tight the deep grammar is unreachable: {} chars",
+            program.len()
+        );
+    }
+
+    /// The precondition every differential sweep in this file depends on
+    /// and none of them can check for itself: see [`oracle_is_live`].
+    #[test]
+    fn the_xs_oracle_starts_at_all() {
+        assert!(
+            oracle_is_live(),
+            "the XS oracle did not start or did not evaluate `1 + 1` to 2. \
+             Every differential sweep in this crate reports agreement when \
+             the oracle fails to start, so they are all vacuous until this \
+             passes. Check the c/moddable submodule."
+        );
+    }
+
+    /// Every roster entry generates and checks cleanly, so the libFuzzer
+    /// lane starts from a green baseline and a mispaired (too strong) check
+    /// fails here rather than as a phantom trophy at 3am.
+    #[test]
+    fn the_stage3_roster_is_clean_over_a_sweep() {
+        for (i, (name, _, _)) in STAGE3_SURFACES.iter().enumerate() {
+            for seed in 0u32..24 {
+                let mut buf = vec![i as u8];
+                let data = seed.to_le_bytes();
+                for k in 0..(64 + (seed % 96)) {
+                    buf.push(
+                        data[(k as usize) % 4]
+                            .wrapping_add((k as u8).wrapping_mul(17))
+                            .wrapping_add((seed as u8).wrapping_mul(9)),
+                    );
+                }
+                assert_eq!(stage3_surface_name(&buf), *name, "selector picks {name}");
+                if let Err(d) = stage3_surface_differential(&buf) {
+                    panic!("stage-3 surface {name} seed {seed} diverged: {d:?}");
+                }
+            }
+        }
+    }
+
+    /// The roster must not silently fall behind the generators. Scanning
+    /// this file's own source is how a new `pub fn gen_…` is caught; the
+    /// alternative is a hand-maintained count, which is the failure mode
+    /// the engine's own safety nets are criticized for. `include_str!`
+    /// means a moved file breaks the build rather than the test.
+    #[test]
+    fn the_stage3_roster_covers_every_generator() {
+        // Generators that deliberately have their OWN libFuzzer target
+        // rather than a roster slot, each named beside the target it
+        // belongs to.
+        const OWN_TARGET: &[&str] = &[
+            "gen_program",           // differential_source
+            "gen_statement_program", // differential_source, statement arm
+            "gen_stage2b_program",   // differential_stage2b
+            "gen_compile_program",   // differential_compile
+            "gen_crank_sequence",    // differential_cranks
+            // Found by widening this scan past `lib.rs`, which is what the
+            // widening was for: both live in other modules and were invisible
+            // to the scan that was supposed to account for every generator.
+            "gen_regexp",        // differential_regexp, differential_regexp_surface
+            "gen_machine_image", // snapshot_roundtrip, snapshot_decoder, store_decoder
+        ];
+        // EVERY module, not only this file. The scan exists to catch a
+        // generator added without a lane, and a generator added in a NEW
+        // module is exactly the case a `lib.rs`-only scan cannot see — which
+        // is not hypothetical: `cranks.rs` holds one today. `include_str!`
+        // keeps a moved file a build error rather than a silent gap.
+        const SOURCES: &[&str] = &[
+            include_str!("lib.rs"),
+            include_str!("cranks.rs"),
+            include_str!("regexp.rs"),
+            include_str!("snapshot.rs"),
+            include_str!("store.rs"),
+            include_str!("seeds.rs"),
+            include_str!("comparison.rs"),
+            include_str!("bin/write_seed_corpus.rs"),
+        ];
+        // And the module list itself must be complete, or the scan has the
+        // same blind spot one level up.
+        // RECURSIVE. A non-recursive read skips `src/bin/`, which is the
+        // same blind spot one level down as the `lib.rs`-only scan this
+        // replaced: a generator added under a subdirectory would have no
+        // lane, and the count would still agree with itself.
+        fn rust_files(dir: &std::path::Path, into: &mut std::collections::BTreeSet<String>) {
+            for entry in std::fs::read_dir(dir).expect("the crate's own src/ is readable") {
+                let path = entry.expect("a readable directory entry").path();
+                if path.is_dir() {
+                    rust_files(&path, into);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    into.insert(path.to_string_lossy().into_owned());
+                }
+            }
+        }
+        let mut modules = std::collections::BTreeSet::new();
+        rust_files(
+            std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
+            &mut modules,
+        );
+        assert_eq!(
+            modules.len(),
+            SOURCES.len(),
+            "src/ holds {} modules but the scan reads {}; a module was added \
+             without being scanned for generators: {modules:?}",
+            modules.len(),
+            SOURCES.len()
+        );
+        let names: Vec<String> = SOURCES
+            .iter()
+            .flat_map(|source| source.lines())
+            .filter_map(|line| line.strip_prefix("pub fn gen_"))
+            .filter_map(|rest| rest.split('(').next())
+            .map(|name| format!("gen_{name}"))
+            .collect();
+        assert!(
+            names.len() >= STAGE3_SURFACES.len(),
+            "the source scan found fewer generators than the roster names; \
+             the scan is broken, not the roster"
+        );
+        let unrostered: Vec<&String> = names
+            .iter()
+            .filter(|n| !OWN_TARGET.contains(&n.as_str()))
+            .filter(|n| !STAGE3_SURFACES.iter().any(|(rostered, _, _)| rostered == n))
+            .collect();
+        assert!(
+            unrostered.is_empty(),
+            "generators with neither a roster slot nor their own libFuzzer \
+             target: {unrostered:?}"
+        );
+    }
+
+    /// The refutation of F040's headline measurement, as a test rather than
+    /// a claim: the crate can now produce inputs carrying non-ASCII code
+    /// units, lone surrogates and astral pairs, and the engines agree on
+    /// what they mean.
+    #[test]
+    fn generated_code_unit_programs_agree_and_leave_ascii() {
+        let mut checked = 0;
+        let mut distinct = std::collections::BTreeSet::new();
+        // The corners the ASCII alphabet made unreachable by construction.
+        let (mut non_ascii, mut high_surrogate, mut low_surrogate, mut astral) =
+            (false, false, false, false);
+        for seed in 0u32..600 {
+            let data = seed.to_le_bytes();
+            let mut buf = Vec::new();
+            for k in 0..(64 + (seed % 96)) {
+                buf.push(
+                    data[(k as usize) % 4]
+                        .wrapping_add((k as u8).wrapping_mul(11))
+                        .wrapping_add((seed as u8).wrapping_mul(5)),
+                );
+            }
+            let prog = gen_code_unit_string_program(&buf);
+            distinct.insert(prog.clone());
+            for esc in prog.match_indices("\\u").map(|(i, _)| i) {
+                let Some(hex) = prog.get(esc + 2..esc + 6) else {
+                    continue;
+                };
+                let Ok(unit) = u16::from_str_radix(hex, 16) else {
+                    continue;
+                };
+                non_ascii |= unit > 0x7f;
+                if (0xd800..0xdc00).contains(&unit) {
+                    high_surrogate = true;
+                    // A high surrogate immediately followed by a low one is
+                    // a pair, i.e. an astral code point.
+                    if let Some(next) = prog
+                        .get(esc + 6..esc + 12)
+                        .filter(|s| s.starts_with("\\u"))
+                        .and_then(|s| u16::from_str_radix(&s[2..], 16).ok())
+                    {
+                        astral |= (0xdc00..0xe000).contains(&next);
+                    }
+                }
+                low_surrogate |= (0xdc00..0xe000).contains(&unit);
+            }
+            // The program text stays ASCII: the code units ride in as
+            // escapes, so the source on the wire to either engine is
+            // byte-identical and the harness's own transport is not the
+            // thing under test.
+            assert!(
+                prog.is_ascii(),
+                "generated source must stay ASCII: {:?}",
+                prog
+            );
+            // The observables are `.length`, `charCodeAt`, `indexOf` and
+            // friends, so the arm rides the full symbol-linking check: the
+            // built-in names have to relink for the property reads to
+            // resolve at all.
+            match differential_check_with_symbols(&prog) {
+                Ok(()) => checked += 1,
+                Err(d) => panic!("code-unit differential divergence: {:?}", d),
+            }
+        }
+        assert_eq!(checked, 600);
+        assert!(
+            distinct.len() > 100,
+            "code-unit sweep too uniform: {} distinct",
+            distinct.len()
+        );
+        assert!(
+            non_ascii,
+            "no generated input carried a non-ASCII code unit"
+        );
+        assert!(
+            high_surrogate,
+            "no generated input carried a lone high surrogate"
+        );
+        assert!(
+            low_surrogate,
+            "no generated input carried a lone low surrogate"
+        );
+        assert!(astral, "no generated input carried a surrogate pair");
+    }
+
+    #[test]
+    fn generated_stage3_text_math_programs_agree() {
         // The stage-3 text-math-json surface (Math statics, String.prototype,
         // Number predicates, parseInt/parseFloat/isNaN, JSON.stringify of a
-        // primitive) is bit-exact (result AND computron); sweep a spread of
+        // primitive) is result-gated (XS cost drift advisory); sweep a spread of
         // seeds across all five shapes and assert zero divergence.
         let mut checked = 0;
         // Coverage flags for the built-in families the arm must reach.
@@ -2761,7 +3539,7 @@ mod tests {
         for seed in 0u32..800 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(11))
@@ -2808,19 +3586,17 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3b_json_structured_programs_agree_bit_exact() {
-        // The stage-3b json-metering surface — structured JSON.stringify over
-        // objects and arrays built recursively from primitives — is bit-exact
-        // (serialized value AND computron). Sweep a spread of seeds over the
-        // recursive generator and assert zero divergence, reaching both the
-        // object and array node shapes and depth beyond a single level.
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
+    fn generated_stage3b_json_structured_programs_agree_meter_v2() {
+        // Sweep the original seeds and coverage shapes against XS semantics.
+        // Version 2 independently checks armed/unarmed outcomes and raw costs.
         let mut checked = 0;
         let (mut object, mut array, mut nested) = (false, false, false);
         let mut distinct = std::collections::BTreeSet::new();
         for seed in 0u32..800 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(24 + (seed % 40)) {
+            for k in 0..(96 + (seed % 160)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(11))
@@ -2835,7 +3611,7 @@ mod tests {
                 || prog.contains("[[")
                 || prog.contains("[{")
                 || prog.contains("{") && prog.contains("[");
-            match differential_check_with_symbols(&prog) {
+            match differential_check_meter_v4(&prog) {
                 Ok(()) => checked += 1,
                 Err(d) => panic!(
                     "stage-3b json-metering differential divergence on {:?}: {:?}",
@@ -2859,18 +3635,17 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3b_json_parse_programs_agree_bit_exact() {
-        // The stage-3b json-metering parse surface — JSON.parse over well-formed
-        // JSON built recursively from primitives, arrays, and objects — is
-        // bit-exact (result AND computron). Sweep a spread of seeds, reaching
-        // primitive, array, and object shapes and depth beyond one level.
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
+    fn generated_stage3b_json_parse_programs_agree_meter_v2() {
+        // Sweep the original seeds and coverage shapes against XS semantics.
+        // Version 2 independently checks armed/unarmed outcomes and raw costs.
         let mut checked = 0;
         let (mut prim, mut array, mut object) = (false, false, false);
         let mut distinct = std::collections::BTreeSet::new();
         for seed in 0u32..800 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(24 + (seed % 40)) {
+            for k in 0..(96 + (seed % 160)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(11))
@@ -2882,7 +3657,7 @@ mod tests {
             object |= prog.contains('{');
             array |= prog.contains('[');
             prim |= !prog.contains('{') && !prog.contains('[');
-            match differential_check_with_symbols(&prog) {
+            match differential_check_meter_v4(&prog) {
                 Ok(()) => checked += 1,
                 Err(d) => panic!(
                     "stage-3b json-parse differential divergence on {:?}: {:?}",
@@ -2906,10 +3681,10 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3b_promise_programs_agree_bit_exact() {
+    fn generated_stage3b_promise_programs_agree() {
         // The stage-3b promises surface — a fulfilled resolution chain over
         // Promise/`resolve`/`then`/`catch` driven to the pump-loop drain — is
-        // bit-exact (result AND computron), INCLUDING the reactions run at the
+        // result-gated (XS cost drift advisory), INCLUDING the reactions run at the
         // drain. Sweep a spread of seeds, reaching the resolve-static,
         // executor-resolve, and pending sources and chains of length 0..3.
         let mut checked = 0;
@@ -2918,7 +3693,7 @@ mod tests {
         for seed in 0u32..800 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(24 + (seed % 40)) {
+            for k in 0..(96 + (seed % 160)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(11))
@@ -2956,12 +3731,10 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3b_regexp_surface_programs_agree_bit_exact() {
-        // The stage-3b xsre-integration surface (child 9/9): a whole-program
-        // `new RegExp(pat, flags).exec/test/…(subj)` over the covered grammar is
-        // bit-exact (result AND computron) end-to-end against the pin — the
-        // construction metering, the exec/test result shaping, and the accessor
-        // getters. Sweep a spread of seeds, reaching every observed operation.
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
+    fn generated_stage3b_regexp_surface_programs_agree_meter_v2() {
+        // Sweep the original seeds and coverage shapes against XS semantics.
+        // Version 2 independently checks armed/unarmed outcomes and raw costs.
         let mut checked = 0;
         let mut skipped = 0;
         let (mut execd, mut tested, mut sourced, mut flagged, mut stringed) =
@@ -2970,7 +3743,7 @@ mod tests {
         for seed in 0u32..1200 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(20 + (seed % 48)) {
+            for k in 0..(80 + (seed % 192)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(13))
@@ -2987,7 +3760,7 @@ mod tests {
             // The differential check skips an out-of-subset pattern honestly
             // (ironhorse halts `Unsupported`, `differential_check` returns Ok
             // without comparing); count coverage by the checks that ran.
-            match differential_check_with_symbols(&prog) {
+            match differential_check_meter_v4(&prog) {
                 Ok(()) => checked += 1,
                 Err(d) => panic!(
                     "stage-3b regexp-surface differential divergence on {:?}: {:?}",
@@ -3017,7 +3790,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3_spread_programs_agree_bit_exact() {
+    fn generated_stage3_spread_programs_agree() {
         // Single-segment array spread desugars to the for-of iterator loop
         // appending each element; raw-exact against the pin. Sweep a spread of
         // seeds over the three observation shapes and a range of lengths and
@@ -3027,7 +3800,7 @@ mod tests {
         for seed in 0u32..600 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(17))
@@ -3050,19 +3823,17 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3_reentrant_programs_agree_bit_exact() {
-        // forEach drives a user callback per element through run_callback; the
-        // callback body's opcodes are metered by the nested dispatch and the
-        // per-element fxCallThisItem overhead is a calibrated constant, so the
-        // whole thing is bit-exact (result AND computron). Sweep a spread of
-        // seeds over the three callback shapes and a range of lengths.
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
+    fn generated_stage3_reentrant_programs_agree_meter_v2() {
+        // Sweep the original seeds and coverage shapes against XS semantics.
+        // Version 2 independently checks armed/unarmed outcomes and raw costs.
         let mut checked = 0;
         let mut shapes = [false; 3];
         let mut distinct = std::collections::BTreeSet::new();
         for seed in 0u32..600 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(23))
@@ -3078,7 +3849,7 @@ mod tests {
             } else {
                 shapes[0] = true;
             }
-            match differential_check_with_symbols(&prog) {
+            match differential_check_meter_v4(&prog) {
                 Ok(()) => checked += 1,
                 Err(d) => panic!("stage-3 re-entrant differential divergence: {:?}", d),
             }
@@ -3095,10 +3866,10 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3_collections_programs_agree_bit_exact() {
+    fn generated_stage3_collections_programs_agree() {
         // Map/Set forEach, entries/keys/values iterators, for-of, and spread —
-        // the stage-3b keyed-collection iteration surface, bit-exact (result
-        // AND computron). Sweep a spread of seeds over Map vs Set, a range of
+        // the stage-3b keyed-collection iteration surface, result-gated (XS
+        // cost drift advisory). Sweep a spread of seeds over Map vs Set, a range of
         // entry counts (including empty), and every observation shape.
         let mut checked = 0;
         let mut kinds = [false; 2]; // Set, Map
@@ -3106,7 +3877,7 @@ mod tests {
         for seed in 0u32..800 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(29))
@@ -3137,11 +3908,11 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3_bigint_programs_agree_bit_exact() {
+    fn generated_stage3_bigint_programs_agree() {
         // The stage-3b BigInt grammar — literals, `+`/`-`/`*` (same-type),
         // unary minus, strict/loose equality (including BigInt-vs-Number),
-        // relational order, typeof, and decimal rendering — bit-exact (result
-        // AND computron) vs XS. Sweep a spread of seeds so every arm and a
+        // relational order, typeof, and decimal rendering — result-gated (XS
+        // cost drift advisory) vs XS. Sweep a spread of seeds so every arm and a
         // range of operand magnitudes (single- and multi-limb) are reached.
         let mut checked = 0;
         let mut saw_typeof = false;
@@ -3152,7 +3923,7 @@ mod tests {
         for seed in 0u32..800 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(29))
@@ -3186,11 +3957,11 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3b_binary_programs_agree_bit_exact() {
+    fn generated_stage3b_binary_programs_agree() {
         // The stage-3b binary-data grammar — `new ArrayBuffer(n)` over a
         // spread of byte lengths (crossing the 8-byte chunk-alignment
-        // boundary) and the `byteLength` accessor — bit-exact (result AND
-        // computron) vs XS. Rides the symbol-linking differential check
+        // boundary) and the `byteLength` accessor — result-gated (XS cost
+        // drift advisory) vs XS. Rides the symbol-linking differential check
         // (the `ArrayBuffer` global and `byteLength` are program symbols).
         let mut checked = 0;
         let mut saw_buffer = false;
@@ -3202,7 +3973,7 @@ mod tests {
         for seed in 0u32..1200 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(29))
@@ -3238,14 +4009,10 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3b_fundamentals_followup_programs_agree_bit_exact() {
-        // The stage-3b fundamentals-followup grammar — a function's
-        // `.length`/`.name`, `Function.prototype.bind` (create + call),
-        // `apply` with a dense array, `Symbol.prototype.toString`/
-        // `String(symbol)`/`Symbol.for`/`keyFor`, and `AggregateError` — every
-        // generated program bit-exact (result AND computron) vs XS. Rides
-        // the symbol-linking differential check (the built-ins + property
-        // names are program symbols).
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
+    fn generated_stage3b_fundamentals_followup_programs_agree_meter_v2() {
+        // Sweep the original seeds and coverage shapes against XS semantics.
+        // Version 2 independently checks armed/unarmed outcomes and raw costs.
         let mut checked = 0;
         let mut saw_length = false;
         let mut saw_name = false;
@@ -3258,7 +4025,7 @@ mod tests {
         for seed in 0u32..1200 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(29))
@@ -3277,7 +4044,7 @@ mod tests {
                 || prog.contains(".forEach(cf.bind(")
                 || prog.contains(".filter(cf.bind(")
                 || prog.contains(".reduce(cf.bind(");
-            match differential_check_with_symbols(&prog) {
+            match differential_check_meter_v4(&prog) {
                 Ok(()) => checked += 1,
                 Err(d) => panic!(
                     "stage-3b fundamentals-followup differential divergence on {:?}: {:?}",
@@ -3301,11 +4068,10 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3b_object_statics_programs_agree_bit_exact() {
-        // The object-statics + intern-table arm: hasOwnProperty / Object.keys /
-        // getOwnPropertyDescriptor over random small ordinary objects, present
-        // and absent keys (novel + pre-interned default), all bit-exact (result
-        // AND computron) under the full symbol-linking differential check.
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
+    fn generated_stage3b_object_statics_programs_agree_meter_v2() {
+        // Sweep the original seeds and coverage shapes against XS semantics.
+        // Version 2 independently checks armed/unarmed outcomes and raw costs.
         let mut checked = 0;
         let mut saw_has = false;
         let mut saw_keys = false;
@@ -3318,7 +4084,7 @@ mod tests {
         for seed in 0u32..1200 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(23))
@@ -3334,7 +4100,7 @@ mod tests {
             saw_computed |= prog.contains("var k=");
             saw_defprop |= prog.contains("Object.defineProperty(");
             saw_in |= prog.contains(" in o");
-            match differential_check_with_symbols(&prog) {
+            match differential_check_meter_v4(&prog) {
                 Ok(()) => checked += 1,
                 Err(d) => panic!(
                     "stage-3b object-statics differential divergence on {:?}: {:?}",
@@ -3358,7 +4124,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3_for_in_programs_agree_bit_exact() {
+    fn generated_stage3_for_in_programs_agree() {
         // for-in over an object literal or array drives the enumerator's key
         // collection + per-key yield, computron-exact. Sweep a spread of seeds
         // over object/array targets, a range of key counts (including empty),
@@ -3369,7 +4135,7 @@ mod tests {
         for seed in 0u32..600 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(19))
@@ -3400,7 +4166,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage2b_programs_agree_bit_exact() {
+    fn generated_stage2b_programs_agree() {
         // The stage-2b generator's object / call / closure / exception
         // programs must ALL agree with XS bit-for-bit (result AND
         // computron) — the object model, call frames, closure cells, and
@@ -3414,8 +4180,8 @@ mod tests {
         for seed in 0u32..400 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(6 + (seed % 14)) {
-                buf.push(data[(k as usize) % 4].wrapping_add(k as u8 * 5));
+            for k in 0..(24 + (seed % 56)) {
+                buf.push(data[(k as usize) % 4].wrapping_add((k as u8).wrapping_mul(5)));
             }
             kinds[(buf[0] % 4) as usize] += 1;
             let prog = gen_stage2b_program(&buf);
@@ -3460,7 +4226,95 @@ mod tests {
             0x25, 0xfe, 0x86, 0x1c, 0x28, 0xee, 0x59, 0x08, 0xa6, 0xf7, 0xec, 0xc0, 0x0d, 0x17,
         ]);
         let _ = decoder_is_panic_free(&[0x25, 0xfe]);
+        // Regression (tripwire trophy `crash-3945c21f`, CI run 35176276742):
+        // a STRING operand whose bytes hold a malformed 4-byte UTF-8
+        // sequence. `cesu8_to_units` treated any lead byte at or above 0xF0
+        // as a genuine astral scalar and computed `cp - 0x10000`; an
+        // OVERLONG sequence such as `F0 80 80 80` is zero, so the subtraction
+        // wrapped — and this workspace builds release with
+        // `overflow-checks = true`, so it aborted the process rather than
+        // producing a wrong string. The decoder now drops the malformed tail,
+        // which is what its doc comment always promised.
+        // The 4-byte core, then the libFuzzer unit that found it.
+        let _ = decoder_is_panic_free(&[0x0b, 0x00, 0x04, 0xF0, 0x80, 0x80, 0x80, 0x00]);
+        let _ = decoder_is_panic_free(FOUR_BYTE_UTF8_TROPHY);
+        // Regression (tripwire trophy `crash-5fa46bee`, CI run 35188561767):
+        // an arena read at `u32::MAX`. `Interp::cur_func` is `SlotIndex::NULL`
+        // at top level, and bytecode that runs a construct expecting a current
+        // function there — a `START_GENERATOR` outside any frame, which
+        // reaches `prototype_of` — passed that NULL to `find_property`, whose
+        // head read indexed the slot arena at `u32::MAX`. The chain walk below
+        // that head read had always treated a null link as "no property"; the
+        // head did not. A null owner is "no object", so it has no properties,
+        // and the generator now falls back to its default prototype.
+        let _ = decoder_is_panic_free(NULL_OWNER_TROPHY);
+        // Regression (tripwire trophy `crash-80142803`, CI run 36913967827):
+        // a `MODULE` envelope whose execute slot holds an object that is not
+        // a function. The arm indexed the function table with it and
+        // panicked; it now halts on either function slot it cannot find.
+        let _ = decoder_is_panic_free(MODULE_NON_FUNCTION_TROPHY);
     }
+
+    /// The tripwire trophy above, verbatim: the 178-byte unit libFuzzer wrote
+    /// to `artifacts/bytecode_decoder/crash-8014280300719a4d79a440f3ea27a97f1
+    /// 11174bc`. Kept whole because the seed corpus is generated and cannot
+    /// carry a hand-added file, as with the two below.
+    const MODULE_NON_FUNCTION_TROPHY: &[u8] = &[
+        11, 0, 75, 82, 221, 114, 2, 141, 114, 0, 116, 65, 0, 0, 20, 199, 127, 141, 31, 42, 82, 66,
+        31, 4, 146, 114, 1, 125, 66, 228, 228, 228, 228, 228, 228, 228, 51, 228, 228, 228, 228,
+        228, 228, 228, 228, 228, 228, 228, 228, 228, 228, 228, 228, 228, 228, 228, 228, 3, 3, 11,
+        0, 75, 114, 2, 32, 212, 0, 143, 154, 153, 153, 153, 153, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        89, 48, 64, 140, 221, 66, 31, 2, 146, 82, 141, 31, 7, 114, 8, 221, 118, 19, 22, 4, 114, 2,
+        126, 140, 125, 114, 34, 125, 19, 221, 66, 34, 4, 146, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        3, 3, 3, 3, 3, 3, 3, 114, 68, 125, 21, 66, 31, 34, 3, 3, 3, 3,
+    ];
+
+    /// The tripwire trophy above, verbatim: the 274-byte unit libFuzzer wrote
+    /// to `artifacts/bytecode_decoder/crash-5fa46bee9d784811e6c5a75006e8b3f45a
+    /// 8a251f`. Kept whole for the same reason as the one above — the seed
+    /// corpus is generated and cannot carry a hand-added file.
+    const NULL_OWNER_TROPHY: &[u8] = &[
+        11, 0, 221, 5, 31, 75, 114, 111, 98, 121, 116, 101, 122, 116, 101, 122, 20, 110, 56, 64,
+        66, 31, 11, 146, 143, 246, 40, 92, 143, 194, 85, 72, 64, 125, 19, 140, 19, 140, 143, 143,
+        194, 245, 40, 92, 143, 65, 64, 31, 11, 221, 19, 116, 0, 0, 0, 102, 199, 23, 140, 0, 143,
+        174, 71, 225, 122, 20, 110, 56, 64, 31, 11, 143, 61, 10, 215, 163, 112, 61, 71, 64, 22, 2,
+        114, 8, 114, 7, 140, 127, 116, 0, 0, 0, 90, 19, 221, 19, 128, 63, 31, 21, 114, 2, 31, 5,
+        114, 28, 125, 22, 2, 114, 0, 125, 116, 0, 0, 0, 82, 18, 22, 140, 44, 213, 19, 66, 31, 12,
+        146, 143, 51, 51, 51, 51, 51, 19, 85, 64, 221, 18, 66, 31, 24, 146, 221, 119, 221, 221, 18,
+        73, 4, 85, 85, 85, 86, 116, 0, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+        16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+        16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+        16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+        16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 0, 143, 195, 143, 194, 62, 64, 114, 6,
+        225, 31, 6, 115, 128, 0, 125, 22, 101, 110, 103, 116, 104,
+    ];
+
+    /// The tripwire trophy above, verbatim as cargo-fuzz printed the failing
+    /// unit (`artifacts/bytecode_decoder/crash-3945c21ff84a88af5233edf3327f2
+    /// e100a2eb732`). Kept whole rather than minimized because the seed
+    /// corpus is generated and cannot carry a hand-added file, so this array
+    /// IS the trophy's only checked-in home.
+    const FOUR_BYTE_UTF8_TROPHY: &[u8] = &[
+        11, 0, 75, 201, 201, 201, 2, 248, 201, 201, 201, 85, 82, 201, 201, 201, 201, 201, 201, 201,
+        201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201,
+        201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201,
+        201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201,
+        201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 78, 114, 2, 32, 212, 0, 143, 255,
+        255, 255, 153, 153, 153, 89, 48, 64, 140, 221, 66, 31, 2, 146, 82, 141, 31, 7, 114, 8, 221,
+        118, 19, 22, 4, 114, 82, 101, 102, 101, 114, 101, 255, 255, 255, 255, 255, 255, 255, 255,
+        255, 116, 0, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 239, 41, 201, 201, 201, 201,
+        201, 201, 255, 255, 255, 255, 201, 201, 201, 201, 201, 201, 201, 255, 255, 255, 255, 255,
+        255, 154, 153, 153, 153, 153, 89, 48, 64, 140, 221, 66, 31, 2, 146, 82, 141, 31, 7, 114, 8,
+        221, 118, 19, 22, 4, 114, 2, 140, 125, 114, 34, 125, 19, 221, 31, 2, 146, 82, 141, 31, 7,
+        114, 8, 221, 118, 19, 22, 4, 114, 2, 140, 125, 114, 114, 34, 125, 19, 221, 66, 34, 4, 146,
+        114, 68, 125, 21, 66, 31, 34, 146, 143, 236, 0, 108, 81, 184, 30, 133, 235, 9, 64, 221,
+        207, 31, 11, 114, 8, 31, 3, 221, 22, 2, 114, 67, 22, 9, 143, 113, 61, 10, 215, 163, 80, 70,
+        64, 127, 221, 31, 5, 114, 92, 125, 22, 1, 82, 19, 31, 33, 114, 79, 65, 12, 143, 31, 133,
+        235, 81, 184, 158, 71, 64, 19, 22, 15, 116, 0, 201, 201, 201, 201, 201, 201, 201, 201, 201,
+        201, 239, 41, 201, 201, 201, 201, 201, 201, 255, 255, 255, 255, 201, 201, 201, 201, 201,
+        201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 223, 21, 187, 169,
+    ];
 
     /// Wedge-proofing lock: the self-targeting backward branch that caused the
     /// stage-4a decoder hang must abort with a bounded `Halt::StepLimit` — not
@@ -3501,7 +4355,7 @@ mod tests {
         let out = run_program_bounded(&[0xC1, 0xA9, 0xC1, 0xC1], DECODER_STEP_LIMIT);
         assert_eq!(
             out.halt,
-            ironhorse_vm::Halt::Unsupported("async:non-boundary-return"),
+            ironhorse_vm::Halt::EngineInvariant("return:non-program-frame"),
             "the malformed async exit must fail before it can self-feed"
         );
         assert!(
@@ -3521,7 +4375,7 @@ mod tests {
         for seed in 0u32..512 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(4 + (seed % 24)) {
+            for k in 0..(16 + (seed % 96)) {
                 buf.push(data[(k as usize) % 4].wrapping_add(k as u8));
             }
             // Generated programs.
@@ -3552,7 +4406,7 @@ mod tests {
         for seed in 0u32..256 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(4 + (seed % 16)) {
+            for k in 0..(16 + (seed % 64)) {
                 buf.push(data[(k as usize) % 4].wrapping_add(k as u8));
             }
             let prog = gen_compile_program(&buf);
@@ -3642,8 +4496,8 @@ mod hostile_suspend_tests {
         let out = ironhorse_vm::run_program_with_symbols(&patched, &symbols);
         assert_eq!(
             out.halt,
-            ironhorse_vm::Halt::Unsupported("yield:stack-underflow"),
-            "the YIELD guard refuses a frame drained below its run base"
+            ironhorse_vm::Halt::EngineInvariant("value-stack:underflow"),
+            "the first excess POP refuses before YIELD can observe a drained frame"
         );
     }
 }

@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=language/statements/try tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/try/scope-catch-param-lex-close.js sloppy pass
+language/statements/try/scope-catch-param-lex-close.js strict pass
+language/statements/try/scope-catch-param-lex-open.js sloppy pass
+language/statements/try/scope-catch-param-lex-open.js strict pass
+language/statements/try/scope-catch-param-var-none.js sloppy pass
+language/statements/try/static-init-await-binding-invalid.js sloppy pass
+language/statements/try/static-init-await-binding-invalid.js strict pass
+language/statements/try/static-init-await-binding-valid.js sloppy pass
+language/statements/try/static-init-await-binding-valid.js strict pass
+language/statements/try/tco-catch-finally.js sloppy skip:feature:tail-call-optimization
+language/statements/try/tco-catch.js sloppy skip:feature:tail-call-optimization
+language/statements/try/tco-finally.js sloppy skip:feature:tail-call-optimization

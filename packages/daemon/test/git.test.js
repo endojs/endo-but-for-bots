@@ -27,6 +27,7 @@ import {
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { makeFilePowers } from '../src/manager-node-powers.js';
 import { lineageOf, makeMount } from '../src/mount.js';
+import { quiesceGitMaintenance, removeRepoTree } from './_git-fixture.js';
 
 /** @import { GitRebaseInput } from '@endo/exo-git' */
 
@@ -41,8 +42,9 @@ const execFileAsync = nodePromisify(execFile);
  */
 const provisionGitWorktree = async t => {
   const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'native-git-'));
-  t.teardown(() => fs.promises.rm(root, { recursive: true, force: true }));
+  t.teardown(() => removeRepoTree(root));
   await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: root });
+  await quiesceGitMaintenance(root);
   // Some CI / dev environments enable `commit.gpgSign` at user-global
   // level; that surfaces here because `provisionGitWorktree` does not
   // override gpg config per-invocation.  Pin the repo-local config to
@@ -389,6 +391,42 @@ test('NativeGitBackend.tree exposes historical blobs and subtrees', async t => {
   t.deepEqual(await E(src).list(), ['config.json']);
   const config = await E(tree).lookup(['src', 'config.json']);
   t.deepEqual(await E(config).json(), { ok: true });
+});
+
+test('NativeGitBackend GitBlob byteRange / textRange attenuate to derived blobs', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  await fs.promises.writeFile(path.join(repoRoot, 'data.txt'), 'hello world\n');
+  await fs.promises.writeFile(path.join(repoRoot, 'lines.txt'), 'a\nb\nc\n');
+  await execFileAsync('git', ['add', 'data.txt', 'lines.txt'], {
+    cwd: repoRoot,
+  });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', 'add data'],
+    { cwd: repoRoot },
+  );
+
+  const backend = makeNativeGitBackend({ repoRoot });
+  const tree = /** @type {any} */ (await backend.tree('HEAD'));
+  const blob = await E(tree).lookup('data.txt');
+
+  // byteRange(start, end) → a derived GitBlob over [start, end), composing and
+  // clamping at EOF; start === end selects an empty blob.
+  t.is(await E(await E(blob).byteRange(0n, 5n)).text(), 'hello');
+  t.is(await E(await E(blob).byteRange(0n, 5n)).size(), 5n);
+  t.is(
+    await E(await E(await E(blob).byteRange(0n, 5n)).byteRange(1n, 3n)).text(),
+    'el',
+  );
+  t.is(await E(await E(blob).byteRange(6n, 100n)).text(), 'world\n');
+  t.is(await E(await E(blob).byteRange(3n, 3n)).text(), '');
+  await t.throwsAsync(() => E(blob).byteRange(5n, 2n), { message: /EINVAL/ });
+
+  // textRange(startLine, endLine) → a derived GitBlob over the line slice.
+  const lines = await E(tree).lookup('lines.txt');
+  t.is(await E(await E(lines).textRange(0, 2)).text(), 'a\nb');
+  t.is(await E(await E(lines).textRange(0, 100)).text(), 'a\nb\nc\n');
+  t.is(await E(await E(lines).textRange(1, 1)).text(), '');
 });
 
 test('NativeGitBackend.tree streams archiveTar from the immutable tree', async t => {
@@ -1604,6 +1642,8 @@ test('NativeGitBackend rejects a swapped .git directory after construction', asy
     force: true,
   });
   await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+  // The swap discarded the repo-local config the fixture had pinned.
+  await quiesceGitMaintenance(repoRoot);
   await execFileAsync('git', ['config', '--local', 'commit.gpgsign', 'false'], {
     cwd: repoRoot,
   });
@@ -2565,11 +2605,10 @@ test('NativeGitBackend.remoteFetch rejects repo-local URL rewrites', async t => 
   const remoteParent = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), 'native-git-remote-'),
   );
-  t.teardown(() =>
-    fs.promises.rm(remoteParent, { recursive: true, force: true }),
-  );
+  t.teardown(() => removeRepoTree(remoteParent));
   const remoteRoot = path.join(remoteParent, 'remote.git');
   await execFileAsync('git', ['clone', '--bare', sourceRepo, remoteRoot]);
+  await quiesceGitMaintenance(remoteRoot);
 
   const repoRoot = await provisionGitWorktree(t);
   await execFileAsync(
@@ -3147,7 +3186,7 @@ test('Git.add accepts mixed string and entry designators', async t => {
   t.is(byPath['outside.txt'].index, 'clean');
 });
 
-test('Git string designators use mount.entry normalization and denial', async t => {
+test('Git string designators use adapter normalization and mount denial', async t => {
   const mount = await provisionMount(t);
   /** @type {string[][]} */
   const calls = [];
@@ -3159,7 +3198,7 @@ test('Git string designators use mount.entry normalization and denial', async t 
   });
   const git = makeGit({ mount, backend, lineageOf });
   const spelling = './a/b/../c';
-  const entry = await E(mount).entry(spelling);
+  const entry = await E(mount).entry(['a', 'c']);
 
   await E(git).add([spelling]);
   await E(git).add([entry]);
@@ -3998,18 +4037,14 @@ test('Git.filesystemAt: File.snapshot returns a BlobRef over the blob bytes', as
   const file = /** @type {any} */ (await E(root).lookup('README.md'));
 
   const blobRef = /** @type {any} */ (await E(file).snapshot());
-  const info = await E(blobRef).getInfo();
-  // The git-tree backend supplies the git-native content hash through
-  // wrapBackend's `blobInfoFor` hook: the `git-sha1` blob OID itself
-  // (git hashes the framed `blob <size>\0<bytes>` payload, not the raw
-  // bytes) — restoring content-address identity (design Goal 2). The
-  // size still matches the blob length.
-  t.is(info.algorithm, 'git-sha1');
-  t.is(info.hash, blobOid);
-  t.is(info.size, BigInt('snapshot test\n'.length));
+  const hash = await E(blobRef).sha256();
+  // The snapshot reports the raw bytes' SHA-256, distinct from the git blob
+  // OID (which hashes a framed payload). QID identity separately uses the OID.
+  t.not(hash, blobOid);
+  t.is(await E(blobRef).size(), BigInt('snapshot test\n'.length));
 
-  // fetch returns the bytes.
-  const reader = await E(blobRef).fetch(0n, BigInt('snapshot test\n'.length));
+  // bytes returns the whole content.
+  const reader = await E(blobRef).bytes();
   const bytes = await collectReader(reader);
   t.is(new TextDecoder().decode(bytes), 'snapshot test\n');
 });
@@ -4085,11 +4120,9 @@ test('Git.filesystemAt: same blob at two paths reports one QID and one hash', as
   t.is(aQid.pathId, BigInt(`0x${blobOid}`));
   t.is(aQid.pathId, bQid.pathId, 'same blob → same QID pathId across paths');
 
-  const aInfo = await E(await E(a).snapshot()).getInfo();
-  const bInfo = await E(await E(b).snapshot()).getInfo();
-  t.is(aInfo.algorithm, 'git-sha1');
-  t.is(aInfo.hash, blobOid);
-  t.is(aInfo.hash, bInfo.hash, 'same blob → same BlobRef hash across paths');
+  const aHash = await E(await E(a).snapshot()).sha256();
+  const bHash = await E(await E(b).snapshot()).sha256();
+  t.is(aHash, bHash, 'same blob produces the same digest across paths');
 });
 
 test('Git.filesystemAt: same blob across two refs reports one QID and one hash', async t => {
@@ -4149,10 +4182,9 @@ test('Git.filesystemAt: same blob across two refs reports one QID and one hash',
   t.is(qid1.pathId, BigInt(`0x${blobOid}`));
   t.is(qid1.pathId, qid2.pathId, 'same blob → same QID pathId across refs');
 
-  const info1 = await E(await E(file1).snapshot()).getInfo();
-  const info2 = await E(await E(file2).snapshot()).getInfo();
-  t.is(info1.hash, blobOid);
-  t.is(info1.hash, info2.hash, 'same blob → same BlobRef hash across refs');
+  const hash1 = await E(await E(file1).snapshot()).sha256();
+  const hash2 = await E(await E(file2).snapshot()).sha256();
+  t.is(hash1, hash2, 'same blob produces the same digest across refs');
 });
 
 test('Git.filesystemAt: Directory.list yields entries in tree order', async t => {
@@ -4860,8 +4892,9 @@ test('NativeGitBackend stays usable when the first commit lands on an empty repo
   const repoRoot = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), 'native-git-empty-'),
   );
-  t.teardown(() => fs.promises.rm(repoRoot, { recursive: true, force: true }));
+  t.teardown(() => removeRepoTree(repoRoot));
   await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+  await quiesceGitMaintenance(repoRoot);
   await fs.promises.writeFile(path.join(repoRoot, 'first.txt'), 'hello\n');
 
   const backend = makeNativeGitBackend({ repoRoot });

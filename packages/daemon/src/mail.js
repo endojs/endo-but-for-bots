@@ -5,8 +5,14 @@ import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { makePromiseKit } from '@endo/promise-kit';
-import { q } from '@endo/errors';
+import { Fail, q } from '@endo/errors';
 import { mustMatch, M } from '@endo/patterns';
+import { makeMarshal } from '@endo/marshal';
+
+import {
+  cancelPendingIterator,
+  makeCancelableIterator,
+} from './cancelable-iterator.js';
 import { makeChangeTopic } from './pubsub.js';
 import {
   assertFormulaNumber,
@@ -32,7 +38,7 @@ import {
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PromiseKit } from '@endo/promise-kit' */
-/** @import { DaemonCore, DeferredTasks, DefineRequest, Envelope, EnvelopedMessage, FormulaIdentifier, FormulaNumber, Form, Handle, Mail, MakeMailbox, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NameOrPath, NamePath, PetName, Provide, Request, Responder, StampedMessage, Topic, ValueMessage } from './types.js' */
+/** @import { DaemonCore, DeferredTasks, DefineRequest, Envelope, EnvelopedMessage, FormulaIdentifier, FormulaNumber, Form, FormField, Handle, Mail, MakeMailbox, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NameOrPath, NamePath, PetName, Provide, Request, Responder, StampedMessage, StoredFormFields, Topic, ValueMessage } from './types.js' */
 
 /** @type {PetName} */
 const NEXT_MESSAGE_NUMBER_NAME = /** @type {PetName} */ ('next-number');
@@ -81,6 +87,57 @@ const coerceMessageNumber = value => {
   return undefined;
 };
 
+/**
+ * Incarnate every formula retained by the pin directories of the mailbox's
+ * agent. Hosts have one pin directory. Guests have a guest-visible directory
+ * and a host-only directory.
+ *
+ * @param {object} args
+ * @param {FormulaIdentifier} args.selfId
+ * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
+ * @param {Provide} args.provide
+ */
+export const reincarnateMailboxPins = async ({
+  selfId,
+  getFormulaForId,
+  provide,
+}) => {
+  const handleFormula = await getFormulaForId(selfId);
+  if (handleFormula.type !== 'handle') {
+    throw new Error(`Mailbox self identifier is not a handle: ${q(selfId)}`);
+  }
+  const agentFormula = await getFormulaForId(handleFormula.agent);
+  /** @type {FormulaIdentifier[]} */
+  let pinDirectoryIds;
+  if (agentFormula.type === 'host') {
+    pinDirectoryIds = [agentFormula.pins];
+  } else if (agentFormula.type === 'guest') {
+    pinDirectoryIds = [agentFormula.guestPins, agentFormula.hostPins].filter(
+      id => id !== undefined,
+    );
+  } else {
+    throw new Error(
+      `Mailbox handle does not belong to an agent: ${q(handleFormula.agent)}`,
+    );
+  }
+
+  // Reincarnation is best-effort: a single retained formula that fails to
+  // incarnate (a stale pin, a worker that cannot respawn, a directory entry
+  // reaped out from under the pin) must not reject the delivery on whose crank
+  // this runs, because the message is already durably persisted by the time we
+  // reach here and the caller would otherwise observe an already-committed
+  // delivery as a failure while the live message-received notification is
+  // silently dropped. Tolerate per-pin failures with Promise.allSettled,
+  // matching the established revivePins/reviveNetworks idiom in manager.js.
+  await Promise.allSettled(
+    pinDirectoryIds.map(async pinDirectoryId => {
+      const pins = await provide(pinDirectoryId, 'directory');
+      const retainedValues = await E(pins).listValues();
+      await Promise.allSettled(retainedValues);
+    }),
+  );
+};
+
 const MESSAGE_SPECIAL_NAMES = new Set([
   '@from',
   '@to',
@@ -110,6 +167,57 @@ const assertUniqueEdgeNames = edgeNames => {
     seen.add(edgeName);
   }
 };
+
+/**
+ * Form fields carry `@endo/patterns` patterns, which are CopyTagged values
+ * whose tag lives on `Symbol.toStringTag`. Message formulas are persisted with
+ * `JSON.stringify` (`manager-database.js`), and JSON has no representation for
+ * a symbol key, so a field stored raw comes back as its payload alone:
+ * `M.boolean()` becomes the plain record `{ payload: 'boolean' }` and
+ * `M.string()` becomes `{ payload: [] }`. That is not a slack pattern, it is an
+ * unsatisfiable one — `submit` matches the answer against it, and no boolean is
+ * a record — so every field carrying an explicit pattern was permanently
+ * unanswerable from the first restart onwards. Only a field with no pattern
+ * survived, because `submit` builds its `M.string()` fallback fresh.
+ *
+ * Encode the fields as smallcaps capdata instead, the same JSON-safe
+ * representation `MarshalFormula` already uses to keep a passable in storage.
+ */
+const fieldsMarshaller = makeMarshal(undefined, undefined, {
+  serializeBodyFormat: 'smallcaps',
+});
+
+/**
+ * @param {FormField[]} fields
+ * @returns {StoredFormFields}
+ */
+const encodeFormFields = fields => {
+  const { body, slots } = fieldsMarshaller.toCapData(harden(fields));
+  // A field is a declaration — name, label, default, pattern — so it has no
+  // capabilities to reference. Refusing slots keeps it that way, rather than
+  // writing identifiers we could not resolve on the way back out.
+  slots.length === 0 ||
+    Fail`Form fields must be pure data, got ${q(slots.length)} slot(s)`;
+  return harden({ body, slots: [] });
+};
+
+/**
+ * Forms persisted before fields were encoded hold the raw array. Those keep
+ * the flattened patterns they were written with — nothing can recover a tag
+ * that was never stored — so they are passed through as they are found, and no
+ * migration is needed.
+ *
+ * @param {FormField[] | StoredFormFields} fields
+ * @returns {FormField[]}
+ */
+const decodeFormFields = fields =>
+  Array.isArray(fields)
+    ? // Backward compatibility: a form written before 56d2c7d5c
+      // ("fix(daemon)!: persist form fields as capdata so patterns survive a
+      // restart"), the commit that introduced the capdata shape below.
+      // Removable once no mailbox predates it.
+      harden(fields)
+    : /** @type {FormField[]} */ (fieldsMarshaller.fromCapData(harden(fields)));
 
 const makeEnvelope = () => makeExo('Envelope', EnvelopeInterface, {});
 
@@ -210,15 +318,27 @@ export const makeMailboxMaker = ({
     };
 
     /** @type {Mail['followMessages']} */
-    const followMessages = async function* currentAndSubsequentMessages() {
-      const subsequentRequests = messagesTopic.subscribe();
-      for (const message of messages.values()) {
-        yield await externalizeMessage(message);
-      }
-      for await (const message of subsequentRequests) {
-        yield await externalizeMessage(message);
-      }
-    };
+    const followMessages = () =>
+      makeCancelableIterator(
+        async function* currentAndSubsequentMessages(setCancelPending) {
+          const subsequentRequests = messagesTopic.subscribe();
+          try {
+            const cancellation = setCancelPending(() =>
+              cancelPendingIterator(subsequentRequests),
+            );
+            if (cancellation !== undefined) await cancellation;
+            for (const message of messages.values()) {
+              yield await externalizeMessage(message);
+            }
+            for await (const message of subsequentRequests) {
+              yield await externalizeMessage(message);
+            }
+          } finally {
+            await subsequentRequests.return(undefined);
+          }
+          return undefined;
+        },
+      );
 
     /**
      * @param {string} description
@@ -345,7 +465,7 @@ export const makeMailboxMaker = ({
           type: 'message',
           ...envelopeRecord,
           description: envelope.description,
-          fields: envelope.fields,
+          fields: encodeFormFields(envelope.fields),
         });
       }
 
@@ -564,7 +684,7 @@ export const makeMailboxMaker = ({
           from: formula.from,
           to: formula.to,
           description: formula.description,
-          fields: formula.fields,
+          fields: decodeFormFields(formula.fields),
           messageId: formula.messageId,
           ...(formula.replyTo !== undefined && { replyTo: formula.replyTo }),
           number: messageNumber,
@@ -752,6 +872,27 @@ export const makeMailboxMaker = ({
           messageNumber,
           harden([{ envelope: harden({ ...envelope, done }), done, date }]),
         );
+        // Re-provide the mailbox's retained pins on every delivery, not once
+        // per restart. This is deliberate and load-bearing: the durability
+        // guarantee this feature adds is that a pinned agent-side responder
+        // resurrects on the *next message* after its worker was canceled
+        // mid-life (see the "survives worker cancellation" integration test),
+        // not only after a whole-daemon restart. A worker can die at any point
+        // in the mailbox's lifetime with no restart to reset a once-per-process
+        // gate, so the revive must run on each delivery to catch it before the
+        // message-received notification is published to a now-dead reader.
+        // The steady-state cost is bounded: `provide` memoizes live formulas
+        // via `controllerForId`, so re-providing an already-incarnated pin is
+        // cheap; the residual per-delivery work is one atomic `listValues`
+        // snapshot, acceptable for the small pin sets a mailbox accumulates.
+        // (Amortizing to once-per-restart was
+        // considered and rejected: it silently defeats mid-life worker-cancel
+        // resurrection.)
+        await reincarnateMailboxPins({
+          selfId,
+          getFormulaForId,
+          provide,
+        });
         messagesTopic.publisher.next(message);
       });
     };
@@ -1283,11 +1424,7 @@ export const makeMailboxMaker = ({
           throw new Error(`Missing value for field ${q(name)}`);
         }
         const effectivePattern = pattern !== undefined ? pattern : M.string();
-        mustMatch(
-          values[name],
-          /** @type {import('@endo/patterns').Pattern} */ (effectivePattern),
-          `field ${q(name)}`,
-        );
+        mustMatch(values[name], effectivePattern, `field ${q(name)}`);
       }
 
       // Marshal the values record.

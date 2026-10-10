@@ -1,0 +1,2 @@
+# engine=ironhorse features=default corpus=annexB/built-ins/String/prototype/split tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/built-ins/String/prototype/split/custom-splitter-emulates-undefined.js sloppy skip:feature:IsHTMLDDA

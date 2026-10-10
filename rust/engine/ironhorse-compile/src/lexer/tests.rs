@@ -5,6 +5,7 @@
 use crate::lexer::Lexer;
 use crate::token::Token;
 use crate::{tokenize, LexErrorKind};
+use ironhorse_text::SymbolName;
 
 /// A `&str` as UTF-16 code units — the lexer's cooked/raw string
 /// representation, so a fixture can spell an expected value as text.
@@ -14,7 +15,11 @@ fn w(s: &str) -> Vec<u16> {
 
 /// The token kinds of `source`, dropping the trailing EOF.
 fn kinds(source: &str) -> Vec<Token> {
-    let mut v: Vec<Token> = tokenize(source).expect("lex ok").into_iter().map(|l| l.token).collect();
+    let mut v: Vec<Token> = tokenize(source)
+        .expect("lex ok")
+        .into_iter()
+        .map(|l| l.token)
+        .collect();
     assert_eq!(v.pop(), Some(Token::Eof), "stream ends in EOF");
     v
 }
@@ -50,7 +55,10 @@ fn punctuators_maximal_munch() {
 #[test]
 fn optional_chain_vs_number() {
     // `?.` is a chain, but `?.5` is question-mark then `.5`.
-    assert_eq!(kinds("a?.b"), vec![Token::Identifier, Token::Chain, Token::Identifier]);
+    assert_eq!(
+        kinds("a?.b"),
+        vec![Token::Identifier, Token::Chain, Token::Identifier]
+    );
     assert_eq!(
         kinds("a?.5"),
         vec![Token::Identifier, Token::QuestionMark, Token::Number]
@@ -59,9 +67,15 @@ fn optional_chain_vs_number() {
 
 #[test]
 fn keywords_and_contextual() {
-    assert_eq!(kinds("if else return"), vec![Token::If, Token::Else, Token::Return]);
+    assert_eq!(
+        kinds("if else return"),
+        vec![Token::If, Token::Else, Token::Return]
+    );
     // `let` and `static` are keywords only in strict mode.
-    assert_eq!(kinds("let static"), vec![Token::Identifier, Token::Identifier]);
+    assert_eq!(
+        kinds("let static"),
+        vec![Token::Identifier, Token::Identifier]
+    );
     let mut lexer = Lexer::new("let yield await");
     lexer.set_strict(true);
     lexer.set_generator(true);
@@ -95,9 +109,23 @@ fn escaped_identifier() {
     // `\u{62}` decodes to `b`, with the escaped flag set.
     let toks = tokenize(r"a \u{62}").unwrap();
     assert_eq!(toks[0].token, Token::Identifier);
-    assert_eq!(toks[0].symbol.as_deref(), Some("a"));
+    assert_eq!(
+        toks[0]
+            .symbol
+            .as_ref()
+            .and_then(SymbolName::to_text)
+            .as_deref(),
+        Some("a")
+    );
     assert!(!toks[0].escaped);
-    assert_eq!(toks[1].symbol.as_deref(), Some("b"));
+    assert_eq!(
+        toks[1]
+            .symbol
+            .as_ref()
+            .and_then(SymbolName::to_text)
+            .as_deref(),
+        Some("b")
+    );
     assert!(toks[1].escaped);
     // An escaped keyword still classifies as the keyword (the "escaped
     // keyword" error lives in a later pass, matching XS).
@@ -110,7 +138,14 @@ fn escaped_identifier() {
 fn private_identifier() {
     let toks = tokenize("#field").unwrap();
     assert_eq!(toks[0].token, Token::PrivateIdentifier);
-    assert_eq!(toks[0].symbol.as_deref(), Some("#field"));
+    assert_eq!(
+        toks[0]
+            .symbol
+            .as_ref()
+            .and_then(SymbolName::to_text)
+            .as_deref(),
+        Some("#field")
+    );
 }
 
 #[test]
@@ -119,7 +154,14 @@ fn unicode_identifier_astral() {
     let src = "\u{1D400}x";
     let toks = tokenize(src).unwrap();
     assert_eq!(toks[0].token, Token::Identifier);
-    assert_eq!(toks[0].symbol.as_deref(), Some("\u{1D400}x"));
+    assert_eq!(
+        toks[0]
+            .symbol
+            .as_ref()
+            .and_then(SymbolName::to_text)
+            .as_deref(),
+        Some("\u{1D400}x")
+    );
 }
 
 #[test]
@@ -178,10 +220,16 @@ fn separator_errors() {
 #[test]
 fn strings_and_escapes() {
     let toks = tokenize(r#" "a\n\t\x41B\u{1F600}" "#).unwrap();
-    assert_eq!(toks[0].string.as_deref(), Some(w("a\n\tAB\u{1F600}").as_slice()));
+    assert_eq!(
+        toks[0].string.as_deref(),
+        Some(w("a\n\tAB\u{1F600}").as_slice())
+    );
     assert!(toks[0].escaped);
     // Raw keeps the escapes verbatim.
-    assert_eq!(toks[0].raw.as_deref(), Some(w(r"a\n\t\x41B\u{1F600}").as_slice()));
+    assert_eq!(
+        toks[0].raw.as_deref(),
+        Some(w(r"a\n\t\x41B\u{1F600}").as_slice())
+    );
 }
 
 #[test]
@@ -348,8 +396,14 @@ fn parse_meter_advances_per_token() {
     }
     // a, +, b, EOF = 4 tokens.
     assert_eq!(count, 4);
-    assert_eq!(lexer.meter().computrons(), 4);
-    assert_eq!(crate::meter::PARSE_METER_RELEASE, "ironhorse-meter-0");
+    assert_eq!(
+        lexer.meter().raw(),
+        4 * crate::meter::PARSE_TOKEN_METERING + 5 * ironhorse_meter::COMPILE_SOURCE_BYTE_METERING
+    );
+    assert_eq!(
+        crate::meter::PARSE_METER_RELEASE,
+        ironhorse_meter::COST_TABLE_VERSION
+    );
 }
 
 #[test]

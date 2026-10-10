@@ -6,6 +6,8 @@
 //
 // Reference: https://github.com/chaos/diod/blob/master/protocol.md
 
+const { freeze } = Object;
+
 /**
  * Streaming writer that grows the underlying buffer as needed.
  *
@@ -151,6 +153,18 @@ harden(wrapMessage);
  * the cap, a local client could declare an arbitrary size and
  * force unbounded `Buffer.concat` growth.
  *
+ * The two records are frozen rather than hardened. `harden` is transitive,
+ * and both carry a Buffer view: hardening a typed array walks every index —
+ * `ownKeys`, a descriptor per element, then the generic traversal enqueueing
+ * each one — which is ~19ms for a 64 KiB payload here, and the `rest` view is
+ * the *whole* unconsumed receive buffer, so the drain loop paid that per
+ * message against a backlog that could be far larger than one frame. It buys
+ * no integrity in exchange: `harden` cannot make a typed array's elements
+ * immutable (integer-indexed properties are permanently writable, which is why
+ * SES only `preventExtensions` on them), so the traversal was protecting
+ * against expandos on views we allocate here and hand straight to a reader.
+ * Freezing the records keeps the shape immutable at O(1).
+ *
  * @param {Buffer} buf
  * @param {number} [maxSize]
  */
@@ -167,8 +181,8 @@ export const tryParseMessage = (buf, maxSize) => {
   const type = buf.readUInt8(4);
   const tag = buf.readUInt16LE(5);
   const payload = buf.subarray(7, size);
-  return harden({
-    msg: harden({ type, tag, payload }),
+  return freeze({
+    msg: freeze({ type, tag, payload }),
     rest: buf.subarray(size),
   });
 };

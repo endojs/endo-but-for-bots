@@ -1,0 +1,419 @@
+// @ts-check
+import '@endo/init';
+import test from 'ava';
+import { E } from '@endo/eventual-send';
+import { makeExo } from '@endo/exo';
+import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { HostedToolSetInterface } from '@endo/hosted-agent';
+
+import {
+  CLAUDE_CLI_MODELS,
+  makeClaudeBackendFactory,
+} from '../src/claude-backend-factory.js';
+
+const drain = async reader => {
+  const events = [];
+  for await (const value of iterateReader(reader)) {
+    events.push(value);
+  }
+  return events;
+};
+
+/**
+ * A fake ClaudeClient: each send() hands back a fresh buffered reader the test
+ * drives, and records the prompt and options it was given.
+ *
+ * @param {() => void} [onTerminate] - observes the client's own stop.
+ */
+const makeFakeClient = (onTerminate = () => {}) => {
+  /** @type {Array<{ prompt: string, opts: Record<string, unknown>, push: (event: object) => void, killed: () => boolean }>} */
+  const turns = [];
+  let interrupts = 0;
+  let idle = true;
+  const client = harden({
+    async terminate() {
+      idle = true;
+      onTerminate();
+    },
+    async send(prompt, opts = {}) {
+      let killed = false;
+      const { push, reader, setOnClose } = makeBufferedReader();
+      setOnClose(() => {
+        killed = true;
+      });
+      idle = false;
+      turns.push({ prompt, opts: { ...opts }, push, killed: () => killed });
+      return reader;
+    },
+    async interrupt() {
+      interrupts += 1;
+      if (idle)
+        throw Error('ClaudeClient(x): no in-flight prompt to interrupt.');
+      idle = true;
+    },
+    async status() {
+      return harden({ sessionId: 'x', conversationStarted: turns.length > 0 });
+    },
+  });
+  return { client, turns, interrupts: () => interrupts };
+};
+
+const makeToolSet = (execute = async () => 'ok') =>
+  makeExo('HostedToolSet', HostedToolSetInterface, {
+    async describe() {
+      return harden({
+        dynamicTools: [
+          {
+            name: 'lookup',
+            description: 'look up a pet name',
+            inputSchema: { type: 'object', properties: {} },
+          },
+        ],
+        toolSetId: 'tools-v1',
+      });
+    },
+    execute,
+    help: () => 'test tool set',
+  });
+
+/**
+ * Wire a factory over recording powers. `bridge` stands in for the MCP socket
+ * server; `pending` lets a test simulate an in-flight Endo tool call.
+ */
+const makeHarness = () => {
+  const log = [];
+  const { client, turns, interrupts } = makeFakeClient(() => {
+    log.push(['stop-client']);
+  });
+  let pending = 0;
+  let bridgeClosed = 0;
+  const factory = makeClaudeBackendFactory({
+    provisionClient: async (sessionId, options) => {
+      log.push(['provision', sessionId, options]);
+      return client;
+    },
+    cancelClient: async sessionId => {
+      log.push(['cancel', sessionId]);
+    },
+    removeSession: async sessionId => {
+      log.push(['remove', sessionId]);
+    },
+    startToolBridge: async (sessionId, toolSet) => {
+      log.push(['bridge', sessionId, await E(toolSet).describe()]);
+      return harden({
+        socketDir: `/tmp/claude-mcp/${sessionId}`,
+        innerDir: '/endo-mcp',
+        configPath: '/endo-mcp/mcp.json',
+        pendingCalls: () => pending,
+        close: async () => {
+          bridgeClosed += 1;
+        },
+      });
+    },
+    removeToolBridge: async sessionId => {
+      log.push(['remove-bridge', sessionId]);
+    },
+  });
+  return {
+    factory,
+    turns,
+    interrupts,
+    log,
+    setPending: n => {
+      pending = n;
+    },
+    bridgeClosed: () => bridgeClosed,
+  };
+};
+
+test('describe() and listModels() present Claude Code as a hosted backend', async t => {
+  const { factory } = makeHarness();
+  t.deepEqual(await E(factory).describe(), {
+    id: 'claude',
+    title: 'Claude Code',
+    kind: 'hosted',
+    continuity: 'transcript',
+    toolOwnership: 'endo',
+  });
+  const models = await E(factory).listModels();
+  t.deepEqual(models, CLAUDE_CLI_MODELS);
+  t.is(models.filter(model => model.default).length, 1);
+  t.true(models.every(model => model.reasoningEfforts.length === 0));
+});
+
+test('create() pins the tool set into an MCP bridge and provisions the client behind it', async t => {
+  const { factory, log } = makeHarness();
+  const { run, admin } = await E(factory).create(
+    harden({
+      sessionId: 'session-a',
+      model: 'claude-sonnet-4-6',
+      systemPrompt: 'You are Floot.',
+      workspaceHostPath: '/git/worktrees/session-a',
+    }),
+    makeToolSet(),
+  );
+  t.truthy(run);
+  t.truthy(admin);
+  t.is(log[0][0], 'bridge');
+  t.is(log[0][1], 'session-a');
+  t.deepEqual(
+    log[0][2].dynamicTools.map(tool => tool.name),
+    ['lookup'],
+  );
+  t.deepEqual(log[1], [
+    'provision',
+    'session-a',
+    {
+      mcp: {
+        socketDir: '/tmp/claude-mcp/session-a',
+        innerDir: '/endo-mcp',
+        configPath: '/endo-mcp/mcp.json',
+      },
+      model: 'claude-sonnet-4-6',
+      workspaceDir: '/git/worktrees/session-a',
+    },
+  ]);
+  const status = await E(run).status();
+  t.is(status.pendingToolCalls, 0);
+  t.deepEqual(status.toolBridge, {
+    innerDir: '/endo-mcp',
+    configPath: '/endo-mcp/mcp.json',
+  });
+});
+
+test('create() refuses an unknown model or a reasoning effort', async t => {
+  const { factory } = makeHarness();
+  await t.throwsAsync(
+    () =>
+      E(factory).create(
+        harden({ sessionId: 'session-a', model: 'gpt-9' }),
+        makeToolSet(),
+      ),
+    { message: /Unknown Claude model/ },
+  );
+  await t.throwsAsync(
+    () =>
+      E(factory).create(
+        harden({ sessionId: 'session-a', reasoningEffort: 'high' }),
+        makeToolSet(),
+      ),
+    { message: /no reasoning-effort setting/ },
+  );
+  await t.throwsAsync(
+    () => E(factory).create(harden({ sessionId: '../x' }), makeToolSet()),
+    { message: /bounded lowercase path component/ },
+  );
+});
+
+test('send() forwards the session model and persona and translates the CLI stream', async t => {
+  const { factory, turns } = makeHarness();
+  const { run } = await E(factory).create(
+    harden({
+      sessionId: 'session-a',
+      model: 'claude-opus-5',
+      systemPrompt: 'default persona',
+    }),
+    makeToolSet(),
+  );
+  const readerP = E(run).send(
+    'build it',
+    harden({ systemPrompt: 'turn persona' }),
+  );
+  for (let tries = 0; turns.length === 0 && tries < 50; tries += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await null;
+  }
+  t.is(turns.length, 1);
+  t.is(turns[0].prompt, 'build it');
+  t.deepEqual(turns[0].opts, {
+    model: 'claude-opus-5',
+    systemPrompt: 'turn persona',
+  });
+  turns[0].push({ type: 'system', subtype: 'init' });
+  turns[0].push({
+    type: 'assistant',
+    message: {
+      content: [
+        { type: 'text', text: 'Building. ' },
+        {
+          type: 'tool_use',
+          id: 'toolu_1',
+          name: 'mcp__endo__lookup',
+          input: { name: 'workspace' },
+        },
+      ],
+    },
+  });
+  turns[0].push({
+    type: 'user',
+    message: {
+      content: [
+        { type: 'tool_result', tool_use_id: 'toolu_1', content: 'found' },
+      ],
+    },
+  });
+  turns[0].push({
+    type: 'result',
+    subtype: 'success',
+    result: 'Building. ',
+    usage: { input_tokens: 20, output_tokens: 5 },
+  });
+  turns[0].push({ type: 'end' });
+  t.deepEqual(await drain(await readerP), [
+    { type: 'phase', phase: 'claude session starting' },
+    { type: 'phase', phase: 'responding' },
+    { type: 'text-delta', text: 'Building. ' },
+    {
+      type: 'tool-call',
+      id: 'toolu_1',
+      name: 'mcp__endo__lookup',
+      args: '{"name":"workspace"}',
+    },
+    {
+      type: 'tool-result',
+      id: 'toolu_1',
+      name: 'mcp__endo__lookup',
+      result: 'found',
+    },
+    { type: 'usage', inputTokens: 20, outputTokens: 5 },
+    { type: 'end' },
+  ]);
+
+  // Without a per-turn persona the session prompt applies.
+  E(run).send('again');
+  for (let tries = 0; turns.length < 2 && tries < 50; tries += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await null;
+  }
+  t.deepEqual(turns[1].opts, {
+    model: 'claude-opus-5',
+    systemPrompt: 'default persona',
+  });
+});
+
+test('interrupt() is a barrier that tolerates an idle client; acknowledge() is a no-op', async t => {
+  const { factory, turns, interrupts } = makeHarness();
+  const { run } = await E(factory).create(
+    harden({ sessionId: 'session-a' }),
+    makeToolSet(),
+  );
+  // Nothing in flight: the client refuses, the backend reports success.
+  await t.notThrowsAsync(() => E(run).interrupt());
+  t.is(interrupts(), 1);
+  await E(run).send('long task');
+  await t.notThrowsAsync(() => E(run).interrupt());
+  t.is(interrupts(), 2);
+  t.is(turns.length, 1);
+  await t.notThrowsAsync(() => E(run).acknowledge('whatever'));
+});
+
+test('terminate() stops the client, closes the bridge, then cancels; it refuses under a live tool call', async t => {
+  const { factory, log, setPending, bridgeClosed } = makeHarness();
+  const { admin } = await E(factory).create(
+    harden({ sessionId: 'session-a' }),
+    makeToolSet(),
+  );
+  setPending(1);
+  await t.throwsAsync(() => E(admin).terminate(), {
+    message: /1 unsettled Endo tool call/,
+  });
+  // Nothing was torn down under the running call.
+  t.is(bridgeClosed(), 0);
+  t.false(log.some(entry => entry[0] === 'stop-client'));
+  t.false(log.some(entry => entry[0] === 'cancel'));
+
+  setPending(0);
+  await E(admin).terminate();
+  t.is(bridgeClosed(), 1);
+  // The worker-side stop (slice, mounts, grant) is awaited before the formula
+  // is cancelled, so a successor's provision cannot race the predecessor's
+  // teardown.
+  t.deepEqual(log.slice(-2), [['stop-client'], ['cancel', 'session-a']]);
+  // Idempotent.
+  await E(admin).terminate();
+  t.is(bridgeClosed(), 1);
+  t.is(log.filter(entry => entry[0] === 'stop-client').length, 1);
+});
+
+test('a tool call that lands after the client stopped still defers the teardown', async t => {
+  // The client is stopped once; the retry resumes from the pending-call check.
+  const { factory, log, setPending, bridgeClosed } = makeHarness();
+  const { admin } = await E(factory).create(
+    harden({ sessionId: 'session-a' }),
+    makeToolSet(),
+  );
+  let stops = 0;
+  setPending(0);
+  // Simulate the race: the pending count rises while the client stops.
+  const original = log.push.bind(log);
+  log.push = (...entries) => {
+    if (entries[0]?.[0] === 'stop-client') {
+      stops += 1;
+      setPending(1);
+    }
+    return original(...entries);
+  };
+  await t.throwsAsync(() => E(admin).terminate(), {
+    message: /1 unsettled Endo tool call/,
+  });
+  t.is(stops, 1);
+  t.is(bridgeClosed(), 0);
+  setPending(0);
+  await E(admin).terminate();
+  t.is(stops, 1, 'the client is not stopped twice');
+  t.is(bridgeClosed(), 1);
+  t.deepEqual(log.at(-1), ['cancel', 'session-a']);
+});
+
+test('a second create() for a live session stops the first instance first', async t => {
+  const { factory, log, bridgeClosed } = makeHarness();
+  await E(factory).create(harden({ sessionId: 'session-a' }), makeToolSet());
+  await E(factory).create(harden({ sessionId: 'session-a' }), makeToolSet());
+  t.is(bridgeClosed(), 1, 'the predecessor bridge was closed');
+  t.deepEqual(
+    log.map(entry => entry[0]),
+    ['bridge', 'provision', 'stop-client', 'cancel', 'bridge', 'provision'],
+  );
+});
+
+test('destroy() stops a live instance, then removes the session and its bridge', async t => {
+  const { factory, log } = makeHarness();
+  await E(factory).create(harden({ sessionId: 'session-a' }), makeToolSet());
+  await E(factory).destroy(harden({ sessionId: 'session-a' }));
+  t.deepEqual(
+    log.map(entry => entry[0]),
+    ['bridge', 'provision', 'stop-client', 'cancel', 'remove', 'remove-bridge'],
+  );
+  // Replay after the session is gone is not an error.
+  await t.notThrowsAsync(() =>
+    E(factory).destroy(harden({ sessionId: 'session-a' })),
+  );
+});
+
+test('a provisioning failure releases the bridge it started', async t => {
+  let bridgeClosed = 0;
+  const factory = makeClaudeBackendFactory({
+    provisionClient: async () => {
+      throw Error('image pull failed');
+    },
+    cancelClient: async () => {},
+    removeSession: async () => {},
+    startToolBridge: async () =>
+      harden({
+        socketDir: '/tmp/x',
+        innerDir: '/endo-mcp',
+        configPath: '/endo-mcp/mcp.json',
+        pendingCalls: () => 0,
+        close: async () => {
+          bridgeClosed += 1;
+        },
+      }),
+    removeToolBridge: async () => {},
+  });
+  await t.throwsAsync(
+    () => E(factory).create(harden({ sessionId: 'session-a' }), makeToolSet()),
+    { message: /image pull failed/ },
+  );
+  t.is(bridgeClosed, 1);
+});

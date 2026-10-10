@@ -1,0 +1,19 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/Now/instant tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/Now/instant/extensible.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/instant/extensible.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/instant/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/instant/length.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/instant/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/instant/name.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/instant/not-a-constructor.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/instant/not-a-constructor.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/instant/prop-desc.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/instant/prop-desc.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/instant/return-value-distinct.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/instant/return-value-distinct.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/instant/return-value-instance.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/instant/return-value-instance.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/instant/return-value-prototype.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/instant/return-value-prototype.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/instant/return-value-value.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/instant/return-value-value.js strict skip:oracle-host-missing-temporal

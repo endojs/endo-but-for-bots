@@ -1,0 +1,73 @@
+#!/usr/bin/env node
+// @ts-check
+/* global process */
+
+import '@endo/init';
+
+import Database from 'better-sqlite3';
+import { openRegistry } from '../src/server.js';
+import { makeToken } from '../src/grants.js';
+import { parseIsoInstant } from '../src/config.js';
+
+const usage = `usage: npm-registry-admin <command>
+  grants list
+  grants issue <id> <subject> <package[,package...]> <expires-iso>
+      prints a fresh bearer token once; only its hash is stored
+  grants revoke <id>
+  verify
+      exit 1 if any stored version is missing its tarball or tree
+Reads REGISTRY_STATE_DIRECTORY (and PUBLIC_REGISTRY_URL, default https://npm.minion.town).`;
+
+const [command, subcommand, ...operands] = process.argv.slice(2);
+const stateDirectory = process.env.REGISTRY_STATE_DIRECTORY;
+if (!stateDirectory || !command) {
+  console.error(usage);
+  process.exit(2);
+}
+const { grants, registry, database } = openRegistry({
+  stateDirectory,
+  publicOrigin: process.env.PUBLIC_REGISTRY_URL || 'https://npm.minion.town',
+  openDatabase: file => new Database(file),
+});
+
+let status = 0;
+if (command === 'grants' && subcommand === 'list') {
+  console.log(JSON.stringify(grants.listGrants(), null, 2));
+} else if (
+  command === 'grants' &&
+  subcommand === 'issue' &&
+  operands.length === 4
+) {
+  const [id, subject, packages, expires] = operands;
+  const expiresAt = parseIsoInstant(expires);
+  if (expiresAt === undefined) {
+    console.error(`invalid expiry ${expires}`);
+    process.exit(2);
+  }
+  const token = makeToken();
+  grants.putGrant({
+    id,
+    subject,
+    packages: packages.split(',').map(entry => entry.trim()),
+    expiresAt,
+    token,
+  });
+  console.log(token);
+} else if (
+  command === 'grants' &&
+  subcommand === 'revoke' &&
+  operands.length === 1
+) {
+  status = grants.revokeGrant(operands[0]) ? 0 : 1;
+} else if (command === 'verify') {
+  const missing = registry.verifyStore();
+  for (const coordinate of missing) {
+    console.error(`missing content: ${coordinate}`);
+  }
+  status = missing.length > 0 ? 1 : 0;
+} else {
+  console.error(usage);
+  status = 2;
+}
+/** @type {any} */ (database).close?.();
+process.exit(status);

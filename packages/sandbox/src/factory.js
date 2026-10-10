@@ -7,7 +7,7 @@ import { E } from '@endo/eventual-send';
 import { Fail, makeError, q, X } from '@endo/errors';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makeExo } from '@endo/exo';
-import { M } from '@endo/patterns';
+import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iterator.js';
 
 import {
   MountHandleInterface,
@@ -17,12 +17,6 @@ import {
 } from './interfaces.js';
 import { makeEagerReader } from './eager-reader.js';
 import { resolveLimits } from './limits.js';
-
-const AsyncWriterInterface = M.interface('SandboxWriter', {
-  next: M.call().optional(M.any()).returns(M.promise()),
-  return: M.call().optional(M.any()).returns(M.promise()),
-  throw: M.call().optional(M.any()).returns(M.promise()),
-});
 
 /** @import { MakeSandboxFactoryInput, SandboxFactory, SandboxMakeOpts, SandboxDriver, BackendProbe, MountSpec, SliceSpec, MountCap, MountMode, SandboxHandle, ProcessHandle, MountHandle, SpawnOpts, DriverProcess, RootfsSpec, TerminationSignal } from './types.js' */
 
@@ -45,7 +39,11 @@ const METHOD_HELP = harden({
     'listBackends() — probe every registered driver. Returns Array<BackendProbe>.',
   make:
     'make(opts) — mint a new SandboxHandle. opts.rootfs is required; ' +
-    'opts.network defaults to "none"; opts.backend defaults to "auto".',
+    'opts.network defaults to "none"; opts.backend defaults to "auto". ' +
+    'opts.policy enforces a deployment policy and makes policy() report ' +
+    'its attestation: it requires network "broker-only", a ' +
+    'digest-pinned OCI rootfs, and an empty opts.mounts, since the ' +
+    'policy declares the whole mount table.',
 });
 
 const HANDLE_HELP_BASE = `\
@@ -57,6 +55,7 @@ driver tears down the underlying namespace.
 
 Methods:
   spawn(argv, opts)   Spawn a process in the slice.
+  policy()            Report the slice's policy attestation.
   mount(cap, …)       Bind a Mount capability into the slice.
   scratch(innerPath)  Mint an ephemeral scratch mount.
   open(innerPath)     Open a single file inside the slice.
@@ -232,25 +231,31 @@ const raceDelay = async (work, ms, makeDelay = delay) => {
 harden(raceDelay);
 
 /**
- * Wrap driver-side stdin write closures as a `WriterRef`-shaped exo.
+ * Wrap driver-side stdin write closures as the `PassableBytesWriter` that
+ * `ProcessHandle.stdin()` hands out: the same exo-stream plumbing as the
+ * stdout and stderr readers, driven by `iterateBytesWriter` with the bytes
+ * crossing CapTP base64-encoded. A writer that took chunks directly could not
+ * be used at all: a mutable `Uint8Array` is not passable, so its own guard
+ * refused every write.
+ *
  * The driver exposes `writeStdin(chunk)` / `closeStdin()` instead of
  * the raw Node stream so the DriverProcess surface remains hardenable
- * (Node streams cannot be deep-frozen).
+ * (Node streams cannot be deep-frozen). A process spawned without a
+ * writable stdin rejects every write: the pump acknowledges a chunk its sink
+ * accepted whatever the sink answers, so reporting `done` there would let
+ * the bytes vanish while the caller believes they were delivered.
  *
  * @param {(chunk: Uint8Array) => Promise<void>} [write]
  * @param {() => Promise<void>} [close]
- * @returns {object}
  */
-const makeWriterExoFromClosures = (write, close) => {
-  return makeExo(
-    'SandboxWriter',
-    AsyncWriterInterface,
-    /** @type {any} */ ({
-      /** @param {Uint8Array} [chunk] */
+const makeWriterExoFromClosures = (write, close) =>
+  bytesWriterFromIterator(
+    harden({
+      /** @param {Uint8Array} chunk */
       async next(chunk) {
         await null;
-        if (write === undefined || chunk === undefined) {
-          return harden({ done: true, value: undefined });
+        if (write === undefined) {
+          throw makeError(X`sandbox process stdin is not writable`);
         }
         await write(chunk);
         return harden({ done: false, value: undefined });
@@ -260,13 +265,8 @@ const makeWriterExoFromClosures = (write, close) => {
         if (close !== undefined) await close();
         return harden({ done: true, value: undefined });
       },
-      async throw(error) {
-        await null;
-        throw error;
-      },
     }),
   );
-};
 harden(makeWriterExoFromClosures);
 
 /**
@@ -378,14 +378,23 @@ export const makeSandboxFactory = (
 
   /**
    * @param {SandboxMakeOpts['backend']} selector
+   * @param {boolean} [needsPolicy] Consider only drivers that can
+   *   enforce and attest a slice policy.
    * @returns {Promise<{ driver?: SandboxDriver; failures: BackendProbe[] }>}
    */
-  const pickDriver = async selector => {
+  const pickDriver = async (selector, needsPolicy = false) => {
     await null;
-    const candidates =
+    const named =
       selector === undefined || selector === 'auto'
         ? driverList
         : driverList.filter(driver => driver.name === selector);
+    // A backend that cannot attest is not a candidate for a slice that
+    // has to be attested. Without this, `auto` picks the first available
+    // driver — bwrap, which `agent.js` registers first — and every
+    // policy slice fails on a host that has both backends installed.
+    const candidates = needsPolicy
+      ? named.filter(driver => driver.policy !== undefined)
+      : named;
     /** @type {BackendProbe[]} */
     const failures = [];
     for (const driver of candidates) {
@@ -484,14 +493,17 @@ export const makeSandboxFactory = (
   const make = async opts => {
     if (ownerLost !== undefined) throw ownerCancelledError(ownerLost);
     const selector = opts.backend ?? 'auto';
-    const selected = await pickDriver(selector);
+    const needsPolicy = opts.policy !== undefined;
+    const selected = await pickDriver(selector, needsPolicy);
     const { driver } = selected;
     if (driver === undefined) {
       const reasons = selected.failures
         .map(probe => `${probe.name}: ${probe.reason ?? 'unavailable'}`)
         .join('; ');
       throw makeError(
-        X`no backend available for ${q(selector)}: ${reasons || 'no drivers registered'}`,
+        needsPolicy
+          ? X`no backend that can enforce and attest a slice policy is available for ${q(selector)}: ${reasons || 'no policy-capable driver registered'}`
+          : X`no backend available for ${q(selector)}: ${reasons || 'no drivers registered'}`,
       );
     }
 
@@ -501,8 +513,12 @@ export const makeSandboxFactory = (
     const mountSpecs = opts.mounts ?? [];
     const resolvedMounts = await Promise.all(mountSpecs.map(resolveMount));
     let scratchHostPath = '';
+    // A policy declares the slice's whole mount table, and the scratch
+    // layer is a writable path outside it. Minting one anyway would put
+    // every policy slice into the driver's own "no undeclared mount"
+    // rejection, on any daemon whose powers can actually allocate one.
     try {
-      scratchHostPath = await acquireScratchHostPath();
+      if (!needsPolicy) scratchHostPath = await acquireScratchHostPath();
     } catch (e) {
       // Scratch is optional in Phase 1 — some callers may want a
       // pure read-only slice. Re-throw only if we actually need it
@@ -533,6 +549,10 @@ export const makeSandboxFactory = (
       env: harden({ ...(opts.env ?? {}) }),
       cwd: opts.cwd,
       limits,
+      // Passed through as the caller wrote it: validating a policy
+      // means saying which controls the backend can enforce and read
+      // back, and only the driver knows that.
+      ...(opts.policy !== undefined ? { policy: opts.policy } : {}),
     });
 
     const driverSlice = await driver.prepareSlice(sliceSpec);
@@ -546,6 +566,25 @@ export const makeSandboxFactory = (
       /** @type {any} */ (driverSlice),
       sliceSpec,
     );
+
+    /**
+     * Refuse the mount-granting methods on a policy slice.
+     *
+     * The policy declares the whole mount table and `policy()` attests
+     * that table as exact. Handing back a `MountHandle` afterwards would
+     * consume a host scratch allocation the daemon must later reclaim and
+     * report an `innerPath` the slice does not have — a capability that
+     * contradicts the attestation the same slice hands out.
+     *
+     * @param {string} method
+     */
+    const assertNoPolicy = method => {
+      if (needsPolicy) {
+        throw makeError(
+          X`${q(method)} is not available on a policy slice: the policy declares the whole mount table`,
+        );
+      }
+    };
 
     /** @type {Set<{ killAndReap: (reason: Error, initialSignal?: TerminationSignal) => Promise<void> }>} */
     const liveProcesses = new Set();
@@ -982,6 +1021,7 @@ export const makeSandboxFactory = (
      */
     const mountInSlice = async (cap, innerPath, mode = 'ro') => {
       assertRunning();
+      assertNoPolicy('mount');
       // Phase 1 only supports mounts declared at slice construction;
       // dynamic mounts after the fact would require remounting bwrap.
       // We still mint a tracker so dispose() can iterate.
@@ -993,6 +1033,7 @@ export const makeSandboxFactory = (
      */
     const scratchInSlice = async innerPath => {
       assertRunning();
+      assertNoPolicy('scratch');
       // Lifecycle is bound to the slice; the daemon's scratch GC
       // sweeps the host directory when the cap is unpinned.
       const scratchCap = /** @type {MountCap} */ (
@@ -1014,6 +1055,25 @@ export const makeSandboxFactory = (
 
     const forkSlice = async () => {
       throw makeError(X`fork not implemented before Phase 3`);
+    };
+
+    /**
+     * Report the slice's policy attestation.
+     *
+     * `assertRunning` first: an attestation is a statement about a
+     * slice that is still confined by what it describes, and a disposed
+     * slice is not confined by anything.
+     *
+     * @returns {Promise<import('./types.js').SlicePolicyAttestation>}
+     */
+    const attestPolicy = async () => {
+      assertRunning();
+      if (driver.policy === undefined) {
+        throw makeError(
+          X`backend ${q(driver.name)} cannot attest a slice policy`,
+        );
+      }
+      return driver.policy(driverSlice);
     };
 
     const resetSlice = async () => {
@@ -1086,6 +1146,7 @@ export const makeSandboxFactory = (
         makeExo('SandboxHandle', SandboxHandleInterface, {
           help: () => `${HANDLE_HELP_BASE}\n${sliceRuntimeReport}`,
           spawn: spawnProc,
+          policy: attestPolicy,
           mount: mountInSlice,
           scratch: scratchInSlice,
           open: openInSlice,

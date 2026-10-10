@@ -1,0 +1,252 @@
+{
+  "description": "Further interp.rs and property.rs decomposition; measurements include the uncommitted declaration extraction over b4fa729af.",
+  "source_sha256": {
+    "rust/engine/ironhorse-vm/src/interp.rs": "362e58fd39305c3b27678e57f884f274e2d1808f94941b8390a7486a9d669bc9",
+    "rust/engine/ironhorse-vm/src/interp/admission.rs": "de4d42f5dceb2b76f6f85ea45a0d501c227c3a7beca0f0f29df5835d77b23541",
+    "rust/engine/ironhorse-vm/src/interp/apply.rs": "ddfa6b70c48ac61c5239fd79aced5f8fb3b46478e77853be684e9b5bb3580dfc",
+    "rust/engine/ironhorse-vm/src/interp/code.rs": "f0fdf90ef56bdd87ea81289b463da96c39ce801325277f78e7904ba3f4a47d85",
+    "rust/engine/ironhorse-vm/src/interp/coerce.rs": "f3d170a8451e2ebefdf337ebef3b52b5507a687885ef98bbcaadb133bbf53583",
+    "rust/engine/ironhorse-vm/src/interp/enumerate.rs": "1261d3eb0b690c9d4ab14b5feddaa4817dd1898fd9eb82c26d512fb4cabea4d6",
+    "rust/engine/ironhorse-vm/src/interp/environment.rs": "0c7dc63807e362953e536712c451f1abf3de026088435e8076c95b061f4de4b4",
+    "rust/engine/ironhorse-vm/src/interp/errors.rs": "de33e2d93dd28e83143d65f22bb6adcf9b131ad988d73e8d54455f987d33c5d8",
+    "rust/engine/ironhorse-vm/src/interp/eval.rs": "d2a91cf3efd9b3495b3583e91d0ea359fa42b642f66973c2802e124e3f036b48",
+    "rust/engine/ironhorse-vm/src/interp/frames.rs": "5b4bb0ae210e239e3a4db36548aa5331b4585d9008f23ec42ac838f184f953c5",
+    "rust/engine/ironhorse-vm/src/interp/function.rs": "e866fe657c7e9637d8983f1be380e1b52c6cfb0dd596328d4625a35673f589a4",
+    "rust/engine/ironhorse-vm/src/interp/intl_data.rs": "bf72f879b7c555f186ebc5c64ffbd48d89c95e0193ac8c578eeedcb542830b57",
+    "rust/engine/ironhorse-vm/src/interp/invoke.rs": "3bd574c2e55ff63919e8cfc7cc4fddc9fcdfd270608b681d22611fff212ef54d",
+    "rust/engine/ironhorse-vm/src/interp/iterable.rs": "71c0f5a10c08ddbce99e3640f9dd22ec6b9fe1299c0482fbc32bf87a2bbd57f9",
+    "rust/engine/ironhorse-vm/src/interp/metering.rs": "522f0e8535a0f0f5792c7cded7406e5b441d72f6ea55d80a57e49eab74fdf092",
+    "rust/engine/ironhorse-vm/src/interp/native_ids.rs": "798f0d188b39681e9722075672b7b30158d2333a9f353d93760a58390ae9f856",
+    "rust/engine/ironhorse-vm/src/interp/property.rs": "26cff81d290c637f0bbe8141b9b46f814f71bd0ac2070b0ff1c9a6d3710502bc",
+    "rust/engine/ironhorse-vm/src/interp/property/descriptors.rs": "1bcd56c37993c36477ce03ba9fb3916215b778643cb651916740d70ea3858c03",
+    "rust/engine/ironhorse-vm/src/interp/property/indexed.rs": "b1bb6a43a42264d034086ebaaed54905c4b3e61050956d1c6793889942d0c804",
+    "rust/engine/ironhorse-vm/src/interp/property/integrity.rs": "3a13bf7e45f6090d56be7df0635e79891317538fa2ac2a0810f3e234742c503e",
+    "rust/engine/ironhorse-vm/src/interp/property/keys.rs": "5631164fde62e67ded7e9a141115f8db9dbb997b4e4b6e9b162921bd80a89f7c",
+    "rust/engine/ironhorse-vm/src/interp/property/object.rs": "9f8afa9b3fd3a105e12e923c7cc4c092537927fb4f17e01c4cbf1b292f7ba5a4",
+    "rust/engine/ironhorse-vm/src/interp/property/ordinary.rs": "17eba84e743110e24910281831a9f744bdd364f9324feec263ee6e4388acd69c",
+    "rust/engine/ironhorse-vm/src/interp/property/proxy.rs": "99a79832553f20d9c8c504dd7df528198244282d2e0985b0f8c31c1a600fd554",
+    "rust/engine/ironhorse-vm/src/interp/property/read_index.rs": "61384f2dbe4cabe72a929e44d8a0139973d5ac116b99f78b1552090dcd1a76c2",
+    "rust/engine/ironhorse-vm/src/interp/render.rs": "38970b1fb44c97816283a465efc6f35fc8f4f80a89e01cbfa18fcc6229c06169",
+    "rust/engine/ironhorse-vm/src/interp/snapshot_rows.rs": "effd98131a092b12622e66814d8a96e86d4d406f018bd88cdd7922a7bb1acf3a",
+    "rust/engine/ironhorse-vm/src/interp/strings.rs": "26ab83f06a6dee7490f6034ba904f8ea25361bd877ea3a19857c9d6a1ef5ac37",
+    "rust/engine/ironhorse-vm/src/interp/unwind.rs": "30ddc7e71b0ddef06a1c15ed545fd650e2e1f9fc2c36a4b307853f2bcd0caa88",
+    "rust/engine/ironhorse-vm/tests/allocation_admission_audit.rs": "4f353f7dcdb3e6cc4a81072967a785c183336ba0d4d2193da48931b0020f8e40",
+    "rust/engine/ironhorse-vm/tests/dispatch_loop_control_transfer.rs": "d8b3dc534e56382c268dc54fa917896ba7a81791a07449b859f0b5e45957fedf",
+    "rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs": "d0a8f32496b15e4a6c9dc6c33efa2db3a3958d7995a586a94699fa69ac2516c6",
+    "rust/engine/ironhorse-vm/tests/throw_construction_sites.rs": "ca70fb5c69cf77726e311333a73bad6a38e9923f27dbaad9040602cb2e8ec643"
+  },
+  "validation": {
+    "engine_passed": 1508,
+    "engine_ignored": 35,
+    "sqlite_passed": 116,
+    "sqlite_ignored": 3,
+    "strict_vm_clippy": "passed",
+    "engine_fmt": "passed",
+    "vm_docs": "built with warnings"
+  },
+  "pinned_gate": {
+    "provenance": {
+      "commit": "b4fa729af8cd86a2048e48c392fd723093f71aec",
+      "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+      "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+      "machine": "arm64",
+      "cpu": "arm",
+      "fixture_sha256": "57186d5e665baee27203114dfad6615889863e3099fa57ca319d6927f6bda46d",
+      "build_environment": {
+        "CARGO_INCREMENTAL": "0",
+        "RUSTFLAGS": null,
+        "CARGO_ENCODED_RUSTFLAGS": null,
+        "RUST_MIN_STACK": "33554432",
+        "RUSTUP_TOOLCHAIN": null,
+        "CARGO_BUILD_TARGET": null
+      }
+    },
+    "medians": {
+      "dispatch_ms": 1051.953167,
+      "slots_ms": 482.834333,
+      "chunks_ms": 31.809291,
+      "attached_detached_ms": 19.003916,
+      "attached_resident_ms": 26.685875,
+      "attached_faulting_ms": 26.998542,
+      "slide_500_front_ms": 0.8545,
+      "slide_500_tail_ms": 0.703125,
+      "slide_2000_front_ms": 1.879,
+      "slide_2000_tail_ms": 0.744625,
+      "slide_8000_front_ms": 5.782666,
+      "slide_8000_tail_ms": 2.350666,
+      "gc_5000_full_first_ms": 2.682,
+      "gc_5000_full_steady_ms": 0.807,
+      "gc_5000_partial_ms": 0.401501,
+      "gc_5000_gate_ms": 0.002709,
+      "gc_5000_enum_ms": 0.021208,
+      "gc_5000_query_ms": 0.005583,
+      "gc_5000_free_ms": 0.374167,
+      "gc_5000_sweep_ns_per_slot": 26.72104769,
+      "gc_20000_full_first_ms": 10.982584,
+      "gc_20000_full_steady_ms": 2.956333,
+      "gc_20000_partial_ms": 1.752041,
+      "gc_20000_gate_ms": 0.012167,
+      "gc_20000_enum_ms": 0.034208,
+      "gc_20000_query_ms": 0.020458,
+      "gc_20000_free_ms": 1.683875,
+      "gc_20000_sweep_ns_per_slot": 25.023716363,
+      "gc_80000_full_first_ms": 43.613958,
+      "gc_80000_full_steady_ms": 11.6295,
+      "gc_80000_partial_ms": 7.102791,
+      "gc_80000_gate_ms": 0.0385,
+      "gc_80000_enum_ms": 0.060958,
+      "gc_80000_query_ms": 0.068666,
+      "gc_80000_free_ms": 6.934208,
+      "gc_80000_sweep_ns_per_slot": 23.611056236,
+      "gc_5000_generational_ms": 0.041041,
+      "gc_5000_full_partial_ms": 0.049958,
+      "gc_20000_generational_ms": 0.057833,
+      "gc_20000_full_partial_ms": 0.088167,
+      "gc_80000_generational_ms": 0.105041,
+      "gc_80000_full_partial_ms": 0.184125,
+      "placeholder_120320_ms": 0.016042,
+      "placeholder_500000_ms": 0.042834,
+      "placeholder_1000000_ms": 0.035417,
+      "placeholder_4000000_ms": 0.110958,
+      "wake_eager_ms": 10.919292,
+      "wake_lazy_ms": 1.5235
+    },
+    "maximum_ratio": 1.25,
+    "failures": [
+      "placeholder_500000_ms: 1.450x > 1.250x"
+    ],
+    "reference_provenance": {
+      "commit": "51b99651b63d4e652f9af4eae603422783233182",
+      "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+      "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+      "machine": "arm64",
+      "cpu": "arm",
+      "fixture_sha256": "57186d5e665baee27203114dfad6615889863e3099fa57ca319d6927f6bda46d",
+      "build_environment": {
+        "CARGO_INCREMENTAL": "0",
+        "RUSTFLAGS": null,
+        "CARGO_ENCODED_RUSTFLAGS": null,
+        "RUST_MIN_STACK": "33554432",
+        "RUSTUP_TOOLCHAIN": null,
+        "CARGO_BUILD_TARGET": null
+      }
+    },
+    "reference_medians": {
+      "dispatch_ms": 1044.250542,
+      "slots_ms": 473.702916,
+      "chunks_ms": 29.859083,
+      "attached_detached_ms": 18.601542,
+      "attached_resident_ms": 28.180292,
+      "attached_faulting_ms": 27.565541,
+      "slide_500_front_ms": 1.048584,
+      "slide_500_tail_ms": 0.862709,
+      "slide_2000_front_ms": 2.039417,
+      "slide_2000_tail_ms": 1.641542,
+      "slide_8000_front_ms": 5.856125,
+      "slide_8000_tail_ms": 5.673417,
+      "gc_5000_full_first_ms": 2.691875,
+      "gc_5000_full_steady_ms": 0.826542,
+      "gc_5000_partial_ms": 0.381083,
+      "gc_5000_gate_ms": 0.00275,
+      "gc_5000_enum_ms": 0.0205,
+      "gc_5000_query_ms": 0.005375,
+      "gc_5000_free_ms": 0.353208,
+      "gc_5000_sweep_ns_per_slot": 28.186097711,
+      "gc_20000_full_first_ms": 10.303917,
+      "gc_20000_full_steady_ms": 3.03775,
+      "gc_20000_partial_ms": 1.595083,
+      "gc_20000_gate_ms": 0.009833,
+      "gc_20000_enum_ms": 0.031292,
+      "gc_20000_query_ms": 0.017958,
+      "gc_20000_free_ms": 1.520542,
+      "gc_20000_sweep_ns_per_slot": 24.438111625,
+      "gc_80000_full_first_ms": 42.131875,
+      "gc_80000_full_steady_ms": 12.009959,
+      "gc_80000_partial_ms": 6.958583,
+      "gc_80000_gate_ms": 0.038875,
+      "gc_80000_enum_ms": 0.063458,
+      "gc_80000_query_ms": 0.068083,
+      "gc_80000_free_ms": 6.788042,
+      "gc_80000_sweep_ns_per_slot": 25.174747914,
+      "gc_5000_generational_ms": 0.045917,
+      "gc_5000_full_partial_ms": 0.054375,
+      "gc_20000_generational_ms": 0.068084,
+      "gc_20000_full_partial_ms": 0.092167,
+      "gc_80000_generational_ms": 0.115458,
+      "gc_80000_full_partial_ms": 0.20225,
+      "placeholder_120320_ms": 0.013583,
+      "placeholder_500000_ms": 0.029542,
+      "placeholder_1000000_ms": 0.13525,
+      "placeholder_4000000_ms": 0.26,
+      "wake_eager_ms": 12.099042,
+      "wake_lazy_ms": 1.320625
+    },
+    "comparison_kind": "same-host-reference"
+  },
+  "fixed_predecessor_diagnostic": {
+    "comparison": "fixed ABBA, predecessor 0bf180e98 versus factoring candidate",
+    "order": [
+      "before",
+      "after",
+      "after",
+      "before"
+    ],
+    "binaries": {
+      "before": "b6ebdac8e73ea28e850b9ddc52f7a5e5ad90a2ef8976b3fd1319b31d7681c9bb",
+      "after": "5188478285da89baf08a6435efcbbbf6034e184028a7c14e779f2a827a8f6670"
+    },
+    "runs": [
+      {
+        "arm": "before",
+        "medians": {
+          "placeholder_120320_ms": 0.017875,
+          "placeholder_500000_ms": 0.038917,
+          "placeholder_1000000_ms": 0.030167,
+          "placeholder_4000000_ms": 0.102417
+        },
+        "output": "\nrunning 1 test\ntest placeholder_alloc_cost_across_slot_counts ... \nBENCH_METRIC placeholder_120320_ms 0.017875000\nslots=  120320 | placeholder alloc median   0.018 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_500000_ms 0.038917000\nslots=  500000 | placeholder alloc median   0.039 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_1000000_ms 0.030167000\nslots= 1000000 | placeholder alloc median   0.030 ms (0.0 ns/slot)\n\nBENCH_METRIC placeholder_4000000_ms 0.102417000\nslots= 4000000 | placeholder alloc median   0.102 ms (0.0 ns/slot)\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s\n\n"
+      },
+      {
+        "arm": "after",
+        "medians": {
+          "placeholder_120320_ms": 0.024333,
+          "placeholder_500000_ms": 0.028667,
+          "placeholder_1000000_ms": 0.033333,
+          "placeholder_4000000_ms": 0.105541
+        },
+        "output": "\nrunning 1 test\ntest placeholder_alloc_cost_across_slot_counts ... \nBENCH_METRIC placeholder_120320_ms 0.024333000\nslots=  120320 | placeholder alloc median   0.024 ms (0.2 ns/slot)\n\nBENCH_METRIC placeholder_500000_ms 0.028667000\nslots=  500000 | placeholder alloc median   0.029 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_1000000_ms 0.033333000\nslots= 1000000 | placeholder alloc median   0.033 ms (0.0 ns/slot)\n\nBENCH_METRIC placeholder_4000000_ms 0.105541000\nslots= 4000000 | placeholder alloc median   0.106 ms (0.0 ns/slot)\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s\n\n"
+      },
+      {
+        "arm": "after",
+        "medians": {
+          "placeholder_120320_ms": 0.022083,
+          "placeholder_500000_ms": 0.042666,
+          "placeholder_1000000_ms": 0.03275,
+          "placeholder_4000000_ms": 0.107667
+        },
+        "output": "\nrunning 1 test\ntest placeholder_alloc_cost_across_slot_counts ... \nBENCH_METRIC placeholder_120320_ms 0.022083000\nslots=  120320 | placeholder alloc median   0.022 ms (0.2 ns/slot)\n\nBENCH_METRIC placeholder_500000_ms 0.042666000\nslots=  500000 | placeholder alloc median   0.043 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_1000000_ms 0.032750000\nslots= 1000000 | placeholder alloc median   0.033 ms (0.0 ns/slot)\n\nBENCH_METRIC placeholder_4000000_ms 0.107667000\nslots= 4000000 | placeholder alloc median   0.108 ms (0.0 ns/slot)\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s\n\n"
+      },
+      {
+        "arm": "before",
+        "medians": {
+          "placeholder_120320_ms": 0.022375,
+          "placeholder_500000_ms": 0.036709,
+          "placeholder_1000000_ms": 0.0315,
+          "placeholder_4000000_ms": 0.105
+        },
+        "output": "\nrunning 1 test\ntest placeholder_alloc_cost_across_slot_counts ... \nBENCH_METRIC placeholder_120320_ms 0.022375000\nslots=  120320 | placeholder alloc median   0.022 ms (0.2 ns/slot)\n\nBENCH_METRIC placeholder_500000_ms 0.036709000\nslots=  500000 | placeholder alloc median   0.037 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_1000000_ms 0.031500000\nslots= 1000000 | placeholder alloc median   0.032 ms (0.0 ns/slot)\n\nBENCH_METRIC placeholder_4000000_ms 0.105000000\nslots= 4000000 | placeholder alloc median   0.105 ms (0.0 ns/slot)\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s\n\n"
+      }
+    ],
+    "ratios": {
+      "placeholder_120320_ms": 1.153192546583851,
+      "placeholder_500000_ms": 0.9432338084785656,
+      "placeholder_1000000_ms": 1.0716104237274393,
+      "placeholder_4000000_ms": 1.02791960157557
+    }
+  },
+  "unchanged_measured_sources": {
+    "rust/engine/ironhorse-vm/src/value.rs": "3f9ea68cc4bc22375f313e46b9c9019397e3b827484cc7eda336b126319c36b9",
+    "rust/engine/ironhorse-snapshot/tests/wake_latency_bench.rs": "f395bce09534d168887686f2d4408db967ddff3fc39b4a98969023c8201d9911"
+  },
+  "qualification": "Pinned gate remains 47/48: placeholder_500000_ms measured 1.450x. Fixed ABBA against pre-factoring 0bf180e98 measured 0.943x on that control. This diagnostic does not replace or turn the pinned gate into a pass. No baseline or threshold changed."
+}

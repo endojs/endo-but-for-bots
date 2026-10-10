@@ -6,8 +6,10 @@
   "scripts": {
     "test": "node node_modules/playwright/cli.js test"
   },
+  "dependencies": {
+    "@playwright/test": "1.60.0"
+  },
   "devDependencies": {
-    "@playwright/test": "1.60.0",
     "@types/node": "^20.11.16"
   }
 }

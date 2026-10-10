@@ -317,7 +317,8 @@ test('Git declarations define every reachable custom filesystem alias', t => {
   t.false(declared.has('GitBlobInfo'));
   const text = declarationText(gitDeclarations.git);
   t.true(text.includes('statfs: () => Promise<GitFilesystemStats>'));
-  t.true(text.includes('getInfo: () => {\n'));
+  t.true(text.includes('sha256: () => Promise<string>'));
+  t.true(text.includes('byteRange: (start: bigint, end: bigint)'));
   t.false(text.includes("import('@endo/platform"));
 });
 

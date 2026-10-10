@@ -77,6 +77,12 @@ export const makeFakeAgent = () => {
   const root = makeNode();
   /** @type {any[]} */
   const messages = [];
+  const identities = new Map();
+  const locator = path => {
+    const key = toPath(path).join('/');
+    if (!identities.has(key)) identities.set(key, identities.size + 1);
+    return `endo://${'a'.repeat(64)}/${identities.get(key).toString(16).padStart(64, '0')}?type=handle`;
+  };
   let nextMessageNumber = 0n;
   let nextMessageId = 0;
   /**
@@ -197,6 +203,7 @@ export const makeFakeAgent = () => {
     };
 
     const powers = Far('FakeAgentPowers', {
+      locate: async (...path) => locator(path),
       has: async (...path) => {
         const parent = walk(path.slice(0, -1));
         return parent !== undefined && parent.has(path[path.length - 1]);
@@ -211,11 +218,10 @@ export const makeFakeAgent = () => {
       lookup: async nameOrPath => lookupPath(toPath(nameOrPath)),
       maybeLookup: async nameOrPath => {
         await null;
-        try {
-          return await lookupPath(toPath(nameOrPath));
-        } catch {
-          return undefined;
-        }
+        const path = toPath(nameOrPath);
+        // Match the real daemon: only a missing first edge is optional.
+        if (!root.has(path[0])) return undefined;
+        return lookupPath(path);
       },
       makeDirectory: async nameOrPath => {
         const path = toPath(nameOrPath);
@@ -255,7 +261,8 @@ export const makeFakeAgent = () => {
           number,
           messageId: `m${nextMessageId}`,
           description,
-          to: toPath(recipient).join('/'),
+          from: locator(['@self']),
+          to: locator(recipient),
         });
         requests.set(String(number), {
           responseName:
@@ -276,7 +283,8 @@ export const makeFakeAgent = () => {
           messageId: `m${nextMessageId}`,
           description,
           fields,
-          to: toPath(recipient).join('/'),
+          from: locator(['@self']),
+          to: locator(recipient),
         });
         for (const follower of incarnation.followers) {
           follower.next(message);
@@ -377,6 +385,8 @@ export const makeFakeAgent = () => {
         number,
         messageId: `m${nextMessageId}`,
         replyTo: formMessage.messageId,
+        from: formMessage.to,
+        to: formMessage.from,
       });
       for (const follower of currentIncarnation.followers) {
         follower.next(message);

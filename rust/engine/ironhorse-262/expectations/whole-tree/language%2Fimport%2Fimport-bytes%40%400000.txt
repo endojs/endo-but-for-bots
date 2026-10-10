@@ -1,0 +1,6 @@
+# engine=ironhorse features=default corpus=language/import/import-bytes tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/import/import-bytes/bytes-from-empty.js sloppy skip:compiler-unimplemented:module
+language/import/import-bytes/bytes-from-js.js sloppy skip:compiler-unimplemented:module
+language/import/import-bytes/bytes-from-json.js sloppy skip:compiler-unimplemented:module
+language/import/import-bytes/bytes-from-png.js sloppy skip:compiler-unimplemented:module
+language/import/import-bytes/bytes-from-txt.js sloppy skip:compiler-unimplemented:module

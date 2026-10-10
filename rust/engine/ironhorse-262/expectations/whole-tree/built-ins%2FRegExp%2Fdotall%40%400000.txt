@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=built-ins/RegExp/dotall tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/RegExp/dotall/with-dotall-unicode.js sloppy pass
+built-ins/RegExp/dotall/with-dotall-unicode.js strict pass
+built-ins/RegExp/dotall/with-dotall.js sloppy pass
+built-ins/RegExp/dotall/with-dotall.js strict pass
+built-ins/RegExp/dotall/without-dotall-unicode.js sloppy pass
+built-ins/RegExp/dotall/without-dotall-unicode.js strict pass
+built-ins/RegExp/dotall/without-dotall.js sloppy pass
+built-ins/RegExp/dotall/without-dotall.js strict pass

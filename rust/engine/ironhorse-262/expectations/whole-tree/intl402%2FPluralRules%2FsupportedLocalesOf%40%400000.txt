@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=intl402/PluralRules/supportedLocalesOf tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/PluralRules/supportedLocalesOf/arguments.js sloppy skip:oracle-host-missing-intl
+intl402/PluralRules/supportedLocalesOf/arguments.js strict skip:oracle-host-missing-intl
+intl402/PluralRules/supportedLocalesOf/length.js sloppy skip:oracle-host-missing-intl
+intl402/PluralRules/supportedLocalesOf/length.js strict skip:oracle-host-missing-intl
+intl402/PluralRules/supportedLocalesOf/main.js sloppy skip:oracle-host-missing-intl
+intl402/PluralRules/supportedLocalesOf/main.js strict skip:oracle-host-missing-intl
+intl402/PluralRules/supportedLocalesOf/name.js sloppy skip:oracle-host-missing-intl
+intl402/PluralRules/supportedLocalesOf/name.js strict skip:oracle-host-missing-intl
+intl402/PluralRules/supportedLocalesOf/prop-desc.js sloppy skip:oracle-host-missing-intl
+intl402/PluralRules/supportedLocalesOf/prop-desc.js strict skip:oracle-host-missing-intl
+intl402/PluralRules/supportedLocalesOf/supportedLocalesOf.js sloppy skip:oracle-host-missing-intl
+intl402/PluralRules/supportedLocalesOf/supportedLocalesOf.js strict skip:oracle-host-missing-intl

@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/Duration/compare tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/Duration/compare/relativeto-hour.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/compare/relativeto-hour.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/compare/relativeto-sub-minute-offset.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/compare/relativeto-sub-minute-offset.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/compare/twenty-five-hour-day.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/compare/twenty-five-hour-day.js strict skip:oracle-host-missing-global:Temporal

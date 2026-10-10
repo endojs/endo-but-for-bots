@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/ZonedDateTime/prototype/hoursInDay tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/ZonedDateTime/prototype/hoursInDay/dst-basic.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/hoursInDay/dst-basic.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/hoursInDay/dst-less-than-hour.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/hoursInDay/dst-less-than-hour.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/hoursInDay/dst-midnight.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/hoursInDay/dst-midnight.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/hoursInDay/dst-skipped-cross-midnight.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/hoursInDay/dst-skipped-cross-midnight.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/hoursInDay/same-date-starts-twice.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/hoursInDay/same-date-starts-twice.js strict skip:oracle-host-missing-global:Temporal

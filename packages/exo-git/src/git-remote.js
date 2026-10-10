@@ -5,7 +5,10 @@ import { Fail, q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { E } from '@endo/eventual-send';
 
-import { assertGitCredentialForUrl } from './git-credential.js';
+import {
+  assertGitCredentialForUrl,
+  gitCredentialFromMaterial,
+} from './git-credential.js';
 import {
   captureGitRefPattern,
   getGitRemotePullDestination,
@@ -48,6 +51,7 @@ import {
  *   GitRemoteEndpoint,
  *   GitRemoteKit,
  *   NormalizedRemotePolicy,
+ *   RemoteCredentialHealth,
  *   RemoteOperationResult,
  *   RemotePolicy,
  *   RemotePullResult,
@@ -131,18 +135,14 @@ export const makeGitRemoteEndpoint = ({
         /** @type {object} */ (credential),
         parsed.origin,
       );
-      const material = record.getMaterial();
-      if (record.kind === 'bearer' && 'token' in material) {
-        return harden({ kind: 'bearer', material });
+      const usable = gitCredentialFromMaterial(
+        record.kind,
+        record.getMaterial(),
+      );
+      if (usable === undefined) {
+        throw new Error('Git credential material is unavailable');
       }
-      if (
-        record.kind === 'basic' &&
-        'username' in material &&
-        'password' in material
-      ) {
-        return harden({ kind: 'basic', material });
-      }
-      throw new Error('Git credential material is unavailable');
+      return usable;
     }
     return undefined;
   };
@@ -177,6 +177,35 @@ export const makeGitRemoteEndpoint = ({
   };
 
   /**
+   * Report whether the credential this endpoint would push with is usable,
+   * WITHOUT using it. A credential holds its material in process memory, so a
+   * daemon restart leaves the record revoked with its material unavailable,
+   * and the next push was the first thing that said so. A holder can now ask
+   * first.
+   *
+   * @returns {RemoteCredentialHealth}
+   */
+  const credentialHealth = () => {
+    if (!requiresCredential || credentialRecord === undefined) {
+      return harden({ required: false });
+    }
+    // `credentialRecord` is the record itself, not a snapshot of it: rotation
+    // and revocation mutate the state its accessors close over, so reading it
+    // here is reading the credential as of now.
+    return harden({
+      required: true,
+      kind: credentialRecord.kind,
+      audience: credentialRecord.audience,
+      available:
+        gitCredentialFromMaterial(
+          credentialRecord.kind,
+          credentialRecord.getMaterial(),
+        ) !== undefined,
+      revoked: credentialRecord.isRevoked(),
+    });
+  };
+
+  /**
    * @param {() => void} onChange
    */
   const watchChange = onChange => {
@@ -195,6 +224,7 @@ export const makeGitRemoteEndpoint = ({
     ensureCredentialUsable,
     captureCredentialVersion,
     assertCredentialUnchanged,
+    credentialHealth,
     watchChange,
   });
 };
@@ -716,6 +746,19 @@ export const makeGitRemote = ({
     async inspect() {
       ensureLive();
       return snapshotPolicy();
+    },
+
+    /**
+     * Whether the credential this remote would push with is usable right now.
+     * Deliberately NOT part of `inspect()`: the snapshot is policy, and a test
+     * asserts it carries nothing credential-shaped. This reports health only —
+     * kind, audience, availability, revocation — never material.
+     *
+     * @returns {Promise<RemoteCredentialHealth>}
+     */
+    async credentialHealth() {
+      ensureLive();
+      return endpoint.credentialHealth();
     },
 
     /**

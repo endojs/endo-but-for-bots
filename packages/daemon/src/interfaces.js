@@ -11,7 +11,7 @@ import {
   pathEntryMethodGuards,
   pathEntryIssuerMethodGuards,
   rangeReadMethodGuards,
-  getInfoMethodGuard,
+  rangeAttenuationMethodGuards,
 } from '@endo/platform/fs/lite';
 import {
   NamePathShape,
@@ -82,10 +82,12 @@ export const ResponderInterface = M.interface('EndoResponder', {
 // clients) can consume them without depending on the daemon. They are imported
 // above; the daemon adds only the registry/locator surface below.
 
-// The documentation-contract interface for the narrow read surface. It is not
-// used to build an exo directly (each surface assembles its own guard from the
-// records); it names the contract that `__getMethodNames__`-based feature
-// detection keys on (namehub-interface-unification.md Decision 3).
+// The interface for the narrow read surface. It both names the contract that
+// `__getMethodNames__`-based feature detection keys on
+// (namehub-interface-unification.md Decision 3) AND is used directly to build
+// the read-only views (`makeReadOnlyDirectoryView` in directory.js, and the
+// mailbox/message hub views in manager.js). Editing it therefore changes the
+// argument guard those exos enforce — it is not documentation-only.
 export const ReadableNameHubInterface = M.interface('ReadableNameHub', {
   ...readableNameHubMethodGuards,
 });
@@ -102,6 +104,7 @@ export const nameHubMethodGuards = harden({
   locate: M.call().rest(NamePathShape).returns(M.promise()),
   reverseLocate: M.call(LocatorShape).returns(M.promise()),
   followLocatorNameChanges: M.call(LocatorShape).returns(M.remotable()),
+  listValues: M.call().returns(M.promise()),
   listIdentifiers: M.call().rest(NamePathShape).returns(M.promise()),
   listLocators: M.call().rest(NamePathShape).returns(M.promise()),
   followNameChanges: M.call().returns(M.remotable()),
@@ -151,11 +154,32 @@ export const SecretBlobInterface = M.interface('SecretBlob', {
   // Uint8Array is mutable and therefore not passable. Base64 is the wire
   // envelope only; the backend and manager continue to store arbitrary bytes.
   readBase64: M.call().returns(M.promise()),
+  // The same bytes plus the generation they came from, as
+  // `{ base64, generation }`. A holder that derives a new value from a secret
+  // — refreshed OAuth state, say — needs the version it read in order to pin
+  // its write to it, and reading the generation separately would leave a gap
+  // in which the record could change.
+  readBase64WithGeneration: M.call().returns(M.promise()),
 });
 
 export const SecretAdminInterface = M.interface('SecretAdmin', {
   getSummary: M.call().returns(M.promise()),
-  replaceBase64: M.call(SecretBase64Shape).returns(M.promise()),
+  // `{ ifGeneration }` makes the replacement conditional on the record still
+  // being at that generation, so a caller replacing a value it derived from an
+  // earlier read fails rather than overwriting a change it never saw. It
+  // resolves to the generation it committed, which is what a caller staging a
+  // multi-step change pins its next write to.
+  //
+  // The third argument is load-bearing: two-argument `M.splitRecord` leaves
+  // unlisted properties unconstrained, so `{ ifGeneraton: 1n }` would pass the
+  // guard, destructure to `undefined`, and commit unconditionally — the
+  // precondition failing open into exactly the blind overwrite it exists to
+  // prevent. Elsewhere in this file the two-argument form is harmless because
+  // an ignored boolean option only means "not requested"; here it would mean
+  // "destroyed the operator's credential", so the rest is closed.
+  replaceBase64: M.call(SecretBase64Shape)
+    .optional(M.splitRecord({}, { ifGeneration: M.bigint() }, harden({})))
+    .returns(M.promise()),
   setDescription: M.call(M.string()).returns(M.promise()),
   revoke: M.call().returns(M.promise()),
   delete: M.call().returns(M.promise()),
@@ -210,6 +234,11 @@ export const HandleInterface = M.interface(
 export const DirectoryInterface = M.interface('EndoDirectory', {
   ...nameHubMethodGuards,
   ...directoryFileMethodGuards,
+  // Result awaited before the return is checked (`callWhen`) and pinned to a
+  // `ReadableNameHub` remotable, matching the sibling `EndoMount`/`EndoMountFile`
+  // `readOnly()` guards (which return `M.remotable('ReadableTree')` /
+  // `M.remotable('ReadableBlob')`) and the declared `Promise<ReadableNameHub>`.
+  readOnly: M.callWhen().returns(M.remotable('ReadableNameHub')),
 });
 
 export const GuestInterface = M.interface('EndoGuest', {
@@ -312,6 +341,10 @@ export const GuestInterface = M.interface('EndoGuest', {
   deliver: M.call(M.record()).returns(),
   // Evaluate code directly in a worker
   evaluate: EvaluateMethodGuard,
+  // Mint a guest-owned invitation (network mediation stays internal)
+  invite: M.call(NameOrPathShape).returns(M.promise()),
+  // Redeem an invitation into this guest (accepts as itself; no minted guest)
+  accept: M.call(LocatorShape, NameOrPathShape).returns(M.promise()),
 });
 
 export const HostInterface = M.interface('EndoHost', {
@@ -664,6 +697,7 @@ harden(AttenuatorInterface);
 export const InvitationInterface = M.interface('EndoInvitation', {
   accept: M.call(IdShape).optional(M.string()).returns(M.promise()),
   locate: M.call().returns(M.promise()),
+  cancel: M.call().optional(M.error()).returns(M.promise()),
 });
 
 export const InspectorHubInterface = M.interface('EndoInspectorHub', {
@@ -678,16 +712,20 @@ export const InspectorInterface = M.interface('EndoInspector', {
 
 // `EndoBlob` is the daemon's immutable-bytes cap and the CapTP remote-read
 // target. It carries the whole-value `readableBlobMethodGuards` (help / text /
-// json / streamBase64) plus the range-I/O `rangeReadMethodGuards` (getInfo /
-// fetch) — i.e. exactly the shared `ReadableBlobRangeInterface`. The content
-// hash is reported by `getInfo().hash` (base64); there is no separate
-// `sha256()` accessor (the daemon's internals always already hold the hex
-// digest from `contentStore.store()` / the formula, so the cap method was
-// only ever a remote accessor, now superseded by `getInfo`). See
+// json / streamBase64) plus the named `rangeReadMethodGuards` (`sha256`,
+// `size`, and `bytes`). See
 // designs/fs-interface-consolidation.md § C4.
 export const BlobInterface = M.interface('EndoBlob', {
   ...readableBlobMethodGuards,
   ...rangeReadMethodGuards,
+  // Range *attenuation* (`byteRange` / `textRange`,
+  // designs/readableblob-range-attenuation.md): return a new `EndoBlob` with
+  // exactly the authority to read the selected byte / line interval, so ranges
+  // compose and can be handed to anything that accepts a readable blob. The
+  // derived cap re-invokes the same factory with a composed absolute interval
+  // over the same content-store address / captured bytes — no formula, name, or
+  // persistence entry for a derived range.
+  ...rangeAttenuationMethodGuards,
 });
 
 const PathSegmentsShape = M.arrayOf(M.string());
@@ -724,29 +762,59 @@ export const MountInterface = M.interface('EndoMount', {
   has: M.call().rest(M.any()).returns(M.promise()),
   list: M.call().rest(PathSegmentsShape).returns(M.promise()),
   // Recursive glob search, delegated to the platform engine. Daemon-local
-  // extension beyond the ReadableTree surface.
-  glob: M.call(M.string()).returns(M.promise()),
+  // extension beyond the ReadableTree surface. `options.followSymlinks` lets
+  // `**` descend through directory symlinks (`rg -L`); the default is off,
+  // because an unbounded pattern crossing links walks the link graph rather
+  // than the tree, which no result cap can rescue.
+  glob: M.call(M.string())
+    .optional(M.splitRecord({}, { followSymlinks: M.boolean() }))
+    .returns(M.promise()),
   // Content search, delegated to the platform engine. `paths` is optional and
   // consumed with an implied `await` (`M.callWhen` + `M.await`), so a caller
   // may pipe a `glob` promise straight in — `grep(pattern, glob(g))` — and the
   // exo awaits and shape-checks it to a `string[]` before the method runs.
   // Omitting `paths` searches every file under the face's root. `options`
-  // carries `maxResults` (there is no `glob` option: glob is decoupled, an
-  // independent producer of the `paths` array). See
+  // carries `maxResults` and `followSymlinks` (there is no `glob` option: glob
+  // is decoupled, an independent producer of the `paths` array).
+  // `followSymlinks` governs the implicit walk taken when `paths` is omitted;
+  // a supplied path is named, so it is followed either way. See
   // designs/platform-search-pushdown.md § "The Array surface".
   grep: M.callWhen(M.string())
     .optional(
       M.await(M.arrayOf(M.string())),
-      M.splitRecord({}, { maxResults: M.number() }),
+      // The rest is closed (`{}`) so a typo'd option key (e.g. `maxResult`)
+      // fails loudly at the exo boundary instead of slipping through the
+      // default `M.any()` rest. `maxResults` is admitted as a number; the
+      // method body further constrains it to a non-negative safe integer
+      // capped at `GREP_MAX_RESULTS` (NaN/Infinity/negatives reject).
+      M.splitRecord(
+        {},
+        { maxResults: M.number(), followSymlinks: M.boolean() },
+        {},
+      ),
     )
     .returns(M.array()),
   // Fused glob+grep composition. Both patterns are required positionals (unlike
   // grep's optional `paths`), so the operation can be pushed down to native code
   // as a single fused enumerate-and-scan call. The reference implementation
-  // composes the delegated surface: `grep(grepPattern, glob(globPattern))`. See
-  // designs/platform-search-pushdown.md § "The Array surface".
+  // composes the delegated surface: `grep(grepPattern, glob(globPattern))`, or
+  // dispatches to a native `search.glorp` when the file powers supply one.
+  // `followSymlinks` reaches the enumeration half only; grep's half receives an
+  // explicit path array, which is followed regardless.
+  // ReDoS hazard: `pattern` is a caller-supplied ECMAScript RegExp source
+  // compiled with `new RegExp(pattern)` and tested per line on the daemon's
+  // single event loop — a catastrophic backtracking source can stall the
+  // daemon (measured tens of seconds from one short line). There is no
+  // portable per-call CPU bound in pure JS; a native engine may impose one.
+  // See designs/platform-search-pushdown.md § "The Array surface".
   glorp: M.call(M.string(), M.string())
-    .optional(M.splitRecord({}, { maxResults: M.number() }))
+    .optional(
+      M.splitRecord(
+        {},
+        { maxResults: M.number(), followSymlinks: M.boolean() },
+        {},
+      ),
+    )
     .returns(M.promise()),
   lookup: M.call(PathArgShape).returns(M.promise()),
   // `maybeLookup` is async in every mount implementation, so retain the
@@ -803,8 +871,7 @@ export const MountInterface = M.interface('EndoMount', {
 // overlapping methods (`streamBase64`, `text`, `json`, `writeText`,
 // `writeBytes`, `append`, `snapshot`) carry the same shapes as
 // `PlatformFileInterface`; `stat`, `help`, and the `rangeReadMethodGuards`
-// (`getInfo` / `fetch`) are mount-specific extensions.  `getInfo` / `fetch`
-// expose the rich `BlobRef` range-I/O surface over the *live* file.
+// are mount-specific extensions over the live file.
 // `readOnly` narrows to a structural ReadableBlob view that carries the same
 // rich surface.
 export const MountFileInterface = M.interface('EndoMountFile', {
@@ -815,9 +882,14 @@ export const MountFileInterface = M.interface('EndoMountFile', {
   list: M.call().returns(M.promise()),
   // Whole-value read surface (help / streamBase64 / text / json) shared with
   // every other readable blob, plus the rich `rangeReadMethodGuards`
-  // (getInfo / fetch) over the live file, plus the mount-file write surface.
+  // over the live file, plus the mount-file write surface.
   ...readableBlobMethodGuards,
   ...rangeReadMethodGuards,
+  // Range *attenuation* (`byteRange` / `textRange`): return a read-only
+  // `ReadableBlob` view over the selected byte / line interval of the *live*
+  // file — each read on the derived view still observes the source, subject to
+  // the fixed interval. See designs/readableblob-range-attenuation.md.
+  ...rangeAttenuationMethodGuards,
   writeText: M.call(M.string()).returns(M.promise()),
   append: M.call(M.string()).returns(M.promise()),
   writeBytes: M.call(M.remotable()).returns(M.promise()),
@@ -865,8 +937,8 @@ export {
 // the `SnapshotTree` shape. See designs/fs-interface-consolidation.md § C3.
 export const ReadableTreeInterface = M.interface('EndoReadableTree', {
   ...readableTreeMethodGuards,
-  ...getInfoMethodGuard,
   sha256: M.call().returns(M.string()),
+  size: M.call().returns(M.promise()),
 });
 
 // `EndoRegistry` brokers npm-style package resolution and tarball fetch

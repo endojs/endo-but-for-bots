@@ -20,6 +20,8 @@
 //! pointer-aliasing trick.
 
 use crate::token::Token;
+#[cfg(test)]
+use ironhorse_text::SymbolName;
 
 /// The parser-flag bits XS stamps onto nodes (`xsScript.h` `enum`). Only
 /// the bits the expression grammar sets are named here; the rest arrive
@@ -61,10 +63,6 @@ pub mod flags {
     pub const AWAITING: u32 = 1 << 10;
     /// `mxBaseFlag`. (bit 11)
     pub const BASE: u32 = 1 << 11;
-    /// `mxNativeFlag`. (bit 12)
-    pub const NATIVE: u32 = 1 << 12;
-    /// `mxHostFlag`. (bit 13)
-    pub const HOST: u32 = 1 << 13;
     /// `mxDefaultFlag`. (bit 14)
     pub const DEFAULT: u32 = 1 << 14;
     /// `mxFieldFlag`. (bit 15)
@@ -108,7 +106,7 @@ pub mod flags {
     /// `mxParserFlags` = `mxCFlag | mxDebugFlag | mxProgramFlag` — the
     /// harness-context bits `fxFunctionExpression`/`fxGeneratorExpression`
     /// carry across into a nested function's fresh `parser->flags`.
-    pub const PARSER_FLAGS: u32 = (1 << 0) | (1 << 1) | (1 << 3);
+    pub const PARSER_FLAGS: u32 = C | (1 << 1) | PROGRAM;
 }
 
 /// A leaf value a node can carry in place of (or beside) children — the
@@ -127,8 +125,8 @@ pub enum Value {
     /// contain (`"\uD800"`), and the coder must emit XS's CESU-8 (an astral
     /// scalar is a 6-byte surrogate pair, a lone surrogate a 3-byte unit),
     /// which is a per-code-unit encoding — so the value is code units end
-    /// to end, encoded to CESU-8 only at the coder ([`str_to_units`] /
-    /// [`units_to_cesu8`]).
+    /// to end, encoded to CESU-8 only at the coder (`str_to_units` /
+    /// `units_to_cesu8`).
     Str(Vec<u16>),
     /// `txBigIntNode` — the scanned literal (digits + radix).
     BigInt(crate::lexer::BigIntLiteral),
@@ -140,34 +138,88 @@ pub enum Item {
     /// A real AST node.
     Node(Box<Node>),
     /// A bare symbol (`fxPushSymbol`).
-    Symbol(String),
+    Symbol(Vec<u16>),
     /// A `NULL` placeholder (`fxPushNULL`).
     Null,
     /// A node list (`fxPushNodeList`), its elements in source order.
     List(Vec<Item>),
 }
 
+/// The deepest tree the compiler will build or walk, in [`Node::depth`]
+/// levels.
+///
+/// Every pass after the parser recurses once per tree level on the host's
+/// native stack — the scoper's hoist and bind walks, the coder's node
+/// dispatch and symbol interning, the cover-grammar conversions, and the
+/// tree's own drop glue — and the tree is deeper than the source is nested
+/// wherever the grammar folds a flat run into a left-nested chain:
+/// `a + a + … + a` with `n` terms, or `a.b.c…` with `n` members, is `n`
+/// levels deep although the parser never recursed for it (a 100,000-term
+/// chain, about 200 KB of source, overflowed a 32 MiB stack merely being
+/// dropped). [`crate::parser::PARSER_STACK_BUDGET`] bounds source nesting;
+/// this bounds the tree itself: the parser refuses to build a node past it
+/// with its `"stack overflow"` `SyntaxError`, so no deeper tree ever exists
+/// for a later pass to recurse over, and the scoper and coder re-check it
+/// as a backstop. It sits above any tree the parser budget can produce
+/// through nesting (the deepest, a 512-level statement nest, is about 1,500
+/// levels), so only the flat-chain shapes ever reach it.
+pub const TREE_DEPTH_LIMIT: u32 = 2048;
+
 /// An AST node: XS's `sxNode` common part (`description->token`, `line`,
 /// `flags`) plus its child slots and any leaf payload.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Node {
+    /// Identity within one parsed tree, preserved by cloning. The parser assigns
+    /// monotonically increasing IDs, including to synthesized nodes. Standalone
+    /// nodes made by `Node::new` are unassigned (`u32::MAX`); callers assembling
+    /// trees by hand must assign distinct IDs before scoping them.
+    pub id: u32,
     /// The node kind — `description->token` in XS.
     pub token: Token,
     /// 1-based source line, XS's `node->line`.
     pub line: u32,
-    /// The `node->flags` word (see [`flags`]).
+    /// The `node->flags` word (see `flags`).
     pub flags: u32,
     /// Child slots, in XS's field order (`children[0]` is the
     /// first-pushed / deepest-on-stack slot).
     pub children: Vec<Item>,
     /// Leaf payload for value-bearing nodes.
     pub value: Value,
+    /// The height of this subtree in node and list levels (a leaf is 1),
+    /// maintained by [`Node::new`] so the parser can refuse a tree past
+    /// [`TREE_DEPTH_LIMIT`] in constant time per node.
+    pub depth: u32,
 }
 
 impl Node {
+    /// A node of `token` at `line` over `children`, its depth computed from
+    /// theirs.
+    pub fn new(token: Token, line: u32, flags: u32, children: Vec<Item>, value: Value) -> Node {
+        let depth = 1 + children.iter().map(item_depth).max().unwrap_or(0);
+        Node {
+            id: u32::MAX,
+            token,
+            line,
+            flags,
+            children,
+            value,
+            depth,
+        }
+    }
+
     /// A childless node of `token` at `line` with no flags.
     pub fn leaf(token: Token, line: u32) -> Node {
-        Node { token, line, flags: 0, children: Vec::new(), value: Value::None }
+        Node::new(token, line, 0, Vec::new(), Value::None)
+    }
+}
+
+/// The height of one stack/child slot: a node's recorded depth, one more
+/// than a list's deepest element, and nothing for a symbol or `NULL`.
+pub fn item_depth(item: &Item) -> u32 {
+    match item {
+        Item::Node(node) => node.depth,
+        Item::List(items) => 1 + items.iter().map(item_depth).max().unwrap_or(0),
+        Item::Symbol(_) | Item::Null => 0,
     }
 }
 
@@ -322,6 +374,7 @@ pub fn node_name(token: Token) -> &'static str {
 
 /// The flag bits worth surfacing in a fixture dump, and their short
 /// spellings. Order is deterministic (low bit first).
+#[cfg(test)]
 const DUMP_FLAGS: &[(u32, &str)] = &[
     (flags::STRICT, "strict"),
     (flags::SUPER, "super"),
@@ -351,18 +404,20 @@ const DUMP_FLAGS: &[(u32, &str)] = &[
 /// not part of the byte-identity bar); it exists to pin the tree *shape*
 /// — node kind, flags, child order — that the coder will later depend
 /// on. Deterministic and free of addresses so fixtures are stable.
+#[cfg(test)]
 pub fn dump(item: &Item) -> String {
     let mut out = String::new();
     dump_item(item, &mut out);
     out
 }
 
+#[cfg(test)]
 fn dump_item(item: &Item, out: &mut String) {
     match item {
         Item::Null => out.push_str("()"),
         Item::Symbol(s) => {
             out.push_str("#");
-            out.push_str(s);
+            out.push_str(&SymbolName::from_units(s).to_string());
         }
         Item::List(items) => {
             out.push('[');
@@ -378,6 +433,7 @@ fn dump_item(item: &Item, out: &mut String) {
     }
 }
 
+#[cfg(test)]
 fn dump_node(node: &Node, out: &mut String) {
     out.push('(');
     out.push_str(node_name(node.token));
@@ -416,11 +472,16 @@ fn dump_node(node: &Node, out: &mut String) {
     out.push(')');
 }
 
+#[cfg(test)]
 fn dump_number(v: f64) -> String {
     if v.is_nan() {
         "NaN".to_string()
     } else if v.is_infinite() {
-        if v < 0.0 { "-Infinity".to_string() } else { "Infinity".to_string() }
+        if v < 0.0 {
+            "-Infinity".to_string()
+        } else {
+            "Infinity".to_string()
+        }
     } else if v == v.trunc() && v.abs() < 1e15 {
         format!("{}", v as i64)
     } else {
@@ -435,14 +496,14 @@ pub fn str_to_units(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
 
-/// Render UTF-16 code units back to a Rust `String` for the text/symbol
-/// boundary (property keys, module specifiers, directives). Lone
-/// surrogates fold to U+FFFD (`from_utf16_lossy`); every well-formed key —
-/// which is all the corpus interns — round-trips exactly.
+/// Render UTF-16 code units lossily for diagnostics and directive comparison.
+/// Lone surrogates fold to U+FFFD. Property symbols retain their UTF-16
+/// units and must never use this diagnostic conversion.
 pub fn units_to_string(u: &[u16]) -> String {
     String::from_utf16_lossy(u)
 }
 
+#[cfg(test)]
 fn dump_string(units: &[u16]) -> String {
     let s = units_to_string(units);
     let mut out = String::with_capacity(s.len() + 2);
@@ -459,4 +520,66 @@ fn dump_string(units: &[u16]) -> String {
     }
     out.push('"');
     out
+}
+
+/// Tear a tree down without the recursive drop glue, which took one host
+/// frame chain per tree level: a refused 5,000-term `1+1+…` overflowed a
+/// 512 KiB wasm stack freeing its partial tree (STACK-DEPTH-REFACTOR.md
+/// D1c). Nor does it allocate: a heap worklist would grow in a destructor,
+/// where a refusal can only abort.
+///
+/// The child list being emptied is the worklist. A child that has children
+/// of its own (a node's, or a node list's) becomes the next one: its last
+/// child moves into the slot the outer worklist's pop just freed, and the
+/// outer worklist, as an [`Item::List`], into the slot that move frees,
+/// swapped to index 0 so it resumes once the inner one is exhausted. Every
+/// push lands in a slot a pop freed, so no buffer grows, and only childless
+/// nodes ever drop. `ironhorse-vm/tests/teardown_allocation.rs` drops deep,
+/// wide and branching trees on a small stack and requires no allocation.
+impl Drop for Node {
+    fn drop(&mut self) {
+        if self.children.is_empty() {
+            return;
+        }
+        let mut work = std::mem::take(&mut self.children);
+        // How many outer worklists are parked, each at index 0 of the next.
+        let mut links = 0usize;
+        loop {
+            if work.len() > usize::from(links > 0) {
+                let mut children = match work.pop() {
+                    Some(Item::Node(mut node)) => std::mem::take(&mut node.children),
+                    Some(Item::List(list)) => list,
+                    Some(Item::Symbol(_) | Item::Null) => continue,
+                    None => break,
+                };
+                let Some(child) = children.pop() else {
+                    continue;
+                };
+                push_in_place(&mut work, child);
+                let outer = std::mem::replace(&mut work, children);
+                push_in_place(&mut work, Item::List(outer));
+                let top = work.len() - 1;
+                work.swap(0, top);
+                links += 1;
+            } else if links > 0 {
+                // Only the link is left: resume the outer worklist.
+                match work.pop() {
+                    Some(Item::List(outer)) => work = outer,
+                    other => {
+                        debug_assert!(false, "a parked worklist is a node list: {other:?}");
+                        break;
+                    }
+                }
+                links -= 1;
+            } else {
+                break;
+            }
+        }
+    }
+}
+
+/// Push into the slot a pop freed, which never reallocates.
+fn push_in_place(list: &mut Vec<Item>, item: Item) {
+    debug_assert!(list.len() < list.capacity());
+    list.push(item);
 }

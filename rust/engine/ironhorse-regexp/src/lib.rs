@@ -4,17 +4,19 @@
 //! question 6 (the matcher is ported as an engine-internal module; the
 //! JavaScript `RegExp` surface is child 9's integration).
 //!
-//! It delivers the two halves of the pin's engine:
+//! It provides compilation, validation, and matching:
 //!
-//! - [`compile`] — the `fxCompileRegExp` pipeline: recursive-descent
+//! - [`compile()`] — the `fxCompileRegExp` pipeline: recursive-descent
 //!   parse into a term tree, a `measure` pass assigning each term its
 //!   byte offset, and a `code` pass emitting the integer step stream.
 //!   The compile meter (`XS_PARSE_REGEXP_METERING`) is carried through so
-//!   child 9 can calibrate end-to-end.
+//!   the JavaScript surface can retain compilation charges.
+//! - [`validate`] — the same grammar, resource limits, and logical work
+//!   charges, without allocating a code buffer or constructing a program.
 //! - [`match_regexp`] — the `fxMatchRegExp` backtracking VM over that
 //!   step stream, metering `XS_REGEXP_METERING` per dispatched step.
 //!
-//! Both are `#![forbid(unsafe_code)]`: the arena/`Vec` model removes the
+//! The crate is `#![forbid(unsafe_code)]`: the arena/`Vec` model removes the
 //! raw pointers XS uses, so the compiler and matcher are compiler-checked
 //! memory-safe. Only `xs-oracle` (the dev/CI differential harness)
 //! links C.
@@ -53,12 +55,19 @@ pub mod compile;
 pub mod matcher;
 pub mod unicode;
 
-pub use compile::{compile, CompileError, Program};
+pub use compile::{
+    compile, compile_checked, compile_units_checked, validate, validate_checked,
+    validate_units_checked, CompileError, CompileOutcome, Program, ValidationOutcome,
+    COMPILE_CHECK_STRIDE, MAX_NESTING_DEPTH,
+};
 pub use flags::{
     XS_REGEXP_D, XS_REGEXP_G, XS_REGEXP_I, XS_REGEXP_M, XS_REGEXP_N, XS_REGEXP_S, XS_REGEXP_U,
     XS_REGEXP_V, XS_REGEXP_Y,
 };
-pub use matcher::{match_regexp, MatchOutcome};
+pub use matcher::{
+    match_regexp, match_regexp_budgeted, match_regexp_checked, MatchOutcome, MATCH_CHECK_STRIDE,
+};
+pub use opcode::{XS_PARSE_REGEXP_METERING, XS_REGEXP_METERING};
 
 /// The result of compiling and running one pattern: a convenience over
 /// [`compile`] + [`match_regexp`] mirroring what the oracle shim returns,
@@ -208,7 +217,7 @@ mod tests {
         assert_eq!(r.outcome.captures[1], (-1, -1)); // left group unset
         assert_eq!(r.outcome.captures[2], (0, 1)); // right group matched "y"
         assert_eq!(r.outcome.names, vec![2]); // slot 0 → capture 2
-        // The other branch: "x" matches the left group.
+                                              // The other branch: "x" matches the left group.
         let r2 = run("(?<a>x)|(?<a>y)", "", "x", 0).expect("compiles");
         assert_eq!(r2.outcome.names, vec![1]);
         assert_eq!(r2.outcome.captures[1], (0, 1));
@@ -330,6 +339,8 @@ mod tests {
 
     #[test]
     fn v_flag_sets_and_string_properties_execute() {
+        assert!(!caps("[]", "v", "A").0);
+        assert!(caps("[^]", "v", "A").0);
         assert!(caps("abc", "v", "abc").0);
         assert!(caps("\\p{Script=Greek}+", "v", "\u{03B1}\u{03B2}").0);
         assert!(caps("[\\p{ASCII}]", "v", "A").0);
@@ -346,7 +357,12 @@ mod tests {
         assert!(caps("\\p{sc=Grek}", "u", "\u{03B1}").0);
         assert!(caps("\\p{Script_Extensions=Hira}", "u", "\u{30FC}").0);
         assert!(caps("\\P{ASCII}", "u", "\u{00E9}").0);
-        assert!(!caps("^\\P{Lowercase_Letter}$", "iu", "A").0);
+        assert!(caps("^\\P{Lowercase_Letter}$", "iu", "A").0);
+        assert!(!caps("^\\P{Lowercase_Letter}$", "iv", "A").0);
+        assert!(caps("^\\p{Uppercase_Letter}$", "iu", "a").0);
+        assert!(caps("^\\p{Uppercase_Letter}$", "iv", "a").0);
+        assert!(caps("^\\P{Uppercase_Letter}$", "iu", "A").0);
+        assert!(!caps("^\\P{Uppercase_Letter}$", "iv", "A").0);
         assert!(matches!(
             compile("\\p{letter}", "u"),
             Err(CompileError::Syntax(_))
@@ -420,7 +436,7 @@ mod tests {
         // `(?i:...)` folds only inside the group.
         assert!(caps("(?i:a)b", "", "Ab").0);
         assert!(!caps("(?i:a)b", "", "AB").0); // the trailing `b` stays case-sensitive
-        // `(?-i:...)` removes folding inside an `i` pattern.
+                                               // `(?-i:...)` removes folding inside an `i` pattern.
         assert!(caps("a(?-i:b)", "i", "Ab").0);
         assert!(!caps("a(?-i:b)", "i", "AB").0);
         // `(?s:.)` makes `.` match a newline only inside the group.
@@ -492,15 +508,30 @@ mod tests {
             assert!(!accepts(r"\P{Bar}", flags), "unknown \\P property /{flags}");
             // A valid general-category property compiles in every mode.
             assert!(accepts(r"\p{L}", flags), "valid \\p{{L}} /{flags}");
-            assert!(accepts(r"[\p{Nd}]", flags), "valid class \\p{{Nd}} /{flags}");
+            assert!(
+                accepts(r"[\p{Nd}]", flags),
+                "valid class \\p{{Nd}} /{flags}"
+            );
         }
         // In non-Unicode mode a property escape is a real charset, not the two
         // literal characters `p{L}` — it must match a letter and reject `p`.
-        assert!(caps(r"\p{L}", "", "A").0, "\\p{{L}} matches a letter (non-u)");
-        assert!(!caps(r"\p{L}", "", "5").0, "\\p{{L}} rejects a digit (non-u)");
-        assert!(!caps(r"\p{L}", "", "{").0, "\\p{{L}} is not literal p{{L}} (non-u)");
+        assert!(
+            caps(r"\p{L}", "", "A").0,
+            "\\p{{L}} matches a letter (non-u)"
+        );
+        assert!(
+            !caps(r"\p{L}", "", "5").0,
+            "\\p{{L}} rejects a digit (non-u)"
+        );
+        assert!(
+            !caps(r"\p{L}", "", "{").0,
+            "\\p{{L}} is not literal p{{L}} (non-u)"
+        );
         // The v-mode string-property table stays gated on `v`.
-        assert!(!accepts(r"\p{Emoji_Keycap_Sequence}", ""), "string prop only in v");
+        assert!(
+            !accepts(r"\p{Emoji_Keycap_Sequence}", ""),
+            "string prop only in v"
+        );
     }
 
     #[test]
@@ -568,9 +599,18 @@ mod tests {
         // to repeat). Locking XS's stricter reality, not the spec's.
         for flags in ["", "u", "v"] {
             assert!(!accepts(r"(?=x)*", flags), "quantified lookahead /{flags}");
-            assert!(!accepts(r"(?!x)+", flags), "quantified neg-lookahead /{flags}");
-            assert!(!accepts(r"(?<=x)*", flags), "quantified lookbehind /{flags}");
-            assert!(!accepts(r"(?<!x)?", flags), "quantified neg-lookbehind /{flags}");
+            assert!(
+                !accepts(r"(?!x)+", flags),
+                "quantified neg-lookahead /{flags}"
+            );
+            assert!(
+                !accepts(r"(?<=x)*", flags),
+                "quantified lookbehind /{flags}"
+            );
+            assert!(
+                !accepts(r"(?<!x)?", flags),
+                "quantified neg-lookbehind /{flags}"
+            );
         }
         assert!(!accepts(r"\b*", ""), "quantified word boundary");
         // A bare, unquantified assertion is of course fine.

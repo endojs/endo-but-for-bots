@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/PlainDate/prototype/equals tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/PlainDate/prototype/equals/argument-object-valid.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/equals/argument-object-valid.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/equals/argument-string.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/equals/argument-string.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/equals/calendar-is-compared.js sloppy skip:oracle-host-missing-temporal
+intl402/Temporal/PlainDate/prototype/equals/calendar-is-compared.js strict skip:oracle-host-missing-temporal
+intl402/Temporal/PlainDate/prototype/equals/canonicalize-calendar.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/equals/canonicalize-calendar.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/equals/future-calendar.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/equals/future-calendar.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/equals/infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/equals/infinity-throws-rangeerror.js strict skip:oracle-host-missing-global:Temporal

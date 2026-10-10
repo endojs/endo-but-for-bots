@@ -1,0 +1,21 @@
+# engine=ironhorse features=default corpus=built-ins/Map/prototype/entries tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Map/prototype/entries/does-not-have-mapdata-internal-slot-set.js sloppy pass
+built-ins/Map/prototype/entries/does-not-have-mapdata-internal-slot-set.js strict pass
+built-ins/Map/prototype/entries/does-not-have-mapdata-internal-slot-weakmap.js sloppy pass
+built-ins/Map/prototype/entries/does-not-have-mapdata-internal-slot-weakmap.js strict pass
+built-ins/Map/prototype/entries/does-not-have-mapdata-internal-slot.js sloppy pass
+built-ins/Map/prototype/entries/does-not-have-mapdata-internal-slot.js strict pass
+built-ins/Map/prototype/entries/entries.js sloppy pass
+built-ins/Map/prototype/entries/entries.js strict pass
+built-ins/Map/prototype/entries/length.js sloppy pass
+built-ins/Map/prototype/entries/length.js strict pass
+built-ins/Map/prototype/entries/name.js sloppy pass
+built-ins/Map/prototype/entries/name.js strict pass
+built-ins/Map/prototype/entries/not-a-constructor.js sloppy pass
+built-ins/Map/prototype/entries/not-a-constructor.js strict pass
+built-ins/Map/prototype/entries/returns-iterator-empty.js sloppy pass
+built-ins/Map/prototype/entries/returns-iterator-empty.js strict pass
+built-ins/Map/prototype/entries/returns-iterator.js sloppy pass
+built-ins/Map/prototype/entries/returns-iterator.js strict pass
+built-ins/Map/prototype/entries/this-not-object-throw.js sloppy pass
+built-ins/Map/prototype/entries/this-not-object-throw.js strict pass

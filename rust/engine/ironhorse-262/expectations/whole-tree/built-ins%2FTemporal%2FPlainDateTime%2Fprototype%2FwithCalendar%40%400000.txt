@@ -1,0 +1,35 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/PlainDateTime/prototype/withCalendar tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/basic.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/basic.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/branding.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/branding.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/builtin.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/builtin.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/calendar-case-insensitive.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/calendar-case-insensitive.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/calendar-invalid-iso-string.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/calendar-invalid-iso-string.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/calendar-iso-string.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/calendar-iso-string.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/calendar-string-leap-second.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/calendar-string-leap-second.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/calendar-string.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/calendar-string.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/calendar-temporal-object.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/calendar-temporal-object.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/calendar-time-string.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/calendar-time-string.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/calendar-wrong-type.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/calendar-wrong-type.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/length.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/length.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/missing-argument.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/missing-argument.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/name.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/name.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/not-a-constructor.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: isConstructor invoked with a non-function value\""
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/not-a-constructor.js strict fail:"abort-value-differs: oracle=\"Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: isConstructor invoked with a non-function value\""
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/prop-desc.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/prop-desc.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/subclassing-ignored.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/withCalendar/subclassing-ignored.js strict skip:oracle-host-missing-global:Temporal

@@ -46,6 +46,7 @@ import { peersComponent } from './peers-component.js';
 import { flootComponent } from './floot-component.js';
 import { workflowComponent } from './workflow-component.js';
 import { secretsComponent } from './secrets-component.js';
+import { managementComponent } from './management-component.js';
 import {
   renderAppHeader,
   renderProfileBar,
@@ -232,6 +233,15 @@ const bodyComponent = (
 
   if (activeSpaceInfo && activeSpaceInfo.mode === 'peers') {
     return peersComponent($parent, rootPowers, profilePath, onProfileChange);
+  }
+
+  if (activeSpaceInfo && activeSpaceInfo.mode === 'management') {
+    return managementComponent(
+      $parent,
+      rootPowers,
+      profilePath,
+      onProfileChange,
+    );
   }
 
   if (activeSpaceInfo && activeSpaceInfo.mode === 'files') {
@@ -446,8 +456,15 @@ const bodyComponent = (
 
       /** @param {string} petName */
       const navigateToConversation = petName => {
+        // `locate` is variadic over name-path SEGMENTS and rejects any segment
+        // containing "/" (`assertNames`), so a nested recipient such as
+        // `floot/controller-profile/session-…` — which send-form hands here
+        // joined — has to be split back into a path.
+        const petNamePath = /** @type {[string, ...string[]]} */ (
+          petName.split('/')
+        );
         E(/** @type {ERef<EndoHost>} */ (resolvedPowers))
-          .locate(petName)
+          .locate(...petNamePath)
           .then(locator => {
             if (!locator) return;
             onConversationChange({ petName, id: locator });
@@ -1665,7 +1682,7 @@ const bodyComponent = (
 
 /**
  * @typedef {object} ActiveSpaceInfo
- * @property {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow' | 'secrets'} mode
+ * @property {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow' | 'secrets' | 'management'} mode
  * @property {string} [channelPetName]
  * @property {string} [proposedName]
  * @property {string} [whylipSystemPrompt]

@@ -6,9 +6,8 @@
 //! reproduces the coverage the retired `stage*_corpus()` bit-exact tests
 //! carried — **same totals** (one case per corpus line, 1:1), **zero
 //! divergence** (every case the covered grammar reaches meets the runner's
-//! bar), and the **same bit-exact set under `--gate-meter-exact`** (every
-//! meter-exact-tagged case reproduces its historical computron agreement, so
-//! the gate is green). It runs the checked-in `cases/` tree through the same
+//! bar). XS computron gaps are advisory; engine-versioned raw pins remain
+//! release gates. It runs the checked-in `cases/` tree through the same
 //! `endot-ih` machinery a nightly run uses.
 //!
 //! The oracle accumulates process RSS across machine create/destroy cycles;
@@ -57,9 +56,10 @@ fn generated_cases_reproduce_corpus_coverage() {
         "test/ironhorse/ tree must contain generated cases"
     );
 
-    // The gate: verdict + observable agreement (default), and tighten every
-    // `ironhorse-meter-exact`-tagged case to the historical bit-exact computron
-    // bar — the "same bit-exact set" half of the proof.
+    // Gate observable agreement and the engine-versioned
+    // `ironhorse-meter-5-raw-N` pins (Iron Horse's OWN frozen costs). The
+    // legacy flag requests an advisory XS cost report, not an equality
+    // acceptance gate: XS-computron parity is a non-goal.
     let cfg = Config {
         gate_meter_exact: true,
         ..Config::default()
@@ -91,12 +91,34 @@ fn generated_cases_reproduce_corpus_coverage() {
         "every generated case must run exactly once"
     );
 
-    // Zero divergence AND the bit-exact set: no failures through the runner
-    // with the meter-exact gate armed. A wrapper-perturbed metering or a
-    // one-sided completion would land here.
+    // A compiler panic names itself in the failure detail rather than hiding
+    // in the skip column, so `met_bar` below already forbids it. This only
+    // says WHICH failure, because "1 failure(s)" is a bad message for an
+    // engine fault.
+    //
+    // Honesty about reach: this corpus is a positive one — its four
+    // `negative:` cases are all `phase: runtime` — and `compiler-panicked` is
+    // raised only on the parse/resolution negative path, so the counter below
+    // is structurally zero here whatever the compiler does. The gate that can
+    // actually fire over parse-phase negatives is
+    // `committed_expectations_record_no_compiler_fault` in
+    // `tests/expectation_shards.rs`, over the checked-in whole-tree
+    // expectations. This line is a message, not a proof, and is written down
+    // as one because the previous version of this comment claimed the proof.
+    assert_eq!(
+        rep.compiler_panics(),
+        0,
+        "the compiler panicked on {} case(s) ({:?}). A panic is an engine \
+         fault, not a coverage gap: route the fold through the coder's error \
+         channel with a kind, or fix the invariant.",
+        rep.compiler_panics(),
+        rep.compiler_panic_labels()
+    );
+
+    // Observable divergences and stale engine-versioned pins remain failures.
     assert!(
         rep.met_bar() && rep.failures.is_empty(),
-        "corpus-conversion coverage equivalence: {} failure(s) under --gate-meter-exact",
+        "corpus-conversion coverage equivalence: {} failure(s) (observable divergences or stale engine-versioned raw pins; XS cost drift is advisory)",
         rep.failures.len(),
     );
 
@@ -131,6 +153,47 @@ fn shared_tree_cases_are_classified_for_host_selection() {
                 .any(|feature| feature == "ironhorse-dual-run"),
             "{} needs the ironhorse-dual-run classifier",
             path.display()
+        );
+    }
+}
+
+#[test]
+fn primitive_throw_cases_preserve_abort_evidence_and_require_the_expected_throw() {
+    let (_, harness) = locate_test262().expect("test262 harness");
+    let cfg = Config {
+        gate_meter_exact: true,
+        ..Config::default()
+    };
+    for index in 19..=25 {
+        let path = cases_dir().join(format!("language/stage2b-exceptions/{index:03}.js"));
+        let source = std::fs::read_to_string(&path).unwrap();
+        let original = source
+            .lines()
+            .find_map(|line| line.strip_prefix("  Source: "))
+            .unwrap();
+        let run = ironhorse_262::dual_run(original).unwrap();
+        assert_eq!(run.agreement, ironhorse_262::Agreement::BothAbort);
+        assert!(
+            run.observables_agree(),
+            "original corpus evidence: {}",
+            path.display()
+        );
+        assert_eq!(
+            ironhorse_262::xst::run_case(&cfg, &harness, &source).verdict,
+            ironhorse_262::xst::Verdict::Covered,
+            "{}",
+            path.display()
+        );
+    }
+    let source =
+        std::fs::read_to_string(cases_dir().join("language/stage2b-exceptions/019.js")).unwrap();
+    for replacement in ["7;", "throw 8"] {
+        let changed = source.replace("\n  throw 7\n", &format!("\n  {replacement}\n"));
+        assert_ne!(changed, source);
+        assert_ne!(
+            ironhorse_262::xst::run_case(&Config::default(), &harness, &changed).verdict,
+            ironhorse_262::xst::Verdict::Covered,
+            "mutation must not pass: {replacement}"
         );
     }
 }

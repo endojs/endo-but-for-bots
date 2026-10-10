@@ -35,7 +35,11 @@ fn run(source: &str) -> RunOutcome {
 
 fn completes_with(source: &str, expected: &str) {
     let out = run(source);
-    assert!(out.completed, "`{source}` must complete (halt: {:?})", out.halt);
+    assert!(
+        out.completed,
+        "`{source}` must complete (halt: {:?})",
+        out.halt
+    );
     assert_eq!(out.result, expected, "`{source}`");
 }
 
@@ -55,10 +59,12 @@ fn an_over_long_source_is_refused_before_it_is_materialized() {
     match rx.recv_timeout(Duration::from_secs(20)) {
         Ok((completed, halt)) => {
             assert!(!completed, "an over-long source must not construct");
-            assert_eq!(
-                halt,
-                Halt::Unsupported("native-call:TypedArray:bad-length"),
-                "and must name the length as the reason"
+            assert!(
+                matches!(
+                    &halt,
+                    Halt::Throw { rendered, .. } if rendered == "RangeError: byteLength too big"
+                ),
+                "and must throw XS's RangeError naming the length: {halt:?}"
             );
             probe.join().expect("probe thread");
         }
@@ -78,10 +84,40 @@ fn a_sparse_source_within_bounds_reads_its_holes_as_undefined() {
     // item reads `undefined`, which is 0 in an integer view and NaN in a
     // floating-point one. The declared length — not the item count — is
     // what the destination gets.
-    completes_with("var a = new Array(4); a[1] = 5; new Uint8Array(a).length", "4");
+    completes_with(
+        "var a = new Array(4); a[1] = 5; new Uint8Array(a).length",
+        "4",
+    );
     completes_with("var a = new Array(4); a[1] = 5; new Uint8Array(a)[0]", "0");
     completes_with("var a = new Array(4); a[1] = 5; new Uint8Array(a)[1]", "5");
-    completes_with("var a = new Array(4); a[1] = 5; new Float64Array(a)[0]", "NaN");
+    completes_with(
+        "var a = new Array(4); a[1] = 5; new Float64Array(a)[0]",
+        "NaN",
+    );
+}
+
+#[test]
+fn the_array_snapshot_precedes_element_coercion() {
+    // The snapshot exists so `IteratorToList` materializes every source value
+    // BEFORE any element coercion runs (test262
+    // `iterated-array-changed-by-tonumber`): a `valueOf` that mutates the
+    // source mid-copy must not change later reads. The fix snapshots the
+    // source's PRESENT items (a clone of the sparse map) rather than a dense
+    // `0..length` `Vec<Slot>`, keeping the snapshot proportional to stored
+    // elements — but the observable immunity locked here is unchanged. Read of
+    // index 1 must be the pre-mutation `2`, not the `99` the coercion of index
+    // 0 wrote back into the source.
+    completes_with(
+        "var a = [ { valueOf: function(){ a[1] = 99; return 1; } }, 2 ]; \
+         new Uint8Array(a)[1]",
+        "2",
+    );
+    // And index 0 still takes the coerced value the `valueOf` returned.
+    completes_with(
+        "var a = [ { valueOf: function(){ a[1] = 99; return 7; } }, 2 ]; \
+         new Uint8Array(a)[0]",
+        "7",
+    );
 }
 
 #[test]
@@ -89,6 +125,198 @@ fn a_dense_array_and_a_source_view_still_copy() {
     // The restructuring rewrote both source arms; keep each one covered
     // here so a regression names itself without the oracle.
     completes_with("new Uint8Array([1, 2, 3])[2]", "3");
-    completes_with("var a = new Uint8Array([5, 6, 7]); new Int32Array(a)[1]", "6");
+    completes_with(
+        "var a = new Uint8Array([5, 6, 7]); new Int32Array(a)[1]",
+        "6",
+    );
     completes_with("new Uint8Array([]).length", "0");
+}
+
+#[test]
+fn inherited_iterator_overrides_do_not_take_the_snapshot_path() {
+    for source in [
+        "var a=[{valueOf:function(){a[1]=99;return 1;}},2]; Array.prototype[Symbol.iterator]=undefined; new Uint8Array(a)[1]",
+        "var a=[1,2]; var p=Object.create(Array.prototype); p[Symbol.iterator]=function(){return {next:function(){return {done:true};}};}; Object.setPrototypeOf(a,p); new Uint8Array(a).length",
+        "var p=Object.getPrototypeOf([][Symbol.iterator]()); p.next=function(){return {done:true};}; new Uint8Array([1,2]).length",
+    ] {
+        assert_eq!(
+            run(source).halt,
+            Halt::NotImplemented("native-call:TypedArray:from-array-like"),
+            "{source}",
+        );
+    }
+}
+
+#[test]
+fn runtime_next_key_does_not_hide_the_intrinsic_iterator() {
+    completes_with(
+        "JSON.parse('{\"ne'+'xt\":1}'); new Uint8Array([1,2])[1]",
+        "2",
+    );
+    assert_eq!(
+        run("var p=Object.getPrototypeOf([][Symbol.iterator]()); delete p.next; new Uint8Array([1,2])").halt,
+        Halt::NotImplemented("native-call:TypedArray:from-array-like"),
+        "pending installation must not restore an explicitly deleted next",
+    );
+}
+
+/// Renders each `t(f)` as `ok`, or as the error's constructor and message.
+/// The messages are XS's: V8 throws the same error at every step below and
+/// words each message its own way.
+const OUTCOMES: &str = "var r = []; function t(f) { try { f(); r.push('ok'); } \
+     catch (e) { r.push(e.constructor.name + ':' + e.message); } }";
+
+/// The over-long source above is one member of a class: every path that
+/// sets or creates an Array length refuses a value that is not an array
+/// length (negative, fractional, `NaN` or past `2 ** 32 - 1`) with a
+/// catchable RangeError, where the engine used to halt.
+#[test]
+fn an_invalid_array_length_is_a_range_error_on_every_path() {
+    let invalid = "RangeError:invalid length";
+    // The length setter, `defineProperty` and `Reflect`.
+    completes_with(
+        &format!(
+            "{OUTCOMES} t(function () {{ var a = []; a.length = -1; }}); \
+             t(function () {{ var a = []; a.length = 2 ** 32; }}); \
+             t(function () {{ var a = []; a.length = 1.5; }}); \
+             t(function () {{ var a = []; a.length = NaN; }}); \
+             t(function () {{ var a = [1, 2]; \
+                 a.length = {{valueOf: function () {{ return -1; }}}}; }}); \
+             t(function () {{ Object.defineProperty([], 'length', {{value: -1}}); }}); \
+             t(function () {{ Object.defineProperty([], 'length', {{value: 2 ** 32}}); }}); \
+             t(function () {{ Object.defineProperties([], {{length: {{value: -1}}}}); }}); \
+             t(function () {{ Reflect.set([], 'length', 2 ** 32); }}); \
+             t(function () {{ Reflect.defineProperty([], 'length', {{value: 1.5}}); }}); \
+             t(function () {{ Array.prototype.length = -1; }}); r.join(' | ')"
+        ),
+        &[invalid; 11].join(" | "),
+    );
+    // A valid length converts, strict code throws the same error, and a
+    // read-only length refuses the write before it converts the value.
+    completes_with(
+        &format!(
+            "{OUTCOMES} t(function () {{ var a = [1, 2]; a.length = '1'; \
+                 if (a.length !== 1) throw 0; }}); \
+             t(function () {{ var a = []; a.length = 4294967295; \
+                 if (a.length !== 4294967295) throw 0; }}); \
+             t(function () {{ 'use strict'; var a = []; a.length = -1; }}); \
+             t(function () {{ var a = [1, 2, 3]; Object.freeze(a); a.length = -1; }}); \
+             t(function () {{ var a = []; \
+                 Object.defineProperty(a, 'length', {{value: 0, writable: false}}); \
+                 a.length = -1; }}); r.join(' | ')"
+        ),
+        &format!("ok | ok | {invalid} | ok | ok"),
+    );
+    // Every way to construct one.
+    completes_with(
+        &format!(
+            "{OUTCOMES} t(function () {{ new Array(4294967296); }}); \
+             t(function () {{ new Array(Infinity); }}); \
+             t(function () {{ new Array(-0); }}); \
+             t(function () {{ Array(4294967295).length; }}); \
+             t(function () {{ new Array('3'); }}); \
+             t(function () {{ Array.from({{length: 2 ** 32}}); }}); \
+             t(function () {{ class A extends Array {{}} new A(-1); }}); \
+             t(function () {{ Reflect.construct(Array, [-1]); }}); \
+             t(function () {{ Reflect.construct(Array, [2 ** 32], Object); }}); \
+             t(function () {{ var B = Array.bind(null); B(1.5); }}); \
+             t(function () {{ new (new Proxy(Array, {{}}))(-1); }}); \
+             t(function () {{ new (new Proxy(Array, {{}}))(1.5); }}); r.join(' | ')"
+        ),
+        &format!(
+            "{invalid} | {invalid} | ok | ok | ok | {invalid} | {invalid} | {invalid} | \
+             {invalid} | {invalid} | {invalid} | {invalid}"
+        ),
+    );
+    // An `@@species` constructor that builds an invalid Array, for every
+    // method that asks for one.
+    completes_with(
+        &format!(
+            "{OUTCOMES} ['map', 'filter', 'slice', 'concat', 'splice'].forEach(function (m) {{ \
+                 t(function () {{ var a = [1]; \
+                     a.constructor = {{[Symbol.species]: \
+                         function (n) {{ return new Array(-1); }}}}; \
+                     m === 'splice' ? a.splice(0, 1) : a[m](function (x) {{ return x; }}); }}); \
+             }}); r.join(' | ')"
+        ),
+        &[invalid; 5].join(" | "),
+    );
+}
+
+/// The TypedArray, ArrayBuffer and DataView members of the class: a negative
+/// length, one past the byte cap, and an offset or length that does not fit
+/// the buffer each throw XS's RangeError, through every construction path.
+#[test]
+fn an_invalid_typed_array_or_buffer_length_is_a_range_error() {
+    completes_with(
+        &format!(
+            "{OUTCOMES} t(function () {{ new Uint8Array(-1); }}); \
+             t(function () {{ new Uint8Array(-Infinity); }}); \
+             t(function () {{ new BigInt64Array(-1); }}); \
+             t(function () {{ new Uint8Array(2 ** 53); }}); \
+             t(function () {{ new Float64Array(2 ** 31); }}); \
+             t(function () {{ new ArrayBuffer(-1); }}); \
+             t(function () {{ new ArrayBuffer(2 ** 53); }}); \
+             t(function () {{ new Uint8Array(NaN); }}); \
+             t(function () {{ new Uint8Array(1.5); }}); \
+             t(function () {{ new Uint8Array(-0.5); }}); r.join(' | ')"
+        ),
+        "RangeError:byteLength < 0 | RangeError:byteLength < 0 | RangeError:byteLength < 0 | \
+         RangeError:byteLength too big | RangeError:byteLength too big | \
+         RangeError:byteLength < 0 | RangeError:byteLength too big | ok | ok | ok",
+    );
+    // An offset or length over a buffer.
+    completes_with(
+        &format!(
+            "{OUTCOMES} t(function () {{ new Uint8Array(new ArrayBuffer(4), 1, 5); }}); \
+             t(function () {{ new Int32Array(new ArrayBuffer(8), 4, 2); }}); \
+             t(function () {{ new Uint16Array(new ArrayBuffer(4), 1); }}); \
+             t(function () {{ new Float32Array(new ArrayBuffer(8), 2); }}); \
+             t(function () {{ new Uint16Array(new ArrayBuffer(3)); }}); \
+             t(function () {{ new Uint8Array(new ArrayBuffer(4), 5); }}); \
+             t(function () {{ new Uint8Array(new ArrayBuffer(4), -1); }}); \
+             t(function () {{ new Uint8Array(new ArrayBuffer(4), 0, -1); }}); r.join(' | ')"
+        ),
+        "RangeError:invalid length 5 | RangeError:invalid length 2 | \
+         RangeError:invalid byteOffset 1 | RangeError:invalid byteOffset 2 | \
+         RangeError:invalid byteLength 3 | RangeError:invalid byteLength 4294967295 | \
+         RangeError:byteLength < 0 | RangeError:byteLength < 0",
+    );
+    completes_with(
+        &format!(
+            "{OUTCOMES} t(function () {{ new DataView(new ArrayBuffer(4), 5); }}); \
+             t(function () {{ new DataView(new ArrayBuffer(4), 1, 4); }}); \
+             t(function () {{ new DataView(new ArrayBuffer(4), 4, 1); }}); \
+             t(function () {{ new DataView(new ArrayBuffer(4), 4); }}); \
+             t(function () {{ new DataView(new ArrayBuffer(4), -1); }}); r.join(' | ')"
+        ),
+        "RangeError:invalid byteOffset 5 | RangeError:invalid byteLength 4 | \
+         RangeError:invalid byteLength 1 | ok | RangeError:byteLength < 0",
+    );
+    // A subclass, `Reflect.construct`, a bound or Proxy constructor, `of` and
+    // `@@species` reach the same checks; `from` converts a negative length
+    // to 0.
+    completes_with(
+        &format!(
+            "{OUTCOMES} t(function () {{ class U extends Uint8Array {{}} new U(-1); }}); \
+             t(function () {{ Reflect.construct(Uint8Array, [-1]); }}); \
+             t(function () {{ new (Uint8Array.bind(null))(-1); }}); \
+             t(function () {{ new (new Proxy(Uint8Array, {{}}))(-1); }}); \
+             t(function () {{ \
+                 Uint8Array.of.call(function (n) {{ return new Uint8Array(-1); }}, 1); }}); \
+             ['map', 'filter', 'slice'].forEach(function (m) {{ t(function () {{ \
+                 var u = new Uint8Array(2); \
+                 u.constructor = {{[Symbol.species]: \
+                     function (n) {{ return new Uint8Array(-1); }}}}; \
+                 u[m](function () {{ return true; }}); }}); }}); \
+             t(function () {{ Reflect.construct(Uint8Array, [new ArrayBuffer(4), 1, 5]); }}); \
+             t(function () {{ class D extends DataView {{}} new D(new ArrayBuffer(4), 5); }}); \
+             t(function () {{ new (DataView.bind(null, new ArrayBuffer(4)))(1, 4); }}); \
+             t(function () {{ Uint8Array.from({{length: -1}}); }}); r.join(' | ')"
+        ),
+        "RangeError:byteLength < 0 | RangeError:byteLength < 0 | RangeError:byteLength < 0 | \
+         RangeError:byteLength < 0 | RangeError:byteLength < 0 | RangeError:byteLength < 0 | \
+         RangeError:byteLength < 0 | RangeError:byteLength < 0 | RangeError:invalid length 5 | \
+         RangeError:invalid byteOffset 5 | RangeError:invalid byteLength 4 | ok",
+    );
 }

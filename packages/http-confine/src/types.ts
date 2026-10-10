@@ -44,8 +44,16 @@ export type ConfinedRequest = {
   cancellation?: Promise<never>;
 };
 
+export type ConfinedResponseSummary = {
+  status: number;
+  statusText: string;
+  ok: boolean;
+  headers: Record<string, string>;
+  url: string;
+};
+
 export type ConfinedResponse = {
-  response: FetchLikeResponse;
+  response: ConfinedResponseSummary;
   bytes: Uint8Array;
   truncated: boolean;
   maxResponseBytes: number;

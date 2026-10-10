@@ -9,24 +9,53 @@ fn decode_operand(op: Opcode, code: &[u8], pc: usize) -> String {
     let rd_s1 = |o: usize| code[pc + o] as i8 as i32;
     let rd_s2 = |o: usize| i16::from_le_bytes([code[pc + o], code[pc + o + 1]]) as i32;
     let rd_s4 = |o: usize| {
-        i32::from_le_bytes([code[pc + o], code[pc + o + 1], code[pc + o + 2], code[pc + o + 3]])
+        i32::from_le_bytes([
+            code[pc + o],
+            code[pc + o + 1],
+            code[pc + o + 2],
+            code[pc + o + 3],
+        ])
     };
     let rd_u2 = |o: usize| u16::from_le_bytes([code[pc + o], code[pc + o + 1]]) as u32;
     use Opcode::*;
     match op {
-        XS_CODE_INTEGER_1 | XS_CODE_BRANCH_1 | XS_CODE_BRANCH_ELSE_1 | XS_CODE_BRANCH_IF_1
-        | XS_CODE_CATCH_1 | XS_CODE_CODE_1 | XS_CODE_RUN_1 | XS_CODE_RUN_TAIL_1
-        | XS_CODE_BRANCH_STATUS_1 | XS_CODE_BRANCH_CHAIN_1 | XS_CODE_BRANCH_COALESCE_1 => {
+        XS_CODE_INTEGER_1
+        | XS_CODE_BRANCH_1
+        | XS_CODE_BRANCH_ELSE_1
+        | XS_CODE_BRANCH_IF_1
+        | XS_CODE_CATCH_1
+        | XS_CODE_CODE_1
+        | XS_CODE_RUN_1
+        | XS_CODE_RUN_TAIL_1
+        | XS_CODE_BRANCH_STATUS_1
+        | XS_CODE_BRANCH_CHAIN_1
+        | XS_CODE_BRANCH_COALESCE_1 => {
             format!("{}", rd_s1(1))
         }
-        XS_CODE_INTEGER_2 | XS_CODE_BRANCH_2 | XS_CODE_BRANCH_ELSE_2 | XS_CODE_BRANCH_IF_2
-        | XS_CODE_CATCH_2 | XS_CODE_CODE_2 | XS_CODE_RUN_2 => format!("{}", rd_s2(1)),
+        XS_CODE_INTEGER_2
+        | XS_CODE_BRANCH_2
+        | XS_CODE_BRANCH_ELSE_2
+        | XS_CODE_BRANCH_IF_2
+        | XS_CODE_CATCH_2
+        | XS_CODE_CODE_2
+        | XS_CODE_RUN_2 => format!("{}", rd_s2(1)),
         XS_CODE_INTEGER_4 | XS_CODE_BRANCH_4 | XS_CODE_CODE_4 => format!("{}", rd_s4(1)),
-        XS_CODE_RESERVE_1 | XS_CODE_GET_LOCAL_1 | XS_CODE_SET_LOCAL_1 | XS_CODE_VAR_LOCAL_1
-        | XS_CODE_LET_LOCAL_1 | XS_CODE_CONST_LOCAL_1 | XS_CODE_PULL_LOCAL_1
-        | XS_CODE_GET_CLOSURE_1 | XS_CODE_SET_CLOSURE_1 | XS_CODE_VAR_CLOSURE_1
-        | XS_CODE_LET_CLOSURE_1 | XS_CODE_CONST_CLOSURE_1 | XS_CODE_PULL_CLOSURE_1
-        | XS_CODE_UNWIND_1 | XS_CODE_RETRIEVE_1 | XS_CODE_STORE_1 => {
+        XS_CODE_RESERVE_1
+        | XS_CODE_GET_LOCAL_1
+        | XS_CODE_SET_LOCAL_1
+        | XS_CODE_VAR_LOCAL_1
+        | XS_CODE_LET_LOCAL_1
+        | XS_CODE_CONST_LOCAL_1
+        | XS_CODE_PULL_LOCAL_1
+        | XS_CODE_GET_CLOSURE_1
+        | XS_CODE_SET_CLOSURE_1
+        | XS_CODE_VAR_CLOSURE_1
+        | XS_CODE_LET_CLOSURE_1
+        | XS_CODE_CONST_CLOSURE_1
+        | XS_CODE_PULL_CLOSURE_1
+        | XS_CODE_UNWIND_1
+        | XS_CODE_RETRIEVE_1
+        | XS_CODE_STORE_1 => {
             format!("#{}", code[pc + 1])
         }
         XS_CODE_NUMBER => {
@@ -72,8 +101,13 @@ fn main() {
             Some(o) => {
                 println!(
                     "SRC {:?}\n  ok={} result={:?} comp={} raw={} frac={} nbytes={}",
-                    src, o.completed, o.result, o.computrons, o.meter_raw,
-                    o.meter_raw as i64 - (o.computrons as i64) * 65536, o.bytecode.len()
+                    src,
+                    o.completed,
+                    o.result,
+                    o.computrons,
+                    o.meter_raw,
+                    o.meter_raw as i64 - (o.computrons as i64) * 65536,
+                    o.bytecode.len()
                 );
                 print!("{}", disasm(&o.bytecode));
             }

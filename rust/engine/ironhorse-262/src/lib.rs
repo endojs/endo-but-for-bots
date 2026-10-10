@@ -7,11 +7,25 @@
 //! and, post stage-6 seam flip, runs ironhorse's **own** bytecode (compiled by
 //! the default `ironhorse-compile` pipeline; the oracle's exact bytes remain a
 //! selectable differential reference via [`Compiler::Oracle`]) on
-//! `ironhorse-vm`, then records four-valued agreement plus computron
-//! agreement. Matching the oracle's *fail*
-//! vector matters as much as its pass vector: a program ironhorse completes
-//! that XS throws on (or vice versa) is a divergence, never a silent
+//! `ironhorse-vm`, then records four-valued agreement. Matching the oracle's
+//! *fail* vector matters as much as its pass vector: a program ironhorse
+//! completes that XS throws on (or vice versa) is a divergence, never a silent
 //! improvement.
+//!
+//! **What the differential gates — and what it does not.** The oracle
+//! certifies *observable results*: completion kind, completion value, and
+//! thrown-value identity ([`DualRun::observables_agree`]). Computron counts
+//! are recorded from both engines as **advisory calibration telemetry only**.
+//! Iron Horse's metering objective is to approximate actual CPU time with a
+//! deterministic, release-versioned cost model; to that end it MAY diverge
+//! from XS's computron counts, and **XS-computron parity is a non-goal — not
+//! a deferred goal** (maintainer directive, `designs/ironhorse-engine.md`
+//! § Metering). No predicate in this crate treats
+//! `oracle_computrons == ironhorse_computrons` as a success criterion.
+//! Determinism of Iron Horse's *own* meter (identical computrons across
+//! repeated runs of the same binary on the same platform) is a separate, hard
+//! requirement and is gated elsewhere (`--repeat`, the golden own-cost
+//! vectors).
 //!
 //! The bespoke per-stage corpus (`corpora/*.js` + the `stage*_corpus()`
 //! accessors) that drove bring-up has **retired** into a test262-shaped
@@ -31,62 +45,19 @@
 
 use ironhorse_vm::{Halt, RunOutcome};
 
-/// The [`ironhorse_vm::SourceCompiler`] the VM's runtime source-execution
-/// bridge (a string `eval`, the `Function` constructor) drives to compile a
-/// source string to bytecode in the running realm. It is ironhorse's own
-/// front end ([`ironhorse_compile`]) — the same compiler the top-level
-/// program rides — so an eval'd source is held to the identical pipeline.
-///
-/// Total over the coder's panics (`catch_unwind`): a deferred coder path
-/// becomes an honest [`ironhorse_vm::SourceCompileError::Unsupported`]
-/// (a coverage gap the VM surfaces as `Halt::Unsupported`), never a harness
-/// crash. A structured parse reject splits on its kind exactly as
-/// [`compile_for`] does: an `Unsupported` parse (an unported-but-valid
-/// construct) is a coverage gap; every other reject is a genuine early error,
-/// which the bridge throws as a realm-local, catchable `SyntaxError`.
-pub struct IronhorseSourceCompiler;
-
-impl ironhorse_vm::SourceCompiler for IronhorseSourceCompiler {
-    fn compile_source(
-        &self,
-        source: &str,
-        strict: bool,
-    ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
-        let source = source.to_string();
-        let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-            ironhorse_compile::compile_atoms_with(&source, strict)
-        }));
-        match compiled {
-            Ok(Ok((bytecode, symbols))) => {
-                Ok(ironhorse_vm::CompiledSource { bytecode, symbols })
-            }
-            Ok(Err(e)) => {
-                match e.kind {
-                    ironhorse_compile::parser::ParseErrorKind::Unsupported => {
-                        Err(ironhorse_vm::SourceCompileError::Unsupported(e.to_string()))
-                    }
-                    // Carry the bare diagnostic (`e.message`, no `line N:`
-                    // prefix) so the bridge's realm-local `SyntaxError` renders
-                    // with XS's exact wording — the pinned oracle's thrown
-                    // `String(exception)` is `SyntaxError: <message>`, and the
-                    // differential harness compares the whole string.
-                    _ => Err(ironhorse_vm::SourceCompileError::Syntax(e.message)),
-                }
-            }
-            Err(payload) => Err(ironhorse_vm::SourceCompileError::Unsupported(panic_message(
-                payload.as_ref(),
-            ))),
-        }
-    }
-}
+pub use ironhorse_runtime::IronhorseSourceCompiler;
 
 /// Construct a realm interpreter linked against `names` **and** armed with the
 /// runtime source compiler, so a program that calls `eval` on a string (or the
 /// `Function` constructor) executes it in-realm rather than reaching the honest
 /// `eval:no-compiler` gap. This is the single wiring point that turns the
-/// compiler/VM bridge on for the conformance harness.
-fn interp_with_source_bridge(names: &[String]) -> ironhorse_vm::Interp {
+/// compiler/VM bridge on for the conformance harness, and the single point
+/// that installs the test262 `$262` host object (the oracle shim exposes the
+/// same `$262.detachArrayBuffer`): a default `Interp` carries no `$262`, so a
+/// production machine never exposes the detach primitive.
+fn interp_with_source_bridge(names: &[ironhorse_vm::SymbolName]) -> ironhorse_vm::Interp {
     let mut interp = ironhorse_vm::Interp::new();
+    interp.install_test262_host();
     interp.link_intrinsics(names);
     interp.set_source_compiler(std::rc::Rc::new(IronhorseSourceCompiler));
     interp
@@ -95,10 +66,91 @@ fn interp_with_source_bridge(names: &[String]) -> ironhorse_vm::Interp {
 /// Run a program bytecode buffer with its symbols atom on a realm armed with
 /// the runtime source bridge (so an in-program `eval` of a string executes).
 /// Mirrors [`ironhorse_vm::run_program_with_symbols`] but installs the
-/// compiler, and is the entry the differential run path uses.
+/// compiler, and is the entry the differential run path uses. Like every
+/// ironhorse run this crate compares against the oracle, the outcome is in
+/// the harness's shape ([`RunOutcome::host_coerced`]): the xsnap shim
+/// coerces the completion with `String(result)` after the run, so a Symbol
+/// or null-prototype completion is the abort the oracle reports.
 fn run_program_with_symbols(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
     let names = ironhorse_vm::parse_symbols(symbols);
-    interp_with_source_bridge(&names).run(bytecode)
+    interp_with_source_bridge(&names)
+        .run(bytecode)
+        .host_coerced()
+}
+
+/// Compile and run one test262 script source the way a HOST does: on a realm
+/// with the runtime source bridge and `$262` installed, with no oracle and no
+/// differential.
+///
+/// This is the whole of what `node` and `xst` do for the other two hosts of
+/// the `ses-xs-parity` axis -- run the assembled source, and let an uncaught
+/// throw be the failure. [`xst`] is the differential runner and answers a
+/// different question (does ironhorse AGREE with XS); this answers "does
+/// ironhorse pass the test", which is what the corpus's own `Test262Error`
+/// assertions already encode.
+///
+/// `Err` is the compile failure ITSELF, not a rendered string: the caller has
+/// to know which error name to print, and [`compile_failure_name`] can only
+/// decide that from the kind. `Ok` carries the run outcome, whose
+/// [`Halt::Throw`] renders as `Name: message` -- the shape `eshost` parses
+/// off stderr.
+pub fn run_script_source(source: &str) -> Result<RunOutcome, ironhorse_compile::ParseError> {
+    let (bytecode, symbols) =
+        ironhorse_compile::compile_atoms_goal(source, ironhorse_compile::Goal::Script, false)?;
+    Ok(run_program_with_symbols(&bytecode, &symbols))
+}
+
+/// The error name a compile failure must be reported under.
+///
+/// `SyntaxError` is a CLAIM, not a label: a test262 case carrying
+/// `negative: { phase: parse, type: SyntaxError }` PASSES when the host prints
+/// that name, because `eshost` matches it off stderr. So only a failure that is
+/// really the grammar's early error may use it. A construct we have not ported
+/// (`Unsupported`), an exhausted work allowance (`MeterLimit`, `MeterAbort`) or
+/// a regexp resource ceiling are all engine gaps, and reporting them as
+/// `SyntaxError` would turn each one into a green case and walk the ratchet up
+/// on our own shortfall. They report as `InternalError`, which fails the case
+/// honestly.
+///
+/// The dual-run runner already draws this line (it keys on the kind, and
+/// `ironhorse_negative_ok` only credits a real throw); this is that judgment,
+/// for the plain host.
+pub fn compile_failure_name(error: &ironhorse_compile::ParseError) -> &'static str {
+    use ironhorse_compile::{LexErrorKind, ParseErrorKind};
+    match &error.kind {
+        ParseErrorKind::Syntax => "SyntaxError",
+        // Both say "ironhorse stopped", not "the source is invalid".
+        ParseErrorKind::Unsupported | ParseErrorKind::MeterLimit => "InternalError",
+        // No wildcard, deliberately. `SyntaxError` is the name that makes a
+        // negative parse-phase case PASS, so a `_` arm defaulting to it would
+        // credit the ratchet for whatever lex kind someone adds next --
+        // reintroducing, silently, the bug this function exists to fix.
+        // `LexErrorKind` carries no `#[non_exhaustive]`, so naming all sixteen
+        // makes a seventeenth a compile error HERE and forces whoever adds it
+        // to classify it. Same discipline as `Refusal`'s `Display`.
+        ParseErrorKind::Lex(lex) => match lex.kind {
+            // Resource ceilings, not grammar. `RegExpBudgetExceeded`'s own doc
+            // says it is "never a guest SyntaxError".
+            LexErrorKind::MeterLimit
+            | LexErrorKind::RegExpBudgetExceeded
+            | LexErrorKind::RegExpResourceLimit
+            | LexErrorKind::Overflow => "InternalError",
+            // The grammar rejecting the source: an unterminated string, a bad
+            // escape, a strict-mode octal, and the rest.
+            LexErrorKind::InvalidCharacter(_)
+            | LexErrorKind::InvalidEscape
+            | LexErrorKind::InvalidNumber
+            | LexErrorKind::StrictOctal
+            | LexErrorKind::UnterminatedString
+            | LexErrorKind::LineTerminatorInString
+            | LexErrorKind::UnterminatedComment
+            | LexErrorKind::UnterminatedRegExp
+            | LexErrorKind::LineTerminatorInRegExp
+            | LexErrorKind::InvalidRegExp
+            | LexErrorKind::InvalidAtSign
+            | LexErrorKind::UnexpectedCharacter(_) => "SyntaxError",
+        },
+    }
 }
 
 pub mod compile_diff;
@@ -148,16 +200,17 @@ pub enum IronhorseCompile {
     /// ironhorse-compile returned a structured error whose kind is
     /// [`ironhorse_compile::parser::ParseErrorKind::Unsupported`] — the front
     /// end declined a construct that is *valid JS but not yet ported*, not a
-    /// spec early error. This is an Ironhorse compiler coverage gap (grouped
-    /// with [`Self::Panicked`] as `compiler-unimplemented:<phase>`), never a
-    /// covered early error. The string is the rendered `ParseError`.
+    /// spec early error. This is an Ironhorse compiler coverage gap
+    /// (`compiler-unimplemented:<phase>`), never a covered early error. The
+    /// string is the rendered `ParseError`.
     Unsupported(String),
-    /// ironhorse-compile **panicked** — it reached a deferred/unimplemented
-    /// coder path (e.g. `static block with lexical declarations deferred`) and
-    /// folded rather than emitting bytecode. This is an Ironhorse *compiler
-    /// coverage gap*, not a covered early error and not a verdict; the string is
-    /// the panic message (a gap label). Distinct from [`Self::Rejected`] (a
-    /// clean SyntaxError) so a crash is never miscounted as a correct rejection.
+    /// ironhorse-compile **panicked** — the compiler violated its own
+    /// invariant. This is an engine FAULT, filed as a `Fail` named
+    /// `compiler-panicked:<phase>`; the string is the panic message. It shared
+    /// `compiler-unimplemented:<phase>` with [`Self::Unsupported`] until F063,
+    /// which made an engine fault read as an honest coverage gap. Distinct
+    /// from [`Self::Rejected`] (a clean SyntaxError) so a crash is never
+    /// miscounted as a correct rejection.
     Panicked(String),
 }
 
@@ -171,7 +224,11 @@ pub struct DualRun {
     pub result_agrees: bool,
     pub oracle_result: String,
     pub ironhorse_result: String,
-    /// Computron agreement (only meaningful when both completed).
+    /// Computron agreement (only meaningful when both completed). **Advisory
+    /// calibration telemetry only**: XS-computron parity is a non-goal, and no
+    /// verdict predicate reads this as a success criterion. A large,
+    /// unexpected drift is worth a look as an allocation-faithfulness canary;
+    /// equality is never required.
     pub computrons_agree: bool,
     pub oracle_computrons: u64,
     pub ironhorse_computrons: u64,
@@ -205,6 +262,8 @@ pub struct DualRun {
     /// needs the oracle's own parse signal reads [`Self::oracle_parsed`], never
     /// this field.
     pub bytecode: Vec<u8>,
+    /// The selected compiler's symbols atom, retained for determinism checks.
+    pub symbols: Vec<u8>,
     /// Whether the XS **oracle** emitted bytecode — normally evidence that it
     /// parsed and coded the source. Some lexer-owned errors are represented by
     /// a small bytecode stub that throws the reported SyntaxError, so an early-
@@ -215,36 +274,32 @@ pub struct DualRun {
     /// read this to tell an oracle *parse rejection* (early error) apart from an
     /// oracle *runtime abort* on a source XS parsed.
     pub oracle_parsed: bool,
+    /// Original XS abort status; zero for an ordinary guest throw.
+    pub oracle_exit_status: i32,
 }
 
 impl DualRun {
-    /// The acceptance-bar predicate for one program: same completion,
-    /// same result string, same computrons.
-    pub fn is_bit_exact(&self) -> bool {
+    /// The result-correctness gate — the ONLY success predicate this record
+    /// offers. XS computation costs are advisory telemetry, never part of it.
+    ///
+    /// A shared abort agrees only when ironhorse aborted for a reason the
+    /// oracle can share: a JS-level `Throw` whose rendered value matches. An
+    /// `Unsupported` (opcode outside the subset) or `Decode`
+    /// (truncated/invalid bytecode) halt means ironhorse bailed on bytecode it
+    /// cannot model — the oracle "also aborting" (a parse error, a different
+    /// throw) is not agreement and must never pass silently.
+    ///
+    /// (A historical `is_bit_exact` predicate additionally required
+    /// `oracle_computrons == ironhorse_computrons`. It was removed
+    /// deliberately: a harness-level concept that treats computron equality
+    /// with the XS oracle as a success criterion re-seeds the retired
+    /// XS-computron-parity framing — accuracy over parity,
+    /// `designs/ironhorse-engine.md` § Metering. Do not reintroduce it.)
+    pub fn observables_agree(&self) -> bool {
         match self.agreement {
-            Agreement::BothComplete => self.result_agrees && self.computrons_agree,
-            // A shared abort is bit-exact only when ironhorse aborted for a
-            // reason the oracle can share: a JS-level `Throw`. An
-            // `Unsupported` (opcode outside the subset) or `Decode`
-            // (truncated/invalid bytecode) halt means ironhorse bailed on
-            // bytecode it cannot model — the oracle "also aborting"
-            // (a parse error, a different throw) is not agreement and
-            // must never pass silently.
-            //
-            // Now that 2b models real exceptions, the shared-abort arm is
-            // tightened to the same standard as `BothComplete` (stage-2a
-            // review observation 3): the thrown value must match (the
-            // oracle's `String(exception)` == ironhorse's `Halt::Throw`
-            // string) AND the computrons must match — the uncaught-throw
-            // host-escape path is metered exactly (`interp` §
-            // `THROW_HOST_ESCAPE_METERING`), and the oracle shim now
-            // records the run-only computron count at the throw. A `Throw`
-            // whose value or computrons diverge is a divergence, not a
-            // silent pass.
+            Agreement::BothComplete => self.result_agrees,
             Agreement::BothAbort => {
-                matches!(self.ironhorse_halt, Halt::Throw(_))
-                    && self.error_agrees
-                    && self.oracle_computrons == self.ironhorse_computrons
+                matches!(self.ironhorse_halt, Halt::Throw { .. }) && self.error_agrees
             }
             _ => false,
         }
@@ -317,6 +372,12 @@ fn compile_for(
                 Ok(Err(e)) => {
                     let rendered = e.to_string();
                     let signal = match e.kind {
+                        ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                            kind:
+                                ironhorse_compile::LexErrorKind::RegExpBudgetExceeded
+                                | ironhorse_compile::LexErrorKind::RegExpResourceLimit,
+                            ..
+                        }) => IronhorseCompile::Unsupported(rendered),
                         ironhorse_compile::parser::ParseErrorKind::Unsupported => {
                             IronhorseCompile::Unsupported(rendered)
                         }
@@ -324,10 +385,11 @@ fn compile_for(
                     };
                     (Vec::new(), Vec::new(), signal)
                 }
-                // A coder fold / panic: ironhorse-compile reached a deferred
-                // path. Empty bytecode, and the panic payload becomes a compiler
-                // coverage-gap label — distinct from a clean rejection so a crash
-                // is never miscounted as a correct SyntaxError.
+                // ironhorse-compile PANICKED. Empty bytecode, and the panic
+                // payload becomes an engine-fault label — distinct both from a
+                // clean rejection (so a crash is never miscounted as a correct
+                // SyntaxError) and from a structured `Unsupported` (so a fault
+                // is never miscounted as honest missing coverage).
                 Err(payload) => (
                     Vec::new(),
                     Vec::new(),
@@ -393,17 +455,25 @@ pub fn dual_run_with(source: &str, compiler: Compiler) -> Option<DualRun> {
     // compares two rejections rather than a crash.
     let ironhorse: RunOutcome = match &compile {
         IronhorseCompile::Rejected(_) => RunOutcome {
+            meter_raw_this_run: 0,
+            computrons_this_run: 0,
+            dispatched_this_run: 0,
             completed: false,
             result: String::new(),
+            coercion_error: None,
+            host_render_halt: None,
+            unhandled_rejection: None,
             computrons: 0,
             dispatched: 0,
             meter_raw: 0,
-            halt: ironhorse_vm::Halt::Throw("SyntaxError".to_string()),
+            halt: ironhorse_vm::Halt::synthetic_throw("SyntaxError"),
         },
         _ => run_program_with_symbols(&bytecode, &symbols),
     };
 
-    Some(build_dual_run(source, oracle, ironhorse, compile, bytecode))
+    Some(build_dual_run(
+        source, oracle, ironhorse, compile, bytecode, symbols,
+    ))
 }
 
 /// MULTI-CRANK differential mode (the wave-6 pattern-2 antidote): run
@@ -430,7 +500,6 @@ pub fn dual_run_with(source: &str, compiler: Compiler) -> Option<DualRun> {
 pub fn dual_run_cranks(sources: &[&str]) -> Option<Vec<DualRun>> {
     let oracle_outcomes = xs_oracle::run_cranks(sources)?;
     let mut interp: Option<ironhorse_vm::Interp> = None;
-    let mut prev_raw: u64 = 0;
     let mut out = Vec::new();
     for (source, oracle) in sources.iter().zip(oracle_outcomes) {
         let bytecode = oracle.bytecode.clone();
@@ -440,54 +509,200 @@ pub fn dual_run_cranks(sources: &[&str]) -> Option<Vec<DualRun>> {
             // prior crank aborted the run): present ironhorse's side as
             // the same non-run.
             RunOutcome {
+                meter_raw_this_run: 0,
+                computrons_this_run: 0,
+                dispatched_this_run: 0,
                 completed: false,
                 result: String::new(),
+                coercion_error: None,
+                host_render_halt: None,
+                unhandled_rejection: interp.as_ref().and_then(|m| m.unhandled_rejection()),
                 computrons: 0,
                 dispatched: 0,
                 meter_raw: 0,
-                halt: ironhorse_vm::Halt::Throw("SyntaxError".to_string()),
+                halt: ironhorse_vm::Halt::synthetic_throw("SyntaxError"),
             }
         } else {
             match interp.as_mut() {
                 None => {
                     let mut m = interp_with_source_bridge(&names);
-                    let o = m.run(&bytecode);
+                    let o = m.run(&bytecode).host_coerced();
                     interp = Some(m);
                     o
                 }
                 Some(m) => match m.relink_crank(&bytecode, &names) {
-                    Ok(relinked) => m.run(&relinked),
+                    Ok(relinked) => m.run(&relinked).host_coerced(),
                     Err(e) => RunOutcome {
+                        meter_raw_this_run: 0,
+                        computrons_this_run: 0,
+                        dispatched_this_run: 0,
                         completed: false,
                         result: String::new(),
+                        coercion_error: None,
+                        host_render_halt: None,
+                        unhandled_rejection: m.unhandled_rejection(),
                         computrons: 0,
                         dispatched: 0,
                         meter_raw: 0,
-                        halt: ironhorse_vm::Halt::Decode(format!("relink refused: {e:?}")),
+                        halt: ironhorse_vm::Halt::Decode(ironhorse_vm::DecodeError::Relink(e)),
                     },
                 },
             }
         };
-        // Per-crank metering: the raw delta across this crank, shifted
-        // exactly as the shim shifts its per-crank reset index.
-        let raw_now = interp.as_ref().map(|m| m.meter_index()).unwrap_or(0);
-        let crank_raw = raw_now.saturating_sub(prev_raw);
-        prev_raw = raw_now;
-        ironhorse.computrons = crank_raw >> 16;
-        ironhorse.meter_raw = crank_raw;
+        ironhorse.computrons = ironhorse.computrons_this_run;
+        ironhorse.meter_raw = ironhorse.meter_raw_this_run;
+        ironhorse.dispatched = ironhorse.dispatched_this_run;
         let stop = !(oracle.completed && ironhorse.completed);
+        let symbols = oracle.symbols.clone();
         out.push(build_dual_run(
             source,
             oracle,
             ironhorse,
             IronhorseCompile::NotAttempted,
             bytecode,
+            symbols,
         ));
         if stop {
             break;
         }
     }
     Some(out)
+}
+
+/// Run separately compiled scripts in one realm with one final microtask
+/// checkpoint. Every script uses IronHorse's own compiler; the oracle supplies
+/// independent execution and compile evidence. The sequence stops when either
+/// engine refuses a phase. Callers must check its length before attributing an
+/// early setup error to the final subject (especially for negative tests).
+/// `signal_name` optionally reads an async completion latch from each phase.
+pub fn dual_run_scripts(sources: &[&str], signal_name: Option<&str>) -> Option<Vec<AsyncDualRun>> {
+    dual_run_scripts_checkpoint(sources, signal_name, true)
+}
+
+pub(crate) fn dual_run_scripts_checkpoint(
+    sources: &[&str],
+    signal_name: Option<&str>,
+    checkpoint: bool,
+) -> Option<Vec<AsyncDualRun>> {
+    let oracles = xs_oracle::run_scripts_with_checkpoint(sources, checkpoint)?;
+    let mut interp = interp_with_source_bridge(&[]);
+    let mut result = Vec::new();
+    for (i, (source, oracle)) in sources.iter().zip(oracles).enumerate() {
+        let (bytecode, symbols, compile) = compile_for(Compiler::default(), source, &oracle);
+        let mut run = run_compiled_script(
+            &mut interp,
+            &bytecode,
+            &symbols,
+            &compile,
+            checkpoint && i + 1 == sources.len(),
+        );
+        run.computrons = run.computrons_this_run;
+        run.meter_raw = run.meter_raw_this_run;
+        run.dispatched = run.dispatched_this_run;
+        let stop = !oracle.completed || !run.completed;
+        result.push(AsyncDualRun {
+            ironhorse_signal: signal_name.and_then(|name| interp.global_string(name)),
+            ironhorse_unhandled_rejection: interp.has_unhandled_rejection(),
+            run: build_dual_run(source, oracle, run, compile, bytecode, symbols),
+        });
+        if stop {
+            break;
+        }
+    }
+    Some(result)
+}
+
+/// Relink independently compiled source into a retained interpreter. Compilation
+/// rejection remains an early SyntaxError, never execution of empty bytecode.
+fn run_compiled_script(
+    interp: &mut ironhorse_vm::Interp,
+    bytecode: &[u8],
+    symbols: &[u8],
+    compile: &IronhorseCompile,
+    pump_jobs: bool,
+) -> RunOutcome {
+    let halt = if matches!(compile, IronhorseCompile::Rejected(_)) {
+        Halt::synthetic_throw("SyntaxError")
+    } else {
+        let names = ironhorse_vm::parse_symbols(symbols);
+        match interp.relink_crank(bytecode, &names) {
+            Ok(code) => {
+                return if pump_jobs {
+                    // The SUBJECT case: an escaping thrown value is rendered by
+                    // running the guest's `toString`, because the oracle side of
+                    // this comparison is `xs_shim.c`'s `endor_error_from_exception`
+                    // doing exactly that. The engine's ordinary boundary stays
+                    // guest-free and keeps its meter- and heap-ceiling guarantees.
+                    interp.run_rendering_throws_in_guest(&code).host_coerced()
+                } else {
+                    // Setup sources end in undefined, so coercion cannot invoke
+                    // a guest callback between setup and the subject.
+                    interp
+                        .run_script_shared(std::rc::Rc::from(code))
+                        .host_coerced()
+                };
+            }
+            Err(error) => Halt::Decode(ironhorse_vm::DecodeError::Relink(error)),
+        }
+    };
+    RunOutcome {
+        meter_raw_this_run: 0,
+        computrons_this_run: 0,
+        dispatched_this_run: 0,
+        completed: false,
+        result: String::new(),
+        coercion_error: None,
+        host_render_halt: None,
+        unhandled_rejection: interp.unhandled_rejection(),
+        computrons: 0,
+        dispatched: 0,
+        meter_raw: 0,
+        halt,
+    }
+}
+
+/// Execute setup with the native compiler before another Script or Module,
+/// retaining pending jobs for the subject's final checkpoint.
+pub(crate) fn run_setup(interp: &mut ironhorse_vm::Interp, setup: &str) -> RunOutcome {
+    let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ironhorse_compile::compile_atoms(setup)
+    }));
+    match compiled {
+        Ok(Ok((code, names))) => {
+            run_compiled_script(interp, &code, &names, &IronhorseCompile::Accepted, false)
+        }
+        _ => run_compiled_script(
+            interp,
+            &[],
+            &[],
+            &IronhorseCompile::Rejected("setup compilation failed".into()),
+            false,
+        ),
+    }
+}
+
+/// Run the same setup/subject phases without an oracle for timeout attribution.
+pub(crate) fn ironhorse_only_scripts(setup: &str, source: &str) -> Halt {
+    let mut interp = interp_with_source_bridge(&[]);
+    let setup_result = run_setup(&mut interp, setup);
+    if !setup_result.completed {
+        return setup_result.halt;
+    }
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ironhorse_compile::compile_atoms(source)
+    })) {
+        Ok(Ok((code, names))) => {
+            run_compiled_script(
+                &mut interp,
+                &code,
+                &names,
+                &IronhorseCompile::Accepted,
+                true,
+            )
+            .halt
+        }
+        _ => Halt::Decode(ironhorse_vm::DecodeError::MissingBytecode),
+    }
 }
 
 /// Assemble a [`DualRun`] record from an oracle outcome and ironhorse's run of
@@ -501,6 +716,7 @@ fn build_dual_run(
     ironhorse: RunOutcome,
     ironhorse_compile: IronhorseCompile,
     bytecode: Vec<u8>,
+    symbols: Vec<u8>,
 ) -> DualRun {
     let agreement = match (oracle.completed, ironhorse.completed) {
         (true, true) => Agreement::BothComplete,
@@ -521,7 +737,7 @@ fn build_dual_run(
     // ironhorse's thrown value string comes from a `Halt::Throw`; any other
     // halt yields no comparable error string.
     let ironhorse_error = match &ironhorse.halt {
-        Halt::Throw(s) => s.clone(),
+        Halt::Throw { rendered, .. } => rendered.clone(),
         _ => String::new(),
     };
     // The thrown value agrees only on a shared abort where ironhorse threw a
@@ -529,7 +745,7 @@ fn build_dual_run(
     // `String(exception)` against ironhorse's throw string.
     let error_agrees = !oracle.completed
         && !ironhorse.completed
-        && matches!(ironhorse.halt, Halt::Throw(_))
+        && matches!(ironhorse.halt, Halt::Throw { .. })
         && oracle.error == ironhorse_error;
 
     DualRun {
@@ -550,7 +766,9 @@ fn build_dual_run(
         ironhorse_halt: ironhorse.halt,
         ironhorse_compile,
         bytecode,
+        symbols,
         oracle_parsed,
+        oracle_exit_status: oracle.exit_status,
     }
 }
 
@@ -558,11 +776,12 @@ fn build_dual_run(
 /// `async`-flagged test262 case needs (design § Part 2, the async row): the
 /// `$DONE` completion sentinel a pure-JS async prelude records into a global,
 /// and the unhandled-rejection latch mirroring XS's `the->rejection`. The
-/// oracle shim already drains the promise job queue with metering accumulating
-/// (`fxRunPromiseJobs`), and ironhorse's [`ironhorse_vm::Interp::run`] drains its own
-/// (the stage-3b promise pump), so a computron agreement in `run` certifies
-/// ironhorse reproduced the oracle's whole execution *including* the microtask
-/// drain — the gate the async verdict layers on top of.
+/// oracle shim already drains the promise job queue (`fxRunPromiseJobs`), and
+/// ironhorse's [`ironhorse_vm::Interp::run`] drains its own (the stage-3b
+/// promise pump), so the observable agreement in `run` covers the oracle's
+/// whole execution *including* the microtask drain — the gate the async
+/// verdict layers on top of. (Computron counts from the two engines remain
+/// advisory telemetry here as everywhere; they gate nothing.)
 #[derive(Debug, Clone)]
 pub struct AsyncDualRun {
     pub run: DualRun,
@@ -588,13 +807,13 @@ pub fn dual_run_async(source: &str, signal_name: &str) -> Option<AsyncDualRun> {
     // async completion latch can be read after the job drain.
     let names = ironhorse_vm::parse_symbols(&symbols);
     let mut interp = interp_with_source_bridge(&names);
-    let ironhorse: RunOutcome = interp.run(&bytecode);
+    let ironhorse: RunOutcome = interp.run(&bytecode).host_coerced();
 
     let ironhorse_signal = interp.global_string(signal_name);
     let ironhorse_unhandled_rejection = interp.has_unhandled_rejection();
 
     Some(AsyncDualRun {
-        run: build_dual_run(source, oracle, ironhorse, compile, bytecode),
+        run: build_dual_run(source, oracle, ironhorse, compile, bytecode, symbols),
         ironhorse_signal,
         ironhorse_unhandled_rejection,
     })
@@ -622,10 +841,52 @@ pub fn ironhorse_only_run(source: &str) -> Halt {
         // A structured reject or a coder panic: ironhorse produced no bytecode,
         // a terminal (non-hanging) outcome — ironhorse did not fail to
         // terminate, so the hang, if any, was not on the ironhorse side.
-        _ => return Halt::Decode("ironhorse-only: compile produced no bytecode".into()),
+        _ => return Halt::Decode(ironhorse_vm::DecodeError::MissingBytecode),
     };
     let names = ironhorse_vm::parse_symbols(&symbols);
-    interp_with_source_bridge(&names).run(&bytecode).halt
+    interp_with_source_bridge(&names)
+        .run(&bytecode)
+        .host_coerced()
+        .halt
+}
+
+/// Run `source` on ironhorse under the **oracle's own framing** and return the
+/// thrown value's string, or `None` if it completed, halted without a
+/// JavaScript throw, or did not compile.
+///
+/// The `xs-oracle` shim compiles *and runs* every source with the `eval`
+/// builtin's flags (`fxParseScript(..., mxProgramFlag | mxEvalFlag)`), so
+/// reproducing it takes both halves:
+///
+/// * the **eval goal** at compile time
+///   ([`ironhorse_compile::compile_with`]) — a strict program's top-level
+///   `var`/function declarations stay frame locals rather than hoisting;
+/// * eval **declaration-instantiation** at run time
+///   ([`ironhorse_vm::Interp::set_eval_program_framing`]) — a global binding
+///   the program does create is configurable (`D = true`), as an eval's is.
+///
+/// This is the attribution primitive for the places ironhorse deliberately
+/// diverges from the oracle (README § "Script goal vs. the oracle's eval
+/// framing"). When re-framing the source as the oracle frames it reproduces
+/// the oracle's abort, the divergence is *demonstrably* the goal framing and
+/// nothing else — the differential can name it instead of inferring it from
+/// the source's shape. The caller decides how closely the two aborts must
+/// agree (`xst::reframed_abort_matches`).
+pub fn ironhorse_eval_goal_error(source: &str) -> Option<String> {
+    let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ironhorse_compile::compile_atoms_with(source, false)
+    }));
+    let (bytecode, symbols) = match compiled {
+        Ok(Ok((b, s))) => (b, s),
+        _ => return None,
+    };
+    let names = ironhorse_vm::parse_symbols(&symbols);
+    let mut interp = interp_with_source_bridge(&names);
+    interp.set_eval_program_framing(true);
+    match interp.run(&bytecode).halt {
+        Halt::Throw { rendered, .. } => Some(rendered),
+        _ => None,
+    }
 }
 
 /// Parse a corpus file: one program per non-empty, non-`//` line. Keeping
@@ -651,13 +912,16 @@ pub fn parse_corpus(text: &str) -> Vec<String> {
 /// `include_str!` by `rust/endo/xsnap/src/lib.rs` (`POLYFILLS`,
 /// `HOST_ALIASES`) — read here verbatim from the same paths, so the bar runs
 /// the *actual* bytes the daemon boots, not a copy that could drift. The
-/// third boot step — **`ses_boot.js`** (SES `lockdown()` + the HandledPromise
-/// shim) — is **not committed**: it is a ~1 MB build artifact the daemon
-/// bundler (`rollup` over `@endo/*`) generates into `src/ses_boot.js` before
-/// the `include_str!`, absent in a fresh checkout. Bundling the full SES
-/// distribution is out of this engine workspace's scope, so `ses_boot.js` is
-/// a **named, ledgered boot-bundle gap** (`boot:ses-lockdown-bundle`), not
-/// dual-run here. `host_aliases.js` is a self-contained `globalThis` IIFE
+/// third boot step — **`ses_boot.js`** — is **not committed**: it is a 70 KB
+/// build artifact `yarn bundle:xs` generates into `src/ses_boot.js` via
+/// `@endo/compartment-mapper`'s `makeBundle`, absent in a fresh checkout.
+/// Despite its name it carries no `lockdown` and is not the SES shim: it is
+/// `@endo/harden` + `@endo/env-options` + `@endo/eventual-send` + the daemon's
+/// boot file, whose only `globalThis` write is `HandledPromise`
+/// (`packages/daemon/src/bus-worker-xs-ses-boot.js:16`). Because it is
+/// generated rather than committed it is not dual-run *here*; the integration
+/// test `tests/stage4_ses_boot.rs` covers it in the CI lane that bundles.
+/// `host_aliases.js` is a self-contained `globalThis` IIFE
 /// that aliases only host functions that exist, so with no host powers
 /// registered it completes to `undefined` — safe to dual-run in the engine.
 pub fn daemon_boot_bundle_sources() -> Vec<(&'static str, String)> {
@@ -705,6 +969,39 @@ pub fn boot_bundle_verdict(source: &str) -> BootVerdict {
         Some(r) => r,
         None => return BootVerdict::NamedGap("oracle-machine-error".into()),
     };
+    boot_run_verdict(&r)
+}
+
+fn boot_run_verdict(r: &DualRun) -> BootVerdict {
+    // The halt is judged before the agreement shape, as in every other
+    // instrument: the engine reporting its own state as wrong, or declining
+    // with a label it never registered, is a divergence whatever the pin did
+    // — never a gap the ledger can wait on, and never excused by the pin's
+    // own unrelated abort.
+    match &r.ironhorse_halt {
+        Halt::Panic(ironhorse_vm::PanicKind::EngineFault { message, .. }) => {
+            return BootVerdict::Divergent(format!("engine-fault:{message}"));
+        }
+        Halt::EngineInvariant(label) => {
+            return BootVerdict::Divergent(format!(
+                "ironhorse violated an engine invariant: {label} (pin completed={})",
+                xst::oracle_completed(r.agreement)
+            ))
+        }
+        Halt::NotImplemented(op) if !xst::is_skip_eligible_label(op) => {
+            return BootVerdict::Divergent(format!(
+                "ironhorse declined with an unregistered label: {op} (pin completed={})",
+                xst::oracle_completed(r.agreement)
+            ))
+        }
+        Halt::Refused(label) if !ironhorse_vm::halt_labels::is_refused_label(label) => {
+            return BootVerdict::Divergent(format!(
+                "unregistered or misclassified refusal: {label}"
+            ));
+        }
+        Halt::Refused(_) => return BootVerdict::NamedGap(boot_gap_key(r)),
+        _ => {}
+    }
     match r.agreement {
         Agreement::BothComplete => {
             if r.result_agrees {
@@ -716,14 +1013,12 @@ pub fn boot_bundle_verdict(source: &str) -> BootVerdict {
                 ))
             }
         }
-        Agreement::BothAbort => {
-            // Both threw: a shared abort is not a boot divergence (the pin
-            // itself rejects the program), reported as the pin's reason.
-            BootVerdict::NamedGap(format!("both-abort:{}", r.oracle_error))
-        }
+        // Both threw: a shared abort is not a boot divergence (the pin itself
+        // rejects the program), reported as the pin's reason.
+        Agreement::BothAbort => BootVerdict::NamedGap(format!("both-abort:{}", r.oracle_error)),
         // ironhorse honestly aborted where the pin completed: the bundle hit an
         // engine surface ironhorse does not model. Name the gap from the halt.
-        Agreement::OracleOnlyComplete => BootVerdict::NamedGap(boot_gap_key(&r)),
+        Agreement::OracleOnlyComplete => BootVerdict::NamedGap(boot_gap_key(r)),
         // ironhorse completed a program the pin rejected: over-acceptance.
         Agreement::IronhorseOnlyComplete => BootVerdict::Divergent(format!(
             "ironhorse completed a program the pin rejected: ironhorse={:?} pin aborted={:?}",
@@ -738,8 +1033,9 @@ pub fn boot_bundle_verdict(source: &str) -> BootVerdict {
 /// intrinsic; anything else carries its halt verbatim.
 fn boot_gap_key(r: &DualRun) -> String {
     match &r.ironhorse_halt {
-        Halt::Unsupported(op) => format!("boot:unsupported:{op}"),
-        Halt::Throw(msg) if msg.contains("undefined variable") => {
+        Halt::NotImplemented(op) => format!("boot:unsupported:{op}"),
+        Halt::Refused(label) => format!("boot:refused:{label}"),
+        Halt::Throw { rendered, .. } if rendered.contains("undefined variable") => {
             // Historical stage-4 gap: before stage-7 child 1 the committed
             // bundle's first statement (`globalThis`) had no live global-object
             // binding and every bundle stopped here. That binding has since
@@ -747,7 +1043,7 @@ fn boot_gap_key(r: &DualRun) -> String {
             // for that (now-closed) gap; a bundle no longer reaches it.
             "boot:no-globalThis-global-object-binding".to_string()
         }
-        Halt::Throw(msg) => format!("boot:throw:{msg}"),
+        Halt::Throw { rendered, .. } => format!("boot:throw:{rendered}"),
         other => format!("boot:halt:{other:?}"),
     }
 }
@@ -767,10 +1063,14 @@ pub struct CompartmentDualRun {
     pub a_result: String,
     /// Compartment B's completion value string.
     pub b_result: String,
-    /// The two compartments referenced the same machine intrinsics graph.
+    /// The two compartments held the same machine intrinsics marker
+    /// (`Rc::ptr_eq`). Marker identity only: each evaluation links the
+    /// intrinsics into a fresh `Interp`, so no intrinsic *object* is
+    /// shared — see `ironhorse_vm::compartment`'s realm decision.
     pub shared_intrinsics: bool,
-    /// Compartment A's computrons (same bytecode → same as the oracle's
-    /// run-only count for a bit-exact program).
+    /// Compartment A's computrons, retained beside the oracle's as advisory
+    /// calibration telemetry (XS-computron parity is a non-goal; nothing
+    /// gates on these).
     pub a_computrons: u64,
     pub oracle_computrons: u64,
     pub a_halt: ironhorse_vm::Halt,
@@ -778,10 +1078,9 @@ pub struct CompartmentDualRun {
 
 impl CompartmentDualRun {
     /// RESULT agreement (the compartment acceptance bar): the oracle and
-    /// BOTH compartments completed with the same completion value, over
-    /// one shared intrinsics graph. A completion mismatch or a
-    /// cross-compartment disagreement is a divergence, never a silent
-    /// pass.
+    /// BOTH compartments completed with the same completion value, on
+    /// one machine. A completion mismatch or a cross-compartment
+    /// disagreement is a divergence, never a silent pass.
     pub fn result_agrees(&self) -> bool {
         self.oracle_completed
             && self.both_completed
@@ -789,18 +1088,10 @@ impl CompartmentDualRun {
             && self.a_result == self.oracle_result
             && self.b_result == self.oracle_result
     }
-
-    /// The same bytecode evaluated in a compartment reproduces the
-    /// oracle's run-only computron count (stricter telemetry the branch
-    /// runner still gates — the compartment evaluator seeds no globals
-    /// here, so it is byte-identical to the top-level realm run).
-    pub fn computrons_agree(&self) -> bool {
-        self.oracle_completed && self.both_completed && self.a_computrons == self.oracle_computrons
-    }
 }
 
-/// Evaluate `source` in two compartments over one machine's shared
-/// intrinsics and compare against the oracle reference. Post stage-6 flip
+/// Evaluate `source` in two compartments on one machine and compare
+/// against the oracle reference. Post stage-6 flip
 /// the bytecode/symbols the compartments evaluate come from the **default
 /// (ironhorse) compiler** — this was the review ledger's standing residual
 /// ("the ironhorse-vm compartment evaluate path still oracle-compiles"), a
@@ -820,8 +1111,10 @@ pub fn compartment_dual_run(source: &str) -> Option<CompartmentDualRun> {
     let b = machine.new_compartment();
     let shared_intrinsics = std::rc::Rc::ptr_eq(a.intrinsics(), b.intrinsics());
 
-    let ra = a.evaluate_with_symbols(&bytecode, &symbols);
-    let rb = b.evaluate_with_symbols(&bytecode, &symbols);
+    // Compared against the oracle, so in the harness's shape: the shim's
+    // post-run `String(result)` makes an uncoercible completion an abort.
+    let ra = a.evaluate_with_symbols(&bytecode, &symbols).host_coerced();
+    let rb = b.evaluate_with_symbols(&bytecode, &symbols).host_coerced();
 
     Some(CompartmentDualRun {
         source: source.to_string(),
@@ -835,23 +1128,6 @@ pub fn compartment_dual_run(source: &str) -> Option<CompartmentDualRun> {
         oracle_computrons: oracle.computrons,
         a_halt: ra.halt,
     })
-}
-
-/// A summary over a corpus run.
-#[derive(Debug, Default, Clone)]
-pub struct Summary {
-    pub total: usize,
-    pub bit_exact: usize,
-    pub result_divergences: usize,
-    pub computron_divergences: usize,
-    pub completion_divergences: usize,
-    pub unsupported: usize,
-}
-
-impl Summary {
-    pub fn met_bar(&self) -> bool {
-        self.total > 0 && self.bit_exact == self.total
-    }
 }
 
 #[cfg(test)]
@@ -874,7 +1150,7 @@ mod tests {
         let rejected = ironhorse_only_run("for (const {");
         assert!(matches!(
             rejected,
-            Halt::Decode(_) | Halt::Return | Halt::Throw(_)
+            Halt::Decode(_) | Halt::Return | Halt::Throw { .. }
         ));
     }
 
@@ -942,6 +1218,30 @@ mod tests {
             "the production compiler seam must distinguish valid unported syntax: {:?}",
             run.ironhorse_compile
         );
+    }
+
+    #[test]
+    fn compiler_seam_lone_surrogate_keys_are_covered() {
+        for (source, expected) in [
+            (
+                r#"var o={"\uD800":1,"\uD801":2}; Object.keys(o).length"#,
+                "2",
+            ),
+            (r#"var o={"\uD800":1}; o["\uD801"]"#, "undefined"),
+            (
+                r#"var o={"\uD800":1}; Object.keys(o)[0].charCodeAt(0)"#,
+                "55296",
+            ),
+        ] {
+            let run = dual_run_with(source, Compiler::Ironhorse).expect("oracle runs");
+            assert_eq!(run.oracle_result, expected, "{source}");
+            assert_eq!(run.agreement, Agreement::BothComplete, "{source}: {run:?}");
+            assert_eq!(run.ironhorse_result, expected, "{source}");
+        }
+        use ironhorse_vm::SourceCompiler;
+        assert!(IronhorseSourceCompiler
+            .compile_source(r#"({"\uD800": 1})"#, false, u64::MAX, &mut |_| true)
+            .is_ok());
     }
 
     /// js-04 helper: a source whose sloppy dual-run must agree with the XS
@@ -1061,15 +1361,15 @@ mod tests {
     }
 
     // A `DualRun` with the given agreement and ironhorse halt. For a
-    // `Halt::Throw`, the oracle is modeled as throwing the same value with
-    // the same computrons (the agreeing case), so `is_bit_exact` turns on
-    // the halt kind; a non-`Throw` halt never agrees.
+    // `Halt::Throw`, the oracle is modeled as throwing the same value (the
+    // agreeing case), so `observables_agree` turns on the halt kind; a
+    // non-`Throw` halt never agrees.
     fn abort_run(agreement: Agreement, ironhorse_halt: Halt) -> DualRun {
         let ironhorse_error = match &ironhorse_halt {
-            Halt::Throw(s) => s.clone(),
+            Halt::Throw { rendered, .. } => rendered.clone(),
             _ => String::new(),
         };
-        let error_agrees = matches!(ironhorse_halt, Halt::Throw(_));
+        let error_agrees = matches!(ironhorse_halt, Halt::Throw { .. });
         DualRun {
             source: String::new(),
             agreement,
@@ -1088,88 +1388,118 @@ mod tests {
             ironhorse_halt,
             ironhorse_compile: IronhorseCompile::NotAttempted,
             bytecode: Vec::new(),
+            symbols: Vec::new(),
             oracle_parsed: false,
+            oracle_exit_status: 0,
         }
     }
 
     #[test]
-    fn both_abort_bit_exact_only_when_endor_throws() {
+    fn boot_engine_fault_is_never_a_named_gap() {
+        for agreement in [
+            Agreement::BothComplete,
+            Agreement::BothAbort,
+            Agreement::OracleOnlyComplete,
+            Agreement::IronhorseOnlyComplete,
+        ] {
+            let run = abort_run(
+                agreement,
+                Halt::Panic(ironhorse_vm::PanicKind::EngineFault {
+                    message: "synthetic defect".into(),
+                    location: None,
+                }),
+            );
+            assert!(
+                matches!(boot_run_verdict(&run), BootVerdict::Divergent(detail) if detail == "engine-fault:synthetic defect")
+            );
+        }
+    }
+
+    #[test]
+    fn boot_refusals_require_the_correct_registered_category() {
+        for halt in [
+            Halt::Refused("sneak:new-exemption"),
+            Halt::Refused("eval:no-compiler"),
+            Halt::NotImplemented("property-key:id-space-exhausted"),
+        ] {
+            let run = abort_run(Agreement::OracleOnlyComplete, halt);
+            assert!(matches!(boot_run_verdict(&run), BootVerdict::Divergent(_)));
+        }
+        let run = abort_run(
+            Agreement::OracleOnlyComplete,
+            Halt::Refused("property-key:id-space-exhausted"),
+        );
+        assert_eq!(
+            boot_run_verdict(&run),
+            BootVerdict::NamedGap("boot:refused:property-key:id-space-exhausted".into())
+        );
+    }
+
+    #[test]
+    fn both_abort_agrees_only_when_endor_throws() {
         // A matching JS-level throw is a genuine shared abort.
-        let throwing = abort_run(Agreement::BothAbort, Halt::Throw("boom".into()));
+        let throwing = abort_run(Agreement::BothAbort, Halt::synthetic_throw("boom"));
         assert!(
-            throwing.is_bit_exact(),
-            "BothAbort with a Throw is bit-exact"
+            throwing.observables_agree(),
+            "BothAbort with a matching Throw agrees"
         );
 
         // An `Unsupported` bail is not agreement even if the oracle also
         // aborted (finding 3): it must never pass silently.
-        let unsupported = abort_run(Agreement::BothAbort, Halt::Unsupported("XS_CODE_CALL"));
+        let unsupported = abort_run(Agreement::BothAbort, Halt::NotImplemented("XS_CODE_CALL"));
         assert!(
-            !unsupported.is_bit_exact(),
-            "BothAbort with an Unsupported halt is not bit-exact"
+            !unsupported.observables_agree(),
+            "BothAbort with an Unsupported halt is not agreement"
         );
 
         // A `Decode` bail (truncated/invalid bytecode) is likewise not
         // agreement.
-        let decode = abort_run(Agreement::BothAbort, Halt::Decode("truncated".into()));
-        assert!(
-            !decode.is_bit_exact(),
-            "BothAbort with a Decode halt is not bit-exact"
+        let decode = abort_run(
+            Agreement::BothAbort,
+            Halt::Decode(ironhorse_vm::DecodeError::ProgramCounterOutOfBounds { pc: 0, len: 0 }),
         );
-    }
+        assert!(
+            !decode.observables_agree(),
+            "BothAbort with a Decode halt is not agreement"
+        );
 
-    #[test]
-    fn both_abort_throw_requires_error_and_computron_agreement() {
-        // Observation 3: a shared `Throw` abort is bit-exact only when the
-        // thrown value AND the computrons match, exactly like the
-        // `BothComplete` arm — a matching halt kind alone is not enough.
-        let mut r = abort_run(Agreement::BothAbort, Halt::Throw("7".into()));
-        r.oracle_computrons = 6;
-        r.ironhorse_computrons = 6;
-        assert!(r.is_bit_exact(), "matching value + computrons is bit-exact");
-
-        // Divergent thrown value: the oracle threw "8" where ironhorse threw "7".
-        let mut wrong_value = r.clone();
+        // Divergent thrown value: the oracle threw "8" where ironhorse
+        // threw "boom".
+        let mut wrong_value = throwing.clone();
         wrong_value.oracle_error = "8".into();
         wrong_value.error_agrees = false;
         assert!(
-            !wrong_value.is_bit_exact(),
-            "a divergent thrown value is not bit-exact"
-        );
-
-        // Divergent computrons on an otherwise-matching throw.
-        let mut wrong_cost = r.clone();
-        wrong_cost.ironhorse_computrons = 7;
-        assert!(
-            !wrong_cost.is_bit_exact(),
-            "a divergent computron count is not bit-exact"
+            !wrong_value.observables_agree(),
+            "a divergent thrown value is not agreement"
         );
     }
 
     #[test]
-    fn non_throw_both_abort_is_counted_not_silent() {
-        // The summary must count a non-`Throw` `BothAbort` (here under
-        // `unsupported`) rather than let it slip through as bit-exact.
-        let runs = [
-            abort_run(Agreement::BothAbort, Halt::Unsupported("XS_CODE_CALL")),
-            abort_run(Agreement::BothAbort, Halt::Decode("truncated".into())),
-        ];
-        let mut s = Summary::default();
-        for r in &runs {
-            s.total += 1;
-            if r.is_bit_exact() {
-                s.bit_exact += 1;
-            } else {
-                match r.agreement {
-                    Agreement::BothComplete => {}
-                    Agreement::BothAbort => s.unsupported += 1,
-                    _ => s.completion_divergences += 1,
-                }
-            }
-        }
-        assert_eq!(s.bit_exact, 0, "neither run may count as bit-exact");
-        assert_eq!(s.unsupported, 2, "both non-Throw aborts are counted");
-        assert!(!s.met_bar());
+    fn observable_agreement_ignores_computron_drift() {
+        // The doctrine pin (accuracy over parity): a run whose observables
+        // match is agreement REGARDLESS of how far the two engines' computron
+        // counts drift apart. XS-computron parity is a non-goal, and no
+        // harness predicate may treat computron equality with the oracle as a
+        // success criterion. If a change makes this test fail, the myth has
+        // regrown — remove the parity gate, do not adjust this test.
+        let mut r = abort_run(Agreement::BothAbort, Halt::synthetic_throw("7"));
+        r.oracle_computrons = 6;
+        r.ironhorse_computrons = u64::MAX;
+        r.computrons_agree = false;
+        assert!(
+            r.observables_agree(),
+            "computron drift must not break shared-abort agreement"
+        );
+
+        let mut completed = abort_run(Agreement::BothComplete, Halt::Return);
+        completed.result_agrees = true;
+        completed.oracle_computrons = 1;
+        completed.ironhorse_computrons = u64::MAX;
+        completed.computrons_agree = false;
+        assert!(
+            completed.observables_agree(),
+            "computron drift must not break completed-run agreement"
+        );
     }
 
     // Arm a fresh ironhorse interpreter on the oracle's bytecode for `src`,
@@ -1282,27 +1612,20 @@ mod tests {
     }
 
     #[test]
-    fn uncaught_throw_is_a_bit_exact_shared_abort() {
-        // Behavioural spot-check decoupled from the corpus: an uncaught
-        // throw is a shared abort whose thrown-value string and run-only
-        // computron count both match the oracle (the host-escape metering
-        // and the shim's abort-path computron capture together make the
-        // shared-abort arm bit-exact, not merely "ironhorse also threw").
+    fn uncaught_throw_has_shared_abort_semantics() {
+        // Error rendering remains an oracle semantic gate. Runtime costs are
+        // pinned independently, so XS cannot veto a cost-table recalibration.
         let r = dual_run("throw 7").expect("oracle");
         assert_eq!(r.agreement, Agreement::BothAbort);
         assert_eq!(r.ironhorse_error, "7");
         assert_eq!(r.oracle_error, "7");
-        assert_eq!(
-            r.oracle_computrons, r.ironhorse_computrons,
-            "uncaught-throw computrons agree"
-        );
-        assert!(r.is_bit_exact(), "an agreeing uncaught throw is bit-exact");
+        assert!(r.observables_agree());
 
-        // A caught throw completes; its result and computrons agree.
+        // A caught throw completes with the same observable result.
         let c = dual_run("try { throw 7 } catch (e) { e + 1 }").expect("oracle");
         assert_eq!(c.agreement, Agreement::BothComplete);
         assert_eq!(c.ironhorse_result, "8");
-        assert!(c.is_bit_exact());
+        assert!(c.observables_agree());
     }
 
     #[test]
@@ -1471,7 +1794,9 @@ mod tests {
         // `String()` of that value...
         assert_eq!(ra.result, one.result, "compartment A sees its own 11");
         assert_eq!(rb.result, two.result, "compartment B sees its own 22");
-        // ...and the two compartments diverge over one shared intrinsics graph.
+        // ...and the two compartments diverge while holding one machine's
+        // intrinsics MARKER (marker identity, not a shared primordial graph —
+        // see `ironhorse_vm::compartment`'s realm decision).
         assert_ne!(ra.result, rb.result);
         assert!(std::rc::Rc::ptr_eq(a.intrinsics(), b.intrinsics()));
     }

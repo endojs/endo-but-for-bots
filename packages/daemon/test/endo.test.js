@@ -6,6 +6,7 @@ import '@endo/init/debug.js';
 
 import test from 'ava';
 import url from 'url';
+import os from 'os';
 import fsp from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
@@ -18,6 +19,9 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeCancelKit } from '@endo/cancel';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
+import { sha256 } from '@endo/sha256';
 import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
 import { defaultParserForLanguage as sourceParserForLanguage } from '@endo/compartment-mapper/import-parsers.js';
@@ -247,10 +251,22 @@ const makeConfig = (...root) => {
     statePath: path.join(dirname, ...root, 'state'),
     ephemeralStatePath: path.join(dirname, ...root, 'run'),
     cachePath: path.join(dirname, ...root, 'cache'),
+    // Use a short socket path under the OS temp dir to stay within the ~104
+    // char Unix socket path limit; a long CI (or worktree) checkout path can
+    // otherwise push `<dirname>/tmp/<config>/endo.sock` over the limit. The
+    // last root segment carries a unique per-test/config id suffix, and the
+    // base-36 process id keeps two concurrent runs (two worktrees, two CI
+    // containers sharing `/tmp`) from deriving the SAME absolute socket path —
+    // a collision where one run's `purge`/`clean` unlinks the other's live
+    // socket. The slice is trimmed to leave the pid room within the length
+    // budget. (This mirrors `_multiplayer-suite.js`'s makeConfig.)
     sockPath:
       process.platform === 'win32'
-        ? raw`\\?\pipe\endo-${root.join('-')}-test.sock`
-        : path.join(dirname, ...root, 'endo.sock'),
+        ? raw`\\?\pipe\endo-${process.pid.toString(36)}-${root.join('-')}-test.sock`
+        : path.join(
+            os.tmpdir(),
+            `endo-${process.pid.toString(36)}-${root.join('-').slice(-32)}.sock`,
+          ),
     address: '127.0.0.1:0',
     pets: new Map(),
     values: new Map(),
@@ -462,11 +478,26 @@ const prepareConfig = async (t, { gcEnabled = true } = {}) => {
 const testNeedsNodeWorker =
   process.env.ENDO_BIN && !process.env.ENDO_NODE_WORKER_BIN ? test.skip : test;
 
+// A leaked rejection (typically a daemon's graceful-disconnect reason,
+// "Termination requested", arriving on a promise nobody observes) is reported
+// by ava only after the whole file has run, so its report cannot say which
+// test leaked it.  Log it when it happens, naming the test in flight; ava
+// still fails the file.
+let testInFlight = '(no test yet)';
+process.on('unhandledRejection', reason => {
+  console.error(
+    `Unhandled rejection while running ${JSON.stringify(testInFlight)}:`,
+    reason,
+  );
+});
+
 test.beforeEach(t => {
+  testInFlight = t.title;
   t.context = [];
 });
 
 test.afterEach.always(async t => {
+  testInFlight = `${t.title} (teardown)`;
   // Stop all daemons first, then cancel the client connections.
   // Stopping first avoids an unhandled rejection race: if cancel() fires
   // before the daemon has shut down, CapTP teardown can produce derivative
@@ -517,6 +548,18 @@ test('failure to start', async t => {
     await cleanup();
     const configSubDirectory = `failure-to-start~${'0'.repeat(200)}`;
     const config = makeConfig('tmp', configSubDirectory);
+    // makeConfig now parks sockPath under the OS temp dir to dodge the ~104
+    // char Unix socket limit, but this test's whole point is a start that
+    // fails, which it induces precisely by that over-long socket path. Restore
+    // the long in-state-dir sockPath here so `start` still fails to bind.
+    if (process.platform !== 'win32') {
+      config.sockPath = path.join(
+        dirname,
+        'tmp',
+        configSubDirectory,
+        'endo.sock',
+      );
+    }
     await purge(config);
     await t.throwsAsync(() => start(config));
   } finally {
@@ -688,9 +731,7 @@ test('persist spawn and evaluation', async t => {
 test('store blob without name fails', async t => {
   const { host } = await prepareHost(t);
 
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('hello\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('hello\n')]);
   await t.throwsAsync(E(host).storeBlob(readerRef), {
     message: 'Invalid name path',
   });
@@ -701,9 +742,7 @@ test('store with name', async t => {
 
   {
     const { host } = await makeHost(config, cancelled);
-    const readerRef = bytesReaderFromIterator([
-      new TextEncoder().encode('hello\n'),
-    ]);
+    const readerRef = bytesReaderFromIterator([encodeUtf8('hello\n')]);
     const readable = await E(host).storeBlob(readerRef, 'hello-text');
     const actualText = await E(readable).text();
     t.is(actualText, 'hello\n');
@@ -717,11 +756,11 @@ test('store with name', async t => {
   }
 });
 
-test('stored blob exposes the rich BlobRef range-I/O surface (getInfo + fetch)', async t => {
+test('stored blob exposes named digest, size, and byte reads', async t => {
   const { cancelled, config } = await prepareConfig(t);
   const { host } = await makeHost(config, cancelled);
 
-  const payload = new TextEncoder().encode('hello world\n'); // 12 bytes
+  const payload = encodeUtf8('hello world\n'); // 12 bytes
   const readerRef = bytesReaderFromIterator([payload]);
   const blob = await E(host).storeBlob(readerRef, 'rich-blob');
 
@@ -738,21 +777,101 @@ test('stored blob exposes the rich BlobRef range-I/O surface (getInfo + fetch)',
       out.set(c, offset);
       offset += c.length;
     }
-    return new TextDecoder().decode(out);
+    return decodeUtf8(out);
   };
 
-  // getInfo() is the blob's content-address accessor (there is no separate
-  // sha256() method — getInfo().hash, base64, is the canonical content hash).
-  const info = await E(blob).getInfo();
-  t.is(info.algorithm, 'sha256');
-  t.is(info.size, 12n);
-  t.is(info.hash, crypto.createHash('sha256').update(payload).digest('base64'));
+  t.is(await E(blob).size(), 12n);
+  t.is(await E(blob).sha256(), encodeBase64(sha256(payload)));
 
-  // fetch(offset, length) is a windowed read, clamped at EOF.
-  t.is(await collect(await E(blob).fetch(0n, 12n)), 'hello world\n');
-  t.is(await collect(await E(blob).fetch(0n, 5n)), 'hello');
-  t.is(await collect(await E(blob).fetch(6n, 100n)), 'world\n');
-  t.is(await collect(await E(blob).fetch(100n, 4n)), '');
+  // bytes() reads the full selected content.
+  t.is(await collect(await E(blob).bytes()), 'hello world\n');
+  t.is(await E(await E(blob).byteRange(0n, 5n)).text(), 'hello');
+  t.is(await E(await E(blob).byteRange(6n, 100n)).text(), 'world\n');
+  t.is(await E(await E(blob).byteRange(100n, 104n)).text(), '');
+});
+
+test('stored blob range attenuation: byteRange / textRange return derived readable blobs', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+  const { host } = await makeHost(config, cancelled);
+
+  const payload = encodeUtf8('hello world\n'); // 12 bytes
+  const readerRef = bytesReaderFromIterator([payload]);
+  const blob = await E(host).storeBlob(readerRef, 'range-blob');
+
+  const b64 = bytes => encodeBase64(sha256(bytes));
+
+  // byteRange(start, end) → a derived EndoReadable over [start, end).
+  const hello = await E(blob).byteRange(0n, 5n);
+  t.is(await E(hello).text(), 'hello');
+  t.is(await E(hello).size(), 5n, 'size reports the selected length');
+  t.is(
+    await E(hello).sha256(),
+    b64(encodeUtf8('hello')),
+    'sha256 reports the selected content digest',
+  );
+
+  // A range of a range intersects (composition, never regaining authority).
+  const el = await E(hello).byteRange(1n, 3n);
+  t.is(await E(el).text(), 'el');
+  // Even a wide child range cannot escape its parent's [0,5) window.
+  const clampedChild = await E(hello).byteRange(3n, 100n);
+  t.is(await E(clampedChild).text(), 'lo');
+
+  // EOF clamp on the top-level blob.
+  const world = await E(blob).byteRange(6n, 100n);
+  t.is(await E(world).text(), 'world\n');
+
+  // start === end selects an empty blob.
+  const empty = await E(blob).byteRange(3n, 3n);
+  t.is(await E(empty).text(), '');
+  t.is(await E(empty).size(), 0n);
+
+  // byteRange composes within the selected authority.
+  t.is(await E(await E(hello).byteRange(1n, 3n)).text(), 'el');
+
+  // EINVAL: an inverted or negative byte range rejects.
+  await t.throwsAsync(E(blob).byteRange(5n, 2n), { message: /EINVAL/ });
+  await t.throwsAsync(E(blob).byteRange(-1n, 2n), { message: /EINVAL|safe/ });
+});
+
+test('stored blob textRange: line boundaries, terminal-LF, CRLF, byte/text composition', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+  const { host } = await makeHost(config, cancelled);
+
+  const store = async text => {
+    const readerRef = bytesReaderFromIterator([encodeUtf8(text)]);
+    return E(host).storeBlob(
+      readerRef,
+      `tr-${Math.random().toString(36).slice(2)}`,
+    );
+  };
+
+  // LF-delimited lines, 0-based end-exclusive; agrees with lines.slice.join.
+  const lf = await store('a\nb\nc\n');
+  t.is(await E(await E(lf).textRange(0, 2)).text(), 'a\nb');
+  t.is(await E(await E(lf).textRange(1, 3)).text(), 'b\nc');
+  // endLine past the last line clamps to the end.
+  t.is(await E(await E(lf).textRange(0, 100)).text(), 'a\nb\nc\n');
+  // start === end selects nothing.
+  t.is(await E(await E(lf).textRange(1, 1)).text(), '');
+
+  // Terminal LF: the trailing empty line is addressable and empty.
+  const term = await store('a\nb\n');
+  t.is(await E(await E(term).textRange(2, 3)).text(), '');
+
+  // CRLF: the CR before LF stays content, so it is preserved.
+  const crlf = await store('x\r\ny\r\n');
+  t.is(await E(await E(crlf).textRange(0, 1)).text(), 'x\r');
+
+  // text-after-byte: a byte range then a line range of it.
+  const doc = await store('one\ntwo\nthree\n');
+  const firstEight = await E(doc).byteRange(0n, 8n); // 'one\ntwo\n'
+  t.is(await E(firstEight).text(), 'one\ntwo\n');
+  t.is(await E(await E(firstEight).textRange(0, 1)).text(), 'one');
+  // byte-after-text: a line range then a byte range of it.
+  const twoLines = await E(doc).textRange(0, 2); // 'one\ntwo'
+  t.is(await E(twoLines).text(), 'one\ntwo');
+  t.is(await E(await E(twoLines).byteRange(0n, 3n)).text(), 'one');
 });
 
 test('store blob in subdirectory', async t => {
@@ -761,9 +880,7 @@ test('store blob in subdirectory', async t => {
   {
     const { host } = await makeHost(config, cancelled);
     await E(host).makeDirectory('subdir');
-    const readerRef = bytesReaderFromIterator([
-      new TextEncoder().encode('hello\n'),
-    ]);
+    const readerRef = bytesReaderFromIterator([encodeUtf8('hello\n')]);
     const readable = await E(host).storeBlob(readerRef, [
       'subdir',
       'hello-text',
@@ -783,9 +900,7 @@ test('store blob in subdirectory', async t => {
 test('store blob requires a name', async t => {
   const { host } = await prepareHost(t);
 
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('hello\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('hello\n')]);
   await t.throwsAsync(E(host).storeBlob(readerRef, []), {
     message: 'Invalid name path',
   });
@@ -855,6 +970,83 @@ test('move renames value, for a single guest', async t => {
   t.false(await E(guest).has('ten'));
   t.true(await E(guest).has('zehn'));
 });
+
+const agentKinds = harden([
+  {
+    kind: 'guest',
+    provideAgent: (host, petName, options) =>
+      E(host).provideGuest(petName, options),
+    pinsProperty: 'guestPins',
+  },
+  {
+    kind: 'host',
+    provideAgent: (host, petName, options) =>
+      E(host).provideHost(petName, options),
+    pinsProperty: 'pins',
+  },
+]);
+
+for (const { kind, provideAgent, pinsProperty } of agentKinds) {
+  test(`provideAgent gives ${kind} a caller-selected pins directory`, async t => {
+    const { host } = await prepareHost(t);
+    const pins = await E(host).makeDirectory(`retained-${kind}-pins`);
+    const agent = await provideAgent(host, kind, {
+      agentName: `${kind}-agent`,
+      pins,
+    });
+
+    await E(host).storeValue(10, 'ten');
+    const tenId = await E(host).identify('ten');
+    await E(agent).storeIdentifier(['@pins', 'ten'], tenId);
+
+    t.is(await E(pins).identify('ten'), tenId);
+    t.deepEqual(await E(agent).list('@pins'), ['ten']);
+
+    const agentId = await E(host).identify(`${kind}-agent`);
+    const agentRecord = await E(E(host).diagnostics()).getFormula(agentId);
+    const pinsId = await E(host).identify(`retained-${kind}-pins`);
+    t.is(agentRecord.properties[pinsProperty].identifier, pinsId);
+  });
+
+  test(`provideAgent gives ${kind} a caller-selected networks directory`, async t => {
+    const { host } = await prepareHost(t);
+    const networks = await E(host).makeDirectory(`delegated-${kind}-nets`);
+    const agent = await provideAgent(host, kind, {
+      agentName: `${kind}-agent`,
+      networks,
+    });
+
+    await E(host).storeValue(10, 'network-marker');
+    const markerId = await E(host).identify('network-marker');
+    await E(networks).storeIdentifier(['loopback'], markerId);
+
+    t.deepEqual(await E(agent).list('@nets'), ['loopback']);
+
+    const agentId = await E(host).identify(`${kind}-agent`);
+    const agentRecord = await E(E(host).diagnostics()).getFormula(agentId);
+    const networksId = await E(host).identify(`delegated-${kind}-nets`);
+    t.is(agentRecord.properties.networks.identifier, networksId);
+  });
+
+  test(`provideAgent introduces ordinary and special names to ${kind}`, async t => {
+    const { host } = await prepareHost(t);
+    await E(host).storeValue(10, 'ten');
+    const agent = await provideAgent(host, kind, {
+      introducedNames: {
+        ten: 'dix',
+        '@pins': 'retained',
+        '@nets': 'connections',
+      },
+    });
+
+    t.is(await E(agent).lookup('dix'), 10);
+    t.is(await E(agent).identify('retained'), await E(host).identify('@pins'));
+    t.is(
+      await E(agent).identify('connections'),
+      await E(host).identify('@nets'),
+    );
+  });
+}
 
 test('move moves value, between different guests', async t => {
   const { host } = await prepareHost(t);
@@ -1178,6 +1370,193 @@ testNeedsNodeWorker('persist confined services and their requests', async t => {
   }
 });
 
+// Integration test for endojs/endo-but-for-bots#1125.
+//
+// Story: a guest is serviced by an agent caplet, retained in the guest's pin
+// directory, that answers every message the guest receives and then dismisses
+// it. Whether the worker holding the agent is canceled, or the whole daemon is
+// restarted, the caplet must resume the guest's autonomous responses without an
+// explicit lookup: delivering a message to the guest's mailbox auto-reincarnates
+// its pinned formulas (reincarnateMailboxPins), so the durable formula, not any
+// live process — and not a manual revival — is what carries the behavior across
+// the gap. The tests therefore never look the responder up before the
+// post-gap send; deleting the reincarnateMailboxPins call in deliver() makes
+// them hang for lack of any acknowledgment.
+
+const autoResponderLocation = url.pathToFileURL(
+  path.join(dirname, 'test', 'auto-responder-agent.js'),
+).href;
+
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Provision a guest whose mailbox is serviced by an auto-responder caplet
+ * running in a dedicated named worker. The caplet is retained in the guest's
+ * own pin directory, which is exactly the set `reincarnateMailboxPins` re-warms
+ * on every delivery to the guest — so a message arriving at the guest revives
+ * the responder with no explicit lookup. Returns the guest agent facet (for
+ * inbox inspection).
+ *
+ * @param {any} host
+ */
+const pinGuestResponder = async host => {
+  await E(host).provideWorker(['responder-worker']);
+  // A caller-selected pin directory for the guest, so the test can retain the
+  // responder in the very directory reincarnateMailboxPins walks.
+  const pins = await E(host).makeDirectory('responder-pins');
+  const guest = await E(host).provideGuest('responder', {
+    agentName: 'responder-agent',
+    pins,
+  });
+  await E(host).makeUnconfined('responder-worker', autoResponderLocation, {
+    powersName: 'responder-agent',
+    resultName: 'auto-responder',
+  });
+  // Pin the responder into the guest's pin directory. This is the retention
+  // edge reincarnateMailboxPins follows on delivery: without it, a canceled or
+  // restarted responder would stay dormant until something looked it up.
+  const responderId = await E(host).identify('auto-responder');
+  await E(pins).storeIdentifier(['auto-responder'], responderId);
+  return guest;
+};
+
+/**
+ * Send one prompt to the pinned guest and wait for the auto-responder's
+ * matching acknowledgment (`acknowledged:<prompt>`) to arrive in the sender host's own
+ * inbox. Matching on the echoed prompt skips any backlog a fresh
+ * `followMessages` replays after a restart.
+ *
+ * @param {any} host
+ * @param {AsyncIterator<any>} hostMessages
+ * @param {string} prompt
+ */
+const sendAndAwaitAcknowledgement = async (host, hostMessages, prompt) => {
+  await E(host).send('responder', [prompt], [], []);
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const { value: message } = await hostMessages.next();
+    if (
+      message.type === 'package' &&
+      message.replyTo !== undefined &&
+      message.strings?.[0] === `acknowledged:${prompt}`
+    ) {
+      return message;
+    }
+  }
+};
+
+/**
+ * Poll the guest's inbox until the named inbound prompt has been dismissed by
+ * the auto-responder.
+ *
+ * @param {ExecutionContext} t
+ * @param {any} guest
+ * @param {string} prompt
+ */
+const assertDismissed = async (t, guest, prompt) => {
+  await null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const messages = await E(guest).listMessages();
+    const pending = messages.find(
+      message =>
+        message.type === 'package' &&
+        message.replyTo === undefined &&
+        message.strings?.[0] === prompt,
+    );
+    if (pending === undefined) {
+      t.pass(`inbound ${prompt} was dismissed`);
+      return;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await delay(20);
+  }
+  t.fail(`inbound ${prompt} was never dismissed`);
+};
+
+testNeedsNodeWorker(
+  'pinned guest responder survives worker cancellation (#1125)',
+  async t => {
+    const { host } = await prepareHost(t);
+    const guest = await pinGuestResponder(host);
+    const hostMessages = iterateReader(E(host).followMessages());
+
+    // Baseline: the pinned agent answers the guest's messages and dismisses
+    // them.
+    const acknowledgement0 = await sendAndAwaitAcknowledgement(
+      host,
+      hostMessages,
+      'ping-0',
+    );
+    t.deepEqual(acknowledgement0.strings, ['acknowledged:ping-0']);
+    await assertDismissed(t, guest, 'ping-0');
+
+    // Cancel the worker containing the agent; its follow loop stops with it.
+    await E(host).cancel('responder-worker');
+
+    // Do NOT look the responder up: an explicit lookup would itself
+    // re-incarnate it and mask the feature under test. Instead, send another
+    // message. Delivering it to the guest's mailbox must auto-reincarnate the
+    // pinned responder (reincarnateMailboxPins), and only a live responder ever
+    // sends the acknowledgment this awaits — so if the reincarnation call is
+    // removed from deliver(), this hangs.
+    const acknowledgement1 = await sendAndAwaitAcknowledgement(
+      host,
+      hostMessages,
+      'ping-1',
+    );
+    t.deepEqual(acknowledgement1.strings, ['acknowledged:ping-1']);
+    await assertDismissed(t, guest, 'ping-1');
+
+    // The revived responder is a fresh incarnation: its counter restarted at
+    // zero and now reads one, proving a new incarnation (not a survivor)
+    // answered the post-cancel message.
+    const responder = await E(host).lookup('auto-responder');
+    t.is(await E(responder).respondedCount(), 1);
+  },
+);
+
+testNeedsNodeWorker(
+  'pinned guest responder survives a daemon restart (#1125)',
+  async t => {
+    const { cancelled, config, host } = await prepareHost(t);
+    const guest = await pinGuestResponder(host);
+    const hostMessages = iterateReader(E(host).followMessages());
+
+    // Baseline: the pinned agent answers and dismisses before the restart.
+    const acknowledgement0 = await sendAndAwaitAcknowledgement(
+      host,
+      hostMessages,
+      'ping-0',
+    );
+    t.deepEqual(acknowledgement0.strings, ['acknowledged:ping-0']);
+    await assertDismissed(t, guest, 'ping-0');
+
+    await restart(config);
+
+    const { host: hostAfter } = await makeHost(config, cancelled);
+    const hostMessagesAfter = iterateReader(E(hostAfter).followMessages());
+
+    // Do NOT look the responder up after the restart. Sending to the guest must
+    // itself auto-reincarnate the pinned responder on delivery; the awaited
+    // acknowledgment can only come from a live, freshly-incarnated responder.
+    const acknowledgement1 = await sendAndAwaitAcknowledgement(
+      hostAfter,
+      hostMessagesAfter,
+      'ping-1',
+    );
+    t.deepEqual(acknowledgement1.strings, ['acknowledged:ping-1']);
+
+    const guestAfter = await E(hostAfter).lookup('responder-agent');
+    await assertDismissed(t, guestAfter, 'ping-1');
+
+    // The counter reads one on the post-restart incarnation, proving a new
+    // incarnation (not a surviving process) answered.
+    const responder = await E(hostAfter).lookup('auto-responder');
+    t.is(await E(responder).respondedCount(), 1);
+  },
+);
+
 test('guest facet receives a message for host', async t => {
   const { host } = await prepareHost(t);
 
@@ -1478,7 +1857,7 @@ testNeedsNodeManager(
     const summary = await E(importer).createBase64(
       'release',
       'Publish release artifacts',
-      encodeBase64(new TextEncoder().encode(canary)),
+      encodeBase64(encodeUtf8(canary)),
     );
     t.is(summary.state, 'active');
     t.is(summary.description, 'Publish release artifacts');
@@ -1489,19 +1868,13 @@ testNeedsNodeManager(
     t.is(formula.type, 'lookup');
     t.false(JSON.stringify(formula).includes(canary));
     const blob = await E(host).lookup(['secrets', 'release']);
-    t.is(
-      new TextDecoder().decode(decodeBase64(await E(blob).readBase64())),
-      canary,
-    );
+    t.is(decodeUtf8(decodeBase64(await E(blob).readBase64())), canary);
 
     await restart(config);
     const { host: hostAfter } = await makeHost(config, cancelled);
     const blobAfter = await E(hostAfter).lookup(['secrets', 'release']);
     t.is(await E(blobAfter).getDescription(), 'Publish release artifacts');
-    t.is(
-      new TextDecoder().decode(decodeBase64(await E(blobAfter).readBase64())),
-      canary,
-    );
+    t.is(decodeUtf8(decodeBase64(await E(blobAfter).readBase64())), canary);
 
     const guest = await E(hostAfter).provideGuest('secret-recipient');
     await E(hostAfter).send(
@@ -1513,22 +1886,19 @@ testNeedsNodeManager(
     const [message] = await E(guest).listMessages();
     await E(guest).adopt(message.number, 'credential', 'release-credential');
     const delegated = await E(guest).lookup('release-credential');
-    t.is(
-      new TextDecoder().decode(decodeBase64(await E(delegated).readBase64())),
-      canary,
-    );
+    t.is(decodeUtf8(decodeBase64(await E(delegated).readBase64())), canary);
 
     const sqlite = await fsp.readFile(
       path.join(config.statePath, 'endo.sqlite'),
     );
-    t.false(sqlite.includes(new TextEncoder().encode(canary)));
+    t.false(sqlite.includes(encodeUtf8(canary)));
     const secretFiles = await fsp.readdir(
       path.join(config.statePath, 'secret-store-v1'),
     );
     const envelope = await fsp.readFile(
       path.join(config.statePath, 'secret-store-v1', secretFiles[0]),
     );
-    t.false(envelope.includes(new TextEncoder().encode(canary)));
+    t.false(envelope.includes(encodeUtf8(canary)));
 
     const catalog = await E(hostAfter).lookup(['@secrets', 'catalog']);
     await E(hostAfter).copy(['secrets', 'release'], ['release-alias']);
@@ -1578,14 +1948,15 @@ testNeedsNodeManager('only the root host manages secrets', async t => {
     message: /Invalid pet name/,
   });
 
-  // Hygiene, not containment: the child still reaches the root host through
-  // its ambient `@endo`, so withholding the name narrows the namespace
-  // rather than the authority. See designs/daemon-secret-manager.md.
-  const rootViaChild = await E(await E(child).lookup('@endo')).host();
-  t.is(
-    await E(rootViaChild).identify('@agent'),
-    await E(host).identify('@agent'),
-  );
+  // #1128 closed the escape hatch this test once documented. Withholding
+  // `@secrets` above was namespace hygiene, not containment, precisely because
+  // a child could still reach the root host through an ambient `@endo`. That
+  // `@endo` is now withheld from non-root hosts too, so the child can no longer
+  // resolve it — the root is unreachable through the child. This is the actual
+  // trust boundary; see the `@endo`-specific tests below and #1128.
+  await t.throwsAsync(() => E(child).lookup('@endo'), {
+    message: /Invalid pet name "@endo"/,
+  });
 });
 
 test('rehydrated requests can be resolved after restart', async t => {
@@ -3081,9 +3452,7 @@ test('evaluate name resolved by lookup path', async t => {
 test('list special names', async t => {
   const { host } = await prepareHost(t);
 
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('hello\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('hello\n')]);
   await E(host).storeBlob(readerRef, 'hello-text');
 
   /** @type {string[]} */
@@ -3116,6 +3485,62 @@ test('child host @host points at parent handle', async t => {
 
   t.is(childHostId, parentHandleId);
   t.not(childHostId, await E(childHost).identify('@self'));
+});
+
+// Issue #1128: the ambient `@endo` special name made every `provideHost`
+// child a full-authority peer of the root — `E(child).lookup('@endo')` then
+// `E(endo).host()` returns the root principal. `@endo` is now withheld from
+// non-root hosts, so a delegated child cannot reach the root through it.
+test('root host exposes a working @endo', async t => {
+  const { host } = await prepareHost(t);
+
+  t.true(await E(host).has('@endo'));
+  const endo = await E(host).lookup('@endo');
+  // The endo facet's `host()` returns the root principal itself.
+  const rootViaEndo = await E(endo).host();
+  const rootSelf = await E(host).identify('@self');
+  t.is(await E(rootViaEndo).identify('@self'), rootSelf);
+});
+
+test('child host does not expose @endo, so the root is unreachable through it', async t => {
+  const { host } = await prepareHost(t);
+  // `provideHost` formulates the child, persisting a formula that carries
+  // `endo: endoId` (makeChildHost passes it into formulateHost), then realizes
+  // it. `specialNames` is recomputed from that formula at realization and
+  // gated on `isRootHost`, so a child — new here, and identically any
+  // already-persisted "old" child — realizes without `@endo`, no migration.
+  const childHost = await E(host).provideHost('child-host');
+
+  // A non-root host has no `@endo` in its special names, so the name is
+  // rejected outright by every name-hub method — the child cannot reach the
+  // root's `endo` facet (and thus `E(endo).host()` → root) at all.
+  await t.throwsAsync(() => E(childHost).has('@endo'), {
+    message: /Invalid pet name "@endo"/u,
+  });
+  await t.throwsAsync(() => E(childHost).lookup('@endo'), {
+    message: /Invalid pet name "@endo"/u,
+  });
+  await t.throwsAsync(() => E(childHost).identify('@endo'), {
+    message: /Invalid pet name "@endo"/u,
+  });
+
+  // The parent (root) still has its `@endo`, confirming the guard is scoped
+  // to non-root hosts rather than removing the name globally.
+  t.true(await E(host).has('@endo'));
+});
+
+test('a guest still does not expose @endo, unchanged by the #1128 fix', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+
+  // Guests never carried `@endo`; withholding it from child hosts leaves the
+  // guest surface exactly as before — the name is still rejected here.
+  await t.throwsAsync(() => E(guest).has('@endo'), {
+    message: /Invalid pet name "@endo"/u,
+  });
+  await t.throwsAsync(() => E(guest).lookup('@endo'), {
+    message: /Invalid pet name "@endo"/u,
+  });
 });
 
 test('guest cannot access host methods', async t => {
@@ -3515,6 +3940,13 @@ testNeedsNodeWorker('invite, accept, and send mail', async t => {
   const invitationLocator = await E(invitation).locate();
   await E(hostB).accept(invitationLocator, 'alice');
 
+  // Acceptance replaces each invitation-side result name with the remote
+  // handle. It does not need a second, synthetic local guest under @pins.
+  t.truthy(await E(hostA).identify('bob'));
+  t.truthy(await E(hostB).identify('alice'));
+  t.is(await E(hostA).identify('@pins', 'guest-bob'), undefined);
+  t.is(await E(hostB).identify('@pins', 'guest-alice'), undefined);
+
   // create value to share
   await E(hostA).evaluate('@main', '"hello, world!"', [], [], ['salutations']);
   const expectedSalutationsLocator = await E(hostA).locate('salutations');
@@ -3540,6 +3972,385 @@ testNeedsNodeWorker('invite, accept, and send mail', async t => {
   t.is(actualParsed.number, expectedParsed.number);
   t.is(actualParsed.node, expectedParsed.node);
 });
+
+testNeedsNodeWorker('guest invites a guest and they exchange mail', async t => {
+  const hostA = await prepareHostWithTestNetwork(t);
+  const hostB = await prepareHostWithTestNetwork(t);
+
+  const guestA = await E(hostA).provideGuest('guest-a-handle', {
+    agentName: 'guest-a',
+  });
+  const invitation = await E(guestA).invite('guest-b');
+  const invitationLocator = await E(invitation).locate();
+  await E(hostB).accept(invitationLocator, 'guest-a');
+
+  // The invitation's result name is the durable connection edge. Acceptance
+  // replaces the invitation with the remote accepter handle without minting
+  // and pinning an otherwise-unreachable local guest on either side.
+  t.truthy(await E(guestA).identify('guest-b'));
+  t.truthy(await E(hostB).identify('guest-a'));
+  t.is(await E(guestA).identify('@pins', 'guest-guest-b'), undefined);
+  t.is(await E(hostA).identify('@pins', 'guest-guest-b'), undefined);
+  t.is(await E(hostB).identify('@pins', 'guest-guest-a'), undefined);
+
+  // The host-only directory remains available for deliberate hidden pins, but
+  // invitation acceptance no longer adds a redundant synthetic guest to it.
+  const guestAId = await E(hostA).identify('guest-a');
+  const guestARecord = await E(E(hostA).diagnostics()).getFormula(guestAId);
+  const guestPinsId = guestARecord.properties.guestPins.identifier;
+  const hostPinsId = guestARecord.properties.hostPins.identifier;
+  t.not(guestPinsId, hostPinsId);
+  const hostPins = await E(hostA).lookupById(hostPinsId);
+  t.is(await E(hostPins).identify('guest-guest-b'), undefined);
+
+  await E(guestA).send('guest-b', ['Hello from guest A'], [], []);
+  await E(hostB).send('guest-a', ['Hello from guest B'], [], []);
+
+  const messagesForGuestB = await E(hostB).listMessages();
+  t.true(
+    messagesForGuestB.some(
+      message =>
+        message.type === 'package' &&
+        message.strings?.[0] === 'Hello from guest A',
+    ),
+  );
+
+  const messagesForGuestA = await E(guestA).listMessages();
+  t.true(
+    messagesForGuestA.some(
+      message =>
+        message.type === 'package' &&
+        message.strings?.[0] === 'Hello from guest B',
+    ),
+  );
+});
+
+test('EndoGuest.invite nests the invitation at a directory path', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest-handle', {
+    agentName: 'guest-agent',
+  });
+  await E(guest).makeDirectory('peers');
+  const invitation = await E(guest).invite(['peers', 'bob']);
+  t.truthy(await E(invitation).locate());
+  t.true(await E(guest).has('peers', 'bob'));
+  t.false(await E(guest).has('bob'));
+});
+
+testNeedsNodeWorker(
+  'EndoGuest.accept binds into the calling guest (same daemon)',
+  async t => {
+    // Both the inviting and accepting guest live in ONE daemon — the
+    // minion.town shape, where the app's inviter and invitee guests are
+    // siblings under a single daemon. No network is required.
+    const { host } = await prepareHost(t);
+    const guestA = await E(host).provideGuest('guest-a-handle', {
+      agentName: 'guest-a',
+    });
+    const guestB = await E(host).provideGuest('guest-b-handle', {
+      agentName: 'guest-b',
+    });
+
+    const invitation = await E(guestA).invite('to-b');
+    const invitationLocator = await E(invitation).locate();
+    // The invitee redeems into ITSELF via the guest facet, not through a host.
+    await E(guestB).accept(invitationLocator, 'to-a');
+
+    // Reciprocal binding, each under its own independently chosen pet name.
+    t.truthy(await E(guestA).identify('to-b'));
+    t.truthy(await E(guestB).identify('to-a'));
+
+    // Accepting as itself mints no replacement guest on either side.
+    t.is(await E(guestA).identify('@pins', 'guest-to-b'), undefined);
+    t.is(await E(guestB).identify('@pins', 'guest-to-a'), undefined);
+
+    // Same-daemon acceptance registers NO peer: the inviter's daemon is this
+    // daemon, so writing a self-peer (or a self-referential remote-agent-key
+    // row) would be spurious. NOTE: this end-to-end check does NOT by itself pin
+    // the same-daemon skips — both agents here have empty `@nets`, so the
+    // orthogonal `hints.length > 0` / `addresses.length > 0` guards keep the peer
+    // store empty even if a same-daemon skip were removed (prover round 4). The
+    // skips are pinned load-bearingly by the multiplayer-suite test "same-daemon
+    // accept writes no peer route with reachable @nets on both sides", which
+    // gives both sides non-empty addresses so only the skips prevent the write.
+    t.deepEqual(
+      await E(host).listKnownPeers(),
+      [],
+      'same-daemon accept writes no known-peer entry',
+    );
+
+    // The bound handles are each guest's OWN handle — the acceptor bound the
+    // inviter's handle (not the top host's), and vice versa.
+    const guestAHandleId = await E(host).identify('guest-a-handle');
+    const guestBHandleId = await E(host).identify('guest-b-handle');
+    t.is(
+      parseLocator(await E(guestB).locate('to-a')).number,
+      parseId(guestAHandleId).number,
+      "acceptor's 'to-a' is the inviting guest's own handle",
+    );
+    t.is(
+      parseLocator(await E(guestA).locate('to-b')).number,
+      parseId(guestBHandleId).number,
+      "inviter's 'to-b' is the accepting guest's own handle",
+    );
+
+    // Mail flows both directions over the shared daemon's mailbox substrate.
+    await E(guestA).send('to-b', ['Hello from A'], [], []);
+    await E(guestB).send('to-a', ['Hello from B'], [], []);
+
+    const messagesForB = await E(guestB).listMessages();
+    t.true(
+      messagesForB.some(
+        message =>
+          message.type === 'package' && message.strings?.[0] === 'Hello from A',
+      ),
+      "B received A's message",
+    );
+    const messagesForA = await E(guestA).listMessages();
+    t.true(
+      messagesForA.some(
+        message =>
+          message.type === 'package' && message.strings?.[0] === 'Hello from B',
+      ),
+      "A received B's message",
+    );
+
+    // Single-use: a replay of the spent invitation is rejected.
+    await t.throwsAsync(
+      () => E(guestB).accept(invitationLocator, 'to-a-again'),
+      undefined,
+      'replayed invitation is rejected',
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'accept rolls back its speculative bind when the invitation is rejected (same daemon)',
+  async t => {
+    // The acceptor-side pet-name bind is written from the caller-supplied
+    // locator BEFORE the invitation is proven (so a bad name path cannot strand
+    // a spent invitation). A rejected accept — forged, unspent, or replayed —
+    // must therefore roll that bind back rather than leave the chosen name
+    // pointing at the unverified handle; least of all may it silently clobber a
+    // pre-existing correspondent already bound under that name.
+    const { host } = await prepareHost(t);
+    const guestA = await E(host).provideGuest('guest-a-handle', {
+      agentName: 'guest-a',
+    });
+    const guestB = await E(host).provideGuest('guest-b-handle', {
+      agentName: 'guest-b',
+    });
+    const guestC = await E(host).provideGuest('guest-c-handle', {
+      agentName: 'guest-c',
+    });
+
+    // B binds a genuine correspondent (A's handle) under 'contact'.
+    const invAB = await E(guestA).invite('to-b');
+    await E(guestB).accept(await E(invAB).locate(), 'contact');
+    const guestAHandleId = await E(host).identify('guest-a-handle');
+    t.is(
+      parseLocator(await E(guestB).locate('contact')).number,
+      parseId(guestAHandleId).number,
+      "'contact' initially names A's handle",
+    );
+
+    // Produce a spent invitation from a DIFFERENT correspondent (C), so a
+    // successful clobber would be observable as C's handle replacing A's.
+    const invCB = await E(guestC).invite('to-b-2');
+    const spentCLocator = await E(invCB).locate();
+    await E(guestB).accept(spentCLocator, 'temp'); // consumes invCB
+
+    // Redeeming the now-spent invitation from C, reusing the name that already
+    // holds A, must reject AND leave 'contact' bound to A (not C, not stray).
+    await t.throwsAsync(
+      () => E(guestB).accept(spentCLocator, 'contact'),
+      undefined,
+      'a spent invitation is rejected',
+    );
+    t.is(
+      parseLocator(await E(guestB).locate('contact')).number,
+      parseId(guestAHandleId).number,
+      "'contact' still names A's handle after the rejected accept",
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'accept rollback removes a FRESH name it speculatively bound (same daemon)',
+  async t => {
+    // The rollback restores "whatever the pet name held before". The existing
+    // rollback test only covers the branch where a prior binding existed (so
+    // rollback re-stores it); this covers the OTHER branch — a name that held
+    // nothing before the speculative bind — where rollback must `remove()` the
+    // phantom binding, not leave it pointing at the unverified handle. Deleting
+    // the `priorLocator === undefined ? remove() : storeLocator()` split's
+    // remove() arm reddens here.
+    const { host } = await prepareHost(t);
+    const guestB = await E(host).provideGuest('guest-b-handle', {
+      agentName: 'guest-b',
+    });
+    const guestC = await E(host).provideGuest('guest-c-handle', {
+      agentName: 'guest-c',
+    });
+
+    // Produce a spent invitation from C.
+    const invCB = await E(guestC).invite('to-b');
+    const spentCLocator = await E(invCB).locate();
+    await E(guestB).accept(spentCLocator, 'temp'); // consumes invCB
+
+    // 'fresh-contact' has never been bound. Redeeming the now-spent invitation
+    // under it must reject AND leave 'fresh-contact' unbound — the speculative
+    // bind removed, not left as a phantom pointing at C's unverified handle.
+    t.is(
+      await E(guestB).identify('fresh-contact'),
+      undefined,
+      'the fresh name is unbound before the rejected accept',
+    );
+    await t.throwsAsync(
+      () => E(guestB).accept(spentCLocator, 'fresh-contact'),
+      undefined,
+      'a spent invitation is rejected',
+    );
+    t.is(
+      await E(guestB).identify('fresh-contact'),
+      undefined,
+      'the fresh name is unbound again after the rejected accept (phantom removed)',
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'duplicate accept(sameLocator, sameName) never loses the winner (same daemon)',
+  async t => {
+    // A client that naively retries its own accept(sameLocator, sameName) —
+    // no attacker required — starts two accepts of the SAME single-use
+    // invitation under the SAME correspondent name. The required outcome:
+    // exactly one wins, and the loser's `E(invitation).accept()` rejection
+    // (single-use) and its correspondent-bind rollback do NOT strand the
+    // winner's binding — 'contact' still names A's handle afterward.
+    //
+    // NOTE: this test asserts the OUTCOME, not the serialization mechanism.
+    // prover round 4 showed that removing the `acceptInvitationJobs.enqueue`
+    // wrapper leaves this same-daemon case green, because same-process
+    // eventual-send delivery ordering already serializes these two calls (the
+    // acceptor's writes here touch no network, so no interleaving await opens
+    // the check-then-act window the queue closes). The daemon-wide queue is
+    // load-bearing for the CROSS-daemon race — a forged locator racing a genuine
+    // one for the same not-yet-known peer, where real network awaits interleave
+    // — which this same-daemon shape cannot exercise. This test remains a useful
+    // guard on the duplicate-accept outcome; it does not claim to pin the queue.
+    const { host } = await prepareHost(t);
+    const guestA = await E(host).provideGuest('guest-a-handle', {
+      agentName: 'guest-a',
+    });
+    const guestB = await E(host).provideGuest('guest-b-handle', {
+      agentName: 'guest-b',
+    });
+
+    const invitation = await E(guestA).invite('to-b');
+    const invitationLocator = await E(invitation).locate();
+
+    const results = await Promise.allSettled([
+      E(guestB).accept(invitationLocator, 'contact'),
+      E(guestB).accept(invitationLocator, 'contact'),
+    ]);
+    const fulfilled = results.filter(r => r.status === 'fulfilled');
+    t.is(fulfilled.length, 1, 'exactly one duplicate accept succeeds');
+
+    // The winner's bind survives the loser's rollback: 'contact' still names
+    // A's handle rather than having been un-named.
+    const guestAHandleId = await E(host).identify('guest-a-handle');
+    const contactLocator = await E(guestB).locate('contact');
+    t.truthy(
+      contactLocator,
+      "'contact' remains bound after the duplicate race",
+    );
+    t.is(
+      parseLocator(contactLocator).number,
+      parseId(guestAHandleId).number,
+      "'contact' still names A's handle after the losing duplicate rolled back",
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'EndoGuest transitive invite chain I -> J -> K (same daemon)',
+  async t => {
+    // A guest that has accepted an invitation can itself invite and accept
+    // further guests: "a guest may invite more guests, transitively."
+    const { host } = await prepareHost(t);
+    const guestI = await E(host).provideGuest('i-handle', { agentName: 'i' });
+    const guestJ = await E(host).provideGuest('j-handle', { agentName: 'j' });
+    const guestK = await E(host).provideGuest('k-handle', { agentName: 'k' });
+
+    const invIJ = await E(guestI).invite('j');
+    await E(guestJ).accept(await E(invIJ).locate(), 'i');
+
+    // J, an accepted guest, now extends its OWN invitation to K.
+    const invJK = await E(guestJ).invite('k');
+    await E(guestK).accept(await E(invJK).locate(), 'j');
+
+    t.truthy(await E(guestI).identify('j'));
+    t.truthy(await E(guestJ).identify('i'));
+    t.truthy(await E(guestJ).identify('k'));
+    t.truthy(await E(guestK).identify('j'));
+
+    // Mail flows along each hop of the chain.
+    await E(guestI).send('j', ['I to J'], [], []);
+    await E(guestJ).send('k', ['J to K'], [], []);
+
+    const messagesForJ = await E(guestJ).listMessages();
+    t.true(
+      messagesForJ.some(
+        message =>
+          message.type === 'package' && message.strings?.[0] === 'I to J',
+      ),
+      "J received I's message",
+    );
+    const messagesForK = await E(guestK).listMessages();
+    t.true(
+      messagesForK.some(
+        message =>
+          message.type === 'package' && message.strings?.[0] === 'J to K',
+      ),
+      "K received J's message",
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'accept keeps distinct result names for paths that a naive join would collide',
+  async t => {
+    const hostA = await prepareHostWithTestNetwork(t);
+    const hostB = await prepareHostWithTestNetwork(t);
+
+    // `['team-a', 'bob']` and `['team', 'a-bob']` flatten to the same string
+    // under a bare `path.join('-')`. Acceptance retains each connection at its
+    // actual directory path, without deriving a second flattened pin key.
+    await E(hostA).makeDirectory('team-a');
+    await E(hostA).makeDirectory('team');
+
+    const invitation1 = await E(hostA).invite(['team-a', 'bob']);
+    const invitation2 = await E(hostA).invite(['team', 'a-bob']);
+
+    await E(hostB).accept(await E(invitation1).locate(), 'peer-1');
+    await E(hostB).accept(await E(invitation2).locate(), 'peer-2');
+
+    const firstId = await E(hostA).identify('team-a', 'bob');
+    const secondId = await E(hostA).identify('team', 'a-bob');
+    t.truthy(firstId);
+    t.truthy(secondId);
+    await E(hostA).remove('team-a', 'bob');
+    t.is(await E(hostA).identify('team-a', 'bob'), undefined);
+    t.is(await E(hostA).identify('team', 'a-bob'), secondId);
+
+    // No implicit invitation-retention pin is necessary or created.
+    const retentionPins = [...(await E(hostA).list('@pins'))].filter(name =>
+      name.startsWith('guest-'),
+    );
+    t.deepEqual(retentionPins, []);
+  },
+);
 
 test('reverse locate local value', async t => {
   const { host } = await prepareHost(t);
@@ -4329,6 +5140,152 @@ test('form multi-submission: same form submitted twice produces two value messag
   t.is(value2.replyTo, formMsg.messageId);
 });
 
+test('form field patterns survive a daemon restart', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+
+  /** @type {bigint} */
+  let formNumber;
+  {
+    const { host } = await makeHost(config, cancelled);
+    const guest = await E(host).provideGuest('guest');
+    const hostIterator = iterateReader(E(host).followMessages());
+
+    await E(guest).form(
+      '@host',
+      'Approve?',
+      harden([
+        { name: 'approved', label: 'Approved', pattern: M.boolean() },
+        { name: 'note', label: 'Note', pattern: M.string() },
+      ]),
+    );
+
+    const { value: formMsg } = await hostIterator.next();
+    t.is(formMsg.type, 'form');
+    formNumber = formMsg.number;
+  }
+
+  await restart(config);
+
+  {
+    const { host } = await makeHost(config, cancelled);
+
+    // A message formula round-trips through JSON, which drops a CopyTagged's
+    // `Symbol.toStringTag`. If the pattern is persisted raw it comes back as
+    // the plain record `{ payload: 'boolean' }`, which NO value satisfies —
+    // the field becomes permanently unanswerable after a restart.
+    await E(host).submit(
+      formNumber,
+      harden({ approved: true, note: 'looks fine' }),
+    );
+    t.pass('a restored boolean field still accepts a boolean');
+  }
+});
+
+test('a restored form still enforces its patterns', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+
+  /** @type {bigint} */
+  let formNumber;
+  {
+    const { host } = await makeHost(config, cancelled);
+    const guest = await E(host).provideGuest('guest');
+    const hostIterator = iterateReader(E(host).followMessages());
+
+    await E(guest).form(
+      '@host',
+      'Approve?',
+      harden([{ name: 'approved', label: 'Approved', pattern: M.boolean() }]),
+    );
+
+    const { value: formMsg } = await hostIterator.next();
+    formNumber = formMsg.number;
+  }
+
+  await restart(config);
+
+  {
+    const { host } = await makeHost(config, cancelled);
+    // Surviving the round-trip must not mean the pattern went slack. Pin the
+    // message, because rejection alone proves nothing: a flattened pattern
+    // rejects a string too, saying `Must be: {"payload":"boolean"}`. Only a
+    // real `M.boolean()` says this.
+    await t.throwsAsync(
+      () => E(host).submit(formNumber, harden({ approved: 'yes' })),
+      { message: /field "approved".*Must be a boolean/ },
+      'a string is still refused for a boolean field',
+    );
+  }
+});
+
+test('a form persisted before fields were encoded still loads', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+
+  {
+    const { host } = await makeHost(config, cancelled);
+    const guest = await E(host).provideGuest('guest');
+    const hostIterator = iterateReader(E(host).followMessages());
+
+    await E(guest).form(
+      '@host',
+      'Approve?',
+      harden([{ name: 'approved', label: 'Approved', pattern: M.boolean() }]),
+    );
+
+    const { value: formMsg } = await hostIterator.next();
+    t.is(formMsg.type, 'form');
+  }
+
+  await stop(config);
+
+  // Rewrite the stored form the way the daemon wrote it before fields were
+  // encoded: the raw array, with the pattern already flattened by JSON.
+  {
+    const db = openTestDb(config.statePath);
+    const forms = db
+      .listFormulas()
+      .map(({ number }) => ({ number, ...db.readFormula(number) }))
+      .filter(
+        ({ formula }) =>
+          /** @type {{ messageType?: string }} */ (formula).messageType ===
+          'form',
+      );
+    // Two: the recipient's copy and the sender's self-delivered copy.
+    t.is(forms.length, 2, 'the form is stored for both sides');
+    for (const { number, node, formula } of forms) {
+      db.writeFormula(
+        number,
+        node,
+        harden({
+          ...formula,
+          fields: [
+            {
+              name: 'approved',
+              label: 'Approved',
+              pattern: { payload: 'boolean' },
+            },
+          ],
+        }),
+      );
+    }
+    db.close();
+  }
+
+  await restart(config);
+
+  {
+    const { host } = await makeHost(config, cancelled);
+    const hostIterator = iterateReader(E(host).followMessages());
+    const { value: formMsg } = await hostIterator.next();
+
+    // Loaded rather than crashed, and kept as found. Nothing recovers a tag
+    // that was never written, so such a field stays unanswerable — but an
+    // existing mailbox must still open, which is why the raw array is read
+    // through instead of being fed to the decoder.
+    t.is(formMsg.type, 'form');
+    t.deepEqual(formMsg.fields[0].pattern, { payload: 'boolean' });
+  }
+});
+
 test('form returns void (fire-and-forget)', async t => {
   const { host } = await prepareHost(t);
 
@@ -4498,7 +5455,7 @@ test('form value message @value is addressable via @mail/N/@value', async t => {
  * @param {string} content
  */
 const makeFarBlob = content => {
-  const bytes = new TextEncoder().encode(content);
+  const bytes = encodeUtf8(content);
   return bytesReaderFromIterator([bytes]);
 };
 
@@ -4529,9 +5486,7 @@ const makeFarTree = children => {
 test('locateContent resolves a readable-blob to an xt-only magnet URN', async t => {
   const { host } = await prepareHost(t);
   const payload = 'content-locator payload\n';
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode(payload),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8(payload)]);
   await E(host).storeBlob(readerRef, 'payload-blob');
 
   const contentLocator = await E(host).locateContent('payload-blob');
@@ -4564,9 +5519,7 @@ test('locateContent returns undefined for an unknown name', async t => {
 
 test('storeContent returns the same xt-only locator as locateContent', async t => {
   const { host } = await prepareHost(t);
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('publish me\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('publish me\n')]);
   await E(host).storeBlob(readerRef, 'to-publish');
   const located = await E(host).locateContent('to-publish');
   const stored = await E(host).storeContent('to-publish');
@@ -4588,9 +5541,7 @@ test('storeContent rejects a non-content formula', async t => {
 
 test('reverseLocateContent finds the pet names for a content locator', async t => {
   const { host } = await prepareHost(t);
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('reverse me\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('reverse me\n')]);
   await E(host).storeBlob(readerRef, 'reverse-blob');
   const contentLocator = await E(host).locateContent('reverse-blob');
   const names = await E(host).reverseLocateContent(contentLocator);
@@ -4599,9 +5550,7 @@ test('reverseLocateContent finds the pet names for a content locator', async t =
 
 test('reverseLocateContent returns all matching names, deduped and sorted', async t => {
   const { host } = await prepareHost(t);
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('shared content\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('shared content\n')]);
   await E(host).storeBlob(readerRef, 'zeta-name');
   // A second pet name for the same content formula (same content identity).
   await E(host).copy(['zeta-name'], ['alpha-name']);
@@ -4612,9 +5561,7 @@ test('reverseLocateContent returns all matching names, deduped and sorted', asyn
 
 test('reverseLocateContent returns an empty array when no content matches', async t => {
   const { host } = await prepareHost(t);
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('lonely\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('lonely\n')]);
   await E(host).storeBlob(readerRef, 'lonely-blob');
   const contentLocator = await E(host).locateContent('lonely-blob');
   await E(host).remove('lonely-blob');
@@ -4634,9 +5581,7 @@ test('internalizeContentLocator rejects a malformed content locator', async t =>
 test('listContent lists only content-bearing entries', async t => {
   const { host } = await prepareHost(t);
   await E(host).storeValue(10, 'ten');
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('listed\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('listed\n')]);
   await E(host).storeBlob(readerRef, 'listed-blob');
   const record = await E(host).listContent();
   t.true('listed-blob' in record);
@@ -4646,9 +5591,7 @@ test('listContent lists only content-bearing entries', async t => {
 
 test('internalizeContentLocator parses a content locator', async t => {
   const { host } = await prepareHost(t);
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('parse me\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('parse me\n')]);
   await E(host).storeBlob(readerRef, 'parse-blob');
   const contentLocator = await E(host).locateContent('parse-blob');
   const internalized = await E(host).internalizeContentLocator(contentLocator);
@@ -4679,9 +5622,7 @@ test('a guest carries the content-locate family', async t => {
   const guest = await E(host).provideGuest('guest', {
     agentName: 'guest-agent',
   });
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('guest blob\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('guest blob\n')]);
   await E(host).storeBlob(readerRef, 'guest-blob');
   await E(host).move(['guest-blob'], ['guest-agent', 'guest-blob']);
   const contentLocator = await E(guest).locateContent('guest-blob');
@@ -4690,7 +5631,7 @@ test('a guest carries the content-locate family', async t => {
 
 test('HTTP web-seed loads and verifies a readable blob', async t => {
   const { host, config } = await prepareHost(t);
-  const originalBytes = new TextEncoder().encode('web-seed payload\n');
+  const originalBytes = encodeUtf8('web-seed payload\n');
   await E(host).storeBlob(bytesReaderFromIterator([originalBytes]), 'original');
   const originalLocator = await E(host).locateContent('original');
   const { hash } = parseContentLocator(originalLocator);
@@ -4701,7 +5642,7 @@ test('HTTP web-seed loads and verifies a readable blob', async t => {
   // The first source deliberately serves another valid blob. `loadContent`
   // must reject it on the xt mismatch and continue to the second web seed.
   await E(host).storeBlob(
-    bytesReaderFromIterator([new TextEncoder().encode('wrong payload\n')]),
+    bytesReaderFromIterator([encodeUtf8('wrong payload\n')]),
     'wrong',
   );
   const wrongLocator = await E(host).locateContent('wrong');
@@ -5259,10 +6200,8 @@ test('provideGit tree exposes immutable commit contents', async t => {
   const main = await E(tree).lookup(['src', 'main.js']);
   t.is(await E(main).text(), 'export default 1;\n');
 
-  // GitBlob exposes the rich BlobRef range-I/O surface (getInfo + fetch).
-  const mainInfo = await E(main).getInfo();
-  t.is(mainInfo.algorithm, 'sha256');
-  t.is(mainInfo.size, 18n); // 'export default 1;\n'
+  // GitBlob exposes the rich BlobRef named-read surface.
+  t.is(await E(main).size(), 18n); // 'export default 1;\n'
   /** @param {any} reader */
   const collectText = async reader => {
     const chunks = [];
@@ -5276,10 +6215,10 @@ test('provideGit tree exposes immutable commit contents', async t => {
       out.set(c, off);
       off += c.length;
     }
-    return new TextDecoder().decode(out);
+    return decodeUtf8(out);
   };
-  t.is(await collectText(await E(main).fetch(0n, 6n)), 'export');
-  t.is(await collectText(await E(main).fetch(0n, 18n)), 'export default 1;\n');
+  t.is(await E(await E(main).byteRange(0n, 6n)).text(), 'export');
+  t.is(await collectText(await E(main).bytes()), 'export default 1;\n');
 
   await fs.promises.writeFile(
     path.join(repoPath, 'src', 'main.js'),
@@ -7629,4 +8568,215 @@ test('readLog follow discovers new logs and settles on disconnect', async t => {
   );
   cancel(Error('readLog follow new-log test done'));
   t.is(await pending, 'settled');
+});
+
+test.serial(
+  'idle host follow streams close without publishing another value',
+  async t => {
+    t.timeout(15_000);
+    const { host } = await prepareHost(t);
+    const names = await prepareFollowNameChangesIterator(host);
+    const messages = iterateReader(await E(host).followMessages());
+    const pendingName = names.next();
+    const pendingMessage = messages.next();
+    // Let the stream requests reach their source before closing them.
+    await new Promise(resolve => setImmediate(resolve));
+    t.true((await names.return()).done);
+    t.true((await messages.return()).done);
+    t.true((await pendingName).done);
+    t.true((await pendingMessage).done);
+  },
+);
+
+test('EndoDirectory.readOnly() mirrors reads and rejects every mutator', async t => {
+  const { host } = await prepareHost(t);
+  const directory = await E(host).makeDirectory('backing-dir');
+  await E(host).storeValue(1, 'one-src');
+  await E(host).storeValue(2, 'two-src');
+  const oneId = await E(host).identify('one-src');
+  const twoId = await E(host).identify('two-src');
+  await E(directory).storeIdentifier(['one'], oneId);
+  await E(directory).storeIdentifier(['two'], twoId);
+
+  const readOnlyDirectory = await E(directory).readOnly();
+
+  // Reads round-trip against the backing directory.
+  t.deepEqual([...(await E(readOnlyDirectory).list())].sort(), ['one', 'two']);
+  t.true(await E(readOnlyDirectory).has('one'));
+  t.false(await E(readOnlyDirectory).has('absent'));
+  t.is(
+    await E(readOnlyDirectory).lookup('one'),
+    await E(directory).lookup('one'),
+  );
+  t.is(await E(readOnlyDirectory).maybeLookup('absent'), undefined);
+
+  // The read-only view exposes no mutators at all. The expectation pins "no
+  // such method" by name, so a passing assertion cannot be a coincidental
+  // unrelated rejection (a dead worker, a formulation failure).
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).storeIdentifier(['three'], oneId),
+    { message: /storeIdentifier/ },
+    'storeIdentifier is not available on a read-only view',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).remove('one'),
+    { message: /remove/ },
+    'remove is not available on a read-only view',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).makeDirectory('nested'),
+    { message: /makeDirectory/ },
+    'makeDirectory is not available on a read-only view',
+  );
+
+  // Malformed arguments are rejected at THIS boundary by the ReadableNameHub
+  // interface guard (makeExo), not only downstream at the backing directory.
+  // `lookup` requires a string or string[]; a number must be refused by the
+  // guard before it forwards. This is the behavioral proof the interface
+  // guard is live on the guest-facing view.
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).lookup(42),
+    { message: /ReadableNameHub/ },
+    'a wrong-typed argument is rejected at the read-only exo boundary',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).has(42),
+    { message: /ReadableNameHub/ },
+    'has rejects a non-string path segment at the exo boundary',
+  );
+
+  // A live write to the backing directory is observable through the view,
+  // confirming it is a live attenuation rather than a snapshot.
+  await E(host).storeValue(3, 'three-src');
+  const threeId = await E(host).identify('three-src');
+  await E(directory).storeIdentifier(['three'], threeId);
+  t.true(await E(readOnlyDirectory).has('three'));
+});
+
+test('EndoDirectory.readOnly() attenuation is shallow: nested directories are handed out live and writable', async t => {
+  const { host } = await prepareHost(t);
+  const directory = await E(host).makeDirectory('backing-dir-shallow');
+  // A nested directory under the backing directory.
+  const nested = await E(directory).makeDirectory('nested');
+  await E(host).storeValue(1, 'seed-src');
+  const seedId = await E(host).identify('seed-src');
+  await E(nested).storeIdentifier(['seed'], seedId);
+
+  const readOnlyDirectory = await E(directory).readOnly();
+
+  // Looking the nested directory up THROUGH the read-only view returns the
+  // live, fully-writable nested directory — NOT a further read-only view. This
+  // is the security-relevant half of the documented contract: attenuation is
+  // shallow, so a holder of the read-only view can mutate one level down.
+  const nestedViaView = await E(readOnlyDirectory).lookup('nested');
+  await E(host).storeValue(2, 'added-src');
+  const addedId = await E(host).identify('added-src');
+  // The write through the looked-up nested directory succeeds — proving it is
+  // the live capability, not a read-only attenuation.
+  await t.notThrowsAsync(
+    E(/** @type {any} */ (nestedViaView)).storeIdentifier(['added'], addedId),
+    'a nested directory reached through the read-only view is writable',
+  );
+  // And the write is observable back through the view's nested lookup.
+  t.true(await E(/** @type {any} */ (nestedViaView)).has('added'));
+  t.true(await E(nested).has('added'));
+});
+
+test('EndoDirectory.readOnly() is memoized: repeated calls return the same view', async t => {
+  const { host } = await prepareHost(t);
+  const directory = await E(host).makeDirectory('backing-dir-memo');
+  const first = await E(directory).readOnly();
+  const second = await E(directory).readOnly();
+  // Memoized per directory: the same capability is returned each call, rather
+  // than minting a fresh worker + formula per invocation.
+  t.is(first, second);
+});
+
+test('mailHub.readOnly() mirrors reads and rejects every mutator', async t => {
+  // The mailbox hub (`@mail`) is one of the two guest-reachable `readOnly()`
+  // call sites in manager.js; its view is minted eagerly at hub construction
+  // from scope-captured has/list/lookup/maybeLookup, so this pins that closure
+  // capture and the guard round-trip through `makeExo` — not just the shared
+  // factory the unit test exercises in isolation.
+  const { host } = await prepareHost(t);
+  const guest = E(host).provideGuest('guest');
+  const hostMessages = iterateReader(E(host).followMessages());
+  await E(guest).send('@host', ['hello'], [], []);
+  await hostMessages.next();
+
+  const mailHub = await E(host).lookup(['@mail']);
+  const readOnlyMail = await E(mailHub).readOnly();
+
+  // Reads round-trip against the backing mailbox hub.
+  const names = [...(await E(readOnlyMail).list())];
+  t.true(Array.isArray(names));
+
+  // No mutator survives on the view (they are present-but-throwing on the hub,
+  // absent entirely on the read-only view).
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyMail)).remove('1'),
+    { message: /remove/ },
+    'remove is not available on the mailbox read-only view',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyMail)).makeDirectory('nested'),
+    { message: /makeDirectory/ },
+    'makeDirectory is not available on the mailbox read-only view',
+  );
+  // The interface guard is live on this call site too: a wrong-typed argument
+  // is rejected at the view boundary.
+  await t.throwsAsync(E(/** @type {any} */ (readOnlyMail)).lookup(42), {
+    message: /ReadableNameHub/,
+  });
+});
+
+test('messageHub.readOnly() mirrors reads and rejects every mutator', async t => {
+  // The per-message hub (`@mail/<number>`) is the second guest-reachable
+  // `readOnly()` call site in manager.js. Same eager-mint shape as the mailbox
+  // hub, exercised here through a real daemon.
+  const { host } = await prepareHost(t);
+  const guest = E(host).provideGuest('guest');
+  const hostMessages = iterateReader(E(host).followMessages());
+  await E(guest).send('@host', ['hello'], [], []);
+  const { value: hostMessage } = await hostMessages.next();
+  await E(host).reply(hostMessage.number, ['hi'], [], []);
+  const { value: replyMessage } = await hostMessages.next();
+
+  const messageHub = await E(host).lookup([
+    '@mail',
+    String(replyMessage.number),
+  ]);
+  const readOnlyMessage = await E(messageHub).readOnly();
+
+  const names = [...(await E(readOnlyMessage).list())];
+  t.true(names.includes('@from'));
+
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyMessage)).remove('@from'),
+    { message: /remove/ },
+    'remove is not available on the message read-only view',
+  );
+  await t.throwsAsync(E(/** @type {any} */ (readOnlyMessage)).has(42), {
+    message: /ReadableNameHub/,
+  });
+});
+
+test('EndoHost/EndoGuest do not carry readOnly() at runtime today', async t => {
+  // `EndoAgent extends EndoDirectory` at the type level and `EndoDirectory.readOnly`
+  // is declared optional, but the agent guards (GuestInterface/HostInterface) do
+  // NOT spread `readOnly`, so `E(host).readOnly()` / `E(guest).readOnly()` reject.
+  // This pins that documented gap: a future accidental widening of the agent
+  // interfaces to include `readOnly` would redden here rather than silently ship.
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  await t.throwsAsync(
+    E(/** @type {any} */ (host)).readOnly(),
+    { message: /readOnly/ },
+    'readOnly is not on the host agent interface',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (guest)).readOnly(),
+    { message: /readOnly/ },
+    'readOnly is not on the guest agent interface',
+  );
 });

@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=built-ins/Math/atanh tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Math/atanh/atanh-specialVals.js sloppy pass
+built-ins/Math/atanh/atanh-specialVals.js strict pass
+built-ins/Math/atanh/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Math/atanh/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Math/atanh/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be atanh; name value should be atanh"
+built-ins/Math/atanh/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be atanh; name value should be atanh"
+built-ins/Math/atanh/not-a-constructor.js sloppy pass
+built-ins/Math/atanh/not-a-constructor.js strict pass
+built-ins/Math/atanh/prop-desc.js sloppy pass
+built-ins/Math/atanh/prop-desc.js strict pass

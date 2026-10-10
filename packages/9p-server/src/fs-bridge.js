@@ -42,12 +42,16 @@ const BridgeInterface = M.interface('FsBridge9p', {
  *   fs: import('@endo/eventual-send').ERef<any>,
  *   socketPath: string,
  *   cancelled?: Promise<unknown>,
+ *   uid?: number,
+ *   gid?: number,
  * }} opts
  */
 export const makeFsBridge9p = ({
   fs,
   socketPath,
   cancelled = new Promise(() => {}),
+  uid = 1000,
+  gid = 1000,
 }) => {
   /** @type {import('node:net').Server | null} */
   let server = null;
@@ -78,7 +82,13 @@ export const makeFsBridge9p = ({
       server = net.createServer({ allowHalfOpen: false }, sock => {
         sockets.add(sock);
         sock.on('close', () => sockets.delete(sock));
-        serveConnection({ fs, socket: sock, cancelled: composedCancelled });
+        serveConnection({
+          fs,
+          socket: sock,
+          cancelled: composedCancelled,
+          uid,
+          gid,
+        });
       });
       // Install a startup-only error listener that we explicitly
       // remove on success — otherwise its `once` registration sits

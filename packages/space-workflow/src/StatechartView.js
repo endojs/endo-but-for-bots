@@ -4,12 +4,32 @@ import harden from '@endo/harden';
 import { h } from 'preact';
 import { renderGraph } from '@endo/workflow/src/graph.js';
 
-import { layoutGraph } from './layout.js';
+import { layoutGraph, NODE_HEIGHT, NODE_WIDTH } from './layout.js';
 
 /** @import { VNode } from 'preact' */
 
-const NODE_WIDTH = 150;
-const NODE_HEIGHT = 40;
+// Backward edges arc under the node band. Forward edges that span more than one
+// column are ROUTED by the layout, through a lane of its own in each column
+// they cross, so they never pass over an unrelated state.
+const ARC_MARGIN = 64;
+
+/**
+ * A smooth path through a list of points, with horizontal control handles so it
+ * reads as a flowing line rather than a dogleg.
+ *
+ * @param {Array<{ x: number, y: number }>} points
+ * @returns {string}
+ */
+const smoothPath = points => {
+  let d = `M ${points[0].x} ${points[0].y}`;
+  for (let i = 1; i < points.length; i += 1) {
+    const a = points[i - 1];
+    const b = points[i];
+    const handle = Math.max(20, (b.x - a.x) / 2);
+    d += ` C ${a.x + handle} ${a.y}, ${b.x - handle} ${b.y}, ${b.x} ${b.y}`;
+  }
+  return d;
+};
 
 /**
  * The ids of every active node in a run configuration: the top-level
@@ -63,7 +83,10 @@ export const StatechartView = ({
   pending,
 }) => {
   const graph = renderGraph(chart);
-  const { positions, width, height } = layoutGraph(graph, chart.initial);
+  const { positions, routes, width, height } = layoutGraph(
+    graph,
+    chart.initial,
+  );
   // `$eachParam` regions render once under a `#each` segment while the
   // runtime configuration and effect paths carry real indices (`#0`,
   // `#1`, …); fold runtime ids onto the drawn node when no literal node
@@ -77,16 +100,34 @@ export const StatechartView = ({
     (pending ?? []).map(record => normalize((record.path ?? []).join('/'))),
   );
 
+  const bandHeight = Math.max(height, 120);
+  // A backward edge arcs under the band, so the viewBox has to grow to hold it.
+  const hasUnder = graph.edges.some(edge => {
+    const from = positions[edge.from];
+    const to = positions[edge.to];
+    return (
+      from !== undefined &&
+      to !== undefined &&
+      !edge.internal &&
+      to.layer <= from.layer
+    );
+  });
+  const viewHeight = bandHeight + (hasUnder ? ARC_MARGIN : 0);
+  // Parallel transitions share a routed lane, so their labels would land on the
+  // same point; stagger them along the lane instead.
+  /** @type {Map<string, number>} */
+  const parallelSeen = new Map();
+
   return h(
     'svg',
     {
       class: 'wf-statechart',
-      viewBox: `0 0 ${width} ${Math.max(height, 120)}`,
+      viewBox: `0 0 ${width} ${viewHeight}`,
       role: 'img',
       'aria-label': `Statechart for ${chart.name}`,
     },
     [
-      ...graph.edges.map(edge => {
+      ...graph.edges.map((edge, edgeIndex) => {
         const from = positions[edge.from];
         const to = positions[edge.to];
         if (from === undefined || to === undefined || edge.internal) {
@@ -97,23 +138,50 @@ export const StatechartView = ({
         const x2 = to.x;
         const y2 = to.y + NODE_HEIGHT / 2;
         const backward = to.layer <= from.layer;
-        const midY = backward ? Math.max(y1, y2) + NODE_HEIGHT : (y1 + y2) / 2;
+        const route = routes[edgeIndex];
+        // One condition for both the path and the class: an edge drawn as a
+        // chord must not be styled as though it were following a lane.
+        const routed = !backward && route !== undefined && route.length > 0;
+        let d;
+        let labelX = (x1 + x2) / 2;
+        let labelY;
+        if (backward) {
+          const under = bandHeight + ARC_MARGIN / 2;
+          d = `M ${x1} ${y1} C ${x1 + 40} ${under}, ${x2 - 40} ${under}, ${x2} ${y2}`;
+          labelY = under - 4;
+        } else if (routed) {
+          d = smoothPath([{ x: x1, y: y1 }, ...route, { x: x2, y: y2 }]);
+          // Along the lane, staggered so parallel transitions stay readable.
+          const pair = `${edge.from}\u0000${edge.to}`;
+          const nth = parallelSeen.get(pair) ?? 0;
+          parallelSeen.set(pair, nth + 1);
+          const at = route[Math.min(nth, route.length - 1)];
+          labelX = at.x;
+          // Once the lane's own points are spoken for there is nowhere new to
+          // sit along it, so each further label steps up by a line instead of
+          // landing on the last one.
+          const overflow = Math.max(0, nth - route.length + 1);
+          labelY = at.y - 6 - overflow * 12;
+        } else {
+          d = `M ${x1} ${y1} C ${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`;
+          labelY = (y1 + y2) / 2 - 4;
+        }
         return h(
           'g',
           { key: `${edge.from}-${edge.to}-${edge.type}-${edge.index}` },
           [
             h('path', {
-              class: backward ? 'wf-edge wf-edge-back' : 'wf-edge',
-              d: backward
-                ? `M ${x1} ${y1} C ${x1 + 40} ${midY}, ${x2 - 40} ${midY}, ${x2} ${y2}`
-                : `M ${x1} ${y1} C ${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`,
+              class: backward
+                ? 'wf-edge wf-edge-back'
+                : `wf-edge${routed ? ' wf-edge-routed' : ''}`,
+              d,
             }),
             h(
               'text',
               {
                 class: 'wf-edge-label',
-                x: (x1 + x2) / 2,
-                y: midY - 4,
+                x: labelX,
+                y: labelY,
               },
               edge.guarded ? `${edge.type} ✓?` : edge.type,
             ),

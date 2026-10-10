@@ -1,0 +1,158 @@
+//! A guest throw inside a promise executor rejects the promise; it does not
+//! land in a `try` live around the `new Promise` (architecture review F023).
+//!
+//! XS runs the executor inside `fx_Promise`'s own `mxTry`, whose `setjmp`
+//! sits between the executor and the caller's handler, so the throw is
+//! caught natively and becomes the rejection reason. The port's boundary
+//! recorded the caller's jump depth but never fenced the chain, so the
+//! executor's throw unwound into the caller's live `catch`: `r` answered
+//! `"caught:1"` where XS answers `0`, and `p` — never assigned — was a
+//! promise that would never settle.
+
+use ironhorse_vm::{run_program_with_symbols, Interp, RunOutcome};
+
+fn run(source: &str) -> RunOutcome {
+    let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("source compiles");
+    run_program_with_symbols(&bytecode, &symbols)
+}
+
+fn compile(src: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
+    let (b, s) = ironhorse_compile::compile_atoms(src).expect("compiles");
+    (b, ironhorse_vm::parse_symbols(&s))
+}
+
+/// Run `first` (draining its promise jobs), then `second` on the same
+/// machine, returning the second crank's completion.
+fn two_cranks(first: &str, second: &str) -> String {
+    let (b, n) = compile(first);
+    let mut m = Interp::new();
+    m.link_intrinsics(&n);
+    let o = m.run(&b);
+    assert!(o.completed, "crank 1 must complete, got {:?}", o.halt);
+    let (b, n) = compile(second);
+    let b = m.relink_crank(&b, &n).expect("relink");
+    let o = m.run(&b);
+    assert!(o.completed, "crank 2 must complete, got {:?}", o.halt);
+    o.result
+}
+
+#[test]
+fn an_executor_throw_does_not_reach_the_callers_catch() {
+    // The review's probe: XS answers `0`.
+    let out = run(
+        "var r=0; var p; try { p = new Promise(function(){ throw 1; }); } \
+         catch(e){ r='caught:'+e; } r",
+    );
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "0");
+}
+
+#[test]
+fn an_executor_throw_rejects_the_promise_with_the_thrown_value() {
+    let r = two_cranks(
+        "var r = 0; var rej = 0; var p; \
+         try { p = new Promise(function(){ throw 1; }); } catch(e) { r = 'caught:' + e; } \
+         p.then(null, function(e){ rej = 'rejected:' + e; });",
+        "r + '/' + rej",
+    );
+    assert_eq!(r, "0/rejected:1");
+}
+
+#[test]
+fn a_handler_inside_the_executor_still_catches() {
+    let out =
+        run("var r=0; new Promise(function(){ try { throw 1; } catch(e) { r='inner:'+e; } }); r");
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "inner:1");
+}
+
+#[test]
+fn an_executor_throw_through_a_called_function_still_rejects() {
+    // The throw crosses a callee frame inside the fence; the callee's frames
+    // are abandoned and the caller's `try` is still not entered.
+    let r = two_cranks(
+        "var r = 0; var rej = 0; var p; function boom() { throw 2; } \
+         try { p = new Promise(function(){ boom(); }); } catch(e) { r = 'caught:' + e; } \
+         p.then(null, function(e){ rej = 'rejected:' + e; });",
+        "r + '/' + rej",
+    );
+    assert_eq!(r, "0/rejected:2");
+}
+
+#[test]
+fn the_callers_handler_chain_survives_the_fence() {
+    // The caller's `try` is restored after the executor returns, so a LATER
+    // throw in the same block is still caught by it.
+    let out = run(
+        "var r=0; try { new Promise(function(){ throw 1; }); throw 3; } \
+         catch(e){ r='caught:'+e; } r",
+    );
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "caught:3");
+}
+
+#[test]
+fn a_throwing_then_getter_during_resolution_rejects_instead_of_reaching_the_caller() {
+    // `fxResolvePromise` reads `resolution.then` inside its own `mxTry`: an
+    // accessor that throws rejects the promise with the thrown value. The
+    // port classified the throw AFTER the getter ran, so the caller's live
+    // `try` had already consumed it (`caught:5` where XS answers `ok`).
+    let out = run(
+        "var r=0; try { Promise.resolve({ get then(){ throw 5 } }); r='ok' } \
+         catch(e){ r='caught:'+e } r",
+    );
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "ok");
+    let r = two_cranks(
+        "var r = 0; var rej = 0; var p; \
+         try { p = Promise.resolve({ get then(){ throw 5 } }); r = 'ok' } catch(e) { r = 'caught:' + e } \
+         p.then(null, function(e){ rej = 'rejected:' + e; });",
+        "r + '/' + rej",
+    );
+    assert_eq!(r, "ok/rejected:5");
+}
+
+#[test]
+fn a_natively_caught_throw_never_runs_the_thrown_objects_tostring() {
+    // XS's `mxCatch` copies `mxException`; its oracle host shim's
+    // `String(exception)` runs a thrown object's `toString`. Ironhorse host
+    // diagnostics never invoke guest coercion. Previously, rendering the
+    // value at the escape site ran it for every throw a native try was
+    // about to catch (review round 3; XS answers `0` for each).
+    for source in [
+        "var n=0; new Promise(function(){ throw { toString(){ n++; return 'x' } } }); n",
+        "var n=0; Promise.resolve({ get then(){ throw { toString(){ n++; return 'x' } } } }); n",
+        "var n=0; try { Array.from([1], function(){ throw { toString(){ n++; return 'x' } } }) } \
+         catch(e) { n += 100 } n",
+        "var n=0; try { throw { toString(){ n++; return 'x' } } } catch(e) {} n",
+    ] {
+        let out = run(source);
+        assert!(out.completed, "halt: {:?}\n  {source}", out.halt);
+        let expected = if source.contains("Array.from") {
+            "100"
+        } else {
+            "0"
+        };
+        assert_eq!(out.result, expected, "{source}");
+    }
+}
+
+#[test]
+fn from_async_property_failures_reject_without_entering_the_caller_handler() {
+    for (source, expected) in [
+        (
+            "var log=[]; try { Array.fromAsync({get length(){throw 7;}}) \
+         .catch(e=>log.push(e)); } catch(e) { log.push('outer'); } log",
+            "7",
+        ),
+        (
+            "var log=[]; try { Array.fromAsync({length:1,get 0(){throw 8;}}) \
+         .catch(e=>log.push(e)); } catch(e) { log.push('outer'); } log",
+            "8",
+        ),
+    ] {
+        let out = run(source);
+        assert!(out.completed, "{:?}", out.halt);
+        assert_eq!(out.result, expected);
+    }
+}

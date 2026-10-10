@@ -1,19 +1,28 @@
-//! The index-arena value and heap model (design § Value and heap
-//! model). XS's pointer-linked slot graph becomes index arenas:
+//! Index-arena values and heap storage.
 //!
-//! - `SlotIndex(u32)` replaces `txSlot*`; the slot heap is an arena of
-//!   32-byte slot records with a free list (XS's "slots never move").
-//! - `ChunkOffset(u32)` replaces chunk pointers; the chunk heap is a
-//!   growable byte arena with the same header discipline, ready for the
-//!   slide-compaction GC that lands in stage 2.
-//!
-//! The 32-byte record layout is held exactly (resolved question 5) so
-//! `currentHeapCount` semantics and snapshot slot images stay aligned
-//! with the oracle: kind + flag + 16-bit id + next-index + 16-byte
-//! payload. Stage 1 exercises the immediate value kinds (undefined,
-//! null, boolean, integer, number); reference/string kinds carry their
-//! arena handles and are filled in as later stages land the object
-//! model and GC.
+//! `SlotIndex` replaces native pointers; slots retain stable indices until reuse.
+//! `ChunkOffset` addresses byte storage and is rewritten during full compaction.
+//! Guest strings are UTF-16 code units; other chunk payloads have their own codecs.
+//! Rust `Slot` layout is not a stable ABI (24 bytes on the audited 64-bit build).
+//! Snapshots encode fields explicitly into a separate 20-byte wire record.
+//! XS's 32-byte slot accounting is not a resident-memory measurement.
+
+/// Default execution profile: at most one million slot records and 256 MiB
+/// of chunk address space. These are deterministic policy limits, not claims
+/// about the host allocator's available memory. Embedders may configure each
+/// arena before running, including after snapshot restore.
+pub const DEFAULT_SLOT_CEILING: u32 = 1_000_000;
+pub const DEFAULT_CHUNK_CEILING: usize = 256 * 1024 * 1024;
+
+/// Private non-guest control transfer from infallible arena APIs to the run
+/// boundary. `resume_unwind` avoids invoking the process panic hook for an
+/// expected resource refusal. Other Rust panics are never converted to this.
+#[derive(Debug)]
+pub(crate) struct HeapExhausted;
+
+pub(crate) fn heap_exhausted() -> ! {
+    std::panic::resume_unwind(Box::new(HeapExhausted))
+}
 
 /// XS's `XS_NO_ID` (`xs.h`): the sentinel key id meaning "no name". A
 /// `constructor_function`/`function` opcode carries it as the name operand
@@ -43,12 +52,14 @@ use std::rc::Rc;
 /// the vm (the snapshot crate adapts its `HeapStore` to this), keeping
 /// the dependency direction snapshot → vm.
 ///
-/// Reads are infallible by signature: the store was validated
-/// exhaustively at open (every promised row present at its exact
-/// length), so a failure here is genuine I/O trouble mid-crank, and an
-/// implementation reports it by panicking with a named message — the
-/// deterministic crashed-crank path, exactly how a stale index or a
-/// corrupted invariant already dies (design decision 7).
+/// Reads are infallible by signature. Open does not re-check the rows
+/// (the store-seam design's trust model trusts the store), so a read can
+/// still fail mid-crank on a missing row or an I/O error, and an
+/// implementation reports that by unwinding: the crashed-crank path,
+/// exactly how a stale index or a corrupted invariant already dies
+/// (design decision 7). The snapshot crate's adapter unwinds with a typed
+/// payload carrying the store's error, so its host can report that error
+/// and rewind; a row that does not decode dies with a named message.
 pub trait PageSource {
     /// The records of slot page `page`, exactly the page's snapshot
     /// length (a partial last page returns its remainder).
@@ -58,23 +69,84 @@ pub trait PageSource {
     fn chunk_extent(&self, ext: u32) -> Vec<u8>;
 }
 
+/// Authority to acknowledge commits to one pair of lazy arenas' backing.
+/// The trusted store adapter retains this capability privately. Neither a
+/// runnable interpreter nor its read-only arena views can recover it.
+pub struct BackingCommitAuthority {
+    identity: Rc<()>,
+}
+
+impl BackingCommitAuthority {
+    /// Establish a backing and its commit authority together, before the
+    /// arenas enter a restore session. No page content is read here.
+    pub fn lazy_arenas(
+        slot_count: u32,
+        free: Vec<u32>,
+        live: u32,
+        chunk_len: usize,
+        source: Rc<dyn PageSource>,
+    ) -> Result<(SlotArena, ChunkArena, Self), SlotArenaImageError> {
+        let mut slots = SlotArena::try_lazy_from_parts(
+            slot_count,
+            free,
+            live,
+            source.clone(),
+            chunk_len as u64,
+        )?;
+        let mut chunks = ChunkArena::lazy_from_parts(chunk_len, source);
+        let identity = Rc::new(());
+        slots
+            .lazy
+            .as_mut()
+            .expect("fresh lazy arena")
+            .commit_identity = Some(identity.clone());
+        chunks.commit_identity = Some(identity.clone());
+        Ok((slots, chunks, Self { identity }))
+    }
+
+    pub(crate) fn authorizes(&self, slots: &SlotArena, chunks: &ChunkArena) -> bool {
+        slots
+            .lazy
+            .as_ref()
+            .and_then(|backing| backing.commit_identity.as_ref())
+            .is_some_and(|identity| Rc::ptr_eq(identity, &self.identity))
+            && chunks
+                .commit_identity
+                .as_ref()
+                .is_some_and(|identity| Rc::ptr_eq(identity, &self.identity))
+    }
+}
+
+/// A store session's acknowledgement of a [`SlotArena`]'s free list, from
+/// [`SlotArena::acknowledge_free_list`]: the list as it stood then is the
+/// list the store holds. Only the arena that issued it honors it, and only
+/// until its next acknowledgement, so neither a replaced arena nor a stray
+/// acknowledgement can make a checkpoint believe the list did not change.
+#[derive(Clone, Debug)]
+pub struct FreeListAck {
+    identity: Rc<()>,
+}
+
 /// The lazy backing of a [`SlotArena`]: the page source plus one
 /// residency bit per attach-time page. `Cell` residency bits let the
 /// by-value read path fault through `&self`; pages past the
 /// attach-time count are locally allocated and implicitly resident.
 struct SlotBacking {
     source: Rc<dyn PageSource>,
+    commit_identity: Option<Rc<()>>,
     resident: Vec<Cell<bool>>,
-    /// The attach-time record count — what the source's geometry can
+    /// The committed record count (the attach-time count, advanced by
+    /// each commit into this backing) — what the source's geometry can
     /// serve, and the exact-length bound every fault is checked
     /// against (a short row must die loudly, not install placeholder
     /// records beside real ones).
     snapshot_count: u32,
-    /// The attach-time chunk-arena byte length, so a fault can bound a
-    /// slot's String/BigInt chunk offset without seeing the chunk
-    /// arena itself (the wave-6 W6-14 lazy remainder, closed): a
-    /// consistently-resealed hostile row must die named AT THE FAULT,
-    /// not anonymously in a later chunk read or the compactor.
+    /// The committed chunk-arena byte length (the attach-time length,
+    /// advanced by each commit into this backing), so a fault can bound
+    /// a slot's String/BigInt chunk offset without seeing the chunk
+    /// arena itself: a row holding an out-of-arena offset must die
+    /// named AT THE FAULT, not anonymously in a later chunk read or the
+    /// compactor.
     chunk_bound: u64,
     /// SPARSE record storage (store seam H1): a lazily attached
     /// arena's records live here, page-by-page, materialized on
@@ -99,9 +171,84 @@ struct SlotBacking {
 }
 
 impl SlotBacking {
+    /// Check a faulted row against the arena before installing it: its
+    /// exact length, and every live record's references against the
+    /// committed geometry and the LIVE free map (`free_marks`). This is a
+    /// guard against engine bugs, not a check on the store, which the
+    /// store-seam design's trust model trusts: in a correct engine no
+    /// live record references a free slot, so a stored row that does
+    /// dies here, named, instead of aliasing whatever later reuses the
+    /// slot. Two references pass that an honest store never holds: one
+    /// to a slot free in the store that a crank has reused since, and one
+    /// out of range when its row was committed that a later commit's
+    /// growth has brought into range.
+    fn validate_records(&self, page: u32, records: &[Slot], free_marks: &[bool]) {
+        let start = page as usize * SLOTS_PER_PAGE as usize;
+        // Exact length, both directions: a short row would silently
+        // leave placeholder records marked resident; a long row would overrun.
+        let expected = (self.snapshot_count as usize)
+            .min(start + SLOTS_PER_PAGE as usize)
+            .saturating_sub(start);
+        assert!(
+            records.len() == expected,
+            "page source returned {} records for page {page}, expected {expected} (corrupt or torn store row)",
+            records.len(),
+        );
+        // A reference out of range would send the collector out of the
+        // arena (an anonymous release panic), so it is refused AT THE
+        // FAULT, named. The chunk-offset bound rides the backing
+        // (`chunk_bound`, the committed chunk length), mirroring the eager
+        // gate's rule: a payload offset sits above its 4-byte header and
+        // inside the arena.
+        let capacity = self.snapshot_count;
+        for (k, s) in records.iter().enumerate() {
+            // A record on the free list is OPAQUE dead bytes: the sweep
+            // does not scrub it and chunk compaction remaps MARKED
+            // slots only, so an honest post-GC store legitimately
+            // holds freed records whose stale references and chunk
+            // offsets sit outside the current arenas. Nothing reads
+            // them before `alloc` overwrites (and re-faults) the page,
+            // so validating them here refuses honest stores. The eager
+            // gate in snapshot's `check_stored_bounds` skips the same records.
+            if free_marks[start + k] {
+                continue;
+            }
+            s.each_ref_slot(|r| {
+                assert!(
+                    r.is_null() || r.0 < capacity,
+                    "lazy heap fault: slot page {page} holds an out-of-arena                      reference ({} past {capacity}) — corrupt store",
+                    r.0,
+                );
+                assert!(
+                    r.is_null() || !free_marks[r.0 as usize],
+                    "lazy heap fault: slot page {page} references a free slot ({}) — corrupt store",
+                    r.0,
+                );
+            });
+            assert!(
+                s.next.is_null() || s.next.0 < capacity,
+                "lazy heap fault: slot page {page} holds an out-of-arena                  next link ({} past {capacity}) — corrupt store",
+                s.next.0,
+            );
+            if let Some(off) = s.chunk_ref() {
+                let o = off.0 as u64;
+                assert!(
+                    off.is_null()
+                        || (o >= CHUNK_HEADER as u64 && o <= self.chunk_bound),
+                    "lazy heap fault: slot page {page} holds an out-of-arena chunk offset ({o} outside {}..={}) — corrupt store",
+                    CHUNK_HEADER,
+                    self.chunk_bound,
+                );
+            }
+        }
+    }
+
     #[inline]
     fn get(&self, i: usize) -> Slot {
-        assert!(i < self.count.get() as usize, "slot index {i} out of bounds");
+        assert!(
+            i < self.count.get() as usize,
+            "slot index {i} out of bounds"
+        );
         let pages = self.pages.borrow();
         match &pages[i / SLOTS_PER_PAGE as usize] {
             Some(p) => p[i % SLOTS_PER_PAGE as usize].get(),
@@ -111,18 +258,24 @@ impl SlotBacking {
 
     /// Write one record through `&self`, materializing its page.
     fn set(&self, i: usize, s: Slot) {
-        assert!(i < self.count.get() as usize, "slot index {i} out of bounds");
+        assert!(
+            i < self.count.get() as usize,
+            "slot index {i} out of bounds"
+        );
         let mut pages = self.pages.borrow_mut();
-        pages[i / SLOTS_PER_PAGE as usize]
-            .get_or_insert_with(materialized_page)[i % SLOTS_PER_PAGE as usize]
+        pages[i / SLOTS_PER_PAGE as usize].get_or_insert_with(materialized_page)
+            [i % SLOTS_PER_PAGE as usize]
             .set(s);
     }
 
     fn get_mut(&mut self, i: usize) -> &mut Slot {
-        assert!(i < self.count.get() as usize, "slot index {i} out of bounds");
+        assert!(
+            i < self.count.get() as usize,
+            "slot index {i} out of bounds"
+        );
         let pages = self.pages.get_mut();
-        pages[i / SLOTS_PER_PAGE as usize]
-            .get_or_insert_with(materialized_page)[i % SLOTS_PER_PAGE as usize]
+        pages[i / SLOTS_PER_PAGE as usize].get_or_insert_with(materialized_page)
+            [i % SLOTS_PER_PAGE as usize]
             .get_mut()
     }
 
@@ -141,7 +294,9 @@ impl SlotBacking {
 /// One freshly materialized sparse page: every record the placeholder,
 /// exactly what dense storage held for a not-yet-faulted page.
 fn materialized_page() -> Box<[Cell<Slot>]> {
-    (0..SLOTS_PER_PAGE).map(|_| Cell::new(Slot::undefined())).collect()
+    (0..SLOTS_PER_PAGE)
+        .map(|_| Cell::new(Slot::undefined()))
+        .collect()
 }
 
 /// Handle into the slot arena. `u32::MAX` is the null sentinel
@@ -170,8 +325,7 @@ impl ChunkOffset {
 }
 
 /// Slot kind byte. Values mirror the XS `XS_*_KIND` ordering for the
-/// kinds stage 1 uses; the full ~66-kind set arrives with the object
-/// model in stage 2.
+/// represented kinds; this enum does not claim every XS kind is supported.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Kind {
@@ -190,7 +344,7 @@ pub enum Kind {
     /// [`Kind::Property`]), or [`SlotIndex::NULL`] for a property-less
     /// object. The payload's `Reference` names the instance's prototype
     /// instance, or [`SlotIndex::NULL`] for a null prototype. This is the
-    /// allocation-faithful object heap the stage-2b design calls for:
+    /// allocation-faithful object heap:
     /// the global object and every object literal is a real arena
     /// instance whose properties are real arena slots.
     Instance = 6,
@@ -227,17 +381,18 @@ pub enum Kind {
     Closure = 9,
     /// An environment/reference sentinel produced by `EVAL_REFERENCE`
     /// and friends and consumed by `GET_VARIABLE`/`SET_VARIABLE`. The
-    /// payload's `Reference` names the environment the variable resolves
-    /// against (the global instance, or `SlotIndex::NULL` for the
-    /// active frame's own scope).
+    /// payload's `Reference` is slot 0 for the global environment, or
+    /// `SlotIndex::NULL` for the active frame's own scope. Computed super
+    /// references instead carry the actual receiver and store the base
+    /// prototype in `next`. These forms can survive in a suspended stack.
     EnvReference = 12,
     /// A computed property key produced by `XS_CODE_AT`/`AT_2` (XS's
     /// `XS_AT_KIND`) and consumed by `GET_PROPERTY_AT`/`SET_PROPERTY_AT`/
     /// `NEW_PROPERTY_AT`/`DELETE_PROPERTY_AT`. The payload's [`Payload::At`]
     /// carries the resolved `(id, index)`: a named key sets `id` (a symbol
     /// id) with `index == 0`; an integer/number index key sets `id ==
-    /// XS_NO_ID` with the array index. A transient stack value only (never
-    /// stored in a property slot or snapshotted), so it needs no GC edge.
+    /// XS_NO_ID` with the array index. A stack value only, also carried in
+    /// suspended activations; never stored as an ordinary guest property.
     At = 13,
     /// A BigInt primitive (XS's `XS_BIGINT_KIND`). The payload's
     /// [`Payload::BigInt`] names a chunk holding the arbitrary-precision
@@ -276,7 +431,7 @@ impl Kind {
     }
 }
 
-/// The 16-byte value payload (XS's value union arm subset for stage 1).
+/// The 16-byte value payload for the represented XS value-union arms.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Payload {
     None,
@@ -295,10 +450,9 @@ pub enum Payload {
     BigInt(ChunkOffset),
 }
 
-/// One 32-byte slot record. The struct is deliberately compact; the
-/// `#[repr(C)]`-style field order matches XS's `txSlot` (next, id,
-/// flag, kind, value) so a future snapshot writer is a serializer, not
-/// a relocator (design § Snapshots).
+/// One arena slot, with Rust's unspecified field layout (no `repr(C)` contract).
+/// It is 24 bytes on the audited 64-bit build; the snapshot codec encodes fields
+/// individually and does not copy or rely on this resident layout.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Slot {
     /// XS `next` link (property lists, frame chains): a slot index.
@@ -309,6 +463,18 @@ pub struct Slot {
     pub flag: u8,
     pub kind: Kind,
     pub value: Payload,
+}
+
+/// Normalize Number NaNs to XS's `mxCanonicalNaN` binary64 representation.
+/// Preserve every non-NaN bit, including negative zero and subnormals.
+/// Raw ArrayBuffer bytes are not Numbers and must not pass through this helper.
+#[inline]
+pub fn canonicalize_nan(n: f64) -> f64 {
+    if n.is_nan() {
+        f64::from_bits(0x7ff8_0000_0000_0000)
+    } else {
+        n
+    }
 }
 
 impl Slot {
@@ -353,6 +519,10 @@ impl Slot {
     }
     #[inline]
     pub fn of(kind: Kind, value: Payload) -> Slot {
+        let value = match value {
+            Payload::Number(n) => Payload::Number(canonicalize_nan(n)),
+            other => other,
+        };
         Slot {
             next: SlotIndex::NULL,
             id: 0,
@@ -397,7 +567,8 @@ impl Slot {
     /// keyed, and the only writes to it are a key (a property's key, a
     /// closure scope slot's captured binding name) or a reset to `0`
     /// when a property's value is copied out onto the stack. So a
-    /// non-zero `id` IS a key id, whatever the kind.
+    /// non-zero `id` IS a key id, except `u16::MAX`, reserved for the
+    /// internal environment behavior marker. That marker carries no key.
     ///
     /// Do not look for [`Kind::Property`] here. A property slot takes
     /// the kind of the VALUE it holds (`create_global_property` and
@@ -420,6 +591,10 @@ impl Slot {
     pub fn stored_key_id(&self) -> Option<u16> {
         let id = match self.value {
             Payload::At(at, _) => at,
+            // Bit 0 is XS_INTERNAL_FLAG on property records. The id alone
+            // is not enough: a crafted ordinary key at MAX must still be
+            // exposed to key-table validation and refused.
+            _ if self.id == u16::MAX && self.flag & 1 != 0 => return None,
             _ => self.id,
         };
         (id != 0).then_some(id)
@@ -452,13 +627,15 @@ impl Slot {
     }
 }
 
-/// A slot arena: fixed-size 32-byte records that never move, with a
+/// A slot arena: fixed-size Rust records with stable indices, with a
 /// free list. This is XS's slot heap; the mark-sweep collector
 /// ([`crate::gc`]) sweeps it to the free list (design § Value and heap
 /// model). Because it is index-based it is safe code: a stale index is
 /// a kind-checked logic bug, not undefined behavior.
-#[derive(Default)]
 pub struct SlotArena {
+    ceiling: u32,
+    pub(crate) snapshot_dirt: Rc<crate::snapshot_dirty::ArenaDirt>,
+    property_index: RefCell<crate::property_index::PropertyIndex>,
     /// The DENSE record storage of an eagerly built machine. `Cell`
     /// (identical layout to `Slot`, zero runtime bookkeeping) is what
     /// lets shared-reference paths write records in
@@ -471,6 +648,17 @@ pub struct SlotArena {
     /// branched on, so eager machines keep their exact pre-H1 path.
     slots: Vec<Cell<Slot>>,
     free: Vec<u32>,
+    /// The free list's low-water mark: the shortest the list has been
+    /// since the last [`SlotArena::acknowledge_free_list`], or since the
+    /// arena was built, when it starts at the list's length. The list
+    /// changes only at its end — the LIFO pop in [`SlotArena::alloc`] and
+    /// the pushes in [`SlotArena::free`] and the sweep — so every entry
+    /// below the mark is as it was then, and a checkpoint ships only the
+    /// segments from the mark on.
+    free_low: usize,
+    /// The identity the current [`FreeListAck`] carries, replaced by each
+    /// acknowledgement. A new arena's is carried by none.
+    free_ack: Rc<()>,
     /// Twin of `free` as one bit per record, kept in exact sync by
     /// every free-list writer: `free` keeps the LIFO reuse order the
     /// snapshot serializes; this bitmap answers "is `i` free?" in O(1).
@@ -493,8 +681,8 @@ pub struct SlotArena {
     /// Host bookkeeping only — nothing observable reads it, the same
     /// determinism firewall as the cost recorder. `free`/`sweep`/`mark`
     /// do not set bits: they never change record bytes (the free list
-    /// travels in the checkpoint's small state, and mark bits are
-    /// transient).
+    /// travels in its own segment rows, tracked by the low-water mark,
+    /// and mark bits are transient).
     dirty: Vec<bool>,
     /// One bit per page: does this arena's lazy backing NOT hold the
     /// page's current content?
@@ -516,11 +704,61 @@ pub struct SlotArena {
     lazy: Option<SlotBacking>,
 }
 
+impl Default for SlotArena {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Invalid slot-arena image metadata, rejected before an arena is built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotArenaImageError {
+    TooManySlots,
+    FreeIndexOutOfRange,
+    DuplicateFreeIndex,
+    LiveFreeAccounting,
+}
+
+impl std::fmt::Display for SlotArenaImageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid slot arena image: {self:?}")
+    }
+}
+
+impl std::error::Error for SlotArenaImageError {}
+
 impl SlotArena {
+    fn image_free_marks(
+        slot_count: usize,
+        free: &[u32],
+        live: u32,
+    ) -> Result<Vec<bool>, SlotArenaImageError> {
+        let count = u32::try_from(slot_count).map_err(|_| SlotArenaImageError::TooManySlots)?;
+        let mut marks = vec![false; slot_count];
+        for &index in free {
+            let mark = marks
+                .get_mut(index as usize)
+                .ok_or(SlotArenaImageError::FreeIndexOutOfRange)?;
+            if *mark {
+                return Err(SlotArenaImageError::DuplicateFreeIndex);
+            }
+            *mark = true;
+        }
+        if free.len() as u64 + u64::from(live) != u64::from(count) {
+            return Err(SlotArenaImageError::LiveFreeAccounting);
+        }
+        Ok(marks)
+    }
+
     pub fn new() -> SlotArena {
         SlotArena {
+            ceiling: DEFAULT_SLOT_CEILING,
+            snapshot_dirt: Rc::default(),
+            property_index: RefCell::default(),
             slots: Vec::new(),
             free: Vec::new(),
+            free_low: 0,
+            free_ack: Rc::default(),
             free_marks: Vec::new(),
             marks: Vec::new(),
             live: 0,
@@ -544,14 +782,28 @@ impl SlotArena {
         source: Rc<dyn PageSource>,
         chunk_bound: u64,
     ) -> SlotArena {
+        Self::try_lazy_from_parts(slot_count, free, live, source, chunk_bound)
+            .expect("valid lazy slot arena image")
+    }
+
+    /// Fallible lazy restoration. Validates metadata before reading any page.
+    pub fn try_lazy_from_parts(
+        slot_count: u32,
+        free: Vec<u32>,
+        live: u32,
+        source: Rc<dyn PageSource>,
+        chunk_bound: u64,
+    ) -> Result<SlotArena, SlotArenaImageError> {
+        let free_marks = Self::image_free_marks(slot_count as usize, &free, live)?;
         let pages = slot_count.div_ceil(SLOTS_PER_PAGE) as usize;
-        let mut free_marks = vec![false; slot_count as usize];
-        for &i in &free {
-            free_marks[i as usize] = true;
-        }
-        SlotArena {
+        Ok(SlotArena {
+            ceiling: DEFAULT_SLOT_CEILING,
+            snapshot_dirt: Rc::default(),
+            property_index: RefCell::default(),
             slots: Vec::new(),
+            free_low: free.len(),
             free,
+            free_ack: Rc::default(),
             free_marks,
             marks: vec![false; slot_count as usize],
             live,
@@ -561,13 +813,14 @@ impl SlotArena {
             unbacked: vec![false; pages],
             lazy: Some(SlotBacking {
                 source,
+                commit_identity: None,
                 resident: (0..pages).map(|_| Cell::new(false)).collect(),
                 snapshot_count: slot_count,
                 chunk_bound,
                 pages: RefCell::new((0..pages).map(|_| None).collect()),
                 count: Cell::new(slot_count),
             }),
-        }
+        })
     }
 
     /// Fault page `page` in if a backing is attached and the page is
@@ -594,64 +847,8 @@ impl SlotArena {
             return;
         }
         let records = backing.source.slot_page(page);
+        backing.validate_records(page, &records, &self.free_marks);
         let start = page as usize * SLOTS_PER_PAGE as usize;
-        // Exact length, both directions: a short row would silently
-        // leave placeholder records marked resident (the review's
-        // silent-corruption finding); a long row would overrun.
-        let expected = (backing.snapshot_count as usize)
-            .min(start + SLOTS_PER_PAGE as usize)
-            .saturating_sub(start);
-        assert!(
-            records.len() == expected,
-            "page source returned {} records for page {page}, expected {expected} (corrupt or torn store row)",
-            records.len(),
-        );
-        // Wave-6 W6-14 (lazy half): leaf hashes prove the row's bytes
-        // are authentic-to-commit, not that its indices are in-arena —
-        // a consistently-resealed hostile store faulted rows whose
-        // references sent the collector out of range (an anonymous
-        // release panic). Refuse AT THE FAULT, named, like the leaf
-        // check above. The chunk-offset bound rides the backing
-        // (`chunk_bound`, the attach-time chunk length), mirroring the
-        // eager gate's rule: a payload offset sits above its 4-byte
-        // header and inside the arena.
-        let capacity = self.capacity() as u32;
-        for (k, s) in records.iter().enumerate() {
-            // A record on the free list is OPAQUE dead bytes: the sweep
-            // does not scrub it and chunk compaction remaps MARKED
-            // slots only, so an honest post-GC store legitimately
-            // holds freed records whose stale references and chunk
-            // offsets sit outside the current arenas. Nothing reads
-            // them before `alloc` overwrites (and re-faults) the page,
-            // so validating them here refuses honest stores (review
-            // finding 2 — the lazy half; the eager gate skips the same
-            // records).
-            if self.is_free((start + k) as u32) {
-                continue;
-            }
-            s.each_ref_slot(|r| {
-                assert!(
-                    r.is_null() || r.0 < capacity,
-                    "lazy heap fault: slot page {page} holds an out-of-arena                      reference ({} past {capacity}) — corrupt store",
-                    r.0,
-                );
-            });
-            assert!(
-                s.next.is_null() || s.next.0 < capacity,
-                "lazy heap fault: slot page {page} holds an out-of-arena                  next link ({} past {capacity}) — corrupt store",
-                s.next.0,
-            );
-            if let Some(off) = s.chunk_ref() {
-                let o = off.0 as u64;
-                assert!(
-                    off.is_null()
-                        || (o >= CHUNK_HEADER as u64 && o <= backing.chunk_bound),
-                    "lazy heap fault: slot page {page} holds an out-of-arena chunk offset ({o} outside {}..={}) — corrupt store",
-                    CHUNK_HEADER,
-                    backing.chunk_bound,
-                );
-            }
-        }
         for (k, s) in records.into_iter().enumerate() {
             backing.set(start + k, s);
         }
@@ -689,7 +886,7 @@ impl SlotArena {
         // is not the same as backed: a checkpoint into a non-pinned twin
         // store clears the dirty bits while leaving the pinned backing —
         // the one every fault reads — on the old bytes. Absent bit fails
-        // closed, as above (review wave 5).
+        // closed, as above.
         if self.unbacked.get(page as usize).copied().unwrap_or(true) {
             return false;
         }
@@ -700,8 +897,7 @@ impl SlotArena {
         // `[snapshot_count, capacity)` live in NO store row, so dropping
         // the box would lose them: the re-fault installs only
         // `snapshot_count`-bounded records and the tail reads back
-        // `undefined`. Pre-H1 the dense vec retained them; this restores
-        // that (review wave 4, H1-a).
+        // `undefined`. The eviction guard must retain those unbacked records.
         //
         // Only the boundary page can hold such records and still be
         // resident (pages wholly past the backed geometry are outside
@@ -728,15 +924,15 @@ impl SlotArena {
     }
 
     /// Advance the lazy backing to the CURRENT geometry — called by
-    /// the store session after ITS OWN successful checkpoint (phase 8
-    /// review fix). Records appended since attach are committed rows
+    /// the store session after ITS OWN successful checkpoint.
+    /// Records appended since attach are committed rows
     /// now, so their pages become store-backed (evictable and
     /// re-faultable, marked resident: they live in memory), and the
     /// tail page's expected fault length tracks the committed row
     /// rather than the attach-time one. No-op on a detached arena.
     ///
     /// `chunk_bound` is the committed chunk-arena length, and moves for
-    /// the same reason the leaves do: a crank that allocates a string
+    /// the same reason the geometry does: a crank that allocates a string
     /// grows the chunk arena, the checkpoint commits slot rows
     /// referencing the new bytes, and those rows are clean — so they
     /// are evictable and CAN fault again. Verified against the
@@ -768,6 +964,19 @@ impl SlotArena {
             for page in 0..backing.resident.len() as u32 {
                 self.ensure_page_resident(page);
             }
+        }
+    }
+
+    /// Stop relying on the lazy backing: fault every attach-time page in
+    /// and mark every page unbacked, so no page is evicted and none
+    /// faults from the backing again. No-op on a detached arena.
+    pub fn abandon_backing(&mut self) {
+        if self.lazy.is_some() {
+            self.ensure_all_resident();
+            let pages =
+                (self.capacity().div_ceil(SLOTS_PER_PAGE) as usize).max(self.unbacked.len());
+            self.unbacked.clear();
+            self.unbacked.resize(pages, true);
         }
     }
 
@@ -804,10 +1013,37 @@ impl SlotArena {
         self.dirty[page] = true;
     }
 
+    /// Configure the slot-address-space ceiling. Existing records count even
+    /// when free; reusing one needs no growth. Policy is host configuration,
+    /// reapplied after restore, and is not part of the serialized heap image.
+    pub fn set_ceiling(&mut self, ceiling: u32) {
+        self.ceiling = ceiling;
+    }
+
+    pub fn ceiling(&self) -> u32 {
+        self.ceiling
+    }
+
     /// Allocate a slot, reusing the free list first (XS semantics).
     pub fn alloc(&mut self, slot: Slot) -> SlotIndex {
+        if self.capacity() > self.ceiling
+            || (self.free.is_empty() && self.capacity() >= self.ceiling)
+        {
+            heap_exhausted();
+        }
+        if self.free.is_empty()
+            && ((self.lazy.is_none() && self.slots.try_reserve(1).is_err())
+                || self.free_marks.try_reserve(1).is_err()
+                || self.marks.try_reserve(1).is_err())
+        {
+            heap_exhausted();
+        }
+        self.snapshot_dirt.content();
+        self.snapshot_dirt.liveness();
         self.live += 1;
         if let Some(i) = self.free.pop() {
+            self.free_low = self.free_low.min(self.free.len());
+            self.property_index.get_mut().free(SlotIndex(i));
             // Fault the page first: overwriting one record of a
             // non-resident page and then marking nothing would let a
             // later fault clobber this fresh allocation with store
@@ -839,10 +1075,17 @@ impl SlotArena {
 
     /// Return a slot to the free list.
     pub fn free(&mut self, index: SlotIndex) {
-        debug_assert!(!index.is_null());
+        assert!(
+            !index.is_null() && index.0 < self.capacity(),
+            "invalid slot index in free"
+        );
+        assert!(!self.is_free(index.0), "double free of slot");
+        let live = self.live.checked_sub(1).expect("slot live count underflow");
+        self.snapshot_dirt.liveness();
+        self.property_index.get_mut().free(index);
         self.free.push(index.0);
         self.free_marks[index.0 as usize] = true;
-        self.live -= 1;
+        self.live = live;
     }
 
     /// Read a record by value (`Slot` is `Copy`; after inlining only
@@ -851,6 +1094,7 @@ impl SlotArena {
     /// always-false branch.
     #[inline]
     pub fn get(&self, index: SlotIndex) -> Slot {
+        debug_assert!(!self.is_free(index.0), "access to free slot");
         if let Some(b) = &self.lazy {
             self.ensure_page_resident(index.0 / SLOTS_PER_PAGE);
             return b.get(index.0 as usize);
@@ -859,6 +1103,9 @@ impl SlotArena {
     }
     #[inline]
     pub fn get_mut(&mut self, index: SlotIndex) -> &mut Slot {
+        debug_assert!(!self.is_free(index.0), "access to free slot");
+        self.snapshot_dirt.content();
+        self.property_index.get_mut().will_mutate(index);
         // Fault before handing out `&mut`: a partial overwrite of a
         // non-resident page must not be clobbered by a later fault.
         if self.lazy.is_some() {
@@ -873,6 +1120,36 @@ impl SlotArena {
             Some(b) => b.get_mut(index.0 as usize),
             None => self.slots[index.0 as usize].get_mut(),
         }
+    }
+
+    pub(crate) fn find_property(&self, owner: SlotIndex, id: u16) -> Option<SlotIndex> {
+        // A null owner is "no object", which has no properties — the same
+        // reading the chain walk below already applies to every link after
+        // the first. Without this the head read indexes the arena at
+        // `u32::MAX` and panics: `Interp::cur_func` is NULL at top level, so
+        // bytecode that runs a construct expecting a current function there
+        // (a crafted `START_GENERATOR`, reached through `prototype_of`)
+        // aborts the engine instead of falling back to its default
+        // prototype. Found by the `bytecode_decoder` fuzz target.
+        if owner.is_null() {
+            return None;
+        }
+        // Most ordinary accesses hit a very short chain. Answer from the
+        // authoritative records before paying for derived-index bookkeeping.
+        let mut current = self.get(owner).next;
+        for _ in 0..8 {
+            if current.is_null() {
+                return None;
+            }
+            let slot = self.get(current);
+            if slot.id == id {
+                return Some(current);
+            }
+            current = slot.next;
+        }
+        self.property_index
+            .borrow_mut()
+            .find(owner, id, |slot| self.get(slot))
     }
 
     /// Total slot records ever allocated (live + free). The collector
@@ -902,6 +1179,8 @@ impl SlotArena {
         if index.is_null() {
             return false;
         }
+        assert!(index.0 < self.capacity(), "mark of out-of-arena slot");
+        assert!(!self.is_free(index.0), "mark of free slot");
         let i = index.0 as usize;
         if self.marks[i] {
             false
@@ -944,6 +1223,8 @@ impl SlotArena {
         let mut reclaimed = 0u32;
         for i in 0..self.capacity() {
             if !self.marks[i as usize] && !self.is_free(i) {
+                self.property_index.get_mut().free(SlotIndex(i));
+                self.snapshot_dirt.liveness();
                 self.free.push(i);
                 self.free_marks[i as usize] = true;
                 self.live -= 1;
@@ -961,11 +1242,71 @@ impl SlotArena {
         self.live
     }
 
-    /// Slot heap footprint in bytes, held at 32 per record (resolved
-    /// question 5) so heap accounting stays comparable with XS.
+    /// XS-accounted capacity: 32 bytes per addressable record.
+    ///
+    /// This is **XS's** accounting unit, kept so a comparison against XS's
+    /// own `currentHeapSize` is like-for-like. It is not this engine's
+    /// record size — `size_of::<Slot>()` is 24, and `Slot` carries no
+    /// `repr` attribute so even that is Rust's choice rather than a
+    /// contract — and it is not resident memory: it excludes Rust layout,
+    /// the per-slot bookkeeping vectors, the chunk arena and the side
+    /// tables. [`SlotArena::resident_byte_size`] is the one to ask for
+    /// footprint. The name says which of the two this is, because the
+    /// unqualified name read as the honest measurement and was cited as
+    /// one (architecture finding F121).
     #[inline]
-    pub fn byte_size(&self) -> usize {
+    pub fn xs_accounted_byte_size(&self) -> usize {
         self.capacity() as usize * 32
+    }
+
+    /// The arena's **resident** footprint: what this process actually
+    /// holds for the slot arena, in bytes.
+    ///
+    /// Counts the record storage at its real `Slot` size plus every
+    /// bookkeeping vector the design's accounting argument left out: the
+    /// free list, the per-slot free-mark and collector-mark bitmaps, and
+    /// the per-page checkpoint-dirty and lazy-residency bitmaps.
+    /// A lazily attached arena
+    /// holds its records page-sparse in the backing rather than in
+    /// `slots`, so the record term follows the vector that is actually
+    /// populated rather than the capacity.
+    ///
+    /// Still not the whole machine: the chunk arena
+    /// ([`ChunkArena::byte_size`]) and the side tables are separate terms,
+    /// and the footprint envelope needs all three. This is the slot term,
+    /// measured rather than asserted.
+    pub fn resident_byte_size(&self) -> usize {
+        use std::mem::size_of;
+        let records = match &self.lazy {
+            // Detached: the dense vec holds every record.
+            None => self.slots.capacity() * size_of::<Cell<Slot>>(),
+            // Lazily attached: `slots` is EMPTY and the records live
+            // page-sparse in the backing, materialized on first fault and
+            // grow-only thereafter. Reading `slots.capacity()` here reported
+            // zero record bytes for an arena holding millions, and reported
+            // the SAME number before and after faulting every page — the one
+            // number that should move was the only one that did not.
+            Some(backing) => {
+                let pages = backing.pages.borrow();
+                let materialized: usize = pages
+                    .iter()
+                    .map(|page| page.as_ref().map_or(0, |records| records.len()))
+                    .sum();
+                materialized * size_of::<Cell<Slot>>()
+                    // The pages table itself: one `Option<Box<..>>` per page,
+                    // held whether or not the page has faulted.
+                    + pages.capacity() * size_of::<Option<Box<[Cell<Slot>]>>>()
+                    // The backing's own per-slot bookkeeping, the same kind
+                    // of vector the detached arena's bitmaps are.
+                    + backing.resident.capacity()
+            }
+        };
+        records
+            + self.free.capacity() * size_of::<u32>()
+            + self.free_marks.capacity()
+            + self.marks.capacity()
+            + self.dirty.capacity()
+            + self.unbacked.capacity()
     }
 
     // --- snapshot support (see `ironhorse-snapshot`) ---
@@ -987,7 +1328,9 @@ impl SlotArena {
     /// [`SlotArena::page_records`] instead.
     pub fn records(&self) -> Vec<Slot> {
         self.ensure_all_resident();
-        (0..self.capacity() as usize).map(|i| self.read(i)).collect()
+        (0..self.capacity() as usize)
+            .map(|i| self.read(i))
+            .collect()
     }
 
     /// Read one record WITHOUT faulting (both storages answer the
@@ -1007,10 +1350,8 @@ impl SlotArena {
     /// still faults defensively for arbitrary callers.
     pub fn page_records(&self, page: u32) -> Vec<Slot> {
         // A page past the arena's geometry is a caller bug, not an empty
-        // page. Pre-H1 the dense slice indexing panicked on it; the
-        // sparse rewrite made it silently return `[]`, which a
-        // checkpoint would then write as a zero-length row (review wave
-        // 4, H1-b). Assert rather than let the geometry error travel.
+        // page. Returning `[]` would let a checkpoint write a zero-length
+        // row. Assert rather than let the geometry error travel.
         let start = (page as usize) * SLOTS_PER_PAGE as usize;
         assert!(
             start < self.capacity() as usize || self.capacity() == 0,
@@ -1030,6 +1371,39 @@ impl SlotArena {
         &self.free
     }
 
+    /// Acknowledge the free list as the store now holds it, after a
+    /// successful commit, and restart the low-water mark at the list's
+    /// length. Earlier acknowledgements stop being honored. An arena just
+    /// restored from the store is adopted with
+    /// [`SlotArena::free_list_baseline`] instead.
+    pub fn acknowledge_free_list(&mut self) -> FreeListAck {
+        self.free_low = self.free.len();
+        self.free_ack = Rc::new(());
+        FreeListAck {
+            identity: self.free_ack.clone(),
+        }
+    }
+
+    /// An acknowledgement of the list as the arena was built, for a session
+    /// adopting an arena just restored from the store: unlike
+    /// [`SlotArena::acknowledge_free_list`], it keeps the low-water mark, so
+    /// whatever restore itself popped (a layout migration that allocates)
+    /// still reaches the next checkpoint. Only sound on an arena whose list
+    /// was built from the stored one and has not been acknowledged since.
+    pub fn free_list_baseline(&self) -> FreeListAck {
+        FreeListAck {
+            identity: self.free_ack.clone(),
+        }
+    }
+
+    /// How many leading free-list entries are unchanged since `ack`: the
+    /// low-water mark. `None` when this arena did not issue `ack`, or has
+    /// acknowledged again since, and the caller must treat the whole list
+    /// as changed.
+    pub fn free_list_unchanged_prefix(&self, ack: &FreeListAck) -> Option<usize> {
+        Rc::ptr_eq(&ack.identity, &self.free_ack).then_some(self.free_low)
+    }
+
     /// Rebuild an arena from a serialized image: the flat record array, the
     /// free list, and the live count. Marks are reset (a snapshot is taken
     /// on a quiescent machine, outside any collection — design § Snapshots
@@ -1037,23 +1411,35 @@ impl SlotArena {
     /// starts clean: a just-restored arena is byte-identical to its store,
     /// so the next incremental checkpoint owes nothing.
     pub fn from_image(slots: Vec<Slot>, free: Vec<u32>, live: u32) -> SlotArena {
+        Self::try_from_image(slots, free, live).expect("valid slot arena image")
+    }
+
+    /// Fallible restoration for callers supplying untrusted image metadata.
+    /// Rejects out-of-range and duplicate free entries and inconsistent counts.
+    pub fn try_from_image(
+        slots: Vec<Slot>,
+        free: Vec<u32>,
+        live: u32,
+    ) -> Result<SlotArena, SlotArenaImageError> {
+        let free_marks = Self::image_free_marks(slots.len(), &free, live)?;
         let marks = vec![false; slots.len()];
         let dirty = vec![false; slots.len().div_ceil(SLOTS_PER_PAGE as usize)];
         let unbacked = vec![false; dirty.len()];
-        let mut free_marks = vec![false; slots.len()];
-        for &i in &free {
-            free_marks[i as usize] = true;
-        }
-        SlotArena {
+        Ok(SlotArena {
+            ceiling: DEFAULT_SLOT_CEILING,
+            snapshot_dirt: Rc::default(),
+            property_index: RefCell::default(),
             slots: slots.into_iter().map(Cell::new).collect(),
+            free_low: free.len(),
             free,
+            free_ack: Rc::default(),
             free_marks,
             marks,
             live,
             dirty,
             unbacked,
             lazy: None,
-        }
+        })
     }
 
     // --- incremental-checkpoint dirty tracking (store seam design) ---
@@ -1091,9 +1477,9 @@ impl SlotArena {
     /// store answers the first (the twin has the bytes) but not the
     /// second (the pinned backing, which every fault reads, still holds
     /// the old ones). Clearing dirty alone therefore made a modified
-    /// page look evictable, and the re-fault silently reverted it
-    /// (review wave 5; the wave-4 guard covered the appended TAIL of
-    /// these same states and left the backed body).
+    /// page look evictable, and the re-fault silently reverted it.
+    /// Both appended records and modified backed records must remain resident
+    /// until their current content is present in the pinned backing.
     ///
     /// A page left unbacked stays that way until something rewrites it,
     /// which is correct rather than pessimistic: a later PINNED commit
@@ -1112,12 +1498,22 @@ impl SlotArena {
     }
 }
 
-/// The size of a chunk's length header, in bytes. Each block in the
-/// arena is laid out `[u32 length][payload...]`, mirroring XS's
+/// The size of an allocated chunk's length header, in bytes. Allocated blocks
+/// are laid out `[u32 length][payload...]`, mirroring XS's
 /// `txChunk` header discipline (a size field precedes each chunk) so
 /// the slide-compactor can walk and relocate blocks without external
-/// bookkeeping.
+/// bookkeeping. Format 17 also permits reusable blocks; see `FREE_CHUNK`.
 pub(crate) const CHUNK_HEADER: usize = 4;
+
+// An allocated payload cannot have this length: its header would exceed the
+// u32 chunk address space. Format 17 reserves it for a reusable block, followed
+// by a little-endian u32 TOTAL span (including both words), at least 8 bytes.
+const FREE_CHUNK: usize = u32::MAX as usize;
+const FREE_CHUNK_HEADER: usize = 8;
+
+// Best fit, then lowest address. Only encoded free blocks enter this derived
+// index, so rebuilding it after resume produces exactly the same choices.
+type FreeChunks = std::collections::BTreeMap<usize, std::collections::BTreeSet<usize>>;
 
 /// The chunk arena: variable-size data (strings as UTF-16 big-endian code
 /// units, ArrayBuffers, BigInt digits, bytecode). Each block carries a length
@@ -1153,6 +1549,246 @@ enum ChunkBytes {
 impl Default for ChunkBytes {
     fn default() -> ChunkBytes {
         ChunkBytes::Plain(Vec::new())
+    }
+}
+
+/// Read compaction input without changing arena residency. At most one cold
+/// source extent is retained in scratch; dirty/local extents come from memory.
+struct ChunkReader<'a> {
+    bytes: &'a ChunkBytes,
+    cached: Option<(usize, Vec<u8>)>,
+}
+
+impl ChunkReader<'_> {
+    fn copy_into(&mut self, mut start: usize, mut out: &mut [u8]) {
+        match self.bytes {
+            ChunkBytes::Plain(bytes) => out.copy_from_slice(&bytes[start..start + out.len()]),
+            ChunkBytes::Lazy {
+                cell,
+                resident,
+                source,
+                snapshot_len,
+            } => {
+                let per = CHUNK_EXTENT_BYTES as usize;
+                while !out.is_empty() {
+                    let ext = start / per;
+                    let within = start % per;
+                    let count = out.len().min(per - within);
+                    if resident.get(ext).is_none_or(|bit| bit.get()) {
+                        out[..count].copy_from_slice(&cell.borrow()[start..start + count]);
+                    } else {
+                        if self
+                            .cached
+                            .as_ref()
+                            .is_none_or(|(cached, _)| *cached != ext)
+                        {
+                            let bytes = source.chunk_extent(ext as u32);
+                            let expected = (*snapshot_len).min(ext * per + per) - ext * per;
+                            assert_eq!(bytes.len(), expected,
+                                "compaction source returned wrong extent length (corrupt or torn store row)");
+                            self.cached = Some((ext, bytes));
+                        }
+                        let bytes = &self.cached.as_ref().unwrap().1;
+                        out[..count].copy_from_slice(&bytes[within..within + count]);
+                    }
+                    start += count;
+                    out = &mut out[count..];
+                }
+            }
+        }
+    }
+
+    fn length_at(&mut self, header: usize) -> usize {
+        let mut bytes = [0; CHUNK_HEADER];
+        self.copy_into(header, &mut bytes);
+        u32::from_le_bytes(bytes) as usize
+    }
+
+    /// Validate a whole chain block before using either its end or free tag.
+    fn block_at(&mut self, header: usize, total: usize) -> (usize, bool) {
+        self.checked_block_at(header, total)
+            .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    fn checked_block_at(
+        &mut self,
+        header: usize,
+        total: usize,
+    ) -> Result<(usize, bool), &'static str> {
+        let payload = header
+            .checked_add(CHUNK_HEADER)
+            .filter(|&end| end <= total)
+            .ok_or("chunk chain header out of range (corrupt heap)")?;
+        let length = self.length_at(header);
+        if length == FREE_CHUNK {
+            if total - header < FREE_CHUNK_HEADER {
+                return Err("free chunk header out of range (corrupt heap)");
+            }
+            let span = self.length_at(payload);
+            if span < FREE_CHUNK_HEADER {
+                return Err("free chunk span too short (corrupt heap)");
+            }
+            let end = header
+                .checked_add(span)
+                .filter(|&end| end <= total)
+                .ok_or("free chunk span out of range (corrupt heap)")?;
+            Ok((end, true))
+        } else {
+            let end = payload
+                .checked_add(length)
+                .filter(|&end| end <= total)
+                .ok_or("chunk chain payload out of range (corrupt heap)")?;
+            Ok((end, false))
+        }
+    }
+
+    /// Reconcile roots with actual block boundaries, including dead blocks.
+    /// Visitors may prepare relocation plans, but must not mutate the arena
+    /// until this complete traversal returns successfully.
+    fn visit_blocks(
+        &mut self,
+        total: usize,
+        live: &[ChunkOffset],
+        visit: impl FnMut(usize, usize, bool),
+    ) {
+        self.checked_visit_blocks(total, live, true, visit)
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    fn checked_visit_blocks(
+        &mut self,
+        total: usize,
+        live: &[ChunkOffset],
+        check_tail: bool,
+        mut visit: impl FnMut(usize, usize, bool),
+    ) -> Result<(), &'static str> {
+        let mut roots: Vec<_> = live.iter().copied().filter(|off| !off.is_null()).collect();
+        roots.sort_unstable_by_key(|off| off.0);
+        roots.dedup();
+        let mut matched = 0;
+        let mut header = 0;
+        while header < total {
+            if !check_tail && matched == roots.len() {
+                return Ok(());
+            }
+            let (end, reusable) = self.checked_block_at(header, total)?;
+            // block_at proved that the complete header fits.
+            let payload = header + CHUNK_HEADER;
+            if let Some(off) = roots.get(matched) {
+                if (off.0 as usize) < payload {
+                    return Err("chunk offset is not a payload boundary (corrupt heap)");
+                }
+            }
+            let marked = roots
+                .get(matched)
+                .is_some_and(|off| off.0 as usize == payload);
+            if marked {
+                if reusable {
+                    return Err("chunk offset references a free block (corrupt heap)");
+                }
+                matched += 1;
+            }
+            visit(header, end, marked);
+            header = end;
+        }
+        if matched != roots.len() {
+            return Err("chunk offset is not a payload boundary (corrupt heap)");
+        }
+        Ok(())
+    }
+
+    fn prepare_write(
+        &mut self,
+        prepared: &mut std::collections::BTreeMap<usize, Vec<u8>>,
+        total: usize,
+        mut destination: usize,
+        mut bytes: &[u8],
+    ) {
+        let per = CHUNK_EXTENT_BYTES as usize;
+        while !bytes.is_empty() {
+            let ext = destination / per;
+            let original = prepared.entry(ext).or_insert_with(|| {
+                let start = ext * per;
+                let mut original = vec![0; total.min(start + per) - start];
+                self.copy_into(start, &mut original);
+                original
+            });
+            let within = destination % per;
+            let count = bytes.len().min(original.len() - within);
+            original[within..within + count].copy_from_slice(&bytes[..count]);
+            destination += count;
+            bytes = &bytes[count..];
+        }
+    }
+}
+
+enum ChunkEdit {
+    Copy {
+        destination: usize,
+        source: usize,
+        size: usize,
+    },
+    Free {
+        header: usize,
+        span: usize,
+    },
+}
+
+/// A chain-aligned region contained in one extent. Crossing live blocks are
+/// immovable anchors outside these regions, so relocation never dirties an
+/// otherwise unrelated extent.
+#[derive(Default)]
+struct ChunkRegion {
+    start: usize,
+    end: usize,
+    live: Vec<(usize, usize)>,
+    live_bytes: usize,
+}
+
+impl ChunkRegion {
+    fn finish(
+        &mut self,
+        edits: &mut Vec<ChunkEdit>,
+        remap: &mut std::collections::HashMap<ChunkOffset, ChunkOffset>,
+        live_end: &mut usize,
+    ) {
+        let span = self.end - self.start;
+        if span == 0 {
+            return;
+        }
+        let dead = span - self.live_bytes;
+        // Compact when at least one quarter of THIS region is dead. ceil(span
+        // / 4) is exact without overflowing a product on 32-bit hosts. This is
+        // relocation policy inside an explicit GC, not automatic GC scheduling.
+        if dead >= span.div_ceil(4) {
+            let mut destination = self.start;
+            for &(source, size) in &self.live {
+                if destination != source {
+                    edits.push(ChunkEdit::Copy {
+                        destination,
+                        source,
+                        size,
+                    });
+                    remap.insert(
+                        ChunkOffset((source + CHUNK_HEADER) as u32),
+                        ChunkOffset((destination + CHUNK_HEADER) as u32),
+                    );
+                }
+                destination += size;
+                *live_end = destination;
+            }
+            if destination < self.end {
+                edits.push(ChunkEdit::Free {
+                    header: destination,
+                    span: self.end - destination,
+                });
+            }
+        } else if let Some(&(source, size)) = self.live.last() {
+            *live_end = source + size;
+        }
+        self.live.clear();
+        self.live_bytes = 0;
+        self.start = self.end;
     }
 }
 
@@ -1206,8 +1842,19 @@ impl Ord for ChunkSlice<'_> {
     }
 }
 
-#[derive(Default)]
+/// Validate the complete block before either narrowing cast or arena mutation.
+/// The exclusive end must remain below the reserved NULL offset, including for
+/// an empty payload whose returned offset equals that end.
+fn chunk_allocation_fits(header: usize, payload: usize, ceiling: usize) -> bool {
+    header
+        .checked_add(CHUNK_HEADER)
+        .and_then(|off| off.checked_add(payload))
+        .is_some_and(|end| end < ceiling)
+}
+
 pub struct ChunkArena {
+    ceiling: usize,
+    commit_identity: Option<Rc<()>>,
     bytes: ChunkBytes,
     /// One dirty bit per [`CHUNK_EXTENT_BYTES`]-byte extent of the byte
     /// space, set by the byte-mutating paths ([`ChunkArena::alloc`],
@@ -1218,14 +1865,28 @@ pub struct ChunkArena {
     dirty: Vec<bool>,
     /// Per-extent twin of [`SlotArena`]'s `unbacked`; see its doc.
     unbacked: Vec<bool>,
+    /// Rebuilt from encoded free markers once on the first allocation or
+    /// capacity query after restore. Scanning headers uses bounded scratch and
+    /// preserves residency.
+    /// None is unknown, not empty; publish only a fully validated index.
+    free_chunks: RefCell<Option<FreeChunks>>,
+}
+
+impl Default for ChunkArena {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ChunkArena {
     pub fn new() -> ChunkArena {
         ChunkArena {
+            ceiling: DEFAULT_CHUNK_CEILING,
+            commit_identity: None,
             bytes: ChunkBytes::Plain(Vec::new()),
             dirty: Vec::new(),
             unbacked: Vec::new(),
+            free_chunks: RefCell::new(Some(FreeChunks::new())),
         }
     }
 
@@ -1235,6 +1896,8 @@ impl ChunkArena {
     pub fn lazy_from_parts(snapshot_len: usize, source: Rc<dyn PageSource>) -> ChunkArena {
         let exts = snapshot_len.div_ceil(CHUNK_EXTENT_BYTES as usize);
         ChunkArena {
+            ceiling: DEFAULT_CHUNK_CEILING,
+            commit_identity: None,
             bytes: ChunkBytes::Lazy {
                 cell: RefCell::new(vec![0u8; snapshot_len]),
                 resident: (0..exts).map(|_| Cell::new(false)).collect(),
@@ -1243,6 +1906,7 @@ impl ChunkArena {
             },
             dirty: vec![false; exts],
             unbacked: vec![false; exts],
+            free_chunks: RefCell::new(None),
         }
     }
 
@@ -1273,7 +1937,9 @@ impl ChunkArena {
         let first = start / per;
         let last = (end.min(*snapshot_len) - 1) / per;
         for ext in first..=last {
-            let Some(bit) = resident.get(ext) else { continue };
+            let Some(bit) = resident.get(ext) else {
+                continue;
+            };
             if bit.get() {
                 continue;
             }
@@ -1323,8 +1989,7 @@ impl ChunkArena {
 
     /// Advance the lazy backing to the CURRENT geometry after the
     /// session's own checkpoint — the extent-space twin of
-    /// [`SlotArena::advance_backing`]. No-op when detached (including
-    /// after a compaction's downgrade to plain storage).
+    /// [`SlotArena::advance_backing`]. No-op when detached.
     pub fn advance_backing(&mut self) {
         let len = self.len();
         if let ChunkBytes::Lazy {
@@ -1335,6 +2000,7 @@ impl ChunkArena {
         {
             *snapshot_len = len;
             let exts = len.div_ceil(CHUNK_EXTENT_BYTES as usize);
+            resident.truncate(exts);
             while resident.len() < exts {
                 resident.push(Cell::new(true));
             }
@@ -1352,8 +2018,7 @@ impl ChunkArena {
     /// two chunks at once. Pre-faults BOTH before taking the two
     /// guards: on a lazy heap, constructing the second guard over a
     /// non-resident extent would `borrow_mut` under the first guard's
-    /// live `Ref` and panic (the adversarial review's critical
-    /// finding). New two-chunk comparisons go through here, never
+    /// live `Ref` and panic. New two-chunk comparisons go through here, never
     /// through two bare [`Self::payload`] calls.
     pub fn compare_payloads(&self, a: ChunkOffset, b: ChunkOffset) -> std::cmp::Ordering {
         self.ensure_payload_resident(a);
@@ -1367,9 +2032,8 @@ impl ChunkArena {
     /// MUST pre-fault every operand through this before taking the
     /// first guard: constructing a second guard whose extents are
     /// non-resident would otherwise `borrow_mut` under the first
-    /// guard's live `Ref` — the adversarial-review critical finding
-    /// (a lazily resumed machine crashing on `a === b` across
-    /// extents while every other run mode succeeds).
+    /// guard's live `Ref`, crashing a lazily resumed machine on
+    /// `a === b` across extents. [`Self::compare_payloads`] enforces this order.
     pub fn ensure_payload_resident(&self, off: ChunkOffset) {
         if matches!(self.bytes, ChunkBytes::Plain(_)) || off.is_null() {
             return;
@@ -1387,6 +2051,21 @@ impl ChunkArena {
     pub fn ensure_all_resident(&self) {
         if let ChunkBytes::Lazy { snapshot_len, .. } = &self.bytes {
             self.ensure_range_resident(0, *snapshot_len);
+        }
+    }
+
+    /// The extent-space twin of [`SlotArena::abandon_backing`]: fault
+    /// every attach-time extent in and mark every extent unbacked. No-op
+    /// on a detached arena.
+    pub fn abandon_backing(&mut self) {
+        if matches!(self.bytes, ChunkBytes::Lazy { .. }) {
+            self.ensure_all_resident();
+            let exts = self
+                .len()
+                .div_ceil(CHUNK_EXTENT_BYTES as usize)
+                .max(self.unbacked.len());
+            self.unbacked.clear();
+            self.unbacked.resize(exts, true);
         }
     }
 
@@ -1461,22 +2140,155 @@ impl ChunkArena {
         }
     }
 
+    /// Configure the chunk-address-space ceiling, capped by its u32 format.
+    /// Reapply this host policy after snapshot restore.
+    pub fn set_ceiling(&mut self, ceiling: usize) {
+        self.ceiling = ceiling.min(ChunkOffset::NULL.0 as usize);
+    }
 
-    /// Append bytes behind a length header, returning the offset of the
+    pub fn ceiling(&self) -> usize {
+        self.ceiling
+    }
+
+    /// Whether a new payload fits, including its length header.
+    pub fn can_allocate(&self, payload_bytes: usize) -> bool {
+        if !chunk_allocation_fits(0, payload_bytes, ChunkOffset::NULL.0 as usize)
+            || payload_bytes
+                .checked_add(CHUNK_HEADER)
+                .is_none_or(|n| n > self.ceiling)
+        {
+            return false;
+        }
+        self.free_chunk_for(payload_bytes, ChunkOffset::NULL.0 as usize)
+            .is_some()
+            || (self
+                .len()
+                .checked_add(CHUNK_HEADER)
+                .and_then(|end| end.checked_add(payload_bytes))
+                .is_some_and(|end| end <= self.ceiling)
+                && chunk_allocation_fits(self.len(), payload_bytes, ChunkOffset::NULL.0 as usize))
+    }
+
+    fn free_chunk_for(&self, payload: usize, address_ceiling: usize) -> Option<(usize, usize)> {
+        let size = payload.checked_add(CHUNK_HEADER)?;
+        if self.free_chunks.borrow().is_none() {
+            let mut reader = ChunkReader {
+                bytes: &self.bytes,
+                cached: None,
+            };
+            let mut free = FreeChunks::new();
+            let mut header = 0;
+            while header < self.len() {
+                let (end, reusable) = reader.block_at(header, self.len());
+                if reusable {
+                    free.entry(end - header).or_default().insert(header);
+                }
+                header = end;
+            }
+            *self.free_chunks.borrow_mut() = Some(free);
+        }
+        let free = self.free_chunks.borrow();
+        free.as_ref()
+            .unwrap()
+            .range(size..)
+            .find_map(|(&span, addresses)| {
+                // A 1–3 byte remainder cannot hold even an ordinary block header.
+                if span != size && span - size < CHUNK_HEADER {
+                    return None;
+                }
+                let &header = addresses.first()?;
+                (chunk_allocation_fits(header, payload, address_ceiling)
+                    && header
+                        .checked_add(size)
+                        .is_some_and(|end| end <= self.ceiling))
+                .then_some((header, span))
+            })
+    }
+
+    /// Reuse the smallest fitting encoded free block (lowest address breaks
+    /// ties), or append bytes behind a length header, returning the offset of the
     /// payload (not the header). Strings are stored as UTF-16 big-endian code
     /// units (revised 2026-07-06 from CESU-8; resolved question 4), so a byte-
     /// lexicographic compare of two string payloads equals their code-unit
     /// (ECMAScript string) ordering.
+    ///
+    /// Exhausting u32 addressability terminates with the named fatal panic
+    /// `chunk:address-space-exhausted` before any mutation. Like a corrupt
+    /// chunk header, this requires discarding the interrupted interpreter or
+    /// restoring a known-good checkpoint. It is not a catchable guest error
+    /// or a configurable memory policy.
     pub fn alloc(&mut self, data: &[u8]) -> ChunkOffset {
-        // Fault the stored tail extent before appending beside its
-        // bytes: an append lands mid-extent whenever the snapshot
-        // length is not extent-aligned, and that extent's stored
-        // prefix must be real before the extent can ever be read.
+        self.alloc_with_address_ceiling(data, ChunkOffset::NULL.0 as usize)
+    }
+
+    // Private seam for exercising the allocation boundary without a 4 GiB
+    // arena. The public allocator always supplies the representation limit.
+    fn alloc_with_address_ceiling(&mut self, data: &[u8], ceiling: usize) -> ChunkOffset {
+        let ceiling = ceiling.min(ChunkOffset::NULL.0 as usize);
+        // Impossible at ANY address: refuse before consulting lazy storage.
+        assert!(
+            chunk_allocation_fits(0, data.len(), ceiling),
+            "chunk:address-space-exhausted"
+        );
+        if let Some((header, span)) = self.free_chunk_for(data.len(), ceiling) {
+            let size = CHUNK_HEADER + data.len();
+            let rest = span - size;
+            let marker_width = if rest >= FREE_CHUNK_HEADER {
+                FREE_CHUNK_HEADER
+            } else if rest >= CHUNK_HEADER {
+                CHUNK_HEADER
+            } else {
+                0
+            };
+            let changed_end = header + size + marker_width;
+            // Fault every byte before mutation: splitting may write a header in
+            // another extent, whose untouched bytes must survive checkpoint.
+            self.ensure_range_resident(header, changed_end);
+            let bytes = self.bytes_mut();
+            bytes[header..header + CHUNK_HEADER]
+                .copy_from_slice(&(data.len() as u32).to_le_bytes());
+            bytes[header + CHUNK_HEADER..header + size].copy_from_slice(data);
+            if rest >= FREE_CHUNK_HEADER {
+                bytes[header + size..header + size + CHUNK_HEADER]
+                    .copy_from_slice(&u32::MAX.to_le_bytes());
+                bytes[header + size + CHUNK_HEADER..header + size + FREE_CHUNK_HEADER]
+                    .copy_from_slice(&(rest as u32).to_le_bytes());
+            } else if rest >= CHUNK_HEADER {
+                // Tiny remnants have an ordinary dead-block header and are NOT
+                // indexed, either now or after restore. A later GC may merge them.
+                bytes[header + size..header + size + CHUNK_HEADER]
+                    .copy_from_slice(&((rest - CHUNK_HEADER) as u32).to_le_bytes());
+            }
+            let free = self.free_chunks.get_mut().as_mut().unwrap();
+            let addresses = free.get_mut(&span).unwrap();
+            addresses.remove(&header);
+            if addresses.is_empty() {
+                free.remove(&span);
+            }
+            if rest >= FREE_CHUNK_HEADER {
+                free.entry(rest).or_default().insert(header + size);
+            }
+            self.mark_dirty_range(header, changed_end);
+            return ChunkOffset((header + CHUNK_HEADER) as u32);
+        }
         let header = self.len();
+        assert!(
+            chunk_allocation_fits(header, data.len(), ceiling),
+            "chunk:address-space-exhausted"
+        );
+        if !self.can_allocate(data.len()) {
+            heap_exhausted();
+        }
+        // Fault the stored tail extent before appending beside its bytes:
+        // an append can land mid-extent, so its stored prefix must be real.
+        // The addressability guard above must precede even this read.
         if header > 0 {
             self.ensure_range_resident(header - 1, header);
         }
         let v = self.bytes_mut();
+        if v.try_reserve(CHUNK_HEADER + data.len()).is_err() {
+            heap_exhausted();
+        }
         v.extend_from_slice(&(data.len() as u32).to_le_bytes());
         let off = v.len() as u32;
         v.extend_from_slice(data);
@@ -1498,7 +2310,35 @@ impl ChunkArena {
             .checked_sub(CHUNK_HEADER)
             .expect("chunk offset below header (corrupt heap)");
         let hdr = self.view(h, h + CHUNK_HEADER);
-        u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]) as usize
+        let length = u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]) as usize;
+        assert_ne!(
+            length, FREE_CHUNK,
+            "chunk offset references a free block (corrupt heap)"
+        );
+        length
+    }
+
+    /// Check one restored payload's header and bounds without walking the
+    /// arena's entire allocation chain. This does not prove that an arbitrary
+    /// in-bounds offset is an allocation boundary; full chain validation uses
+    /// `validate_references`. Backing-source failures still fault normally.
+    pub(crate) fn restored_payload_len(&self, off: ChunkOffset) -> Result<usize, &'static str> {
+        let start = off.0 as usize;
+        let header = start
+            .checked_sub(CHUNK_HEADER)
+            .ok_or("chunk offset below header")?;
+        if off.is_null() || start > self.byte_size() {
+            return Err("chunk offset outside arena");
+        }
+        let bytes = self.view(header, start);
+        let length = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+        if length == FREE_CHUNK {
+            return Err("chunk offset references a free block");
+        }
+        if length > self.byte_size() - start {
+            return Err("chunk payload outside arena");
+        }
+        Ok(length)
     }
 
     /// A shared view of `len` bytes of the block whose payload begins
@@ -1509,14 +2349,34 @@ impl ChunkArena {
     /// the lazy arm).
     #[inline]
     pub fn slice(&self, off: ChunkOffset, len: usize) -> ChunkSlice<'_> {
+        assert!(len <= self.len_of(off), "chunk slice exceeds allocation");
         let start = off.0 as usize;
         self.view(start, start + len)
+    }
+
+    /// A bounded subrange of one payload. Validate against the block header,
+    /// then visit only the requested extents (not the intervening payload).
+    /// This is the indexed-string read path on attached heaps.
+    #[inline]
+    pub(crate) fn payload_range(
+        &self,
+        off: ChunkOffset,
+        range: std::ops::Range<usize>,
+    ) -> Option<ChunkSlice<'_>> {
+        if range.start > range.end || range.end > self.len_of(off) {
+            return None;
+        }
+        let start = (off.0 as usize).checked_add(range.start)?;
+        let end = (off.0 as usize).checked_add(range.end)?;
+        Some(self.view(start, end))
     }
 
     /// The whole payload of the block at `off`, using its stored length.
     #[inline]
     pub fn payload(&self, off: ChunkOffset) -> ChunkSlice<'_> {
-        self.slice(off, self.len_of(off))
+        let len = self.len_of(off);
+        let start = off.0 as usize;
+        self.view(start, start + len)
     }
 
     /// A mutable view of `len` bytes of the block whose payload begins at
@@ -1527,128 +2387,270 @@ impl ChunkArena {
     /// not leave placeholder bytes beside fresh ones.
     #[inline]
     pub fn slice_mut(&mut self, off: ChunkOffset, len: usize) -> &mut [u8] {
+        assert!(
+            len <= self.len_of(off),
+            "mutable chunk slice exceeds allocation"
+        );
         let start = off.0 as usize;
         self.ensure_range_resident(start, start + len);
         self.mark_dirty_range(start, start + len);
         &mut self.bytes_mut()[start..start + len]
     }
 
-    /// Slide-compact: keep only the blocks whose payload offsets are in
-    /// `live`, packing them to the front of the arena in ascending
-    /// offset order, and return the old→new payload-offset remap the
-    /// caller applies to every live `ChunkOffset` (design § Value and
-    /// heap model: "offsets are rewritten exactly where XS rewrites
-    /// pointers"). Duplicate/unknown offsets in `live` are ignored.
-    pub fn compact(&mut self, live: &[ChunkOffset]) -> std::collections::HashMap<ChunkOffset, ChunkOffset> {
-        use std::collections::{HashMap, HashSet};
-        // Compaction reads every live block, so it is the amortized
-        // full reifier on a lazy arena (design decision 4); after it,
-        // every offset has changed and the source is stale, so the
-        // arena downgrades to plain fully-resident storage.
-        self.ensure_all_resident();
+    /// Check that non-null references name allocated payload boundaries with
+    /// complete blocks. Walk only through the last referenced block; lazy
+    /// headers are read without changing residency, backing, or dirty state.
+    /// Malformed bytes return an error; backing-source failures still propagate.
+    pub fn validate_references(&self, live: &[ChunkOffset]) -> Result<(), &'static str> {
+        let mut reader = ChunkReader {
+            bytes: &self.bytes,
+            cached: None,
+        };
+        reader.checked_visit_blocks(self.len(), live, false, |_, _, _| {})
+    }
 
-        let mut seen: Vec<ChunkOffset> = live
-            .iter()
-            .copied()
-            .filter(|o| !o.is_null())
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
-        // Relocate in ascending source order so the copy never overlaps
-        // a not-yet-moved block.
-        seen.sort_by_key(|o| o.0);
+    /// Reclaim chunks without relocating across extent boundaries. Complete
+    /// blocks within one extent are packed when at least one quarter of their
+    /// chain-aligned region is dead; live crossing blocks remain fixed anchors.
+    /// Dead crossing blocks become reusable markers. Trailing garbage is always
+    /// truncated. Interior holes are reusable even though `byte_size` includes
+    /// them; below-threshold ordinary dead blocks wait for a later collection.
+    ///
+    /// Returns entries only for moved payload offsets. Root and block-chain
+    /// validation matches [`Self::compact`]. All reads finish before mutation;
+    /// clean unaffected extents retain their backing and residency. This does
+    /// not schedule GC: the caller must already have chosen to collect.
+    pub fn compact_local(
+        &mut self,
+        live: &[ChunkOffset],
+    ) -> std::collections::HashMap<ChunkOffset, ChunkOffset> {
+        let total = self.len();
+        let per = CHUNK_EXTENT_BYTES as usize;
+        let mut reader = ChunkReader {
+            bytes: &self.bytes,
+            cached: None,
+        };
+        let mut edits = Vec::new();
+        let mut remap = std::collections::HashMap::new();
+        let mut region = ChunkRegion::default();
+        let mut new_len = 0;
+        reader.visit_blocks(total, live, |header, end, marked| {
+            let contained = header / per == (end - 1) / per;
+            if !contained || (region.end > region.start && header / per != region.start / per) {
+                region.finish(&mut edits, &mut remap, &mut new_len);
+            }
+            if contained {
+                if region.start == region.end {
+                    region.start = header;
+                }
+                region.end = end;
+                if marked {
+                    region.live.push((header, end - header));
+                    region.live_bytes += end - header;
+                }
+            } else {
+                if marked {
+                    new_len = end;
+                } else {
+                    edits.push(ChunkEdit::Free {
+                        header,
+                        span: end - header,
+                    });
+                }
+                region.start = end;
+                region.end = end;
+            }
+        });
+        region.finish(&mut edits, &mut remap, &mut new_len);
 
-        // Validate every live block against the CURRENT bytes BEFORE
-        // the backing vector is taken below: a corrupt offset or
-        // length (record-content corruption is not validated at open —
-        // the design's named limitation) must die here, while the
-        // arena is still intact. Panicking after the take would unwind
-        // with the byte space emptied — a machine caught by
-        // `catch_unwind` would then serialize a zero-length chunk
-        // space under offsets that point past its end.
-        {
-            let total = self.len();
-            for &old in &seen {
-                let h = (old.0 as usize)
-                    .checked_sub(CHUNK_HEADER)
-                    .expect("chunk offset below header (corrupt heap)");
-                assert!(h + CHUNK_HEADER <= total, "chunk header out of range (corrupt heap)");
-                let len = self.len_of(old);
-                // checked_add, not `+`: on a 32-bit usize a corrupt
-                // u32 length can wrap the sum past the guard, and the
-                // later slice would then panic AFTER the byte space
-                // was taken — exactly the state-loss this validation
-                // pass exists to prevent (review finding). Panicking
-                // HERE is fine: nothing has been taken yet.
-                let end = (old.0 as usize)
-                    .checked_add(len)
-                    .expect("chunk payload length overflows (corrupt heap)");
-                assert!(end <= total, "chunk payload out of range (corrupt heap)");
+        let mut prepared = std::collections::BTreeMap::new();
+        let mut scratch = vec![0; per];
+        for edit in edits {
+            match edit {
+                ChunkEdit::Copy {
+                    destination,
+                    source,
+                    size,
+                } => {
+                    reader.copy_into(source, &mut scratch[..size]);
+                    reader.prepare_write(&mut prepared, total, destination, &scratch[..size]);
+                }
+                ChunkEdit::Free { header, span } if header < new_len => {
+                    // Every discarded block has at least a four-byte header.
+                    // Tiny holes stay ordinary unreferenced blocks, matching
+                    // the allocator's split encoding and rebuilt index.
+                    let mut marker = [0; FREE_CHUNK_HEADER];
+                    let width = if span >= FREE_CHUNK_HEADER {
+                        marker[..CHUNK_HEADER].copy_from_slice(&u32::MAX.to_le_bytes());
+                        marker[CHUNK_HEADER..].copy_from_slice(
+                            &u32::try_from(span)
+                                .expect("free chunk span exceeds address space (corrupt heap)")
+                                .to_le_bytes(),
+                        );
+                        FREE_CHUNK_HEADER
+                    } else {
+                        marker[..CHUNK_HEADER]
+                            .copy_from_slice(&((span - CHUNK_HEADER) as u32).to_le_bytes());
+                        CHUNK_HEADER
+                    };
+                    reader.prepare_write(&mut prepared, total, header, &marker[..width]);
+                }
+                ChunkEdit::Free { .. } => {} // Truncated trailing garbage.
             }
         }
+        let shortened_tail = (new_len < total && new_len % per != 0).then_some(new_len / per);
+        if let Some(ext) = shortened_tail {
+            // Even unchanged prefix bytes need a shorter committed row.
+            // Read before truncation so a failed fault cannot lose the tail.
+            prepared.entry(ext).or_insert_with(|| {
+                let start = ext * per;
+                let mut bytes = vec![0; total.min(start + per) - start];
+                reader.copy_into(start, &mut bytes);
+                bytes
+            });
+        }
+        prepared.retain(|&ext, bytes| {
+            let start = ext * per;
+            bytes.truncate(new_len.min(start + per) - start);
+            reader.copy_into(start, &mut scratch[..bytes.len()]);
+            Some(ext) == shortened_tail || bytes.as_slice() != &scratch[..bytes.len()]
+        });
+        drop(reader);
+        if prepared.is_empty() && new_len == total {
+            return remap;
+        }
 
-        let old_bytes = std::mem::take(self.bytes_mut());
-        // In-range by the validation pass above; the arithmetic cannot
-        // panic between the take and the reinstall.
-        let len_at = |off: ChunkOffset| -> usize {
-            let h = off.0 as usize - CHUNK_HEADER;
-            u32::from_le_bytes([
-                old_bytes[h],
-                old_bytes[h + 1],
-                old_bytes[h + 2],
-                old_bytes[h + 3],
-            ]) as usize
+        // No fallible source access remains. Preserve untouched bytes, dirty
+        // bits and unbacked ownership; changed extents become resident before
+        // the next read can consult the older source snapshot.
+        for (&ext, bytes) in &prepared {
+            let start = ext * per;
+            self.bytes_mut()[start..start + bytes.len()].copy_from_slice(bytes);
+        }
+        self.bytes_mut().truncate(new_len);
+        let exts = new_len.div_ceil(per);
+        self.dirty.truncate(exts);
+        self.unbacked.truncate(exts);
+        if let ChunkBytes::Lazy { resident, .. } = &mut self.bytes {
+            resident.truncate(exts);
+            for &ext in prepared.keys() {
+                if let Some(bit) = resident.get(ext) {
+                    bit.set(true);
+                }
+            }
+        }
+        for &ext in prepared.keys() {
+            self.dirty[ext] = true;
+        }
+        *self.free_chunks.get_mut() = None;
+        remap
+    }
+
+    /// Slide-compact: keep only the blocks whose payload offsets are in
+    /// `live`, packing them to the front of the arena in ascending
+    /// offset order, and return the old→new payload-offset remap for blocks
+    /// that moved. An absent entry means the offset is unchanged. The
+    /// caller applies these entries to every live `ChunkOffset` (design § Value and
+    /// heap model: "offsets are rewritten exactly where XS rewrites
+    /// pointers"). Duplicate and null offsets in `live` are ignored.
+    /// Every other offset must name an actual payload boundary; invalid
+    /// offsets or malformed block chains panic before any bytes are moved.
+    pub fn compact(
+        &mut self,
+        live: &[ChunkOffset],
+    ) -> std::collections::HashMap<ChunkOffset, ChunkOffset> {
+        let mut reader = ChunkReader {
+            bytes: &self.bytes,
+            cached: None,
         };
+        let total = self.len();
+        let mut runs = Vec::new();
+        let mut new_len = 0usize;
+        let mut remap = std::collections::HashMap::new();
+        reader.visit_blocks(total, live, |header, end, marked| {
+            if marked {
+                let old = ChunkOffset((header + CHUNK_HEADER) as u32);
+                let new = ChunkOffset(
+                    u32::try_from(new_len + CHUNK_HEADER)
+                        .expect("compacted chunk offset exceeds address space"),
+                );
+                if old != new {
+                    remap.insert(old, new);
+                }
+                runs.push((new_len, header, end - header));
+                new_len += end - header;
+            }
+        });
 
-        let mut fresh: Vec<u8> = Vec::with_capacity(old_bytes.len());
-        let mut remap: HashMap<ChunkOffset, ChunkOffset> = HashMap::new();
-        for old in seen {
-            let len = len_at(old);
-            let start = old.0 as usize;
-            let header = fresh.len();
-            fresh.extend_from_slice(&(len as u32).to_le_bytes());
-            let new_off = fresh.len() as u32;
-            fresh.extend_from_slice(&old_bytes[start..start + len]);
-            debug_assert_eq!(new_off as usize, header + CHUNK_HEADER);
-            remap.insert(old, ChunkOffset(new_off));
+        // Nothing moved or shrank: keep bytes, backing, dirt and residency
+        // exactly as they were. Only headers were read during validation.
+        if new_len == total {
+            return remap;
         }
-        // Incremental compaction dirt (store seam phase 7): an extent
-        // is dirty only if its BYTES actually changed — a compaction
-        // that moves little (garbage clustered at the tail) re-commits
-        // little. The geometry may have shrunk, so the bitmap tracks
-        // the new extent count; an extent wholly identical to its old
-        // bytes at the same positions stays clean, because the store
-        // already holds exactly those bytes.
-        let exts = fresh.len().div_ceil(CHUNK_EXTENT_BYTES as usize);
         let per = CHUNK_EXTENT_BYTES as usize;
+        let exts = new_len.div_ceil(per);
+        let mut fresh = vec![0; new_len];
         let mut dirty = Vec::with_capacity(exts);
-        for e in 0..exts {
-            let start = e * per;
-            let end = fresh.len().min(start + per);
-            let changed = match old_bytes.get(start..end) {
-                Some(old) => old != &fresh[start..end],
-                // The old space was shorter here: new content, dirty.
-                None => true,
+        let mut unbacked = Vec::with_capacity(exts);
+        let mut residency = Vec::with_capacity(exts);
+        let mut run_index = 0;
+        let mut next = vec![0; per];
+        let mut previous = vec![0; per];
+        for ext in 0..exts {
+            let start = ext * per;
+            let end = new_len.min(start + per);
+            let count = end - start;
+            let mut position = start;
+            while position < end {
+                let (destination, source, size) = runs[run_index];
+                let within = position - destination;
+                let take = (size - within).min(end - position);
+                reader.copy_into(
+                    source + within,
+                    &mut next[position - start..position - start + take],
+                );
+                position += take;
+                if within + take == size {
+                    run_index += 1;
+                }
+            }
+            reader.copy_into(start, &mut previous[..count]);
+            let changed = next[..count] != previous[..count];
+            let was_dirty = self.dirty.get(ext).copied().unwrap_or(true);
+            let was_unbacked = self.unbacked.get(ext).copied().unwrap_or(true);
+            let tail_shrunk = ext == exts - 1 && total.min(start + per) > new_len;
+            let is_dirty = changed || was_dirty || tail_shrunk;
+            let was_resident = match &self.bytes {
+                ChunkBytes::Plain(_) => true,
+                ChunkBytes::Lazy { resident, .. } => resident.get(ext).is_none_or(|bit| bit.get()),
             };
-            // Uncommitted PRE-compaction dirt must survive: the diff
-            // above compares against pre-compaction MEMORY, but the
-            // store holds the last COMMITTED bytes, which may differ
-            // even where compaction moved nothing.
-            let was_dirty = self.dirty.get(e).copied().unwrap_or(true);
-            // A shrunk FINAL extent also counts as changed when ITS
-            // OWN byte count shrank — the stored row carried the old,
-            // longer length. Compare the old space clamped to this
-            // extent, not whole-space lengths: dropping entire
-            // trailing extents while the surviving tail's own bytes
-            // are identical leaves that tail clean (the geometry
-            // shrink travels in the manifest, and the store deletes
-            // rows past the new extent count).
-            let tail_shrunk = e == exts - 1 && old_bytes.len().min(start + per) > fresh.len();
-            dirty.push(changed || was_dirty || tail_shrunk);
+            let keep = was_resident || is_dirty || was_unbacked;
+            if keep {
+                fresh[start..end].copy_from_slice(&next[..count]);
+            }
+            dirty.push(is_dirty);
+            unbacked.push(was_unbacked);
+            residency.push(Cell::new(keep));
         }
-        self.bytes = ChunkBytes::Plain(fresh);
-        self.unbacked = vec![false; dirty.len()];
+        // All source reads and validation finish before replacing storage.
+        // A source failure cannot empty or partially relocate the arena.
+        drop(reader);
+        self.bytes = match std::mem::take(&mut self.bytes) {
+            ChunkBytes::Plain(_) => ChunkBytes::Plain(fresh),
+            ChunkBytes::Lazy {
+                source,
+                snapshot_len,
+                ..
+            } => ChunkBytes::Lazy {
+                cell: RefCell::new(fresh),
+                resident: residency,
+                source,
+                snapshot_len,
+            },
+        };
+        self.unbacked = unbacked;
         self.dirty = dirty;
+        *self.free_chunks.get_mut() = Some(FreeChunks::new());
         remap
     }
 
@@ -1691,9 +2693,12 @@ impl ChunkArena {
     pub fn from_image(bytes: Vec<u8>) -> ChunkArena {
         let exts = bytes.len().div_ceil(CHUNK_EXTENT_BYTES as usize);
         ChunkArena {
+            ceiling: DEFAULT_CHUNK_CEILING,
+            commit_identity: None,
             bytes: ChunkBytes::Plain(bytes),
             dirty: vec![false; exts],
             unbacked: vec![false; exts],
+            free_chunks: RefCell::new(None),
         }
     }
 
@@ -1822,6 +2827,218 @@ mod dirty_tests {
 
     use super::*;
 
+    /// A fault checks a row's references against the LIVE free map. While
+    /// the target is free, a live record referencing it is refused; once a
+    /// crank reuses the slot, the stored reference names a live record
+    /// again and passes. The store-seam design's trust model gives that
+    /// second case up: an honest store never holds a reference to a free
+    /// slot, and the explicit validator checks the stored bytes.
+    #[test]
+    fn lazy_fault_checks_references_against_the_live_free_map() {
+        struct CrossPage;
+        impl PageSource for CrossPage {
+            fn slot_page(&self, page: u32) -> Vec<Slot> {
+                if page == 0 {
+                    let mut slots = vec![Slot::undefined(); SLOTS_PER_PAGE as usize];
+                    slots[1] = Slot::of(
+                        Kind::Reference,
+                        Payload::Reference(SlotIndex(SLOTS_PER_PAGE)),
+                    );
+                    slots
+                } else {
+                    vec![Slot::of(
+                        Kind::Reference,
+                        Payload::Reference(SlotIndex(900_000)),
+                    )]
+                }
+            }
+            fn chunk_extent(&self, _: u32) -> Vec<u8> {
+                unreachable!()
+            }
+        }
+        let arena = || {
+            SlotArena::lazy_from_parts(
+                SLOTS_PER_PAGE + 1,
+                vec![SLOTS_PER_PAGE],
+                SLOTS_PER_PAGE,
+                Rc::new(CrossPage),
+                64,
+            )
+        };
+        let free = arena();
+        let panic =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| free.get(SlotIndex(1))))
+                .expect_err("a live-to-free edge dies at its fault");
+        let message = panic.downcast_ref::<String>().expect("named fault");
+        assert!(message.contains("references a free slot"), "{message}");
+        let mut reused = arena();
+        assert_eq!(reused.alloc(Slot::undefined()), SlotIndex(SLOTS_PER_PAGE));
+        assert_eq!(
+            reused.get(SlotIndex(1)).value,
+            Payload::Reference(SlotIndex(SLOTS_PER_PAGE))
+        );
+    }
+
+    #[test]
+    fn lazy_fault_rejects_live_edges_into_free_records() {
+        struct PoisonedPage(Slot);
+        impl PageSource for PoisonedPage {
+            fn slot_page(&self, _: u32) -> Vec<Slot> {
+                vec![
+                    Slot::undefined(),
+                    self.0,
+                    Slot::of(Kind::Reference, Payload::Reference(SlotIndex(900_000))),
+                ]
+            }
+            fn chunk_extent(&self, _: u32) -> Vec<u8> {
+                unreachable!()
+            }
+        }
+        let reference = Slot::of(Kind::Reference, Payload::Reference(SlotIndex(2)));
+        let mut next = Slot::undefined();
+        next.next = SlotIndex(2);
+        for edge in [reference, next] {
+            let arena = SlotArena::lazy_from_parts(3, vec![2], 2, Rc::new(PoisonedPage(edge)), 64);
+            let panic =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| arena.get(SlotIndex(1))))
+                    .expect_err("the first fault must reject a live-to-free edge");
+            let message = panic.downcast_ref::<String>().expect("named fault");
+            assert!(message.contains("references a free slot"), "{message}");
+        }
+    }
+
+    #[test]
+    fn chunk_addressability_boundaries_do_not_need_gigabyte_allocations() {
+        let max = u32::MAX as usize;
+        assert!(chunk_allocation_fits(0, 0, max));
+        assert!(chunk_allocation_fits(max - CHUNK_HEADER - 1, 0, max));
+        assert!(!chunk_allocation_fits(max - CHUNK_HEADER, 0, max));
+        assert!(chunk_allocation_fits(0, max - CHUNK_HEADER - 1, max));
+        assert!(!chunk_allocation_fits(0, max - CHUNK_HEADER, max));
+        assert!(!chunk_allocation_fits(0, max, max));
+        assert!(!chunk_allocation_fits(usize::MAX, 0, max));
+        assert!(!chunk_allocation_fits(0, usize::MAX, max));
+        assert!(!chunk_allocation_fits(max, max, max));
+    }
+
+    #[test]
+    fn chunk_addressability_refusal_leaves_arena_untouched() {
+        let mut arena = ChunkArena::new();
+        let first = arena.alloc(b"abc");
+        arena.clear_dirty();
+        // The empty block at offset 11 still fits; offset 12 is reserved by
+        // the simulated representation and must fail before writing a header.
+        let empty = arena.alloc_with_address_ceiling(b"", 12);
+        assert_eq!(empty.0, 11);
+        arena.clear_dirty();
+        let before = arena.bytes_mut().clone();
+        let unbacked = arena.unbacked.clone();
+        let refusal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            arena.alloc_with_address_ceiling(b"x", 12)
+        }))
+        .unwrap_err();
+        assert_eq!(
+            refusal.downcast_ref::<&str>(),
+            Some(&"chunk:address-space-exhausted")
+        );
+        assert_eq!(arena.bytes_mut(), &before);
+        assert!(arena.dirty_extents().is_empty());
+        assert_eq!(arena.unbacked, unbacked);
+        assert_eq!(&*arena.payload(first), b"abc");
+        assert!(arena.payload(empty).is_empty());
+    }
+
+    #[test]
+    fn chunk_addressability_failure_precedes_lazy_tail_fault() {
+        struct MustNotRead;
+        impl PageSource for MustNotRead {
+            fn slot_page(&self, _: u32) -> Vec<Slot> {
+                panic!("unexpected slot fault")
+            }
+            fn chunk_extent(&self, _: u32) -> Vec<u8> {
+                panic!("unexpected chunk fault")
+            }
+        }
+        let mut arena = ChunkArena::lazy_from_parts(7, Rc::new(MustNotRead));
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            arena.alloc_with_address_ceiling(b"", 4)
+        }))
+        .unwrap_err();
+        assert_eq!(
+            failure.downcast_ref::<&str>(),
+            Some(&"chunk:address-space-exhausted")
+        );
+        assert_eq!(arena.len(), 7);
+        assert_eq!(arena.resident_extent_count(), 0);
+        assert!(arena.dirty_extents().is_empty());
+        assert!(arena.unbacked.iter().all(|flag| !flag));
+    }
+
+    /// The free-list low-water mark: pops lower it, pushes (a free, a
+    /// sweep) leave it, and an acknowledgement restarts it at the list's
+    /// length. The acknowledgement is honored only by the arena that issued
+    /// it and only until the next one.
+    #[test]
+    fn free_list_low_water_mark_tracks_the_unchanged_prefix() {
+        let mut a = SlotArena::new();
+        let slots: Vec<SlotIndex> = (0..6).map(|i| a.alloc(Slot::integer(i))).collect();
+        for &slot in &slots[..4] {
+            a.free(slot);
+        }
+        let ack = a.acknowledge_free_list();
+        assert_eq!(a.free_list_unchanged_prefix(&ack), Some(4));
+
+        // Pushes leave the prefix alone.
+        a.free(slots[4]);
+        assert_eq!(a.free_list_unchanged_prefix(&ack), Some(4));
+        // Pops lower it, even when a push restores the length.
+        a.alloc(Slot::integer(7));
+        a.alloc(Slot::integer(8));
+        assert_eq!(a.free_list_unchanged_prefix(&ack), Some(3));
+        a.free(slots[5]);
+        assert_eq!(a.free_list_unchanged_prefix(&ack), Some(3));
+        assert_eq!(a.free_list().len(), 4);
+        // A sweep's pushes leave it too.
+        a.clear_marks();
+        assert!(a.sweep() > 0);
+        assert_eq!(a.free_list_unchanged_prefix(&ack), Some(3));
+
+        // A second acknowledgement restarts the mark and retires the first.
+        let next = a.acknowledge_free_list();
+        assert_eq!(a.free_list_unchanged_prefix(&ack), None);
+        assert_eq!(
+            a.free_list_unchanged_prefix(&next),
+            Some(a.free_list().len())
+        );
+
+        // Another arena, even one with the same list, honors neither.
+        let twin = SlotArena::from_image(a.records(), a.free_list().to_vec(), a.live_count());
+        assert_eq!(twin.free_list_unchanged_prefix(&next), None);
+        assert_eq!(twin.free_list_unchanged_prefix(&ack), None);
+    }
+
+    /// An arena adopted as restored keeps the mark it was built with, so
+    /// what restore itself pops still counts as changed even when a push
+    /// restores the length; an acknowledgement would restart the mark.
+    #[test]
+    fn a_free_list_baseline_keeps_the_build_time_mark() {
+        let mut a = SlotArena::new();
+        let slots: Vec<SlotIndex> = (0..5).map(|i| a.alloc(Slot::integer(i))).collect();
+        for &slot in &slots[..3] {
+            a.free(slot);
+        }
+        let mut restored =
+            SlotArena::from_image(a.records(), a.free_list().to_vec(), a.live_count());
+        restored.alloc(Slot::integer(9));
+        restored.free(slots[3]);
+        assert_eq!(restored.free_list().len(), 3);
+        let baseline = restored.free_list_baseline();
+        assert_eq!(restored.free_list_unchanged_prefix(&baseline), Some(2));
+        let ack = restored.acknowledge_free_list();
+        assert_eq!(restored.free_list_unchanged_prefix(&ack), Some(3));
+        assert_eq!(restored.free_list_unchanged_prefix(&baseline), None);
+    }
+
     #[test]
     fn slot_alloc_and_get_mut_mark_their_pages() {
         let mut a = SlotArena::new();
@@ -1923,5 +3140,28 @@ mod dirty_tests {
     fn chunk_from_image_starts_clean() {
         let c = ChunkArena::from_image(vec![9u8; (CHUNK_EXTENT_BYTES + 1) as usize]);
         assert!(c.dirty_extents().is_empty());
+    }
+
+    #[test]
+    fn backing_authority_is_bound_to_both_original_arenas() {
+        struct Unread;
+        impl PageSource for Unread {
+            fn slot_page(&self, _: u32) -> Vec<Slot> {
+                panic!("no page read")
+            }
+            fn chunk_extent(&self, _: u32) -> Vec<u8> {
+                panic!("no extent read")
+            }
+        }
+        let source: Rc<dyn PageSource> = Rc::new(Unread);
+        let (slots, chunks, authority) =
+            BackingCommitAuthority::lazy_arenas(0, vec![], 0, 0, source.clone()).unwrap();
+        let (other_slots, other_chunks, other) =
+            BackingCommitAuthority::lazy_arenas(0, vec![], 0, 0, source).unwrap();
+        assert!(authority.authorizes(&slots, &chunks));
+        assert!(!authority.authorizes(&slots, &other_chunks));
+        assert!(!authority.authorizes(&other_slots, &chunks));
+        assert!(!other.authorizes(&slots, &chunks));
+        assert!(!authority.authorizes(&SlotArena::new(), &ChunkArena::new()));
     }
 }

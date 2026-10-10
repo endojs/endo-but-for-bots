@@ -133,8 +133,19 @@ never-used session cancels for free.
 
 - **`cancel`** (explicit `E(host).cancel(name)`, **and every daemon shutdown**)
   is _transient_: the formula stays on disk and **reincarnates**, re-provisioning
-  a fresh container on the next `send()` (the workspace and conversation persist
-  in the `Filesystem` cap; `claude --continue` resumes).
+  a fresh container on the next `send()`. The workspace persists in its
+  `Filesystem` cap, and the **conversation transcript persists in a *dedicated*
+  config `Filesystem` cap** mounted at `/claude-config` (pointed at by
+  `CLAUDE_CONFIG_DIR`) — separate from `/workspace` so the transcript never
+  lands in a new-project git worktree or a `publishWorkspace` static site, and
+  crucially _outside_ the container's ephemeral tmpfs so it survives a restart.
+  On reincarnation the client reads that config dir's host backing directory
+  before every spawn; when it holds a transcript the turn resumes it by name
+  (`claude --resume <id>`, falling back to `--continue` for a transcript it
+  cannot name) rather than forking a fresh, context-free conversation. (Older
+  sessions minted before the config mount existed carry no
+  `CONFIG_MOUNT_POINT`, keep the tmpfs config dir, and therefore still lose
+  history across a restart until re-provisioned.)
 - **`remove`/collection** additionally **deletes** the formula. Because teardown
   is wired to the same `whenCancelled` signal, removal is a clean delete with no
   leftover container or mount — _"remove == delete, no further cleanup."_
@@ -208,13 +219,23 @@ enqueuing, so it preempts the in-flight turn cleanly.
 The analogy is exact; only the _abort action_ differs (floot aborts a fetch
 stream; here we **kill the `claude -p` OS process** in the slice):
 
-| floot                              | claude-sandbox                          |
-| ---------------------------------- | --------------------------------------- |
-| `converse(input) → replyReader`    | `send(prompt) → replyReader`            |
-| a turn = provider HTTP stream      | a turn = `claude -p` process            |
-| abort = `controller.abort()`       | abort = `E(proc).kill()` (on `onClose`) |
-| `turnChain` serializes turns       | `turnChain` serializes turns            |
-| reply channel `onClose → abort`    | reply channel `onClose → kill`          |
+| floot                                | claude-sandbox                          |
+| ------------------------------------ | --------------------------------------- |
+| `startTurn(input) → FlootTurn`       | `send(prompt) → replyReader`            |
+| a turn = provider HTTP stream        | a turn = `claude -p` process            |
+| abort = `controller.abort()`         | abort = `E(proc).kill()` (on `onClose`) |
+| `turnChain` serializes turns         | `turnChain` serializes turns            |
+| reply channel drained by the daemon  | reply channel `onClose → kill`          |
+| abort on `Turn.cancel()` only        | abort on the consumer's close           |
+
+Floot's half of the last two rows changed with
+[floot-daemon-owned-turns](../../designs/floot-daemon-owned-turns.md): a Floot
+session hands out a `FlootTurn` and drains its own reply channel, so nobody's
+disconnect ends a turn.
+This package still hands its reply channel to its caller, which is the right
+default for a client the daemon holds directly — but a caller that reaches it
+across a browser CapTP connection wants a turn object in front of it for the
+same reason floot does.
 
 `send()` returns the buffered reader immediately; the turn queues on `turnChain`
 and the reader yields the parsed stream-json events then a terminal
@@ -255,7 +276,7 @@ completion provider; it is an entire agent). The only common seam is the
 
 ### The common Session interface
 
-Synthesised from floot's `FlootSession` (`converse(input) → replyReader`,
+Synthesised from floot's `FlootSession` (`startTurn(input) → FlootTurn`,
 `getHistory`, `getUsage`, `getInfo`) and this package's `ClaudeClient`
 (`send`/`interrupt`/`terminate`/`status`):
 
@@ -314,7 +335,9 @@ Stream-json → `ReplyEvent` normalisation:
   `claude -p`, so partial tool side-effects already written to the workspace
   persist (a "dirtier" stop).
 - **Streaming granularity.** API yields true token deltas; claude-code yields
-  coarser structured-event deltas. Both map onto `delta`/`tool_call`.
+  them too, now that the CLI runs with `--include-partial-messages` (the
+  complete assistant records that follow are deduplicated by message id).
+  Both map onto `delta`/`tool_call`.
 - **Auth.** Both take a `ClaudeCredentials` cap. Container injects it as env
   (`CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`); API threads it into the
   provider. Uniform at the cap boundary.
@@ -446,10 +469,11 @@ formula **owns its slice and mount**:
 lazily from its `env` on first use — looking up the `sandbox-factory` /
 `fs-mounter` / `Filesystem` / `ClaudeCredentials` caps by pet name, mounting the
 workspace, registering the Mount cap, and minting the slice.
-On reincarnation it re-mounts and re-mints a fresh container; the workspace and
-the conversation persist in the `Filesystem` cap, and the (possibly
-peer-hosted) credential is re-materialised at spawn time — so no secret ever
-enters the formula `env`.
+On reincarnation it re-mounts and re-mints a fresh container; the workspace
+persists in its `Filesystem` cap and the conversation transcript persists in a
+dedicated config `Filesystem` cap mounted at `/claude-config` (see § Teardown
+for the cross-restart resume path), and the (possibly peer-hosted) credential is
+re-materialised at spawn time — so no secret ever enters the formula `env`.
 
 The per-session client worker runs as the attenuated `sandbox-powers` cap, not
 `@agent` — see [§8 Least authority for the client worker](#8-least-authority-for-the-client-worker--fixed).

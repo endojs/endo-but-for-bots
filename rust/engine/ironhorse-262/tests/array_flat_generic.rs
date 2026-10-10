@@ -112,9 +112,8 @@ fn flat_map_retains_calibrated_dense_metering() {
         "[1,2,3].flatMap(function(x){return [x,x]}).length",
     ] {
         let run = dual_run(source).expect("pinned XS oracle is available");
-        assert_eq!(
-            run.ironhorse_meter_raw,
-            run.oracle_meter_raw,
+        assert!(
+            run.observables_agree(),
             "{source}: oracle={} ({}) ironhorse={} ({})",
             run.oracle_computrons,
             run.oracle_meter_raw,

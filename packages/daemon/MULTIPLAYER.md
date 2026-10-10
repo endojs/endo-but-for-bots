@@ -432,14 +432,18 @@ the bytes-and-handshake layer differs.
 1. **Transport**: Each daemon runs a listener — TCP for `tcp-netstring`,
    TCP carrying an OCapN-Noise session for `ocapn`, or libp2p's
    transport stack for `libp2p`.
-2. **Invitation URL**: Encodes the inviter's node id, host handle id,
+2. **Invitation URL**: Encodes the inviter's node id, inviting handle id,
    and one or more connection-hint addresses (TCP `at=tcp+netstring+
    json+captp0://…`, OCapN `at=ocapn+noise+tcp://…`, or libp2p
-   multiaddrs).
-3. **Accept**: The acceptor parses the locator, registers the inviter's
-   peer info, iterates installed networks for one that `supports` the
-   hint's protocol, dials it, and runs the `hello` handshake to
-   exchange host-handle ids.
+   multiaddrs). The inviter is either a host (`EndoHost.invite`) or a
+   guest (`EndoGuest.invite`); the locator's `from` names that inviting
+   agent's handle, not necessarily a host handle.
+3. **Accept**: The acceptor is either a host (`EndoHost.accept`) or a
+   guest (`EndoGuest.accept`) — symmetric with the invite step above,
+   since a guest can now redeem an invitation as itself. The acceptor
+   parses the locator, registers the inviter's peer info, iterates
+   installed networks for one that `supports` the hint's protocol, dials
+   it, and runs the `hello` handshake to exchange handle ids.
 4. **Session**: A persistent session carries all subsequent `E()` calls
    between the daemons. Under `tcp-netstring` and `libp2p` this is a
    CapTP session over the dialled transport; under `ocapn` it is a

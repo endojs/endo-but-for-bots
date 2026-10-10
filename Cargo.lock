@@ -1124,6 +1124,7 @@ dependencies = [
  "gix",
  "hex",
  "ironhorse-compile",
+ "ironhorse-runtime",
  "ironhorse-snapshot",
  "ironhorse-store-sqlite",
  "ironhorse-vm",
@@ -2817,12 +2818,31 @@ dependencies = [
 name = "ironhorse-compile"
 version = "0.0.1"
 dependencies = [
+ "ironhorse-meter",
  "ironhorse-regexp",
+ "ironhorse-text",
+ "ironhorse-unicode",
 ]
+
+[[package]]
+name = "ironhorse-meter"
+version = "0.0.1"
 
 [[package]]
 name = "ironhorse-regexp"
 version = "0.0.1"
+dependencies = [
+ "ironhorse-meter",
+ "ironhorse-unicode",
+]
+
+[[package]]
+name = "ironhorse-runtime"
+version = "0.0.1"
+dependencies = [
+ "ironhorse-compile",
+ "ironhorse-vm",
+]
 
 [[package]]
 name = "ironhorse-snapshot"
@@ -2843,12 +2863,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironhorse-text"
+version = "0.0.1"
+
+[[package]]
+name = "ironhorse-unicode"
+version = "0.0.1"
+
+[[package]]
 name = "ironhorse-vm"
 version = "0.0.1"
 dependencies = [
  "icu_normalizer",
  "icu_segmenter",
+ "ironhorse-meter",
  "ironhorse-regexp",
+ "ironhorse-text",
+ "libm",
 ]
 
 [[package]]
@@ -4828,6 +4859,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "thixotrope-ironhorse-worker"
+version = "0.1.0"
+dependencies = [
+ "ironhorse-compile",
+ "ironhorse-snapshot",
+ "ironhorse-store-sqlite",
+ "ironhorse-vm",
+ "rustix",
+ "serde_json",
 ]
 
 [[package]]

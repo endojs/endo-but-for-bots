@@ -51,6 +51,7 @@ const powersWithStore = (powers, storeValue) =>
     storeValue,
     request: (...args) => E(powers).request(...args),
     form: (...args) => E(powers).form(...args),
+    locate: (...path) => E(powers).locate(...path),
     listMessages: () => E(powers).listMessages(),
     followMessages: () => E(powers).followMessages(),
   });

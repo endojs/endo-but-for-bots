@@ -6,6 +6,9 @@
   },
   "references": [
     {
+      "path": "../errors/tsconfig.composite.json"
+    },
+    {
       "path": "../eventual-send/tsconfig.composite.json"
     },
     {

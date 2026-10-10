@@ -4,7 +4,7 @@
 
 use ironhorse_vm::{parse_symbols, Halt, Interp};
 
-fn compile_module(source: &str) -> (Vec<u8>, Vec<String>) {
+fn compile_module(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (bytecode, symbols) =
         ironhorse_compile::compile_module_atoms(source).expect("module compiles");
     (bytecode, parse_symbols(&symbols))
@@ -80,7 +80,7 @@ fn loader_dependent_module_shapes_stay_named() {
     machine.link_intrinsics(&symbols);
     assert_eq!(
         machine.run(&bytecode).halt,
-        Halt::Unsupported("module:static-linking")
+        Halt::NotImplemented("module:static-linking")
     );
 
     let (bytecode, symbols) = compile_module("await 1; globalThis.answer = 1;");
@@ -88,6 +88,6 @@ fn loader_dependent_module_shapes_stay_named() {
     machine.link_intrinsics(&symbols);
     assert_eq!(
         machine.run(&bytecode).halt,
-        Halt::Unsupported("module:top-level-await")
+        Halt::NotImplemented("module:top-level-await")
     );
 }

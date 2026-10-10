@@ -1,0 +1,25 @@
+# engine=ironhorse features=default corpus=intl402/NumberFormat/prototype/resolvedOptions tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/NumberFormat/prototype/resolvedOptions/basic.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/resolvedOptions/basic.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/resolvedOptions/builtin.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/resolvedOptions/builtin.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/resolvedOptions/compactDisplay.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/resolvedOptions/compactDisplay.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/resolvedOptions/length.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/resolvedOptions/length.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/resolvedOptions/name.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/resolvedOptions/name.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/resolvedOptions/no-instanceof.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/resolvedOptions/no-instanceof.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/resolvedOptions/order.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/resolvedOptions/order.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/resolvedOptions/prop-desc.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/resolvedOptions/prop-desc.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/resolvedOptions/resolved-numbering-system-unicode-extensions-and-options.js sloppy skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/prototype/resolvedOptions/resolved-numbering-system-unicode-extensions-and-options.js strict skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/prototype/resolvedOptions/return-keys-order-default.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/resolvedOptions/return-keys-order-default.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/resolvedOptions/roundingMode.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/resolvedOptions/roundingMode.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/resolvedOptions/this-value-not-numberformat.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/prototype/resolvedOptions/this-value-not-numberformat.js strict skip:oracle-host-missing-intl

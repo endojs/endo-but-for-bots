@@ -1,0 +1,82 @@
+diff --git a/rust/engine/ironhorse-compile/src/coder.rs b/rust/engine/ironhorse-compile/src/coder.rs
+index 92fffc1e3..341c18e76 100644
+--- a/rust/engine/ironhorse-compile/src/coder.rs
++++ b/rust/engine/ironhorse-compile/src/coder.rs
+@@ -1103,6 +1103,7 @@ fn compile_goal_metered(
+     strict: bool,
+     meter: crate::meter::ParseMeter<'_>,
+ ) -> Result<(Vec<u8>, Vec<u8>), crate::parser::ParseError> {
++    let phase_start = std::time::Instant::now();
+     let module = goal == Goal::Module;
+     let mut parser =
+         crate::parser::Parser::with_meter(source, strict || module, module, meter.clone())?;
+@@ -1117,9 +1118,15 @@ fn compile_goal_metered(
+             n.flags |= crate::ast::flags::EVAL;
+         }
+     }
++    let parse_secs = phase_start.elapsed().as_secs_f64();
++    let phase_start = std::time::Instant::now();
+     let tree = crate::scoper::run_goal_for_compile(&root, goal, meter.clone())?;
++    let scope_secs = phase_start.elapsed().as_secs_f64();
++    let phase_start = std::time::Instant::now();
+     let mut coder = Coder::new(&tree, meter);
+     coder.intern_tree(&root);
++    let intern_secs = phase_start.elapsed().as_secs_f64();
++    let phase_start = std::time::Instant::now();
+     if module {
+         coder.code_module(node_of(&root));
+     } else {
+@@ -1129,7 +1136,24 @@ fn compile_goal_metered(
+     if let Some(error) = coder.error.take() {
+         return Err(error);
+     }
+-    Ok(coder.serialize_atoms())
++    let code_secs = phase_start.elapsed().as_secs_f64();
++    let phase_start = std::time::Instant::now();
++    let result = coder.serialize_atoms();
++    let serialize_secs = phase_start.elapsed().as_secs_f64();
++    let phase_start = std::time::Instant::now();
++    drop(coder);
++    let drop_coder = phase_start.elapsed().as_secs_f64();
++    let phase_start = std::time::Instant::now();
++    drop(tree);
++    let drop_tree = phase_start.elapsed().as_secs_f64();
++    let phase_start = std::time::Instant::now();
++    drop(root);
++    let drop_root = phase_start.elapsed().as_secs_f64();
++    let phase_start = std::time::Instant::now();
++    drop(parser);
++    let drop_parser = phase_start.elapsed().as_secs_f64();
++    eprintln!("PHASE bytes={} parse={parse_secs:.9} scope={scope_secs:.9} intern={intern_secs:.9} code={code_secs:.9} serialize={serialize_secs:.9} drop_coder={drop_coder:.9} drop_tree={drop_tree:.9} drop_root={drop_root:.9} drop_parser={drop_parser:.9}", source.len());
++    Ok(result)
+ }
+ 
+ /// A compiled unit and its complete front-end cost (all raw deltas were already
+@@ -5958,7 +5982,9 @@ impl Coder<'_, '_> {
+     /// stage-5 id contract), letting the `Ironhorse` seam stop borrowing the
+     /// oracle's atom.
+     fn serialize_atoms(&mut self) -> (Vec<u8>, Vec<u8>) {
++        let phase_start = std::time::Instant::now();
+         self.optimize();
++        eprintln!("OPT records={} secs={:.9}", self.codes.len(), phase_start.elapsed().as_secs_f64());
+         self.meter.work(self.codes.len().saturating_mul(3));
+         self.meter.work(self.symbols.entries.len());
+ 
+diff --git a/rust/engine/ironhorse-compile/src/scoper.rs b/rust/engine/ironhorse-compile/src/scoper.rs
+index 234b24c4c..1851b04e5 100644
+--- a/rust/engine/ironhorse-compile/src/scoper.rs
++++ b/rust/engine/ironhorse-compile/src/scoper.rs
+@@ -460,9 +460,13 @@ pub(crate) fn run_goal_metered(
+         ..Scoper::default()
+     };
+     // fxParserHoist
++    let phase_start = std::time::Instant::now();
+     s.hoist_dispatch(root_node)?;
++    let hoist_secs = phase_start.elapsed().as_secs_f64();
+     // fxParserBind
++    let phase_start = std::time::Instant::now();
+     s.bind_dispatch(root_node)?;
++    eprintln!("SCOPE scopes={} hoist={hoist_secs:.9} bind={:.9}", s.scopes.len(), phase_start.elapsed().as_secs_f64());
+     // Eval scopes accumulate in insertion order. All hoist/bind resolution uses
+     // stable ids and newest-first name indexes; materialize XS's prepend order
+     // once, after the last possible synthetic declaration and before coding.

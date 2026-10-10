@@ -1,0 +1,27 @@
+# engine=ironhorse features=default corpus=built-ins/Atomics/or tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Atomics/or/bad-range.js sloppy skip:unsupported-opcode:atomics:access-index
+built-ins/Atomics/or/bad-range.js strict skip:unsupported-opcode:atomics:access-index
+built-ins/Atomics/or/descriptor.js sloppy pass
+built-ins/Atomics/or/descriptor.js strict pass
+built-ins/Atomics/or/expected-return-value.js sloppy pass
+built-ins/Atomics/or/expected-return-value.js strict pass
+built-ins/Atomics/or/good-views.js sloppy skip:unsupported-opcode:atomics:access-index
+built-ins/Atomics/or/good-views.js strict skip:unsupported-opcode:atomics:access-index
+built-ins/Atomics/or/immutable-buffer.js sloppy skip:shared-test262-failure
+built-ins/Atomics/or/immutable-buffer.js strict skip:shared-test262-failure
+built-ins/Atomics/or/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 3; length value should be 3"
+built-ins/Atomics/or/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 3; length value should be 3"
+built-ins/Atomics/or/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be or; name value should be or"
+built-ins/Atomics/or/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be or; name value should be or"
+built-ins/Atomics/or/non-shared-bufferdata.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Atomics/or/non-shared-bufferdata.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Atomics/or/non-shared-int-views-throws.js sloppy skip:unsupported-opcode:atomics:non-integer-typedarray
+built-ins/Atomics/or/non-shared-int-views-throws.js strict skip:unsupported-opcode:atomics:non-integer-typedarray
+built-ins/Atomics/or/non-views.js sloppy skip:unsupported-opcode:atomics:non-typedarray
+built-ins/Atomics/or/non-views.js strict skip:unsupported-opcode:atomics:non-typedarray
+built-ins/Atomics/or/not-a-constructor.js sloppy pass
+built-ins/Atomics/or/not-a-constructor.js strict pass
+built-ins/Atomics/or/validate-arraytype-before-index-coercion.js sloppy skip:unsupported-opcode:atomics:non-integer-typedarray
+built-ins/Atomics/or/validate-arraytype-before-index-coercion.js strict skip:unsupported-opcode:atomics:non-integer-typedarray
+built-ins/Atomics/or/validate-arraytype-before-value-coercion.js sloppy skip:unsupported-opcode:atomics:non-integer-typedarray
+built-ins/Atomics/or/validate-arraytype-before-value-coercion.js strict skip:unsupported-opcode:atomics:non-integer-typedarray

@@ -1,0 +1,17 @@
+# engine=ironhorse features=default corpus=intl402/Locale/prototype/getCollations tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Locale/prototype/getCollations/branding.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCollations/branding.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCollations/collation-keyword.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCollations/collation-keyword.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCollations/name.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCollations/name.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCollations/output-array-sorted.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCollations/output-array-sorted.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCollations/output-array-values.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCollations/output-array-values.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCollations/output-array.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCollations/output-array.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCollations/prop-desc.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCollations/prop-desc.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCollations/und-language.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getCollations/und-language.js strict skip:oracle-host-missing-global:Intl

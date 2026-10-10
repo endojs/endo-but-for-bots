@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-17 |
-| **Updated** | 2026-09-04 |
+| **Updated** | 2026-09-07 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 
@@ -189,6 +189,27 @@ body, and the machine-thread run entry, converting the process abort into a
 lands, the "not a compromised daemon" guarantee holds only for the prospective
 Ironhorse `Machine` seam, not for the C-XS worker on today's delivery path.
 
+**Worker-owned power tables.** Catching a panic must not expose torn shared
+state or leave the dead worker's native handles alive for the daemon's lifetime.
+The filesystem, directory, SQLite connection/statement, and incremental hasher
+tables therefore belong to the dedicated worker thread. Thread exit drops these
+resources. Handle identifiers remain globally allocated, and a lookup resolves
+only against the calling thread's table. This also closes the pre-existing
+cross-worker handle lookup gap: the former process-wide tables did not check
+ownership even in runs without a panic. Reconstruction after restart remains
+separate work in § Slot Machine Termination and Retry. Until those handles can
+be reconstructed, a supervised suspend request with open native handles returns
+`suspend-error` and leaves the worker running. The caller must close its file,
+directory, SQLite, and hasher handles before retrying suspension.
+
+**Limits of the unwind boundary.** `catch_unwind` catches unwinding Rust panics.
+It cannot contain native stack overflow, explicit process abort, allocation
+abort, or a second panic from a destructor during unwinding. Native recursion
+on guest-controlled inputs still needs its own bound; this differs from the
+interpreter's emulated `Halt::StackOverflow` limit. The build rejects
+`panic = "abort"`. No transactional rollback of host effects already performed
+before the fault is provided by this slice.
+
 **Conclusion of the scope step:** Ironhorse's mechanism exists for two of three
 natural cases and needs *naming and generalizing*, not building. Its genuinely
 new engineering is the formal category (small) and the Coda. Slot Machine's
@@ -210,7 +231,7 @@ and adds classification, rather than collapsing them:
    diagnostics the supervisor and debugger need.
 2. **Add a grouping predicate** on `Halt`:
    `fn is_panic(&self) -> bool`, true for `StackOverflow | MeterAbort |
-   Panic(_)` (the settled core of the set) and **provisionally** also for
+   EngineInvariant(_) | Panic(_)` (the settled core of the set) and **provisionally** also for
    `Decode | StepLimit`, whose inclusion is the one element of this predicate left
    open (see Open Questions: they terminate-without-commit like a panic, but their
    provenance is supervisor/harness rather than guest behavior). The `Decode |
@@ -240,7 +261,7 @@ and adds classification, rather than collapsing them:
    carries a diagnostic payload, for the same reason item 1 keeps the legacy
    variants' payloads**: collapsing them to payload-free would forfeit exactly the
    supervisor/debugger diagnostics this family is meant to preserve:
-   `EngineFault { message: String, location: Option<PanicLocation> }` captures the
+   `EngineFault { message: String, location: Option<String> }` captures the
    caught Rust panic's message and (where the panic hook can recover it) its
    file/line, so `EngineFault` is as informative as `StackOverflow(usize)`'s
    overshoot; `ReferenceError { name: Option<String>, site: RaiseSite }` captures
@@ -252,8 +273,8 @@ and adds classification, rather than collapsing them:
    frozen-at-fault snapshot is self-describing rather than requiring the cause to be
    re-derived from the program counter alone. The two "where" fields are
    deliberately spelled differently: `EngineFault.location` is an *optional
-   physical source position* (`PanicLocation`, a Rust file/line the panic hook can
-   recover only sometimes), whereas `ReferenceError.site` is a *non-optional
+   physical source position* (`Option<String>`, a Rust `file:line:col` string the
+   panic hook can recover only sometimes), whereas `ReferenceError.site` is a *non-optional
    categorical raise-site* (`RaiseSite`, always exactly one of the finite Coda
    sites). The distinction is a fault's physical origin versus its known-in-advance categorical
    origin, not an accidental naming inconsistency. Neither variant is payload-free.
@@ -273,8 +294,11 @@ and adds classification, rather than collapsing them:
    decision reads only this three-way value; the `reason` carries the underlying
    `Halt` for reporting. **The `Panicked` arm is defined *by delegation*, not by a
    second enumeration:** `ExecutionOutcome::classify(halt)` computes `Panicked(halt)`
-   exactly when `halt.is_panic()` (item 2) is true, never by re-listing the panic
-   variant shapes at the `Machine` seam. This is a binding implementation
+   whenever `halt.is_panic()` (item 2) is true, never by re-listing the panic
+   variant shapes at the `Machine` seam. The seam also fails closed for
+   `Unsupported` and unexpected control-state halts: these classify as
+   `Panicked` for discard policy even though they are not members of the panic
+   category. Thus the outcome is a strict superset of the predicate. This is a binding implementation
    constraint, so the "one place the set is defined" claim in item 2 survives its
    own architecture: adding a new `Halt`/`PanicKind` variant updates `is_panic()`
    alone, and the classifier follows for free instead of drifting as a
@@ -1249,7 +1273,7 @@ transcript) is a separate, later bar and does not block the correctness suite.
 | [ironhorse-debugger-recovery-and-uncaught](ironhorse-debugger-recovery-and-uncaught.md) | Supplies the throw/uncaught classifier (`jumps.is_empty()`), the `raise` engine-unwind prerequisite the Coda toggles against, and the break/report model a panic must be distinguished within. The Coda's switch lives at that design's `raise` seam. |
 | [daemon-xs-worker-debugger](daemon-xs-worker-debugger.md) | The consumer contract (`<break>`/`<panic>` wire messages, `DebugSession`, `setExceptionBreakMode`) the panic break reason extends. |
 | [ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md) | Supplies the Ironhorse engine primitive that Slot Machine uses to obtain or restore a worker snapshot, including the per-worker SQLite `HeapStore::commit` / `CheckpointBatch` durability primitive. Its heap store is a *separate* SQLite file from the transcript, so Slot Machine joins a store-backed worker's heap epoch and transcript crank via `ATTACH` on one connection or an explicit two-phase commit (§ Slot Machine per-worker write-ahead transcript), not a single implicit transaction. |
-| [ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md) | Supplies the landed snapshot-plus-journal-suffix, stable frame sequence, duplicate-suppression, and replay-window precedent. This design applies that recovery envelope to endor vats and extends it to host-call messages and logical handles. |
+| [thixotrope](thixotrope.md) | Supplies the landed snapshot-plus-journal-suffix, stable frame sequence, duplicate-suppression, and replay-window precedent. This design applies that recovery envelope to endor vats and extends it to host-call messages and logical handles. |
 
 ## Prompt
 

@@ -216,6 +216,8 @@ packages/fae/
 ├── src/
 │   ├── extract-tool-calls.js # XML tool call parser
 │   ├── fae-tool-interface.js # FaeTool M.interface guard
+│   ├── subagent.js           # Delegation registry and subagent tools
+│   ├── subagent-host.js      # Agent provisioning, teardown, and the spawner
 │   ├── tool-makers.js        # Built-in tool factory functions
 │   └── tools.js              # Tool discovery and execution
 └── tools/
@@ -230,3 +232,39 @@ packages/fae/
     ├── grep.js               # FaeTool: search file contents by regexp under root
     └── run-command.js        # FaeTool: run shell commands in root
 ```
+
+## Subagents
+
+An agent may hand a self-contained piece of work to a subagent it converses with
+over the daemon mailbox, using `spawnSubagent`, `askSubagent`, and
+`stopSubagent`.
+The capability that mints subagents is endowed per agent, so withholding it
+withholds the tools.
+See [SUBAGENTS.md](./SUBAGENTS.md).
+
+## Provider credentials
+
+The LLM auth token is held by the daemon's secret manager, not by a pet-store
+value.
+`llm-provider-factory` puts a submitted token in `@secrets` and records only the
+pet name it was bound to; `fae-factory-setup` resolves that name where it is
+meaningful — in the user's own inventory — and delegates the resulting
+`SecretBlob` capability to the factory, which passes it on to each agent's
+driver.
+An agent reads the token afresh for every turn, so replacing the bytes
+(`SecretAdmin.replaceBase64`) rotates every running agent at once and revoking
+the secret stops the next turn rather than merely the next provisioning.
+The provider is rebuilt only when the bytes actually change.
+A deployment still carrying a plaintext `authToken` in its provider config keeps
+working, with a warning: that arrangement cannot be rotated, revoked, or
+audited.
+
+Going the other way — replacing a managed secret with a plaintext token — takes
+more than re-running setup.
+Setup drops the factory's own `llm-auth-secret`, so newly created agents get
+none, but every agent already provisioned holds the `SecretBlob` in its own
+namespace and the resolver prefers a capability over a config value.
+A `SecretBlob` hands its holder the bytes by design, so the way to stop those
+agents using the old token is to **revoke the secret**, which is what the secret
+manager is for; removing the pet name from the provider config is not a
+revocation.

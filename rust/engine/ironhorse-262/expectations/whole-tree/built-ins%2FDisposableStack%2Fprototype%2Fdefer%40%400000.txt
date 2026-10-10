@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=built-ins/DisposableStack/prototype/defer tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/DisposableStack/prototype/defer/adds-onDispose.js sloppy pass
+built-ins/DisposableStack/prototype/defer/adds-onDispose.js strict pass
+built-ins/DisposableStack/prototype/defer/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/DisposableStack/prototype/defer/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/DisposableStack/prototype/defer/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be defer; name value should be defer"
+built-ins/DisposableStack/prototype/defer/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be defer; name value should be defer"
+built-ins/DisposableStack/prototype/defer/not-a-constructor.js sloppy pass
+built-ins/DisposableStack/prototype/defer/not-a-constructor.js strict pass
+built-ins/DisposableStack/prototype/defer/prop-desc.js sloppy pass
+built-ins/DisposableStack/prototype/defer/prop-desc.js strict pass
+built-ins/DisposableStack/prototype/defer/puts-onDispose-on-top-of-stack.js sloppy pass
+built-ins/DisposableStack/prototype/defer/puts-onDispose-on-top-of-stack.js strict pass
+built-ins/DisposableStack/prototype/defer/returns-undefined.js sloppy pass
+built-ins/DisposableStack/prototype/defer/returns-undefined.js strict pass
+built-ins/DisposableStack/prototype/defer/this-does-not-have-internal-disposablestate-throws.js sloppy pass
+built-ins/DisposableStack/prototype/defer/this-does-not-have-internal-disposablestate-throws.js strict pass
+built-ins/DisposableStack/prototype/defer/this-not-object-throws.js sloppy pass
+built-ins/DisposableStack/prototype/defer/this-not-object-throws.js strict pass
+built-ins/DisposableStack/prototype/defer/throws-if-disposed.js sloppy pass
+built-ins/DisposableStack/prototype/defer/throws-if-disposed.js strict pass
+built-ins/DisposableStack/prototype/defer/throws-if-onDispose-not-callable.js sloppy pass
+built-ins/DisposableStack/prototype/defer/throws-if-onDispose-not-callable.js strict pass

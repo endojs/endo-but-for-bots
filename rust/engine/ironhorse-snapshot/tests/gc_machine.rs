@@ -3,18 +3,28 @@
 //! entries for swept objects, rewrites externally held chunk offsets,
 //! and a collected machine keeps executing and checkpointing exactly.
 
+#[path = "common/compile.rs"]
+mod guest_compile;
+use guest_compile::compile;
+
 use ironhorse_snapshot::machine::{begin_store_session, resume_from_store, MachineSnapshot};
 use ironhorse_snapshot::store::MemoryStore;
 use ironhorse_snapshot::Signature;
-use ironhorse_vm::{parse_symbols, Interp};
+use ironhorse_vm::{Interp, RunOutcome};
 
 fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
 }
 
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
-    let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("fixture compiles");
-    (bytecode, parse_symbols(&symbols))
+/// Relink and run a later crank on `m`. A crank's symbol atom is its own,
+/// so its ids must be relinked against the machine's realm table before it
+/// runs; run raw, `CRANKS[1]`'s `var n` shifts every later id onto the
+/// wrong crank-1 name, and `keep.v` reads a property of `undefined` — which
+/// the engine used to answer silently (a coincidental result this test
+/// then compared against itself) and now refuses with a `TypeError`.
+fn run_crank(m: &mut Interp, crank: &(Vec<u8>, Vec<ironhorse_vm::SymbolName>)) -> RunOutcome {
+    let bytecode = m.relink_crank(&crank.0, &crank.1).expect("relink");
+    m.run(&bytecode)
 }
 
 const CRANKS: [&str; 2] = [
@@ -32,13 +42,14 @@ const CRANKS: [&str; 2] = [
 
 #[test]
 fn collected_machine_keeps_executing_and_agrees() {
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = CRANKS.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        CRANKS.iter().map(|s| compile(s)).collect();
 
     // Baseline: never collected.
     let mut base = Interp::new();
     base.link_intrinsics(&compiled[0].1);
     assert!(base.run(&compiled[0].0).completed);
-    let b2 = base.run(&compiled[1].0);
+    let b2 = run_crank(&mut base, &compiled[1]);
     assert!(b2.completed);
 
     // Collected between cranks: same results, same computrons (GC is
@@ -47,32 +58,36 @@ fn collected_machine_keeps_executing_and_agrees() {
     m.link_intrinsics(&compiled[0].1);
     let o1 = m.run(&compiled[0].0);
     assert!(o1.completed);
-    let stats = m.collect_garbage();
+    let stats = m.collect_garbage().unwrap();
     assert!(stats.slots_reclaimed > 0, "the loop's dead objects sweep");
     assert!(
         stats.chunk_bytes_after < stats.chunk_bytes_before,
         "dead strings compact away"
     );
-    let o2 = m.run(&compiled[1].0);
+    let o2 = run_crank(&mut m, &compiled[1]);
     assert!(o2.completed, "halt: {:?}", o2.halt);
     assert_eq!(o2.result, b2.result, "array/string/object survive GC");
     assert_eq!(o2.computrons, b2.computrons, "meter unperturbed by GC");
 
     // A second collect right after the first is a fixpoint apart from
     // the crank's own garbage — nothing live is lost either way.
-    let live_before = m.collect_garbage().slots_live;
-    let again = m.collect_garbage();
-    assert_eq!(again.slots_live, live_before, "collect is idempotent on live set");
+    let live_before = m.collect_garbage().unwrap().slots_live;
+    let again = m.collect_garbage().unwrap();
+    assert_eq!(
+        again.slots_live, live_before,
+        "collect is idempotent on live set"
+    );
 }
 
 #[test]
 fn collected_machine_checkpoints_and_resumes_exactly() {
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = CRANKS.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        CRANKS.iter().map(|s| compile(s)).collect();
 
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     assert!(m.run(&compiled[0].0).completed);
-    m.collect_garbage();
+    m.collect_garbage().unwrap();
 
     // The GC'd machine, uninterrupted, is the oracle for its own
     // store round-trip.
@@ -81,16 +96,21 @@ fn collected_machine_checkpoints_and_resumes_exactly() {
         .map_err(|(_, e)| e)
         .expect("begin");
     let mut oracle = session.into_machine();
-    let expected = oracle.run(&compiled[1].0);
+    let expected = run_crank(&mut oracle, &compiled[1]);
     assert!(expected.completed);
 
     let mut resumed = resume_from_store(&store, &sig()).expect("resume");
-    let got = resumed.machine_mut().run(&compiled[1].0);
+    let got = run_crank(resumed.machine_mut(), &compiled[1]);
     assert_eq!(got.result, expected.result);
     assert_eq!(got.computrons, expected.computrons);
     assert_eq!(
-        resumed.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
-        oracle.write_snapshot(&sig()).expect("quiescent machine snapshots"),
+        resumed
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
+        oracle
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
         "post-GC store round-trip is byte-exact"
     );
 }
@@ -111,7 +131,8 @@ fn partial_collect_is_conservative_and_exact() {
          last = { v: -1 }; t = 7;",
         "var last; var i; t + 1",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
 
     let mut store = MemoryStore::new();
     let mut m = Interp::new();
@@ -121,16 +142,19 @@ fn partial_collect_is_conservative_and_exact() {
         .map_err(|(_, e)| e)
         .expect("begin");
 
-    let live_before = session.machine().slots.live_count();
+    let live_before = session.machine().slots().live_count();
     let freed = partial_collect(&mut session, &store).expect("partial collect");
     // Dead records keep their edges until their page is rewritten, so every
     // page still summary-linked from live pages is retained. Intrinsic boot
     // growth may shift the chain across page boundaries and expose some whole
     // pages with no such link; reclaiming those is safe and intentionally not
     // locked to a boot-allocation-sensitive exact count.
-    assert!(freed <= live_before, "partial collection cannot free more than the arena holds");
+    assert!(
+        freed <= live_before,
+        "partial collection cannot free more than the arena holds"
+    );
     assert_eq!(
-        session.machine().slots.live_count(),
+        session.machine().slots().live_count(),
         live_before - freed,
         "accounting tracks the frees exactly"
     );
@@ -142,10 +166,17 @@ fn partial_collect_is_conservative_and_exact() {
     assert!(o.completed);
     assert_eq!(o.result, "8");
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    ironhorse_snapshot::store::validate_store_content(&store, &sig()).expect("the store validates");
     let resumed = resume_from_store(&store, &sig()).expect("resume");
     assert_eq!(
-        resumed.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
-        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
+        resumed
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
+        session
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
         "post-partial-collect store round-trip is byte-exact"
     );
 }
@@ -178,7 +209,8 @@ fn partial_collect_keeps_side_table_only_referenced_objects() {
         "var i; var v; var w; var length; var arr; \
          arr[0].v + arr[1999].w",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
 
     let mut store = MemoryStore::new();
     let mut m = Interp::new();
@@ -223,10 +255,17 @@ fn partial_collect_keeps_side_table_only_referenced_objects() {
     assert!(o.completed, "halt: {:?}", o.halt);
     assert_eq!(o.result, "1999", "0 + 1999 read back from live elements");
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    ironhorse_snapshot::store::validate_store_content(&store, &sig()).expect("the store validates");
     let resumed = resume_from_store(&store, &sig()).expect("resume");
     assert_eq!(
-        resumed.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
-        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
+        resumed
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
+        session
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
         "store round-trip stays byte-exact"
     );
 }
@@ -243,7 +282,8 @@ fn partial_collect_reclaims_page_isolated_garbage() {
     use ironhorse_vm::{Slot, SLOTS_PER_PAGE};
 
     let cranks = ["var t = 0; t = 7;", "var t; t + 1"];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
 
     let mut store = MemoryStore::new();
     let mut m = Interp::new();
@@ -257,18 +297,24 @@ fn partial_collect_reclaims_page_isolated_garbage() {
     // 2-slot objects straddles page boundaries, and a straddling run
     // chains every page (the conservatism case above) — the reclaim
     // lock must not hinge on that parity.
-    while m.slots.capacity() % SLOTS_PER_PAGE != 0 {
-        m.slots.alloc(Slot::integer(0));
-    }
-    for _ in 0..(4 * SLOTS_PER_PAGE) {
-        m.slots.alloc(Slot::integer(7));
-    }
+    let mut image = m.snapshot_image_for_testing(&sig()).unwrap();
+    let aligned = image.slots.len().div_ceil(SLOTS_PER_PAGE as usize) * SLOTS_PER_PAGE as usize;
+    image.slots.resize(aligned, Slot::integer(0));
+    image
+        .slots
+        .resize(aligned + 4 * SLOTS_PER_PAGE as usize, Slot::integer(7));
+    image.slot_live = image.slots.len() as u32 - image.slot_free.len() as u32;
+    let m = ironhorse_snapshot::machine::from_snapshot_bytes(
+        &ironhorse_snapshot::image::write_machine_unchecked(&image),
+        &sig(),
+    )
+    .unwrap();
 
     let mut session = begin_store_session(m, &sig(), &mut store)
         .map_err(|(_, e)| e)
         .expect("begin");
 
-    let live_before = session.machine().slots.live_count();
+    let live_before = session.machine().slots().live_count();
     let freed = partial_collect(&mut session, &store).expect("partial collect");
     // The four planted pages are exactly page-isolated garbage; the
     // alignment filler shares its page with live records and is
@@ -278,7 +324,7 @@ fn partial_collect_reclaims_page_isolated_garbage() {
         "page-isolated garbage reclaimed without content reads, got {freed}"
     );
     assert_eq!(
-        session.machine().slots.live_count(),
+        session.machine().slots().live_count(),
         live_before - freed,
         "accounting tracks the frees exactly"
     );
@@ -290,33 +336,39 @@ fn partial_collect_reclaims_page_isolated_garbage() {
     assert!(o.completed, "halt: {:?}", o.halt);
     assert_eq!(o.result, "8");
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    ironhorse_snapshot::store::validate_store_content(&store, &sig()).expect("the store validates");
     let resumed = resume_from_store(&store, &sig()).expect("resume");
     assert_eq!(
-        resumed.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
-        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
+        resumed
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
+        session
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
         "post-reclaim store round-trip is byte-exact"
     );
-    session.machine_mut().collect_garbage();
+    session.machine_mut().collect_garbage().unwrap();
 }
 
 /// Phase 9 bar: small state is O(1) in heap size — a machine with a
 /// large free list (post-GC) stores a SMALL small-state row, with the
-/// list riding in leafed segment rows instead.
+/// list riding in segment rows instead.
 #[test]
 fn small_state_stays_small_with_a_large_free_list() {
     use ironhorse_snapshot::store::{free_seg_count, HeapStore};
 
-    let cranks = [
-        "var last = { v: 0 }; var t = 0; var i = 0; \
+    let cranks = ["var last = { v: 0 }; var t = 0; var i = 0; \
          for (i = 0; i < 3000; i = i + 1) { last = { v: i }; } \
-         last = 0; t = 7;",
-    ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+         last = 0; t = 7;"];
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     assert!(m.run(&compiled[0].0).completed);
     // Full GC sweeps the dropped chain onto the free list.
-    let stats = m.collect_garbage();
+    let stats = m.collect_garbage().unwrap();
     assert!(stats.slots_reclaimed > 3000, "chain swept: {stats:?}");
 
     let mut store = MemoryStore::new();
@@ -326,21 +378,33 @@ fn small_state_stays_small_with_a_large_free_list() {
     let manifest = store.manifest().unwrap();
     assert!(manifest.free_len > 3000, "free list is genuinely large");
     let small_len = store.read_small_state().unwrap().len();
+    // Boot-native names add a fixed per-runtime table, independent of garbage.
+    let native_name_bytes = 4 + 8 * session
+        .machine()
+        .function_state_snapshot()
+        .native_names
+        .as_ref()
+        .unwrap()
+        .len();
     assert!(
         // The Promise/RegExp/ArrayBuffer species getters, matchAll iterator
-        // natives, and ArrayBuffer slice metadata add only fixed boot state;
-        // keep a tight constant ceiling while allowing those constant-sized
-        // rows.
-        small_len < 600,
+        // natives, ArrayBuffer slice metadata, and the eagerly linked Error
+        // name/message keys add only fixed boot state. Keep a tight constant
+        // ceiling while allowing those constant-sized rows and the 32-byte
+        // cost-table digest in METR.
+        small_len < 672 + native_name_bytes,
         "small state is O(1) in heap size, got {small_len} bytes for \
          {} free entries",
         manifest.free_len
     );
-    // The list itself rides in segment rows, leafed and verifiable —
-    // and it genuinely spans MULTIPLE segments, so the split and the
+    // The list itself rides in segment rows, and it genuinely spans
+    // MULTIPLE segments, so the split and the
     // reassembly are exercised, not just the single-segment case.
     let segs = free_seg_count(manifest.free_len);
-    assert!(segs >= 2, "multi-segment split exercised, got {segs} segment(s)");
+    assert!(
+        segs >= 2,
+        "multi-segment split exercised, got {segs} segment(s)"
+    );
     let total: usize = (0..segs)
         .map(|s| store.read_free_seg(s).unwrap().len())
         .sum();
@@ -350,14 +414,10 @@ fn small_state_stays_small_with_a_large_free_list() {
     // And the round-trip carries it exactly.
     let resumed = resume_from_store(&store, &sig()).expect("resume");
     assert_eq!(
-        resumed.machine().slots.free_list().len() as u32,
+        resumed.machine().slots().free_list().len() as u32,
         manifest.free_len
     );
 }
-
-
-
-
 
 /// Phase 9 proportionality lock (review follow-up): LIFO free-list
 /// churn rewrites ONLY the tail segment. Allocation pops from the
@@ -378,14 +438,15 @@ fn lifo_churn_rewrites_only_the_tail_free_segment() {
          last = 0; t = 7;",
         "var last; var v; var t; var i; last = { v: 1 }; t + 1",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
 
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     assert!(m.run(&compiled[0].0).completed);
     // Sweep the dropped chain onto the free list — thousands of
     // entries, spanning multiple segments.
-    m.collect_garbage();
+    m.collect_garbage().unwrap();
 
     let mut store = MemoryStore::new();
     let mut session = begin_store_session(m, &sig(), &mut store)
@@ -398,13 +459,94 @@ fn lifo_churn_rewrites_only_the_tail_free_segment() {
     let o = session.machine_mut().run(&compiled[1].0);
     assert!(o.completed, "halt: {:?}", o.halt);
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    ironhorse_snapshot::store::validate_store_content(&store, &sig()).expect("the store validates");
 
     let segs_after = free_seg_count(store.manifest().unwrap().free_len);
-    assert_eq!(segs_before, segs_after, "fixture premise: no boundary crossing");
+    assert_eq!(
+        segs_before, segs_after,
+        "fixture premise: no boundary crossing"
+    );
     assert_eq!(
         store.last_commit_stats().free_segs_written,
         1,
         "LIFO churn ships exactly the tail segment"
+    );
+}
+
+/// The free list's low-water mark across segment boundaries (store seam
+/// phase 13): a checkpoint ships the rows from the segment the list
+/// shrank into on, none when nothing moved, and after pops through a
+/// boundary and a collection's pushes, the store still resumes to the
+/// machine it checkpointed.
+#[test]
+fn free_list_rows_follow_the_mark_across_segment_boundaries() {
+    use ironhorse_snapshot::machine::{checkpoint_to_store, full_collect};
+    use ironhorse_snapshot::store::{
+        free_seg_count, validate_store_content, HeapStore, FREE_SEG_ENTRIES,
+    };
+
+    // Later cranks mirror crank 1's symbol order (keep, g, i).
+    let cranks = [
+        "var keep = 0; var g = 0; var i = 0; \
+         for (i = 0; i < 6000; i = i + 1) { g = { v: i }; } g = 0; 0",
+        "var keep; var g; var i; keep = []; \
+         for (i = 0; i < 2500; i = i + 1) { keep[i] = { v: i }; } 1",
+        "var keep; var g; var i; keep = 0; 2",
+    ];
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
+    let mut m = Interp::new();
+    m.link_intrinsics(&compiled[0].1);
+    assert!(m.run(&compiled[0].0).completed);
+    m.collect_garbage().unwrap();
+    let mut store = MemoryStore::new();
+    let mut session = begin_store_session(m, &sig(), &mut store)
+        .map_err(|(_, e)| e)
+        .expect("begin");
+    let free_len = |store: &MemoryStore| store.manifest().unwrap().free_len;
+    let start = free_len(&store);
+    assert!(free_seg_count(start) >= 3, "multi-segment premise: {start}");
+
+    checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    assert_eq!(store.last_commit_stats().free_segs_written, 0);
+
+    // Pops only, through a boundary: the mark is the shorter list's length.
+    let o = run_crank(session.machine_mut(), &compiled[1]);
+    assert!(o.completed, "halt: {:?}", o.halt);
+    checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    let popped = free_len(&store);
+    assert!(popped / FREE_SEG_ENTRIES < start / FREE_SEG_ENTRIES);
+    assert_eq!(
+        store.last_commit_stats().free_segs_written as u32,
+        free_seg_count(popped) - popped / FREE_SEG_ENTRIES
+    );
+
+    // A collection's pushes leave the mark where the last commit left it,
+    // and the rows from its segment on travel.
+    let o = run_crank(session.machine_mut(), &compiled[2]);
+    assert!(o.completed, "halt: {:?}", o.halt);
+    checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    let low = free_len(&store);
+    full_collect(&mut session, &store).expect("collects");
+    checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    let pushed = free_len(&store);
+    assert!(
+        pushed > popped,
+        "the collection pushed the dropped slots back"
+    );
+    assert!(free_seg_count(pushed) - low / FREE_SEG_ENTRIES >= 2);
+    assert_eq!(
+        store.last_commit_stats().free_segs_written as u32,
+        free_seg_count(pushed) - low / FREE_SEG_ENTRIES
+    );
+    validate_store_content(&store, &sig()).expect("the store validates");
+    assert_eq!(
+        resume_from_store(&store, &sig())
+            .expect("resumes")
+            .machine()
+            .snapshot_image(&sig())
+            .unwrap(),
+        session.machine().snapshot_image(&sig()).unwrap()
     );
 }
 
@@ -472,14 +614,15 @@ fn ephemeron_marking_reclaims_dead_keyed_weak_entries() {
          g = wm.get(keep); t = g.k; g = wm.get(g); t = t + g.v; \
          i = 0; i < 1; t",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let o1 = m.run(&compiled[0].0);
     assert!(o1.completed, "fixture halted: {:?}", o1.halt);
     assert_eq!(o1.result, "7");
 
-    let stats = m.collect_garbage();
+    let stats = m.collect_garbage().unwrap();
     assert!(
         stats.slots_reclaimed >= 2000,
         "dead-keyed weak entries AND the plain garbage reclaim: {stats:?}"
@@ -488,7 +631,10 @@ fn ephemeron_marking_reclaims_dead_keyed_weak_entries() {
     // The live-keyed chain survives: keep -> {k:2} -> {v:3}.
     let o2 = m.run(&compiled[1].0);
     assert!(o2.completed, "halt: {:?}", o2.halt);
-    assert_eq!(o2.result, "5", "get() answers through the ephemeron chain after GC");
+    assert_eq!(
+        o2.result, "5",
+        "get() answers through the ephemeron chain after GC"
+    );
 }
 
 #[test]
@@ -505,19 +651,23 @@ fn weak_set_membership_keeps_nothing_alive() {
         "var ws; var keep; var g; var i; var t; g = WeakSet; g = 0; ws.add; keep.k; \
          t = 0; if (ws.has(keep)) { t = 1; } t",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let o1 = m.run(&compiled[0].0);
     assert!(o1.completed, "fixture halted: {:?}", o1.halt);
-    let stats = m.collect_garbage();
+    let stats = m.collect_garbage().unwrap();
     assert!(
         stats.slots_reclaimed >= 380,
         "set-only members are dead by ephemeron semantics: {stats:?}"
     );
     let o2 = m.run(&compiled[1].0);
     assert!(o2.completed, "halt: {:?}", o2.halt);
-    assert_eq!(o2.result, "1", "the externally-held member is still a member");
+    assert_eq!(
+        o2.result, "1",
+        "the externally-held member is still a member"
+    );
 }
 
 #[test]
@@ -548,14 +698,21 @@ fn symbol_key_descriptor_survives_collection() {
          g = o.a; g = o.v; g = o.w; sym = Symbol; sym = 0; g = 0; \
          Object.keys(o).length",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let o1 = m.run(&compiled[0].0);
     assert!(o1.completed, "crank 1 halted: {:?}", o1.halt);
-    assert_eq!(o1.result, "1", "the symbol key is partitioned out before GC");
-    let stats = m.collect_garbage();
-    assert!(stats.slots_reclaimed > 0, "the plain garbage was real: {stats:?}");
+    assert_eq!(
+        o1.result, "1",
+        "the symbol key is partitioned out before GC"
+    );
+    let stats = m.collect_garbage().unwrap();
+    assert!(
+        stats.slots_reclaimed > 0,
+        "the plain garbage was real: {stats:?}"
+    );
     let o2 = m.run(&compiled[1].0);
     assert!(o2.completed, "crank 2 halted: {:?}", o2.halt);
     assert_eq!(
@@ -604,7 +761,8 @@ fn partial_collect_under_bulk_table_churn_stays_parity_clean() {
          arr.unshift; arr.shift; m.clear; m.set; k = { v: 0, w: 0 }; \
          i = 5; t = arr[i].v + 1; arr.length; t",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
 
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
@@ -619,16 +777,21 @@ fn partial_collect_under_bulk_table_churn_stays_parity_clean() {
     let freed_1 = partial_collect(&mut session, &store).expect("collect after build");
     assert!(freed_1 > 0, "the dropped chain reclaims: {freed_1}");
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    ironhorse_snapshot::store::validate_store_content(&store, &sig()).expect("the store validates");
 
     let o2 = session.machine_mut().run(&compiled[1].0);
     assert!(o2.completed, "halt: {:?}", o2.halt);
     assert_eq!(o2.result, "1010", "post-churn dynamic read");
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    ironhorse_snapshot::store::validate_store_content(&store, &sig()).expect("the store validates");
     let _freed_2 = partial_collect(&mut session, &store).expect("collect after churn");
 
     let o3 = session.machine_mut().run(&compiled[2].0);
     assert!(o3.completed, "halt: {:?}", o3.halt);
-    assert_eq!(o3.result, "1006", "the churned state survives the collections");
+    assert_eq!(
+        o3.result, "1006",
+        "the churned state survives the collections"
+    );
 }
 
 #[test]
@@ -646,14 +809,15 @@ fn dead_keyed_symbol_interns_are_reclaimed_precisely() {
         "var o; var g; var i; var sym; \
          o = { a: 2 }; sym = Symbol('key'); o[sym] = 9; i = o[sym]; g.a + i",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let o1 = m.run(&compiled[0].0);
     assert!(o1.completed, "fixture halted: {:?}", o1.halt);
     assert_eq!(o1.result, "7");
 
-    let stats = m.collect_garbage();
+    let stats = m.collect_garbage().unwrap();
     // 50 dead owners (2-slot objects + their symbol property slots)
     // and 50 dead descriptors; the exact figure rides slot layout, so
     // bound it from below well past what plain-object garbage alone
@@ -670,14 +834,15 @@ fn dead_keyed_symbol_interns_are_reclaimed_precisely() {
     // Symbols still intern and read back after the precise sweep.
     let o2 = m.run(&compiled[1].0);
     assert!(o2.completed, "halt: {:?}", o2.halt);
-    assert_eq!(o2.result, "16", "a fresh symbol key works after the reclamation");
+    assert_eq!(
+        o2.result, "16",
+        "a fresh symbol key works after the reclamation"
+    );
 }
 
 #[test]
 fn generational_collect_frees_new_garbage_and_never_more_than_partial() {
-    use ironhorse_snapshot::machine::{
-        checkpoint_to_store, generational_collect, partial_collect,
-    };
+    use ironhorse_snapshot::machine::{checkpoint_to_store, generational_collect, partial_collect};
     // Phase 11's semantic lock, run as TWINS from identical state:
     // the generational pass (candidates = pages dirtied since the
     // last collect) frees new page-isolated garbage, never frees a
@@ -700,7 +865,8 @@ fn generational_collect_frees_new_garbage_and_never_more_than_partial() {
         // matches the earlier cranks').
         "var keep; var g; var i; var t; keep.w; t = keep.v; t",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
 
     let run_twin = |generational: bool| -> (u32, String, u64) {
         let mut store = MemoryStore::new();
@@ -713,10 +879,14 @@ fn generational_collect_frees_new_garbage_and_never_more_than_partial() {
         // Draw the generation boundary: everything to here is OLD.
         let _ = partial_collect(&mut session, &store).expect("boundary collect");
         checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+        ironhorse_snapshot::store::validate_store_content(&store, &sig())
+            .expect("the store validates");
 
         let o = session.machine_mut().run(&compiled[1].0);
         assert!(o.completed, "halt: {:?}", o.halt);
         checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+        ironhorse_snapshot::store::validate_store_content(&store, &sig())
+            .expect("the store validates");
 
         let freed = if generational {
             generational_collect(&mut session, &store).expect("generational")
@@ -759,5 +929,50 @@ fn generational_collect_is_a_noop_with_no_new_dirt() {
     let freed = partial_collect(&mut session, &store).expect("partial");
     assert!(freed > 0);
     let again = generational_collect(&mut session, &store).expect("generational");
-    assert_eq!(again, 0, "no dirt since the last collect, nothing to examine");
+    assert_eq!(
+        again, 0,
+        "no dirt since the last collect, nothing to examine"
+    );
+}
+
+#[test]
+fn relocated_native_names_survive_repeated_collection_and_restore() {
+    use ironhorse_snapshot::machine::checkpoint_to_store;
+    let mut m = Interp::new();
+    let boot_names = m.function_state_snapshot().native_names.unwrap();
+    let setup = compile("var saved = Proxy.revocable; Object.defineProperty(saved, 'name', { value: 'renamed' }); delete Math.max.name; (() => { for (let i = 0; i < 2000; i++) { const garbage = 'discard-this-long-transient-string-' + i; } })(); 0");
+    m.link_intrinsics(&setup.1);
+    assert!(m.run(&setup.0).completed);
+    m.collect_garbage().unwrap();
+    let names = m.function_state_snapshot().native_names.unwrap();
+    assert!(
+        names.iter().any(|&(owner, offset)| boot_names
+            .iter()
+            .any(|&(old_owner, old_offset)| owner == old_owner && offset != old_offset)),
+        "fixture must relocate a boot-native name"
+    );
+    let mut store = MemoryStore::new();
+    let mut session = begin_store_session(m, &sig(), &mut store)
+        .map_err(|(_, e)| e)
+        .expect("begin");
+    let read = compile("var saved; JSON.stringify([saved.name, Math.max.name, typeof undefined, typeof null, typeof true, typeof 1, typeof 's', typeof saved, typeof Symbol(), typeof 1n])");
+    for _ in 0..3 {
+        let mut resumed = resume_from_store(&store, &sig()).expect("resume");
+        let expected = run_crank(session.machine_mut(), &read);
+        let actual = run_crank(resumed.machine_mut(), &read);
+        assert!(expected.completed && actual.completed);
+        assert_eq!(actual.result, "[\"renamed\",\"\",\"undefined\",\"object\",\"boolean\",\"number\",\"string\",\"function\",\"symbol\",\"bigint\"]");
+        assert_eq!(actual.result, expected.result);
+        session.machine_mut().collect_garbage().unwrap();
+        resumed.machine_mut().collect_garbage().unwrap();
+        assert_eq!(
+            session.machine().write_snapshot(&sig()).unwrap(),
+            resumed.machine().write_snapshot(&sig()).unwrap(),
+            "restore preserves exact post-GC heap"
+        );
+        session = resumed;
+        checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+        ironhorse_snapshot::store::validate_store_content(&store, &sig())
+            .expect("the store validates");
+    }
 }

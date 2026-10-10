@@ -1,0 +1,4 @@
+# engine=ironhorse features=default corpus=annexB/language/expressions/logical-assignment tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/language/expressions/logical-assignment/emulates-undefined-and.js sloppy skip:feature:IsHTMLDDA
+annexB/language/expressions/logical-assignment/emulates-undefined-coalesce.js sloppy skip:feature:IsHTMLDDA
+annexB/language/expressions/logical-assignment/emulates-undefined-or.js sloppy skip:feature:IsHTMLDDA

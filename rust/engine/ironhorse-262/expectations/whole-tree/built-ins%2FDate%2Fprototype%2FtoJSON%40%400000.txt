@@ -1,0 +1,27 @@
+# engine=ironhorse features=default corpus=built-ins/Date/prototype/toJSON tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Date/prototype/toJSON/builtin.js sloppy pass
+built-ins/Date/prototype/toJSON/builtin.js strict pass
+built-ins/Date/prototype/toJSON/called-as-function.js sloppy pass
+built-ins/Date/prototype/toJSON/called-as-function.js strict pass
+built-ins/Date/prototype/toJSON/invoke-abrupt.js sloppy pass
+built-ins/Date/prototype/toJSON/invoke-abrupt.js strict pass
+built-ins/Date/prototype/toJSON/invoke-arguments.js sloppy pass
+built-ins/Date/prototype/toJSON/invoke-arguments.js strict pass
+built-ins/Date/prototype/toJSON/invoke-result.js sloppy pass
+built-ins/Date/prototype/toJSON/invoke-result.js strict pass
+built-ins/Date/prototype/toJSON/length.js sloppy pass
+built-ins/Date/prototype/toJSON/length.js strict pass
+built-ins/Date/prototype/toJSON/name.js sloppy pass
+built-ins/Date/prototype/toJSON/name.js strict pass
+built-ins/Date/prototype/toJSON/non-finite.js sloppy pass
+built-ins/Date/prototype/toJSON/non-finite.js strict pass
+built-ins/Date/prototype/toJSON/not-a-constructor.js sloppy pass
+built-ins/Date/prototype/toJSON/not-a-constructor.js strict pass
+built-ins/Date/prototype/toJSON/to-object.js sloppy pass
+built-ins/Date/prototype/toJSON/to-object.js strict pass
+built-ins/Date/prototype/toJSON/to-primitive-abrupt.js sloppy pass
+built-ins/Date/prototype/toJSON/to-primitive-abrupt.js strict pass
+built-ins/Date/prototype/toJSON/to-primitive-symbol.js sloppy pass
+built-ins/Date/prototype/toJSON/to-primitive-symbol.js strict pass
+built-ins/Date/prototype/toJSON/to-primitive-value-of.js sloppy pass
+built-ins/Date/prototype/toJSON/to-primitive-value-of.js strict pass

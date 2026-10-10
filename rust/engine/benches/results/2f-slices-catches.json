@@ -1,0 +1,536 @@
+{
+  "scope": [
+    "F044 bounded slice/substring",
+    "F120 shared catch name maps"
+  ],
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+  "build_environment": {
+    "CARGO_INCREMENTAL": "0",
+    "RUST_MIN_STACK": "33554432",
+    "profile": "release, overflow checks enabled"
+  },
+  "before_revision": "a65686fda0a657575e20d28541c390fdad8bd32d",
+  "catch_revision": "ce903c33e64b39e02d27ff072aa95e9f34ed9631",
+  "after_state": "ce903c33e plus the bounded String slice/substring implementation in this commit; test-only module moved after measurement",
+  "fixture_sha256": {
+    "rust/engine/ironhorse-vm/tests/performance_leftovers.rs": "0c2773987cf929f8aaf8985b41822bf59d94818e5816e6601a4cfa8bcd14cce7",
+    "rust/engine/ironhorse-snapshot/tests/classification_bench.rs": "eb541b49ad4ec557a4d2c357668ca1f3c4cc77228a092eb7ef40e6c62656f788"
+  },
+  "focused": {
+    "before": {
+      "slice_16": {
+        "seconds": 0.000618166,
+        "raw": 1542120944,
+        "dispatched": 23044
+      },
+      "slice_4096": {
+        "seconds": 0.001948458,
+        "raw": 1542120944,
+        "dispatched": 23044
+      },
+      "slice_1048576": {
+        "seconds": 0.335797,
+        "raw": 1542120944,
+        "dispatched": 23044
+      },
+      "substring_16": {
+        "seconds": 0.000631333,
+        "raw": 1542120944,
+        "dispatched": 23044
+      },
+      "substring_4096": {
+        "seconds": 0.002033166,
+        "raw": 1542120944,
+        "dispatched": 23044
+      },
+      "substring_1048576": {
+        "seconds": 0.3350915,
+        "raw": 1542120944,
+        "dispatched": 23044
+      },
+      "catch_false_2": {
+        "seconds": 0.007258,
+        "raw": 78647547632,
+        "dispatched": 1200066
+      },
+      "catch_true_2": {
+        "seconds": 0.01887325,
+        "raw": 196612347960,
+        "dispatched": 3000066
+      },
+      "catch_false_50": {
+        "seconds": 0.010713083,
+        "raw": 78669581744,
+        "dispatched": 1200402
+      },
+      "catch_true_50": {
+        "seconds": 0.024942041,
+        "raw": 196634382072,
+        "dispatched": 3000402
+      },
+      "catch_false_200": {
+        "seconds": 0.007236375,
+        "raw": 78738438416,
+        "dispatched": 1201452
+      },
+      "catch_true_200": {
+        "seconds": 0.038320375,
+        "raw": 196703238744,
+        "dispatched": 3001452
+      },
+      "catch_false_400": {
+        "seconds": 0.007117625,
+        "raw": 78830247720,
+        "dispatched": 1202852
+      },
+      "catch_true_400": {
+        "seconds": 0.055243959,
+        "raw": 196795048056,
+        "dispatched": 3002852
+      }
+    },
+    "after": {
+      "slice_16": {
+        "seconds": 0.000708167,
+        "raw": 1542120944,
+        "dispatched": 23044
+      },
+      "slice_4096": {
+        "seconds": 0.000680333,
+        "raw": 1542120944,
+        "dispatched": 23044
+      },
+      "slice_1048576": {
+        "seconds": 0.00064025,
+        "raw": 1542120944,
+        "dispatched": 23044
+      },
+      "substring_16": {
+        "seconds": 0.000601416,
+        "raw": 1542120944,
+        "dispatched": 23044
+      },
+      "substring_4096": {
+        "seconds": 0.000601625,
+        "raw": 1542120944,
+        "dispatched": 23044
+      },
+      "substring_1048576": {
+        "seconds": 0.000604,
+        "raw": 1542120944,
+        "dispatched": 23044
+      },
+      "catch_false_2": {
+        "seconds": 0.006750292,
+        "raw": 78647547632,
+        "dispatched": 1200066
+      },
+      "catch_true_2": {
+        "seconds": 0.015818041,
+        "raw": 196612347960,
+        "dispatched": 3000066
+      },
+      "catch_false_50": {
+        "seconds": 0.006975291,
+        "raw": 78669581744,
+        "dispatched": 1200402
+      },
+      "catch_true_50": {
+        "seconds": 0.0195325,
+        "raw": 196634382072,
+        "dispatched": 3000402
+      },
+      "catch_false_200": {
+        "seconds": 0.006922542,
+        "raw": 78738438416,
+        "dispatched": 1201452
+      },
+      "catch_true_200": {
+        "seconds": 0.028963792,
+        "raw": 196703238744,
+        "dispatched": 3001452
+      },
+      "catch_false_400": {
+        "seconds": 0.007005167,
+        "raw": 78830247720,
+        "dispatched": 1202852
+      },
+      "catch_true_400": {
+        "seconds": 0.043113167,
+        "raw": 196795048056,
+        "dispatched": 3002852
+      }
+    },
+    "ratios": {
+      "slice_16": 1.1455935784239186,
+      "slice_4096": 0.34916482675017885,
+      "slice_1048576": 0.0019066578915237478,
+      "substring_16": 0.952612963364817,
+      "substring_4096": 0.2959054991082873,
+      "substring_1048576": 0.0018024927519796833,
+      "catch_false_2": 0.9300484982088729,
+      "catch_true_2": 0.8381196137390222,
+      "catch_false_50": 0.6511002481731916,
+      "catch_true_50": 0.7831155437520129,
+      "catch_false_200": 0.9566311861947454,
+      "catch_true_200": 0.755832686919165,
+      "catch_false_400": 0.984200066735744,
+      "catch_true_400": 0.7804141444678141
+    },
+    "receipts_equal": true
+  },
+  "call_control": {
+    "order": "before/after/after/before, saved binaries after both builds completed",
+    "runs": [
+      {
+        "side": "before",
+        "metrics": {
+          "small_ordinary_get": {
+            "seconds": 0.306495041,
+            "raw": 704515247736,
+            "dispatched": 10500045
+          },
+          "small_plain_call": {
+            "seconds": 0.371761125,
+            "raw": 1097731332000,
+            "dispatched": 16500045
+          },
+          "small_array_length": {
+            "seconds": 0.274320875,
+            "raw": 704516329040,
+            "dispatched": 10500061
+          },
+          "small_native_call": {
+            "seconds": 0.366270834,
+            "raw": 868354279752,
+            "dispatched": 13000031
+          },
+          "populated_ordinary_get": {
+            "seconds": 0.355760709,
+            "raw": 704524260264,
+            "dispatched": 10500161
+          },
+          "populated_plain_call": {
+            "seconds": 0.423071917,
+            "raw": 1097740344528,
+            "dispatched": 16500161
+          },
+          "populated_array_length": {
+            "seconds": 0.308591,
+            "raw": 704525341568,
+            "dispatched": 10500177
+          },
+          "populated_native_call": {
+            "seconds": 0.398397834,
+            "raw": 868363292280,
+            "dispatched": 13000147
+          }
+        },
+        "log": "\nrunning 1 test\ntest property_and_callee_classification ... CLASSIFICATION small_ordinary_get seconds=0.306495041 raw=704515247736 dispatched=10500045\nCLASSIFICATION small_plain_call seconds=0.371761125 raw=1097731332000 dispatched=16500045\nCLASSIFICATION small_array_length seconds=0.274320875 raw=704516329040 dispatched=10500061\nCLASSIFICATION small_native_call seconds=0.366270834 raw=868354279752 dispatched=13000031\nCLASSIFICATION populated_ordinary_get seconds=0.355760709 raw=704524260264 dispatched=10500161\nCLASSIFICATION populated_plain_call seconds=0.423071917 raw=1097740344528 dispatched=16500161\nCLASSIFICATION populated_array_length seconds=0.308591000 raw=704525341568 dispatched=10500177\nCLASSIFICATION populated_native_call seconds=0.398397834 raw=868363292280 dispatched=13000147\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.95s\n\n"
+      },
+      {
+        "side": "after",
+        "metrics": {
+          "small_ordinary_get": {
+            "seconds": 0.29984525,
+            "raw": 704515247736,
+            "dispatched": 10500045
+          },
+          "small_plain_call": {
+            "seconds": 0.371961417,
+            "raw": 1097731332000,
+            "dispatched": 16500045
+          },
+          "small_array_length": {
+            "seconds": 0.269356625,
+            "raw": 704516329040,
+            "dispatched": 10500061
+          },
+          "small_native_call": {
+            "seconds": 0.533341209,
+            "raw": 868354279752,
+            "dispatched": 13000031
+          },
+          "populated_ordinary_get": {
+            "seconds": 0.363294125,
+            "raw": 704524260264,
+            "dispatched": 10500161
+          },
+          "populated_plain_call": {
+            "seconds": 0.622617084,
+            "raw": 1097740344528,
+            "dispatched": 16500161
+          },
+          "populated_array_length": {
+            "seconds": 0.31349825,
+            "raw": 704525341568,
+            "dispatched": 10500177
+          },
+          "populated_native_call": {
+            "seconds": 0.403667334,
+            "raw": 868363292280,
+            "dispatched": 13000147
+          }
+        },
+        "log": "\nrunning 1 test\ntest property_and_callee_classification ... CLASSIFICATION small_ordinary_get seconds=0.299845250 raw=704515247736 dispatched=10500045\nCLASSIFICATION small_plain_call seconds=0.371961417 raw=1097731332000 dispatched=16500045\nCLASSIFICATION small_array_length seconds=0.269356625 raw=704516329040 dispatched=10500061\nCLASSIFICATION small_native_call seconds=0.533341209 raw=868354279752 dispatched=13000031\nCLASSIFICATION populated_ordinary_get seconds=0.363294125 raw=704524260264 dispatched=10500161\nCLASSIFICATION populated_plain_call seconds=0.622617084 raw=1097740344528 dispatched=16500161\nCLASSIFICATION populated_array_length seconds=0.313498250 raw=704525341568 dispatched=10500177\nCLASSIFICATION populated_native_call seconds=0.403667334 raw=868363292280 dispatched=13000147\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.86s\n\n"
+      },
+      {
+        "side": "after",
+        "metrics": {
+          "small_ordinary_get": {
+            "seconds": 0.301765458,
+            "raw": 704515247736,
+            "dispatched": 10500045
+          },
+          "small_plain_call": {
+            "seconds": 0.376770125,
+            "raw": 1097731332000,
+            "dispatched": 16500045
+          },
+          "small_array_length": {
+            "seconds": 0.2709735,
+            "raw": 704516329040,
+            "dispatched": 10500061
+          },
+          "small_native_call": {
+            "seconds": 0.398145708,
+            "raw": 868354279752,
+            "dispatched": 13000031
+          },
+          "populated_ordinary_get": {
+            "seconds": 0.36889125,
+            "raw": 704524260264,
+            "dispatched": 10500161
+          },
+          "populated_plain_call": {
+            "seconds": 0.430920708,
+            "raw": 1097740344528,
+            "dispatched": 16500161
+          },
+          "populated_array_length": {
+            "seconds": 0.3098625,
+            "raw": 704525341568,
+            "dispatched": 10500177
+          },
+          "populated_native_call": {
+            "seconds": 0.40285125,
+            "raw": 868363292280,
+            "dispatched": 13000147
+          }
+        },
+        "log": "\nrunning 1 test\ntest property_and_callee_classification ... CLASSIFICATION small_ordinary_get seconds=0.301765458 raw=704515247736 dispatched=10500045\nCLASSIFICATION small_plain_call seconds=0.376770125 raw=1097731332000 dispatched=16500045\nCLASSIFICATION small_array_length seconds=0.270973500 raw=704516329040 dispatched=10500061\nCLASSIFICATION small_native_call seconds=0.398145708 raw=868354279752 dispatched=13000031\nCLASSIFICATION populated_ordinary_get seconds=0.368891250 raw=704524260264 dispatched=10500161\nCLASSIFICATION populated_plain_call seconds=0.430920708 raw=1097740344528 dispatched=16500161\nCLASSIFICATION populated_array_length seconds=0.309862500 raw=704525341568 dispatched=10500177\nCLASSIFICATION populated_native_call seconds=0.402851250 raw=868363292280 dispatched=13000147\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.06s\n\n"
+      },
+      {
+        "side": "before",
+        "metrics": {
+          "small_ordinary_get": {
+            "seconds": 0.309698375,
+            "raw": 704515247736,
+            "dispatched": 10500045
+          },
+          "small_plain_call": {
+            "seconds": 0.373154375,
+            "raw": 1097731332000,
+            "dispatched": 16500045
+          },
+          "small_array_length": {
+            "seconds": 0.417824291,
+            "raw": 704516329040,
+            "dispatched": 10500061
+          },
+          "small_native_call": {
+            "seconds": 0.440197958,
+            "raw": 868354279752,
+            "dispatched": 13000031
+          },
+          "populated_ordinary_get": {
+            "seconds": 0.362870292,
+            "raw": 704524260264,
+            "dispatched": 10500161
+          },
+          "populated_plain_call": {
+            "seconds": 0.424125542,
+            "raw": 1097740344528,
+            "dispatched": 16500161
+          },
+          "populated_array_length": {
+            "seconds": 0.312468291,
+            "raw": 704525341568,
+            "dispatched": 10500177
+          },
+          "populated_native_call": {
+            "seconds": 0.399016541,
+            "raw": 868363292280,
+            "dispatched": 13000147
+          }
+        },
+        "log": "\nrunning 1 test\ntest property_and_callee_classification ... CLASSIFICATION small_ordinary_get seconds=0.309698375 raw=704515247736 dispatched=10500045\nCLASSIFICATION small_plain_call seconds=0.373154375 raw=1097731332000 dispatched=16500045\nCLASSIFICATION small_array_length seconds=0.417824291 raw=704516329040 dispatched=10500061\nCLASSIFICATION small_native_call seconds=0.440197958 raw=868354279752 dispatched=13000031\nCLASSIFICATION populated_ordinary_get seconds=0.362870292 raw=704524260264 dispatched=10500161\nCLASSIFICATION populated_plain_call seconds=0.424125542 raw=1097740344528 dispatched=16500161\nCLASSIFICATION populated_array_length seconds=0.312468291 raw=704525341568 dispatched=10500177\nCLASSIFICATION populated_native_call seconds=0.399016541 raw=868363292280 dispatched=13000147\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.43s\n\n"
+      }
+    ],
+    "ratios": {
+      "small_ordinary_get": 0.9763342034800319,
+      "small_plain_call": 1.005122785067568,
+      "small_array_length": 0.7806601151643382,
+      "small_native_call": 1.15501917276918,
+      "populated_ordinary_get": 1.01886138224087,
+      "populated_plain_call": 1.243556364349294,
+      "populated_array_length": 1.0037056993323363,
+      "populated_native_call": 1.011417161873963
+    },
+    "threshold": 1.25,
+    "failures": []
+  },
+  "pre_change_general_controls": {
+    "provenance": {
+      "commit": "a65686fda0a657575e20d28541c390fdad8bd32d",
+      "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+      "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+      "machine": "arm64",
+      "cpu": "arm",
+      "fixture_sha256": "57186d5e665baee27203114dfad6615889863e3099fa57ca319d6927f6bda46d",
+      "build_environment": {
+        "CARGO_INCREMENTAL": "0",
+        "RUSTFLAGS": null,
+        "CARGO_ENCODED_RUSTFLAGS": null,
+        "RUST_MIN_STACK": "33554432",
+        "RUSTUP_TOOLCHAIN": null,
+        "CARGO_BUILD_TARGET": null
+      }
+    },
+    "medians": {
+      "dispatch_ms": 1080.9645,
+      "slots_ms": 492.36525,
+      "chunks_ms": 31.039916,
+      "attached_detached_ms": 19.112375,
+      "attached_resident_ms": 27.340334,
+      "attached_faulting_ms": 27.412542,
+      "slide_500_front_ms": 0.911166,
+      "slide_500_tail_ms": 0.612667,
+      "slide_2000_front_ms": 1.920833,
+      "slide_2000_tail_ms": 0.798334,
+      "slide_8000_front_ms": 6.543416,
+      "slide_8000_tail_ms": 2.588459,
+      "gc_5000_full_first_ms": 2.703292,
+      "gc_5000_full_steady_ms": 0.80125,
+      "gc_5000_partial_ms": 0.403916,
+      "gc_5000_gate_ms": 0.00275,
+      "gc_5000_enum_ms": 0.020042,
+      "gc_5000_query_ms": 0.005291,
+      "gc_5000_free_ms": 0.374625,
+      "gc_5000_sweep_ns_per_slot": 25.400362612,
+      "gc_20000_full_first_ms": 10.959042,
+      "gc_20000_full_steady_ms": 3.042833,
+      "gc_20000_partial_ms": 1.714375,
+      "gc_20000_gate_ms": 0.010084,
+      "gc_20000_enum_ms": 0.036792,
+      "gc_20000_query_ms": 0.022542,
+      "gc_20000_free_ms": 1.631667,
+      "gc_20000_sweep_ns_per_slot": 24.875156138,
+      "gc_80000_full_first_ms": 43.806834,
+      "gc_80000_full_steady_ms": 11.960167,
+      "gc_80000_partial_ms": 7.363791,
+      "gc_80000_gate_ms": 0.038625,
+      "gc_80000_enum_ms": 0.062833,
+      "gc_80000_query_ms": 0.070083,
+      "gc_80000_free_ms": 7.18125,
+      "gc_80000_sweep_ns_per_slot": 25.637259897,
+      "gc_5000_generational_ms": 0.039583,
+      "gc_5000_full_partial_ms": 0.047666,
+      "gc_20000_generational_ms": 0.063167,
+      "gc_20000_full_partial_ms": 0.076333,
+      "gc_80000_generational_ms": 0.116875,
+      "gc_80000_full_partial_ms": 0.214792,
+      "placeholder_120320_ms": 0.025625,
+      "placeholder_500000_ms": 0.03025,
+      "placeholder_1000000_ms": 0.030709,
+      "placeholder_4000000_ms": 0.121166,
+      "wake_eager_ms": 11.311833,
+      "wake_lazy_ms": 1.730417
+    },
+    "maximum_ratio": 1.25,
+    "failures": [],
+    "reference_provenance": {
+      "commit": "b2b78ad04d396b2577945f6ea7c2ec941e982520",
+      "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+      "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+      "machine": "arm64",
+      "cpu": "arm",
+      "fixture_sha256": "57186d5e665baee27203114dfad6615889863e3099fa57ca319d6927f6bda46d",
+      "build_environment": {
+        "CARGO_INCREMENTAL": "0",
+        "RUSTFLAGS": null,
+        "CARGO_ENCODED_RUSTFLAGS": null,
+        "RUST_MIN_STACK": "33554432",
+        "RUSTUP_TOOLCHAIN": null,
+        "CARGO_BUILD_TARGET": null
+      }
+    },
+    "reference_medians": {
+      "dispatch_ms": 1654.264917,
+      "slots_ms": 489.407458,
+      "chunks_ms": 31.230334,
+      "attached_detached_ms": 19.30825,
+      "attached_resident_ms": 27.363,
+      "attached_faulting_ms": 27.721542,
+      "slide_500_front_ms": 0.826625,
+      "slide_500_tail_ms": 0.96525,
+      "slide_2000_front_ms": 2.444792,
+      "slide_2000_tail_ms": 2.292375,
+      "slide_8000_front_ms": 8.291709,
+      "slide_8000_tail_ms": 8.902458,
+      "gc_5000_full_first_ms": 4.510667,
+      "gc_5000_full_steady_ms": 1.504708,
+      "gc_5000_partial_ms": 0.685834,
+      "gc_5000_gate_ms": 0.002958,
+      "gc_5000_enum_ms": 0.026417,
+      "gc_5000_query_ms": 0.006125,
+      "gc_5000_free_ms": 0.652125,
+      "gc_5000_sweep_ns_per_slot": 44.755884353,
+      "gc_20000_full_first_ms": 17.618833,
+      "gc_20000_full_steady_ms": 4.615667,
+      "gc_20000_partial_ms": 2.944042,
+      "gc_20000_gate_ms": 0.010208,
+      "gc_20000_enum_ms": 0.036333,
+      "gc_20000_query_ms": 0.019709,
+      "gc_20000_free_ms": 2.804333,
+      "gc_20000_sweep_ns_per_slot": 39.074714403,
+      "gc_80000_full_first_ms": 69.442084,
+      "gc_80000_full_steady_ms": 17.361375,
+      "gc_80000_partial_ms": 13.563417,
+      "gc_80000_gate_ms": 0.055125,
+      "gc_80000_enum_ms": 0.100542,
+      "gc_80000_query_ms": 0.126375,
+      "gc_80000_free_ms": 13.212625,
+      "gc_80000_sweep_ns_per_slot": 40.577100234,
+      "gc_5000_generational_ms": 0.066,
+      "gc_5000_full_partial_ms": 0.107167,
+      "gc_20000_generational_ms": 0.082958,
+      "gc_20000_full_partial_ms": 0.127875,
+      "gc_80000_generational_ms": 0.17675,
+      "gc_80000_full_partial_ms": 0.313,
+      "placeholder_120320_ms": 0.023,
+      "placeholder_500000_ms": 0.036292,
+      "placeholder_1000000_ms": 0.031666,
+      "placeholder_4000000_ms": 0.1555,
+      "wake_eager_ms": 15.381,
+      "wake_lazy_ms": 2.200541
+    },
+    "comparison_kind": "same-host-reference"
+  },
+  "logs": {
+    "ironhorse-2f-focused-before.log": "   Compiling ironhorse-vm v0.0.1 (/Users/xyz/Development/endo6/rust/engine/ironhorse-vm)\n    Finished `release` profile [optimized] target(s) in 0.48s\n     Running tests/performance_leftovers.rs (rust/engine/target/release/deps/performance_leftovers-46970eaf58167089)\n\nrunning 2 tests\ntest bounded_string_slices ... LEFTOVER_METRIC slice_16 seconds=0.000618166 raw=1542120944 dispatches=23044\nLEFTOVER_METRIC slice_4096 seconds=0.001948458 raw=1542120944 dispatches=23044\nLEFTOVER_METRIC slice_1048576 seconds=0.335797000 raw=1542120944 dispatches=23044\nLEFTOVER_METRIC substring_16 seconds=0.000631333 raw=1542120944 dispatches=23044\nLEFTOVER_METRIC substring_4096 seconds=0.002033166 raw=1542120944 dispatches=23044\nLEFTOVER_METRIC substring_1048576 seconds=0.335091500 raw=1542120944 dispatches=23044\nok\ntest catch_entry_local_count ... LEFTOVER_METRIC catch_false_2 seconds=0.007258000 raw=78647547632 dispatches=1200066\nLEFTOVER_METRIC catch_true_2 seconds=0.018873250 raw=196612347960 dispatches=3000066\nLEFTOVER_METRIC catch_false_50 seconds=0.010713083 raw=78669581744 dispatches=1200402\nLEFTOVER_METRIC catch_true_50 seconds=0.024942041 raw=196634382072 dispatches=3000402\nLEFTOVER_METRIC catch_false_200 seconds=0.007236375 raw=78738438416 dispatches=1201452\nLEFTOVER_METRIC catch_true_200 seconds=0.038320375 raw=196703238744 dispatches=3001452\nLEFTOVER_METRIC catch_false_400 seconds=0.007117625 raw=78830247720 dispatches=1202852\nLEFTOVER_METRIC catch_true_400 seconds=0.055243959 raw=196795048056 dispatches=3002852\nok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.16s\n\n",
+    "ironhorse-2f-focused-after.log": "   Compiling ironhorse-vm v0.0.1 (/Users/xyz/Development/endo6/rust/engine/ironhorse-vm)\n    Finished `release` profile [optimized] target(s) in 27.96s\n     Running tests/performance_leftovers.rs (rust/engine/target/release/deps/performance_leftovers-46970eaf58167089)\n\nrunning 2 tests\ntest bounded_string_slices ... LEFTOVER_METRIC slice_16 seconds=0.000708167 raw=1542120944 dispatches=23044\nLEFTOVER_METRIC slice_4096 seconds=0.000680333 raw=1542120944 dispatches=23044\nLEFTOVER_METRIC slice_1048576 seconds=0.000640250 raw=1542120944 dispatches=23044\nLEFTOVER_METRIC substring_16 seconds=0.000601416 raw=1542120944 dispatches=23044\nLEFTOVER_METRIC substring_4096 seconds=0.000601625 raw=1542120944 dispatches=23044\nLEFTOVER_METRIC substring_1048576 seconds=0.000604000 raw=1542120944 dispatches=23044\nok\ntest catch_entry_local_count ... LEFTOVER_METRIC catch_false_2 seconds=0.006750292 raw=78647547632 dispatches=1200066\nLEFTOVER_METRIC catch_true_2 seconds=0.015818041 raw=196612347960 dispatches=3000066\nLEFTOVER_METRIC catch_false_50 seconds=0.006975291 raw=78669581744 dispatches=1200402\nLEFTOVER_METRIC catch_true_50 seconds=0.019532500 raw=196634382072 dispatches=3000402\nLEFTOVER_METRIC catch_false_200 seconds=0.006922542 raw=78738438416 dispatches=1201452\nLEFTOVER_METRIC catch_true_200 seconds=0.028963792 raw=196703238744 dispatches=3001452\nLEFTOVER_METRIC catch_false_400 seconds=0.007005167 raw=78830247720 dispatches=1202852\nLEFTOVER_METRIC catch_true_400 seconds=0.043113167 raw=196795048056 dispatches=3002852\nok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.92s\n\n",
+    "ironhorse-2f-catch-after.log": "   Compiling ironhorse-vm v0.0.1 (/Users/xyz/Development/endo6/rust/engine/ironhorse-vm)\n    Finished `release` profile [optimized] target(s) in 30.48s\n     Running tests/performance_leftovers.rs (rust/engine/target/release/deps/performance_leftovers-46970eaf58167089)\n\nrunning 1 test\ntest catch_entry_local_count ... LEFTOVER_METRIC catch_false_2 seconds=0.007191292 raw=78647547632 dispatches=1200066\nLEFTOVER_METRIC catch_true_2 seconds=0.015432417 raw=196612347960 dispatches=3000066\nLEFTOVER_METRIC catch_false_50 seconds=0.007212166 raw=78669581744 dispatches=1200402\nLEFTOVER_METRIC catch_true_50 seconds=0.018736084 raw=196634382072 dispatches=3000402\nLEFTOVER_METRIC catch_false_200 seconds=0.007221500 raw=78738438416 dispatches=1201452\nLEFTOVER_METRIC catch_true_200 seconds=0.028957833 raw=196703238744 dispatches=3001452\nLEFTOVER_METRIC catch_false_400 seconds=0.007350958 raw=78830247720 dispatches=1202852\nLEFTOVER_METRIC catch_true_400 seconds=0.043093417 raw=196795048056 dispatches=3002852\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.85s\n\n",
+    "ironhorse-2f-classification-before.log": "   Compiling proc-macro2 v1.0.106\n   Compiling quote v1.0.45\n   Compiling unicode-ident v1.0.24\n   Compiling stable_deref_trait v1.2.1\n   Compiling writeable v0.6.3\n   Compiling litemap v0.8.2\n   Compiling icu_locale_data v2.2.0\n   Compiling libm v0.2.16\n   Compiling utf8_iter v1.0.4\n   Compiling icu_normalizer_data v2.2.0\n   Compiling icu_segmenter_data v2.2.0\n   Compiling ironhorse-meter v0.0.1 (/tmp/ironhorse-2f-base/rust/engine/ironhorse-meter)\n   Compiling ironhorse-unicode v0.0.1 (/tmp/ironhorse-2f-base/rust/engine/ironhorse-unicode)\n   Compiling write16 v1.0.0\n   Compiling smallvec v1.15.1\n   Compiling ironhorse-text v0.0.1 (/tmp/ironhorse-2f-base/rust/engine/ironhorse-text)\n   Compiling utf16_iter v1.0.5\n   Compiling ironhorse-regexp v0.0.1 (/tmp/ironhorse-2f-base/rust/engine/ironhorse-regexp)\n   Compiling ironhorse-compile v0.0.1 (/tmp/ironhorse-2f-base/rust/engine/ironhorse-compile)\n   Compiling core_maths v0.1.1\n   Compiling syn v2.0.117\n   Compiling synstructure v0.13.2\n   Compiling zerovec-derive v0.11.3\n   Compiling displaydoc v0.2.5\n   Compiling zerofrom-derive v0.1.7\n   Compiling yoke-derive v0.8.2\n   Compiling zerotrie v0.2.4\n   Compiling zerofrom v0.1.8\n   Compiling yoke v0.8.3\n   Compiling zerovec v0.11.6\n   Compiling tinystr v0.8.3\n   Compiling potential_utf v0.1.5\n   Compiling icu_collections v2.2.0\n   Compiling icu_locale_core v2.2.0\n   Compiling icu_provider v2.2.0\n   Compiling icu_locale v2.2.0\n   Compiling icu_normalizer v2.2.0\n   Compiling icu_segmenter v2.2.0\n   Compiling ironhorse-vm v0.0.1 (/tmp/ironhorse-2f-base/rust/engine/ironhorse-vm)\n   Compiling ironhorse-snapshot v0.0.1 (/tmp/ironhorse-2f-base/rust/engine/ironhorse-snapshot)\n    Finished `release` profile [optimized] target(s) in 1m 13s\n     Running tests/classification_bench.rs (/tmp/ironhorse-2f-base/rust/engine/target/release/deps/classification_bench-0c695e52d1738836)\n\nrunning 1 test\ntest property_and_callee_classification ... CLASSIFICATION small_ordinary_get seconds=0.309734875 raw=704515247736 dispatched=10500045\nCLASSIFICATION small_plain_call seconds=0.376129792 raw=1097731332000 dispatched=16500045\nCLASSIFICATION small_array_length seconds=0.272630042 raw=704516329040 dispatched=10500061\nCLASSIFICATION small_native_call seconds=0.355502292 raw=868354279752 dispatched=13000031\nCLASSIFICATION populated_ordinary_get seconds=0.365932375 raw=704524260264 dispatched=10500161\nCLASSIFICATION populated_plain_call seconds=0.418871334 raw=1097740344528 dispatched=16500161\nCLASSIFICATION populated_array_length seconds=0.308428917 raw=704525341568 dispatched=10500177\nCLASSIFICATION populated_native_call seconds=0.401420083 raw=868363292280 dispatched=13000147\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.40s\n\n",
+    "ironhorse-2f-before-controls.log": "   Compiling proc-macro2 v1.0.106\n   Compiling quote v1.0.45\n   Compiling unicode-ident v1.0.24\n   Compiling stable_deref_trait v1.2.1\n   Compiling writeable v0.6.3\n   Compiling litemap v0.8.2\n   Compiling icu_locale_data v2.2.0\n   Compiling utf8_iter v1.0.4\n   Compiling libm v0.2.16\n   Compiling icu_normalizer_data v2.2.0\n   Compiling icu_segmenter_data v2.2.0\n   Compiling ironhorse-meter v0.0.1 (/private/var/folders/s3/jvxf9sxn55d659hjxrf1j1zh0000gn/T/ironhorse-reference-x0rruoqs/rust/engine/ironhorse-meter)\n   Compiling ironhorse-text v0.0.1 (/private/var/folders/s3/jvxf9sxn55d659hjxrf1j1zh0000gn/T/ironhorse-reference-x0rruoqs/rust/engine/ironhorse-text)\n   Compiling write16 v1.0.0\n   Compiling utf16_iter v1.0.5\n   Compiling smallvec v1.15.1\n   Compiling ironhorse-regexp v0.0.1 (/private/var/folders/s3/jvxf9sxn55d659hjxrf1j1zh0000gn/T/ironhorse-reference-x0rruoqs/rust/engine/ironhorse-regexp)\n   Compiling ironhorse-compile v0.0.1 (/private/var/folders/s3/jvxf9sxn55d659hjxrf1j1zh0000gn/T/ironhorse-reference-x0rruoqs/rust/engine/ironhorse-compile)\n   Compiling syn v2.0.117\n   Compiling synstructure v0.13.2\n   Compiling core_maths v0.1.1\n   Compiling zerofrom-derive v0.1.7\n   Compiling yoke-derive v0.8.2\n   Compiling zerovec-derive v0.11.3\n   Compiling displaydoc v0.2.5\n   Compiling zerofrom v0.1.8\n   Compiling zerotrie v0.2.4\n   Compiling yoke v0.8.3\n   Compiling zerovec v0.11.6\n   Compiling tinystr v0.8.3\n   Compiling potential_utf v0.1.5\n   Compiling icu_collections v2.2.0\n   Compiling icu_locale_core v2.2.0\n   Compiling icu_provider v2.2.0\n   Compiling icu_locale v2.2.0\n   Compiling icu_normalizer v2.2.0\n   Compiling icu_segmenter v2.2.0\n   Compiling ironhorse-vm v0.0.1 (/private/var/folders/s3/jvxf9sxn55d659hjxrf1j1zh0000gn/T/ironhorse-reference-x0rruoqs/rust/engine/ironhorse-vm)\n   Compiling ironhorse-snapshot v0.0.1 (/private/var/folders/s3/jvxf9sxn55d659hjxrf1j1zh0000gn/T/ironhorse-reference-x0rruoqs/rust/engine/ironhorse-snapshot)\n    Finished `release` profile [optimized] target(s) in 48.46s\n     Running tests/dispatch_bench.rs (/var/folders/s3/jvxf9sxn55d659hjxrf1j1zh0000gn/T/ironhorse-reference-x0rruoqs/target/release/deps/dispatch_bench-cb54f915b5c01991)\n\nrunning 1 test\ntest detached_hot_path_bench ... \nBENCH_METRIC dispatch_ms 1654.264917000\n\nBENCH_METRIC slots_ms 489.407458000\n\nBENCH_METRIC chunks_ms 31.230334000\nBENCH dispatch_ms=1654.26 slots_ms=489.41 chunks_ms=31.23\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.21s\n\n   Compiling ironhorse-snapshot v0.0.1 (/private/var/folders/s3/jvxf9sxn55d659hjxrf1j1zh0000gn/T/ironhorse-reference-x0rruoqs/rust/engine/ironhorse-snapshot)\n    Finished `release` profile [optimized] target(s) in 1.77s\n     Running tests/attached_bench.rs (/var/folders/s3/jvxf9sxn55d659hjxrf1j1zh0000gn/T/ironhorse-reference-x0rruoqs/target/release/deps/attached_bench-a608969556901099)\n\nrunning 1 test\ntest attached_vs_detached_hot_crank ... heap: 60891 slots (238 pages), 11964 chunk bytes (1 extents)\n\nBENCH_METRIC attached_detached_ms 19.308250000\n\nBENCH_METRIC attached_resident_ms 27.363000000\n\nBENCH_METRIC attached_faulting_ms 27.721542000\ndetached hot crank median:          19.308 ms\nattached-resident hot crank median: 27.363 ms  (x1.417 of detached)\nattached-faulting hot crank median: 27.722 ms  (x1.436 of detached)\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.79s\n\n   Compiling ironhorse-snapshot v0.0.1 (/private/var/folders/s3/jvxf9sxn55d659hjxrf1j1zh0000gn/T/ironhorse-reference-x0rruoqs/rust/engine/ironhorse-snapshot)\n    Finished `release` profile [optimized] target(s) in 0.78s\n     Running tests/gc_bench.rs (/var/folders/s3/jvxf9sxn55d659hjxrf1j1zh0000gn/T/ironhorse-reference-x0rruoqs/target/release/deps/gc_bench-ab83718d7385c74d)\n\nrunning 3 tests\ntest compaction_slide_checkpoint_cost ... chunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   1.132 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.822 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.927 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.697 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.861 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.827 ms\n\nBENCH_METRIC slide_500_front_ms 0.826625000\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.865 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   1.304 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.874 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.965 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   1.010 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.864 ms\n\nBENCH_METRIC slide_500_tail_ms 0.965250000\nchunks n=  500 SLIDE COST: 0 extent rows are pure movement rewrite\n\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.216 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.445 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.619 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.968 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.255 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.587 ms\n\nBENCH_METRIC slide_2000_front_ms 2.444792000\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.305 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.447 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.078 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.292 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.165 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.450 ms\n\nBENCH_METRIC slide_2000_tail_ms 2.292375000\nchunks n= 2000 SLIDE COST: 0 extent rows are pure movement rewrite\n\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   7.216 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   7.978 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   8.123 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   8.292 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   9.250 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   8.765 ms\n\nBENCH_METRIC slide_8000_front_ms 8.291709000\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   8.876 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   8.548 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   9.364 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   8.746 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   8.902 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   9.016 ms\n\nBENCH_METRIC slide_8000_tail_ms 8.902458000\nchunks n= 8000 SLIDE COST: 0 extent rows are pure movement rewrite\n\nok\ntest gc_cost_across_heap_sizes ... \nBENCH_METRIC gc_5000_full_first_ms 4.510667000\n\nBENCH_METRIC gc_5000_full_steady_ms 1.504708000\n\nBENCH_METRIC gc_5000_partial_ms 0.685834000\n\nBENCH_METRIC gc_5000_gate_ms 0.002958000\n\nBENCH_METRIC gc_5000_enum_ms 0.026417000\n\nBENCH_METRIC gc_5000_query_ms 0.006125000\n\nBENCH_METRIC gc_5000_free_ms 0.652125000\n\nBENCH_METRIC gc_5000_sweep_ns_per_slot 44.755884353\nslots=  30887 pages=  121 | full-first    4.511 ms | full-steady    1.505 ms | partial   0.686 ms (freed 14247; gate 0.003, enum 0.026, query 0.006, free 0.652 ms) | free-list   15002 | collect/slot   44.8 ns\n\nBENCH_METRIC gc_20000_full_first_ms 17.618833000\n\nBENCH_METRIC gc_20000_full_steady_ms 4.615667000\n\nBENCH_METRIC gc_20000_partial_ms 2.944042000\n\nBENCH_METRIC gc_20000_gate_ms 0.010208000\n\nBENCH_METRIC gc_20000_enum_ms 0.036333000\n\nBENCH_METRIC gc_20000_query_ms 0.019709000\n\nBENCH_METRIC gc_20000_free_ms 2.804333000\n\nBENCH_METRIC gc_20000_sweep_ns_per_slot 39.074714403\nslots= 120887 pages=  473 | full-first   17.619 ms | full-steady    4.616 ms | partial   2.944 ms (freed 59703; gate 0.010, enum 0.036, query 0.020, free 2.804 ms) | free-list   60002 | collect/slot   39.1 ns\n\nBENCH_METRIC gc_80000_full_first_ms 69.442084000\n\nBENCH_METRIC gc_80000_full_steady_ms 17.361375000\n\nBENCH_METRIC gc_80000_partial_ms 13.563417000\n\nBENCH_METRIC gc_80000_gate_ms 0.055125000\n\nBENCH_METRIC gc_80000_enum_ms 0.100542000\n\nBENCH_METRIC gc_80000_query_ms 0.126375000\n\nBENCH_METRIC gc_80000_free_ms 13.212625000\n\nBENCH_METRIC gc_80000_sweep_ns_per_slot 40.577100234\nslots= 480887 pages= 1879 | full-first   69.442 ms | full-steady   17.361 ms | partial  13.563 ms (freed 239991; gate 0.055, enum 0.101, query 0.126, free 13.213 ms) | free-list  240002 | collect/slot   40.6 ns\nok\ntest generational_steady_state_cost ... \nBENCH_METRIC gc_5000_generational_ms 0.066000000\n\nBENCH_METRIC gc_5000_full_partial_ms 0.107167000\nslots=  15886 | generational   0.066 ms (freed 768) | full partial   0.107 ms\n\nBENCH_METRIC gc_20000_generational_ms 0.082958000\n\nBENCH_METRIC gc_20000_full_partial_ms 0.127875000\nslots=  60886 | generational   0.083 ms (freed 768) | full partial   0.128 ms\n\nBENCH_METRIC gc_80000_generational_ms 0.176750000\n\nBENCH_METRIC gc_80000_full_partial_ms 0.313000000\nslots= 240886 | generational   0.177 ms (freed 768) | full partial   0.313 ms\nok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.12s\n\n   Compiling ironhorse-snapshot v0.0.1 (/private/var/folders/s3/jvxf9sxn55d659hjxrf1j1zh0000gn/T/ironhorse-reference-x0rruoqs/rust/engine/ironhorse-snapshot)\n    Finished `release` profile [optimized] target(s) in 1.47s\n     Running tests/wake_latency_bench.rs (/var/folders/s3/jvxf9sxn55d659hjxrf1j1zh0000gn/T/ironhorse-reference-x0rruoqs/target/release/deps/wake_latency_bench-a666972c9732cda1)\n\nrunning 2 tests\ntest placeholder_alloc_cost_across_slot_counts ... \nBENCH_METRIC placeholder_120320_ms 0.023000000\nslots=  120320 | placeholder alloc median   0.023 ms (0.2 ns/slot)\n\nBENCH_METRIC placeholder_500000_ms 0.036292000\nslots=  500000 | placeholder alloc median   0.036 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_1000000_ms 0.031666000\nslots= 1000000 | placeholder alloc median   0.032 ms (0.0 ns/slot)\n\nBENCH_METRIC placeholder_4000000_ms 0.155500000\nslots= 4000000 | placeholder alloc median   0.155 ms (0.0 ns/slot)\nok\ntest wake_latency_eager_vs_lazy ... heap: 120888 slots, 44786 chunk bytes\n\nBENCH_METRIC wake_eager_ms 15.381000000\n\nBENCH_METRIC wake_lazy_ms 2.200541000\neager wake median: 15.381 ms\nlazy  wake median: 2.201 ms\nlazy/eager ratio:  0.143\nok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s\n\n   Compiling proc-macro2 v1.0.106\n   Compiling quote v1.0.45\n   Compiling unicode-ident v1.0.24\n   Compiling stable_deref_trait v1.2.1\n   Compiling writeable v0.6.3\n   Compiling litemap v0.8.2\n   Compiling utf8_iter v1.0.4\n   Compiling libm v0.2.16\n   Compiling icu_locale_data v2.2.0\n   Compiling icu_normalizer_data v2.2.0\n   Compiling icu_segmenter_data v2.2.0\n   Compiling ironhorse-unicode v0.0.1 (/Users/xyz/Development/endo6/rust/engine/ironhorse-unicode)\n   Compiling ironhorse-meter v0.0.1 (/Users/xyz/Development/endo6/rust/engine/ironhorse-meter)\n   Compiling write16 v1.0.0\n   Compiling ironhorse-text v0.0.1 (/Users/xyz/Development/endo6/rust/engine/ironhorse-text)\n   Compiling utf16_iter v1.0.5\n   Compiling smallvec v1.15.1\n   Compiling ironhorse-regexp v0.0.1 (/Users/xyz/Development/endo6/rust/engine/ironhorse-regexp)\n   Compiling ironhorse-compile v0.0.1 (/Users/xyz/Development/endo6/rust/engine/ironhorse-compile)\n   Compiling syn v2.0.117\n   Compiling core_maths v0.1.1\n   Compiling synstructure v0.13.2\n   Compiling zerovec-derive v0.11.3\n   Compiling displaydoc v0.2.5\n   Compiling zerofrom-derive v0.1.7\n   Compiling yoke-derive v0.8.2\n   Compiling zerotrie v0.2.4\n   Compiling zerofrom v0.1.8\n   Compiling yoke v0.8.3\n   Compiling zerovec v0.11.6\n   Compiling tinystr v0.8.3\n   Compiling potential_utf v0.1.5\n   Compiling icu_collections v2.2.0\n   Compiling icu_locale_core v2.2.0\n   Compiling icu_provider v2.2.0\n   Compiling icu_locale v2.2.0\n   Compiling icu_normalizer v2.2.0\n   Compiling icu_segmenter v2.2.0\n   Compiling ironhorse-vm v0.0.1 (/Users/xyz/Development/endo6/rust/engine/ironhorse-vm)\n   Compiling ironhorse-snapshot v0.0.1 (/Users/xyz/Development/endo6/rust/engine/ironhorse-snapshot)\n    Finished `release` profile [optimized] target(s) in 38.70s\n     Running tests/dispatch_bench.rs (target/release/deps/dispatch_bench-f97974959121ca2b)\n\nrunning 1 test\ntest detached_hot_path_bench ... \nBENCH_METRIC dispatch_ms 1080.964500000\nBENCH_RATIO dispatch_ms 0.653441\n\nBENCH_METRIC slots_ms 492.365250000\nBENCH_RATIO slots_ms 1.006044\n\nBENCH_METRIC chunks_ms 31.039916000\nBENCH_RATIO chunks_ms 0.993903\nBENCH dispatch_ms=1080.96 slots_ms=492.37 chunks_ms=31.04\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.65s\n\n   Compiling ironhorse-snapshot v0.0.1 (/Users/xyz/Development/endo6/rust/engine/ironhorse-snapshot)\n    Finished `release` profile [optimized] target(s) in 0.67s\n     Running tests/attached_bench.rs (target/release/deps/attached_bench-ce9fa892e91fea5f)\n\nrunning 1 test\ntest attached_vs_detached_hot_crank ... heap: 60891 slots (238 pages), 11964 chunk bytes (1 extents)\n\nBENCH_METRIC attached_detached_ms 19.112375000\nBENCH_RATIO attached_detached_ms 0.989855\n\nBENCH_METRIC attached_resident_ms 27.340334000\nBENCH_RATIO attached_resident_ms 0.999172\n\nBENCH_METRIC attached_faulting_ms 27.412542000\nBENCH_RATIO attached_faulting_ms 0.988853\ndetached hot crank median:          19.112 ms\nattached-resident hot crank median: 27.340 ms  (x1.431 of detached)\nattached-faulting hot crank median: 27.413 ms  (x1.434 of detached)\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.79s\n\n   Compiling ironhorse-snapshot v0.0.1 (/Users/xyz/Development/endo6/rust/engine/ironhorse-snapshot)\n    Finished `release` profile [optimized] target(s) in 0.73s\n     Running tests/gc_bench.rs (target/release/deps/gc_bench-8e4cb99bd2d8159a)\n\nrunning 3 tests\ntest compaction_slide_checkpoint_cost ... chunks n=  500 front-garbage (slide): extents    2\u2192   2 | extent rows written    1 | slot pages written    1 | checkpoint   1.025 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   2 | extent rows written    1 | slot pages written    1 | checkpoint   0.903 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   2 | extent rows written    1 | slot pages written    1 | checkpoint   0.911 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   2 | extent rows written    1 | slot pages written    1 | checkpoint   0.760 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   2 | extent rows written    1 | slot pages written    1 | checkpoint   0.944 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   2 | extent rows written    1 | slot pages written    1 | checkpoint   0.954 ms\n\nBENCH_METRIC slide_500_front_ms 0.911166000\nBENCH_RATIO slide_500_front_ms 1.102272\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   0.595 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   0.594 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   0.673 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   0.613 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   0.607 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   0.656 ms\n\nBENCH_METRIC slide_500_tail_ms 0.612667000\nBENCH_RATIO slide_500_tail_ms 0.634724\nchunks n=  500 SLIDE COST: 0 extent rows are pure movement rewrite\n\nchunks n= 2000 front-garbage (slide): extents    5\u2192   5 | extent rows written    3 | slot pages written    1 | checkpoint   2.088 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   5 | extent rows written    3 | slot pages written    1 | checkpoint   1.930 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   5 | extent rows written    3 | slot pages written    1 | checkpoint   1.921 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   5 | extent rows written    3 | slot pages written    1 | checkpoint   1.936 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   5 | extent rows written    3 | slot pages written    1 | checkpoint   1.849 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   5 | extent rows written    3 | slot pages written    1 | checkpoint   1.793 ms\n\nBENCH_METRIC slide_2000_front_ms 1.920833000\nBENCH_RATIO slide_2000_front_ms 0.785684\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    1 | slot pages written    0 | checkpoint   0.917 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    1 | slot pages written    0 | checkpoint   0.798 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    1 | slot pages written    0 | checkpoint   0.735 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    1 | slot pages written    0 | checkpoint   0.811 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    1 | slot pages written    0 | checkpoint   0.805 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    1 | slot pages written    0 | checkpoint   0.797 ms\n\nBENCH_METRIC slide_2000_tail_ms 0.798334000\nBENCH_RATIO slide_2000_tail_ms 0.348256\nchunks n= 2000 SLIDE COST: 2 extent rows are pure movement rewrite\n\nchunks n= 8000 front-garbage (slide): extents   17\u2192  17 | extent rows written    9 | slot pages written    1 | checkpoint   7.127 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192  17 | extent rows written    9 | slot pages written    1 | checkpoint   7.024 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192  17 | extent rows written    9 | slot pages written    1 | checkpoint   5.811 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192  17 | extent rows written    9 | slot pages written    1 | checkpoint   6.543 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192  17 | extent rows written    9 | slot pages written    1 | checkpoint   7.412 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192  17 | extent rows written    9 | slot pages written    1 | checkpoint   5.758 ms\n\nBENCH_METRIC slide_8000_front_ms 6.543416000\nBENCH_RATIO slide_8000_front_ms 0.789152\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    1 | slot pages written    0 | checkpoint   2.457 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    1 | slot pages written    0 | checkpoint   2.382 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    1 | slot pages written    0 | checkpoint   2.282 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    1 | slot pages written    0 | checkpoint   2.588 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    1 | slot pages written    0 | checkpoint   2.590 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    1 | slot pages written    0 | checkpoint   3.070 ms\n\nBENCH_METRIC slide_8000_tail_ms 2.588459000\nBENCH_RATIO slide_8000_tail_ms 0.290758\nchunks n= 8000 SLIDE COST: 8 extent rows are pure movement rewrite\n\nok\ntest gc_cost_across_heap_sizes ... \nBENCH_METRIC gc_5000_full_first_ms 2.703292000\nBENCH_RATIO gc_5000_full_first_ms 0.599311\n\nBENCH_METRIC gc_5000_full_steady_ms 0.801250000\nBENCH_RATIO gc_5000_full_steady_ms 0.532495\n\nBENCH_METRIC gc_5000_partial_ms 0.403916000\nBENCH_RATIO gc_5000_partial_ms 0.588941\n\nBENCH_METRIC gc_5000_gate_ms 0.002750000\nBENCH_RATIO gc_5000_gate_ms 0.929682\n\nBENCH_METRIC gc_5000_enum_ms 0.020042000\nBENCH_RATIO gc_5000_enum_ms 0.758678\n\nBENCH_METRIC gc_5000_query_ms 0.005291000\nBENCH_RATIO gc_5000_query_ms 0.863837\n\nBENCH_METRIC gc_5000_free_ms 0.374625000\nBENCH_RATIO gc_5000_free_ms 0.574468\n\nBENCH_METRIC gc_5000_sweep_ns_per_slot 25.400362612\nBENCH_RATIO gc_5000_sweep_ns_per_slot 0.567531\nslots=  30887 pages=  121 | full-first    2.703 ms | full-steady    0.801 ms | partial   0.404 ms (freed 14247; gate 0.003, enum 0.020, query 0.005, free 0.375 ms) | free-list   15000 | collect/slot   25.4 ns\n\nBENCH_METRIC gc_20000_full_first_ms 10.959042000\nBENCH_RATIO gc_20000_full_first_ms 0.622007\n\nBENCH_METRIC gc_20000_full_steady_ms 3.042833000\nBENCH_RATIO gc_20000_full_steady_ms 0.659240\n\nBENCH_METRIC gc_20000_partial_ms 1.714375000\nBENCH_RATIO gc_20000_partial_ms 0.582320\n\nBENCH_METRIC gc_20000_gate_ms 0.010084000\nBENCH_RATIO gc_20000_gate_ms 0.987853\n\nBENCH_METRIC gc_20000_enum_ms 0.036792000\nBENCH_RATIO gc_20000_enum_ms 1.012633\n\nBENCH_METRIC gc_20000_query_ms 0.022542000\nBENCH_RATIO gc_20000_query_ms 1.143741\n\nBENCH_METRIC gc_20000_free_ms 1.631667000\nBENCH_RATIO gc_20000_free_ms 0.581838\n\nBENCH_METRIC gc_20000_sweep_ns_per_slot 24.875156138\nBENCH_RATIO gc_20000_sweep_ns_per_slot 0.636605\nslots= 120887 pages=  473 | full-first   10.959 ms | full-steady    3.043 ms | partial   1.714 ms (freed 59703; gate 0.010, enum 0.037, query 0.023, free 1.632 ms) | free-list   60000 | collect/slot   24.9 ns\n\nBENCH_METRIC gc_80000_full_first_ms 43.806834000\nBENCH_RATIO gc_80000_full_first_ms 0.630840\n\nBENCH_METRIC gc_80000_full_steady_ms 11.960167000\nBENCH_RATIO gc_80000_full_steady_ms 0.688895\n\nBENCH_METRIC gc_80000_partial_ms 7.363791000\nBENCH_RATIO gc_80000_partial_ms 0.542916\n\nBENCH_METRIC gc_80000_gate_ms 0.038625000\nBENCH_RATIO gc_80000_gate_ms 0.700680\n\nBENCH_METRIC gc_80000_enum_ms 0.062833000\nBENCH_RATIO gc_80000_enum_ms 0.624943\n\nBENCH_METRIC gc_80000_query_ms 0.070083000\nBENCH_RATIO gc_80000_query_ms 0.554564\n\nBENCH_METRIC gc_80000_free_ms 7.181250000\nBENCH_RATIO gc_80000_free_ms 0.543514\n\nBENCH_METRIC gc_80000_sweep_ns_per_slot 25.637259897\nBENCH_RATIO gc_80000_sweep_ns_per_slot 0.631816\nslots= 480887 pages= 1879 | full-first   43.807 ms | full-steady   11.960 ms | partial   7.364 ms (freed 239991; gate 0.039, enum 0.063, query 0.070, free 7.181 ms) | free-list  240000 | collect/slot   25.6 ns\nok\ntest generational_steady_state_cost ... \nBENCH_METRIC gc_5000_generational_ms 0.039583000\nBENCH_RATIO gc_5000_generational_ms 0.599742\n\nBENCH_METRIC gc_5000_full_partial_ms 0.047666000\nBENCH_RATIO gc_5000_full_partial_ms 0.444782\nslots=  15886 | generational   0.040 ms (freed 768) | full partial   0.048 ms\n\nBENCH_METRIC gc_20000_generational_ms 0.063167000\nBENCH_RATIO gc_20000_generational_ms 0.761433\n\nBENCH_METRIC gc_20000_full_partial_ms 0.076333000\nBENCH_RATIO gc_20000_full_partial_ms 0.596935\nslots=  60886 | generational   0.063 ms (freed 768) | full partial   0.076 ms\n\nBENCH_METRIC gc_80000_generational_ms 0.116875000\nBENCH_RATIO gc_80000_generational_ms 0.661245\n\nBENCH_METRIC gc_80000_full_partial_ms 0.214792000\nBENCH_RATIO gc_80000_full_partial_ms 0.686236\nslots= 240886 | generational   0.117 ms (freed 768) | full partial   0.215 ms\nok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.42s\n\n   Compiling ironhorse-snapshot v0.0.1 (/Users/xyz/Development/endo6/rust/engine/ironhorse-snapshot)\n    Finished `release` profile [optimized] target(s) in 0.63s\n     Running tests/wake_latency_bench.rs (target/release/deps/wake_latency_bench-ed5419db42af4ba0)\n\nrunning 2 tests\ntest placeholder_alloc_cost_across_slot_counts ... \nBENCH_METRIC placeholder_120320_ms 0.025625000\nBENCH_RATIO placeholder_120320_ms 1.114130\nslots=  120320 | placeholder alloc median   0.026 ms (0.2 ns/slot)\n\nBENCH_METRIC placeholder_500000_ms 0.030250000\nBENCH_RATIO placeholder_500000_ms 0.833517\nslots=  500000 | placeholder alloc median   0.030 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_1000000_ms 0.030709000\nBENCH_RATIO placeholder_1000000_ms 0.969778\nslots= 1000000 | placeholder alloc median   0.031 ms (0.0 ns/slot)\n\nBENCH_METRIC placeholder_4000000_ms 0.121166000\nBENCH_RATIO placeholder_4000000_ms 0.779203\nslots= 4000000 | placeholder alloc median   0.121 ms (0.0 ns/slot)\nok\ntest wake_latency_eager_vs_lazy ... heap: 120888 slots, 44786 chunk bytes\n\nBENCH_METRIC wake_eager_ms 11.311833000\nBENCH_RATIO wake_eager_ms 0.735442\n\nBENCH_METRIC wake_lazy_ms 1.730417000\nBENCH_RATIO wake_lazy_ms 0.786360\neager wake median: 11.312 ms\nlazy  wake median: 1.730 ms\nlazy/eager ratio:  0.153\nok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s\n\n"
+  },
+  "qualifications": [
+    "Absolute Linux and macOS medians are not compared: the Linux artifact revision b2b78ad0 was fetched and remeasured on this host using identical current control fixtures.",
+    "The initial classification-before run overlapped candidate compilation and is retained for provenance, not used in the fixed ABBA ratios.",
+    "The first catch-after measurement reset maps with Default and is retained; final measurements use Rc::make_mut(...).clear() to preserve unique map capacity.",
+    "CATCH now shares maps; binding mutations may still clone and UNWIND name pruning remains proportional to map size. No claim of constant-time complete try loops.",
+    "Rc default construction in mem::take allocates an empty owner on call/suspend saves; the eight call/property controls quantify this change, including a populated plain-call slowdown near the 1.25 threshold.",
+    "The 48-control report predates these performance changes and establishes the starting comparison only. Final combined branch verification remains required."
+  ]
+}

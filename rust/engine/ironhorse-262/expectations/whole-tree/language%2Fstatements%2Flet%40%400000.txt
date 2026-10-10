@@ -1,0 +1,42 @@
+# engine=ironhorse features=default corpus=language/statements/let tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/let/block-local-closure-get-before-initialization.js sloppy pass
+language/statements/let/block-local-closure-get-before-initialization.js strict pass
+language/statements/let/block-local-closure-set-before-initialization.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/statements/let/block-local-closure-set-before-initialization.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/statements/let/block-local-use-before-initialization-in-declaration-statement.js sloppy pass
+language/statements/let/block-local-use-before-initialization-in-declaration-statement.js strict pass
+language/statements/let/block-local-use-before-initialization-in-prior-statement.js sloppy pass
+language/statements/let/block-local-use-before-initialization-in-prior-statement.js strict pass
+language/statements/let/cptn-value.js sloppy pass
+language/statements/let/cptn-value.js strict pass
+language/statements/let/fn-name-arrow.js sloppy pass
+language/statements/let/fn-name-arrow.js strict pass
+language/statements/let/fn-name-class.js sloppy pass
+language/statements/let/fn-name-class.js strict pass
+language/statements/let/fn-name-cover.js sloppy pass
+language/statements/let/fn-name-cover.js strict pass
+language/statements/let/fn-name-fn.js sloppy pass
+language/statements/let/fn-name-fn.js strict pass
+language/statements/let/fn-name-gen.js sloppy pass
+language/statements/let/fn-name-gen.js strict pass
+language/statements/let/function-local-closure-get-before-initialization.js sloppy pass
+language/statements/let/function-local-closure-get-before-initialization.js strict pass
+language/statements/let/function-local-closure-set-before-initialization.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/statements/let/function-local-closure-set-before-initialization.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/statements/let/function-local-use-before-initialization-in-declaration-statement.js sloppy pass
+language/statements/let/function-local-use-before-initialization-in-declaration-statement.js strict pass
+language/statements/let/function-local-use-before-initialization-in-prior-statement.js sloppy pass
+language/statements/let/function-local-use-before-initialization-in-prior-statement.js strict pass
+language/statements/let/global-closure-get-before-initialization.js sloppy pass
+language/statements/let/global-closure-get-before-initialization.js strict pass
+language/statements/let/global-closure-set-before-initialization.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/statements/let/global-closure-set-before-initialization.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/statements/let/global-use-before-initialization-in-declaration-statement.js sloppy pass
+language/statements/let/global-use-before-initialization-in-declaration-statement.js strict pass
+language/statements/let/global-use-before-initialization-in-prior-statement.js sloppy pass
+language/statements/let/global-use-before-initialization-in-prior-statement.js strict pass
+language/statements/let/redeclaration-error-from-within-strict-mode-function.js sloppy pass
+language/statements/let/static-init-await-binding-invalid.js sloppy pass
+language/statements/let/static-init-await-binding-invalid.js strict pass
+language/statements/let/static-init-await-binding-valid.js sloppy pass
+language/statements/let/static-init-await-binding-valid.js strict pass

@@ -1,0 +1,189 @@
+#![forbid(unsafe_code)]
+//! Production compiler adapter for the VM’s runtime source-execution seam.
+//! Neither the compiler nor the VM depends on this assembly crate.
+
+/// The [`ironhorse_vm::SourceCompiler`] the VM's runtime source-execution
+/// bridge (a string `eval`, the `Function` constructor) drives to compile a
+/// source string to bytecode in the running realm. It is ironhorse's own
+/// front end ([`ironhorse_compile`]) — the same compiler the top-level
+/// program rides — so an eval'd source is held to the identical pipeline.
+///
+/// Total over the coder's panics (`catch_unwind`), and the two reasons a
+/// compile can fail to produce bytecode are kept apart (architecture finding
+/// F063). A structured parse reject whose kind is `Unsupported` — a valid
+/// construct this compiler has not ported — is a coverage gap, and becomes
+/// [`ironhorse_vm::SourceCompileError::Unsupported`], which the VM surfaces as
+/// an uncatchable, self-naming `Halt::NotImplemented`. A *caught panic* is not
+/// that: it is the compiler breaking its own invariant, and it becomes
+/// [`ironhorse_vm::SourceCompileError::Invariant`], which the VM surfaces as
+/// `Halt::EngineInvariant("eval:compiler-invariant")`. Until this distinction
+/// existed both arrived as `Unsupported`, so a guest-triggerable compiler fault
+/// was indistinguishable from an honest coverage gap — in the harness's
+/// accounting and in the `NotImplemented` label the guest saw.
+///
+/// Meter refusal becomes an uncatchable `MeterAbort`; other rejects become
+/// realm-local, catchable `SyntaxError`s. Charges reach the live VM before each
+/// work step, and a shared receipt survives this compiler's unwind boundary.
+pub struct IronhorseSourceCompiler;
+
+impl ironhorse_vm::SourceCompiler for IronhorseSourceCompiler {
+    fn compile_source(
+        &self,
+        source: &str,
+        strict: bool,
+        raw_budget: u64,
+        charge: &mut dyn FnMut(u64) -> bool,
+    ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
+        let meter = ironhorse_compile::ParseMeter::with_charge_callback(raw_budget, charge);
+        let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ironhorse_compile::compile_atoms_with_meter(source, strict, meter.clone())
+        }));
+        if meter.exhausted() {
+            return Err(ironhorse_vm::SourceCompileError::MeterAbort);
+        }
+        match compiled {
+            Ok(Ok((bytecode, symbols))) => Ok(ironhorse_vm::CompiledSource {
+                bytecode,
+                symbols,
+                parse_meter_raw: meter.raw(),
+                parse_computrons: meter.computrons(),
+            }),
+            Ok(Err(e)) => {
+                match e.kind {
+                    ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                        kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
+                        ..
+                    }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
+                    ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                        kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
+                        ..
+                    }) => Err(ironhorse_vm::SourceCompileError::MeterAbort),
+                    ironhorse_compile::parser::ParseErrorKind::MeterLimit => {
+                        Err(ironhorse_vm::SourceCompileError::MeterAbort)
+                    }
+                    ironhorse_compile::parser::ParseErrorKind::Unsupported => {
+                        Err(ironhorse_vm::SourceCompileError::Unsupported(e.to_string()))
+                    }
+                    // Carry the bare diagnostic (`e.message`, no `line N:`
+                    // prefix) so the bridge's realm-local `SyntaxError` renders
+                    // with XS's exact wording — the pinned oracle's thrown
+                    // `String(exception)` is `SyntaxError: <message>`, and the
+                    // differential harness compares the whole string.
+                    _ => Err(ironhorse_vm::SourceCompileError::Syntax(e.message)),
+                }
+            }
+            // A caught panic is an engine fault, not a coverage gap. See the
+            // type's doc comment: sharing `Unsupported` with an unported
+            // construct is precisely what F063 reported.
+            Err(payload) => Err(ironhorse_vm::SourceCompileError::Invariant(panic_message(
+                payload.as_ref(),
+            ))),
+        }
+    }
+
+    fn compile_source_units(
+        &self,
+        source: &[u16],
+        strict: bool,
+        raw_budget: u64,
+        charge: &mut dyn FnMut(u64) -> bool,
+    ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
+        let meter = ironhorse_compile::ParseMeter::with_charge_callback(raw_budget, charge);
+        let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ironhorse_compile::compile_atoms_units_with_meter(
+                source,
+                ironhorse_compile::Goal::Eval,
+                strict,
+                meter.clone(),
+            )
+        }));
+        finish_units(&meter, compiled)
+    }
+
+    fn compile_eval_units(
+        &self,
+        source: &[u16],
+        context: &ironhorse_vm::EvalContext,
+        raw_budget: u64,
+        charge: &mut dyn FnMut(u64) -> bool,
+    ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
+        let context = ironhorse_compile::EvalContext {
+            strict: context.strict,
+            new_target: context.new_target,
+            super_property: context.super_property,
+            field: context.field,
+            private_environment: context.private_environment,
+        };
+        let meter = ironhorse_compile::ParseMeter::with_charge_callback(raw_budget, charge);
+        let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ironhorse_compile::compile_atoms_units_eval_with_meter(source, &context, meter.clone())
+        }));
+        finish_units(&meter, compiled)
+    }
+}
+
+/// Map a UTF-16 compile's outcome to the VM's [`ironhorse_vm::CompiledSource`]
+/// or the reason it produced none.
+fn finish_units(
+    meter: &ironhorse_compile::ParseMeter<'_>,
+    compiled: std::thread::Result<
+        Result<(Vec<u8>, Vec<u8>), ironhorse_compile::parser::ParseError>,
+    >,
+) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
+    if meter.exhausted() {
+        return Err(ironhorse_vm::SourceCompileError::MeterAbort);
+    }
+    match compiled {
+        Ok(Ok((bytecode, symbols))) => Ok(ironhorse_vm::CompiledSource {
+            bytecode,
+            symbols,
+            parse_meter_raw: meter.raw(),
+            parse_computrons: meter.computrons(),
+        }),
+        Ok(Err(e)) => {
+            match e.kind {
+                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                    kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
+                    ..
+                }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
+                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                    kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
+                    ..
+                }) => Err(ironhorse_vm::SourceCompileError::MeterAbort),
+                ironhorse_compile::parser::ParseErrorKind::MeterLimit => {
+                    Err(ironhorse_vm::SourceCompileError::MeterAbort)
+                }
+                ironhorse_compile::parser::ParseErrorKind::Unsupported => {
+                    Err(ironhorse_vm::SourceCompileError::Unsupported(e.to_string()))
+                }
+                // Carry the bare diagnostic (`e.message`, no `line N:`
+                // prefix) so the bridge's realm-local `SyntaxError` renders
+                // with XS's exact wording — the pinned oracle's thrown
+                // `String(exception)` is `SyntaxError: <message>`, and the
+                // differential harness compares the whole string.
+                _ => Err(ironhorse_vm::SourceCompileError::Syntax(e.message)),
+            }
+        }
+        // A caught panic is an engine fault, not a coverage gap. See the
+        // type's doc comment: sharing `Unsupported` with an unported
+        // construct is precisely what F063 reported.
+        Err(payload) => Err(ironhorse_vm::SourceCompileError::Invariant(panic_message(
+            payload.as_ref(),
+        ))),
+    }
+}
+
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "panic".to_string()
+    };
+    // One line AND length-bounded — this becomes part of a report reason string
+    // published into report.json/HTML, so a panic payload embedding a minified
+    // source cannot land unbounded in the artifact.
+    let line = msg.lines().next().unwrap_or("panic").trim();
+    line.chars().take(200).collect()
+}

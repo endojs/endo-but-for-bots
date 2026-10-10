@@ -47,11 +47,17 @@ fn constructor_and_tag_are_wired() {
 #[test]
 fn decimal_grouping_and_separators_are_exact() {
     for (source, expected) in [
-        ("new Intl.NumberFormat('en-US').format(12345.678)", "12,345.678"),
+        (
+            "new Intl.NumberFormat('en-US').format(12345.678)",
+            "12,345.678",
+        ),
         ("new Intl.NumberFormat('en-US').format(1000)", "1,000"),
         ("new Intl.NumberFormat('en-US').format(100)", "100"),
         ("new Intl.NumberFormat('en-US').format(-1)", "-1"),
-        ("new Intl.NumberFormat('de-DE').format(12345.678)", "12.345,678"),
+        (
+            "new Intl.NumberFormat('de-DE').format(12345.678)",
+            "12.345,678",
+        ),
         ("new Intl.NumberFormat('de-DE').format(1000)", "1.000"),
         // Indian grouping: 3-2-2 group sizes.
         ("new Intl.NumberFormat('en-IN').format(100000)", "1,00,000"),
@@ -67,7 +73,10 @@ fn decimal_grouping_and_separators_are_exact() {
 
 #[test]
 fn percent_scales_by_hundred() {
-    intl_result("new Intl.NumberFormat('en-US',{style:'percent'}).format(0.2)", "20%");
+    intl_result(
+        "new Intl.NumberFormat('en-US',{style:'percent'}).format(0.2)",
+        "20%",
+    );
     // Percent style defaults to maximumFractionDigits 0, so 1.1% rounds to 1%.
     intl_result(
         "new Intl.NumberFormat('en-US',{style:'percent'}).format(0.011)",

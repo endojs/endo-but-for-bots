@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=intl402/DisplayNames/prototype/resolvedOptions tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/DisplayNames/prototype/resolvedOptions/default-option-values.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/resolvedOptions/default-option-values.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/resolvedOptions/length.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/resolvedOptions/length.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/resolvedOptions/name.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/resolvedOptions/name.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/resolvedOptions/option-fallback.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/resolvedOptions/option-fallback.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/resolvedOptions/option-languagedisplay.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/resolvedOptions/option-languagedisplay.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/resolvedOptions/option-style.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/resolvedOptions/option-style.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/resolvedOptions/option-type.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/resolvedOptions/option-type.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/resolvedOptions/prop-desc.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/resolvedOptions/prop-desc.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/resolvedOptions/return-object.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/resolvedOptions/return-object.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/resolvedOptions/this-not-object-throws.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/resolvedOptions/this-not-object-throws.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/resolvedOptions/this-object-lacks-internal-throws.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/resolvedOptions/this-object-lacks-internal-throws.js strict skip:oracle-host-missing-global:Intl

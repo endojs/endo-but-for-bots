@@ -1,0 +1,8 @@
+# engine=ironhorse features=default corpus=annexB/language/expressions/assignmenttargettype tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/language/expressions/assignmenttargettype/callexpression-as-for-in-lhs.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no reference\" ironhorse=\"SyntaxError\""
+annexB/language/expressions/assignmenttargettype/callexpression-as-for-of-lhs.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no reference\" ironhorse=\"SyntaxError\""
+annexB/language/expressions/assignmenttargettype/callexpression-in-compound-assignment.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no reference\" ironhorse=\"SyntaxError\""
+annexB/language/expressions/assignmenttargettype/callexpression-in-postfix-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no reference\" ironhorse=\"SyntaxError\""
+annexB/language/expressions/assignmenttargettype/callexpression-in-prefix-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no reference\" ironhorse=\"SyntaxError\""
+annexB/language/expressions/assignmenttargettype/callexpression.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no reference\" ironhorse=\"SyntaxError\""
+annexB/language/expressions/assignmenttargettype/cover-callexpression-and-asyncarrowhead.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no reference\" ironhorse=\"SyntaxError\""

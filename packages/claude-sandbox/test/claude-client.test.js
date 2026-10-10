@@ -172,9 +172,47 @@ test('send() spawns claude -p with stream-json and yields parsed events', async 
   t.is(argv[2], 'do a thing');
   t.true(argv.includes('--output-format'));
   t.true(argv.includes('stream-json'));
+  t.true(argv.includes('--include-partial-messages'));
+  t.true(argv.includes('--dangerously-skip-permissions'));
   t.is(opts.cwd, '/workspace');
   // First send has no conversation to resume.
   t.false(argv.includes('--continue'));
+});
+
+test('resumePriorConversation makes the first send use --continue', async t => {
+  const fake = makeFakeSlice([[]]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), { resumePriorConversation: true }),
+  );
+  await drain(await client.send('after restart'));
+  t.is(fake.spawned.length, 1);
+  // A session reincarnated after a daemon restart, whose persistent config dir
+  // already held a transcript, resumes it on its very first post-restart turn
+  // rather than forking a fresh, context-free conversation.
+  t.true(fake.spawned[0].argv.includes('--continue'));
+  const status = await client.status();
+  t.true(status.conversationStarted);
+});
+
+test('an mcpConfigPath adds --mcp-config and --strict-mcp-config', async t => {
+  const fake = makeFakeSlice([[]]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      mcpConfigPath: '/endo-mcp/mcp.json',
+    }),
+  );
+  await drain(await client.send('do a thing'));
+  const { argv } = fake.spawned[0];
+  t.true(argv.includes('--mcp-config'));
+  t.is(argv[argv.indexOf('--mcp-config') + 1], '/endo-mcp/mcp.json');
+  t.true(argv.includes('--strict-mcp-config'));
+});
+
+test('without an mcpConfigPath no MCP flags are passed', async t => {
+  const fake = makeFakeSlice([[]]);
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
+  await drain(await client.send('do a thing'));
+  t.false(fake.spawned[0].argv.includes('--mcp-config'));
 });
 
 test('send() adds --continue after the first turn and forwards --model', async t => {
@@ -193,6 +231,41 @@ test('send() adds --continue after the first turn and forwards --model', async t
     t.true(proc.argv.includes('--model'));
     t.true(proc.argv.includes('claude-sonnet-4-6'));
   }
+});
+
+test('a constructor systemPrompt adds --append-system-prompt to every spawn', async t => {
+  const fake = makeFakeSlice([[], []]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), { systemPrompt: 'You are Floot.' }),
+  );
+
+  await drain(await client.send('first'));
+  await drain(await client.send('second'));
+
+  t.is(fake.spawned.length, 2);
+  for (const proc of fake.spawned) {
+    const i = proc.argv.indexOf('--append-system-prompt');
+    t.true(i !== -1, 'argv carries --append-system-prompt');
+    t.is(proc.argv[i + 1], 'You are Floot.');
+  }
+});
+
+test('a per-turn systemPrompt overrides the constructor default', async t => {
+  const fake = makeFakeSlice([[]]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), { systemPrompt: 'default persona' }),
+  );
+  await drain(await client.send('hi', { systemPrompt: 'turn persona' }));
+  const { argv } = fake.spawned[0];
+  const i = argv.indexOf('--append-system-prompt');
+  t.is(argv[i + 1], 'turn persona');
+});
+
+test('without a systemPrompt no --append-system-prompt is passed', async t => {
+  const fake = makeFakeSlice([[]]);
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
+  await drain(await client.send('do a thing'));
+  t.false(fake.spawned[0].argv.includes('--append-system-prompt'));
 });
 
 test('overlapping sends queue and run in order (serialized)', async t => {
@@ -395,6 +468,80 @@ test('help() describes the ClaudeClient surface', async t => {
   t.regex(client.help(), /send\(prompt/);
 });
 
+test('detectPriorConversation decides --continue per spawn', async t => {
+  const fake = makeFakeSlice([[], [], []]);
+  let persisted = false;
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      detectPriorConversation: () => persisted,
+    }),
+  );
+
+  // First turn: no transcript yet → fresh conversation.
+  await drain(await client.send('first'));
+  t.false(fake.spawned[0].argv.includes('--continue'));
+
+  // Simulate claude having persisted the first turn's transcript.
+  persisted = true;
+  await drain(await client.send('second'));
+  t.true(fake.spawned[1].argv.includes('--continue'));
+
+  // Transcript gone again (e.g. config dir wiped) → detector wins over the
+  // in-memory conversationStarted flag, so the turn does not pass a
+  // --continue that has nothing to resume.
+  persisted = false;
+  await drain(await client.send('third'));
+  t.false(fake.spawned[2].argv.includes('--continue'));
+});
+
+test('a first turn killed before claude persisted does not poison the next with --continue', async t => {
+  // The in-memory flag alone would flip to true after the first spawn even
+  // when the process was killed before writing a transcript; the detector
+  // (still reporting no transcript) must override it.
+  const fake = makeFakeSlice([[], []]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      detectPriorConversation: () => false,
+    }),
+  );
+  await drain(await client.send('killed early'));
+  await drain(await client.send('retry'));
+  t.is(fake.spawned.length, 2);
+  t.false(fake.spawned[0].argv.includes('--continue'));
+  t.false(fake.spawned[1].argv.includes('--continue'));
+});
+
+test('a detector throw falls back to the in-memory flag', async t => {
+  const fake = makeFakeSlice([[], []]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      detectPriorConversation: () => {
+        throw new Error('EACCES');
+      },
+    }),
+  );
+  await drain(await client.send('first'));
+  await drain(await client.send('second'));
+  t.false(fake.spawned[0].argv.includes('--continue'));
+  t.true(fake.spawned[1].argv.includes('--continue'));
+});
+
+test('initialPrompt is skipped when a prior conversation exists', async t => {
+  // The prompt rides in the formula env, so a reincarnated formula would
+  // otherwise re-fire it as a spurious extra turn on every daemon restart.
+  const fake = makeFakeSlice([[]]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      initialPrompt: 'hello',
+      detectPriorConversation: () => true,
+    }),
+  );
+  await drain(await client.send('next'));
+  t.is(fake.spawned.length, 1);
+  t.is(fake.spawned[0].argv[2], 'next');
+  t.true(fake.spawned[0].argv.includes('--continue'));
+});
+
 test('initialPrompt is fired and drained at construction', async t => {
   const fake = makeFakeSlice([[enc.encode('{"type":"result"}\n')], []]);
   const client = makeClaudeClient(
@@ -411,4 +558,270 @@ test('initialPrompt is fired and drained at construction', async t => {
   // The second turn continues the conversation started by the initial
   // prompt.
   t.true(fake.spawned[1].argv.includes('--continue'));
+});
+
+// ---------------------------------------------------------------------------
+// Runtime extra mounts: recreate concurrency (designs/runtime-container-fs-mount.md)
+// ---------------------------------------------------------------------------
+
+test('terminate() racing a mount recreate never re-provisions', async t => {
+  t.timeout(10_000);
+  let provisionCount = 0;
+  let removeMountCount = 0;
+  let releaseDispose;
+  const disposeGate = new Promise(r => {
+    releaseDispose = r;
+  });
+  let disposeStarted;
+  const disposeStartedP = new Promise(r => {
+    disposeStarted = r;
+  });
+  const makeSlice = () => ({
+    async spawn() {
+      const proc = {
+        async stdout() {
+          return harden({ kind: 'fake-stdout' });
+        },
+        async kill() {},
+        async wait() {
+          return harden({ code: 0, signal: null });
+        },
+      };
+      procOut.set(proc, []);
+      return proc;
+    },
+    async dispose() {
+      disposeStarted();
+      await disposeGate;
+    },
+  });
+  const client = makeClaudeClient({
+    sessionId: 'race-term',
+    createdAt: 'now',
+    workspaceMountPoint: '/tmp/x',
+    workspacePath: '/workspace',
+    backend: 'podman',
+    makeStdoutIterable,
+    provision: async () => {
+      provisionCount += 1;
+      return {
+        slice: makeSlice(),
+        removeMount: async () => {
+          removeMountCount += 1;
+        },
+      };
+    },
+  });
+  await drain(await client.send('one'));
+  t.is(provisionCount, 1);
+
+  // Start a recreate; while its teardown is disposing the old slice,
+  // terminate the client. The recreate must NOT re-provision afterwards —
+  // that container (and its credential grant) would have no owner left to
+  // release it.
+  const applied = client.setExtraMounts(
+    harden([{ cap: harden({}), innerPath: '/mnt/x', mode: 'rw' }]),
+  );
+  await disposeStartedP;
+  const terminated = client.terminate();
+  releaseDispose();
+  await applied;
+  await terminated;
+  t.is(provisionCount, 1);
+  await t.throwsAsync(() => client.send('after'), {
+    message: /is terminated/,
+  });
+  // A recreate leaves the workspace Mount pet name registered because the
+  // re-provision re-registers it. Nothing re-provisioned here, so the stopped
+  // recreate has to reclaim the name itself, or the terminated session leaves
+  // a live host-rooted Mount formula behind.
+  t.is(removeMountCount, 1);
+});
+
+test('a send racing a mount recreate waits for the teardown gate', async t => {
+  t.timeout(10_000);
+  const log = [];
+  let provisionCount = 0;
+  let releaseUnmount;
+  const unmountGate = new Promise(r => {
+    releaseUnmount = r;
+  });
+  let unmountStarted;
+  const unmountStartedP = new Promise(r => {
+    unmountStarted = r;
+  });
+  const makeLoggedSlice = n => ({
+    async spawn() {
+      log.push(`spawn@${n}`);
+      const proc = {
+        async stdout() {
+          return harden({ kind: 'fake-stdout' });
+        },
+        async kill() {},
+        async wait() {
+          return harden({ code: 0, signal: null });
+        },
+      };
+      procOut.set(proc, []);
+      return proc;
+    },
+    async dispose() {
+      log.push(`dispose@${n}`);
+    },
+  });
+  const client = makeClaudeClient({
+    sessionId: 'race-gate',
+    createdAt: 'now',
+    workspaceMountPoint: '/tmp/x',
+    workspacePath: '/workspace',
+    backend: 'podman',
+    makeStdoutIterable,
+    provision: async extras => {
+      provisionCount += 1;
+      const n = provisionCount;
+      log.push(`provision@${n}:${extras.map(e => e.innerPath).join(',')}`);
+      return {
+        slice: makeLoggedSlice(n),
+        mountHandle: {
+          async unmount() {
+            log.push(`unmount-start@${n}`);
+            if (n === 1) {
+              unmountStarted();
+              await unmountGate;
+            }
+            log.push(`unmount-end@${n}`);
+          },
+        },
+      };
+    },
+  });
+  await drain(await client.send('one'));
+
+  const applied = client.setExtraMounts(
+    harden([{ cap: harden({}), innerPath: '/mnt/r', mode: 'rw' }]),
+  );
+  await unmountStartedP; // the old workspace unmount is in progress
+  const sendP = client.send('two'); // races the recreate
+  await new Promise(r => setTimeout(r, 20));
+  // The gate holds: no provision may overlap the teardown, or the fresh 9P
+  // mounts could be unmounted by the old slice's teardown.
+  t.is(provisionCount, 1);
+  releaseUnmount();
+  await applied;
+  const events = await drain(await sendP);
+  t.is(events[events.length - 1].type, 'end');
+  t.is(provisionCount, 2);
+  t.true(log.indexOf('unmount-end@1') < log.indexOf('provision@2:/mnt/r'));
+  // The racing turn spawned in the NEW slice.
+  t.true(log.includes('spawn@2'));
+});
+
+test('a turn killed by a mount recreate aborts with the recreate-labelled reason', async t => {
+  t.timeout(10_000);
+  let unblockStdout;
+  const blocked = new Promise(r => {
+    unblockStdout = r;
+  });
+  let releaseProvision;
+  const provisionGate = new Promise(r => {
+    releaseProvision = r;
+  });
+  let provisionCount = 0;
+  const client = makeClaudeClient({
+    sessionId: 'label',
+    createdAt: 'now',
+    workspaceMountPoint: '/tmp/x',
+    workspacePath: '/workspace',
+    backend: 'podman',
+    makeStdoutIterable: () =>
+      harden({
+        async *[Symbol.asyncIterator]() {
+          yield enc.encode('{"type":"system"}\n');
+          await blocked; // in flight until the recreate disposes the slice
+        },
+      }),
+    provision: async () => {
+      provisionCount += 1;
+      if (provisionCount === 2) {
+        // Hold the re-mint open so the killed turn's abort is pushed while
+        // the recreate is still in progress.
+        await provisionGate;
+      }
+      return {
+        slice: {
+          async spawn() {
+            return {
+              async stdout() {
+                return harden({ kind: 'fake-stdout' });
+              },
+              async kill() {
+                unblockStdout();
+              },
+              async wait() {
+                return harden({ code: null, signal: 'SIGKILL' });
+              },
+            };
+          },
+          async dispose() {
+            unblockStdout(); // disposing the slice kills the process
+          },
+        },
+      };
+    },
+  });
+  const it = iterateReader(await client.send('work'));
+  t.is((await it.next()).value.type, 'system'); // the turn is in flight
+  const applied = client.setExtraMounts(
+    harden([{ cap: harden({}), innerPath: '/mnt/z', mode: 'rw' }]),
+  );
+  const rest = [];
+  for await (const ev of it) {
+    rest.push(ev);
+  }
+  const last = rest[rest.length - 1];
+  t.is(last.type, 'abort');
+  t.regex(last.reason, /container mount set changed; sandbox slice recreated/);
+  t.regex(last.reason, /killed by SIGKILL/);
+  releaseProvision();
+  await applied;
+  t.is(provisionCount, 2);
+});
+
+test('setExtraMounts refuses eager and terminated clients without recording', async t => {
+  // Eager client (no provision thunk): there is no way to recreate the
+  // slice, and the refused set must not leak into status()/terminate().
+  const fake = makeFakeSlice([[]]);
+  const mount = makeFakeMount();
+  const eager = makeClaudeClient(baseArgs(fake, mount));
+  await t.throwsAsync(
+    () =>
+      eager.setExtraMounts(
+        harden([{ cap: harden({}), innerPath: '/mnt/x', mode: 'rw' }]),
+      ),
+    { message: /require a lazily-provisioned client/ },
+  );
+  t.deepEqual((await eager.status()).extraMounts, []);
+
+  // Terminated client: refused before any provisioning.
+  let provisions = 0;
+  const lazy = makeClaudeClient({
+    sessionId: 'dead',
+    createdAt: 'now',
+    workspaceMountPoint: '/tmp/x',
+    backend: 'podman',
+    makeStdoutIterable,
+    provision: async () => {
+      provisions += 1;
+      return { slice: makeFakeSlice([]).slice };
+    },
+  });
+  await lazy.terminate();
+  await t.throwsAsync(
+    () =>
+      lazy.setExtraMounts(
+        harden([{ cap: harden({}), innerPath: '/mnt/x', mode: 'rw' }]),
+      ),
+    { message: /is terminated/ },
+  );
+  t.is(provisions, 0);
 });

@@ -125,6 +125,21 @@ endo make --UNCONFINED node_modules/@endo/workflow/src/index.js \
 endo cp workflow-service @pins/workflow-service
 ```
 
+`@endo/workflow/setup.js` does the same unattended, for a daemon that lists
+it in `ENDO_EXTRA`:
+
+```
+endo run --UNCONFINED node_modules/@endo/workflow/setup.js --powers @agent
+```
+
+It is idempotent — a re-run keeps the installed service, so the formula
+identity that grants derived from it depend on never changes — and it
+re-pins unconditionally, so a lost pin heals instead of leaving stored runs
+dormant.
+In a hosted deployment it reroutes the module specifier through the
+release tree's `current` symlink, so the pinned formula survives release
+pruning and still re-imports the newest code on each revival.
+
 The daemon eagerly revives exactly one caplet collection at boot: the
 `@pins` directory.
 On the next start, `revivePins()` provides the pinned identifier, the
@@ -290,3 +305,17 @@ appends, so a recovered run and a live run cannot disagree.
   uses: `current()`, `stateAt(seq)` time travel, and client-side
   `verify()` of the hash chain. The `@endo/space-workflow` Chat space
   renders runs through it.
+
+### Retrying a factory handoff
+
+`factory.start({ requestId, params })` optionally names an idempotent handoff.
+The key is scoped to that factory; concurrent calls and retries after restart
+return the same run. Reusing the key with different params rejects. Keyed starts
+require capability-free params and pre-bound endowments; they cannot add new
+endowments. This closes the gap between starting a run and saving its observer
+in a conversational agent's pet store.
+
+Mail correlation authenticates both the service's sent-mail counterpart and
+the answering participant by formula identity, ignoring transport hints. A
+matching marker or `replyTo` alone is not an approval. Recovery applies the same
+provenance checks as live delivery.

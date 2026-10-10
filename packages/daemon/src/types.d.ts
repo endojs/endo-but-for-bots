@@ -1,4 +1,5 @@
 import type { Passable } from '@endo/pass-style';
+import type { Pattern } from '@endo/patterns';
 import type { ERef } from '@endo/eventual-send';
 import type { FarRef } from '@endo/eventual-send';
 import type { CapTPOptions } from '@endo/captp';
@@ -220,6 +221,10 @@ export type GuestFormula = {
   worker: FormulaIdentifier;
   networks: FormulaIdentifier;
   planes: FormulaIdentifier;
+  /** The guest-visible and guest-mutable pin directory (`@pins`). */
+  guestPins?: FormulaIdentifier;
+  /** The host-only pin directory retained by the guest formula. */
+  hostPins?: FormulaIdentifier;
 };
 
 export type LeastAuthorityFormula = {
@@ -563,6 +568,16 @@ export type MailHubFormula = {
   store: FormulaIdentifier;
 };
 
+/**
+ * Form fields as persisted in a message formula: smallcaps capdata, so the
+ * CopyTagged patterns survive the formula's JSON round-trip. Forms written
+ * before this encoding hold the raw `FormField[]` instead.
+ */
+export type StoredFormFields = {
+  body: string;
+  slots: [];
+};
+
 export type MessageFormula = {
   type: 'message';
   messageType: 'request' | 'package' | 'definition' | 'form' | 'value';
@@ -580,7 +595,7 @@ export type MessageFormula = {
   ids?: FormulaIdentifier[];
   source?: string;
   slots?: Record<string, { label: string; pattern?: unknown }>;
-  fields?: FormField[];
+  fields?: FormField[] | StoredFormFields;
   valueId?: FormulaIdentifier;
 };
 
@@ -633,9 +648,46 @@ export type ChannelMessage = {
 
 export type InvitationFormula = {
   type: 'invitation';
-  hostAgent: FormulaIdentifier;
-  hostHandle: FormulaIdentifier;
+  /**
+   * The inviting `EndoAgent` — an `EndoHost` (via `EndoHost.invite`) or an
+   * `EndoGuest` (via `EndoGuest.invite`). Network mediation is not drawn from
+   * this agent; the daemon supplies it internally (see `makeInvitation`), so a
+   * guest inviter gains no network authority.
+   *
+   * Optional because a record minted before the
+   * `hostAgent`/`hostHandle` -> `invitingAgent`/`invitingHandle` rename
+   * carries only the deprecated {@link hostAgent}; every read coerces
+   * `invitingAgent ?? hostAgent`, so an on-disk record may satisfy this shape
+   * through the fallback field alone.
+   */
+  invitingAgent?: FormulaIdentifier;
+  /**
+   * The inviting agent's handle, which the locator's `from` names. Optional
+   * for the same legacy reason as {@link invitingAgent}; reads coerce
+   * `invitingHandle ?? hostHandle`.
+   */
+  invitingHandle?: FormulaIdentifier;
+  /**
+   * The pet-name path in the inviting agent's own store that retains this
+   * pending invitation. Deliberately NOT renamed to `correspondentName`
+   * alongside the `EndoHost.accept`/`EndoGuest.accept` and CLI rename: this is a
+   * persisted on-disk field, so renaming it would be a stored-record schema
+   * change. The concept it names is the correspondent's pet name.
+   */
   guestName: NameOrPath;
+  /**
+   * @deprecated Legacy field name for {@link invitingAgent}, persisted by
+   * records minted before the `hostAgent`/`hostHandle` ->
+   * `invitingAgent`/`invitingHandle` rename, and the fallback source reads
+   * coerce from. Read-only: newly minted invitations never set it, but reads
+   * coerce it so existing production databases need not be purged.
+   */
+  hostAgent?: FormulaIdentifier;
+  /**
+   * @deprecated Legacy field name for {@link invitingHandle}. See
+   * {@link hostAgent}.
+   */
+  hostHandle?: FormulaIdentifier;
 };
 
 export type InvitationDeferredTaskParams = {
@@ -733,8 +785,12 @@ export type FormField = {
   name: string;
   label: string;
   example?: string;
-  default?: unknown;
-  pattern?: unknown;
+  // Not `unknown`: a field crosses CapTP and is persisted with the form's
+  // message formula, so neither of these can be an arbitrary value. `pattern`
+  // is narrower still than passable — it is what `submit` hands to
+  // `mustMatch`, so it is an `@endo/patterns` pattern.
+  default?: Passable;
+  pattern?: Pattern;
   secret?: boolean;
 };
 
@@ -783,6 +839,12 @@ export interface Invitation {
     hostNameFromGuest?: string,
   ): Promise<{ syncedStoreNumber: FormulaNumber }>;
   locate(): Promise<string>;
+  /**
+   * Revoke this pending, unaccepted invitation through the object itself.
+   * Single-use: a no-op once the invitation has been accepted, and it revokes
+   * exactly this invitation, leaving any sibling invitation redeemable.
+   */
+  cancel(reason?: Error): Promise<void>;
 }
 
 export interface Topic<
@@ -944,6 +1006,13 @@ export interface NameHub {
     locator: string,
   ): AsyncGenerator<LocatorNameChange, undefined, undefined>;
   list(...petNamePath: string[]): Promise<Array<Name>>;
+  /**
+   * Return a snapshot of the values at the directory's immediate pet names.
+   * The names and their values are captured in one directory turn, so a
+   * concurrent mutation cannot shift the association between enumeration and
+   * lookup.
+   */
+  listValues(): Promise<Array<unknown>>;
   listIdentifiers(...petNamePath: string[]): Promise<Array<string>>;
   listLocators(...petNamePath: string[]): Promise<Record<string, string>>;
   followNameChanges(
@@ -959,11 +1028,68 @@ export interface NameHub {
   copy(fromPetName: string[], toPetName: string[]): Promise<void>;
 }
 
+export interface ReadableNameHub {
+  help(method?: string): string;
+  has(...petNamePath: string[]): Promise<boolean>;
+  list(...petNamePath: string[]): Promise<Array<Name>>;
+  /**
+   * Resolve a pet-name path to the value named at it.
+   *
+   * Attenuation is SHALLOW: only this hub's own mutators (`storeIdentifier`,
+   * `remove`, `makeDirectory`, `writeText`, ...) are withheld. A path that
+   * resolves to a nested capability-bearing value — a sub-`EndoDirectory`, an
+   * agent handle, a worker — is returned as the live, fully-authorized object,
+   * NOT a further read-only view. A holder of the read-only hub can therefore
+   * reach and mutate every writable capability in the transitively reachable
+   * name graph, not merely one literal level down. In particular, if the
+   * backing directory names itself, an ancestor, or the grantor's own agent,
+   * `lookup` of that name hands back the fully writable hub and the narrowing
+   * is void — so this attenuation is only meaningful over a directory whose
+   * reachable graph holds no writable path back to the grantor. Callers that
+   * need a recursively read-only surface must re-attenuate the result
+   * themselves (or arrange that the backing directory contains no nested
+   * writable capabilities). Contrast `EndoMount.readOnly()`, whose
+   * {@link ReadableTreeView} narrowing is recursive through nested lookups.
+   */
+  lookup(petNamePath: string | readonly string[]): Promise<unknown>;
+  /** See {@link ReadableNameHub.lookup}: attenuation is shallow, not recursive. */
+  maybeLookup(
+    petNamePath: string | readonly string[],
+  ): Promise<unknown | undefined>;
+}
+
 export interface EndoDirectory extends NameHub {
   makeDirectory(petNamePath: string | string[]): Promise<EndoDirectory>;
   readText(petNamePath: string | string[]): Promise<string>;
   maybeReadText(petNamePath: string | string[]): Promise<string | undefined>;
   writeText(petNamePath: string | string[], content: string): Promise<void>;
+  /**
+   * Mint a read-only view of this directory as a {@link ReadableNameHub}. The
+   * attenuation is SHALLOW — it withholds this directory's mutators but does
+   * not recursively narrow values returned by `lookup`/`maybeLookup`; see
+   * {@link ReadableNameHub.lookup}. A view of a directory that contains nested
+   * writable directories still hands those nested directories out live.
+   *
+   * `async` (returns a `Promise<ReadableNameHub>`), unlike the synchronous,
+   * recursively-narrowing `EndoMount.readOnly()` / `EndoMountFile.readOnly()`:
+   * a directory is a live `NameHub` that can name heterogeneous capabilities
+   * (workers, agents, sub-directories), so a recursive structural narrowing of
+   * the kind a content-addressed mount tree admits is not generally possible,
+   * and the mint forwards through eventual-send. A caller feature-detecting
+   * `readOnly` across the `EndoMount*` / `EndoDirectory` family must not assume
+   * a uniform sync/recursive contract; `await` erases the sync/async tell.
+   *
+   * Optional at the type level even though the runtime `DirectoryInterface`
+   * guard (`interfaces.js`) requires it unconditionally: a standalone
+   * `EndoDirectory` (and the `mailHub`/`messageHub` directories) always
+   * implements it, but `EndoAgent extends EndoDirectory` while the agent
+   * exos (`EndoGuest`/`EndoHost`) do not yet carry `readOnly` in their
+   * guards, so `E(host).readOnly()` rejects at runtime today. The `?` keeps
+   * that gap type-honest for agents. Whether to implement `readOnly` on
+   * agents (or move it off the base interface) is decided by the slice of
+   * #1125 that first consumes it.
+   */
+  readOnly?(): Promise<ReadableNameHub>;
 }
 
 /**
@@ -1217,14 +1343,29 @@ export interface EndoReadable {
   ): Promise<StreamNode<string, undefined>>;
   text(): Promise<string>;
   json(): Promise<unknown>;
-  getInfo(): Promise<BlobInfo>;
-  fetch(offset: bigint, length: bigint): Promise<PassableBytesReader>;
+  sha256(): Promise<string>;
+  size(): Promise<bigint>;
+  bytes(): Promise<PassableBytesReader>;
+  /**
+   * Range *attenuation* (designs/readableblob-range-attenuation.md): select the
+   * half-open byte interval `[start, end)` relative to the receiver and return
+   * a new `EndoReadable` with exactly the authority to read it. Ranges compose
+   * and construction reads no bytes, so it resolves synchronously.
+   */
+  byteRange(start: bigint, end: bigint): EndoReadable;
+  /**
+   * Select lines `[startLine, endLine)` (0-based, end-exclusive, LF boundaries,
+   * CRLF preserved) of the receiver's current bytes and return the byte slice
+   * as an `EndoReadable`. It reads bytes to find LF boundaries, so it resolves
+   * asynchronously.
+   */
+  textRange(startLine: number, endLine: number): Promise<EndoReadable>;
   help(method?: string): string;
 }
 
 export interface EndoReadableTree {
   sha256(): string;
-  getInfo(): Promise<BlobInfo>;
+  size(): Promise<bigint>;
   has(...pathSegments: string[]): Promise<boolean>;
   list(...pathSegments: string[]): Promise<readonly string[]>;
   lookup(
@@ -1250,8 +1391,7 @@ export type MountNameChange =
   { add: string; type: 'file' | 'directory' } | { remove: string };
 
 /**
- * The `{ algorithm, hash, size }` content-address triple returned by a rich
- * blob's `getInfo()`. `hash` is base64; `algorithm` is `'sha256'`.
+ * A content address and byte length used internally by CAS compositions.
  */
 export type BlobInfo = {
   algorithm: string;
@@ -1270,8 +1410,22 @@ export interface ReadableBlobView {
   ): Promise<StreamNode<string, undefined>>;
   text(): Promise<string>;
   json(): Promise<unknown>;
-  getInfo(): Promise<BlobInfo>;
-  fetch(offset: bigint, length: bigint): Promise<PassableBytesReader>;
+  sha256(): Promise<string>;
+  size(): Promise<bigint>;
+  bytes(): Promise<PassableBytesReader>;
+  /**
+   * Range *attenuation* (designs/readableblob-range-attenuation.md): a new
+   * read-only `ReadableBlob` view over the selected byte interval of the live
+   * file. Construction reads no bytes, so it resolves synchronously.
+   */
+  byteRange(start: bigint, end: bigint): ReadableBlobView;
+  /**
+   * A read-only `ReadableBlob` view over the byte slice of lines
+   * `[startLine, endLine)` (0-based, end-exclusive, LF boundaries) of the live
+   * file's current bytes. It reads bytes to find LF boundaries, so it resolves
+   * asynchronously.
+   */
+  textRange(startLine: number, endLine: number): Promise<ReadableBlobView>;
   help(method?: string): string;
 }
 
@@ -1319,8 +1473,22 @@ export interface EndoMountFile {
     synPromise: ERef<StreamNode<Passable, Passable>>,
   ): Promise<StreamNode<string, undefined>>;
   json(): Promise<unknown>;
-  getInfo(): Promise<BlobInfo>;
-  fetch(offset: bigint, length: bigint): Promise<PassableBytesReader>;
+  sha256(): Promise<string>;
+  size(): Promise<bigint>;
+  bytes(): Promise<PassableBytesReader>;
+  /**
+   * Range *attenuation* (designs/readableblob-range-attenuation.md): a
+   * read-only `ReadableBlob` view over the selected byte interval of the live
+   * file. Construction reads no bytes, so it resolves synchronously.
+   */
+  byteRange(start: bigint, end: bigint): ReadableBlobView;
+  /**
+   * A read-only `ReadableBlob` view over the byte slice of lines
+   * `[startLine, endLine)` (0-based, end-exclusive, LF boundaries) of the live
+   * file's current bytes. It reads bytes to find LF boundaries, so it resolves
+   * asynchronously.
+   */
+  textRange(startLine: number, endLine: number): Promise<ReadableBlobView>;
   writeText(content: string): Promise<void>;
   append(content: string): Promise<void>;
   writeBytes(readableRef: ERef<PassableBytesReader>): Promise<void>;
@@ -1348,29 +1516,42 @@ export interface EndoMount extends PathEntryIssuer {
    * Recursive glob search delegated to the platform engine
    * (`@endo/platform/fs/search`): mount-face-relative paths matching
    * `pattern`, UTF-16-sorted and capped at `GLOB_MAX_RESULTS`.
+   *
+   * `**` reports a directory symlink but does not descend through it, so the
+   * walk covers the tree rather than the link graph; a segment that names a
+   * path still follows one. `followSymlinks` restores the sweep, as `rg -L`
+   * does.
    */
-  glob(pattern: string): Promise<string[]>;
+  glob(
+    pattern: string,
+    options?: { followSymlinks?: boolean },
+  ): Promise<string[]>;
   /**
    * Content search for an ECMAScript RegExp source (no flags). `paths` is
    * the file set to search; the exo awaits it (`M.await`), so a `glob`
    * promise pipes straight in: `grep(pattern, glob(g))`. Omitted, every
-   * file under the face's root is searched.
+   * file under the face's root is searched — and `followSymlinks` governs
+   * that implicit walk only; a supplied path is named, so it is followed
+   * either way.
    */
   grep(
     pattern: string,
     paths?: string[] | Promise<string[]>,
-    options?: { maxResults?: number },
+    options?: { maxResults?: number; followSymlinks?: boolean },
   ): Promise<Array<import('@endo/platform/fs/search.types').GrepMatch>>;
   /**
    * Fused glob+grep: search the files matching `globPattern` for
    * `grepPattern`. The reference implementation composes the decoupled
    * surface (`grep(grepPattern, glob(globPattern))`); a native powers layer
    * may push both patterns down as one enumerate-and-scan pass.
+   *
+   * `followSymlinks` reaches the enumeration half only: grep's half receives
+   * an explicit path array, and a named path is followed regardless.
    */
   glorp(
     globPattern: string,
     grepPattern: string,
-    options?: { maxResults?: number },
+    options?: { maxResults?: number; followSymlinks?: boolean },
   ): Promise<Array<import('@endo/platform/fs/search.types').GrepMatch>>;
   lookup(
     path: string | readonly string[] | EndoMountEntry,
@@ -1441,9 +1622,13 @@ export interface EndoMountControl {
 
 export interface EndoWorker {}
 
-export type MakeHostOrGuestOptions = {
+export type MakeAgentOptions = {
   agentName?: string | string[];
   introducedNames?: Record<string, string>;
+  /** A caller-selected directory to expose to the new agent as `@pins`. */
+  pins?: EndoDirectory;
+  /** A caller-selected directory to expose as `@nets`. */
+  networks?: EndoDirectory;
 };
 
 export type MakeCapletOptions = {
@@ -1554,6 +1739,34 @@ export interface EndoGuest extends EndoAgent {
   ): Promise<void>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
   sendValue: Mail['sendValue'];
+  /**
+   * Mint a single-use invitation whose locator's `from` names this guest's
+   * handle, so an acceptor binds this guest (not the top host) under its chosen
+   * pet name. Acceptance stores the acceptor's handle in this guest's pet store
+   * under `correspondentName`. Network mediation runs through an internal
+   * daemon broker; this call confers no `getPeerInfo`/`addPeerInfo`, host facet,
+   * peer enumeration, or outbound-dialing surface. Shares `EndoHost.invite`'s
+   * implementation.
+   */
+  invite(correspondentName: string | string[]): Promise<Invitation>;
+  /**
+   * Redeem an invitation locator into THIS guest, binding the relationship to
+   * the calling guest — no replacement guest is minted on the acceptor side.
+   * The guest accepts *as itself*: its `@self` handle is the identity presented
+   * to the inviter, and the inviter's handle is bound reciprocally under
+   * `correspondentName` (a pet name this guest chooses; the inviter chooses its
+   * own independently, so the two may differ). A path nests the binding under a
+   * directory that must already exist. Shares `EndoHost.accept`'s
+   * implementation; confers no `getPeerInfo`/`addPeerInfo`, host facet, peer
+   * enumeration, or outbound-dialing surface. Redeeming a genuine invitation
+   * registers the inviter's daemon and agent key additively only (never
+   * redirecting an existing route), with the agent-key write deferred until the
+   * invitation is proven.
+   */
+  accept(
+    invitationLocator: string,
+    correspondentName: string | string[],
+  ): Promise<void>;
 }
 
 export type SecretState = 'active' | 'revoked';
@@ -1585,11 +1798,29 @@ export interface SecretBlob {
   help(): string;
   getDescription(): Promise<string>;
   readBase64(): Promise<string>;
+  /**
+   * The same bytes plus the generation they came from. A holder deriving a new
+   * value from a secret needs the version it read in order to pin its write to
+   * it with `SecretAdmin.replaceBase64`'s `ifGeneration`.
+   */
+  readBase64WithGeneration(): Promise<{ base64: string; generation: bigint }>;
 }
 
 export interface SecretAdmin {
   getSummary(): Promise<SecretSummary>;
-  replaceBase64(bytesBase64: string): Promise<void>;
+  /**
+   * `ifGeneration` makes the replacement conditional on the record still being
+   * at that generation, so a caller replacing a value it derived from an
+   * earlier read is refused rather than overwriting a change it never saw.
+   *
+   * Resolves to the generation the replacement committed, so a caller staging
+   * a multi-step change can pin its next write to the version this one
+   * produced without re-reading.
+   */
+  replaceBase64(
+    bytesBase64: string,
+    options?: { ifGeneration?: bigint },
+  ): Promise<bigint>;
   setDescription(description: string): Promise<void>;
   revoke(): Promise<void>;
   delete(): Promise<void>;
@@ -1830,11 +2061,11 @@ export interface EndoHost extends EndoAgent {
   provideHostPath(cap: unknown): Promise<string>;
   provideGuest(
     petName?: string | string[],
-    opts?: MakeHostOrGuestOptions,
+    opts?: MakeAgentOptions,
   ): Promise<EndoGuest>;
   provideHost(
     petName?: string | string[],
-    opts?: MakeHostOrGuestOptions,
+    opts?: MakeAgentOptions,
   ): Promise<EndoHost>;
   makeDirectory(petNamePath: string | string[]): Promise<EndoDirectory>;
   provideWorker(petNamePath: string | string[]): Promise<EndoWorker>;
@@ -1905,10 +2136,10 @@ export interface EndoHost extends EndoAgent {
     locator: string,
     petNameOrPath: string | string[],
   ): Promise<void>;
-  invite(guestName: string | string[]): Promise<Invitation>;
+  invite(correspondentName: string | string[]): Promise<Invitation>;
   accept(
     invitationLocator: string,
-    guestName: string | string[],
+    correspondentName: string | string[],
   ): Promise<void>;
   endow(
     messageNumber: bigint,
@@ -2290,6 +2521,15 @@ export type FilePowers = {
   // Node powers omit it. Declared here so the XS factory's return value
   // structurally satisfies FilePowers without an excess-property error.
   readLink?: (path: string) => Promise<string | undefined>;
+  /**
+   * Optional platform-native search engine. When present, `provideSearch`
+   * (`@endo/platform/fs/search`) uses it verbatim in place of the normative JS
+   * engine, and the mount's `glorp` dispatches to the engine's own `glorp`
+   * member for a single fused enumerate-and-scan pass. Structurally optional so
+   * the Node powers (which
+   * rely on the JS engine) satisfy `FilePowers` without it.
+   */
+  search?: import('@endo/platform/fs/search.types').Search;
   pathIdentity: (path: string) => Promise<string>;
   statPath: (path: string) => Promise<{
     kind: 'file' | 'directory' | 'symlink';
@@ -2560,6 +2800,8 @@ type FormulateNumberedGuestParams = {
   workerId: FormulaIdentifier;
   networksDirectoryId: FormulaIdentifier;
   planesDirectoryId: FormulaIdentifier;
+  guestPinsDirectoryId: FormulaIdentifier;
+  hostPinsDirectoryId: FormulaIdentifier;
   pinned: FormulaIdentifier[];
 };
 
@@ -2711,6 +2953,8 @@ export interface DaemonCore {
     hostHandleId: FormulaIdentifier,
     deferredTasks: DeferredTasks<AgentDeferredTaskParams>,
     workerLabel?: string,
+    guestPinsDirectoryId?: FormulaIdentifier,
+    networksDirectoryId?: FormulaIdentifier,
   ) => FormulateResult<EndoGuest>;
 
   /**
@@ -2724,6 +2968,8 @@ export interface DaemonCore {
     hostAgentId: FormulaIdentifier,
     hostHandleId: FormulaIdentifier,
     workerLabel?: string,
+    guestPinsDirectoryId?: FormulaIdentifier,
+    networksDirectoryId?: FormulaIdentifier,
   ) => Promise<Readonly<FormulateNumberedGuestParams>>;
 
   formulateChannel: (
@@ -2842,11 +3088,28 @@ export interface DaemonCore {
   ) => FormulateResult<GitRemote>;
 
   formulateInvitation: (
-    hostAgentId: FormulaIdentifier,
-    hostHandleId: FormulaIdentifier,
+    invitingAgentId: FormulaIdentifier,
+    invitingHandleId: FormulaIdentifier,
     guestName: NameOrPath,
     deferredTasks: DeferredTasks<InvitationDeferredTaskParams>,
   ) => FormulateResult<Invitation>;
+
+  /**
+   * Acceptor-side invitation redemption shared by `EndoHost.accept` and
+   * `EndoGuest.accept`. Binds the relationship into the calling agent (accepts
+   * as itself; mints no replacement guest), sourcing the accepting agent's
+   * handle addresses from its own `@nets`. Peer registration and remote
+   * agent-key routing stay behind this daemon-core capability, so a guest
+   * acceptor is handed no dialing or peer-registration authority.
+   */
+  acceptInvitation: (args: {
+    invitationLocator: string;
+    acceptingHandleId: FormulaIdentifier;
+    acceptingNetworksDirectoryId: FormulaIdentifier;
+    bindCorrespondent: (
+      remoteHandleLocator: string,
+    ) => Promise<(() => Promise<void>) | undefined>;
+  }) => Promise<void>;
 
   formulateUnconfined: (
     hostAgentId: FormulaIdentifier,

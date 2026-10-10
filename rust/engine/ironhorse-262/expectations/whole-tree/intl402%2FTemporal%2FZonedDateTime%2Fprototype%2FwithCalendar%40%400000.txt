@@ -1,0 +1,17 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/ZonedDateTime/prototype/withCalendar tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/ZonedDateTime/prototype/withCalendar/basic.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/withCalendar/basic.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/withCalendar/calendar-case-insensitive.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/withCalendar/calendar-case-insensitive.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/withCalendar/calendar-time-string.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/withCalendar/calendar-time-string.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/withCalendar/canonicalize-calendar.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/withCalendar/canonicalize-calendar.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/withCalendar/extreme-dates.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/withCalendar/extreme-dates.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/withCalendar/future-calendar.js sloppy skip:oracle-host-missing-temporal
+intl402/Temporal/ZonedDateTime/prototype/withCalendar/future-calendar.js strict skip:oracle-host-missing-temporal
+intl402/Temporal/ZonedDateTime/prototype/withCalendar/preserves-instant.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/withCalendar/preserves-instant.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/withCalendar/preserves-time-zone.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/withCalendar/preserves-time-zone.js strict skip:oracle-host-missing-global:Temporal

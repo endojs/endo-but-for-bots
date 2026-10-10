@@ -11,6 +11,8 @@
 //! medians and their ratio; the operator compares across heap sizes
 //! (the fixture loop count scales the heap).
 
+mod bench_support;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Instant;
@@ -24,10 +26,16 @@ fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
 }
 
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
+fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("fixture compiles");
     (bytecode, parse_symbols(&symbols))
 }
+
+/// Timed samples per measurement. These timings are short — most a few
+/// milliseconds — and on a shared host the median of five or six samples moved
+/// by up to 2.2x between runs of one binary (`benches/README.md`), far past
+/// `run.py`'s 1.25x floor.
+const SAMPLES: usize = 21;
 
 #[test]
 #[ignore]
@@ -61,7 +69,7 @@ fn wake_latency_eager_vs_lazy() {
         times[times.len() / 2]
     };
 
-    let eager: Vec<f64> = (0..5)
+    let eager: Vec<f64> = (0..SAMPLES)
         .map(|_| {
             let t0 = Instant::now();
             let mut s2 = resume_from_store(&*store.borrow(), &sig()).unwrap();
@@ -70,7 +78,7 @@ fn wake_latency_eager_vs_lazy() {
             t0.elapsed().as_secs_f64() * 1e3
         })
         .collect();
-    let lazy: Vec<f64> = (0..5)
+    let lazy: Vec<f64> = (0..SAMPLES)
         .map(|_| {
             let t0 = Instant::now();
             let mut s2 = resume_from_store_lazy(store.clone(), &sig()).unwrap();
@@ -80,6 +88,8 @@ fn wake_latency_eager_vs_lazy() {
         })
         .collect();
     let (e, l) = (median(eager), median(lazy));
+    bench_support::report("wake_eager_ms", e);
+    bench_support::report("wake_lazy_ms", l);
     println!("eager wake median: {e:.3} ms");
     println!("lazy  wake median: {l:.3} ms");
     println!("lazy/eager ratio:  {:.3}", l / e);
@@ -109,7 +119,7 @@ fn placeholder_alloc_cost_across_slot_counts() {
 
     for &slots in &[120_320u32, 500_000, 1_000_000, 4_000_000] {
         let mut ms = Vec::new();
-        for _ in 0..5 {
+        for _ in 0..SAMPLES {
             let source: Rc<dyn PageSource> = Rc::new(NoFaults);
             let t0 = Instant::now();
             let arena = SlotArena::lazy_from_parts(slots, Vec::new(), slots, source, u64::MAX);
@@ -117,10 +127,11 @@ fn placeholder_alloc_cost_across_slot_counts() {
             drop(arena);
         }
         ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        bench_support::report(&format!("placeholder_{slots}_ms"), ms[SAMPLES / 2]);
         println!(
             "slots={slots:>8} | placeholder alloc median {:>7.3} ms ({:.1} ns/slot)",
-            ms[2],
-            ms[2] * 1e6 / slots as f64,
+            ms[SAMPLES / 2],
+            ms[SAMPLES / 2] * 1e6 / slots as f64,
         );
     }
 }

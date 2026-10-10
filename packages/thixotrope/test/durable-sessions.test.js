@@ -4,7 +4,7 @@ import test from '@endo/ses-ava/test.js';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
@@ -47,7 +47,11 @@ const makeDaemon = (statePath, port, resources = {}) =>
         logger,
         resumption,
         makeBaseNetlayer: powers =>
-          makeTcpNetLayer({ ...powers, specifiedPort: port }),
+          makeTcpNetLayer({
+            ...powers,
+            specifiedPort: port,
+            specifiedDesignator: basename(statePath),
+          }),
       }),
   });
 
@@ -60,16 +64,18 @@ const makeDurableClient = label =>
       makeDurableNetLayer({
         handlers,
         logger,
-        makeBaseNetlayer: powers => makeTcpNetLayer(powers),
+        makeBaseNetlayer: powers =>
+          makeTcpNetLayer({ ...powers, specifiedDesignator: label }),
         reconnectDelayMs: 25,
       }),
   });
 
-test('live remote references survive a daemon restart', async t => {
+test.serial('live remote references survive a daemon restart', async t => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-durable-sess-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
 
   const daemon1 = await makeDaemon(statePath, 0);
+  t.teardown(() => daemon1.shutdown());
   const port = Number(daemon1.location.hints.port);
   const worker = await daemon1.createWorker({ debugLabel: 'counter' });
   const counter = await worker.evaluate(COUNTER_SOURCE);
@@ -99,11 +105,12 @@ test('live remote references survive a daemon restart', async t => {
   t.is(await E(remoteCounter).getCount(), 3, 'no call was lost or doubled');
 });
 
-test('a resumed session continues without a handshake', async t => {
+test.serial('a resumed session continues without a handshake', async t => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-durable-keys-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
 
   const daemon1 = await makeDaemon(statePath, 0);
+  t.teardown(() => daemon1.shutdown());
   const port = Number(daemon1.location.hints.port);
   const worker = await daemon1.createWorker({ debugLabel: 'counter' });
   const counter = await worker.evaluate(COUNTER_SOURCE);
@@ -120,7 +127,7 @@ test('a resumed session continues without a handshake', async t => {
   const [token] = store.listSessionTokens();
   const metaPath = join(statePath, 'sessions', token, 'meta.json');
   const before = JSON.parse(readFileSync(metaPath, 'utf8'));
-  t.true(before.established, 'the session recorded its frame watermarks');
+  t.is(before.version, 2, 'the session records durable acceptance');
   t.true(Number(before.recvSeq) > 0);
 
   await daemon1.shutdown();
@@ -139,7 +146,7 @@ test('a resumed session continues without a handshake', async t => {
   );
 });
 
-test('a promise resolution crosses a daemon restart', async t => {
+test.serial('a promise resolution crosses a daemon restart', async t => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-durable-prom-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
 
@@ -160,6 +167,7 @@ test('a promise resolution crosses a daemon restart', async t => {
   `;
 
   const daemon1 = await makeDaemon(statePath, 0);
+  t.teardown(() => daemon1.shutdown());
   const port = Number(daemon1.location.hints.port);
   const worker = await daemon1.createWorker({ debugLabel: 'gifter' });
   const gifter = await worker.evaluate(GIFT_SOURCE);
@@ -201,7 +209,7 @@ test('a promise resolution crosses a daemon restart', async t => {
   );
 });
 
-test('an answer a resource owes rejects after a restart', async t => {
+test.serial('an answer a resource owes rejects after a restart', async t => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-durable-ans-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
 
@@ -218,6 +226,7 @@ test('an answer a resource owes rejects after a restart', async t => {
   };
 
   const daemon1 = await makeDaemon(statePath, 0, resources);
+  t.teardown(() => daemon1.shutdown());
   const port = Number(daemon1.location.hints.port);
   const worker = await daemon1.createWorker({ debugLabel: 'waiter' });
   const gate = daemon1.makeResource('gate');
@@ -268,41 +277,50 @@ test('an answer a resource owes rejects after a restart', async t => {
   );
 });
 
-test('a call issued while the daemon is down completes after restart', async t => {
-  const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-durable-sess2-'));
-  t.teardown(() => rm(statePath, { recursive: true, force: true }));
+test.serial(
+  'a call issued while the daemon is down completes after restart',
+  async t => {
+    const statePath = await mkdtemp(
+      join(tmpdir(), 'thixotrope-durable-sess2-'),
+    );
+    t.teardown(() => rm(statePath, { recursive: true, force: true }));
 
-  const daemon1 = await makeDaemon(statePath, 0);
-  const port = Number(daemon1.location.hints.port);
-  const worker = await daemon1.createWorker({ debugLabel: 'counter' });
-  const counter = await worker.evaluate(COUNTER_SOURCE);
-  const secret = daemon1.publish(counter);
+    const daemon1 = await makeDaemon(statePath, 0);
+    t.teardown(() => daemon1.shutdown());
+    const port = Number(daemon1.location.hints.port);
+    const worker = await daemon1.createWorker({ debugLabel: 'counter' });
+    const counter = await worker.evaluate(COUNTER_SOURCE);
+    const secret = daemon1.publish(counter);
 
-  const client = await makeDurableClient('gap-client');
-  t.teardown(() => client.shutdown());
+    const client = await makeDurableClient('gap-client');
+    t.teardown(() => client.shutdown());
 
-  const remoteCounter = await client.enlivenSturdyRef(
-    client.makeSturdyRef(daemon1.location, secret),
-  );
-  t.is(await E(remoteCounter).incr(), 1);
+    const remoteCounter = await client.enlivenSturdyRef(
+      client.makeSturdyRef(daemon1.location, secret),
+    );
+    t.is(await E(remoteCounter).incr(), 1);
 
-  await daemon1.shutdown();
+    await daemon1.shutdown();
 
-  // The daemon is down: the call buffers in the client's netlayer,
-  // which keeps trying to reconnect.
-  const stalled = E(remoteCounter).incr();
+    // The daemon is down: the call buffers in the client's netlayer,
+    // which keeps trying to reconnect.
+    const stalled = E(remoteCounter).incr();
 
-  const daemon2 = await makeDaemon(statePath, port);
-  t.teardown(() => daemon2.shutdown());
+    const daemon2 = await makeDaemon(statePath, port);
+    t.teardown(() => daemon2.shutdown());
 
-  t.is(await stalled, 2, 'the buffered call was delivered to the successor');
-});
+    t.is(await stalled, 2, 'the buffered call was delivered to the successor');
+  },
+);
 
-test('sessions survive repeated daemon restarts', async t => {
+test.serial('sessions survive repeated daemon restarts', async t => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-durable-sess3-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
 
   let daemon = await makeDaemon(statePath, 0);
+  // The previous instance closes before replacement; always close the current one
+  // if an assertion or restart fails. shutdown also reuses an earlier crash.
+  t.teardown(() => daemon.shutdown());
   const port = Number(daemon.location.hints.port);
   const worker = await daemon.createWorker({ debugLabel: 'counter' });
   const counter = await worker.evaluate(COUNTER_SOURCE);
@@ -326,3 +344,111 @@ test('sessions survive repeated daemon restarts', async t => {
   }
   await daemon.shutdown();
 });
+
+test.serial(
+  'both durable nodes restart and deliver a settlement to the persisted listener',
+  async t => {
+    t.timeout(20_000);
+    const exporterPath = await mkdtemp(
+      join(tmpdir(), 'thix-exporter-restart-'),
+    );
+    t.teardown(() => rm(exporterPath, { recursive: true, force: true }));
+    const holderPath = await mkdtemp(join(tmpdir(), 'thix-holder-restart-'));
+    t.teardown(() => rm(holderPath, { recursive: true, force: true }));
+    const exporter1 = await makeDaemon(exporterPath, 0);
+    t.teardown(() => exporter1.shutdown());
+    const holder1 = await makeDaemon(holderPath, 0);
+    t.teardown(() => holder1.shutdown());
+    const exporterPort = Number(exporter1.location.hints.port);
+    const holderPort = Number(holder1.location.hints.port);
+    const counterWorker = await exporter1.createWorker();
+    const counter = await counterWorker.evaluate(`(() => {
+      let count = 0;
+      let waiting = false;
+      let resolveGate;
+      const gate = new Promise(resolve => { resolveGate = resolve; });
+      return Far('Counter', {
+        incr: () => { count += 1; return count; },
+        getCount: () => count,
+        wait: () => { waiting = true; return gate; },
+        isWaiting: () => waiting,
+        settle: value => { resolveGate(value); return true; },
+      });
+    })()`);
+    const counterSecret = exporter1.publish(counter);
+    const holderWorker = await holder1.createWorker();
+    const holder = await holderWorker.evaluate(`(() => {
+    let counter;
+    let observed = 'pending';
+    return Far('Holder', {
+      hold: value => { counter = value; return true; },
+      incr: () => E(counter).incr(),
+      count: () => E(counter).getCount(),
+      watch: () => {
+        E(counter).wait().then(
+          value => { observed = value; },
+          () => { observed = 'rejected'; },
+        );
+        return E(counter).isWaiting();
+      },
+      observed: () => observed,
+    });
+  })()`);
+    const holderSecret = holder1.publish(holder);
+    const gifter = await makeDurableClient('both-restart-gifter');
+    t.teardown(() => gifter.shutdown());
+    const remoteCounter = await gifter.enlivenSturdyRef(
+      gifter.makeSturdyRef(exporter1.location, counterSecret),
+    );
+    const remoteHolder = await gifter.enlivenSturdyRef(
+      gifter.makeSturdyRef(holder1.location, holderSecret),
+    );
+    t.true(await E(remoteHolder).hold(remoteCounter));
+    t.is(await E(remoteCounter).getCount(), 0);
+    t.is(await E(remoteHolder).incr(), 1);
+    t.true(
+      await E(remoteHolder).watch(),
+      'the originating call reached the exporter',
+    );
+    t.is(await E(remoteHolder).observed(), 'pending');
+    const store = makeFsStore(holderPath);
+    const outgoing = store
+      .listSessionTokens()
+      .filter(token => store.provideSessionStore(token).getMeta().isOriginator);
+    t.is(
+      outgoing.length,
+      1,
+      'gift withdrawal created a durable originating session',
+    );
+    const before = store.provideSessionStore(outgoing[0]).getMeta();
+    t.true(before.hubSessionKey.startsWith('handoff:'));
+    await holder1.shutdown();
+    await exporter1.shutdown();
+    const exporter2 = await makeDaemon(exporterPath, exporterPort);
+    t.teardown(() => exporter2.shutdown());
+    t.true(await E(remoteCounter).settle('settled while holder was offline'));
+    const exporterSession = makeFsStore(exporterPath).provideSessionStore(
+      outgoing[0],
+    );
+    t.truthy(
+      exporterSession.getMeta().frames[0],
+      'the exporter retains settlement delivery while the listener node is offline',
+    );
+    const holder2 = await makeDaemon(holderPath, holderPort);
+    t.teardown(() => holder2.shutdown());
+    t.is(await E(remoteHolder).incr(), 2);
+    t.is(await E(remoteHolder).count(), 2);
+    t.is(await E(remoteHolder).observed(), 'settled while holder was offline');
+    const after = store.provideSessionStore(outgoing[0]).getMeta();
+    t.deepEqual(
+      after.identity,
+      before.identity,
+      'originating session identity was restored',
+    );
+    t.is(
+      after.hubSessionKey,
+      before.hubSessionKey,
+      'the hub alias was preserved',
+    );
+  },
+);

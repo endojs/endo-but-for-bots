@@ -47,16 +47,16 @@ Both:
 - **Errors, not coercion.** A non-`Uint8Array` argument throws `TypeError`; an
   `out` with fewer than 32 bytes left at `offset` throws `RangeError`.
 - **No streaming.** The streaming shape is already served by the injected
-  `CryptoPowers.makeSha256`. If a future *static-import* site needs streaming,
+  `CryptoPowers.makeSha256`. If a future _static-import_ site needs streaming,
   add it here then.
 
 ## Conditions
 
-| condition | implementation | backing |
-| --- | --- | --- |
-| `node` | `src/sha256-node.js` | `node:crypto` `createHash('sha256')` |
-| `xs` | `src/sha256-endor.js` | Endor's `hostSha256Bytes` contract |
-| `browser`, `default` | `src/sha256-browser.js` | pure-JS synchronous SHA-256 |
+| condition            | implementation          | backing                              |
+| -------------------- | ----------------------- | ------------------------------------ |
+| `node`               | `src/sha256-node.js`    | `node:crypto` `createHash('sha256')` |
+| `xs`                 | `src/sha256-endor.js`   | Endor's `hostSha256Bytes` contract   |
+| `browser`, `default` | `src/sha256-browser.js` | pure-JS synchronous SHA-256          |
 
 `default` maps to the pure-JS build so that a browser bundler setting none of
 the three still gets a working digest.
@@ -67,3 +67,44 @@ one-shot `hostSha256Bytes` global before application modules evaluate. There
 is no fallback: selecting this build outside Endor is a configuration error.
 Every digest from the host is copied and length-checked before it is returned;
 a wrong-sized digest would otherwise become a wrong content address.
+
+## `@endo/sha256/async`
+
+The asynchronous analogue, for callers that can await their digest:
+
+```js
+import { sha256Async, sha256IntoAsync } from '@endo/sha256/async';
+
+const digest = await sha256Async(bytes); // Promise<Uint8Array>, length 32
+```
+
+`sha256Async(bytes) -> Promise<Uint8Array>` and `sha256IntoAsync(out, bytes,
+offset = 0) -> Promise<number>` mirror the synchronous pair — same bytes-in,
+bytes-out contract, same raw digest, same `TypeError` / `RangeError` on a bad
+argument (surfaced as a rejected promise) — and produce byte-for-byte the same
+digest.
+
+It exists because the **browser** arm can use WebCrypto (`crypto.subtle.digest`),
+which the synchronous `@endo/sha256` cannot: `crypto.subtle.digest` returns a
+`Promise`, and the synchronous API's only in-graph consumer content-addresses
+inside a synchronous exo factory. This separately named export is where
+WebCrypto reaches the browser. Reach for it only where the digest can be
+awaited; the content-addressing paths that need a synchronous result keep using
+`@endo/sha256`.
+
+| condition            | implementation                | backing                                                   |
+| -------------------- | ----------------------------- | --------------------------------------------------------- |
+| `node`               | `src/sha256-node-async.js`    | wraps the synchronous `node:crypto` build                 |
+| `xs`                 | `src/sha256-endor-async.js`   | wraps the synchronous Endor `hostSha256Bytes` build       |
+| `browser`, `default` | `src/sha256-browser-async.js` | WebCrypto `crypto.subtle.digest`, with a pure-JS fallback |
+
+Only the browser has a native asynchronous digest worth reaching for, so the
+node and Endor arms simply wrap their synchronous builds in a promise rather
+than take an extra host round trip. The browser arm prefers
+`crypto.subtle.digest` and falls back to the same pure-JS digest the
+synchronous browser build uses when `crypto.subtle` is absent — an insecure
+`http://` context, or a `default`-arm environment with no WebCrypto — so it
+never throws for want of a secure context. The choice is made per call, so a
+digest taken before a secure context is established cannot pin the pure-JS path
+for the rest of the process. `default` maps to the browser build for the same
+reason the synchronous `default` does: it works wherever it lands.

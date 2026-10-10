@@ -1,0 +1,25 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArray/prototype/byteOffset tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArray/prototype/byteOffset/detached-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/byteOffset/detached-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/byteOffset/invoked-as-accessor.js sloppy pass
+built-ins/TypedArray/prototype/byteOffset/invoked-as-accessor.js strict pass
+built-ins/TypedArray/prototype/byteOffset/invoked-as-func.js sloppy pass
+built-ins/TypedArray/prototype/byteOffset/invoked-as-func.js strict pass
+built-ins/TypedArray/prototype/byteOffset/length.js sloppy pass
+built-ins/TypedArray/prototype/byteOffset/length.js strict pass
+built-ins/TypedArray/prototype/byteOffset/name.js sloppy pass
+built-ins/TypedArray/prototype/byteOffset/name.js strict pass
+built-ins/TypedArray/prototype/byteOffset/prop-desc.js sloppy pass
+built-ins/TypedArray/prototype/byteOffset/prop-desc.js strict pass
+built-ins/TypedArray/prototype/byteOffset/resizable-array-buffer-auto.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/byteOffset/resizable-array-buffer-auto.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/byteOffset/resizable-array-buffer-fixed.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/byteOffset/resizable-array-buffer-fixed.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/byteOffset/resized-out-of-bounds.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/byteOffset/resized-out-of-bounds.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/byteOffset/return-byteoffset.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/byteOffset/return-byteoffset.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/byteOffset/this-has-no-typedarrayname-internal.js sloppy pass
+built-ins/TypedArray/prototype/byteOffset/this-has-no-typedarrayname-internal.js strict pass
+built-ins/TypedArray/prototype/byteOffset/this-is-not-object.js sloppy pass
+built-ins/TypedArray/prototype/byteOffset/this-is-not-object.js strict pass

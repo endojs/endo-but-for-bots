@@ -20,6 +20,7 @@ const StartOptionsShape = M.splitRecord(
   {},
   {
     params: M.record(),
+    requestId: M.string(),
     endowments: M.recordOf(M.string(), M.any()),
   },
 );

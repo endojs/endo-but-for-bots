@@ -19,68 +19,17 @@
 //! `next()` failed its this-guard — the twins diverge, the red this
 //! suite was born failing.
 
+#[path = "common/twin.rs"]
+mod carry;
 mod common;
+use carry::{compile, crank, sig, twin};
 
 use common::TempDir;
 
-use ironhorse_snapshot::machine::{
-    begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
-    MachineSnapshot,
-};
-use ironhorse_snapshot::store::{validate_store, HeapStore, MemoryStore};
+use ironhorse_snapshot::machine::{from_snapshot_bytes, MachineSnapshot};
+use ironhorse_snapshot::store::MemoryStore;
 use ironhorse_snapshot::store_file::FileStore;
-use ironhorse_snapshot::Signature;
-use ironhorse_vm::{parse_symbols, Interp};
-
-fn sig() -> Signature {
-    Signature::new("ironhorse-worker-v1")
-}
-
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
-    let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
-    (bytecode, parse_symbols(&symbols))
-}
-
-/// Relink and run one crank, returning `(completed, halt debug, result,
-/// computrons)`. The COMPUTRON count is part of the observation: a
-/// resumed machine that answers correctly while charging differently
-/// has still diverged, and consensus is on the count as much as the
-/// value. Every twin below therefore compares metering too.
-fn crank(m: &mut Interp, src: &str) -> (bool, String, String, u64) {
-    let (b, n) = compile(src);
-    let b = m.relink_crank(&b, &n).expect("relink");
-    let o = m.run(&b);
-    (o.completed, format!("{:?}", o.halt), o.result, o.computrons)
-}
-
-/// Run crank 1 and the observation cranks uninterrupted, and the same
-/// cranks across a checkpoint/resume split on `store`; assert the
-/// observations agree pairwise and return the continuous ones.
-fn twin(crank1: &str, observations: &[&str], store: &mut dyn HeapStore) -> Vec<(bool, String, String, u64)> {
-    let (b1, n1) = compile(crank1);
-
-    let mut cont = Interp::new();
-    cont.link_intrinsics(&n1);
-    assert!(cont.run(&b1).completed, "crank 1 (continuous)");
-    let continuous: Vec<_> = observations.iter().map(|s| crank(&mut cont, s)).collect();
-
-    let mut m = Interp::new();
-    m.link_intrinsics(&n1);
-    assert!(m.run(&b1).completed, "crank 1 (store)");
-    let session = begin_store_session(m, &sig(), store)
-        .map_err(|(_, e)| e)
-        .expect("begin");
-    drop(session);
-    let mut session = resume_from_store(store, &sig()).expect("resume");
-    let resumed: Vec<_> = observations
-        .iter()
-        .map(|s| crank(session.machine_mut(), s))
-        .collect();
-    assert_eq!(continuous, resumed, "resumed observes exactly as uninterrupted");
-    checkpoint_to_store(&mut session, &sig(), store).expect("checkpoint after resume");
-    validate_store(store, &sig()).expect("post-crank store validates");
-    continuous
-}
+use ironhorse_vm::Interp;
 
 fn assert_twin(name: &str, crank1: &str, observations: &[&str], expect: &[&str]) {
     let mut mem = MemoryStore::new();
@@ -89,7 +38,10 @@ fn assert_twin(name: &str, crank1: &str, observations: &[&str], expect: &[&str])
         assert!(got.0, "observation completes: {:?}", got.1);
     }
     let got: Vec<&str> = seen.iter().map(|(_, _, r, _)| r.as_str()).collect();
-    assert_eq!(got, expect, "the continuous observations are the real answers");
+    assert_eq!(
+        got, expect,
+        "the continuous observations are the real answers"
+    );
 
     let dir = TempDir::new(name);
     let mut file = FileStore::open(dir.join("heap.ihstore")).unwrap();
@@ -235,19 +187,16 @@ fn resumed_set_entries_iterator_answers_like_uninterrupted() {
         "ih-iter-twin-set",
         "var s = 0; var si2 = 0; var t = 0; \
          s = new Set(); s.add(5); s.add(6); si2 = s.entries(); si2.next(); t = 7; t",
-        &[
-            "var si2; var t; var r = 0; r = si2.next(); \
-             t = r.value[0] + ':' + r.value[1] + ':' + r.done; t",
-        ],
+        &["var si2; var t; var r = 0; r = si2.next(); \
+             t = r.value[0] + ':' + r.value[1] + ':' + r.done; t"],
         &["6:6:false"],
     );
 }
 
 #[test]
 fn blob_snapshot_carries_the_iterator_rows_too() {
-    let (b1, n1) = compile(
-        "var it = 0; var t = 0; it = [4, 5, 6].values(); t = it.next().value; t",
-    );
+    let (b1, n1) =
+        compile("var it = 0; var t = 0; it = [4, 5, 6].values(); t = it.next().value; t");
     let obs = "var it; var t; t = it.next().value; t";
 
     let mut cont = Interp::new();
@@ -263,4 +212,180 @@ fn blob_snapshot_carries_the_iterator_rows_too() {
     let mut r = from_snapshot_bytes(&bytes, &sig()).expect("rebuild");
     let resumed = crank(&mut r, obs);
     assert_eq!(resumed, continuous, "blob twin agrees");
+}
+
+#[test]
+fn collection_content_indexes_survive_lazy_restore_and_chunk_compaction() {
+    let setup = "var m = new Map(); var key = String.fromCharCode(0xD800); m.set(key, 1); m.set(12345678901234567890n, 2); m.set('deleted', 3); m.get(key); m.delete('deleted'); var it = m.keys(); it.next(); 0";
+    let observations = [
+        "[m.get(String.fromCharCode(0xD800)),m.get(BigInt('12345678901234567890')),m.size].join(',')",
+        "m.delete(String.fromCharCode(0xD800)); m.set(String.fromCharCode(0xD800),4); [m.get(key),m.size,String(it.next().value)].join(',')",
+    ];
+    assert_twin(
+        "content-index",
+        setup,
+        &observations,
+        &["1,2,2", "4,2,12345678901234567890"],
+    );
+
+    let (code, names) = compile(setup);
+    let mut machine = Interp::new();
+    machine.link_intrinsics(&names);
+    assert!(machine.run(&code).completed);
+    machine.collect_garbage().unwrap();
+    for (source, expected) in observations
+        .iter()
+        .zip(["1,2,2", "4,2,12345678901234567890"])
+    {
+        let outcome = crank(&mut machine, source);
+        assert!(outcome.0, "{:?}", outcome.1);
+        assert_eq!(outcome.2, expected);
+    }
+}
+
+/// The five lazy Iterator helpers (kinds 10-14) are the first cursors whose
+/// `result` names an internal HOLDER rather than a reused `{value, done}`
+/// iteration result, and the first to carry a guest callback across a
+/// snapshot. Three layers cap the cursor kind — the `ITER` decoder, the
+/// bounds gate, and the VM's `restore_iterators` — so a snapshot written with
+/// a kind none of them knew would have come back refused as corrupt.
+#[test]
+fn resumed_map_and_filter_helpers_keep_their_callback_and_counter() {
+    assert_twin(
+        "ih-iter-twin-lazy-map-filter",
+        "var mapped = 0; var picked = 0; var seen = 0; var t = 0; \
+         seen = []; \
+         mapped = [1, 2, 3, 4].values().map(function (v, i) { seen.push(i); return v * 2; }); \
+         mapped.next(); \
+         picked = [1, 2, 3, 4, 5, 6].values().filter(function (v) { return v % 2 === 0; }); \
+         picked.next(); t = 7; t",
+        &[
+            "var mapped; var t; var r = 0; r = mapped.next(); \
+             t = r.value + ':' + r.done; t",
+            "var mapped; var t; t = mapped.toArray().join(','); t",
+            // The counter rides the row's `index`. Crank 1 spent counter 0, so
+            // the three callbacks after the resume must receive 1, 2 and 3 —
+            // a counter restarted at zero would read "0,0,1,2".
+            "var seen; var t; t = seen.join(','); t",
+            "var picked; var t; t = picked.toArray().join(','); t",
+        ],
+        &["4:false", "6,8", "0,1,2,3", "4,6"],
+    );
+}
+
+#[test]
+fn a_resumed_take_and_drop_keep_their_remaining_count() {
+    // The count lives in the holder, not in the row's `index`: a resumed
+    // `take` must still stop at its ORIGINAL limit, and a resumed `drop` must
+    // not discard a second prefix.
+    assert_twin(
+        "ih-iter-twin-lazy-take-drop",
+        "var kept = 0; var rest = 0; var t = 0; \
+         kept = [1, 2, 3, 4, 5].values().take(3); kept.next(); \
+         rest = [1, 2, 3, 4, 5].values().drop(2); rest.next(); t = 7; t",
+        &[
+            "var kept; var t; t = kept.toArray().join(','); t",
+            "var rest; var t; t = rest.toArray().join(','); t",
+        ],
+        &["2,3", "4,5"],
+    );
+}
+
+#[test]
+fn a_flat_map_resumed_inside_an_inner_iterator_resumes_inside_it() {
+    // One `next()` opens the inner iterator for `1` and yields its first
+    // element, so the snapshot is taken with a LIVE, half-drained inner
+    // iterator in the holder. Losing it would restart that inner run and
+    // repeat `11`.
+    assert_twin(
+        "ih-iter-twin-lazy-flat-map",
+        "var flat = 0; var t = 0; \
+         flat = [1, 2].values().flatMap(function (v) { return [v * 10, v * 10 + 1]; }); \
+         t = flat.next().value; t",
+        &["var flat; var t; t = flat.toArray().join(','); t"],
+        &["11,20,21"],
+    );
+}
+
+#[test]
+fn a_resumed_helper_chain_continues_at_every_stage() {
+    assert_twin(
+        "ih-iter-twin-lazy-chain",
+        "var chain = 0; var t = 0; \
+         chain = [1, 2, 3, 4, 5, 6].values() \
+             .map(function (v) { return v * 2; }) \
+             .filter(function (v) { return v > 2; }) \
+             .drop(1).take(2); \
+         t = chain.next().value; t",
+        &[
+            "var chain; var t; t = chain.toArray().join(','); t",
+            "var chain; var t; var r = 0; r = chain.next(); \
+             t = r.value + ':' + r.done; t",
+        ],
+        &["8", "undefined:true"],
+    );
+}
+
+/// The `done` latch itself has to travel, which needs a helper that is
+/// finished while its underlying iterator is NOT.
+///
+/// An adversarial review proved the obvious fixture vacuous: an exhausted
+/// `[1].values().map(f)` answers `undefined:true` on a resumed machine even
+/// with the latch dropped, because the helper just re-steps its already-spent
+/// array cursor, gets done, and re-latches — same value, same computrons. The
+/// review forced `done: false` on every restored kind-10..14 row and all
+/// seventeen tests here stayed green.
+///
+/// Here the source is ENDLESS and the helper is closed by `return()`, so a
+/// dropped latch cannot hide: the resumed helper would step that source and
+/// yield from it instead of reporting done.
+#[test]
+fn a_helper_closed_over_a_live_source_stays_closed_across_a_resume() {
+    assert_twin(
+        "ih-iter-twin-lazy-closed-live-source",
+        "var endless = 0; var closed = 0; var t = 0; \
+         endless = { n: 0, next: function () { this.n = this.n + 1; \
+             return { value: this.n, done: false }; } }; \
+         closed = Iterator.prototype.map.call(endless, function (v) { return v; }); \
+         t = closed.next().value; closed.return(); t",
+        &[
+            "var closed; var t; var r = 0; r = closed.next(); \
+             t = r.value + ':' + r.done; t",
+            // The source really is still live: a lost latch would have yielded
+            // from it rather than reporting done.
+            "var endless; var t; t = endless.next().value; t",
+        ],
+        &["undefined:true", "2"],
+    );
+}
+
+/// A collection cycle must not reclaim a live helper's captured callback or
+/// its underlying iterator. The row's GC visitor traces only `iterable` and
+/// `result` (`gc_tables.rs`), which is why the holder is an ARRAY — visiting
+/// `result` marks that array and the ordinary object walk reaches its items
+/// from there. A chain of bare slots, the shape XS uses for internal fields,
+/// would have marked only the first.
+#[test]
+fn a_live_helper_survives_a_collection_with_its_callback_intact() {
+    let setup = "var mult = 0; var flat = 0; var t = 0; \
+                 mult = 3; \
+                 flat = [1, 2].values().flatMap(function (v) { \
+                     return [v * mult, v * mult + 1]; }); \
+                 t = flat.next().value; t";
+    let observations = ["var flat; var t; t = flat.toArray().join(','); t"];
+    // The captured closure reads a free variable, so a collected upvalue
+    // would surface as a wrong number rather than a crash.
+    assert_twin("ih-iter-twin-lazy-gc", setup, &observations, &["4,6,7"]);
+
+    let (code, names) = compile(setup);
+    let mut machine = Interp::new();
+    machine.link_intrinsics(&names);
+    assert!(machine.run(&code).completed);
+    machine.collect_garbage().unwrap();
+    let outcome = crank(&mut machine, observations[0]);
+    assert!(outcome.0, "after a collection: {:?}", outcome.1);
+    assert_eq!(
+        outcome.2, "4,6,7",
+        "the helper's captured callback, its upvalue and its inner iterator all survive a collection",
+    );
 }

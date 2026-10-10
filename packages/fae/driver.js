@@ -3,6 +3,7 @@ import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
 
 import { spawnWorkerLoop } from './agent.js';
+import { resolveAuthToken } from './src/credentials.js';
 
 /**
  * Fae agent driver caplet.
@@ -13,6 +14,12 @@ import { spawnWorkerLoop } from './agent.js';
  *
  *   - `llm-provider`  – the provider config `{ host, model, authToken }`
  *   - `agent`          – the agent's EndoGuest (inbox, mail, petstore, tools)
+ *
+ * and optionally a third:
+ *
+ *   - `subagent-spawner` – authority to create, list, and release agents named
+ *     beneath this one.  Absent for an agent at the delegation bound, which is
+ *     what withholds the subagent tools from it.
  *
  * When this formula is pinned (`PINS`), `revivePins()` re-provides it on
  * daemon restart, which re-imports this module and calls `make()` again,
@@ -31,14 +38,35 @@ import { spawnWorkerLoop } from './agent.js';
  */
 export const make = async (powers, context, { env } = {}) => {
   const systemPrompt = env?.FAE_SYSTEM_PROMPT || undefined;
+  // Written by this agent's parent, not by the operator, so the loop appends it
+  // to the standing prompt rather than letting it take its place.
+  const delegatedPrompt = env?.FAE_SUBAGENT_PROMPT || undefined;
 
   const startLoop = async () => {
-    const providerConfig =
-      /** @type {{ host: string, model: string, authToken: string }} */ (
+    const storedConfig =
+      /** @type {{ host: string, model: string, authToken?: string }} */ (
         await E(powers).lookup('llm-provider')
       );
     const agentPowers = await E(powers).lookup('agent');
-    await spawnWorkerLoop(agentPowers, context, providerConfig, systemPrompt);
+    const spawner = (await E(powers).has('subagent-spawner'))
+      ? await E(powers).lookup('subagent-spawner')
+      : undefined;
+    // The token comes from the `SecretBlob` when one was delegated, so the
+    // stored config carries no credential. Handing the loop a thunk rather
+    // than a token is what makes rotation and revocation reach an agent that
+    // is already running: it reads the secret again for every turn.
+    await spawnWorkerLoop(
+      agentPowers,
+      context,
+      storedConfig,
+      systemPrompt,
+      harden({
+        ...(spawner ? { spawner } : {}),
+        ...(delegatedPrompt ? { delegatedPrompt } : {}),
+        provideAuthToken: () =>
+          resolveAuthToken({ powers, config: storedConfig }),
+      }),
+    );
   };
 
   startLoop().catch(error => {

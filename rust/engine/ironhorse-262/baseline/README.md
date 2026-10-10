@@ -4,6 +4,12 @@ This directory is the **immutable starting snapshot** for the Ironhorse
 JavaScript-completion work. It is committed once, and every later change in that
 effort measures its regression invariant against it.
 
+> **Latest historical comparison: [refresh-20260904/](./refresh-20260904/).**
+> This round-2 snapshot records its original measured commit, before PR #1113's
+> final iterator fix and rebase.
+> It is a historical superset of [refresh-20260829/](./refresh-20260829/), not a
+> current-head certification or an automated CI gate.
+
 > **Provenance gap (read before trusting the totals as a HEAD measurement).**
 > The engine pin below (`14f26d0a6…`) is the head of the sibling reporting PR the
 > harness was cherry-picked from, **not** an ancestor of this branch, and it
@@ -16,7 +22,9 @@ effort measures its regression invariant against it.
 > terminates alone (`oracle-nontermination:…`), rather than retaining the
 > hand-authored `engine-hang:…` strings in `baseline.json`; and parse/resolution
 > negatives that were blanket run-skips can now land as `covered`,
-> `compiler-unimplemented:*`, an over-acceptance `Fail`, or an
+> `compiler-unimplemented:*`, a `compiler-panicked:*` **failure** (an engine
+> fault, kept apart from the coverage gap beside it — architecture finding
+> F063), an over-acceptance `Fail`, or an
 > `negative-oracle-unexpected` skip when both parsers accept (the early-error verdict is
 > decided at the parse phase, comparing ironhorse-compile's acceptance against
 > the oracle's own parse signal). The
@@ -66,9 +74,15 @@ infrastructure case is `language/global-code/decl-lex-restricted-global.js`
    reattribution from failure to infrastructure is permitted when an oracle or
    harness cause is demonstrated; it must preserve the case path and reason in
    the comparison output.
-3. **The proprietary exact-metering / byte-identity corpus under `../cases/**`
-   stays passing** with unchanged computron expectations
-   (`ironhorse-xst --gate-meter-exact ...cases`).
+3. **The proprietary byte-identity / engine-versioned-meter corpus under
+   `../cases/**` stays passing** (`ironhorse-xst --gate-meter-exact
+   ...cases`). Note (2026-09-15): the flag's only failing meter check is a
+   stale `ironhorse-meter-5-raw-N` pin — Iron Horse's **own** frozen cost.
+   Computron drift against the XS oracle is always advisory and is NOT part
+   of this invariant; XS-computron parity is a non-goal
+   (`designs/ironhorse-engine.md` § Metering). A deliberate meter
+   recalibration updates the raw pins with its version bump and does not
+   violate this invariant.
 
 [`baseline.json`](./baseline.json) carries the provenance, the per-category
 totals, the full `failures`/`infrastructure` lists, and the complete sorted

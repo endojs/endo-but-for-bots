@@ -7,15 +7,6 @@ on:
   push:
     branches: [master, llm]
   pull_request:
-    # `paths-ignore` causes this workflow not to run at all when every
-    # changed path matches one of these patterns. The sister workflow
-    # `ci-docs.yml` mirrors this list under `paths` (the inverse) so
-    # that doc-only PRs still produce checks named `test` and `lint`,
-    # satisfying any future branch-protection rule that names those
-    # checks as required. Keep the two lists in sync.
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
 
 # Minimal permissions for workflows and jobs. `actions/cache` and
 # `setup-node`'s `cache: yarn` use the runner's built-in cache service,
@@ -44,7 +35,14 @@ concurrency:
 # Steps between "begin" and "end" should be the same in every job.
 
 jobs:
+  changes:
+    uses: $/.github/workflows/ci-changes.yml
+
   lint:
+    env:
+      CI_PACKAGES: ${{ needs.changes.outputs.packages }}
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['lint']) }}
     name: lint
 
     # begin macro
@@ -52,6 +50,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -89,6 +91,7 @@ jobs:
         run: yarn build:types:check
 
       - name: Check package uniformity
+        if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['package-uniformity']) }}
         run: yarn test:package-uniformity && node scripts/check-package-uniformity.mjs
 
       # Keep declaration generation below: only overlap checks that do not
@@ -105,15 +108,17 @@ jobs:
             run: corepack yarn tsc -p tsconfig.json --noEmit
 
           - name: Check workspace TypeScript programs
-            run: corepack yarn lint:workspaces:types
+            run: python3 scripts/run-ci-task.py lint:types
 
       - name: Build composite TypeScript declarations
         run: corepack yarn build:types
 
       - name: Test opt-in TypeScript contracts
-        run: corepack yarn test:types
+        run: python3 scripts/run-ci-task.py test:types
 
   familiar-bundle:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['familiar-bundle']) }}
     name: familiar-bundle
 
     # The Familiar Electron shell bundles a handful of CLI / daemon /
@@ -134,6 +139,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -155,6 +164,10 @@ jobs:
         run: yarn workspace @endo/familiar step:bundle
 
   test:
+    env:
+      CI_PACKAGES: ${{ needs.changes.outputs.packages }}
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test']) }}
     name: test
 
     # begin macro
@@ -170,12 +183,13 @@ jobs:
         # 4.
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Fetch full history so turbo can compute the affected set against
-          # `origin/llm` for the `--filter='...[origin/llm]'` invocation below.
-          fetch-depth: 0
           persist-credentials: false
 
       # without this, setup-node errors on mismatched yarn versions
@@ -205,23 +219,20 @@ jobs:
 
       # end macro
 
-      # Use turbo's `--filter='...[origin/llm]'` to test only the packages
-      # affected by this PR and their dependents (the leading `...` selects the
-      # changed set plus everything that depends on it), rather than the full
-      # matrix. The base `origin/llm` is the repo's default branch on this fork.
-      # The `test` task `dependsOn` `build` and `^build`, so turbo builds only
-      # the affected closure on demand; a separate full `yarn build` step would
-      # rebuild all ~83 packages and is therefore omitted.
+      # The detector selects changed workspaces and recursive dependents.
+      # Turbo builds their prerequisites and runs only these exact names.
       - name: Run yarn test (affected set)
         working-directory: ${{ env.WORKDIR }}
-        run: yarn turbo run test --filter='...[origin/llm]'
+        run: python3 scripts/run-ci-task.py test
 
       - name: Restore working directory
-        if: ${{ steps.move-wd.outcome == 'success' }}
+        if: ${{ always() && steps.move-wd.outcome == 'success' }}
         working-directory: ${{ runner.temp }}
         run: mv -fv "$WORKDIR" "$ORIGINAL_WORKDIR"
 
   sandbox-drivers:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['sandbox-drivers']) }}
     name: sandbox-drivers
 
     # begin macro
@@ -229,6 +240,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -268,6 +283,8 @@ jobs:
         run: yarn workspace @endo/sandbox run test:drivers
 
   test-async-hooks:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-async-hooks']) }}
     name: test-async-hooks
 
     runs-on: ${{ matrix.platform }}
@@ -294,6 +311,10 @@ jobs:
     # begin macro
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -321,6 +342,10 @@ jobs:
         run: yarn test
 
   cover:
+    env:
+      CI_PACKAGES: ${{ needs.changes.outputs.packages }}
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['cover']) }}
     name: cover
 
     # begin macro
@@ -333,12 +358,13 @@ jobs:
         platform: [ubuntu-latest]
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Fetch full history so turbo can compute the affected set against
-          # `origin/llm` for the `--filter='...[origin/llm]'` invocation below.
-          fetch-depth: 0
           persist-credentials: false
 
       # without this, setup-node errors on mismatched yarn versions
@@ -355,52 +381,12 @@ jobs:
 
       # end macro
 
-      # As with the `test` job, scope coverage to the affected packages and
-      # their dependents. The `test:c8` turbo task `dependsOn` `build` and
-      # `^build`, so turbo builds only the affected closure on demand; a
-      # separate full `yarn build` step is therefore omitted.
       - name: Run yarn test:c8 (affected set)
-        run: yarn turbo run test:c8 --filter='...[origin/llm]'
-
-  test262:
-    name: test262
-
-    # begin macro
-
-    runs-on: ${{ matrix.platform }}
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: [22.x, 24.x]
-        platform: [ubuntu-latest]
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      # without this, setup-node errors on mismatched yarn versions
-      - run: corepack enable
-
-      - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: yarn
-
-      - name: Install dependencies
-        run: yarn install --immutable
-
-      # end macro
-
-      - name: Run yarn build
-        run: yarn build
-
-      - name: Run yarn test262
-        run: exit 0 # TODO remove test262 from required tests for CI
+        run: python3 scripts/run-ci-task.py test:c8
 
   test-hermes:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-hermes']) }}
     name: test-hermes
 
     # begin macro
@@ -408,6 +394,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -431,14 +421,20 @@ jobs:
         run: yarn build
 
       - name: Run SES/Hermes smoke test
-        run: yarn test:hermes
+        run: yarn workspace ses test:hermes
 
   check-action-pins:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['check-action-pins']) }}
     name: check-action-pins
 
     runs-on: ubuntu-latest
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -456,19 +452,12 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
-      - name: Detect workflow changes
-        id: paths
-        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
-        with:
-          filters: |
-            workflows:
-              - '.github/workflows/**'
-
       - name: Verify action pins
-        if: ${{ github.event_name != 'pull_request' || steps.paths.outputs.workflows == 'true' }}
         run: node scripts/update-action-pins.mjs --check-pins
 
   viable-release:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['viable-release']) }}
     name: viable-release
 
     # begin macro
@@ -481,6 +470,10 @@ jobs:
         platform: [ubuntu-latest]
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -519,6 +512,8 @@ jobs:
         run: yarn smoketest:publish
 
   test-xs:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-xs']) }}
     name: test-xs
 
     # begin macro
@@ -528,8 +523,13 @@ jobs:
     # may include release tags and hashes
     env:
       MODDABLE_VERSION: 9.0.0
+      CI_PACKAGES: ${{ needs.changes.outputs.packages }}
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -612,14 +612,20 @@ jobs:
         working-directory: endo
         run: |
           PATH=$PATH:$GITHUB_WORKSPACE/bin
-          yarn test:xs
+          python3 scripts/run-ci-task.py test:xs
 
   build-xsnap:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['build-xsnap']) }}
     name: build-xsnap
 
     runs-on: ubuntu-latest
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -658,7 +664,7 @@ jobs:
           yarn bundle:xs
 
       - name: Build xsnap crate
-        run: cargo check --manifest-path rust/endo/xsnap/Cargo.toml
+        run: cargo check --locked --manifest-path rust/endo/xsnap/Cargo.toml
 
       - name: Test the store-backed worker lifecycle (endo crate)
         # The supervisor's Ironhorse heap-persistence option
@@ -672,63 +678,173 @@ jobs:
         # cfg(feature = "ironhorse-engine"), so without the pin a
         # default-feature flip would turn this step into a 0-test
         # green pass with no error (wave-3 finding).
-        run: cargo test -p endo --features ironhorse-engine --test ironhorse_store_worker
+        #
+        # The second command exists for the same reason the --features
+        # pin does: naming only --test targets runs NO unit tests, and
+        # this is the only lane that builds the endo crate at all. That
+        # gap let an assertion pinning a lockdown bypass --
+        # `(()=>{}).constructor('return 42')()` returning "42" -- stay
+        # green through the commits that closed it, because nothing ran
+        # it. 29 tests, under a second.
+        #
+        # SCOPED to `ironhorse_engine::` deliberately, and not widened to
+        # the whole lib. A bare `--lib` runs ~300 more, including the
+        # `inproc` tests that drive real xsnap machines across threads
+        # and deliberately panic one of them; on this runner that
+        # segfaults (signal 11), while ten local runs across five
+        # `--test-threads` settings stay green. The likely cause is
+        # already written down in this PR: `xsnap::Machine::eval`
+        # installs no outermost `txJump` and takes SIGSEGV instead of
+        # returning `None`, and its only callers are `#[cfg(test)]` --
+        # exactly the population a bare `--lib` switches on. Fixing that
+        # is a `c_setjmp` guard in `xsnap-platform.c`, XS-glue work with
+        # its own reproduction pinned in `tests/js_machine_trait.rs`.
+        # Widen this filter once that lands; widening it before would
+        # gate the lane on a defect nothing here can verify a fix for.
+        #
+        # Two commands, not one: a filter argument applies to every
+        # selected target, so folding it into the line above would
+        # silently filter the three integration suites down to nothing.
+        run: |
+          cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker --test ironhorse_runtime_compiler --test js_machine_trait
+          cargo test --locked -p endo --features ironhorse-engine --lib ironhorse_engine::
 
-  # The pure-Rust ironhorse crates: the engine's zero-C members
-  # (ironhorse-vm, ironhorse-snapshot — including the store seam's
-  # metamorphic determinism and checkpoint acceptance suites) plus the
-  # daemon-side SQLite heap-store backend in the root workspace. The
-  # oracle-linked engine crates (xs-oracle, ironhorse-compile,
-  # ironhorse-regexp, ironhorse-262, ironhorse-fuzz) are excluded from
-  # TESTING here — their dev-dependencies compile the Moddable XS C
-  # sources — and run in test-ironhorse-oracle below, which provisions
-  # the submodule (the deferred-work checklist's oracle-suites item).
-  # (ironhorse-compile still builds here as a library dependency of the
-  # tested crates — dev-dependencies of dependencies do not build.)
-  #
-  # On pull requests the expensive steps self-skip unless the PR
-  # touches these crates or their inputs (the engine workspace, the
-  # SQLite crate, the root cargo manifests, or this workflow), so the
-  # check name stays present — and green — on unrelated PRs instead of
-  # needing a docs-only-style mirror workflow. Pushes to master always
-  # run the full job.
-  test-ironhorse:
-    name: test-ironhorse
+  # Skip entire jobs, including the runner matrix, on unrelated PRs/pushes.
+  format-ironhorse:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['format-ironhorse']) }}
+    name: format-ironhorse
 
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Depth 2 so the pull_request merge commit's parents exist
-          # for the change probe below.
-          fetch-depth: 2
+          fetch-depth: 0
 
-      - name: Detect ironhorse-relevant changes
-        id: changes
-        if: github.event_name == 'pull_request'
+      - name: Verify shared IronHorse dependency resolutions
         run: |
-          # The pull_request checkout is a merge commit whose first
-          # parent is the base branch head, so this diff is exactly the
-          # PR's change set. Fail open (run the tests) if that shape
-          # ever doesn't hold.
-          if ! git rev-parse -q --verify HEAD^2 >/dev/null; then
-            echo "hit=true" >> "$GITHUB_OUTPUT"
-          # Consume the whole diff. `grep -q` can close the pipe early,
-          # making `git diff` exit on SIGPIPE and the runner's `pipefail`
-          # misclassify a relevant large PR as a miss.
-          elif git diff --name-only HEAD^1 HEAD \
-            | grep -E '^rust/engine/|^rust/endo/ironhorse-store-sqlite/|^Cargo\.toml$|^Cargo\.lock$|^\.github/workflows/ci\.yml$' >/dev/null; then
-            echo "hit=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "hit=false" >> "$GITHUB_OUTPUT"
-          fi
+          rustc --edition 2021 --test rust/engine/ironhorse-fuzz/src/comparison.rs -o /tmp/ironhorse-comparison-test
+          /tmp/ironhorse-comparison-test
+          python3 rust/engine/scripts/test-math-vectors.py
+          python3 rust/engine/scripts/test-lockfile-agreement.py
+          python3 rust/engine/scripts/check-lockfile-agreement.py
+          python3 rust/engine/scripts/test-intl-profile.py
+          python3 rust/engine/scripts/intl-profile.py
+
+      - name: Check row-schema history and version transitions
+        env:
+          ROW_SCHEMA_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          python3 rust/engine/scripts/test-row-schema.py
+          python3 rust/engine/scripts/check-row-schema.py --base "${ROW_SCHEMA_BASE:-HEAD^}"
+
+      - name: Check generated engine crate diagram and library safety declarations
+        run: |
+          python3 rust/engine/scripts/test-crate-graph.py
+          python3 rust/engine/scripts/crate-graph.py --check
+
+      - name: Install pinned rustfmt
+        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt
+
+      - name: Check generated compiler opcode table
+        run: |
+          python3 rust/engine/scripts/test-compiler-opcodes.py
+          python3 rust/engine/scripts/generate-compiler-opcodes.py --check
+
+      - name: Check ironhorse engine formatting
+        run: cargo +1.88.0 fmt --manifest-path rust/engine/Cargo.toml --all -- --check
+      # The stack-lanes probe is a standalone cargo root outside the workspace
+      # (rust/engine/stack-lanes/probe/Cargo.toml), so `fmt --all` never sees it.
+      - name: Check stack-lanes formatting
+        run: rustfmt +1.88.0 --edition 2021 --check rust/engine/stack-lanes/probe/src/main.rs rust/engine/stack-lanes/cases.rs
+
+      - name: Check SQLite heap-store formatting
+        run: cargo +1.88.0 fmt --manifest-path Cargo.toml --package ironhorse-store-sqlite -- --check
+
+  test-thixotrope-ironhorse:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-thixotrope-ironhorse']) }}
+    name: test-thixotrope-ironhorse
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: corepack enable
+      - name: Use Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: yarn
+      - name: Install dependencies
+        run: corepack yarn install --immutable
+      - name: Cache Cargo and release worker
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-thixotrope-ironhorse-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-thixotrope-ironhorse-
+      - name: Build real SQLite worker
+        run: cargo build --locked --release -p thixotrope-ironhorse-worker
+      - name: Test the worker's heap opening and crank admission
+        run: cargo test --locked --release -p thixotrope-ironhorse-worker
+      - name: Bundle SES and OCapN peer
+        run: corepack yarn workspace @endo/thixotrope build:ironhorse-bundles
+      - name: Test two demos and twelve adversarial persistence scenarios
+        run: corepack yarn workspace @endo/thixotrope test:ironhorse
+
+  # Oracle-free suites share the same source/build-input change gate.
+  test-ironhorse:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-ironhorse']) }}
+    name: ${{ matrix.check }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: debug
+            check: test-ironhorse
+            os: ubuntu-latest
+          - profile: release
+            check: test-ironhorse-release
+            os: ubuntu-latest
+          # Run the same golden snapshots on a second host platform.
+          - profile: debug
+            check: test-ironhorse-macos
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Cache Cargo + targets
-        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -736,68 +852,168 @@ jobs:
             ~/.cargo/git
             target
             rust/engine/target
-          key: ${{ runner.os }}-ironhorse-${{ hashFiles('Cargo.lock', 'rust/engine/Cargo.lock') }}
+          key: ${{ runner.os }}-ironhorse-${{ matrix.profile }}-${{ hashFiles('Cargo.lock', 'rust/engine/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-ironhorse-
+            ${{ runner.os }}-ironhorse-${{ matrix.profile }}-
 
       - name: Test ironhorse engine crates (rust/engine workspace)
-        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         working-directory: rust/engine
-        run: cargo test -p ironhorse-vm -p ironhorse-snapshot
+        env:
+          RUST_MIN_STACK: '33554432'
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          flags=()
+          if [ "$PROFILE" = release ]; then flags+=(--release); fi
+          cargo test --locked "${flags[@]}" -p ironhorse-runtime -p ironhorse-meter -p ironhorse-unicode -p ironhorse-vm -p ironhorse-snapshot -p ironhorse-compile -p ironhorse-regexp --features ironhorse-vm/store-integrity
+
+      - name: Test deterministic Math configuration (oracle-free)
+        working-directory: rust/engine
+        env:
+          RUST_MIN_STACK: '33554432'
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          flags=()
+          if [ "$PROFILE" = release ]; then flags+=(--release); fi
+          cargo test --locked "${flags[@]}" -p ironhorse-vm -p ironhorse-snapshot --features ironhorse-vm/deterministic-math,ironhorse-vm/store-integrity
+
+      - name: Export platform Math vector (oracle-free)
+        if: ${{ !cancelled() }}
+        working-directory: rust/engine
+        env:
+          RUST_MIN_STACK: '33554432'
+          PROFILE: ${{ matrix.profile }}
+          IRONHORSE_MATH_VECTOR: ${{ github.workspace }}/math-vector.tsv
+        run: |
+          flags=()
+          if [ "$PROFILE" = release ]; then flags+=(--release); fi
+          cargo test --locked "${flags[@]}" -p ironhorse-vm --test math_determinism platform_math_vector
+
+      - name: Export candidate Math provider comparison (oracle-free)
+        if: ${{ !cancelled() }}
+        working-directory: rust/engine
+        env:
+          PROFILE: ${{ matrix.profile }}
+          IRONHORSE_PROVIDER_VECTOR: ${{ github.workspace }}/math-provider-vector.tsv
+        run: |
+          flags=()
+          if [ "$PROFILE" = release ]; then flags+=(--release); fi
+          cargo test --locked "${flags[@]}" -p ironhorse-vm --test math_provider_comparison
+
+      - name: Export deterministic Math vector (oracle-free)
+        if: ${{ !cancelled() }}
+        working-directory: rust/engine
+        env:
+          PROFILE: ${{ matrix.profile }}
+          IRONHORSE_MATH_VECTOR: ${{ github.workspace }}/math-vector-libm.tsv
+        run: |
+          flags=()
+          if [ "$PROFILE" = release ]; then flags+=(--release); fi
+          cargo test --locked "${flags[@]}" -p ironhorse-vm --features deterministic-math --test math_determinism platform_math_vector
+
+      - name: Retain platform Math bits
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: math-${{ matrix.check }}
+          path: |
+            math-vector.tsv
+            math-provider-vector.tsv
+            math-vector-libm.tsv
+          if-no-files-found: error
 
       - name: Test SQLite heap-store backend (root workspace)
-        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
-        run: cargo test -p ironhorse-store-sqlite
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          flags=()
+          if [ "$PROFILE" = release ]; then flags+=(--release); fi
+          cargo test --locked "${flags[@]}" -p ironhorse-store-sqlite --features ironhorse-vm/store-integrity
+          cargo test --locked "${flags[@]}" -p ironhorse-store-sqlite --features ironhorse-vm/store-integrity --example vat_surgery
 
-  # The oracle-linked ironhorse crate suites (ironhorse-compile,
-  # ironhorse-regexp, ironhorse-262's bounded fixtures, and the fuzz
-  # lib's unit tests — including the hostile-suspend trophies). Their
-  # dev-dependencies compile the Moddable XS C sources, so this job
-  # provisions the c/moddable submodule that test-ironhorse
-  # deliberately avoids; until this job existed those suites ran only
-  # locally (the store-seam ledger's oracle-suites item). The suites
-  # themselves are seconds; the C oracle build is the cost, and the
-  # cargo cache carries it between runs. Same self-skip probe as the
-  # fuzz lane (oracle inputs included), so unrelated PRs stay green
-  # without paying the C build.
+  test-ironhorse-calibration:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-ironhorse-calibration']) }}
+    name: test-ironhorse-calibration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test instrumentation and frozen computrons
+        working-directory: rust/engine
+        env:
+          RUST_MIN_STACK: '33554432'
+        run: |
+          cargo test --locked -p ironhorse-vm --features cost-calibration --lib
+          cargo test --locked -p ironhorse-vm --features cost-calibration --test golden_computrons
+          cargo test --locked -p ironhorse-vm --features consensus --test golden_computrons
+      - name: Reject calibration in consensus builds
+        working-directory: rust/engine
+        run: |
+          if cargo check --locked -p ironhorse-vm --features consensus,cost-calibration > feature-conflict.log 2>&1; then
+            cat feature-conflict.log
+            exit 1
+          fi
+          grep -F 'consensus and cost-calibration are mutually exclusive' feature-conflict.log
+
+  compare-ironhorse-math:
+    needs: [changes, test-ironhorse]
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['compare-ironhorse-math']) }}
+    name: compare-ironhorse-math
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: math-test-ironhorse*
+          path: math-vectors
+      - name: Compare Linux and macOS bits, and debug and release bits
+        run: |
+          status=0
+          python3 rust/engine/scripts/compare-math-vectors.py math-vectors/math-test-ironhorse/math-vector.tsv math-vectors/math-test-ironhorse-macos/math-vector.tsv math-platform-differences.tsv rust/engine/ironhorse-vm/tests/fixtures/math-platform-differences.tsv || status=1
+          python3 rust/engine/scripts/compare-math-vectors.py math-vectors/math-test-ironhorse/math-vector.tsv math-vectors/math-test-ironhorse-release/math-vector.tsv math-profile-differences.tsv || status=1
+          python3 rust/engine/scripts/compare-math-vectors.py math-vectors/math-test-ironhorse/math-vector-libm.tsv math-vectors/math-test-ironhorse-macos/math-vector-libm.tsv math-libm-platform-differences.tsv || status=1
+          python3 rust/engine/scripts/compare-math-vectors.py math-vectors/math-test-ironhorse/math-vector-libm.tsv math-vectors/math-test-ironhorse-release/math-vector-libm.tsv math-libm-profile-differences.tsv || status=1
+          exit "$status"
+      - name: Retain comparison evidence even on divergence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: math-differences
+          path: math-*-differences.tsv
+          if-no-files-found: error
+
+  # Oracle tests additionally depend on the pinned XS and bridge inputs.
   test-ironhorse-oracle:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-ironhorse-oracle']) }}
     name: test-ironhorse-oracle
 
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Depth 2 so the pull_request merge commit's parents exist
-          # for the change probe below.
-          fetch-depth: 2
-
-      - name: Detect ironhorse-relevant changes
-        id: changes
-        if: github.event_name == 'pull_request'
-        run: |
-          # The fuzz lane's probe: these suites link the XS oracle,
-          # so the moddable gitlink, .gitmodules, and the shared
-          # xsnap platform sources are all inputs. The merge commit's
-          # first parent is the base branch head, so this diff is
-          # exactly the PR's change set; fail open if that shape ever
-          # doesn't hold.
-          if ! git rev-parse -q --verify HEAD^2 >/dev/null; then
-            echo "hit=true" >> "$GITHUB_OUTPUT"
-          # No `grep -q`: under `pipefail`, its early close can turn a
-          # matching large diff into a false miss through SIGPIPE.
-          elif git diff --name-only HEAD^1 HEAD \
-            | grep -E '^rust/engine/|^rust/endo/ironhorse-store-sqlite/|^Cargo\.toml$|^Cargo\.lock$|^\.github/workflows/ci\.yml$|^c/moddable|^\.gitmodules$|^rust/endo/xsnap/xsnap-platform\.' >/dev/null; then
-            echo "hit=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "hit=false" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Fetch XS oracle submodule
-        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         # Anonymous shallow fetch can hit transient throttling on
         # shared runner egress; retry before failing, and fail LOUD
         # if all attempts leave the sources absent.
@@ -808,8 +1024,50 @@ jobs:
           done
           test -f c/moddable/xs/sources/xsAll.h
 
+      - run: corepack enable
+
+      - name: Use Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Generate the daemon SES boot bundle
+        # `rust/endo/xsnap/src/ses_boot.js` is gitignored (`.gitignore:35`),
+        # so on a bare checkout `stage4_ses_boot.rs` finds no bundle and
+        # returns early -- a green pass that measured nothing, which is the
+        # same trap the build-xsnap job already documents. Generating it here,
+        # plus IRONHORSE_SES_BOOT_REQUIRED on the test step, makes a missing
+        # bundle red instead of silent.
+        #
+        # The single script rather than `yarn bundle:xs`: that root script
+        # runs three bundlers, and the other two write `worker_bootstrap.js`
+        # (765 KB) and `daemon_bootstrap.js` (2.4 MB), which nothing in the
+        # rust/engine workspace reads. This job already compiles XS, builds
+        # and clippies the whole engine workspace under -D warnings, and runs
+        # two corpus gates inside `timeout-minutes: 30`.
+        run: node packages/daemon/scripts/bundle-bus-worker-xs-ses-boot.mjs
+
+      - name: Generate the SES shim and prelude the realm-profile tests read
+        # Same trap as the bundle above, two more artifacts. `dist-ironhorse/
+        # boot.js` and `test262-runner/prelude/ironhorse.js` are both build
+        # output, so on a bare checkout `ses_boot_intrinsics.rs` and
+        # `ses_prelude_reach.rs` return early and report a green pass that
+        # measured nothing. They are generated here, and the test step below
+        # sets the matching *_REQUIRED vars so a missing one is red.
+        #
+        # This lane rather than `test-ironhorse`: that job is a 3-way matrix
+        # (debug, release, macos), so a Node toolchain and `yarn install`
+        # there would be paid three times, once on a macOS runner. This job
+        # already has both, and already builds the workspace.
+        run: |
+          corepack yarn workspace @endo/thixotrope build:ironhorse-bundles
+          corepack yarn workspace @endo/test262-runner build
+
       - name: Cache Cargo + targets
-        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -820,23 +1078,258 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-ironhorse-oracle-
 
-      - name: Test oracle-linked engine crates (rust/engine workspace)
-        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
+      - name: Install pinned lint toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal --component clippy
+
+      - name: Check engine build warnings
         working-directory: rust/engine
-        # The regexp parity and unicode-sets suites recurse deeply in
-        # debug builds (the pure-Rust port keeps XS's recursive
-        # compile/match shape), overflowing the 2 MiB default test-
-        # thread stack. 16 MiB matches what the suites need locally;
-        # the recursion depth is an engine property, not this lane's.
         env:
-          RUST_MIN_STACK: '16777216'
-        run: cargo test -p ironhorse-compile -p ironhorse-regexp -p ironhorse-262 -p ironhorse-fuzz
+          RUSTFLAGS: -D warnings
+        run: cargo +1.88.0 build --locked --workspace
+
+      - name: Check engine Clippy warnings
+        working-directory: rust/engine
+        run: cargo +1.88.0 clippy --locked --workspace --no-deps -- -D warnings
+
+      - name: Vendor test262 at the pinned SHA
+        # `corpus_compiler_totality.rs` compiles every test262 source and
+        # requires that none of them panics -- the F063 gate that does not
+        # depend on someone having thought of the shape. It needs the corpus,
+        # which is not in the repository, and without it the test returns
+        # early and reports a green pass that measured nothing (the trap the
+        # SES bundle steps above already document).
+        #
+        # A shallow single-SHA fetch, ~30s, from the same `TEST262_REVISION`
+        # the nightly sweep pins so there is one home for the SHA. `.git` is
+        # dropped afterwards: the sweep reads `harness/` and `test/` only.
+        #
+        # OUTSIDE `rust/engine/target`, which the cache step above saves: the
+        # corpus is ~270 MB and belongs in neither the build cache nor its key.
+        # `TEST262_DIR` on the test step below points at it.
+        run: |
+          set -euo pipefail
+          source rust/engine/ironhorse-262/TEST262_REVISION
+          dir="$GITHUB_WORKSPACE/test262-src"
+          mkdir -p "$dir"
+          git -C "$dir" init -q
+          git -C "$dir" remote add origin "$TEST262_REPO"
+          git -C "$dir" fetch --depth 1 -q origin "$TEST262_SHA"
+          git -C "$dir" checkout -q "$TEST262_SHA"
+          rm -rf "$dir/.git"
+
+      - name: Test oracle-linked engine crates (rust/engine workspace)
+        working-directory: rust/engine
+        # The engine's native recursion is bounded by its own budget
+        # (`NATIVE_DEPTH_LIMIT`), calibrated to the thread stack it
+        # documents in `ironhorse_vm::NATIVE_STACK_BYTES`: 32 MiB for an
+        # unoptimized build, where the monolithic dispatch frames are an
+        # order of magnitude larger. Suites that drive the engine on the
+        # harness thread inherit cargo's 2 MiB default, so give them the
+        # contract stack; the tests that pin the budget's boundaries
+        # spawn threads of that size themselves.
+        env:
+          RUST_MIN_STACK: '33554432'
+          # Assert rather than skip: the bundle was generated above.
+          IRONHORSE_SES_BOOT_REQUIRED: '1'
+          # Same contract for the corpus vendored above: a missing checkout is
+          # red here rather than a silent early return.
+          TEST262_DIR: ${{ github.workspace }}/test262-src
+          IRONHORSE_COMPILER_TOTALITY_REQUIRED: '1'
+        run: cargo test --locked -p ironhorse-compile -p ironhorse-regexp -p ironhorse-262 -p ironhorse-fuzz --features ironhorse-compile/parity,ironhorse-regexp/parity
+      - name: Test the SES realm profiles and prelude reach (artifacts above)
+        working-directory: rust/engine
+        # The only lane where these two run rather than skip. Carries the same
+        # parity features as the step above so both share one build of the
+        # crates they have in common.
+        env:
+          RUST_MIN_STACK: '33554432'
+          # Assert rather than skip: both artifacts were generated above.
+          IRONHORSE_SES_SHIM_REQUIRED: '1'
+          IRONHORSE_SES_PRELUDE_REQUIRED: '1'
+        run: cargo test --locked -p ironhorse-vm --test ses_boot_intrinsics --test ses_prelude_reach --features ironhorse-compile/parity,ironhorse-regexp/parity
+      - name: Gate the committed try/catch expectation slice
+        working-directory: rust/engine
+        env:
+          RUST_MIN_STACK: '33554432'
+          GARDEN_TEST262_TIP: 'be13516fb6441b950ba8a3df97eb34062c186972'
+        run: >-
+          cargo run --locked -p ironhorse-262 --bin endot-ih --
+          --direct-only --strict-skip-reasons
+          --expectations ironhorse-262/expectations/try.txt
+          language/statements/try
+      - name: Gate the complete Ironhorse corpus expectations
+        working-directory: rust/engine
+        env:
+          RUST_MIN_STACK: '33554432'
+          GARDEN_TEST262_TIP: 'be13516fb6441b950ba8a3df97eb34062c186972'
+        run: >-
+          cargo run --locked -p ironhorse-262 --bin endot-ih --
+          --strict-skip-reasons
+          --repeat 3 --expectations ironhorse-262/expectations/ironhorse.txt
+          ../../packages/test262-runner/test262/test/ironhorse
+  fuzz-ironhorse:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['fuzz-ironhorse']) }}
+    name: fuzz-ironhorse
+
+    env:
+      # JOB level, not step level: the cache keys below interpolate it, and
+      # a step-level definition would leave them reading an empty string —
+      # which silently detaches this lane's build cache from the nightly
+      # one and makes a toolchain bump invisible to the key.
+      # The SAME pin as ironhorse-deep-fuzz.yml and
+      # `ironhorse-fuzz/fuzz/rust-toolchain.toml` (bump them together).
+      FUZZ_TOOLCHAIN: nightly-2026-08-15
+
+    runs-on: ubuntu-latest
+    # A TRIPWIRE, not a search: every target for a few seconds each over
+    # the checked-in seed corpus and whatever the nightly lane has
+    # accreted. The search is `ironhorse-deep-fuzz.yml`, minutes per
+    # target on a schedule. This lane exists so a pull request that
+    # reintroduces a fixed trophy fails on the pull request rather than
+    # at 3am, which is what the deep lane's header claimed for a job
+    # that did not exist (F039).
+    #
+    # The ceiling is a first estimate, not a measurement: the fuzzing
+    # itself is 14 x 30s = 7 minutes, and everything else is the cold
+    # build — cargo-fuzz from source, the engine graph and the XS oracle C
+    # sources, release with a sanitizer, across fourteen binaries. Narrow
+    # it once a few runs have reported their real duration.
+    timeout-minutes: 60
+
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch XS oracle submodule
+        # The ironhorse-fuzz lib links the XS oracle for its differential
+        # targets. Anonymous shallow fetch can hit transient throttling on
+        # shared runner egress; retry before failing, and fail LOUD if all
+        # attempts leave the sources absent.
+        run: |
+          for i in 1 2 3; do
+            git submodule update --init --depth 1 c/moddable && break
+            sleep $((10 * i))
+          done
+          test -f c/moddable/xs/sources/xsAll.h
+
+      - name: Cache Cargo + fuzz build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            rust/engine/ironhorse-fuzz/fuzz/target
+          key: ${{ runner.os }}-ironhorse-fuzz-build-${{ env.FUZZ_TOOLCHAIN }}-${{ hashFiles('rust/engine/ironhorse-fuzz/fuzz/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-ironhorse-fuzz-build-${{ env.FUZZ_TOOLCHAIN }}-
+
+      - name: Restore fuzz corpus
+        # RESTORE ONLY, deliberately. A cache written by a pull-request run
+        # is scoped to that pull request's ref and nothing else can ever
+        # read it, so saving here would write an entry no lane restores
+        # while pushing the repository's shared cache quota — and evicting
+        # the yarn and xsnap caches the rest of CI depends on. The flow is
+        # one-way: the nightly lane's discoveries reach this tripwire
+        # through the default branch's cache scope, and this tripwire's
+        # own accretion is not worth keeping for 30 seconds of search.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: rust/engine/ironhorse-fuzz/fuzz/corpus
+          key: ${{ runner.os }}-ironhorse-fuzz-corpus-
+          restore-keys: |
+            ${{ runner.os }}-ironhorse-fuzz-corpus-
+
+      - name: Install pinned nightly toolchain and cargo-fuzz
+        run: |
+          rustup toolchain install "$FUZZ_TOOLCHAIN" --profile minimal
+          command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked
+
+      - name: Check fuzz lockfile freshness
+        working-directory: rust/engine/ironhorse-fuzz
+        # `cargo fuzz run` itself does not take --locked, so a stale
+        # committed fuzz/Cargo.lock would silently float new registry deps
+        # at build time. The nightly lane has always had this gate; it
+        # belongs on the lane that runs on pull requests too, or the defect
+        # class it guards reaches the PR green and the nightly red.
+        run: |
+          cargo +"$FUZZ_TOOLCHAIN" fetch --locked --manifest-path fuzz/Cargo.toml || {
+            echo "::error::fuzz/Cargo.lock is stale — run 'cargo update --workspace' in rust/engine/ironhorse-fuzz/fuzz and commit the lock"
+            exit 1
+          }
+
+      - name: Seed the corpus from the checked-in seeds
+        working-directory: rust/engine/ironhorse-fuzz
+        run: |
+          # `nullglob`: without it an unmatched pattern runs the loop once
+          # with the literal `fuzz/seeds/*/` and creates a directory named
+          # `*`. A missing seed tree is a real failure, and on the tripwire
+          # lane a silent no-op would be invisible, so say what happened.
+          shopt -s nullglob
+          seeded=0
+          for d in fuzz/seeds/*/; do
+            t=$(basename "$d")
+            mkdir -p "fuzz/corpus/$t"
+            cp -n "$d"*.bin "fuzz/corpus/$t/" 2>/dev/null || true
+            seeded=$((seeded + 1))
+          done
+          test "$seeded" -gt 0 || { echo "::error::fuzz/seeds/ is empty or absent"; exit 1; }
+          echo "seeded $seeded targets; corpus now holds $(find fuzz/corpus -name '*.bin' | wc -l) inputs"
+
+      - name: Fuzz tripwire (seconds per target)
+        working-directory: rust/engine/ironhorse-fuzz
+        env:
+          FUZZ_BUDGET: '30'
+        run: |
+          # `|| true`: GitHub runs this with `-eo pipefail`, so a `grep`
+          # that matches nothing would kill the step before the diagnostic
+          # below could print.
+          targets=$(sed -n 's/^name = "\(.*\)"$/\1/p' fuzz/Cargo.toml | grep -v '^ironhorse-fuzz-targets$' || true)
+          test -n "$targets" || { echo "::error::no fuzz targets found in fuzz/Cargo.toml"; exit 1; }
+          # `-s none`: NO sanitizer. The roster used to be the four
+          # pure-Rust targets; it is now every target, which includes the
+          # differential ones that link the Moddable XS C sources. Running
+          # those under cargo-fuzz's default AddressSanitizer plus
+          # LeakSanitizer would make this lane a sanitizer run over XS —
+          # a genuinely useful thing, and one the repository already does
+          # deliberately and separately in `ironhorse-sanitizers.yml`,
+          # where the leak suppressions and the expectations live. The
+          # engine itself is `forbid(unsafe_code)`, so what a sanitizer
+          # would add here is XS findings this lane is not set up to
+          # triage, arriving as red runs on unrelated pull requests.
+          rc=0
+          for t in $targets; do
+            cargo +"$FUZZ_TOOLCHAIN" fuzz run -s none "$t" -- -max_total_time="$FUZZ_BUDGET" -print_final_stats=1 || rc=1
+          done
+          exit "$rc"
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ironhorse-fuzz-tripwire-artifacts
+          path: rust/engine/ironhorse-fuzz/fuzz/artifacts/
+          if-no-files-found: ignore
+
   test-ocapn-python:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-ocapn-python']) }}
     name: test-ocapn-python
 
     runs-on: ubuntu-latest
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout Endo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -912,11 +1405,17 @@ jobs:
           fi
 
   build-wasm:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['build-wasm']) }}
     name: build-wasm
 
     runs-on: ubuntu-latest
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -23,16 +23,19 @@
 //!
 //! The last line is the third-host `ses-xs-parity` invocation: ironhorse joins
 //! `xst -l` and node-with-SES-prelude as the third `packages/test262-runner`
-//! host on that parity axis (design § Staging step 4). The guest
-//! `lockdown()`/`Compartment` surface the mode needs is a named scope fold
-//! ironhorse does not yet expose, so today every such case is an honest named
-//! skip (`feature:Compartment` / `ses-mode:lockdown-unimplemented`); coverage
-//! lights up automatically when that guest surface lands.
+//! host on that parity axis (design § Staging step 4). `-l` runs: ironhorse
+//! binds a guest `lockdown()` and `assemble` splices the call between the
+//! harness and the case body, as `xst262.c:1267` does. `-c`/`-lc` still do not:
+//! there is no guest `Compartment`, so those modes stay honest named skips
+//! (`ses-mode:compartment-unimplemented`) and a case that READS `Compartment`
+//! is a `feature:Compartment` skip under any mode. That coverage lights up
+//! when the constructor lands.
 //!
 //! Positional paths are subtrees under the located test262 root; a bare path
-//! defaults under `language/` for back-compat with `test262-language`. Exit
-//! code is nonzero on any failure (a divergence, an over-acceptance, a
-//! meter-exact-gate or determinism violation), so CI/nightly can gate.
+//! defaults under `language/` for back-compat with `test262-language`. Without
+//! a committed expectation list, any failure produces a nonzero exit. With a
+//! list, exact known failures are accepted and every gating ratchet drift
+//! (including changed failure reasons) produces a nonzero exit.
 //!
 //! Memory note (inherited from `test262-language`): the XS oracle
 //! accumulates process memory across the tens of thousands of machine
@@ -113,6 +116,18 @@ fn main() {
                     .unwrap_or_else(|| fail("--ses-mode needs one of l|lc|c"));
                 cfg.ses_mode =
                     SesMode::parse(&v).unwrap_or_else(|| fail("--ses-mode must be l, lc, or c"));
+            }
+            // `--prelude <file>`: the SHIM route, as `test262-harness --prelude`
+            // does it for the xs and node hosts. Distinct from `-l`, which is
+            // the native route and still fails closed: a prelude does not make
+            // `-l` work, it makes `-l` unnecessary.
+            "--prelude" => {
+                let path = args
+                    .next()
+                    .unwrap_or_else(|| fail("--prelude needs a path"));
+                let source = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| fail(&format!("--prelude {path}: {e}")));
+                cfg.prelude = Some(source);
             }
             "--test262-dir" => {
                 test262_dir = Some(PathBuf::from(
@@ -197,6 +212,10 @@ fn main() {
     }
 
     let mut files = Vec::new();
+    let mut corpus_paths = Vec::new();
+    let canonical_root = root
+        .canonicalize()
+        .unwrap_or_else(|error| fail(&format!("cannot resolve corpus root: {error}")));
     for sub in &subtrees {
         // A positional that already names an existing filesystem path (a case
         // file or a directory of cases — e.g. the generated `test/ironhorse`
@@ -210,6 +229,23 @@ fn main() {
         } else {
             root.join("language").join(sub)
         };
+        // Header scope is relative to the corpus root, not the machine's
+        // checkout path. Whole-tree workers pass absolute batch directories;
+        // their committed lists must validate on another host too.
+        let scope = target
+            .canonicalize()
+            .ok()
+            .and_then(|path| {
+                path.strip_prefix(&canonical_root).ok().map(|relative| {
+                    if relative.as_os_str().is_empty() {
+                        ".".to_string()
+                    } else {
+                        relative.to_string_lossy().replace('\\', "/")
+                    }
+                })
+            })
+            .unwrap_or_else(|| sub.clone());
+        corpus_paths.push(scope);
         let found = if batch_index.is_some() {
             Vec::new()
         } else if target.is_file() {
@@ -255,6 +291,12 @@ fn main() {
         cfg.gate_meter_exact,
         cfg.ses_mode.short(),
     );
+    // Fail closed on a SES mode ironhorse cannot actually provide, BEFORE any
+    // case runs. See `refuse_unimplemented_ses_mode`.
+    if let Some(msg) = refuse_unimplemented_ses_mode(cfg.ses_mode) {
+        fail(&msg);
+    }
+
     let rep = run_files(&cfg, &harness, &root, &files);
 
     println!("{}", "=".repeat(72));
@@ -320,7 +362,10 @@ fn main() {
         }
     }
 
-    let mut gate_failed = !rep.met_bar();
+    // A committed list can quarantine exact known failures. Without a list,
+    // retain the ordinary zero-failure bar; with one, every outcome (including
+    // its failure reason) is judged by the ratchet below.
+    let mut gate_failed = rep.total == 0 || (expectations_path.is_none() && !rep.met_bar());
 
     // Expectation-list mode (design `designs/test262-fixture-consolidation.md`):
     // `--update-expectations` writes the observed run as the committed list;
@@ -330,7 +375,7 @@ fn main() {
     let expected_header = Header {
         engine: "ironhorse".to_string(),
         features: features_label(&cfg.features_include),
-        corpus: corpus_label(&subtrees),
+        corpus: corpus_label(&corpus_paths),
         tip: std::env::var("GARDEN_TEST262_TIP").unwrap_or_else(|_| "unknown".to_string()),
     };
     if let Some(path) = &update_expectations {
@@ -386,7 +431,14 @@ fn main() {
         }
     }
 
-    if !gate_failed {
+    if !gate_failed && expectations_path.is_some() {
+        println!(
+            "EXPECTATIONS MET: {} covered, {} expected failure(s) (of {} total)",
+            rep.covered,
+            rep.failures.len(),
+            rep.total
+        );
+    } else if !gate_failed {
         println!(
             "BAR MET: {} covered, 0 failed (of {} total; {} skipped by named reason)",
             rep.covered,
@@ -423,6 +475,46 @@ fn corpus_label(subtrees: &[String]) -> String {
     corpus.join(",")
 }
 
+/// Refuse a SES mode whose guest surface ironhorse does not expose, rather
+/// than running every case as a named pre-skip.
+///
+/// The pre-skip is honest per case -- each names `ses-mode:*-unimplemented`
+/// -- but the RUN is not: every case skips, nothing fails, and the process
+/// exits 0, so `test262:ironhorse` reports a clean run while testing nothing
+/// at all.
+///
+/// The `ses-xs-parity` axis is a RATCHET, not a CI gate
+/// (`packages/test262-runner/README.md`): it is read for a pass count that
+/// should go up and never down, and it gates no build. That is precisely why
+/// this refuses rather than exiting 0. A gate can survive a meaningless
+/// green, because something else fails when the code is wrong; a ratchet
+/// cannot survive a meaningless NUMBER, because the number is the whole
+/// signal. 15288 skips reported as success would ratchet against nothing.
+///
+/// So the mode fails closed: asking for a surface that does not exist is a
+/// configuration error, not a skip. A per-case skip stays the right answer for
+/// a case whose own feature is missing (`Compartment` unbound, say); it is the
+/// wrong answer for "the mode you selected has no implementation".
+///
+/// This is the other half of [`SesMode::unimplemented_skip`]'s seam, and the
+/// seam has now moved once, which is the thing to understand before reading
+/// this function. `-l` no longer refuses: `lockdown()` is a guest-callable
+/// native (`ironhorse-vm::Interp::do_lockdown`,
+/// `designs/ironhorse-native-lockdown.md`), so `unimplemented_skip` returns
+/// `None` for it and so does this. `-c` and `-lc` still refuse, on the
+/// `Compartment` constructor, which is not a guest intrinsic.
+fn refuse_unimplemented_ses_mode(mode: SesMode) -> Option<String> {
+    let reason = mode.unimplemented_skip()?;
+    Some(format!(
+        "SES mode `{}` ({reason}): ironhorse exposes no guest `Compartment` \
+         constructor, so every case would be a named pre-skip and the run would \
+         exit 0 having tested nothing. Refusing instead of reporting green. Use \
+         `-l` for a locked-down realm without compartments, drop the mode flag \
+         for the corpus unlocked down, or supply the surface with `--prelude`.",
+        mode.short(),
+    ))
+}
+
 fn fail(msg: &str) -> ! {
     eprintln!("endot-ih: {}", msg);
     std::process::exit(2);
@@ -445,14 +537,15 @@ OPTIONS:
                              non-terminator is an ironhorse-hang failure, while
                              an oracle-only one is an infrastructure skip
                              (default 10; 0 = off)
-    --gate-meter-exact       fail ironhorse-meter-exact cases on a computron drift
-    --repeat N               re-run ironhorse N times; require identical computrons
+    --gate-meter-exact       legacy flag; oracle computron drift is always advisory
+    --repeat N               re-run N times; require identical results, halts, and raw costs
     --features-include F[,F] opt features OUT of the skip set (e.g. ses-xs-parity)
     --feature-filter F[,F]   run ONLY cases carrying a feature (test262-harness
                              --features-include semantics; e.g. ses-xs-parity)
     -l | -lc | -c            SES lockdown / lockdown+compartment / compartment
-    --ses-mode l|lc|c        mode (xst262.c -l/-lc/-c analogues); guest surface
-                             not yet landed, so each is a named whole-case skip
+    --ses-mode l|lc|c        mode (xst262.c -l/-lc/-c analogues); `l` runs the
+                             corpus under a native lockdown(), the two
+                             Compartment modes are named whole-case skips
     --test262-dir DIR        use DIR as the test262 root (has harness/, test/)
     -o, --report FILE        write the xst-shaped YAML report to FILE
     --json FILE              write the per-case JSON batch file (for the
@@ -476,3 +569,35 @@ OPTIONS:
 THIRD-HOST (ses-xs-parity axis, alongside `xst -l` and node+SES prelude):
     endot-ih -l --feature-filter ses-xs-parity --features-include ses-xs-parity built-ins
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::{refuse_unimplemented_ses_mode, SesMode};
+
+    #[test]
+    fn an_unimplemented_ses_mode_is_refused_rather_than_skipped_green() {
+        // The unlocked corpus runs; there is nothing to refuse.
+        assert_eq!(refuse_unimplemented_ses_mode(SesMode::None), None);
+
+        // `-l` runs for real now: `lockdown()` is a landed native. This
+        // assertion is the whole point of the seam -- a mode whose surface
+        // exists must NOT fail closed, or the lane stays dark after the work
+        // that was supposed to light it up.
+        assert_eq!(refuse_unimplemented_ses_mode(SesMode::Lockdown), None);
+
+        // The two modes that need `new Compartment()` still refuse, and say
+        // why in terms of the outcome they are preventing -- a run that exits
+        // 0 having tested nothing. `-lc` refuses on its compartment half even
+        // though its lockdown half works.
+        for mode in [SesMode::Compartment, SesMode::LockdownCompartment] {
+            let msg = refuse_unimplemented_ses_mode(mode)
+                .unwrap_or_else(|| panic!("{mode:?} must fail closed while its surface is absent"));
+            assert!(msg.contains(mode.unimplemented_skip().unwrap()));
+            assert!(msg.contains("tested nothing"), "{msg}");
+            // It names the surface that is actually missing, and points at the
+            // mode that does work.
+            assert!(msg.contains("Compartment"), "{msg}");
+            assert!(msg.contains("`-l`"), "{msg}");
+        }
+    }
+}

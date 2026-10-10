@@ -59,7 +59,7 @@ const selected = names.length
 
 let drift = 0;
 for (const fix of selected) {
-  const gPath = goldenPath(fix.name);
+  const gPath = goldenPath(fix);
 
   if (fix.oracle === 'node') {
     const text = serialize(await buildNodeGolden(fix));

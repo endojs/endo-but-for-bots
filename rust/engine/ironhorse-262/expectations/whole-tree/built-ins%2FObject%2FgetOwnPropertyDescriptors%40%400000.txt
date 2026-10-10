@@ -1,0 +1,37 @@
+# engine=ironhorse features=default corpus=built-ins/Object/getOwnPropertyDescriptors tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Object/getOwnPropertyDescriptors/exception-not-object-coercible.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptors/exception-not-object-coercible.js strict pass
+built-ins/Object/getOwnPropertyDescriptors/function-length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Object/getOwnPropertyDescriptors/function-length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Object/getOwnPropertyDescriptors/function-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be getOwnPropertyDescriptors; name value should be getOwnPropertyDescriptors"
+built-ins/Object/getOwnPropertyDescriptors/function-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be getOwnPropertyDescriptors; name value should be getOwnPropertyDescriptors"
+built-ins/Object/getOwnPropertyDescriptors/function-property-descriptor.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptors/function-property-descriptor.js strict pass
+built-ins/Object/getOwnPropertyDescriptors/inherited-properties-omitted.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptors/inherited-properties-omitted.js strict pass
+built-ins/Object/getOwnPropertyDescriptors/normal-object.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptors/normal-object.js strict pass
+built-ins/Object/getOwnPropertyDescriptors/not-a-constructor.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptors/not-a-constructor.js strict pass
+built-ins/Object/getOwnPropertyDescriptors/observable-operations.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptors/observable-operations.js strict pass
+built-ins/Object/getOwnPropertyDescriptors/order-after-define-property.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptors/order-after-define-property.js strict pass
+built-ins/Object/getOwnPropertyDescriptors/primitive-booleans.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptors/primitive-booleans.js strict pass
+built-ins/Object/getOwnPropertyDescriptors/primitive-numbers.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptors/primitive-numbers.js strict pass
+built-ins/Object/getOwnPropertyDescriptors/primitive-strings.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptors/primitive-strings.js strict pass
+built-ins/Object/getOwnPropertyDescriptors/primitive-symbols.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptors/primitive-symbols.js strict pass
+built-ins/Object/getOwnPropertyDescriptors/proxy-no-ownkeys-returned-keys-order.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptors/proxy-no-ownkeys-returned-keys-order.js strict pass
+built-ins/Object/getOwnPropertyDescriptors/proxy-undefined-descriptor.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptors/proxy-undefined-descriptor.js strict pass
+built-ins/Object/getOwnPropertyDescriptors/symbols-included.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptors/symbols-included.js strict pass
+built-ins/Object/getOwnPropertyDescriptors/tamper-with-global-object.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptors/tamper-with-global-object.js strict pass
+built-ins/Object/getOwnPropertyDescriptors/tamper-with-object-keys.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptors/tamper-with-object-keys.js strict pass

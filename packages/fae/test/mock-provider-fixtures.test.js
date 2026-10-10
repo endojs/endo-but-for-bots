@@ -50,10 +50,10 @@ const makeTrackedMathTool = executions => {
   });
 };
 
-// Marked test.failing because the fixture's adoption + tool-turn flow
-// is fully wired only by endojs/endo-but-for-bots#298's attachment-driven
-// tool-turn hardening; on this PR the worker loop does not yet drive the
-// replayed trace to completion.
+// The recorded model calls `mathTool` even though the adopted capability's
+// authoritative schema names it `math`. Discovery now binds execution to that
+// schema name and deliberately refuses aliases, so this remains a model-trace
+// failure rather than a confused-deputy fallback.
 test.failing(
   'current fixture replays Fae attachment adoption through mock provider',
   async t => {

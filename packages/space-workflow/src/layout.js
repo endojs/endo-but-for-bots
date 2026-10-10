@@ -8,9 +8,27 @@
  * stable in-layer ordering suffices — no external layout dependency,
  * and the same input always yields the same picture. Nested and region
  * states participate flat, named by their path ids.
+ *
+ * An edge that spans more than one column is ROUTED rather than drawn as
+ * a chord: it gets a dummy node in each column it passes through, those
+ * dummies take part in the in-layer ordering like any other node, and
+ * the edge is returned as a polyline through them. This is what keeps a
+ * long edge out of the middle of an unrelated state — the compensation
+ * edges in the deploy charts all converge on one late state, and as
+ * chords they crossed most of the diagram.
  */
 
 import harden from '@endo/harden';
+
+// The box a state is drawn as. The layout needs these to put a lane's entry
+// and exit on the left and right edges of the column it crosses, and the view
+// needs them to draw the box itself; they live here, and the view imports
+// them, so the two cannot drift apart into a routed edge that misses its own
+// node border by whatever the difference happens to be.
+export const NODE_WIDTH = 150;
+harden(NODE_WIDTH);
+export const NODE_HEIGHT = 40;
+harden(NODE_HEIGHT);
 
 /**
  * @param {Array<{ from: string, to: string }>} edges
@@ -42,7 +60,7 @@ const edgeReaches = (edges, from, to, budget) => {
 /**
  * @param {{ nodes: Array<{ id: string }>, edges: Array<{ from: string, to: string }> }} graph
  * @param {string} initial - the chart's top-level initial state id
- * @returns {{ positions: Record<string, { x: number, y: number, layer: number }>, width: number, height: number }}
+ * @returns {{ positions: Record<string, { x: number, y: number, layer: number }>, routes: Record<number, Array<{ x: number, y: number }>>, width: number, height: number }}
  */
 export const layoutGraph = (graph, initial) => {
   const { nodes, edges } = graph;
@@ -107,22 +125,182 @@ export const layoutGraph = (graph, initial) => {
     byLayer.set(layer, row);
   }
 
-  const layerWidth = 180;
-  const rowHeight = 64;
-  /** @type {Record<string, { x: number, y: number, layer: number }>} */
-  const positions = {};
+  // Dummy nodes for multi-column edges. Each gets a slot in every column it
+  // crosses, so the ordering below moves it out of the way of real states just
+  // as it would any other node, and the edge is drawn through those slots
+  // instead of straight over whatever lies between. Backward edges are left
+  // alone: there are few of them and they arc under the band in the view.
+  /** @type {Map<number, string[]>} */
+  const routeIds = new Map();
+  // Parallel transitions between the same pair share one lane: three ways of
+  // getting from `build` to `unpinning` are three labels along one path, not
+  // three paths. Without this the deploy charts grow a lane per transition and
+  // the diagram becomes mostly empty vertical space.
+  /** @type {Map<string, string[]>} */
+  const laneByPair = new Map();
+  edges.forEach((edge, index) => {
+    const fromLayer = layers.get(edge.from);
+    const toLayer = layers.get(edge.to);
+    if (fromLayer === undefined || toLayer === undefined) return;
+    if (toLayer <= fromLayer + 1) return;
+    const pair = `${edge.from}\u0000${edge.to}`;
+    let ids = laneByPair.get(pair);
+    if (ids === undefined) {
+      ids = [];
+      for (let layer = fromLayer + 1; layer < toLayer; layer += 1) {
+        const id = `~route/${laneByPair.size}/${layer}`;
+        layers.set(id, layer);
+        const row = byLayer.get(layer) ?? [];
+        row.push(id);
+        byLayer.set(layer, row);
+        ids.push(id);
+      }
+      laneByPair.set(pair, ids);
+    }
+    routeIds.set(index, ids);
+  });
+  // The ordering sweeps below need each dummy chained to its own route so it
+  // follows the edge rather than drifting. Built as a COPY: `graph.edges` comes
+  // from the caller (hardened, in production) and is not ours to extend.
+  const orderingEdges = [...edges];
+  for (const [pair, ids] of laneByPair) {
+    const [from, to] = pair.split('\u0000');
+    const chain = [from, ...ids, to];
+    for (let i = 0; i < chain.length - 1; i += 1) {
+      orderingEdges.push({ from: chain[i], to: chain[i + 1] });
+    }
+  }
+
+  // In-layer ordering. Insertion order is whatever `renderGraph` happened to
+  // emit, which puts a state's successors wherever they fall and makes edges
+  // cross for no reason. Sort each layer by the average position of its
+  // neighbours in the adjacent layer (the barycentre heuristic), sweeping
+  // forwards then backwards a few times. Ties keep the previous order, so the
+  // result is still deterministic for a given chart.
+  const orderedLayers = [...byLayer.keys()].sort((a, b) => a - b);
+  /** @type {Map<string, number>} */
+  const slot = new Map();
+  const reslot = () => {
+    for (const layer of orderedLayers) {
+      const row = /** @type {string[]} */ (byLayer.get(layer));
+      row.forEach((id, i) => slot.set(id, i));
+    }
+  };
+  reslot();
+  /**
+   * @param {string} id
+   * @param {boolean} forward - look at the layer before (true) or after
+   * @returns {number | undefined}
+   */
+  const barycentre = (id, forward) => {
+    const ownLayer = layers.get(id);
+    if (ownLayer === undefined) return undefined;
+    const neighbours = [];
+    for (const edge of orderingEdges) {
+      const other = forward
+        ? edge.to === id && edge.from !== id && edge.from
+        : edge.from === id && edge.to !== id && edge.to;
+      if (other) {
+        const otherLayer = layers.get(other);
+        // Only a neighbour on the side this sweep reads from contributes:
+        // a forward sweep averages the layer before, a backward one the layer
+        // after. Anything on the same or the wrong side is not a constraint.
+        const contributes =
+          otherLayer !== undefined &&
+          (forward ? otherLayer < ownLayer : otherLayer > ownLayer);
+        const at = contributes ? slot.get(other) : undefined;
+        if (at !== undefined) neighbours.push(at);
+      }
+    }
+    if (neighbours.length === 0) return undefined;
+    return neighbours.reduce((sum, n) => sum + n, 0) / neighbours.length;
+  };
+  for (let sweep = 0; sweep < 4; sweep += 1) {
+    const forward = sweep % 2 === 0;
+    const order = forward ? orderedLayers : [...orderedLayers].reverse();
+    for (const layer of order) {
+      const row = /** @type {string[]} */ (byLayer.get(layer));
+      const keyed = row.map((id, i) => ({
+        id,
+        i,
+        b: barycentre(id, forward),
+      }));
+      keyed.sort((a, b) => {
+        // Nodes with no neighbour on that side keep their place.
+        if (a.b === undefined && b.b === undefined) return a.i - b.i;
+        if (a.b === undefined) return -1;
+        if (b.b === undefined) return 1;
+        return a.b === b.b ? a.i - b.i : a.b - b.b;
+      });
+      byLayer.set(
+        layer,
+        keyed.map(entry => entry.id),
+      );
+      reslot();
+    }
+  }
+
+  // Room to route around: these leave a 70px channel between columns and 36px
+  // between rows for edges and their labels.
+  const layerWidth = NODE_WIDTH + 70;
+  const rowHeight = NODE_HEIGHT + 36;
+  // Every slot in every column, lanes included — a lane occupies a row of its
+  // own, so it takes part in the geometry even though it is not a state.
+  /** @type {Map<string, { x: number, y: number, layer: number }>} */
+  const placed = new Map();
   let height = 0;
   for (const [layer, row] of byLayer) {
     row.forEach((id, i) => {
-      positions[id] = harden({
-        x: 20 + layer * layerWidth,
-        y: 20 + i * rowHeight,
-        layer,
-      });
+      placed.set(
+        id,
+        harden({
+          x: 20 + layer * layerWidth,
+          y: 20 + i * rowHeight,
+          layer,
+        }),
+      );
     });
     height = Math.max(height, 20 + row.length * rowHeight);
   }
+  // Polyline for each routed edge. Two points per column crossed — the lane's
+  // entry and exit — so the line runs HORIZONTALLY across a column at its
+  // lane's height and does all its climbing in the gutters between columns.
+  // A single mid-column point instead lets the approach cut diagonally through
+  // the box of whatever sits in that column, which is the crossing this is
+  // meant to remove. The view adds the endpoints on the node borders.
+  /** @type {Record<number, Array<{ x: number, y: number }>>} */
+  const routes = {};
+  for (const [index, ids] of routeIds) {
+    const points = [];
+    for (const id of ids) {
+      const at = placed.get(id);
+      if (at !== undefined) {
+        points.push(harden({ x: at.x, y: at.y + NODE_HEIGHT / 2 }));
+        points.push(
+          harden({ x: at.x + NODE_WIDTH, y: at.y + NODE_HEIGHT / 2 }),
+        );
+      }
+    }
+    routes[index] = harden(points);
+  }
+  // Lanes are an implementation detail of routing, so they stay out of what is
+  // returned: the caller asked where its STATES are, and one walking
+  // `positions` to draw a box each must not find a phantom to draw.
+  /** @type {Record<string, { x: number, y: number, layer: number }>} */
+  const positions = {};
+  for (const node of nodes) {
+    const at = placed.get(node.id);
+    if (at !== undefined) {
+      positions[node.id] = at;
+    }
+  }
+
   const width = 40 + (Math.max(0, ...byLayer.keys()) + 1) * layerWidth;
-  return harden({ positions: harden(positions), width, height });
+  return harden({
+    positions: harden(positions),
+    routes: harden(routes),
+    width,
+    height,
+  });
 };
 harden(layoutGraph);
