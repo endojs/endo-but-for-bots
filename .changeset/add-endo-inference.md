@@ -1,5 +1,5 @@
 ---
-'@endo/inference': minor
+'@endo/inference': major
 ---
 
 Introduce `@endo/inference`, the provider-neutral interface for running one confined inference turn on behalf of an Endo guest.
