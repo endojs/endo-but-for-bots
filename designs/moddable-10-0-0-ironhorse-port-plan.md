@@ -1,4 +1,4 @@
-# Moddable SDK 10.0.0 to IronHorse port plan
+# Moddable SDK 10.0.0 to IronHorse Port Plan
 
 | | |
 |---|---|
@@ -33,11 +33,11 @@ The order of the work follows from that. Because the oracle is old, it cannot
 check the ports, so each port is checked by targeted Rust tests whose expected
 values come from the specification. The oracle pin moves last, in a separate
 validation job, only after every port has finished. Promotion of a new ratchet
-floor is already gated separately (§ Oracle, matrix, and ratchet change
-control, item 3), so the reason for this order is not that gate. It is that the
+floor is already gated separately (§ Oracle, Matrix, and Ratchet Change
+Control, item 3), so the reason for this order is not that gate. It is that the
 pin regenerates the whole expectation tree, a shared artifact that every port
 would otherwise conflict on, and that child 6 must measure all five ports'
-code together; see § Considered and rejected for the early-drift-report
+code together; see § Considered and Rejected for the early-drift-report
 alternative.
 
 The oracle pin target is the annotated `10.0.0` tag,
@@ -52,8 +52,8 @@ The pin move spans more than the audited window. The current pin is
 change between the two. This plan classified only the requested corrections
 made from 2026-09-04 to 2026-10-08; other XS changes in the pin-to-pin range
 were not audited. Child 6 therefore treats any result change that no row below
-explains as **unclassified oracle drift** and triages it (§ Oracle, matrix, and
-ratchet change control).
+explains as **unclassified oracle drift** and triages it (§ Oracle, Matrix, and
+Ratchet Change Control).
 
 The four classifications are exclusive:
 
@@ -62,7 +62,7 @@ The four classifications are exclusive:
 - `needs-port`: IronHorse has the old behavior or lacks a required proposal
   surface it intends to support. R22 is the one row in the second sense, and
   its support decision is child 5's first deliverable (§ Immutable ArrayBuffer
-  design note).
+  Design Note).
 - `not-applicable`: the prerequisite feature is not implemented in IronHorse,
   so the correction has no reachable IronHorse analog.
 - `host-excluded`: the feature is refused on purpose by the single-agent,
@@ -71,18 +71,18 @@ The four classifications are exclusive:
 ECMA-419, device, Piu, board, TypeScript, xsdb, and the tagged Pebble change are
 out of scope: the source inventory found no `rust/engine` impact from them.
 
-## Release classification
+## Release Classification
 
 ### Summary
 
 | Classification | Count | Items, with the owning child number in parentheses |
 |---|---:|---|
 | `needs-port` | 10 | R01 revoked Proxy callability (1); R02 scope-slot limit, R03 labeled exit from `switch` (2); R04 `Math.round`, R05 `repeat`, R06 `Array.from` ToLength order (3); R17 TypedArray length-constructor order, R18 `set` order, R19 constructor content type (4); R22 immutable ArrayBuffer (5) |
-| `already-conformant` (provisional) | 12 | R07 to R16 (3), R20 and R21 (4). Reading-based until each row's probe lands; see § Evidence basis |
+| `already-conformant` (provisional) | 12 | R07 to R16 (3), R20 and R21 (4). Reading-based until each row's probe lands; see § Evidence Basis |
 | `not-applicable` | 2 | R23 `setFromHex`, R24 ArrayBuffer `resize` |
 | `host-excluded` | 2 | R25 `Atomics.wait`, R26 `Math.irandom` |
 
-### Evidence basis
+### Evidence Basis
 
 IronHorse evidence was gathered by reading the named functions at `7d2eb307a`.
 The test262 column quotes the checked-in expectation files at the same commit,
@@ -116,7 +116,7 @@ corpus does not contain. Every `already-conformant` verdict is therefore
 provisional, and each such row names a child that adds a targeted Rust probe
 for the corrected behavior. Until the probe lands, the row is a reading-based
 verdict; if the probe fails, the row becomes a `needs-port` item in the same
-child, subject to the probe-failure limit under § Implementation children. The
+child, subject to the probe-failure limit under § Implementation Children. The
 child's PR changes each probed row from `already-conformant` (provisional) to
 `already-conformant` (or to `needs-port`) in this table, so a grep for
 `(provisional)` lists exactly the rows whose probe has not landed.
@@ -128,7 +128,7 @@ column links `https://github.com/Moddable-OpenSource/moddable/commit/<sha>`.
 
 Each row has a stable ID (R01 to R26), and the table is sorted by owning child,
 with the rows that no child owns listed last. To find a child's work, read the Child column;
-§ Implementation children lists the same IDs per child.
+§ Implementation Children lists the same IDs per child.
 
 | ID | Release item | XS commit | Classification | Child | IronHorse evidence | test262 expectation |
 |---|---|---|---|---|---|---|
@@ -166,7 +166,7 @@ resizable support lands, R17 to R21 and R24 must be re-probed, since the cases
 those skips hide become reachable. R25 stays `host-excluded` only while the
 host is single-agent.
 
-### Worked example: revoked Proxy
+### Worked Example: Revoked Proxy
 
 ```js
 const { proxy, revoke } = Proxy.revocable(function () {}, {});
@@ -184,7 +184,7 @@ throws a TypeError. XS 10.0.0 (`1e71939f630a`) and the 8.3.1 oracle both return
 constructable shape on the proxy row itself, so it survives revocation and a
 snapshot round trip, and that expectation turns to `pass`.
 
-## Implementation children
+## Implementation Children
 
 Every child is independently claimable. Each one adds the targeted Rust tests
 for its rows, including the probes for its `already-conformant` rows. Sizes use
@@ -198,7 +198,7 @@ the calibrated categories in the roadmap's
 | 3 built-ins order | `moddable-10-0-0-ironhorse-builtins-order-port` | M, 2 to 3 days | Ports R04, R05, R06; probes R07 to R16. The R08 and R13 probes here use live callable proxies only; the revoked-Proxy probes belong to child 1, so no child 3 probe can fail for R01's reason. R16 has a smoke check in child 6 (the capture-group oracle run). |
 | 4 TypedArray | `moddable-10-0-0-ironhorse-typedarray-port` | M, 2 to 3 days | Ports R17, R18, R19; probes R20 and R21 without changing their logic. |
 | 5 immutable ArrayBuffer | `moddable-10-0-0-ironhorse-immutable-arraybuffer-port` | L, 1.5 to 2 weeks | R22. Opens with a short design note (below) before any write-path code. Implement immutable buffers and write guards with direct native-surface, write-rejection, transfer, slice, detached-precedence, snapshot, and SES-boot tests; update `FROZEN_REALM_FORECLOSURE` from measured behavior. Follows the snapshot-golden rule under § Orchestration. Does not move the oracle pin, the hardened262 matrix, or the ratchet. |
-| 6 oracle validation | `moddable-10-0-0-ironhorse-oracle-validation` | M, 3 to 5 days | Refuses to start unless all five port PRs are merged (§ Orchestration). Move the oracle pin, re-audit overlays, triage unclassified oracle drift, run the hardened262 matrix and the R16 capture-group oracle check, and produce the candidate ratchet comparison, all described under change control below. Has its own stop rule (§ Oracle, matrix, and ratchet change control). |
+| 6 oracle validation | `moddable-10-0-0-ironhorse-oracle-validation` | M, 3 to 5 days | Refuses to start unless all five port PRs are merged (§ Orchestration). Move the oracle pin, re-audit overlays, triage unclassified oracle drift, run the hardened262 matrix and the R16 capture-group oracle check, and produce the candidate ratchet comparison, all described under change control below. Has its own stop rule (§ Oracle, Matrix, and Ratchet Change Control). |
 
 Children 1 to 5 run in parallel; the numbers identify children and do not
 give an execution order. Only child 6 runs after the others. Each parked job
@@ -214,7 +214,7 @@ reviewer can check the spec reading separately from the code.
 **Probe-failure limit.** A probe that fails in children 3 or 4 is ported in the
 same child only while that child has at most two failed probes. (A probe is
 the targeted Rust test that confirms a provisional `already-conformant` row;
-see § Evidence basis.) At the third,
+see § Evidence Basis.) At the third,
 the child stops, reports the failed probes, and each becomes its own parked
 `gate: go-ahead` follow-up job for the maintainer to size and authorize; the
 child's sizes above assume no more than two such conversions. This matches the
@@ -225,7 +225,7 @@ The basenames name the area each child changes. They share the
 `moddable-10-0-0-ironhorse-ports`, so a prefix search on the board returns the
 whole campaign; that is intended.
 
-### Immutable ArrayBuffer design note (child 5)
+### Immutable ArrayBuffer Design Note (Child 5)
 
 Child 5 touches the buffer, TypedArray, and DataView write paths, transfer and
 slice semantics, snapshot persistence, and the SES-boot foreclosure test. Its
@@ -249,7 +249,7 @@ that decides four things:
   the note names the format-version bump and the golden fixtures it
   regenerates, under the snapshot-golden rule in § Orchestration.
 
-### Scope-slot counting rule (child 2)
+### Scope-Slot Counting Rule (Child 2)
 
 XS commit `cfe72a8cfcd2` adds, in `xs/sources/xsScope.c`, the check
 `if (binder->scopeMaximum > 65535) fxReportParserError(..., "too many variables")`
@@ -307,7 +307,7 @@ has a rule:
 
 The artifacts that force an order belong to child 6: the `c/moddable` pin, the
 full regenerated expectation tree, the five hardened262 host baselines, and the
-candidate covered set. Child 6 must measure all six children's code together.
+candidate covered set. Child 6 must measure all five ports' code together.
 
 So the campaign runs in two stages:
 
@@ -369,7 +369,7 @@ scripts/jobs/promote-plan.sh moddable-10-0-0-ironhorse-oracle-validation
 
 No port starts as part of the design PR.
 
-## Oracle, matrix, and ratchet change control
+## Oracle, Matrix, and Ratchet Change Control
 
 Only child 6 may change these surfaces:
 
@@ -422,7 +422,7 @@ needed for acceptance do not exist at `be13516fb6441b950ba8a3df97eb34062c186972`
 If it must move, that is a separately reported corpus-input change in the same
 candidate comparison, not an incidental lockfile-like update.
 
-## Test plan
+## Test Plan
 
 - Each child runs its nearest `ironhorse-vm`, `ironhorse-compile`, snapshot, and
   `ironhorse-262` tests and adds direct cases for every test262 coverage hole
@@ -437,7 +437,7 @@ candidate comparison, not an incidental lockfile-like update.
   the hardened262 five-host matrix, and snapshot tests for immutable buffers and
   revoked proxies, all on the 10.0.0 oracle.
 
-## Considered and rejected
+## Considered and Rejected
 
 - Porting every 10.0.0 commit was rejected: most requested items are already
   conformant, absent with their prerequisite feature, or intentionally
@@ -465,7 +465,7 @@ candidate comparison, not an incidental lockfile-like update.
   was rejected: an oracle-pin regression and a feature defect would land in one
   PR, and the pin would wait on the slowest feature work.
 
-## Appendix: capture-group memory safety
+## Appendix: Capture-Group Memory Safety
 
 The Moddable fix `db0490c5bcd5` removes a two-pass allocation bug: XS formerly
 sized from one `Get`/ToString result and copied a second, potentially longer
@@ -491,7 +491,7 @@ There are two separate checks, owned by two children:
   than IronHorse. If the maintainer wants that stronger check, it is a
   separate, separately sized job.
 
-## Appendix: ownership map
+## Appendix: Ownership Map
 
 This table follows the repository's ownership-map convention for designs: for
 each boundary the change crosses, it names the code that does the work
