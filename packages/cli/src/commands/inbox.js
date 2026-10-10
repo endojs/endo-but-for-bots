@@ -24,6 +24,28 @@ export const inbox = async ({ follow, agentNames }) =>
       messageNumberById.set(message.messageId, message.number);
       const { number, type, from, to, date } = message;
 
+      // Command records are the agent's own log of the host commands it
+      // issued (adopt, dismiss, send, ...) and of their outcomes.
+      if (type === 'command') {
+        const { commandName, args } = message;
+        const argsText = Object.values(args || {})
+          .map(value => `${value}`)
+          .join(' ');
+        console.log(
+          `${number}. you ran ${q(`${commandName} ${argsText}`.trim())} at ${q(date)}`,
+        );
+        continue;
+      } else if (type === 'command-result') {
+        const { success, summary, replyTo } = message;
+        const replyNumber = messageNumberById.get(replyTo);
+        const replyContext =
+          replyNumber === undefined ? 'unknown' : `#${replyNumber}`;
+        console.log(
+          `${number}. ${success ? 'succeeded' : 'failed'} ${q(summary)} in reply to ${replyContext} at ${q(date)}`,
+        );
+        continue;
+      }
+
       let verb = '';
       if (type === 'request') {
         verb = 'requested';
