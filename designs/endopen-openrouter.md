@@ -36,7 +36,7 @@ genie, or an operator's own agent) inherits whatever provider reach the
 Agentry boundary has, so the gap is closed once, for every agent.
 
 The reach is already most of the way there.
-pi-ai `0.79.0` (the version `packages/agentry/package.json` pins) ships
+The pi-ai version pinned by `packages/agentry/package.json` ships
 `openrouter` as a built-in registry provider: its generated model table
 carries several hundred `openrouter` entries at
 `https://openrouter.ai/api/v1`, its OpenAI-completions client honors
