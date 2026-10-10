@@ -477,6 +477,24 @@ export const makeMailboxMaker = ({
         });
       }
 
+      if (type === 'command') {
+        return harden({
+          type: 'message',
+          ...envelopeRecord,
+          commandName: envelope.commandName,
+          args: envelope.args,
+        });
+      }
+
+      if (type === 'command-result') {
+        return harden({
+          type: 'message',
+          ...envelopeRecord,
+          success: envelope.success,
+          summary: envelope.summary,
+        });
+      }
+
       throw new Error('Unknown message type');
     };
 
@@ -735,6 +753,55 @@ export const makeMailboxMaker = ({
         });
       }
 
+      if (formula.messageType === 'command') {
+        if (formula.commandName === undefined || formula.args === undefined) {
+          throw new Error('Command message formula is incomplete');
+        }
+        return harden({
+          type: formula.messageType,
+          from: formula.from,
+          to: formula.to,
+          commandName: formula.commandName,
+          args: formula.args,
+          strings: [formula.commandName],
+          names: [],
+          ids: [],
+          messageId: formula.messageId,
+          number: messageNumber,
+          date: formula.date,
+          done,
+          dismissed: dismissal.promise,
+          dismisser,
+        });
+      }
+
+      if (formula.messageType === 'command-result') {
+        if (
+          formula.replyTo === undefined ||
+          formula.success === undefined ||
+          formula.summary === undefined
+        ) {
+          throw new Error('Command result message formula is incomplete');
+        }
+        return harden({
+          type: formula.messageType,
+          from: formula.from,
+          to: formula.to,
+          success: formula.success,
+          summary: formula.summary,
+          strings: [formula.summary],
+          names: [],
+          ids: [],
+          messageId: formula.messageId,
+          replyTo: formula.replyTo,
+          number: messageNumber,
+          date: formula.date,
+          done,
+          dismissed: dismissal.promise,
+          dismisser,
+        });
+      }
+
       throw new Error('Unknown message formula type');
     };
 
@@ -919,6 +986,18 @@ export const makeMailboxMaker = ({
     };
 
     /**
+     * Recording is best-effort: a failure to record must not block the
+     * command itself, but should not pass silently either.
+     *
+     * @param {unknown} error
+     * @returns {undefined}
+     */
+    const reportRecordingFailure = error => {
+      console.error('Failed to record command in transcript', error);
+      return undefined;
+    };
+
+    /**
      * Record a command in the agent's own inbox.
      * Returns the messageId so the corresponding command-result can
      * cite it as its `replyTo`. The bigint sequence number stays
@@ -1040,7 +1119,7 @@ export const makeMailboxMaker = ({
           messageNumber: String(normalizedMessageNumber),
           resolution: String(resolutionNameOrPath),
         }),
-      ).catch(() => undefined);
+      ).catch(reportRecordingFailure);
 
       try {
         const id = await E(directory).identify(...resolutionPath);
@@ -1058,7 +1137,7 @@ export const makeMailboxMaker = ({
         await E(resolver).resolveWithId(externalizedId);
         if (cmdMessageId !== undefined) {
           await recordCommandResult(cmdMessageId, true, 'resolved').catch(
-            () => {},
+            reportRecordingFailure,
           );
         }
       } catch (error) {
@@ -1067,7 +1146,7 @@ export const makeMailboxMaker = ({
             cmdMessageId,
             false,
             /** @type {Error} */ (error).message,
-          ).catch(() => {});
+          ).catch(reportRecordingFailure);
         }
         throw error;
       }
@@ -1093,7 +1172,7 @@ export const makeMailboxMaker = ({
           messageNumber: String(normalizedMessageNumber),
           reason,
         }),
-      ).catch(() => {});
+      ).catch(reportRecordingFailure);
 
       const rejection = harden(Promise.reject(harden(new Error(reason))));
       // request messages use a persisted resolver formula.
@@ -1117,7 +1196,7 @@ export const makeMailboxMaker = ({
           to: String(toNameOrPath),
           text: strings.join(' '),
         }),
-      ).catch(() => {});
+      ).catch(reportRecordingFailure);
 
       const toPath = namePathFrom(toNameOrPath);
       assertNames(edgeNames);
@@ -1259,14 +1338,14 @@ export const makeMailboxMaker = ({
       const cmdMessageId = await recordCommand(
         'dismiss',
         harden({ messageNumber: String(normalizedMessageNumber) }),
-      ).catch(() => undefined);
+      ).catch(reportRecordingFailure);
 
       const { dismisser } = E.get(message);
       try {
         await E(dismisser).dismiss();
         if (cmdMessageId !== undefined) {
           await recordCommandResult(cmdMessageId, true, 'dismissed').catch(
-            () => {},
+            reportRecordingFailure,
           );
         }
       } catch (error) {
@@ -1275,7 +1354,7 @@ export const makeMailboxMaker = ({
             cmdMessageId,
             false,
             /** @type {Error} */ (error).message,
-          ).catch(() => {});
+          ).catch(reportRecordingFailure);
         }
         throw error;
       }
@@ -1309,7 +1388,7 @@ export const makeMailboxMaker = ({
           edgeName,
           petName: petNamePath.join('/'),
         }),
-      ).catch(() => undefined);
+      ).catch(reportRecordingFailure);
 
       try {
         if (message.type === 'value') {
@@ -1326,7 +1405,7 @@ export const makeMailboxMaker = ({
               cmdMessageId,
               true,
               `adopted as ${petNamePath.join('/')}`,
-            ).catch(() => {});
+            ).catch(reportRecordingFailure);
           }
           return;
         }
@@ -1356,7 +1435,7 @@ export const makeMailboxMaker = ({
             cmdMessageId,
             true,
             `adopted as ${petNamePath.join('/')}`,
-          ).catch(() => {});
+          ).catch(reportRecordingFailure);
         }
       } catch (error) {
         if (cmdMessageId !== undefined) {
@@ -1364,7 +1443,7 @@ export const makeMailboxMaker = ({
             cmdMessageId,
             false,
             /** @type {Error} */ (error).message,
-          ).catch(() => {});
+          ).catch(reportRecordingFailure);
         }
         throw error;
       }
@@ -1378,7 +1457,7 @@ export const makeMailboxMaker = ({
           to: String(toNameOrPath),
           description,
         }),
-      ).catch(() => {});
+      ).catch(reportRecordingFailure);
 
       const toPath = namePathFrom(toNameOrPath);
       // The response is stored under responseName, so it is a store

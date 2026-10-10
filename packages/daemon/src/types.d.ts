@@ -604,6 +604,10 @@ export type MessageFormula = {
   slots?: Record<string, { label: string; pattern?: unknown }>;
   fields?: FormField[] | StoredFormFields;
   valueId?: FormulaIdentifier;
+  commandName?: string;
+  args?: Record<string, unknown>;
+  success?: boolean;
+  summary?: string;
 };
 
 // Pending is represented by the absence of a status entry in the promise store.
