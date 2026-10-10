@@ -277,6 +277,71 @@ test('makeScript treats empty or undefined syncModuleTransforms as absent', asyn
   t.is(withUndefined, baseline);
 });
 
+test('makeScript applies syncModuleTransforms to mjs modules', async t => {
+  const marker = 'syncModuleTransforms-mjs-marker-8e41';
+  let count = 0;
+  /** @type {SyncModuleTransforms} */
+  const syncModuleTransforms = {
+    mjs: sourceBytes => {
+      count += 1;
+      const source = new TextDecoder().decode(sourceBytes);
+      const bytes = new TextEncoder().encode(`${source}\n'${marker}';\n`);
+      return { bytes, parser: 'mjs' };
+    },
+  };
+  const bundle = await makeScript(read, fixture, { syncModuleTransforms });
+  t.true(count > 0);
+  t.true(bundle.includes(marker));
+  const log = [];
+  const print = entry => {
+    log.push(entry);
+  };
+  const compartment = new Compartment({
+    globals: { print },
+    __options__: true,
+  });
+  compartment.evaluate(bundle);
+  t.deepEqual(log, expectedLog);
+});
+
+test('makeScript bundles a module under the parser a syncModuleTransform returns', async t => {
+  const marker = 'syncModuleTransforms-json-to-cjs-marker-4b6d';
+  /** @type {SyncModuleTransforms} */
+  const syncModuleTransforms = {
+    json: sourceBytes => {
+      const source = new TextDecoder().decode(sourceBytes);
+      const bytes = new TextEncoder().encode(
+        `'${marker}';\nmodule.exports = ${source};\n`,
+      );
+      return { bytes, parser: 'cjs' };
+    },
+  };
+  const bundle = await makeScript(read, fixture, { syncModuleTransforms });
+  t.true(bundle.includes(marker));
+  const log = [];
+  const print = entry => {
+    log.push(entry);
+  };
+  const compartment = new Compartment({
+    globals: { print },
+    __options__: true,
+  });
+  compartment.evaluate(bundle);
+  t.deepEqual(log, expectedLog);
+});
+
+test('makeScript rejects when a syncModuleTransform throws', async t => {
+  /** @type {SyncModuleTransforms} */
+  const syncModuleTransforms = {
+    cjs: () => {
+      throw Error('syncModuleTransforms-failure-2c7a');
+    },
+  };
+  await t.throwsAsync(makeScript(read, fixture, { syncModuleTransforms }), {
+    message: /syncModuleTransforms-failure-2c7a/,
+  });
+});
+
 test('makeFunctor with useEvaluate preserves error for compiled sourceUrlPrefix when sourceUrlPrefix runtime option absent', async t => {
   const bundle = await makeFunctor(read, fixture, {
     useEvaluate: true,
