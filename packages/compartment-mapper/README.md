@@ -432,6 +432,10 @@ behavior of parsers.
 These language identifiers are keys for the `moduleTransforms` and
 `syncModuleTransforms` options, which may map each language to a transform
 function.
+A transform may return a different language as its `parser`, in which case the
+module is parsed and bundled as that language.
+If both options provide a transform for the same language, the transform in
+`moduleTransforms` takes precedence.
 The language identifiers are also the values for a `languageForExtension`,
 `moduleLanguageForExtension`, and `commonjsLanguageForExtension` options to
 configure additional extension-to-language mappings for a module and its

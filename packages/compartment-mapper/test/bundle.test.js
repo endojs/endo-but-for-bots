@@ -1,3 +1,5 @@
+/** @import {SyncModuleTransforms} from '../src/types.js' */
+
 import 'ses';
 import fs from 'fs';
 import url from 'url';
@@ -164,6 +166,180 @@ test('makeFunctor works', async t => {
   });
   compartment.evaluate(bundle)();
   t.deepEqual(log, expectedLog);
+});
+
+/**
+ * Counts how many `cjs` modules pass through a sync module transform, so a
+ * test can assert that `syncModuleTransforms` reaches the bundler's linker.
+ */
+const makeCountingSyncModuleTransforms = () => {
+  const counter = { count: 0 };
+  /** @type {SyncModuleTransforms} */
+  const syncModuleTransforms = {
+    cjs: sourceBytes => {
+      counter.count += 1;
+      return { bytes: sourceBytes, parser: 'cjs' };
+    },
+  };
+  return { counter, syncModuleTransforms };
+};
+
+test('makeScript applies syncModuleTransforms', async t => {
+  const { counter, syncModuleTransforms } = makeCountingSyncModuleTransforms();
+  const bundle = await makeScript(read, fixture, { syncModuleTransforms });
+  t.true(counter.count > 0);
+  const log = [];
+  const print = entry => {
+    log.push(entry);
+  };
+  const compartment = new Compartment({
+    globals: { print },
+    __options__: true,
+  });
+  compartment.evaluate(bundle);
+  t.deepEqual(log, expectedLog);
+});
+
+test('makeFunctor applies syncModuleTransforms', async t => {
+  const { counter, syncModuleTransforms } = makeCountingSyncModuleTransforms();
+  const bundle = await makeFunctor(read, fixture, { syncModuleTransforms });
+  t.true(counter.count > 0);
+  const log = [];
+  const print = entry => {
+    log.push(entry);
+  };
+  const compartment = new Compartment({
+    globals: { print },
+    __options__: true,
+  });
+  compartment.evaluate(bundle)();
+  t.deepEqual(log, expectedLog);
+});
+
+test('makeScript bundles the output of syncModuleTransforms', async t => {
+  const marker = 'syncModuleTransforms-marker-5a1f';
+  /** @type {SyncModuleTransforms} */
+  const syncModuleTransforms = {
+    cjs: sourceBytes => {
+      const source = new TextDecoder().decode(sourceBytes);
+      const bytes = new TextEncoder().encode(`${source}\n'${marker}';\n`);
+      return { bytes, parser: 'cjs' };
+    },
+  };
+  const bundle = await makeScript(read, fixture, { syncModuleTransforms });
+  t.true(bundle.includes(marker));
+  const log = [];
+  const print = entry => {
+    log.push(entry);
+  };
+  const compartment = new Compartment({
+    globals: { print },
+    __options__: true,
+  });
+  compartment.evaluate(bundle);
+  t.deepEqual(log, expectedLog);
+});
+
+/**
+ * Makes a `cjs` transform that appends a marker statement to each module.
+ *
+ * @param {string} marker
+ */
+const appendMarker = marker => sourceBytes => {
+  const source = new TextDecoder().decode(sourceBytes);
+  const bytes = new TextEncoder().encode(`${source}\n'${marker}';\n`);
+  return { bytes, parser: /** @type {const} */ ('cjs') };
+};
+
+test('makeScript prefers moduleTransforms over syncModuleTransforms for the same language', async t => {
+  const asyncMarker = 'moduleTransforms-marker-7c2e';
+  const syncMarker = 'syncModuleTransforms-marker-3d9b';
+  const appendAsyncMarker = appendMarker(asyncMarker);
+  const bundle = await makeScript(read, fixture, {
+    moduleTransforms: {
+      cjs: async sourceBytes => appendAsyncMarker(sourceBytes),
+    },
+    syncModuleTransforms: { cjs: appendMarker(syncMarker) },
+  });
+  t.true(bundle.includes(asyncMarker));
+  t.false(bundle.includes(syncMarker));
+});
+
+test('makeScript treats empty or undefined syncModuleTransforms as absent', async t => {
+  const baseline = await makeScript(read, fixture);
+  const withEmpty = await makeScript(read, fixture, {
+    syncModuleTransforms: {},
+  });
+  const withUndefined = await makeScript(read, fixture, {
+    syncModuleTransforms: undefined,
+  });
+  t.is(withEmpty, baseline);
+  t.is(withUndefined, baseline);
+});
+
+test('makeScript applies syncModuleTransforms to mjs modules', async t => {
+  const marker = 'syncModuleTransforms-mjs-marker-8e41';
+  let count = 0;
+  /** @type {SyncModuleTransforms} */
+  const syncModuleTransforms = {
+    mjs: sourceBytes => {
+      count += 1;
+      const source = new TextDecoder().decode(sourceBytes);
+      const bytes = new TextEncoder().encode(`${source}\n'${marker}';\n`);
+      return { bytes, parser: 'mjs' };
+    },
+  };
+  const bundle = await makeScript(read, fixture, { syncModuleTransforms });
+  t.true(count > 0);
+  t.true(bundle.includes(marker));
+  const log = [];
+  const print = entry => {
+    log.push(entry);
+  };
+  const compartment = new Compartment({
+    globals: { print },
+    __options__: true,
+  });
+  compartment.evaluate(bundle);
+  t.deepEqual(log, expectedLog);
+});
+
+test('makeScript bundles a module under the parser a syncModuleTransform returns', async t => {
+  const marker = 'syncModuleTransforms-json-to-cjs-marker-4b6d';
+  /** @type {SyncModuleTransforms} */
+  const syncModuleTransforms = {
+    json: sourceBytes => {
+      const source = new TextDecoder().decode(sourceBytes);
+      const bytes = new TextEncoder().encode(
+        `'${marker}';\nmodule.exports = ${source};\n`,
+      );
+      return { bytes, parser: 'cjs' };
+    },
+  };
+  const bundle = await makeScript(read, fixture, { syncModuleTransforms });
+  t.true(bundle.includes(marker));
+  const log = [];
+  const print = entry => {
+    log.push(entry);
+  };
+  const compartment = new Compartment({
+    globals: { print },
+    __options__: true,
+  });
+  compartment.evaluate(bundle);
+  t.deepEqual(log, expectedLog);
+});
+
+test('makeScript rejects when a syncModuleTransform throws', async t => {
+  /** @type {SyncModuleTransforms} */
+  const syncModuleTransforms = {
+    cjs: () => {
+      throw Error('syncModuleTransforms-failure-2c7a');
+    },
+  };
+  await t.throwsAsync(makeScript(read, fixture, { syncModuleTransforms }), {
+    message: /syncModuleTransforms-failure-2c7a/,
+  });
 });
 
 test('makeFunctor with useEvaluate preserves error for compiled sourceUrlPrefix when sourceUrlPrefix runtime option absent', async t => {

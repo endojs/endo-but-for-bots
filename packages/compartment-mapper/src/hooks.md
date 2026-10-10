@@ -100,11 +100,13 @@ graph TB
 subgraph "bundle.js"
   makeFunctor -- options:transparently ----------> mapNodeModules
   makeScript -- options:transparently ----------> mapNodeModules
-  makeFunctorFromMap  -- no moduleSourceHook ----x makeImportHookMaker
+  makeFunctor -- options:transparently ----------> makeFunctorFromMap
+  makeScript -- options:transparently ----------> makeScriptFromMap
 end
 
 subgraph "bundle-lite.js"
-makeFunctorFromMap2 --no moduleSourceHook -----x makeImportHookMaker
+makeFunctorFromMap --no moduleSourceHook -----x makeImportHookMaker
+makeScriptFromMap --no moduleSourceHook -----x makeImportHookMaker
 end
 
 subgraph "archive-lite.js"
