@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-14 |
-| **Updated** | 2026-08-31 |
+| **Updated** | 2026-10-10 |
 | **Author** | Designer (prompted) |
 | **Status** | Proposed |
 
@@ -30,10 +30,10 @@ resumes.
 Three observable problems follow.
 
 1. **Source rejection.** The module-source transform parses with
-   `sourceType: 'module'` ([packages/module-source/src/transform-source.js line 26](../packages/module-source/src/transform-source.js#L26)),
+   `sourceType: 'module'` ([packages/module-source/src/transform-analyze.js line 89](../packages/module-source/src/transform-analyze.js#L89)),
    so `@babel/parser` accepts the `await` token at module top
-   level. The transform then wraps the body in an arrow IIFE
-   ([packages/module-source/src/transform-analyze.js line 100](../packages/module-source/src/transform-analyze.js#L100)):
+   level. `buildFunctorSource` then wraps the body in an arrow IIFE
+   ([packages/module-source/src/functor.js line 79](../packages/module-source/src/functor.js#L79)):
    `({imports,liveVar,onceVar,import,importMeta})=>(function(){'use
    strict'; ... })()`. This wrapper is the module's *functor*: the
    per-module function `ModuleSource` emits, which the linker invokes to run
@@ -57,63 +57,93 @@ Three observable problems follow.
    disambiguation falls out of two simpler invariants.)
 
 The aim of this design is to support TLA per the 262 cyclic-module-records
-algorithm in the SES shim *and* in the module-source precompilation pipeline,
-without changing the synchronous semantics of any module that does not
-itself use `await` and does not import an async dep transitively.
+algorithm across every Endo module host: the SES shim, the module-source
+precompilation pipeline, `@endo/compartment-mapper` (and the bundle and
+archive formats built on it), and the IronHorse engine's native
+`Compartment`. A module that does not itself use `await` and does not
+import an async dependency transitively keeps its synchronous semantics on
+every host.
+
+Two maintainer directions on the calling convention shape the design
+([review 5095793109](https://github.com/endojs/endo-but-for-bots/pull/249#pullrequestreview-5095793109)):
+
+- `compartment.importNow(specifier)` returns after the **first turn** of a
+  module graph's initialization; `compartment.import(specifier)` returns a
+  promise for the exports once asynchronous initialization has completed.
+  See [`importNow` returns after the first turn](#importnow-returns-after-the-first-turn).
+- Virtual module instances are constructed by passing a virtual module
+  source to `compartment.import` (and `importNow`). The source carries
+  `isAsync` and an `initialize(environment, { import, importNow,
+  importMeta })` function, so one calling convention covers synchronous and
+  asynchronous modules. See
+  [Virtual module sources and the import calling convention](#virtual-module-sources-and-the-import-calling-convention).
 
 ## Scope
 
 In scope:
 
-- A new `[[Async]]` flag derived statically at module-analyze time and
-  carried on the module source.
-- A new `[[AsyncEvaluation]]` boolean and `[[PendingAsyncDependencies]]`
-  count on the module instance.
-- An asynchronous `execute()` path on `makeModuleInstance` whose returned
-  promise settles when, and only when, the module's body has completed (in
-  the sync case, immediately; in the async case, when the body's implicit
-  promise resolves).
-- Linker bookkeeping for `[[AsyncParentModules]]` and the
-  `gatherAsyncParentCompletions` walk. (SES deliberately omits 262's
+- **Flag.** An `isAsync` flag, derived statically at module-analyze time
+  and carried on the module source. It is the 262 `[[HasTLA]]` field.
+  Precompiled records carry it as `__isAsync__`, next to `__needsImport__`
+  and `__needsImportMeta__`. `ModuleSource.prototype` exposes it as an
+  `isAsync` getter, next to `needsImport` and `needsImportMeta`. Virtual
+  module sources declare it as an own `isAsync` property. The naming
+  rationale is in [Naming](#naming-isasync-and-initialize).
+- **Instance state.** An `[[AsyncEvaluation]]` boolean and a
+  `[[PendingAsyncDependencies]]` count on the module instance.
+- **Asynchronous `execute()`.** An asynchronous `execute()` path on
+  `makeModuleInstance`. Its returned promise settles when, and only when,
+  the module's body has completed: immediately in the sync case, and when
+  the body's implicit promise resolves in the async case.
+- **Linker bookkeeping.** Bookkeeping for `[[AsyncParentModules]]` and the
+  `gatherAsyncParentCompletions` walk. SES deliberately omits 262's
   `[[CycleRoot]]` selection; see
   [Module-instance contract](#module-instance-contract) for why the same
-  disambiguation falls out of simpler invariants.)
-- The `compartment.import(...)` contract
-  ([packages/ses/src/compartment.js line 176](../packages/ses/src/compartment.js#L176)):
-  its returned promise gains a new `[[TopLevelCapability]]` this design
-  introduces. The public `import` method has no deferred-capability object
-  today — its promise is an ordinary `async` function's return value chained
-  through `load`+`execute` (the `[[TopLevelCapability]]`-shaped object at
-  [compartment.js line 435](../packages/ses/src/compartment.js#L435) is the
+  disambiguation falls out of simpler invariants. IronHorse, a native
+  engine gated on test262 conformance, follows the spec fields verbatim
+  ([IronHorse engine](#ironhorse-engine)).
+- **The `compartment.import(...)` contract.** Today the public method
+  ([packages/ses/src/compartment.js line 180](../packages/ses/src/compartment.js#L180))
+  has no deferred-capability object: its promise is an ordinary `async`
+  function's return value, chained through `load`+`execute`. (The
+  `[[TopLevelCapability]]`-shaped object at
+  [compartment.js line 439](../packages/ses/src/compartment.js#L439) is the
   separate `compartmentImport` endowment that gates a module body's
-  *dynamic* `import()`, not the public method). The contract becomes: the
-  promise settles *after* TLA in the imported subgraph resolves, where today
-  it settles synchronously after a `link`+`execute` round-trip.
-- The `compartment.importNow(...)` contract: stays synchronous and
-  **rejects any module reachable from the importNow root whose
-  `asyncEvaluation` is true** — the dynamic flag, which per
-  [Module-instance contract](#module-instance-contract) is also true for a
-  purely-sync module that transitively imports an async dep (test row 6),
-  not only a module that is itself `[[Async]]` — with a diagnostic naming
-  the offending specifier. `asyncEvaluation`, not the static `[[Async]]`
-  flag, is the authoritative guard predicate here and in the
-  [importNow guard](#compartmentimportnow-guard) section.
-- A module-source-level signal: the analyzer flags `__moduleIsAsync__:
-  true` on the source record when the body contains a top-level
-  `AwaitExpression` outside any nested function or class.
+  *dynamic* `import()`, not the public method.) This design adds a
+  `[[TopLevelCapability]]`, and the returned promise settles *after* TLA in
+  the imported subgraph resolves. Today it settles right after a
+  `link`+`execute` round-trip.
+- **The `compartment.importNow(...)` contract.** It stays synchronous. It
+  loads and links the graph, runs every synchronous step of evaluation, and
+  starts each asynchronous body. Then it returns the namespace, whose
+  bindings may still be in their temporal dead zone. It does **not** reject
+  async graphs; an earlier draft did.
+- **Virtual module sources.** Synchronous and asynchronous virtual module
+  sources under one calling convention, accepted directly by
+  `compartment.import` and `compartment.importNow`.
+- **`@endo/compartment-mapper` ramifications.** The archive language
+  designator, the synchronous script-bundle runtime, the CommonJS `require`
+  path through `importNow`, and the policy and attenuator virtual sources.
+- **IronHorse engine.** Native async module evaluation, native
+  `Compartment.prototype.import`/`importNow` with the same contract, and the
+  virtual-source calling convention.
+- **Hardened test262 cases.** New hardened262 cases, authored in the design
+  phase, that run on every agent: SES-on-Node, SES-on-XS, bare XS,
+  IronHorse, and SES-on-IronHorse.
 
 Out of scope:
 
-- Asynchronous *virtual* module sources. Virtual sources stay sync; their
-  `execute(env, ...)` returns nothing today and that contract is
-  preserved. (See [Open questions](#open-questions) on whether a future
-  virtual-async shape is worth a separate design.)
-- Native Compartment passthrough. When a host XS or browser implementation
-  supports a native ModuleSource, that path inherits the host's TLA
-  behavior unchanged; this design touches the shim path only.
 - `await using` (explicit-resource-management). That is a sibling proposal
   whose grammar interacts with TLA but whose lifetime semantics are
-  separate; out of this design.
+  separate.
+- Changing the native XS `Compartment`. XS is the reference
+  implementation hardened262 compares against. Where XS diverges from this
+  contract, the baseline records the divergence as a finding; this design
+  does not patch XS.
+- Import attributes and deferred import (`import defer`) evaluation.
+  test262's `import-defer/evaluation-top-level-await/` cases are sorted
+  into the IronHorse expectations, but deferred evaluation is its own
+  design.
 
 ## Test suite
 
@@ -121,6 +151,14 @@ The test suite leads because the spec for TLA *is* a finite set of
 observable shapes. Each shape names one fixture pattern and one
 assertion. The SES implementation must pass every shape; absent fixtures
 are absent capabilities.
+
+The suite has two layers. The ava suite below tests SES-shim internals:
+`asyncEvaluation`, the archive round trip, the mapper's `require` guard.
+The [hardened test262 cases](#hardened-test262-cases) test the
+user-visible `Compartment`/`ModuleSource` contract on every engine agent.
+The hardened cases are authored in the design phase, before any
+implementation, so each agent's baseline records today's failures as the
+starting line.
 
 The fixtures live in [packages/ses/test/module-top-level-await/](../packages/ses/test/module-top-level-await/)
 and are loaded through ava-driven harnesses that build a Compartment with
@@ -139,7 +177,7 @@ A handful of design terms appear in the row cells before the Design
 section defines them; reading the next paragraph first or skimming
 the Design section before returning to this table is fine. The terms:
 
-- `__moduleIsAsync__` is a static boolean on the precompiled module
+- `__isAsync__` is a static boolean on the precompiled module
   record, set by the analyzer when the body contains a top-level
   `AwaitExpression`. See [Static analysis](#static-analysis-detect-async-at-parse-time).
 - `[[AsyncEvaluation]]` is the spec field that distinguishes a
@@ -162,8 +200,14 @@ the Design section before returning to this table is fine. The terms:
   declared but not yet initialized, so an access throws a `ReferenceError`
   (row 11).
 
-The eighteen rows below (rows 1–17 plus the inserted sub-row `12a`) are
-framed as the implementation's acceptance criteria. test262's TLA directory is the canonical
+The rows below (1–25 plus the inserted sub-rows `12a` and `13a`–`13c`) are
+framed as the implementation's acceptance criteria. Rows 1–17 are the
+SES-shim transliteration of test262's TLA directory. Rows 18–25 cover the
+virtual-source calling convention and the compartment-mapper
+ramifications. Every row that does not depend on SES internals is also
+authored as a hardened test262 case
+([Hardened test262 cases](#hardened-test262-cases)), so the same behavior
+is checked on XS and IronHorse too. test262's TLA directory is the canonical
 upstream; if a future test262 addition catches a regression these
 rows do not, a follow-up adds the row (or imports the test262
 fixture directly through the shim's transliteration harness).
@@ -175,7 +219,7 @@ fixture directly through the shim's transliteration harness).
 | 3 | `await { then: 'not-callable' }` resolves to the object | `await-awaits-thenable-not-callable.js` | Non-callable `then` falls back to value coercion |
 | 4 | Module with `export const x = await 1; export default await 2;` is importable | `module-import-resolution.js` + `..._FIXTURE.js` | The importer sees settled exports after the importer's own `[[TopLevelCapability]]` resolves |
 | 5 | Module whose body rejects causes downstream `import` to reject | `module-import-rejection.js` + `..._FIXTURE.js` | The rejection propagates through `[[AsyncParentModules]]` to the top-level capability |
-| 6 | Sync importer of async dep: the importer is itself `[[Async]] === false`, but `[[PendingAsyncDependencies]] > 0` flips `[[AsyncEvaluation]]` to true | `module-sync-import-async-resolution-ticks.js` | A purely-sync module that imports an async dep is still evaluated after the dep settles |
+| 6 | Sync importer of async dep: the importer is itself `[[HasTLA]] === false`, but `[[PendingAsyncDependencies]] > 0` flips `[[AsyncEvaluation]]` to true | `module-sync-import-async-resolution-ticks.js` | A purely-sync module that imports an async dep is still evaluated after the dep settles |
 | 7 | Async importer of async dep: chained ticks observed in DFS post-order | `module-async-import-async-resolution-ticks.js` | Tick ordering matches the spec's queue discipline |
 | 8 | `await 1; await 2; tick 1...tick 4` interleaving | `top-level-ticks.js` | Microtask interleaving matches the spec; promise-then ticks ordered against await ticks |
 | 9 | DFS-invariant under diamond async deps | `dfs-invariant.js` | Two paths to one async leaf produce one execution; parents complete in DFS post-order |
@@ -183,12 +227,22 @@ fixture directly through the shim's transliteration harness).
 | 11 | Self-import of an async module: ReferenceError on access during cycle, resolved post-await | `module-self-import-async-resolution-ticks.js` | Self-import's TDZ behavior holds across the await suspension |
 | 12 | `await import(specifier)` from a sync module: dynamic import resolves to the namespace, sync module remains sync | `dynamic-import-resolution.js` | Dynamic import is *not* TLA; it uses the existing `compartmentImport` path |
 | 12a | Dynamic import of a still-suspended async module from inside another async module's await window | `dynamic-import-of-waiting-module.js` (test262) | The dynamic-import promise settles on the target's `topLevelCapability`, not eagerly; the caller resumes after the target's body completes |
-| 13 | `compartment.importNow` of an async module: synchronous rejection | new, SES-only | The shim guards importNow against async deps reachable through static or live `import` |
-| 13a | `compartment.importNow` of a *purely-sync* root that transitively imports an async dep: synchronous rejection | new, SES-only | The guard tests the reachable graph's `asyncEvaluation` (true on the sync root itself via the row-6 propagation), not the root's own static `[[Async]]` flag, so the transitive case is rejected too — the direct case (row 13) is not the only one |
-| 14 | Pre-compiled module source with `__moduleIsAsync__: true` round-trips through bundle-source and import-bundle, executing with the same TLA semantics | new, SES-only | The async flag survives the bundle/extract round trip; see [Bundle-source coupling](#bundle-source-coupling) |
-| 15 | Pre-compiled non-async module with no TLA stays synchronous: `[[AsyncEvaluation]]` never flips to true; the `compartment.import` promise still resolves, but the import-now path works | new, SES-only regression | No regression for the 99%-of-modules-are-sync case |
+| 13 | `compartment.importNow` of an async module returns synchronously after the first initialization turn | new, SES-only | The namespace is returned before the body's first `await` resumes; a hoisted `export function` is callable, while an `export const` assigned after the `await` throws `ReferenceError` (TDZ) until the body resumes |
+| 13a | `compartment.importNow` of a *purely-sync* root that transitively imports an async dep | new, SES-only | The root's body has **not** run when `importNow` returns, because its `pendingAsyncDependencies` is non-zero (row 6). Its namespace is returned and its body-assigned bindings are uninitialized. The case asserts only that the body has not run, not whether hoisted functions are callable, because the shim and 262 differ there (see [`importNow` returns after the first turn](#importnow-returns-after-the-first-turn)) |
+| 13b | `compartment.import` after `compartment.importNow` of the same async specifier | new, SES-only | The later `import` resolves on the *same* `topLevelCapability` the first-turn evaluation started; the body runs once, never twice |
+| 13c | `compartment.importNow` of an async module whose body later rejects | new, SES-only | `importNow` does not throw. A later `compartment.import` of the same specifier rejects with the body's error, and repeated imports reject with the same error identity |
+| 14 | Pre-compiled module source with `__isAsync__: true` round-trips through an `endoZipBase64` archive and `importBundle`, executing with the same TLA semantics | new, SES-only | The async flag and the `pre-mjs-async-json` language survive the archive round trip; see [Compartment-mapper ramifications](#compartment-mapper-ramifications) |
+| 15 | Pre-compiled module source with no TLA stays synchronous | new, SES-only regression | `[[AsyncEvaluation]]` never flips to true; `importNow` returns a fully initialized namespace and `import` resolves as today. No regression for the 99%-of-modules-are-sync case |
 | 16 | Syntax: `await` at module top level outside any function is accepted | test262 `syntax/` directory (sampled: `if-block-await-expr-identifier.js` and siblings) | The module-source transform accepts the source; the functor is async |
 | 17 | Syntax: `await` is still rejected inside a non-async function nested in a module | test262 `early-errors-await-not-simple-assignment-target.js` and surrounding | The transform's nested-function check is unchanged; only the module-scope IIFE is async |
+| 18 | `new ModuleSource(text).isAsync` is `true` for module-scope `await` and `false` for `await` inside a nested `async function` | new; hardened262 `ModuleSource/isAsync/` | The reflected flag is the static `[[HasTLA]]`, not "evaluates asynchronously" |
+| 19 | Virtual source `{ isAsync: true, initialize: async (environment) => { await p; environment.x = 1; } }` passed to `compartment.import` | new; hardened262 `VirtualModuleSource/isAsync/` | The import resolves after `initialize`'s promise fulfills, and `x` is `1` |
+| 20 | Virtual source with `isAsync` absent or `false` whose `initialize` returns a thenable | new; hardened262 `VirtualModuleSource/isAsync/` | Rejects (or, through `importNow`, throws) a `TypeError` naming the module; a synchronous source may not complete asynchronously |
+| 21 | Virtual source's `initialize` receives `{ import, importNow, importMeta }` only as declared | new; hardened262 `VirtualModuleSource/initialize/` | `import` and `importNow` are present iff `needsImport`; `importMeta` is present iff `needsImportMeta`; `environment` is sealed, export properties writable, import properties read-only |
+| 22 | Sync module importing an async virtual source | new; hardened262 `VirtualModuleSource/isAsync/` | The row-6 propagation applies to virtual sources: the importer's body runs after `initialize`'s promise fulfills |
+| 23 | `compartment.import(virtualSource)` and `compartment.import(new ModuleSource(text))` without a specifier | new; hardened262 `prototype/import/source-argument-*` | Each call constructs a fresh, unmemoized instance; the source's `bindings` imports resolve through the compartment's hooks |
+| 24 | CommonJS `require()` of an ESM whose static closure contains an `isAsync` source, through compartment-mapper | new, mapper-only | Throws `ERR_REQUIRE_ASYNC_MODULE`-shaped `Error`, matching Node's `require(esm)`; see [Compartment-mapper ramifications](#compartment-mapper-ramifications) |
+| 25 | Script-format bundle (`endoScript`, `getExport`, `nestedEvaluate`) of a graph containing TLA | new, mapper-only | Bundling throws naming the async module; the synchronous bundle runtime never sees an async functor |
 
 ### Implementation of the harness
 
@@ -198,7 +252,7 @@ Each test is a single ava test case that:
    of `specifier -> ModuleSource`. The source records come from the
    module-source analyzer applied to the fixture text inline; for
    regression-grade tests, the precompiled functor is captured to a
-   golden file (`__moduleIsAsync__` and `__syncModuleProgram__` are
+   golden file (`__isAsync__` and `__syncModuleProgram__` are
    asserted by string match).
 2. Injects one or more resolver pairs into the fixture's evaluation
    environment. The fixture body awaits a named pair's `promise`; the
@@ -237,32 +291,109 @@ A small subset of test262 TLA fixtures depend on host-driven
 ava analogue. Those are recast as direct ava `t.is` / `t.throws`
 calls; the spec assertion is preserved, the harness is rewritten.
 
+### Hardened test262 cases
+
+[`@endo/hardened262`](../packages/hardened262/README.md) runs test262-style
+cases against every Hardened JavaScript agent: bare XS (`xs`), SES on XS
+(`sesXs`), SES on Node (`sesNode`), bare IronHorse (`ironhorse`), and SES on
+IronHorse (`sesIronhorse`). Its stated purpose is to show that the shim and
+native implementations behave the same, which makes it the acceptance
+surface for a contract this design defines on three engines at once. The
+cases below are part of the design phase. They land with the design (or
+in the first implementation PR, ahead of any source change) and are
+recorded in each agent's `baseline/<agent>/<scenario>/` as failing. Each
+implementation phase then moves its rows from `failed` to `passed`, and
+`yarn test262:baseline` keeps the movement monotonic.
+
+Conventions, following the existing `test/Compartment/` tree:
+
+- The YAML header carries `flags: [async, onlyStrict]` and
+  `features: [Compartment, top-level-await]`. Cases whose *module text*
+  uses `await` are built from `new ModuleSource(text)` strings, so the test
+  file itself is strict script code. It therefore runs in the scenarios
+  each agent executes today
+  ([`agentRunsScenario`](../packages/hardened262/scripts/test.js#L309)):
+  `module`/`lockdownModule` on XS and Node, and `strict`/`lockdownStrict`
+  on IronHorse.
+- Completion is reported through `$DONE` and `harness/doneprintHandle.js`,
+  as `VirtualModuleSource/needsImportMeta/test.js` does.
+- Asynchrony is driven deterministically by resolver pairs, not by counting
+  microtask ticks against an opaque scheduler (the maintainer's direction on
+  the [earlier review](https://github.com/endojs/endo-but-for-bots/pull/249#discussion_r3244019807)).
+  A new include, `harness/moduleResolverPairs.js`, exports
+  `makeGate(name)`. It returns `{ promise, resolve, reject }` and a virtual
+  module source whose async `initialize` awaits the gate's promise. A test
+  composes gates into a module graph through `modules: { ... }` and opens
+  them in a chosen order.
+- Per-agent opt-outs (`noXs`, `noSesXs`, `noSesNode`) are **not** used to
+  hide divergence. A case that XS fails because XS's native behavior
+  differs from this contract stays enabled, and the `xs` baseline records
+  the failure as a finding.
+
+| Path under `packages/hardened262/test/Compartment/` | Asserts | Shim rows |
+|---|---|---|
+| `ModuleSource/isAsync/name.js`, `ModuleSource/isAsync/prop-desc.js` | `isAsync` is an accessor on `ModuleSource.prototype`, like `needsImport`, with the standard getter name and descriptor | 18 |
+| `ModuleSource/isAsync/module-scope-await.js` | `new ModuleSource('await 0;').isAsync === true`; also for `await` in a block, in a `for await` head, and in an `export const` initializer | 16, 18 |
+| `ModuleSource/isAsync/nested-await.js` | `false` for `await` only inside an `async function`, an async arrow, or an async method; `false` for a module with no `await` | 17, 18 |
+| `prototype/import/top-level-await/resolves-after-body.js` | `import` resolves only after a gate-driven body completes; exports read through the namespace are the post-`await` values | 1, 4 |
+| `prototype/import/top-level-await/rejection-propagates.js` | A body rejection rejects the importer's `import`, with the same error identity on a repeated `import` | 2, 5 |
+| `prototype/import/top-level-await/sync-importer-of-async-dep.js` | A non-`await` importer's body runs after its async dependency's gate opens | 6 |
+| `prototype/import/top-level-await/diamond-order.js` | Two paths to one async leaf run it once; parents complete in post-order, recorded in a log array passed through a gate module | 7, 9 |
+| `prototype/import/top-level-await/cycle-with-async-member.js` | In a cycle with one async member, the importer's namespace settles only after that member's gate opens | 10 |
+| `prototype/import/top-level-await/self-import-tdz.js` | A self-importing async module observes TDZ before its `await` and the value after | 11 |
+| `prototype/import/top-level-await/dynamic-import-waiting-module.js` | A dynamic `import()` of a still-suspended module settles on that module's completion, not eagerly | 12a |
+| `prototype/importNow/top-level-await/returns-after-first-turn.js` | `importNow` returns before the gate opens; a hoisted `export function` is callable; an `export const` initialized after `await` throws `ReferenceError` | 13 |
+| `prototype/importNow/top-level-await/sync-root-of-async-dep.js` | A non-`await` root's body has not run when `importNow` returns | 13a |
+| `prototype/importNow/top-level-await/import-after-importNow.js` | A subsequent `import` of the same specifier shares the evaluation (the body runs once) and resolves when the gate opens | 13b |
+| `prototype/importNow/top-level-await/rejection-after-first-turn.js` | `importNow` does not throw; a later `import` rejects with the body's error | 13c |
+| `VirtualModuleSource/isAsync/initialize-awaited.js` | `{ isAsync: true, initialize: async (environment) => ... }` resolves after `initialize`'s promise | 19 |
+| `VirtualModuleSource/isAsync/sync-source-returns-thenable.js` | `isAsync` absent or `false` with a thenable-returning `initialize` is a `TypeError` | 20 |
+| `VirtualModuleSource/isAsync/sync-importer.js` | A non-`await` importer of an async virtual source waits for it | 22 |
+| `VirtualModuleSource/initialize/context.js` | The second argument carries `import` and `importNow` iff `needsImport`, and `importMeta` iff `needsImportMeta` | 21 |
+| `VirtualModuleSource/initialize/environment-sealed.js` | `environment` is sealed: exports writable, imports read-only, no reexport properties; the seal holds across an `await` | 21 |
+| `prototype/import/source-argument-virtual.js`, `prototype/import/source-argument-module-source.js` | `import(source)` without a specifier builds a fresh instance per call | 23 |
+
+The test262 TLA directory itself (`language/module-code/top-level-await/`,
+about 250 files with its `syntax/` subdirectory) is not copied into
+hardened262. IronHorse already runs it through `ironhorse-262` with
+per-file expectations ([IronHorse engine](#ironhorse-engine)), and the
+`test262-runner` package runs it on Node and XS. hardened262 covers only
+what test262 cannot express: the `Compartment` and `ModuleSource` surface,
+under `lockdown`.
+
 ## Design
 
-> **A note on the implementation citations below.** The Prompt requires
-> this design to be implementable on `actual/master` (upstream endo's
-> master branch), but the concrete file paths and line numbers cited in
-> this section are against the bots-fork tree (`llm`) this document lands
-> in, where the fixtures and harness live. The **spec-level algorithm**
-> (the `[[AsyncEvaluation]]` / `[[PendingAsyncDependencies]]` /
-> `[[AsyncParentModules]]` bookkeeping in `module-instance.js` and
-> `module-link.js`) ports directly — those files match master. The
-> **module-source citations do not**: `transform-source.js` (cited under
-> Static analysis) does not exist on `actual/master` at all;
-> `babel-plugin.js` — the file the single `AwaitExpression` visitor is
-> added to — is substantially rewritten between fork and master (~1000
-> lines differ); and the sync-vs-async IIFE/functor emission that this
-> section attributes to `transform-analyze.js` lives, on master, in a
-> separate `functor.js` (`buildFunctorSource`) that the fork's layout does
-> not have. An implementer working on `actual/master` must map each
-> module-source citation onto that tree — add the visitor to master's
-> `babel-plugin.js`, and emit the `async` functor from master's
-> `functor.js`/`buildFunctorSource` — rather than following the
-> fork-relative paths verbatim.
+> **A note on the implementation citations below.** The Prompt asks for
+> a design implementable on `actual/master` (upstream endo's master
+> branch). Paths and line numbers below are against the frozen base this
+> revision is pinned to (`llm-7d2eb30`). Since the 2026-10 refresh, the
+> bots-fork `module-source` package has the same layout as master: the
+> functor template lives in `functor.js` (`buildFunctorSource`) and the
+> analyzer visitors in `babel-plugin.js`. The SES citations
+> (`module-load.js`, `module-link.js`, `module-instance.js`,
+> `compartment.js`) port to master directly. The compartment-mapper and
+> IronHorse sections apply only to the bots fork, where those packages
+> and the `rust/engine` tree exist in the cited form.
+
+### Implementation map
+
+| Surface | Files | Change |
+|---|---|---|
+| Analyzer | [`module-source/src/babel-plugin.js`](../packages/module-source/src/babel-plugin.js) | Detect module-scope `await` and `for await`; set `isAsync` |
+| Functor | [`module-source/src/functor.js`](../packages/module-source/src/functor.js#L79) | Emit `async function` for the inner IIFE when `isAsync` |
+| Record | [`module-source/src/functor.js`](../packages/module-source/src/functor.js#L103) (`buildModuleRecord`), [`module-source.js`](../packages/module-source/src/module-source.js#L49) | Carry `__isAsync__`; add the `isAsync` getter |
+| Permits | [`ses/src/permits.js`](../packages/ses/src/permits.js#L1758) | Add `isAsync: getter` to `%ModuleSourcePrototype%`, next to `needsImport` |
+| Link | [`ses/src/module-link.js`](../packages/ses/src/module-link.js#L56) | Recognize `__isAsync__`; recognize the `initialize`-shaped virtual source; build the async bookkeeping ([Linker bookkeeping](#linker-bookkeeping)) |
+| Instance | [`ses/src/module-instance.js`](../packages/ses/src/module-instance.js#L118) | Async `execute()`, capability, parent walk; `makeVirtualModuleInstance` gains the `initialize` path |
+| Compartment | [`ses/src/compartment.js`](../packages/ses/src/compartment.js#L130) | `import` awaits the root capability; `importNow` returns after the first turn; both accept a module source in place of a specifier |
+| Mapper | `compartment-mapper/src/` | See [Compartment-mapper ramifications](#compartment-mapper-ramifications) |
+| Engine | `rust/engine/ironhorse-vm/src/` | See [IronHorse engine](#ironhorse-engine) |
 
 ### Static analysis: detect async at parse time
 
-The Babel analyzer plugin gains a single visitor:
+The Babel analyzer plugin gains two visitors. A module-scope `for await`
+is TLA too, but Babel represents it as a `ForOfStatement` with `await:
+true`, not as an `AwaitExpression`:
 
 ```js
 AwaitExpression(path) {
@@ -270,9 +401,14 @@ AwaitExpression(path) {
   // module program itself, i.e. there is no Function ancestor between
   // path and Program.
   if (!path.getFunctionParent()) {
-    options.moduleIsAsync = true;
+    sourceOptions.isAsync = true;
   }
-}
+},
+ForOfStatement(path) {
+  if (path.node.await && !path.getFunctionParent()) {
+    sourceOptions.isAsync = true;
+  }
+},
 ```
 
 The module analysis record gains one new field:
@@ -280,7 +416,7 @@ The module analysis record gains one new field:
 ```js
 {
   ...
-  __moduleIsAsync__: boolean,
+  __isAsync__: boolean,
 }
 ```
 
@@ -302,7 +438,7 @@ Pre-existing modules that do not use `await` produce byte-identical
 output. The flag travels in the precompiled record alongside
 `__syncModuleProgram__` (renamed conceptually: the field still carries
 the program source; the *Async* dimension is the new
-`__moduleIsAsync__` boolean).
+`__isAsync__` boolean).
 
 A note on class static blocks. The `path.getFunctionParent()` check
 treats a class static block as a non-function scope: `await` is a
@@ -330,8 +466,8 @@ proposal's user-visible vocabulary (`asyncEvaluation`,
 proposal-compartments-conformant native Compartment and the SES shim
 share a single mental model for the data dependency graph. Where this
 design diverges from the proposal it is for SES-specific reasons
-documented inline (the `importNow` guard and the bundle-source
-coupling are SES-only).
+documented inline (the `requireSync` opt-in on `importNow` and the
+archive language designator are Endo-specific).
 
 `makeModuleInstance` returns an object with:
 
@@ -400,7 +536,7 @@ pending count is non-zero until every member of the SCC its imports
 reach has fulfilled); row 11's self-import TDZ behavior is a within-
 single-module property and does not depend on root selection.
 
-`asyncEvaluation` is true iff the module is `[[Async]]` itself OR its
+`asyncEvaluation` is true iff the module is `[[HasTLA]]` itself OR its
 `[[PendingAsyncDependencies]] > 0`. The latter is the case for a
 purely-sync module that imports an async dep transitively; row 6 of the
 test table.
@@ -423,7 +559,7 @@ re-derive syncness from the return type, so the two can never drift.
 `link()` ([packages/ses/src/module-link.js](../packages/ses/src/module-link.js)) gains a second pass that walks the linked instance graph in DFS
 post-order. For each instance:
 
-1. If its source has `__moduleIsAsync__: true`, set `asyncEvaluation =
+1. If its source has `__isAsync__: true`, set `asyncEvaluation =
    true` and allocate `topLevelCapability`.
 2. For each linked import target, if the target's `asyncEvaluation` is
    true **and the target has not already fulfilled**
@@ -441,7 +577,7 @@ post-order. For each instance:
    still-pending deps, rather than monotonically accumulating across
    re-links.
 3. After the pass: if `pendingAsyncDependencies > 0` and the instance
-   itself is not `[[Async]]`, set `asyncEvaluation = true` and allocate
+   itself is not `[[HasTLA]]`, set `asyncEvaluation = true` and allocate
    the capability anyway. This is the row-6 case.
 
 Cycles are not a special case for the bookkeeping. A back-edge
@@ -479,7 +615,7 @@ sequenceDiagram
   Note over Dep: awaited promise resolves
   Dep->>Dep: AsyncModuleExecutionFulfilled
   Dep->>Root: notify parent (decrement pending)
-  Note over Root: pending==0; if [[Async]],<br/>start async body; else resolve capability
+  Note over Root: pending==0; if [[HasTLA]],<br/>start async body; else resolve capability
   Root-->>User: resolved namespace
 ```
 
@@ -488,7 +624,7 @@ The `topLevelCapability.promise` is the same promise the user holds via
 as "the import resolved." The `pendingAsyncDependencies` field on Root
 is non-zero between the dep registering and `AsyncModuleExecutionFulfilled`
 walking the parent edges; the field reaching zero is what gates the
-Root's own body (if Root is `[[Async]]`) or the Root's capability
+Root's own body (if Root is `[[HasTLA]]`) or the Root's capability
 resolution (if Root is purely-sync importing async).
 
 The recursive `instance.execute()` in `module-instance.js` line 401 has
@@ -499,85 +635,378 @@ to change shape:
   registers a completion handler on the dep's
   `topLevelCapability.promise` and increments a local pending count.
 - Once all sync deps are settled and pending count is zero, the parent's
-  own body executes. If the parent is `[[Async]]`, the body is the async
+  own body executes. If the parent is `[[HasTLA]]`, the body is the async
   IIFE; the body's returned promise is the parent's
   `topLevelCapability`.
 - Rejection: `AsyncModuleExecutionRejected` walks
   `asyncParentModules` and rejects each parent's capability with the
   same error. test262's `module-import-rejection.js` covers this.
 
-### `compartment.importNow` guard
+### `importNow` returns after the first turn
 
-`importNow` walks the linked subgraph; if any reachable instance has
-`asyncEvaluation === true`, throw synchronously with:
+`compartment.importNow(specifier)` and `compartment.import(specifier)`
+share one evaluation. They differ only in what they return and when.
 
-```text
-TypeError: Cannot importNow because module <specifier> is async (top-level await)
-```
+- `import` loads asynchronously, links, starts evaluation, and returns a
+  promise for the namespace. The promise settles on the root's
+  `topLevelCapability`: once every asynchronous body in the root's graph
+  has completed, or with the first rejection.
+- `importNow` loads synchronously (through `importNowHook`, as today),
+  links, starts the same evaluation, and returns the namespace **when the
+  first turn of initialization ends**.
 
-This is a SES-shim-specific contract; XS / native Compartments may
-expose a different shape. The diagnostic names the *first* async
-specifier encountered in DFS order, not all of them; users iterate.
+"The first turn" is everything evaluation does synchronously before it
+first yields. It is exactly the synchronous prefix of 262's `Evaluate()`,
+which runs as much of the graph as it can and then returns a promise.
+`importNow` runs that prefix and returns the namespace in place of the
+promise. Concretely, within the first turn:
 
-The specifier is attacker-influenced content, so the diagnostic should be
-built with SES's `assert` machinery rather than the plain
-`TypeError('...')` string interpolation the literal form above suggests:
+- Every module whose `asyncEvaluation` is false runs to completion, as
+  today.
+- Every `[[HasTLA]]` module with no pending async dependencies starts its
+  body. The async functor runs its preamble, which initializes hoisted
+  `function` declarations, and then its statements up to the first
+  `await`.
+- A module with `pendingAsyncDependencies > 0` does not start. Its
+  namespace exists, but its `let`/`const`/`class` bindings remain in
+  their temporal dead zone (row 13a). In 262, and in IronHorse, its
+  hoisted `function` declarations are already initialized, because
+  `InitializeEnvironment` runs at link time. The shim initializes hoisted
+  functions in the functor preamble, so in the shim they stay
+  uninitialized until the body starts. Moving the preamble to link time is
+  a separate conformance fix. The hardened262 case for row 13a therefore
+  asserts only that the body has not run.
+
+The capability allocated during the first turn is stored on the root
+instance. A later `import` of the same specifier, or a dynamic `import()`
+from another module, awaits that same capability, so the body never runs
+twice (row 13b). An error thrown synchronously during the first turn, by
+a fully synchronous module, still throws from `importNow`, as today. An
+error raised after the first turn rejects the capability. `importNow`
+cannot report it; a later `import` observes it (row 13c). If nothing ever
+observes it, the host's unhandled-rejection tracking reports it, which is
+correct: the failure is genuinely unobserved.
+
+For a graph with no TLA, the first turn is the whole evaluation and
+`importNow` behaves exactly as it does today (row 15).
+
+This replaces the earlier draft's guard, which made `importNow` throw a
+`TypeError` when any reachable module had `asyncEvaluation === true`. The
+guard survives only as an opt-in, `importNow(specifier, { requireSync:
+true })`. With the option, after linking and before evaluation,
+`importNow` throws when the root's `asyncEvaluation` is true:
 
 ```js
-makeError(X`Cannot importNow because module ${q(specifier)} is async (top-level await)`);
+throw makeError(
+  X`Cannot importNow ${q(specifier)} synchronously because module ${q(asyncSpecifier)} uses top-level await`,
+);
 ```
 
-This matches the `importHook`-needed message in `module-load.js`, where
-`q()` safely delimits a comparably dynamic value.
+`asyncSpecifier` is the first async module in DFS order. The specifier
+is attacker-influenced content, so the message is built with SES's
+`assert` machinery and `q()`, like the `importHook`-needed message in
+`module-load.js`. The compartment-mapper's CommonJS `require` is the
+option's first consumer ([Compartment-mapper ramifications](#compartment-mapper-ramifications)).
+
+Why first-turn rather than reject:
+
+- It is what the spec already does. A host that drops `Evaluate()`'s
+  promise observes exactly this state. The shim stays a faithful model of
+  the native algorithm rather than adding a shim-only restriction.
+- Hoisted `export function` bindings are usable right away. That is the
+  part of an async module a synchronous host can safely consume, for
+  example a plugin registry that only needs callable entry points.
+- IronHorse's module envelope already separates hoisting from body
+  execution: [`exec_module`](../rust/engine/ironhorse-vm/src/interp/dispatch.rs#L4686)
+  receives an `initialize` and an `execute` function. "Return after the
+  first turn" maps onto that split without a second code path.
+
+### Virtual module sources and the import calling convention
+
+A virtual module source is an ordinary object that provides a module's
+bindings and its initialization as a function, with no source text. Under
+this design, `compartment.import` and `compartment.importNow` accept one
+directly, in place of a specifier, as the maintainer proposed:
+
+```js
+const { namespace } = await compartment.import({
+  bindings: [
+    { import: 'connect', from: 'net' },
+    { export: 'client' },
+  ],
+  needsImport: true,
+  needsImportMeta: true,
+  isAsync: true,
+  initialize: async (environment, { import: dynamicImport, importNow, importMeta }) => {
+    environment.client = await environment.connect(importMeta.url);
+  },
+});
+```
+
+The same object is also accepted wherever a module source is accepted
+today: as the `source` of a `modules` descriptor, and as an `importHook`
+or `importNowHook` result. A `ModuleSource` instance may be passed to
+`import` and `importNow` the same way. Its `isAsync` getter plays the role
+of the virtual source's own property.
+
+The protocol:
+
+| Property | Type | Meaning |
+|---|---|---|
+| `bindings` | `Array<Binding>`, default `[]` | Import and export declarations in the proposal-compartments `Binding` shape (`{ import, as?, from }`, `{ importAllFrom, as }`, `{ export, as?, from? }`, `{ exportAllFrom, as? }`), as XS and hardened262's `VirtualModuleSource/bindings` cases use them. The linker checks them and throws `SyntaxError` for duplicate or unresolvable exports. |
+| `needsImport` | boolean, default `false` | When true, the context carries `import` and `importNow`. |
+| `needsImportMeta` | boolean, default `false` | When true, the context carries `importMeta`, filled by `importMetaHook` as for a precompiled source. |
+| `isAsync` | boolean, default `false` | The `[[HasTLA]]` bit. When true, `initialize` may return a promise and the module completes when that promise fulfills. When false, `initialize` must complete synchronously. |
+| `initialize` | `(environment, context) => void \| Promise<void>` | The module body. |
+
+`initialize` is called once, when evaluation reaches the module. Its
+arguments:
+
+- `environment` is the module environment record, sealed. Export names
+  are writable properties: a write updates the live binding and notifies
+  importers. Import names are read-only properties that read the live
+  binding of the imported module. There are no reexport properties. The
+  seal and the live-binding behavior hold across an `await`.
+- `context` is a frozen object with `import(specifier)` (the module's
+  dynamic `import`, resolved against this module), `importNow(specifier)`
+  (its synchronous counterpart, with the first-turn semantics above), and
+  `importMeta`. Each property is present only when the corresponding
+  `needs*` flag is set.
+
+Synchronous and asynchronous modules share the convention. The linker
+reads `isAsync` at link time, before calling anything. It needs the bit
+early: the bit sets `asyncEvaluation`, contributes to importers'
+`pendingAsyncDependencies`, and decides what `importNow`'s first turn
+covers. For a source with `isAsync: true`, the result of `initialize` is
+passed through `Promise.resolve` and the module completes on it, like an
+async functor. For a source without it, a thenable result is a
+`TypeError` naming the module (row 20). Allowing a synchronous source to
+finish asynchronously would let its importers read exports that are not
+yet settled, which is the bug this design exists to prevent.
+
+`compartment.import(source)` without a specifier creates a fresh module
+instance on every call. The instance is not memoized in the compartment's
+module map, because it has no specifier to memoize under (row 23); this
+matches proposal-compartments, where a module instance is distinct from
+its source. The `from` specifiers in its `bindings` are full specifiers,
+handed to `importHook` without a `resolveHook` call, because there is no
+referrer to resolve against (see [open question 5](#open-questions)).
+
+The legacy shapes stay accepted unchanged, and stay synchronous:
+
+- the SES shape, with `imports`/`exports`/`reexports` arrays and
+  `execute(exportsTarget, compartment, resolvedImports)`
+  ([module-link.js line 72](../packages/ses/src/module-link.js#L72));
+- the XS shape, `execute($, Import, ImportMeta)` with `bindings`.
+
+The linker tells them apart by which function property is present:
+`initialize` selects the new convention, and `execute` selects a legacy
+one. An object with both is a `TypeError`. The new name keeps the linker
+from sniffing arity or function kind to decide between conventions.
+
+### Naming: `isAsync` and `initialize`
+
+The maintainer asked that the flag reuse the property names already used
+or proposed on module sources ("isAsync?, please check proposals").
+Findings:
+
+- **ECMA-262** names the Cyclic Module Record field `[[HasTLA]]`. It is
+  internal, with no user-visible spelling.
+- **proposal-compartments** reflects static analysis on `ModuleSource`
+  instances as `bindings` and `needsImportMeta`, and leaves the async bit
+  as an explicit design question: "Do we also need to reflect `isAsync`?"
+  ([1-static-analysis.md](https://github.com/tc39/proposal-compartments/blob/master/1-static-analysis.md)).
+  The SES permits already list the proposal's getters (`bindings`,
+  `needsImport`, `needsImportMeta`) on `%ModuleSourcePrototype%`
+  ([permits.js line 1758](../packages/ses/src/permits.js#L1758)).
+- **XS** virtual module sources use `execute($, Import, ImportMeta)` with
+  `bindings`, `needsImport`, and `needsImportMeta`. They carry no async
+  flag: "Like a module body, the `execute` function can be asynchronous"
+  (Moddable's *XS Compartment* documentation). XS infers asynchrony from
+  the function.
+- No other Endo code uses `isAsync`, `hasTLA`, or `hasTopLevelAwait` for
+  a module source.
+
+This design adopts **`isAsync`**, the name the proposal has under
+consideration. It is used on `ModuleSource.prototype`, on virtual
+sources, and as `__isAsync__` in precompiled records (parallel to
+`__needsImport__` and `__needsImportMeta__`). An earlier draft used
+`__moduleIsAsync__`; it is renamed here so that one name covers all three
+surfaces. The flag is explicit rather than inferred as XS infers it.
+Inference by function kind cannot see through bound functions, proxies, or
+ordinary functions that return promises, and the linker needs the bit
+before it calls the function.
+
+**`initialize`** follows the maintainer's sketch. Using a distinct name
+also gives the linker an unambiguous discriminator from both legacy
+`execute` shapes. One caution: IronHorse (following XS) uses `initialize`
+internally for the hoisting half of a compiled module envelope. A virtual
+source's `initialize` is the whole body. The two never meet in user code,
+but the IronHorse section uses "envelope initializer" for the internal
+one to keep them apart.
 
 ### Bundle-source coupling
 
-`bundle-source` precompiles module sources into a static record at
-build time, in one of several output formats: `endoZipBase64` (a
-hash-addressed zip archive of per-module records, decoded at load),
-`endoScript` (a single self-contained script that concatenates every
-module's synchronous functor into one evaluable program), and
-`nestedEvaluate` / `getExport` (bundles that embed each module functor
-for individual invocation at runtime). The `__moduleIsAsync__: true` flag
-must round-trip through each:
+`bundle-source` emits four formats, which reach two runtimes
+([bundle-source.js line 27](../packages/bundle-source/src/bundle-source.js#L27)):
 
-- `endoZipBase64`: the bundle's per-module record JSON gains the field.
-- `endoScript`: a single-script bundle whose root or any transitively
-  embedded module is async fails to bundle in this format, because
-  endoScript's runtime concatenates synchronous IIFEs into one
-  evaluatable program with no place for an async suspension. The
-  bundler errors with `TypeError: endoScript format does not support
-  top-level await in <specifier>`.
-- `nestedEvaluate` and `getExport`: these formats embed individual
-  module functors; the async-IIFE shape works because each functor is
-  invoked through `compartmentImport`'s async machinery at runtime.
+- **`endoZipBase64`** is a compartment-mapper archive of per-module
+  precompiled records. `importBundle` loads it through `parseArchive` and
+  `await archive.import(...)`, which calls `compartment.import`, an
+  asynchronous path. TLA works: each record carries `__isAsync__`, and the
+  archive names it with the new language designator (next section).
+- **`endoScript`, `getExport`, and `nestedEvaluate`** are all produced by
+  `bundleScript`, which calls compartment-mapper's `makeFunctor`
+  ([script.js line 11](../packages/bundle-source/src/script.js#L11)). That
+  inlines every functor into one script whose runtime calls them in
+  topological order as plain synchronous calls
+  ([compartment-mapper/src/bundle.js line 556](../packages/compartment-mapper/src/bundle.js#L556)).
+  There is no place in that runtime for a suspension, so all three script
+  formats reject TLA at bundle time, naming the module (row 25). An earlier
+  draft claimed that `getExport` and `nestedEvaluate` would work through
+  `compartmentImport`. They share the synchronous runtime with
+  `endoScript`, so that claim was wrong.
 
-Separately from the bundle-source emit path, a load-time policy gate
-sits in `@endo/compartment-mapper`, **not** `@endo/check-bundle`: the
-per-module `parserForLanguage[module.parser]` lookup (e.g. in
-`import-archive-lite.js`) rejects any compartment-map whose per-module
-language/parser designator is unrecognized, on the theory that an
-unknown designator may imply different runtime semantics.
-(`@endo/check-bundle` validates only the bundle's *top-level*
-`moduleFormat` against a closed enum and delegates archive hash
-verification to compartment-mapper's `parseArchive`; it does not gate the
-per-module `parser` field, so it is not the load-bearing surface here.) A
-TLA-bearing bundle is distinguished by a new module-language designator
-(`pre-mjs-async-json` or similar, alongside today's `pre-mjs-json`); an
-unmodified compartment-mapper on a host that has not been upgraded for TLA
-support rejects such bundles by construction.
-This composes cleanly with the Agoric chain's upgrade pattern: until
-the chain's compartment-mapper is taught about the new language
-designator, TLA-bearing bundles are refused at load time, regardless
-of whether the SES shim on the chain is itself TLA-capable. The
-sibling change (adding the designator to compartment-mapper's
-`parserForLanguage` map) is out of scope for this design but is the
-policy half of the bundle-source coupling described above. See open
-question 3 for the bundle-source-format alternative.
+### Compartment-mapper ramifications
+
+1. **Archive language designator.** Today a precompiled ESM record is
+   language `pre-mjs-json`
+   ([archive-parsers.js line 19](../packages/compartment-mapper/src/archive-parsers.js#L19),
+   [import-archive-parsers.js line 19](../packages/compartment-mapper/src/import-archive-parsers.js#L19),
+   [import-archive-all-parsers.js line 21](../packages/compartment-mapper/src/import-archive-all-parsers.js#L21);
+   parsers in `parse-pre-mjs.js` and `parse-archive-mjs.js`; the language
+   union in `types/compartment-map-schema.ts`). The archiver writes
+   `pre-mjs-async-json` for a record whose `__isAsync__` is true. That
+   parser is `pre-mjs-json`'s parser plus one check: the record must carry
+   `__isAsync__: true`. Conversely, `pre-mjs-json` rejects a record that
+   carries it, so the designator and the flag cannot disagree. An archive
+   with no TLA is byte-identical to today's.
+2. **Upgrade gate.** An unmodified compartment-mapper looks up
+   `parserForLanguage[module.parser]` and rejects the unknown
+   `pre-mjs-async-json`. A host that has not been upgraded, such as an
+   Agoric chain, refuses TLA-bearing bundles at load time, whether or not
+   its SES is TLA-capable. `@endo/check-bundle` needs no change: it checks
+   only the top-level `moduleFormat` and delegates archive hashing to
+   `parseArchive`
+   ([check-bundle/lite.js line 56](../packages/check-bundle/lite.js#L56)).
+3. **Script bundlers.** `bundlerSupportForLanguage`
+   ([bundle.js line 274](../packages/compartment-mapper/src/bundle.js#L274),
+   [bundle-lite.js line 270](../packages/compartment-mapper/src/bundle-lite.js#L270))
+   gets no `pre-mjs-async-json` entry, so `makeFunctorFromMap` and `makeScriptFromMap`
+   throw on an async module with a message naming it (row 25).
+4. **Live loading.** The `mjs` language
+   ([parse-mjs.js line 26](../packages/compartment-mapper/src/parse-mjs.js#L26))
+   builds a `ModuleSource`, so `isAsync` arrives with no new language.
+   `importLocation` and `loadLocation(...).import()` already end in
+   `compartment.import`, so a TLA entry module works once SES supports it.
+5. **CommonJS `require` of an async ESM.** The CommonJS wrapper's
+   `require` calls `compartment.importNow`
+   ([parse-cjs-shared-export-wrapper.js line 196](../packages/compartment-mapper/src/parse-cjs-shared-export-wrapper.js#L196)
+   and line 204). Under the first-turn semantics, a plain `importNow` would
+   hand CommonJS a namespace whose bindings are still in their dead zone.
+   Node refuses that case: `require(esm)` of a graph containing TLA throws
+   `ERR_REQUIRE_ASYNC_MODULE`. The wrapper matches Node. It passes
+   `{ requireSync: true }`, catches SES's `TypeError`, and rethrows an
+   `Error` with `code: 'ERR_REQUIRE_ASYNC_MODULE'` (row 24).
+6. **Policy attenuators and exit modules.** These are legacy-shape
+   synchronous virtual sources (`policy.js` line 529, `link.js` line 178,
+   the `execute(){}` placeholder in `import-hook.js` line 759). They are
+   unchanged and stay synchronous.
+
+### IronHorse engine
+
+IronHorse is the bots fork's Rust JavaScript engine
+([ironhorse-engine.md](ironhorse-engine.md)). It must give native modules
+the same observable contract the shim gives emulated ones, because
+hardened262 runs every row on `ironhorse` and `sesIronhorse` next to XS
+and Node.
+
+Where it stands today:
+
+- The module graph models `ModuleRecord` and `ModuleStatus`, and
+  `ModuleStatus` stops at `Evaluated`; "`EvaluatingAsync` is not reachable
+  in the static half"
+  ([module.rs line 174](../rust/engine/ironhorse-vm/src/module.rs#L174)).
+  `link`/`evaluate` (`ModuleGraph::instantiate`, `inner_link`, `evaluate`,
+  `inner_eval`) are ported at the level of results. They are not yet
+  driven from module bytecode.
+- `exec_module`
+  ([dispatch.rs line 4686](../rust/engine/ironhorse-vm/src/interp/dispatch.rs#L4686))
+  halts with a named not-implemented label for each unsupported surface:
+  `module:dynamic-import`, `module:import-meta`, `module:static-linking`,
+  and, when the envelope's execute function is an async function,
+  `module:top-level-await` (line 4721).
+- The guest `Compartment` covers construction, `evaluate`, and
+  `globalThis`. `import`, `importNow`, and callable hooks are its phase 2
+  ([natives/compartment.rs](../rust/engine/ironhorse-vm/src/interp/natives/compartment.rs));
+  the host-side `Compartment::import` always returns
+  `Err(DynamicImport)`
+  ([compartment.rs line 579](../rust/engine/ironhorse-vm/src/compartment.rs#L579)).
+  Virtual module sources are not handled anywhere.
+  [ironhorse-guest-compartment.md](ironhorse-guest-compartment.md) plans
+  `ModuleSource` and `VirtualModuleSource` for the same phase 2.
+- In `rust/engine/ironhorse-262/expectations/whole-tree/`, test262's
+  `language/module-code/top-level-await/` tree records 197 cases skipped
+  under `module:top-level-await`. Another 11 are skipped under
+  `module:static-linking` and 11 under `module:dynamic-import`.
+
+The design for IronHorse:
+
+1. **Spec fields, verbatim.** `ModuleRecord` gains `has_tla`, the
+   `[[AsyncEvaluation]]` ordering stamp, `pending_async_dependencies`,
+   `async_parent_modules`, `top_level_capability`, `cycle_root`, and
+   `evaluation_error`. `ModuleStatus` gains `EvaluatingAsync`.
+   `inner_eval` follows 262's `InnerModuleEvaluation`,
+   `ExecuteAsyncModule`, `AsyncModuleExecutionFulfilled`,
+   `AsyncModuleExecutionRejected`, and `GatherAvailableAncestors` step for
+   step, including `[[CycleRoot]]`. The shim omits `[[CycleRoot]]` because
+   the maintainer judged it unnecessary for observable behavior
+   ([Module-instance contract](#module-instance-contract)). A native engine
+   whose acceptance gate is test262 convergence follows the spec text
+   instead. hardened262 is where the two are checked for observable
+   agreement.
+2. **Envelope execution.** The `module:top-level-await` halt is replaced
+   by running the envelope's execute function as an async function. Its
+   promise gets the fulfilled and rejected reactions above, queued through
+   the ordinary FIFO job queue (`queue_promise_job`,
+   [promise.rs line 804](../rust/engine/ironhorse-vm/src/interp/natives/promise.rs#L804)),
+   so module completions interleave with other promise jobs exactly as the
+   spec's tick-ordering cases (test262 `top-level-ticks.js`,
+   `module-*-resolution-ticks.js`) require. The envelope initializer (the
+   hoisting half) still runs at link time, which gives the first-turn
+   semantics their 262 meaning.
+3. **Prerequisites.** Async evaluation needs real static linking and
+   dynamic import from bytecode. The `module:static-linking` and
+   `module:dynamic-import` halts are cleared first, under
+   [ironhorse-test262-convergence](ironhorse-test262-convergence.md). TLA
+   is the next module surface after them.
+4. **Native `Compartment`.** Phase 2 of the guest `Compartment` adopts
+   this design's contract: `import` returns the root capability's promise;
+   `importNow` runs the first turn and returns the namespace;
+   `importNow(specifier, { requireSync: true })` throws the same
+   `TypeError`; `ModuleSource.prototype.isAsync` is a getter; and
+   `import`/`importNow` accept a virtual source in the `initialize`
+   convention, with the legacy XS `execute` shape kept synchronous.
+5. **Metering and snapshots.** An async module's resumption is a promise
+   job, so the existing metered drain (`run_promise_jobs_with_meter` in
+   `compartment.rs`) meters it with no new mechanism. A machine can be
+   snapshotted while a graph is `EvaluatingAsync`. The new record fields,
+   which are a capability's promise and resolving functions, counters, and
+   parent edge lists, are added to the snapshot schema
+   ([ironhorse-snapshot-schema.md](ironhorse-snapshot-schema.md)) so a
+   restored machine resumes the graph.
+6. **Acceptance.** The 197 `module:top-level-await` expectations move to
+   `pass` (the 24 `module:compiler-byte-divergence` entries in `syntax/`
+   are compiler-oracle comparisons and are tracked separately), and the
+   hardened262 rows pass on `ironhorse`. The `sesIronhorse` agent runs the
+   *shim's* async machinery on IronHorse. That needs only async functions
+   and the job queue, not native module TLA, so `sesIronhorse` can pass
+   the hardened rows before step 2 lands. It is the earliest cross-engine
+   signal.
 
 ### Backward compatibility
 
-- A pre-existing precompiled record without `__moduleIsAsync__` is
+- A pre-existing precompiled record without `__isAsync__` is
   treated as `false`. No round-trip breakage.
 - A sync module re-precompiled with the new analyzer emits byte-identical
   output until the source actually contains top-level `await`.
@@ -585,6 +1014,55 @@ question 3 for the bundle-source-format alternative.
   change is *what it resolves to* in the presence of TLA (it resolves
   later, not sooner). Callers who today rely on
   `compartment.import(spec).then(ns => ...)` continue to work.
+- `compartment.importNow` keeps today's behavior for every graph without
+  TLA. Today an async graph cannot load at all (the functor fails to
+  evaluate), so the first-turn semantics change no working program.
+- The legacy SES and XS virtual-source shapes keep their synchronous
+  `execute` contract. The `initialize` convention is additive.
+- An archive with no TLA uses only `pre-mjs-json` and is byte-identical
+  to today's. A TLA-bearing archive is refused by an un-upgraded
+  compartment-mapper rather than misexecuted.
+
+## Dependencies
+
+| Design | Relationship |
+|---|---|
+| [ironhorse-guest-compartment](ironhorse-guest-compartment.md) | Its phase 2 (`import`, `importNow`, `ModuleSource`, `VirtualModuleSource`) adopts this contract |
+| [ironhorse-test262-convergence](ironhorse-test262-convergence.md) | Clears the `module:static-linking` and `module:dynamic-import` halts that IronHorse TLA builds on; owns the TLA expectations |
+| [ironhorse-ses-compartment-equivalence](ironhorse-ses-compartment-equivalence.md) | Its hook-equivalence table gains the `import`/`importNow` async rows |
+| [ironhorse-snapshot-schema](ironhorse-snapshot-schema.md) | Gains the async module-record fields |
+| [ses-import-attributes](ses-import-attributes.md) | Sibling SES module-loader design; both extend the module-source record and the linker |
+
+## Phased implementation
+
+Each phase lands with the hardened262 baseline movement it causes, so
+progress is visible as rows moving from `failed` to `passed`.
+
+0. **Hardened test262 cases (design phase).** Add the
+   [hardened262 cases](#hardened-test262-cases) and
+   `harness/moduleResolverPairs.js`, and record them as failing on every
+   agent. No source change.
+1. **module-source.** The `isAsync` analyzer visitors, the async functor,
+   `__isAsync__` in the record, the `ModuleSource.prototype.isAsync`
+   getter, and the permit. Until phase 2 lands, the SES linker rejects a
+   record with `__isAsync__: true` with an explicit `SyntaxError` rather
+   than running an async functor unawaited. The `ModuleSource/isAsync`
+   rows pass.
+2. **SES evaluation.** Module-instance and linker bookkeeping,
+   `import` on the root capability, `importNow` first-turn semantics, and
+   `requireSync`. Shim rows 1–17 pass, as do the hardened `import`/`importNow`
+   rows on `sesNode`, `sesXs`, and `sesIronhorse`.
+3. **SES virtual sources.** The `initialize` convention and
+   `import(source)`/`importNow(source)`. Rows 19–23 pass.
+4. **compartment-mapper.** `pre-mjs-async-json`, the script-bundler
+   rejection, and the `require` guard. Rows 14, 24, and 25 pass.
+5. **IronHorse.** After the static-linking and dynamic-import halts are
+   cleared: native async evaluation (the test262 TLA expectations move to
+   `pass`), then the guest `Compartment` phase 2 with this contract (the
+   hardened rows pass on `ironhorse`).
+
+Phases 1–3 port to `actual/master`. Phases 4 and 5 apply to the bots
+fork's compartment-mapper and engine.
 
 ## Alternatives considered
 
@@ -607,47 +1085,27 @@ question 3 for the bundle-source-format alternative.
 
 ## Open questions
 
-1. **Virtual module sources.** Deferred per maintainer. The design
-   preserves the sync-only contract on virtual sources. If a use case
-   arises where a virtual source must itself be async (e.g. a
-   TLA-bearing source generated at import time from a remote tree),
-   the contract on `makeVirtualModuleInstance` would need a parallel
-   evolution. Surface to designer when the use case materializes.
-2. **`importNow` diagnostic shape.** Confirmed by maintainer: a
-   `TypeError` is right for now, with the caveat that the future
-   sync-import proposals (e.g. tc39/proposal-import-sync) may force a
-   more specific diagnostic if "sync import of an async-evaluating
-   module" becomes a distinct user-visible condition rather than a
-   shim-only restriction. Track when the proposal advances; revisit
-   the diagnostic shape then.
-3. **Bundle-source format coverage and load-time language gating.** The
-   `endoScript`-format error in the bundle-source-coupling section is
-   the load-bearing rejection at bundle time. A second rejection
-   surface lives in `@endo/compartment-mapper`: the per-module
-   `parserForLanguage[module.parser]` lookup rejects any compartment-map
-   whose per-module language designator is unrecognized, on the theory
-   that such a designator may imply different runtime semantics. (This is
-   *not* `@endo/check-bundle`, which validates only the bundle's
-   top-level `moduleFormat` and delegates archive hashing to
-   compartment-mapper's `parseArchive`.) A new module-language designator
-   (for example `pre-mjs-async-json` alongside today's `pre-mjs-json`) is
-   the same kind of unrecognized designator, so an unmodified
-   compartment-mapper on an old Agoric chain rejects a TLA-bearing bundle
-   by construction. This is the right composition point with the Agoric
-   chain (and any other host that consumes endo bundles through
-   compartment-mapper) and lets the chain upgrade in lockstep with TLA
-   support: until a host's compartment-mapper is taught about the new
-   language designator, it refuses to load such bundles. The design
-   adopts this: bundle-source emits the new language designator only when
-   the bundle actually contains TLA, and the design assumes a sibling
-   change adds the designator to compartment-mapper's `parserForLanguage`
-   map when the host is upgraded. The bundle-source-coupling section
-   above is the runtime-format surface; compartment-mapper's
-   language-parser table is the policy surface. The remaining open
-   question: should `bundle-source` silently fall back to `endoZipBase64`
-   for sources that would otherwise be `endoScript`-bundled with TLA
-   present, or surface the rejection at bundle time? The draft prefers
-   the explicit error so the build manifests are reproducible.
+1. **Virtual module sources: resolved.** An earlier draft deferred
+   asynchronous virtual sources. The maintainer asked to design them now
+   ([review comment](https://github.com/endojs/endo-but-for-bots/pull/249#discussion_r3919279323)),
+   and [Virtual module sources and the import calling convention](#virtual-module-sources-and-the-import-calling-convention)
+   does so.
+2. **`importNow` on an async graph: resolved.** The maintainer's
+   direction
+   ([review comment](https://github.com/endojs/endo-but-for-bots/pull/249#discussion_r3919243561))
+   replaces the earlier `TypeError` guard with first-turn semantics
+   ([`importNow` returns after the first turn](#importnow-returns-after-the-first-turn)).
+   The `TypeError` survives only behind `{ requireSync: true }`. If
+   tc39/proposal-import-sync advances and defines a user-visible error for
+   synchronously importing an async graph, the opt-in adopts its shape.
+3. **Script-format bundles.** All three script formats (`endoScript`,
+   `getExport`, `nestedEvaluate`) reject TLA at bundle time, because they
+   share compartment-mapper's synchronous bundle runtime. The open choice:
+   should a later change add an asynchronous variant of that runtime, or
+   should `bundle-source` instead fall back to `endoZipBase64` when TLA is
+   present? The draft prefers neither for now. An explicit error keeps
+   build manifests reproducible, and `endoZipBase64` is already the
+   default format.
 4. **Re-link with new edges — resolved at design level, not left to
    implementation.** A `compartment.import` call that re-enters the same
    compartment for a fresh root specifier reuses memoized instances. An
@@ -674,6 +1132,21 @@ question 3 for the bundle-source-format alternative.
    to garbage-collect `asyncParentModules` entries for parents that have
    themselves been discarded between imports (a memory-hygiene question,
    not a correctness one).
+5. **Referrer for `import(source)`.** A virtual source passed to
+   `import` without a specifier has no referrer, so this design treats
+   its `bindings` `from` strings as full specifiers. An alternative is an
+   options bag, `compartment.import(source, { specifier })`. The
+   specifier would name the referrer for `resolveHook` and might also name
+   the module in diagnostics, without memoizing the instance under it.
+   The design defers the options bag until a caller needs relative
+   imports from a virtual source.
+6. **Convergence with XS.** XS infers asynchrony from `execute` and has
+   no `initialize` convention or `requireSync` option. Until Moddable
+   adopts (or rejects) `isAsync` and `initialize`, hardened262's `xs`
+   baseline records those rows as failing, and the `sesXs` agent covers
+   XS hosts through the shim. Raising the naming with Moddable and the
+   proposal-compartments champions is a follow-up to this design, not a
+   prerequisite.
 
 ## Prompt
 
@@ -717,3 +1190,30 @@ question 3 for the bundle-source-format alternative.
 > class); backward compatibility for serialized ModuleSource bundles;
 > SES augmentation; ModuleSource augmentation; alternatives considered;
 > open questions.
+>
+> Revision prompt (2026-10-10), from the maintainer's
+> [CHANGES_REQUESTED review](https://github.com/endojs/endo-but-for-bots/pull/249#pullrequestreview-5095793109):
+>
+> Let's advance and pin the merge base to current llm branch with hash and
+> refresh. In particular, I want to expand the scope of this design to
+> cover implementation in both the shim, ramifications for compartment
+> mapper, and also the new IronHorse engine. We'll need hardened test262
+> cases in the design phase.
+>
+> Inline: I think a likely acceptable direction for this is that
+> `importNow` returns after the first turn of the initialization of the
+> module, whereas `import` returns a promise for the eventually completed
+> exports, when the async module initialization has completed.
+>
+> Inline: Let's get ambitious and design this out as well. I think it
+> likely that virtual module instances will be constructed by calling
+> `import` with a virtual module source, where a virtual module source is a
+> protocol of the `ModuleSource` constructor or `import` syntax and methods
+> of compartments. I'm inclined to use the `import` because it will be
+> harder to shim the native behavior on the `ModuleSource` package. So, we
+> would simply expose a calling convention for both synchronous and
+> asynchronous modules, reusing the property names we already use or have
+> proposed on module sources instances to reflect whether the module uses
+> top level await (isAsync?, please check proposals).
+>
+> Consider `import({ needsImport: true, needsImportMeta: true, isAsync: true, initialize: async(environment, {import, importNow, importMeta}) {}, bindings: []})`.
