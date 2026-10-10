@@ -368,6 +368,29 @@ test.failing('bundle cjs-compat', async t => {
   t.deepEqual(log, expectedLog);
 });
 
+test('bundled MJS preserves hoisted function name when module shadows Object', async t => {
+  // Regression for the `Object`-shadow bug: a module that imports a
+  // binding named `Object` introduces a `let Object;` declaration in the
+  // precompiled-module functor body. The hoisted-function-name preamble
+  // emitted by `@endo/module-source` previously called
+  // `Object.defineProperty(F,'name',{value:'F'})` inline, which resolved
+  // against the imported binding (here `() => null`) and threw
+  // `TypeError`. The fix threads `defineProperty` through the functor
+  // calling convention; `packages/compartment-mapper/src/bundle-mjs.js`
+  // passes the bundle runtime's `defineProperty` (destructured from
+  // `globalThis.Object` before user-source code runs) into the functor.
+  // This test exercises that bundle-mjs path end-to-end, complementing
+  // the `ses`-driven test in `packages/module-source/test/module-source.test.js`.
+  const objectShadowFixture = new URL(
+    'fixtures-object-shadow/node_modules/app/index.js',
+    import.meta.url,
+  ).toString();
+  const bundle = await makeFunctor(read, objectShadowFixture);
+  const compartment = new Compartment({ __options__: true });
+  const namespace = compartment.evaluate(bundle)();
+  t.is(namespace.F.name, 'F');
+});
+
 test('bundle cjs-compat default-difficulties', async t => {
   const cjsFixture = new URL(
     'fixtures-cjs-compat/node_modules/default-difficulties/index.mjs',

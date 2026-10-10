@@ -59,15 +59,37 @@ test('export default', t => {
   });
 });
 
+// Captured at module-loader scope, before any test shadows `Object`, so a
+// test that imports a binding named `Object` into the module-under-test does
+// not break the helper itself. Production callers (`ses`'s
+// `makeModuleInstance`, `@endo/compartment-mapper`'s `bundle` runtime) source
+// `defineProperty` from a pre-shadow capture too.
+const intrinsicDefineProperty = Object.defineProperty;
+
 /**
  * @param {ExecutionContext} t
  * @param {string} source
  * @param {object} [options]
  * @param {object} [options.endowments]
  * @param {Map<string, Map<string, any>>} [options.imports]
+ * @param {((target: object, key: string, descriptor: object) => object) | undefined} [options.defineProperty]
+ *   The value passed for the functor's `defineProperty` field. Defaults to
+ *   the captured-pre-shadow intrinsic. Tests pass `undefined` (with the
+ *   `defineProperty` key present in `options`) to exercise the
+ *   host-pairing surface (an old host that does not pass the field).
  */
 function initialize(t, source, options = {}) {
   const { endowments, imports = new Map() } = options;
+  // Default-by-key-presence (rather than default destructuring) so that an
+  // explicit `defineProperty: undefined` from the caller is preserved
+  // rather than coerced to the intrinsic. The host-pairing test below
+  // depends on this distinction.
+  const defineProperty = Object.prototype.hasOwnProperty.call(
+    options,
+    'defineProperty',
+  )
+    ? options.defineProperty
+    : intrinsicDefineProperty;
   const record = new ModuleSource(source);
   // t.log(record.__syncModuleProgram__);
   const liveUpdaters = {};
@@ -164,6 +186,7 @@ function initialize(t, source, options = {}) {
     imports: updateImports,
     liveVar: liveUpdaters,
     onceVar: onceUpdaters,
+    defineProperty,
     importMeta: { url: 'file://meta.url' },
   });
 
@@ -793,6 +816,61 @@ test('export namespace as from re-export end-to-end', t => {
     ]),
   });
   t.deepEqual(namespace.ns, { apples: 'apples', oranges: 'oranges' });
+});
+
+test('hoisted function name survives Object import', t => {
+  // The bug: the preamble emitted `Object.defineProperty(F,'name',...)`
+  // inline in the functor body. A module that imports a binding named
+  // `Object` introduces a `let Object;` declaration in the functor body
+  // (the import-decl hoisting); the `imports` updater assigns it to the
+  // imported value before the preamble runs. The preamble's
+  // `Object.defineProperty` then resolves against the imported binding
+  // rather than the SES intrinsic. The imported value here is the
+  // function `() => null`, so the unpatched preamble would evaluate
+  // `(() => null).defineProperty(...)`, which is `undefined(...)`, which
+  // throws `TypeError`. The fix routes the call through the destructured
+  // `defineProperty` field of the functor calling convention; the call
+  // becomes `$h_defineProperty(F,'name',...)`, which is unaffected by
+  // the body's `let Object;` shadow.
+  const source = `
+    import { Object } from './object.js';
+    export function F() {}
+  `;
+
+  // Structural assertion: the emitted preamble does not reference
+  // `Object.defineProperty` inside the functor body. The hidden-binding
+  // call is what makes the functor body immune to the import-decl
+  // shadow.
+  const { __syncModuleProgram__ } = new ModuleSource(source);
+  t.false(
+    __syncModuleProgram__.includes('Object.defineProperty'),
+    'emitted preamble must not call Object.defineProperty in the functor body',
+  );
+
+  // End-to-end assertion: a module that shadows `Object` via import
+  // initializes without throwing and the hoisted function's `.name` is
+  // set. Drives the patched code path through to completion.
+  const { namespace } = initialize(t, source, {
+    imports: new Map([['./object.js', new Map([['Object', () => null]])]]),
+  });
+  t.is(namespace.F.name, 'F');
+});
+
+test('host-pairing: old host (no defineProperty field) throws TypeError', t => {
+  // Exercises the host-pairing surface the changeset describes: a host
+  // that does not pass the `defineProperty` field into the functor
+  // (e.g., an old `ses` or `@endo/compartment-mapper` paired with the
+  // new `@endo/module-source`) leaves the destructured value as
+  // `undefined`. The preamble's `$h_defineProperty(F,'name',...)`
+  // then invokes `undefined(...)` and throws `TypeError`. This is the
+  // failure mode named in `.changeset/module-source-define-property.md`.
+  t.throws(
+    () =>
+      initialize(t, `export function F() {}`, {
+        defineProperty: undefined,
+      }),
+    { instanceOf: TypeError },
+  );
 });
 
 test('source map generation', t => {

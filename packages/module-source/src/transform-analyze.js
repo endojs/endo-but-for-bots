@@ -62,9 +62,10 @@ const makeCreateStaticRecord = transformSource =>
       );
     }
 
-    let preamble = sourceOptions.importDecls.join(',');
-    if (preamble !== '') {
-      preamble = `let ${preamble};`;
+    let preamble = '';
+    const importDecls = sourceOptions.importDecls.join(',');
+    if (importDecls !== '') {
+      preamble += `let ${importDecls};`;
     }
     const js = JSON.stringify;
     const isrc = sourceOptions.importSources;
@@ -81,7 +82,13 @@ const makeCreateStaticRecord = transformSource =>
         let src = '';
         if (cvname) {
           // It's a function assigned to, so set its name property.
-          src = `Object.defineProperty(${cvname},'name',{value:${js(vname)}});`;
+          // The hidden binding (rather than `Object.defineProperty`) is
+          // used here so that a module-local `import { Object }` declaration
+          // cannot shadow the call. The host passes the SES intrinsic
+          // through the functor's `defineProperty` field; see
+          // `packages/ses/src/module-instance.js` and
+          // `packages/compartment-mapper/src/bundle-mjs.js`.
+          src = `${h.HIDDEN_DEFINE_PROPERTY}(${cvname},'name',{value:${js(vname)}});`;
         }
         const hDeclId = isOnce ? h.HIDDEN_ONCE : h.HIDDEN_LIVE;
         src += `${hDeclId}.${vname}(${cvname || ''});`;
@@ -98,7 +105,7 @@ const makeCreateStaticRecord = transformSource =>
     // well.
     // Relies on the evaluator to ensure these functions are strict.
     let functorSource = `\
-({imports:${h.HIDDEN_IMPORTS},liveVar:${h.HIDDEN_LIVE},onceVar:${h.HIDDEN_ONCE},import:${h.HIDDEN_IMPORT},importMeta:${h.HIDDEN_META}})=>(function(){'use strict';\
+({imports:${h.HIDDEN_IMPORTS},liveVar:${h.HIDDEN_LIVE},onceVar:${h.HIDDEN_ONCE},defineProperty:${h.HIDDEN_DEFINE_PROPERTY},import:${h.HIDDEN_IMPORT},importMeta:${h.HIDDEN_META}})=>(function(){'use strict';\
 ${preamble}\
 ${scriptSource}
 })()

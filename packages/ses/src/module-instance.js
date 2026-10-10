@@ -478,6 +478,7 @@ export const makeModuleInstance = (
             imports: freeze(imports),
             onceVar: freeze(onceVar),
             liveVar: freeze(liveVar),
+            defineProperty,
             import: dynamicImport,
             importMeta,
           }),
