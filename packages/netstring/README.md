@@ -81,22 +81,27 @@ still falls between messages, never between the parts of one message.
 import { makePipe } from '@endo/stream';
 import { makeNetstringReader, makeNetstringWriter } from '@endo/netstring';
 
-const [input, output] = makePipe();
-const writer = makeNetstringWriter(output);
-const reader = makeNetstringReader(input);
+const [pipeWriter, pipeReader] = makePipe();
+const writer = makeNetstringWriter(pipeWriter);
+const reader = makeNetstringReader(pipeReader);
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+
+// Consumer: start reading first. makePipe is a rendezvous pipe, so each
+// writer.next() resolves only after the reader has taken the value.
+const consumed = (async () => {
+  for await (const message of reader) {
+    console.log(decoder.decode(message));
+  }
+})();
 
 // Producer
 await writer.next(encoder.encode('hello'));
 await writer.next(encoder.encode('world'));
 await writer.return();
 
-// Consumer
-for await (const message of reader) {
-  console.log(decoder.decode(message));
-}
+await consumed;
 // Output: hello
 // Output: world
 ```
@@ -120,10 +125,14 @@ Creates a writer that encodes messages with netstring framing.
 
 **Parameters:**
 - `output` - A `Writer<Uint8Array, undefined>` from `@endo/stream`
-- `options.chunked` - Enable zero-copy mode for streams that support
+- `options.chunked` - Write the length prefix, each message part, and the
+  trailing comma as separate writes issued without waiting on each other,
+  instead of copying them into a single buffer, for streams that support
   consecutive writes without waiting (default: false)
 
-**Returns:** A `Writer<Uint8Array, undefined>` that frames messages.
+**Returns:** A `Writer<Uint8Array | Uint8Array[], undefined>` that frames
+messages. Each `next()` takes either one `Uint8Array` or an array of parts that
+together form one message.
 
 ## Protocol
 
