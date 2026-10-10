@@ -68,6 +68,22 @@ plugin calls before it starts any provider process.
 | `unavailable` (`detail` is display text)                     | plugin                                                                     |
 | `needs-containment`                                          | prompt-origin gate only                                                    |
 
+## Security
+
+`SECURITY.md` is the policy shared by every Endo package for reporting a
+vulnerability; CI keeps it identical across packages. The concerns particular
+to this package are:
+
+- A `CredentialSource` and the `env` of a grant it returns are secrets. Hold
+  them in the deployment, never hand them to a guest or a remote
+  holder, and never write the `env` to a log or a usage sink.
+- The prompt-origin gate does not make a backend safe to share. It checks a
+  label that the caller writes, so the boundary is which holders receive an
+  uncontained backend at all.
+- The usage recorder copies an `unavailable` result's `detail` into the usage
+  record. A plugin must not put credential material or raw provider stderr in
+  `detail`.
+
 ## Not yet here
 
 - A persisted admission ledger. Admission policy is the broker's (or the
