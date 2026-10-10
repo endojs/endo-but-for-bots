@@ -19,7 +19,7 @@ on IronHorse and on an **oracle**, an `xst` build of XS compiled from the
 `c/moddable` submodule, and records each case's result in checked-in
 **whole-tree expectations**. The **covered set** is the list of cases IronHorse
 passes; the **ratchet floor** is the dated covered set that no later change may
-shrink, and a **candidate** is a freshly generated covered set proposed to
+shrink; and a **candidate** is a freshly generated covered set proposed to
 replace it.
 
 Moddable SDK 10.0.0 contains a concentrated set of XS engine corrections made
@@ -36,8 +36,8 @@ validation job, only after every port has finished. Promotion of a new ratchet
 floor is already gated separately (§ Oracle, Matrix, and Ratchet Change
 Control, item 3), so the reason for this order is not that gate. It is that the
 pin regenerates the whole expectation tree, a shared artifact that every port
-would otherwise conflict on, and that child 6 must measure all five ports'
-code together; see § Considered and Rejected for the early-drift-report
+would otherwise conflict on, which is why child 6 must measure all five
+ports' code together; see § Considered and Rejected for the early-drift-report
 alternative.
 
 The oracle pin target is the annotated `10.0.0` tag,
@@ -215,7 +215,7 @@ reviewer can check the spec reading separately from the code.
 same child only while that child has at most two failed probes. (A probe is
 the targeted Rust test that confirms a provisional `already-conformant` row;
 see § Evidence Basis.) At the third,
-the child stops, reports the failed probes, and each becomes its own parked
+the child stops and reports the failed probes; each becomes its own parked
 `gate: go-ahead` follow-up job for the maintainer to size and authorize; the
 child's sizes above assume no more than two such conversions. This matches the
 stop-and-report rule for child 2.
@@ -240,7 +240,9 @@ that decides four things:
   hardened262 matrix should run the native surface rather than the shim) or
   recommends no-go. On no-go, child 5 stops after the note, R22 is reclassified
   `not-applicable`, and child 6's matrix run keeps the current IronHorse
-  results.
+  results. The R22 cases that the 10.0.0 oracle passes and IronHorse fails are
+  then expected drift: child 6 lists them under R22, not as unclassified
+  drift, and they do not count toward the child 6 stop rule.
 - **Representation.** Where the immutable bit lives (on the buffer row, or in a
   side table keyed by buffer), and how every write path reaches it.
 - **Precedence.** The order of the detached and immutable checks on each write,
@@ -326,7 +328,12 @@ children's PRs is merged into the base child 6 builds on, checked through
 `gh pr view`. A child's PR is found by its `<!-- garden-job: <basename> -->`
 marker, where the basename is the child's own or a re-run's (below). A merged
 PR is stronger evidence than a completion report, which records only that a
-job finished. If `gh` or the garden journal is unreachable, or a child's PR
+job finished. Every terminal outcome this plan permits ends in a merged PR,
+so a permitted stop never deadlocks the gate: on no-go, child 5 merges its
+note-only PR; a child 2, 3, or 4 that stops and reports merges whatever it
+landed, and its PR body names the stopped rows and their parked follow-up
+jobs; a child that landed nothing merges a note-only PR recording the stop.
+If `gh` or the garden journal is unreachable, or a child's PR
 cannot be found, the check fails closed. On failure child 6 stops, changes
 nothing, and reports which child failed the check; the maintainer fixes the
 cause and promotes child 6 again. An inattentive promotion therefore still
