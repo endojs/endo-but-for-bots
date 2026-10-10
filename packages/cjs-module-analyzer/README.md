@@ -15,7 +15,7 @@ code to determine:
 
 - **exports**: The names exported by the module
 - **reexports**: Modules whose exports are re-exported
-- **requires**: The `require()` calls in the module
+- **requires**: The specifiers of the `require()` calls in the module
 
 This is used by [`@endo/compartment-mapper`](../compartment-mapper/README.md)
 to build a module graph from CommonJS sources without executing them.
@@ -34,7 +34,7 @@ const source = `
 const { exports, reexports, requires } = analyzeCommonJS(source, 'my-module.js');
 // exports: ['meaning', 'helper']
 // reexports: []
-// requires: [{ specifier: './helper.js', type: 0 }]
+// requires: ['./helper.js']
 ```
 
 ## Supported Patterns
