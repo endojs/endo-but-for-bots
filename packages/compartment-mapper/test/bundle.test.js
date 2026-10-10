@@ -240,6 +240,43 @@ test('makeScript bundles the output of syncModuleTransforms', async t => {
   t.deepEqual(log, expectedLog);
 });
 
+/**
+ * Makes a `cjs` transform that appends a marker statement to each module.
+ *
+ * @param {string} marker
+ */
+const appendMarker = marker => sourceBytes => {
+  const source = new TextDecoder().decode(sourceBytes);
+  const bytes = new TextEncoder().encode(`${source}\n'${marker}';\n`);
+  return { bytes, parser: /** @type {const} */ ('cjs') };
+};
+
+test('makeScript prefers moduleTransforms over syncModuleTransforms for the same language', async t => {
+  const asyncMarker = 'moduleTransforms-marker-7c2e';
+  const syncMarker = 'syncModuleTransforms-marker-3d9b';
+  const appendAsyncMarker = appendMarker(asyncMarker);
+  const bundle = await makeScript(read, fixture, {
+    moduleTransforms: {
+      cjs: async sourceBytes => appendAsyncMarker(sourceBytes),
+    },
+    syncModuleTransforms: { cjs: appendMarker(syncMarker) },
+  });
+  t.true(bundle.includes(asyncMarker));
+  t.false(bundle.includes(syncMarker));
+});
+
+test('makeScript treats empty or undefined syncModuleTransforms as absent', async t => {
+  const baseline = await makeScript(read, fixture);
+  const withEmpty = await makeScript(read, fixture, {
+    syncModuleTransforms: {},
+  });
+  const withUndefined = await makeScript(read, fixture, {
+    syncModuleTransforms: undefined,
+  });
+  t.is(withEmpty, baseline);
+  t.is(withUndefined, baseline);
+});
+
 test('makeFunctor with useEvaluate preserves error for compiled sourceUrlPrefix when sourceUrlPrefix runtime option absent', async t => {
   const bundle = await makeFunctor(read, fixture, {
     useEvaluate: true,
