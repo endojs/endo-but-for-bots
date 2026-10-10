@@ -32,6 +32,8 @@ import {
   relativeTime,
 } from '@endo/spaces-util/time-formatters.js';
 
+import { CommandCard } from './command-message.js';
+
 // 1:1 recipient-filtered default inbox view, migrated from imperative DOM to a
 // confined Preact component rendered through a single `renderConfined`.
 //
@@ -971,44 +973,6 @@ const ValueBody = ({
 harden(ValueBody);
 
 /**
- * Body for the `command` and `command-result` messages the daemon records in
- * an agent's own inbox when the agent issues a host command (dismiss, resolve,
- * reject, adopt, send, request). Both render as compact monospace cards: a
- * `command` shows a pending icon with the command name and its argument
- * values; a `command-result` shows a success or failure icon with its summary.
- *
- * @param {object} props
- * @param {InboxMessage} props.message
- */
-const CommandBody = ({ message }) => {
-  const raw = /** @type {any} */ (message.raw);
-  if (message.type === 'command') {
-    const argsStr = raw.args
-      ? Object.values(raw.args)
-          .map(value => `${value}`)
-          .join(' ')
-      : '';
-    return h(
-      'div',
-      { class: 'command-message' },
-      h('span', { class: 'command-icon' }, '\u25D0'),
-      h(
-        'span',
-        { class: 'command-text' },
-        `${raw.commandName} ${argsStr}`.trim(),
-      ),
-    );
-  }
-  return h(
-    'div',
-    { class: `command-message ${raw.success ? 'success' : 'error'}` },
-    h('span', { class: 'command-icon' }, raw.success ? '\u2713' : '\u2717'),
-    h('span', { class: 'command-text' }, raw.summary || ''),
-  );
-};
-harden(CommandBody);
-
-/**
  * Dispatch a message to its type-specific body component.
  *
  * @param {object} props
@@ -1046,7 +1010,8 @@ const MessageContent = ({
       });
     case 'command':
     case 'command-result':
-      return h(CommandBody, { message });
+      // Command and command-result messages render as compact cards.
+      return h(CommandCard, { message: /** @type {any} */ (message.raw) });
     default:
       return null;
   }
