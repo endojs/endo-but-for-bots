@@ -19,6 +19,7 @@ moduleFunctor({
   imports(importedVariableUpdaters) { /* ... */ },
   liveVar: exportedVariableUpdaters,
   onceVar: exportedConstantEmitters,
+  defineProperty: Object.defineProperty,
   importMeta: Object.create(null)
 });
 ```
@@ -86,6 +87,7 @@ line numbers.
   imports: $h_imports,
   liveVar: $h_live,
   onceVar: $h_once,
+  defineProperty: $h_defineProperty,
   importMeta: $h_import_meta,
 }) => {
   let foo, bar, fizz, buzz, colour;
@@ -189,6 +191,7 @@ type UpdaterArgument = {
   imports(Updaters, ExportAlls) => void,
   liveVar(Exporters) => void,
   onceVar(Exporters) => void,
+  defineProperty: typeof Object.defineProperty,
 };
 
 // Update functions communicate values both out of one module's scope and into

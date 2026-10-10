@@ -565,8 +565,8 @@ A compiled module source record has the following shape:
   an initialization record and initializes the module.
   This property distinguishes this type of module record.
   The name implies a future record type that supports top-level await.
-  * An initialization record has the properties `imports`, `liveVar`, `importMeta` and
-    `onceVar`.
+  * An initialization record has the properties `imports`, `liveVar`, `importMeta`,
+    `onceVar` and `defineProperty`.
     * `imports` is a function that accepts a map from partial import
       module specifiers to maps from names that the corresponding module
       exports to notifier functions.
@@ -581,6 +581,11 @@ A compiled module source record has the following shape:
     * `onceVar` is a record that maps constants exported by this
       module to a function that may be called to initialize the
       corresponding value in another module.
+    * `defineProperty` is the SES intrinsic `Object.defineProperty`.
+      It must be provided.
+      The generated code uses it to set the `name` of hoisted function
+      declarations, so that a module-local binding named `Object` cannot
+      shadow the call.
 * `__syncModuleFunctor__` is an optional function that if present is used
   instead of the evaluation of the `__syncModuleProgram__` string. It will be
   called with the initialization record described above. It is intended to be
