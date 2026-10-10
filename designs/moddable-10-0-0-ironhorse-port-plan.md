@@ -3,11 +3,11 @@
 | | |
 |---|---|
 | **Created** | 2026-10-10 |
-| **Updated** | 2026-10-10 (panel rounds 1 and 2) |
+| **Updated** | 2026-10-10 (panel rounds 1 to 3) |
 | **Author** | kriscendobot (prompted) |
 | **Status** | Proposed |
 
-## What is the problem being solved?
+## What is the Problem Being Solved?
 
 IronHorse (`rust/engine`) is this repository's Rust JavaScript engine. It
 deliberately tracks the semantics of XS, the C engine in the Moddable SDK, and
@@ -20,8 +20,8 @@ shrink, and a **candidate** is a freshly generated covered set proposed to
 replace it.
 
 Moddable SDK 10.0.0 contains a concentrated set of XS engine corrections made
-between 2026-09-04 and 2026-10-08. Following an older XS implementation can
-preserve a defect after XS has fixed it. The oracle is still XS 8.3.1, so it
+between 2026-09-04 and 2026-10-08. An engine that copies the behavior of an
+older XS can keep a defect that XS has since fixed. The oracle is still XS 8.3.1, so it
 cannot reveal those defects either. This plan classifies every requested
 release item against `rust/engine` at `7d2eb307a`, identifies the actual
 IronHorse gaps, and turns only those gaps into review-held implementation jobs.
@@ -79,7 +79,8 @@ The test262 column quotes the checked-in expectation files at the same commit,
 not a fresh run. Expectation files are under
 `rust/engine/ironhorse-262/expectations/whole-tree/`, one file per directory
 (for example `language%2Fexpressions%2Ftypeof%40%400000.txt`). Any row's claim
-can be reproduced with:
+can be reproduced with `grep -rh '^<test-path>' .` in that directory; for
+example:
 
 ```sh
 cd rust/engine/ironhorse-262/expectations/whole-tree
@@ -93,12 +94,18 @@ The command above prints, among others:
 language/expressions/typeof/proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"object\"», «\"function\"») to be true"
 ```
 
+A `fail:` line means IronHorse's result differs from the oracle's and the
+oracle passed; it records an IronHorse gap, not an oracle defect.
+
 A passing expectation proves nothing for a case that a skip hides or that the
 corpus does not contain. Every `already-conformant` verdict is therefore
 provisional, and each such row names a child that adds a targeted Rust probe
 for the corrected behavior. Until the probe lands, the row is a reading-based
 verdict; if the probe fails, the row becomes a `needs-port` item in the same
-child.
+child, subject to the probe-failure limit under § Implementation children. The
+child's PR changes each probed row from `already-conformant` (provisional) to
+`already-conformant` (or to `needs-port`) in this table, so a grep for
+`(provisional)` lists exactly the rows whose probe has not landed.
 
 Code paths are under `rust/engine/` unless stated otherwise. The XS commit
 column links `https://github.com/Moddable-OpenSource/moddable/commit/<sha>`.
@@ -106,7 +113,7 @@ column links `https://github.com/Moddable-OpenSource/moddable/commit/<sha>`.
 ### Items
 
 Each row has a stable ID (R01 to R26), and the table is sorted by owning child,
-with the rows no child owns last. To find a child's work, read the Child column;
+with the rows that no child owns listed last. To find a child's work, read the Child column;
 § Implementation children lists the same IDs per child.
 
 | ID | Release item | XS commit | Classification | Child | IronHorse evidence | test262 expectation |
@@ -163,14 +170,28 @@ for its rows, including the probes for its `already-conformant` rows. Sizes use
 the calibrated categories in the roadmap's
 [Size and Time Estimates](README.md#size-and-time-estimates).
 
-| Order | Parked basename | Size | Scope and acceptance |
-|---:|---|---|---|
-| 1 | `moddable-10-0-0-ironhorse-callability-port` | M, 2 to 3 days | R01. Preserve callable/constructable proxy shape through revocation and persistence; pass the four failing revoked-proxy expectations plus snapshot round trips. Follows the snapshot-golden rule under § Orchestration. |
-| 2 | `moddable-10-0-0-ironhorse-compiler-safety-port` | M, 2 to 3 days | R02, R03. Port the XS scope-slot limit with the counting rule below, and unwind switch temporaries on every labeled exit; targeted compiler/runtime and byte-identity tests. |
-| 3 | `moddable-10-0-0-ironhorse-builtins-order-port` | S, 1 to 2 days | Ports R04, R05, R06; probes R07 to R16. R16 has a partner check in child 6 (the capture-group oracle run). |
-| 4 | `moddable-10-0-0-ironhorse-typedarray-port` | M, 2 to 3 days | Ports R17, R18, R19; probes R20 and R21 without changing their logic. |
-| 5 | `moddable-10-0-0-ironhorse-immutable-arraybuffer-port` | L, 1.5 to 2 weeks | R22. Opens with a short design note (below) before any write-path code. Implement immutable buffers and write guards with direct native-surface, write-rejection, transfer, slice, detached-precedence, snapshot, and SES-boot tests; update `FROZEN_REALM_FORECLOSURE` from measured behavior. Follows the snapshot-golden rule under § Orchestration. Does not move the oracle pin, the hardened262 matrix, or the ratchet. |
-| 6 | `moddable-10-0-0-ironhorse-oracle-validation` | M, 3 to 5 days | Refuses to start unless the ports completion is clean (§ Orchestration). Move the oracle pin, re-audit overlays, triage unclassified oracle drift, run the hardened262 matrix and the R16 capture-group oracle check, and produce the candidate ratchet comparison, all described under change control below. |
+| Child | Parked basename | Size | Scope and acceptance |
+|---|---|---|---|
+| 1 callability | `moddable-10-0-0-ironhorse-callability-port` | M, 2 to 3 days | R01. Preserve callable/constructable proxy shape through revocation and persistence; pass the four failing revoked-proxy expectations plus snapshot round trips. Follows the snapshot-golden rule under § Orchestration. |
+| 2 compiler safety | `moddable-10-0-0-ironhorse-compiler-safety-port` | M, 2 to 3 days | R02, R03. Port the XS scope-slot limit with the counting rule below, and unwind switch temporaries on every labeled exit; targeted compiler/runtime and byte-identity tests. |
+| 3 built-ins order | `moddable-10-0-0-ironhorse-builtins-order-port` | M, 2 to 3 days | Ports R04, R05, R06; probes R07 to R16. The R08 and R13 probes cover revoked as well as live callable proxies, and are re-run after child 1 merges, because child 1 changes the `slot_is_callable` predicate they rest on. R16 has a partner check in child 6 (the capture-group oracle run). |
+| 4 TypedArray | `moddable-10-0-0-ironhorse-typedarray-port` | M, 2 to 3 days | Ports R17, R18, R19; probes R20 and R21 without changing their logic. |
+| 5 immutable ArrayBuffer | `moddable-10-0-0-ironhorse-immutable-arraybuffer-port` | L, 1.5 to 2 weeks | R22. Opens with a short design note (below) before any write-path code. Implement immutable buffers and write guards with direct native-surface, write-rejection, transfer, slice, detached-precedence, snapshot, and SES-boot tests; update `FROZEN_REALM_FORECLOSURE` from measured behavior. Follows the snapshot-golden rule under § Orchestration. Does not move the oracle pin, the hardened262 matrix, or the ratchet. |
+| 6 oracle validation | `moddable-10-0-0-ironhorse-oracle-validation` | M, 3 to 5 days | Refuses to start unless the ports completion is clean (§ Orchestration). Move the oracle pin, re-audit overlays, triage unclassified oracle drift, run the hardened262 matrix and the R16 capture-group oracle check, and produce the candidate ratchet comparison, all described under change control below. |
+
+Children 1 to 5 run in parallel; the numbers identify children and do not
+give an execution order. Only child 6 runs after the others.
+
+Every expected value in a port child's tests cites the specification step or
+the XS 10.0.0 diff hunk it comes from, in a comment beside the assertion, so a
+reviewer can check the spec reading separately from the code.
+
+**Probe-failure limit.** A probe that fails in children 3 or 4 is ported in the
+same child only while that child has at most two failed probes. At the third,
+the child stops, reports the failed probes, and each becomes its own parked
+`gate: go-ahead` follow-up job for the maintainer to size and authorize; the
+child's sizes above assume no more than two such conversions. This matches the
+stop-and-report rule for child 2.
 
 The basenames name the area each child changes. They share the
 `moddable-10-0-0-ironhorse-` prefix with the orchestration
@@ -211,6 +232,16 @@ difference and stops rather than choosing a new rule.
 
 ## Orchestration
 
+Some garden terms used in this section: the **board** is the garden's job queue; a
+**parked** job waits in its plan area and does nothing until promoted;
+`gate: go-ahead` marks a parked job that waits for maintainer authorization;
+and an **orchestration** is a job that promotes a set of parked children and
+writes a **completion record** (`jobs/tada/<orchestration>.md` on the garden
+journal) when they are all done. That record's `orchestration-status` field
+shows `complete` when every child succeeded, or `complete-with-failures` with
+the failed children listed under `failed-children`. The mechanics are in
+garden `skills/orchestration/SKILL.md`.
+
 Children 1 to 5 change different engine code, but some of them regenerate the
 same generated artifacts, so they are not fully disjoint. Each shared artifact
 has a rule:
@@ -242,16 +273,6 @@ The artifacts that force an order belong to child 6: the `c/moddable` pin, the
 full regenerated expectation tree, the five hardened262 host baselines, and the
 candidate covered set. Child 6 must measure all six children's code together.
 
-Some garden terms used below: the **board** is the garden's job queue; a
-**parked** job waits in its plan area and does nothing until promoted;
-`gate: go-ahead` marks a parked job that waits for maintainer authorization;
-and an **orchestration** is a job that promotes a set of parked children and
-writes a **completion record** (`jobs/tada/<orchestration>.md` on the garden
-journal) when they are all done. That record's `orchestration-status` field
-shows `complete` when every child succeeded, or `complete-with-failures` with
-the failed children listed under `failed-children`. The mechanics are in
-garden `skills/orchestration/SKILL.md`.
-
 So the campaign runs in two stages:
 
 1. **Ports, parallel.** One orchestration, `moddable-10-0-0-ironhorse-ports`,
@@ -265,18 +286,30 @@ So the campaign runs in two stages:
    because it would also fire on `complete-with-failures` and would baseline a
    known defect.
 
-The barrier has two parts. `promote-plan.sh --require-tada` refuses to promote
-child 6 while the ports orchestration has no completion record, but it accepts
-`complete-with-failures`, so it is not the barrier by itself. The maintainer
-checks the record before promoting, and child 6's job body also begins with a
-deterministic self-check: it reads the ports completion record and stops,
-reporting failure without changing anything, unless the record shows
-`orchestration-status: complete` and lists no `failed-children`. An inattentive
-promotion therefore still cannot move the pin over a known defect.
+The gate is child 6's own deterministic self-check, the first step of its job
+body; it is the sole enforcing mechanism. `promote-plan.sh --require-tada` and
+the maintainer's look at the record are advisory: the flag only refuses while
+the ports orchestration has no completion record, and it accepts
+`complete-with-failures`. The self-check passes only when both hold:
+
+- **Every port child completed cleanly.** Either the ports completion record
+  shows `orchestration-status: complete` with no `failed-children`, or, for
+  each child listed under `failed-children`, a later clean completion report
+  of a re-run of that same basename exists (`jobs/tada/<child>.md`, dated after
+  the orchestration's record, not marked `orchestration-failed`).
+- **Every port child's PR is merged.** A completion report records that a job
+  finished, not that its PR merged, so the self-check also confirms through
+  `gh pr view` that each of the five children's PRs is merged into the base
+  child 6 builds on.
+
+Otherwise child 6 stops, changes nothing, and reports which child or PR failed
+the check; the maintainer fixes the cause and promotes child 6 again. An
+inattentive promotion therefore still cannot move the pin over a known defect.
 
 If a port child fails, re-run that child alone after fixing the cause (the
-other children's merged work stands). Child 6 is promoted only once every port
-child has a clean completion. While child 6 is held, the oracle stays at 8.3.1,
+other children's merged work stands). The re-run's clean completion report is
+what the self-check reads in place of the orchestration's failure entry, so no
+new orchestration record is needed. While child 6 is held, the oracle stays at 8.3.1,
 so the port children are validated by their own targeted Rust tests, not by the
 oracle. For the rows the 8.3.1 oracle gets wrong (the ordering fixes and
 `Math.round`), the expected values in those tests come from the specification
@@ -298,7 +331,15 @@ scripts/jobs/post-orchestration.sh --parallel --on-child-failure continue \
 
 `--adopt-go-ahead` retags the parked `go-ahead` children as orchestrated in the
 same commit as the orchestration record, so no child can be promoted outside
-it. Then, after the maintainer has confirmed that the ports completed cleanly:
+it. Then, once the ports have finished, the maintainer may look at the record
+first (advisory; child 6's self-check is the gate):
+
+```sh
+grep -E '^(orchestration-status|failed-children)' \
+  journal/jobs/tada/moddable-10-0-0-ironhorse-ports.md
+```
+
+and promote child 6:
 
 ```sh
 scripts/jobs/promote-plan.sh --require-tada moddable-10-0-0-ironhorse-ports \
@@ -335,8 +376,10 @@ Only child 6 may change these surfaces:
      did not audit. Every result change that no row R01 to R26 explains is
      listed in its own section of the report with one triage verdict: the
      oracle now agrees with IronHorse; a new IronHorse gap, which becomes a new
-     parked follow-up job and is not fixed in child 6; or a harness or overlay
-     change. A case IronHorse passes that leaves the covered set only because
+     parked follow-up job and is not fixed in child 6; a **port mismatch**,
+     where the 10.0.0 oracle disagrees with a result a port child pinned from
+     the specification, which becomes a parked follow-up job naming the
+     disputed spec reading; or a harness or overlay change. A case IronHorse passes that leaves the covered set only because
      the 10.0.0 oracle now fails it is reported in this section, not counted
      silently as a loss or accepted. Acceptance waits until every drift entry
      has a verdict.
@@ -399,9 +442,12 @@ There are two separate checks, owned by two children:
 - **Oracle (child 6).** The 8.3.1 oracle still has the bug, so a differential
   run of that case could read past an allocation and still report matching
   output. Child 6 adds the case to the differential set only after moving to
-  the 10.0.0 oracle, and runs it once against an AddressSanitizer build of that
-  oracle to confirm the oracle side is clean. This is a check of the oracle,
-  which the differential harness trusts, not of IronHorse.
+  the 10.0.0 oracle, and checks that the 10.0.0 oracle's output matches
+  IronHorse's pinned output. An AddressSanitizer build of the oracle is not
+  part of this plan: it would need sanitizer build support in `xs-oracle` that
+  this plan neither specifies nor sizes, and it would check the harness rather
+  than IronHorse. If the maintainer wants that stronger check, it is a
+  separate, separately sized job.
 
 ## Appendix: ownership map
 
