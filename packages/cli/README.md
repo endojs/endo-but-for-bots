@@ -1,5 +1,236 @@
-# Endo CLI
+# `@endo/cli`
 
-The Endo command line is a user interface for managing the Endo application
-runner (daemon).
-This includes managing the lifecycle of the daemon process.
+Command line interface for the Endo daemon.
+
+## Overview
+
+The `endo` command provides a user interface for managing the Endo daemon,
+a persistent host for guest programs running in Hardened JavaScript.
+Through the CLI, users can run confined programs, manage named values, send
+messages, and control the daemon lifecycle.
+
+The daemon is per-OS-account: each operating-system account that runs
+`endo start` gets its own daemon, listening on a socket private to that
+account.
+One account cannot stop or send messages to another account's daemon.
+
+See [`@endo/daemon`](../daemon/README.md) for more about the underlying daemon.
+For a worked tutorial that follows the same arc as this reference, see
+[`demo/README.md`](./demo/README.md).
+
+## Getting Started
+
+This package is not yet published to npm.
+To use it locally, clone the Endo repository and run from the workspace:
+
+```sh
+git clone https://github.com/endojs/endo.git
+cd endo
+yarn install
+cd packages/cli
+yarn endo start   # Start the daemon
+yarn endo --help  # Run CLI commands
+```
+
+Or invoke the CLI directly:
+
+```sh
+node packages/cli/bin/endo --help
+```
+
+The examples below assume `endo` resolves to that binary.
+For interactive use, alias it in your current shell:
+
+```sh
+alias endo="$PWD/packages/cli/bin/endo"
+```
+
+## Daemon Lifecycle
+
+Start, stop, and manage the Endo daemon:
+
+```sh
+endo start    # Start the daemon (error if already running)
+endo stop     # Stop the daemon
+endo restart  # Stop the daemon if running, then start it
+endo ping     # Check if the daemon is responsive
+endo log -f   # Follow the daemon log
+```
+
+Reset state:
+
+```sh
+endo clean  # Erase ephemeral state (logs, sockets)
+endo purge  # Erase all persistent state (requires confirmation)
+```
+
+## Running Programs
+
+Run a confined program:
+
+```sh
+endo run program.js
+endo run program.js --powers NONE   # No special powers (default)
+endo run program.js --powers HOST   # All of the primary user's authority
+endo run program.js --powers ENDO   # All of the power of the daemon
+endo run program.js --powers <pet>  # A named guest's powers
+```
+
+The "primary user" is the user account that started the daemon.
+`HOST` designates everything that user has authority to do.
+See [Agents and Messages](#agents-and-messages) below for a fuller
+treatment of agents.
+
+Make a persistent worker (a long-lived process the daemon spawns to run
+guest code) wherein programs can run:
+
+```sh
+endo make worker.js --name my-worker
+endo make worker.js --worker existing-worker  # Reuse a worker
+endo make worker.js --powers NONE             # No special powers
+endo make worker.js --powers AGENT            # The current agent's own powers
+endo make worker.js --powers ENDO             # All of the power of the daemon
+endo make worker.js --powers <pet>            # A named guest's powers
+```
+
+The `--powers` vocabulary differs between `run` and `make`:
+`run` accepts `HOST` for the primary user's authority,
+while `make` accepts `AGENT` for the current agent's own powers.
+Both also accept any pet name; reserved pet names like `SELF` and `HOST`
+work wherever they are defined in the calling agent's namespace.
+
+Bundle a program for later use:
+
+```sh
+endo bundle ./app --name my-bundle
+endo run --bundle my-bundle
+```
+
+## Managing Names
+
+Endo uses petnames to refer to values.
+Each agent has its own namespace of names.
+A path of names can traverse into nested namespaces.
+
+```sh
+endo list                    # List known names (or: endo ls)
+endo list some-directory     # List names in a directory
+endo list path.to.directory  # List names in a deeply nested directory
+endo show my-value           # Print a value
+endo cat my-blob             # Dump blob contents
+endo remove old-name         # Forget a name (or: endo rm)
+endo move old-name new-name  # Rename (or: endo mv)
+endo copy src-name dst-name  # Duplicate a name (or: endo cp)
+```
+
+Store values:
+
+```sh
+endo store --name my-blob --path ./file.txt    # Store a file
+endo store --name my-text --text "hello"       # Store text
+endo store --name my-data --json '{"a":1}'     # Store JSON
+echo "data" | endo store --name piped --stdin  # Store from stdin
+```
+
+A "blob" in Endo is a binary value the daemon keeps in its
+content-addressed store, not a `web.Blob`.
+Storing text or a file produces a blob the daemon can later read back
+through the petname.
+
+Create directories for organizing names:
+
+```sh
+endo mkdir my-directory
+```
+
+## Evaluating Expressions
+
+Evaluate JavaScript in a worker:
+
+```sh
+endo eval '1 + 1' --name two
+endo eval 'a + b' a b --name sum  # With named values as arguments
+endo eval 'x * 2' \
+  --worker my-worker \
+  --name doubled
+```
+
+## Agents and Messages
+
+Endo supports multiple agents (personas, profiles) that can exchange messages
+and capabilities.
+These personas can be held by people, confined programs, bots, or AI agents.
+People can have more than one.
+
+Create agents:
+
+```sh
+endo mkhost alice  # Create a host agent (all of the primary user's authority)
+endo mkguest bob   # Create a guest agent (limited authority)
+```
+
+Subsequent commands use `--as <agent>` to act as a particular agent:
+
+```sh
+endo list --as alice
+endo list --as bob
+```
+
+Send messages with embedded references (alice the host sends to bob the guest):
+
+```sh
+endo send bob "Here is @my-value for you" --as alice
+endo send bob "Take @this-thing:your-name" --as alice  # bob sees it as "your-name"
+```
+
+Check inbox and handle messages (bob the guest receives from alice):
+
+```sh
+endo inbox --as bob              # List bob's received messages
+endo inbox --follow --as bob     # Follow messages as they arrive
+endo adopt 1 your-name --as bob  # Adopt the @your-name reference from message #1
+endo dismiss 1 --as bob          # Delete message #1
+```
+
+The second positional argument to `adopt` is the name the sender
+embedded in the message (here `your-name`, from the second `endo send`
+example above).
+Pass `--name <local-name>` to rename the value while adopting.
+
+Request and grant capabilities.
+A request is a message that expects a response; `resolve` answers it
+with a named value, `reject` answers it with a reason:
+
+```sh
+# bob (guest) requests a capability from alice (host)
+endo request "I need access to the database" --as bob --to alice
+
+# alice (host) reviews inbox and grants or rejects
+endo inbox --as alice                      # See bob's request
+endo resolve 1 database-ref --as alice     # Grant request #1 with a named value
+endo reject 1 "Not authorized" --as alice  # Or reject it
+```
+
+## Workers
+
+Spawn a new worker process:
+
+```sh
+endo spawn --name my-worker
+```
+
+## Locating Files
+
+Find daemon-related paths:
+
+```sh
+endo where state  # State directory
+endo where sock   # Unix socket / named pipe
+endo where log    # Log file
+endo where cache  # Cache directory
+endo where run    # PID file directory
+```
+
+## License
+
+[Apache-2.0](./LICENSE)
