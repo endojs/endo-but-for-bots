@@ -3,7 +3,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { MAX_TIMER_DELAY_MS } from '../src/guards.js';
-import { makeLimitEnforcer, makeProcessGroupKiller } from '../src/limits.js';
+import { makeLimitEnforcer } from '../src/limits.js';
 
 /** A manual clock: timers fire only when the test calls `fire()`. */
 const makeManualTimers = () => {
@@ -263,96 +263,6 @@ test('limits are checked at construction', t => {
       terminate: () => {},
     }),
   );
-});
-
-test('the process group killer signals the negated pid it was made for', t => {
-  /** @type {Array<[number, string]>} */
-  const calls = [];
-  const killProcessGroup = makeProcessGroupKiller({
-    kill: (pid, signal) => {
-      calls.push([pid, signal]);
-    },
-    pid: 1234,
-    platform: 'linux',
-  });
-  t.true(killProcessGroup());
-  t.deepEqual(calls, [[-1234, 'SIGKILL']]);
-  t.false(
-    makeProcessGroupKiller({
-      kill: () => {},
-      pid: undefined,
-      platform: 'linux',
-    })(),
-  );
-});
-
-test('the process group killer refuses a pid that names no child group', t => {
-  /** @type {number[]} */
-  const calls = [];
-  for (const pid of [0, 1, -1234, 1.5, NaN, 2 ** 31]) {
-    t.throws(
-      () =>
-        makeProcessGroupKiller({
-          kill: target => {
-            calls.push(target);
-          },
-          pid,
-          platform: 'linux',
-        }),
-      { message: /pid must be an integer from 2/ },
-      String(pid),
-    );
-  }
-  t.deepEqual(calls, []);
-});
-
-test('the process group killer tolerates a group that is already gone', t => {
-  const gone = makeProcessGroupKiller({
-    kill: () => {
-      throw Object.assign(Error('no such process'), { code: 'ESRCH' });
-    },
-    pid: 1234,
-    platform: 'linux',
-  });
-  t.false(gone());
-  const denied = makeProcessGroupKiller({
-    kill: () => {
-      throw Object.assign(Error('not permitted'), { code: 'EPERM' });
-    },
-    pid: 1234,
-    platform: 'linux',
-  });
-  t.throws(() => denied(), { message: 'not permitted' });
-});
-
-test('the process group killer signals the pid itself on win32', t => {
-  /** @type {Array<[number, string]>} */
-  const calls = [];
-  const killProcessGroup = makeProcessGroupKiller({
-    kill: (pid, signal) => calls.push([pid, signal]),
-    pid: 1234,
-    platform: 'win32',
-  });
-  t.true(killProcessGroup());
-  t.deepEqual(calls, [[1234, 'SIGKILL']]);
-});
-
-test('the process group killer requires the platform power', t => {
-  /** @type {number[]} */
-  const calls = [];
-  t.throws(
-    () =>
-      makeProcessGroupKiller(
-        /** @type {any} */ ({
-          kill: (/** @type {number} */ target) => {
-            calls.push(target);
-          },
-          pid: 1234,
-        }),
-      ),
-    { message: /platform must be a string/ },
-  );
-  t.deepEqual(calls, []);
 });
 
 test('a throwing terminate does not escape abort', t => {

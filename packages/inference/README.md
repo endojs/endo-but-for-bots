@@ -28,8 +28,9 @@ A provider may join at any of these layers.
      output bytes, and turn count, and turns cancellation into `cancelled`.
      `maxWallClockMs` is at most `MAX_TIMER_DELAY_MS` (`2 ** 31 - 1`,
      exported from `@endo/inference/guards.js`), the
-     longest delay a host timer honors. `makeProcessGroupKiller` makes the
-     `terminate` for one detached child, bound to that child's pid.
+     longest delay a host timer honors. A plugin that spawns a process
+     through `@endo/host-spawner` with `killProcessGroup: true` passes
+     `terminate: () => proc.kill('SIGKILL')`, so the whole group dies.
    - `@endo/inference/classify.js`: `makeShapeClassifier` maps a raw response
      to a result tag through a table pinned per exact provider version. An
      unknown version or an unrecognized response does not classify, so the
