@@ -1,3 +1,5 @@
+/** @import {SyncModuleTransforms} from '../src/types.js' */
+
 import 'ses';
 import fs from 'fs';
 import url from 'url';
@@ -154,6 +156,54 @@ test('makeScript with useEvaluate and sourceUrlPrefix preserves source URLs in s
 
 test('makeFunctor works', async t => {
   const bundle = await makeFunctor(read, fixture);
+  const log = [];
+  const print = entry => {
+    log.push(entry);
+  };
+  const compartment = new Compartment({
+    globals: { print },
+    __options__: true,
+  });
+  compartment.evaluate(bundle)();
+  t.deepEqual(log, expectedLog);
+});
+
+/**
+ * Counts how many `cjs` modules pass through a sync module transform, so a
+ * test can assert that `syncModuleTransforms` reaches the bundler's linker.
+ */
+const makeCountingSyncModuleTransforms = () => {
+  const counter = { count: 0 };
+  /** @type {SyncModuleTransforms} */
+  const syncModuleTransforms = {
+    cjs: sourceBytes => {
+      counter.count += 1;
+      return { bytes: sourceBytes, parser: 'cjs' };
+    },
+  };
+  return { counter, syncModuleTransforms };
+};
+
+test('makeScript applies syncModuleTransforms', async t => {
+  const { counter, syncModuleTransforms } = makeCountingSyncModuleTransforms();
+  const bundle = await makeScript(read, fixture, { syncModuleTransforms });
+  t.true(counter.count > 0);
+  const log = [];
+  const print = entry => {
+    log.push(entry);
+  };
+  const compartment = new Compartment({
+    globals: { print },
+    __options__: true,
+  });
+  compartment.evaluate(bundle);
+  t.deepEqual(log, expectedLog);
+});
+
+test('makeFunctor applies syncModuleTransforms', async t => {
+  const { counter, syncModuleTransforms } = makeCountingSyncModuleTransforms();
+  const bundle = await makeFunctor(read, fixture, { syncModuleTransforms });
+  t.true(counter.count > 0);
   const log = [];
   const print = entry => {
     log.push(entry);
