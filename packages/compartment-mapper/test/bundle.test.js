@@ -216,6 +216,30 @@ test('makeFunctor applies syncModuleTransforms', async t => {
   t.deepEqual(log, expectedLog);
 });
 
+test('makeScript bundles the output of syncModuleTransforms', async t => {
+  const marker = 'syncModuleTransforms-marker-5a1f';
+  /** @type {SyncModuleTransforms} */
+  const syncModuleTransforms = {
+    cjs: sourceBytes => {
+      const source = new TextDecoder().decode(sourceBytes);
+      const bytes = new TextEncoder().encode(`${source}\n'${marker}';\n`);
+      return { bytes, parser: 'cjs' };
+    },
+  };
+  const bundle = await makeScript(read, fixture, { syncModuleTransforms });
+  t.true(bundle.includes(marker));
+  const log = [];
+  const print = entry => {
+    log.push(entry);
+  };
+  const compartment = new Compartment({
+    globals: { print },
+    __options__: true,
+  });
+  compartment.evaluate(bundle);
+  t.deepEqual(log, expectedLog);
+});
+
 test('makeFunctor with useEvaluate preserves error for compiled sourceUrlPrefix when sourceUrlPrefix runtime option absent', async t => {
   const bundle = await makeFunctor(read, fixture, {
     useEvaluate: true,
