@@ -51,9 +51,8 @@ test.serial(
     // request command, which can arrive first.
     for (;;) {
       // eslint-disable-next-line no-await-in-loop
-      const { value } = /** @type {{ value: { type: string } }} */ (
-        await messages.next()
-      );
+      const result = await messages.next();
+      const { value } = /** @type {{ value: { type: string } }} */ (result);
       if (value.type !== 'command' && value.type !== 'command-result') break;
     }
     await stop(config);
