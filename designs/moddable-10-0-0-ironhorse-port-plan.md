@@ -3,11 +3,14 @@
 | | |
 |---|---|
 | **Created** | 2026-10-10 |
-| **Updated** | 2026-10-10 (panel rounds 1 to 3) |
+| **Updated** | 2026-10-10 (panel rounds 1 to 4) |
 | **Author** | kriscendobot (prompted) |
 | **Status** | Proposed |
 
 ## What is the Problem Being Solved?
+
+In short: XS 10.0.0 fixed engine bugs that IronHorse may have copied, and the
+XS build IronHorse is tested against is too old to notice.
 
 IronHorse (`rust/engine`) is this repository's Rust JavaScript engine. It
 deliberately tracks the semantics of XS, the C engine in the Moddable SDK, and
@@ -29,8 +32,13 @@ IronHorse gaps, and turns only those gaps into review-held implementation jobs.
 The order of the work follows from that. Because the oracle is old, it cannot
 check the ports, so each port is checked by targeted Rust tests whose expected
 values come from the specification. The oracle pin moves last, in a separate
-validation job, only after every port has finished, so that a regenerated
-expectation tree cannot record an unfinished port as the new normal.
+validation job, only after every port has finished. Promotion of a new ratchet
+floor is already gated separately (§ Oracle, matrix, and ratchet change
+control, item 3), so the reason for this order is not that gate. It is that the
+pin regenerates the whole expectation tree, a shared artifact that every port
+would otherwise conflict on, and that child 6 must measure all five ports'
+code together; see § Considered and rejected for the early-drift-report
+alternative.
 
 The oracle pin target is the annotated `10.0.0` tag,
 `5f215f776f93039755343dbe75a09aa2615045f4`. That commit is Pebble platform glue
@@ -52,7 +60,9 @@ The four classifications are exclusive:
 - `already-conformant`: the named IronHorse path already has the corrected
   behavior.
 - `needs-port`: IronHorse has the old behavior or lacks a required proposal
-  surface it intends to support.
+  surface it intends to support. R22 is the one row in the second sense, and
+  its support decision is child 5's first deliverable (§ Immutable ArrayBuffer
+  design note).
 - `not-applicable`: the prerequisite feature is not implemented in IronHorse,
   so the correction has no reachable IronHorse analog.
 - `host-excluded`: the feature is refused on purpose by the single-agent,
@@ -65,7 +75,7 @@ out of scope: the source inventory found no `rust/engine` impact from them.
 
 ### Summary
 
-| Classification | Count | Items and owning child |
+| Classification | Count | Items, with the owning child number in parentheses |
 |---|---:|---|
 | `needs-port` | 10 | R01 revoked Proxy callability (1); R02 scope-slot limit, R03 labeled exit from `switch` (2); R04 `Math.round`, R05 `repeat`, R06 `Array.from` ToLength order (3); R17 TypedArray length-constructor order, R18 `set` order, R19 constructor content type (4); R22 immutable ArrayBuffer (5) |
 | `already-conformant` (provisional) | 12 | R07 to R16 (3), R20 and R21 (4). Reading-based until each row's probe lands; see § Evidence basis |
@@ -79,20 +89,24 @@ The test262 column quotes the checked-in expectation files at the same commit,
 not a fresh run. Expectation files are under
 `rust/engine/ironhorse-262/expectations/whole-tree/`, one file per directory
 (for example `language%2Fexpressions%2Ftypeof%40%400000.txt`). Any row's claim
-can be reproduced with `grep -rh '^<test-path>' .` in that directory; for
-example:
+can be reproduced with `grep -rh '^<test-path>' .` in that directory. Each
+expectation line is the test path, then the mode (`sloppy`, `strict`, or
+`module`), then the result. For example:
 
 ```sh
 cd rust/engine/ironhorse-262/expectations/whole-tree
 grep -rh '^language/expressions/typeof/proxy.js' .
 ```
 
-Each expectation line starts with the test path, then the mode and the result.
 The command above prints, among others:
 
 ```text
 language/expressions/typeof/proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"object\"», «\"function\"») to be true"
 ```
+
+The `«` and `»` marks are verbatim: the test262 harness's `assert.sameValue`
+message uses them to quote values, and the expectation file stores the message
+as the run produced it.
 
 A `fail:` line means IronHorse's result differs from the oracle's and the
 oracle passed; it records an IronHorse gap, not an oracle defect.
@@ -125,15 +139,15 @@ with the rows that no child owns listed last. To find a child's work, read the C
 | R05 | String `repeat` with an empty receiver and huge finite count | `4b1afbc46e3f` | `needs-port` | 3 | `natives/string.rs`, `NativeMethod::StringRepeat`, rejects `n > 0x7fff_ffff` before its empty-content fast return. | `String/prototype/repeat` passes because test262 stops at 2^31 - 1. Add empty-string cases at 2^31 and `Number.MAX_SAFE_INTEGER`, while Infinity and negative counts keep throwing. |
 | R06 | `Array.from` ToLength / Construct order | `eb7d6de2802c` | `needs-port` | 3 | `natives/array.rs::array_from_inner` computes ToLength correctly, but the array-like path rejects a length above `u32::MAX` before `Construct(C)`; `ironhorse-262/tests/error_messages_async.rs` locks the old early error. | Ordinary `Array/from/source-object-length.js` passes; there is no test262 case proving `C` is called for length `2**32`. Add that order case. |
 | R07 | `charAt` / `charCodeAt` truncation | `6099bb0d146b` | `already-conformant` (provisional) | 3 | `natives/string.rs::call_string_indexed` uses `array_to_integer_or_infinity`; f64-to-i64 saturation prevents 32-bit wrap. | `String/prototype/{charAt,charCodeAt}` passes. Probe: positive and negative Infinity, and `2**32+1`. |
-| R08 | String `replace` / `replaceAll` / RegExp `@@replace` Proxy callability | `dca752b707d4` | `already-conformant` (provisional) | 3 | `function.rs::slot_is_callable` follows live proxy targets and the replace/RegExpExec paths in `natives/regexp.rs` use that predicate. | `String/prototype/{replace,replaceAll}` and RegExp `Symbol.replace` expectations pass. Probe: callable-Proxy replacer and `exec`. |
+| R08 | String `replace` / `replaceAll` / RegExp `@@replace` Proxy callability | `dca752b707d4` | `already-conformant` (provisional) | 3 | `function.rs::slot_is_callable` follows live proxy targets and the replace/RegExpExec paths in `natives/regexp.rs` use that predicate. | `String/prototype/{replace,replaceAll}` and RegExp `Symbol.replace` expectations pass. Probe (child 3): live callable-Proxy replacer and `exec`. Probe (child 1): the same cases with a revoked Proxy, since R01 changes the predicate. |
 | R09 | String index/search methods with no argument | `4340468ff9c8` | `already-conformant` (provisional) | 3 | `natives/string.rs::call_string_indexed` supplies `undefined` and then ToString for omitted search values in `indexOf`, `lastIndexOf`, `includes`, `startsWith`, and `endsWith`. | All five expectation files pass, but none calls the method with zero arguments. Probe: each method with no argument. This item is not `String.prototype.search`, which had no corresponding release change. |
 | R10 | `Symbol.for()` with no argument | `912290f420e4` | `already-conformant` (provisional) | 3 | `natives/dispatch.rs`, `NativeMethod::SymbolFor`, receives the missing argument as `undefined`, applies ToPrimitive/ToString, and uses `symbol_registry`. | `Symbol/for` passes except `cross-realm.js`, a named shared skip. No case calls it with zero arguments. Probe: `Symbol.for() === Symbol.for("undefined")`. |
 | R11 | `Array.from` non-callable iterator order | `a795d3e926d3` | `already-conformant` (provisional) | 3 | `array_from_inner` reads `@@iterator` and rejects a non-callable method before constructing the target. | `Array/from/get-iter-method-err.js` and custom-constructor iterator cases pass. Probe: a counting constructor that must not be called. |
 | R12 | `Reflect.apply` / `Reflect.construct` argument read order | `7abe778a17a2` | `already-conformant` (provisional) | 3 | `natives/reflect.rs::reflect_call_operands` validates, calls `arraylike_to_vec`, then dispatches the target/trap; the opcode fast path shares it. | Both `Reflect/{apply,construct}` trees pass with no skips. Probe: a Proxy target whose trap logs before or after the argument-list reads. |
-| R13 | `Object.prototype.toString` through a handler | `477da5802658` | `already-conformant` (provisional) | 3 | `natives/dispatch.rs`, `NativeMethod::ObjectToString`, determines Array/callable brand first and reads `@@toStringTag` through the ordinary MOP, so a proxy `get` trap observes it. | `Object/prototype/toString/proxy-*` passes. Probe: a callable Proxy whose `get` trap records the `@@toStringTag` read. |
-| R14 | `Array.fromAsync` non-object `next` result | `fbbd2cbb8d42` | `already-conformant` (provisional) | 3 | `natives/array.rs::from_async_resume_next` rejects the result promise with a TypeError when the awaited iterator result is not a reference. | `Array/fromAsync` passes all 186 recorded rows, including the non-object result cases. |
-| R15 | Set methods with size above 2^31 - 1 | `0768ebb7c6a8` | `already-conformant` (provisional) | 3 | `natives/collection.rs::get_set_record` retains `size` as f64/Infinity and every branch compares that full value. | Set operation trees pass the large fake-size cases such as `union/size-is-a-number.js`. |
-| R16 | `String.prototype.replace` capture-group memory safety | `db0490c5bcd5` | `already-conformant` (provisional) | 3 (IronHorse probe), 6 (oracle run) | `natives/regexp.rs::{regexp_generic_substitution,regexp_get_substitution,string_plain_substitution}` append to a bounds-checked `Vec` in one pass. `$<name>` performs one `mop_get` and ToString per occurrence; indexes are clamped, saturated, or checked before every slice. The crate forbids unsafe code. | `RegExp/prototype/Symbol.replace/named-groups*` and `result-coerce-groups*` pass. See the capture-group note in the appendix. |
+| R13 | `Object.prototype.toString` through a handler | `477da5802658` | `already-conformant` (provisional) | 3 | `natives/dispatch.rs`, `NativeMethod::ObjectToString`, determines Array/callable brand first and reads `@@toStringTag` through the ordinary MOP, so a proxy `get` trap observes it. | `Object/prototype/toString/proxy-*` passes. Probe (child 3): a live callable Proxy whose `get` trap records the `@@toStringTag` read. Probe (child 1): a revoked callable Proxy, whose brand must stay `Function`. |
+| R14 | `Array.fromAsync` non-object `next` result | `fbbd2cbb8d42` | `already-conformant` (provisional) | 3 | `natives/array.rs::from_async_resume_next` rejects the result promise with a TypeError when the awaited iterator result is not a reference. | `Array/fromAsync` passes all 186 recorded rows, but those pass on 8.3.1 as well and so cannot show the 10.0.0 change. Probe, from the `fbbd2cbb8d42` hunk: an async iterator whose `next` returns a primitive (`1`, `undefined`, and a Symbol) and an iterator whose `next` resolves to a primitive; each rejects the `Array.fromAsync` promise with a TypeError, and the iterator's `return` is not called. |
+| R15 | Set methods with size above 2^31 - 1 | `0768ebb7c6a8` | `already-conformant` (provisional) | 3 | `natives/collection.rs::get_set_record` retains `size` as f64/Infinity and every branch compares that full value. | Set operation trees pass the large fake-size cases such as `union/size-is-a-number.js`, but those pass on 8.3.1 as well. Probe, from the `0768ebb7c6a8` hunk: for each of `union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, and `isDisjointFrom`, a set-like argument whose `size` is `2**31` and one whose `size` is `2**32 + 1`, with counting `has`/`keys`, asserting the result and which of `has` or `keys` the method calls. |
+| R16 | `String.prototype.replace` capture-group memory safety | `db0490c5bcd5` | `already-conformant` (provisional) | 3 (IronHorse probe), 6 (oracle run) | `natives/regexp.rs::{regexp_generic_substitution,regexp_get_substitution,string_plain_substitution}` append to a bounds-checked `Vec` in one pass. `$<name>` performs one `mop_get` and ToString per occurrence; indexes are clamped, saturated, or checked before every slice. The crate forbids unsafe code. | `RegExp/prototype/Symbol.replace/named-groups*` and `result-coerce-groups*` pass. See the capture-group note in the appendix; the oracle run is output-only and is not evidence of memory safety. |
 | R17 | TypedArray length constructor: ToIndex before prototype read | `df98bbacb808` | `needs-port` | 4 | `natives/dispatch.rs::native_ctor_buffer`, `Native::TypedArray` length arm, calls `to_number_f64`, then `typed_array_prototype`, then `index_from_number`; the comment names the old XS order. | `TypedArrayConstructors/ctors/length-arg` is largely hidden by resizable-buffer skips. Add a `newTarget.prototype` getter plus negative, oversized, and throwing lengths. |
 | R18 | TypedArray `set` array-like offset/read/detach order | `2d059ebaee86` | `needs-port` | 4 | `natives/buffer.rs`, `NativeMethod::TypedArraySet`, rejects offsets above `i32::MAX` before `arraylike_length`, and throws after each array-like element detaches the target where the spec performs the failed integer-indexed set without that throw. | `set/array-arg-targetbuffer-detached-on-get-src-value-no-throw.js` fails; resizable-dependent order cases skip. Add a huge-offset/source-length order case. |
 | R19 | TypedArray constructor content type | `c645752e4b44` | `needs-port` | 4 | The source-TypedArray arm in `natives/dispatch.rs::native_ctor_buffer` copies zero elements without checking BigInt-versus-Number domain, so empty cross-domain construction succeeds. | `ctors*/typedarray-arg/src-typedarray-{big,not-big}-throws.js` is masked by resizable-buffer setup. Add zero-length cross-domain cases. |
@@ -144,6 +158,13 @@ with the rows that no child owns listed last. To find a child's work, read the C
 | R24 | ArrayBuffer resize rejection order | `b4e0cab143c7` | `not-applicable` | none | `natives/dispatch.rs`, `NativeMethod::ArrayBufferResize`, always returns `Halt::NotImplemented("array-buffer-resize:unsupported")`; resizable construction is also refused. Resizable buffers are unimplemented rather than banned by policy. | `ArrayBuffer/prototype/resize` is uniformly a named unsupported-opcode skip. |
 | R25 | `Atomics.wait` leak/deadlock and post-coercion revalidation | `e1fa1b788922`, `83ab166a0386` | `host-excluded` | none | `natives/buffer.rs::atomics_dispatch` refuses wait/notify/waitAsync before allocating a waiter or taking a lock; the single-agent fixed-buffer profile has no resizable view to revalidate. | `Atomics/wait*` is pre-skipped as `structural:can-block` / `structural:multi-agent`. Keep the refusal test; do not add waiter machinery. |
 | R26 | `Math.irandom` | `d17c0de3099b` | `host-excluded` | none | `ironhorse-vm/src/interp/realm.rs` and `interp/native_ids.rs` omit nondeterministic `Math.random`; the XS-only `irandom` and `imod` extensions are absent by the same deterministic-host policy. | No test262 item exists. |
+
+Two of these verdicts rest on the current feature set. R24 is
+`not-applicable` only while resizable ArrayBuffers stay unimplemented, and the
+resizable-buffer skips currently hide part of R17 to R19 and R21. When
+resizable support lands, R17 to R21 and R24 must be re-probed, since the cases
+those skips hide become reachable. R25 stays `host-excluded` only while the
+host is single-agent.
 
 ### Worked example: revoked Proxy
 
@@ -172,22 +193,28 @@ the calibrated categories in the roadmap's
 
 | Child | Parked basename | Size | Scope and acceptance |
 |---|---|---|---|
-| 1 callability | `moddable-10-0-0-ironhorse-callability-port` | M, 2 to 3 days | R01. Preserve callable/constructable proxy shape through revocation and persistence; pass the four failing revoked-proxy expectations plus snapshot round trips. Follows the snapshot-golden rule under § Orchestration. |
-| 2 compiler safety | `moddable-10-0-0-ironhorse-compiler-safety-port` | M, 2 to 3 days | R02, R03. Port the XS scope-slot limit with the counting rule below, and unwind switch temporaries on every labeled exit; targeted compiler/runtime and byte-identity tests. |
-| 3 built-ins order | `moddable-10-0-0-ironhorse-builtins-order-port` | M, 2 to 3 days | Ports R04, R05, R06; probes R07 to R16. The R08 and R13 probes cover revoked as well as live callable proxies, and are re-run after child 1 merges, because child 1 changes the `slot_is_callable` predicate they rest on. R16 has a partner check in child 6 (the capture-group oracle run). |
+| 1 callability | `moddable-10-0-0-ironhorse-callability-port` | M, 2 to 3 days | R01. Preserve callable/constructable proxy shape through revocation and persistence; pass the four failing revoked-proxy expectations plus snapshot round trips. Also owns the revoked-Proxy probes for R08 and R13. Follows the snapshot-golden rule under § Orchestration. |
+| 2 compiler safety | `moddable-10-0-0-ironhorse-compiler-safety-port` | M, 2 to 3 days | R02, R03. Port the XS scope-slot limit with the counting rule below, and unwind switch temporaries on every labeled exit; targeted compiler/runtime and byte-identity tests. If the IronHorse scoper does not reserve slots the way XS does, the expected outcome is R03 landed and R02 stopped and reported, which costs less than the M estimate. |
+| 3 built-ins order | `moddable-10-0-0-ironhorse-builtins-order-port` | M, 2 to 3 days | Ports R04, R05, R06; probes R07 to R16. The R08 and R13 probes here use live callable proxies only; the revoked-Proxy probes belong to child 1, so no child 3 probe can fail for R01's reason. R16 has a smoke check in child 6 (the capture-group oracle run). |
 | 4 TypedArray | `moddable-10-0-0-ironhorse-typedarray-port` | M, 2 to 3 days | Ports R17, R18, R19; probes R20 and R21 without changing their logic. |
 | 5 immutable ArrayBuffer | `moddable-10-0-0-ironhorse-immutable-arraybuffer-port` | L, 1.5 to 2 weeks | R22. Opens with a short design note (below) before any write-path code. Implement immutable buffers and write guards with direct native-surface, write-rejection, transfer, slice, detached-precedence, snapshot, and SES-boot tests; update `FROZEN_REALM_FORECLOSURE` from measured behavior. Follows the snapshot-golden rule under § Orchestration. Does not move the oracle pin, the hardened262 matrix, or the ratchet. |
-| 6 oracle validation | `moddable-10-0-0-ironhorse-oracle-validation` | M, 3 to 5 days | Refuses to start unless the ports completion is clean (§ Orchestration). Move the oracle pin, re-audit overlays, triage unclassified oracle drift, run the hardened262 matrix and the R16 capture-group oracle check, and produce the candidate ratchet comparison, all described under change control below. |
+| 6 oracle validation | `moddable-10-0-0-ironhorse-oracle-validation` | M, 3 to 5 days | Refuses to start unless all five port PRs are merged (§ Orchestration). Move the oracle pin, re-audit overlays, triage unclassified oracle drift, run the hardened262 matrix and the R16 capture-group oracle check, and produce the candidate ratchet comparison, all described under change control below. Has its own stop rule (§ Oracle, matrix, and ratchet change control). |
 
 Children 1 to 5 run in parallel; the numbers identify children and do not
-give an execution order. Only child 6 runs after the others.
+give an execution order. Only child 6 runs after the others. Each parked job
+body opens with "child N of 6, stage 1 (ports)" or "child 6 of 6, stage 2
+(validation)", so a board entry or a child's PR locates itself in this plan.
+The garden terms used here (parked, `gate: go-ahead`, orchestration) are
+defined at the start of § Orchestration.
 
 Every expected value in a port child's tests cites the specification step or
 the XS 10.0.0 diff hunk it comes from, in a comment beside the assertion, so a
 reviewer can check the spec reading separately from the code.
 
 **Probe-failure limit.** A probe that fails in children 3 or 4 is ported in the
-same child only while that child has at most two failed probes. At the third,
+same child only while that child has at most two failed probes. (A probe is
+the targeted Rust test that confirms a provisional `already-conformant` row;
+see § Evidence basis.) At the third,
 the child stops, reports the failed probes, and each becomes its own parked
 `gate: go-ahead` follow-up job for the maintainer to size and authorize; the
 child's sizes above assume no more than two such conversions. This matches the
@@ -203,8 +230,17 @@ whole campaign; that is intended.
 Child 5 touches the buffer, TypedArray, and DataView write paths, transfer and
 slice semantics, snapshot persistence, and the SES-boot foreclosure test. Its
 first commit is a short design note, reviewed before write-path code lands,
-that decides three things:
+that decides four things:
 
+- **Go or no-go.** Whether IronHorse supports the immutable ArrayBuffer surface
+  at all. Supporting it adds three intrinsics, moves the boot fingerprint and
+  the snapshot format, and reverses the deliberate `FROZEN_REALM_FORECLOSURE`
+  assertion that the native methods are absent. The note states the reason to
+  track the proposal (for example, that the `sesIronhorse` host in the
+  hardened262 matrix should run the native surface rather than the shim) or
+  recommends no-go. On no-go, child 5 stops after the note, R22 is reclassified
+  `not-applicable`, and child 6's matrix run keeps the current IronHorse
+  results.
 - **Representation.** Where the immutable bit lives (on the buffer row, or in a
   side table keyed by buffer), and how every write path reaches it.
 - **Precedence.** The order of the detached and immutable checks on each write,
@@ -279,37 +315,29 @@ So the campaign runs in two stages:
    runs children 1 to 5 with `--parallel --on-child-failure continue`. A stuck
    or failed child does not hold up the others, and in particular a TypedArray
    problem cannot hold the immutable-buffer work.
-2. **Validation, held.** Child 6 stays parked at `gate: go-ahead` until the
-   ports orchestration's completion record shows
-   `orchestration-status: complete` with no `failed-children`. Only then is it
-   promoted. A `blocked_on` edge onto the orchestration cannot express this,
-   because it would also fire on `complete-with-failures` and would baseline a
-   known defect.
+2. **Validation, held.** Child 6 stays parked at `gate: go-ahead` until every
+   port child's PR is merged. A `blocked_on` edge onto the orchestration
+   cannot express this, because it would also fire on
+   `complete-with-failures` and would baseline a known defect.
 
-The gate is child 6's own deterministic self-check, the first step of its job
-body; it is the sole enforcing mechanism. `promote-plan.sh --require-tada` and
-the maintainer's look at the record are advisory: the flag only refuses while
-the ports orchestration has no completion record, and it accepts
-`complete-with-failures`. The self-check passes only when both hold:
-
-- **Every port child completed cleanly.** Either the ports completion record
-  shows `orchestration-status: complete` with no `failed-children`, or, for
-  each child listed under `failed-children`, a later clean completion report
-  of a re-run of that same basename exists (`jobs/tada/<child>.md`, dated after
-  the orchestration's record, not marked `orchestration-failed`).
-- **Every port child's PR is merged.** A completion report records that a job
-  finished, not that its PR merged, so the self-check also confirms through
-  `gh pr view` that each of the five children's PRs is merged into the base
-  child 6 builds on.
-
-Otherwise child 6 stops, changes nothing, and reports which child or PR failed
-the check; the maintainer fixes the cause and promotes child 6 again. An
-inattentive promotion therefore still cannot move the pin over a known defect.
+The gate is one deterministic self-check, the first step of child 6's job
+body, and nothing else gates. It passes only when each of the five port
+children's PRs is merged into the base child 6 builds on, checked through
+`gh pr view`. A child's PR is found by its `<!-- garden-job: <basename> -->`
+marker, where the basename is the child's own or a re-run's (below). A merged
+PR is stronger evidence than a completion report, which records only that a
+job finished. If `gh` or the garden journal is unreachable, or a child's PR
+cannot be found, the check fails closed. On failure child 6 stops, changes
+nothing, and reports which child failed the check; the maintainer fixes the
+cause and promotes child 6 again. An inattentive promotion therefore still
+cannot move the pin over a known defect.
 
 If a port child fails, re-run that child alone after fixing the cause (the
-other children's merged work stands). The re-run's clean completion report is
-what the self-check reads in place of the orchestration's failure entry, so no
-new orchestration record is needed. While child 6 is held, the oracle stays at 8.3.1,
+other children's merged work stands). A re-run is posted under a dated
+basename, `<child>-rerun-YYYYMMDD`, because the board treats a reposted
+basename that already completed as a no-op. Its PR carries that basename's
+marker, which the self-check accepts in place of the original child's. No new
+orchestration record is needed. While child 6 is held, the oracle stays at 8.3.1,
 so the port children are validated by their own targeted Rust tests, not by the
 oracle. For the rows the 8.3.1 oracle gets wrong (the ordering fixes and
 `Math.round`), the expected values in those tests come from the specification
@@ -329,21 +357,14 @@ scripts/jobs/post-orchestration.sh --parallel --on-child-failure continue \
   moddable-10-0-0-ironhorse-immutable-arraybuffer-port
 ```
 
-`--adopt-go-ahead` retags the parked `go-ahead` children as orchestrated in the
-same commit as the orchestration record, so no child can be promoted outside
-it. Then, once the ports have finished, the maintainer may look at the record
-first (advisory; child 6's self-check is the gate):
+`--adopt-go-ahead` (an existing flag of the garden's
+`scripts/jobs/post-orchestration.sh`) retags the parked `go-ahead` children as
+orchestrated in the same commit as the orchestration record, so no child can
+be promoted outside it. Then, once the five port PRs have merged, promote
+child 6; its self-check decides whether it proceeds:
 
 ```sh
-grep -E '^(orchestration-status|failed-children)' \
-  journal/jobs/tada/moddable-10-0-0-ironhorse-ports.md
-```
-
-and promote child 6:
-
-```sh
-scripts/jobs/promote-plan.sh --require-tada moddable-10-0-0-ironhorse-ports \
-  moddable-10-0-0-ironhorse-oracle-validation
+scripts/jobs/promote-plan.sh moddable-10-0-0-ironhorse-oracle-validation
 ```
 
 No port starts as part of the design PR.
@@ -388,6 +409,14 @@ Only child 6 may change these surfaces:
      process after exact-head review and merge; this orchestration neither
      borrows that delegation nor uses its PR marker.
 
+**Child 6 stop rule.** Child 6 stops, commits nothing beyond its report, and
+splits the remainder into parked `gate: go-ahead` follow-up jobs when either
+holds: an overlay in `xs-oracle/build.rs` does not build against 10.0.0 and
+cannot be re-applied without changing its behavior, or the unclassified oracle
+drift exceeds 25 entries. Its M estimate assumes neither happens. The report
+lists the overlays or drift entries found so far, so the follow-ups start from
+it.
+
 The test262 pin stays unchanged unless child 6 proves that the immutable cases
 needed for acceptance do not exist at `be13516fb6441b950ba8a3df97eb34062c186972`.
 If it must move, that is a separately reported corpus-input change in the same
@@ -421,6 +450,17 @@ candidate comparison, not an incidental lockfile-like update.
   children 1 to 5 share are regenerated goldens, which the rebase-and-regenerate
   rule in § Orchestration handles, and a halt in one small child would block the
   largest, independent one.
+- A non-promoting early drift report (pin 10.0.0 on a scratch branch before
+  the ports, publish the drift, promote nothing) was considered. Its benefit is
+  real: it would check the port children's spec readings, for example R04's
+  pinned values or R18's detach order, against an independent engine before
+  they merge, instead of surfacing a misreading as a child 6 "port mismatch".
+  It was rejected for now because any 10.0.0 run first needs the overlay
+  re-audit, which is child 6's largest unknown and would then run twice, and
+  because each port's expected values already cite a spec step or XS hunk
+  beside the assertion, so a reviewer checks the reading directly. If the
+  overlay re-audit turns out small, a maintainer can promote child 6's pin step
+  early as a scratch-branch report without changing this plan's gates.
 - Folding the oracle pin and ratchet comparison into the immutable-buffer child
   was rejected: an oracle-pin regression and a feature defect would land in one
   PR, and the pin would wait on the slowest feature work.
@@ -443,7 +483,9 @@ There are two separate checks, owned by two children:
   run of that case could read past an allocation and still report matching
   output. Child 6 adds the case to the differential set only after moving to
   the 10.0.0 oracle, and checks that the 10.0.0 oracle's output matches
-  IronHorse's pinned output. An AddressSanitizer build of the oracle is not
+  IronHorse's pinned output. That check is output-only: matching output was
+  also consistent with the 8.3.1 bug, so it is a harness smoke check, not
+  evidence of memory safety in either engine. An AddressSanitizer build of the oracle is not
   part of this plan: it would need sanitizer build support in `xs-oracle` that
   this plan neither specifies nor sizes, and it would check the harness rather
   than IronHorse. If the maintainer wants that stronger check, it is a
