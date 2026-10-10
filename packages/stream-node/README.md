@@ -84,14 +84,6 @@ Adapts a Node.js [`Writable`][node-writable] stream to an Endo writer.
 **Parameters:**
 - `output` - A Node.js [`Writable`][node-writable] stream
 
-[node-readable]: https://nodejs.org/api/stream.html#class-streamreadable
-[node-writable]: https://nodejs.org/api/stream.html#class-streamwritable
-[node-buffer]: https://nodejs.org/api/buffer.html#class-buffer
-[node-object-mode]: https://nodejs.org/api/stream.html#object-mode
-[node-readable-set-encoding]: https://nodejs.org/api/stream.html#readablesetencodingencoding
-[node-backpressure]: https://nodejs.org/api/stream.html#backpressure
-[node-drain]: https://nodejs.org/api/stream.html#event-drain
-
 **Returns:** A `Writer<Uint8Array>` with `next`, `return`, and `throw` methods
 
 ## Hardened JavaScript
@@ -102,3 +94,11 @@ The environment must be locked down before use, typically via `@endo/init`.
 ## License
 
 [Apache-2.0](./LICENSE)
+
+[node-readable]: https://nodejs.org/api/stream.html#class-streamreadable
+[node-writable]: https://nodejs.org/api/stream.html#class-streamwritable
+[node-buffer]: https://nodejs.org/api/buffer.html#class-buffer
+[node-object-mode]: https://nodejs.org/api/stream.html#object-mode
+[node-readable-set-encoding]: https://nodejs.org/api/stream.html#readablesetencodingencoding
+[node-backpressure]: https://nodejs.org/api/stream.html#backpressure
+[node-drain]: https://nodejs.org/api/stream.html#event-drain
