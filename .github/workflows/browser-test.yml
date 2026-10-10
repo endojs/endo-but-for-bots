@@ -64,6 +64,10 @@ jobs:
         run: yarn install --immutable
       - name: Build artifacts
         run: yarn build
+      - name: Build chat browser-test fixtures
+        # Component fixture pages for browser-test/tests/chat-*.spec.js;
+        # see packages/chat/test/browser/README.md.
+        run: yarn workspace @endo/chat build:browser-fixtures
       - name: Install browser test dependencies
         working-directory: browser-test
         run: npm ci --ignore-scripts

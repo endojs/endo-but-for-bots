@@ -4,6 +4,17 @@ const http = require('http');
 const fs = require('fs');
 
 const CHAT_DIST = path.join(__dirname, '..', 'packages', 'chat', 'dist');
+// Component fixture pages built by `yarn build:browser-fixtures` in
+// packages/chat; see packages/chat/test/browser/README.md.
+const CHAT_FIXTURES_DIST = path.join(
+  __dirname,
+  '..',
+  'packages',
+  'chat',
+  'test',
+  'browser',
+  'dist',
+);
 
 /**
  * Map a file extension to a Content-Type header value suitable
@@ -42,31 +53,30 @@ const contentTypeFor = ext => {
 };
 
 /**
- * Serve a file from `packages/chat/dist/` under the `/chat/` URL
- * prefix.  Returns true if the request was handled (whether 200 or
- * 404), false if it falls outside the `/chat/` prefix.
+ * Serve files from `root` under the URL `prefix` (for example
+ * `/chat`).  Returns true if the request was handled (whether 200 or
+ * 404), false if it falls outside the prefix.
  *
  * Uses a containment check on the resolved path to refuse
- * `/chat/../...` traversal attempts.
+ * `<prefix>/../...` traversal attempts.
  *
+ * @param {string} prefix
+ * @param {string} root
  * @param {http.IncomingMessage} req
  * @param {http.ServerResponse} res
  * @returns {boolean}
  */
-const serveChat = (req, res) => {
+const serveStatic = (prefix, root, req, res) => {
   const url = req.url || '';
-  if (url !== '/chat' && !url.startsWith('/chat/')) {
+  if (url !== prefix && !url.startsWith(`${prefix}/`)) {
     return false;
   }
-  let rel = url.slice('/chat'.length);
+  let rel = url.slice(prefix.length);
   if (rel === '' || rel === '/') {
     rel = '/index.html';
   }
-  const filePath = path.join(CHAT_DIST, rel);
-  if (
-    filePath !== CHAT_DIST &&
-    !filePath.startsWith(`${CHAT_DIST}${path.sep}`)
-  ) {
+  const filePath = path.join(root, rel);
+  if (filePath !== root && !filePath.startsWith(`${root}${path.sep}`)) {
     res.writeHead(403);
     res.end();
     return true;
@@ -107,7 +117,10 @@ const server = http.createServer((req, res) => {
       ),
     );
   }
-  if (serveChat(req, res)) {
+  if (
+    serveStatic('/chat', CHAT_DIST, req, res) ||
+    serveStatic('/chat-fixtures', CHAT_FIXTURES_DIST, req, res)
+  ) {
     return undefined;
   }
   console.warn('404', req.url);
