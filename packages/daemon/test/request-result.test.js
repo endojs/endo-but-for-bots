@@ -47,7 +47,14 @@ test.serial(
     });
     const messages = iterateReader(E(guest).followMessages());
     E.sendOnly(guest).request('@host', 'need a number');
-    await messages.next();
+    // Wait for the request itself, skipping the guest's own record of its
+    // request command, which can arrive first.
+    for (;;) {
+      // eslint-disable-next-line no-await-in-loop
+      const result = await messages.next();
+      const { value } = /** @type {{ value: { type: string } }} */ (result);
+      if (value.type !== 'command' && value.type !== 'command-result') break;
+    }
     await stop(config);
     await start(config);
     const recovered = await connect();

@@ -12,6 +12,7 @@
   "exclude": [
     "test/monaco-lockdown",
     "test/inventory-item-actions",
-    "test/safe-datatransfer"
+    "test/safe-datatransfer",
+    "test/browser/dist"
   ]
 }

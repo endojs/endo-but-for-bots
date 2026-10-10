@@ -3196,6 +3196,20 @@ const makeDaemonCore = async (
       registerName('@slots', undefined, slots);
       registerName(MESSAGE_PROMISE_NAME, promiseId, undefined);
       registerName(MESSAGE_RESOLVER_NAME, resolverId, undefined);
+    } else if (messageType === 'command') {
+      const { commandName, args } = formula;
+      if (typeof commandName !== 'string' || args === undefined) {
+        throw new Error('Command message formula is incomplete');
+      }
+      registerName('@command', undefined, commandName);
+      registerName('@args', undefined, harden(args));
+    } else if (messageType === 'command-result') {
+      const { success, summary } = formula;
+      if (typeof success !== 'boolean' || typeof summary !== 'string') {
+        throw new Error('Command result message formula is incomplete');
+      }
+      registerName('@success', undefined, success);
+      registerName('@summary', undefined, summary);
     } else {
       throw new Error(`Unknown message type ${q(messageType)}`);
     }

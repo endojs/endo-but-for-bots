@@ -32,6 +32,8 @@ import {
   relativeTime,
 } from '@endo/spaces-util/time-formatters.js';
 
+import { CommandCard } from './command-message.js';
+
 // 1:1 recipient-filtered default inbox view, migrated from imperative DOM to a
 // confined Preact component rendered through a single `renderConfined`.
 //
@@ -1006,6 +1008,10 @@ const MessageContent = ({
         formDescriptions,
         setError,
       });
+    case 'command':
+    case 'command-result':
+      // Command and command-result messages render as compact cards.
+      return h(CommandCard, { message: /** @type {any} */ (message.raw) });
     default:
       return null;
   }
@@ -1206,6 +1212,10 @@ const MessageEnvelope = ({
   let envelopeClass = 'message-envelope';
   if (isPending) envelopeClass += ' message-envelope-pending';
   if (isEdited) envelopeClass += ' message-envelope-edited';
+  // Command records are visually subdued relative to conversational messages.
+  if (message.type === 'command' || message.type === 'command-result') {
+    envelopeClass += ' command-envelope';
+  }
 
   return h(
     'div',

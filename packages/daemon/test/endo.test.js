@@ -87,6 +87,38 @@ const drainIterator = async (iteratorRef, count) => {
 };
 
 /**
+ * Whether a message is one of the `command` / `command-result` records
+ * an agent's own mailbox writes when the agent issues a host command.
+ *
+ * @param {{ type: string }} message
+ */
+const isCommandRecord = message =>
+  message.type === 'command' || message.type === 'command-result';
+
+/**
+ * Take the next message from a followMessages iterator, skipping
+ * command records.
+ *
+ * @param {AsyncIterator<any>} iterator
+ */
+const nextConversational = async iterator => {
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const result = await iterator.next();
+    if (result.done || !isCommandRecord(result.value)) {
+      return result;
+    }
+  }
+};
+
+/**
+ * @template {{ type: string }} T
+ * @param {T[]} messages
+ */
+const conversational = messages =>
+  messages.filter(message => !isCommandRecord(message));
+
+/**
  * Open a read-only handle to the daemon's database for test inspection.
  *
  * @param {string} statePath
@@ -1573,8 +1605,10 @@ test('guest facet receives a message for host', async t => {
 
   await E(guest).send('@host', ['Hello, World!'], ['gift'], ['number']);
 
-  const { value: message1 } = await iterator.next();
-  t.is(message1.number, 1n);
+  // Messages 1 and 2 are the host's own record of its resolve command
+  // and that command's result.
+  const { value: message1 } = await nextConversational(iterator);
+  t.is(message1.number, 3n);
   await E(host).adopt(message1.number, 'gift', ['ten2']);
   const ten = await E(host).lookup(['ten2']);
   t.is(ten, 10);
@@ -1589,7 +1623,7 @@ test('guest facet receives a message for host', async t => {
   // The guest externalized 'from' with its own key, so the host inbox
   // sees the guest's self-locator.  The 'to' was the host's self-ID
   // (LOCAL_NODE) and gets externalized with the host's key.
-  const hostInbox = await E(host).listMessages();
+  const hostInbox = conversational(await E(host).listMessages());
   t.deepEqual(
     hostInbox.map(({ type, from, to }) => ({
       type,
@@ -1603,7 +1637,7 @@ test('guest facet receives a message for host', async t => {
   );
 
   // Guest should have own sent messages (externalized with guest's key).
-  const guestInbox = await E(guest).listMessages();
+  const guestInbox = conversational(await E(guest).listMessages());
   t.deepEqual(
     guestInbox.map(({ type, from, to }) => ({ type, from, to })),
     [
@@ -1632,7 +1666,7 @@ test('reply links to parent message', async t => {
 
   const [{ value: hostMessage }, { value: sentMessage }] = await Promise.all([
     hostMessages.next(),
-    guestMessages.next(),
+    nextConversational(guestMessages),
   ]);
 
   t.is(hostMessage.type, 'package');
@@ -1657,7 +1691,7 @@ test('editMessage replaces payload and preserves history', async t => {
 
   const [{ value: initialHost }, { value: initialGuest }] = await Promise.all([
     hostMessages.next(),
-    guestMessages.next(),
+    nextConversational(guestMessages),
   ]);
   t.deepEqual(initialHost.strings, ['Thinking...']);
   t.is(initialHost.done, true);
@@ -1672,7 +1706,7 @@ test('editMessage replaces payload and preserves history', async t => {
   );
   const [{ value: editHost1 }, { value: editGuest1 }] = await Promise.all([
     hostMessages.next(),
-    guestMessages.next(),
+    nextConversational(guestMessages),
   ]);
   t.deepEqual(editHost1.strings, ['Thinking more...']);
   t.is(editHost1.done, false);
@@ -1686,7 +1720,7 @@ test('editMessage replaces payload and preserves history', async t => {
   });
   const [{ value: editHost2 }, { value: editGuest2 }] = await Promise.all([
     hostMessages.next(),
-    guestMessages.next(),
+    nextConversational(guestMessages),
   ]);
   t.deepEqual(editHost2.strings, ['Final answer.']);
   t.is(editHost2.done, true);
@@ -1742,7 +1776,7 @@ test('editMessage accepts edits after done and records them', async t => {
 
   await E(guest).send('@host', ['original'], [], []);
   const [{ value: initialGuest }] = await Promise.all([
-    guestMessages.next(),
+    nextConversational(guestMessages),
     hostMessages.next(),
   ]);
 
@@ -1750,7 +1784,7 @@ test('editMessage accepts edits after done and records them', async t => {
     done: true,
   });
   const [{ value: editGuest }, { value: editHost }] = await Promise.all([
-    guestMessages.next(),
+    nextConversational(guestMessages),
     hostMessages.next(),
   ]);
   t.deepEqual(editGuest.strings, ['corrected']);
@@ -1805,7 +1839,7 @@ test('mailboxes persist messages across restart', async t => {
 
   await E(host).dismiss(message0.number);
 
-  const inboxBefore = await E(host).listMessages();
+  const inboxBefore = conversational(await E(host).listMessages());
   t.deepEqual(
     inboxBefore.map(({ number, description }) => ({ number, description })),
     [{ number: 1n, description: 'second request' }],
@@ -1814,7 +1848,7 @@ test('mailboxes persist messages across restart', async t => {
   await restart(config);
 
   const { host: hostAfter } = await makeHost(config, cancelled);
-  const inboxAfter = await E(hostAfter).listMessages();
+  const inboxAfter = conversational(await E(hostAfter).listMessages());
   t.deepEqual(
     inboxAfter.map(({ number, description }) => ({ number, description })),
     [{ number: 1n, description: 'second request' }],
@@ -1823,12 +1857,14 @@ test('mailboxes persist messages across restart', async t => {
   const guestAfter = await E(hostAfter).provideGuest('guest-after-restart');
   await E(guestAfter).send('@host', ['hello'], [], []);
 
-  const inboxAfterDelivery = await E(hostAfter).listMessages();
+  // Messages 2 and 3 are the host's record of its dismiss command and
+  // that command's result.
+  const inboxAfterDelivery = conversational(await E(hostAfter).listMessages());
   t.deepEqual(
     inboxAfterDelivery.map(({ number, type }) => ({ number, type })),
     [
       { number: 1n, type: 'request' },
-      { number: 2n, type: 'package' },
+      { number: 4n, type: 'package' },
     ],
   );
 });
@@ -1969,7 +2005,7 @@ test('rehydrated requests can be resolved after restart', async t => {
 
   E.sendOnly(guest).request('@host', 'need a number');
 
-  const { value: guestMessage } = await guestMessages.next();
+  const { value: guestMessage } = await nextConversational(guestMessages);
   const { promiseId: promiseLocatorP } = E.get(guestMessage);
   const promiseLocator = await promiseLocatorP;
   await E(host).storeLocator(['pending'], promiseLocator);
@@ -1987,6 +2023,203 @@ test('rehydrated requests can be resolved after restart', async t => {
   const resolvedId = await E(hostAfter).lookup(['pending']);
   const tenId = await E(hostAfter).identify('ten');
   t.is(resolvedId, tenId);
+});
+
+/**
+ * The command records in an agent's inbox, reduced to their
+ * deterministic fields.
+ *
+ * @param {Array<Record<string, unknown>>} messages
+ */
+const commandRecords = messages =>
+  messages.filter(isCommandRecord).map(message =>
+    message.type === 'command'
+      ? {
+          type: message.type,
+          commandName: message.commandName,
+          args: message.args,
+        }
+      : {
+          type: message.type,
+          success: message.success,
+          summary: message.summary,
+        },
+  );
+
+test('send and adopt record commands in the issuing agent inbox', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  await E(host).storeValue(10, 'ten');
+
+  const guestMessages = iterateReader(E(guest).followMessages());
+  await E(host).send('guest', ['take this'], ['gift'], ['ten']);
+  const { value: gift } = await nextConversational(guestMessages);
+  t.is(gift.type, 'package');
+
+  await E(guest).adopt(gift.number, 'gift', ['my-ten']);
+  t.is(await E(guest).lookup(['my-ten']), 10);
+
+  const hostInbox = await E(host).listMessages();
+  t.deepEqual(commandRecords(hostInbox), [
+    {
+      type: 'command',
+      commandName: 'send',
+      args: { to: 'guest', text: 'take this' },
+    },
+  ]);
+
+  const guestInbox = await E(guest).listMessages();
+  t.deepEqual(commandRecords(guestInbox), [
+    {
+      type: 'command',
+      commandName: 'adopt',
+      args: {
+        messageNumber: String(gift.number),
+        edgeName: 'gift',
+        petName: 'my-ten',
+      },
+    },
+    { type: 'command-result', success: true, summary: 'adopted as my-ten' },
+  ]);
+
+  // Command records are self-addressed and never reach the recipient.
+  const hostSelf = await E(host).locate('@self');
+  const guestSelf = await E(guest).locate('@self');
+  const [sendRecord] = hostInbox.filter(isCommandRecord);
+  t.is(sendRecord.from, hostSelf);
+  t.is(sendRecord.to, hostSelf);
+  const [adoptRecord, adoptResult] = guestInbox.filter(isCommandRecord);
+  for (const record of [adoptRecord, adoptResult]) {
+    t.is(record.from, guestSelf);
+    t.is(record.to, guestSelf);
+  }
+
+  // The result threads to its command by a random messageId, not by
+  // the mailbox's message number sequence.
+  t.regex(adoptRecord.messageId, /^[0-9a-f]{64}$/);
+  t.regex(adoptResult.messageId, /^[0-9a-f]{64}$/);
+  t.is(adoptResult.replyTo, adoptRecord.messageId);
+});
+
+test('a failed command records a failure result and still throws', async t => {
+  const { host } = await prepareHost(t);
+  const guest = E(host).provideGuest('guest');
+
+  const hostMessages = iterateReader(E(host).followMessages());
+  E.sendOnly(guest).request('@host', 'a number', 'number');
+  const { value: request } = await hostMessages.next();
+  t.is(request.type, 'request');
+
+  await t.throwsAsync(() => E(host).resolve(request.number, 'nope'), {
+    message: /No formula exists for the pet name "nope"/,
+  });
+
+  const inbox = await E(host).listMessages();
+  t.deepEqual(commandRecords(inbox), [
+    {
+      type: 'command',
+      commandName: 'resolve',
+      args: { messageNumber: String(request.number), resolution: 'nope' },
+    },
+    {
+      type: 'command-result',
+      success: false,
+      summary: 'No formula exists for the pet name "nope"',
+    },
+  ]);
+  // The unresolved request is still pending.
+  t.true(inbox.some(message => message.number === request.number));
+
+  // The guest recorded its own request command.
+  t.deepEqual(commandRecords(await E(guest).listMessages()), [
+    {
+      type: 'command',
+      commandName: 'request',
+      args: { to: '@host', description: 'a number' },
+    },
+  ]);
+});
+
+test('reject and dismiss record commands', async t => {
+  const { host } = await prepareHost(t);
+  const guest = E(host).provideGuest('guest');
+
+  const hostMessages = iterateReader(E(host).followMessages());
+  const rejectedP = E(guest).request('@host', 'a number', 'number');
+  rejectedP.catch(() => {});
+  const { value: request } = await hostMessages.next();
+
+  await E(host).reject(request.number, 'not today');
+  await t.throwsAsync(() => rejectedP, { message: 'not today' });
+
+  await E(host).dismiss(request.number);
+  const inbox = await E(host).listMessages();
+  t.false(inbox.some(message => message.number === request.number));
+  t.deepEqual(commandRecords(inbox), [
+    {
+      type: 'command',
+      commandName: 'reject',
+      args: { messageNumber: String(request.number), reason: 'not today' },
+    },
+    {
+      type: 'command',
+      commandName: 'dismiss',
+      args: { messageNumber: String(request.number) },
+    },
+    { type: 'command-result', success: true, summary: 'dismissed' },
+  ]);
+});
+
+test('command records persist across restart', async t => {
+  const { cancelled, config, host } = await prepareHost(t);
+  const guest = E(host).provideGuest('guest');
+
+  const hostMessages = iterateReader(E(host).followMessages());
+  E.sendOnly(guest).request('@host', 'a number', 'number');
+  const { value: request } = await hostMessages.next();
+  await t.throwsAsync(() => E(host).resolve(request.number, 'nope'));
+
+  const before = (await E(host).listMessages()).filter(isCommandRecord);
+  t.is(before.length, 2);
+
+  await restart(config);
+
+  const { host: hostAfter } = await makeHost(config, cancelled);
+  const after = (await E(hostAfter).listMessages()).filter(isCommandRecord);
+  t.deepEqual(
+    after.map(({ number, messageId, replyTo }) => ({
+      number,
+      messageId,
+      replyTo,
+    })),
+    before.map(({ number, messageId, replyTo }) => ({
+      number,
+      messageId,
+      replyTo,
+    })),
+  );
+  t.deepEqual(commandRecords(after), commandRecords(before));
+
+  // The message hubs expose the recorded fields by name.
+  const [command, result] = after;
+  const commandHub = await E(hostAfter).lookup([
+    '@mail',
+    String(command.number),
+  ]);
+  t.is(await E(commandHub).lookup('@type'), 'command');
+  t.is(await E(commandHub).lookup('@command'), 'resolve');
+  t.deepEqual(await E(commandHub).lookup('@args'), {
+    messageNumber: String(request.number),
+    resolution: 'nope',
+  });
+  const resultHub = await E(hostAfter).lookup(['@mail', String(result.number)]);
+  t.is(await E(resultHub).lookup('@type'), 'command-result');
+  t.is(await E(resultHub).lookup('@success'), false);
+  t.is(
+    await E(resultHub).lookup('@summary'),
+    'No formula exists for the pet name "nope"',
+  );
+  t.is(await E(resultHub).lookup('@reply'), command.messageId);
 });
 
 test('followNamehanges first publishes existing names', async t => {
@@ -4499,7 +4732,7 @@ testNeedsNodeWorker('reply across nodes', async t => {
   await E(hostA).send('bob', ['Hello Bob'], [], []);
 
   // A's outgoing message appears in A's own iterator
-  const { value: sentMsg } = await iteratorA.next();
+  const { value: sentMsg } = await nextConversational(iteratorA);
   t.is(sentMsg.type, 'package');
 
   // B receives the message
@@ -4510,7 +4743,7 @@ testNeedsNodeWorker('reply across nodes', async t => {
   await E(hostB).reply(received.number, ['Hello Alice'], [], []);
 
   // A receives the reply via its iterator
-  const { value: replyMsg } = await iteratorA.next();
+  const { value: replyMsg } = await nextConversational(iteratorA);
   t.is(replyMsg.type, 'package');
   t.is(replyMsg.strings[0], 'Hello Alice');
 });
@@ -4653,7 +4886,7 @@ test('resolve with pet name path', async t => {
 
   // Verify the resolution worked by checking we can dismiss the message
   await E(host).dismiss(message.number);
-  const messagesAfter = await E(host).listMessages();
+  const messagesAfter = conversational(await E(host).listMessages());
   t.is(messagesAfter.length, 0);
 });
 
