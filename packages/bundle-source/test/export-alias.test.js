@@ -5,7 +5,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import * as url from 'url';
 import bundleSource from '../src/index.js';
 
-test.failing('export alias', async t => {
+test('export alias', async t => {
   const entryPath = url.fileURLToPath(
     new URL(`../demo/exports.js`, import.meta.url),
   );
