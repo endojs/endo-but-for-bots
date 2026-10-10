@@ -3,6 +3,7 @@
 |             |                                              |
 |-------------|----------------------------------------------|
 | **Created** | 2026-05-15                                   |
+| **Updated** | 2026-10-10                                   |
 | **Author**  | kriscendobot (prompted by kriskowal)         |
 | **Status**  | Not Started                                  |
 | **Source**  | journal entry [`044500Z-dispatch-liaison-f47931.md`](../../journal/entries/2026/05/15/044500Z-dispatch-liaison-f47931.md) |
@@ -51,7 +52,7 @@ It mirrors the shape of
 | **Capability model** | Ambient OS authority + permission rules (`allow`/`ask`/`deny` by tool name)  | Object-capability: guest holds only the references it has been granted            |
 | **Persistence**      | SQLite (Drizzle ORM) at `~/.local/share/opencode/`; rows keyed by session    | Formula store, typed durable graph, content-addressed blobs                       |
 | **Extensibility**    | NPM-distributed plugins (server hooks), `SKILL.md` skills, MCP servers       | Guest plugins (confined JS modules), pet-name directory, no skill registry        |
-| **LLM routing**      | Vercel AI SDK + ~20 provider packages bundled (OpenRouter native)            | Lal providers (Anthropic / Gemini / Ollama / llama.cpp); no router-aware path     |
+| **LLM routing**      | Vercel AI SDK + ~20 provider packages bundled (OpenRouter native)            | Agentry `defineAgent` model resolution over the pi-ai registry (OpenRouter in it) |
 | **Concurrent agents**| `task` tool spawns one subagent at a time; experimental `background: true`   | Each guest is its own vat; concurrent agents are the default                      |
 | **External protocol**| ACP (Agent Client Protocol) server, MCP client                               | OCapN (over WebSocket; Noise transport in flight), CapTP                          |
 | **TUI**              | Bubble Tea (Go) rich TUI, the marquee surface                                | Familiar (Electron) + browser Chat UI; no native TUI yet (`endor-tui` in M6)      |
@@ -116,14 +117,14 @@ worker-pinning mechanics.
 
 | OpenCode Provider              | Endo Equivalent (today)            | Status                                            |
 |--------------------------------|------------------------------------|---------------------------------------------------|
-| Anthropic                      | `lal/providers/anthropic.js`       | **Available**                                     |
-| OpenAI                         | (planned via OpenAI-compat path)   | Partial                                           |
-| Google (Gemini / Vertex)       | `lal/providers/gemini.js`          | **Available**                                     |
-| OpenAI-compatible              | `lal/providers/llamacpp.js`        | **Available**                                     |
-| Ollama (local)                 | `lal/providers/ollama.js`          | **Available**                                     |
-| **OpenRouter**                 | —                                  | **Not designed** ([endopen-openrouter](endopen-openrouter.md)) |
-| Bedrock, xAI, Mistral, Groq    | —                                  | Not designed (OpenAI-compat reach covers most)    |
-| GitHub Copilot, Codex, Vercel  | —                                  | Not designed                                      |
+| Anthropic                      | Agentry, pi-ai registry            | **Available**                                     |
+| OpenAI                         | Agentry, pi-ai registry            | **Available**                                     |
+| Google (Gemini / Vertex)       | Agentry, pi-ai registry            | **Available**                                     |
+| OpenAI-compatible              | Agentry `openai-compatible` profile | **Available**                                    |
+| Ollama (local)                 | Agentry `ollama` profile           | **Available**                                     |
+| **OpenRouter**                 | Agentry, pi-ai registry            | Partial: no attribution headers, snapshot-only catalog ([endopen-openrouter](endopen-openrouter.md)) |
+| Bedrock, xAI, Mistral, Groq    | Agentry, pi-ai registry            | Available where pi-ai lists them                  |
+| GitHub Copilot, Codex, Vercel  | —                                  | Subscription OAuth: [endopi-provider-registry-and-oauth](endopi-provider-registry-and-oauth.md) |
 | Cloudflare AI Gateway          | —                                  | Not designed                                      |
 | LLM Gateway (router)           | —                                  | Not designed                                      |
 
@@ -139,14 +140,16 @@ vendor-specific quirks live in 15-line loader closures,
 not in scattered conditionals
 (see `provider.ts` in the citation index below).
 
-Endo's Lal has one provider per file with a single `chat(messages, tools)`
-shape ([`packages/lal/providers/index.js`](../packages/lal/providers/index.js)
-lines 33 through 65).
-The shape is consistent but the dispatch is by host URL string-match,
-not by an explicit provider registry.
-Adding a router-aware provider (OpenRouter) requires either a new branch in
-`createProvider` or a registry refactor;
-see [endopen-openrouter](endopen-openrouter.md) for the design.
+Endo's interface boundary for providers is
+[`@endo/agentry`](agentry-agent-builder.md), not any one harness.
+`defineAgent` resolves its `model` config through `resolveModelProfile`
+([`packages/agentry/src/harness/model.js`](../packages/agentry/src/harness/model.js))
+into a pi-ai `Model`, keyed on an explicit provider name, and resolves
+the key through a `Credentials` seam at make time.
+The pi-ai registry plays the role of OpenCode's `BUNDLED_PROVIDERS`, and
+already includes OpenRouter; what Endo lacks is OpenCode's per-vendor
+header hook and a path for models newer than the registry snapshot.
+See [endopen-openrouter](endopen-openrouter.md) for the design.
 
 ### Tools
 
@@ -409,20 +412,20 @@ for the design.
 
 ### Gap 2: OpenRouter integration
 
-OpenCode works well with OpenRouter; Endo does not have an
-OpenRouter adapter at all. OpenRouter is a meta-provider that routes
-requests across upstream providers (Anthropic / OpenAI / Google /
+OpenCode works well with OpenRouter; Endo reaches OpenRouter only
+incidentally, through the pi-ai registry behind Agentry.
+OpenRouter is a meta-provider that routes requests across upstream providers (Anthropic / OpenAI / Google /
 many local model hosts) with one OpenAI-compatible endpoint, one
 API key, and per-model pricing transparency. It is the de-facto
 "one key, all models" provider for indie developers.
 
-The integration is small (one new `lal/providers/openrouter.js` file
-plus header injection per OpenCode's
+The integration is small and lives entirely at the Agentry boundary
+(a tested registry path, then an `openrouter` arm in
+`resolveModelProfile` that adds header injection per OpenCode's
 [`provider.ts`](https://github.com/anomalyco/opencode/blob/d59d9966/packages/opencode/src/provider/provider.ts)
-line 420 pattern) but it deserves its own design because the
-header-injection ergonomics raise the broader question of *whether
-Lal's provider table should mirror OpenCode's loader-closure
-pattern*. The design proposes a registry refactor as the path.
+line 420 pattern and admits models newer than pi-ai's snapshot), so
+every `defineAgent` harness gains it at once rather than one harness's
+private provider table.
 
 See **[endopen-openrouter](endopen-openrouter.md)** for the design.
 
@@ -575,7 +578,7 @@ Total: 19 OpenCode source files cited.
 | LSP integration                           | Low      | Useful for code-editing agents, but the value depends on the editor surface. Defer until the opencode-shaped space lands. |
 | Plan / build agent modes                  | Low      | Easy to add as a guest-level prompt switch; mostly a UX choice. |
 | Todo list as agent state                  | Low      | The `todowrite` tool is convenient for agent self-tracking; would be a small inbox-shaped formula. |
-| Cost / token usage display                | Low      | OpenCode's status bar surfaces model + tokens + cost per turn; Endo has the data via the Lal provider but does not display it. |
+| Cost / token usage display                | Low      | OpenCode's status bar surfaces model + tokens + cost per turn; Endo has the data on each pi-ai assistant message behind Agentry but does not display it. |
 
 ## Related Designs
 
@@ -584,6 +587,7 @@ Total: 19 OpenCode source files cited.
 - [endopen-openrouter](endopen-openrouter.md): gap 2 sibling.
 - [endopen-tui-shell](endopen-tui-shell.md): gap 3 sibling.
 - [endopen-acp-server](endopen-acp-server.md): gap 4 sibling.
+- [agentry-agent-builder](agentry-agent-builder.md): the `defineAgent` boundary agents and providers are assembled at.
 - [daemon-agent-tools](daemon-agent-tools.md): Endo's tool-arming story.
 - [daemon-capability-filesystem](daemon-capability-filesystem.md): Endo's filesystem confinement.
 - [endoclaw-network-fetch](endoclaw-network-fetch.md): Endo's HTTP fetch story.

@@ -370,11 +370,11 @@ LLM-agent stack).*
 | [daemon-make-archive](daemon-make-archive.md) | 2026-04-23 | 2026-04-24 | In Progress |
 | [daemon-form-request](daemon-form-request.md) | 2026-02-25 | 2026-03-02 | **Complete** |
 | [endoclaw](endoclaw.md) | 2026-03-03 | 2026-03-03 | Reference |
-| [endopen](endopen.md) | 2026-05-15 | 2026-05-15 | Reference |
-| [endopen-concurrent-subagents](endopen-concurrent-subagents.md) | 2026-05-15 | 2026-05-15 | Not Started |
-| [endopen-openrouter](endopen-openrouter.md) | 2026-05-15 | 2026-05-15 | Not Started |
-| [endopen-tui-shell](endopen-tui-shell.md) | 2026-05-15 | 2026-05-15 | Not Started |
-| [endopen-acp-server](endopen-acp-server.md) | 2026-05-15 | 2026-05-20 | Not Started |
+| [endopen](endopen.md) | 2026-05-15 | 2026-10-10 | Reference |
+| [endopen-concurrent-subagents](endopen-concurrent-subagents.md) | 2026-05-15 | 2026-10-10 | Not Started |
+| [endopen-openrouter](endopen-openrouter.md) | 2026-05-15 | 2026-10-10 | Not Started |
+| [endopen-tui-shell](endopen-tui-shell.md) | 2026-05-15 | 2026-10-10 | Not Started |
+| [endopen-acp-server](endopen-acp-server.md) | 2026-05-15 | 2026-10-10 | Not Started |
 | [endopi](endopi.md) | 2026-05-15 | 2026-06-25 | Reference |
 | [endopi-edit-tool](endopi-edit-tool.md) | 2026-05-15 | 2026-07-10 | In Progress |
 | [endopi-jsonl-transcript-format](endopi-jsonl-transcript-format.md) | 2026-05-15 | 2026-05-15 | Proposed |
@@ -638,6 +638,8 @@ flowchart TD
         eoauth --> esheets
         ereminder --> enopanel
         enopr --> enopanel
+        eagentry --> enopr
+        eagentry --> enacp
     end
 
     subgraph OCapN
@@ -913,7 +915,7 @@ capabilities available to agents.
 | daemon-xs-worker-snapshot | In Progress | XS heap snapshot/restore; Phases 1-2 implemented — streaming CAS write/read, suspend/resume supervisor integration, CBOR control verbs; 12 passing tests; Phase 2 integration test and ephemeral GC roots remaining |
 | endo-reminder (supersedes endoclaw-timer) | Not Started | **Strategic:** Core capability concern — SES removes `setTimeout`/`setInterval`; the message scheduler is the only way agents get scheduled execution. Prerequisite for proactive behavior. Redrafted per PR #609 review as the unconfined plugin `@endo/reminder` over the virtual file system. |
 | endo-fetch (supersedes endoclaw-network-fetch) | Not Started | **Strategic:** `HttpClient` with origin allowlist. Self-hosted agents need outbound HTTP; foundation for OAuth and all external integrations. The landed capability is `@endo/exo-http-client` over `@endo/http-confine` (#566). Provisioning uses an unfettered `@endo/fetch` base, endowed with a state directory to `@endo/confined-fetch`, which exposes the policy-bound client ([endo-fetch](endo-fetch.md)); `makeHttpTool` follows in [`daemon-agent-tools`](daemon-agent-tools.md) Phase 3.6. |
-| endopen-openrouter | Not Started | OpenRouter provider for Lal plus registry refactor; first cut is one new file. From the OpenCode comparative analysis ([endopen](endopen.md)). |
+| endopen-openrouter | Not Started | OpenRouter at the `@endo/agentry` boundary ([agentry-agent-builder](agentry-agent-builder.md)): pin the pi-ai registry path `defineAgent` already reaches, then an `openrouter` arm in `resolveModelProfile` for attribution headers and off-snapshot models; no harness-specific adapter. From the OpenCode comparative analysis ([endopen](endopen.md)). |
 | ~~daemon-cross-peer-gc~~ | **Complete** | Replaced the proposed CRDT-of-pet-stores with a one-way retention-set sync per peer connection (`retention-accumulator.js`, `EndoGateway.followRetentionSet`, SQLite `retention` table). Solves the GC gap; bidirectional shared namespace deferred as YAGNI. |
 | ~~daemon-guest-eval-simplification~~ | **Implemented** | Eval-proposal handshake removed; guest eval delegates directly to `formulateEval`. Type-system cleanup and regression test in PR #92. |
 
@@ -1143,7 +1145,7 @@ automation.
 | endoclaw-notifications | Not Started | `Notify` exo -> Electron `Notification`; needs daemon<->Electron bridge |
 | endoclaw-webhooks | Not Started | Gateway webhook endpoints -> agent inbox as messages |
 | endoclaw-voice | Not Started | Web Speech API or Whisper in Chat UI; UI feature only |
-| endopen-acp-server | Not Started | ACP (Agent Client Protocol) server adapter; lets Zed and other ACP clients drive Endo while preserving the capability story. From [endopen](endopen.md). |
+| endopen-acp-server | Not Started | ACP (Agent Client Protocol) server adapter; lets Zed and other ACP clients drive Endo while preserving the capability story. Session guests run `@endo/agentry`-built agents, so the adapter couples to the Agentry boundary rather than a specific harness. From [endopen](endopen.md). |
 | endopen-concurrent-subagents | Not Started | First-class panel-of-subagents UX surface; Endo's capability/formula model makes this concurrent by construction. From [endopen](endopen.md). |
 
 **Exit criterion:** Users can install and interact with weblets. Agents
@@ -1634,7 +1636,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | endopi-stdio-rpc-bridge | M | 4-5 days | 3 | LF-delimited JSONL RPC for embedding the Lal/Fae agent in another process; short-term shape before `endor-bus-tui` |
 | endopi-extension-package-manifest | S-M | 3 days | 10 | `package.json` `endo` keyword bundling guests + skills + prompts + providers in one install |
 | endopen | — | — | — | Reference comparative analysis (OpenCode); spin-outs carry the work |
-| endopen-openrouter | S-M | 3 days | 3 | OpenRouter provider for Lal; Phase 1 minimal (1 day), Phase 2 registry refactor (2 days), Phase 3 form deferred |
+| endopen-openrouter | S-M | 3 days | 3 | OpenRouter at the Agentry boundary; Phase 1 registry-path test (under 1 day), Phase 2 `resolveModelProfile` arm (2 days), Phase 3 pet-named config deferred |
 | endopen-concurrent-subagents | M | 3-4 weeks | 7 | Panel guest pattern + Chat widget + CLI `endo panel` verb |
 | endopen-acp-server | M-L | 4-5 weeks | 7 | ACP adapter (7 phases); MCP-server adapter sibling deferred |
 | endopen-tui-shell | M-L | 4-5 weeks | 9 | New `coding` space kind in Chat; layout shell, file-tree, diff viewer, todo pane, status bar |

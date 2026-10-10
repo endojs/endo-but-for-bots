@@ -3,6 +3,7 @@
 |             |                                              |
 |-------------|----------------------------------------------|
 | **Created** | 2026-05-15                                   |
+| **Updated** | 2026-10-10                                   |
 | **Author**  | kriscendobot (prompted by kriskowal)         |
 | **Status**  | Not Started                                  |
 | **Source**  | [`endopen.md`](endopen.md) § Gap 1           |
@@ -137,9 +138,13 @@ receives:
   formulate panel members on demand.
 - `inbox` / `submit`: standard guest plumbing for parent communication.
 - `Timer`: for per-member deadlines ([endoclaw-timer](endoclaw-timer.md)).
-- a `Lal` or `Fae` provider capability (Fae is Lal's sibling
-  LLM-provider capability): to ask the LLM for an aggregation strategy
+- a pet-named model profile, resolved through
+  [`@endo/agentry`](agentry-agent-builder.md)'s `defineAgent` and its
+  `Credentials` seam: to ask the LLM for an aggregation strategy
   (optional).
+  The panel does not depend on any particular harness package; each
+  member is whatever `defineAgent`-built agent its guest runs, and the
+  panel sees only the uniform `request(prompt)` contract.
 
 API (sketch):
 
@@ -276,7 +281,8 @@ This is a strong validation of the shape.
 ## Phased Implementation
 
 1. **Daemon-level panel agent module**
-   (`packages/lal/panel.js` or a new `packages/panel/`):
+   (a new `packages/panel/`, building its optional aggregator with
+   `@endo/agentry`'s `defineAgent`):
    the `Panel` exo, the `deliberate` method (no `request` alias — see
    § Concept), the per-member timeout **and its cancel-the-loser step**,
    the concurrency bound, the aggregation function.
@@ -392,7 +398,7 @@ Total: 3 to 4 weeks for Phases 1-3; Phase 4 is independent.
 3. **Considered and rejected: panels-as-formula-type.**
    Reason: a formula type per role explodes the type registry;
    the guest-with-capabilities pattern is sufficient and consistent
-   with how Lal and Fae are modeled today.
+   with how Agentry-built agents are hosted as guests today.
 
 ## Verification
 

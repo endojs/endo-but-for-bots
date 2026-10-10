@@ -1,8 +1,9 @@
-# EndOpen: OpenRouter Provider for Lal
+# EndOpen: OpenRouter at the Agentry Boundary
 
 |             |                                              |
 |-------------|----------------------------------------------|
 | **Created** | 2026-05-15                                   |
+| **Updated** | 2026-10-10                                   |
 | **Author**  | kriscendobot (prompted by kriskowal)         |
 | **Status**  | Not Started                                  |
 | **Source**  | [`endopen.md`](endopen.md) § Gap 2           |
@@ -20,333 +21,219 @@ provider
 (`provider.ts` line 101 for the SDK loader, line 420 for header injection;
 see the Related Designs section below for the source path).
 
-Endo's Lal supports Anthropic, Gemini, Ollama, and llama.cpp
-([`packages/lal/providers/index.js`](../packages/lal/providers/index.js)
-lines 33 through 65) but has no OpenRouter adapter.
-A user who wants to route through OpenRouter today must use the
-llama.cpp / OpenAI-compatible adapter and override the URL,
-but the headers OpenRouter expects (`HTTP-Referer`, `X-Title`)
-are not set, and the dispatch heuristic
-(`baseURL.includes('/v1')` in
-[`packages/lal/providers/config.js`](../packages/lal/providers/config.js))
-classifies it as the generic `'openai-compatible'` kind rather than as a
-router-aware endpoint.
+An earlier draft of this design added an OpenRouter adapter to Lal's
+per-file provider table.
+That is no longer the way: Endo's agents are now assembled at the
+**Agentry boundary**, so OpenRouter support is specified there and
+nowhere else.
+[`@endo/agentry`](agentry-agent-builder.md)'s `defineAgent` resolves its
+`model` config through `resolveModelProfile`
+([`packages/agentry/src/harness/model.js`](../packages/agentry/src/harness/model.js))
+into a concrete `@earendil-works/pi-ai` `Model`, and resolves the
+provider key through the `Credentials` seam at make time.
+Any harness built with `defineAgent` (code-mode presets, a rebuilt lal,
+genie, or an operator's own agent) inherits whatever provider reach the
+Agentry boundary has, so the gap is closed once, for every agent.
 
-The gap is small but operationally salient:
-the maintainer named OpenRouter integration specifically.
-The fix is a provider file plus a small refactor that introduces a
-registry.
+The reach is already most of the way there.
+pi-ai `0.79.0` (the version `packages/agentry/package.json` pins) ships
+`openrouter` as a built-in registry provider: its generated model table
+carries several hundred `openrouter` entries at
+`https://openrouter.ai/api/v1`, its OpenAI-completions client honors
+OpenRouter's normalized `reasoning` object and per-model routing
+preferences, and its env-key table maps `openrouter` to
+`OPENROUTER_API_KEY`.
+A `"provider/modelId"` model string splits at the *first* slash, so
+`model: 'openrouter/anthropic/claude-sonnet-4'` already resolves to
+provider `openrouter`, id `anthropic/claude-sonnet-4`.
+
+What remains is narrow:
+
+- **Attribution headers.** pi-ai sends a model's `headers` merged with
+  per-call options, and sets no `HTTP-Referer` / `X-Title` for
+  OpenRouter.
+  Agentry has no config field to supply them.
+- **Catalog drift.** pi-ai's table is a generated snapshot.
+  A model OpenRouter lists after the snapshot fails with
+  `Unknown pi-ai model: openrouter/<id>`.
+  The only escape hatch today is an `openai-compatible` profile with
+  `baseUrl`, which `resolveModelProfile` builds with provider `'openai'`,
+  so the `Credentials` seam looks up the wrong key and the model loses
+  its OpenRouter identity.
+- **Durable configuration.** The key is resolved from the environment
+  (`makeEnvCredentials`).
+  A daemon-hosted agent should name its OpenRouter key and default model
+  by pet name instead.
 
 ## Design
 
-### Phase 1: Drop-in OpenRouter Provider (minimal)
+### Phase 1: Document and test the registry path (minimal)
 
-Add `packages/lal/providers/openrouter.js`:
-
-```js
-// @ts-check
-
-const DEFAULT_BASE = 'https://openrouter.ai/api/v1';
-const DEFAULT_MODEL = 'anthropic/claude-3.5-sonnet';
-const REFERER = 'https://endo.example/'; // configurable
-const TITLE = 'Endo';
-
-/**
- * @param {{ apiKey: string, model?: string, baseURL?: string, referer?: string, title?: string }} opts
- */
-export const makeOpenRouterProvider = ({
-  apiKey,
-  model = DEFAULT_MODEL,
-  baseURL = DEFAULT_BASE,
-  referer = REFERER,
-  title = TITLE,
-}) => {
-  const chat = async (messages, tools) => {
-    const body = harden({
-      model,
-      messages,
-      tools: tools.length > 0 ? tools : undefined,
-    });
-    const res = await fetch(`${baseURL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-        'HTTP-Referer': referer,
-        'X-Title': title,
-      },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      throw Error(`OpenRouter ${res.status}: ${await res.text()}`);
-    }
-    const json = await res.json();
-    return harden({ message: json.choices[0].message });
-  };
-  return harden({ chat });
-};
-harden(makeOpenRouterProvider);
-```
-
-Extend `detectProviderKind` in
-[`config.js`](../packages/lal/providers/config.js):
+No new adapter.
+Pin, with a test in `packages/agentry`, that the existing path works:
 
 ```js
-// Add 'openrouter' to the existing return union
-// ('anthropic' | 'gemini' | 'openai-compatible' | 'ollama') and insert
-// its check BEFORE the general `/v1` predicate. Ordering is
-// load-bearing: OpenRouter's canonical base URL
-// (https://openrouter.ai/api/v1) contains `/v1`, so without the
-// earlier check it would classify as the existing 'openai-compatible'
-// kind. A future reorganization (e.g. alphabetical sort) must preserve
-// openrouter-before-openai-compatible.
-export const detectProviderKind = baseURL => {
-  if (baseURL.includes('openrouter.ai')) {
-    return 'openrouter';
-  }
-  if (baseURL.includes('anthropic.com')) {
-    return 'anthropic';
-  }
-  if (
-    baseURL.includes('googleapis.com') ||
-    baseURL.includes('generativelanguage')
-  ) {
-    return 'gemini';
-  }
-  if (baseURL.includes('/v1')) {
-    return 'openai-compatible';
-  }
-  return 'ollama';
-};
+import { defineAgent } from '@endo/agentry';
+
+const makeAgent = defineAgent({
+  model: 'openrouter/anthropic/claude-sonnet-4',
+  instructions: 'You are a helpful agent.',
+  tools: [],
+});
+// Credentials seam: makeEnvCredentials resolves OPENROUTER_API_KEY.
+const agent = makeAgent({ credentials });
 ```
 
-This reuses the existing kind spelling `'openai-compatible'` and its
-existing `.includes('/v1')` predicate verbatim; the only change to the
-shipped function is the new `'openrouter'` branch ahead of the `/v1`
-check.
+The test asserts that the resolved `Model` has `provider: 'openrouter'`,
+`baseUrl: 'https://openrouter.ai/api/v1'`, and the id after the first
+slash, and that the maker's `getApiKey('openrouter')` reaches the
+`Credentials` seam.
+The `@endo/agentry` README gains an OpenRouter example.
+That makes the code-mode presets (`makeCodeModeAgent`,
+`makeCodeModeGitLoopAgent`) OpenRouter-capable with no further change.
 
-**Ordering as a design decision.**
-The check for `openrouter.ai` must come before the `/v1` predicate.
-OpenRouter's canonical base URL is `https://openrouter.ai/api/v1`,
-which contains `/v1`;
-a future refactor that sorts the dispatch table alphabetically or by
-provider name would silently regress OpenRouter into the existing
-`'openai-compatible'` kind.
-The Phase 2 registry refactor below preserves the ordering by giving
-each entry an explicit `match(baseURL)` predicate that the registry
-evaluates in declared order, with router-aware entries first.
+### Phase 2: An `openrouter` arm in `resolveModelProfile`
 
-Wire into `createProvider` in
-[`index.js`](../packages/lal/providers/index.js), as a new branch
-*ahead of* the existing `providerKind === 'openai-compatible'` branch
-(which stays unchanged and continues to handle llama.cpp and other
-`/v1` endpoints):
+Extend the profile config with optional `headers` and teach
+`resolveModelProfile` an explicit `openrouter` arm, keyed on the
+**provider field**, not on URL shape:
 
-```js
-if (providerKind === 'openrouter') {
-  const apiKey = env.LAL_AUTH_TOKEN;
-  if (!apiKey) throw Error('LAL_AUTH_TOKEN required for OpenRouter');
-  return makeOpenRouterProvider({ apiKey, model });
-}
-```
+1. If `provider === 'openrouter'` and the id is in pi-ai's registry, take
+   the registry `Model` (as today) and overlay `headers`.
+2. If the id is *not* in the registry, build an OpenAI-completions
+   `Model` at `https://openrouter.ai/api/v1` with `provider: 'openrouter'`
+   (so the `Credentials` seam still resolves the OpenRouter key) and the
+   profile's `cost` / `contextWindow` / `maxTokens` budget overrides,
+   instead of throwing.
+3. Default the attribution headers to `HTTP-Referer:
+   https://github.com/endojs/endo` and `X-Title: Endo` when the profile
+   does not supply them.
 
-This is the minimal cut: ~80 LOC of new code. It adds one branch to
-`detectProviderKind` and one to `createProvider` without altering the
-existing `'openai-compatible'` branch or its `defaultModels` entry, so
-it ships in one PR with no behavior change for existing providers.
+The arm reuses `buildOpenAICompatibleModel` and lives beside the
+existing `ollama` / `openai-compatible` arms; nothing outside
+`packages/agentry` learns about OpenRouter.
 
-### Phase 2: Provider registry refactor
+### Phase 3: Pet-named provider configuration
 
-OpenCode's lesson worth borrowing is the **registry shape** at
-`provider.ts` lines 88 through 119
-(the `BUNDLED_PROVIDERS` map of provider-name to lazy SDK loader)
-and lines 410 through 459
-(the `customLoaders` dictionary of provider-name to header / option
-closure;
-see the Related Designs section below for the source path).
-The separation is clean:
+Today a daemon-hosted agent gets its key from the process environment.
+The [`agentry-agent-builder`](agentry-agent-builder.md) § Retained daemon
+sessions provisioning policy already names remote credentials only as
+host-side pet names whose material stays in the daemon; the same shape
+applies to model providers.
+The operator fills `provider`, `API key`, `default model`, and the
+optional attribution headers once (a form, following the
+[`lal-fae-form-provisioning`](lal-fae-form-provisioning.md) pattern), and
+the result is a durable model profile referenceable by pet name.
+The provisioning host resolves the pet name to a model profile plus a
+capability-scoped `Credentials` provider and passes both to the maker,
+so the guest never holds the key.
 
-- **Provider table** says *how* to talk to a given vendor's
-  endpoint.
-- **Loader table** says *what extra headers / options* a given
-  vendor expects.
-
-Lal today merges both:
-each provider file has its `chat()` implementation hard-coded.
-This works for ~5 providers but starts to thrash at ~15.
-The refactor:
-
-1. Define a `Provider` interface as today
-   (`{ chat(messages, tools) => { message } }`).
-2. Add a `ProviderRegistry` keyed by `providerKind`
-   (`'anthropic'`, `'openrouter'`, `'openai-compatible'`, `'gemini'`,
-   ...).
-3. Each registry entry holds
-   `{ make(opts) => Provider, defaultHeaders, defaultModel, defaultBaseURL, match(baseURL) }`.
-4. `createProvider(env)` becomes a registry lookup + `make()` invocation;
-   the dispatch heuristic moves into the registry as a `match(baseURL)`
-   predicate per entry.
-   The registry evaluates predicates in declared order, with router-aware
-   entries (OpenRouter) listed before catch-all OpenAI-compat predicates
-   so that ordering remains explicit at the data-model layer rather than
-   implicit in source position.
-
-The refactor is not load-bearing for the OpenRouter feature, but
-it sets up the right shape for the next 5 to 10 providers
-(Bedrock, Groq, Cohere, xAI, etc. are all OpenAI-compat with header
-quirks).
-
-### Phase 3: Provider configuration via form
-
-Today, provider configuration goes through environment variables
-(`LAL_HOST`, `LAL_MODEL`, `LAL_AUTH_TOKEN`).
-The [`lal-fae-form-provisioning`](lal-fae-form-provisioning.md) design
-landed the form-based agent-provisioning shape;
-the natural extension is a provider-config form.
-The user fills `provider kind`, `API key`, `default model`,
-`referrer URL` (for OpenRouter's `HTTP-Referer` header) once,
-and the form output becomes a durable provider configuration
-referenceable by pet-name.
-The Lal worker startup reads the pet-named config and instantiates the
-right provider.
-
-This is a UX improvement, not a correctness improvement;
-gate it behind Phase 2
-(the registry is the data-model that makes the form fields obvious).
+This is a UX and confinement improvement, not a correctness improvement;
+gate it behind Phase 2 (the profile shape is what the form fields fill).
 
 ## Dependencies
 
 | Design                                | Relationship                                         |
 |---------------------------------------|------------------------------------------------------|
-| [lal-fae-form-provisioning](lal-fae-form-provisioning.md) | Phase 3 piggybacks on the form-based config pattern |
+| [agentry-agent-builder](agentry-agent-builder.md) | The boundary: `defineAgent` model resolution and the `Credentials` seam |
+| [lal-fae-form-provisioning](lal-fae-form-provisioning.md) | Phase 3 borrows the form-based config pattern |
 | [endoclaw-network-fetch](endoclaw-network-fetch.md) | OpenRouter calls go through Endo's outbound HTTP capability when capability-confined |
 
 ## Phased Implementation
 
 | Phase | What                                  | Size | Notes                                    |
 |-------|---------------------------------------|------|------------------------------------------|
-| 1     | OpenRouter provider file + heuristic  | S    | ~80 LOC, no breaking change              |
-| 2     | Provider registry refactor            | M    | Pre-work for Bedrock / Groq / xAI later  |
-| 3     | Form-based provider config            | M    | Depends on Phase 2; UX improvement       |
+| 1     | Registry-path test + README example   | S    | No new code path; pins existing behavior |
+| 2     | `openrouter` arm in `resolveModelProfile` | S    | ~60 LOC; headers + off-snapshot models  |
+| 3     | Pet-named provider configuration      | M    | Depends on Phase 2 and session provisioning |
 
-Total: 2-3 weeks if all three land in sequence; Phase 1 alone is 1
-day.
+Total: about 3 days for Phases 1 and 2 (Phase 1 alone is under a day);
+Phase 3 is a separate M-sized follow-on that waits on retained-session
+provisioning.
 
 ## Open Questions
 
 - **Header values**:
   what should `HTTP-Referer` and `X-Title` be for an Endo daemon?
   OpenCode uses `https://opencode.ai/` and `opencode`.
-  Proposal: `https://github.com/endojs/endo` and `Endo` (or
-  per-Familiar-instance values via the form).
-  The headers are used by OpenRouter to attribute traffic;
+  Proposal: `https://github.com/endojs/endo` and `Endo`, overridable per
+  profile.
+  OpenRouter uses the headers to attribute traffic;
   reasonable defaults that identify the project are appropriate.
-- **Streaming**:
-  OpenRouter supports OpenAI-style SSE streaming.
-  Phase 1 punts on this (synchronous, all-at-once);
-  Phase 2's registry refactor is the right time to introduce a
-  `chatStream()` interface alongside `chat()`.
-  Out of scope for the initial cut.
 - **Cost telemetry**:
-  OpenRouter returns per-request cost in the response body.
-  Endo has no UI for this today;
-  the [`endopen-tui-shell`](endopen-tui-shell.md) design proposes a
+  OpenRouter returns per-request cost in the response body, and pi-ai
+  carries usage on each assistant message.
+  The [`endopen-tui-shell`](endopen-tui-shell.md) design proposes a
   status-bar slot that would surface it.
 - **Model catalog**:
   OpenRouter exposes `/models` as a JSON catalog.
-  The lab-FAE form could fetch and offer a dropdown rather than free-form
-  `LAL_MODEL`.
-  Defer to Phase 3.
+  The Phase 3 form could fetch it and offer a dropdown rather than a
+  free-form model id.
+  Whether Phase 2's off-snapshot models should also read context and
+  pricing from `/models` (instead of profile overrides) is open.
 
 ## Design Decisions
 
-1. **Minimal cut ships independently of the registry refactor.**
-   The feature gap the maintainer named is OpenRouter usability;
-   the registry refactor is a follow-on that pays its way in the next
-   5 providers.
-   Land them as separate PRs.
+1. **The interface boundary is Agentry, not any one harness.**
+   Lal, fae, genie, and the code-mode presets are all meant to be
+   `defineAgent(...)` configurations
+   ([agentry-agent-builder](agentry-agent-builder.md) § What is the
+   Problem Being Solved?).
+   A provider added to one harness's private table would have to be
+   added again to each of the others; a provider reachable through
+   `resolveModelProfile` reaches all of them.
+   This design therefore touches no harness package.
 
-2. **Lal owns the provider abstraction, not the daemon.**
-   The daemon does not learn about HTTP providers;
-   the Lal worker does.
-   OpenRouter access is from Lal's worker process, gated by whatever
-   outbound HTTP capability Lal holds
+2. **Reuse pi-ai's registry provider; do not write an adapter.**
+   pi-ai already speaks OpenRouter's dialect (reasoning normalization,
+   routing preferences, the env-key mapping).
+   A hand-written `fetch` adapter would duplicate that and lose
+   streaming, which pi-agent-core's loop already uses.
+
+3. **Dispatch on the provider field, never on URL shape.**
+   The earlier draft inferred the provider from the base URL and needed
+   an ordering rule (`openrouter.ai` before the generic `/v1` match) to
+   avoid misclassifying OpenRouter as generic OpenAI-compatible.
+   `resolveModelProfile` already keys registry lookups on `provider`, so
+   the Phase 2 arm is keyed the same way and the ordering hazard does
+   not arise.
+
+4. **The daemon does not learn about HTTP providers.**
+   Provider access happens in the agent's worker, through the `Model`
+   the maker binds, gated by whatever outbound HTTP capability that
+   worker holds
    (today: ambient fetch;
    in the future: [endoclaw-network-fetch](endoclaw-network-fetch.md)
    with an OpenRouter allowlist entry).
 
-3. **Provider-detection ordering is a load-bearing data-model concern.**
-   The `openrouter.ai` predicate must precede the `/v1` predicate, both
-   in Phase 1's `detectProviderKind` source order and in Phase 2's
-   registry declared order.
-   Without the ordering rule, OpenRouter's `https://openrouter.ai/api/v1`
-   base URL would match the existing generic `'openai-compatible'` entry
-   and silently regress.
-   Phase 2's registry encodes the ordering as a `match(baseURL)` per
-   entry evaluated in declared order, rather than relying on source
-   position.
-
-4. **Considered and rejected: a generic openai-compatible provider.**
-   Lal already has `llamacpp.js` as the OpenAI-compatible adapter
-   ([`packages/lal/providers/llamacpp.js`](../packages/lal/providers/llamacpp.js)).
-   Reusing it for OpenRouter would skip the header-injection story
-   and conflate "local OpenAI-compatible" with "router-aware
-   OpenAI-compatible".
-   Reason for rejection: OpenRouter has provider-specific behavior
-   (the headers, the per-request cost field, the model-catalog endpoint)
-   that deserves its own file, even when the wire format overlaps.
-
-5. **Considered and rejected (for now): an explicit `providerKind`
-   field instead of URL-shape inference.**
-   The order-dependent `match(baseURL)` dispatch (Phase 1's
-   `detectProviderKind`, carried into Phase 2's declared-order registry)
-   infers *which provider* from *what the base URL happens to look
-   like*: place-oriented inference that the "openrouter-before-`/v1`"
-   ordering rule exists only to compensate for.
-   A value-oriented alternative removes the inference entirely: let the
-   user or config state `providerKind` directly
-   (`'openrouter'`, `'anthropic'`, `'openai-compatible'`, `'gemini'`,
-   `'ollama'`), matched on that field with no ordering dependency, so
-   "which vendor" is decoupled from "what its URL happens to look like".
-   `detectProviderKind` would survive only as a best-effort default when
-   the field is omitted.
-   Reason it is not the Phase 1/2 default: the shipped config surface is
-   URL-first today (`LAL_HOST`), so an explicit-kind field is a config
-   migration that belongs with the Phase 3 provider-config form, where
-   `providerKind` becomes an explicit form field and the ordering rule
-   can retire.
-   Until then the ordering rule stands, documented as a known
-   place-oriented wart (this decision and Design Decision 3) rather than
-   an invisible one.
+5. **Considered and rejected: routing through the `openai-compatible`
+   arm.**
+   It works on the wire, but builds the `Model` as provider `'openai'`,
+   so key resolution, cost accounting, and pi-ai's OpenRouter-specific
+   request shaping all see the wrong provider.
+   Phase 2's dedicated arm keeps the identity.
 
 ## Verification
 
-Phase 1's load-bearing claim is the provider-detection *ordering* one:
-the `openrouter.ai` predicate must resolve before the generic `/v1`
-predicate, or OpenRouter silently misclassifies as
-`'openai-compatible'`.
-That claim is falsifiable and lands with a check:
-
-- **Detection ordering.** A unit test asserts
-  `detectProviderKind('https://openrouter.ai/api/v1')` returns
-  `'openrouter'`, not `'openai-compatible'`, and that a plain
-  `'https://host/v1'` still returns `'openai-compatible'`. A future
-  reordering that regresses OpenRouter fails this test rather than
-  shipping silently.
-- **Existing-branch preservation.** A test asserts the
-  `'openai-compatible'` branch and its
-  `defaultModels['openai-compatible']` lookup are unchanged by the new
-  `'openrouter'` branch, so llama.cpp and other generic `/v1` endpoints
-  still resolve as before.
-- **Header injection.** A test drives `makeOpenRouterProvider` against a
-  stub endpoint and asserts the request carries `HTTP-Referer` and
-  `X-Title`, distinguishing the router-aware path from the generic
-  OpenAI-compatible adapter that omits them.
+- **Registry resolution.** A unit test asserts
+  `resolveModelProfile({ model: 'openrouter/anthropic/claude-sonnet-4' })`
+  returns a `Model` with `provider: 'openrouter'` and the OpenRouter base
+  URL, and that the first-slash split keeps the vendor prefix in the id.
+- **Key resolution.** A test asserts a maker built from that definition
+  asks the `Credentials` seam for `openrouter`, not `openai`.
+- **Off-snapshot models (Phase 2).** A test resolves an id absent from
+  pi-ai's table and asserts it yields an `openrouter` `Model` rather
+  than throwing.
+- **Header injection (Phase 2).** A test drives the resolved model
+  against a stub endpoint and asserts the request carries `HTTP-Referer`
+  and `X-Title`.
 
 ## Related Designs
 
 - [endopen](endopen.md): primary comparative analysis.
-- [lal-fae-form-provisioning](lal-fae-form-provisioning.md): Phase 3 piggyback.
+- [agentry-agent-builder](agentry-agent-builder.md): the `defineAgent` boundary this design extends.
+- [endopi-provider-registry-and-oauth](endopi-provider-registry-and-oauth.md): the broader pi-ai registry and subscription OAuth track.
+- [lal-fae-form-provisioning](lal-fae-form-provisioning.md): Phase 3 form pattern.
 - [endoclaw-network-fetch](endoclaw-network-fetch.md): outbound HTTP capability story.
 - OpenCode reference:
   [`packages/opencode/src/provider/provider.ts`](https://github.com/anomalyco/opencode/blob/d59d9966/packages/opencode/src/provider/provider.ts)
@@ -357,3 +244,8 @@ That claim is falsifiable and lands with a check:
 > opencode ... can work well with openrouter
 >
 > kriskowal, 2026-05-15
+
+> Coupling to Lal specifically is no longer the way. We would interface
+> at the Agentry boundary
+>
+> kriskowal, review of PR #266

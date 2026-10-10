@@ -3,7 +3,7 @@
 |             |                                              |
 |-------------|----------------------------------------------|
 | **Created** | 2026-05-15                                   |
-| **Updated** | 2026-05-20                                   |
+| **Updated** | 2026-10-10                                   |
 | **Author**  | kriscendobot (prompted by kriskowal)         |
 | **Status**  | Not Started                                  |
 | **Source**  | [`endopen.md`](endopen.md) § Gap 4           |
@@ -83,14 +83,14 @@ sequenceDiagram
     participant Zed as Zed editor
     participant Adapter as endo-acp adapter
     participant Daemon as Endo daemon
-    participant Guest as Endo guest (Lal)
+    participant Guest as Endo guest (Agentry agent)
 
     Zed->>Adapter: initialize
     Adapter->>Daemon: connect (gateway bearer token)
     Adapter-->>Zed: initialize response (capabilities)
 
     Zed->>Adapter: session/new {cwd: "/path/to/repo"}
-    Adapter->>Daemon: provideGuest(petName="acp-session-N", powers={Mount: cwd, Lal: default})
+    Adapter->>Daemon: provideGuest(petName="acp-session-N", powers={Mount: cwd, model: default profile})
     Daemon-->>Adapter: guest formula ID (public handle, kept adapter-side)
     Adapter-->>Zed: session info + minted session token (opaque secret)
 
@@ -115,8 +115,9 @@ sequenceDiagram
 The adapter holds **the user's authority**, not the ACP client's.
 The bearer token in the adapter's connection identifies the user;
 each new ACP session is a new guest with capabilities the *user*
-granted (typically: `Mount` to the working directory, `Lal` to the
-default LLM provider, `Shell` if the agent-mode rules permit). The
+granted (typically: `Mount` to the working directory, a pet-named
+model profile whose key stays behind Agentry's `Credentials` seam,
+`Shell` if the agent-mode rules permit). The
 ACP client cannot escalate beyond this; the structural confinement
 the daemon provides is preserved across the protocol bridge.
 
@@ -231,8 +232,8 @@ The adapter accepts a config file at `~/.config/endo-acp/config.json`:
     "bearerToken": "..."
   },
   "session": {
-    "agentModule": "lal",
-    "defaultModel": "anthropic/claude-3.5-sonnet",
+    "agent": "code-mode",
+    "defaultModel": "anthropic/claude-sonnet-4",
     "permission": {
       "auto": false,
       "bash": "ask"
@@ -240,6 +241,14 @@ The adapter accepts a config file at `~/.config/endo-acp/config.json`:
   }
 }
 ```
+
+`agent` names the [`@endo/agentry`](agentry-agent-builder.md)
+definition each session guest runs (here the `makeCodeModeAgent`
+preset), and `defaultModel` is an Agentry model string
+(a profile id or `"provider/modelId"`, so `"openrouter/..."` works per
+[`endopen-openrouter`](endopen-openrouter.md)).
+The adapter never names a specific harness package; any agent built
+with `defineAgent` is eligible.
 
 The `permission.auto` flag explicitly defaults to `false` (in
 contrast to OpenCode). Setting it to `true` makes the adapter
@@ -286,7 +295,7 @@ deserves an `endopen-mcp-client.md` follow-up if prioritized.
 
 | Phase | What                                                            | Size | Notes                                |
 |-------|-----------------------------------------------------------------|------|--------------------------------------|
-| 1     | Adapter scaffold + `initialize` + `session/new` + `session/prompt` | M | ~600 LOC, basic single-turn echo via Lal |
+| 1     | Adapter scaffold + `initialize` + `session/new` + `session/prompt` | M | ~600 LOC, basic single-turn echo via an Agentry code-mode agent |
 | 2     | Streaming `session/update` notifications                        | M    | ~300 LOC; subscribes to guest inbox  |
 | 3     | Permission routing through form-request                         | M    | ~250 LOC; user-in-the-loop story     |
 | 4     | `session/load` / `session/resume` / formula-ID persistence      | S-M  | ~200 LOC; per-adapter SQLite or simple JSON store |
@@ -363,19 +372,21 @@ Total: 4-5 weeks for Phases 1-6; Phase 7 is a follow-on toggle.
 8. **Considered and rejected: also implementing the MCP server
    in the same adapter.** Reason: scope. The MCP server is a
    sibling design, not part of this one.
-9. **Guest agent modules implement a minimal required interface
+9. **Guest agents implement a minimal required interface
    (`cancel()`, `fork()`); the adapter never silently degrades a
    protocol method.** ACP exposes one `session/cancel` and one
    `session/fork`. Backing them with an "if implemented, else
    best-effort approximation" branch would give the ACP client the same
-   method name with different semantics depending on which agent module
-   happens to back the guest, a hidden, unadvertised precondition and
+   method name with different semantics depending on which agent
+   definition happens to back the guest, a hidden, unadvertised precondition and
    the least-surprise trap. Instead the guest agent interface *requires*
    `cancel()` and `fork()`, so each protocol method has one meaning.
    These are **new guest-agent-surface work, not already-satisfied
    primitives**: neither exists on the guest agent interface today
-   (`grep -rn "\bfork(" packages/daemon/src/guest.js packages/lal
-   packages/genie` returns nothing), and the daemon's existing
+   (`git grep -F 'fork(' packages/daemon/src/guest.js packages/agentry/src
+   packages/genie/src` returns nothing, and the pi-agent-core `Agent`
+   an Agentry maker returns offers only an in-process `abort()`), and
+   the daemon's existing
    `cancel(petNameOrPath, reason?)` is formula-store *value release*,
    not interruption of an in-flight LLM request — the semantics
    `session/cancel` actually needs. `fork()` is heavier still: copying a
@@ -390,6 +401,10 @@ Total: 4-5 weeks for Phases 1-6; Phase 7 is a follow-on toggle.
    genuinely cannot fork, the adapter advertises the missing capability
    to the client (at `initialize` / `session/new`) rather than degrading
    silently.
+   The interface is implemented once, at the Agentry boundary: the
+   wrapper that exposes a `defineAgent` maker's `Agent` as a guest maps
+   `cancel()` onto pi-agent-core's `abort()` and owns `fork()`, so every
+   Agentry-built agent satisfies it rather than each harness separately.
 
 ## Verification
 
@@ -398,8 +413,8 @@ falsifiable:
 
 - **Capability preservation (Phases 1, 3).** A conformance test drives
   the adapter with an ACP client that requests a tool the session's
-  guest was not endowed with (e.g. `Shell` when only `Mount` / `Lal`
-  were granted) and asserts the request is refused structurally, never
+  guest was not endowed with (e.g. `Shell` when only `Mount` and a model
+  profile were granted) and asserts the request is refused structurally, never
   auto-approved. A second test asserts a permission request surfaces as
   a form-request and blocks until answered.
 - **Credential hygiene (Phases 1, 4).** A test asserts that a formula ID

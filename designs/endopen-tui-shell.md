@@ -3,6 +3,7 @@
 |             |                                              |
 |-------------|----------------------------------------------|
 | **Created** | 2026-05-15                                   |
+| **Updated** | 2026-10-10                                   |
 | **Author**  | kriscendobot (prompted by kriskowal)         |
 | **Status**  | Not Started                                  |
 | **Source**  | [`endopen.md`](endopen.md) § Gap 3           |
@@ -63,7 +64,7 @@ cursor glyphs:
 |   [v] packages                    | opencode end-to-end, then       |
 |     [>] chat                      | author the comparative doc.     |
 |     [>] daemon                    |                                 |
-|     [>] lal                       | * read designs/endoclaw.md      |
+|     [>] agentry                   | * read designs/endoclaw.md      |
 |   * README.md                     |   (template)                    |
 |                                   | * read designs/README.md        |
 | --------------- todo ------------ |                                 |
@@ -111,9 +112,11 @@ Components:
   smaller durable cut that still honors the invariant. A transient
   `value` message with no backing state is explicitly *not* the cut,
   since it would leave the plan unreadable after reload.
-- **Status bar**: model name, token count, cost (from the Lal
-  provider's response metadata; the OpenRouter provider design's
-  Phase 3 surfaces cost in the chat envelope), and a clock /
+- **Status bar**: model name, token count, cost (from the usage
+  metadata on the pi-ai assistant messages an
+  [`@endo/agentry`](agentry-agent-builder.md)-built agent produces;
+  OpenRouter's per-request cost arrives the same way, per
+  [`endopen-openrouter`](endopen-openrouter.md)), and a clock /
   busy indicator.
 - **Command palette**: leader-key (`/`) opens a fuzzy-filtered
   list of commands the space supports (analogue to OpenCode's
@@ -220,8 +223,8 @@ discover that the region is interactive.
    ~150 LOC.
    **Size: S.**
 5. **Status bar**:
-   a new component reading model / tokens / cost from the latest Lal
-   envelope.
+   a new component reading model / tokens / cost from the latest
+   Agentry agent envelope.
    ~100 LOC.
    **Size: S.**
 6. **Diff viewer**:
