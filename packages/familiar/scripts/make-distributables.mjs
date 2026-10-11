@@ -4,6 +4,14 @@
  * - macOS: DMG (via electron-installer-dmg/appdmg) + zip (via ditto)
  * - Linux: zip
  * - Windows: zip
+ *
+ * Usage: node scripts/make-distributables.mjs [target-os] [target-arch]
+ *
+ * Both arguments are optional and default to the host platform / arch. The
+ * macOS arm64 vs x64 release matrix runs this script on architecture-matched
+ * runners; the arguments are present so the script can be invoked
+ * cross-architecture in support of a future universal-binary lipo step (the
+ * post-MVR followup to G15 tracked in designs/familiar-release.md).
  */
 
 import { execSync } from 'node:child_process';
@@ -39,8 +47,15 @@ const ensureNativeBuilt = chain => {
   execSync('npx node-gyp rebuild', { stdio: 'inherit', cwd: dir });
 };
 
-const platform = process.platform === 'win32' ? 'win32' : process.platform;
-const { arch } = process;
+// Determine target OS. Callers may pass `win` (the node-dist spelling) or
+// `win32` (the @electron/packager spelling); normalise to the
+// @electron/packager spelling for the appDir path.
+const hostPlatform = process.platform === 'win32' ? 'win32' : process.platform;
+const targetOSArg = process.argv[2] || hostPlatform;
+const platform = targetOSArg === 'win' ? 'win32' : targetOSArg;
+
+// Determine target arch.
+const arch = process.argv[3] || process.arch;
 
 const appDir = path.join(familiarDir, `out/Familiar-${platform}-${arch}`);
 if (!fs.existsSync(appDir)) {
@@ -80,7 +95,7 @@ console.log(`Created: out/make/${zipName}`);
 
 // --- DMG (macOS only) ---
 if (platform === 'darwin') {
-  const dmgName = `Familiar-${version}.dmg`;
+  const dmgName = `Familiar-${version}-${arch}.dmg`;
   const appBundle = path.join(appDir, 'Familiar.app');
 
   // appdmg requires native modules (macos-alias, fs-xattr).
@@ -94,7 +109,7 @@ if (platform === 'darwin') {
   await createDMG({
     appPath: appBundle,
     out: makeDir,
-    name: `Familiar-${version}`,
+    name: `Familiar-${version}-${arch}`,
     icon: path.join(familiarDir, 'assets/icon.icns'),
     overwrite: true,
   });

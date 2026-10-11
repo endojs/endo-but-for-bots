@@ -69,6 +69,17 @@ jobs:
           name: bundles
           path: packages/familiar/bundles/
 
+  # macOS arm64 and x64 build on architecture-matched runners (macos-14 is
+  # Apple Silicon, macos-13 is the last Intel-runner generation GitHub still
+  # offers). This is the lighter-touch of the two G15 options in
+  # designs/familiar-release.md: the matrix produces two distinct native
+  # artifacts per release and the user picks the one for their hardware,
+  # vs. the multi-day universal-binary path that would lipo the two
+  # together via @electron/universal. The matrix needs no extra tooling,
+  # no signing dance for combining slices, and no fat-binary size cost;
+  # the universal binary stays tracked as a post-MVR followup for
+  # whenever the single-download UX wins out over the per-target
+  # distribution surface.
   make:
     name: Make (${{ matrix.target-os }}-${{ matrix.target-arch }})
     needs: build-artifacts
@@ -133,8 +144,15 @@ jobs:
           cd packages/familiar
           ./scripts/prepare-package.sh "$TARGET_OS" "$TARGET_ARCH"
 
+      - name: Package app
+        run: |
+          cd packages/familiar
+          node scripts/package-app.mjs ${{ matrix.target-os }} ${{ matrix.target-arch }}
+
       - name: Make distributables
-        run: yarn workspace @endo/familiar step:make
+        run: |
+          cd packages/familiar
+          node scripts/make-distributables.mjs ${{ matrix.target-os }} ${{ matrix.target-arch }}
 
       - name: Upload make output
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
