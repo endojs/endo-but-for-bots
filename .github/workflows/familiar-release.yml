@@ -1,15 +1,38 @@
 name: Familiar Release
 
 on:
+  # Build every supported platform on PRs and branch pushes that touch
+  # familiar / daemon / chat / bundled-agent / build-infra code, so the
+  # per-platform artifacts are available for manual smoke testing from the
+  # run's Artifacts panel (#229 G1). Tag pushes and workflow_dispatch
+  # additionally gate the draft-release job below.
+  pull_request:
+    paths:
+      - 'packages/familiar/**'
+      - 'packages/daemon/**'
+      - 'packages/chat/**'
+      - 'packages/lal/**'
+      - 'packages/fae/**'
+      - '.github/workflows/familiar-release.yml'
+  push:
+    branches:
+      - llm
+      - master
+    paths:
+      - 'packages/familiar/**'
+      - 'packages/daemon/**'
+      - 'packages/chat/**'
+      - 'packages/lal/**'
+      - 'packages/fae/**'
+      - '.github/workflows/familiar-release.yml'
+    tags:
+      - 'familiar-v*'
   workflow_dispatch:
     inputs:
       version:
         description: 'Release version (e.g. 0.1.0)'
         required: false
         type: string
-  push:
-    tags:
-      - 'familiar-v*'
 
 # Build jobs only need checkout access; release write access is scoped below.
 permissions:
@@ -78,6 +101,9 @@ jobs:
       TARGET_OS: ${{ matrix.target-os }}
 
     strategy:
+      # Keep building the remaining platforms when one fails so a partial
+      # artifact set is still available for smoke testing.
+      fail-fast: false
       matrix:
         include:
           - runner: macos-14
@@ -132,6 +158,9 @@ jobs:
         run: |
           cd packages/familiar
           ./scripts/prepare-package.sh "$TARGET_OS" "$TARGET_ARCH"
+
+      - name: Package app
+        run: yarn workspace @endo/familiar step:package
 
       - name: Make distributables
         run: yarn workspace @endo/familiar step:make
