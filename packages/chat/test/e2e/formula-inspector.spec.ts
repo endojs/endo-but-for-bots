@@ -35,6 +35,7 @@ const setupHarness = async (page: Page) => {
           { name: 'my-eval', type: 'eval', id: 'eval-id-1' },
           { name: 'my-worker', type: 'worker', id: 'worker-id-1' },
           { name: 'my-key', type: 'keypair', id: 'kp-id-1' },
+          { name: 'my-hub', type: 'eval', id: 'hub-id-1' },
         ],
         formulas: {
           'eval-id-1': {
@@ -59,6 +60,62 @@ const setupHarness = async (page: Page) => {
               privateKey: { kind: 'literal', value: '0xSECRET' },
             },
           },
+          'hub-id-1': {
+            type: 'eval',
+            number: 'hub-id-1',
+            properties: {
+              source: { kind: 'literal', value: 'harden({})' },
+              worker: { kind: 'reference', identifier: 'worker-id-1' },
+              endowments: { kind: 'reference-list', entries: {} },
+            },
+          },
+        },
+        // The snapshot the synthetic EndoHost's #284 `listRetentionPaths`
+        // resolves to, keyed by inspected formula id. Segments are ordered
+        // leaf-to-root exactly as the daemon returns them (see the shape in
+        // packages/chat/test/component/value-component-flip.test.js). `my-eval`
+        // is retained by one path (endo root → "pins" pet store → my-eval);
+        // `my-key` is deliberately unretained (empty snapshot) so the back
+        // face renders the empty state.
+        retentionPaths: {
+          'eval-id-1': [
+            [
+              {
+                groupMembers: ['eval-id-1'],
+                formulaTypes: ['eval'],
+                referencedBy: 'pins-id',
+                labels: ['pet:my-eval'],
+              },
+              {
+                groupMembers: ['pins-id'],
+                formulaTypes: ['pet-store'],
+                referencedBy: 'endo-id',
+                labels: ['pins'],
+              },
+              {
+                groupMembers: ['endo-id'],
+                type: 'root',
+                formulaTypes: ['endo'],
+              },
+            ],
+          ],
+          'kp-id-1': [],
+          // A value retained by many paths, so the bounded-height list must
+          // scroll. Each path is a distinct single-hop retainer rooted at
+          // `endo`, generated so the fixture stays legible.
+          'hub-id-1': Array.from({ length: 12 }, (_unused, i) => [
+            {
+              groupMembers: ['hub-id-1'],
+              formulaTypes: ['eval'],
+              referencedBy: `holder-${i}-id`,
+              labels: [`pet:holder-${i}`],
+            },
+            {
+              groupMembers: [`holder-${i}-id`],
+              type: 'root',
+              formulaTypes: ['endo'],
+            },
+          ]),
         },
       });
     }
@@ -158,5 +215,93 @@ test.describe('Formula Inspector (Value modal back face)', () => {
     // The reduced-motion rule overrides the 200ms duration.
     expect(trans === '0s' || trans === '0ms' || trans === '').toBe(true);
     await context.close();
+  });
+
+  /**
+   * Retention-paths table on the Formula back face (#439/#599).
+   *
+   * The read-only "Retention paths" table renders the #284
+   * `EndoHost.listRetentionPaths` snapshot for the inspected value: each
+   * row a path from a garbage-collection root, through the reference
+   * graph, to this value. Unlike the happy-dom component tests
+   * (`test/component/retention-paths-view.test.js` and
+   * `value-component-flip.test.js`), these cases exercise the table in a
+   * real browser — the flip transform, the bounded-height scroll region,
+   * and the confined renderer under a live CSS engine. Like the sibling
+   * back-face cases they presume the `window.__testHarness` fixture (whose
+   * `setFixture` now also carries `retentionPaths`); they run once that
+   * harness lands.
+   */
+  test.describe('Retention paths table', () => {
+    test.fixme('flipping to the back face renders the retention-paths table', async ({
+      page,
+    }) => {
+      await setupHarness(page);
+      await page.locator('.pet-item-row >> text=my-eval').click();
+      await page.keyboard.press('f');
+      await expect(page.locator('#value-window')).toHaveClass(/flipped/);
+
+      // The table heading and count badge reflect the one retaining path.
+      const table = page.locator('.retention-paths');
+      await expect(table).toBeVisible();
+      await expect(table.locator('.retention-paths-title')).toHaveText(
+        'Retention paths',
+      );
+      await expect(table.locator('.retention-paths-count')).toHaveText('1');
+      await expect(table.locator('.retention-path')).toHaveCount(1);
+    });
+
+    test.fixme('the table shows the pet-store edge and marks the target segment', async ({
+      page,
+    }) => {
+      await setupHarness(page);
+      await page.locator('.pet-item-row >> text=my-eval').click();
+      await page.keyboard.press('f');
+
+      // The pet-store edge renders the quoted pet name; the leaf (the
+      // inspected value) is highlighted as the target segment.
+      await expect(page.locator('.retention-path-edge-pet')).toHaveText(
+        '"my-eval"',
+      );
+      await expect(
+        page.locator('.retention-path-segment-target'),
+      ).toContainText('eval-id-1');
+    });
+
+    test.fixme('an unretained value shows the empty state', async ({
+      page,
+    }) => {
+      await setupHarness(page);
+      // my-key has an empty retention snapshot (unretained).
+      await page.locator('.pet-item-row >> text=my-key').click();
+      await page.keyboard.press('f');
+      await expect(page.locator('#value-window')).toHaveClass(/flipped/);
+
+      const table = page.locator('.retention-paths');
+      await expect(table.locator('.retention-path')).toHaveCount(0);
+      await expect(
+        table.locator('.formula-view-empty.retention-paths-message'),
+      ).toContainText('unretained');
+      // No count badge when there are no paths.
+      await expect(table.locator('.retention-paths-count')).toHaveCount(0);
+    });
+
+    test.fixme('a value retained by many paths scrolls within a bounded height', async ({
+      page,
+    }) => {
+      // A browser-only assertion: the list caps its height and scrolls
+      // (real CSS layout), which happy-dom cannot measure. `my-hub` is
+      // retained by more paths than fit the bounded height.
+      await setupHarness(page);
+      await page.locator('.pet-item-row >> text=my-hub').click();
+      await page.keyboard.press('f');
+      await expect(page.locator('.retention-paths-count')).toHaveText('12');
+
+      const list = page.locator('.retention-paths-list');
+      const overflows = await list.evaluate(
+        el => el.scrollHeight > el.clientHeight,
+      );
+      expect(overflows).toBe(true);
+    });
   });
 });

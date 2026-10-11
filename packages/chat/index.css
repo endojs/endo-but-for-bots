@@ -10537,6 +10537,121 @@ button.btn-spinner::after {
   font-style: italic;
 }
 
+/* Retention paths table — the read-only list of every path by which the
+   inspected formula is retained, rendered below the property list on the
+   formula back face. */
+.retention-paths {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-light);
+}
+
+.retention-paths-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.retention-paths-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.retention-paths-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  padding: 1px 7px;
+}
+
+.retention-paths-message {
+  text-align: left;
+}
+
+/* Bound the height so a value retained by many paths scrolls rather than
+   pushing the rest of the modal off-screen. */
+.retention-paths-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.retention-path {
+  padding: 8px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+}
+
+.retention-path-banner {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.retention-path-segments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.retention-path-segment {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary, var(--bg-secondary));
+  font-size: 12px;
+}
+
+.retention-path-segment-root {
+  border-color: var(--accent-primary);
+}
+
+.retention-path-segment-target {
+  border-color: var(--accent-primary);
+  background: var(--bg-hover);
+  font-weight: 600;
+}
+
+.retention-path-member {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.retention-path-type {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.retention-path-edge-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.retention-path-edge {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.retention-path-edge-pet {
+  color: var(--accent-primary);
+  font-style: italic;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;
