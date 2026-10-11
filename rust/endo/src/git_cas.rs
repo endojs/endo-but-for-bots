@@ -203,7 +203,7 @@ fn backend_error(error: impl std::error::Error) -> GitCasError {
     GitCasError::Backend(error.to_string())
 }
 
-fn algorithm_from_gix(kind: gix::hash::Kind) -> GitHashAlgorithm {
+pub(crate) fn algorithm_from_gix(kind: gix::hash::Kind) -> GitHashAlgorithm {
     match kind {
         gix::hash::Kind::Sha1 => GitHashAlgorithm::Sha1,
         gix::hash::Kind::Sha256 => GitHashAlgorithm::Sha256,
@@ -211,7 +211,7 @@ fn algorithm_from_gix(kind: gix::hash::Kind) -> GitHashAlgorithm {
     }
 }
 
-fn object_id_from_gix(id: gix::ObjectId) -> GitObjectId {
+pub(crate) fn object_id_from_gix(id: gix::ObjectId) -> GitObjectId {
     match id.kind() {
         gix::hash::Kind::Sha1 => {
             GitObjectId::Sha1(id.as_bytes().try_into().expect("SHA-1 object ID length"))
