@@ -1035,6 +1035,16 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@earendil-works/pi-tui@npm:^1.0.2":
+  version: 1.0.2
+  resolution: "@earendil-works/pi-tui@npm:1.0.2"
+  dependencies:
+    get-east-asian-width: "npm:1.6.0"
+    marked: "npm:18.0.11"
+  checksum: 10c0/f88d88bd0d6f2fd127bd309f9e2efdbcb86bc9ae851bc84563ba3f4a484a804514826f0618e9aca8266663388af4499a1b50af21c4052e30654eb356492d38d5
+  languageName: node
+  linkType: hard
+
 "@electron-internal/extract-zip@npm:^1.0.1":
   version: 1.0.4
   resolution: "@electron-internal/extract-zip@npm:1.0.4"
@@ -1296,7 +1306,7 @@ __metadata:
     "@earendil-works/pi-agent-core": "npm:^0.87.1"
     "@earendil-works/pi-ai": "npm:^0.87.1"
     "@earendil-works/pi-coding-agent": "npm:^0.87.1"
-    "@earendil-works/pi-tui": "npm:^0.87.1"
+    "@earendil-works/pi-tui": "npm:^1.0.2"
     "@endo/agent-tools": "workspace:^"
     "@endo/cancel": "workspace:^"
     "@endo/daemon": "workspace:^"
