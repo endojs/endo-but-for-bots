@@ -1,6 +1,7 @@
 /**
- * Bundles the Endo CLI and daemon into self-contained ESM files
- * using esbuild for inclusion in the packaged Electron app.
+ * Bundles the Endo CLI, daemon, and the daemon-control helper into
+ * self-contained ESM files using esbuild for inclusion in the
+ * packaged Electron app.
  *
  * All bundles are emitted as ESM (`.mjs`) so that:
  *   - Module-level `await` (used by `manager-node.js` for SQLite
@@ -45,6 +46,16 @@ await build({
   ...shared,
   entryPoints: [path.join(repoRoot, 'packages/cli/bin/endo.cjs')],
   outfile: path.join(familiarRoot, 'bundles/endo-cli.mjs'),
+});
+
+// Tiny CapTP-driven daemon-lifecycle helper. Consolidates the previously
+// CLI-mediated `stop` and `purge` subprocess calls into one entry point
+// parameterized by a single argv verb; see `daemon-control.js` for the
+// CapTP shape and lockdown rationale.
+await build({
+  ...shared,
+  entryPoints: [path.join(familiarRoot, 'daemon-control.js')],
+  outfile: path.join(familiarRoot, 'bundles/daemon-control.cjs'),
 });
 
 await build({
