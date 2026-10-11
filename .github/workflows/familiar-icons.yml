@@ -1,0 +1,57 @@
+name: Familiar Icons
+
+# Verify that the checked-in icon artifacts under
+# packages/familiar/assets/ are in sync with the SVG source
+# at packages/familiar/art/familiar.svg.
+#
+# The verification renders the SVG into a tempdir on a Linux runner using
+# the same tools the regeneration script uses (rsvg-convert, png2icns,
+# icotool) and compares byte-for-byte against the checked-in artifacts.
+# Drift fails the job with a one-line summary per drifted artifact.
+#
+# Trigger paths are scoped to the icon pipeline (the source SVG, the
+# checked-in artifacts, the regen script, and this workflow) so the
+# verify job doesn't fire on unrelated PRs.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'packages/familiar/art/familiar.svg'
+      - 'packages/familiar/assets/icon*'
+      - 'packages/familiar/scripts/generate-icons.sh'
+      - '.github/workflows/familiar-icons.yml'
+  pull_request:
+    paths:
+      - 'packages/familiar/art/familiar.svg'
+      - 'packages/familiar/assets/icon*'
+      - 'packages/familiar/scripts/generate-icons.sh'
+      - '.github/workflows/familiar-icons.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify icon artifacts match source SVG
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install icon toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y librsvg2-bin icnsutils icoutils
+
+      - name: Verify icons match source
+        run: |
+          cd packages/familiar
+          ./scripts/generate-icons.sh --check
