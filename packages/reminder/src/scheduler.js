@@ -16,8 +16,9 @@
  *   `@endo/platform/fs/extended`) rather than daemon `filePowers` / `node:fs`,
  *   so the backing may be a directory, a database, or memory;
  * - delivers each reminder message through the injected `onMessage` callback,
- *   which the plugin wires to an eventual-send to the subscriber capability
- *   resolved by name through `powers` (Phase 2 baseline);
+ *   which the plugin wires to ordinary guest package mail addressed to `@self`
+ *   (`../src/mail.js`); the callback drives the one-shot response from the send
+ *   outcome, so the ephemeral response never leaves the plugin;
  * - takes injectable `setTimeout` / `clearTimeout` / `now` / `random` seams so
  *   tests can drive a deterministic clock and backoff.
  */
