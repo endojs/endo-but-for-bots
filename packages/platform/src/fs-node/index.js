@@ -12,3 +12,4 @@ export {
   makeContentStoreCryptoPowers,
 } from './content-store-powers.js';
 export { makeNodeSearchPowers } from './search-powers.js';
+export { makeWatchDirectory } from './watch-directory.js';

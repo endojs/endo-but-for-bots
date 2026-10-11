@@ -32,7 +32,7 @@ const EXCLUDED_PACKAGES = new Set([
   '@endo/init',
   '@endo/lockdown',
   '@endo/platform/proc',
-  '@endo/platform/fs/node',
+  '@endo/platform/fs/node/watch-directory',
   '@endo/platform/exo-fs',
   '@endo/relay-server',
   '@endo/where',
