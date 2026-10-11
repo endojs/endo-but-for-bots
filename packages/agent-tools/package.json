@@ -172,7 +172,7 @@
   },
   "devDependencies": {
     "@earendil-works/pi-agent-core": "^0.87.1",
-    "@earendil-works/pi-ai": "^0.87.1",
+    "@earendil-works/pi-ai": "^1.0.2",
     "@endo/daemon": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/git": "workspace:^",
@@ -189,7 +189,7 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "^0.87.1",
-    "@earendil-works/pi-ai": "^0.87.1"
+    "@earendil-works/pi-ai": "^1.0.2"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-agent-core": {

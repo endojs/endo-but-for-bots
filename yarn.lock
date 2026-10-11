@@ -39,6 +39,23 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@anthropic-ai/sdk@npm:0.129.0":
+  version: 0.129.0
+  resolution: "@anthropic-ai/sdk@npm:0.129.0"
+  dependencies:
+    json-schema-to-ts: "npm:^3.1.1"
+    standardwebhooks: "npm:^1.0.0"
+  peerDependencies:
+    zod: ^3.25.0 || ^4.0.0
+  peerDependenciesMeta:
+    zod:
+      optional: true
+  bin:
+    anthropic-ai-sdk: bin/cli
+  checksum: 10c0/d4eba38c978ef5ecf9cce4e47b5dd927a78e1b20c6725a7cb61a77cf6e9dfa4543767165c7a8499f9c949466093e8e3d8c8416bdb0c0d78de81d54a8b2b93f6d
+  languageName: node
+  linkType: hard
+
 "@anthropic-ai/sdk@npm:^0.131.0":
   version: 0.131.0
   resolution: "@anthropic-ai/sdk@npm:0.131.0"
@@ -989,6 +1006,26 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@earendil-works/pi-ai@npm:^1.0.2":
+  version: 1.0.2
+  resolution: "@earendil-works/pi-ai@npm:1.0.2"
+  dependencies:
+    "@anthropic-ai/sdk": "npm:0.129.0"
+    "@aws-sdk/client-bedrock-runtime": "npm:3.1127.0"
+    "@earendil-works/pi-telemetry": "npm:^1.0.2"
+    "@google/genai": "npm:2.21.0"
+    "@smithy/node-http-handler": "npm:4.12.1"
+    http-proxy-agent: "npm:9.1.0"
+    https-proxy-agent: "npm:9.1.0"
+    openai: "npm:7.19.0"
+    partial-json: "npm:0.1.7"
+    typebox: "npm:1.3.27"
+  bin:
+    pi-ai: dist/cli.js
+  checksum: 10c0/cd62792443e214b9484b2b6e79f7ae340d96cb3845366cfe5063d177ebb807a67b7c54d1819e82f317978318bd0c222f4a20093af11a1a0b99392ad181d2e255
+  languageName: node
+  linkType: hard
+
 "@earendil-works/pi-coding-agent@npm:^0.87.1":
   version: 0.87.1
   resolution: "@earendil-works/pi-coding-agent@npm:0.87.1"
@@ -1022,6 +1059,13 @@ __metadata:
   version: 0.87.1
   resolution: "@earendil-works/pi-telemetry@npm:0.87.1"
   checksum: 10c0/8bcbd720043fd7622f431b09b06bdabdaffcb1c87fc645c4a0c277e64211b998b78684b07e7990934cd8330559f25f7c0b2b422a87936f6dfe04f0da7244b616
+  languageName: node
+  linkType: hard
+
+"@earendil-works/pi-telemetry@npm:^1.0.2":
+  version: 1.0.2
+  resolution: "@earendil-works/pi-telemetry@npm:1.0.2"
+  checksum: 10c0/c1cd92dcb4eb1cf8763cbf7617ebe5d0198f800609e765d6a7f0dbe39446a58d0e6b88ea99d8ca70ac2c03d0a5ad39a995d7196fcd0ddfdadf7fdc2eb63b0d0b
   languageName: node
   linkType: hard
 
@@ -1254,7 +1298,7 @@ __metadata:
   resolution: "@endo/agent-tools@workspace:packages/agent-tools"
   dependencies:
     "@earendil-works/pi-agent-core": "npm:^0.87.1"
-    "@earendil-works/pi-ai": "npm:^0.87.1"
+    "@earendil-works/pi-ai": "npm:^1.0.2"
     "@endo/daemon": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
@@ -1280,7 +1324,7 @@ __metadata:
     typescript: "catalog:dev"
   peerDependencies:
     "@earendil-works/pi-agent-core": ^0.87.1
-    "@earendil-works/pi-ai": ^0.87.1
+    "@earendil-works/pi-ai": ^1.0.2
   peerDependenciesMeta:
     "@earendil-works/pi-agent-core":
       optional: true
@@ -1294,7 +1338,7 @@ __metadata:
   resolution: "@endo/agentry@workspace:packages/agentry"
   dependencies:
     "@earendil-works/pi-agent-core": "npm:^0.87.1"
-    "@earendil-works/pi-ai": "npm:^0.87.1"
+    "@earendil-works/pi-ai": "npm:^1.0.2"
     "@earendil-works/pi-coding-agent": "npm:^0.87.1"
     "@earendil-works/pi-tui": "npm:^0.87.1"
     "@endo/agent-tools": "workspace:^"
@@ -2695,7 +2739,7 @@ __metadata:
   dependencies:
     "@anthropic-ai/sdk": "npm:^0.131.0"
     "@earendil-works/pi-agent-core": "npm:^0.87.1"
-    "@earendil-works/pi-ai": "npm:^0.87.1"
+    "@earendil-works/pi-ai": "npm:^1.0.2"
     "@endo/agent-tools": "workspace:^"
     "@endo/agentry": "workspace:^"
     "@endo/cli": "workspace:^"
@@ -14719,6 +14763,33 @@ __metadata:
     zod:
       optional: true
   checksum: 10c0/fde60f66be934e52c61f0ef864817f4f4ee0bc76ac345599c29a6bfa4ffe5a4563a9e3af5fbc5b9c4bf36a3f06a8b3c0bd9f735f94b8019d6018c6b2ec43c0cf
+  languageName: node
+  linkType: hard
+
+"openai@npm:7.19.0":
+  version: 7.19.0
+  resolution: "openai@npm:7.19.0"
+  peerDependencies:
+    "@aws-sdk/credential-provider-node": ">=3.972.0 <4"
+    "@smithy/hash-node": ">=4.3.0 <5"
+    "@smithy/signature-v4": ">=5.4.0 <6"
+    undici: ">=5 <9"
+    ws: ^8.21.0
+    zod: ^3.25 || ^4.0
+  peerDependenciesMeta:
+    "@aws-sdk/credential-provider-node":
+      optional: true
+    "@smithy/hash-node":
+      optional: true
+    "@smithy/signature-v4":
+      optional: true
+    undici:
+      optional: true
+    ws:
+      optional: true
+    zod:
+      optional: true
+  checksum: 10c0/027f21e9dd47bfc76f411775d18e17bb0d7c25a1f29d0bc5832a304b598509b44809b1d33ce231fa7657a9f6d38cda0304c15cd4eb7864aa8f3d50ebd4b7ed52
   languageName: node
   linkType: hard
 
