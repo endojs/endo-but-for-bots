@@ -486,6 +486,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@babel/helper-string-parser@npm:^8.0.6":
+  version: 8.0.6
+  resolution: "@babel/helper-string-parser@npm:8.0.6"
+  checksum: 10c0/b59c0ff09e168d77b02538d363a2b6461b08697f30a7e1ea99a2f68f74307a2ce56a3cd7625494d5f21d4c48d5ddddeb2d2eec5791754345d524d092e415ae8d
+  languageName: node
+  linkType: hard
+
 "@babel/helper-validator-identifier@npm:^7.27.1":
   version: 7.27.1
   resolution: "@babel/helper-validator-identifier@npm:7.27.1"
@@ -504,6 +511,13 @@ __metadata:
   version: 7.29.7
   resolution: "@babel/helper-validator-identifier@npm:7.29.7"
   checksum: 10c0/4795354e7ae0dcafa72de1cd04ec51252dc1498517170beaf019e03effc5b7bf13c6b21a3949a77e07b8125be7f106ed1131350d8ebd4566ae874094a726d62b
+  languageName: node
+  linkType: hard
+
+"@babel/helper-validator-identifier@npm:^8.0.6":
+  version: 8.0.6
+  resolution: "@babel/helper-validator-identifier@npm:8.0.6"
+  checksum: 10c0/9170fe52f3c330945b259cfb5786fb0e1fb4bdafd4deedcb0d3cbe300e993c8df9ca2307734bd3009220799f3053d206557f78d942df0f41e565304e19d2595c
   languageName: node
   linkType: hard
 
@@ -546,7 +560,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@babel/parser@npm:^7.29.8, @babel/parser@npm:~7.29.9":
+"@babel/parser@npm:^7.29.8":
   version: 7.29.9
   resolution: "@babel/parser@npm:7.29.9"
   dependencies:
@@ -554,6 +568,17 @@ __metadata:
   bin:
     parser: ./bin/babel-parser.js
   checksum: 10c0/171b16eb4527cdbbb72cb98710f91acb22356e2c40196ba3b7a1b84efa8c55d0b0992f399c8c675c3e17f67fd133676c5c4118e5f20db243f427c8b29b0c3f40
+  languageName: node
+  linkType: hard
+
+"@babel/parser@npm:~8.0.6":
+  version: 8.0.6
+  resolution: "@babel/parser@npm:8.0.6"
+  dependencies:
+    "@babel/types": "npm:^8.0.6"
+  bin:
+    parser: ./bin/babel-parser.js
+  checksum: 10c0/af600f314542538a9dacf08e51cdce1eb947a6008e54539833987bdda98ef8632fd7178985411315431240e3d3d969788a216e534d6301eecbabed6d4a88a766
   languageName: node
   linkType: hard
 
@@ -667,6 +692,16 @@ __metadata:
     "@babel/helper-string-parser": "npm:^7.29.7"
     "@babel/helper-validator-identifier": "npm:^7.29.7"
   checksum: 10c0/be7c279f0abf2a086c633e21b49c7ca80275d05283cc5a268b67a708c9914bd0c944f1422b3eb3cb37682a2af5d560abf520ccf9b01b53ecbfe6b71fbc3fdde6
+  languageName: node
+  linkType: hard
+
+"@babel/types@npm:^8.0.6":
+  version: 8.0.6
+  resolution: "@babel/types@npm:8.0.6"
+  dependencies:
+    "@babel/helper-string-parser": "npm:^8.0.6"
+    "@babel/helper-validator-identifier": "npm:^8.0.6"
+  checksum: 10c0/f97ac49f5e38ae44f20f702d78c1853438ec0d518da1623b6da9dc728c4132a1a7a3060390db021fa792850b64842637bea93c026a6d4eee2e42eaa023f1b778
   languageName: node
   linkType: hard
 
@@ -1999,7 +2034,7 @@ __metadata:
   resolution: "@endo/evasive-transform@workspace:packages/evasive-transform"
   dependencies:
     "@babel/generator": "npm:^7.28.3"
-    "@babel/parser": "npm:~7.29.9"
+    "@babel/parser": "npm:~8.0.6"
     "@babel/traverse": "npm:~7.29.0"
     "@babel/types": "npm:~7.29.0"
     "@endo/ses-ava": "workspace:^"
@@ -2827,7 +2862,7 @@ __metadata:
   resolution: "@endo/module-source@workspace:packages/module-source"
   dependencies:
     "@babel/generator": "npm:^7.28.3"
-    "@babel/parser": "npm:~7.29.9"
+    "@babel/parser": "npm:~8.0.6"
     "@babel/traverse": "npm:~7.29.0"
     "@babel/types": "npm:~7.29.0"
     "@endo/cjs-module-analyzer": "workspace:^"
@@ -3011,7 +3046,7 @@ __metadata:
   resolution: "@endo/parser-pipeline@workspace:packages/parser-pipeline"
   dependencies:
     "@babel/generator": "npm:~7.28.3"
-    "@babel/parser": "npm:~7.29.9"
+    "@babel/parser": "npm:~8.0.6"
     "@babel/traverse": "npm:~7.28.3"
     "@babel/types": "npm:~7.29.0"
     "@endo/compartment-mapper": "workspace:^"
@@ -3287,7 +3322,7 @@ __metadata:
   resolution: "@endo/ses-test@workspace:packages/ses-test"
   dependencies:
     "@babel/generator": "npm:^7.28.3"
-    "@babel/parser": "npm:~7.29.9"
+    "@babel/parser": "npm:~8.0.6"
     "@babel/traverse": "npm:~7.29.0"
     "@babel/types": "npm:~7.29.0"
     "@endo/compartment-mapper": "workspace:^"
