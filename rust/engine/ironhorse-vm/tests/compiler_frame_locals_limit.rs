@@ -28,6 +28,31 @@ fn frame_of(count: usize, pre: &str, item: &str, post: &str) -> String {
     s
 }
 
+fn base36(mut number: usize) -> String {
+    const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    if number == 0 {
+        return "0".to_owned();
+    }
+    let mut digits = Vec::new();
+    while number != 0 {
+        digits.push(DIGITS[number % DIGITS.len()] as char);
+        number /= DIGITS.len();
+    }
+    digits.iter().rev().collect()
+}
+
+fn upstream_named_frame(count: usize) -> String {
+    let mut source = String::with_capacity(count * 7);
+    source.push_str("(function(){");
+    for number in 0..count {
+        source.push_str("let a");
+        source.push_str(&base36(number));
+        source.push(';');
+    }
+    source.push_str("})");
+    source
+}
+
 #[test]
 fn over_limit_frame_is_refused_through_compile() {
     // 65536 `let` slots need a nonexistent `RESERVE_4`. The scoper's frame
@@ -38,6 +63,24 @@ fn over_limit_frame_is_refused_through_compile() {
 
     // The atom-bearing entry rejects it identically.
     let error = compile_atoms(&frame_of(65_536, "function f(){", "let a{i};", "}")).unwrap_err();
+    assert_eq!(error.kind, ParseErrorKind::Syntax);
+    assert_eq!(error.message, "too many variables");
+}
+
+#[test]
+fn upstream_named_boundary_is_a_documented_symbol_atom_divergence() {
+    // Moddable's scope-count-limit.js compiles and runs the first vector. The
+    // Iron Horse scoper admits its 65,535 slots, but its u16 symbols atom
+    // reserves id zero and therefore carries only 65,534 named symbols. Keep
+    // that independent wire-format/property-key limit explicit rather than
+    // misreporting this valid frame as a locals-limit failure.
+    let error = compile_atoms(&upstream_named_frame(65_535)).unwrap_err();
+    assert_eq!(error.kind, ParseErrorKind::Syntax);
+    assert_eq!(error.message, "too many symbols (maximum 65534)");
+
+    // The upstream rejection half remains Iron Horse's locals-limit result,
+    // since bind-time scope counting happens before atom serialization.
+    let error = compile_atoms(&upstream_named_frame(65_536)).unwrap_err();
     assert_eq!(error.kind, ParseErrorKind::Syntax);
     assert_eq!(error.message, "too many variables");
 }

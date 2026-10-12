@@ -565,6 +565,36 @@ fn frame_of(count: usize, pre: &str, item: &str, post: &str) -> String {
     s
 }
 
+/// Base-36 spelling used by XS's `scope-count-limit.js`: compact enough that
+/// the boundary fixture is the same shape as upstream rather than a test-only
+/// decimal-name approximation.
+fn base36(mut number: usize) -> String {
+    const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    if number == 0 {
+        return "0".to_owned();
+    }
+    let mut digits = Vec::new();
+    while number != 0 {
+        digits.push(DIGITS[number % DIGITS.len()] as char);
+        number /= DIGITS.len();
+    }
+    digits.iter().rev().collect()
+}
+
+/// XS's upstream named-slot boundary vector: an anonymous function avoids an
+/// extra function-name symbol while every `let` gets a distinct compact name.
+fn upstream_named_frame(count: usize) -> String {
+    let mut source = String::with_capacity(count * 7);
+    source.push_str("(function(){");
+    for number in 0..count {
+        source.push_str("let a");
+        source.push_str(&base36(number));
+        source.push(';');
+    }
+    source.push_str("})");
+    source
+}
+
 /// The largest `scopeCount` in the scope tree of `src`, or a scoper error.
 fn max_scope_count(src: &str) -> Result<i64, crate::parser::ParseError> {
     let tree = scope_program(src, false)?;
@@ -590,6 +620,18 @@ fn frame_at_the_ceiling_is_accepted() {
     // RESERVE operand can encode, so it is admitted.
     let src = frame_of(65_535, "function f(){", "let a{i};", "}");
     assert_eq!(max_scope_count(&src).unwrap(), 65_535);
+}
+
+#[test]
+fn upstream_named_scope_count_boundary_is_visible_to_the_scoper() {
+    // Port of Moddable's tests/xs/issues/scope-count-limit.js acceptance
+    // half. Full compilation is deliberately tested separately because the
+    // symbols atom has a lower, documented Iron Horse limit.
+    assert_eq!(
+        max_scope_count(&upstream_named_frame(65_535)).unwrap(),
+        65_535
+    );
+    assert_frame_rejected(&upstream_named_frame(65_536));
 }
 
 #[test]
@@ -662,4 +704,17 @@ fn module_top_level_frame_honors_the_ceiling() {
     let err = scope_module(&over).expect_err("over-limit module frame must be rejected");
     assert_eq!(err.kind, ParseErrorKind::Syntax);
     assert_eq!(err.message, "too many variables");
+}
+
+#[test]
+fn oss_fuzz_tagged_template_vector_is_parser_limited_before_scoping() {
+    // OSS-Fuzz used 32,768 tagged templates in one function. Each tag makes
+    // `bind_template` reserve two temporary slots, so XS reaches 65,536 with
+    // one source name. Iron Horse caps an AST at 2,048 levels to protect every
+    // recursive compiler pass, so this left-associated chain is rejected by
+    // the parser before the scoper can observe the temporary-only overflow.
+    let source = format!("function f(){{t{}}}", "``".repeat(32_768));
+    let error = scope_program(&source, false).expect_err("tree-depth cap rejects tag chain");
+    assert_eq!(error.kind, ParseErrorKind::Syntax);
+    assert_eq!(error.message, "stack overflow");
 }
