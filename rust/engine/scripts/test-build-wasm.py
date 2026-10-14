@@ -20,6 +20,7 @@ SCRIPTS = Path(__file__).resolve().parent
 ENGINE = SCRIPTS.parent
 build_wasm = load("build_wasm", SCRIPTS / "build-wasm.py")
 build_probe = load("build_probe", ENGINE / "stack-lanes/build_probe.py")
+changes = load("changes", ENGINE.parents[1] / "scripts/ci-changes.py")
 
 PROBE_EXPORT = "-C link-arg=--export=__stack_pointer"
 
@@ -82,6 +83,9 @@ class Consumers(unittest.TestCase):
                          shared + " " + PROBE_EXPORT)
         self.assertEqual(build_probe.WASM_TARGET, build_wasm.WASIP1)
         self.assertEqual(build_probe.DEFAULT_SHADOW_STACK, build_wasm.DEFAULT_SHADOW_STACK)
+
+    def test_ci_selects_the_job_for_the_crates_the_script_builds(self):
+        self.assertEqual(changes.WASM_CRATES, set(build_wasm.CRATES))
 
 
 if __name__ == "__main__":

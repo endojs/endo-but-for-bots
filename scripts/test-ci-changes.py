@@ -227,6 +227,30 @@ class Repository(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(self.selected(path)["cross-target-ironhorse"])
 
+    def test_engine_wasm_build_inputs(self):
+        """The engine's wasm build runs for the members it builds, through the
+        graph, and for the inputs of its own that no crate owns: the recipe,
+        its test, the probe build that shares the recipe, the WASI test
+        script and the engine's toolchain pin. The host-only members, the
+        probe's source and prose do not select it."""
+        for path in ["rust/engine/ironhorse-text/src/lib.rs",
+                     "rust/engine/ironhorse-snapshot/tests/record_count_overflow.rs",
+                     "rust/engine/scripts/build-wasm.py",
+                     "rust/engine/scripts/test-build-wasm.py",
+                     "rust/engine/stack-lanes/build_probe.py",
+                     "rust/engine/scripts/test-snapshot-wasi.py",
+                     "rust/engine/rust-toolchain.toml",
+                     "rust/engine/Cargo.lock"]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["build-ironhorse-wasm"])
+        for path in ["rust/engine/xs-oracle/src/lib.rs",
+                     "rust/engine/ironhorse-262/src/lib.rs",
+                     "rust/engine/stack-lanes/probe/src/main.rs",
+                     "rust/engine/WASM-BLOCKERS.md",
+                     "rust/ocapn_noise/src/lib.rs"]:
+            with self.subTest(path=path):
+                self.assertFalse(self.selected(path)["build-ironhorse-wasm"])
+
     def test_format_helper_inputs(self):
         self.assertTrue(self.selected("rust/engine/scripts/generate-compiler-opcodes.py")["format-ironhorse"])
 

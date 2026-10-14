@@ -23,7 +23,7 @@ JOBS = (
     "test-thixotrope-ironhorse", "format-ironhorse", "test-ironhorse",
     "test-ironhorse-calibration", "compare-ironhorse-math",
     "test-ironhorse-oracle", "oracle-sanitizers", "fuzz-ironhorse",
-    "cross-target-ironhorse", "test-ocapn-python",
+    "cross-target-ironhorse", "build-ironhorse-wasm", "test-ocapn-python",
     "build-wasm", "browser-tests", "guile-interop", "viable-release",
     "depcheck", "check-action-pins", "package-uniformity", "filter-tests",
 )
@@ -37,7 +37,7 @@ RUST_JOBS = {
     "build-xsnap", "test-thixotrope-ironhorse", "format-ironhorse",
     "test-ironhorse", "test-ironhorse-calibration", "compare-ironhorse-math",
     "test-ironhorse-oracle", "oracle-sanitizers", "fuzz-ironhorse",
-    "cross-target-ironhorse", "build-wasm",
+    "cross-target-ironhorse", "build-ironhorse-wasm", "build-wasm",
 }
 WORKFLOWS = {
     ".github/workflows/browser-test.yml": {"browser-tests"},
@@ -54,6 +54,12 @@ WORKFLOWS = {
 CORE = {
     "ironhorse-meter", "ironhorse-vm", "ironhorse-snapshot",
     "ironhorse-compile", "ironhorse-regexp", "ironhorse-store-sqlite",
+}
+# The engine members rust/engine/scripts/build-wasm.py builds for wasm; its
+# test holds this set to the script's list.
+WASM_CRATES = {
+    "ironhorse-meter", "ironhorse-text", "ironhorse-unicode", "ironhorse-regexp",
+    "ironhorse-vm", "ironhorse-compile", "ironhorse-runtime", "ironhorse-snapshot",
 }
 
 
@@ -290,6 +296,11 @@ def classify(paths, graphs, all_jobs=False):
             n.startswith("rust:rust/engine/") for n in rust_affected
         )
         jobs["build-wasm"] |= "ocapn_noise_protocol_facilities" in crates
+        # The engine's wasm build: the members it builds, through the graph,
+        # so that a change to ironhorse-text selects it for ironhorse-vm. The
+        # host-only members (the oracle bindings, the test262 runner, the fuzz
+        # targets, the stack-lanes probe) do not.
+        jobs["build-ironhorse-wasm"] |= bool(core_crates & WASM_CRATES)
 
     for path in paths:
         if shared_js(path):
@@ -405,6 +416,16 @@ def classify(paths, graphs, all_jobs=False):
             jobs["test-ironhorse"] = True
         if path == "packages/ocapn-noise/gen/ocapn-noise.wasm":
             jobs["build-wasm"] = True
+        # The wasm build's own inputs that no crate owns: the recipe and its
+        # test, the probe build the test holds to the recipe, the WASI test
+        # script the job runs, and the engine's toolchain pin, whose rust-src
+        # the recipe rebuilds std from.
+        if path in {
+            "rust/engine/scripts/build-wasm.py", "rust/engine/scripts/test-build-wasm.py",
+            "rust/engine/stack-lanes/build_probe.py", "rust/engine/scripts/test-snapshot-wasi.py",
+            "rust/engine/rust-toolchain.toml",
+        }:
+            jobs["build-ironhorse-wasm"] = True
         if path == "rust/engine/scripts/compare-math-vectors.py":
             jobs["test-ironhorse"] = True
         if under(path, "docs") or path.endswith((".md", ".sh")) or PurePosixPath(path).name.startswith("typedoc") or path in {".shellcheckrc", "SECURITY.md"}:

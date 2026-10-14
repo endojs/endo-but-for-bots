@@ -1545,3 +1545,64 @@ jobs:
           # is identical.  Drift indicates somebody changed Rust source
           # without re-running build.sh.
           git diff --exit-code packages/ocapn-noise/gen/ocapn-noise.wasm
+
+  # The engine's official wasm build (rust/engine/WASM-BLOCKERS.md B1, option
+  # 1): std rebuilt with unwinding on the pinned toolchain for both wasm
+  # targets, through the one script that holds the recipe, then the snapshot's
+  # 32-bit overflow refusals on WASI. The -Zbuild-std artifacts live in the
+  # cached target directory; a cold run rebuilds std twice.
+  build-ironhorse-wasm:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['build-ironhorse-wasm']) }}
+    name: build-ironhorse-wasm
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: '0'
+
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cache Cargo + the engine's wasm targets
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/engine/target
+          # The rebuilt std is keyed by what it is built from and with: the
+          # lockfile, the toolchain pin (its rust-src) and the recipe's flags.
+          key: ${{ runner.os }}-ironhorse-wasm-${{ hashFiles('rust/engine/Cargo.lock', 'rust/engine/rust-toolchain.toml', 'rust/engine/scripts/build-wasm.py') }}
+          restore-keys: |
+            ${{ runner.os }}-ironhorse-wasm-
+
+      - name: Set up Node
+        # test-snapshot-wasi.py runs its test binary through node:wasi.
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.x
+
+      - name: Install rust-src and the wasm targets on the pinned toolchain
+        # rustup picks the channel from rust/engine/rust-toolchain.toml.
+        working-directory: rust/engine
+        run: |
+          set -euo pipefail
+          rustup component add rust-src
+          rustup target add wasm32-wasip1 wasm32-unknown-unknown
+
+      - name: Test the build script
+        run: python3 rust/engine/scripts/test-build-wasm.py
+
+      - name: Build the engine for wasm32-wasip1 and wasm32-unknown-unknown
+        run: python3 rust/engine/scripts/build-wasm.py
+
+      - name: Run the snapshot's 32-bit overflow refusals on WASI
+        run: python3 rust/engine/scripts/test-snapshot-wasi.py
