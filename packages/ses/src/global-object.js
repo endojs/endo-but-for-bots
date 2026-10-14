@@ -23,20 +23,13 @@ import { constantProperties, universalPropertyNames } from './permits.js';
  * start-compartment binding stays non-writable and non-configurable; a child
  * compartment's binding is writable and configurable as usual.
  *
- * An entry here reaches every compartment, including one built with no
- * endowments to confine untrusted code, so its value must confer no authority.
- * `SturdyRef` qualifies only because the `@endo/sturdyref` shim constructs,
- * brand-checks, and dispatches to a handler the caller already holds. Nothing
- * here enforces that: `sampleSturdyRef` in `intrinsics.js` is a misconfiguration
- * guard, not an authority boundary, so any change to the shim's authority
- * reaches every compartment.
- * `lockdown` validates each entry with its own name-specific check before
- * sampling it (for `SturdyRef`, `sampleSturdyRef`), so a new entry needs a new
- * check alongside it.
+ * A first-wins entry may appear in either the universal or initial global map.
+ * Parcel is initial-only because it includes `locate`; child compartments get
+ * `%SharedParcel%` instead.
  */
 const firstWinsPropertyNames = freeze({
   __proto__: null,
-  SturdyRef: true, // Shimmed by `@endo/sturdyref`.
+  Parcel: true, // Shimmed by `@endo/parcel`.
 });
 
 /**
@@ -168,12 +161,26 @@ export const setGlobalObjectMutableProperties = (
   }
 
   for (const [name, intrinsicName] of entries(newGlobalPropertyNames)) {
+    let locked = false;
+    if (hasOwn(firstWinsPropertyNames, name)) {
+      const value = intrinsics[intrinsicName];
+      const descriptor = getOwnPropertyDescriptor(globalObject, name);
+      if (isFirstWinsDescriptor(descriptor, value)) {
+        // Preserve the shim's locked initial binding. Fresh child globals have
+        // no such binding and receive the ordinary mutable shared binding.
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      locked =
+        descriptor !== undefined &&
+        !(hasOwn(descriptor, 'value') && is(descriptor.value, value));
+    }
     if (hasOwn(intrinsics, intrinsicName)) {
       defineProperty(globalObject, name, {
         value: intrinsics[intrinsicName],
-        writable: true,
+        writable: !locked,
         enumerable: false,
-        configurable: true,
+        configurable: !locked,
       });
     }
   }
