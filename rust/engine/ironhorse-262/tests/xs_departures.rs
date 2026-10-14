@@ -500,13 +500,6 @@ const GAPS: &[Row] = &[
         why: "%StringIteratorPrototype% is its own object, tagged `String Iterator`, and %ArrayIteratorPrototype% is tagged `Array Iterator`; Ironhorse shares one untagged prototype",
     },
     Row {
-        program: "typeof WeakRef + ' ' + typeof FinalizationRegistry",
-        ironhorse: "undefined undefined",
-        xs: "function function",
-        v8: "function function",
-        why: "WeakRef and FinalizationRegistry are absent from Ironhorse's realm",
-    },
-    Row {
         program: "[typeof Uint8Array.prototype.toSorted, typeof Uint8Array.prototype.toReversed, typeof Uint8Array.prototype.with].join()",
         ironhorse: "undefined,undefined,undefined",
         xs: "function,function,function",

@@ -698,6 +698,12 @@ mod tests {
             // accounts for it here. `designs/ironhorse-guest-compartment.md`
             // § 7 specifies the table that would let it travel.
             "guest_compartments",
+            // `WeakRef` targets and `FinalizationRegistry` cells: cross-crank
+            // state riding NO section, refused at the persist gate by
+            // presence like `guest_compartments` above (the instance is an
+            // ordinary slot whose whole brand is table membership).
+            "weak_refs",
+            "finalization_registries",
             "identity_roots",
             "restored_leases",
             "restored_environment_leases",
@@ -838,6 +844,8 @@ mod tests {
             "set_proto",
             "weakmap_proto",
             "weakset_proto",
+            "weak_ref_proto",
+            "finalization_registry_proto",
             "arraybuffer_proto",
             "dataview_proto",
             "array_iterator_proto",

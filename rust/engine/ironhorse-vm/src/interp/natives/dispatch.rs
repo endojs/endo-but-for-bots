@@ -1936,6 +1936,21 @@ impl Interp {
                 };
                 return Err(self.catchable_type_error_msg(format!("call: {name}")));
             }
+            // `new WeakRef(target)` / `new FinalizationRegistry(callback)`
+            // (`fx_WeakRef` / `fx_FinalizationRegistry`, `xsMapSet.c`): the
+            // argument is validated BEFORE `fxGetPrototypeFromConstructor`
+            // reads `new.target.prototype`, as the specification orders it.
+            // Constructor-only, like `Map`/`Set`/`Proxy` above. See
+            // `interp/natives/weak.rs`.
+            Native::WeakRef | Native::FinalizationRegistry => self.construct_weak_native(
+                native,
+                base,
+                argc,
+                has_target,
+                code,
+                new_target,
+                derived_native_construct,
+            )?,
             // `new Compartment(options)` (`fx_Compartment`, `xsModule.c:2864`):
             // a fresh global object holding references to the one shared
             // intrinsic graph, plus a fresh `eval`/`Function` bound to it.
@@ -2355,6 +2370,11 @@ impl Interp {
             | NativeMethod::CollValues
             | NativeMethod::CollClear => {
                 self.native_method_collection(m, base, argc, code, this, arg0)?
+            }
+            NativeMethod::WeakRefDeref
+            | NativeMethod::FinalizationRegistryRegister
+            | NativeMethod::FinalizationRegistryUnregister => {
+                NativeResult::Value(self.call_weak_method(m, this, base, argc)?)
             }
             NativeMethod::PromiseThen
             | NativeMethod::PromiseResolveStatic

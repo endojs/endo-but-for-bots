@@ -573,6 +573,24 @@ impl Interp {
                 "a live guest `Compartment`, whose environment binding no snapshot carries",
             );
         }
+        // A live `WeakRef` or `FinalizationRegistry` ([`Interp::weak_refs`],
+        // [`Interp::finalization_registries`]), refused on PRESENCE for the
+        // same reason a guest `Compartment` is: the instance is an ordinary
+        // `Kind::Instance` slot whose whole brand -- the weak target, or the
+        // callback and cells -- is membership in a table no section carries.
+        // A resumed machine would hold an instance `deref`/`register` reject
+        // as "not a WeakRef instance", and a registry whose pending cleanups
+        // silently never run. The doomed-set walk cannot see either, so
+        // presence is the gate. The table that would let them travel is a
+        // later increment.
+        if !self.weak_refs.is_empty() {
+            return Some("a live `WeakRef`, whose weak target no snapshot carries");
+        }
+        if !self.finalization_registries.is_empty() {
+            return Some(
+                "a live `FinalizationRegistry`, whose cells and callback no snapshot carries",
+            );
+        }
         // Presence of the INSTANCE is not the whole question, because the
         // instance is not what carries the state. Two things outlive it.
         //

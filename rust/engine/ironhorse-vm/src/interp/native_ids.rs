@@ -1037,6 +1037,21 @@ pub enum NativeMethod {
     /// One of the Iterator Helper prototype methods, indexed in the order
     /// installed by `create_intrinsics`.
     IteratorHelper(u8),
+    /// `WeakRef.prototype.deref()` (`fx_WeakRef_prototype_deref`,
+    /// `xsMapSet.c`): the `[[WeakRefTarget]]` while it is alive, else
+    /// `undefined`. A live target is kept for the rest of the job
+    /// (`fxKeepDuringJobs`), which the quiescent-only collector satisfies by
+    /// construction: no collection runs before the crank ends.
+    WeakRefDeref,
+    /// `FinalizationRegistry.prototype.register(target, holdings[, token])`
+    /// (`fx_FinalizationRegistry_prototype_register`): append a cell to the
+    /// receiver's `[[Cells]]`. The target and token are held weakly, the
+    /// holdings strongly. Returns `undefined`.
+    FinalizationRegistryRegister,
+    /// `FinalizationRegistry.prototype.unregister(token)`
+    /// (`fx_FinalizationRegistry_prototype_unregister`): drop every cell
+    /// whose token is `token`; `true` when any was.
+    FinalizationRegistryUnregister,
 }
 
 /// One intrinsic (native) function ironhorse models. The variant is the
@@ -1093,6 +1108,19 @@ pub enum Native {
     Set,
     WeakMap,
     WeakSet,
+    /// `WeakRef` — the weak-reference constructor (`xsMapSet.c` `fx_WeakRef`).
+    /// Constructor-only; the target must be an object (the pinned XS rejects
+    /// symbols, as its `WeakMap` does). The per-instance `[[WeakRefTarget]]`
+    /// lives in the [`Interp::weak_refs`] side table, which the full collector
+    /// clears when the target dies (`fxMarkWeakStuff`).
+    WeakRef,
+    /// `FinalizationRegistry` — the cleanup-callback registry constructor
+    /// (`xsMapSet.c` `fx_FinalizationRegistry`). Constructor-only; the
+    /// callback must be callable. Its `[[Cells]]` live in the
+    /// [`Interp::finalization_registries`] side table; a cell whose target
+    /// dies in a collection is cleaned up at the next job boundary
+    /// (`fxCleanupFinalizationRegistries`).
+    FinalizationRegistry,
     /// The abstract `Iterator` constructor and its helper-method prototype.
     Iterator,
     /// `ArrayBuffer` — the raw byte-buffer constructor (`xsDataView.c`
@@ -1220,6 +1248,8 @@ impl Native {
             Native::Set => "Set",
             Native::WeakMap => "WeakMap",
             Native::WeakSet => "WeakSet",
+            Native::WeakRef => "WeakRef",
+            Native::FinalizationRegistry => "FinalizationRegistry",
             Native::Iterator => "Iterator",
             Native::ArrayBuffer => "ArrayBuffer",
             Native::SharedArrayBuffer => "SharedArrayBuffer",
@@ -1277,6 +1307,9 @@ impl Native {
             Native::Compartment => 1,
             Native::DataView => 1,
             Native::Date => 7,
+            // `fxBuildHostConstructor(the, mxCallback(fx_WeakRef), 1, …)` and
+            // its FinalizationRegistry twin: one required argument each.
+            Native::WeakRef | Native::FinalizationRegistry => 1,
             Native::Symbol
             | Native::Map
             | Native::Set
@@ -1347,6 +1380,10 @@ impl Native {
         v.push(("DataView", Native::DataView));
         v.push(("Promise", Native::Promise));
         v.push(("RegExp", Native::RegExp));
+        // Appended after the long-standing roster so the boot slot indices of
+        // every earlier intrinsic are unchanged; only the fingerprint moves.
+        v.push(("WeakRef", Native::WeakRef));
+        v.push(("FinalizationRegistry", Native::FinalizationRegistry));
         v
     }
 }

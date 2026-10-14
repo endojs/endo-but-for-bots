@@ -77,6 +77,16 @@ macro_rules! gc_root {
     ($emit:ident, $vm:ident, $field:ident, $roots:ident, keys) => {
         $emit! { $roots.extend($vm.$field.keys().copied()); }
     };
+    // A FinalizationRegistry with registered cells is a root for as long as
+    // it has them, as XS's `mxFinalizationRegistries` machine slot makes it
+    // (`fx_FinalizationRegistry_prototype_register` links the registry there
+    // and `unregister`/cleanup unlink it once its cells are gone): its
+    // callback still runs for a target that dies after the guest drops the
+    // registry. An empty registry is held only by the guest's references.
+    ($emit:ident, $vm:ident, $field:ident, $roots:ident, registries_with_cells) => {
+        $emit! { $roots.extend($vm.$field.iter().filter_map(|(owner, registry)|
+            (!registry.cells.is_empty()).then_some(*owner))); }
+    };
     ($emit:ident, $vm:ident, $field:ident, $roots:ident, values) => {
         $emit! { $roots.extend($vm.$field.values().copied()); }
     };

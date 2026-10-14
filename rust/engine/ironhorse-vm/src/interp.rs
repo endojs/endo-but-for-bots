@@ -926,6 +926,47 @@ struct DisposableStackData {
     records: Vec<DisposalRecord>,
 }
 
+/// A `WeakRef` instance's `[[WeakRefTarget]]` (XS's `XS_WEAK_REF_KIND`
+/// internal property, `xsMapSet.c`). Kept in the [`Interp::weak_refs`] side
+/// table like [`DisposableStackData`].
+#[derive(Copy, Clone, Debug)]
+struct WeakRefData {
+    /// The target instance, or `SlotIndex::NULL` once a full collection found
+    /// it unreachable (`fxMarkWeakStuff` nulls `weakRef.target`); `deref` then
+    /// answers `undefined`.
+    target: crate::value::SlotIndex,
+}
+
+/// One `[[Cells]]` record of a `FinalizationRegistry` (XS's
+/// `XS_FINALIZATION_CELL_KIND` slot and the holdings slot preceding it).
+#[derive(Copy, Clone, Debug)]
+struct FinalizationCell {
+    /// The weakly held target, or `SlotIndex::NULL` once a collection found
+    /// it dead — the state that queues the cell for cleanup.
+    target: crate::value::SlotIndex,
+    /// The held value handed to the cleanup callback; any value, held
+    /// strongly, so it may be chunk-bearing (a string or BigInt).
+    holdings: Slot,
+    /// The weakly held unregister token, or `SlotIndex::NULL` when none was
+    /// given or it died.
+    token: crate::value::SlotIndex,
+}
+
+/// A `FinalizationRegistry` instance's internal state (XS's
+/// `XS_FINALIZATION_REGISTRY_KIND` closure, `xsMapSet.c`). Kept in the
+/// [`Interp::finalization_registries`] side table.
+#[derive(Clone, Debug)]
+struct FinalizationRegistryData {
+    /// The cleanup callback (`finalizationRegistry.callback`), held strongly.
+    callback: Slot,
+    /// Registration order, as XS links the cells off the callback slot.
+    cells: Vec<FinalizationCell>,
+    /// XS's `XS_FINALIZATION_REGISTRY_CHANGED`: a cell's target died in a
+    /// collection since the last cleanup, so the next job boundary runs the
+    /// callback for each dead cell.
+    changed: bool,
+}
+
 /// An `ArrayBuffer` instance's internal state (XS's `XS_ARRAY_BUFFER_KIND`
 /// + `XS_BUFFER_INFO_KIND` internal slots: the backing-store address and
 /// the byte length). Kept in the [`Interp::array_buffers`] side table like
@@ -2883,6 +2924,20 @@ impl Interp {
             if let Err(h) = self.drain_promise_jobs(code) {
                 step = h;
             }
+            // `fxEndJob` → `fxCleanupFinalizationRegistries`: once the job
+            // queue has drained, a registry flagged by an earlier collection
+            // runs its cleanup callback for each dead cell. A callback may
+            // queue reactions, so the queue drains once more afterwards and
+            // the crank still ends quiescent. Collection runs only between
+            // cranks, so no cell dies during this crank's own jobs.
+            if step == Step::Returned {
+                if let Err(h) = self
+                    .cleanup_finalization_registries(code)
+                    .and_then(|()| self.drain_promise_jobs(code))
+                {
+                    step = h;
+                }
+            }
             self.result = script_result;
         }
         let halt = self.finish_step_rendering_throws(code, step, guest_thrown_rendering);
@@ -3234,6 +3289,8 @@ fn native_unsupported_name(native: Native) -> &'static str {
         Native::Set => "native-call:Set",
         Native::WeakMap => "native-call:WeakMap",
         Native::WeakSet => "native-call:WeakSet",
+        Native::WeakRef => "native-call:WeakRef",
+        Native::FinalizationRegistry => "native-call:FinalizationRegistry",
         Native::Iterator => "native-call:Iterator",
         Native::ArrayBuffer => "native-call:ArrayBuffer",
         Native::SharedArrayBuffer => "native-call:SharedArrayBuffer",

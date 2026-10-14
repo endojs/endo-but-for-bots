@@ -908,6 +908,8 @@ impl Interp {
                 (self.set_proto, "Set"),
                 (self.weakmap_proto, "WeakMap"),
                 (self.weakset_proto, "WeakSet"),
+                (self.weak_ref_proto, "WeakRef"),
+                (self.finalization_registry_proto, "FinalizationRegistry"),
                 (
                     self.intrinsic_prototype("SharedArrayBuffer"),
                     "SharedArrayBuffer",

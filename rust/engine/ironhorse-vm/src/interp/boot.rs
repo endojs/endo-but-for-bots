@@ -226,6 +226,14 @@ impl Interp {
         term(format!("set_proto={:?}", self.set_proto).as_bytes());
         term(format!("weakmap_proto={:?}", self.weakmap_proto).as_bytes());
         term(format!("weakset_proto={:?}", self.weakset_proto).as_bytes());
+        term(format!("weak_ref_proto={:?}", self.weak_ref_proto).as_bytes());
+        term(
+            format!(
+                "finalization_registry_proto={:?}",
+                self.finalization_registry_proto
+            )
+            .as_bytes(),
+        );
         term(format!("arraybuffer_proto={:?}", self.arraybuffer_proto).as_bytes());
         term(format!("dataview_proto={:?}", self.dataview_proto).as_bytes());
         term(format!("array_iterator_proto={:?}", self.array_iterator_proto).as_bytes());
@@ -410,6 +418,14 @@ impl Interp {
                 // below. Their per-instance table lives in the `collections`
                 // side table, not on the prototype.
                 Native::Map | Native::Set | Native::WeakMap | Native::WeakSet => {
+                    self.slots.alloc(Slot::instance(object_proto))
+                }
+                // `%WeakRef.prototype%` / `%FinalizationRegistry.prototype%`:
+                // plain boot objects chaining to %Object.prototype%, carrying
+                // `deref` and `register`/`unregister` bound below. The
+                // per-instance target and cells live in the `weak_refs` and
+                // `finalization_registries` side tables.
+                Native::WeakRef | Native::FinalizationRegistry => {
                     self.slots.alloc(Slot::instance(object_proto))
                 }
                 // `%Compartment.prototype%`: a plain boot object chaining to
@@ -988,6 +1004,42 @@ impl Interp {
                     let mf = self.alloc_named_method(m, m_name, 1);
                     self.proto_methods.push((proto, m_name, mf));
                 }
+            }
+        }
+        // `%WeakRef.prototype%` and `%FinalizationRegistry.prototype%`
+        // (`fxBuildWeakRef`/`fxBuildFinalizationRegistry`, `xsMapSet.c`):
+        // remembered so a `new WeakRef(o)` / `new FinalizationRegistry(f)`
+        // instance chains to the right one, and their methods bound with the
+        // `name`/`length` XS gives them (`deref` 0, `register` 2,
+        // `unregister` 1). `cleanupSome` is not bound: the pin compiles it
+        // out (`#if 0 // removed from FinalizationRegistry specification`).
+        self.weak_ref_proto = self
+            .intrinsics
+            .get("WeakRef")
+            .and_then(|&c| self.ctor_prototype.get(&c).copied())
+            .unwrap_or(crate::value::SlotIndex::NULL);
+        if !self.weak_ref_proto.is_null() {
+            let deref = self.alloc_named_method(NativeMethod::WeakRefDeref, "deref", 0);
+            self.proto_methods
+                .push((self.weak_ref_proto, "deref", deref));
+        }
+        self.finalization_registry_proto = self
+            .intrinsics
+            .get("FinalizationRegistry")
+            .and_then(|&c| self.ctor_prototype.get(&c).copied())
+            .unwrap_or(crate::value::SlotIndex::NULL);
+        if !self.finalization_registry_proto.is_null() {
+            for (m_name, arity, m) in [
+                ("register", 2, NativeMethod::FinalizationRegistryRegister),
+                (
+                    "unregister",
+                    1,
+                    NativeMethod::FinalizationRegistryUnregister,
+                ),
+            ] {
+                let mf = self.alloc_named_method(m, m_name, arity);
+                self.proto_methods
+                    .push((self.finalization_registry_proto, m_name, mf));
             }
         }
         // `Map.groupBy` / `Object.groupBy` (array-grouping proposal) — statics
