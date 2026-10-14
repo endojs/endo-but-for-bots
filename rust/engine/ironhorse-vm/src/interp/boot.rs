@@ -1079,17 +1079,14 @@ impl Interp {
             "transferToFixedLength",
             transfer_to_fixed,
         ));
-        for (name, m) in [
-            ("resize", NativeMethod::ArrayBufferResize),
-            ("concat", NativeMethod::ArrayBufferConcat),
-        ] {
-            let mf = self.alloc_method(m);
-            self.proto_methods.push((self.arraybuffer_proto, name, mf));
-        }
+        let resize = self.alloc_named_method(NativeMethod::ArrayBufferResize, "resize", 1);
+        self.proto_methods
+            .push((self.arraybuffer_proto, "resize", resize));
+        let concat = self.alloc_method(NativeMethod::ArrayBufferConcat);
+        self.proto_methods
+            .push((self.arraybuffer_proto, "concat", concat));
         for (name, method) in [
-            // All supported buffers are fixed length, so these getters have
-            // the same receiver checks, detachment behavior, and result.
-            ("byteLength", NativeMethod::ArrayBufferMaxByteLengthGetter),
+            ("byteLength", NativeMethod::ArrayBufferByteLengthGetter),
             ("detached", NativeMethod::ArrayBufferDetachedGetter),
             (
                 "maxByteLength",
@@ -1105,6 +1102,39 @@ impl Interp {
                 None,
                 "ArrayBuffer",
             ));
+        }
+        // `%SharedArrayBuffer.prototype%` (`fxBuildAtomics`): the
+        // `byteLength`/`growable`/`maxByteLength` accessors and the `grow` and
+        // `slice` methods, in XS's order.
+        let shared_proto = self.intrinsic_prototype("SharedArrayBuffer");
+        if !shared_proto.is_null() {
+            for (name, method) in [
+                (
+                    "byteLength",
+                    NativeMethod::SharedArrayBufferByteLengthGetter,
+                ),
+                ("growable", NativeMethod::SharedArrayBufferGrowableGetter),
+                (
+                    "maxByteLength",
+                    NativeMethod::SharedArrayBufferMaxByteLengthGetter,
+                ),
+            ] {
+                let getter = self.alloc_named_method(method, &format!("get {name}"), 0);
+                self.proto_accessors.push((
+                    shared_proto,
+                    ProtoAccessorKey::String(name),
+                    getter,
+                    None,
+                    "SharedArrayBuffer",
+                ));
+            }
+            for (name, method, arity) in [
+                ("grow", NativeMethod::SharedArrayBufferGrow, 1),
+                ("slice", NativeMethod::SharedArrayBufferSlice, 2),
+            ] {
+                let mf = self.alloc_named_method(method, name, arity);
+                self.proto_methods.push((shared_proto, name, mf));
+            }
         }
         // `ArrayBuffer.isView` — a static bound as an own property of the
         // `ArrayBuffer` constructor instance (not the prototype).

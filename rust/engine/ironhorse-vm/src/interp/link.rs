@@ -1443,7 +1443,7 @@ impl Interp {
 
     /// The `prototype` of the boot constructor named `name`, or
     /// [`crate::value::SlotIndex::NULL`] in a profile without it.
-    fn intrinsic_prototype(&self, name: &str) -> crate::value::SlotIndex {
+    pub(super) fn intrinsic_prototype(&self, name: &str) -> crate::value::SlotIndex {
         self.intrinsics
             .get(name)
             .and_then(|ctor| self.ctor_prototype.get(ctor))

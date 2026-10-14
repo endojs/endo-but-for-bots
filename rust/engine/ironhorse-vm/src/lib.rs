@@ -67,7 +67,7 @@ pub use interp::SIDE_TABLES;
 pub use interp::{
     dtf_component_key_static, error_name_static, CompiledSource, EvalContext, Halt, Interp, Native,
     PanicKind, RelinkError, RestoreError, RestoreSession, RunOutcome, SourceCompileError,
-    SourceCompiler, TYPED_ARRAY_TYPES,
+    SourceCompiler, TYPED_ARRAY_TYPES, VIEW_LENGTH_TRACKING,
 };
 pub use interp::{CompartmentEnvironment, DecodeError, Realm};
 pub use interp::{HEAVY_FRAME_COST, LIGHT_FRAME_COST, NATIVE_DEPTH_LIMIT};

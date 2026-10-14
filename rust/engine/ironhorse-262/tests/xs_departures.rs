@@ -211,6 +211,34 @@ const DEPARTURES: &[Row] = &[
         v8: "TypeError,false",
         why: "a strict `super[0] = v` over an inherited read-only index throws and creates nothing (OrdinarySet); XS defines an own property",
     },
+    Row {
+        program: "var s = new SharedArrayBuffer(8, { maxByteLength: 16 }); s.grow(12); [s.byteLength, s.maxByteLength].join()",
+        ironhorse: "12,16",
+        xs: "throw RangeError: cannot grow SharedArrayBuffer instance",
+        v8: "12,16",
+        why: "SharedArrayBuffer.prototype.grow grows a growable buffer up to its maximum (ES2024 25.2.5.3); XS checks the range, then always throws",
+    },
+    Row {
+        program: "var log = []; try { new ArrayBuffer(4).resize({ valueOf: function () { log.push('valueOf'); return 1; } }); } catch (e) { log.push(e.constructor.name); } log.join()",
+        ironhorse: "TypeError",
+        xs: "valueOf,TypeError",
+        v8: "TypeError",
+        why: "ArrayBuffer.prototype.resize requires [[ArrayBufferMaxByteLength]] before it converts newLength (ES2024 25.1.6.6 steps 2-4); XS converts first",
+    },
+    Row {
+        program: "var r; try { r = new ArrayBuffer(4, { maxByteLength: 8 }).transfer(12).byteLength; } catch (e) { r = e.constructor.name; } r",
+        ironhorse: "RangeError",
+        xs: "12",
+        v8: "RangeError",
+        why: "transfer keeps a resizable buffer's maximum, so AllocateArrayBuffer refuses a new length above it (ArrayBufferCopyAndDetach); XS makes a buffer longer than its maximum",
+    },
+    Row {
+        program: "var b = new ArrayBuffer(8, { maxByteLength: 8 }); new Uint8Array(b).set([1,2,3,4,5,6,7,8]); var C = function (n) { b.resize(3); return new ArrayBuffer(n); }; C[Symbol.species] = C; b.constructor = C; var r; try { r = new Uint8Array(b.slice(1, 6)).join(''); } catch (e) { r = e.constructor.name + ': ' + e.message; } r",
+        ironhorse: "23000",
+        xs: "TypeError: resized this",
+        v8: "23000",
+        why: "ArrayBuffer.prototype.slice copies the bytes a species constructor that shrank the source left in range (ES2024 25.1.6.7 steps 26-27); XS throws",
+    },
 ];
 
 /// Programs where Ironhorse departs from XS and V8 has no counterpart to
@@ -243,6 +271,13 @@ const UNPAIRED: &[Row] = &[
         xs: "Error|Error|true|true",
         v8: "throw ReferenceError: DisposableStack is not defined",
         why: "the specification gives DisposableStack.prototype and AsyncDisposableStack.prototype no toString, so a stack stringifies by its @@toStringTag; XS gives each prototype its own toString answering \"Error\"; Node 22 has neither constructor",
+    },
+    Row {
+        program: "var t = new Uint8Array(new SharedArrayBuffer(4, { maxByteLength: 8 })); Reflect.preventExtensions(t)",
+        ironhorse: "false",
+        xs: "true",
+        v8: "true",
+        why: "a TypedArray that tracks a growable SharedArrayBuffer is not fixed-length, so [[PreventExtensions]] refuses (ES2024 10.4.5.2, IsTypedArrayFixedLength); XS refuses only over a resizable ArrayBuffer, and Node 22 predates the rule",
     },
 ];
 
@@ -409,27 +444,6 @@ const GAPS: &[Row] = &[
         why: "Function.prototype.bind accepts any callable receiver; on a Proxy Ironhorse halts",
     },
     Row {
-        program: "new ArrayBuffer(8, { maxByteLength: 16 }).resizable",
-        ironhorse: "halt NotImplemented(\"native-call:ArrayBuffer:resizable\")",
-        xs: "true",
-        v8: "true",
-        why: "resizable ArrayBuffers (ES2024 25.1.3.1); Ironhorse halts on a maxByteLength",
-    },
-    Row {
-        program: "new ArrayBuffer(4, {}).resizable",
-        ironhorse: "halt NotImplemented(\"native-call:ArrayBuffer:resizable\")",
-        xs: "false",
-        v8: "false",
-        why: "an options object without maxByteLength makes a fixed-length buffer; Ironhorse halts on any options object",
-    },
-    Row {
-        program: "new SharedArrayBuffer(8, { maxByteLength: 16 }).growable",
-        ironhorse: "halt NotImplemented(\"native-call:SharedArrayBuffer:growable\")",
-        xs: "true",
-        v8: "true",
-        why: "growable SharedArrayBuffers (ES2024 25.2.3.1); Ironhorse halts on a maxByteLength",
-    },
-    Row {
         program: "(1.5).toString(2)",
         ironhorse: "halt NotImplemented(\"Number.toString:fractional-non-decimal-radix\")",
         xs: "1.1",
@@ -522,10 +536,10 @@ const GAPS: &[Row] = &[
     },
     Row {
         program: "var s = new SharedArrayBuffer(4); [Object.getPrototypeOf(s) === SharedArrayBuffer.prototype, s instanceof SharedArrayBuffer, Reflect.ownKeys(SharedArrayBuffer.prototype).map(String).join('+')].join()",
-        ironhorse: "false,false,constructor+Symbol(Symbol.toStringTag)",
+        ironhorse: "true,true,constructor+byteLength+growable+maxByteLength+grow+slice+Symbol(Symbol.toStringTag)",
         xs: "true,true,byteLength+growable+maxByteLength+grow+slice+constructor+Symbol(Symbol.toStringTag)",
         v8: "true,true,constructor+byteLength+slice+maxByteLength+growable+grow+Symbol(Symbol.toStringTag)",
-        why: "a SharedArrayBuffer inherits %SharedArrayBuffer.prototype%, which has byteLength, growable, maxByteLength, grow and slice; Ironhorse builds it on %ArrayBuffer.prototype% and leaves the prototype bare",
+        why: "%SharedArrayBuffer.prototype% lists its members before `constructor`, as XS creates them; Ironhorse lists `constructor` first (the boot-roster order of the Map.prototype rows; V8 has its own order)",
     },
     Row {
         program: "var r = Proxy.revocable(() => 1, {}); r.revoke(); try { new r.proxy(); 'constructed' } catch (e) { e.message }",

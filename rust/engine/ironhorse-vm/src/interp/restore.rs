@@ -402,7 +402,7 @@ impl RestoreSession {
     }
     pub fn restore_typed_array_family(
         &mut self,
-        buffers: Vec<(u32, u32, u32, u8)>,
+        buffers: Vec<(u32, u32, u32, u8, u32)>,
         views: Vec<(u32, u8, u32, u32, u32)>,
         data_views: Vec<(u32, u32, u32, u32)>,
     ) -> Result<(), RestoreError> {
@@ -923,7 +923,7 @@ mod tests {
 
     #[test]
     fn typed_array_family_is_validated_before_any_buffer_or_view_is_installed() {
-        for case in 0..12 {
+        for case in 0..17 {
             let mut interp = Interp::new();
             let buffer = interp.new_object().0;
             let view = interp.new_object().0;
@@ -933,7 +933,7 @@ mod tests {
                 .iter()
                 .position(|ty| ty.shift == 1)
                 .unwrap() as u8;
-            let mut buffers = vec![(buffer, data, 8, 0)];
+            let mut buffers = vec![(buffer, data, 8, 0, 0)];
             let mut views = vec![(view, kind, buffer, 0, 4)];
             let mut data_views = vec![(data_view, buffer, 1, 3)];
             let expected = match case {
@@ -946,7 +946,7 @@ mod tests {
                     "owner has multiple buffer-family brands"
                 }
                 2 => {
-                    buffers[0].3 = 4;
+                    buffers[0].3 = 8;
                     "unknown buffer flags"
                 }
                 3 => {
@@ -982,6 +982,34 @@ mod tests {
                     buffers[0].1 = 4;
                     "chunk offset references a free block"
                 }
+                // A resizable buffer's maximum covers its length; a fixed one
+                // has none.
+                11 => {
+                    buffers[0].3 = 4;
+                    buffers[0].4 = 7;
+                    "buffer maximum disagrees with its length"
+                }
+                12 => {
+                    buffers[0].4 = 16;
+                    "buffer maximum disagrees with its length"
+                }
+                // Only a resizable buffer has length-tracking views.
+                13 => {
+                    views[0].4 = crate::VIEW_LENGTH_TRACKING;
+                    "typed-array range exceeds buffer"
+                }
+                14 => {
+                    data_views[0].3 = crate::VIEW_LENGTH_TRACKING;
+                    "data-view range exceeds buffer"
+                }
+                // A view on a resizable buffer may be out of bounds, but
+                // never past the buffer's maximum.
+                15 => {
+                    buffers[0].3 = 4;
+                    buffers[0].4 = 16;
+                    views[0].4 = 9;
+                    "typed-array range exceeds buffer"
+                }
                 _ => {
                     interp.chunks = ChunkArena::from_image(vec![8, 0, 0, 0]);
                     buffers[0].1 = 4;
@@ -1011,7 +1039,7 @@ mod tests {
         assert_eq!(empty as usize, interp.chunks.byte_size());
         interp
             .restore_typed_array_family(
-                vec![(buffer, data, 0, 1), (empty_buffer, empty, 0, 0)],
+                vec![(buffer, data, 0, 1, 0), (empty_buffer, empty, 0, 0, 0)],
                 vec![(view, 0, buffer, 16, 4)],
                 vec![(data_view, buffer, 16, 4)],
             )
@@ -1027,6 +1055,46 @@ mod tests {
         assert_eq!(
             interp.array_buffers[&crate::value::SlotIndex(empty_buffer)].length,
             0
+        );
+    }
+
+    #[test]
+    fn typed_restore_keeps_maximums_tracking_views_and_shrunk_geometry() {
+        let mut interp = Interp::new();
+        let buffer = interp.new_object().0;
+        let tracking = interp.new_object().0;
+        let fixed = interp.new_object().0;
+        let data_view = interp.new_object().0;
+        let data = interp.chunks.alloc(&[0; 4]).0;
+        let kind = TYPED_ARRAY_TYPES
+            .iter()
+            .position(|ty| ty.shift == 1)
+            .unwrap() as u8;
+        // A resizable buffer shrunk to 4 of its 16 bytes, under a tracking
+        // view, a fixed view now past its end, and a tracking DataView.
+        interp
+            .restore_typed_array_family(
+                vec![(buffer, data, 4, 0b100, 16)],
+                vec![
+                    (tracking, kind, buffer, 2, crate::VIEW_LENGTH_TRACKING),
+                    (fixed, kind, buffer, 0, 6),
+                ],
+                vec![(data_view, buffer, 8, crate::VIEW_LENGTH_TRACKING)],
+            )
+            .unwrap();
+        let buffer = crate::value::SlotIndex(buffer);
+        assert_eq!(interp.array_buffers[&buffer].max_length, Some(16));
+        let tracking = interp.typed_arrays[&crate::value::SlotIndex(tracking)];
+        assert_eq!(tracking.array_length, None);
+        assert_eq!(interp.ta_length(tracking), Some(1));
+        let fixed = interp.typed_arrays[&crate::value::SlotIndex(fixed)];
+        assert_eq!(interp.ta_length(fixed), None);
+        let data_view = interp.data_views[&crate::value::SlotIndex(data_view)];
+        assert_eq!(data_view.byte_length, None);
+        assert_eq!(interp.dv_byte_length(data_view), None);
+        assert_eq!(
+            interp.array_buffers_snapshot(),
+            vec![(buffer.0, data, 4, 0b100, 16)]
         );
     }
 

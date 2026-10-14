@@ -71,7 +71,7 @@ const PROPERTY_READ_PATH: &[(&str, &str)] = &[
 /// that adding a probe is a decision someone makes on purpose, with this
 /// comment in front of them. Raising it is allowed; raising it silently is
 /// not.
-const MAX_PROPERTY_READ_PROBES: usize = 27;
+const MAX_PROPERTY_READ_PROBES: usize = 26;
 
 /// And for the call path, which F119 names in the same breath.
 ///

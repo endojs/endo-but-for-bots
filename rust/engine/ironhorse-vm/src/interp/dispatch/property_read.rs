@@ -202,8 +202,7 @@ impl Interp {
                 Slot::boolean(self.disposable_stacks[&inst].disposed)
             }
             Payload::Reference(inst)
-                if ((obj.kind == Kind::Reference && self.array_buffers.contains_key(&inst))
-                    && !self.shared_buffers.contains(&inst))
+                if (obj.kind == Kind::Reference && self.array_buffers.contains_key(&inst))
                     || (obj.kind == Kind::Reference && self.typed_arrays.contains_key(&inst))
                     || (obj.kind == Kind::Reference && self.data_views.contains_key(&inst)) =>
             {
@@ -211,14 +210,6 @@ impl Interp {
                 // prototypes. Ordinary lookup preserves guest
                 // deletion, replacement, and own-property shadows.
                 (self.mop_get(code, inst, id, obj))?
-            }
-            Payload::Reference(inst)
-                if Some(id) == self.byte_length_id
-                    && (obj.kind == Kind::Reference && self.array_buffers.contains_key(&inst))
-                    && self.shared_buffers.contains(&inst) =>
-            {
-                self.meter.tick_raw(ARRAY_BUFFER_BYTE_LENGTH_GET_METERING);
-                Slot::integer(self.array_buffers[&inst].length as i32)
             }
             Payload::Reference(inst)
                 if (obj.kind == Kind::Reference && self.regexps.contains_key(&inst)) =>

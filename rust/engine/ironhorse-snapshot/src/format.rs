@@ -238,7 +238,12 @@ pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 /// targets and `FinalizationRegistry` callbacks, cells and cleanup flags
 /// (row schema 6). Both are omitted when their table is empty, so a machine
 /// holding neither writes the format-24 atom sequence under the new stamp.
-pub const IRONHORSE_FORMAT_VERSION: u32 = 25;
+/// Format 26 carries resizable buffers: an `ABUF` row whose flags have bit
+/// 2 set (resizable, or growable when shared) is followed by its `u32`
+/// maximum byte length, and a `TARR` or `DVIW` length of `u32::MAX` marks a
+/// view that tracks its buffer's length. A machine with no resizable buffer
+/// writes the format-25 payloads under the new stamp.
+pub const IRONHORSE_FORMAT_VERSION: u32 = 26;
 
 /// The oldest format version this reader still decodes. Version-1
 /// containers predate the version-2 stamp; every version-1 writer in

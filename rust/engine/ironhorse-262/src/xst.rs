@@ -3613,11 +3613,11 @@ mod tests {
             eprintln!("test262 subset absent; skipping assembled oracle-exclusion regression");
             return;
         };
+        // The vendored `set/array-arg-targetbuffer-detached-on-get-src-value-
+        // throws.js` predates ES2022's `TypedArraySetElement`; Ironhorse now
+        // fails it with XS (upstream test262 replaced it with the `-no-throw`
+        // case both pass), so it is no longer an oracle-only failure.
         for (relative, _former_skip) in [
-            (
-                "built-ins/TypedArray/prototype/set/array-arg-targetbuffer-detached-on-get-src-value-throws.js",
-                "oracle-xs-typedarray-set-detach",
-            ),
             (
                 "built-ins/TypedArray/prototype/sort/detached-buffer-comparefn.js",
                 "oracle-xs-typedarray-sort-detach",
@@ -3634,8 +3634,11 @@ mod tests {
             let source = std::fs::read_to_string(test_root.join(relative))
                 .unwrap_or_else(|error| panic!("read {relative}: {error}"));
             let result = run_case(&Config::default(), &harness, &source);
-            assert!(matches!(result.verdict, Verdict::Fail(ref reason) if reason.contains("Test262Error:")),
-                "assembled official case {relative}: {:?}", result.verdict);
+            assert!(
+                matches!(result.verdict, Verdict::Fail(ref reason) if reason.contains("Test262Error:")),
+                "assembled official case {relative}: {:?}",
+                result.verdict
+            );
         }
     }
 

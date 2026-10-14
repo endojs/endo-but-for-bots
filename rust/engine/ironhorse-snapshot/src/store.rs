@@ -121,7 +121,11 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// did for the frames appended before it. A v36-era machine was refused at
 /// the persist gate while it held either table, so it has nothing persisted
 /// in them by definition.
-pub const STORE_SCHEMA_VERSION: u32 = 37;
+/// v38: the buffers section may carry a resizable buffer's maximum byte
+/// length, and the typed-arrays and data-views sections length-tracking
+/// views (container format 26). Migration is an identity restamp: an older
+/// store has no resizable buffer.
+pub const STORE_SCHEMA_VERSION: u32 = 38;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -1739,6 +1743,9 @@ fn migrate_step(manifest: &mut StoreManifest, small: &mut Vec<u8>) -> Result<(),
                 small.extend_from_slice(&payload);
             }
         }
+        // 37 → 38 is an identity restamp: a resizable buffer's maximum and a
+        // length-tracking view are encodings an older store never holds.
+        37 => {}
         _ => match LADDER.iter().find(|&&(target, _)| target - 1 == schema) {
             Some(&(_, extra_len)) => small.resize(small.len() + extra_len, 0),
             None => {
@@ -4604,8 +4611,10 @@ mod tests {
             ))
             .unwrap();
         let current = inner.manifest().unwrap();
+        // The last schema before the weak-reference sections, whose framing
+        // this build's roster is not.
         let stale = StoreManifest {
-            store_schema: STORE_SCHEMA_VERSION - 1,
+            store_schema: crate::store_sections::WEAK_SECTIONS_SCHEMA - 1,
             ..current.clone()
         };
         let small = inner.read_small_state().unwrap();

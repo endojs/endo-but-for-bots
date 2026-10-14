@@ -968,12 +968,6 @@ pub(super) use ironhorse_meter::ARRAY_CTOR_BASE_METERING;
 /// argument).
 pub(super) use ironhorse_meter::ARRAY_ISARRAY_METERING;
 
-/// The raw 16.16 cost of the `ArrayBuffer.prototype.byteLength` accessor
-/// getter (`fx_ArrayBuffer_prototype_get_byteLength`) beyond the
-/// `GET_PROPERTY` dispatch: measured against the pin (the getter reads the
-/// stored `bufferInfo.length` and meters nothing itself).
-pub(super) use ironhorse_meter::ARRAY_BUFFER_BYTE_LENGTH_GET_METERING;
-
 /// The constant raw 16.16 cost of a `new ArrayBuffer(n)` construct beyond
 /// the byteLength-dependent backing-store chunk: the native host frame,
 /// `fxArgToSafeByteLength`, `fxGetPrototypeFromConstructor`, and

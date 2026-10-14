@@ -65,7 +65,7 @@ fn vm_restore_checks_buffer_header_and_mutable_slices_stop_at_block_end() {
         restored.restore_native_names(None).unwrap();
         assert!(restored
             .restore_typed_array_family(
-                vec![(buffer.owner, buffer.data, length, 0)],
+                vec![(buffer.owner, buffer.data, length, 0, 0)],
                 vec![],
                 vec![]
             )

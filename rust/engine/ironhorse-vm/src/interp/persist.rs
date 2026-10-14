@@ -961,35 +961,53 @@ impl Interp {
 
     /// Quiescent snapshot of the `array_buffers` side table (ledger
     /// `ArrayBuffers` row, the `ABUF` atom), ascending by owning slot:
-    /// `(owner slot, backing chunk offset, byte length, flags)`. The
-    /// backing BYTES travel with the chunk arena (`BLOC`); this row is
-    /// the geometry that makes them readable. Flags fold the two
-    /// satellite brand sets in: bit 0 = detached
+    /// `(owner slot, backing chunk offset, byte length, flags, maximum byte
+    /// length)`. The backing BYTES travel with the chunk arena (`BLOC`);
+    /// this row is the geometry that makes them readable. Flags fold the
+    /// two satellite brand sets and resizability in: bit 0 = detached
     /// ([`Self::detached_buffers`]), bit 1 = shared
-    /// ([`Self::shared_buffers`]).
-    pub fn array_buffers_snapshot(&self) -> Vec<(u32, u32, u32, u8)> {
-        let mut out: Vec<(u32, u32, u32, u8)> = self
+    /// ([`Self::shared_buffers`]), bit 2 = resizable (growable when
+    /// shared), whose maximum is the fifth field — 0 for a fixed-length
+    /// buffer.
+    pub fn array_buffers_snapshot(&self) -> Vec<(u32, u32, u32, u8, u32)> {
+        let mut out: Vec<(u32, u32, u32, u8, u32)> = self
             .array_buffers
             .iter()
             .map(|(owner, b)| {
                 let flags = u8::from(self.detached_buffers.contains(owner))
-                    | (u8::from(self.shared_buffers.contains(owner)) << 1);
-                (owner.0, b.data.0, b.length, flags)
+                    | (u8::from(self.shared_buffers.contains(owner)) << 1)
+                    | (u8::from(b.max_length.is_some()) << 2);
+                (
+                    owner.0,
+                    b.data.0,
+                    b.length,
+                    flags,
+                    b.max_length.unwrap_or(0),
+                )
             })
             .collect();
-        out.sort_unstable_by_key(|(owner, _, _, _)| *owner);
+        out.sort_unstable_by_key(|(owner, _, _, _, _)| *owner);
         out
     }
 
     /// Quiescent snapshot of the `typed_arrays` side table (ledger
     /// `TypedArrays` row, the `TARR` atom), ascending by owning slot:
     /// `(owner slot, element kind, buffer slot, byte offset, element
-    /// length)`. `kind` indexes [`TYPED_ARRAY_TYPES`].
+    /// length)`. `kind` indexes [`TYPED_ARRAY_TYPES`]; a length-tracking
+    /// view's length is [`VIEW_LENGTH_TRACKING`].
     pub fn typed_arrays_snapshot(&self) -> Vec<(u32, u8, u32, u32, u32)> {
         let mut out: Vec<(u32, u8, u32, u32, u32)> = self
             .typed_arrays
             .iter()
-            .map(|(owner, t)| (owner.0, t.kind, t.buffer.0, t.offset, t.length))
+            .map(|(owner, t)| {
+                (
+                    owner.0,
+                    t.kind,
+                    t.buffer.0,
+                    t.offset,
+                    t.array_length.unwrap_or(VIEW_LENGTH_TRACKING),
+                )
+            })
             .collect();
         out.sort_unstable_by_key(|(owner, _, _, _, _)| *owner);
         out
@@ -997,12 +1015,20 @@ impl Interp {
 
     /// Quiescent snapshot of the `data_views` side table (ledger
     /// `DataViews` row, the `DVIW` atom), ascending by owning slot:
-    /// `(owner slot, buffer slot, byte offset, byte length)`.
+    /// `(owner slot, buffer slot, byte offset, byte length)`, the length of
+    /// a length-tracking view being [`VIEW_LENGTH_TRACKING`].
     pub fn data_views_snapshot(&self) -> Vec<(u32, u32, u32, u32)> {
         let mut out: Vec<(u32, u32, u32, u32)> = self
             .data_views
             .iter()
-            .map(|(owner, d)| (owner.0, d.buffer.0, d.offset, d.size))
+            .map(|(owner, d)| {
+                (
+                    owner.0,
+                    d.buffer.0,
+                    d.offset,
+                    d.byte_length.unwrap_or(VIEW_LENGTH_TRACKING),
+                )
+            })
             .collect();
         out.sort_unstable_by_key(|(owner, _, _, _)| *owner);
         out
@@ -1013,14 +1039,18 @@ impl Interp {
     /// freshly restored machine whose tables are empty, AFTER the
     /// arenas are in place (the buffer extents are validated against
     /// the restored chunk arena). Validates every row — an unknown
-    /// element kind, a flags byte outside the two brand bits, a NULL
-    /// or out-of-arena backing extent, a view naming a buffer with no
-    /// row, or live view geometry past its buffer's length — before any
-    /// family table changes. Detached buffers retain their views' former geometry
-    /// because the observable accessors project those views as zero-length.
+    /// element kind, a flags byte outside the three defined bits, a
+    /// maximum below its buffer's length or past the allocation ceiling,
+    /// a NULL or out-of-arena backing extent, a view naming a buffer with
+    /// no row, a length-tracking view on a fixed-length buffer, or view
+    /// geometry its buffer could never have covered — before any family
+    /// table changes. Detached buffers retain their views' former geometry
+    /// because the observable accessors project those views as zero-length;
+    /// a view on a resizable buffer may likewise be out of bounds, but never
+    /// past the buffer's maximum.
     pub(super) fn restore_typed_array_family(
         &mut self,
-        buffers: Vec<(u32, u32, u32, u8)>,
+        buffers: Vec<(u32, u32, u32, u8, u32)>,
         views: Vec<(u32, u8, u32, u32, u32)>,
         data_views: Vec<(u32, u32, u32, u32)>,
     ) -> Result<(), RestoreError> {
@@ -1040,9 +1070,16 @@ impl Interp {
                 return Err(refuse("owner has multiple buffer-family brands"));
             }
         }
-        for &(_, data, length, flags) in &buffers {
-            if flags > 0b11 {
+        for &(_, data, length, flags, max_length) in &buffers {
+            if flags > 0b111 {
                 return Err(refuse("unknown buffer flags"));
+            }
+            if if flags & 0b100 != 0 {
+                max_length < length || max_length > 0x7FFF_FFFF
+            } else {
+                max_length != 0
+            } {
+                return Err(refuse("buffer maximum disagrees with its length"));
             }
             let stored_length = self
                 .chunks
@@ -1056,39 +1093,53 @@ impl Interp {
                 return Err(refuse("buffer length disagrees with backing state"));
             }
         }
+        // `(byte length, flags, maximum)` of the buffer a view names.
         let buffer_state = |owner| {
             buffers
                 .binary_search_by_key(&owner, |row| row.0)
                 .ok()
-                .map(|index| (buffers[index].2, buffers[index].3))
+                .map(|index| (buffers[index].2, buffers[index].3, buffers[index].4))
                 .ok_or_else(|| refuse("view has no buffer row"))
         };
+        // Whether a view's byte range `[offset, end)` (`None` for a
+        // length-tracking view) is one its buffer could hold.
+        let covered =
+            |offset: u32, end: Option<u64>, (buffer_length, flags, max): (u32, u8, u32)| {
+                if flags & 0b100 != 0 {
+                    end.unwrap_or(u64::from(offset)) <= u64::from(max)
+                } else {
+                    end.is_some() && (flags & 1 != 0 || end <= Some(u64::from(buffer_length)))
+                }
+            };
         for &(_, kind, buffer, offset, length) in &views {
             let ty = TYPED_ARRAY_TYPES
                 .get(kind as usize)
                 .ok_or_else(|| refuse("unknown typed-array kind"))?;
-            let (buffer_length, flags) = buffer_state(buffer)?;
+            let state = buffer_state(buffer)?;
             if offset % (1u32 << ty.shift) != 0 {
                 return Err(refuse("typed-array offset is not aligned"));
             }
-            let end = u64::from(offset) + (u64::from(length) << ty.shift);
-            if flags & 1 == 0 && end > u64::from(buffer_length) {
+            let end = (length != VIEW_LENGTH_TRACKING)
+                .then(|| u64::from(offset) + (u64::from(length) << ty.shift));
+            if !covered(offset, end, state) {
                 return Err(refuse("typed-array range exceeds buffer"));
             }
         }
         for &(_, buffer, offset, size) in &data_views {
-            let (buffer_length, flags) = buffer_state(buffer)?;
-            if flags & 1 == 0 && u64::from(offset) + u64::from(size) > u64::from(buffer_length) {
+            let state = buffer_state(buffer)?;
+            let end = (size != VIEW_LENGTH_TRACKING).then(|| u64::from(offset) + u64::from(size));
+            if !covered(offset, end, state) {
                 return Err(refuse("data-view range exceeds buffer"));
             }
         }
-        for (owner, data, length, flags) in buffers {
+        for (owner, data, length, flags, max_length) in buffers {
             let owner = crate::value::SlotIndex(owner);
             self.array_buffers.insert(
                 owner,
                 ArrayBufferData {
                     data: crate::value::ChunkOffset(data),
                     length,
+                    max_length: (flags & 0b100 != 0).then_some(max_length),
                 },
             );
             if flags & 1 != 0 {
@@ -1099,13 +1150,17 @@ impl Interp {
             }
         }
         for (owner, kind, buffer, offset, length) in views {
+            let resizable_buffer = self.array_buffers[&crate::value::SlotIndex(buffer)]
+                .max_length
+                .is_some();
             self.typed_arrays.insert(
                 crate::value::SlotIndex(owner),
                 TypedArrayData {
                     kind,
                     buffer: crate::value::SlotIndex(buffer),
                     offset,
-                    length,
+                    array_length: (length != VIEW_LENGTH_TRACKING).then_some(length),
+                    resizable_buffer,
                 },
             );
         }
@@ -1115,7 +1170,7 @@ impl Interp {
                 DataViewData {
                     buffer: crate::value::SlotIndex(buffer),
                     offset,
-                    size,
+                    byte_length: (size != VIEW_LENGTH_TRACKING).then_some(size),
                 },
             );
         }

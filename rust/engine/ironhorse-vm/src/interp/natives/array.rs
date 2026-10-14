@@ -1432,11 +1432,12 @@ impl Interp {
                 && !self.arguments_objects.contains(&st.iterable)
             {
                 u64::from(self.arrays[&st.iterable].length)
-            } else if let Some(typed_array) = self.typed_arrays.get(&st.iterable) {
-                if self.detached_buffers.contains(&typed_array.buffer) {
-                    return Err(self.catchable_type_error_msg("out of bound buffer".into()));
-                } else {
-                    u64::from(typed_array.length)
+            } else if let Some(&typed_array) = self.typed_arrays.get(&st.iterable) {
+                // A view its buffer was detached from or shrunk under throws
+                // (XS's `fxIsDataViewOutOfBound`); otherwise its live length.
+                match self.ta_length(typed_array) {
+                    Some(length) => u64::from(length),
+                    None => return Err(self.catchable_type_error_msg("out of bound buffer".into())),
                 }
             } else {
                 self.meter
@@ -3479,12 +3480,13 @@ impl Interp {
                 ));
             }
             // Integer-indexed own elements need no observable `has`/`get`
-            // property walk. Keep validating attachment before every read:
-            // a custom species result's defineProperty trap can detach the
-            // source between iterations. Indices beyond the fixed view length
-            // are known absent even when an own fake `length` is wider.
+            // property walk. Keep validating the index before every read: a
+            // custom species result's defineProperty trap can detach or resize
+            // the source between iterations. Indices no resize could ever
+            // bring into the view are known absent even when an own fake
+            // `length` is wider.
             if let Some(typed_array) = self.typed_arrays.get(&source).copied() {
-                let copy_length = length.min(u64::from(typed_array.length));
+                let copy_length = length.min(u64::from(self.ta_length_bound(typed_array)));
                 for k in 0..copy_length {
                     if self.ta_valid_index(typed_array, k as f64).is_some() {
                         let value = if typed_array.kind <= 1 {

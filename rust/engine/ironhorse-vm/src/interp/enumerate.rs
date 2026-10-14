@@ -111,12 +111,7 @@ impl Interp {
             indices.extend(0..self.str_len(offset) as u32);
         }
         if let Some(&ta) = self.typed_arrays.get(&cur) {
-            let length = if self.detached_buffers.contains(&ta.buffer) {
-                0
-            } else {
-                ta.length
-            };
-            indices.extend(0..length);
+            indices.extend(0..self.ta_length_or_zero(ta));
         }
         if let Some(props) = self.index_props.get(&cur) {
             indices.extend(props.items().keys().copied());

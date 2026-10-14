@@ -970,12 +970,14 @@ struct FinalizationRegistryData {
 }
 
 /// An `ArrayBuffer` instance's internal state (XS's `XS_ARRAY_BUFFER_KIND`
-/// + `XS_BUFFER_INFO_KIND` internal slots: the backing-store address and
-/// the byte length). Kept in the [`Interp::array_buffers`] side table like
-/// [`CollectionData`]; the backing bytes live in the chunk arena at
-/// `data`, relocated by the slide-compactor. `length` is the buffer's
-/// `byteLength` (`bufferInfo.length`). Resizable buffers are unsupported,
-/// so this record has no maximum-length field.
+/// + `XS_BUFFER_INFO_KIND` internal slots: the backing-store address, the
+/// byte length and the maximum byte length). Kept in the
+/// [`Interp::array_buffers`] side table like [`CollectionData`]; the backing
+/// bytes live in the chunk arena at `data`, relocated by the slide-compactor.
+/// `length` is the buffer's `byteLength` (`bufferInfo.length`). An attached
+/// buffer's backing chunk holds exactly `length` bytes: a resize allocates a
+/// new chunk and repoints `data`, as XS's `fxRenewChunk` may. A detached
+/// buffer keeps its old chunk under a zero `length`.
 #[derive(Copy, Clone, Debug)]
 struct ArrayBufferData {
     /// The chunk-arena offset of the zero-filled backing store. Read by the
@@ -984,6 +986,10 @@ struct ArrayBufferData {
     /// exposes `length`.
     data: crate::value::ChunkOffset,
     length: u32,
+    /// `[[ArrayBufferMaxByteLength]]` (XS's `bufferInfo.maxLength`): `Some`
+    /// for a resizable `ArrayBuffer` or a growable `SharedArrayBuffer`, and
+    /// `None` (XS's `-1`) for a fixed-length buffer.
+    max_length: Option<u32>,
 }
 
 /// One TypedArray element type (XS's `gxTypeDispatches` row): the
@@ -1062,26 +1068,46 @@ pub const TYPED_ARRAY_TYPES: &[TypedArrayType] = &[
 /// dispatch slot + `XS_DATA_VIEW_KIND` view slot + buffer reference). Kept
 /// in the [`Interp::typed_arrays`] side table. `kind` indexes
 /// [`TYPED_ARRAY_TYPES`]; `buffer` names the backing `ArrayBuffer`
-/// instance; `offset` is the `byteOffset`; `length` is the element count
-/// (XS's `size >> shift`). Kinds 0 and 1 are BigInt-element views; their
-/// element reads and writes use the BigInt conversion paths.
+/// instance; `offset` is the `byteOffset`; `array_length` is the element
+/// count (XS's `size >> shift`), or `None` for a view that tracks the length
+/// of a resizable buffer (XS's `size < 0`). Kinds 0 and 1 are BigInt-element
+/// views; their element reads and writes use the BigInt conversion paths.
+///
+/// The live length of a view is never stored: [`Interp::ta_length`] derives
+/// it from the buffer's current byte length (`IsTypedArrayOutOfBounds` and
+/// `TypedArrayLength`), because a resize can move it under any view.
 #[derive(Copy, Clone, Debug)]
 struct TypedArrayData {
     kind: u8,
     buffer: crate::value::SlotIndex,
     offset: u32,
-    length: u32,
+    /// `[[ArrayLength]]`: `Some(n)` for a fixed-length view, `None` (`auto`)
+    /// for a length-tracking one.
+    array_length: Option<u32>,
+    /// Whether `buffer` is resizable (growable, when shared), which never
+    /// changes for a buffer. Only then can a resize move the view's length,
+    /// so a view on a fixed-length buffer answers its length without reading
+    /// the buffer (and a length-tracking view always has this set).
+    resizable_buffer: bool,
 }
+
+/// The persisted length of a length-tracking view (`[[ArrayLength]]` or
+/// `[[ByteLength]]` `auto`) in the `TARR` and `DVIW` rows: XS's `size = -1`
+/// as an unsigned word. No fixed-length view can reach it, since a buffer
+/// holds at most `0x7FFF_FFFF` bytes.
+pub const VIEW_LENGTH_TRACKING: u32 = u32::MAX;
 
 /// A `DataView` instance's internal state (XS's `XS_DATA_VIEW_KIND` view
 /// slot + buffer reference). Kept in the [`Interp::data_views`] side table.
 /// `buffer` names the backing `ArrayBuffer`; `offset` is the `byteOffset`;
-/// `size` is the view's `byteLength` in bytes.
+/// `byte_length` is the view's `[[ByteLength]]` in bytes, or `None` (`auto`)
+/// for a view that tracks the length of a resizable buffer (XS's
+/// `size < 0`). [`Interp::dv_byte_length`] derives the live byte length.
 #[derive(Copy, Clone, Debug)]
 struct DataViewData {
     buffer: crate::value::SlotIndex,
     offset: u32,
-    size: u32,
+    byte_length: Option<u32>,
 }
 
 /// A promise instance's settlement state (XS's `XS_PROMISE_KIND` STATUS

@@ -260,22 +260,30 @@ pub struct ErrorImage {
 /// One `ArrayBuffer` instance's serialized side-table row (the `ABUF`
 /// atom / small-state buffers section): the owning slot, the backing
 /// store's chunk offset (the bytes themselves travel with the chunk
-/// arena in `BLOC`), the byte length, and the brand flags (bit 0 =
-/// detached, bit 1 = shared; all other bits refused). Ascending by
-/// owner in serialized form.
+/// arena in `BLOC`), the byte length, the brand flags (bit 0 =
+/// detached, bit 1 = shared, bit 2 = resizable; all other bits refused),
+/// and a resizable buffer's maximum byte length (0 otherwise; format 26).
+/// Ascending by owner in serialized form.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BufferImage {
     pub owner: u32,
     pub data: u32,
     pub length: u32,
     pub flags: u8,
+    pub max_length: u32,
 }
+
+/// [`BufferImage::flags`] bit 2: the buffer is resizable (growable, when
+/// shared), and its row carries [`BufferImage::max_length`].
+pub const BUFFER_RESIZABLE: u8 = 0b100;
 
 /// One TypedArray instance's serialized side-table row (the `TARR`
 /// atom / small-state typed-arrays section): the owning slot, the
 /// element kind (an index into `ironhorse_vm::TYPED_ARRAY_TYPES`,
 /// refused past it), the backing buffer's slot, the byte offset, and
-/// the element length. Ascending by owner in serialized form.
+/// the element length, which is `ironhorse_vm::VIEW_LENGTH_TRACKING` for
+/// a view that tracks a resizable buffer's length (format 26). Ascending
+/// by owner in serialized form.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TypedArrayImage {
     pub owner: u32,
@@ -287,8 +295,9 @@ pub struct TypedArrayImage {
 
 /// One DataView instance's serialized side-table row (the `DVIW` atom
 /// / small-state data-views section): the owning slot, the backing
-/// buffer's slot, the byte offset, and the byte length. Ascending by
-/// owner in serialized form.
+/// buffer's slot, the byte offset, and the byte length, which is
+/// `ironhorse_vm::VIEW_LENGTH_TRACKING` for a length-tracking view (format
+/// 26). Ascending by owner in serialized form.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DataViewImage {
     pub owner: u32,
@@ -1845,7 +1854,9 @@ pub(crate) fn decode_error_frames(p: &[u8]) -> Result<Vec<(u32, Vec<String>)>, S
 
 /// Encode the array-buffers side table (the `ABUF` payload /
 /// small-state buffers section). Input is owner-ascending. Wire form
-/// per row: `u32 owner`, `u32 data`, `u32 length`, `u8 flags`.
+/// per row: `u32 owner`, `u32 data`, `u32 length`, `u8 flags`, and, only
+/// when `flags` has [`BUFFER_RESIZABLE`], `u32 max_length` — so a table
+/// with no resizable buffer encodes exactly as format 25 did.
 pub(crate) fn encode_buffers(buffers: &[BufferImage]) -> Vec<u8> {
     let mut v = Vec::new();
     encode_buffers_into(buffers, &mut v);
@@ -1859,6 +1870,9 @@ pub(crate) fn encode_buffers_into<S: Sink>(buffers: &[BufferImage], v: &mut S) {
         v.put(&b.data.to_be_bytes());
         v.put(&b.length.to_be_bytes());
         v.put_u8(b.flags);
+        if b.flags & BUFFER_RESIZABLE != 0 {
+            v.put(&b.max_length.to_be_bytes());
+        }
     }
 }
 
@@ -1871,13 +1885,26 @@ pub(crate) fn decode_buffers(p: &[u8]) -> Result<Vec<BufferImage>, SnapshotError
         let data = c.u32()?;
         let length = c.u32()?;
         let flags = c.u8()?;
-        // Only the two brand bits (detached, shared) exist; anything
-        // else is a non-canonical encoding.
-        if flags > 0b11 {
+        // Only the two brand bits (detached, shared) and the resizable bit
+        // exist; anything else is a non-canonical encoding.
+        if flags > 0b111 {
             return Err(SnapshotError::Corrupt(
                 "array-buffers side table: unknown flag bits",
             ));
         }
+        let max_length = if flags & BUFFER_RESIZABLE != 0 {
+            let max_length = c.u32()?;
+            // A maximum below the length, or past the allocation ceiling,
+            // is no buffer the engine could have made.
+            if max_length < length || max_length > 0x7FFF_FFFF {
+                return Err(SnapshotError::Corrupt(
+                    "array-buffers side table: maximum out of range",
+                ));
+            }
+            max_length
+        } else {
+            0
+        };
         // Strictly-ascending owners, for the sibling decoders' reason.
         if out
             .last()
@@ -1892,6 +1919,7 @@ pub(crate) fn decode_buffers(p: &[u8]) -> Result<Vec<BufferImage>, SnapshotError
             data,
             length,
             flags,
+            max_length,
         });
     }
     c.done()?;
@@ -5692,12 +5720,43 @@ mod tests {
             owner: 1,
             data: 4,
             length: 8,
-            flags: 4,
+            flags: 8,
+            max_length: 0,
         }];
         assert!(matches!(
             decode_buffers(&encode_buffers(&bad_flags)),
             Err(SnapshotError::Corrupt(_))
         ));
+        // A resizable buffer's maximum covers its length and fits the
+        // allocation ceiling; the round trip keeps it, and a fixed buffer's
+        // row carries none.
+        let resizable = vec![BufferImage {
+            owner: 1,
+            data: 4,
+            length: 8,
+            flags: BUFFER_RESIZABLE,
+            max_length: 16,
+        }];
+        assert_eq!(
+            encode_buffers(&resizable).len(),
+            encode_buffers(&bad_flags).len() + 4
+        );
+        assert_eq!(
+            decode_buffers(&encode_buffers(&resizable)).unwrap(),
+            resizable
+        );
+        for max_length in [7, 0x8000_0000] {
+            let bad_max = vec![BufferImage {
+                max_length,
+                ..resizable[0].clone()
+            }];
+            assert!(matches!(
+                decode_buffers(&encode_buffers(&bad_max)),
+                Err(SnapshotError::Corrupt(
+                    "array-buffers side table: maximum out of range"
+                ))
+            ));
+        }
         // Duplicate owners in each table.
         let dup_buf = vec![
             BufferImage {
@@ -5705,12 +5764,14 @@ mod tests {
                 data: 4,
                 length: 8,
                 flags: 0,
+                max_length: 0,
             },
             BufferImage {
                 owner: 2,
                 data: 16,
                 length: 8,
                 flags: 0,
+                max_length: 0,
             },
         ];
         assert!(matches!(
@@ -5755,12 +5816,14 @@ mod tests {
                 data: 4,
                 length: 8,
                 flags: 0b10,
+                max_length: 0,
             },
             BufferImage {
                 owner: 3,
                 data: 16,
                 length: 0,
                 flags: 0b01,
+                max_length: 0,
             },
         ];
         assert_eq!(decode_buffers(&encode_buffers(&ok_b)).unwrap(), ok_b);
@@ -5793,6 +5856,7 @@ mod tests {
             data: 60,
             length: 8,
             flags: 0,
+            max_length: 0,
         }];
         assert!(check_image_slot_bounds(
             &[],
@@ -5822,6 +5886,7 @@ mod tests {
             data: 2,
             length: 8,
             flags: 0,
+            max_length: 0,
         }];
         assert!(check_image_slot_bounds(
             &[],
@@ -5852,6 +5917,7 @@ mod tests {
             data: u32::MAX,
             length: 0,
             flags: 0,
+            max_length: 0,
         }];
         assert!(check_image_slot_bounds(
             &[],
@@ -5912,6 +5978,7 @@ mod tests {
             data: 4,
             length: 8,
             flags: 0,
+            max_length: 0,
         }];
         let kind_u32 = ironhorse_vm::TYPED_ARRAY_TYPES
             .iter()
@@ -8319,6 +8386,7 @@ mod side_table_order_refusals {
             data: 0,
             length: 0,
             flags: 0,
+            max_length: 0,
         };
         let mut second = first.clone();
         second.owner = 3;
@@ -8620,12 +8688,13 @@ mod side_table_field_refusals {
             data: 0,
             length: 0,
             flags: 0,
+            max_length: 0,
         };
-        for flags in 0..=3 {
+        for flags in 0..=7 {
             buffer.flags = flags;
             assert!(decode_buffers(&encode_buffers(&[buffer.clone()])).is_ok());
         }
-        for flags in [4, 128, 255] {
+        for flags in [8, 128, 255] {
             buffer.flags = flags;
             assert_eq!(
                 decode_buffers(&encode_buffers(&[buffer.clone()])),
@@ -11565,6 +11634,7 @@ mod buffer_geometry_refusals {
             data: 4,
             length: 8,
             flags: 0,
+            max_length: 0,
         }
     }
 

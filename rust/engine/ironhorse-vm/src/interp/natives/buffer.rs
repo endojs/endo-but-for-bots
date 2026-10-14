@@ -15,6 +15,153 @@ impl Interp {
         }
     }
 
+    /// `IsTypedArrayOutOfBounds` and `TypedArrayLength` (ECMA-262 10.4.5.12
+    /// and 10.4.5.13) over the view's buffer as it is now: the view's live
+    /// element count, or `None` when the view is out of bounds — its buffer
+    /// detached, or resized so that it no longer covers the view (XS's
+    /// `fxGetDataViewSize` and `fxIsDataViewOutOfBound`). A length-tracking
+    /// view covers whole elements from its offset to the buffer's end.
+    ///
+    /// A view on a fixed-length buffer only reads the detached set, as
+    /// before resizable buffers: the integer-indexed paths in the interpreter
+    /// loop (`k in ta`, `delete ta[k]`, own keys) inline this, and a buffer
+    /// lookup there widened `dispatch_at_inner`'s frame by 32 bytes, which
+    /// every level of a native re-entry pays (`benches/stack_height.py`).
+    #[inline]
+    pub(in crate::interp) fn ta_length(&self, ta: TypedArrayData) -> Option<u32> {
+        if self.detached_buffers.contains(&ta.buffer) {
+            return None;
+        }
+        match ta.array_length {
+            Some(length) if !ta.resizable_buffer => Some(length),
+            _ => self.resizable_ta_length(ta),
+        }
+    }
+
+    /// [`Self::ta_length`] for an attached view on a resizable buffer: the
+    /// length the buffer's current byte length leaves it.
+    #[cold]
+    #[inline(never)]
+    fn resizable_ta_length(&self, ta: TypedArrayData) -> Option<u32> {
+        let buffer_length = self.array_buffers[&ta.buffer].length;
+        if ta.offset > buffer_length {
+            return None;
+        }
+        let shift = TYPED_ARRAY_TYPES[ta.kind as usize].shift as u32;
+        match ta.array_length {
+            None => Some((buffer_length - ta.offset) >> shift),
+            Some(length) => {
+                let end = u64::from(ta.offset) + (u64::from(length) << shift);
+                (end <= u64::from(buffer_length)).then_some(length)
+            }
+        }
+    }
+
+    /// `TypedArrayLength` behind `IsTypedArrayOutOfBounds`'s TypeError (XS's
+    /// `fxCheckDataViewSize` for a TypedArray): a detached buffer and a view
+    /// the buffer no longer covers throw XS's two messages.
+    pub(in crate::interp) fn checked_ta_length(&mut self, ta: TypedArrayData) -> Result<u32, Step> {
+        if self.detached_buffers.contains(&ta.buffer) {
+            return Err(self.catchable_type_error_msg("detached buffer".into()));
+        }
+        self.ta_length(ta)
+            .ok_or_else(|| self.catchable_type_error_msg("out of bounds view".into()))
+    }
+
+    /// An upper bound on any length the view can reach: its fixed length, or
+    /// for a length-tracking view the elements its buffer's maximum could
+    /// hold past its offset.
+    pub(in crate::interp) fn ta_length_bound(&self, ta: TypedArrayData) -> u32 {
+        ta.array_length.unwrap_or_else(|| {
+            let buffer = self.array_buffers[&ta.buffer];
+            let shift = TYPED_ARRAY_TYPES[ta.kind as usize].shift as u32;
+            buffer
+                .max_length
+                .unwrap_or(buffer.length)
+                .saturating_sub(ta.offset)
+                >> shift
+        })
+    }
+
+    /// `TypedArrayLength` where an out-of-bounds view counts as empty, as the
+    /// `length` getter and the integer-indexed `[[OwnPropertyKeys]]` read it.
+    pub(in crate::interp) fn ta_length_or_zero(&self, ta: TypedArrayData) -> u32 {
+        self.ta_length(ta).unwrap_or(0)
+    }
+
+    /// `IsViewOutOfBounds` and `GetViewByteLength` (ECMA-262 25.3.1.3 and
+    /// 25.3.1.2) for a DataView: its live byte length, or `None` when it is
+    /// out of bounds (XS's `fxCheckDataViewSize` without the throw).
+    pub(in crate::interp) fn dv_byte_length(&self, dv: DataViewData) -> Option<u32> {
+        if self.detached_buffers.contains(&dv.buffer) {
+            return None;
+        }
+        let buffer_length = self.array_buffers[&dv.buffer].length;
+        if dv.offset > buffer_length {
+            return None;
+        }
+        match dv.byte_length {
+            None => Some(buffer_length - dv.offset),
+            Some(size) => {
+                (u64::from(dv.offset) + u64::from(size) <= u64::from(buffer_length)).then_some(size)
+            }
+        }
+    }
+
+    /// `GetViewByteLength` behind `IsViewOutOfBounds`'s TypeError (XS's
+    /// `fxCheckDataViewSize`): a detached buffer and a view the buffer no
+    /// longer covers throw XS's two messages.
+    pub(in crate::interp) fn checked_dv_byte_length(
+        &mut self,
+        dv: DataViewData,
+    ) -> Result<u32, Step> {
+        if self.detached_buffers.contains(&dv.buffer) {
+            return Err(self.catchable_type_error_msg("detached buffer".into()));
+        }
+        self.dv_byte_length(dv)
+            .ok_or_else(|| self.catchable_type_error_msg("out of bounds view".into()))
+    }
+
+    /// Whether a buffer is fixed-length (`IsFixedLengthArrayBuffer`): it
+    /// has no `[[ArrayBufferMaxByteLength]]`.
+    pub(in crate::interp) fn is_fixed_length_buffer(
+        &self,
+        buffer: crate::value::SlotIndex,
+    ) -> bool {
+        self.array_buffers[&buffer].max_length.is_none()
+    }
+
+    /// `IsTypedArrayFixedLength` (ECMA-262 10.4.5.8): a view whose length can
+    /// never change. A length-tracking view is not, and neither is any view
+    /// on a resizable `ArrayBuffer`; a fixed-length view on a growable
+    /// `SharedArrayBuffer` is, since a shared buffer never shrinks.
+    pub(in crate::interp) fn ta_is_fixed_length(&self, ta: TypedArrayData) -> bool {
+        ta.array_length.is_some()
+            && (!ta.resizable_buffer || self.shared_buffers.contains(&ta.buffer))
+    }
+
+    /// `GetArrayBufferMaxByteLengthOption(options)` (ECMA-262 25.1.3.7) in
+    /// XS's form, `fxArgToSafeByteLength` over `options.maxByteLength`: `None`
+    /// unless `options` is an object whose `maxByteLength` is not undefined,
+    /// else that value's ToIndex, before the allocation ceiling the caller
+    /// applies after a subclass's prototype read.
+    pub(in crate::interp) fn array_buffer_max_byte_length_option(
+        &mut self,
+        code: &[u8],
+        options: Slot,
+    ) -> Result<Option<f64>, Step> {
+        let object = match options.value {
+            Payload::Reference(object) if options.kind == Kind::Reference => object,
+            _ => return Ok(None),
+        };
+        let id = self.intern_static_key("maxByteLength");
+        let max = self.mop_get(code, object, id, options)?;
+        if max.kind == Kind::Undefined {
+            return Ok(None);
+        }
+        self.safe_byte_length(code, max).map(Some)
+    }
+
     /// Mark an ArrayBuffer detached and expose its zero byte length. The old
     /// chunk becomes reclaimable when the owning instance is collected or the
     /// chunk arena is compacted.
@@ -26,19 +173,21 @@ impl Interp {
             .length = 0;
     }
 
-    /// `SpeciesConstructor(buffer, %ArrayBuffer%)`. Constructor and
-    /// `@@species` reads use the full object MOP, and an undefined constructor
-    /// or nullish species selects the realm intrinsic.
-    fn array_buffer_species_constructor(
+    /// `SpeciesConstructor(buffer, %ArrayBuffer%)` (or `%SharedArrayBuffer%`,
+    /// as `default` names). Constructor and `@@species` reads use the full
+    /// object MOP, and an undefined constructor or nullish species selects
+    /// the realm intrinsic.
+    fn buffer_species_constructor(
         &mut self,
         code: &[u8],
         buffer: Slot,
         buffer_ref: crate::value::SlotIndex,
+        default: &str,
     ) -> Result<Slot, Step> {
         let default_ref = *self
             .intrinsics
-            .get("ArrayBuffer")
-            .expect("ArrayBuffer intrinsic is linked");
+            .get(default)
+            .expect("buffer intrinsic is linked");
         let default = Slot::of(Kind::Reference, Payload::Reference(default_ref));
         let constructor_id = self.intern_static_key("constructor");
         let constructor = self.mop_get(code, buffer_ref, constructor_id, buffer)?;
@@ -109,7 +258,7 @@ impl Interp {
         };
         let new_length = final_index.saturating_sub(first);
 
-        let constructor = self.array_buffer_species_constructor(code, this, source)?;
+        let constructor = self.buffer_species_constructor(code, this, source, "ArrayBuffer")?;
         let result = self.construct_value(
             code,
             constructor,
@@ -149,15 +298,16 @@ impl Interp {
         Ok(result)
     }
 
-    /// `ArrayBufferCopyAndDetach` for the engine's fixed-length ArrayBuffer
-    /// model. Both public transfer methods are identical until resizable
-    /// buffers are introduced: allocate a realm-intrinsic fixed buffer, copy
-    /// the common prefix, zero-fill any extension, then detach the source.
+    /// `ArrayBufferCopyAndDetach(O, newLength, preserveResizability)`: allocate
+    /// a realm-intrinsic buffer, copy the common prefix, zero-fill any
+    /// extension, then detach the source. `transfer` keeps a resizable
+    /// source's maximum (`preserve`); `transferToFixedLength` never does.
     pub(in crate::interp) fn array_buffer_transfer(
         &mut self,
         code: &[u8],
         this: Slot,
         new_length_arg: Slot,
+        preserve: bool,
     ) -> Result<Slot, Step> {
         let source = self.array_buffer_ref(this).ok_or_else(|| {
             self.catchable_type_error_msg("this: not an ArrayBuffer instance".into())
@@ -165,9 +315,8 @@ impl Interp {
         if self.shared_buffers.contains(&source) {
             return Err(self.catchable_type_error_msg("this: not an ArrayBuffer instance".into()));
         }
-        let old_length = self.array_buffers[&source].length;
         let new_length = if new_length_arg.kind == Kind::Undefined {
-            old_length
+            self.array_buffers[&source].length
         } else {
             self.to_index_arg(code, new_length_arg)?
         };
@@ -175,9 +324,25 @@ impl Interp {
         if self.detached_buffers.contains(&source) {
             return Err(self.catchable_type_error_msg("detached buffer".into()));
         }
+        let max_length = if preserve {
+            self.array_buffers[&source].max_length
+        } else {
+            None
+        };
+        // AllocateArrayBuffer's resizable check: the new length must fit the
+        // preserved maximum.
+        if max_length.is_some_and(|max| new_length > max) {
+            return Err(self.catchable_range_error_msg("newLength > maxByteLength".into()));
+        }
 
-        let copy_length = old_length.min(new_length);
+        // `ToIndex` can also have resized the source, so the copy reads its
+        // current length.
+        let copy_length = self.array_buffers[&source].length.min(new_length);
         let result = self.alloc_array_buffer(new_length)?;
+        self.array_buffers
+            .get_mut(&result)
+            .expect("a fresh ArrayBuffer is branded")
+            .max_length = max_length;
         let source_buffer = self.array_buffers[&source];
         let mut bytes = Self::reserved_vec(copy_length as usize)?;
         bytes.extend_from_slice(&self.chunks.payload(source_buffer.data)[..copy_length as usize]);
@@ -192,12 +357,199 @@ impl Interp {
         Ok(Slot::of(Kind::Reference, Payload::Reference(result)))
     }
 
+    /// Give `buffer` a fresh zero-filled backing chunk of `new_length` bytes
+    /// holding the common prefix of the old one, as XS's `fxRenewChunk` (or
+    /// its `fxNewChunk` + `c_memcpy` fallback) does for `resize`. The new
+    /// chunk is charged as an allocation; the old one is left for the
+    /// collector, like a detached buffer's.
+    fn reallocate_array_buffer(
+        &mut self,
+        buffer: crate::value::SlotIndex,
+        new_length: u32,
+    ) -> Result<(), Step> {
+        if !self.chunks.can_allocate(new_length as usize) {
+            return Err(Step::Host(Halt::HeapExhausted));
+        }
+        self.charge_and_check(((new_length as u64 + 7) & !7) + 16)?;
+        let old = self.array_buffers[&buffer];
+        let copy_length = old.length.min(new_length) as usize;
+        let mut bytes = Self::reserved_vec(new_length as usize)?;
+        bytes.extend_from_slice(&self.chunks.payload(old.data)[..copy_length]);
+        bytes.resize(new_length as usize, 0);
+        let data = self.chunks.alloc(&bytes);
+        let record = self
+            .array_buffers
+            .get_mut(&buffer)
+            .expect("a resized buffer is branded");
+        record.data = data;
+        record.length = new_length;
+        Ok(())
+    }
+
+    /// `ArrayBuffer.prototype.resize(newLength)` (ECMA-262 25.1.6.6;
+    /// `fx_ArrayBuffer_prototype_resize`). A fixed-length receiver throws
+    /// before `newLength` is converted, as the specification orders it; XS
+    /// converts first.
+    pub(in crate::interp) fn array_buffer_resize(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+        new_length_arg: Slot,
+    ) -> Result<Slot, Step> {
+        let buffer = self.array_buffer_ref(this).ok_or_else(|| {
+            self.catchable_type_error_msg("this: not an ArrayBuffer instance".into())
+        })?;
+        if self.shared_buffers.contains(&buffer) {
+            return Err(self.catchable_type_error_msg("this: not an ArrayBuffer instance".into()));
+        }
+        let Some(max_length) = self.array_buffers[&buffer].max_length else {
+            return Err(self.catchable_type_error_msg("not resizable".into()));
+        };
+        let new_length = self.to_index_arg(code, new_length_arg)?;
+        // `ToIndex` above is observable and can detach the buffer.
+        if self.detached_buffers.contains(&buffer) {
+            return Err(self.catchable_type_error_msg("detached buffer".into()));
+        }
+        if new_length > max_length {
+            return Err(self.catchable_range_error_msg("newLength > maxByteLength".into()));
+        }
+        self.reallocate_array_buffer(buffer, new_length)?;
+        Ok(Slot::undefined())
+    }
+
+    /// The SharedArrayBuffer `value` names (XS's `fxCheckSharedArrayBuffer`),
+    /// or XS's TypeError naming `which` (`this`, `result`).
+    pub(in crate::interp) fn shared_array_buffer_ref(
+        &mut self,
+        value: Slot,
+        which: &str,
+    ) -> Result<crate::value::SlotIndex, Step> {
+        match self.array_buffer_ref(value) {
+            Some(buffer)
+                if value.kind == Kind::Reference && self.shared_buffers.contains(&buffer) =>
+            {
+                Ok(buffer)
+            }
+            _ if value.kind != Kind::Reference => {
+                Err(self.catchable_type_error_msg(format!("{which}: not an object")))
+            }
+            _ => {
+                Err(self
+                    .catchable_type_error_msg(format!("{which}: not a SharedArrayBuffer instance")))
+            }
+        }
+    }
+
+    /// `SharedArrayBuffer.prototype.grow(newLength)` (ECMA-262 25.2.5.3). XS
+    /// checks the receiver and the range, then always throws `cannot grow
+    /// SharedArrayBuffer instance`; a single-agent Ironhorse grows the buffer
+    /// as the specification does, zero-filling the new bytes. Growing to the
+    /// current length is a no-op.
+    pub(in crate::interp) fn shared_array_buffer_grow(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+        new_length_arg: Slot,
+    ) -> Result<Slot, Step> {
+        let buffer = self.shared_array_buffer_ref(this, "this")?;
+        let Some(max_length) = self.array_buffers[&buffer].max_length else {
+            return Err(self.catchable_type_error_msg("this: not resizable".into()));
+        };
+        let new_length = self.to_index_arg(code, new_length_arg)?;
+        let old_length = self.array_buffers[&buffer].length;
+        if new_length < old_length {
+            return Err(self.catchable_range_error_msg("newLength < byteLength".into()));
+        }
+        if new_length > max_length {
+            return Err(self.catchable_range_error_msg("newLength > maxByteLength".into()));
+        }
+        if new_length != old_length {
+            self.reallocate_array_buffer(buffer, new_length)?;
+        }
+        Ok(Slot::undefined())
+    }
+
+    /// `SharedArrayBuffer.prototype.slice(start, end)` (ECMA-262 25.2.5.6;
+    /// `fx_SharedArrayBuffer_prototype_slice`): clamp both relative indices,
+    /// construct through `SpeciesConstructor(O, %SharedArrayBuffer%)`, check
+    /// the result is a distinct, large enough SharedArrayBuffer, and copy the
+    /// byte range. A shared buffer never shrinks, so the range is still
+    /// inside the source after the constructor ran.
+    pub(in crate::interp) fn shared_array_buffer_slice(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Step> {
+        let source = self.shared_array_buffer_ref(this, "this")?;
+        let length = self.array_buffers[&source].length;
+        let start_arg = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let end_arg = self
+            .stack
+            .get(base + 5)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let first = Self::typed_array_relative_index(
+            self.array_to_integer_or_infinity(code, start_arg)?,
+            length,
+        );
+        let final_index = if argc < 2 || end_arg.kind == Kind::Undefined {
+            length
+        } else {
+            Self::typed_array_relative_index(
+                self.array_to_integer_or_infinity(code, end_arg)?,
+                length,
+            )
+        };
+        let new_length = final_index.saturating_sub(first);
+
+        let constructor =
+            self.buffer_species_constructor(code, this, source, "SharedArrayBuffer")?;
+        let result = self.construct_value(
+            code,
+            constructor,
+            &[Slot::number(new_length as f64)],
+            constructor,
+        )?;
+        let result_ref = self.shared_array_buffer_ref(result, "result")?;
+        if result_ref == source {
+            return Err(
+                self.catchable_type_error_msg("result: same SharedArrayBuffer instance".into())
+            );
+        }
+        if self.array_buffers[&result_ref].length < new_length {
+            return Err(
+                self.catchable_type_error_msg("result: smaller SharedArrayBuffer instance".into())
+            );
+        }
+        if new_length > 0 {
+            let source_buffer = self.array_buffers[&source];
+            let bytes = self.chunks.payload(source_buffer.data)
+                [first as usize..(first + new_length) as usize]
+                .to_vec();
+            let target_buffer = self.array_buffers[&result_ref];
+            let out = self
+                .chunks
+                .slice_mut(target_buffer.data, new_length as usize);
+            out.copy_from_slice(&bytes);
+        }
+        Ok(result)
+    }
+
     /// `ValidateTypedArray(this)`: enforce the receiver brand and reject a
-    /// view whose backing ArrayBuffer has been detached.
+    /// view whose backing ArrayBuffer has been detached or no longer covers
+    /// it. Returns the view and its `TypedArrayLength` at this moment, which
+    /// the methods iterate over; element reads past a later resize go through
+    /// [`Self::ta_valid_index`], which reads the live length.
     pub(in crate::interp) fn validate_typed_array(
         &mut self,
         this: Slot,
-    ) -> Result<TypedArrayData, Step> {
+    ) -> Result<(TypedArrayData, u32), Step> {
         let ta = match this.value {
             Payload::Reference(r) if this.kind == Kind::Reference => {
                 self.typed_arrays.get(&r).copied()
@@ -205,10 +557,28 @@ impl Interp {
             _ => None,
         }
         .ok_or_else(|| self.catchable_type_error_msg("this: not a TypedArray instance".into()))?;
-        if self.detached_buffers.contains(&ta.buffer) {
-            return Err(self.catchable_type_error_msg("detached buffer".into()));
+        let length = self.checked_ta_length(ta)?;
+        Ok((ta, length))
+    }
+
+    /// `! Get(O, index)` for an integer index below a length a method
+    /// captured: the element, or `None` once a resize or detach has left
+    /// `index` outside the view (`IntegerIndexedElementGet` reads
+    /// `undefined`). Unmetered, unlike [`Self::ta_indexed_element_get`].
+    pub(in crate::interp) fn ta_element_value(
+        &mut self,
+        ta: TypedArrayData,
+        index: u32,
+    ) -> Option<Slot> {
+        if index >= self.ta_length(ta)? {
+            return None;
         }
-        Ok(ta)
+        Some(if ta.kind <= 1 {
+            self.typed_array_element_get_bigint(ta, index)
+        } else {
+            self.typed_array_element_get(ta, index)
+                .expect("numeric TypedArray element decodes")
+        })
     }
 
     fn typed_array_relative_index(n: f64, length: u32) -> u32 {
@@ -258,22 +628,20 @@ impl Interp {
             self.catchable_type_error_msg("this: not a TypedArray instance".into())
         })?;
         self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
-        let out_of_bounds = self.detached_buffers.contains(&ta.buffer);
+        // An out-of-bounds view (detached, or past its resized buffer's end)
+        // reads 0 for all three (XS's `fxGetDataViewSize`).
+        let length = self.ta_length(ta);
         Ok(match method {
-            NativeMethod::TypedArrayLengthGetter => {
-                Slot::integer(if out_of_bounds { 0 } else { ta.length as i32 })
-            }
+            NativeMethod::TypedArrayLengthGetter => Slot::integer(length.unwrap_or(0) as i32),
             NativeMethod::TypedArrayByteLengthGetter => {
                 let shift = TYPED_ARRAY_TYPES[ta.kind as usize].shift as u32;
-                Slot::integer(if out_of_bounds {
-                    0
-                } else {
-                    (ta.length << shift) as i32
-                })
+                Slot::integer(length.map_or(0, |length| length << shift) as i32)
             }
-            NativeMethod::TypedArrayByteOffsetGetter => {
-                Slot::integer(if out_of_bounds { 0 } else { ta.offset as i32 })
-            }
+            NativeMethod::TypedArrayByteOffsetGetter => Slot::integer(if length.is_none() {
+                0
+            } else {
+                ta.offset as i32
+            }),
             NativeMethod::TypedArrayBufferGetter => {
                 Slot::of(Kind::Reference, Payload::Reference(ta.buffer))
             }
@@ -291,7 +659,7 @@ impl Interp {
         argc: usize,
         code: &[u8],
     ) -> Result<Slot, Step> {
-        let ta = self.validate_typed_array(this)?;
+        let (ta, length) = self.validate_typed_array(this)?;
         let locales = if argc > 0 {
             self.stack
                 .get(base + 4)
@@ -309,18 +677,12 @@ impl Interp {
             Slot::undefined()
         };
         let mut out = Vec::new();
-        for index in 0..ta.length {
+        for index in 0..length {
             if index > 0 {
                 out.push(u16::from(b','));
             }
-            if self.detached_buffers.contains(&ta.buffer) {
+            let Some(value) = self.ta_element_value(ta, index) else {
                 continue;
-            }
-            let value = if ta.kind <= 1 {
-                self.typed_array_element_get_bigint(ta, index)
-            } else {
-                self.typed_array_element_get(ta, index)
-                    .expect("numeric TypedArray locale element decodes")
             };
             let rendered =
                 self.invoke_value_method(code, value, "toLocaleString", &[locales, options])?;
@@ -350,8 +712,8 @@ impl Interp {
         {
             return Err(self.catchable_type_error_msg("result: not a TypedArray instance".into()));
         }
-        let ta = self.validate_typed_array(result)?;
-        if u64::from(ta.length) < length {
+        let (ta, result_length) = self.validate_typed_array(result)?;
+        if u64::from(result_length) < length {
             return Err(
                 self.catchable_type_error_msg("result: too small TypedArray instance".into())
             );
@@ -551,10 +913,11 @@ impl Interp {
     }
 
     /// `%TypedArray%.prototype.join`: validate the branded view before
-    /// coercing the separator, read the fixed internal length, and stringify
-    /// each numeric/BigInt element in index order. A buffer detached by
-    /// separator coercion makes subsequent integer-index reads `undefined`,
-    /// hence empty fields, as required by IntegerIndexedElementGet.
+    /// coercing the separator, read its length at that moment, and stringify
+    /// each numeric/BigInt element in index order. A buffer detached or
+    /// shrunk by separator coercion makes the integer-index reads past its
+    /// end `undefined`, hence empty fields, as required by
+    /// IntegerIndexedElementGet.
     pub(in crate::interp) fn typed_array_join(
         &mut self,
         this: Slot,
@@ -562,7 +925,7 @@ impl Interp {
         argc: usize,
         code: &[u8],
     ) -> Result<Slot, Step> {
-        let ta = self.validate_typed_array(this)?;
+        let (ta, length) = self.validate_typed_array(this)?;
         let separator = self
             .stack
             .get(base + 4)
@@ -574,18 +937,12 @@ impl Interp {
             self.to_string_units(code, separator)?
         };
         let mut out = Vec::new();
-        for index in 0..ta.length {
+        for index in 0..length {
             if index > 0 {
                 out.extend_from_slice(&sep);
             }
-            if self.detached_buffers.contains(&ta.buffer) {
+            let Some(value) = self.ta_element_value(ta, index) else {
                 continue;
-            }
-            let value = if ta.kind <= 1 {
-                self.typed_array_element_get_bigint(ta, index)
-            } else {
-                self.typed_array_element_get(ta, index)
-                    .expect("numeric TypedArray element decodes")
             };
             out.extend_from_slice(&self.to_string_units_metered(value));
         }
@@ -646,7 +1003,7 @@ impl Interp {
                 ))
             }
         };
-        let target = self.validate_typed_array(result)?;
+        let (target, target_length) = self.validate_typed_array(result)?;
         // Preserve the spec content-domain guard. Pinned XS defers this to
         // element coercion, so empty/mapped cross-domain species can succeed;
         // there is no corresponding XS diagnostic for this earlier error.
@@ -655,7 +1012,7 @@ impl Interp {
                 "TypedArray species must preserve the Number or BigInt element domain".into(),
             ));
         }
-        if minimum_length.is_some_and(|minimum| target.length < minimum) {
+        if minimum_length.is_some_and(|minimum| target_length < minimum) {
             return Err(
                 self.catchable_type_error_msg("result: too small TypedArray instance".into())
             );
@@ -687,10 +1044,12 @@ impl Interp {
             }
         };
         // `subarray` intentionally performs its begin/end coercions even for a
-        // detached branded view; construction over the detached buffer is the
-        // later operation that throws. `slice` uses ValidateTypedArray up front.
-        let source = if method == NativeMethod::TypedArraySubarray {
-            self.typed_arrays[&exemplar]
+        // detached or out-of-bounds branded view, against a zero length;
+        // construction over the buffer is the later operation that throws.
+        // `slice` uses ValidateTypedArray up front.
+        let (source, source_length) = if method == NativeMethod::TypedArraySubarray {
+            let source = self.typed_arrays[&exemplar];
+            (source, self.ta_length_or_zero(source))
         } else {
             self.validate_typed_array(this)?
         };
@@ -704,22 +1063,12 @@ impl Interp {
             .get(base + 5)
             .copied()
             .unwrap_or_else(Slot::undefined);
-        // IntegerIndexedObjectLength returns zero for a detached view. Keep
-        // the stored byte offset (the species constructor must still observe
-        // it), but calculate both relative indices against that effective
-        // zero length rather than the pre-detachment internal slot.
-        let source_length = if method == NativeMethod::TypedArraySubarray
-            && self.detached_buffers.contains(&source.buffer)
-        {
-            0
-        } else {
-            source.length
-        };
+        let end_omitted = argc < 2 || end_arg.kind == Kind::Undefined;
         let begin = Self::typed_array_relative_index(
             self.array_to_integer_or_infinity(code, begin_arg)?,
             source_length,
         );
-        let end = if argc < 2 || end_arg.kind == Kind::Undefined {
+        let end = if end_omitted {
             source_length
         } else {
             Self::typed_array_relative_index(
@@ -740,13 +1089,17 @@ impl Interp {
                     )
                 })?;
             let buffer = Slot::of(Kind::Reference, Payload::Reference(source.buffer));
+            // A length-tracking view's subarray with no end tracks too: the
+            // length argument is left out.
+            let tracking = source.array_length.is_none() && end_omitted;
             let args = [
                 buffer,
                 Slot::number(byte_offset as f64),
                 Slot::number(count as f64),
             ];
+            let args = if tracking { &args[..2] } else { &args[..] };
             let (result, _) =
-                self.typed_array_species_create(code, exemplar, source, &args, None)?;
+                self.typed_array_species_create(code, exemplar, source, args, None)?;
             return Ok(result);
         }
 
@@ -756,8 +1109,13 @@ impl Interp {
         if count == 0 {
             return Ok(result);
         }
-        if self.detached_buffers.contains(&source.buffer) {
-            return Err(self.catchable_type_error_msg("detached buffer".into()));
+        // The species constructor is guest code that can detach or shrink the
+        // source: an out-of-bounds source throws, and a shorter one copies
+        // only the elements it still has.
+        let current_length = self.checked_ta_length(source)?;
+        let count = end.min(current_length).saturating_sub(begin);
+        if count == 0 {
+            return Ok(result);
         }
         if source.kind == target.kind {
             let size = TYPED_ARRAY_TYPES[source.kind as usize].size as usize;
@@ -775,12 +1133,9 @@ impl Interp {
             out[target_start..target_start + byte_count].copy_from_slice(&bytes);
         } else {
             for offset in 0..count {
-                let value = if source.kind <= 1 {
-                    self.typed_array_element_get_bigint(source, begin + offset)
-                } else {
-                    self.typed_array_element_get(source, begin + offset)
-                        .expect("numeric TypedArray slice source decodes")
-                };
+                let value = self
+                    .ta_element_value(source, begin + offset)
+                    .unwrap_or_else(Slot::undefined);
                 self.typed_array_element_set(code, target, offset, value)?;
             }
         }
@@ -798,7 +1153,7 @@ impl Interp {
         base: usize,
         code: &[u8],
     ) -> Result<Slot, Step> {
-        let source = self.validate_typed_array(this)?;
+        let (source, source_length) = self.validate_typed_array(this)?;
         let exemplar = match this.value {
             Payload::Reference(reference) => reference,
             _ => unreachable!(),
@@ -818,15 +1173,15 @@ impl Interp {
         }
 
         if method == NativeMethod::TypedArrayMap {
-            let args = [Slot::number(source.length as f64)];
+            let args = [Slot::number(source_length as f64)];
             let (result, target) = self.typed_array_species_create(
                 code,
                 exemplar,
                 source,
                 &args,
-                Some(source.length),
+                Some(source_length),
             )?;
-            for index in 0..source.length {
+            for index in 0..source_length {
                 let value = self.ta_indexed_element_get(source, index as f64);
                 let mapped = self.run_callback(
                     code,
@@ -840,7 +1195,7 @@ impl Interp {
         }
 
         let mut kept = Vec::new();
-        for index in 0..source.length {
+        for index in 0..source_length {
             let value = self.ta_indexed_element_get(source, index as f64);
             let selected = self.run_callback(
                 code,
@@ -866,7 +1221,8 @@ impl Interp {
     /// optional guest comparator whose result is ToNumber-coerced. A comparator
     /// that detaches the receiver triggers the required TypeError immediately
     /// after its result is ToNumber-coerced, before another comparison or any
-    /// write-back.
+    /// write-back. One that shrinks it leaves the write-back to the indices
+    /// still inside the view.
     pub(in crate::interp) fn typed_array_sort(
         &mut self,
         this: Slot,
@@ -874,7 +1230,7 @@ impl Interp {
         argc: usize,
         code: &[u8],
     ) -> Result<Slot, Step> {
-        let typed_array = self.validate_typed_array(this)?;
+        let (typed_array, length) = self.validate_typed_array(this)?;
         let compare = self
             .stack
             .get(base + 4)
@@ -884,8 +1240,8 @@ impl Interp {
         if custom && !self.is_callable_value(compare) {
             return Err(self.catchable_type_error_msg("compare: not a function".into()));
         }
-        let mut values = self.reserve_work_scratch(typed_array.length as usize)?;
-        for index in 0..typed_array.length {
+        let mut values = self.reserve_work_scratch(length as usize)?;
+        for index in 0..length {
             values.push(if typed_array.kind <= 1 {
                 self.typed_array_element_get_bigint(typed_array, index)
             } else {
@@ -963,9 +1319,10 @@ impl Interp {
 
     /// The non-allocating `%TypedArray%.prototype` iteration/search/fold
     /// family. These algorithms validate the integer-indexed receiver once,
-    /// capture its internal length, and then `Get` every index (TypedArrays
-    /// have no holes). If a callback detaches the buffer, later indexed reads
-    /// become `undefined` while the captured iteration range remains fixed.
+    /// capture its length, and then `Get` every index (TypedArrays have no
+    /// holes). If a callback detaches or shrinks the buffer, indexed reads
+    /// past its new end become `undefined` while the captured iteration
+    /// range remains fixed.
     pub(in crate::interp) fn typed_array_readonly(
         &mut self,
         operation: u8,
@@ -974,8 +1331,7 @@ impl Interp {
         argc: usize,
         code: &[u8],
     ) -> Result<Slot, Step> {
-        let ta = self.validate_typed_array(this)?;
-        let length = ta.length;
+        let (ta, length) = self.validate_typed_array(this)?;
         let arg0 = self
             .stack
             .get(base + 4)
@@ -1068,6 +1424,11 @@ impl Interp {
                     0
                 };
                 for index in start..length {
+                    // `indexOf` skips an index the view no longer has
+                    // (`HasProperty`); `includes` compares its `undefined`.
+                    if operation == 6 && self.ta_valid_index(ta, index as f64).is_none() {
+                        continue;
+                    }
                     let value = self.ta_indexed_element_get(ta, index as f64);
                     let equal = if operation == 5 {
                         self.same_value_zero(&arg0, &value)
@@ -1127,9 +1488,12 @@ impl Interp {
                     length as i128 + relative as i128
                 };
                 while index >= 0 {
-                    let value = self.ta_indexed_element_get(ta, index as f64);
-                    if self.strict_equal(&arg0, &value) {
-                        return Ok(Slot::integer(index as i32));
+                    // An index the view no longer has is skipped (`HasProperty`).
+                    if self.ta_valid_index(ta, index as f64).is_some() {
+                        let value = self.ta_indexed_element_get(ta, index as f64);
+                        if self.strict_equal(&arg0, &value) {
+                            return Ok(Slot::integer(index as i32));
+                        }
                     }
                     index -= 1;
                 }
@@ -1191,30 +1555,37 @@ impl Interp {
                 .copied()
                 .unwrap_or_else(Slot::undefined)
         };
-        let ta = self.validate_typed_array(this)?;
+        let (ta, length) = self.validate_typed_array(this)?;
         let size = TYPED_ARRAY_TYPES[ta.kind as usize].size as usize;
 
         match method {
             NativeMethod::TypedArrayCopyWithin => {
-                let to = self.typed_array_index_arg(code, arg(self, 0), ta.length)?;
-                let from = self.typed_array_index_arg(code, arg(self, 1), ta.length)?;
+                let to = self.typed_array_index_arg(code, arg(self, 0), length)?;
+                let from = self.typed_array_index_arg(code, arg(self, 1), length)?;
                 let end = if argc < 3 || arg(self, 2).kind == Kind::Undefined {
-                    ta.length
+                    length
                 } else {
-                    self.typed_array_index_arg(code, arg(self, 2), ta.length)?
+                    self.typed_array_index_arg(code, arg(self, 2), length)?
                 };
-                if self.detached_buffers.contains(&ta.buffer) {
-                    return Err(self.catchable_type_error_msg("detached buffer".into()));
-                }
-                let count = end.saturating_sub(from).min(ta.length.saturating_sub(to));
+                let count = end.saturating_sub(from).min(length.saturating_sub(to));
                 if count > 0 {
-                    let buffer = self.array_buffers[&ta.buffer];
-                    let src = ta.offset as usize + from as usize * size;
-                    let dst = ta.offset as usize + to as usize * size;
-                    let byte_count = count as usize * size;
-                    let snapshot = self.chunks.payload(buffer.data)[src..src + byte_count].to_vec();
-                    let out = self.chunks.slice_mut(buffer.data, dst + byte_count);
-                    out[dst..dst + byte_count].copy_from_slice(&snapshot);
+                    // The coercions are guest code that can detach or shrink
+                    // the buffer: an out-of-bounds view throws, and a shorter
+                    // one copies the longest prefix both ranges still have.
+                    let length = self.checked_ta_length(ta)?;
+                    let count = count
+                        .min(length.saturating_sub(from))
+                        .min(length.saturating_sub(to));
+                    if count > 0 {
+                        let buffer = self.array_buffers[&ta.buffer];
+                        let src = ta.offset as usize + from as usize * size;
+                        let dst = ta.offset as usize + to as usize * size;
+                        let byte_count = count as usize * size;
+                        let snapshot =
+                            self.chunks.payload(buffer.data)[src..src + byte_count].to_vec();
+                        let out = self.chunks.slice_mut(buffer.data, dst + byte_count);
+                        out[dst..dst + byte_count].copy_from_slice(&snapshot);
+                    }
                 }
                 Ok(this)
             }
@@ -1224,16 +1595,17 @@ impl Interp {
                 let start = if argc < 2 || arg(self, 1).kind == Kind::Undefined {
                     0
                 } else {
-                    self.typed_array_index_arg(code, arg(self, 1), ta.length)?
+                    self.typed_array_index_arg(code, arg(self, 1), length)?
                 };
                 let end = if argc < 3 || arg(self, 2).kind == Kind::Undefined {
-                    ta.length
+                    length
                 } else {
-                    self.typed_array_index_arg(code, arg(self, 2), ta.length)?
+                    self.typed_array_index_arg(code, arg(self, 2), length)?
                 };
-                if self.detached_buffers.contains(&ta.buffer) {
-                    return Err(self.catchable_type_error_msg("detached buffer".into()));
-                }
+                // The coercions can detach or shrink the buffer: an
+                // out-of-bounds view throws, and a shorter one fills only the
+                // elements it still has.
+                let end = end.min(self.checked_ta_length(ta)?);
                 let buffer = self.array_buffers[&ta.buffer];
                 for i in start..end {
                     let pos = ta.offset as usize + i as usize * size;
@@ -1243,10 +1615,10 @@ impl Interp {
                 Ok(this)
             }
             NativeMethod::TypedArrayReverse => {
-                if ta.length > 1 {
+                if length > 1 {
                     let buffer = self.array_buffers[&ta.buffer];
                     let mut lo = 0u32;
-                    let mut hi = ta.length - 1;
+                    let mut hi = length - 1;
                     while lo < hi {
                         let lpos = ta.offset as usize + lo as usize * size;
                         let hpos = ta.offset as usize + hi as usize * size;
@@ -1270,14 +1642,13 @@ impl Interp {
                     return Err(self.catchable_range_error_msg("byteLength too big".into()));
                 }
                 let offset = offset_number as u32;
-                if self.detached_buffers.contains(&ta.buffer) {
-                    return Err(self.catchable_type_error_msg("detached buffer".into()));
-                }
+                // The offset's coercion can detach or shrink the target.
+                let target_length = self.checked_ta_length(ta)?;
                 let source = arg(self, 0);
 
                 if let Payload::Reference(src_ref) = source.value {
                     if source.kind == Kind::Reference && self.typed_arrays.contains_key(&src_ref) {
-                        let src = self.validate_typed_array(source)?;
+                        let (src, src_length) = self.validate_typed_array(source)?;
                         // Keep the spec's content-domain guard; pinned XS only
                         // rejects when an element conversion encounters the mismatch.
                         if (ta.kind <= 1) != (src.kind <= 1) {
@@ -1286,7 +1657,9 @@ impl Interp {
                                     .into(),
                             ));
                         }
-                        if src.length > ta.length.saturating_sub(offset) || offset > ta.length {
+                        if src_length > target_length.saturating_sub(offset)
+                            || offset > target_length
+                        {
                             return Err(self.catchable_range_error_msg("invalid offset".into()));
                         }
                         if ta.kind == src.kind {
@@ -1295,7 +1668,7 @@ impl Interp {
                             let src_size = TYPED_ARRAY_TYPES[src.kind as usize].size as usize;
                             let src_buffer = self.array_buffers[&src.buffer];
                             let src_start = src.offset as usize;
-                            let byte_count = src.length as usize * src_size;
+                            let byte_count = src_length as usize * src_size;
                             let snapshot = self.chunks.payload(src_buffer.data)
                                 [src_start..src_start + byte_count]
                                 .to_vec();
@@ -1309,8 +1682,8 @@ impl Interp {
                             // Different element types convert source values. Read
                             // the complete list first so overlapping views behave
                             // as if the source bytes were cloned.
-                            let mut values = self.reserve_work_scratch(src.length as usize)?;
-                            for i in 0..src.length {
+                            let mut values = self.reserve_work_scratch(src_length as usize)?;
+                            for i in 0..src_length {
                                 let value = if src.kind <= 1 {
                                     self.typed_array_element_get_bigint(src, i)
                                 } else {
@@ -1328,19 +1701,17 @@ impl Interp {
                     if source.kind == Kind::Reference {
                         let raw_len = self.arraylike_length(code, src_ref, source)?;
                         let src_len = to_length_u64(self.to_number_f64(code, raw_len)?);
-                        if src_len > ta.length.saturating_sub(offset) as u64 || offset > ta.length {
+                        if src_len > target_length.saturating_sub(offset) as u64
+                            || offset > target_length
+                        {
                             return Err(self.catchable_range_error_msg("invalid offset".into()));
                         }
+                        // `TypedArraySetElement`: each value is coerced, then
+                        // written only while its index is still in the view —
+                        // a source getter can detach or shrink the target.
                         for i in 0..src_len {
                             let value = self.arraylike_index(code, src_ref, i, source)?;
-                            let bytes = self.typed_array_element_bytes(code, ta.kind, value)?;
-                            if self.detached_buffers.contains(&ta.buffer) {
-                                return Err(self.catchable_type_error_msg("detached buffer".into()));
-                            }
-                            let target_buffer = self.array_buffers[&ta.buffer];
-                            let pos = ta.offset as usize + (offset as usize + i as usize) * size;
-                            let out = self.chunks.slice_mut(target_buffer.data, pos + size);
-                            out[pos..pos + size].copy_from_slice(&bytes);
+                            self.typed_array_element_set(code, ta, offset + i as u32, value)?;
                         }
                         return Ok(Slot::undefined());
                     }
@@ -1360,14 +1731,14 @@ impl Interp {
                 }
                 if let Payload::String(string) = source.value {
                     let src_len = self.str_len(string) as u32;
-                    if src_len > ta.length.saturating_sub(offset) || offset > ta.length {
+                    if src_len > target_length.saturating_sub(offset) || offset > target_length {
                         return Err(self.catchable_range_error_msg("invalid offset".into()));
                     }
                     for i in 0..src_len {
                         let value = self.string_index_get(string, i);
                         self.typed_array_element_set(code, ta, offset + i, value)?;
                     }
-                } else if offset > ta.length {
+                } else if offset > target_length {
                     return Err(self.catchable_range_error_msg("invalid offset".into()));
                 }
                 Ok(Slot::undefined())
@@ -1486,7 +1857,9 @@ impl Interp {
     }
 
     /// Coerce `value` to this element type and write TypedArray element
-    /// `index` (XS's per-type setter). `index` must be in bounds.
+    /// `index` (XS's per-type setter), as `TypedArraySetElement` does: the
+    /// coercion always runs, and the write is skipped when it (or a callback
+    /// before it) left `index` outside the view.
     pub(in crate::interp) fn typed_array_element_set(
         &mut self,
         code: &[u8],
@@ -1495,6 +1868,9 @@ impl Interp {
         value: Slot,
     ) -> Result<(), Step> {
         let le = self.typed_array_element_bytes(code, ta.kind, value)?;
+        if self.ta_length(ta).is_none_or(|length| index >= length) {
+            return Ok(());
+        }
         let size = le.len();
         let buf = self.array_buffers[&ta.buffer];
         let base = ta.offset as usize + index as usize * size;
@@ -1526,13 +1902,11 @@ impl Interp {
     /// `IsValidIntegerIndex(O, index)` (ECMA-262 10.4.5.14) for the numeric
     /// index `n` a canonical numeric index string named: `Some(index)` when
     /// `n` is an integral non-negative value (`-0` excluded) strictly below
-    /// the view length and the viewed buffer is attached, else `None`. The
-    /// integer/number fast kinds keep this on the inline arithmetic path so the
-    /// meter-exact corpus is untouched.
+    /// the view's live length (so its buffer is attached and still covers
+    /// the view), else `None`. The integer/number fast kinds keep this on the
+    /// inline arithmetic path so the meter-exact corpus is untouched.
     pub(in crate::interp) fn ta_valid_index(&self, ta: TypedArrayData, n: f64) -> Option<u32> {
-        if self.detached_buffers.contains(&ta.buffer) {
-            return None;
-        }
+        let length = self.ta_length(ta)?;
         // Integral, finite, not -0, and in `[0, length)`.
         if !n.is_finite() || n.fract() != 0.0 {
             return None;
@@ -1540,7 +1914,7 @@ impl Interp {
         if n == 0.0 && n.is_sign_negative() {
             return None;
         }
-        if n < 0.0 || n >= ta.length as f64 {
+        if n < 0.0 || n >= length as f64 {
             return None;
         }
         Some(n as u32)
@@ -1582,6 +1956,11 @@ impl Interp {
     /// value the canonical numeric index `n` reads, or `undefined` when `n` is
     /// not a valid integer index (out of range / non-integral / detached).
     /// Meters one built-in step exactly as the plain `sample[i]` read does.
+    ///
+    /// Out of line: inlined, its resizable-buffer branch widened
+    /// `get_property_in_place`, a frame a Proxy `get` trap reached through
+    /// the prototype chain pays at every level (`benches/stack_height.py`).
+    #[inline(never)]
     pub(in crate::interp) fn ta_indexed_element_get(&mut self, ta: TypedArrayData, n: f64) -> Slot {
         match self.ta_valid_index(ta, n) {
             None => Slot::undefined(),
@@ -1787,9 +2166,11 @@ impl Interp {
                 "atomics:non-integer-typedarray",
             )));
         }
+        // ValidateTypedArray: a detached or out-of-bounds view throws.
+        let length = self.checked_ta_length(ta)?;
         // ValidateAtomicAccess: ToIndex(index) in `[0, length)`.
         let idx = match self.element_value_to_number(a1) {
-            Some(v) if v >= 0.0 && v.fract() == 0.0 && (v as u64) < ta.length as u64 => v as u32,
+            Some(v) if v >= 0.0 && v.fract() == 0.0 && (v as u64) < length as u64 => v as u32,
             _ => return Err(Step::Host(Halt::NotImplemented("atomics:access-index"))),
         };
         let size = TYPED_ARRAY_TYPES[ta.kind as usize].size as usize;
@@ -2101,6 +2482,7 @@ impl Interp {
             ArrayBufferData {
                 data,
                 length: byte_length,
+                max_length: None,
             },
         );
         Ok(inst)

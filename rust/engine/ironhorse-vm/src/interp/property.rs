@@ -856,6 +856,14 @@ impl Interp {
         if self.proxies.contains_key(&inst) {
             return self.proxy_prevent_extensions(code, inst);
         }
+        // A TypedArray whose length a resize can change refuses
+        // (ECMA-262 10.4.5.2 step 1, `IsTypedArrayFixedLength`; XS's
+        // `fxTypedArrayPreventExtensions`).
+        if let Some(&ta) = self.typed_arrays.get(&inst) {
+            if !self.ta_is_fixed_length(ta) {
+                return Ok(false);
+            }
+        }
         self.materialize_intrinsic_own_surface(inst);
         self.slots.get_mut(inst).flag |= XS_DONT_PATCH_FLAG;
         Ok(true)
@@ -1999,13 +2007,9 @@ impl Interp {
         }
         // Integer-indexed TypedArray own keys: each live element index in
         // ascending order, then ordinary string and symbol expandos. A
-        // detached view has zero observable indexed keys.
+        // detached or out-of-bounds view has zero observable indexed keys.
         if let Some(&ta) = self.typed_arrays.get(&inst) {
-            let length = if self.detached_buffers.contains(&ta.buffer) {
-                0
-            } else {
-                ta.length
-            };
+            let length = self.ta_length_or_zero(ta);
             let mut out = Vec::new();
             for index in 0..length {
                 self.charge_builtin_work(1)?;

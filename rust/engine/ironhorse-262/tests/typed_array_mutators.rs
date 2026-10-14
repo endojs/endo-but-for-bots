@@ -92,16 +92,11 @@ fn detachment_during_coercion_or_array_like_get_throws() {
 }
 
 #[test]
-fn set_checks_detachment_after_each_array_like_get() {
-    let source = "var a=new Uint8Array([1,2,3]); var x={length:3,0:42}; Object.defineProperty(x,1,{get:function(){$262.detachArrayBuffer(a.buffer)}}); Object.defineProperty(x,2,{get:function(){throw 'late read'}}); try { a.set(x); 'none' } catch(e) { e instanceof TypeError ? 'type' : e }";
-    let run = dual_run(source).expect("the pinned XS oracle must start");
-    assert_eq!(run.agreement, Agreement::BothComplete, "{run:?}");
-    assert_eq!(
-        run.oracle_result, "late read",
-        "pinned XS defect changed: {run:?}"
-    );
-    assert_eq!(
-        run.ironhorse_result, "type",
-        "IronHorse must follow SetTypedArrayFromArrayLike detachment order: {run:?}"
-    );
+fn set_keeps_reading_an_array_like_after_its_target_detaches() {
+    // `SetTypedArrayFromArrayLike` writes each value through
+    // `TypedArraySetElement` (ES2022 and later), which skips an index the
+    // view no longer has rather than throwing, so the reads go on and the
+    // last getter's throw is what escapes (test262
+    // `array-arg-targetbuffer-detached-on-get-src-value-no-throw.js`; V8 agrees).
+    assert_result_agrees("var a=new Uint8Array([1,2,3]); var x={length:3,0:42}; Object.defineProperty(x,1,{get:function(){$262.detachArrayBuffer(a.buffer)}}); Object.defineProperty(x,2,{get:function(){throw 'late read'}}); try { a.set(x); 'none' } catch(e) { e instanceof TypeError ? 'type' : e }");
 }

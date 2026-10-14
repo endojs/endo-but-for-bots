@@ -40,7 +40,6 @@ pub const NOT_IMPLEMENTED_LABELS: &[&str] = &[
     "TypedArray.prototype:readonly-operation",
     "apply:non-user-function-receiver",
     "array-buffer-concat:unsupported",
-    "array-buffer-resize:unsupported",
     "array-species:symbol",
     "async-generator:new-target",
     "atomics:access-index",
@@ -87,8 +86,6 @@ pub const NOT_IMPLEMENTED_LABELS: &[&str] = &[
     "module:import-meta",
     "module:static-linking",
     "module:top-level-await",
-    "native-call:ArrayBuffer:resizable",
-    "native-call:SharedArrayBuffer:growable",
     // Custom iterator protocols and array-like interleaving are not yet modeled.
     "native-call:TypedArray:from-array-like",
     "number:unmodeled",

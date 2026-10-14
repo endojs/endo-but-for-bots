@@ -624,11 +624,12 @@ macro_rules! snapshot_payloads {
                         interp
                             .array_buffers_snapshot()
                             .into_iter()
-                            .map(|(owner, data, length, flags)| crate::image::BufferImage {
+                            .map(|(owner, data, length, flags, max_length)| crate::image::BufferImage {
                                 owner,
                                 data,
                                 length,
                                 flags,
+                                max_length,
                             })
                             .collect()
                     } else {
@@ -642,13 +643,23 @@ macro_rules! snapshot_payloads {
                     // every buffer's backing extent lies inside the chunk arena, and
                     // every live view names a buffer ROW whose length covers the view.
                     // Detached buffers retain the former view geometry, whose observable
-                    // accessors project zero lengths. A view that merely named an in-bounds
-                    // SLOT with no buffer row would restore without a backing allocation.
-                    let buffer_shape = |slot: u32| -> Option<(u32, bool)> {
+                    // accessors project zero lengths. A view on a resizable buffer may be
+                    // out of bounds after a shrink, but never past the buffer's maximum,
+                    // and only such a buffer has length-tracking views. A view that merely
+                    // named an in-bounds SLOT with no buffer row would restore without a
+                    // backing allocation.
+                    let buffer_shape = |slot: u32| -> Option<&crate::image::BufferImage> {
                         buffers
                             .binary_search_by_key(&slot, |b| b.owner)
                             .ok()
-                            .map(|i| (buffers[i].length, buffers[i].flags & 1 != 0))
+                            .map(|i| &buffers[i])
+                    };
+                    let covers = |b: &crate::image::BufferImage, offset: u32, end: Option<u64>| {
+                        if b.flags & crate::image::BUFFER_RESIZABLE != 0 {
+                            end.unwrap_or(offset as u64) <= b.max_length as u64
+                        } else {
+                            end.is_some_and(|end| b.flags & 1 != 0 || end <= b.length as u64)
+                        }
                     };
                     for b in buffers {
                         owned(b.owner)?;
@@ -668,9 +679,10 @@ macro_rules! snapshot_payloads {
                             .ok_or(SnapshotError::Corrupt(
                                 "typed-arrays side table: unknown element kind",
                             ))?;
-                        let covered = buffer_shape(t.buffer).is_some_and(|(len, detached)| {
-                            detached || t.offset as u64 + ((t.length as u64) << shift) <= len as u64
-                        });
+                        let end = (t.length != ironhorse_vm::VIEW_LENGTH_TRACKING)
+                            .then(|| t.offset as u64 + ((t.length as u64) << shift));
+                        let covered =
+                            buffer_shape(t.buffer).is_some_and(|b| covers(b, t.offset, end));
                         if !covered {
                             return Err(SnapshotError::Corrupt(
                                 "typed-arrays side table: view geometry past its buffer",
@@ -680,9 +692,10 @@ macro_rules! snapshot_payloads {
                     for d in data_views {
                         owned(d.owner)?;
                         owned(d.buffer)?;
-                        let covered = buffer_shape(d.buffer).is_some_and(|(len, detached)| {
-                            detached || d.offset as u64 + d.size as u64 <= len as u64
-                        });
+                        let end = (d.size != ironhorse_vm::VIEW_LENGTH_TRACKING)
+                            .then(|| d.offset as u64 + d.size as u64);
+                        let covered =
+                            buffer_shape(d.buffer).is_some_and(|b| covers(b, d.offset, end));
                         if !covered {
                             return Err(SnapshotError::Corrupt(
                                 "data-views side table: view geometry past its buffer",
@@ -697,7 +710,7 @@ macro_rules! snapshot_payloads {
                     let ok = interp.restore_typed_array_family(
                         buffers
                             .into_iter()
-                            .map(|b| (b.owner, b.data, b.length, b.flags))
+                            .map(|b| (b.owner, b.data, b.length, b.flags, b.max_length))
                             .collect(),
                         typed_arrays
                             .into_iter()

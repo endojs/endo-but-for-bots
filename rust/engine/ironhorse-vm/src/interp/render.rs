@@ -127,7 +127,7 @@ impl Interp {
                     // `Object.prototype.toString`. Render each in-bounds element.
                     let ta = self.typed_arrays[&r];
                     let mut out = String::new();
-                    for i in 0..ta.length {
+                    for i in 0..self.ta_length_or_zero(ta) {
                         if i > 0 {
                             out.push(',');
                         }

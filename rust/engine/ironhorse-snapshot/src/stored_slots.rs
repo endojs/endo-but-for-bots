@@ -64,7 +64,10 @@ macro_rules! metadata_row {
     };
 }
 metadata_row!(WeakRefRow, [owner, target]);
-metadata_row!(crate::image::BufferImage, [owner, data, length, flags]);
+metadata_row!(
+    crate::image::BufferImage,
+    [owner, data, length, flags, max_length]
+);
 metadata_row!(
     ironhorse_vm::snapshot_api::CollatorData,
     [

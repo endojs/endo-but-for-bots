@@ -650,59 +650,56 @@ impl Interp {
             derived_native_construct,
         );
         let result: Slot = match native {
-            // `new ArrayBuffer(byteLength)` (`fx_ArrayBuffer` +
-            // `fxNewArrayBufferInstance`): a fresh zero-filled buffer. The
-            // instance is `fxNewObjectInstance` + two internal `fxNewSlot`s
-            // (the `XS_ARRAY_BUFFER_KIND` address slot and the
-            // `XS_BUFFER_INFO_KIND` length slot), folded with the native host
-            // frame into [`ARRAY_BUFFER_CTOR_FRAME_METERING`]; the backing
-            // store is a single `fxNewChunk(byteLength)`. A resizable buffer
-            // (a reference second argument carrying `maxByteLength`), a
-            // negative/oversized/non-integer byteLength (each a RangeError),
-            // and the `ArrayBuffer(n)` call without `new` (a TypeError) are
-            // honest named skips — their abort metering is a later increment.
-            Native::ArrayBuffer if has_target => {
-                if argc >= 2 && arg(1).kind == Kind::Reference {
-                    return Err(Step::Host(Halt::NotImplemented(
-                        "native-call:ArrayBuffer:resizable",
-                    )));
-                }
+            // `new ArrayBuffer(byteLength[, options])` and `new
+            // SharedArrayBuffer(byteLength[, options])` (`fx_ArrayBuffer` +
+            // `fxNewArrayBufferInstance`, `xsAtomics.c` `fx_SharedArrayBuffer`):
+            // a fresh zero-filled buffer. The instance is
+            // `fxNewObjectInstance` + two internal `fxNewSlot`s (the
+            // `XS_ARRAY_BUFFER_KIND` address slot and the `XS_BUFFER_INFO_KIND`
+            // length slot), folded with the native host frame into
+            // [`ARRAY_BUFFER_CTOR_FRAME_METERING`]; the backing store is a
+            // single `fxNewChunk(byteLength)`, never the maximum. An object
+            // second argument's `maxByteLength`, when not undefined, makes the
+            // buffer resizable (growable for a SharedArrayBuffer). Single-agent,
+            // a SharedArrayBuffer is a plain byte buffer marked shared.
+            Native::ArrayBuffer | Native::SharedArrayBuffer if has_target => {
+                let shared = matches!(native, Native::SharedArrayBuffer);
                 let a = arg(0);
-                // ToIndex before a subclass's prototype, as XS's
-                // `fxArgToSafeByteLength` runs before
-                // `fxGetPrototypeFromConstructor`; a length too large to
+                let options = if argc >= 2 { arg(1) } else { Slot::undefined() };
+                // XS's order: ToIndex(length), then `options.maxByteLength`
+                // and its ToIndex, then `byteLength > maxByteLength`, all
+                // before a subclass's prototype; a length too large to
                 // allocate fails after the read.
                 let length = self.safe_byte_length(code, a)?;
-                let proto =
-                    self.derived_construct_prototype(code, new_target, derived_native_construct)?;
-                let byte_length = self.index_from_number(length)?;
-                self.meter.tick_raw(ARRAY_BUFFER_CTOR_FRAME_METERING);
-                let inst = self.alloc_array_buffer(byte_length)?;
-                self.adopt_prototype(Slot::of(Kind::Reference, Payload::Reference(inst)), proto)
-            }
-            // `new SharedArrayBuffer(byteLength)` (`xsAtomics.c`
-            // `fx_SharedArrayBuffer`). Single-agent: a plain byte buffer marked
-            // shared. Only the integer/number fixed-length form is covered; a
-            // growable buffer (2nd option-bag arg) or a byteLength needing
-            // general ToNumber self-names an honest skip.
-            Native::SharedArrayBuffer if has_target => {
-                if argc >= 2 && arg(1).kind == Kind::Reference {
-                    return Err(Step::Host(Halt::NotImplemented(
-                        "native-call:SharedArrayBuffer:growable",
-                    )));
+                let max_length = self.array_buffer_max_byte_length_option(code, options)?;
+                if max_length.is_some_and(|max| length > max) {
+                    return Err(self.catchable_range_error_msg("byteLength > maxByteLength".into()));
                 }
-                let a = arg(0);
-                // ToIndex before a subclass's prototype, as XS's
-                // `fxArgToSafeByteLength` runs before
-                // `fxGetPrototypeFromConstructor`; a length too large to
-                // allocate fails after the read.
-                let length = self.safe_byte_length(code, a)?;
-                let proto =
-                    self.derived_construct_prototype(code, new_target, derived_native_construct)?;
+                let proto = match self.derived_construct_prototype(
+                    code,
+                    new_target,
+                    derived_native_construct,
+                )? {
+                    Some(proto) => Some(proto),
+                    None if shared => Some(self.intrinsic_prototype("SharedArrayBuffer")),
+                    None => None,
+                };
                 let byte_length = self.index_from_number(length)?;
+                let max_length = match max_length {
+                    Some(max) if max > 0x7FFF_FFFFu32 as f64 => {
+                        return Err(self.catchable_range_error_msg("maxByteLength too big".into()));
+                    }
+                    max => max.map(|max| max as u32),
+                };
                 self.meter.tick_raw(ARRAY_BUFFER_CTOR_FRAME_METERING);
                 let inst = self.alloc_array_buffer(byte_length)?;
-                self.shared_buffers.insert(inst);
+                self.array_buffers
+                    .get_mut(&inst)
+                    .expect("a fresh ArrayBuffer is branded")
+                    .max_length = max_length;
+                if shared {
+                    self.shared_buffers.insert(inst);
+                }
                 self.adopt_prototype(Slot::of(Kind::Reference, Payload::Reference(inst)), proto)
             }
             // `new <TypedArray>(...)` (`fx_TypedArray` + `fxConstructTypedArray`
@@ -735,9 +732,9 @@ impl Interp {
                     self.object_proto
                 };
                 match a.value {
-                    // View over an existing ArrayBuffer.
+                    // View over an existing ArrayBuffer
+                    // (InitializeTypedArrayFromArrayBuffer).
                     Payload::Reference(r) if self.array_buffers.contains_key(&r) => {
-                        let buf_len = self.array_buffers[&r].length;
                         // byteOffset (arg1): `ToIndex` — a non-negative integer.
                         // The integer/number fast paths stay inline (their exact
                         // metering is pinned by the meter-exact corpus); a
@@ -756,74 +753,81 @@ impl Interp {
                                 "invalid byteOffset {offset}"
                             )));
                         }
-                        // length (arg2): explicit element count, or the
-                        // remaining buffer (which must divide evenly).
-                        let byte_size: u32;
-                        if argc >= 3 && a2.kind != Kind::Undefined {
-                            // length (arg2): `ToIndex` — explicit element count.
-                            // Integer/number inline (metering pinned); otherwise
-                            // the general coercion / catchable throw.
-                            let len = match self.arg_to_byte_length(base, 2, 0) {
+                        // length (arg2): `ToIndex` — explicit element count.
+                        // Integer/number inline (metering pinned); otherwise
+                        // the general coercion / catchable throw.
+                        let explicit_length = if argc >= 3 && a2.kind != Kind::Undefined {
+                            Some(match self.arg_to_byte_length(base, 2, 0) {
                                 Some(l) => l,
                                 None => self.to_index_arg(code, a2)?,
-                            };
-                            // A length whose byte span overflows u32, runs past
-                            // the buffer, or (implicitly) exceeds the allocation
-                            // ceiling is a RangeError (`fxCheckTypedArrayLength`).
-                            if self.detached_buffers.contains(&r) {
-                                return Err(self.catchable_type_error_msg("detached buffer".into()));
-                            }
-                            let delta = match len.checked_mul(1 << shift) {
-                                Some(d) => d,
-                                None => {
-                                    return Err(self.catchable_range_error_msg(format!(
-                                        "invalid length {len}"
-                                    )))
-                                }
-                            };
-                            let end = match offset.checked_add(delta) {
-                                Some(e) => e,
-                                None => {
-                                    return Err(self.catchable_range_error_msg(format!(
-                                        "invalid length {len}"
-                                    )))
-                                }
-                            };
-                            if buf_len < end {
-                                return Err(
-                                    self.catchable_range_error_msg(format!("invalid length {len}"))
-                                );
-                            }
-                            byte_size = delta;
+                            })
                         } else {
-                            // Implicit length: the buffer must divide evenly by
-                            // the element size and contain the offset — else a
-                            // RangeError (`fxCheckTypedArrayLength`).
-                            if self.detached_buffers.contains(&r) {
-                                return Err(self.catchable_type_error_msg("detached buffer".into()));
-                            }
-                            if (buf_len & ((1 << shift) - 1)) != 0 {
-                                return Err(self.catchable_range_error_msg(format!(
-                                    "invalid byteLength {buf_len}"
-                                )));
-                            }
-                            if offset > buf_len {
-                                return Err(self.catchable_range_error_msg(format!(
-                                    "invalid byteLength {}",
-                                    buf_len.wrapping_sub(offset)
-                                )));
-                            }
-                            byte_size = buf_len - offset;
+                            None
+                        };
+                        // Both coercions are guest code that can detach or
+                        // resize the buffer, so its length is read after them
+                        // (XS's `fxGetBufferInfo`).
+                        if self.detached_buffers.contains(&r) {
+                            return Err(self.catchable_type_error_msg("detached buffer".into()));
                         }
+                        let buf_len = self.array_buffers[&r].length;
+                        let array_length = match explicit_length {
+                            Some(len) => {
+                                // A length whose byte span overflows u32, runs
+                                // past the buffer, or (implicitly) exceeds the
+                                // allocation ceiling is a RangeError
+                                // (`fxCheckTypedArrayLength`).
+                                let end = len
+                                    .checked_mul(1 << shift)
+                                    .and_then(|delta| offset.checked_add(delta));
+                                if end.is_none_or(|end| buf_len < end) {
+                                    return Err(self.catchable_range_error_msg(format!(
+                                        "invalid length {len}"
+                                    )));
+                                }
+                                Some(len)
+                            }
+                            // Implicit length over a resizable buffer (or a
+                            // growable SharedArrayBuffer): a length-tracking
+                            // view, which must start inside the buffer.
+                            None if !self.is_fixed_length_buffer(r) => {
+                                if offset > buf_len {
+                                    return Err(self.catchable_range_error_msg(format!(
+                                        "invalid offset {offset}"
+                                    )));
+                                }
+                                None
+                            }
+                            // Implicit length over a fixed-length buffer: the
+                            // buffer must divide evenly by the element size and
+                            // contain the offset — else a RangeError
+                            // (`fxCheckTypedArrayLength`).
+                            None => {
+                                if (buf_len & ((1 << shift) - 1)) != 0 {
+                                    return Err(self.catchable_range_error_msg(format!(
+                                        "invalid byteLength {buf_len}"
+                                    )));
+                                }
+                                if offset > buf_len {
+                                    return Err(self.catchable_range_error_msg(format!(
+                                        "invalid byteLength {}",
+                                        buf_len.wrapping_sub(offset)
+                                    )));
+                                }
+                                Some((buf_len - offset) >> shift)
+                            }
+                        };
                         self.meter.tick_raw(TYPED_ARRAY_BUFFER_CTOR_FRAME_METERING);
                         let inst = self.slots.alloc(Slot::instance(proto));
+                        let resizable_buffer = !self.is_fixed_length_buffer(r);
                         self.typed_arrays.insert(
                             inst,
                             TypedArrayData {
                                 kind: idx,
                                 buffer: r,
                                 offset,
-                                length: byte_size >> shift,
+                                array_length,
+                                resizable_buffer,
                             },
                         );
                         Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -872,13 +876,11 @@ impl Interp {
                         } else {
                             let src = self.typed_arrays[&r];
                             // The prototype read above is guest code that can
-                            // detach the source (InitializeTypedArrayFromTypedArray;
-                            // XS's `fxGetBufferInfo`): copying it then read
-                            // stale bytes out of a detached buffer.
-                            if self.detached_buffers.contains(&src.buffer) {
-                                return Err(self.catchable_type_error_msg("detached buffer".into()));
-                            }
-                            (src.length, Some(src))
+                            // detach or shrink the source
+                            // (InitializeTypedArrayFromTypedArray; XS's
+                            // `fxCheckDataViewSize`): copying it then read stale
+                            // bytes out of a detached or shorter buffer.
+                            (self.checked_ta_length(src)?, Some(src))
                         };
                         // A sparse snapshot is valid only with the intrinsic
                         // array iterator and its intrinsic next method. Check
@@ -926,7 +928,8 @@ impl Interp {
                             kind: idx,
                             buffer,
                             offset: 0,
-                            length,
+                            array_length: Some(length),
+                            resizable_buffer: false,
                         };
                         self.typed_arrays.insert(inst, ta);
                         // An ARRAY source is snapshotted up front — the spec's
@@ -1066,7 +1069,8 @@ impl Interp {
                                 kind: idx,
                                 buffer,
                                 offset: 0,
-                                length,
+                                array_length: Some(length),
+                                resizable_buffer: false,
                             },
                         );
                         Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -1094,7 +1098,6 @@ impl Interp {
                 };
                 let offset_arg = arg(1);
                 let length_arg = arg(2);
-                let buf_len = self.array_buffers[&buf].length;
                 let offset = self.to_index_arg(code, offset_arg)?;
                 // A buffer detached by the `ToIndex(byteOffset)` coercion (a
                 // user `valueOf`) is a TypeError — after the coercion ran, so
@@ -1103,39 +1106,50 @@ impl Interp {
                 if self.detached_buffers.contains(&buf) {
                     return Err(self.catchable_type_error_msg("detached buffer".into()));
                 }
+                let buf_len = self.array_buffers[&buf].length;
                 if offset > buf_len {
                     return Err(
                         self.catchable_range_error_msg(format!("invalid byteOffset {offset}"))
                     );
                 }
-                let size: u32;
-                if argc >= 3 && length_arg.kind != Kind::Undefined {
+                let byte_length: Option<u32> = if argc >= 3 && length_arg.kind != Kind::Undefined {
                     let s = self.to_index_arg(code, length_arg)?;
-                    let end = match offset.checked_add(s) {
-                        Some(e) => e,
-                        None => {
-                            return Err(
-                                self.catchable_range_error_msg(format!("invalid byteLength {s}"))
-                            )
-                        }
-                    };
-                    if buf_len < end {
+                    if offset.checked_add(s).is_none_or(|end| buf_len < end) {
                         return Err(
                             self.catchable_range_error_msg(format!("invalid byteLength {s}"))
                         );
                     }
-                    size = s;
+                    Some(s)
+                } else if self.is_fixed_length_buffer(buf) {
+                    Some(buf_len - offset)
                 } else {
-                    size = buf_len - offset;
-                }
+                    // Over a resizable buffer an omitted byteLength tracks the
+                    // buffer's length (XS's `size = -1`).
+                    None
+                };
                 let proto = self
                     .derived_construct_prototype(code, new_target, derived_native_construct)?
                     .unwrap_or(self.dataview_proto);
                 // A subclass's prototype read is guest code that can detach
                 // the buffer (ECMA-262 DataView step 11; XS's `fxGetBufferInfo`
-                // throws the same way).
+                // throws the same way) or resize it (steps 12-14).
                 if self.detached_buffers.contains(&buf) {
                     return Err(self.catchable_type_error_msg("detached buffer".into()));
+                }
+                if !self.is_fixed_length_buffer(buf) {
+                    let buf_len = self.array_buffers[&buf].length;
+                    if offset > buf_len {
+                        return Err(
+                            self.catchable_range_error_msg(format!("invalid byteOffset {offset}"))
+                        );
+                    }
+                    if let Some(s) = byte_length {
+                        if offset.checked_add(s).is_none_or(|end| buf_len < end) {
+                            return Err(
+                                self.catchable_range_error_msg(format!("invalid byteLength {s}"))
+                            );
+                        }
+                    }
                 }
                 self.meter.tick_raw(DATA_VIEW_CTOR_FRAME_METERING);
                 let inst = self.slots.alloc(Slot::instance(proto));
@@ -1144,7 +1158,7 @@ impl Interp {
                     DataViewData {
                         buffer: buf,
                         offset,
-                        size,
+                        byte_length,
                     },
                 );
                 Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -2266,10 +2280,16 @@ impl Interp {
             | NativeMethod::ArrayBufferSlice
             | NativeMethod::ArrayBufferTransfer
             | NativeMethod::ArrayBufferTransferToFixedLength
+            | NativeMethod::ArrayBufferByteLengthGetter
             | NativeMethod::ArrayBufferDetachedGetter
             | NativeMethod::ArrayBufferMaxByteLengthGetter
             | NativeMethod::ArrayBufferResizableGetter
             | NativeMethod::ArrayBufferResize
+            | NativeMethod::SharedArrayBufferByteLengthGetter
+            | NativeMethod::SharedArrayBufferGrowableGetter
+            | NativeMethod::SharedArrayBufferMaxByteLengthGetter
+            | NativeMethod::SharedArrayBufferGrow
+            | NativeMethod::SharedArrayBufferSlice
             | NativeMethod::ArrayBufferConcat
             | NativeMethod::ArrayBufferIsView
             | NativeMethod::Atomic(..)
@@ -3897,9 +3917,15 @@ impl Interp {
             }
             NativeMethod::ArrayBufferSlice => self.array_buffer_slice(code, this, base, argc)?,
             NativeMethod::ArrayBufferTransfer | NativeMethod::ArrayBufferTransferToFixedLength => {
-                self.array_buffer_transfer(code, this, arg0)?
+                self.array_buffer_transfer(
+                    code,
+                    this,
+                    arg0,
+                    m == NativeMethod::ArrayBufferTransfer,
+                )?
             }
-            NativeMethod::ArrayBufferDetachedGetter
+            NativeMethod::ArrayBufferByteLengthGetter
+            | NativeMethod::ArrayBufferDetachedGetter
             | NativeMethod::ArrayBufferMaxByteLengthGetter
             | NativeMethod::ArrayBufferResizableGetter => {
                 let buffer = self.array_buffer_ref(this).ok_or_else(|| {
@@ -3910,29 +3936,54 @@ impl Interp {
                         self.catchable_type_error_msg("this: not an ArrayBuffer instance".into())
                     );
                 }
+                let data = self.array_buffers[&buffer];
+                let detached = self.detached_buffers.contains(&buffer);
                 match m {
-                    NativeMethod::ArrayBufferDetachedGetter => {
-                        Slot::boolean(self.detached_buffers.contains(&buffer))
+                    NativeMethod::ArrayBufferDetachedGetter => Slot::boolean(detached),
+                    // A detached buffer's lengths read 0; the maximum of a
+                    // fixed-length buffer is its length.
+                    NativeMethod::ArrayBufferByteLengthGetter => {
+                        Slot::number(if detached { 0 } else { data.length } as f64)
                     }
-                    NativeMethod::ArrayBufferMaxByteLengthGetter => {
-                        let length = if self.detached_buffers.contains(&buffer) {
-                            0
-                        } else {
-                            self.array_buffers[&buffer].length
-                        };
-                        Slot::number(length as f64)
+                    NativeMethod::ArrayBufferMaxByteLengthGetter => Slot::number(if detached {
+                        0
+                    } else {
+                        data.max_length.unwrap_or(data.length)
                     }
-                    NativeMethod::ArrayBufferResizableGetter => Slot::boolean(false),
+                        as f64),
+                    NativeMethod::ArrayBufferResizableGetter => {
+                        Slot::boolean(data.max_length.is_some())
+                    }
                     _ => unreachable!(),
                 }
             }
-            // `ArrayBuffer.prototype.resize`/`concat`: resizable buffers and
-            // the XS concat extension remain honest named skips.
-            NativeMethod::ArrayBufferResize => {
-                return Err(Step::Host(Halt::NotImplemented(
-                    "array-buffer-resize:unsupported",
-                )))
+            NativeMethod::ArrayBufferResize => self.array_buffer_resize(code, this, arg0)?,
+            NativeMethod::SharedArrayBufferByteLengthGetter
+            | NativeMethod::SharedArrayBufferGrowableGetter
+            | NativeMethod::SharedArrayBufferMaxByteLengthGetter => {
+                let buffer = self.shared_array_buffer_ref(this, "this")?;
+                let data = self.array_buffers[&buffer];
+                match m {
+                    NativeMethod::SharedArrayBufferByteLengthGetter => {
+                        Slot::number(data.length as f64)
+                    }
+                    NativeMethod::SharedArrayBufferGrowableGetter => {
+                        Slot::boolean(data.max_length.is_some())
+                    }
+                    NativeMethod::SharedArrayBufferMaxByteLengthGetter => {
+                        Slot::number(data.max_length.unwrap_or(data.length) as f64)
+                    }
+                    _ => unreachable!(),
+                }
             }
+            NativeMethod::SharedArrayBufferGrow => {
+                self.shared_array_buffer_grow(code, this, arg0)?
+            }
+            NativeMethod::SharedArrayBufferSlice => {
+                self.shared_array_buffer_slice(code, this, base, argc)?
+            }
+            // `ArrayBuffer.prototype.concat`: the XS extension remains an
+            // honest named skip.
             NativeMethod::ArrayBufferConcat => {
                 return Err(Step::Host(Halt::NotImplemented(
                     "array-buffer-concat:unsupported",
@@ -3966,13 +4017,18 @@ impl Interp {
                     }
                 };
                 let view = self.data_views[&inst];
-                if index != 0 && self.detached_buffers.contains(&view.buffer) {
-                    return Err(self.catchable_type_error_msg("detached buffer".into()));
-                }
+                // `byteLength` and `byteOffset` throw for a view its buffer no
+                // longer covers (`IsViewOutOfBounds`, XS's
+                // `fxCheckDataViewSize`); `buffer` never does.
+                let size = if index != 0 {
+                    self.checked_dv_byte_length(view)?
+                } else {
+                    0
+                };
                 self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
                 match index {
                     0 => Slot::of(Kind::Reference, Payload::Reference(view.buffer)),
-                    1 => Slot::number(view.size as f64),
+                    1 => Slot::number(size as f64),
                     _ => Slot::number(view.offset as f64),
                 }
             }
@@ -3991,15 +4047,14 @@ impl Interp {
                 let dv = self.data_views[&inst];
                 let delta = TYPED_ARRAY_TYPES[kind as usize].size as u32;
                 let offset = self.to_index_arg(code, arg0)?;
-                // `GetViewValue`: after ToIndex, a detached backing buffer is a
-                // TypeError — and it precedes the out-of-range RangeError, so a
-                // detached view with an out-of-range offset still throws
-                // TypeError (`detached-buffer-before-outofrange-byteoffset`).
-                if self.detached_buffers.contains(&dv.buffer) {
-                    return Err(self.catchable_type_error_msg("detached buffer".into()));
-                }
+                // `GetViewValue`: after ToIndex, a detached or out-of-bounds
+                // view is a TypeError — and it precedes the out-of-range
+                // RangeError, so a detached view with an out-of-range offset
+                // still throws TypeError
+                // (`detached-buffer-before-outofrange-byteoffset`).
+                let size = self.checked_dv_byte_length(dv)?;
                 // `(size < delta) || ((size - delta) < offset)` → RangeError.
-                if dv.size < delta || (dv.size - delta) < offset {
+                if size < delta || (size - delta) < offset {
                     return Err(self.catchable_range_error_msg("invalid byteOffset".into()));
                 }
                 let little = self.arg_is_truthy(base, 1);
@@ -4046,12 +4101,11 @@ impl Interp {
                 } else {
                     self.data_view_encode(code, kind, value, little)?
                 };
-                // A detached backing buffer is a TypeError, ahead of the
-                // out-of-range RangeError (`detached-buffer-*` ordering cases).
-                if self.detached_buffers.contains(&dv.buffer) {
-                    return Err(self.catchable_type_error_msg("detached buffer".into()));
-                }
-                if dv.size < delta || (dv.size - delta) < offset {
+                // A detached or out-of-bounds view is a TypeError, ahead of
+                // the out-of-range RangeError (`detached-buffer-*` ordering
+                // cases).
+                let size = self.checked_dv_byte_length(dv)?;
+                if size < delta || (size - delta) < offset {
                     return Err(self.catchable_range_error_msg("invalid byteOffset".into()));
                 }
                 let abs = dv.offset + offset;

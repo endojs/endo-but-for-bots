@@ -829,13 +829,27 @@ pub enum NativeMethod {
     /// Recorded in `proto_accessors`, so the species readers can tell the
     /// untouched intrinsic from a guest getter.
     SpeciesGetter,
-    /// The fixed-buffer-compatible `ArrayBuffer.prototype` accessors.
+    /// The `ArrayBuffer.prototype` accessors (`fx_ArrayBuffer_prototype_get_*`).
+    ArrayBufferByteLengthGetter,
     ArrayBufferDetachedGetter,
     ArrayBufferMaxByteLengthGetter,
     ArrayBufferResizableGetter,
-    /// `ArrayBuffer.prototype.resize` is recognized but returns
-    /// `Halt::NotImplemented`; only fixed-size buffers are modeled.
+    /// `ArrayBuffer.prototype.resize(newLength)`
+    /// (`fx_ArrayBuffer_prototype_resize`): a resizable buffer's new byte
+    /// length, zero-filling any growth.
     ArrayBufferResize,
+    /// The `SharedArrayBuffer.prototype` accessors
+    /// (`fx_SharedArrayBuffer_prototype_get_*`).
+    SharedArrayBufferByteLengthGetter,
+    SharedArrayBufferGrowableGetter,
+    SharedArrayBufferMaxByteLengthGetter,
+    /// `SharedArrayBuffer.prototype.grow(newLength)`: a growable buffer's new,
+    /// never smaller, byte length.
+    SharedArrayBufferGrow,
+    /// `SharedArrayBuffer.prototype.slice(start, end)`
+    /// (`fx_SharedArrayBuffer_prototype_slice`): a species-constructed
+    /// SharedArrayBuffer holding the byte range.
+    SharedArrayBufferSlice,
     /// `ArrayBuffer.prototype.transfer` / `transferToFixedLength`.
     ArrayBufferTransfer,
     ArrayBufferTransferToFixedLength,

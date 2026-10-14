@@ -40,6 +40,10 @@
 //! wire version without changing the row schema. Row release 6 (container
 //! format 25, store schema 37) adds the `WeakRef` and `FinalizationRegistry`
 //! rows; the schema 36 → 37 ladder step appends their two sections empty.
+//! Container format 26 and store schema 37 → 38 are an encoding-only release
+//! within row release 6: the buffer and view rows gain a resizable buffer's
+//! maximum and the length-tracking view sentinel, and the 37 → 38 step is an
+//! identity restamp.
 //! Row release 1 records the
 //! existing format 20/store 31 contract without changing persisted bytes.
 //!
