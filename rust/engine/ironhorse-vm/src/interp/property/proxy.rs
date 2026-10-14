@@ -541,7 +541,7 @@ impl Interp {
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let key = self.property_key_slot(id)?;
-        let desc_obj = self.descriptor_object(desc);
+        let desc_obj = self.from_property_descriptor(desc);
         let result = self.invoke_value(code, trap, handler_slot, &[target_slot, key, desc_obj])?;
         if !self.truthy(&result) {
             return Ok(false);

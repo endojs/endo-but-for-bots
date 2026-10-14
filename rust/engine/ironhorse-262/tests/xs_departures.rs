@@ -239,6 +239,27 @@ const DEPARTURES: &[Row] = &[
         v8: "23000",
         why: "ArrayBuffer.prototype.slice copies the bytes a species constructor that shrank the source left in range (ES2024 25.1.6.7 steps 26-27); XS throws",
     },
+    Row {
+        program: "var log = []; var p = new Proxy({ c: 1 }, { defineProperty(t, k, d) { log.push(Object.keys(d).join('+')); return Reflect.defineProperty(t, k, d); } }); p.c = 2; log.join()",
+        ironhorse: "value",
+        xs: "value+writable+enumerable+configurable",
+        v8: "value",
+        why: "[[Set]] on an existing data property defines `{ [[Value]]: V }` on the receiver (OrdinarySetWithOwnDescriptor step 2.d.iv), and the trap receives FromPropertyDescriptor of it; XS completes the descriptor",
+    },
+    Row {
+        program: "var log = []; var p = new Proxy({}, { defineProperty(t, k, d) { log.push(Object.keys(d).join('+')); return Reflect.defineProperty(t, k, d); } }); Object.defineProperty(p, 'g', { get() {}, enumerable: true }); log.join()",
+        ironhorse: "get+enumerable",
+        xs: "get+set+enumerable",
+        v8: "get+enumerable",
+        why: "a Proxy's `defineProperty` trap receives FromPropertyDescriptor of the descriptor, only the fields present (ES2024 10.5.6 step 7); XS adds an absent `set`",
+    },
+    Row {
+        program: "var t = { get a() { return 42; } }; var p = new Proxy(t, { defineProperty(t, k, d) { return Reflect.defineProperty(t, k, d); } }); Reflect.defineProperty(p, 'a', { set: undefined }); typeof Object.getOwnPropertyDescriptor(t, 'a').get",
+        ironhorse: "function",
+        xs: "undefined",
+        v8: "function",
+        why: "the same rule through a forwarding trap: `{ set: undefined }` leaves the getter; XS's added `get: undefined` removes it",
+    },
 ];
 
 /// Programs where Ironhorse departs from XS and V8 has no counterpart to

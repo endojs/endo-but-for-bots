@@ -328,13 +328,15 @@ The rest are listed here as they stood.
 
 ### Object MOP: intrinsics, tombstones, harden, petrify
 
-7 open, 5 of them P1.
+7 open, 5 of them P1; `F085` since fixed.
 
 - `F081` **P1** Retain ordinary numeric expandos on boxed Strings
 - `F082` **P1** Honor deleted function-metadata tombstones throughout the MOP
 - `F083` **P1** Throw a catchable TypeError after key coercion
 - `F084` **P2** Include RegExp in the full-MOP defineProperty path (partial)
-- `F085` **P2** Preserve descriptor field presence for proxy defineProperty traps
+- `F085` **P1** Preserve descriptor field presence for proxy defineProperty traps
+  (fixed: raised to P1 because a forwarding trap wiped values under `freeze`,
+  `seal` and plain assignment; the trap now receives FromPropertyDescriptor)
 - `F087` **P1** Do not expose the queued harden mark to reentrant calls
 - `F088` **P1** Enforce petrified ArrayBuffer state in its ordinary view writes
 

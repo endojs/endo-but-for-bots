@@ -267,3 +267,61 @@ fn reflect_routes_through_traps() {
     agrees("Reflect.has(new Proxy({}, { has: function () { return true; } }), 'z')");
     agrees("Reflect.ownKeys(new Proxy({ m: 1 }, {})).join(',')");
 }
+
+// -------------------------------------------------------------------------
+// A forwarding `defineProperty` trap redefines only what was asked (F085).
+// -------------------------------------------------------------------------
+
+/// The trap receives FromPropertyDescriptor of the requested descriptor, so
+/// forwarding it with `Reflect.defineProperty` changes only the fields the
+/// caller named. Ironhorse completed the descriptor with defaults, so
+/// `Object.freeze` through a forwarding Proxy wiped values and accessors, and
+/// one assignment made a property read-only. Each program reports the
+/// target's resulting own descriptors, which XS and V8 agree on. XS passes
+/// a completed descriptor on the [[Set]] path and adds the absent half of an
+/// accessor pair, so `{ set: undefined }` drops a getter there;
+/// `xs_departures.rs` records both.
+#[test]
+fn a_forwarding_define_property_trap_changes_only_the_named_fields() {
+    let setup = "var t = { get a() { return 42; }, b: 7, c: 'c' }; \
+                 Object.defineProperty(t, 'd', { value: 'd', writable: false, enumerable: false, configurable: true }); \
+                 var p = new Proxy(t, { defineProperty: function (t, k, d) { \
+                   return Reflect.defineProperty(t, k, d); } }); \
+                 function show() { return Reflect.ownKeys(t).map(function (k) { \
+                   var d = Object.getOwnPropertyDescriptor(t, k); \
+                   return String(k) + '=' + ['value', 'writable', 'get', 'set', 'enumerable', 'configurable'] \
+                     .filter(function (f) { return f in d; }) \
+                     .map(function (f) { return f + ':' + (typeof d[f] === 'function' ? 'fn' : String(d[f])); }).join('/'); \
+                 }).join(' '); }";
+    for operation in [
+        "Object.freeze(p)",
+        "Object.seal(p)",
+        "Object.preventExtensions(p)",
+        "harden(p)",
+        "Reflect.defineProperty(p, 'b', { enumerable: false })",
+        "Reflect.defineProperty(p, 'b', { writable: false })",
+        "Reflect.defineProperty(p, 'b', { configurable: false })",
+        "Reflect.defineProperty(p, 'b', { value: undefined })",
+        "Reflect.defineProperty(p, 'a', { get: function () { return 1; } })",
+        "Reflect.defineProperty(p, 'e', {})",
+        "Reflect.defineProperty(p, 'e', { value: 1 })",
+        "Reflect.defineProperty(p, 'd', { value: 'D' })",
+        "Object.defineProperties(p, { b: { enumerable: false }, f: { get: function () {} } })",
+        "p.b = 8; p.b = 9",
+        "p.c = undefined",
+        "p.e = 1",
+        "p[Symbol.iterator] = 1",
+        "p[0] = 1; p[0] = 2",
+    ] {
+        agrees(&format!("{setup} {operation}; show()"));
+    }
+}
+
+#[test]
+fn an_array_behind_a_forwarding_trap_keeps_a_writable_length() {
+    agrees(
+        "var a = [1, 2]; var p = new Proxy(a, { defineProperty: function (t, k, d) { return Reflect.defineProperty(t, k, d); } }); \
+         p.push(3); p.push(4); p.length = 3; p.unshift(0); p.splice(1, 1); \
+         [a.join(), JSON.stringify(Object.getOwnPropertyDescriptor(a, 'length'))].join(' ')",
+    );
+}
