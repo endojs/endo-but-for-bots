@@ -16,6 +16,7 @@ mod reflect;
 mod regexp;
 mod resource;
 mod string;
+mod sum_precise;
 mod temporal;
 mod uri;
 mod weak;

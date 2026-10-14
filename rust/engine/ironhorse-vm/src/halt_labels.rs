@@ -194,6 +194,7 @@ pub const NOT_IMPLEMENTED_HELPER_LABELS: &[&str] = &[
 /// that its state is wrong. Never skip-eligible. Sorted by byte order.
 pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "Date.toJSON:toISOString-key",
+    "GetIterator:symbol",
     "Iterator.setter:missing-toStringTag",
     "Iterator:helper-id",
     "Iterator:helper-kind",

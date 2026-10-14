@@ -119,3 +119,41 @@ fn error_is_error() {
         ),
     ]);
 }
+
+#[test]
+fn math_sum_precise() {
+    check(&[
+        (
+            "[Math.sumPrecise.name, Math.sumPrecise.length].join()",
+            "sumPrecise,1",
+        ),
+        (
+            "[Math.sumPrecise([0.1, 0.2]), Math.sumPrecise([1e20, 0.1, -1e20]), Math.sumPrecise([1, 2, 3]), Math.sumPrecise([1e308, 1e308, -1e308]), Math.sumPrecise([1e308, 1e308]), Math.sumPrecise([5e-324, 5e-324]), Math.sumPrecise(new Set([1, 2])), Math.sumPrecise(new Float64Array([0.5, 0.25]))].join()",
+            "0.30000000000000004,0.1,6,1e+308,Infinity,1e-323,3,0.75",
+        ),
+        (
+            "[Math.sumPrecise([Infinity, -Infinity]), Math.sumPrecise([NaN, 1]), Math.sumPrecise([Infinity, 1]), Math.sumPrecise([-Infinity, -0])].join()",
+            "NaN,NaN,Infinity,-Infinity",
+        ),
+        // Ties round to even, once, on the exact sum.
+        (
+            "[Math.sumPrecise([2 ** 53, 1]), Math.sumPrecise([2 ** 53, 1, 1]), Math.sumPrecise([-(2 ** 53), -1, -5e-324]), Math.sumPrecise([1.7976931348623157e308, 9.979201547673598e291]), Math.sumPrecise([1.7976931348623157e308, 9.979201547673599e291])].join()",
+            "9007199254740992,9007199254740994,-9007199254740994,1.7976931348623157e+308,Infinity",
+        ),
+        // Only -0 items, or none, leave -0; XS answers -0 for a +0 stored
+        // as a double (`xs_departures.rs`).
+        (
+            "var z = 0.5 - 0.5; [Object.is(Math.sumPrecise([]), -0), Object.is(Math.sumPrecise([-0, -0]), -0), Object.is(Math.sumPrecise([z]), 0), Object.is(Math.sumPrecise([1.5, -1.5]), 0)].join()",
+            "true,true,true,true",
+        ),
+        (
+            "var r = []; [undefined, null, [1, '2'], {}, [1n], '12'].forEach(function (v) { try { Math.sumPrecise(v); r.push('ok'); } catch (e) { r.push(e.name); } }); r.join()",
+            "TypeError,TypeError,TypeError,TypeError,TypeError,TypeError",
+        ),
+        // A non-Number item closes the iterator.
+        (
+            "var closed = 0; var it = {[Symbol.iterator]: function () { var i = 0; return {next: function () { i++; return {done: i > 3, value: i === 2 ? 'x' : i}; }, return: function () { closed++; return {}; }}; }}; var r; try { Math.sumPrecise(it); } catch (e) { r = e.name; } [r, closed].join()",
+            "TypeError,1",
+        ),
+    ]);
+}

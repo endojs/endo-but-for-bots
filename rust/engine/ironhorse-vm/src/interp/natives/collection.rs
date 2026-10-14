@@ -937,7 +937,7 @@ impl Interp {
     /// IfAbruptCloseIterator finds a closed record and skips the close. This
     /// function sets no latch itself — the caller latches the helper on the
     /// way out — so the distinction it implements is only "do not close".
-    fn helper_step_value(
+    pub(in crate::interp) fn helper_step_value(
         &mut self,
         code: &[u8],
         iterator: Slot,
