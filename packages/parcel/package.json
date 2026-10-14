@@ -1,22 +1,22 @@
 {
-  "name": "@endo/sturdyref",
+  "name": "@endo/parcel",
   "version": "0.1.0",
-  "description": "First-wins SturdyRef shim: a realm-shared constructor for opaque sturdy references whose handler's enliven hook defines what they capture and how they revive",
+  "description": "First-wins Parcel shim for opaque, passable locations",
   "keywords": [
-    "sturdyref",
+    "parcel",
     "ocapn",
     "captp",
-    "enliven",
+    "open",
     "shim",
     "ponyfill"
   ],
   "author": "Endo contributors",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/endojs/endo/tree/master/packages/sturdyref#readme",
+  "homepage": "https://github.com/endojs/endo/tree/master/packages/parcel#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/endojs/endo.git",
-    "directory": "packages/sturdyref"
+    "directory": "packages/parcel"
   },
   "bugs": {
     "url": "https://github.com/endojs/endo/issues"
@@ -26,6 +26,7 @@
   "module": "./index.js",
   "exports": {
     ".": "./index.js",
+    "./no-shim.js": "./no-shim.js",
     "./shim.js": {
       "types": "./shim.types.d.ts",
       "default": "./shim.js"
@@ -46,6 +47,7 @@
     "@endo/harden": "workspace:^"
   },
   "devDependencies": {
+    "@endo/eventual-send": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "ava": "catalog:dev",

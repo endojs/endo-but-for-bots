@@ -6,11 +6,11 @@
 // Isolated in its own file (its own process) because it never locks down.
 
 import test from 'ava';
-import { makeSturdyRef, enliven, isSturdyRef } from '../src/sturdyref-pony.js';
+import { makeParcel, open, isParcel } from '../src/parcel-pony.js';
 
 test('tampering with WeakMap.prototype after import reaches nothing', async t => {
-  const handler = { enliven: () => 'live' };
-  const ref = makeSturdyRef(handler);
+  const openHook = () => 'live';
+  const ref = makeParcel('test:tampered-weakmap', openHook);
 
   const seen = [];
   // Tamper through an untyped alias: a direct `WeakMap.prototype.get = ...`
@@ -28,17 +28,17 @@ test('tampering with WeakMap.prototype after import reaches nothing', async t =>
     return Reflect.apply(set, this, [key, value]);
   };
   // Restore before asserting: ava itself uses WeakMaps.
-  let enlivened;
+  let opened;
   let freshIsBranded;
   let forgedIsBranded;
   try {
-    enlivened = await enliven(ref);
-    freshIsBranded = isSturdyRef(makeSturdyRef(handler));
-    forgedIsBranded = isSturdyRef({});
+    opened = await open(ref);
+    freshIsBranded = isParcel(makeParcel('test:fresh', openHook));
+    forgedIsBranded = isParcel({});
   } finally {
     Object.assign(weakMapPrototype, { get, has, set });
   }
-  t.is(enlivened, 'live');
+  t.is(opened, 'live');
   t.true(freshIsBranded);
   t.false(forgedIsBranded, 'a tampered has cannot forge the brand');
   t.is(seen.length, 0, 'the handler map was never exposed');

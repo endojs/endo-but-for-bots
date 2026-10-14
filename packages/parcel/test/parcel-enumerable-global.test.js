@@ -6,21 +6,18 @@
 
 import '@endo/init';
 import test from 'ava';
-import {
-  makeSturdyRefConstructor,
-  selectSturdyRef,
-} from '../src/sturdyref-shim.js';
+import { makeParcelConstructor, selectParcel } from '../src/parcel-shim.js';
 
 test('first-wins: a non-configurable enumerable writable global is locked', t => {
-  const TwinSturdyRef = makeSturdyRefConstructor();
-  Object.defineProperty(globalThis, 'SturdyRef', {
-    value: TwinSturdyRef,
+  const TwinParcel = makeParcelConstructor();
+  Object.defineProperty(globalThis, 'Parcel', {
+    value: TwinParcel,
     enumerable: true,
     writable: true,
     configurable: false,
   });
-  t.is(selectSturdyRef(), TwinSturdyRef);
-  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'SturdyRef');
+  t.is(selectParcel(), TwinParcel);
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'Parcel');
   t.false(descriptor.writable);
   t.false(descriptor.configurable);
   t.true(descriptor.enumerable);
