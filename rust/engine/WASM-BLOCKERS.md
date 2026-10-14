@@ -41,8 +41,8 @@ A `wasm32-unknown-unknown` build needs **no imports at all**.
 It is **not** yet deterministic across targets, even with `consensus` on.
 An audit confirmed 27 sites where native x86_64 and wasm32 behave differently (B7).
 Most give the same guest program a different answer or a different computron count.
-The rest are host-side: a checkpoint that aborts on wasm32, a crafted store, error values, a
-WASI panic, and a restore that follows hash order.
+The rest are host-side: a checkpoint that aborted on wasm32 (fixed since: the whole-heap writer
+streams), a crafted store, error values, a WASI panic, and a restore that follows hash order.
 Examples are allocating near a heap ceiling, growing arrays or side tables past wasm32's
 allocation limits, and one three-line program that crashes the wasm32 engine outright.
 The probes that stay clear of those sites and of the host limits in B3 and B8 matched native
@@ -55,7 +55,7 @@ What stands in the way, in order of severity:
 | B1 | Stable Rust cannot link a wasm artifact with `panic=unwind`; the engine requires unwinding, including for guest-catchable errors | toolchain / engine | **hard** |
 | B7 | Heap admission, unadmitted host allocations, `usize` arithmetic and snapshot decoding depend on the target, so native and wasm32 diverge in results and metering; one tiny program crashes wasm32 | engine | **hard (consensus)** |
 | B3 | The native-recursion budget assumes an 8 MiB stack; smaller wasm stacks overflow **before** the budget halts, sometimes on programs the engine accepts natively | engine / host | configuration for Wasmtime and Node, **hard in browsers and workerd** |
-| B8 | The ceilings do not bound memory: up to 4–5× the chunk ceiling for a running string heap and about 6× while a snapshot of it is written, unbounded for arrays and side tables; a cap that fails `memory.grow` makes programs trap or halt early with `HeapExhausted` where native completes or halts later, and Cloudflare documents replacing the whole isolate, but whether production fails `memory.grow` first is not known | engine / host | **hard under a 128 MB cap** |
+| B8 | The ceilings do not bound memory: up to 4–5× the chunk ceiling for a running string heap, plus one container while a snapshot of it is written (the writer streams now; it used to be about 6×), unbounded for arrays and side tables; a cap that fails `memory.grow` makes programs trap or halt early with `HeapExhausted` where native completes or halts later, and Cloudflare documents replacing the whole isolate, but whether production fails `memory.grow` first is not known | engine / host | **hard under a 128 MB cap** |
 | B2 | Wasm exception-handling encoding: LLVM emits the legacy form by default, and Wasmtime accepts only the standard `exnref` form | toolchain / host | configuration |
 | B4 | Default-feature builds diverge between native and wasm in `Math` results and therefore in metering | engine features | configuration (use `consensus`) |
 | B5 | The worker binary depends on threads, `flock`, bundled C SQLite and POSIX files; `FileStore` does not work on WASI | worker / store | port work |
@@ -335,14 +335,29 @@ the ceilings before allocating.
 
 ### Snapshots and stores
 
-- **Checkpointing needs several copies of the heap** (`ironhorse-snapshot/src/machine.rs:163`).
+- **Checkpointing needed several copies of the heap** (fixed: the whole-heap writer streams,
+  `ironhorse-snapshot/src/stream.rs`).
   A machine with 16 million Map entries runs identically on both targets.
   Natively it then checkpoints into a 640 MB snapshot.
-  On wasm32 the encoder's doubling buffer fails to allocate 1 GiB and aborts.
-  `snapshot_image` first copies the arenas into a `MachineImage`, and `encode_heap` then builds
+  On wasm32 the encoder's doubling buffer failed to allocate 1 GiB and aborted.
+  `snapshot_image` first copied the arenas into a `MachineImage`, and `encode_heap` then built
   the HEAP payload in two more buffers before copying it into the output.
-  Encoding each atom straight from the live arenas into the sink, whether a file, a hasher or
-  one exact pre-sized buffer, removes the copies; pre-sizing the output buffer alone does not.
+  The container write verbs (`write_snapshot`, `write_snapshot_to`, `write_snapshot_to_file`,
+  `suspend_to_cas`) now encode each atom straight from the live arenas and side tables into
+  the sink, whether a file, a hasher or one exactly pre-sized buffer: a sizing pass runs every
+  encoder into a byte counter, because an atom's header carries its length, and the write pass
+  runs the same encoders into the sink.
+  The bytes are those of the image writer by construction (one encoder per payload, the
+  roster's atom order and omission rule; `tests/streaming_identity.rs` locks it on a machine
+  carrying every atom, on the golden corpus, and through a restore of a container the image
+  writer wrote), so no seal or hash moves.
+  The same 16-million-entry Map now snapshots on wasm32 in 4.5 s, taking linear memory from
+  2.05 GB to 2.69 GB, exactly the container's 640 MB in one buffer; natively the snapshot's peak
+  resident set fell from 4.56 GB to 3.14 GB (the run's 2.50 GB plus the buffer) and the write
+  from 15.7 s to 3.9 s.
+  What still copies: `begin_store_session`'s first full commit builds an image and a whole batch,
+  and a checkpoint re-encodes each dirty section whole (B8), both O(side tables), and the vm's
+  owned snapshots of the per-instance tables (functions, promises, iterators, …), O(exotic rows).
 - **`manifest.chunk_len` is truncated** (`ironhorse-snapshot/src/store.rs:605`, narrowed with
   `as usize` at `machine.rs:1379`, `store.rs:2931`, `store.rs:3262`).
   A crafted store with `chunk_len = 2^32 + 65536` makes every chunk allocation halt natively.
@@ -359,6 +374,9 @@ the ceilings before allocating.
   Decoding should refuse duplicate owners.
 - **The CAS and file-store temporary names use `std::process::id()`**
   (`ironhorse-snapshot/src/machine.rs:114`, `store_file.rs:135`, `:730`), which panics on WASI.
+  The default commit-token source (`store.rs`, `RandomTokens`) did too, so no store session
+  could begin under WASI; it now hashes a constant in place of the process id there, the counter,
+  the clock and the per-thread hash keys keeping tokens distinct.
 - **Error values differ by width.**
   An overflowing HEAP, STAC or manifest count is refused on both targets, with different
   `Corrupt` messages (`ironhorse-snapshot/src/image.rs:957`, `:4630`, `store.rs:639`).
@@ -385,8 +403,9 @@ the ceilings before allocating.
   kept objects take 3.23 GB of wasm32 linear memory, and the same doubling after them traps on
   wasm32 again.
   The two caps must be chosen together, so that both arenas' worst-case footprint (B8) fits in
-  4 GiB with room left for a checkpoint, which holds several more copies of the heap until the
-  encoder streams (see "Checkpointing needs several copies of the heap" above).
+  4 GiB with room left for a checkpoint: one container's worth when it is written to memory,
+  and 64 KiB when it is written to a file, now that the encoder streams (see "Checkpointing
+  needed several copies of the heap" above).
   The 44,000,000 kept objects above run identically on both targets, but checkpointing them
   aborts on wasm32 at 4.11 GB of linear memory, when the encoder cannot allocate 880 MB, while
   native writes the 880 MB snapshot.
@@ -601,19 +620,89 @@ Measured:
 So for heaps dominated by strings the running footprint is up to 4–5× the chunk ceiling
 (doubling a large string is the worst case measured while running; push loops of strings halted
 at 2.1–2.2×), and for heaps dominated by arrays or side tables no ceiling bounds it.
-A whole-heap snapshot adds several copies (B7), and the worst-case footprint must count them:
-under the default ceilings, writing a 252 MB snapshot of strings took wasm32 from 557 MB to
-1.56 GB of linear memory, 5.8× the chunk ceiling, and at 2^29 the same pattern reached 3.11 GB.
+A whole-heap snapshot used to add several copies (B7), and the worst-case footprint had to
+count them: under the default ceilings, writing a 252 MB snapshot of strings took wasm32 from
+557 MB to 1.56 GB of linear memory, 5.8× the chunk ceiling, and at 2^29 the same pattern reached
+3.11 GB.
+The whole-heap writer now streams from the live arenas (`ironhorse-snapshot/src/stream.rs`), and
+the snapshot adds at most the container itself, in one buffer, when written to memory, or a 64 KiB
+write buffer when written to a file.
+Measured with `scripts/snapshot-footprint.py` (natively, resident set size and its high-water mark;
+on wasm32, `memory.size` under Wasmtime 49, which never shrinks), before and after:
+
+| Case | Container | wasm32 before | wasm32 after | native peak before | native peak after |
+|---|---|---|---|---|---|
+| 16,000,000 Map entries | 640 MB | 2.05 GB, then aborts allocating 1 GiB | 2.05 GB → 2.69 GB, 4.5 s | 2.62 GB → 4.56 GB, 15.7 s | 2.62 GB → 3.14 GB, 3.9 s |
+| 125,000 strings of 1,000 units | 254 MB | 746 MB → 1.75 GB, 0.60 s | 746 MB → 746 MB, 0.04 s | 266 MB → 1.03 GB, 0.88 s | 266 MB → 521 MB, 0.21 s |
+| 1,000,000 Map entries | 40 MB | 124 MB → 400 MB, 0.26 s | 124 MB → 164 MB, 0.05 s | 171 MB → 308 MB, 0.18 s | 171 MB → 204 MB, 0.05 s |
+
+The string snapshot grew wasm32 linear memory by nothing at all, because the buffer fit in memory
+the run had already freed; the 16-million-entry Map, whose entries are the live heap, grew it by
+exactly the container.
+Natively the snapshot's own share of the peak fell from 1.94 GB over the run's high-water mark to
+514 MB, the buffer, and every case writes three to five times faster, because the four copies and
+the doubling reallocations were the cost.
+So for a whole-heap snapshot the worst case is the running footprint plus one container, and a
+container is bounded by the ceilings: the chunk arena verbatim, 20 bytes per slot record, and
+the side tables, which no ceiling bounds yet.
+
 The Thixotrope worker's per-crank `checkpoint_to_store` copies only the dirty chunk extents and
 slot pages, but it re-encodes each changed section, such as all arrays' items or all Maps'
-entries, whole (`ironhorse-snapshot/src/machine.rs:1029-1034`).
+entries, whole (`ironhorse-snapshot/src/machine.rs`, the `small_updates` of
+`checkpoint_to_store_core`).
 On the string heap above, its batch fit in memory the crank had already freed, and linear memory
 grew to 787 MB only because the in-memory store kept its own copy.
 For arrays and Maps it costs as much as a whole-heap snapshot or more, on every crank that
 changes them: before the store copied anything, checkpointing 500,000 kept array items took
 wasm32 from 40 MB to 122 MB, where writing their snapshot reached 92 MB, and 500,000 Map entries
 from 78 MB to 224 MB, where their snapshot reached 208 MB.
-Ceilings that admit array items and side tables must leave room for that re-encoding.
+The streaming writer does not change this path, and the same harness measured it afterwards
+(`--case array-ckpt --case map-ckpt`: a session begun on the kept state, one crank that changes
+one element, then a checkpoint into a store that samples memory when the batch reaches it).
+Natively, 500,000 array items took the resident set from 77 MB before the checkpoint to 94 MB
+at the commit, 17 MB for the owned item rows the vm hands out (500,000 × 32 B) and the 12 MB
+`ARRY` payload; 500,000 Map entries took it from 106 MB to 167 MB, 61 MB for the owned entry
+rows (500,000 × 48 B), the 20 MB `COLL` payload and the doubling slack of both.
+On wasm32 the session's first full commit, which still builds an image and a whole batch, had
+already grown linear memory to 129 MB and 268 MB, and neither checkpoint grew it further: the
+re-encoding fits in what that first commit freed, so on this path the first commit, not the
+checkpoint, sets the mark.
+Ceilings that admit array items and side tables must leave room for that re-encoding until the
+sections are encoded incrementally.
+
+**Incremental section encoding, a proposal.**
+The dirty tracking is a 32-bit mask with one bit per section (`ironhorse-vm/src/snapshot_dirty.rs`);
+once a bit is set the checkpoint extracts and encodes the whole section, so its cost is the
+section's size, not the change's.
+The bulk sections, arrays, index properties and collections, carry the slot payloads, and one
+collection can hold the whole heap (the 16-million-entry Map is one 640 MB row), so the unit of
+change must be smaller than a row.
+What the tracking would have to record, per bulk section:
+
+- per owner, whether the row was created, removed (the sweep drops it) or had its header
+  changed (an array's `length`, an index store's high-water mark, a collection's `kind` or
+  `table_length`);
+- per owner, which fixed-size spans of its payload changed: for arrays and index properties the
+  item map by index range, for collections the physical entry list by entry range, with a
+  tombstone compaction or `clear()` marking every span, since both renumber what follows.
+
+A span of 4,096 entries is 160 KB of `COLL` payload or 96 KB of `ARRY` payload, the size of a
+slot page's worth of records, so the same ceilings can count section spans and slot pages in one
+unit.
+The dirty state is one bit per span and one per owner: the 16-million-entry Map needs 3,907 span
+bits, under 500 bytes, beside its one owner bit.
+The store would hold each bulk section as span rows keyed by owner and span index, like slot
+pages and chunk extents, with the container export concatenating the rows in owner order, which
+is the section's encoding already (a count, then rows), so the container bytes and every seal
+over them stay as they are; the section digests the checkpoint compares would become one digest
+per span row, and `small_section_hashes` the digest of those.
+A crank that sets one entry would then ship one 160 KB span instead of 640 MB, and the
+checkpoint's transient memory would be the touched spans' bytes.
+The cost is a store schema bump with a migration that splits the three sections into span rows,
+the per-span dirty bits in `ArrayData` and `CollectionData` with the sweep and compaction hooks
+that set them, and the checkpoint and resume paths that read them: about three thousand lines
+across the vm, the snapshot crate and the SQLite backend, by the size of the slot-page machinery
+it would mirror.
 
 Wasm linear memory never shrinks.
 On a host that enforces its memory cap by failing `memory.grow`, as Wasmtime's store limits do,
