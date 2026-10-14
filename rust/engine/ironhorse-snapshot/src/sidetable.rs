@@ -734,6 +734,9 @@ mod tests {
             // restored machine starts with every holder pending, which only
             // completes a complete surface again.
             "pending_surfaces",
+            // Each intrinsic object's key ranks: derived at boot from the
+            // order tables, which the boot fingerprint covers, never stored.
+            "intrinsic_key_ranks",
         ];
         const TRANSIENTS: &[&str] = &[
             // Intrinsic linking is synchronous and restores this guard before

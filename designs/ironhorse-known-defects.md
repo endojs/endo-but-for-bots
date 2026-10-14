@@ -316,15 +316,22 @@ The rest are listed here as they stood.
 
 ### Snapshot migration and boot versioning
 
-7 open, 4 of them P1.
+7 open, 4 of them P1; `F078` and `F079` since fixed.
 
 - `F068` **P1** Do not use a considered `join` as the arguments-layout version (partial)
 - `F069` **P1** Encode the boot generation outside the legacy signature namespace
 - `F071` **P2** Keep legacy migration-fixture generators on the legacy signature
 - `F072` **P2** Treat a null `@@toPrimitive` method as absent
 - `F073` **P2** Preserve the pinned missing-key behavior
-- `F078` **P1** Canonicalize intrinsic ordering for prototypes and namespaces too
-- `F079` **P2** Move a deleted-and-recreated intrinsic property to the end
+- `F078` **P1** Canonicalize intrinsic ordering for prototypes and namespaces too (fixed)
+- `F079` **P2** Move a deleted-and-recreated intrinsic property to the end (fixed)
+
+Every intrinsic's own keys now come in XS's order, whatever a program names,
+computes or reflects on first: each lazily installed member takes its place
+from the tables in `ironhorse-vm/src/interp/intrinsic_order.rs`, and a global
+object's standard bindings are installed together before guest code runs.
+A deleted member added again is an ordinary new key, last.
+`ironhorse-262/tests/intrinsic_key_order.rs` compares every intrinsic with XS.
 
 ### Object MOP: intrinsics, tombstones, harden, petrify
 

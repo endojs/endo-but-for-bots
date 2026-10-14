@@ -209,6 +209,7 @@ const FRESH_ORDER: &[&str] = &[
     "pending_rejections",
     "locked_down_constructors",
     "pending_surfaces",
+    "intrinsic_key_ranks",
     "lockdown_complete",
     "promise_jobs",
     "combinators",

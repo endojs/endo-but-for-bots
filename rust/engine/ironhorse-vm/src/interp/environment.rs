@@ -381,6 +381,9 @@ impl Interp {
             prop.next = head;
             let idx = self.slots.alloc(prop);
             self.slots.get_mut(inst).next = idx;
+            if self.installing_intrinsics {
+                self.place_intrinsic_key(inst, idx);
+            }
         }
     }
 
@@ -418,6 +421,9 @@ impl Interp {
             prop.next = head;
             let idx = self.slots.alloc(prop);
             self.slots.get_mut(inst).next = idx;
+            if self.installing_intrinsics {
+                self.place_intrinsic_key(inst, idx);
+            }
         }
         self.accessors.insert((inst, id), AccessorData { get, set });
     }

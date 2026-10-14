@@ -223,6 +223,20 @@ impl Interp {
         descriptor: crate::value::SlotIndex,
         id: u16,
     ) {
+        // These are intrinsic members, placed in their holders' order like
+        // any other ([`Self::place_intrinsic_key`]).
+        let was_installing = self.installing_intrinsics;
+        self.installing_intrinsics = true;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.install_well_known_symbol_members(descriptor, id);
+        }));
+        self.installing_intrinsics = was_installing;
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    fn install_well_known_symbol_members(&mut self, descriptor: crate::value::SlotIndex, id: u16) {
         let well_known_name = self.well_known_symbols.iter().find_map(|(name, value)| {
             (value.value == Payload::Reference(descriptor)).then_some(*name)
         });

@@ -234,6 +234,9 @@ where XS answers rightly, including guest-reachable `NotImplemented` halts.
 Fixing one fails its row, so the record shrinks as the gaps close.
 No such record is kept for computrons: XS-computron parity is a non-goal (see
 "Metering objective"), so the oracle gates results only.
+`ironhorse-262/tests/intrinsic_key_order.rs` compares the own keys of every
+intrinsic with XS's, in order, under prefixes that once reordered them, and
+records each key one engine has and the other lacks.
 
 ## Building the oracle: the `c/moddable` pin
 

@@ -87,6 +87,7 @@ impl Interp {
         let mut interp = boot_fresh!(snapshot_dirt, slots, chunks, global_obj, static_str);
         interp.create_intrinsics();
         interp.pending_surfaces = interp.intrinsic_surface_holders();
+        interp.intrinsic_key_ranks = interp.intrinsic_key_ranks_at_boot();
         // **After `create_intrinsics`, before `boot_slot_count` is fixed.**
         // Both halves of that are load-bearing. After, because boot's own
         // constructor wiring reads `ctor_prototype` back to install
@@ -159,6 +160,20 @@ impl Interp {
         let mut default_keys: Vec<_> = self.default_keys.iter().copied().collect();
         default_keys.sort_unstable();
         term(format!("default_keys={default_keys:?}").as_bytes());
+        // The order each intrinsic object's keys are created in, and the
+        // holder each order resolved to: a snapshot whose intrinsics were
+        // laid out by other tables must be refused.
+        for (path, keys) in super::intrinsic_order::INTRINSIC_KEY_ORDER {
+            let holder = self.resolve_intrinsic_holder(path);
+            term(format!("intrinsic_key_order={path}@{holder:?}={keys:?}").as_bytes());
+        }
+        term(
+            format!(
+                "global_key_order={:?}",
+                super::intrinsic_order::GLOBAL_KEY_ORDER
+            )
+            .as_bytes(),
+        );
         term(format!("global_obj={:?}", self.realm.global_object()).as_bytes());
         term(format!("intl_object={:?}", self.intl_object).as_bytes());
         term(format!("temporal_object={:?}", self.temporal_object).as_bytes());

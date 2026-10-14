@@ -110,35 +110,15 @@ fn description_and_to_string_agree() {
     );
 }
 
-/// The one divergence the accessor itself introduces:
-/// `%Symbol.prototype%`'s own-key ORDER. Recorded against BOTH engines
-/// rather than asserted to agree, so a move on either side fails here
-/// instead of surfacing in a nightly sweep.
+/// `%Symbol.prototype%`'s own keys, in order. Ironhorse once installed
+/// `description` after the methods, where XS builds it first; each member
+/// now takes its place in XS's order as it is installed
+/// (`ironhorse-vm/src/interp/intrinsic_order.rs`).
 #[test]
-fn the_own_key_order_diverges_while_the_key_set_agrees() {
-    // The install loop runs `proto_methods` before `proto_accessors`, so
-    // `description` lands after the methods where XS builds it first. This
-    // is an instance of a pre-existing, engine-wide class —
-    // `Error.prototype` reads `toString,stack,constructor,name,message`
-    // against XS's `toString,name,message,stack,constructor`, and
-    // `Number.prototype` diverges in content as well as order — not a
-    // class the accessor introduces. Reordering the shared install loop
-    // would move five other prototypes at once, so the instance is
-    // recorded, not fixed.
+fn the_own_keys_agree_in_order() {
     let dr = dual_run("'' + Object.getOwnPropertyNames(Symbol.prototype).join(',')")
         .expect("the XS oracle machine must start");
     assert_eq!(dr.agreement, Agreement::BothComplete);
     assert_eq!(dr.oracle_result, "description,toString,valueOf,constructor");
-    assert_eq!(
-        dr.ironhorse_result,
-        "toString,valueOf,description,constructor"
-    );
-    // The KEY SET agrees even though the order does not — before the
-    // accessor, `description` was missing from ironhorse's list entirely,
-    // so this half of the match is what the change buys.
-    let mut oracle: Vec<&str> = dr.oracle_result.split(',').collect();
-    let mut ironhorse: Vec<&str> = dr.ironhorse_result.split(',').collect();
-    oracle.sort_unstable();
-    ironhorse.sort_unstable();
-    assert_eq!(oracle, ironhorse, "same own keys, different order");
+    assert_eq!(dr.ironhorse_result, dr.oracle_result);
 }

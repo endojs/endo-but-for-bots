@@ -2880,6 +2880,25 @@ pub struct Interp {
     /// machine starts with every holder pending, and completing a complete
     /// surface again changes nothing.
     pending_surfaces: std::collections::HashSet<crate::value::SlotIndex>,
+    #[boot_new(std::collections::HashMap::new())]
+    #[gc_root(keys)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Each intrinsic object's keys by their place in its creation order
+    /// ([`intrinsic_order::INTRINSIC_KEY_ORDER`]), so a member installed
+    /// lazily takes its place among the others
+    /// ([`Self::place_intrinsic_key`]). Derived at boot and never persisted:
+    /// the boot fingerprint covers the tables it comes from.
+    intrinsic_key_ranks: std::collections::HashMap<
+        crate::value::SlotIndex,
+        &'static crate::interp::intrinsic_order::IntrinsicKeyRanks,
+    >,
     #[boot_new(crate::value::SlotIndex::NULL)]
     #[gc_root(index)]
     #[quiescent(retained)]

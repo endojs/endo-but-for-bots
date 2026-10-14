@@ -169,8 +169,19 @@ impl Interp {
         // cannot be pre-interned or spoofed by guest JavaScript; no property
         // uses the minted id. Reusing the table avoids a schema-only atom.
         self.intern_symbol_key_reserved(self.template_cache);
+        // Every standard global, in its order, before the bindings the
+        // program's names select: a global object's own keys do not depend on
+        // which of them the program text spells.
+        let program_names = self.symbol_names.len();
+        self.install_standard_globals();
         let names = self.symbol_names.clone();
-        self.install_intrinsic_bindings(&names, 0, true, |_| true);
+        self.install_named_intrinsic_bindings(
+            &names,
+            0,
+            true,
+            |_| true,
+            |id| usize::from(id) <= program_names,
+        );
     }
 
     /// Reify boot-default properties used implicitly by newly linked natives.
@@ -221,7 +232,7 @@ impl Interp {
 
     /// Install one standard global binding if the current environment admits
     /// it and has not already created or deleted it.
-    fn install_global_intrinsic_binding(&mut self, name: &SymbolName, id: u16) {
+    pub(super) fn install_global_intrinsic_binding(&mut self, name: &SymbolName, id: u16) {
         if self.environment.binding_names.contains(&id) {
             return;
         }
@@ -293,21 +304,6 @@ impl Interp {
         }
     }
 
-    /// Populate only the current environment's standard globals. Creating a
-    /// sibling must not rerun the shared prototype-surface installer with an
-    /// all-names predicate, because that would resurrect shared guest edits.
-    pub(super) fn install_environment_global_bindings(&mut self, names: &[SymbolName]) {
-        let was_installing = self.installing_intrinsics;
-        self.installing_intrinsics = true;
-        for name in names {
-            let Some(&id) = self.symbol_ids.get(name) else {
-                continue;
-            };
-            self.install_global_intrinsic_binding(name, id);
-        }
-        self.installing_intrinsics = was_installing;
-    }
-
     /// Standard globals currently present in the machine name table but not in
     /// this environment's binding history, ordered by stable symbol id.
     ///
@@ -376,6 +372,24 @@ impl Interp {
         full: bool,
         keep: impl Fn(u16) -> bool,
     ) {
+        self.install_named_intrinsic_bindings(names, names_start, full, &keep, &keep);
+    }
+
+    /// [`Self::install_intrinsic_bindings`], where `named` admits the ids a
+    /// program named rather than those `keep` admits. Naming `Date`, a typed
+    /// array, `Intl`, an accessor's owning constructor or an Error installs
+    /// that whole surface at once, a convenience for programs that reflect on
+    /// it by runtime strings; the link pass interns every standard global's
+    /// name for its binding, and that alone must not count as naming them.
+    pub(super) fn install_named_intrinsic_bindings(
+        &mut self,
+        names: &[SymbolName],
+        names_start: usize,
+        full: bool,
+        keep: impl Fn(u16) -> bool,
+        named: impl Fn(u16) -> bool,
+    ) {
+        let is_named = |vm: &Self, name: &str| vm.symbol_ids.get(name).is_some_and(|&id| named(id));
         let was_installing = self.installing_intrinsics;
         self.installing_intrinsics = true;
         // Include dependencies in this same installation pass. A later crank
@@ -554,11 +568,9 @@ impl Interp {
         });
         let typed_array_proto =
             typed_array_ctor.and_then(|constructor| self.ctor_prototype.get(&constructor).copied());
-        let names_typed_array = TYPED_ARRAY_TYPES
-            .iter()
-            .any(|ty| self.symbol_ids.contains_key(ty.name));
+        let names_typed_array = TYPED_ARRAY_TYPES.iter().any(|ty| is_named(self, ty.name));
         let date_ctor = self.intrinsics.get("Date").copied();
-        let names_date = self.symbol_ids.contains_key("Date");
+        let names_date = is_named(self, "Date");
         // Keep the canonical rosters resident while allocations below can
         // unwind. A retry must see the same installer inputs.
         let methods = self.proto_methods.clone();
@@ -577,7 +589,7 @@ impl Interp {
                 Some(pid)
             } else if let Some(&id) = self.symbol_ids.get(mname) {
                 Some(id)
-            } else if proto == self.intl_object && self.symbol_ids.contains_key("Intl") {
+            } else if proto == self.intl_object && is_named(self, "Intl") {
                 // The `Intl.*` constructor and namespace-method properties are
                 // reachable reflectively through a string key (e.g.
                 // `verifyProperty(Intl, 'NumberFormat', {...})`) with no static
@@ -713,11 +725,9 @@ impl Interp {
             // earlier link already installed it does not re-install — a guest
             // redefinition of `format` survives.
             let guard_is_kept = if guard == "TypedArray" {
-                TYPED_ARRAY_TYPES
-                    .iter()
-                    .any(|ty| self.symbol_ids.get(ty.name).copied().is_some_and(&keep))
+                TYPED_ARRAY_TYPES.iter().any(|ty| is_named(self, ty.name))
             } else {
-                self.symbol_ids.get(guard).copied().is_some_and(&keep)
+                is_named(self, guard)
             };
             let property_is_kept = self.symbol_ids.get(pname).copied().is_some_and(&keep);
             if guard_is_kept || property_is_kept {
@@ -779,7 +789,7 @@ impl Interp {
                 "stack",
             ]
             .iter()
-            .any(|n| self.symbol_ids.contains_key(*n));
+            .any(|n| is_named(self, n));
             // The property id, not a later Error-family constructor name,
             // owns installation. Otherwise introducing RangeError resurrects
             // a stack property the guest deleted in an earlier crank.
@@ -1149,6 +1159,10 @@ impl Interp {
                 );
             }
         }
+        // `DisposableStack.prototype[@@dispose]` is the same function as its
+        // `dispose`, and likewise `disposeAsync` and `@@asyncDispose`. Take it
+        // from the roster rather than the prototype, where `dispose` is
+        // installed only once something names it.
         for (native, string_name, symbol_name) in [
             (Native::DisposableStack, "dispose", "dispose"),
             (Native::AsyncDisposableStack, "disposeAsync", "asyncDispose"),
@@ -1160,16 +1174,23 @@ impl Interp {
             else {
                 continue;
             };
-            let Some(&string_id) = self.symbol_ids.get(string_name) else {
+            let Some(function) = self
+                .proto_methods
+                .iter()
+                .find(|(holder, name, _)| *holder == proto && *name == string_name)
+                .map(|(_, _, function)| *function)
+            else {
                 continue;
             };
             let Some(symbol_id) = self.well_known_symbol_property_id(symbol_name) else {
                 continue;
             };
-            let function = self.boot_chain_get(proto, string_id);
-            if self.is_callable_value(function) {
-                self.set_own_unmetered_with_flag(proto, symbol_id, function, XS_DONT_ENUM_FLAG);
-            }
+            self.set_own_unmetered_with_flag(
+                proto,
+                symbol_id,
+                Slot::of(Kind::Reference, Payload::Reference(function)),
+                XS_DONT_ENUM_FLAG,
+            );
         }
         self.installing_intrinsics = was_installing;
     }
@@ -1516,8 +1537,9 @@ impl Interp {
     }
 
     /// Every object the boot rosters give lazily installed members, but the
-    /// global object, whose bindings a program creates as it runs: the
-    /// initial [`Self::pending_surfaces`].
+    /// global object, whose standard bindings link installs all at once
+    /// ([`Self::install_standard_globals`]): the initial
+    /// [`Self::pending_surfaces`].
     pub(super) fn intrinsic_surface_holders(
         &self,
     ) -> std::collections::HashSet<crate::value::SlotIndex> {
@@ -1550,7 +1572,14 @@ impl Interp {
     /// leave guest deletions and replacements alone. Newly interned names
     /// describe boot properties that have never been observable in this
     /// machine, so their create-only installation is sound and unmetered.
+    /// Each lands at its place in the object's key order
+    /// ([`Self::place_intrinsic_key`]), so what was reflected on first, or
+    /// interned when, does not show.
     pub(super) fn materialize_intrinsic_own_surface(&mut self, inst: crate::value::SlotIndex) {
+        // Whether `inst` is still in `pending_surfaces` must not decide what
+        // this does: the set is derived at boot and not persisted, so a
+        // resumed machine would install, and charge, where its live twin did
+        // not.
         // Materialization is boot work, never authority to extend a sealed object.
         if self.slots.get(inst).flag & XS_DONT_PATCH_FLAG != 0 {
             return;
@@ -1587,11 +1616,15 @@ impl Interp {
         {
             member_names.push("stack");
         }
-        if inst == self.environment.global_obj {
-            member_names.extend(self.intrinsics.keys().copied());
-            member_names.extend(["undefined", "NaN", "Infinity", "globalThis"]);
+        // Installed beside the roster, once `constructor` is a name
+        // ([`Self::install_intrinsic_bindings`]).
+        if inst == self.async_generator_proto {
+            member_names.push("constructor");
         }
-        if member_names.is_empty() {
+        // The global object's standard bindings are all installed at link
+        // ([`Self::install_standard_globals`]), but reflecting on it still
+        // completes the pending suffix, as it does for an intrinsic.
+        if member_names.is_empty() && inst != self.environment.global_obj {
             return;
         }
         // Complete symbol-keyed boot surfaces before own-key reflection or
@@ -1617,72 +1650,6 @@ impl Interp {
         }
         self.install_pending_intrinsics();
         self.pending_surfaces.remove(&inst);
-    }
-
-    /// String-key creation order for a standard intrinsic object's modeled
-    /// boot properties. XS creates callable members in case-insensitive name
-    /// order, followed by data constants in their declaration order. The VM's
-    /// native-function allocation order is an implementation detail and must
-    /// not leak through `[[OwnPropertyKeys]]`.
-    pub(super) fn intrinsic_own_string_order(
-        &self,
-        inst: crate::value::SlotIndex,
-    ) -> Option<Vec<u16>> {
-        if !self.intrinsics.values().any(|owner| *owner == inst) {
-            return None;
-        }
-        let mut callable_names: Vec<&'static str> = self
-            .proto_methods
-            .iter()
-            .filter_map(|(owner, name, _)| {
-                (*owner == inst && !matches!(*name, "length" | "name" | "prototype"))
-                    .then_some(*name)
-            })
-            .chain(
-                self.proto_accessors
-                    .iter()
-                    .filter_map(|(owner, key, _, _, _)| match key {
-                        ProtoAccessorKey::String(name)
-                            if *owner == inst
-                                && !matches!(*name, "length" | "name" | "prototype") =>
-                        {
-                            Some(*name)
-                        }
-                        _ => None,
-                    }),
-            )
-            .collect();
-        // `sort_by_cached_key`, not `sort_unstable_by_key`: the key allocates a
-        // String and the unstable form re-evaluates it on every comparison.
-        // The stable sort also pins the order of two names that differ only in
-        // case to their source order, rather than leaving it to the sort.
-        callable_names.sort_by_cached_key(|name| name.to_ascii_lowercase());
-        callable_names.dedup();
-
-        let mut names = callable_names;
-        for (owner, name, _) in &self.proto_data {
-            if *owner == inst && !names.contains(name) {
-                names.push(*name);
-            }
-        }
-        for (owner, name, _) in &self.proto_value_data {
-            if *owner == inst && !names.contains(name) {
-                names.push(*name);
-            }
-        }
-        if self.intrinsics.get("Symbol").copied() == Some(inst) {
-            for (name, _) in &self.well_known_symbols {
-                if !names.contains(name) {
-                    names.push(*name);
-                }
-            }
-        }
-        Some(
-            names
-                .into_iter()
-                .filter_map(|name| self.symbol_ids.get(name).copied())
-                .collect(),
-        )
     }
 
     /// Materialize a standard global when its name first enters the runtime

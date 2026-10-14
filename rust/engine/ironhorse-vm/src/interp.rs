@@ -72,6 +72,7 @@ mod strings;
 mod unwind;
 
 pub(crate) mod host;
+mod intrinsic_order;
 mod link;
 mod native_try;
 mod natives;

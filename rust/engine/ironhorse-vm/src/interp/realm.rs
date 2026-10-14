@@ -947,8 +947,7 @@ impl Interp {
             realm.modules = modules;
             let old = std::mem::replace(&mut self.environment, realm);
             self.inactive_environments.insert(old.global_obj, old);
-            let names = self.symbol_names.to_vec();
-            self.install_environment_global_bindings(&names);
+            self.install_standard_globals();
             self.environment
                 .binding_names
                 .extend(self.environment.global_props.keys().copied());
