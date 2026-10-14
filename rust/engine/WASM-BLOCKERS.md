@@ -40,11 +40,12 @@ A `wasm32-unknown-unknown` build needs **no imports at all**.
 
 It is **not** yet deterministic across targets, even with `consensus` on.
 An audit confirmed 27 sites where native x86_64 and wasm32 behave differently (B7).
-Most give the same guest program a different answer or a different computron count.
-The rest are host-side: a checkpoint that aborted on wasm32 (fixed since: the whole-heap writer
+The sites in heap admission and in `usize` arithmetic are fixed, among them a three-line program
+that crashed the wasm32 engine outright.
+Of the rest, most give the same guest program a different answer or a different computron
+count, for example by growing arrays or side tables past wasm32's allocation limits.
+The others are host-side: a checkpoint that aborted on wasm32 (fixed since: the whole-heap writer
 streams), a crafted store, error values, a WASI panic, and a restore that follows hash order.
-Examples are allocating near a heap ceiling, growing arrays or side tables past wasm32's
-allocation limits, and one three-line program that crashes the wasm32 engine outright.
 The probes that stay clear of those sites and of the host limits in B3 and B8 matched native
 exactly.
 
@@ -53,7 +54,7 @@ What stands in the way, in order of severity:
 | # | Blocker | Layer | Kind |
 |---|---------|-------|------|
 | B1 | Stable Rust cannot link a wasm artifact with `panic=unwind`; the engine requires unwinding, including for guest-catchable errors | toolchain / engine | **hard** |
-| B7 | Heap admission, unadmitted host allocations, `usize` arithmetic and snapshot decoding depend on the target, so native and wasm32 diverge in results and metering; one tiny program crashes wasm32 | engine | **hard (consensus)** |
+| B7 | Unadmitted host allocations and snapshot decoding depend on the target, so native and wasm32 diverge in results and metering; heap admission and `usize` arithmetic are fixed | engine | **hard (consensus)** |
 | B3 | The native-recursion budget assumes an 8 MiB stack; smaller wasm stacks overflow **before** the budget halts, sometimes on programs the engine accepts natively | engine / host | configuration for Wasmtime and Node, **hard in browsers and workerd** |
 | B8 | The ceilings do not bound memory: up to 4–5× the chunk ceiling for a running string heap, plus one container while a snapshot of it is written (the writer streams now; it used to be about 6×), unbounded for arrays and side tables; a cap that fails `memory.grow` makes programs trap or halt early with `HeapExhausted` where native completes or halts later, and Cloudflare documents replacing the whole isolate, but whether production fails `memory.grow` first is not known | engine / host | **hard under a 128 MB cap** |
 | B2 | Wasm exception-handling encoding: LLVM emits the legacy form by default, and Wasmtime accepts only the standard `exnref` form | toolchain / host | configuration |
@@ -256,12 +257,13 @@ are latent issues listed below.
 
 ### Admission charged by Rust memory layout
 
-Deterministic heap admission sometimes measures Rust memory rather than guest data.
+Deterministic heap admission measured Rust memory rather than guest data.
 `admit_scratch` and its siblings (`ironhorse-vm/src/interp/admission.rs:106`, `:208-216`,
-`:223`) charge `capacity * size_of::<T>()` against the chunk ceiling.
-The RegExp compiler and matcher do the same against their own byte budgets.
-For any `T` that contains `usize`, a `Vec` header or a pointer, native and wasm32 charge
-different amounts, so a program near a ceiling halts on one target and completes on the other.
+`:223`) charged `capacity * size_of::<T>()` against the chunk ceiling.
+The RegExp compiler and matcher did the same against their own byte budgets.
+For any `T` that contains `usize`, a `Vec` header or a pointer, native and wasm32 charged
+different amounts, so a program near a ceiling halted on one target and completed on the other.
+Every site below is fixed (see [Status](#status)); the wasm32 column is from before the fix.
 
 | Site | Element type (native / wasm32 bytes) | Program | Native | wasm32 |
 |---|---|---|---|---|
@@ -274,17 +276,17 @@ different amounts, so a program near a ceiling halts on one target and completes
 | `ironhorse-regexp/src/compile.rs:953`, `:955-962`, `:1366-1375`, `:1717` | `Node` (64 / 40), `Vec<u32>` headers (24 / 12) | `new RegExp('a'.repeat(420000)).test('a')` | `HeapExhausted`, 288,772 | `Return false`, 321,730 |
 | `ironhorse-regexp/src/matcher.rs:129`, `:190-193` | `State` (40 / 24), `AssertionData` (16 / 8) | `new RegExp('()'.repeat(129)+'a*$').test('a'.repeat(62500))` | `HeapExhausted`, 202,597 | `Return true`, 203,696 |
 
-For `new RegExp` and RegExp literals, guest `try`/`catch` cannot hide the difference.
-The regexp compiler's limit becomes an uncatchable `HeapExhausted` natively.
-Top-level literals become a compile-time `RegExpResourceLimit` natively but compile on wasm32.
-A wasm32 snapshot that holds such a `RegExp` is refused when restored natively, with
+For `new RegExp` and RegExp literals, guest `try`/`catch` could not hide the difference.
+The regexp compiler's limit became an uncatchable `HeapExhausted` natively.
+Top-level literals became a compile-time `RegExpResourceLimit` natively but compiled on wasm32.
+A wasm32 snapshot that held such a `RegExp` was refused when restored natively, with
 `Corrupt("regexp side table: persisted source does not compile")`
 (`ironhorse-snapshot/src/snapshot_roster.rs:950`).
-`json.rs:1199` (`(ReadKey, usize)`, 16 / 12) is masked today by a stricter check before it.
+`json.rs:1199` (`(ReadKey, usize)`, 16 / 12) was masked by a stricter check before it.
 
-The fix is to charge a fixed, declared width per element type instead of `size_of::<T>()`.
-Use the audited 64-bit widths, with a compile-time assertion on 64-bit targets, so native
-thresholds do not move.
+Each site now charges a fixed, declared width per element type instead of `size_of::<T>()`.
+The widths are the audited 64-bit layouts, with a compile-time assertion on 64-bit targets, so
+native thresholds do not move.
 
 ### Unadmitted host allocations
 
@@ -314,11 +316,13 @@ the ceilings before allocating.
 
 ### Arithmetic on the host's `usize`
 
-- **`advance_string_index` (`natives/regexp.rs:301`)** computes `i + 1` in `usize`.
-  With `lastIndex = 2**32 - 1` that overflows on wasm32 only.
+Both sites are fixed (see [Status](#status)).
+
+- **`advance_string_index` (`natives/regexp.rs:301`)** computed `i + 1` in `usize`.
+  With `lastIndex = 2**32 - 1` that overflowed on wasm32 only.
   With overflow checks on, as the workspace `release` profile and the default `dev` profile both
-  have them, it panics; with them off, `subject[i]` panics out of bounds instead, so a
-  three-line guest program crashes the wasm engine either way:
+  have them, it panicked; with them off, `subject[i]` panicked out of bounds instead, so a
+  three-line guest program crashed the wasm engine either way:
 
   ```js
   var re = /(?:)/gu; var n = 0;
@@ -327,11 +331,11 @@ the ceilings before allocating.
   ```
 
   Native returns `"Qx"`.
-  `@@match`, `String.prototype.replace` and `matchAll` reach the same line.
-- **`JSON.stringify` output sizing (`natives/json.rs:163`)** converts a `u64` to `usize` before
+  `@@match`, `String.prototype.replace` and `matchAll` reached the same line.
+- **`JSON.stringify` output sizing (`natives/json.rs:163`)** converted a `u64` to `usize` before
   checking the result limit.
-  A nested array whose computed output crosses 2^32 units throws a catchable
-  `RangeError: result too large` natively, but halts with `HeapExhausted` on wasm32.
+  A nested array whose computed output crosses 2^32 units threw a catchable
+  `RangeError: result too large` natively, but halted with `HeapExhausted` on wasm32.
 
 ### Snapshots and stores
 
@@ -427,20 +431,32 @@ the ceilings before allocating.
   A crafted database could alias rows differently by width; the crate does not build for wasm
   today.
 
-### Fix prototypes
+### Status
 
-Three of the audit's fixes, which cover 11 of the 27 sites, are kept as two patches in
-[`determinism-prototypes/`](determinism-prototypes/):
-- fixed per-element admission widths, with the matcher's charges pinned the same way;
-- the `advance_string_index` overflow;
-- the `JSON.stringify` output sizing.
+Two of the four families are closed: every site in "Admission charged by Rust memory layout"
+and in "Arithmetic on the host's `usize`" now behaves the same on native and wasm32.
 
-With both patches applied, eight of the repros above print exactly the native line on wasm32.
-Patched native output is byte-identical to unpatched native output, so native thresholds do
-not move.
-A control repro in the RegExp compiler, which neither patch touches, still diverges.
-The `ironhorse-vm` and `ironhorse-regexp` test suites pass, except for one source-mutation test
-whose anchor line the JSON patch rewrites.
+- Scratch admission (`ironhorse-vm/src/interp/admission.rs`) charges a width each element type
+  declares through a `ScratchElement` trait, instead of `size_of::<T>()`.
+  This closes `natives/regexp.rs:1012`, `:1393` and `:1490`, and `natives/json.rs:591`, `:708`,
+  `:1095`, `:1204` and the masked `:1199`.
+- The RegExp matcher charges declared constants for `State`, `AssertionData` and
+  `QuantifierData`, which closes `ironhorse-regexp/src/matcher.rs:129` and `:190-193`.
+- The RegExp compiler charges declared constants for a `Node` and for a `Vec<u32>` string
+  header, which closes `ironhorse-regexp/src/compile.rs:953`, `:955-962`, `:1366-1375` and
+  `:1717`.
+- `advance_string_index` reads a surrogate pair through a checked range and never adds to the
+  guest index in `usize`, which closes `natives/regexp.rs:301`.
+- `JSON.stringify` admits a container's size in `u64` before narrowing it, which closes
+  `natives/json.rs:163`.
+
+The line numbers are the audit's.
+Each declared width is the audited 64-bit layout, and a 64-bit build asserts at compile time
+that it equals `size_of`, so native thresholds cannot move and a layout change fails the build.
+`ironhorse-vm/tests/declared_width_audit.rs` fails when any of these paths returns to `size_of`
+or to `usize` arithmetic.
+The unadmitted host allocations, the snapshot and store findings not marked fixed, and the
+latent issues remain open.
 
 ## B3: the native-recursion budget outruns wasm stacks
 
