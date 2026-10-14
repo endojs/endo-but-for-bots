@@ -1127,7 +1127,9 @@ impl Interp {
                 XS_CODE_EXCEPTION => dispatch_flow!(self.exec_exception(pc, size), pc),
                 XS_CODE_THROW => dispatch_flow!(self.exec_throw(code, return_depth), pc),
                 XS_CODE_RETHROW => dispatch_flow!(self.exec_rethrow(code, return_depth), pc),
-                XS_CODE_THROW_STATUS => dispatch_flow!(self.exec_throw_status(pc, size), pc),
+                XS_CODE_THROW_STATUS => {
+                    dispatch_flow!(self.exec_throw_status(code, pc, return_depth, size), pc)
+                }
                 XS_CODE_USING | XS_CODE_USING_ASYNC => {
                     dispatch_flow!(self.exec_using(code, pc, return_depth, op, size), pc)
                 }
@@ -4620,14 +4622,27 @@ impl Interp {
         dispatch_halt_flow!(self.raise_js(v), self, return_depth, code);
     }
 
-    // `throw_status` (`XS_CODE_THROW_STATUS`, xsRun.c:1423):
-    // throw only when the frame's status carries `XS_THROW_STATUS`
-    // (a for-in/for-of/optional-chaining status check). The
-    // covered grammar never sets a throw status, so this always
+    // `throw_status` (`XS_CODE_THROW_STATUS`, xsRun.c:1423): after
+    // an `AWAIT` whose promise rejected (`for await` next and close,
+    // `yield*`, and an async generator's `yield` and `return`), the
+    // resume pushed the rejection reason and set the throw status;
+    // raise it as `mxException = *mxStack` to the innermost handler,
+    // as `BRANCH_STATUS` does for a plain `await`. Any other status
     // falls through; it is dispatched (metered) and advances.
     /// The dispatch loop's `THROW_STATUS` arm.
     #[inline(never)]
-    fn exec_throw_status(&mut self, mut pc: usize, size: i8) -> Flow {
+    fn exec_throw_status(
+        &mut self,
+        code: &[u8],
+        mut pc: usize,
+        return_depth: usize,
+        size: i8,
+    ) -> Flow {
+        if matches!(self.resume_status, ResumeStatus::Throw) {
+            self.resume_status = ResumeStatus::NoStatus;
+            let v = dispatch_result_flow!(self.peek_checked(), self, return_depth, code);
+            dispatch_halt_flow!(self.raise_js(v), self, return_depth, code);
+        }
         pc += size as usize;
         Flow::Next(pc)
     }

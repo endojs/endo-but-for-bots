@@ -933,12 +933,16 @@ impl Interp {
         if let ReactionKind::AsyncGeneratorYield(gen) = reaction.kind {
             self.meter.tick_raw(PROMISE_JOB_FRAME_METERING);
             if rejected {
-                let data = self.async_generators.get_mut(&gen).ok_or(Step::Host(
-                    Halt::EngineInvariant("async-generator:yield-reaction-missing"),
-                ))?;
-                data.state = AsyncGeneratorState::Completed;
-                data.frame = None;
-                return self.finish_async_generator_request(code, gen, value, true);
+                // AsyncGeneratorYield awaits the operand inside the body
+                // (`yield v` is `yield await v`, ES2024 27.6.3.8), so a
+                // rejection is thrown at the `yield`, where a `try` around it
+                // catches it; the request stays pending on the resumed body.
+                if !self.async_generators.contains_key(&gen) {
+                    return Err(Step::Host(Halt::EngineInvariant(
+                        "async-generator:yield-reaction-missing",
+                    )));
+                }
+                return self.step_async_generator(code, gen, ResumeStatus::Throw, value, false);
             }
             let result = self.new_generator_result(value, false);
             self.async_generators.get_mut(&gen).unwrap().state =
