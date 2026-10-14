@@ -1614,6 +1614,18 @@ pub mod engine {
         /// must coordinate it. Collection may fault in the full heap and makes
         /// the following checkpoint rewrite relocated records.
         ///
+        /// The sweep only flags the `FinalizationRegistry` instances whose
+        /// targets died; their cleanup callbacks are this operator's to run,
+        /// and it runs them here, before the checkpoint, so no checkpoint of
+        /// this machine carries a pending cleanup. The callbacks' own garbage
+        /// can flag more registries, so the step repeats, sweep then notify,
+        /// until a sweep flags nothing; each sweep needs the clean boundary a
+        /// checkpoint restores, so every notification is checkpointed before
+        /// the next sweep, and the meter bounds the loop as it bounds any
+        /// crank. One collection event is counted however many sweeps it
+        /// took. A callback's uncaught throw halts the machine; the
+        /// collection then fails with that halt and rewinds.
+        ///
         /// Pending completed cranks are flushed first. A collection or checkpoint
         /// failure rewinds to that durable boundary: delivery remains committed,
         /// while the failed collection event is not counted. Returns slots freed.
@@ -1625,14 +1637,57 @@ pub mod engine {
                     .collections()
                     .checked_add(1)
                     .ok_or(MachineError::Refused(Refusal::CollectionCounterExhausted))?;
-                let stats = session
-                    .full_collect(&*self.store.borrow())
-                    .map_err(store_err)?;
                 session.set_collections(collections);
-                session
-                    .checkpoint(&self.signature, &mut *self.store.borrow_mut())
-                    .map_err(store_err)?;
-                Ok(stats.slots_reclaimed)
+                let mut reclaimed: u32 = 0;
+                loop {
+                    let stats = session
+                        .full_collect(&*self.store.borrow())
+                        .map_err(store_err)?;
+                    reclaimed = reclaimed.saturating_add(stats.slots_reclaimed);
+                    let pending = session
+                        .machine()
+                        .with_persistence(|interp| interp.finalization_cleanup_pending())
+                        .map_err(MachineError::Halt)?;
+                    if pending {
+                        // The notification is a crank: it continues the
+                        // machine's meter under a crank's budget, with the
+                        // check callback every crank runs under, so a
+                        // cascade of callbacks ends where a runaway crank
+                        // would.
+                        let state = session
+                            .machine()
+                            .with_persistence(|interp| interp.meter_state())
+                            .map_err(MachineError::Halt)?;
+                        let mut meter = VMeter::new();
+                        meter.restore(state);
+                        if let (Some(interval), Some(limit)) =
+                            (self.meter.check_interval(), self.meter.crank_limit())
+                        {
+                            self.crank_ceiling
+                                .set((state.index >> 16).saturating_add(limit));
+                            meter.rearm(interval);
+                        }
+                        let host = if meter.is_armed() {
+                            Some(if self.meter.check_interval().is_some() {
+                                meter_host(&self.crank_ceiling)
+                            } else {
+                                Box::new(|_| true) as Box<dyn FnMut(u64) -> bool>
+                            })
+                        } else {
+                            None
+                        };
+                        let outcome = session.machine().notify_finalizations(Some(meter), host);
+                        if !outcome.completed {
+                            return Err(MachineError::Halt(outcome.halt));
+                        }
+                    }
+                    session
+                        .checkpoint(&self.signature, &mut *self.store.borrow_mut())
+                        .map_err(store_err)?;
+                    if !pending {
+                        return Ok(reclaimed);
+                    }
+                }
             }))
             .unwrap_or_else(collection_panic);
             // Only the rewind's OWN failure loses the machine. A collection

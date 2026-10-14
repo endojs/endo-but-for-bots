@@ -249,3 +249,64 @@ fn a_machine_holding_neither_writes_no_weak_atoms() {
     assert!(!bytes.windows(4).any(|w| w == b"WKRF"));
     assert!(!bytes.windows(4).any(|w| w == b"FNRG"));
 }
+
+/// Build the machine with one dead and one live registration, without
+/// collecting: the operator decides when the sweep and the notification run.
+fn registered() -> Interp {
+    let (bytecode, names) = compile(
+        "var log = []; var w = 0; var r = 0; var keep = 0; var seen = 0; \
+         keep = {}; \
+         w = new WeakRef({}); \
+         r = new FinalizationRegistry(function (held) { log.push(held); }); \
+         r.register({}, 'dead'); \
+         r.register(keep, 'alive', keep); \
+         seen = typeof w.deref(); seen",
+    );
+    let mut machine = Interp::new();
+    machine.link_intrinsics(&names);
+    assert!(machine.run(&bytecode).completed);
+    machine
+}
+
+#[test]
+fn an_operator_that_notifies_after_the_sweep_carries_no_pending_cleanup() {
+    use ironhorse_snapshot::machine::{checkpoint_to_store, full_collect, resume_from_store};
+
+    // A blob: sweep, notify, snapshot. The image holds the cleared target,
+    // the live cell only, and no flag; the resumed machine reads the log the
+    // notification wrote and fires nothing again.
+    let mut machine = registered();
+    machine.collect_garbage().expect("sweep at the boundary");
+    assert!(machine.finalization_cleanup_pending());
+    let outcome = machine.notify_finalizations();
+    assert!(outcome.completed, "{:?}", outcome.halt);
+    assert!(!machine.finalization_cleanup_pending());
+    let bytes = machine.write_snapshot(&sig()).expect("snapshot");
+    let image = read_machine(&bytes, &sig()).expect("read");
+    assert_eq!(image.weak_refs[0].target, u32::MAX);
+    let registry = &image.finalization_registries[0];
+    assert!(!registry.changed);
+    assert_eq!(registry.cells.len(), 1);
+    assert_ne!(registry.cells[0].target, u32::MAX);
+    let mut blob = from_snapshot_bytes(&bytes, &sig()).expect("blob restore");
+    assert!(!blob.finalization_cleanup_pending());
+    assert_eq!(crank(&mut blob, LOG).2, "dead");
+    assert_eq!(crank(&mut blob, LOG).2, "dead");
+
+    // A store session: the sweep at a clean boundary, the notification as
+    // the operator's step, then the checkpoint, which is the daemon's
+    // `collect()` sequence; the resumed session holds nothing pending.
+    let mut store = MemoryStore::new();
+    let mut session = begin_store_session(registered(), &sig(), &mut store)
+        .map_err(|(_, error)| error)
+        .expect("begin");
+    let stats = full_collect(&mut session, &store).expect("full collect");
+    assert!(stats.slots_reclaimed > 0);
+    assert!(session.machine().finalization_cleanup_pending());
+    let outcome = session.machine_mut().notify_finalizations();
+    assert!(outcome.completed, "{:?}", outcome.halt);
+    checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    let mut resumed = resume_from_store(&store, &sig()).expect("resume");
+    assert!(!resumed.machine().finalization_cleanup_pending());
+    assert_eq!(crank(resumed.machine_mut(), LOG).2, "dead");
+}

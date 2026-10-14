@@ -2727,6 +2727,24 @@ impl Interp {
         self.run_operation(code, false, true, false)
     }
 
+    /// The operator's notification step. A sweep ([`Self::collect_garbage`])
+    /// only nulls dead targets and flags the registries that held them; the
+    /// cleanup callbacks are guest code, so they run as a crank: this one, a
+    /// script-less pump under the meter that runs every flagged registry's
+    /// callbacks and the reactions they queue, and returns that run's
+    /// outcome for the operator's accounting. A host that must not carry a
+    /// pending cleanup across a boundary calls it after each sweep, and
+    /// sweeps and calls again while [`Self::finalization_cleanup_pending`]
+    /// says the callbacks' own garbage flagged more; the meter bounds that
+    /// loop, since every productive step invokes a callback. A host that
+    /// never calls it gets XS's `fxEndJob` timing instead: the next completed
+    /// crank notifies at the end of its drain. A completed run leaves the
+    /// machine quiescent; a callback's uncaught throw halts it as a crank's
+    /// would, with the remaining dead cells still flagged.
+    pub fn notify_finalizations(&mut self) -> RunOutcome {
+        self.run_promise_jobs()
+    }
+
     fn run_operation(
         &mut self,
         shared: std::rc::Rc<[u8]>,
@@ -2925,11 +2943,14 @@ impl Interp {
                 step = h;
             }
             // `fxEndJob` → `fxCleanupFinalizationRegistries`: once the job
-            // queue has drained, a registry flagged by an earlier collection
-            // runs its cleanup callback for each dead cell. A callback may
-            // queue reactions, so the queue drains once more afterwards and
-            // the crank still ends quiescent. Collection runs only between
-            // cranks, so no cell dies during this crank's own jobs.
+            // queue has drained, a registry flagged by an earlier sweep runs
+            // its cleanup callback for each dead cell. A callback may queue
+            // reactions, so the queue drains once more afterwards and the
+            // crank still ends quiescent. This is also the whole of
+            // `notify_finalizations`, the operator's script-less pump; a
+            // host that notifies after each sweep reaches here with nothing
+            // flagged. Collection runs only between cranks, so no cell dies
+            // during this crank's own jobs.
             if step == Step::Returned {
                 if let Err(h) = self
                     .cleanup_finalization_registries(code)

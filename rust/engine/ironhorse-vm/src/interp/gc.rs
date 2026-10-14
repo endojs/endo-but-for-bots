@@ -98,6 +98,15 @@ impl Interp {
     /// Only quiescent machines may collect. Refusal changes no state and
     /// does not queue work; consumers choose when to retry. Collector faults
     /// remain panics and permanently disqualify the machine.
+    ///
+    /// The sweep runs no guest code and charges the meter nothing: a dead
+    /// `WeakRef` target is nulled and a `FinalizationRegistry` whose target
+    /// died is flagged, and its cleanup callbacks wait for the operator's
+    /// [`Self::notify_finalizations`] or, failing that, the end of the next
+    /// completed crank's drain. [`Self::finalization_cleanup_pending`] says
+    /// which state the machine is in; a pending cleanup persists and resumes
+    /// as such, so an operator whose snapshots must carry none notifies
+    /// before it snapshots.
     pub fn collect_garbage(&mut self) -> Result<crate::gc::GcStats, crate::gc::GcAdmissionError> {
         self.admit_collection()?;
         self.gc_failed = true;

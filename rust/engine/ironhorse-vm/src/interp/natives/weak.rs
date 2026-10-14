@@ -223,6 +223,17 @@ impl Interp {
         }
     }
 
+    /// Whether a sweep flagged a registry whose cleanup callbacks have not
+    /// all run: true from the sweep that killed a registered target until
+    /// the notification, the operator's [`Interp::notify_finalizations`] or
+    /// the end of the next completed crank's drain, and after a callback's
+    /// throw left dead cells behind.
+    pub fn finalization_cleanup_pending(&self) -> bool {
+        self.finalization_registries
+            .values()
+            .any(|registry| registry.changed)
+    }
+
     /// `fxCleanupFinalizationRegistries` (`fxEndJob`): for every registry a
     /// collection flagged, run its callback once per cell whose target died,
     /// in registration order, removing each cell before the call. A throw

@@ -563,3 +563,126 @@ fn a_machine_holding_a_weak_ref_or_registry_is_persistable() {
     assert_eq!(m.weak_refs_snapshot()[0].target, u32::MAX);
     assert!(m.finalization_registries_snapshot()[0].changed);
 }
+
+// ---------------------------------------------------------------------
+// The operator's notification step
+// ---------------------------------------------------------------------
+
+#[test]
+fn notify_finalizations_runs_the_pending_cleanup_under_the_meter() {
+    let mut m = machine();
+    assert!(
+        crank(
+            &mut m,
+            r#"
+        var log = [];
+        var r = new FinalizationRegistry(function (h) {
+            log.push(h);
+            Promise.resolve().then(function () { log.push('job'); });
+        });
+        r.register({}, 'dead');
+        0;
+        "#
+        )
+        .completed
+    );
+    // Nothing pending before a sweep: the step is free and changes nothing.
+    assert!(!m.finalization_cleanup_pending());
+    let idle = m.notify_finalizations();
+    assert!(idle.completed, "{:?}", idle.halt);
+    assert_eq!(idle.computrons_this_run, 0);
+    // The sweep flags the registry and runs no guest code; the step runs
+    // the callback and the reaction it queued, metered, and leaves the
+    // machine quiescent with nothing pending.
+    m.collect_garbage().unwrap();
+    assert!(m.finalization_cleanup_pending());
+    // A host that never calls the step gets `fxEndJob` timing: the next
+    // crank's script still reads an empty log, and that crank's own drain
+    // notifies at its end. Set the same state up again and use the step.
+    assert_eq!(crank(&mut m, "log.join()").result, "");
+    assert!(!m.finalization_cleanup_pending());
+    assert_eq!(crank(&mut m, "log.join()").result, "dead,job");
+    assert!(crank(&mut m, "log = []; r.register({}, 'dead'); 0;").completed);
+    m.collect_garbage().unwrap();
+    assert!(m.finalization_cleanup_pending());
+    let outcome = m.notify_finalizations();
+    assert!(outcome.completed, "{:?}", outcome.halt);
+    assert!(outcome.computrons_this_run > 0, "the callbacks are metered");
+    assert!(m.is_quiescent());
+    assert!(!m.finalization_cleanup_pending());
+    assert_eq!(crank(&mut m, "log.join()").result, "dead,job");
+}
+
+#[test]
+fn a_sweep_and_notify_loop_ends_once_a_sweep_flags_nothing() {
+    // A callback's own garbage can flag more registries: `held` keeps an
+    // object registered elsewhere alive until the callback drops it. The
+    // operator loops until a sweep flags nothing, which takes two rounds.
+    let mut m = machine();
+    assert!(
+        crank(
+            &mut m,
+            r#"
+        var log = [];
+        var r = new FinalizationRegistry(function (h) { log.push(h.name); h.keep = null; });
+        var second = {};
+        r.register(second, {name: 'second'});
+        r.register({}, {name: 'first', keep: second});
+        second = null;
+        0;
+        "#
+        )
+        .completed
+    );
+    let mut rounds = 0;
+    loop {
+        m.collect_garbage().unwrap();
+        if !m.finalization_cleanup_pending() {
+            break;
+        }
+        let outcome = m.notify_finalizations();
+        assert!(outcome.completed, "{:?}", outcome.halt);
+        rounds += 1;
+        assert!(rounds <= 3, "the loop must end");
+    }
+    assert_eq!(rounds, 2);
+    assert_eq!(crank(&mut m, "log.join()").result, "first,second");
+}
+
+#[test]
+fn a_cascading_cleanup_is_bounded_by_the_meter() {
+    // Each callback registers a fresh object, so every sweep flags the
+    // registry again: the loop never ends on its own, and the meter is what
+    // ends it, exactly as it ends any crank.
+    let mut m = machine();
+    assert!(
+        crank(
+            &mut m,
+            r#"
+        var count = 0;
+        var r = new FinalizationRegistry(function (h) { count += 1; r.register({}, h + 1); });
+        r.register({}, 1);
+        0;
+        "#
+        )
+        .completed
+    );
+    m.arm_meter(1_000, Box::new(|computrons| computrons < 200_000));
+    let mut rounds = 0u32;
+    let halt = loop {
+        m.collect_garbage().unwrap();
+        assert!(
+            m.finalization_cleanup_pending(),
+            "the cascade must not end on its own"
+        );
+        let outcome = m.notify_finalizations();
+        rounds += 1;
+        if !outcome.completed {
+            break outcome.halt;
+        }
+        assert!(rounds < 100_000, "the meter must end the loop");
+    };
+    assert_eq!(halt, ironhorse_vm::Halt::MeterAbort);
+    assert!(rounds > 1, "the budget admits more than one round");
+    assert!(!m.is_quiescent());
+}

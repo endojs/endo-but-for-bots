@@ -1338,6 +1338,21 @@ impl Machine {
     }
 
     /// Drain the machine's ordered promise queue through captured callback contexts.
+    /// The operator's finalization step at the machine level: a pump,
+    /// since the drain of a script-less crank is where a sweep's flagged
+    /// registries notify ([`Interp::notify_finalizations`]). A `meter`
+    /// replaces the realm's, charges included, so the step can run under a
+    /// crank's budget; a `host` is this pump's check callback, detached
+    /// afterwards as every pump's is. Named so a host's sweep, notify,
+    /// checkpoint sequence reads as what it is.
+    pub fn notify_finalizations(
+        &self,
+        meter: Option<crate::Meter>,
+        host: Option<Box<dyn FnMut(u64) -> bool>>,
+    ) -> RunOutcome {
+        self.pump(meter, host)
+    }
+
     pub fn run_promise_jobs(&self) -> RunOutcome {
         self.pump(None, None)
     }
