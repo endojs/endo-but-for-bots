@@ -357,10 +357,12 @@ The rest are listed here as they stood.
 
 ### Numeric coercion, Math, JSON
 
-11 open, 8 of them P1.
+11 open, 8 of them P1; `F100` since fixed.
 
 - `F099` **P1** Meter the newly reachable object-to-number conversions
 - `F100` **P1** Parse every ECMAScript whitespace character in numeric strings
+  (fixed: `parseInt`, `parseFloat` and StringToNumber skip every WhiteSpace
+  and LineTerminator code point)
 - `F101` **P1** Coerce the first pow/atan2 argument when the second is missing
   (re-probed 2026-10-14: XS skips the coercion too, so this is a `SHARED`
   candidate; V8 coerces, as ES2024 21.3.2.26 step 1 requires)

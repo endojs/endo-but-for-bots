@@ -11,9 +11,48 @@ pub(super) enum ArithOp {
     Mod,
 }
 
-/// Whether `b` is an ASCII byte XS's `fxSkipSpaces` treats as whitespace.
-fn is_ecma_ws(b: u8) -> bool {
-    matches!(b, 0x09 | 0x0A | 0x0B | 0x0C | 0x0D | 0x20)
+/// The byte length of the WhiteSpace or LineTerminator code point that
+/// starts `bytes` (CESU-8), or 0: StrWhiteSpaceChar (ES2024 7.1.4.1.1), which
+/// XS's `fxSkipSpaces` also recognizes. Every such code point is in the BMP,
+/// so it is one, two or three bytes; U+180E is not one of them.
+fn leading_ws_len(bytes: &[u8]) -> usize {
+    let (code_point, len) = match *bytes {
+        [b, ..] if b < 0x80 => (u32::from(b), 1),
+        [b0 @ 0xC0..=0xDF, b1, ..] => ((u32::from(b0 & 0x1F) << 6) | u32::from(b1 & 0x3F), 2),
+        [b0 @ 0xE0..=0xEF, b1, b2, ..] => (
+            (u32::from(b0 & 0x0F) << 12) | (u32::from(b1 & 0x3F) << 6) | u32::from(b2 & 0x3F),
+            3,
+        ),
+        _ => return 0,
+    };
+    if super::text::is_ecma_whitespace(code_point) {
+        len
+    } else {
+        0
+    }
+}
+
+/// The byte length of the WhiteSpace or LineTerminator code point that ends
+/// `bytes`, or 0 (see [`leading_ws_len`]).
+fn trailing_ws_len(bytes: &[u8]) -> usize {
+    (1..=3.min(bytes.len()))
+        .find(|&len| {
+            let start = bytes.len() - len;
+            // A code point starts at a byte that is not a continuation.
+            bytes[start] & 0xC0 != 0x80 && leading_ws_len(&bytes[start..]) == len
+        })
+        .unwrap_or(0)
+}
+
+/// The offset of the first byte past the leading whitespace of `bytes`.
+fn skip_leading_ws(bytes: &[u8]) -> usize {
+    let mut i = 0;
+    loop {
+        match leading_ws_len(&bytes[i..]) {
+            0 => return i,
+            len => i += len,
+        }
+    }
 }
 
 /// `fx_parseInt` (`xsNumber.c`): the integer prefix parse over the CESU-8
@@ -23,10 +62,7 @@ fn is_ecma_ws(b: u8) -> bool {
 /// empty digit run is `NaN`. No `mxMeterSome`, no chunk.
 pub(super) fn parse_int(bytes: &[u8], mut radix: i32) -> Slot {
     let n = bytes.len();
-    let mut i = 0;
-    while i < n && is_ecma_ws(bytes[i]) {
-        i += 1;
-    }
+    let mut i = skip_leading_ws(bytes);
     let mut sign = 1.0f64;
     match bytes.get(i) {
         Some(b'+') => i += 1,
@@ -124,15 +160,15 @@ pub(super) fn number_to_radix_string(number: f64, radix: u32) -> Option<Vec<u8>>
 /// `strtod2` equivalent).
 pub(super) fn string_to_number(bytes: &[u8], whole: bool) -> f64 {
     let n = bytes.len();
-    let mut i = 0;
-    while i < n && is_ecma_ws(bytes[i]) {
-        i += 1;
-    }
+    let i = skip_leading_ws(bytes);
     if whole {
         // Trim trailing whitespace; the body must consume the rest exactly.
         let mut end = n;
-        while end > i && is_ecma_ws(bytes[end - 1]) {
-            end -= 1;
+        loop {
+            match trailing_ws_len(&bytes[i..end]) {
+                0 => break,
+                len => end -= len,
+            }
         }
         let body = &bytes[i..end];
         if body.is_empty() {
