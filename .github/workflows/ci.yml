@@ -1592,11 +1592,17 @@ jobs:
 
       - name: Install rust-src and the wasm targets on the pinned toolchain
         # rustup picks the channel from rust/engine/rust-toolchain.toml.
+        # rustup stamps rust-src with its install time, so on a fresh runner
+        # Cargo would find std's sources newer than the cached -Zbuild-std
+        # artifacts and rebuild std and everything above it. The sources are
+        # fixed by the toolchain pin, which is in the cache key, so their
+        # mtimes are pinned to the toolchain's release date instead.
         working-directory: rust/engine
         run: |
           set -euo pipefail
           rustup component add rust-src
           rustup target add wasm32-wasip1 wasm32-unknown-unknown
+          find "$(rustc --print sysroot)/lib/rustlib/src" -exec touch -h -d '2025-11-07T00:00:00Z' {} +
 
       - name: Test the build script
         run: python3 rust/engine/scripts/test-build-wasm.py
