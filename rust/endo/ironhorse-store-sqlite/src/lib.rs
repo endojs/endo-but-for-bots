@@ -70,6 +70,15 @@ fn page_col(v: i64) -> Result<u32, StoreError> {
     u32::try_from(v).map_err(|_| StoreError::Io(format!("sqlite: page column out of range ({v})")))
 }
 
+/// A row's key read back from the database, range-checked into the u32 key
+/// space the store writes. An `as` narrowing would wrap a negative key, or
+/// truncate one past `u32::MAX` on a 32-bit host, into a plausible index, so
+/// one file could alias rows differently by target width. A key outside the
+/// range is a corrupt row.
+fn row_key(key: i64, what: &'static str) -> Result<u32, StoreError> {
+    u32::try_from(key).map_err(|_| StoreError::Snapshot(SnapshotError::Corrupt(what)))
+}
+
 /// The `meta` key holding the encoded [`StoreManifest`].
 const META_MANIFEST: &str = "manifest";
 /// The `meta` key recording that `edge_pairs` mirrors the `page_edges`
@@ -727,20 +736,29 @@ impl HeapStore for SqliteHeapStore {
         if Self::stored_manifest(&self.conn)?.is_none() {
             return Err(StoreError::Empty);
         }
-        let (count, extent): (i64, i64) = self
+        // Keys are unique, so once the least and greatest are u32 pages,
+        // `COUNT == MAX + 1` means contiguous from page 0. Unchecked, a
+        // negative key could stand in for a missing page 0: `{-1, 1}` has
+        // the right count.
+        let (count, least, greatest): (i64, Option<i64>, Option<i64>) = self
             .conn
             .query_row(
-                "SELECT COUNT(*), COALESCE(MAX(page) + 1, 0) FROM page_edges",
+                "SELECT COUNT(*), MIN(page), MAX(page) FROM page_edges",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .map_err(sql_err)?;
+        const OUT_OF_RANGE: &str = "sqlite: page edges key out of range";
+        for key in [least, greatest].into_iter().flatten() {
+            row_key(key, OUT_OF_RANGE)?;
+        }
+        let extent = greatest.map_or(0, |page| page + 1);
         if count != extent {
             return Err(StoreError::Io(format!(
                 "sqlite: page_edges not contiguous ({count} rows, extent {extent})"
             )));
         }
-        Ok(count as u32)
+        row_key(count, OUT_OF_RANGE)
     }
 
     fn reachable_page_set(
@@ -1004,6 +1022,7 @@ impl HeapStore for SqliteHeapStore {
             .map_err(sql_err)?;
         for row in rows {
             let (page, len) = row.map_err(sql_err)?;
+            let page = row_key(page, "sqlite: slot page key out of range")?;
             if page as usize != pages.len() {
                 return Err(StoreError::MissingRow("slot page", pages.len() as u32));
             }
@@ -1020,6 +1039,7 @@ impl HeapStore for SqliteHeapStore {
             .map_err(sql_err)?;
         for row in rows {
             let (ext, len) = row.map_err(sql_err)?;
+            let ext = row_key(ext, "sqlite: chunk extent key out of range")?;
             if ext as usize != exts.len() {
                 return Err(StoreError::MissingRow("chunk extent", exts.len() as u32));
             }
@@ -1042,6 +1062,7 @@ impl HeapStore for SqliteHeapStore {
         let mut out: Vec<Vec<u32>> = Vec::new();
         for row in rows {
             let (page, blob) = row.map_err(sql_err)?;
+            let page = row_key(page, "sqlite: page edges key out of range")?;
             if page as usize != out.len() {
                 return Err(StoreError::MissingRow("page edges", out.len() as u32));
             }
