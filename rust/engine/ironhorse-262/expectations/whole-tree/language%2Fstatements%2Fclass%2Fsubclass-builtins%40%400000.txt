@@ -67,7 +67,7 @@ language/statements/class/subclass-builtins/subclass-Uint8ClampedArray.js sloppy
 language/statements/class/subclass-builtins/subclass-Uint8ClampedArray.js strict pass
 language/statements/class/subclass-builtins/subclass-WeakMap.js sloppy pass
 language/statements/class/subclass-builtins/subclass-WeakMap.js strict pass
-language/statements/class/subclass-builtins/subclass-WeakRef.js sloppy skip:ironhorse-missing-global:WeakRef
-language/statements/class/subclass-builtins/subclass-WeakRef.js strict skip:ironhorse-missing-global:WeakRef
+language/statements/class/subclass-builtins/subclass-WeakRef.js sloppy pass
+language/statements/class/subclass-builtins/subclass-WeakRef.js strict pass
 language/statements/class/subclass-builtins/subclass-WeakSet.js sloppy pass
 language/statements/class/subclass-builtins/subclass-WeakSet.js strict pass

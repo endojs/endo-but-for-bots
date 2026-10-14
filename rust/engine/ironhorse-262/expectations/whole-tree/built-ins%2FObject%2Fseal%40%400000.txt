@@ -113,8 +113,8 @@ built-ins/Object/seal/seal-error.js sloppy pass
 built-ins/Object/seal/seal-error.js strict pass
 built-ins/Object/seal/seal-evalerror.js sloppy pass
 built-ins/Object/seal/seal-evalerror.js strict pass
-built-ins/Object/seal/seal-finalizationregistry.js sloppy skip:ironhorse-missing-global:FinalizationRegistry
-built-ins/Object/seal/seal-finalizationregistry.js strict skip:ironhorse-missing-global:FinalizationRegistry
+built-ins/Object/seal/seal-finalizationregistry.js sloppy pass
+built-ins/Object/seal/seal-finalizationregistry.js strict pass
 built-ins/Object/seal/seal-float32array.js sloppy pass
 built-ins/Object/seal/seal-float32array.js strict pass
 built-ins/Object/seal/seal-float64array.js sloppy pass
@@ -177,8 +177,8 @@ built-ins/Object/seal/seal-urierror.js sloppy pass
 built-ins/Object/seal/seal-urierror.js strict pass
 built-ins/Object/seal/seal-weakmap.js sloppy pass
 built-ins/Object/seal/seal-weakmap.js strict pass
-built-ins/Object/seal/seal-weakref.js sloppy skip:ironhorse-missing-global:WeakRef
-built-ins/Object/seal/seal-weakref.js strict skip:ironhorse-missing-global:WeakRef
+built-ins/Object/seal/seal-weakref.js sloppy pass
+built-ins/Object/seal/seal-weakref.js strict pass
 built-ins/Object/seal/seal-weakset.js sloppy pass
 built-ins/Object/seal/seal-weakset.js strict pass
 built-ins/Object/seal/symbol-object-contains-symbol-properties-non-strict.js sloppy pass
