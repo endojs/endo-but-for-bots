@@ -755,6 +755,19 @@ memory-pressure GC reached from `uvwasi_fd_write` crashes in
 Wasmtime ran the same modules correctly.
 `scripts/test-snapshot-wasi.py` uses the same runner, which is fine for its small tests.
 
+**Status (2026-10-14): measured and decided in [WASM-MEMORY.md](WASM-MEMORY.md).**
+The footprint is linear in the ceilings: on wasm32 the worst running heap takes 4.5 bytes per
+byte of chunk ceiling and 50 per slot over a 7.25 MiB empty instance, a whole-heap snapshot 6.9
+and 117, and an eager restore 6.0 and 145, with a 15% allowance for the allocator's layout.
+That report gives the formula, ceilings for a 128 MB Cloudflare isolate (4 MiB of chunks and
+262,144 slots), a 512 MB container and a native host, the consensus caps (2^28 bytes and 2^23
+slots, not 2^29 and 44,739,242), and the linear-memory threshold at which to recycle an instance.
+A host allocator's refusal now halts with its own `Halt::HostAllocationFailed`, which the embedder
+never commits: under a 128 MiB Wasmtime cap the forty-string loop above ends in it instead of in
+`HeapExhausted`.
+Array items and side tables are still admitted against no ceiling, and the allocations that remain
+infallible still trap under a cap.
+
 ## B2: which exception-handling encoding the host supports
 
 LLVM 21 emits the **legacy** wasm EH instructions (`try`/`catch`) by default.
