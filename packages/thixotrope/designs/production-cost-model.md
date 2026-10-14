@@ -97,7 +97,7 @@ That ordering decides the triage below.
 | 1.2  | Count the worker journal in memory    | Done                                  |
 | 1.3  | Keep the lease holder alive           | Do                                    |
 | 1.4  | Name vat directories after workers    | Do                                    |
-| 1.5  | Correct the README                    | Do                                    |
+| 1.5  | Correct the README                    | Done                                  |
 | 2.1  | Snapshot awake workers                | Do, with one threshold                |
 | 2.2  | Answer `status` before ready          | Do; the rest of boot work is deferred |
 | 2.3  | Break routes toward a retired session | Done                                  |
@@ -214,7 +214,7 @@ Under Ironhorse today they do not: the realm has no `WeakRef` or `FinalizationRe
 The only place `enableImportCollection: false` is set is the replay test double
 (`src/core/peer-replay-engine.js`), which is why the report named the wrong cause for the right
 outcome.
-Say what is true now, and point at section 3 for what changes it.
+Done: the README now says what is true today and points at section 3 for what changes it.
 
 ## 2. Structural changes
 
