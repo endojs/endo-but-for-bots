@@ -2537,6 +2537,7 @@ impl Interp {
             | NativeMethod::FunctionPrototype
             | NativeMethod::FunctionToString
             | NativeMethod::ErrorToString
+            | NativeMethod::ErrorIsError
             | NativeMethod::FunctionBind
             | NativeMethod::FunctionHasInstance
             | NativeMethod::SymbolToString
@@ -7426,6 +7427,15 @@ impl Interp {
                 Slot::of(Kind::String, Payload::String(off))
             }
             // `Error.prototype.toString`: `name` / `name: message`.
+            // `Error.isError(value)` (`fx_Error_isError`): only an object
+            // with `[[ErrorData]]` answers true, so neither a Proxy for an
+            // error nor an object inheriting from `Error.prototype` does.
+            NativeMethod::ErrorIsError => Slot::boolean(
+                argc > 0
+                    && matches!(arg0.value,
+                        Payload::Reference(r)
+                            if arg0.kind == Kind::Reference && self.error_data.contains_key(&r)),
+            ),
             NativeMethod::ErrorToString => {
                 let units = self.error_to_string(code, this)?;
                 self.meter.tick_raw(METHOD_ERROR_TOSTRING_METERING);

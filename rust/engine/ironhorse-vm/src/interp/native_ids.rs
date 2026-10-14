@@ -288,6 +288,9 @@ pub enum NativeMethod {
     /// objects and consulted by the `instanceof` operator.
     FunctionHasInstance,
     ErrorToString,
+    /// `Error.isError(value)` (`fx_Error_isError`): whether `value` is an
+    /// object with an `[[ErrorData]]` internal slot.
+    ErrorIsError,
     DisposableStackUse,
     DisposableStackAdopt,
     DisposableStackDefer,
