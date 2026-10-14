@@ -92,10 +92,22 @@ All three build.
 None asks for a process id on WASI any longer (B7), so on `wasm32-wasip1` a `FileStore` session
 and a CAS suspend and resume work in a preopened directory, as `scripts/test-snapshot-wasi.py`
 checks.
-On `wasm32-unknown-unknown`, which has no filesystem, only `MemoryStore` or a host-imported
-store could serve, and a store session still panics there.
-The default commit-token source reads `SystemTime::now()`, which that target does not
-implement, and `begin_store_session` takes no other source outside tests.
+On `wasm32-unknown-unknown`, which has no filesystem, a store session runs over `MemoryStore`
+or a host-imported store on commit tokens the embedder supplies.
+The default source, `RandomTokens`, would read `SystemTime::now()`, which panics there, and std
+keys its hashers there from addresses that repeat from one run of a build to the next.
+Without the clock each run would mint the previous run's tokens, so on that target it refuses
+with `StoreError::TokenSource`, and a session's first commit refuses with it.
+The embedder passes its host's randomness as a `CommitTokenSource` to
+`begin_store_session_with_tokens` or `begin_shared_store_session_with_tokens`, and gives a
+resumed session one with `set_token_source` before it checkpoints.
+In Node, a `wasm32-unknown-unknown` build whose source imports `crypto.getRandomValues` begins,
+checkpoints, and resumes both eagerly and lazily; begun with the default source, it refuses and
+hands the machine back.
+`scripts/test-snapshot-wasi.py` runs the same API on `wasm32-wasip1`
+(`ironhorse-snapshot/tests/commit_token_source.rs`).
+`import_from_container` still draws from `RandomTokens` and refuses there too; restoring the
+container with `from_snapshot_bytes` and beginning a session over the machine serves instead.
 
 `Date.now` does not read a host clock.
 `HashMap` seeding works on both targets.
