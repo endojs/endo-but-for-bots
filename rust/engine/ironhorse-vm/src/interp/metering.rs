@@ -1143,13 +1143,11 @@ pub(super) use ironhorse_meter::ENUMERATOR_NEXT_METERING;
 /// of the key count (the per-key string allocation is metered in
 /// [`ENUMERATOR_NEXT_METERING`] + the key chunk). Calibrated against the pin
 /// for an empty ordinary-object enumeration; an array adds
-/// [`ARRAY_FOR_IN_EXTRA_METERING`]. Known sub-computron residual: the exact
-/// non-empty keys-list handling carries a ±8-raw chunk-alignment gap
-/// (analogous to the array-spread residual) that is well under one computron
-/// and never crosses a `>> 16` boundary in a bounded program, so the
-/// computron-level bar (which every corpus/fuzz/test262 check uses) stays
-/// exact; modeling the keys-instance chunk capacity to close it is a later
-/// refinement.
+/// [`ARRAY_FOR_IN_EXTRA_METERING`]. XS's count is where the number came
+/// from, not a target: XS-computron parity is a non-goal, so the ±8-raw
+/// difference from XS's keys-instance chunk alignment on a non-empty keys
+/// list is not a defect. Only a mismatch between this charge and the work
+/// Ironhorse does would be.
 pub(super) use ironhorse_meter::FOR_IN_ENUMERATOR_METERING;
 
 /// The raw 16.16 cost of `XS_CODE_FOR_IN` over `null` or `undefined`, in

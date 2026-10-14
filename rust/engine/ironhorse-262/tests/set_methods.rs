@@ -151,7 +151,10 @@ fn set_methods_require_a_set_receiver() {
 }
 
 #[test]
-fn collection_size_getters_preserve_metering() {
+fn collection_size_getters_agree() {
+    // Results only: XS-computron parity is a non-goal, and the oracle-free
+    // `map` and `set` rows of `ironhorse-vm/tests/fixtures/computrons.tsv`
+    // pin Ironhorse's own cost of `size`.
     for source in [
         "new Map().size",
         "new Set().size",
@@ -159,6 +162,5 @@ fn collection_size_getters_preserve_metering() {
     ] {
         let run = dual_run(source).expect("the XS oracle machine must start");
         assert!(run.observables_agree(), "{source}: {run:?}");
-        assert_eq!(run.ironhorse_meter_raw, run.oracle_meter_raw, "{source}");
     }
 }

@@ -95,14 +95,11 @@ impl Interp {
     /// (the payload is already 8-aligned). Verified against the pin: an
     /// N-element literal's per-element chunk cost is 48, 80, 112, 144, ….
     ///
-    /// Known sub-computron residual: a *spread* segment appending into an
-    /// already-populated array carries a −8-raw-per-segment gap (ironhorse
-    /// over-charges by 8) versus XS's item-chunk over-allocation
-    /// (`fxNewGrowableChunk`/`fxSizeToCapacity`) growth path. It is well under
-    /// one computron and never crosses a `>> 16` boundary in a bounded program,
-    /// so the computron-level bar (and every corpus/fuzz/test262 check, which
-    /// compare `meterIndex >> 16`) stays exact; modeling the over-allocation
-    /// capacity to close the raw gap is a later refinement.
+    /// A *spread* segment appending into an already-populated array charges
+    /// 8 raw more per segment than XS, whose item chunks grow with
+    /// over-allocation (`fxNewGrowableChunk`/`fxSizeToCapacity`). XS's
+    /// count is where these weights came from, not a target: XS-computron
+    /// parity is a non-goal, so that difference is not a defect.
     pub(in crate::interp) fn array_item_grow_metering(&self, present: u64) -> u64 {
         let bytes = (present + 1) * ARRAY_ITEM_BYTES;
         // round up to 8 (already a multiple of 8) + 16-byte chunk header.
