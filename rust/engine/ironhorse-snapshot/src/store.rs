@@ -168,6 +168,13 @@ pub enum StoreError {
     /// which is why it is not [`StoreError::Io`]: a retry loop over a
     /// capability refusal never terminates.
     Unsupported(&'static str),
+    /// A [`CommitTokenSource`] cannot mint a commit's token: [`RandomTokens`]
+    /// on a target with neither a clock nor random hash keys
+    /// (`wasm32-unknown-unknown`), where the embedder supplies a source of
+    /// its own, or a source that keeps returning zero or the predecessor.
+    /// Nothing is committed, and a session refused this way still pairs with
+    /// its store.
+    TokenSource(&'static str),
     /// The CALLER's [`CheckpointBatch`] failed validation. The store is not
     /// implicated: this is a malformed request, and the inner error names
     /// which check it failed.
@@ -286,6 +293,7 @@ impl StoreError {
             | StoreError::PendingStateUnsupported { .. }
             | StoreError::Empty
             | StoreError::Unsupported(_)
+            | StoreError::TokenSource(_)
             | StoreError::EpochMismatch { .. }
             | StoreError::BaselineMismatch { .. }
             | StoreError::NotEmpty { .. }
@@ -343,6 +351,7 @@ impl std::fmt::Display for StoreError {
             StoreError::Empty => write!(f, "store has no committed epoch"),
             StoreError::Io(what) => write!(f, "store io error: {what}"),
             StoreError::Unsupported(what) => write!(f, "backend cannot {what}"),
+            StoreError::TokenSource(what) => write!(f, "cannot mint a commit token: {what}"),
             StoreError::BatchRejected(inner) => write!(f, "commit batch rejected: {inner}"),
             StoreError::EngineInvariant(what) => {
                 write!(f, "engine invariant violated: {what}")
@@ -555,16 +564,23 @@ impl std::fmt::Display for CommitToken {
 }
 
 /// Where commit tokens come from. The default, [`RandomTokens`], draws them
-/// from randomly keyed hasher state; tests inject their own.
+/// from randomly keyed hasher state. An embedder supplies its own through
+/// [`crate::machine::begin_store_session_with_tokens`] and
+/// [`crate::machine::StoreSession::set_token_source`], from its host's
+/// randomness where [`RandomTokens`] refuses; tests inject reproducible ones.
 ///
 /// The pairing of a session with its store is token equality, so tokens
 /// must be distinct across every store state a session could be pointed
 /// at, not just from their predecessor: a source that repeats itself on two
 /// copies of a store lets a session commit to the copy it did not read.
+/// That includes the copies a restart leaves behind, so a source must not
+/// repeat its sequence from one run to the next. Tokens need to be distinct,
+/// not secret.
 pub trait CommitTokenSource {
-    /// The next token. [`mint_token`] refuses zero and the predecessor, and
-    /// draws again.
-    fn next_token(&mut self) -> CommitToken;
+    /// The next token, or the reason this source cannot draw one, which
+    /// the commit that asked for it returns. [`mint_token`] refuses zero
+    /// and the predecessor, and draws again.
+    fn next_token(&mut self) -> Result<CommitToken, StoreError>;
 }
 
 /// The default [`CommitTokenSource`]: 128 bits from two SipHash states
@@ -576,10 +592,17 @@ pub trait CommitTokenSource {
 /// WASI has no process id (`std::process::id` panics there, WASM-BLOCKERS.md
 /// B7), so on that target the id term is a constant and the counter, the
 /// clock and the per-thread hash keys keep tokens distinct.
+///
+/// On `wasm32-unknown-unknown` it refuses with [`StoreError::TokenSource`].
+/// The standard library has no clock there (`SystemTime::now` panics), and
+/// it keys `RandomState` from memory addresses, so the keys repeat from one
+/// run of a build to the next. With the counter starting at zero in every
+/// run, each run would mint the previous run's tokens. An embedder on that
+/// target supplies a source of its own.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RandomTokens;
 
-#[cfg(not(target_os = "wasi"))]
+#[cfg(not(any(target_os = "wasi", all(target_family = "wasm", target_os = "unknown"))))]
 fn process_id() -> u32 {
     std::process::id()
 }
@@ -590,7 +613,16 @@ fn process_id() -> u32 {
 }
 
 impl CommitTokenSource for RandomTokens {
-    fn next_token(&mut self) -> CommitToken {
+    #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+    fn next_token(&mut self) -> Result<CommitToken, StoreError> {
+        Err(StoreError::TokenSource(
+            "this target has no clock or random hash keys for RandomTokens; \
+             supply a CommitTokenSource",
+        ))
+    }
+
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+    fn next_token(&mut self) -> Result<CommitToken, StoreError> {
         use std::hash::{BuildHasher, Hasher};
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -610,22 +642,28 @@ impl CommitTokenSource for RandomTokens {
         let mut token = [0u8; 16];
         token[..8].copy_from_slice(&halves[0].to_be_bytes());
         token[8..].copy_from_slice(&halves[1].to_be_bytes());
-        CommitToken(token)
+        Ok(CommitToken(token))
     }
 }
 
 /// Mint the token of a commit whose predecessor is `prev`: nonzero and
-/// distinct from `prev`. A source that keeps returning either is broken,
-/// and this panics rather than spin on it: [`RandomTokens`] cannot, and
-/// an injected source is test tooling.
-pub fn mint_token(source: &mut dyn CommitTokenSource, prev: CommitToken) -> CommitToken {
+/// distinct from `prev`. A source's own refusal passes through. A source
+/// that keeps returning zero or the predecessor is broken, and this refuses
+/// it with [`StoreError::TokenSource`] rather than spin on it, or panic on
+/// what may be an embedder's source.
+pub fn mint_token(
+    source: &mut dyn CommitTokenSource,
+    prev: CommitToken,
+) -> Result<CommitToken, StoreError> {
     for _ in 0..64 {
-        let token = source.next_token();
+        let token = source.next_token()?;
         if !token.is_zero() && token != prev {
-            return token;
+            return Ok(token);
         }
     }
-    panic!("commit token source keeps returning zero or the predecessor");
+    Err(StoreError::TokenSource(
+        "the source keeps returning zero or the predecessor",
+    ))
 }
 
 /// Slot pages a `slot_count`-record arena occupies (the last page may
@@ -1966,6 +2004,13 @@ pub fn encode_chunk_extent(chunks: &[u8], ext: u32) -> Vec<u8> {
 /// predecessor ([`CommitToken::ZERO`] for an empty store) and carries a
 /// fresh token from [`RandomTokens`].
 ///
+/// # Panics
+///
+/// Where [`RandomTokens`] refuses (`wasm32-unknown-unknown`).
+/// [`import_from_container`] returns that refusal instead, and a session
+/// takes the embedder's source
+/// ([`crate::machine::begin_store_session_with_tokens`]).
+///
 /// ```compile_fail
 /// use ironhorse_snapshot::{CommitToken, MachineImage, image_to_batch};
 /// fn unchecked_batch(image: &MachineImage) { image_to_batch(image, 1, CommitToken::ZERO); }
@@ -1975,7 +2020,7 @@ pub fn image_to_batch(
     epoch: u64,
     prev_token: CommitToken,
 ) -> CheckpointBatch {
-    image_to_batch_with_cadence(image, epoch, prev_token, 0, &mut RandomTokens)
+    image_to_batch_with_cadence(image, epoch, prev_token, 0, random_token(prev_token))
 }
 
 /// Build an arbitrary full batch for adversarial tooling, without a live gate.
@@ -1986,17 +2031,25 @@ pub fn image_to_batch_unchecked(
     epoch: u64,
     prev_token: CommitToken,
 ) -> CheckpointBatch {
-    encode_image_batch(image, epoch, prev_token, 0, &mut RandomTokens)
+    encode_image_batch(image, epoch, prev_token, 0, random_token(prev_token))
 }
 
+/// A token from [`RandomTokens`] for the batch builders that cannot return
+/// its refusal.
+fn random_token(prev_token: CommitToken) -> CommitToken {
+    mint_token(&mut RandomTokens, prev_token).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// The full-write batch of `image`, carrying `token`, already minted
+/// against `prev_token`.
 pub(crate) fn image_to_batch_with_cadence(
     image: &crate::image::GatedImage,
     epoch: u64,
     prev_token: CommitToken,
     collect_every: u32,
-    tokens: &mut dyn CommitTokenSource,
+    token: CommitToken,
 ) -> CheckpointBatch {
-    encode_image_batch(image.image(), epoch, prev_token, collect_every, tokens)
+    encode_image_batch(image.image(), epoch, prev_token, collect_every, token)
 }
 
 fn encode_image_batch(
@@ -2004,7 +2057,7 @@ fn encode_image_batch(
     epoch: u64,
     prev_token: CommitToken,
     collect_every: u32,
-    tokens: &mut dyn CommitTokenSource,
+    token: CommitToken,
 ) -> CheckpointBatch {
     let manifest = StoreManifest {
         version: image.version.clone(),
@@ -2021,7 +2074,7 @@ fn encode_image_batch(
         cranks: 0,
         collect_every,
         collections: 0,
-        token: mint_token(tokens, prev_token),
+        token,
     };
     let small = crate::snapshot_roster::small_from_image(image);
     let small_bytes = small.encode();
@@ -2549,6 +2602,12 @@ pub fn export_to_container(store: &dyn HeapStore) -> Result<Vec<u8>, StoreError>
 /// The container gates are the check: the store this writes is then trusted
 /// like any other (the store-seam design's trust model).
 /// Untouched legacy pages need not be rewritten until checkpoint dirties them.
+///
+/// The commit's token comes from [`RandomTokens`], so on
+/// `wasm32-unknown-unknown` this refuses with [`StoreError::TokenSource`].
+/// There, restore the container with [`crate::machine::from_snapshot_bytes`]
+/// and begin a session over the machine with the embedder's source
+/// ([`crate::machine::begin_store_session_with_tokens`]).
 pub fn import_from_container(
     bytes: &[u8],
     expected_sig: &Signature,
@@ -2565,10 +2624,14 @@ pub fn import_from_container(
             "stored property id outside the name and symbol-key tables",
         )));
     }
-    store.commit(&image_to_batch(
-        &crate::image::GatedImage::new(image)?,
+    let image = crate::image::GatedImage::new(image)?;
+    let token = mint_token(&mut RandomTokens, CommitToken::ZERO)?;
+    store.commit(&image_to_batch_with_cadence(
+        &image,
         1,
         CommitToken::ZERO,
+        0,
+        token,
     ))
 }
 
@@ -4084,22 +4147,24 @@ mod tests {
     fn mint_token_redraws_zero_and_the_predecessor() {
         struct Script(Vec<CommitToken>);
         impl CommitTokenSource for Script {
-            fn next_token(&mut self) -> CommitToken {
-                self.0.remove(0)
+            fn next_token(&mut self) -> Result<CommitToken, StoreError> {
+                Ok(self.0.remove(0))
             }
         }
         let prev = CommitToken([1; 16]);
         let fresh = CommitToken([2; 16]);
         let mut source = Script(vec![CommitToken::ZERO, prev, fresh]);
-        assert_eq!(mint_token(&mut source, prev), fresh);
+        assert_eq!(mint_token(&mut source, prev), Ok(fresh));
         let mut stuck = Script(vec![prev; 64]);
-        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            mint_token(&mut stuck, prev)
-        }))
-        .is_err());
+        assert_eq!(
+            mint_token(&mut stuck, prev),
+            Err(StoreError::TokenSource(
+                "the source keeps returning zero or the predecessor"
+            ))
+        );
         let mut random = RandomTokens;
         let drawn: std::collections::HashSet<CommitToken> = (0..64)
-            .map(|_| mint_token(&mut random, CommitToken::ZERO))
+            .map(|_| mint_token(&mut random, CommitToken::ZERO).unwrap())
             .collect();
         assert_eq!(drawn.len(), 64);
         assert!(!drawn.contains(&CommitToken::ZERO));

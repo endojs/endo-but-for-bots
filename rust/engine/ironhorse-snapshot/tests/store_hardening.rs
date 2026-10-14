@@ -253,7 +253,7 @@ fn incremental_batch(
         cranks: 0,
         collect_every: 0,
         collections: 0,
-        token: mint_token(&mut RandomTokens, prev_token),
+        token: mint_token(&mut RandomTokens, prev_token).unwrap(),
     };
     let small = SmallState {
         index_props: Vec::new(),

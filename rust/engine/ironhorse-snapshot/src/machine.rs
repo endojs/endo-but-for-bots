@@ -786,12 +786,14 @@ impl StoreSession {
         self.tracking.token
     }
 
-    /// Draw this session's later commit tokens from `source` instead of
-    /// [`RandomTokens`], for tests that need reproducible manifests. A
-    /// reproducible source gives up the distinctness the pairing relies on
-    /// ([`CommitTokenSource`]), so this exists only in tests and under the
-    /// `unchecked-tooling` feature.
-    #[cfg(any(test, feature = "unchecked-tooling"))]
+    /// Draw this session's later commit tokens from `source`. A resumed
+    /// session draws from [`RandomTokens`] until this is called, and on a
+    /// target where that refuses (`wasm32-unknown-unknown`) its first
+    /// checkpoint refuses with [`StoreError::TokenSource`], leaving the
+    /// session paired with its store; the embedder sets its host's source
+    /// here before checkpointing. The source must keep tokens distinct
+    /// ([`CommitTokenSource`]); a reproducible one, as tests use, gives up
+    /// the distinctness the pairing relies on.
     pub fn set_token_source(&mut self, source: Box<dyn CommitTokenSource>) {
         self.tracking.tokens = source;
     }
@@ -894,12 +896,35 @@ pub fn begin_store_session(
 
 /// Bind a fresh store with its immutable collection cadence.
 pub fn begin_store_session_with_cadence(
-    mut interp: Interp,
+    interp: Interp,
     signature: &Signature,
     store: &mut dyn HeapStore,
     collect_every: u32,
 ) -> Result<StoreSession, (Interp, StoreError)> {
-    match begin_store_core(&mut interp, signature, store, collect_every) {
+    begin_store_session_with_tokens(
+        interp,
+        signature,
+        store,
+        collect_every,
+        Box::new(RandomTokens),
+    )
+}
+
+/// Bind a fresh store with its immutable collection cadence, drawing the
+/// session's commit tokens, the first included, from `tokens` rather than
+/// [`RandomTokens`]. On a target where [`RandomTokens`] refuses
+/// (`wasm32-unknown-unknown`) the embedder supplies its host's randomness
+/// here. The source must keep tokens distinct ([`CommitTokenSource`]). One
+/// that cannot mint is refused with its own error, or with
+/// [`StoreError::TokenSource`], before the machine is touched.
+pub fn begin_store_session_with_tokens(
+    mut interp: Interp,
+    signature: &Signature,
+    store: &mut dyn HeapStore,
+    collect_every: u32,
+    tokens: Box<dyn CommitTokenSource>,
+) -> Result<StoreSession, (Interp, StoreError)> {
+    match begin_store_core(&mut interp, signature, store, collect_every, tokens) {
         Ok(tracking) => Ok(StoreSession { interp, tracking }),
         Err(error) => Err((interp, error)),
     }
@@ -910,12 +935,16 @@ fn begin_store_core(
     signature: &Signature,
     store: &mut dyn HeapStore,
     collect_every: u32,
+    mut tokens: Box<dyn CommitTokenSource>,
 ) -> Result<StoreTracking, StoreError> {
     match store.manifest() {
         Err(StoreError::Empty) => {}
         Ok(m) => return Err(StoreError::NotEmpty { epoch: m.epoch }),
         Err(e) => return Err(e),
     }
+    // Mint the first token before touching the machine: a source that
+    // cannot mint hands it back as it came, its backing and dirt intact.
+    let token = mint_token(&mut *tokens, CommitToken::ZERO)?;
     // The persist gate, on the data path: the ONLY way to
     // an image of this machine is the gated `snapshot_image`, whose
     // refusals are re-phrased as `StoreError`s so the machine travels
@@ -954,13 +983,12 @@ fn begin_store_core(
     // so stop relying on the backing now: nothing is evicted and nothing
     // faults from the old store again.
     interp.abandon_backing();
-    let mut tokens: Box<dyn CommitTokenSource> = Box::new(RandomTokens);
     let batch = crate::store::image_to_batch_with_cadence(
         &image,
         1,
         CommitToken::ZERO,
         collect_every,
-        &mut *tokens,
+        token,
     );
     // A failed commit hands the machine back with its dirt intact.
     store.commit(&batch)?;
@@ -1087,7 +1115,7 @@ fn checkpoint_to_store_core(
     let mut manifest = manifest_of(interp, signature, epoch, tracking.cranks);
     manifest.collect_every = tracking.collect_every;
     manifest.collections = tracking.collections;
-    manifest.token = mint_token(&mut *tracking.tokens, tracking.token);
+    manifest.token = mint_token(&mut *tracking.tokens, tracking.token)?;
 
     // Dirty rows only — never the whole heap. `page_records`/
     // `extent_bytes` copy one page/extent out of the arena (dirty rows
@@ -1258,6 +1286,9 @@ fn changed_free_segs(
 /// store-seam design's trust model the store is the machine it holds,
 /// and [`crate::store::validate_store`] and
 /// [`crate::store::validate_store_content`] are the explicit checks.
+///
+/// The session draws its commit tokens from [`RandomTokens`] until
+/// [`StoreSession::set_token_source`] gives it another; resuming mints none.
 pub fn resume_from_store(
     store: &dyn HeapStore,
     expected_sig: &Signature,
@@ -1397,6 +1428,9 @@ impl<S: HeapStore> ironhorse_vm::PageSource for StorePageSource<S> {
 /// an `Rc<RefCell<…>>` so the returned machine's fault path and the
 /// caller's later [`checkpoint_to_store`] (`&mut *store.borrow_mut()`)
 /// share it.
+///
+/// The session draws its commit tokens from [`RandomTokens`] until
+/// [`StoreSession::set_token_source`] gives it another; resuming mints none.
 pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     store: std::rc::Rc<std::cell::RefCell<S>>,
     expected_sig: &Signature,
@@ -2402,8 +2436,8 @@ mod tests {
         use crate::store::{CommitTokenSource, HeapStore, MemoryStore};
         struct Script(Vec<CommitToken>);
         impl CommitTokenSource for Script {
-            fn next_token(&mut self) -> CommitToken {
-                self.0.remove(0)
+            fn next_token(&mut self) -> Result<CommitToken, StoreError> {
+                Ok(self.0.remove(0))
             }
         }
         let mut store = MemoryStore::new();
@@ -2995,6 +3029,11 @@ impl SharedStoreSession {
     pub fn set_collections(&mut self, collections: u64) {
         self.tracking.collections = collections;
     }
+    /// Draw this session's later commit tokens from `source`; see
+    /// [`StoreSession::set_token_source`].
+    pub fn set_token_source(&mut self, source: Box<dyn CommitTokenSource>) {
+        self.tracking.tokens = source;
+    }
 
     pub fn checkpoint(
         &mut self,
@@ -3033,8 +3072,28 @@ pub fn begin_shared_store_session(
     store: &mut dyn HeapStore,
     collect_every: u32,
 ) -> Result<SharedStoreSession, (ironhorse_vm::Machine, StoreError)> {
+    begin_shared_store_session_with_tokens(
+        machine,
+        signature,
+        store,
+        collect_every,
+        Box::new(RandomTokens),
+    )
+}
+
+/// [`begin_shared_store_session`] drawing the session's commit tokens from
+/// `tokens`; see [`begin_store_session_with_tokens`].
+pub fn begin_shared_store_session_with_tokens(
+    machine: ironhorse_vm::Machine,
+    signature: &Signature,
+    store: &mut dyn HeapStore,
+    collect_every: u32,
+    tokens: Box<dyn CommitTokenSource>,
+) -> Result<SharedStoreSession, (ironhorse_vm::Machine, StoreError)> {
     let result = machine
-        .with_persistence(|interp| begin_store_core(interp, signature, store, collect_every))
+        .with_persistence(|interp| {
+            begin_store_core(interp, signature, store, collect_every, tokens)
+        })
         .map_err(shared_access_error)
         .and_then(|r| r);
     match result {
