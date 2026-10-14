@@ -24,6 +24,30 @@ impl Interp {
         };
 
         let key = (object, brand);
+        // PrivateFieldAdd and PrivateMethodOrAccessorAdd throw when the
+        // element is already there, so a constructor that returns an existing
+        // object cannot reinitialize its private state. Only the other half
+        // of an accessor pair may follow its first half (`fxDefinePrivateProperty`).
+        let accessor = self.private_accessors.get(&key).copied();
+        let present = if flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
+            self.private_values.contains_key(&key)
+                || accessor.is_some_and(|accessor| {
+                    if flag & XS_GETTER_FLAG != 0 {
+                        accessor.get.is_some()
+                    } else {
+                        accessor.set.is_some()
+                    }
+                })
+        } else {
+            self.private_values.contains_key(&key) || accessor.is_some()
+        };
+        if present {
+            let private_name = self.property_debug_name(
+                self.locals[self.local_index(index).expect("private name binding")].id,
+            );
+            let error = self.internal_error("TypeError", format!("set {private_name}: const"));
+            return Err(self.raise_js(error));
+        }
         if flag & XS_METHOD_FLAG != 0 {
             let home = self
                 .functions
@@ -58,6 +82,14 @@ impl Interp {
                 },
             );
         } else {
+            // A private method is not writable; the stored flag says which
+            // elements are methods, as XS's does, and survives a snapshot.
+            let mut value = value;
+            value.flag = if flag & XS_METHOD_FLAG != 0 {
+                XS_DONT_SET_FLAG
+            } else {
+                0
+            };
             self.private_values.insert(key, value);
         }
         Ok(())
@@ -87,14 +119,18 @@ impl Interp {
             }
         };
         let key = (object, brand);
-        let value = if let Some(value) = self.private_values.get(&key).copied() {
+        let value = if let Some(mut value) = self.private_values.get(&key).copied() {
+            value.flag = 0;
             value
-        } else if let Some(accessor) = self.private_accessors.get(&key).copied() {
-            match accessor.get {
-                Some(getter) => (self.run_callback(code, getter, receiver, &[]))?,
-                None => Slot::undefined(),
-            }
+        } else if let Some(getter) = self
+            .private_accessors
+            .get(&key)
+            .copied()
+            .and_then(|accessor| accessor.get)
+        {
+            (self.run_callback(code, getter, receiver, &[]))?
         } else {
+            // Absent, or an accessor with no getter (PrivateGet step 5).
             let error = self.internal_error(
                 "TypeError",
                 format!("get {private_name}: undefined private property"),
@@ -130,7 +166,15 @@ impl Interp {
             }
         };
         let key = (object, brand);
-        if self.private_values.contains_key(&key) {
+        if let Some(current) = self.private_values.get(&key).copied() {
+            // PrivateSet step 4: a method cannot be assigned.
+            if current.flag & XS_DONT_SET_FLAG != 0 {
+                let error =
+                    self.internal_error("TypeError", format!("set {private_name}: not writable"));
+                return Err(self.raise_js(error));
+            }
+            let mut value = value;
+            value.flag = 0;
             self.private_values.insert(key, value);
         } else if let Some(accessor) = self.private_accessors.get(&key).copied() {
             match accessor.set {

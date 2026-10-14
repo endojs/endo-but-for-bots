@@ -103,3 +103,102 @@ fn private_elements_use_lexical_brand_identity() {
     );
     assert_result_agrees("class A { static #x = 3; static get() { return this.#x } } A.get()");
 }
+
+/// PrivateFieldAdd and PrivateMethodOrAccessorAdd throw a TypeError when the
+/// object already has the element. Ironhorse overwrote it, so a base
+/// constructor that returns an existing object let a second `new` reset that
+/// object's private state.
+#[test]
+fn private_elements_cannot_be_added_twice() {
+    let returner = "class B { constructor(o) { return o; } }";
+    for elements in [
+        "#f = ++n;",
+        "#f;",
+        "#m() {}",
+        "get #a() { return n; }",
+        "set #a(v) {}",
+        "get #a() { return n; } set #a(v) {}",
+        "static x = 1; #f = ++n; #m() {}",
+    ] {
+        assert_result_agrees(&format!(
+            "var n = 0; {returner} class C extends B {{ {elements} constructor(o) {{ super(o); }} \
+             static has(o) {{ return {has}; }} }} \
+             var o = {{}}; new C(o); var r; try {{ new C(o); r = 'none'; }} catch (e) {{ r = String(e); }} \
+             [n, r, C.has(o)].join()",
+            // XS answers `#a in o` false for a setter-only accessor, which
+            // `xs_departures.rs` records; the getter forms avoid it here.
+            has = if elements.contains("#f") {
+                "#f in o"
+            } else if elements.contains("#m") {
+                "#m in o"
+            } else if elements.contains("get #a") {
+                "#a in o"
+            } else {
+                "'skipped'"
+            },
+        ));
+    }
+    // Two classes may each add their own element of the same spelling.
+    assert_result_agrees(&format!(
+        "{returner} class C extends B {{ #f = 1; static get(o) {{ return o.#f; }} }} \
+         class D extends B {{ #f = 2; static get(o) {{ return o.#f; }} }} \
+         var o = {{}}; new C(o); new D(o); [C.get(o), D.get(o)].join()"
+    ));
+}
+
+/// The integrity case: an unhardened class with private state, reached
+/// through a returning base constructor installed after the fact.
+#[test]
+fn a_purse_balance_cannot_be_reset_through_a_returning_constructor() {
+    assert_result_agrees(
+        "class Base {} \
+         class Purse extends Base { #balance = 0; deposit(v) { this.#balance += v; } get balance() { return this.#balance; } } \
+         var p = new Purse(); p.deposit(10); \
+         Object.setPrototypeOf(Purse, function (o) { return o; }); \
+         var r; try { new Purse(p); r = 'reset'; } catch (e) { r = e.constructor.name; } \
+         [r, p.balance].join()",
+    );
+}
+
+/// PrivateSet throws on a method, and PrivateGet on an accessor without a
+/// getter, through every assignment form.
+#[test]
+fn private_methods_are_read_only_and_setter_only_accessors_unreadable() {
+    for target in ["this.#m", "C.#s"] {
+        for write in [
+            "T = 5",
+            "T += 1",
+            "T &&= 1",
+            "T ||= 1",
+            "T ??= 1",
+            "T++",
+            "--T",
+            "[T] = [1]",
+            "({ a: T } = { a: 1 })",
+            "for (T of [1]);",
+            "for (T in { a: 1 });",
+            "eval('T = 1')",
+        ] {
+            let write = write.replace('T', target);
+            assert_result_agrees(&format!(
+                "class C {{ #m() {{ return 1; }} static #s() {{ return 2; }} \
+                 t() {{ var r; try {{ {write}; r = 'wrote'; }} catch (e) {{ r = String(e); }} \
+                 return [r, typeof this.#m, typeof C.#s].join(); }} }} new C().t()"
+            ));
+        }
+    }
+    for read in [
+        "this.#s",
+        "this.#s + 1",
+        "this.#s++",
+        "this.#s += 1",
+        "[this.#s] = [1]",
+        "this.#s ??= 1",
+    ] {
+        assert_result_agrees(&format!(
+            "var log = []; class C {{ set #s(v) {{ log.push(v); }} \
+             t() {{ var r; try {{ r = String({read}); }} catch (e) {{ r = String(e); }} return [r, log.join()].join(' '); }} }} \
+             new C().t()"
+        ));
+    }
+}

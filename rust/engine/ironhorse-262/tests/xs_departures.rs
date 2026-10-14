@@ -260,6 +260,13 @@ const DEPARTURES: &[Row] = &[
         v8: "function",
         why: "the same rule through a forwarding trap: `{ set: undefined }` leaves the getter; XS's added `get: undefined` removes it",
     },
+    Row {
+        program: "class C { set #a(v) {} static has(o) { return #a in o; } } C.has(new C())",
+        ironhorse: "true",
+        xs: "false",
+        v8: "true",
+        why: "`#a in o` asks PrivateElementFind, which finds a setter-only accessor (ES2024 13.10.1); XS looks the element up as a read",
+    },
 ];
 
 /// Programs where Ironhorse departs from XS and V8 has no counterpart to
