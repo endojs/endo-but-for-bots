@@ -545,6 +545,27 @@ const UNPAIRED: &[Row] = &[
         v8: "throw TypeError: Iterator.concat is not a function",
         why: "Iterator.concat steps the open iterator with IteratorStepValue, which does not close it when next throws or answers a non-object (ES2026 27.1.3.2.1 step 3.a.v.1); XS's fx_IteratorHelper_prototype_next catches any throw from a helper's step and re-enters the step to close its iterator, here fx_Iterator_concat_step; Node 22 has no Iterator.concat",
     },
+    Row {
+        program: "var u = new Uint8Array(4); u.buffer.transfer(); u.setFromHex('abc')",
+        ironhorse: "throw TypeError: detached buffer",
+        xs: "throw SyntaxError: string: odd length",
+        v8: "throw TypeError: u.setFromHex is not a function",
+        why: "Uint8Array.prototype.setFromHex refuses a detached or out-of-bounds view before FromHex finds an odd length (ES2026 23.3.2.2); XS 8.3.1's fx_Uint8Array_prototype_setFromHex checks the length first, which Moddable SDK 10.0.0 reorders (c97c28ec568a, #1435 R23); Node 22 has no setFromHex",
+    },
+    Row {
+        program: "var r = new Uint8Array(1).setFromBase64('AQID'), s = new Uint8Array(10).setFromBase64('AQID  '); [r.read, r.written, s.read, s.written].join()",
+        ironhorse: "0,0,6,3",
+        xs: "4,0,4,3",
+        v8: "throw TypeError: (intermediate value).setFromBase64 is not a function",
+        why: "FromBase64 moves read past each chunk it decodes and, once its scan reaches the end of the string with room left in the target, to the string's length, trailing whitespace included (ES2026 23.3.3.7); XS's fxUint8ArrayFromBase64 starts read at the caller's UTF-8 length of the whole input and moves it only after it decodes a chunk, so read keeps that length when a non-empty target has no room for a whole chunk, and stops short of the whitespace after the last chunk of a string that ends in whole chunks while the target has room left; Node 22 has no setFromBase64",
+    },
+    Row {
+        program: "var u = new Uint8Array(2), v = new Uint8Array(2); try { u.setFromHex('ab\\u00e9'); } catch (e) {} try { v.setFromHex('abc\\u00e9'); } catch (e) {} u.join() + '|' + v.join()",
+        ironhorse: "0,0|171,0",
+        xs: "171,0|0,0",
+        v8: "0,0|0,0",
+        why: "FromHex tests the string's length in code units for an odd length (ES2026 23.3.3.8), so 'ab\\u00e9' is refused before anything is written; XS's fx_Uint8Array_prototype_setFromHex tests the UTF-8 byte length, so a non-ASCII character changes which inputs are odd and what is written before the SyntaxError; Node 22 has no setFromHex",
+    },
 ];
 
 const KEPT: &[Row] = &[
