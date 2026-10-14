@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Build the stack-lanes probe for the host and for wasm32-wasip1.
 
-The wasm build is the verified workaround of WASM-BLOCKERS.md B1: the engine
-needs panic=unwind, which stable Rust cannot link on wasm, so std is rebuilt
-with unwinding under RUSTC_BOOTSTRAP. It emits the standard exnref exception
-encoding (B2), which Wasmtime requires and V8 accepts behind a flag, links the
-shadow stack STACK-DEPTH-REFACTOR.md §5 lane A asks for (4 MiB by default),
-and exports __stack_pointer so a host can paint the shadow stack.
+The wasm build is the engine's official wasm recipe, `scripts/build-wasm.py`
+(WASM-BLOCKERS.md B1, option 1): the engine needs panic=unwind, which stable
+Rust cannot link on wasm, so std is rebuilt with unwinding under
+RUSTC_BOOTSTRAP, in the standard exnref exception encoding (B2), with the
+shadow stack STACK-DEPTH-REFACTOR.md §5 lane A asks for (4 MiB by default).
+The flags and the environment come from that script; the probe adds one flag
+of its own, exporting __stack_pointer so a host can paint the shadow stack.
 """
 import argparse
+import importlib.util
 import os
 from pathlib import Path
 import shutil
@@ -16,8 +18,21 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 PROBE = ROOT / "stack-lanes/probe"
-WASM_TARGET = "wasm32-wasip1"
-DEFAULT_SHADOW_STACK = 4 * 1024 * 1024
+
+
+def _load_build_wasm():
+    """The recipe's one home, under a file name `import` cannot spell."""
+    spec = importlib.util.spec_from_file_location("build_wasm", ROOT / "scripts/build-wasm.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+build_wasm = _load_build_wasm()
+WASM_TARGET = build_wasm.WASIP1
+DEFAULT_SHADOW_STACK = build_wasm.DEFAULT_SHADOW_STACK
+# The probe's own addition to the recipe: lane B's hosts paint the shadow stack.
+PROBE_RUSTFLAGS = ("-C link-arg=--export=__stack_pointer",)
 
 
 def artifact(target=None):
@@ -27,13 +42,7 @@ def artifact(target=None):
 
 
 def wasm_rustflags(shadow_stack):
-    return " ".join([
-        "-C panic=unwind",
-        "-C target-feature=+exception-handling",
-        "-C llvm-args=-wasm-use-legacy-eh=false",
-        f"-C link-arg=-zstack-size={shadow_stack}",
-        "-C link-arg=--export=__stack_pointer",
-    ])
+    return " ".join(build_wasm.rustflags(shadow_stack, PROBE_RUSTFLAGS))
 
 
 def build(target=None, shadow_stack=DEFAULT_SHADOW_STACK, quiet=False):
@@ -45,9 +54,8 @@ def build(target=None, shadow_stack=DEFAULT_SHADOW_STACK, quiet=False):
     env = dict(os.environ, CARGO_INCREMENTAL="0", CARGO_TARGET_DIR=str(PROBE / "target"))
     command = ["cargo", "build", "--release"]
     if target == WASM_TARGET:
-        env["RUSTC_BOOTSTRAP"] = "1"
-        env["RUSTFLAGS"] = wasm_rustflags(shadow_stack)
-        command += ["-Zbuild-std=std,panic_unwind", "--target", WASM_TARGET]
+        env = build_wasm.environment(shadow_stack, PROBE_RUSTFLAGS, base=env)
+        command = build_wasm.build_arguments(WASM_TARGET)
     elif target is not None:
         raise ValueError(f"unsupported target: {target}")
     if quiet:
