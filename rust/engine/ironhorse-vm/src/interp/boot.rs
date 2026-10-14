@@ -2704,7 +2704,6 @@ impl Interp {
             ("getTimezoneOffset", 20, 0),
             ("toISOString", 21, 0),
             ("toUTCString", 22, 0),
-            ("toGMTString", 22, 0),
             ("toString", 23, 0),
             ("toDateString", 24, 0),
             ("toTimeString", 25, 0),
@@ -2727,6 +2726,9 @@ impl Interp {
             ("setUTCMonth", 33, 2),
             ("setFullYear", 34, 3),
             ("setUTCFullYear", 34, 3),
+            // Annex B (B.2.3.1, B.2.3.2).
+            ("getYear", 35, 0),
+            ("setYear", 36, 1),
         ] {
             let f = match (name, to_utc_string) {
                 ("toGMTString", Some(f)) => f,
@@ -2736,6 +2738,17 @@ impl Interp {
                 to_utc_string = Some(f);
             }
             self.proto_methods.push((proto, name, f));
+        }
+        // Annex B's `toGMTString` (B.2.3.3) is the `toUTCString` function
+        // object itself, as XS's `fxBuildDate` installs it.
+        if let Some((_, _, to_utc_string)) = self
+            .proto_methods
+            .iter()
+            .find(|(holder, name, _)| *holder == proto && *name == "toUTCString")
+            .copied()
+        {
+            self.proto_methods
+                .push((proto, "toGMTString", to_utc_string));
         }
         // The symbol-key id is minted lazily, but this identity belongs to the
         // realm's boot graph so snapshots can rederive it at the same slot.

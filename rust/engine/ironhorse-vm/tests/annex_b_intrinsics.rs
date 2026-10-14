@@ -173,3 +173,36 @@ fn string_prototype_substr() {
         ),
     ]);
 }
+
+#[test]
+fn date_prototype_legacy_year_and_gmt_string() {
+    check(&[
+        (
+            "[Date.prototype.toGMTString === Date.prototype.toUTCString, Date.prototype.toGMTString.name, Date.prototype.getYear.name, Date.prototype.getYear.length, Date.prototype.setYear.name, Date.prototype.setYear.length].join()",
+            "true,toUTCString,getYear,0,setYear,1",
+        ),
+        (
+            "[new Date(2000, 0, 1).getYear(), new Date(1899, 0, 1).getYear(), new Date(NaN).getYear()].join()",
+            "100,-1,NaN",
+        ),
+        (
+            "var d = new Date(2000, 5, 15, 3, 4, 5, 6); [d.setYear(50), d.getFullYear(), d.setYear(-0.5), d.getFullYear(), d.setYear(99.9), d.getFullYear(), d.setYear(100), d.getFullYear(), d.setYear(NaN), d.setYear(2001), d.setYear()].join()",
+            "-616884954994,1950,-2194721754994,1900,929415845006,1999,-58997192154994,100,NaN,978307200000,NaN",
+        ),
+        // An invalid date counts as +0.
+        (
+            "var d = new Date(NaN); var r = d.setYear(2000); [r, d.getMonth(), d.getDate()].join()",
+            "946684800000,0,1",
+        ),
+        // The specification and V8; XS reads a month and a date too, and
+        // leaves +0 behind when the conversion throws (`xs_departures.rs`).
+        (
+            "var d = new Date(2000, 0, 15); d.setYear(99, 5, 3); var n = new Date(NaN); try { n.setYear({valueOf: function () { throw 1; }}); } catch (e) {} [d.getFullYear(), d.getMonth(), d.getDate(), n.getTime()].join()",
+            "1999,0,15,NaN",
+        ),
+        (
+            "var r = []; try { Date.prototype.getYear.call({}) } catch (e) { r.push(e.name) } try { Date.prototype.setYear.call({}, 1) } catch (e) { r.push(e.name) } r.join()",
+            "TypeError,TypeError",
+        ),
+    ]);
+}
