@@ -310,6 +310,10 @@ At the same point native completes, or halts deterministically.
 | Typed-array `join`, typed-array and array `toLocaleString` (`natives/buffer.rs:558`, `:287`, `natives/array.rs:4482`) | a long separator or long elements | `HeapExhausted` | capacity-overflow panic, trap |
 | `Function` constructor (`interp/eval.rs:226`, then `ironhorse-compile/src/lexer.rs:167`) | `Function(s,s,…,'')` with a 268.8M-code-point assembled source | `Return function12` | `EngineInvariant("eval:compiler-invariant")` |
 
+Since B8's `Halt::HostAllocationFailed`, the Map and Set and the array rows end in that halt on
+wasm32 instead of trapping, as do the latent repros below whose wasm32 side trapped or halted
+`HeapExhausted` on a host refusal; the other rows still trap as listed
+(`stack-lanes/expected-divergence/wasmtime.json` records each line).
 The same sites break native resource accounting too.
 Under the default ceilings the native process reached about 4–6.6 GiB of RSS in these repros.
 With a slot ceiling of 50,000, one million Map entries, Set entries, array items or indexed

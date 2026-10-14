@@ -488,9 +488,9 @@ What raises it:
   space it found.
 
 What still allocates infallibly, and so still aborts (a trap on wasm) under a cap: decoding a
-string's payload (`be16_to_units`), property tables and key interning, the compiler, Intl, the Map
-index's copies of string keys, and the snapshot writer's buffer, the decoder and the checkpoint
-batch.
+string's payload (`be16_to_units`), property tables and key interning, the compiler, Intl,
+typed-array `join` and array and typed-array `toLocaleString`, the Map index's copies of string
+keys, and the snapshot writer's buffer, the decoder and the checkpoint batch.
 The contract treats such a trap the same way, and none of these can commit a crank: the checkpoint
 and snapshot paths run after the crank, so a trap there leaves it uncommitted.
 
@@ -506,6 +506,13 @@ Evidence:
   The forty-string loop ends in `HostAllocationFailed` at 4,457,259 computrons; strings, the
   doubled string, the mix, arrays, Maps and Sets each end in it rather than trapping, and the
   object list, which fits, still returns.
+- `stack-lanes/cross_target.py --shard slow`, the B7 host-limit repros at 4 GiB: six of them now
+  end in `HostAllocationFailed` on wasm32 (Map entries and array items, which trapped, and the
+  chunk-arena doubling, the scratch buffer over 2 GiB, the doubling at a 2^30 chunk ceiling and
+  the kept objects at the slot-ceiling wall, which trapped or halted `HeapExhausted`), and
+  `expected-divergence/wasmtime.json` records them so.
+  Their native lines are unchanged; the Intl and `Function` constructor repros still trap or
+  halt as before.
 - **Release-neutral**: `stack-lanes/differential.py --base c416423d` reports `same` on all 1,763
   programs; `cargo test --release --workspace --no-fail-fast` passes 3,730 tests in 481 suites;
   the benchmark check is in the pull request.
