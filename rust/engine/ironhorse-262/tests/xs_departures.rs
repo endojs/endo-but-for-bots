@@ -521,13 +521,6 @@ const GAPS: &[Row] = &[
         why: "Atomics operations convert their value with ToIntegerOrInfinity; Ironhorse halts on a non-number value",
     },
     Row {
-        program: "var w = new WeakMap(); try { for (var x of w); 'iterated' } catch (e) { e.constructor.name }",
-        ironhorse: "halt NotImplemented(\"for_of:weak-collection\")",
-        xs: "TypeError",
-        v8: "TypeError",
-        why: "a WeakMap is not iterable, so for-of throws a TypeError; Ironhorse halts",
-    },
-    Row {
         program: "typeof Object.getOwnPropertyDescriptor(RegExp.prototype, 'flags')",
         ironhorse: "undefined",
         xs: "object",
