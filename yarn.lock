@@ -2622,6 +2622,7 @@ __metadata:
     "@endo/eventual-send": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/lockdown": "workspace:^"
+    "@endo/parcel": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     ava: "catalog:dev"
     eslint: "catalog:dev"
@@ -2981,14 +2982,13 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/parcel@workspace:packages/parcel":
+"@endo/parcel@workspace:^, @endo/parcel@workspace:packages/parcel":
   version: 0.0.0-use.local
   resolution: "@endo/parcel@workspace:packages/parcel"
   dependencies:
     "@endo/eventual-send": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/init": "workspace:^"
-    "@endo/pass-style": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
