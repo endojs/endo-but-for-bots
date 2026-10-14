@@ -110,5 +110,33 @@ class RealMeasurement(unittest.TestCase):
         )
 
 
+class NightlyJob(unittest.TestCase):
+    """The nightly job must build what the instrument reads.
+
+    From 2026-09-20 every nightly run failed at the measurement with
+    `no deps/libironhorse_snapshot-*.rlib`: the job's only build was the
+    microbenchmark comparison's, and `ironhorse-262` does not depend on
+    `ironhorse-snapshot`.
+    """
+
+    WORKFLOW = (
+        Path(__file__).resolve().parents[3]
+        / ".github"
+        / "workflows"
+        / "ironhorse-full-test262.yml"
+    )
+
+    def test_the_job_builds_every_engine_crate_before_measuring(self):
+        text = self.WORKFLOW.read_text()
+        measured = text.index("benches/code_size.py")
+        job = text.rindex("\n  xs-microbenchmarks:", 0, measured)
+        steps = text[job:measured]
+        build = steps.rfind("cargo build --locked --release")
+        self.assertGreater(build, 0, "no release build before the measurement")
+        command = " ".join(steps[build:].split())
+        for crate in ENGINE_CRATES:
+            self.assertIn(f"-p {crate.replace('_', '-')} ", command + " ")
+
+
 if __name__ == "__main__":
     unittest.main()

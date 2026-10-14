@@ -68,6 +68,17 @@ jobs:
         # four-variant daemon measurement; throughput, code size and heap
         # footprint are all measured now (F106/F122).
         run: python3 rust/engine/benches/xs_compare.py --output xs-microbenchmarks.json
+      - name: Build the engine's release libraries
+        # `code_size.py` reads the release rlib of every crate in its
+        # ENGINE_CRATES, and the comparison above builds only what
+        # `ironhorse-262` depends on, which leaves out `ironhorse-snapshot`.
+        if: always()
+        working-directory: rust/engine
+        run: >-
+          cargo build --locked --release
+          -p ironhorse-vm -p ironhorse-compile -p ironhorse-regexp
+          -p ironhorse-snapshot -p ironhorse-text -p ironhorse-unicode
+          -p ironhorse-meter
       - name: Measure engine code size against XS
         # Reported, not gated: the engine is far outside the design's 2x bar
         # and a failing check would say nothing the number does not.
