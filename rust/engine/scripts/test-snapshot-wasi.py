@@ -4,6 +4,8 @@
 These are the refusals and portability checks of WASM-BLOCKERS.md B7 that need
 no compiler: oversized counts and chunk lengths, duplicate Intl bound-function
 owners, temporary names without a process id, and the consensus ceiling caps.
+They also run the embedder-chosen commit-token sources that store sessions on
+wasm32-unknown-unknown depend on.
 
 Requires Node.js with WASI preview1 and a Rust wasm32-wasip1 standard library:
     rustup target add --toolchain 1.91.1 wasm32-wasip1
@@ -32,6 +34,7 @@ TESTS = (
     ("chunk_length_refusal", "ironhorse-snapshot/tests/chunk_length_refusal.rs"),
     ("intl_bound_owner_refusal", "ironhorse-snapshot/tests/intl_bound_owner_refusal.rs"),
     ("temporary_names", "ironhorse-snapshot/tests/temporary_names.rs"),
+    ("commit_token_source", "ironhorse-snapshot/tests/commit_token_source.rs"),
     ("consensus_ceiling_caps", "ironhorse-vm/tests/consensus_ceiling_caps.rs"),
 )
 
