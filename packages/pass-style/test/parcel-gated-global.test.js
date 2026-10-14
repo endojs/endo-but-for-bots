@@ -1,8 +1,12 @@
 import test from '@endo/ses-ava/test.js';
 
 const { create, defineProperty, freeze } = Object;
+const mutableSerialTest =
+  Object.getOwnPropertyDescriptor(globalThis, 'Parcel')?.configurable !== false
+    ? test.serial
+    : test.skip;
 
-// Each case installs a frozen constructor whose `isSturdyRef` vouches for
+// Each case installs a frozen constructor whose `isParcel` vouches for
 // everything, and breaks exactly one of the other conditions pass-style
 // requires before it trusts the global. Pass-style captures the first global
 // it trusts for the life of its module, so each case asks a fresh instance of
@@ -19,13 +23,13 @@ const makeImpostor = (
   breakIt = () => {},
   { freezeCheck = true, freezePrototype = true } = {},
 ) => {
-  const impostor = function SturdyRef() {};
-  impostor.isSturdyRef = () => true;
+  const impostor = function Parcel() {};
+  impostor.isParcel = () => true;
   defineProperty(impostor.prototype, Symbol.toStringTag, {
-    value: 'SturdyRef',
+    value: 'Parcel',
   });
   breakIt(impostor);
-  if (freezeCheck) freeze(impostor.isSturdyRef);
+  if (freezeCheck) freeze(impostor.isParcel);
   if (freezePrototype && impostor.prototype) freeze(impostor.prototype);
   return freeze(impostor);
 };
@@ -35,10 +39,10 @@ const makeImpostor = (
  */
 const isTrusted = async impostor => {
   instance += 1;
-  const { isSturdyRefObject } = await import(
-    `../src/sturdyref.js?instance=${instance}`
+  const { isParcelObject } = await import(
+    `../src/parcel.js?instance=${instance}`
   );
-  /** @type {any} */ (globalThis).SturdyRef = impostor;
+  /** @type {any} */ (globalThis).Parcel = impostor;
   try {
     const { prototype } = impostor;
     const candidate = freeze(
@@ -46,9 +50,9 @@ const isTrusted = async impostor => {
         typeof prototype === 'object' || prototype === null ? prototype : null,
       ),
     );
-    return isSturdyRefObject(candidate);
+    return isParcelObject(candidate);
   } finally {
-    delete (/** @type {any} */ (globalThis).SturdyRef);
+    delete (/** @type {any} */ (globalThis).Parcel);
   }
 };
 
@@ -60,7 +64,7 @@ const assertNotTrusted = async (t, impostor) => {
   t.false(await isTrusted(impostor));
 };
 
-test.serial('a well-shaped impostor is trusted', async t => {
+mutableSerialTest('a well-shaped impostor is trusted', async t => {
   // The control: every case below differs from this one in one condition.
   t.true(await isTrusted(makeImpostor()));
 });
@@ -69,7 +73,7 @@ test.serial('a well-shaped impostor is trusted', async t => {
 // `isFrozen` answers true for everything.
 const frozenIsMeaningful = !Object.isFrozen({});
 
-test.serial('an unfrozen isSturdyRef is not trusted', async t => {
+mutableSerialTest('an unfrozen isParcel is not trusted', async t => {
   if (!frozenIsMeaningful) {
     t.pass('unsafe taming: isFrozen cannot detect an unfrozen check');
     return;
@@ -77,7 +81,7 @@ test.serial('an unfrozen isSturdyRef is not trusted', async t => {
   await assertNotTrusted(t, makeImpostor(undefined, { freezeCheck: false }));
 });
 
-test.serial('an unfrozen prototype is not trusted', async t => {
+mutableSerialTest('an unfrozen prototype is not trusted', async t => {
   if (!frozenIsMeaningful) {
     t.pass('unsafe taming: isFrozen cannot detect an unfrozen prototype');
     return;
@@ -88,7 +92,7 @@ test.serial('an unfrozen prototype is not trusted', async t => {
   );
 });
 
-test.serial('a null prototype is not trusted', async t => {
+mutableSerialTest('a null prototype is not trusted', async t => {
   await assertNotTrusted(
     t,
     makeImpostor(impostor => {
@@ -97,7 +101,7 @@ test.serial('a null prototype is not trusted', async t => {
   );
 });
 
-test.serial('a prototype carrying a method is not trusted', async t => {
+mutableSerialTest('a prototype carrying a method is not trusted', async t => {
   await assertNotTrusted(
     t,
     makeImpostor(impostor => {
@@ -106,20 +110,23 @@ test.serial('a prototype carrying a method is not trusted', async t => {
   );
 });
 
-test.serial('a prototype carrying an accessor tag is not trusted', async t => {
-  await assertNotTrusted(
-    t,
-    makeImpostor(impostor => {
-      impostor.prototype = {};
-      defineProperty(impostor.prototype, 'constructor', { value: impostor });
-      defineProperty(impostor.prototype, Symbol.toStringTag, {
-        get: () => 'SturdyRef',
-      });
-    }),
-  );
-});
+mutableSerialTest(
+  'a prototype carrying an accessor tag is not trusted',
+  async t => {
+    await assertNotTrusted(
+      t,
+      makeImpostor(impostor => {
+        impostor.prototype = {};
+        defineProperty(impostor.prototype, 'constructor', { value: impostor });
+        defineProperty(impostor.prototype, Symbol.toStringTag, {
+          get: () => 'Parcel',
+        });
+      }),
+    );
+  },
+);
 
-test.serial('a prototype with the wrong tag is not trusted', async t => {
+mutableSerialTest('a prototype with the wrong tag is not trusted', async t => {
   await assertNotTrusted(
     t,
     makeImpostor(impostor => {
@@ -132,7 +139,7 @@ test.serial('a prototype with the wrong tag is not trusted', async t => {
   );
 });
 
-test.serial(
+mutableSerialTest(
   'a prototype that does not inherit from Object is not trusted',
   async t => {
     await assertNotTrusted(
@@ -141,14 +148,14 @@ test.serial(
         impostor.prototype = create(null);
         defineProperty(impostor.prototype, 'constructor', { value: impostor });
         defineProperty(impostor.prototype, Symbol.toStringTag, {
-          value: 'SturdyRef',
+          value: 'Parcel',
         });
       }),
     );
   },
 );
 
-test.serial(
+mutableSerialTest(
   'a prototype whose constructor is another is not trusted',
   async t => {
     await assertNotTrusted(
@@ -159,14 +166,14 @@ test.serial(
           value: function Other() {},
         });
         defineProperty(impostor.prototype, Symbol.toStringTag, {
-          value: 'SturdyRef',
+          value: 'Parcel',
         });
       }),
     );
   },
 );
 
-test.serial(
+mutableSerialTest(
   'a prototype carrying an enumerable tag is not trusted',
   async t => {
     await assertNotTrusted(
@@ -175,7 +182,7 @@ test.serial(
         impostor.prototype = {};
         defineProperty(impostor.prototype, 'constructor', { value: impostor });
         defineProperty(impostor.prototype, Symbol.toStringTag, {
-          value: 'SturdyRef',
+          value: 'Parcel',
           enumerable: true,
         });
       }),
@@ -183,15 +190,15 @@ test.serial(
   },
 );
 
-test.serial('a throwing isSturdyRef accessor is not trusted', async t => {
+mutableSerialTest('a throwing isParcel accessor is not trusted', async t => {
   // Freezing a constructor does not stop its accessors from throwing, so
   // pass-style must not invoke them.
   await assertNotTrusted(
     t,
     makeImpostor(
       impostor => {
-        delete impostor.isSturdyRef;
-        defineProperty(impostor, 'isSturdyRef', {
+        delete impostor.isParcel;
+        defineProperty(impostor, 'isParcel', {
           get() {
             throw Error('boom');
           },
@@ -206,20 +213,20 @@ test.serial('a rejected global does not stop a later one', async t => {
   // Only a trusted global is captured, so a malformed one that appears first
   // cannot keep the shim's from being recognized afterward.
   instance += 1;
-  const { isSturdyRefObject } = await import(
-    `../src/sturdyref.js?instance=${instance}`
+  const { isParcelObject } = await import(
+    `../src/parcel.js?instance=${instance}`
   );
   const malformed = makeImpostor(impostor => {
     impostor.prototype.transfer = () => {};
   });
   const wellShaped = makeImpostor();
   try {
-    /** @type {any} */ (globalThis).SturdyRef = malformed;
-    t.false(isSturdyRefObject(freeze(create(malformed.prototype))));
-    /** @type {any} */ (globalThis).SturdyRef = wellShaped;
-    t.true(isSturdyRefObject(freeze(create(wellShaped.prototype))));
+    /** @type {any} */ (globalThis).Parcel = malformed;
+    t.false(isParcelObject(freeze(create(malformed.prototype))));
+    /** @type {any} */ (globalThis).Parcel = wellShaped;
+    t.true(isParcelObject(freeze(create(wellShaped.prototype))));
   } finally {
-    delete (/** @type {any} */ (globalThis).SturdyRef);
+    delete (/** @type {any} */ (globalThis).Parcel);
   }
 });
 
@@ -227,18 +234,18 @@ test.serial('a trusted global is not replaced by a later one', async t => {
   // Once a well-shaped global is captured, a second, equally well-shaped
   // constructor installed afterward does not displace it.
   instance += 1;
-  const { isSturdyRefObject } = await import(
-    `../src/sturdyref.js?instance=${instance}`
+  const { isParcelObject } = await import(
+    `../src/parcel.js?instance=${instance}`
   );
   const first = makeImpostor();
   const second = makeImpostor();
   try {
-    /** @type {any} */ (globalThis).SturdyRef = first;
-    t.true(isSturdyRefObject(freeze(create(first.prototype))));
-    /** @type {any} */ (globalThis).SturdyRef = second;
-    t.false(isSturdyRefObject(freeze(create(second.prototype))));
-    t.true(isSturdyRefObject(freeze(create(first.prototype))));
+    /** @type {any} */ (globalThis).Parcel = first;
+    t.true(isParcelObject(freeze(create(first.prototype))));
+    /** @type {any} */ (globalThis).Parcel = second;
+    t.false(isParcelObject(freeze(create(second.prototype))));
+    t.true(isParcelObject(freeze(create(first.prototype))));
   } finally {
-    delete (/** @type {any} */ (globalThis).SturdyRef);
+    delete (/** @type {any} */ (globalThis).Parcel);
   }
 });

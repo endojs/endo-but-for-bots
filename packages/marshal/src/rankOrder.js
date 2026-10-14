@@ -119,9 +119,9 @@ export const compareNumerics = (left, right) => {
 harden(compareNumerics);
 
 /**
- * A SturdyRef has no encoding yet, so it has no rank either.
+ * A Parcel has no encoding yet, so it has no rank either.
  *
- * @typedef {Exclude<PassStyle, 'sturdyRef'>} RankedPassStyle
+ * @typedef {Exclude<PassStyle, 'parcel'>} RankedPassStyle
  * @typedef {Record<RankedPassStyle, { index: number, cover: RankCover }>} PassStyleRanksRecord
  * @typedef {PassStyleRanksRecord & { '*': { cover: RankCover } }} StaticRanksRecord
  */
@@ -234,7 +234,7 @@ export const makeComparatorKit = (compareRemotables = (_x, _y) => NaN) => {
   /** @type {PartialCompare} */
   const comparator = (left, right) => {
     // Identical operands are equal before their pass style is consulted, so a
-    // value without a rank, such as a SturdyRef, still compares equal to
+    // value without a rank, such as a Parcel, still compares equal to
     // itself.
     if (sameValueZero(left, right)) {
       return 0;
@@ -366,7 +366,7 @@ export const makeComparatorKit = (compareRemotables = (_x, _y) => NaN) => {
         const rightArray = /** @type {Uint8Array} */ (right).slice(0);
         return compareBytes(leftArray, rightArray);
       }
-      case 'sturdyRef': {
+      case 'parcel': {
         throw Fail`A ${q(leftStyle)} cannot be rank-ordered`;
       }
       case 'tagged': {

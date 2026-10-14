@@ -32,7 +32,7 @@ and **Pass-by-reference**.
 | `'tagged'` | Extension | Domain-specific types | `makeTagged('copySet', [...])` |
 | `'error'` | Pass-by-presence | Error objects | `harden(Error('failed'))` |
 | `'promise'` | Pass-by-presence | Promise objects | `Promise.resolve(42)` |
-| `'sturdyRef'` | Pass-by-presence | SturdyRefs, when `@endo/sturdyref` is installed | `new SturdyRef(handler)` |
+| `'parcel'` | Pass-by-presence | Parcels, when `@endo/parcel` is installed | `new Parcel(location, openHook)` |
 
 ## Core Functions
 
@@ -157,7 +157,7 @@ The object remains in its original location.
 
 **Use for:** Objects with behavior, mutable state, capabilities, large objects
 
-**Pass styles:** remotable, promise, error, sturdyRef
+**Pass styles:** remotable, promise, error, parcel
 
 ```javascript
 const service = Far('Service', {
