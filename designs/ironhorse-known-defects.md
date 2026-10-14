@@ -358,6 +358,8 @@ The rest are listed here as they stood.
 - `F099` **P1** Meter the newly reachable object-to-number conversions
 - `F100` **P1** Parse every ECMAScript whitespace character in numeric strings
 - `F101` **P1** Coerce the first pow/atan2 argument when the second is missing
+  (re-probed 2026-10-14: XS skips the coercion too, so this is a `SHARED`
+  candidate; V8 coerces, as ES2024 21.3.2.26 step 1 requires)
 - `F102` **P2** Use a scaled algorithm for variadic Math.hypot
 - `F103` **P1** Meter the new reviver wrapper and recursive walk
 - `F104` **P1** Preserve callable-Proxy identity after revocation
@@ -369,7 +371,7 @@ The rest are listed here as they stood.
 
 ### Promise combinators, capabilities, thenables
 
-13 open, 6 of them P1.
+13 open, 6 of them P1; `F126` since fixed.
 
 - `F111` **P1** Invoke `then` on primitive Promise.resolve results
 - `F113` **P2** Remove the fixed one-million-yield semantic cap
@@ -380,7 +382,10 @@ The rest are listed here as they stood.
 - `F123` **P1** Support bound constructors in NewPromiseCapability
 - `F124` **P2** Preserve NewTarget through default Proxy construction
 - `F125` **P1** Preserve both observable species lookups in `finally`
+  (re-probed 2026-10-14: still open; `promise_finally` in `natives/promise.rs`
+  logs `ctor,species` where XS and V8 log `ctor,species,ctor,species`)
 - `F126` **P2** Preserve Promise native names in function stringification
+  (fixed: the Promise natives use `alloc_named_method` and stringify as XS does)
 - `F127` **P2** Include every standard Promise static in the completeness gate
 - `F128` **P2** Charge for accessor-based thenable probes (partial)
 - `F129` **P2** Account for callable `finally` wrapper creation (partial)
@@ -458,7 +463,7 @@ The rest are listed here as they stood.
 
 ### arguments MOP, Error construction, global environment
 
-14 open, 13 of them P1; `F177` through `F180` since fixed.
+14 open, 13 of them P1; `F177` through `F180` and `F190` since fixed.
 
 - `F177` **P1** Read arguments-object length through the property MOP (fixed)
 - `F178` **P1** Meter generic CreateListFromArrayLike reads in apply (fixed)
@@ -472,7 +477,8 @@ The rest are listed here as they stood.
 - `F187` **P2** Meter Error-to-string allocation in encoded bytes
 - `F188` **P1** Calibrate CopyObject's newly enabled MOP paths
 - `F189` **P1** Resolve inherited properties in the global Object Environment Record
-- `F190` **P1** Reject strict assignment to an unbound identifier
+- `F190` **P1** Reject strict assignment to an unbound identifier (fixed:
+  both engines throw ReferenceError)
 - `F191` **P1** Charge SET_VARIABLE before rejected or throwing global writes exit
 
 ### Array iterator
