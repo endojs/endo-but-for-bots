@@ -771,7 +771,7 @@ impl Interp {
                     // host allocator does.
                     frames
                         .try_reserve(1)
-                        .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+                        .map_err(|_| Step::Host(Halt::HostAllocationFailed))?;
                     frames.push(frame);
                     None
                 }
@@ -1017,7 +1017,7 @@ impl Interp {
                     self.admit_scratch::<u16>(member.len() + additional)?;
                     member
                         .try_reserve(additional)
-                        .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+                        .map_err(|_| Step::Host(Halt::HostAllocationFailed))?;
                     member.push(b':' as u16);
                     if !state.gap.is_empty() {
                         member.push(b' ' as u16);
@@ -1234,7 +1234,7 @@ impl Interp {
                     // host allocator does.
                     stack
                         .try_reserve(1)
-                        .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+                        .map_err(|_| Step::Host(Halt::HostAllocationFailed))?;
                     stack.push(frame);
                     continue 'value;
                 }
@@ -1714,7 +1714,7 @@ impl Interp {
                     self.admit_scratch::<(ReadKey, usize)>(source_positions.len() + 1)?;
                     source_positions
                         .try_reserve(1)
-                        .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+                        .map_err(|_| Step::Host(Halt::HostAllocationFailed))?;
                     source_positions.insert(*key, sources.len());
                     self.push_prepaid_scratch(sources, (*key, source))?;
                 }
@@ -1814,7 +1814,7 @@ impl Interp {
             let frame = self.json_internalize_enter(code, holder, name, source)?;
             frames
                 .try_reserve(1)
-                .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+                .map_err(|_| Step::Host(Halt::HostAllocationFailed))?;
             frames.push(frame);
             loop {
                 let frame = frames.last_mut().expect("an entered property is open");

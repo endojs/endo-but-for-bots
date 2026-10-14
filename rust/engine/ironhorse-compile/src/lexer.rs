@@ -1310,6 +1310,9 @@ impl<'a> Lexer<'a> {
             Err(ironhorse_regexp::CompileError::ResourceLimit) => {
                 return Err(self.err(LexErrorKind::RegExpResourceLimit))
             }
+            Err(ironhorse_regexp::CompileError::HostAllocationFailed) => {
+                return Err(self.err(LexErrorKind::RegExpHostAllocationFailed))
+            }
         }
         st.string = Some(source_units);
         st.modifier = Some(flags);

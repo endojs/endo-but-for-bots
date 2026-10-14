@@ -37,6 +37,7 @@ fn an_engine_gap_never_claims_syntax_error() {
         LexErrorKind::MeterLimit,
         LexErrorKind::RegExpBudgetExceeded,
         LexErrorKind::RegExpResourceLimit,
+        LexErrorKind::RegExpHostAllocationFailed,
         LexErrorKind::Overflow,
     ] {
         assert_eq!(lex(kind.clone()), "InternalError", "{kind:?}");

@@ -106,6 +106,9 @@ impl Interp {
         }
         let compiled = match result {
             Err(SourceCompileError::HeapExhausted) => return Err(Step::Host(Halt::HeapExhausted)),
+            Err(SourceCompileError::HostAllocationFailed) => {
+                return Err(Step::Host(Halt::HostAllocationFailed))
+            }
             Ok(compiled) => compiled,
             Err(SourceCompileError::MeterAbort) => return Err(Step::Host(Halt::MeterAbort)),
             Err(SourceCompileError::Syntax(message)) => {

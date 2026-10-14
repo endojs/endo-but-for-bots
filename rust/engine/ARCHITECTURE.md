@@ -328,9 +328,12 @@ The schema perspectives describe those duties by task:
 ## Halts, resource admission and determinism
 
 `Halt` distinguishes guest/control-flow outcomes from host stops.
-It includes **`HeapExhausted`** and **`Panic(PanicKind)`** as well as
+It includes **`HeapExhausted`**, **`HostAllocationFailed`** and **`Panic(PanicKind)`** as well as
 `MeterAbort`, `StackOverflow`, `ReentryLimit`, `StepLimit`, `Decode`, `NotImplemented`, `Refused`,
 `EngineInvariant`, `Throw` and `Return`.
+`HeapExhausted` is a ceiling's deterministic refusal; `HostAllocationFailed` is the host
+allocator refusing what the ceilings admitted, which `Halt::is_host_failure` marks as never the
+crank's outcome ([WASM-MEMORY.md](WASM-MEMORY.md#host-allocation-failure)).
 Yield/await are internal `DispatchOutcome` control outcomes, not `Halt` variants.
 A guest exception handler must not catch resource exhaustion or an engine panic.
 `Halt::is_panic` defines the panic set; `ExecutionOutcome::classify` also rejects

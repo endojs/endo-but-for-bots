@@ -147,6 +147,14 @@ impl SideRefCounts {
     }
 }
 
+/// What one [`ArrayData::insert_item`] is charged against its host-allocator
+/// pre-flight ([`crate::value::preflight_host_growth`]). On the audited
+/// 64-bit build, a million sequential inserts into a `BTreeMap<u32, Slot>`
+/// allocate one node every six inserts, 55.6 bytes per item, and no node
+/// is larger than 416 bytes, so 512 is about nine times the average and
+/// the 128 inserts between two pre-flights stay well inside their block.
+const ITEM_GROWTH_BOUND: usize = 512;
+
 /// An Array instance's internal state (kept in `Interp::arrays`): the
 /// spec `length` and the sparse item map. Item indices are u32 (a
 /// hole). A `BTreeMap` keeps the indices ordered so `for-in`
@@ -237,6 +245,9 @@ impl ArrayData {
         value: Slot,
         refs: &mut SideRefCounts,
     ) -> Option<Slot> {
+        // A `BTreeMap` insert allocates nodes infallibly, so pre-flight the
+        // host allocator instead, before any mutation.
+        crate::value::preflight_host_growth(ITEM_GROWTH_BOUND);
         refs.add_slot(&value);
         self.count_added(&value);
         let displaced = self.items.insert(index, value);
@@ -452,6 +463,11 @@ impl CollectionData {
         mut canonicalize: impl FnMut(&Slot) -> CollKey,
     ) -> Option<usize> {
         let mut index = self.index.borrow_mut();
+        let pending = self.entries.len() - index.keys.len();
+        if index.keys.try_reserve(pending).is_err() || index.positions.try_reserve(pending).is_err()
+        {
+            crate::value::host_allocation_failed();
+        }
         for at in index.keys.len()..self.entries.len() {
             let canonical = self.entries[at].as_ref().map(|(key, _)| {
                 let canonical = std::rc::Rc::new(canonicalize(key));
@@ -474,6 +490,11 @@ impl CollectionData {
     }
 
     pub(crate) fn push_entry(&mut self, key: Slot, value: Slot, refs: &mut SideRefCounts) {
+        // Grow the entry list before any mutation; a refusal is the host
+        // allocator's, since entries are not admitted against a ceiling.
+        if self.entries.try_reserve(1).is_err() {
+            crate::value::host_allocation_failed();
+        }
         refs.add_slot(&key);
         refs.add_slot(&value);
         self.entries.push(Some((key, value)));

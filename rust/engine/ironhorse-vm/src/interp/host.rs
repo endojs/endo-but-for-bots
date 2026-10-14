@@ -167,16 +167,18 @@ impl<'scope> HostCallContext<'scope> {
         }));
         match result {
             Ok(offset) => Ok(self.value(Slot::of(Kind::String, Payload::String(offset)))),
-            Err(payload) if payload.is::<crate::value::HeapExhausted>() => {
-                self.stopped = Some(Step::Host(Halt::HeapExhausted));
-                Err(HostCallError::Stopped)
-            }
-            Err(payload) => {
-                self.stopped = Some(Step::Host(Halt::EngineInvariant(
-                    "host:string-allocation-panicked",
-                )));
-                std::panic::resume_unwind(payload)
-            }
+            Err(payload) => match crate::interp::resource_halt(&*payload) {
+                Some(halt) => {
+                    self.stopped = Some(Step::Host(halt));
+                    Err(HostCallError::Stopped)
+                }
+                None => {
+                    self.stopped = Some(Step::Host(Halt::EngineInvariant(
+                        "host:string-allocation-panicked",
+                    )));
+                    std::panic::resume_unwind(payload)
+                }
+            },
         }
     }
 
@@ -211,12 +213,12 @@ impl<'scope> HostCallContext<'scope> {
                 self.interp.native_depth = native_depth - held;
                 self.interp.clear_held();
                 self.interp.jumps = jumps;
-                self.stopped = Some(Step::Host(if payload.is::<crate::value::HeapExhausted>() {
-                    Halt::HeapExhausted
-                } else {
-                    Halt::EngineInvariant("host:guest-call-panicked")
-                }));
-                if payload.is::<crate::value::HeapExhausted>() {
+                let resource = crate::interp::resource_halt(&*payload);
+                let contained = resource.is_some();
+                self.stopped = Some(Step::Host(
+                    resource.unwrap_or(Halt::EngineInvariant("host:guest-call-panicked")),
+                ));
+                if contained {
                     return Err(HostCallError::Stopped);
                 }
                 std::panic::resume_unwind(payload);
@@ -325,8 +327,10 @@ impl Interp {
         }));
         match result {
             Ok(result) => result,
-            Err(payload) if payload.is::<crate::value::HeapExhausted>() => Err(Halt::HeapExhausted),
-            Err(payload) => std::panic::resume_unwind(payload),
+            Err(payload) => match crate::interp::resource_halt(&*payload) {
+                Some(halt) => Err(halt),
+                None => std::panic::resume_unwind(payload),
+            },
         }
     }
 }

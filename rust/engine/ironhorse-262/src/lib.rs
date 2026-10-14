@@ -125,8 +125,8 @@ pub fn compile_failure_name(error: &ironhorse_compile::ParseError) -> &'static s
         // negative parse-phase case PASS, so a `_` arm defaulting to it would
         // credit the ratchet for whatever lex kind someone adds next --
         // reintroducing, silently, the bug this function exists to fix.
-        // `LexErrorKind` carries no `#[non_exhaustive]`, so naming all sixteen
-        // makes a seventeenth a compile error HERE and forces whoever adds it
+        // `LexErrorKind` carries no `#[non_exhaustive]`, so naming all seventeen
+        // makes an eighteenth a compile error HERE and forces whoever adds it
         // to classify it. Same discipline as `Refusal`'s `Display`.
         ParseErrorKind::Lex(lex) => match lex.kind {
             // Resource ceilings, not grammar. `RegExpBudgetExceeded`'s own doc
@@ -134,6 +134,7 @@ pub fn compile_failure_name(error: &ironhorse_compile::ParseError) -> &'static s
             LexErrorKind::MeterLimit
             | LexErrorKind::RegExpBudgetExceeded
             | LexErrorKind::RegExpResourceLimit
+            | LexErrorKind::RegExpHostAllocationFailed
             | LexErrorKind::Overflow => "InternalError",
             // The grammar rejecting the source: an unterminated string, a bad
             // escape, a strict-mode octal, and the rest.
@@ -375,7 +376,8 @@ fn compile_for(
                         ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
                             kind:
                                 ironhorse_compile::LexErrorKind::RegExpBudgetExceeded
-                                | ironhorse_compile::LexErrorKind::RegExpResourceLimit,
+                                | ironhorse_compile::LexErrorKind::RegExpResourceLimit
+                                | ironhorse_compile::LexErrorKind::RegExpHostAllocationFailed,
                             ..
                         }) => IronhorseCompile::Unsupported(rendered),
                         ironhorse_compile::parser::ParseErrorKind::Unsupported => {

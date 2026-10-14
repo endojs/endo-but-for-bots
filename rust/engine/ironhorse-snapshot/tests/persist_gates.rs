@@ -184,6 +184,10 @@ fn a_live_eval_function_round_trips_the_blob_verbs() {
                         ..
                     }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
                     ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                        kind: ironhorse_compile::LexErrorKind::RegExpHostAllocationFailed,
+                        ..
+                    }) => Err(ironhorse_vm::SourceCompileError::HostAllocationFailed),
+                    ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
                         kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
                         ..
                     }) => Err(ironhorse_vm::SourceCompileError::MeterAbort),

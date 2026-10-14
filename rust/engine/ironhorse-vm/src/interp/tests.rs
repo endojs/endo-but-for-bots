@@ -2130,6 +2130,7 @@ fn every_opcode_decodes_and_dispatches_without_panic_or_decode_error() {
             | Halt::Throw { .. }
             | Halt::MeterAbort
             | Halt::HeapExhausted
+            | Halt::HostAllocationFailed
             | Halt::StepLimit(_)
             | Halt::NotImplemented(_)
             | Halt::Refused(_)

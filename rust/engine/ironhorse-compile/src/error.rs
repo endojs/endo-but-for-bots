@@ -51,6 +51,10 @@ pub enum LexErrorKind {
     RegExpBudgetExceeded,
     /// Regexp compilation exceeded its deterministic storage profile.
     RegExpResourceLimit,
+    /// The host allocator refused regexp storage its profile admitted. Not a
+    /// property of the source (more host memory compiles it), so never a
+    /// guest SyntaxError and never a deterministic resource stop.
+    RegExpHostAllocationFailed,
     /// A `@` outside XS's host (`mxCFlag`) mode.
     InvalidAtSign,
     /// A single `\` (or `\` not followed by `.`) where XS expects `\u`.
@@ -84,6 +88,7 @@ impl fmt::Display for LexErrorKind {
             InvalidRegExp => write!(f, "invalid regular expression"),
             RegExpBudgetExceeded => write!(f, "regexp work budget exhausted"),
             RegExpResourceLimit => write!(f, "regexp storage limit exhausted"),
+            RegExpHostAllocationFailed => write!(f, "regexp host allocation failed"),
             InvalidAtSign => write!(f, "invalid character @"),
             UnexpectedCharacter(c) => write!(f, "invalid character {}", c),
             Overflow => write!(f, "buffer overflow"),

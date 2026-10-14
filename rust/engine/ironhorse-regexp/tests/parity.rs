@@ -35,9 +35,11 @@ fn check(case: Case) -> Result<bool, String> {
         .ok_or_else(|| format!("oracle machine failure for /{}/{}", pattern, flags))?;
 
     match compile(pattern, flags) {
-        Err(CompileError::BudgetExceeded | CompileError::ResourceLimit) => {
-            Err("regexp compilation resource refusal".into())
-        }
+        Err(
+            CompileError::BudgetExceeded
+            | CompileError::ResourceLimit
+            | CompileError::HostAllocationFailed,
+        ) => Err("regexp compilation resource refusal".into()),
         Err(CompileError::Unsupported(_)) => {
             // Honest named skip — the oracle may well compile it.
             Ok(false)

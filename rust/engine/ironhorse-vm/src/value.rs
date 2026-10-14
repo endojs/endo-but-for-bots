@@ -17,11 +17,77 @@ pub const DEFAULT_CHUNK_CEILING: usize = 256 * 1024 * 1024;
 /// Private non-guest control transfer from infallible arena APIs to the run
 /// boundary. `resume_unwind` avoids invoking the process panic hook for an
 /// expected resource refusal. Other Rust panics are never converted to this.
+///
+/// It means the **configured ceiling** refused: a deterministic outcome of
+/// the program under that ceiling, the same on every host. A host allocator
+/// that refuses instead raises [`HostAllocationFailed`].
 #[derive(Debug)]
 pub(crate) struct HeapExhausted;
 
 pub(crate) fn heap_exhausted() -> ! {
     std::panic::resume_unwind(Box::new(HeapExhausted))
+}
+
+/// The same private control transfer as [`HeapExhausted`], for growth the
+/// ceiling admitted but the **host allocator** refused: a `try_reserve`
+/// that failed, whether the allocator returned no memory (a host that caps
+/// memory by failing `memory.grow`, for example) or the request passed the
+/// target's `isize::MAX` allocation limit. It says nothing about the
+/// program, so the run boundary reports it as
+/// `Halt::HostAllocationFailed`, never as `Halt::HeapExhausted`.
+#[derive(Debug)]
+pub(crate) struct HostAllocationFailed;
+
+pub(crate) fn host_allocation_failed() -> ! {
+    std::panic::resume_unwind(Box::new(HostAllocationFailed))
+}
+
+/// What one pre-flight asks the host allocator for (see
+/// [`preflight_host_growth`]).
+const PREFLIGHT_BYTES: usize = 64 * 1024;
+
+thread_local! {
+    /// Growth credit left before this thread's next pre-flight, in bytes.
+    /// Per thread, so that the growth a pre-flight covers is the growth of
+    /// the thread that made it. It only sets how often the allocator is
+    /// probed, never what a program computes.
+    static PREFLIGHT_CREDIT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Pre-flight the host allocator before growth that has no fallible form on
+/// stable Rust, such as a `BTreeMap` node. Each call spends `bytes` of credit;
+/// when the credit runs out, the allocator is asked for [`PREFLIGHT_BYTES`]
+/// and the block is released at once. If it refuses, the run stops with
+/// [`host_allocation_failed`] before the infallible growth can abort the
+/// process (a trap on wasm). `bytes` must bound what one call's growth can
+/// allocate, so that the growth between two pre-flights fits in the block
+/// the last one found.
+///
+/// Best effort, not a guarantee: other infallible allocations between two
+/// pre-flights can take the space it found. It never changes an outcome on
+/// a host whose allocator succeeds.
+#[inline]
+pub(crate) fn preflight_host_growth(bytes: usize) {
+    let credit = PREFLIGHT_CREDIT.get();
+    if credit > bytes {
+        PREFLIGHT_CREDIT.set(credit - bytes);
+        return;
+    }
+    preflight_refill(bytes);
+}
+
+#[cold]
+#[inline(never)]
+fn preflight_refill(bytes: usize) {
+    let mut probe: Vec<u8> = Vec::new();
+    if probe.try_reserve_exact(PREFLIGHT_BYTES).is_err() {
+        host_allocation_failed();
+    }
+    // Keep the optimizer from eliding the allocation and assuming it
+    // succeeded.
+    std::hint::black_box(probe.as_ptr());
+    drop(probe);
+    PREFLIGHT_CREDIT.set(PREFLIGHT_BYTES.saturating_sub(bytes));
 }
 
 /// XS's `XS_NO_ID` (`xs.h`): the sentinel key id meaning "no name". A
@@ -1031,12 +1097,14 @@ impl SlotArena {
         {
             heap_exhausted();
         }
+        // The ceiling admitted the slot; a failure to grow the record
+        // vectors now is the host allocator's.
         if self.free.is_empty()
             && ((self.lazy.is_none() && self.slots.try_reserve(1).is_err())
                 || self.free_marks.try_reserve(1).is_err()
                 || self.marks.try_reserve(1).is_err())
         {
-            heap_exhausted();
+            host_allocation_failed();
         }
         self.snapshot_dirt.content();
         self.snapshot_dirt.liveness();
@@ -2297,8 +2365,10 @@ impl ChunkArena {
             self.ensure_range_resident(header - 1, header);
         }
         let v = self.bytes_mut();
+        // `can_allocate` admitted the bytes; a failure to grow the arena
+        // now is the host allocator's.
         if v.try_reserve(CHUNK_HEADER + data.len()).is_err() {
-            heap_exhausted();
+            host_allocation_failed();
         }
         v.extend_from_slice(&(data.len() as u32).to_le_bytes());
         let off = v.len() as u32;

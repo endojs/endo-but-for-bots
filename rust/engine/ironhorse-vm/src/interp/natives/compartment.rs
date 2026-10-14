@@ -179,10 +179,10 @@ impl Interp {
         }
         match result {
             Ok(result) => result,
-            Err(payload) if payload.is::<crate::value::HeapExhausted>() => {
-                Err(Step::Host(Halt::HeapExhausted))
-            }
-            Err(payload) => std::panic::resume_unwind(payload),
+            Err(payload) => match crate::interp::resource_halt(&*payload) {
+                Some(halt) => Err(Step::Host(halt)),
+                None => std::panic::resume_unwind(payload),
+            },
         }
     }
 

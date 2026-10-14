@@ -428,6 +428,8 @@ receiving a skip; a new or misclassified label is a harness failure.
 not missing-feature acceptance.
 `HeapExhausted`, `MeterAbort`, `StackOverflow` and the harness-only `StepLimit`
 report resource/limit stops; guest handlers cannot catch them.
+`HostAllocationFailed` reports a host allocator that refused what the ceilings admitted; it is
+not the program's outcome and is never committed (`Halt::is_host_failure`, `WASM-MEMORY.md`).
 `Decode` names malformed bytecode, and `Throw` carries an escaping guest exception.
 See `Halt::is_panic`, `ExecutionOutcome::classify`, the runner verdict arms and
 `ironhorse-vm/tests/halt_label_registry.rs` for the actual classification rules.

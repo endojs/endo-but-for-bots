@@ -1966,7 +1966,7 @@ impl Interp {
             let ordinary_ids = self.ordered_own_key_ids(inst);
             self.admit_scratch::<u32>(idxs.len() + ordinary_ids.len())?;
             idxs.try_reserve(ordinary_ids.len())
-                .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+                .map_err(|_| Step::Host(Halt::HostAllocationFailed))?;
             self.charge_builtin_work((ordinary_ids.len() + idxs.len()) as u64)?;
             idxs.extend(ordinary_ids.iter().filter_map(|&id| self.key_id_index(id)));
             idxs.sort_unstable();

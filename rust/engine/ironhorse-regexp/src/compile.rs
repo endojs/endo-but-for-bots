@@ -33,6 +33,10 @@ pub enum CompileError {
     BudgetExceeded,
     /// A deterministic compiler storage ceiling was reached.
     ResourceLimit,
+    /// The host allocator refused storage the compiler's ceilings had
+    /// admitted. Not a property of the pattern: the same pattern compiles,
+    /// or reaches [`CompileError::ResourceLimit`], with more host memory.
+    HostAllocationFailed,
     /// A pin feature this stage has not ported yet. Named, never a wrong
     /// answer (the stage's honest-skip bar).
     Unsupported(&'static str),
@@ -118,6 +122,8 @@ pub struct ValidationOutcome {
 enum CompileStop {
     Budget,
     Resource,
+    /// A `try_reserve` the ceilings admitted failed in the host allocator.
+    Host,
 }
 
 fn stop(reason: CompileStop) -> ! {
@@ -560,6 +566,7 @@ fn checked_work<T>(
             Ok(reason) => Err(match *reason {
                 CompileStop::Budget => CompileError::BudgetExceeded,
                 CompileStop::Resource => CompileError::ResourceLimit,
+                CompileStop::Host => CompileError::HostAllocationFailed,
             }),
             Err(payload) => std::panic::resume_unwind(payload),
         },
@@ -752,7 +759,7 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
             validation_tests::record_code_words(total_words);
             self.code
                 .try_reserve_exact(total_words)
-                .unwrap_or_else(|_| stop(CompileStop::Resource));
+                .unwrap_or_else(|_| stop(CompileStop::Host));
             self.code.resize(total_words, 0);
         }
     }
@@ -1066,7 +1073,7 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
         }
         self.nodes
             .try_reserve(1)
-            .unwrap_or_else(|_| stop(CompileStop::Resource));
+            .unwrap_or_else(|_| stop(CompileStop::Host));
         self.nodes.push(Node {
             kind,
             step: 0,
@@ -1262,7 +1269,7 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
         let mut targets = Vec::new();
         targets
             .try_reserve_exact(mapping_count)
-            .unwrap_or_else(|_| stop(CompileStop::Resource));
+            .unwrap_or_else(|_| stop(CompileStop::Host));
         crate::charcase::for_each_unicode_fold_mapping(|source, target| {
             if charset_contains(property, source) == include_members {
                 targets.push(target);
@@ -1425,7 +1432,7 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
             let mut canonical = Vec::new();
             canonical
                 .try_reserve_exact(count)
-                .map_err(|_| CompileError::ResourceLimit)?;
+                .map_err(|_| CompileError::HostAllocationFailed)?;
             for ch in begin..=end {
                 self.work.charge(1);
                 canonical.push(crate::charcase::canonicalize(ch as i64, fold) as i32);
@@ -1816,7 +1823,7 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
                         self.work.allocate(STRING_HEADER_CHARGE);
                         strings
                             .try_reserve(1)
-                            .unwrap_or_else(|_| stop(CompileStop::Resource));
+                            .unwrap_or_else(|_| stop(CompileStop::Host));
                         strings.push(std::mem::take(&mut current));
                     }
                     if c == b'}' as i64 {
@@ -1838,7 +1845,7 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
                     self.work.allocate(std::mem::size_of::<u32>());
                     current
                         .try_reserve(1)
-                        .unwrap_or_else(|_| stop(CompileStop::Resource));
+                        .unwrap_or_else(|_| stop(CompileStop::Host));
                     current.push(character as u32);
                     self.next()?;
                 }

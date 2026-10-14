@@ -3357,7 +3357,7 @@ impl Interp {
                         // the host allocator does.
                         outer
                             .try_reserve(1)
-                            .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+                            .map_err(|_| Step::Host(Halt::HostAllocationFailed))?;
                         let nested = FlatSource {
                             source: element_object,
                             source_len: element_len,
@@ -4740,7 +4740,7 @@ impl Interp {
                 self.charge_and_check(self.array_item_grow_metering(out.len() as u64))?;
                 self.admit_scratch::<Slot>(out.len() + 1)?;
                 out.try_reserve(1)
-                    .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+                    .map_err(|_| Step::Host(Halt::HostAllocationFailed))?;
                 out.push(item);
             }
         }

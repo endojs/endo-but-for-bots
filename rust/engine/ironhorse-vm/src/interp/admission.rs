@@ -155,7 +155,7 @@ impl Interp {
         self.reserve_units_growth(output.len() as u64, length as u64)?;
         output
             .try_reserve(addition.len())
-            .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+            .map_err(|_| Step::Host(Halt::HostAllocationFailed))?;
         output.extend_from_slice(addition);
         Ok(())
     }
@@ -202,7 +202,7 @@ impl Interp {
         self.charge_and_check(charge)?;
         output
             .try_reserve(addition.len())
-            .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+            .map_err(|_| Step::Host(Halt::HostAllocationFailed))?;
         output.extend_from_slice(addition);
         Ok(())
     }
@@ -219,7 +219,7 @@ impl Interp {
         self.admit_scratch::<T>(length)?;
         output
             .try_reserve(addition.len())
-            .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+            .map_err(|_| Step::Host(Halt::HostAllocationFailed))?;
         output.extend_from_slice(addition);
         Ok(())
     }
@@ -236,7 +236,7 @@ impl Interp {
         self.admit_scratch::<T>(length)?;
         output
             .try_reserve(1)
-            .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+            .map_err(|_| Step::Host(Halt::HostAllocationFailed))?;
         output.push(value);
         Ok(())
     }
@@ -275,16 +275,17 @@ impl Interp {
         if !self.chunks.can_allocate(bytes) {
             crate::value::heap_exhausted();
         }
-        Self::reserved_vec(capacity).unwrap_or_else(|_| crate::value::heap_exhausted())
+        Self::reserved_vec(capacity).unwrap_or_else(|_| crate::value::host_allocation_failed())
     }
 
     /// Materialize a capacity already admitted by `reserve_units` or a chunk
-    /// admission check. Host allocator refusal is also an execution halt.
+    /// admission check. Host allocator refusal is also an execution halt, but
+    /// not the ceiling's: it is `HostAllocationFailed`, never `HeapExhausted`.
     pub(super) fn reserved_vec<T>(capacity: usize) -> Result<Vec<T>, Step> {
         let mut buffer = Vec::new();
         buffer
             .try_reserve_exact(capacity)
-            .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+            .map_err(|_| Step::Host(Halt::HostAllocationFailed))?;
         Ok(buffer)
     }
 

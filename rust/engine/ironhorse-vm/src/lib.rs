@@ -7,8 +7,8 @@
 //! Guest strings use UTF-16; symbol-name conversion is shared through `ironhorse-text`.
 //! [`SourceCompiler`] supplies dynamic compilation without a production compiler dependency.
 //! [`gc::GcHooks`] connects the collector to references held outside the arenas.
-//! [`Halt`] includes [`Halt::HeapExhausted`] and [`Halt::Panic`]; resource stops and
-//! engine faults are not catchable guest exceptions.
+//! [`Halt`] includes [`Halt::HeapExhausted`], [`Halt::HostAllocationFailed`] and
+//! [`Halt::Panic`]; resource stops and engine faults are not catchable guest exceptions.
 //!
 //! [`Machine`] owns one frozen intrinsic graph and shared heap. Each
 //! [`Compartment`] retains a [`Realm`] with independent globals and compiler policy.

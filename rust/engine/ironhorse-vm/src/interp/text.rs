@@ -15,8 +15,17 @@ pub(super) fn be16_to_units(content: &[u8]) -> Vec<u16> {
 /// Encode code `units` to the stored **UTF-16 big-endian** payload (2 bytes
 /// per unit). Big-endian so a byte-lexicographic compare of two payloads
 /// equals their code-unit ordering (the ECMAScript string relation).
+///
+/// The buffer is reserved fallibly: every guest string is copied through
+/// here, whole, on its way into the chunk arena, so on a host that caps
+/// memory this is often the first allocation to fail. Its failure is
+/// the host's ([`crate::value::host_allocation_failed`]), never the
+/// ceiling's, which admitted the string before it was built.
 pub(super) fn units_to_be16(units: &[u16]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(units.len() * 2);
+    let mut out = Vec::new();
+    if out.try_reserve_exact(units.len() * 2).is_err() {
+        crate::value::host_allocation_failed();
+    }
     for &u in units {
         out.extend_from_slice(&u.to_be_bytes());
     }
@@ -89,7 +98,7 @@ fn admitted_scalar_run(vm: &mut Interp, units: usize) -> Result<String, Step> {
     vm.admit_scratch::<u8>(bytes)?;
     let mut run = String::new();
     run.try_reserve_exact(bytes)
-        .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+        .map_err(|_| Step::Host(Halt::HostAllocationFailed))?;
     Ok(run)
 }
 

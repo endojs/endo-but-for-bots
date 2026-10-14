@@ -222,6 +222,9 @@ pub enum SourceCompileError {
     Invariant(String),
     /// Regexp compilation exceeded its storage profile.
     HeapExhausted,
+    /// The host allocator refused storage the compiler's profile admitted;
+    /// the bridge stops the machine with [`Halt::HostAllocationFailed`].
+    HostAllocationFailed,
 }
 
 /// What a direct `eval` inherits from the code that calls it, as XS's
@@ -1489,6 +1492,23 @@ pub fn error_name_static(name: &str) -> Option<&'static str> {
     ERROR_NAMES.iter().find(|&&n| n == name).copied()
 }
 
+/// The halt a caught resource-stop unwind reports, or `None` for any other
+/// panic payload: [`crate::value::heap_exhausted`] (the ceiling refused)
+/// becomes [`Halt::HeapExhausted`], and
+/// [`crate::value::host_allocation_failed`] (the host allocator refused)
+/// becomes [`Halt::HostAllocationFailed`]. Every `catch_unwind` that
+/// contains a resource stop classifies its payload here, so the two never
+/// collapse into one.
+pub(crate) fn resource_halt(payload: &(dyn std::any::Any + Send)) -> Option<Halt> {
+    if payload.is::<crate::value::HeapExhausted>() {
+        Some(Halt::HeapExhausted)
+    } else if payload.is::<crate::value::HostAllocationFailed>() {
+        Some(Halt::HostAllocationFailed)
+    } else {
+        None
+    }
+}
+
 /// A host-observable completion or abort. Nested catch and suspension transfers
 /// are private interpreter state and cannot be returned in this type.
 ///
@@ -1513,7 +1533,36 @@ pub enum Halt {
     /// The meter host refused more computation.
     MeterAbort,
     /// The configured slot or chunk heap ceiling was exhausted.
+    ///
+    /// Deterministic: the same program under the same ceilings halts here
+    /// on every host and target. Contrast [`Halt::HostAllocationFailed`].
     HeapExhausted,
+    /// The host allocator refused memory that the configured ceilings had
+    /// admitted: a fallible growth (an arena, a reserved scratch buffer, a
+    /// side table) failed for a reason outside the program, such as a host
+    /// that caps memory by failing `memory.grow`, or a request past the
+    /// target's `isize::MAX` allocation limit (2 GiB on wasm32).
+    ///
+    /// **Not deterministic.** The same crank completes, or halts later with
+    /// [`Halt::HeapExhausted`], on a host with more memory, so this outcome
+    /// belongs to the host, not to the program. The embedder contract:
+    ///
+    /// 1. **Never commit a crank that ends here**: neither its heap nor its
+    ///    outbound effects, and never record the halt itself as the crank's
+    ///    outcome (a replica must not vote it, and a supervisor must not
+    ///    terminate the vat for it).
+    /// 2. **Restore from the last committed state** and re-drive the crank.
+    /// 3. **Recycle the instance** first. On wasm, linear memory never
+    ///    shrinks, so the instance that failed keeps the memory it reached;
+    ///    drop it and restore into a fresh one
+    ///    (`rust/engine/WASM-MEMORY.md` has the threshold and the cost).
+    ///
+    /// Like [`Halt::HeapExhausted`] it is a panic ([`Halt::is_panic`]);
+    /// [`Halt::is_host_failure`] is the predicate that separates the two.
+    /// Allocations the engine still makes infallibly abort (a trap on wasm)
+    /// rather than reaching this halt; the embedder treats such a trap the
+    /// same way.
+    HostAllocationFailed,
     /// The interpreter ran past a caller-supplied **step ceiling** without
     /// completing — a bounded-execution guard for callers that install no
     /// metering host (notably the bytecode-decoder fuzz harness, which
@@ -1626,7 +1675,9 @@ impl Halt {
     /// still the sole definition of "is a panic," not of "must discard the
     /// crank" (a strictly larger set).
     ///
-    /// The settled core is `StackOverflow | ReentryLimit | MeterAbort | EngineInvariant(_) | Panic(_)`.
+    /// The settled core is `StackOverflow | ReentryLimit | MeterAbort | EngineInvariant(_) | Panic(_)`,
+    /// with the resource stops `HeapExhausted` and `HostAllocationFailed`;
+    /// [`Halt::is_host_failure`] tells the second of those apart.
     /// `Decode` and the harness-only `StepLimit` are **provisional**
     /// members: they terminate-without-commit like a panic, but their
     /// provenance is supervisor/harness rather than guest behavior, so
@@ -1646,6 +1697,7 @@ impl Halt {
                 | Halt::ReentryLimit { .. }
                 | Halt::MeterAbort
                 | Halt::HeapExhausted
+                | Halt::HostAllocationFailed
                 | Halt::Panic(_)
                 | Halt::EngineInvariant(_)
                 // Provisional (Open Question), may change without a
@@ -1653,6 +1705,22 @@ impl Halt {
                 | Halt::Decode(_)
                 | Halt::StepLimit(_)
         )
+    }
+
+    /// True when the halt reports the **host**, not the program: the crank
+    /// would have run differently with more memory, so its outcome is not a
+    /// fact about the delivery. Today that is [`Halt::HostAllocationFailed`]
+    /// alone.
+    ///
+    /// Every such halt is also a panic ([`Halt::is_panic`]), so a commit
+    /// path that discards panics already discards it. This predicate answers
+    /// the further question a supervisor or replica asks: whether the halt
+    /// may be recorded as the crank's result (vote it, terminate the vat for
+    /// it, count it toward a runaway policy). For these halts it may not;
+    /// restore the last committed state into a fresh instance and re-drive
+    /// the crank instead.
+    pub fn is_host_failure(&self) -> bool {
+        matches!(self, Halt::HostAllocationFailed)
     }
 }
 
@@ -2787,58 +2855,57 @@ impl Interp {
                 host_render_halt: None,
             };
         }
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let payload = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.run_inner(shared, execute_script, pump_jobs, guest_thrown_rendering)
         })) {
-            Ok(outcome) => outcome,
-            Err(payload) if payload.is::<crate::value::HeapExhausted>() => {
-                // All native activations have unwound. The interrupted heap
-                // remains non-quiescent and must be rewound by the supervisor.
-                self.native_depth = 0;
-                self.clear_held();
-                self.last_crank_completed = false;
-                // A lazy Iterator helper's "already running" latch rides
-                // `IterState::generation`, cleared by the step's own exit path
-                // — which THIS unwind skipped, because `HeapExhausted` is a
-                // `resume_unwind` rather than a returned `Step`. A latch left
-                // set poisons that helper for good (every later `next()` and
-                // `return()` answers "already running"), and because a
-                // following completed crank restores quiescence the machine
-                // could then be snapshotted: the row carries no field for the
-                // latch, so the resumed twin would answer differently from the
-                // machine it came from. No helper is mid-step once the stack
-                // has unwound, so clearing every latch here is exactly the
-                // live value.
-                for state in self.iterators.values_mut() {
-                    if (10..=14).contains(&state.kind) {
-                        state.generation = 0;
-                    }
-                }
-                RunOutcome {
-                    meter_raw_this_run: 0,
-                    computrons_this_run: 0,
-                    dispatched_this_run: 0,
-                    completed: false,
-                    unhandled_rejection: self.unhandled_rejection(),
-                    result: String::new(),
-                    coercion_error: None,
-                    computrons: self.meter.computrons(),
-                    dispatched: self.n_dispatched,
-                    meter_raw: self.meter.raw(),
-                    halt: Halt::HeapExhausted,
-                    host_render_halt: None,
-                }
+            Ok(outcome) => return outcome,
+            Err(payload) => payload,
+        };
+        let Some(halt) = resource_halt(&*payload) else {
+            // The Rust stack has unwound every native activation. Keep
+            // the failed crank and poison latches for inspection, but do
+            // not retain native recursion charges for frames that no
+            // longer exist. A later explicit run resets guest activation.
+            self.native_depth = 0;
+            self.clear_held();
+            self.last_crank_completed = false;
+            std::panic::resume_unwind(payload)
+        };
+        // All native activations have unwound. The interrupted heap
+        // remains non-quiescent and must be rewound by the supervisor.
+        self.native_depth = 0;
+        self.clear_held();
+        self.last_crank_completed = false;
+        // A lazy Iterator helper's "already running" latch rides
+        // `IterState::generation`, cleared by the step's own exit path
+        // — which THIS unwind skipped, because a resource stop is a
+        // `resume_unwind` rather than a returned `Step`. A latch left
+        // set poisons that helper for good (every later `next()` and
+        // `return()` answers "already running"), and because a
+        // following completed crank restores quiescence the machine
+        // could then be snapshotted: the row carries no field for the
+        // latch, so the resumed twin would answer differently from the
+        // machine it came from. No helper is mid-step once the stack
+        // has unwound, so clearing every latch here is exactly the
+        // live value.
+        for state in self.iterators.values_mut() {
+            if (10..=14).contains(&state.kind) {
+                state.generation = 0;
             }
-            Err(payload) => {
-                // The Rust stack has unwound every native activation. Keep
-                // the failed crank and poison latches for inspection, but do
-                // not retain native recursion charges for frames that no
-                // longer exist. A later explicit run resets guest activation.
-                self.native_depth = 0;
-                self.clear_held();
-                self.last_crank_completed = false;
-                std::panic::resume_unwind(payload)
-            }
+        }
+        RunOutcome {
+            meter_raw_this_run: 0,
+            computrons_this_run: 0,
+            dispatched_this_run: 0,
+            completed: false,
+            unhandled_rejection: self.unhandled_rejection(),
+            result: String::new(),
+            coercion_error: None,
+            computrons: self.meter.computrons(),
+            dispatched: self.n_dispatched,
+            meter_raw: self.meter.raw(),
+            halt,
+            host_render_halt: None,
         }
     }
 

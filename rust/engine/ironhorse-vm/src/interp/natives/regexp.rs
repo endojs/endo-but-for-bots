@@ -348,6 +348,9 @@ impl Interp {
             Err(ironhorse_regexp::CompileError::ResourceLimit) => {
                 return Err(Step::Host(Halt::HeapExhausted))
             }
+            Err(ironhorse_regexp::CompileError::HostAllocationFailed) => {
+                return Err(Step::Host(Halt::HostAllocationFailed))
+            }
             Ok(p) => p,
             Err(ironhorse_regexp::CompileError::Syntax(reason)) => {
                 // An invalid pattern is a catchable `SyntaxError`, exactly as
@@ -547,6 +550,9 @@ impl Interp {
             )
         };
         self.charge_and_check(outcome.match_meter_raw - charged)?;
+        if outcome.host_allocation_failed {
+            return Err(Step::Host(Halt::HostAllocationFailed));
+        }
         if outcome.resource_limit {
             return Err(Step::Host(Halt::HeapExhausted));
         }

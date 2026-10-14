@@ -963,10 +963,9 @@ impl Interp {
                     self.switch_environment(previous);
                     self.discard_inactive_environment(partial);
                 }
-                if payload.is::<crate::value::HeapExhausted>() {
-                    Err(Halt::HeapExhausted)
-                } else {
-                    std::panic::resume_unwind(payload)
+                match crate::interp::resource_halt(&*payload) {
+                    Some(halt) => Err(halt),
+                    None => std::panic::resume_unwind(payload),
                 }
             }
         }
@@ -1178,10 +1177,10 @@ impl Interp {
             self.slots.alloc(value)
         })) {
             Ok(root) => root,
-            Err(payload) if payload.is::<crate::value::HeapExhausted>() => {
-                return Err(Halt::HeapExhausted)
-            }
-            Err(payload) => std::panic::resume_unwind(payload),
+            Err(payload) => match crate::interp::resource_halt(&*payload) {
+                Some(halt) => return Err(halt),
+                None => std::panic::resume_unwind(payload),
+            },
         };
         let lease = self.pin_identity(root);
         Ok((root, lease))

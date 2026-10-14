@@ -71,6 +71,10 @@ fn map_compiled(
                 ..
             }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
             ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                kind: ironhorse_compile::LexErrorKind::RegExpHostAllocationFailed,
+                ..
+            }) => Err(ironhorse_vm::SourceCompileError::HostAllocationFailed),
+            ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
                 kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
                 ..
             }) => Err(ironhorse_vm::SourceCompileError::MeterAbort),
