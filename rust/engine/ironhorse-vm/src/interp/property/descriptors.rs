@@ -202,6 +202,32 @@ impl Interp {
         self.slots.alloc(Slot::instance(self.object_proto))
     }
 
+    /// FromPropertyDescriptor (ES2024 6.2.6.4): an object with only the
+    /// fields `descriptor` has, in the specification's order. A Proxy's
+    /// `defineProperty` trap receives this, so a forwarding trap redefines
+    /// exactly what was asked; [`Self::descriptor_object`] completes the
+    /// descriptor, which suits a complete one read back from an object.
+    pub(in crate::interp) fn from_property_descriptor(
+        &mut self,
+        descriptor: OrdinaryDescriptor,
+    ) -> Slot {
+        let object = self.alloc_descriptor_instance();
+        let fields = [
+            ("value", descriptor.value),
+            ("writable", descriptor.writable.map(Slot::boolean)),
+            ("get", descriptor.get),
+            ("set", descriptor.set),
+            ("enumerable", descriptor.enumerable.map(Slot::boolean)),
+            ("configurable", descriptor.configurable.map(Slot::boolean)),
+        ];
+        for (name, value) in fields {
+            if let Some(value) = value {
+                self.define_descriptor_field(object, name, value);
+            }
+        }
+        Slot::of(Kind::Reference, Payload::Reference(object))
+    }
+
     pub(in crate::interp) fn descriptor_object(&mut self, descriptor: OrdinaryDescriptor) -> Slot {
         let object = self.alloc_descriptor_instance();
         if descriptor.is_accessor() {
