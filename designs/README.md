@@ -499,6 +499,7 @@ LLM-agent stack).*
 | [thixotrope-on-cloudflare](thixotrope-on-cloudflare.md) | 2026-09-23 | 2026-09-24 | Proposed |
 | [thixotrope-on-cloudflare-addendum-single-vat-hub](thixotrope-on-cloudflare-addendum-single-vat-hub.md) | 2026-09-24 | 2026-09-24 | Proposed |
 | [thixotrope-on-cloudflare-review](thixotrope-on-cloudflare-review.md) | 2026-09-24 | 2026-09-24 | Reference |
+| [thixotrope-wasm-worker](thixotrope-wasm-worker.md) | 2026-10-14 | 2026-10-15 | Proposed |
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | In Progress |
 | [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md) | 2026-04-23 | 2026-05-06 | **Complete** |
 | [syrup-frame](syrup-frame.md) | 2026-05-04 | 2026-05-06 | Deprecated |
@@ -582,6 +583,10 @@ LLM-agent stack).*
 **Current totals (2026-10-07, hardened-text-codecs-shim to Implemented):** 77 Complete/Implemented, 84 In Progress, 18 Not Started, 25 Proposed, 3 Active, 21 Reference, 4 Deprecated, 2 Draft, 5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phases 1–2 implemented* and [genie-integration](genie-integration.md) as a *Largely realized* retrospective (**244 indexed records**). The bucket sum is 244. The raw audit covered 242 files (`designs/*.md` plus `packages/*/designs/*.md`): six ledger/support files were excluded, while four already-indexed nested channel-thread research records lie outside those two globs. Every indexed record and untallied file was checked in six disjoint batches against document metadata, all-state PR searches, and the `llm` log; 63 claimed-to-verified status corrections and 16 new rows are recorded in [`ARCHIVE.md`](ARCHIVE.md). The totals also count [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md) (**Implemented**, #1306), which landed on `llm` concurrently with this pass and was folded in at rebase. The Cloudflare pass adds [thixotrope-on-cloudflare](thixotrope-on-cloudflare.md) (Proposed), [thixotrope-on-cloudflare-addendum-single-vat-hub](thixotrope-on-cloudflare-addendum-single-vat-hub.md) (Proposed) and [thixotrope-on-cloudflare-review](thixotrope-on-cloudflare-review.md) (Reference) to the summary table (Proposed 23 -> 25, Reference 20 -> 21, records 240 -> 243), and both Proposed designs to the M4 table, the dependency graph and the estimates table. Neither is estimated: the base design's Phase 0 is a go/no-go measurement gated on the engine work in `rust/engine/WASM-BLOCKERS.md` and `rust/engine/STACK-DEPTH-REFACTOR.md`, so no milestone-duration, critical-path or timeline change is assigned.
 
 The 2026-09-30 rebase of PR #1116 adds [guest-native-invitations](guest-native-invitations.md) (**In Progress**: the guest `invite`/`accept` surface landed in #1305 and #1310), increasing In Progress from 83 to 84 and the indexed records from 243 to 244.
+
+The 2026-10-14 pass adds [thixotrope-wasm-worker](thixotrope-wasm-worker.md) (**Proposed**: the B5 plan with its spike); it joins the M4 table, the dependency graph (between the base Cloudflare design and its addendum) and the estimates table. Its Phases 0b–4 add about 12 days of M4 work that waits on nothing else in M4 and can run beside it, so M4's projected duration and the timeline are unchanged; its Phase 5 waits on the Cloudflare review's blockers 7–11, like the two Cloudflare designs, and is not placed on the timeline.
+
+**Current totals (2026-10-15, re-derived from the summary table):** 77 Complete/Implemented, 83 In Progress, 18 Not Started, 29 Proposed, 3 Active, 21 Reference, 4 Deprecated, 3 Draft, 5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phases 1–2 implemented* and [genie-integration](genie-integration.md) as a *Largely realized* retrospective (**248 indexed records**). The bucket sum is 248. A qualified cell folds by its leading status (an `In Progress (PR #284)` is In Progress, a `Superseded by …` is Superseded, a `Proposed (exploratory)` is Proposed). The 2026-10-07 paragraph's totals (245 records, 26 Proposed, 84 In Progress, 2 Draft, with the later one-row increments) were incremented rather than re-derived and had drifted from the table by three rows; this count replaces them. The raw corpus is 251 files (`designs/*.md` plus `packages/*/designs/*.md`): six ledger/support files are excluded (this README, `ARCHIVE.md`, `AGENTS.md`, `CLAUDE.md`, and the two package design-directory indexes), four already-indexed channel-thread research records lie outside those globs, and one design file, [daemon-mount-visible-roots](daemon-mount-visible-roots.md) (Proposed, 2026-09-30), is in the corpus but not yet in the summary table; indexing it is left to the next grooming pass, since this pass changes no other row.
 
 ## Roadmap
 
@@ -798,6 +803,10 @@ flowchart TD
         oortho --> ocf
         ihengine --> ocf
         ocf --> ocfa
+        owasm[thixotrope-wasm-worker<br/><i>PROPOSED</i>]
+        ocf --> owasm
+        ihengine --> owasm
+        owasm --> ocfa
         oreconn --> oortho
         onet --> docapn
         onoise --> docapn
@@ -1191,6 +1200,7 @@ finalized.
 | thixotrope | In Progress | OCapN comms hub owned by Thixotrope; XS and Ironhorse SQLite workers; snapshot/journal recovery; persistent guest objects, answers, and listeners; local supervisor, application installation, observable inventory, and vat retention diagnostics. Layered durable acceptance and outbox recovery are implemented in protocol v2; the application admission API remains separate design work. Potential mechanisms are tracked separately in the package designs. |
 | thixotrope-on-cloudflare | Proposed | Run each Thixotrope worker as a hibernating SQLite-backed Durable Object, with Ironhorse compiled to wasm and the heap store on Durable Object SQLite. Gated on the engine work in `rust/engine/WASM-BLOCKERS.md` and `rust/engine/STACK-DEPTH-REFACTOR.md`; the [verification review](thixotrope-on-cloudflare-review.md) ranks the blockers. |
 | thixotrope-on-cloudflare-addendum-single-vat-hub | Proposed | Replaces the base design's architecture with single-vat hubs (vat and OCapN hub tables in one Durable Object) and a per-tenant control object for lifecycle and collection. |
+| thixotrope-wasm-worker | Proposed | The worker split into a host-neutral core and host shells, the heap store ported onto Durable Object SQLite over a host-import ABI, and the base design's Phase 0 measured in local workerd; the spike under `rust/engine/wasm-worker-spike/` passes the whole store acceptance suite inside a Durable Object. |
 | `thixotrope/message-delivery` | **Implemented** | Package-level implementation record for the durable message-delivery slice. |
 | `thixotrope/vat-replacement` | Proposed (exploratory) | Package-level replacement experiment; remains exploratory rather than a committed standalone deliverable. |
 | `daemon/iroh-network-design` | **Implemented** | Package-level Iroh transport implementation supporting the M4 networking cut. |
@@ -1903,6 +1913,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | thixotrope | M | Not re-estimated | 4 | XS and Ironhorse engines, comms hub, supervisor, and application installation are implemented. Remaining delivery-contract work and package experiments need a new estimate; the earlier XS-adapter estimate is obsolete. |
 | thixotrope-on-cloudflare | — | not estimated; its Phase 0 is a go/no-go measurement | 4 | The stack prerequisites are costed in `rust/engine/STACK-DEPTH-REFACTOR.md`; the other engine prerequisites (`rust/engine/WASM-BLOCKERS.md` B1, B5, B7, B8) are not costed; the rest waits on Phase 0. |
 | thixotrope-on-cloudflare-addendum-single-vat-hub | — | not estimated | 4 | Phase 2 of the base design; its protocol findings in the review must be resolved first. |
+| thixotrope-wasm-worker | L | about 12 days for Phases 0b–4 (0b S, 1 M, 2 S–M, 3 M plus B7, 4 M, at the 2026-05-14 calibration's median actuals of 0.7 d for S, 3 d for M; 1, 2 and 4 can run in parallel), then Phase 5 at L (8.5 d actual) once the review's blockers 7–11 are resolved | 4 | The B5 plan: core crate, `ironhorse-store-do`, platform-neutral profile, local wasm engine; Phase 5 is the Addendum A protocols and waits on the review's blockers 7–11. |
 | daemon-agent-network-identity | S-M | 3 days | 4 | Network registration, locator construction |
 | ~~ocapn-noise-network~~ | L | — | 4 | ✅ Complete (PR #137 consolidates stacked PRs #111/#112/#113; merged 2026-05-08) |
 | ~~ocapn-iroh-netlayer~~ | M | — | 4 | ✅ Complete (implemented with the design: `@endo/ocapn-iroh`, mock-iroh CI tests plus `ENDO_IROH_INTEGRATION=1`-gated real-endpoint test) |

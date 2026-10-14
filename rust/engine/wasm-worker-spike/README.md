@@ -9,7 +9,8 @@ the backend acceptance suite passes inside local workerd, and the design's
 Phase 0 numbers (wake, commit, rows, memory) come from `run.py`.
 It is a standalone cargo root outside the engine workspace, like
 `stack-lanes/probe`, because its wasm build uses the unstable unwinding recipe
-of [WASM-BLOCKERS.md B1](../WASM-BLOCKERS.md#b1-unwinding-is-required-and-stable-wasm-cannot-provide-it)
+of
+[WASM-BLOCKERS.md B1](../WASM-BLOCKERS.md#b1-unwinding-is-required-and-stable-wasm-cannot-provide-it)
 (`../scripts/build-wasm.py`, whose flags and environment `run.py` imports).
 It carries no production code.
 
@@ -39,8 +40,8 @@ still takes wasi-libc and the crt objects from the target's `rust-std`;
 It is WASI rather than `wasm32-unknown-unknown` because the acceptance suite's
 own sessions draw commit tokens from the engine's default source, which needs
 a clock and seeded hash keys (the engine refuses on the other target); the
-host shims the six WASI imports std reaches for, and the sessions the spike
-owns draw their tokens from `host_random` on either target.
+host shims the WASI imports std reaches for (the module imports six), and the
+sessions the spike owns draw their tokens from `host_random` on either target.
 
 ```sh
 cd rust/engine/wasm-worker-spike
