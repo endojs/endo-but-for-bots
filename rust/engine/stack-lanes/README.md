@@ -21,6 +21,8 @@ output line byte for byte against a native reference produced in the same run.
 | `sweep.py`, `sweep-pins.json` | The grammar sweep: every folding or right-nested production bisected to its ceiling; a shape with no ceiling is classified by its compile-stack slope. `ironhorse-compile/tests/recursion_bounds.rs` reads the pins of the shapes it shares with the sweep from `sweep-pins.json`, so a re-pin moves both. |
 | `expected-traps/` | One list per host configuration of the cases allowed to trap there. |
 | `differential.py`, `differential/` | The release-neutral gate for the refactors of Phase 1 onward: the native probe at a base revision against the working tree, both handed the same program text (the corpus, every family around its ceiling, and the per-change programs in `differential/`), compared byte for byte, compiles by bytecode, symbols and every parse-meter charge (`--digest`), runs by where the meter is checked, to the computron (`--meter-trace`). |
+| `cross_target.py`, `differential/cross-target*.js` | The cross-target gate of `WASM-BLOCKERS.md` B7: the native probe against the wasm32 probe under Wasmtime at lane A's stack, both built from the working tree and handed `differential.py`'s programs, compared on the same fields. The two snippet files hold the B7 repros. |
+| `expected-divergence/` | The divergences `cross_target.py` allows, one entry per program with both lines and its B7 site. |
 | `../benches/stack_height.py` | The native ratchet over the same corpus (`benches/README.md`). |
 
 ## Running
@@ -43,6 +45,8 @@ python3 lane_b_workerd.py --no-build --shard all --paint
 python3 lane_c.py --no-build --output lane-c.json
 python3 sweep.py --no-build --check
 python3 differential.py                     # uncommitted work against HEAD
+python3 cross_target.py --no-build          # native against wasm32, the fast shard
+python3 cross_target.py --no-build --shard slow
 python3 -m unittest discover -s . -p 'test_*.py'
 ```
 
@@ -56,6 +60,76 @@ the expected-trap lists it clears.
 
 `regexp-backtrack` is its own shard (`--shard slow`); the default `fast` shard is
 everything else and `all` is both.
+The programs of a `differential/*.slow.js` file are slow too: `differential.py` runs them
+with `--slow` and `cross_target.py` with `--shard slow`, one at a time, since they are slow
+because they need gigabytes natively or minutes on wasm32.
+
+A snippet program may open with header lines.
+`// name: <name>` labels it `snippet <file>#<name>` instead of by its position, so that a
+list entry survives an insertion above it.
+`// flags:` takes `--eval-compiler`, `--compile-only`, `--chunk-ceiling=<bytes>` and
+`--slot-ceiling=<slots>`; the last two set the machine's allocation ceilings, for the B7
+repros that need a ceiling an embedder could raise.
+
+## Cross-target comparison
+
+`cross_target.py` builds the native and wasm32 probes from the working tree, or takes the
+last builds with `--no-build`, and runs every program of the shard on both.
+The wasm32 side runs under the Wasmtime CLI (`$WASMTIME`) at lane A's `max_wasm_stack`
+(409,600 B) with exceptions on.
+Both sides carry `--digest` and `--meter-trace`, so a halt, a result, a computron, a meter
+check, a bytecode byte or a parse-meter charge that differs between the targets fails.
+An engine panic is part of a side's outcome, reported without the checkout's path or the
+line number, so a panic on one target is a divergence like any other.
+A corpus case that traps under Wasmtime is expected when lane A's expected-trap list names
+it, at the same stack.
+CI runs the fast shard on every engine change (`cross-target-ironhorse` in
+`.github/workflows/ci.yml`); it takes about four and a half minutes on a GitHub runner, a
+third of it in one `b4-flat.js` program.
+The slow shard takes about eleven minutes and needs about 10 GB of memory, most of it for
+the native side of the `Intl.Segmenter` repro.
+
+## Expected-divergence list
+
+`expected-divergence/wasmtime.json` lists the divergences that are still open.
+Each entry names the program by its label, the B7 site it belongs to (as the B7 tables name
+it), the native line and the wasm32 line.
+A divergence passes only when an entry records exactly both lines; anything else fails:
+
+- a program outside the list that diverges (`differs`), with an entry printed for pasting;
+- a listed program that no longer diverges (`stale`), so the list cannot outlive a fix;
+- a listed program that diverges otherwise than recorded (`changed`);
+- an entry whose program no longer exists.
+
+A native trap or panic, or a timeout on either side, is never expected.
+Entries for programs outside the run (another shard, `--only`, `--program`) are left
+unchecked.
+The list records the stack it was taken at and refuses a check at another one.
+
+The list only shrinks.
+A B7 fix removes the entries it clears: run its snippets with `--program`, then the fast
+and slow shards, and delete the entries that come back `stale` (`--update-expected` deletes
+them and re-records the `changed` ones).
+A new divergence is added by hand with its B7 site, never by `--update-expected`.
+An engine change can also move a listed program's lines on both targets without touching
+its divergence: new intrinsics take chunk space, so a repro near a ceiling halts a few
+computrons sooner on each.
+The entry then reads `changed`; re-record it with `--update-expected`, and check in review
+that the two lines still differ the way the B7 site says.
+A repro whose two targets differ by only a few kilobytes keeps its filler in the middle of
+that window, so that such a move does not carry it out of the window and pass it off as
+fixed.
+Every program of `differential/cross-target*.js` also runs in `differential.py`, so a fix
+that moves a native threshold fails there.
+
+Not every B7 site is reachable from a guest program on the probe.
+The open snapshot and store findings (the truncated `chunk_len`, duplicate Intl
+bound-function rows, `std::process::id()` in the CAS and file-store names, the error values
+that differ by width), the host floating-point environment and `ironhorse-store-sqlite` need
+a crafted store, a snapshot or a host change.
+`json.rs:1199` is masked by a stricter check before it, `json_escape_string` cannot be
+reached on wasm32 today, and a top-level RegExp literal's compile-time refusal is reached
+through `Function` instead of a 420,000-character literal in a snippet.
 
 ## Expected-trap lists
 
@@ -67,8 +141,8 @@ Each list carries the configuration it was recorded under (stack size, V8 flags,
 shadow stack); a check under another configuration refuses to run, and
 re-recording under a new one needs the whole corpus (`--shard all`, no `--case`).
 Timeouts and native traps are never expected traps.
-A mismatch between a host's output and native is always a failure: it is the
-cross-host determinism check `WASM-BLOCKERS.md` B7 asks for.
+A mismatch between a host's output and native is always a failure here: lane A
+compares only the corpus, and `cross_target.py` is where a known divergence is listed.
 
 Lane A started at 2,097,152 B and is lowered as phases land.
 After the report's Phase 3 it runs at 409,600 B, the 400 KiB that Target 2's 200 B per

@@ -59,7 +59,7 @@ What stands in the way, in order of severity:
 | B2 | Wasm exception-handling encoding: LLVM emits the legacy form by default, and Wasmtime accepts only the standard `exnref` form | toolchain / host | configuration |
 | B4 | Default-feature builds diverge between native and wasm in `Math` results and therefore in metering | engine features | configuration (use `consensus`) |
 | B5 | The worker binary depends on threads, `flock`, bundled C SQLite and POSIX files; `FileStore` does not work on WASI | worker / store | port work |
-| B6 | No CI builds or runs the engine on wasm; the one WASI test script is not wired in | CI | process |
+| B6 | CI runs the engine on wasm only in the native-against-wasm32 differential's fast shard; the one WASI test script is not wired in | CI | process |
 
 [Browser-specific considerations](#browser-specific-considerations) follow the blockers.
 
@@ -246,6 +246,9 @@ A consensus build must give the same result and the same computrons on every tar
 An audit of the engine for native-versus-wasm32 divergence confirmed 27 distinct sites.
 Each guest-visible site was reproduced by running the same program on the native probe and on
 the wasm32 probe under Wasmtime, both with `consensus`, and comparing the full output line.
+Those repros are kept in `stack-lanes/differential/cross-target.js` and `cross-target.slow.js`,
+and CI compares them on both targets (B6); `stack-lanes/expected-divergence/wasmtime.json`
+lists the ones that still diverge.
 The snapshot and store findings used crafted inputs or host calls.
 It found them through five lenses: host-layout charges, casts, overflow points, floating point,
 and snapshots.
@@ -805,22 +808,36 @@ The daemon has no wasm host yet: `engine_for_spawn_request("wasm", …)` is reje
 (`rust/endo/src/engine.rs`), and `endor.rs`'s module docs list `-e wasm` only as a future
 engine.
 
-## B6: no wasm coverage in CI
+## B6: little wasm coverage in CI
 
-The only wasm job, `build-wasm`, builds `rust/ocapn_noise`.
+The differential job exists: `cross-target-ironhorse` in `.github/workflows/ci.yml` runs on every
+change under `rust/engine` except documentation.
+It builds the stack-lanes probe natively and for `wasm32-wasip1` with the B1 workaround, and
+`stack-lanes/cross_target.py` hands both the same guest programs.
+The wasm32 side runs under the Wasmtime 49 CLI at lane A's fixed `max_wasm_stack` of 409,600 B.
+Halt, result, computrons, the meter's checks, bytecode, symbols and parse-meter charges must
+agree byte for byte.
+The programs are the stack-lanes corpus, every recursion family and chain kind around its
+ceiling, the per-change snippets of `stack-lanes/differential/`, and the B7 repros in
+`stack-lanes/differential/cross-target.js`.
+A divergence passes only when `stack-lanes/expected-divergence/wasmtime.json` lists it, with
+both lines and its B7 site.
+A listed divergence that no longer appears fails, so the list holds exactly the open B7 sites
+the probe reaches, and each B7 fix removes its entries.
+The B7 repros that need gigabytes natively or minutes on wasm32, in `cross-target.slow.js`, are
+a separate shard (`--shard slow`) that no workflow runs yet.
+The snapshot and store sites need crafted stores or snapshots, which the probe does not take.
+
+The only other wasm job, `build-wasm`, builds `rust/ocapn_noise`.
 `rust/engine/scripts/test-snapshot-wasi.py` runs the snapshot's 32-bit overflow refusals on
 `wasm32-wasip1`, and it passes locally (2/2).
 No workflow invokes it, even though
 `architecture-review/2026-09-06/ARCHITECTURE-REVIEW.md` states that those refusals "run on
 32-bit WASI in CI".
-Nothing stops the currently clean crates from gaining a wasm-incompatible dependency, and
-nothing catches B7-style divergence.
-
-A cheap first gate is `cargo build --target wasm32-unknown-unknown` for the six crates that
+Only the crates the probe links are built for wasm in CI, so nothing stops another clean crate
+from gaining a wasm-incompatible dependency.
+A cheap remaining gate is `cargo build --target wasm32-unknown-unknown` for the six crates that
 build today, plus the existing WASI script.
-The next step is a differential job that runs the same guest programs natively and on wasm32
-(under Wasmtime) and compares results and computrons.
-It should also run the recursion families under a fixed small `max_wasm_stack`.
 
 ## Browser-specific considerations
 
