@@ -572,8 +572,22 @@ pub trait CommitTokenSource {
 /// `RandomState`, whose keys are drawn per thread and advanced at every
 /// use), over a process-wide counter, the process id and the clock. Tokens
 /// need to be distinct, not secret.
+///
+/// WASI has no process id (`std::process::id` panics there, WASM-BLOCKERS.md
+/// B7), so on that target the id term is a constant and the counter, the
+/// clock and the per-thread hash keys keep tokens distinct.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RandomTokens;
+
+#[cfg(not(target_os = "wasi"))]
+fn process_id() -> u32 {
+    std::process::id()
+}
+
+#[cfg(target_os = "wasi")]
+fn process_id() -> u32 {
+    0
+}
 
 impl CommitTokenSource for RandomTokens {
     fn next_token(&mut self) -> CommitToken {
@@ -589,7 +603,7 @@ impl CommitTokenSource for RandomTokens {
             let mut h = state.build_hasher();
             h.write_u64(count);
             h.write_u128(nanos);
-            h.write_u32(std::process::id());
+            h.write_u32(process_id());
             h.write_usize(lane);
             *half = h.finish();
         }
