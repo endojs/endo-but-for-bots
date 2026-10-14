@@ -1,6 +1,50 @@
 //! Meter checks and fallible admission for temporary allocations.
 use super::*;
 
+/// The bytes one scratch element is charged against the chunk ceiling.
+///
+/// Whether an admission fits decides whether a crank halts `HeapExhausted`,
+/// so the charge is consensus state and must not follow the host pointer
+/// width as `size_of::<T>()` does (`usize`, tuples holding it). Each element
+/// type declares a fixed charge (its audited 64-bit layout), and a 64-bit
+/// build asserts the constant still equals that layout.
+pub(crate) trait ScratchElement {
+    const CHARGE: usize;
+}
+
+macro_rules! scratch_element {
+    ($($t:ty => $n:expr),* $(,)?) => {$(
+        impl crate::interp::admission::ScratchElement for $t {
+            const CHARGE: usize = $n;
+        }
+        #[cfg(target_pointer_width = "64")]
+        const _: () = assert!(std::mem::size_of::<$t>() == $n);
+    )*};
+}
+pub(crate) use scratch_element;
+
+scratch_element! {
+    u8 => 1,
+    u16 => 2,
+    u32 => 4,
+    i32 => 4,
+    f64 => 8,
+    usize => 8,
+    Slot => 24,
+    (i32, i32) => 8,
+    (Slot, usize, usize) => 40,
+    (char, u8) => 8,
+    ReadKey => 8,
+    (ReadKey, Slot) => 32,
+    (ReadKey, usize) => 16,
+    (u16, OrdinaryDescriptor) => 88,
+    (u32, Slot) => 32,
+    (Slot, Slot) => 48,
+    Option<Slot> => 24,
+    Option<crate::value::SlotIndex> => 8,
+    Vec<u16> => 24,
+}
+
 impl Interp {
     /// A loop-closing metering check (`mxCheckMeter`). Consults the host
     /// when one is installed; a fresh, never-armed machine (the default
@@ -93,7 +137,7 @@ impl Interp {
     }
 
     /// Extend a string output only after admitting its complete new size.
-    pub(super) fn extend_reserved_units<T: Copy>(
+    pub(super) fn extend_reserved_units<T: Copy + ScratchElement>(
         &mut self,
         output: &mut Vec<T>,
         addition: &[T],
@@ -103,7 +147,7 @@ impl Interp {
             .checked_add(addition.len())
             .ok_or(Step::Host(Halt::HeapExhausted))?;
         let bytes = length
-            .checked_mul(std::mem::size_of::<T>())
+            .checked_mul(T::CHARGE)
             .ok_or(Step::Host(Halt::HeapExhausted))?;
         if !self.chunks.can_allocate(bytes) {
             return Err(Step::Host(Halt::HeapExhausted));
@@ -118,14 +162,20 @@ impl Interp {
 
     /// Bound an unmetered temporary by the heap profile before reserving it.
     /// Its caller prepays the operation's existing work charge first.
-    pub(super) fn reserve_scratch<T>(&mut self, capacity: usize) -> Result<Vec<T>, Step> {
+    pub(super) fn reserve_scratch<T: ScratchElement>(
+        &mut self,
+        capacity: usize,
+    ) -> Result<Vec<T>, Step> {
         self.admit_scratch::<T>(capacity)?;
         Self::reserved_vec(capacity)
     }
 
     /// Admit new element-wise scratch work, charged once before collecting it.
     /// Unlike `reserve_scratch`, the caller has no existing prepaid loop cost.
-    pub(super) fn reserve_work_scratch<T>(&mut self, capacity: usize) -> Result<Vec<T>, Step> {
+    pub(super) fn reserve_work_scratch<T: ScratchElement>(
+        &mut self,
+        capacity: usize,
+    ) -> Result<Vec<T>, Step> {
         self.admit_scratch::<T>(capacity)?;
         let raw = (capacity as u64)
             .checked_mul(crate::meter::BUILTIN_METERING)
@@ -136,7 +186,7 @@ impl Interp {
 
     /// Bound each output expansion before copying, including `$` substitutions
     /// whose expansion can be much larger than the replacement template.
-    pub(super) fn extend_work_scratch<T: Copy>(
+    pub(super) fn extend_work_scratch<T: Copy + ScratchElement>(
         &mut self,
         output: &mut Vec<T>,
         addition: &[T],
@@ -157,7 +207,7 @@ impl Interp {
         Ok(())
     }
 
-    pub(super) fn extend_prepaid_scratch<T: Copy>(
+    pub(super) fn extend_prepaid_scratch<T: Copy + ScratchElement>(
         &mut self,
         output: &mut Vec<T>,
         addition: &[T],
@@ -174,7 +224,7 @@ impl Interp {
         Ok(())
     }
 
-    pub(super) fn push_prepaid_scratch<T>(
+    pub(super) fn push_prepaid_scratch<T: ScratchElement>(
         &mut self,
         output: &mut Vec<T>,
         value: T,
@@ -205,9 +255,9 @@ impl Interp {
         buffer
     }
 
-    pub(super) fn admit_scratch<T>(&mut self, capacity: usize) -> Result<(), Step> {
+    pub(super) fn admit_scratch<T: ScratchElement>(&mut self, capacity: usize) -> Result<(), Step> {
         let bytes = capacity
-            .checked_mul(std::mem::size_of::<T>())
+            .checked_mul(T::CHARGE)
             .ok_or(Step::Host(Halt::HeapExhausted))?;
         if !self.chunks.can_allocate(bytes) {
             return Err(Step::Host(Halt::HeapExhausted));
@@ -218,9 +268,9 @@ impl Interp {
     /// Reserve a bounded representation copy for immutable host diagnostics.
     /// This helper cannot charge work; guest callers use their normal admission
     /// checkpoints. It is restricted to copies, never guest numeric lengths.
-    pub(super) fn reserve_copy_scratch<T>(&self, capacity: usize) -> Vec<T> {
+    pub(super) fn reserve_copy_scratch<T: ScratchElement>(&self, capacity: usize) -> Vec<T> {
         let bytes = capacity
-            .checked_mul(std::mem::size_of::<T>())
+            .checked_mul(T::CHARGE)
             .unwrap_or_else(|| crate::value::heap_exhausted());
         if !self.chunks.can_allocate(bytes) {
             crate::value::heap_exhausted();

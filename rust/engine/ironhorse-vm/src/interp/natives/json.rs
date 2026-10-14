@@ -17,6 +17,11 @@ enum JsonSource {
     Object(Vec<(ReadKey, JsonSource)>),
 }
 
+crate::interp::admission::scratch_element! {
+    JsonSource => 40,
+    (ReadKey, JsonSource) => 48,
+}
+
 /// The key an object node is given for a worklist link while its tree is
 /// freed ([`JsonSource`]'s `Drop`); nothing reads it.
 const FREED_SOURCE_KEY: ReadKey = ReadKey::Index(0);
