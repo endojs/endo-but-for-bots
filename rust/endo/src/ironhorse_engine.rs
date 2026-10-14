@@ -296,6 +296,11 @@ pub mod engine {
             Halt::StackOverflow(n) => {
                 format!("value stack overflow ({n} slots in use)")
             }
+            Halt::HostAllocationFailed => {
+                "host allocation failed (a host limit, not the program's; \
+                 restore the last commit in a fresh instance)"
+                    .to_string()
+            }
             Halt::ReentryLimit { depth, limit } => {
                 format!("native recursion limit (attempted weighted depth {depth}; limit {limit})")
             }
@@ -603,6 +608,14 @@ pub mod engine {
                     }),
                 ..
             })) => Err(MachineError::Halt(Halt::HeapExhausted)),
+            Ok(Err(ironhorse_compile::ParseError {
+                kind:
+                    ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                        kind: ironhorse_compile::LexErrorKind::RegExpHostAllocationFailed,
+                        ..
+                    }),
+                ..
+            })) => Err(MachineError::Halt(Halt::HostAllocationFailed)),
             Ok(Err(ironhorse_compile::ParseError {
                 kind:
                     ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
@@ -2479,6 +2492,7 @@ pub mod engine {
                     limit: 2048,
                 },
                 Halt::MeterAbort,
+                Halt::HostAllocationFailed,
                 Halt::EngineInvariant("bitwise:stack-underflow"),
                 engine_fault(),
                 Halt::Decode(ironhorse_vm::DecodeError::ProgramCounterOutOfBounds {
@@ -2530,6 +2544,7 @@ pub mod engine {
                     limit: 2048,
                 },
                 Halt::MeterAbort,
+                Halt::HostAllocationFailed,
                 Halt::EngineInvariant("bitwise:stack-underflow"),
                 engine_fault(),
                 Halt::Decode(ironhorse_vm::DecodeError::InvalidSymbols),
