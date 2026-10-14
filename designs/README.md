@@ -421,7 +421,7 @@ LLM-agent stack).*
 | [ironhorse-snapshot-schema-debugging](ironhorse-snapshot-schema-debugging.md) | 2026-09-08 | 2026-09-08 | Proposed |
 | [ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md) | 2026-08-06 | 2026-09-24 | In Progress |
 | [ironhorse-debugger-recovery-and-uncaught](ironhorse-debugger-recovery-and-uncaught.md) | 2026-08-12 | 2026-08-14 | Proposed |
-| [ironhorse-known-defects](ironhorse-known-defects.md) | 2026-09-04 | 2026-09-07 | Reference |
+| [ironhorse-known-defects](ironhorse-known-defects.md) | 2026-09-04 | 2026-10-14 | Reference |
 | [ironhorse-engine-trait-research](ironhorse-engine-trait-research.md) | 2026-09-08 | — | Reference |
 | [ironhorse-w6-decisions](ironhorse-w6-decisions.md) | 2026-09-09 | 2026-09-24 | Active |
 | [ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md) | 2026-09-14 | 2026-09-24 | Proposed |
