@@ -2437,6 +2437,7 @@ impl Interp {
             | NativeMethod::StringAt
             | NativeMethod::StringSlice
             | NativeMethod::StringSubstring
+            | NativeMethod::StringSubstr
             | NativeMethod::StringIndexOf
             | NativeMethod::StringLastIndexOf
             | NativeMethod::StringIncludes
@@ -6055,6 +6056,7 @@ impl Interp {
             | NativeMethod::StringAt
             | NativeMethod::StringSlice
             | NativeMethod::StringSubstring
+            | NativeMethod::StringSubstr
             | NativeMethod::StringIndexOf
             | NativeMethod::StringLastIndexOf
             | NativeMethod::StringIncludes
