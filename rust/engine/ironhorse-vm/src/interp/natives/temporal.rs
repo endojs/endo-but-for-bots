@@ -82,6 +82,11 @@ impl Interp {
                 "Temporal.Duration: fields must have a consistent sign".into(),
             ));
         }
+        // A Duration's slots hold Numbers: a field balanced from an exact
+        // difference is stored as ℝ(𝔽(value)), so `z1.since(z2, { largestUnit:
+        // "microseconds" })` over 2**64 ns reads -18446744073709552 µs, not
+        // ...551.
+        let record = TemporalDurationRecord::from_fields(record.fields().map(|v| v as f64 as i64));
         let inst = self
             .slots
             .alloc(Slot::instance(self.temporal_duration_proto));
