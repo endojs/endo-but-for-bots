@@ -99,7 +99,7 @@ That ordering decides the triage below.
 | 1.4  | Name vat directories after workers    | Done                                  |
 | 1.5  | Correct the README                    | Done                                  |
 | 2.1  | Snapshot awake workers                | Done, with one threshold              |
-| 2.2  | Answer `status` before ready          | Do; the rest of boot work is deferred |
+| 2.2  | Answer `status` before ready          | Deferred, beside D.5                  |
 | 2.3  | Break routes toward a retired session | Done                                  |
 | 2.4  | Measure what a commit writes          | Measure when convenient               |
 | 3    | Collection under Ironhorse            | Requirements on the parallel effort   |
@@ -250,18 +250,16 @@ cadence and recovery from the awake snapshot.
 
 ### 2.2 Answer `status` before the supervisor is ready
 
-A control connection accepted before `readyKit` resolves waits on it
-(`src/control/supervisor.js`), so a booting supervisor looks the same as a dead one, and `status`
-exists only on a selected workspace.
-
-Proposed: a daemon-wide `status` that needs no workspace, and a connection facet that answers
-`status()` and `help()` at once before ready with `{ phase: 'starting' | 'warming' | 'ready' }`
-and the count of workers still replaying.
-Every other method still waits.
-
-With 2.1 bounding every replay suffix, the rest of the boot work (D.5) is deferred.
-
-Test: in `test/local-control.test.js`, `status` answers while a replay is blocked.
+Deferred, beside D.5.
+The control socket is served last, after the workers warm, so during a warm there is no socket to
+answer: a client gets `ECONNREFUSED`, which is what the operator's host retried 360 times a minute.
+Answering during the warm would take a second, temporary host listener, opened under the lease
+before restore and closed before the control adapter binds, with warm progress plumbed out of the
+daemon: sixty to eighty lines and a second listener lifecycle.
+With 2.1, a restart replays at most the cadence per worker, so the window that listener would
+cover shrinks from the operator's fifteen minutes to seconds.
+The host should treat `ECONNREFUSED` as a supervisor that is starting and back off (their
+bd-1993), which it needs for a dead supervisor anyway.
 
 ### 2.3 Break routes toward a retired session
 
@@ -363,6 +361,8 @@ mechanism depends on who imports them; check after the engine work lands.
   A bounded pool, an `awaitWarm` option, a warming report, and a start that returns before every
   replay finishes.
   It changes the start contract; 2.1 bounds every suffix, which removes most of the motivation.
+  2.2, a `status` that answers during the warm, waits here with it: both serve a window 2.1 made
+  short.
 
 ## Rejected
 
@@ -399,14 +399,16 @@ The report's guest, host and wire modules belong to the hosted application.
 - Send the endowment packet as one message, not frames of 32 tokens or 8 refs.
   With 1.1 a frame no longer commits the heap, so the report's 20 minutes become seconds, but each
   frame is still a delivery.
-- Back off when retrying a supervisor that is starting (their bd-1993).
+- Back off when retrying a supervisor that is starting (their bd-1993), and read `ECONNREFUSED`
+  on the control socket as that: the socket is served last (2.2).
 
 ## First batch
 
-1.1, 1.2, 1.3, 1.4, 1.5, 2.1, 2.2, and reading bd-1991 for 2.3.
+Done: 1.1, 1.2, 1.3, 1.4, 1.5, 2.1 and 2.3; 2.2 is deferred beside D.5.
 Each removes work, closes an unbounded growth, or corrects a statement; only 2.1 adds a tunable,
 and none adds a state format.
 Section 3's tests follow the engine work.
 
-Until 1.1 lands and the application sends endowments in one message, the operator's guidance
-stands: give a Thixotrope chat one or two powers, not the root set.
+1.1 makes each endowment frame cheap, but each is still a delivery; until the application sends
+the packet as one message, the operator's guidance stands: give a Thixotrope chat one or two
+powers, not the root set.
