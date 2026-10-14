@@ -756,7 +756,7 @@ Wasmtime ran the same modules correctly.
 `scripts/test-snapshot-wasi.py` uses the same runner, which is fine for its small tests.
 
 **Status (2026-10-14): measured and decided in [WASM-MEMORY.md](WASM-MEMORY.md), with the
-streaming writer.**
+streaming writer and the declared admission widths.**
 The footprint is linear in the ceilings: on wasm32 the worst running heap takes 4.5 bytes per
 byte of chunk ceiling and 50 per slot over a 7.25 MiB empty instance, a checkpoint or a
 whole-heap snapshot at most one container more (5.5 and 70), and an eager restore, now the

@@ -1,7 +1,8 @@
 # The wasm build's memory: a model, ceilings per host, and a host-failure halt
 
 Measured 2026-10-14 on `llm` at `0a42c5a3` plus this branch, which turns
-[WASM-BLOCKERS.md](WASM-BLOCKERS.md) B8 ("the ceilings do not bound memory") into a decision.
+[WASM-BLOCKERS.md](WASM-BLOCKERS.md) B8 ("the ceilings do not bound memory") into a decision,
+and re-measured on `llm` at `c416423d` once the admission widths had landed.
 The build is the B1 recipe of `stack-lanes/build_probe.py` (std rebuilt with unwinding, `exnref`,
 a 4 MiB shadow stack, `consensus`), the same flags as the official build script that
 [endojs/endo-but-for-bots#1450](https://github.com/endojs/endo-but-for-bots/pull/1450) adds.
@@ -10,12 +11,18 @@ in for V8.
 Every number below comes from a file in [`stack-lanes/memory/results/`](stack-lanes/memory/results/)
 and the command that wrote it ([Reproduction](#reproduction)).
 
-Of the sibling tasks this depends on, one has landed and these numbers include it: the streaming
-snapshot writer (`a6b452a5`, with `9d3810e9`), which writes a whole-heap snapshot from the live
-arenas.
-Three have not: array-item and side-table admission, the consensus caps on `set_chunk_ceiling`
-and `set_slot_ceiling`, and the target-independent admission widths
-([endojs/endo-but-for-bots#1449](https://github.com/endojs/endo-but-for-bots/pull/1449)).
+Of the sibling tasks this depends on, two have landed and these numbers include both.
+The streaming snapshot writer (`a6b452a5`, with `9d3810e9`) writes a whole-heap snapshot from
+the live arenas.
+The target-independent admission widths
+([endojs/endo-but-for-bots#1449](https://github.com/endojs/endo-but-for-bots/pull/1449),
+`d5f23bf0` to `ff8051e0`) charge declared widths instead of `size_of`; re-measured on top of
+them, every wasm table and every capped-host halt below repeated to the byte.
+The native and recycle files are from `0a42c5a3`: the widths equal the 64-bit `size_of` they
+replace, so native output does not change, and they change what admission charges, not what a
+run that completes allocates.
+Two have not landed: array-item and side-table admission, and the consensus caps on
+`set_chunk_ceiling` and `set_slot_ceiling`.
 [The formula](#the-worst-case-formula) says which constants each of them moves.
 
 ## Decisions
@@ -254,8 +261,9 @@ What the sibling tasks change:
 - **The consensus caps** set the largest C and S the formula is ever evaluated at
   ([below](#the-consensus-caps)).
 - **Target-independent admission widths**
-  ([endojs/endo-but-for-bots#1449](https://github.com/endojs/endo-but-for-bots/pull/1449)) move
-  where scratch admission halts, not what a heap costs; no constant here changes.
+  ([endojs/endo-but-for-bots#1449](https://github.com/endojs/endo-but-for-bots/pull/1449)), which
+  have landed, move where scratch admission halts on wasm32, not what a heap costs: no constant
+  here changed, and every wasm table repeated to the byte on top of them.
 
 Four engine changes would lower the constants themselves, and none is made here:
 
@@ -498,8 +506,8 @@ Evidence:
   The forty-string loop ends in `HostAllocationFailed` at 4,457,259 computrons; strings, the
   doubled string, the mix, arrays, Maps and Sets each end in it rather than trapping, and the
   object list, which fits, still returns.
-- **Release-neutral**: `stack-lanes/differential.py --base 0a42c5a3` reports `same` on all 1,763
-  programs; `cargo test --release --workspace --no-fail-fast` passes 3,720 tests in 480 suites;
+- **Release-neutral**: `stack-lanes/differential.py --base c416423d` reports `same` on all 1,763
+  programs; `cargo test --release --workspace --no-fail-fast` passes 3,730 tests in 481 suites;
   the benchmark check is in the pull request.
   The halt is unreachable unless an allocation fails.
 
