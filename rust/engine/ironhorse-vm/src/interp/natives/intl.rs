@@ -716,10 +716,12 @@ impl Interp {
             let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
             item.id = 0;
             item.next = crate::value::SlotIndex::NULL;
-            self.arrays
-                .get_mut(&arr)
-                .unwrap()
-                .insert_item(i as u32, item, &mut self.side_refs);
+            self.arrays.get_mut(&arr).unwrap().insert_item(
+                i as u32,
+                item,
+                &mut self.side_refs,
+                &mut self.chunks,
+            );
         }
         self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
         Slot::of(Kind::Reference, Payload::Reference(arr))
@@ -741,20 +743,25 @@ impl Interp {
             let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
             item.id = 0;
             item.next = crate::value::SlotIndex::NULL;
-            self.arrays
-                .get_mut(&arr)
-                .unwrap()
-                .insert_item(i as u32, item, &mut self.side_refs);
+            self.arrays.get_mut(&arr).unwrap().insert_item(
+                i as u32,
+                item,
+                &mut self.side_refs,
+                &mut self.chunks,
+            );
         }
         self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
         Slot::of(Kind::Reference, Payload::Reference(arr))
     }
 
     /// A single list element must be a String (ECMA-402 StringListFromIterable
-    /// step: `If Type(next) is not String, throw a TypeError`).
-    fn list_element_string(&mut self, value: Slot) -> Result<Vec<u16>, Step> {
+    /// step: `If Type(next) is not String, throw a TypeError`). The element is
+    /// kept by reference: copying each one before the list is complete let a
+    /// list of many references to one long string exhaust host memory before
+    /// a later non-String element threw.
+    fn list_element_string(&mut self, value: Slot) -> Result<crate::value::ChunkOffset, Step> {
         match value.value {
-            Payload::String(off) if value.kind == Kind::String => Ok(self.str_units(off)),
+            Payload::String(off) if value.kind == Kind::String => Ok(off),
             _ => Err(self
                 .catchable_type_error_msg("Intl.ListFormat: list elements must be strings".into())),
         }
@@ -769,21 +776,15 @@ impl Interp {
         &mut self,
         code: &[u8],
         iterable: Slot,
-    ) -> Result<Vec<Vec<u16>>, Step> {
+    ) -> Result<StringList, Step> {
         if iterable.kind == Kind::Undefined {
-            return Ok(Vec::new());
+            return Ok(StringList::Values(Vec::new()));
         }
         if iterable.kind == Kind::String {
             if let Payload::String(off) = iterable.value {
-                let units = self.str_units(off);
-                let mut result = Vec::new();
-                for decoded in char::decode_utf16(units) {
-                    result.push(match decoded {
-                        Ok(ch) => ch.encode_utf16(&mut [0u16; 2]).to_vec(),
-                        Err(error) => vec![error.unpaired_surrogate()],
-                    });
-                }
-                return Ok(result);
+                // Each code point is one element; they are read in order from
+                // this one copy rather than kept as a vector apiece.
+                return Ok(StringList::CodePoints(self.str_units(off)));
             }
         }
         let obj = match iterable.value {
@@ -824,13 +825,13 @@ impl Interp {
                     let s = self.list_element_string(item)?;
                     result.push(s);
                 }
-                return Ok(result);
+                return Ok(StringList::Values(result));
             }
             // An intrinsic array iterator handed in directly
             // (`array[Symbol.iterator]()`): read its remaining array elements.
             if let Some(state) = self.iterators.get(&obj) {
                 if state.done {
-                    return Ok(Vec::new());
+                    return Ok(StringList::Values(Vec::new()));
                 }
                 let source = state.iterable;
                 let start = state.index;
@@ -851,7 +852,7 @@ impl Interp {
                         st.index = length;
                         st.done = true;
                     }
-                    return Ok(result);
+                    return Ok(StringList::Values(result));
                 }
             }
             return Err(
@@ -892,7 +893,7 @@ impl Interp {
             };
             let done = self.mop_get(code, step_inst, done_id, step)?;
             if self.truthy(&done) {
-                return Ok(result);
+                return Ok(StringList::Values(result));
             }
             let value = self.mop_get(code, step_inst, value_id, step)?;
             if value.kind != Kind::String {
@@ -905,7 +906,7 @@ impl Interp {
                 ));
             }
             let s = match value.value {
-                Payload::String(off) => self.str_units(off),
+                Payload::String(off) => off,
                 _ => {
                     return Err(self.catchable_type_error_msg(
                         "Intl.ListFormat: list elements must be strings".into(),
@@ -1476,12 +1477,99 @@ impl Interp {
             let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
             item.id = 0;
             item.next = crate::value::SlotIndex::NULL;
-            self.arrays
-                .get_mut(&arr)
-                .unwrap()
-                .insert_item(i as u32, item, &mut self.side_refs);
+            self.arrays.get_mut(&arr).unwrap().insert_item(
+                i as u32,
+                item,
+                &mut self.side_refs,
+                &mut self.chunks,
+            );
         }
         self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
         Slot::of(Kind::Reference, Payload::Reference(arr))
+    }
+}
+
+/// The list `Intl.ListFormat` formats, as StringListFromIterable produced it,
+/// without a copy of each element: the String values themselves, or the code
+/// points of one primitive string.
+pub(in crate::interp) enum StringList {
+    Values(Vec<crate::value::ChunkOffset>),
+    CodePoints(Vec<u16>),
+}
+
+impl Interp {
+    /// Append one `{type, value}` part object to a `formatToParts` result.
+    pub(in crate::interp) fn list_format_push_part(
+        &mut self,
+        arr: crate::value::SlotIndex,
+        index: u32,
+        ty: &'static str,
+        value: &[u16],
+    ) {
+        let obj = self.slots.alloc(Slot::instance(self.object_proto));
+        let value_slot = self.new_string_units(value);
+        let type_slot = self.intl_string(ty);
+        // Insert in `type`, `value` enumeration order.
+        self.define_descriptor_field(obj, "type", type_slot);
+        self.define_descriptor_field(obj, "value", value_slot);
+        let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
+        item.id = 0;
+        item.next = crate::value::SlotIndex::NULL;
+        self.arrays.get_mut(&arr).unwrap().insert_item(
+            index,
+            item,
+            &mut self.side_refs,
+            &mut self.chunks,
+        );
+    }
+
+    /// How many elements `list` holds.
+    pub(in crate::interp) fn string_list_len(list: &StringList) -> usize {
+        match list {
+            StringList::Values(values) => values.len(),
+            StringList::CodePoints(units) => char::decode_utf16(units.iter().copied()).count(),
+        }
+    }
+
+    /// The UTF-16 length of every element of `list` together.
+    pub(in crate::interp) fn string_list_units(&self, list: &StringList) -> u64 {
+        match list {
+            StringList::Values(values) => values
+                .iter()
+                .map(|&off| self.chunks.len_of(off) as u64 / 2)
+                .sum(),
+            StringList::CodePoints(units) => units.len() as u64,
+        }
+    }
+
+    /// The next element of `list` in order, read from the heap (or the
+    /// iterated string) only now. `at` is the element index for a list of
+    /// values and the code-unit offset for a list of code points.
+    pub(in crate::interp) fn string_list_next(
+        &self,
+        list: &StringList,
+        at: &mut usize,
+    ) -> Vec<u16> {
+        match list {
+            StringList::Values(values) => {
+                let units = self.str_units(values[*at]);
+                *at += 1;
+                units
+            }
+            StringList::CodePoints(units) => {
+                let width = match units.get(*at..*at + 2) {
+                    Some(&[lead, trail])
+                        if (0xD800..=0xDBFF).contains(&lead)
+                            && (0xDC00..=0xDFFF).contains(&trail) =>
+                    {
+                        2
+                    }
+                    _ => 1,
+                };
+                let element = units[*at..*at + width].to_vec();
+                *at += width;
+                element
+            }
+        }
     }
 }

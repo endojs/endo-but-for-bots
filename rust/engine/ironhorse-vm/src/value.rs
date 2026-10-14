@@ -2015,6 +2015,16 @@ pub struct ChunkArena {
     /// preserves residency.
     /// None is unknown, not empty; publish only a fully validated index.
     free_chunks: RefCell<Option<FreeChunks>>,
+    /// Bytes of retained host side storage (array items, collection
+    /// entries, `Intl.Segmenter` segments) charged against this arena's
+    /// ceiling at declared widths (`crate::side_storage`). An append fits
+    /// only when the byte length, this charge, the header and the payload
+    /// together stay within the ceiling, so the ceiling bounds both.
+    ///
+    /// Not persisted: the interpreter derives it from its tables after a
+    /// restore and after collection, so a restored machine charges exactly
+    /// what the machine that built the same heap charges.
+    side_reserved: u64,
 }
 
 impl Default for ChunkArena {
@@ -2032,6 +2042,7 @@ impl ChunkArena {
             dirty: Vec::new(),
             unbacked: Vec::new(),
             free_chunks: RefCell::new(Some(FreeChunks::new())),
+            side_reserved: 0,
         }
     }
 
@@ -2052,6 +2063,7 @@ impl ChunkArena {
             dirty: vec![false; exts],
             unbacked: vec![false; exts],
             free_chunks: RefCell::new(None),
+            side_reserved: 0,
         }
     }
 
@@ -2310,12 +2322,71 @@ impl ChunkArena {
         }
         self.free_chunk_for(payload_bytes, ChunkOffset::NULL.0 as usize)
             .is_some()
-            || (self
-                .len()
-                .checked_add(CHUNK_HEADER)
-                .and_then(|end| end.checked_add(payload_bytes))
-                .is_some_and(|end| end <= self.ceiling)
+            || (self.footprint_fits(CHUNK_HEADER as u64 + payload_bytes as u64)
                 && chunk_allocation_fits(self.len(), payload_bytes, ChunkOffset::NULL.0 as usize))
+    }
+
+    /// Whether `extra` more bytes, on top of the byte length and the side
+    /// storage already charged, stay within the ceiling. Computed in `u64`
+    /// so the answer does not depend on the host's `usize`.
+    #[inline]
+    fn footprint_fits(&self, extra: u64) -> bool {
+        (self.len() as u64)
+            .checked_add(self.side_reserved)
+            .and_then(|used| used.checked_add(extra))
+            .is_some_and(|end| end <= self.ceiling as u64)
+    }
+
+    /// Whether the byte length and the side storage charged against the
+    /// ceiling still fit under it (a host may lower the ceiling below them).
+    pub fn within_ceiling(&self) -> bool {
+        self.footprint_fits(0)
+    }
+
+    /// The side-storage bytes currently charged against the ceiling.
+    pub fn side_reserved(&self) -> u64 {
+        self.side_reserved
+    }
+
+    /// Charge `bytes` of retained side storage against the ceiling, or
+    /// refuse without changing anything. Side storage reuses no free
+    /// chunk, so only the appendable footprint is consulted.
+    #[must_use]
+    pub(crate) fn try_reserve_side(&mut self, bytes: u64) -> bool {
+        if bytes == 0 {
+            return true;
+        }
+        if !self.footprint_fits(bytes) {
+            return false;
+        }
+        self.side_reserved += bytes;
+        true
+    }
+
+    /// Charge `bytes` of side storage or halt the crank with
+    /// [`HeapExhausted`], before the caller mutates anything.
+    #[inline]
+    pub(crate) fn reserve_side(&mut self, bytes: u64) {
+        if !self.try_reserve_side(bytes) {
+            heap_exhausted();
+        }
+    }
+
+    /// Return `bytes` of side storage released by a shrinking table.
+    #[inline]
+    pub(crate) fn release_side(&mut self, bytes: u64) {
+        debug_assert!(
+            bytes <= self.side_reserved,
+            "side storage release {bytes} exceeds the charge {}",
+            self.side_reserved
+        );
+        self.side_reserved = self.side_reserved.saturating_sub(bytes);
+    }
+
+    /// Install a charge derived from the tables (after a restore or a
+    /// collection), replacing whatever the incremental ledger held.
+    pub(crate) fn set_side_reserved(&mut self, bytes: u64) {
+        self.side_reserved = bytes;
     }
 
     fn free_chunk_for(&self, payload: usize, address_ceiling: usize) -> Option<(usize, usize)> {
@@ -2859,6 +2930,7 @@ impl ChunkArena {
             dirty: vec![false; exts],
             unbacked: vec![false; exts],
             free_chunks: RefCell::new(None),
+            side_reserved: 0,
         }
     }
 

@@ -260,10 +260,11 @@ impl Interp {
                         if item.flag & XS_DONT_DELETE_FLAG != 0 {
                             false
                         } else {
-                            self.arrays
-                                .get_mut(&inst)
-                                .unwrap()
-                                .remove_item(&index, &mut self.side_refs);
+                            self.arrays.get_mut(&inst).unwrap().remove_item(
+                                &index,
+                                &mut self.side_refs,
+                                &mut self.chunks,
+                            );
                             true
                         }
                     } else {

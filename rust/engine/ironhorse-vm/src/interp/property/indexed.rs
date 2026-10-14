@@ -79,7 +79,7 @@ impl Interp {
             // while sealing PROMOTED each element out of the item map; making
             // seal stamp items in place is what exposed it.
             v.flag = a.items().get(&index).map_or(v.flag, |item| item.flag);
-            a.insert_item(index, v, &mut self.side_refs);
+            a.insert_item(index, v, &mut self.side_refs, &mut self.chunks);
             if index + 1 > a.length {
                 a.length = index + 1;
             }
@@ -240,10 +240,11 @@ impl Interp {
                         self.arrays.get_mut(&inst).unwrap().length = index + 1;
                         return false;
                     }
-                    self.arrays
-                        .get_mut(&inst)
-                        .unwrap()
-                        .remove_item(&index, &mut self.side_refs);
+                    self.arrays.get_mut(&inst).unwrap().remove_item(
+                        &index,
+                        &mut self.side_refs,
+                        &mut self.chunks,
+                    );
                 }
             }
         }
@@ -432,6 +433,7 @@ impl Interp {
                             index,
                             replacement,
                             &mut self.side_refs,
+                            &mut self.chunks,
                         );
                     } else {
                         self.arrays
@@ -497,6 +499,7 @@ impl Interp {
                             index,
                             replacement,
                             &mut self.side_refs,
+                            &mut self.chunks,
                         );
                     }
                     // Attributes only: the value and its reference topology
@@ -513,10 +516,11 @@ impl Interp {
             // An accessor on an index: `self.accessors` is keyed by
             // `(instance, id)`, so this one genuinely needs a name.
             let id = self.array_index_promotion_id(id, index)?;
-            self.arrays
-                .get_mut(&inst)
-                .unwrap()
-                .remove_item(&index, &mut self.side_refs);
+            self.arrays.get_mut(&inst).unwrap().remove_item(
+                &index,
+                &mut self.side_refs,
+                &mut self.chunks,
+            );
             self.set_own_unmetered_with_flag(inst, id, current.value.unwrap(), value.flag);
             return Ok(self.ordinary_define_own_property(inst, id, descriptor));
         }
@@ -620,10 +624,8 @@ impl Interp {
         self.index_prop_store(inst, index, value);
     }
 
-    /// [`Self::index_prop_set`] without the growth metering — the resume path,
-    /// which rebuilds a store that was already paid for when the guest built
-    /// it. Charging here would make a resumed machine's meter diverge from the
-    /// uninterrupted one it must agree with.
+    /// [`Self::index_prop_set`] without the growth metering. The item's side
+    /// storage is still charged against the chunk ceiling.
     pub(in crate::interp) fn index_prop_store(
         &mut self,
         inst: crate::value::SlotIndex,
@@ -634,7 +636,31 @@ impl Interp {
         value.next = crate::value::SlotIndex::NULL;
         let refs = &mut self.side_refs;
         let props = self.index_props.entry(inst).or_default();
-        props.insert_item(index, value, refs);
+        props.insert_item(index, value, refs, &mut self.chunks);
+        // `ArrayData::length` is this store's HIGH-WATER mark, not an array
+        // `length` (an ordinary object has none). It only ever rises, so a
+        // deleted index keeps the cursor domain it opened — XS's resident
+        // indexed-array slot does not shrink when an element is deleted, and
+        // `resident_indexed_limit` reads this as the tombstone it documents.
+        props.length = props.length.max(index.saturating_add(1));
+    }
+
+    /// The resume path's [`Self::index_prop_store`]: it rebuilds a store the
+    /// guest already paid for, so it neither meters nor charges. Charging
+    /// here would make a resumed machine's meter diverge from the
+    /// uninterrupted one it must agree with; the side-storage ledger is
+    /// derived from the restored tables afterwards.
+    pub(in crate::interp) fn index_prop_restore(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        index: u32,
+        mut value: Slot,
+    ) {
+        value.id = crate::value::XS_NO_ID;
+        value.next = crate::value::SlotIndex::NULL;
+        let refs = &mut self.side_refs;
+        let props = self.index_props.entry(inst).or_default();
+        props.restore_item(index, value, refs);
         // `ArrayData::length` is this store's HIGH-WATER mark, not an array
         // `length` (an ordinary object has none). It only ever rises, so a
         // deleted index keeps the cursor domain it opened — XS's resident
@@ -657,7 +683,7 @@ impl Interp {
         let removed = self
             .index_props
             .get_mut(&inst)
-            .and_then(|props| props.remove_item(&index, refs));
+            .and_then(|props| props.remove_item(&index, refs, &mut self.chunks));
         if self
             .index_props
             .get(&inst)

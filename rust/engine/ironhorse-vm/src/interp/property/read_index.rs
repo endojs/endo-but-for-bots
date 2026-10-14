@@ -352,10 +352,11 @@ impl Interp {
                     if item.flag & XS_DONT_DELETE_FLAG != 0 {
                         return Ok(false);
                     }
-                    vm.arrays
-                        .get_mut(&inst)
-                        .unwrap()
-                        .remove_item(&index, &mut vm.side_refs);
+                    vm.arrays.get_mut(&inst).unwrap().remove_item(
+                        &index,
+                        &mut vm.side_refs,
+                        &mut vm.chunks,
+                    );
                     return Ok(true);
                 }
                 return Ok(true);

@@ -28,6 +28,7 @@ mod intl_profile;
 mod math;
 pub use math::MATH_PROVIDER;
 mod bulk;
+mod side_storage;
 mod side_tables;
 mod snapshot_dirty;
 pub use snapshot_dirty::{SnapshotBaseline, SnapshotDirty, SnapshotSection};

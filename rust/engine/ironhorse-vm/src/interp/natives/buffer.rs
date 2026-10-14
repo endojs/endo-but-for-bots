@@ -676,17 +676,20 @@ impl Interp {
         } else {
             Slot::undefined()
         };
+        // The result is bounded by the chunk ceiling as it grows, before the
+        // host copy can outrun it.
         let mut out = Vec::new();
         for index in 0..length {
             if index > 0 {
-                out.push(u16::from(b','));
+                self.extend_admitted_copy(&mut out, &[u16::from(b',')])?;
             }
             let Some(value) = self.ta_element_value(ta, index) else {
                 continue;
             };
             let rendered =
                 self.invoke_value_method(code, value, "toLocaleString", &[locales, options])?;
-            out.extend_from_slice(&self.to_string_units(code, rendered)?);
+            let units = self.to_string_units(code, rendered)?;
+            self.extend_admitted_copy(&mut out, &units)?;
         }
         Ok(self.new_string_units(&out))
     }
@@ -936,15 +939,18 @@ impl Interp {
         } else {
             self.to_string_units(code, separator)?
         };
+        // A long separator repeats once per element: bound the result by the
+        // chunk ceiling as it grows, before the host copy can outrun it.
         let mut out = Vec::new();
         for index in 0..length {
             if index > 0 {
-                out.extend_from_slice(&sep);
+                self.extend_admitted_copy(&mut out, &sep)?;
             }
             let Some(value) = self.ta_element_value(ta, index) else {
                 continue;
             };
-            out.extend_from_slice(&self.to_string_units_metered(value));
+            let units = self.to_string_units_metered(value);
+            self.extend_admitted_copy(&mut out, &units)?;
         }
         Ok(self.new_string_units(&out))
     }
@@ -1204,6 +1210,7 @@ impl Interp {
                 &[value, Slot::integer(index as i32), this],
             )?;
             if self.truthy(&selected) {
+                self.admit_transient((kept.len() as u64 + 1) * crate::side_storage::SLOT_BYTES)?;
                 kept.push(value);
             }
         }

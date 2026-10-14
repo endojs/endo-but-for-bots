@@ -32,6 +32,7 @@ mod code;
 mod coerce;
 mod dispatch;
 mod metering;
+mod side_ledger;
 use metering::*;
 mod native_ids;
 pub use native_ids::{MathId, Native, NativeMethod};
@@ -114,7 +115,7 @@ mod locale;
 use locale::{
     canonicalize_locale, collator_compare_units, currency_digits, format_date_time_parts,
     format_date_time_range_parts, is_well_formed_currency_code, is_well_formed_unit_identifier,
-    list_format_parts, locale_base_name, locale_is_supported, locale_to_tag, maximize_locale,
+    list_separator, locale_base_name, locale_is_supported, locale_to_tag, maximize_locale,
     minimize_locale, plural_categories, plural_select, segment_units, supported_locale,
     titlecase_ascii, valid_language, valid_region, valid_script, valid_unicode_type,
 };
@@ -1451,7 +1452,14 @@ struct FromAsyncData {
 #[derive(Clone, Debug)]
 struct IterState {
     iterable: crate::value::SlotIndex,
+    /// The cursor position. For a collection cursor (kinds 5-7) it is only a
+    /// hint, the physical place [`IterState::coll_seq`] was last found at
+    /// (see [`crate::bulk::CollCursor`]).
     index: u32,
+    /// For a collection cursor (kinds 5-7): the least entry sequence number
+    /// not yet visited, which survives the entry list compacting. Zero for
+    /// every other kind.
+    coll_seq: u64,
     kind: u8,
     result: crate::value::SlotIndex,
     done: bool,
@@ -2888,7 +2896,14 @@ impl Interp {
         let payload = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.run_inner(shared, execute_script, pump_jobs, guest_thrown_rendering)
         })) {
-            Ok(outcome) => return outcome,
+            Ok(outcome) => {
+                if matches!(outcome.halt, Halt::HeapExhausted | Halt::HostAllocationFailed) {
+                    // A nested boundary caught the stop; the unwind below it
+                    // can still have dropped charged storage.
+                    self.rederive_side_reserved();
+                }
+                return outcome;
+            }
             Err(payload) => payload,
         };
         let Some(halt) = resource_halt(&*payload) else {
@@ -2923,6 +2938,13 @@ impl Interp {
                 state.generation = 0;
             }
         }
+        // A resource stop can unwind past storage a native had charged but
+        // not yet installed in a table (an array it was still filling, a
+        // `%Segments%` record awaiting its slot). The tables are intact, so
+        // charge exactly what they hold: a later completed crank may make
+        // this machine snapshot-able again, and its restore derives the
+        // ledger from the same tables.
+        self.rederive_side_reserved();
         RunOutcome {
             meter_raw_this_run: 0,
             computrons_this_run: 0,
@@ -2984,9 +3006,7 @@ impl Interp {
         guest_thrown_rendering: bool,
     ) -> RunOutcome {
         let code: &[u8] = &shared;
-        if self.slots.capacity() > self.slots.ceiling()
-            || self.chunks.byte_size() > self.chunks.ceiling()
-        {
+        if self.slots.capacity() > self.slots.ceiling() || !self.chunks.within_ceiling() {
             crate::value::heap_exhausted();
         }
         // A halted crank retains its activation for inspection until the

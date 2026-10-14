@@ -23,7 +23,7 @@ macro_rules! persist_holder {
         $emit! { $vm.$field.values().flat_map(|a| a.items().iter().map(|(_, v)| v)).any($names) }
     };
     ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, collections) => {
-        $emit! { $vm.$field.values().flat_map(|c| c.entries().iter().flatten().flat_map(|e| [&e.0, &e.1])).any($names) }
+        $emit! { $vm.$field.values().flat_map(|c| c.live_entries().flat_map(|e| [&e.0, &e.1])).any($names) }
     };
     ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, accessors) => {
         $emit! { $vm.$field.values().any(|d| d.get.as_ref().is_some_and($names) || d.set.as_ref().is_some_and($names)) }

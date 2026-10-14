@@ -596,7 +596,7 @@ impl Interp {
         let mut data = ArrayData::default();
         data.length = items.len() as u32;
         for (i, s) in items.iter().enumerate() {
-            data.insert_item(i as u32, *s, &mut self.side_refs);
+            data.insert_item(i as u32, *s, &mut self.side_refs, &mut self.chunks);
         }
         self.arrays.insert(inst, data);
         Slot::of(Kind::Reference, Payload::Reference(inst))

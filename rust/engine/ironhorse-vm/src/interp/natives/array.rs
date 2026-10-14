@@ -1327,7 +1327,7 @@ impl Interp {
         // Overwriting an item replaces its VALUE, never its attributes. See
         // `array_item_set` for why dropping them is a seal bypass.
         v.flag = data.items().get(&i).map_or(v.flag, |item| item.flag);
-        data.insert_item(i, v, &mut self.side_refs);
+        data.insert_item(i, v, &mut self.side_refs, &mut self.chunks);
         if i + 1 > data.length {
             data.length = i + 1;
         }
@@ -1391,6 +1391,7 @@ impl Interp {
                 iterable: arr,
                 index: 0,
                 kind,
+                coll_seq: 0,
                 generation: 0,
                 result,
                 done: false,
@@ -1511,8 +1512,13 @@ impl Interp {
                         let pair = self.new_array();
                         let a = self.arrays.get_mut(&pair).unwrap();
                         a.length = 2;
-                        a.insert_item(0, Slot::integer(st.index as i32), &mut self.side_refs);
-                        a.insert_item(1, elem, &mut self.side_refs);
+                        a.insert_item(
+                            0,
+                            Slot::integer(st.index as i32),
+                            &mut self.side_refs,
+                            &mut self.chunks,
+                        );
+                        a.insert_item(1, elem, &mut self.side_refs, &mut self.chunks);
                         self.charge_and_check(self.array_chunk_size_metering(2))?;
                         Slot::of(Kind::Reference, Payload::Reference(pair))
                     }
@@ -4660,10 +4666,12 @@ impl Interp {
         } else {
             Slot::undefined()
         };
+        // The result is bounded by the chunk ceiling as it grows, before the
+        // host copy can outrun it.
         let mut out = Vec::new();
         for index in 0..length {
             if index > 0 {
-                out.push(u16::from(b','));
+                self.extend_admitted_copy(&mut out, &[u16::from(b',')])?;
             }
             let value = if self.arrays.contains_key(&inst) {
                 self.array_generic_get(code, inst, index)?
@@ -4675,7 +4683,8 @@ impl Interp {
             }
             let rendered =
                 self.invoke_value_method(code, value, "toLocaleString", &[locales, options])?;
-            out.extend_from_slice(&self.to_string_units(code, rendered)?);
+            let units = self.to_string_units(code, rendered)?;
+            self.extend_admitted_copy(&mut out, &units)?;
         }
         Ok(self.new_string_units(&out))
     }

@@ -266,7 +266,7 @@ impl Interp {
         for (i, mut v) in errors.into_iter().enumerate() {
             v.id = 0;
             v.next = crate::value::SlotIndex::NULL;
-            arr_data.insert_item(i as u32, v, &mut self.side_refs);
+            arr_data.insert_item(i as u32, v, &mut self.side_refs, &mut self.chunks);
         }
         arr_data.length = n as u32;
         self.arrays.insert(arr_inst, arr_data);

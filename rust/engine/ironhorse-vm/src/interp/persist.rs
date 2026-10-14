@@ -266,6 +266,10 @@ impl Interp {
         validate_restore_chain(&slots, self.environment.global_obj, &mut Default::default())?;
         self.slots = slots;
         self.chunks = chunks;
+        // The restored arena carries no side-storage ledger; charge it for
+        // whatever tables exist now. The row restores re-derive it as they
+        // rebuild their tables.
+        self.rederive_side_reserved();
         self.stack = stack;
         self.meter.restore(meter);
         // SymbolTables ledger row: only `symbol_names` is serialized; the
@@ -414,6 +418,13 @@ impl Interp {
     /// once a program has given it a length, so a pristine image carries no
     /// array rows.
     pub fn arrays_snapshot(&self) -> Vec<ArraySnapshot> {
+        // A snapshot point is where a restore re-derives the side-storage
+        // ledger from these rows, so the live ledger must already equal it.
+        debug_assert_eq!(
+            self.chunks.side_reserved(),
+            self.side_storage_charge(),
+            "side-storage ledger drifted from the tables"
+        );
         let mut out: Vec<ArraySnapshot> = self
             .arrays
             .iter()
@@ -3952,6 +3963,8 @@ impl Interp {
         install(&mut self.segments, t.segments);
         install(&mut self.segment_iterators, t.segment_iterators);
         install(&mut self.date_time_formats, t.date_time_formats);
+        // Restored `%Segments%` objects keep their inputs and segment lists.
+        self.rederive_side_reserved();
         Ok(())
     }
 
@@ -3960,7 +3973,7 @@ impl Interp {
     /// Free-listed owners are skipped (a swept cursor's row names
     /// nothing, and its collection may be gone). Two normalizations
     /// at the boundary (see [`IteratorRow`]): a collection cursor's
-    /// physical entry index becomes the live-entry ORDINAL — matching
+    /// position (an entry sequence number) becomes the live-entry ORDINAL — matching
     /// the `COLL` row's tombstone compaction — and a stale cursor
     /// (its collection's clear-generation moved) emits `done: true`,
     /// exactly the latch its next `next()` would have set.
@@ -3975,10 +3988,10 @@ impl Interp {
                     continue;
                 };
                 let stale = c.generation() != st.generation;
-                let ordinal = c.entries()[..(st.index as usize).min(c.entries().len())]
-                    .iter()
-                    .filter(|e| e.is_some())
-                    .count() as u32;
+                let ordinal = c.live_ordinal(&crate::bulk::CollCursor {
+                    seq: st.coll_seq,
+                    hint: st.index,
+                });
                 (ordinal, st.done || stale)
             } else {
                 (st.index, st.done)
@@ -4075,7 +4088,7 @@ impl Interp {
                             reason: "malformed iterator state",
                         });
                     };
-                    if r.index as usize > c.entries().len() {
+                    if r.index as usize > c.physical_len() {
                         return Err(RestoreError {
                             row: ROW,
                             reason: "malformed iterator state",
@@ -4154,6 +4167,14 @@ impl Interp {
                     iterable: crate::value::SlotIndex(r.iterable),
                     index: r.index,
                     kind: r.kind,
+                    // A collection cursor's persisted index is a live-entry
+                    // ordinal, which is the sequence number the restored
+                    // list gives that entry (`CollectionData::restored_cursor`).
+                    coll_seq: if (5..=7).contains(&r.kind) {
+                        u64::from(r.index)
+                    } else {
+                        0
+                    },
                     generation: 0,
                     result: crate::value::SlotIndex(r.result),
                     done: r.done,
@@ -4395,9 +4416,9 @@ impl Interp {
             for (index, value) in items {
                 // Through the counted accessor, like every other restore
                 // insert, so the side-ref page counts the partial collector
-                // reads are rebuilt in lockstep — but UNMETERED: the guest
-                // paid for this store when it built it.
-                self.index_prop_store(owner, index, value);
+                // reads are rebuilt in lockstep — but UNMETERED and
+                // UNCHARGED: the guest paid for this store when it built it.
+                self.index_prop_restore(owner, index, value);
             }
             // Restore the mark itself, after the inserts (which only raise it
             // to the greatest index they carry). A row whose items are all
@@ -4410,7 +4431,7 @@ impl Interp {
             let mut a = crate::bulk::ArrayData::default();
             a.length = length;
             for (index, value) in items {
-                a.insert_item(index, value, &mut self.side_refs);
+                a.restore_item(index, value, &mut self.side_refs);
             }
             self.arrays.insert(crate::value::SlotIndex(owner), a);
         }
@@ -4419,7 +4440,7 @@ impl Interp {
                 .expect("collection kind was validated before restore");
             let mut c = crate::bulk::CollectionData::new(kind, table_length);
             for (key, value) in entries {
-                c.push_entry(key, value, &mut self.side_refs);
+                c.restore_entry(key, value, &mut self.side_refs);
             }
             self.collections.insert(crate::value::SlotIndex(owner), c);
         }
@@ -4428,6 +4449,7 @@ impl Interp {
             self.symbol_registry.insert(key.clone(), desc);
             self.symbol_registry_keys.insert(desc, key);
         }
+        self.rederive_side_reserved();
         Ok(())
     }
 

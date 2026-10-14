@@ -327,23 +327,6 @@ impl Interp {
         argc: usize,
         code: &[u8],
     ) -> Result<Slot, Step> {
-        let mut params: Vec<Vec<u16>> = Vec::new();
-        let mut body = Vec::new();
-        for i in 0..argc {
-            let slot = self
-                .stack
-                .get(base + 4 + i)
-                .copied()
-                .unwrap_or_else(Slot::undefined);
-            // ToString each argument (the spec coerces every parameter chunk and
-            // the body). A `Symbol` throws a realm `TypeError` from here.
-            let piece = self.to_string_units(code, slot)?;
-            if i + 1 == argc {
-                body = piece;
-            } else {
-                params.push(piece);
-            }
-        }
         // The function-head grammar per kind. The trailing `anonymous` is the
         // spec's dynamic-function name; the `.name` the returned function
         // reports comes from compiling this head.
@@ -359,16 +342,40 @@ impl Interp {
         // expression. The `\n` before `)` and after `{` are the spec's exact
         // separators (they defeat a trailing line comment in the parameter list
         // or a `//`-terminated body from swallowing the closing punctuation).
-        let mut source: Vec<u16> = format!("({head}(").encode_utf16().collect();
-        for (index, param) in params.into_iter().enumerate() {
-            if index != 0 {
-                source.push(u16::from(b','));
+        //
+        // One string can be passed as many parameters, so the assembled
+        // source can be far larger than anything in the heap. It is built in
+        // place, each piece admitted against the chunk ceiling before the copy
+        // grows, so neither the copy nor the compiler's lexer ever holds a
+        // source larger than the ceiling allows.
+        let mut source: Vec<u16> = Vec::new();
+        let opening: Vec<u16> = format!("({head}(").encode_utf16().collect();
+        self.extend_admitted_copy(&mut source, &opening)?;
+        let mut body = Vec::new();
+        for i in 0..argc {
+            let slot = self
+                .stack
+                .get(base + 4 + i)
+                .copied()
+                .unwrap_or_else(Slot::undefined);
+            // ToString each argument (the spec coerces every parameter chunk and
+            // the body). A `Symbol` throws a realm `TypeError` from here.
+            let piece = self.to_string_units(code, slot)?;
+            if i + 1 == argc {
+                body = piece;
+            } else {
+                if i != 0 {
+                    self.extend_admitted_copy(&mut source, &[u16::from(b',')])?;
+                }
+                self.extend_admitted_copy(&mut source, &piece)?;
             }
-            source.extend(param);
         }
-        source.extend("\n) {\n".encode_utf16());
-        source.extend(body);
-        source.extend("\n})".encode_utf16());
+        let open_body: Vec<u16> = "\n) {\n".encode_utf16().collect();
+        let close_body: Vec<u16> = "\n})".encode_utf16().collect();
+        self.extend_admitted_copy(&mut source, &open_body)?;
+        self.extend_admitted_copy(&mut source, &body)?;
+        drop(body);
+        self.extend_admitted_copy(&mut source, &close_body)?;
         self.eval_source(&source, false)
     }
 }

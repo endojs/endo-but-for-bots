@@ -914,6 +914,7 @@ impl Interp {
                 iterable: matcher,
                 index: u32::from(global) | (u32::from(full_unicode) << 1),
                 kind: 9,
+                coll_seq: 0,
                 generation: 0,
                 result: anchor,
                 done: false,
@@ -1090,7 +1091,7 @@ impl Interp {
         {
             let a = self.arrays.get_mut(&result).unwrap();
             for (i, s) in items {
-                a.insert_item(i, s, &mut self.side_refs);
+                a.insert_item(i, s, &mut self.side_refs, &mut self.chunks);
             }
             a.length = captures.len() as u32;
         }
@@ -1191,8 +1192,13 @@ impl Interp {
                 self.meter.tick_slot_alloc();
                 {
                     let a = self.arrays.get_mut(&pair).unwrap();
-                    a.insert_item(0, Slot::integer(from), &mut self.side_refs);
-                    a.insert_item(1, Slot::integer(to), &mut self.side_refs);
+                    a.insert_item(
+                        0,
+                        Slot::integer(from),
+                        &mut self.side_refs,
+                        &mut self.chunks,
+                    );
+                    a.insert_item(1, Slot::integer(to), &mut self.side_refs, &mut self.chunks);
                     a.length = 2;
                 }
                 let s = Slot::of(Kind::Reference, Payload::Reference(pair));
@@ -1207,7 +1213,7 @@ impl Interp {
         {
             let a = self.arrays.get_mut(&arr).unwrap();
             for (i, s) in items {
-                a.insert_item(i, s, &mut self.side_refs);
+                a.insert_item(i, s, &mut self.side_refs, &mut self.chunks);
             }
             a.length = captures.len() as u32;
         }
@@ -2314,7 +2320,7 @@ impl Interp {
         let n = segments.len() as u32;
         let a = self.arrays.get_mut(&array).unwrap();
         for (i, s) in segments.into_iter().enumerate() {
-            a.insert_item(i as u32, s, &mut self.side_refs);
+            a.insert_item(i as u32, s, &mut self.side_refs, &mut self.chunks);
         }
         a.length = n;
         Slot::of(Kind::Reference, Payload::Reference(array))

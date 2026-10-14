@@ -888,15 +888,16 @@ fn side_ref_undercount_blocks_quiescence_and_page_freeing() {
         0,
         Slot::of(Kind::Reference, Payload::Reference(value)),
         &mut interp.side_refs,
+        &mut interp.chunks,
     );
     // Simulate a missed counted mutation. Removing the remaining
     // entry detects the missing count without a debug-only panic.
     interp.side_refs = SideRefCounts::new();
-    interp
-        .arrays
-        .get_mut(&array)
-        .unwrap()
-        .remove_item(&0, &mut interp.side_refs);
+    interp.arrays.get_mut(&array).unwrap().remove_item(
+        &0,
+        &mut interp.side_refs,
+        &mut interp.chunks,
+    );
     assert!(!interp.is_quiescent());
     assert_eq!(
         interp.free_pages(&[value.0 / crate::value::SLOTS_PER_PAGE]),
@@ -929,6 +930,7 @@ fn side_ref_parity_mismatch_refuses_reclamation_including_release() {
         0,
         Slot::of(Kind::Reference, Payload::Reference(value)),
         &mut interp.side_refs,
+        &mut interp.chunks,
     );
     assert!(interp.is_quiescent());
     assert!(interp.side_table_ref_page_bits()[next_page as usize]);
@@ -939,11 +941,11 @@ fn side_ref_parity_mismatch_refuses_reclamation_including_release() {
     assert_eq!(interp.free_pages(&[next_page]), Err(NotQuiescent));
     assert!(!interp.slots.is_free_index(value));
     // Repairing the bitmap does not permit this machine to persist.
-    interp
-        .arrays
-        .get_mut(&array)
-        .unwrap()
-        .remove_item(&0, &mut SideRefCounts::new());
+    interp.arrays.get_mut(&array).unwrap().remove_item(
+        &0,
+        &mut SideRefCounts::new(),
+        &mut interp.chunks,
+    );
     interp.side_table_ref_page_bits();
     assert!(!interp.is_quiescent());
 }
@@ -965,6 +967,7 @@ fn tail_masked_bulk_reference(interp: &mut Interp) -> (crate::value::SlotIndex, 
         0,
         Slot::of(Kind::Reference, Payload::Reference(interp.object_proto)),
         &mut interp.side_refs,
+        &mut interp.chunks,
     );
     (array, next_page)
 }
@@ -1020,20 +1023,22 @@ fn side_ref_parity_sees_an_off_by_one_beside_a_surviving_reference() {
     let value = interp.new_object();
     let page = value.0 / crate::value::SLOTS_PER_PAGE;
     let reference = Slot::of(Kind::Reference, Payload::Reference(value));
-    interp
-        .arrays
-        .get_mut(&array)
-        .unwrap()
-        .insert_item(0, reference, &mut interp.side_refs);
+    interp.arrays.get_mut(&array).unwrap().insert_item(
+        0,
+        reference,
+        &mut interp.side_refs,
+        &mut interp.chunks,
+    );
     assert_eq!(interp.side_ref_parity(), Ok(()));
     let before = interp.side_table_ref_page_bits();
     // A mutation that forgot its increment: the same page, one more item.
     let mut bypassed = SideRefCounts::new();
-    interp
-        .arrays
-        .get_mut(&array)
-        .unwrap()
-        .insert_item(1, reference, &mut bypassed);
+    interp.arrays.get_mut(&array).unwrap().insert_item(
+        1,
+        reference,
+        &mut bypassed,
+        &mut interp.chunks,
+    );
     let mismatch = interp.side_ref_parity().unwrap_err();
     assert_eq!(
         (mismatch.page, mismatch.counted, mismatch.walked),
@@ -3046,14 +3051,14 @@ fn runtime_key_scan_keeps_arena_precedence_and_tail_minimum() {
     let second = vm.slots.alloc(key(8));
     vm.stack.push(key(6));
     let mut array = ArrayData::default();
-    array.insert_item(0, key(7), &mut vm.side_refs);
-    array.insert_item(1, key(5), &mut vm.side_refs);
+    array.insert_item(0, key(7), &mut vm.side_refs, &mut vm.chunks);
+    array.insert_item(1, key(5), &mut vm.side_refs, &mut vm.chunks);
     vm.arrays.insert(owner, array);
     let mut indexed = ArrayData::default();
-    indexed.insert_item(0, key(4), &mut vm.side_refs);
+    indexed.insert_item(0, key(4), &mut vm.side_refs, &mut vm.chunks);
     vm.index_props.insert(owner, indexed);
     let mut collection = CollectionData::new(CollKind::Map, 4);
-    collection.push_entry(key(2), key(1), &mut vm.side_refs);
+    collection.push_entry(key(2), key(1), &mut vm.side_refs, &mut vm.chunks);
     vm.collections.insert(owner, collection);
     // The key diagnostic has never walked every native-reference holder.
     // Reusing persist_refs would incorrectly include this lower witness.

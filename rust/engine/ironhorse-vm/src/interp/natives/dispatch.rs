@@ -1850,7 +1850,7 @@ impl Interp {
                             let mut v = a;
                             v.id = 0;
                             v.next = crate::value::SlotIndex::NULL;
-                            data.insert_item(0, v, &mut self.side_refs);
+                            data.insert_item(0, v, &mut self.side_refs, &mut self.chunks);
                             data.length = 1;
                         }
                     }
@@ -1864,7 +1864,7 @@ impl Interp {
                             .unwrap_or_else(Slot::undefined);
                         v.id = 0;
                         v.next = crate::value::SlotIndex::NULL;
-                        data.insert_item(i as u32, v, &mut self.side_refs);
+                        data.insert_item(i as u32, v, &mut self.side_refs, &mut self.chunks);
                     }
                     data.length = argc as u32;
                 }
@@ -2811,32 +2811,45 @@ impl Interp {
                 };
                 let data = self.list_formats[&inst].clone();
                 let list = self.string_list_from_iterable(code, arg0)?;
-                let parts = list_format_parts(&data, &list);
+                let elements = Self::string_list_len(&list);
+                let mut at = 0usize;
                 if m == NativeMethod::ListFormatFormat {
-                    let mut s = Vec::new();
-                    for (_, value) in &parts {
-                        s.extend_from_slice(value);
+                    // Bound the joined result by the chunk ceiling before
+                    // assembling it: its elements are already in the heap, but
+                    // the result repeats them.
+                    let literals: u64 = (1..elements)
+                        .map(|index| {
+                            list_separator(&data, elements, index)
+                                .encode_utf16()
+                                .count() as u64
+                        })
+                        .sum();
+                    let total = self.string_list_units(&list) + literals;
+                    self.admit_copy_units(total)?;
+                    let mut s = Self::reserved_vec(total as usize)?;
+                    for index in 0..elements {
+                        if index > 0 {
+                            s.extend(list_separator(&data, elements, index).encode_utf16());
+                        }
+                        s.extend_from_slice(&self.string_list_next(&list, &mut at));
                     }
                     self.new_string_units(&s)
                 } else {
                     let arr = self.new_array();
-                    for (i, (ty, value)) in parts.iter().enumerate() {
-                        let obj = self.slots.alloc(Slot::instance(self.object_proto));
-                        let value_slot = self.new_string_units(value);
-                        let type_slot = self.intl_string(ty);
-                        // Insert in `type`, `value` enumeration order.
-                        self.define_descriptor_field(obj, "type", type_slot);
-                        self.define_descriptor_field(obj, "value", value_slot);
-                        let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
-                        item.id = 0;
-                        item.next = crate::value::SlotIndex::NULL;
-                        self.arrays.get_mut(&arr).unwrap().insert_item(
-                            i as u32,
-                            item,
-                            &mut self.side_refs,
-                        );
+                    let mut part = 0u32;
+                    for index in 0..elements {
+                        if index > 0 {
+                            let literal: Vec<u16> = list_separator(&data, elements, index)
+                                .encode_utf16()
+                                .collect();
+                            self.list_format_push_part(arr, part, "literal", &literal);
+                            part += 1;
+                        }
+                        let element = self.string_list_next(&list, &mut at);
+                        self.list_format_push_part(arr, part, "element", &element);
+                        part += 1;
                     }
-                    self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
+                    self.arrays.get_mut(&arr).unwrap().length = part;
                     Slot::of(Kind::Reference, Payload::Reference(arr))
                 }
             }
@@ -2975,6 +2988,7 @@ impl Interp {
                         i as u32,
                         item,
                         &mut self.side_refs,
+                        &mut self.chunks,
                     );
                 }
                 self.arrays.get_mut(&arr).unwrap().length = categories.len() as u32;
@@ -3205,10 +3219,10 @@ impl Interp {
                 };
                 let granularity = self.segmenters[&inst].granularity.clone();
                 let units = self.to_string_units(code, arg0)?;
-                let segments = segment_units(&granularity, &units);
+                let segments = self.admitted_segments(&granularity, units)?;
                 let sdata = SegmentsData {
-                    units,
-                    segments,
+                    units: segments.0,
+                    segments: segments.1,
                     granularity,
                 };
                 let sinst = self.slots.alloc(Slot::instance(self.segments_proto));
@@ -3528,6 +3542,7 @@ impl Interp {
                                 i,
                                 v,
                                 &mut self.side_refs,
+                                &mut self.chunks,
                             );
                         }
                     }
@@ -3698,7 +3713,7 @@ impl Interp {
                     for (i, mut v) in kept.into_iter().enumerate() {
                         v.id = 0;
                         v.next = crate::value::SlotIndex::NULL;
-                        a.insert_item(i as u32, v, &mut self.side_refs);
+                        a.insert_item(i as u32, v, &mut self.side_refs, &mut self.chunks);
                     }
                     a.length = total;
                 }
@@ -4178,10 +4193,12 @@ impl Interp {
                     let mut v = a;
                     v.id = 0;
                     v.next = crate::value::SlotIndex::NULL;
-                    self.arrays
-                        .get_mut(&inst)
-                        .unwrap()
-                        .insert_item(idx, v, &mut self.side_refs);
+                    self.arrays.get_mut(&inst).unwrap().insert_item(
+                        idx,
+                        v,
+                        &mut self.side_refs,
+                        &mut self.chunks,
+                    );
                     self.charge_builtin_work(5)?;
                 }
                 let a = self.arrays.get_mut(&inst).unwrap();
@@ -4215,7 +4232,7 @@ impl Interp {
                         .arrays
                         .get_mut(&inst)
                         .unwrap()
-                        .remove_item(&new_len, &mut self.side_refs)
+                        .remove_item(&new_len, &mut self.side_refs, &mut self.chunks)
                         .unwrap_or_else(Slot::undefined);
                     // `fxSetIndexSize(length-1, XS_CHUNK)` reallocs the item
                     // chunk down; `mxMeterSome(8)`.
@@ -4351,10 +4368,12 @@ impl Interp {
                 v.id = 0;
                 v.next = crate::value::SlotIndex::NULL;
                 for i in start..end {
-                    self.arrays
-                        .get_mut(&inst)
-                        .unwrap()
-                        .insert_item(i, v, &mut self.side_refs);
+                    self.arrays.get_mut(&inst).unwrap().insert_item(
+                        i,
+                        v,
+                        &mut self.side_refs,
+                        &mut self.chunks,
+                    );
                     self.charge_builtin_work(5)?;
                 }
                 this
@@ -4381,13 +4400,13 @@ impl Interp {
                 let mut lo = 0u32;
                 let mut hi = length.saturating_sub(1);
                 while lo < hi {
-                    let l = a.remove_item(&lo, &mut self.side_refs);
-                    let h = a.remove_item(&hi, &mut self.side_refs);
+                    let l = a.remove_item(&lo, &mut self.side_refs, &mut self.chunks);
+                    let h = a.remove_item(&hi, &mut self.side_refs, &mut self.chunks);
                     if let Some(h) = h {
-                        a.insert_item(lo, h, &mut self.side_refs);
+                        a.insert_item(lo, h, &mut self.side_refs, &mut self.chunks);
                     }
                     if let Some(l) = l {
-                        a.insert_item(hi, l, &mut self.side_refs);
+                        a.insert_item(hi, l, &mut self.side_refs, &mut self.chunks);
                     }
                     lo += 1;
                     hi -= 1;
@@ -4446,7 +4465,12 @@ impl Interp {
                     );
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in items {
-                        a.insert_item(i, Slot::of(s.kind, s.value), &mut self.side_refs);
+                        a.insert_item(
+                            i,
+                            Slot::of(s.kind, s.value),
+                            &mut self.side_refs,
+                            &mut self.chunks,
+                        );
                     }
                     a.length = count;
                 }
@@ -4561,7 +4585,7 @@ impl Interp {
                 {
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in out.into_iter().enumerate() {
-                        a.insert_item(i as u32, s, &mut self.side_refs);
+                        a.insert_item(i as u32, s, &mut self.side_refs, &mut self.chunks);
                     }
                     a.length = total;
                 }
@@ -4637,13 +4661,13 @@ impl Interp {
                     let removed = {
                         let a = self.arrays.get_mut(&inst).unwrap();
                         let first = a
-                            .remove_item(&0, &mut self.side_refs)
+                            .remove_item(&0, &mut self.side_refs, &mut self.chunks)
                             .unwrap_or_else(Slot::undefined);
                         let mut shifted = std::collections::BTreeMap::new();
                         for (&k, &v) in a.items().iter() {
                             shifted.insert(k - 1, v);
                         }
-                        a.replace_items(shifted, &mut self.side_refs);
+                        a.replace_items(shifted, &mut self.side_refs, &mut self.chunks);
                         a.length = new_len;
                         first
                     };
@@ -4700,7 +4724,7 @@ impl Interp {
                         v.next = crate::value::SlotIndex::NULL;
                         shifted.insert(i as u32, v);
                     }
-                    a.replace_items(shifted, &mut self.side_refs);
+                    a.replace_items(shifted, &mut self.side_refs, &mut self.chunks);
                     a.length = length + c;
                 }
                 self.charge_builtin_work(2)?;
@@ -4751,10 +4775,10 @@ impl Interp {
                         let dst = to + i as u32;
                         match s {
                             Some(v) => {
-                                a.insert_item(dst, v, &mut self.side_refs);
+                                a.insert_item(dst, v, &mut self.side_refs, &mut self.chunks);
                             }
                             None => {
-                                a.remove_item(&dst, &mut self.side_refs);
+                                a.remove_item(&dst, &mut self.side_refs, &mut self.chunks);
                             }
                         }
                     }
@@ -4816,7 +4840,12 @@ impl Interp {
                     );
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in items.into_iter().enumerate() {
-                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
+                        a.insert_item(
+                            i as u32,
+                            Slot::of(s.kind, s.value),
+                            &mut self.side_refs,
+                            &mut self.chunks,
+                        );
                     }
                     a.length = length;
                 }
@@ -4856,7 +4885,12 @@ impl Interp {
                     );
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (to, s) in items.into_iter().enumerate() {
-                        a.insert_item(to as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
+                        a.insert_item(
+                            to as u32,
+                            Slot::of(s.kind, s.value),
+                            &mut self.side_refs,
+                            &mut self.chunks,
+                        );
                     }
                     a.length = length;
                 }
@@ -4976,16 +5010,26 @@ impl Interp {
                 rebuilt.extend_from_slice(&cur[(start + deletions) as usize..]);
                 {
                     let a = self.arrays.get_mut(&inst).unwrap();
-                    a.clear_items(&mut self.side_refs);
+                    a.clear_items(&mut self.side_refs, &mut self.chunks);
                     for (i, s) in rebuilt.into_iter().enumerate() {
-                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
+                        a.insert_item(
+                            i as u32,
+                            Slot::of(s.kind, s.value),
+                            &mut self.side_refs,
+                            &mut self.chunks,
+                        );
                     }
                     a.length = length - deletions + insertions;
                 }
                 {
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in removed.into_iter().enumerate() {
-                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
+                        a.insert_item(
+                            i as u32,
+                            Slot::of(s.kind, s.value),
+                            &mut self.side_refs,
+                            &mut self.chunks,
+                        );
                     }
                     a.length = deletions;
                 }
@@ -5086,7 +5130,12 @@ impl Interp {
                 {
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in rebuilt.into_iter().enumerate() {
-                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
+                        a.insert_item(
+                            i as u32,
+                            Slot::of(s.kind, s.value),
+                            &mut self.side_refs,
+                            &mut self.chunks,
+                        );
                     }
                     a.length = result_len;
                 }
@@ -5149,7 +5198,12 @@ impl Interp {
                 {
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in out.into_iter().enumerate() {
-                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
+                        a.insert_item(
+                            i as u32,
+                            Slot::of(s.kind, s.value),
+                            &mut self.side_refs,
+                            &mut self.chunks,
+                        );
                     }
                     a.length = total;
                 }
@@ -5667,7 +5721,7 @@ impl Interp {
                     self.collections
                         .get_mut(&inst)
                         .unwrap()
-                        .clear_entries(&mut self.side_refs);
+                        .clear_entries(&mut self.side_refs, &mut self.chunks);
                     // `fxResizeEntries` with size 0 shrinks the address chunk back
                     // toward `mxTableMinLength`, charging the rehash chunk if the
                     // length changes (modeled by [`Self::collection_table_resize`]).
@@ -7016,7 +7070,7 @@ impl Interp {
                 let result = self.new_array_unmetered();
                 let mut data = ArrayData::default();
                 for (index, key) in keys.into_iter().enumerate() {
-                    data.insert_item(index as u32, key, &mut self.side_refs);
+                    data.insert_item(index as u32, key, &mut self.side_refs, &mut self.chunks);
                 }
                 data.length = data.items().len() as u32;
                 self.arrays.insert(result, data);
@@ -7351,18 +7405,19 @@ impl Interp {
                         let pair = self.slots.alloc(Slot::instance(self.array_proto));
                         let mut pd = ArrayData::default();
                         pd.length = 2;
-                        pd.insert_item(0, *key, &mut self.side_refs);
-                        pd.insert_item(1, *val, &mut self.side_refs);
+                        pd.insert_item(0, *key, &mut self.side_refs, &mut self.chunks);
+                        pd.insert_item(1, *val, &mut self.side_refs, &mut self.chunks);
                         self.arrays.insert(pair, pd);
                         data.insert_item(
                             i as u32,
                             Slot::of(Kind::Reference, Payload::Reference(pair)),
                             &mut self.side_refs,
+                            &mut self.chunks,
                         );
                     } else {
                         self.meter.tick_raw(OBJECT_VALUES_PER_KEY_METERING);
                         self.meter.tick_slot_alloc();
-                        data.insert_item(i as u32, *val, &mut self.side_refs);
+                        data.insert_item(i as u32, *val, &mut self.side_refs, &mut self.chunks);
                     }
                 }
                 self.arrays.insert(result, data);

@@ -1577,10 +1577,12 @@ impl Interp {
             unreachable!("an array element delivered to an object");
         };
         self.admit_scratch::<Slot>(*length as usize + 1)?;
-        self.arrays
-            .get_mut(inst)
-            .unwrap()
-            .insert_item(*length, v, &mut self.side_refs);
+        self.arrays.get_mut(inst).unwrap().insert_item(
+            *length,
+            v,
+            &mut self.side_refs,
+            &mut self.chunks,
+        );
         if track_source {
             self.push_prepaid_scratch(sources, source)?;
         }

@@ -1281,7 +1281,7 @@ impl Interp {
         if let Some(data) = self.arrays.get_mut(&array) {
             data.length = values.len() as u32;
             for (index, value) in values.into_iter().enumerate() {
-                data.insert_item(index as u32, value, &mut self.side_refs);
+                data.insert_item(index as u32, value, &mut self.side_refs, &mut self.chunks);
             }
         }
         // The `_SLOPPY`/`_STRICT` forms build the user-visible
@@ -1383,6 +1383,7 @@ impl Interp {
                         index as u32,
                         mapped,
                         &mut self.side_refs,
+                        &mut self.chunks,
                     );
                 }
             }

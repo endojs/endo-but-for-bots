@@ -124,6 +124,8 @@ impl Interp {
 
         self.compact_code_segments();
         self.compact_reaction_arenas();
+        // Dropped rows and pruned weak entries release their side storage.
+        self.rederive_side_reserved();
 
         self.gc_failed = false;
         Ok(stats)
@@ -348,6 +350,7 @@ impl Interp {
         self.prune_dead_tables(&dead);
         self.compact_code_segments();
         self.compact_reaction_arenas();
+        self.rederive_side_reserved();
         self.gc_failed = false;
         Ok(freed.len() as u32)
     }

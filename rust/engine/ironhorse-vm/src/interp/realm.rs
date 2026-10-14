@@ -963,6 +963,8 @@ impl Interp {
                     self.switch_environment(previous);
                     self.discard_inactive_environment(partial);
                 }
+                // Charged storage the unwind dropped leaves the ledger.
+                self.rederive_side_reserved();
                 match crate::interp::resource_halt(&*payload) {
                     Some(halt) => Err(halt),
                     None => std::panic::resume_unwind(payload),

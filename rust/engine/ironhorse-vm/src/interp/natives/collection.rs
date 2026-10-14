@@ -109,6 +109,7 @@ impl Interp {
                             key,
                             val,
                             &mut self.side_refs,
+                            &mut self.chunks,
                         );
                         self.collection_table_resize(inst);
                     }
@@ -129,6 +130,7 @@ impl Interp {
                         key,
                         Slot::undefined(),
                         &mut self.side_refs,
+                        &mut self.chunks,
                     );
                     self.collection_table_resize(inst);
                 }
@@ -138,7 +140,7 @@ impl Interp {
                 let key = self.normalize_coll_key(arg0);
                 let v = self
                     .collection_find(inst, &key)
-                    .map(|p| self.collections[&inst].entries()[p].unwrap().1)
+                    .map(|p| self.collections[&inst].value_at(p))
                     .unwrap_or_else(Slot::undefined);
                 Ok(v)
             }
@@ -157,10 +159,11 @@ impl Interp {
                 let key = self.normalize_coll_key(arg0);
                 match self.collection_find(inst, &key) {
                     Some(p) => {
-                        self.collections
-                            .get_mut(&inst)
-                            .unwrap()
-                            .remove_entry(p, &mut self.side_refs);
+                        self.collections.get_mut(&inst).unwrap().remove_entry(
+                            p,
+                            &mut self.side_refs,
+                            &mut self.chunks,
+                        );
                         // `fxDeleteEntry` calls `fxResizeEntries` (a Map/Set may
                         // shrink its address chunk; a weak unlink is
                         // allocation-free).
@@ -344,6 +347,7 @@ impl Interp {
                     key,
                     value,
                     &mut self.side_refs,
+                    &mut self.chunks,
                 );
                 self.collection_table_resize(inst);
             }
@@ -626,6 +630,7 @@ impl Interp {
                 iterable: crate::value::SlotIndex::NULL,
                 index: 0,
                 kind: 4,
+                coll_seq: 0,
                 generation: 0,
                 result,
                 done: false,
@@ -667,6 +672,7 @@ impl Interp {
                 iterable: inst,
                 index: 0,
                 kind,
+                coll_seq: 0,
                 generation: coll_generation,
                 result,
                 done: false,
@@ -751,6 +757,7 @@ impl Interp {
                 iterable: iterator_inst,
                 index: 0,
                 kind: 8,
+                coll_seq: 0,
                 generation: 0,
                 result: next_holder,
                 done: false,
@@ -849,7 +856,7 @@ impl Interp {
 
     fn helper_set(&mut self, holder: crate::value::SlotIndex, index: u32, value: Slot) {
         if let Some(data) = self.arrays.get_mut(&holder) {
-            data.insert_item(index, value, &mut self.side_refs);
+            data.insert_item(index, value, &mut self.side_refs, &mut self.chunks);
         }
     }
 
@@ -880,7 +887,7 @@ impl Interp {
             // spent. `clear_items` drops every item's side reference and
             // leaves nothing behind.
             if let Some(data) = self.arrays.get_mut(&holder) {
-                data.clear_items(&mut self.side_refs);
+                data.clear_items(&mut self.side_refs, &mut self.chunks);
             }
         }
         if let Some(state) = self.iterators.get_mut(&helper) {
@@ -1160,6 +1167,7 @@ impl Interp {
                 iterable: inst,
                 index: 0,
                 kind: op + 10,
+                coll_seq: 0,
                 // `generation` is the re-entrancy latch for these kinds, not a
                 // collection clear-generation. A snapshot is only taken at a
                 // quiescent point, where no helper is mid-step, so the row
@@ -1660,7 +1668,12 @@ impl Interp {
                         let data = self.arrays.get_mut(&array).unwrap();
                         data.length = length;
                         for (index, value) in items.iter().enumerate() {
-                            data.insert_item(index as u32, *value, &mut self.side_refs);
+                            data.insert_item(
+                                index as u32,
+                                *value,
+                                &mut self.side_refs,
+                                &mut self.chunks,
+                            );
                         }
                         if length != 0 {
                             self.charge_and_check(self.array_chunk_size_metering(length))?;
@@ -1753,50 +1766,64 @@ impl Interp {
             }
         }
         let st = self.iterators[&iter].clone();
-        let len = self
-            .collections
-            .get(&st.iterable)
-            .map(|c| c.entries().len() as u32)
-            .unwrap_or(0);
-        let mut live_index = st.index;
-        while live_index < len
-            && self.collections[&st.iterable].entries()[live_index as usize].is_none()
-        {
-            live_index += 1;
-        }
-        let (new_value, new_done, next_index): (Slot, bool, u32) = if st.done || live_index >= len {
-            (Slot::undefined(), true, st.index)
+        let mut cursor = crate::bulk::CollCursor {
+            seq: st.coll_seq,
+            hint: st.index,
+        };
+        let next = if st.done {
+            None
         } else {
-            // A keys/values yield carries no residual; an entries yield charges
-            // the pair-construction frame ([`COLLECTION_ITERATOR_ENTRY_METERING`])
-            // plus the two-element pair chunk (below).
-            if st.kind == 7 {
-                self.meter.tick_raw(COLLECTION_ITERATOR_ENTRY_METERING);
-            }
-            let (k, v) = self.collections[&st.iterable].entries()[live_index as usize].unwrap();
-            let is_set = matches!(self.collections[&st.iterable].kind, CollKind::Set);
-            let value = match st.kind {
-                5 => k, // keys
-                // values: a Map yields the value half; a Set stores its value
-                // in the key half, so it yields the key.
-                6 if is_set => k,
-                6 => v,
-                _ => {
-                    // entries: `[key, value]` (a Set yields `[value, value]`).
-                    let (a, b) = if is_set { (k, k) } else { (k, v) };
-                    let pair = self.new_array();
-                    let arr = self.arrays.get_mut(&pair).unwrap();
-                    arr.length = 2;
-                    arr.insert_item(0, Slot::of(a.kind, a.value), &mut self.side_refs);
-                    arr.insert_item(1, Slot::of(b.kind, b.value), &mut self.side_refs);
-                    self.meter.tick_raw(self.array_chunk_size_metering(2));
-                    Slot::of(Kind::Reference, Payload::Reference(pair))
+            self.collections
+                .get(&st.iterable)
+                .and_then(|c| c.next_live(&mut cursor))
+        };
+        let (new_value, new_done) = match next {
+            None => (Slot::undefined(), true),
+            Some((k, v)) => {
+                // A keys/values yield carries no residual; an entries yield
+                // charges the pair-construction frame
+                // ([`COLLECTION_ITERATOR_ENTRY_METERING`]) plus the
+                // two-element pair chunk (below).
+                if st.kind == 7 {
+                    self.meter.tick_raw(COLLECTION_ITERATOR_ENTRY_METERING);
                 }
-            };
-            (value, false, live_index + 1)
+                let is_set = matches!(self.collections[&st.iterable].kind, CollKind::Set);
+                let value = match st.kind {
+                    5 => k, // keys
+                    // values: a Map yields the value half; a Set stores its
+                    // value in the key half, so it yields the key.
+                    6 if is_set => k,
+                    6 => v,
+                    _ => {
+                        // entries: `[key, value]` (a Set yields `[value, value]`).
+                        let (a, b) = if is_set { (k, k) } else { (k, v) };
+                        let pair = self.new_array();
+                        let arr = self.arrays.get_mut(&pair).unwrap();
+                        arr.length = 2;
+                        arr.insert_item(
+                            0,
+                            Slot::of(a.kind, a.value),
+                            &mut self.side_refs,
+                            &mut self.chunks,
+                        );
+                        arr.insert_item(
+                            1,
+                            Slot::of(b.kind, b.value),
+                            &mut self.side_refs,
+                            &mut self.chunks,
+                        );
+                        self.meter.tick_raw(self.array_chunk_size_metering(2));
+                        Slot::of(Kind::Reference, Payload::Reference(pair))
+                    }
+                };
+                (value, false)
+            }
         };
         if let Some(s) = self.iterators.get_mut(&iter) {
-            s.index = next_index;
+            if !st.done {
+                s.coll_seq = cursor.seq;
+                s.index = cursor.hint;
+            }
             s.done = new_done;
         }
         let (vid, did) = self.iterator_result_ids();
@@ -1881,13 +1908,14 @@ impl Interp {
         } else {
             MAP_FOREACH_FRAME_METERING
         })?;
-        // Index into the insertion list. Deletions leave tombstones and
+        // Walk the insertion order by sequence number. Deletions leave
+        // tombstones (or compact them away underneath the cursor) and
         // additions append, matching XS's live linked-list walk. A
         // `clear()` from inside the callback bumps the collection's
         // generation and ends the walk (XS's purge — the cursor never
         // reaches post-clear appends).
         let start_generation = self.collections.get(&inst).map_or(0, |c| c.generation());
-        let mut i = 0u32;
+        let mut cursor = crate::bulk::CollCursor::default();
         loop {
             if self
                 .collections
@@ -1896,17 +1924,12 @@ impl Interp {
             {
                 break;
             }
-            let entry = self
+            let Some((k, v)) = self
                 .collections
                 .get(&inst)
-                .and_then(|c| c.entries().get(i as usize));
-            let (k, v) = match entry {
-                Some(Some(kv)) => *kv,
-                Some(None) => {
-                    i += 1;
-                    continue;
-                }
-                None => break,
+                .and_then(|c| c.next_live(&mut cursor))
+            else {
+                break;
             };
             self.meter.tick_raw(COLLECTION_FOREACH_PER_ENTRY_METERING);
             // Map: cb(value, key, coll). Set: cb(value, value, coll) — the
@@ -1915,7 +1938,6 @@ impl Interp {
             let cb_key = k;
             let cb_args = [cb_val, cb_key, this];
             self.run_callback(code, callback, this_arg, &cb_args)?;
-            i += 1;
         }
         Ok(Slot::undefined())
     }
@@ -1954,12 +1976,7 @@ impl Interp {
     fn collection_live_keys(&self, inst: crate::value::SlotIndex) -> Vec<Slot> {
         self.collections
             .get(&inst)
-            .map(|c| {
-                c.entries()
-                    .iter()
-                    .filter_map(|e| e.map(|(k, _)| k))
-                    .collect()
-            })
+            .map(|c| c.live_entries().map(|&(k, _)| k).collect())
             .unwrap_or_default()
     }
 
@@ -2118,6 +2135,7 @@ impl Interp {
                 key,
                 Slot::undefined(),
                 &mut self.side_refs,
+                &mut self.chunks,
             );
             self.collection_table_resize(inst);
         }
@@ -2145,6 +2163,9 @@ impl Interp {
                 while let Some(v) = self.set_keys_iterator_step(code, iter, next)? {
                     let v = self.canonicalize_set_key(v);
                     if !self.key_list_contains(&result, &v) {
+                        self.admit_transient(
+                            (result.len() as u64 + 1) * crate::side_storage::SLOT_BYTES,
+                        )?;
                         result.push(v);
                     }
                 }
@@ -2156,20 +2177,12 @@ impl Interp {
                 if (this_len as f64) <= other_size {
                     // Walk THIS in order; keep those the other set `has`. `has`
                     // may mutate THIS, so re-check the element is still present.
-                    let mut i = 0u32;
-                    loop {
-                        let entry = self
-                            .collections
-                            .get(&inst)
-                            .and_then(|c| c.entries().get(i as usize));
-                        let k = match entry {
-                            Some(Some((k, _))) => *k,
-                            Some(None) => {
-                                i += 1;
-                                continue;
-                            }
-                            None => break,
-                        };
+                    let mut cursor = crate::bulk::CollCursor::default();
+                    while let Some((k, _)) = self
+                        .collections
+                        .get(&inst)
+                        .and_then(|c| c.next_live(&mut cursor))
+                    {
                         let in_other = self.call_primitive_method(code, has, obj, &[k])?;
                         if self.truthy(&in_other)
                             && self.collection_find(inst, &k).is_some()
@@ -2177,7 +2190,6 @@ impl Interp {
                         {
                             result.push(k);
                         }
-                        i += 1;
                     }
                 } else {
                     // Iterate the OTHER set's keys; keep those THIS contains.
@@ -2227,6 +2239,9 @@ impl Interp {
                     if in_this {
                         result.retain(|e| !self.same_value_zero(e, &v));
                     } else if !self.key_list_contains(&result, &v) {
+                        self.admit_transient(
+                            (result.len() as u64 + 1) * crate::side_storage::SLOT_BYTES,
+                        )?;
                         result.push(v);
                     }
                 }
@@ -2239,25 +2254,16 @@ impl Interp {
                 if (this_keys.len() as f64) > other_size {
                     return Ok(Slot::boolean(false));
                 }
-                let mut i = 0u32;
-                loop {
-                    let entry = self
-                        .collections
-                        .get(&inst)
-                        .and_then(|c| c.entries().get(i as usize));
-                    let k = match entry {
-                        Some(Some((k, _))) => *k,
-                        Some(None) => {
-                            i += 1;
-                            continue;
-                        }
-                        None => break,
-                    };
+                let mut cursor = crate::bulk::CollCursor::default();
+                while let Some((k, _)) = self
+                    .collections
+                    .get(&inst)
+                    .and_then(|c| c.next_live(&mut cursor))
+                {
                     let in_other = self.call_primitive_method(code, has, obj, &[k])?;
                     if !self.truthy(&in_other) {
                         return Ok(Slot::boolean(false));
                     }
-                    i += 1;
                 }
                 Ok(Slot::boolean(true))
             }
@@ -2281,25 +2287,16 @@ impl Interp {
                 // No common element. Walk the smaller side.
                 let this_len = self.collection_live_len(inst);
                 if (this_len as f64) <= other_size {
-                    let mut i = 0u32;
-                    loop {
-                        let entry = self
-                            .collections
-                            .get(&inst)
-                            .and_then(|c| c.entries().get(i as usize));
-                        let k = match entry {
-                            Some(Some((k, _))) => *k,
-                            Some(None) => {
-                                i += 1;
-                                continue;
-                            }
-                            None => break,
-                        };
+                    let mut cursor = crate::bulk::CollCursor::default();
+                    while let Some((k, _)) = self
+                        .collections
+                        .get(&inst)
+                        .and_then(|c| c.next_live(&mut cursor))
+                    {
                         let in_other = self.call_primitive_method(code, has, obj, &[k])?;
                         if self.truthy(&in_other) {
                             return Ok(Slot::boolean(false));
                         }
-                        i += 1;
                     }
                 } else {
                     let (iter, next) = self.get_keys_iterator(code, obj, keys)?;
@@ -2378,13 +2375,14 @@ impl Interp {
                     .copied()
                     .unwrap_or_else(Slot::undefined);
                 if let Some(p) = self.collection_find(inst, &key) {
-                    return Ok(self.collections[&inst].entries()[p].unwrap().1);
+                    return Ok(self.collections[&inst].value_at(p));
                 }
                 self.charge_new_entry_slots(3);
                 self.collections.get_mut(&inst).unwrap().push_entry(
                     key,
                     value,
                     &mut self.side_refs,
+                    &mut self.chunks,
                 );
                 self.collection_table_resize(inst);
                 Ok(value)
@@ -2399,7 +2397,7 @@ impl Interp {
                     return Err(self.catchable_type_error_msg("callback: not a function".into()));
                 }
                 if let Some(p) = self.collection_find(inst, &key) {
-                    return Ok(self.collections[&inst].entries()[p].unwrap().1);
+                    return Ok(self.collections[&inst].value_at(p));
                 }
                 // `Call(callbackfn, undefined, « key »)`. The callback may mutate
                 // the map (including inserting `key` itself); the computed value
@@ -2419,6 +2417,7 @@ impl Interp {
                             key,
                             value,
                             &mut self.side_refs,
+                            &mut self.chunks,
                         );
                         self.collection_table_resize(inst);
                     }
@@ -2492,6 +2491,9 @@ impl Interp {
         let mut buckets: Vec<(Slot, Vec<Slot>)> = Vec::new();
         let mut reprs: Vec<(Option<u16>, Vec<u16>)> = Vec::new();
         let mut index: i32 = 0;
+        // Every recorded value and bucket, at declared widths, bounded by the
+        // chunk ceiling before it is kept.
+        let mut recorded: u64 = 0;
 
         // A closure would need `&mut self`, so record inline. `record` buckets
         // one produced value under the callback's (coerced) result.
@@ -2503,6 +2505,11 @@ impl Interp {
                     callbackfn,
                     Slot::undefined(),
                     &[value, Slot::integer(index)],
+                )?;
+                recorded += 1;
+                self.admit_transient(
+                    recorded * crate::side_storage::SLOT_BYTES
+                        + (buckets.len() as u64 + 1) * crate::side_storage::GROUP_BUCKET_BYTES,
                 )?;
                 if is_map {
                     let key = self.normalize_coll_key(key);
@@ -2652,10 +2659,12 @@ impl Interp {
         for (key, values) in buckets {
             let array = self.group_array_from_values(values);
             self.charge_new_entry_slots(3);
-            self.collections
-                .get_mut(&inst)
-                .unwrap()
-                .push_entry(key, array, &mut self.side_refs);
+            self.collections.get_mut(&inst).unwrap().push_entry(
+                key,
+                array,
+                &mut self.side_refs,
+                &mut self.chunks,
+            );
             self.collection_table_resize(inst);
         }
         Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -2726,10 +2735,12 @@ impl Interp {
             let mut v = v;
             v.id = 0;
             v.next = crate::value::SlotIndex::NULL;
-            self.arrays
-                .get_mut(&inst)
-                .unwrap()
-                .insert_item(i as u32, v, &mut self.side_refs);
+            self.arrays.get_mut(&inst).unwrap().insert_item(
+                i as u32,
+                v,
+                &mut self.side_refs,
+                &mut self.chunks,
+            );
         }
         self.arrays.get_mut(&inst).unwrap().length = n;
         Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -2896,11 +2907,12 @@ impl Interp {
             } else {
                 crate::value::canonicalize_nan(value).to_bits()
             }),
-            Payload::String(off) => CollKey::String(self.chunks.payload(off).to_vec()),
-            Payload::BigInt(off) => {
-                let (negative, magnitude) = self.read_bigint(off);
-                CollKey::BigInt(negative, magnitude)
+            // Content classes: the hash of the key, never a copy of it.
+            // `collection_find` confirms a match by comparing the keys.
+            Payload::String(off) => {
+                CollKey::String(CollKey::content_hash(&*self.chunks.payload(off)))
             }
+            Payload::BigInt(off) => CollKey::BigInt(CollKey::content_hash(self.read_bigint(off))),
             Payload::Reference(reference) => CollKey::Reference(reference),
             Payload::At(..) => unreachable!("internal property key in a collection"),
         }
@@ -2909,7 +2921,11 @@ impl Interp {
     /// The index of `key` among `inst`'s entries by SameValueZero, or `None`.
     fn collection_find(&self, inst: crate::value::SlotIndex, key: &Slot) -> Option<usize> {
         let data = self.collections.get(&inst)?;
-        data.find(&self.coll_index_key(key), |key| self.coll_index_key(key))
+        data.find(
+            &self.coll_index_key(key),
+            |stored| self.coll_index_key(stored),
+            |stored| self.strict_equal(stored, key),
+        )
     }
 
     /// Charge the metering of an inserting `fxSetEntry`/`fxSetWeakEntry` new

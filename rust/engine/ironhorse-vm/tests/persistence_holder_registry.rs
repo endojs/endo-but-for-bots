@@ -38,7 +38,7 @@ fn every_persisted_holder_keeps_its_native_reference_checks() {
         ("stack", &[".iter().any(names)"]),
         ("arrays", &[".items().iter().map(|(_,v)|v)", ".any(names)"]),
         ("index_props", &[".items().iter().map(|(_,v)|v)", ".any(names)"]),
-        ("collections", &[".entries().iter().flatten().flat_map(|e|[&e.0,&e.1])", ".any(names)"]),
+        ("collections", &[".live_entries().flat_map(|e|[&e.0,&e.1])", ".any(names)"]),
         ("accessors", &["d.get.as_ref().is_some_and(names)||d.set.as_ref().is_some_and(names)"]),
         ("private_accessors", &["d.get.as_ref().is_some_and(names)||d.set.as_ref().is_some_and(names)"]),
         ("private_values", &[".values().any(names)"]),

@@ -44,6 +44,7 @@ impl Interp {
                 iterable,
                 index: 0,
                 kind: 3,
+                coll_seq: 0,
                 generation: 0,
                 result,
                 done,
