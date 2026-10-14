@@ -634,6 +634,21 @@ pub fn slot_page_count(slot_count: u32) -> u32 {
     slot_count.div_ceil(SLOTS_PER_PAGE)
 }
 
+/// A chunk offset is a u32, so no arena this format describes is longer
+/// than `u32::MAX` bytes. Every reader that narrows a manifest's
+/// `chunk_len` to `usize` runs behind this check, so the narrowing is
+/// lossless on a 32-bit host too: a longer length would otherwise truncate
+/// there, and a wasm32 machine would resume a different arena from the same
+/// store than a 64-bit one.
+fn check_chunk_len(chunk_len: u64) -> Result<(), StoreError> {
+    if chunk_len > u64::from(u32::MAX) {
+        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "store manifest chunk length exceeds the chunk offset space",
+        )));
+    }
+    Ok(())
+}
+
 /// Chunk extents a `chunk_len`-byte arena occupies (the last extent
 /// may be partial).
 pub fn chunk_extent_count(chunk_len: u64) -> u32 {
@@ -766,15 +781,9 @@ impl StoreManifest {
         let slot_count = u32::from_be_bytes(take4(&mut i)?);
         let slot_live = u32::from_be_bytes(take4(&mut i)?);
         let chunk_len = u64::from_be_bytes(take8(&mut i)?);
-        // A chunk offset is a u32, so no arena this format describes is
-        // longer. This is only the coarse bound; open's tail-row check
-        // ties the length to the stored rows before a lazy arena is sized
-        // from it.
-        if chunk_len > u64::from(u32::MAX) {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "store manifest chunk length exceeds the chunk offset space",
-            )));
-        }
+        // This is only the coarse bound; open's tail-row check ties the
+        // length to the stored rows before a lazy arena is sized from it.
+        check_chunk_len(chunk_len)?;
         let free_len = u32::from_be_bytes(take4(&mut i)?);
         let epoch = u64::from_be_bytes(take8(&mut i)?);
         if store_schema >= 36 {
@@ -1020,11 +1029,7 @@ pub fn check_batch(
     prior: Option<&StoreManifest>,
     batch: &CheckpointBatch,
 ) -> Result<(), StoreError> {
-    if batch.manifest.chunk_len > u64::from(u32::MAX) {
-        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-            "store manifest chunk length exceeds the chunk offset space",
-        )));
-    }
+    check_chunk_len(batch.manifest.chunk_len)?;
     let n_pages = slot_page_count(batch.manifest.slot_count) as usize;
     let n_exts = chunk_extent_count(batch.manifest.chunk_len) as usize;
     let n_frees = free_seg_count(batch.manifest.free_len) as usize;
@@ -2086,6 +2091,10 @@ pub fn check_open_gates(
             found: manifest.signature.clone(),
         }));
     }
+    // The manifest decoder refuses this, but a store may hand back a
+    // manifest it never encoded; every open path passes here before it
+    // narrows the length.
+    check_chunk_len(manifest.chunk_len)?;
     Ok(())
 }
 
