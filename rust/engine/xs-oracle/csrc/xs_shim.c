@@ -61,6 +61,13 @@ typedef struct {
 	 * differential comparison reads them, so they cannot make a trophy. */
 	txU4 heap_count;
 	txU4 chunks_size;
+	/* The test262 async harness's completion latch, `__endorAsyncSignal`,
+	 * read after the final microtask checkpoint of a multi-script run, so
+	 * the differential can tell whether the oracle's own `$DONE` reported
+	 * success. Empty with has_async_signal == 0 when it is undefined or the
+	 * run did not reach the checkpoint. */
+	txU4 has_async_signal;
+	char async_signal[ENDOR_ERROR_MAX];
 } EndorOracleResult;
 
 static int gEndorClusterReady = 0;
@@ -675,6 +682,20 @@ static int xs_oracle_run_sources(const char **sources, const txU4 *sourceLens,
 				}
 				mxPop();
 				out->ok = 1;
+				/* After the last checkpoint and every measurement above:
+				 * interning the name cannot reach a later crank's symbols. */
+				if (drainLast && crank_i + 1 == crankCount) {
+					mxPush(mxGlobal);
+					fxGetID(the, fxID(the, "__endorAsyncSignal"));
+					if (the->stack->kind != XS_UNDEFINED_KIND) {
+						fxToString(the, the->stack);
+						strncpy(out->async_signal, the->stack->value.string,
+							ENDOR_ERROR_MAX - 1);
+						out->async_signal[ENDOR_ERROR_MAX - 1] = 0;
+						out->has_async_signal = 1;
+					}
+					mxPop();
+				}
 			}
 		}
 		mxCatch(the) {

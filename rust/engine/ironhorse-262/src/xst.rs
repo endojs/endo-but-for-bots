@@ -1499,6 +1499,9 @@ const ASYNC_SIGNAL_NAME: &str = "__endorAsyncSignal";
 /// defines to write the same sentinel — so either path records the same
 /// `Test262:AsyncTest{Complete,Failure:…}` marker string.
 const ASYNC_PRELUDE: &str = r#"function $DONE(error) {
+  if (typeof __endorAsyncSignal === 'string' && __endorAsyncSignal.indexOf('Test262:AsyncTestFailure') === 0) {
+    return;
+  }
   if (error) {
     if (typeof error === 'object' && error !== null && 'name' in error) {
       __endorAsyncSignal = 'Test262:AsyncTestFailure:' + error.name + ': ' + error.message;
@@ -1509,7 +1512,12 @@ const ASYNC_PRELUDE: &str = r#"function $DONE(error) {
     __endorAsyncSignal = 'Test262:AsyncTestComplete';
   }
 }
-function print(msg) { __endorAsyncSignal = '' + msg; }
+function print(msg) {
+  if (typeof __endorAsyncSignal === 'string' && __endorAsyncSignal.indexOf('Test262:AsyncTestFailure') === 0) {
+    return;
+  }
+  __endorAsyncSignal = '' + msg;
+}
 "#;
 
 /// Run one case (source text) through the full mode/verdict machinery.
@@ -2224,29 +2232,38 @@ fn combine_mode_results(sloppy: Option<CaseResult>, strict: Option<CaseResult>) 
     }
 }
 
-/// Refine a differentially-`Covered` async case by its `$DONE` completion
-/// latch (the did-not-run / success / failure trichotomy `xst262.c` computes
-/// after `fxRunLoop`), plus the unhandled-rejection latch. Only the clean
-/// success path counts as covered; every other shape is an honest named skip —
-/// never a `Fail`, because on a `Covered` base the oracle *agreed* with ironhorse,
-/// so a non-success signal reflects the shared execution (an oracle-side
-/// failure or a test that never signaled), not an ironhorse defect.
+/// Layer the async completion verdict on a `Covered` differential: the
+/// `$DONE` sentinel each engine's prelude recorded after its microtask drain,
+/// plus ironhorse's unhandled-rejection latch. Only the clean success path
+/// counts as covered. When ironhorse did not succeed but the oracle's own
+/// `$DONE` reported `Test262:AsyncTestComplete`, ironhorse failed where XS
+/// passed: a gating `async:` failure naming what ironhorse reported. Any
+/// other non-success is a named skip, because the oracle did not succeed
+/// either (both reported failure, or neither signaled).
 fn refine_async(async_run: &AsyncDualRun) -> Verdict {
-    if async_run.ironhorse_unhandled_rejection {
-        return Verdict::RunSkip("async:unhandled-rejection".into());
-    }
-    match async_run.ironhorse_signal.as_deref() {
-        Some("Test262:AsyncTestComplete") => Verdict::Covered,
-        Some(s) if s.starts_with("Test262:AsyncTestFailure") => {
-            Verdict::RunSkip("async:reported-failure".into())
+    let skip = if async_run.ironhorse_unhandled_rejection {
+        "async:unhandled-rejection"
+    } else {
+        match async_run.ironhorse_signal.as_deref() {
+            Some("Test262:AsyncTestComplete") => return Verdict::Covered,
+            Some(s) if s.starts_with("Test262:AsyncTestFailure") => "async:reported-failure",
+            // A signal that is neither the success marker nor a known failure
+            // marker: some other `print` output, honestly named, not covered.
+            Some(_) => "async:unexpected-signal",
+            // The did-not-run latch: `$DONE` was never called (nor `print`).
+            None => "async:no-completion-signal",
         }
-        // A signal that is neither the success marker nor a known failure
-        // marker: some other `print` output — honestly named, not covered.
-        Some(_) => Verdict::RunSkip("async:unexpected-signal".into()),
-        // The did-not-run latch: `$DONE` was never called (nor `print`), so the
-        // async test never signaled completion on the shared execution.
-        None => Verdict::RunSkip("async:no-completion-signal".into()),
+    };
+    if async_run.oracle_signal.as_deref() == Some("Test262:AsyncTestComplete")
+        && !async_run.ironhorse_unhandled_rejection
+    {
+        let reported = async_run
+            .ironhorse_signal
+            .as_deref()
+            .unwrap_or("no completion signal");
+        return Verdict::Fail(format!("async: {reported} (the oracle completed)"));
     }
+    Verdict::RunSkip(skip.into())
 }
 
 /// The xst-shaped report over a set of cases: `mode:` / `skip:` / `fail:`
@@ -4977,20 +4994,93 @@ mod tests {
             run: synthetic_abort(Halt::Return, ""),
             ironhorse_signal: signal.map(|s| s.to_string()),
             ironhorse_unhandled_rejection: unhandled,
+            oracle_signal: None,
+        }
+    }
+
+    fn synthetic_async_against(
+        signal: Option<&str>,
+        unhandled: bool,
+        oracle: Option<&str>,
+    ) -> AsyncDualRun {
+        AsyncDualRun {
+            oracle_signal: oracle.map(|s| s.to_string()),
+            ..synthetic_async(signal, unhandled)
         }
     }
 
     #[test]
-    fn refine_async_only_narrows_covered_to_honest_skips() {
+    fn refine_async_fails_what_only_the_oracle_completed() {
+        let complete = Some("Test262:AsyncTestComplete");
+        // XS's own `$DONE` succeeded where ironhorse's did not: ironhorse's
+        // failure, gated, with what ironhorse reported.
+        assert_eq!(
+            refine_async(&synthetic_async_against(
+                Some("Test262:AsyncTestFailure:TypeError: x"),
+                false,
+                complete
+            )),
+            Verdict::Fail(
+                "async: Test262:AsyncTestFailure:TypeError: x (the oracle completed)".into()
+            )
+        );
+        assert_eq!(
+            refine_async(&synthetic_async_against(None, false, complete)),
+            Verdict::Fail("async: no completion signal (the oracle completed)".into())
+        );
+        // Both succeeded, or both failed: unchanged.
+        assert_eq!(
+            refine_async(&synthetic_async_against(complete, false, complete)),
+            Verdict::Covered
+        );
+        assert!(matches!(
+            refine_async(&synthetic_async_against(
+                Some("Test262:AsyncTestFailure:X"),
+                false,
+                Some("Test262:AsyncTestFailure:Y")
+            )),
+            Verdict::RunSkip(r) if r == "async:reported-failure"
+        ));
+        // The unhandled-rejection latch is ironhorse's alone, so it stays a skip.
+        assert!(matches!(
+            refine_async(&synthetic_async_against(complete, true, complete)),
+            Verdict::RunSkip(r) if r == "async:unhandled-rejection"
+        ));
+    }
+
+    #[test]
+    fn the_oracle_reports_its_own_done_after_the_checkpoint() {
+        let run = |body: &str| {
+            let setup = format!("{ASYNC_PRELUDE}");
+            let runs = crate::dual_run_scripts(&[&setup, body], Some(ASYNC_SIGNAL_NAME))
+                .expect("oracle machine available");
+            let last = runs.last().unwrap();
+            (last.oracle_signal.clone(), last.ironhorse_signal.clone())
+        };
+        let complete = Some("Test262:AsyncTestComplete".to_string());
+        assert_eq!(
+            run("Promise.resolve().then(function () { $DONE(); });"),
+            (complete.clone(), complete.clone())
+        );
+        assert_eq!(run("1;"), (None, None));
+        // A failure is sticky: a later `$DONE()` does not overwrite it.
+        let failed = Some("Test262:AsyncTestFailure:Test262Error: first".to_string());
+        assert_eq!(
+            run("$DONE('first'); Promise.resolve().then(function () { $DONE(); });"),
+            (failed.clone(), failed)
+        );
+    }
+
+    #[test]
+    fn refine_async_without_the_oracles_success_narrows_to_named_skips() {
         // The clean `$DONE()` success is the only covered shape.
         assert_eq!(
             refine_async(&synthetic_async(Some("Test262:AsyncTestComplete"), false)),
             Verdict::Covered
         );
-        // A reported async failure, an unexpected signal, and the did-not-run
-        // latch each become a NAMED skip — never a `Fail` (on a `Covered` base
-        // the oracle agreed with ironhorse, so a non-success signal is a shared
-        // outcome, not an ironhorse defect).
+        // Without the oracle's success, a reported async failure, an
+        // unexpected signal, and the did-not-run latch each become a NAMED
+        // skip, not a `Fail`.
         assert!(matches!(
             refine_async(&synthetic_async(Some("Test262:AsyncTestFailure:X"), false)),
             Verdict::RunSkip(r) if r == "async:reported-failure"

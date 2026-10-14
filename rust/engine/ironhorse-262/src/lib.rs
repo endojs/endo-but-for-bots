@@ -622,9 +622,11 @@ pub(crate) fn dual_run_scripts_checkpoint(
         run.meter_raw = run.meter_raw_this_run;
         run.dispatched = run.dispatched_this_run;
         let stop = !oracle.completed || !run.completed;
+        let oracle_signal = signal_name.and(oracle.async_signal.clone());
         result.push(AsyncDualRun {
             ironhorse_signal: signal_name.and_then(|name| interp.global_string(name)),
             ironhorse_unhandled_rejection: interp.has_unhandled_rejection(),
+            oracle_signal,
             run: build_dual_run(source, oracle, run, compile, bytecode, symbols),
         });
         if stop {
@@ -814,6 +816,10 @@ pub struct AsyncDualRun {
     /// ironhorse saw a promise settle rejected that nothing ever observed
     /// (`the->rejection`-equivalent).
     pub ironhorse_unhandled_rejection: bool,
+    /// The oracle's own completion sentinel, read after its final microtask
+    /// checkpoint ([`xs_oracle::OracleOutcome::async_signal`]); `None` when
+    /// it never signaled or the run took a path that does not read it.
+    pub oracle_signal: Option<String>,
 }
 
 /// Run one async-harness `source` on both engines and, keeping ironhorse's
@@ -838,6 +844,8 @@ pub fn dual_run_async(source: &str, signal_name: &str) -> Option<AsyncDualRun> {
         run: build_dual_run(source, oracle, ironhorse, compile, bytecode, symbols),
         ironhorse_signal,
         ironhorse_unhandled_rejection,
+        // The single-source oracle run does not read the latch.
+        oracle_signal: None,
     })
 }
 

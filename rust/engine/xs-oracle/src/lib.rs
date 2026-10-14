@@ -42,6 +42,9 @@ struct XsOracleResultRaw {
     /// compare against, and had none.
     heap_count: u32,
     chunks_size: u32,
+    /// `__endorAsyncSignal` after a multi-script run's final checkpoint.
+    has_async_signal: u32,
+    async_signal: [u8; 256],
 }
 
 impl Default for XsOracleResultRaw {
@@ -60,6 +63,8 @@ impl Default for XsOracleResultRaw {
             exit_status: 0,
             heap_count: 0,
             chunks_size: 0,
+            has_async_signal: 0,
+            async_signal: [0u8; 256],
         }
     }
 }
@@ -274,6 +279,11 @@ pub struct OracleOutcome {
     /// XS's byte-arena size at the end of the run, the counterpart of this
     /// engine's chunk arena. Diagnostic only, as above.
     pub chunks_size: u32,
+    /// The test262 async harness's completion latch (`__endorAsyncSignal`)
+    /// read after the final microtask checkpoint of [`run_scripts`], so a
+    /// caller can tell whether XS's own `$DONE` reported success. `None` when
+    /// it is undefined, and always for the single-source and crank runs.
+    pub async_signal: Option<String>,
 }
 
 impl OracleOutcome {
@@ -340,6 +350,7 @@ pub fn run(source: &str) -> Option<OracleOutcome> {
         exit_status: raw.exit_status,
         heap_count: raw.heap_count,
         chunks_size: raw.chunks_size,
+        async_signal: None,
     };
 
     // Safety: frees the heap buffers the shim allocated; we have copied
@@ -409,6 +420,7 @@ fn outcome_from_raw(raw: &mut XsOracleResultRaw) -> OracleOutcome {
         exit_status: raw.exit_status,
         heap_count: raw.heap_count,
         chunks_size: raw.chunks_size,
+        async_signal: (raw.has_async_signal != 0).then(|| cstr_field(&raw.async_signal)),
     };
     // Safety: frees the shim's heap buffers; copied out above.
     unsafe { xs_oracle_free(raw as *mut _) };
