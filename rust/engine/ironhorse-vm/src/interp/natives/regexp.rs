@@ -2527,3 +2527,104 @@ fn regexp_rendered_source_len(source: &[u16]) -> usize {
     }
     length
 }
+
+/// `HEX[n]` is the lower-case hexadecimal digit for `n`, as `RegExp.escape`
+/// writes them.
+const HEX_LOWER: &[u8; 16] = b"0123456789abcdef";
+
+impl Interp {
+    /// `RegExp.escape(S)` (ES2025 22.2.5.1): a String argument, else a
+    /// TypeError; each code point of it as `EncodeForRegExpEscape` writes it,
+    /// with a leading decimal digit or ASCII letter written as `\xHH`. Each
+    /// input unit is charged before it is read, and each output growth is
+    /// admitted before the scratch buffer grows.
+    /// Out of line from the method dispatcher, whose frame every native
+    /// re-entry carries (`benches/stack_height.py`).
+    #[inline(never)]
+    pub(in crate::interp) fn regexp_escape(
+        &mut self,
+        argc: usize,
+        arg0: Slot,
+    ) -> Result<Slot, Step> {
+        let Payload::String(off) = arg0.value else {
+            return Err(self.catchable_type_error_msg("string: not a string".into()));
+        };
+        if argc < 1 || arg0.kind != Kind::String {
+            return Err(self.catchable_type_error_msg("string: not a string".into()));
+        }
+        let len = self.str_len(off);
+        let mut out = Vec::new();
+        let mut pos = 0;
+        while pos < len {
+            self.charge_and_check(crate::meter::STRING_METERING)?;
+            let first = self
+                .str_unit_at(off, pos as u32)
+                .expect("escape index within string");
+            pos += 1;
+            let mut c = u32::from(first);
+            if (0xd800..=0xdbff).contains(&first) && pos < len {
+                let second = self
+                    .str_unit_at(off, pos as u32)
+                    .expect("escape index within string");
+                if (0xdc00..=0xdfff).contains(&second) {
+                    self.charge_and_check(crate::meter::STRING_METERING)?;
+                    pos += 1;
+                    c = 0x10000 + ((c - 0xd800) << 10) + (u32::from(second) - 0xdc00);
+                }
+            }
+            let hex_byte = |byte: u32| {
+                [
+                    b'\\',
+                    b'x',
+                    HEX_LOWER[(byte >> 4) as usize],
+                    HEX_LOWER[(byte & 15) as usize],
+                ]
+                .map(u16::from)
+            };
+            if out.is_empty() && u8::try_from(c).is_ok_and(|byte| byte.is_ascii_alphanumeric()) {
+                self.extend_reserved_units(&mut out, &hex_byte(c))?;
+            } else if let Some(syntax) = u8::try_from(c)
+                .ok()
+                .filter(|byte| b"^$\\.*+?()[]{}|/".contains(byte))
+            {
+                self.extend_reserved_units(&mut out, &[u16::from(b'\\'), u16::from(syntax)])?;
+            } else if let Some(control) = match c {
+                0x09 => Some(b't'),
+                0x0a => Some(b'n'),
+                0x0b => Some(b'v'),
+                0x0c => Some(b'f'),
+                0x0d => Some(b'r'),
+                _ => None,
+            } {
+                self.extend_reserved_units(&mut out, &[u16::from(b'\\'), u16::from(control)])?;
+            } else if u8::try_from(c).is_ok_and(|byte| b",-=<>#&!%:;@~'`\"".contains(&byte))
+                || super::super::text::is_ecma_whitespace(c)
+                || (0xd800..=0xdfff).contains(&c)
+            {
+                if c <= 0xff {
+                    self.extend_reserved_units(&mut out, &hex_byte(c))?;
+                } else {
+                    // Only BMP code points reach here: a lone surrogate, or
+                    // a WhiteSpace or LineTerminator code point.
+                    let unit = c as u16;
+                    let escaped = [
+                        b'\\',
+                        b'u',
+                        HEX_LOWER[(unit >> 12) as usize],
+                        HEX_LOWER[((unit >> 8) & 15) as usize],
+                        HEX_LOWER[((unit >> 4) & 15) as usize],
+                        HEX_LOWER[(unit & 15) as usize],
+                    ];
+                    self.extend_reserved_units(&mut out, &escaped.map(u16::from))?;
+                }
+            } else if let Ok(unit) = u16::try_from(c) {
+                self.extend_reserved_units(&mut out, &[unit])?;
+            } else {
+                let scalar = char::from_u32(c).expect("a paired surrogate is a scalar");
+                let mut buffer = [0u16; 2];
+                self.extend_reserved_units(&mut out, scalar.encode_utf16(&mut buffer))?;
+            }
+        }
+        Ok(self.new_reserved_string_units(&out))
+    }
+}

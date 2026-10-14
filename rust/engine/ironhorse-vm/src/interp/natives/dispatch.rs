@@ -2425,6 +2425,7 @@ impl Interp {
             NativeMethod::RegExpExec
             | NativeMethod::RegExpTest
             | NativeMethod::RegExpCompile
+            | NativeMethod::RegExpEscape
             | NativeMethod::RegExpMatch
             | NativeMethod::RegExpMatchAll
             | NativeMethod::RegExpSearch
@@ -5939,6 +5940,7 @@ impl Interp {
                 self.regexp_test(code, inst, this, arg0)?
             }
             NativeMethod::RegExpCompile => this,
+            NativeMethod::RegExpEscape => self.regexp_escape(argc, arg0)?,
             NativeMethod::RegExpMatch
             | NativeMethod::RegExpMatchAll
             | NativeMethod::RegExpSearch

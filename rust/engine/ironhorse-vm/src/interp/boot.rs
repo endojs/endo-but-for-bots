@@ -1414,6 +1414,10 @@ impl Interp {
             self.alloc_named_method(NativeMethod::RegExpSplit, "[Symbol.split]", 2);
         let _ =
             self.alloc_named_method(NativeMethod::RegExpSpeciesGetter, "get [Symbol.species]", 0);
+        if let Some(&regexp_ctor) = self.intrinsics.get("RegExp") {
+            let escape = self.alloc_named_method(NativeMethod::RegExpEscape, "escape", 1);
+            self.proto_methods.push((regexp_ctor, "escape", escape));
+        }
         for (native, methods) in [
             (
                 Native::DisposableStack,
