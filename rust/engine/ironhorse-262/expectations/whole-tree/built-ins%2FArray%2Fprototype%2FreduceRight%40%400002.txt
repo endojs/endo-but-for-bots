@@ -100,8 +100,8 @@ built-ins/Array/prototype/reduceRight/15.4.4.22-9-c-ii-9.js sloppy pass
 built-ins/Array/prototype/reduceRight/15.4.4.22-9-c-ii-9.js strict pass
 built-ins/Array/prototype/reduceRight/call-with-boolean.js sloppy skip:unsupported-opcode:reduce:non-dense-array
 built-ins/Array/prototype/reduceRight/call-with-boolean.js strict skip:unsupported-opcode:reduce:non-dense-array
-built-ins/Array/prototype/reduceRight/callbackfn-resize-arraybuffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/Array/prototype/reduceRight/callbackfn-resize-arraybuffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/reduceRight/callbackfn-resize-arraybuffer.js sloppy pass
+built-ins/Array/prototype/reduceRight/callbackfn-resize-arraybuffer.js strict pass
 built-ins/Array/prototype/reduceRight/length-near-integer-limit.js sloppy skip:unsupported-opcode:reduce:non-dense-array
 built-ins/Array/prototype/reduceRight/length-near-integer-limit.js strict skip:unsupported-opcode:reduce:non-dense-array
 built-ins/Array/prototype/reduceRight/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"

@@ -1,6 +1,6 @@
 # engine=ironhorse features=default corpus=built-ins/TypedArrayConstructors/internals/DefineOwnProperty tip=be13516fb6441b950ba8a3df97eb34062c186972
-built-ins/TypedArrayConstructors/internals/DefineOwnProperty/conversion-operation-consistent-nan.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/internals/DefineOwnProperty/conversion-operation-consistent-nan.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/DefineOwnProperty/conversion-operation-consistent-nan.js sloppy pass
+built-ins/TypedArrayConstructors/internals/DefineOwnProperty/conversion-operation-consistent-nan.js strict pass
 built-ins/TypedArrayConstructors/internals/DefineOwnProperty/conversion-operation.js sloppy pass
 built-ins/TypedArrayConstructors/internals/DefineOwnProperty/conversion-operation.js strict pass
 built-ins/TypedArrayConstructors/internals/DefineOwnProperty/desc-value-throws.js sloppy pass

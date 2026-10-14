@@ -7,10 +7,10 @@ built-ins/TypedArrayConstructors/of/custom-ctor-does-not-instantiate-ta-throws.j
 built-ins/TypedArrayConstructors/of/custom-ctor-does-not-instantiate-ta-throws.js strict pass
 built-ins/TypedArrayConstructors/of/custom-ctor-returns-immutable-arraybuffer.js sloppy skip:shared-test262-failure
 built-ins/TypedArrayConstructors/of/custom-ctor-returns-immutable-arraybuffer.js strict skip:shared-test262-failure
-built-ins/TypedArrayConstructors/of/custom-ctor-returns-other-instance.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/of/custom-ctor-returns-other-instance.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/of/custom-ctor-returns-smaller-instance-throws.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/of/custom-ctor-returns-smaller-instance-throws.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/of/custom-ctor-returns-other-instance.js sloppy pass
+built-ins/TypedArrayConstructors/of/custom-ctor-returns-other-instance.js strict pass
+built-ins/TypedArrayConstructors/of/custom-ctor-returns-smaller-instance-throws.js sloppy pass
+built-ins/TypedArrayConstructors/of/custom-ctor-returns-smaller-instance-throws.js strict pass
 built-ins/TypedArrayConstructors/of/custom-ctor.js sloppy pass
 built-ins/TypedArrayConstructors/of/custom-ctor.js strict pass
 built-ins/TypedArrayConstructors/of/inherited.js sloppy pass

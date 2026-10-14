@@ -1,14 +1,14 @@
 # engine=ironhorse features=default corpus=built-ins/TypedArrayConstructors/ctors-bigint/object-arg tip=be13516fb6441b950ba8a3df97eb34062c186972
-built-ins/TypedArrayConstructors/ctors-bigint/object-arg/as-array-returns.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/ctors-bigint/object-arg/as-array-returns.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/as-array-returns.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/as-array-returns.js strict pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/as-generator-iterable-returns.js sloppy pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/as-generator-iterable-returns.js strict pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/bigint-tobigint64.js sloppy pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/bigint-tobigint64.js strict pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/bigint-tobiguint64.js sloppy pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/bigint-tobiguint64.js strict pass
-built-ins/TypedArrayConstructors/ctors-bigint/object-arg/boolean-tobigint.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/ctors-bigint/object-arg/boolean-tobigint.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/boolean-tobigint.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/boolean-tobigint.js strict pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/custom-proto-access-throws.js sloppy pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/custom-proto-access-throws.js strict pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/iterating-throws.js sloppy pass
@@ -33,8 +33,8 @@ built-ins/TypedArrayConstructors/ctors-bigint/object-arg/proto-from-ctor-realm.j
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/string-nan-tobigint.js sloppy pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/string-nan-tobigint.js strict pass
-built-ins/TypedArrayConstructors/ctors-bigint/object-arg/string-tobigint.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/ctors-bigint/object-arg/string-tobigint.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/string-tobigint.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/string-tobigint.js strict pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/symbol-tobigint.js sloppy pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/symbol-tobigint.js strict pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/throws-from-property.js sloppy pass
@@ -53,8 +53,8 @@ built-ins/TypedArrayConstructors/ctors-bigint/object-arg/throws-setting-property
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/throws-setting-property.js strict pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/throws-setting-symbol-property.js sloppy pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/throws-setting-symbol-property.js strict pass
-built-ins/TypedArrayConstructors/ctors-bigint/object-arg/undefined-newtarget-throws.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/ctors-bigint/object-arg/undefined-newtarget-throws.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/undefined-newtarget-throws.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/undefined-newtarget-throws.js strict pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/undefined-tobigint.js sloppy pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/undefined-tobigint.js strict pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/use-custom-proto-if-object.js sloppy pass

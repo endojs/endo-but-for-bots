@@ -13,8 +13,8 @@ built-ins/ArrayBuffer/prototype/maxByteLength/prop-desc.js sloppy pass
 built-ins/ArrayBuffer/prototype/maxByteLength/prop-desc.js strict pass
 built-ins/ArrayBuffer/prototype/maxByteLength/return-maxbytelength-non-resizable.js sloppy pass
 built-ins/ArrayBuffer/prototype/maxByteLength/return-maxbytelength-non-resizable.js strict pass
-built-ins/ArrayBuffer/prototype/maxByteLength/return-maxbytelength-resizable.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/ArrayBuffer/prototype/maxByteLength/return-maxbytelength-resizable.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/maxByteLength/return-maxbytelength-resizable.js sloppy pass
+built-ins/ArrayBuffer/prototype/maxByteLength/return-maxbytelength-resizable.js strict pass
 built-ins/ArrayBuffer/prototype/maxByteLength/this-has-no-arraybufferdata-internal.js sloppy pass
 built-ins/ArrayBuffer/prototype/maxByteLength/this-has-no-arraybufferdata-internal.js strict pass
 built-ins/ArrayBuffer/prototype/maxByteLength/this-is-not-object.js sloppy pass

@@ -15,5 +15,5 @@ built-ins/TypedArray/prototype/toReversed/property-descriptor.js sloppy fail:"ir
 built-ins/TypedArray/prototype/toReversed/property-descriptor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: typeof Expected SameValue(«\"undefined\"», «\"function\"») to be true"
 built-ins/TypedArray/prototype/toReversed/reverses.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
 built-ins/TypedArray/prototype/toReversed/reverses.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
-built-ins/TypedArray/prototype/toReversed/this-value-invalid.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/toReversed/this-value-invalid.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/toReversed/this-value-invalid.js sloppy pass
+built-ins/TypedArray/prototype/toReversed/this-value-invalid.js strict pass

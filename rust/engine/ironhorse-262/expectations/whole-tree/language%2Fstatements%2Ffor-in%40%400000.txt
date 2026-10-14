@@ -127,8 +127,8 @@ language/statements/for-in/order-property-on-prototype.js sloppy pass
 language/statements/for-in/order-property-on-prototype.js strict pass
 language/statements/for-in/order-simple-object.js sloppy pass
 language/statements/for-in/order-simple-object.js strict pass
-language/statements/for-in/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-language/statements/for-in/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+language/statements/for-in/resizable-buffer.js sloppy skip:shared-positive-test-failure
+language/statements/for-in/resizable-buffer.js strict skip:shared-positive-test-failure
 language/statements/for-in/return-from-catch.js sloppy pass
 language/statements/for-in/return-from-catch.js strict pass
 language/statements/for-in/return-from-finally.js sloppy pass

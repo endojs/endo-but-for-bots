@@ -3,5 +3,5 @@ built-ins/Atomics/sub/bigint/bad-range.js sloppy skip:unsupported-opcode:atomics
 built-ins/Atomics/sub/bigint/bad-range.js strict skip:unsupported-opcode:atomics:access-index
 built-ins/Atomics/sub/bigint/good-views.js sloppy skip:unsupported-opcode:atomics:access-index
 built-ins/Atomics/sub/bigint/good-views.js strict skip:unsupported-opcode:atomics:access-index
-built-ins/Atomics/sub/bigint/non-shared-bufferdata.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/Atomics/sub/bigint/non-shared-bufferdata.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Atomics/sub/bigint/non-shared-bufferdata.js sloppy pass
+built-ins/Atomics/sub/bigint/non-shared-bufferdata.js strict pass

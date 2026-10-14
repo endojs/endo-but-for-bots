@@ -9,8 +9,8 @@ built-ins/TypedArrayConstructors/internals/HasProperty/BigInt/detached-buffer-re
 built-ins/TypedArrayConstructors/internals/HasProperty/BigInt/detached-buffer-realm.js strict skip:shared-positive-test-failure
 built-ins/TypedArrayConstructors/internals/HasProperty/BigInt/detached-buffer.js sloppy pass
 built-ins/TypedArrayConstructors/internals/HasProperty/BigInt/detached-buffer.js strict pass
-built-ins/TypedArrayConstructors/internals/HasProperty/BigInt/indexed-value.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/internals/HasProperty/BigInt/indexed-value.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/HasProperty/BigInt/indexed-value.js sloppy pass
+built-ins/TypedArrayConstructors/internals/HasProperty/BigInt/indexed-value.js strict pass
 built-ins/TypedArrayConstructors/internals/HasProperty/BigInt/infinity-with-detached-buffer.js sloppy pass
 built-ins/TypedArrayConstructors/internals/HasProperty/BigInt/inherited-property.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: 42 Expected SameValue(«true», «false») to be true (Testing with BigInt64Array and makePassthrough.)"
 built-ins/TypedArrayConstructors/internals/HasProperty/BigInt/inherited-property.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: 42 Expected SameValue(«true», «false») to be true (Testing with BigInt64Array and makePassthrough.)"

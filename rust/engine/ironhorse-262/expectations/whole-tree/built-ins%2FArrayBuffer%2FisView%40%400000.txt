@@ -13,16 +13,16 @@ built-ins/ArrayBuffer/isView/arg-is-dataview.js sloppy pass
 built-ins/ArrayBuffer/isView/arg-is-dataview.js strict pass
 built-ins/ArrayBuffer/isView/arg-is-not-object.js sloppy pass
 built-ins/ArrayBuffer/isView/arg-is-not-object.js strict pass
-built-ins/ArrayBuffer/isView/arg-is-typedarray-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/ArrayBuffer/isView/arg-is-typedarray-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/isView/arg-is-typedarray-buffer.js sloppy pass
+built-ins/ArrayBuffer/isView/arg-is-typedarray-buffer.js strict pass
 built-ins/ArrayBuffer/isView/arg-is-typedarray-constructor.js sloppy pass
 built-ins/ArrayBuffer/isView/arg-is-typedarray-constructor.js strict pass
-built-ins/ArrayBuffer/isView/arg-is-typedarray-subclass-instance.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/ArrayBuffer/isView/arg-is-typedarray-subclass-instance.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/ArrayBuffer/isView/arg-is-typedarray.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/ArrayBuffer/isView/arg-is-typedarray.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/ArrayBuffer/isView/invoked-as-a-fn.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/ArrayBuffer/isView/invoked-as-a-fn.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/isView/arg-is-typedarray-subclass-instance.js sloppy pass
+built-ins/ArrayBuffer/isView/arg-is-typedarray-subclass-instance.js strict pass
+built-ins/ArrayBuffer/isView/arg-is-typedarray.js sloppy pass
+built-ins/ArrayBuffer/isView/arg-is-typedarray.js strict pass
+built-ins/ArrayBuffer/isView/invoked-as-a-fn.js sloppy pass
+built-ins/ArrayBuffer/isView/invoked-as-a-fn.js strict pass
 built-ins/ArrayBuffer/isView/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
 built-ins/ArrayBuffer/isView/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
 built-ins/ArrayBuffer/isView/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be isView; name value should be isView"

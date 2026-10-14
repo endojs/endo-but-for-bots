@@ -162,8 +162,8 @@ built-ins/Array/prototype/forEach/S15.4.4.18_A2.js sloppy pass
 built-ins/Array/prototype/forEach/S15.4.4.18_A2.js strict pass
 built-ins/Array/prototype/forEach/call-with-boolean.js sloppy skip:unsupported-opcode:forEach:non-dense-array
 built-ins/Array/prototype/forEach/call-with-boolean.js strict skip:unsupported-opcode:forEach:non-dense-array
-built-ins/Array/prototype/forEach/callbackfn-resize-arraybuffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/Array/prototype/forEach/callbackfn-resize-arraybuffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/forEach/callbackfn-resize-arraybuffer.js sloppy pass
+built-ins/Array/prototype/forEach/callbackfn-resize-arraybuffer.js strict pass
 built-ins/Array/prototype/forEach/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
 built-ins/Array/prototype/forEach/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
 built-ins/Array/prototype/forEach/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be forEach; name value should be forEach"

@@ -3,8 +3,8 @@ built-ins/Array/prototype/findLast/array-altered-during-loop.js sloppy pass
 built-ins/Array/prototype/findLast/array-altered-during-loop.js strict pass
 built-ins/Array/prototype/findLast/call-with-boolean.js sloppy skip:unsupported-opcode:findLast:non-dense-array
 built-ins/Array/prototype/findLast/call-with-boolean.js strict skip:unsupported-opcode:findLast:non-dense-array
-built-ins/Array/prototype/findLast/callbackfn-resize-arraybuffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/Array/prototype/findLast/callbackfn-resize-arraybuffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/findLast/callbackfn-resize-arraybuffer.js sloppy pass
+built-ins/Array/prototype/findLast/callbackfn-resize-arraybuffer.js strict pass
 built-ins/Array/prototype/findLast/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: The value of `Array.prototype.findLast.length` is `1` Expected SameValue(«0», «1») to be true"
 built-ins/Array/prototype/findLast/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: The value of `Array.prototype.findLast.length` is `1` Expected SameValue(«0», «1») to be true"
 built-ins/Array/prototype/findLast/maximum-index.js sloppy pass

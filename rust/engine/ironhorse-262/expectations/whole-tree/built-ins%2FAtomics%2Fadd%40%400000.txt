@@ -13,8 +13,8 @@ built-ins/Atomics/add/length.js sloppy fail:"ironhorse failed a harness assertio
 built-ins/Atomics/add/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 3; length value should be 3"
 built-ins/Atomics/add/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be add; name value should be add"
 built-ins/Atomics/add/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be add; name value should be add"
-built-ins/Atomics/add/non-shared-bufferdata.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/Atomics/add/non-shared-bufferdata.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Atomics/add/non-shared-bufferdata.js sloppy pass
+built-ins/Atomics/add/non-shared-bufferdata.js strict pass
 built-ins/Atomics/add/non-shared-int-views-throws.js sloppy skip:unsupported-opcode:atomics:non-integer-typedarray
 built-ins/Atomics/add/non-shared-int-views-throws.js strict skip:unsupported-opcode:atomics:non-integer-typedarray
 built-ins/Atomics/add/non-views.js sloppy skip:unsupported-opcode:atomics:non-typedarray

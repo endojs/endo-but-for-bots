@@ -25,8 +25,8 @@ built-ins/ArrayIteratorPrototype/next/args-unmapped-expansion-after-exhaustion.j
 built-ins/ArrayIteratorPrototype/next/args-unmapped-expansion-before-exhaustion.js sloppy pass
 built-ins/ArrayIteratorPrototype/next/args-unmapped-iteration.js sloppy pass
 built-ins/ArrayIteratorPrototype/next/args-unmapped-truncation-before-exhaustion.js sloppy pass
-built-ins/ArrayIteratorPrototype/next/detach-typedarray-in-progress.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/ArrayIteratorPrototype/next/detach-typedarray-in-progress.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayIteratorPrototype/next/detach-typedarray-in-progress.js sloppy pass
+built-ins/ArrayIteratorPrototype/next/detach-typedarray-in-progress.js strict pass
 built-ins/ArrayIteratorPrototype/next/iteration-mutable.js sloppy pass
 built-ins/ArrayIteratorPrototype/next/iteration-mutable.js strict pass
 built-ins/ArrayIteratorPrototype/next/iteration.js sloppy pass

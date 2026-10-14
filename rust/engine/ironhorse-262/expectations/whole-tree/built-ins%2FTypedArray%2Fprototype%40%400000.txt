@@ -3,7 +3,7 @@ built-ins/TypedArray/prototype/Symbol.iterator.js sloppy pass
 built-ins/TypedArray/prototype/Symbol.iterator.js strict pass
 built-ins/TypedArray/prototype/constructor.js sloppy pass
 built-ins/TypedArray/prototype/constructor.js strict pass
-built-ins/TypedArray/prototype/resizable-and-fixed-have-same-prototype.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/resizable-and-fixed-have-same-prototype.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/resizable-and-fixed-have-same-prototype.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/resizable-and-fixed-have-same-prototype.js strict skip:shared-positive-test-failure
 built-ins/TypedArray/prototype/toString.js sloppy pass
 built-ins/TypedArray/prototype/toString.js strict pass

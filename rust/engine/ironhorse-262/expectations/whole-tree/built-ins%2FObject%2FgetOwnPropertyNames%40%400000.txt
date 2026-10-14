@@ -23,8 +23,8 @@ built-ins/Object/getOwnPropertyNames/15.2.3.4-2-4.js sloppy pass
 built-ins/Object/getOwnPropertyNames/15.2.3.4-2-4.js strict pass
 built-ins/Object/getOwnPropertyNames/15.2.3.4-3-1.js sloppy pass
 built-ins/Object/getOwnPropertyNames/15.2.3.4-3-1.js strict pass
-built-ins/Object/getOwnPropertyNames/15.2.3.4-4-1.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: result1[expResult[p1]] !== true"
-built-ins/Object/getOwnPropertyNames/15.2.3.4-4-1.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: result1[expResult[p1]] !== true"
+built-ins/Object/getOwnPropertyNames/15.2.3.4-4-1.js sloppy pass
+built-ins/Object/getOwnPropertyNames/15.2.3.4-4-1.js strict pass
 built-ins/Object/getOwnPropertyNames/15.2.3.4-4-2.js sloppy pass
 built-ins/Object/getOwnPropertyNames/15.2.3.4-4-2.js strict pass
 built-ins/Object/getOwnPropertyNames/15.2.3.4-4-36.js sloppy pass

@@ -35,8 +35,8 @@ built-ins/Array/prototype/filter/15.4.4.20-9-c-iii-9.js sloppy pass
 built-ins/Array/prototype/filter/15.4.4.20-9-c-iii-9.js strict pass
 built-ins/Array/prototype/filter/call-with-boolean.js sloppy skip:unsupported-opcode:filter:non-dense-array
 built-ins/Array/prototype/filter/call-with-boolean.js strict skip:unsupported-opcode:filter:non-dense-array
-built-ins/Array/prototype/filter/callbackfn-resize-arraybuffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/Array/prototype/filter/callbackfn-resize-arraybuffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/filter/callbackfn-resize-arraybuffer.js sloppy pass
+built-ins/Array/prototype/filter/callbackfn-resize-arraybuffer.js strict pass
 built-ins/Array/prototype/filter/create-ctor-non-object.js sloppy pass
 built-ins/Array/prototype/filter/create-ctor-non-object.js strict pass
 built-ins/Array/prototype/filter/create-ctor-poisoned.js sloppy pass

@@ -51,8 +51,8 @@ built-ins/TypedArrayConstructors/ctors/buffer-arg/excessive-length-throws-sab.js
 built-ins/TypedArrayConstructors/ctors/buffer-arg/excessive-length-throws-sab.js strict pass
 built-ins/TypedArrayConstructors/ctors/buffer-arg/excessive-length-throws.js sloppy pass
 built-ins/TypedArrayConstructors/ctors/buffer-arg/excessive-length-throws.js strict pass
-built-ins/TypedArrayConstructors/ctors/buffer-arg/excessive-offset-throws-resizable-ab.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/ctors/buffer-arg/excessive-offset-throws-resizable-ab.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors/buffer-arg/excessive-offset-throws-resizable-ab.js sloppy pass
+built-ins/TypedArrayConstructors/ctors/buffer-arg/excessive-offset-throws-resizable-ab.js strict pass
 built-ins/TypedArrayConstructors/ctors/buffer-arg/excessive-offset-throws-sab.js sloppy pass
 built-ins/TypedArrayConstructors/ctors/buffer-arg/excessive-offset-throws-sab.js strict pass
 built-ins/TypedArrayConstructors/ctors/buffer-arg/excessive-offset-throws.js sloppy pass
@@ -83,8 +83,8 @@ built-ins/TypedArrayConstructors/ctors/buffer-arg/proto-from-ctor-realm-sab.js s
 built-ins/TypedArrayConstructors/ctors/buffer-arg/proto-from-ctor-realm-sab.js strict skip:shared-positive-test-failure
 built-ins/TypedArrayConstructors/ctors/buffer-arg/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
 built-ins/TypedArrayConstructors/ctors/buffer-arg/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
-built-ins/TypedArrayConstructors/ctors/buffer-arg/resizable-out-of-bounds.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/ctors/buffer-arg/resizable-out-of-bounds.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors/buffer-arg/resizable-out-of-bounds.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArrayConstructors/ctors/buffer-arg/resizable-out-of-bounds.js strict skip:shared-positive-test-failure
 built-ins/TypedArrayConstructors/ctors/buffer-arg/returns-new-instance-sab.js sloppy pass
 built-ins/TypedArrayConstructors/ctors/buffer-arg/returns-new-instance-sab.js strict pass
 built-ins/TypedArrayConstructors/ctors/buffer-arg/returns-new-instance.js sloppy pass

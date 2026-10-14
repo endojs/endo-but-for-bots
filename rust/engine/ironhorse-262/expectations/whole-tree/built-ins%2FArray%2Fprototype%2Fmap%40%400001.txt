@@ -178,8 +178,8 @@ built-ins/Array/prototype/map/15.4.4.19-9-9.js sloppy pass
 built-ins/Array/prototype/map/15.4.4.19-9-9.js strict pass
 built-ins/Array/prototype/map/call-with-boolean.js sloppy skip:unsupported-opcode:map:non-dense-array
 built-ins/Array/prototype/map/call-with-boolean.js strict skip:unsupported-opcode:map:non-dense-array
-built-ins/Array/prototype/map/callbackfn-resize-arraybuffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/Array/prototype/map/callbackfn-resize-arraybuffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/map/callbackfn-resize-arraybuffer.js sloppy pass
+built-ins/Array/prototype/map/callbackfn-resize-arraybuffer.js strict pass
 built-ins/Array/prototype/map/create-ctor-non-object.js sloppy pass
 built-ins/Array/prototype/map/create-ctor-non-object.js strict pass
 built-ins/Array/prototype/map/create-ctor-poisoned.js sloppy pass

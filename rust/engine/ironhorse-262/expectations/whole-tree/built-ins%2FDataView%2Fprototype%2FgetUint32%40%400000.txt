@@ -15,8 +15,8 @@ built-ins/DataView/prototype/getUint32/negative-byteoffset-throws.js sloppy pass
 built-ins/DataView/prototype/getUint32/negative-byteoffset-throws.js strict pass
 built-ins/DataView/prototype/getUint32/not-a-constructor.js sloppy pass
 built-ins/DataView/prototype/getUint32/not-a-constructor.js strict pass
-built-ins/DataView/prototype/getUint32/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/DataView/prototype/getUint32/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/DataView/prototype/getUint32/resizable-buffer.js sloppy pass
+built-ins/DataView/prototype/getUint32/resizable-buffer.js strict pass
 built-ins/DataView/prototype/getUint32/return-abrupt-from-tonumber-byteoffset-symbol.js sloppy pass
 built-ins/DataView/prototype/getUint32/return-abrupt-from-tonumber-byteoffset-symbol.js strict pass
 built-ins/DataView/prototype/getUint32/return-abrupt-from-tonumber-byteoffset.js sloppy pass

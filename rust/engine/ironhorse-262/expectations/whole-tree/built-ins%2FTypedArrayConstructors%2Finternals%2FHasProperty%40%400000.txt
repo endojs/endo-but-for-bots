@@ -9,8 +9,8 @@ built-ins/TypedArrayConstructors/internals/HasProperty/detached-buffer-realm.js 
 built-ins/TypedArrayConstructors/internals/HasProperty/detached-buffer-realm.js strict skip:shared-positive-test-failure
 built-ins/TypedArrayConstructors/internals/HasProperty/detached-buffer.js sloppy pass
 built-ins/TypedArrayConstructors/internals/HasProperty/detached-buffer.js strict pass
-built-ins/TypedArrayConstructors/internals/HasProperty/indexed-value.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/internals/HasProperty/indexed-value.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/HasProperty/indexed-value.js sloppy pass
+built-ins/TypedArrayConstructors/internals/HasProperty/indexed-value.js strict pass
 built-ins/TypedArrayConstructors/internals/HasProperty/infinity-with-detached-buffer.js sloppy pass
 built-ins/TypedArrayConstructors/internals/HasProperty/inherited-property.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: 42 Expected SameValue(«true», «false») to be true (Testing with Float64Array and makePassthrough.)"
 built-ins/TypedArrayConstructors/internals/HasProperty/inherited-property.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: 42 Expected SameValue(«true», «false») to be true (Testing with Float64Array and makePassthrough.)"
@@ -28,7 +28,7 @@ built-ins/TypedArrayConstructors/internals/HasProperty/key-is-not-numeric-index.
 built-ins/TypedArrayConstructors/internals/HasProperty/key-is-not-numeric-index.js strict pass
 built-ins/TypedArrayConstructors/internals/HasProperty/key-is-symbol.js sloppy pass
 built-ins/TypedArrayConstructors/internals/HasProperty/key-is-symbol.js strict pass
-built-ins/TypedArrayConstructors/internals/HasProperty/resizable-array-buffer-auto.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/internals/HasProperty/resizable-array-buffer-auto.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/internals/HasProperty/resizable-array-buffer-fixed.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/internals/HasProperty/resizable-array-buffer-fixed.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/HasProperty/resizable-array-buffer-auto.js sloppy pass
+built-ins/TypedArrayConstructors/internals/HasProperty/resizable-array-buffer-auto.js strict pass
+built-ins/TypedArrayConstructors/internals/HasProperty/resizable-array-buffer-fixed.js sloppy pass
+built-ins/TypedArrayConstructors/internals/HasProperty/resizable-array-buffer-fixed.js strict pass

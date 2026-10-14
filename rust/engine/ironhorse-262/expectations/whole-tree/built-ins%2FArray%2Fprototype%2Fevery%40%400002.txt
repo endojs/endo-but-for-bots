@@ -19,8 +19,8 @@ built-ins/Array/prototype/every/15.4.4.16-8-8.js sloppy pass
 built-ins/Array/prototype/every/15.4.4.16-8-8.js strict pass
 built-ins/Array/prototype/every/call-with-boolean.js sloppy skip:unsupported-opcode:some/every:non-dense-array
 built-ins/Array/prototype/every/call-with-boolean.js strict skip:unsupported-opcode:some/every:non-dense-array
-built-ins/Array/prototype/every/callbackfn-resize-arraybuffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/Array/prototype/every/callbackfn-resize-arraybuffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/every/callbackfn-resize-arraybuffer.js sloppy pass
+built-ins/Array/prototype/every/callbackfn-resize-arraybuffer.js strict pass
 built-ins/Array/prototype/every/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
 built-ins/Array/prototype/every/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
 built-ins/Array/prototype/every/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be every; name value should be every"

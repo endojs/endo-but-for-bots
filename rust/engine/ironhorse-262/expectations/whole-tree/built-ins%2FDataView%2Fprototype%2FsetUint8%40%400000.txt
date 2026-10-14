@@ -25,8 +25,8 @@ built-ins/DataView/prototype/setUint8/not-a-constructor.js sloppy pass
 built-ins/DataView/prototype/setUint8/not-a-constructor.js strict pass
 built-ins/DataView/prototype/setUint8/range-check-after-value-conversion.js sloppy pass
 built-ins/DataView/prototype/setUint8/range-check-after-value-conversion.js strict pass
-built-ins/DataView/prototype/setUint8/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/DataView/prototype/setUint8/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/DataView/prototype/setUint8/resizable-buffer.js sloppy pass
+built-ins/DataView/prototype/setUint8/resizable-buffer.js strict pass
 built-ins/DataView/prototype/setUint8/return-abrupt-from-tonumber-byteoffset-symbol.js sloppy pass
 built-ins/DataView/prototype/setUint8/return-abrupt-from-tonumber-byteoffset-symbol.js strict pass
 built-ins/DataView/prototype/setUint8/return-abrupt-from-tonumber-byteoffset.js sloppy pass

@@ -49,8 +49,8 @@ built-ins/TypedArrayConstructors/ctors/object-arg/throws-setting-property.js slo
 built-ins/TypedArrayConstructors/ctors/object-arg/throws-setting-property.js strict pass
 built-ins/TypedArrayConstructors/ctors/object-arg/throws-setting-symbol-property.js sloppy pass
 built-ins/TypedArrayConstructors/ctors/object-arg/throws-setting-symbol-property.js strict pass
-built-ins/TypedArrayConstructors/ctors/object-arg/undefined-newtarget-throws.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/ctors/object-arg/undefined-newtarget-throws.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors/object-arg/undefined-newtarget-throws.js sloppy pass
+built-ins/TypedArrayConstructors/ctors/object-arg/undefined-newtarget-throws.js strict pass
 built-ins/TypedArrayConstructors/ctors/object-arg/use-custom-proto-if-object.js sloppy pass
 built-ins/TypedArrayConstructors/ctors/object-arg/use-custom-proto-if-object.js strict pass
 built-ins/TypedArrayConstructors/ctors/object-arg/use-default-proto-if-custom-proto-is-not-object.js sloppy pass

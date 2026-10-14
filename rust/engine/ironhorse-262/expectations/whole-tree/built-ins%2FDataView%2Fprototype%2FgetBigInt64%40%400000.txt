@@ -15,8 +15,8 @@ built-ins/DataView/prototype/getBigInt64/negative-byteoffset-throws.js sloppy pa
 built-ins/DataView/prototype/getBigInt64/negative-byteoffset-throws.js strict pass
 built-ins/DataView/prototype/getBigInt64/not-a-constructor.js sloppy pass
 built-ins/DataView/prototype/getBigInt64/not-a-constructor.js strict pass
-built-ins/DataView/prototype/getBigInt64/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/DataView/prototype/getBigInt64/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/DataView/prototype/getBigInt64/resizable-buffer.js sloppy pass
+built-ins/DataView/prototype/getBigInt64/resizable-buffer.js strict pass
 built-ins/DataView/prototype/getBigInt64/return-abrupt-from-tonumber-byteoffset-symbol.js sloppy pass
 built-ins/DataView/prototype/getBigInt64/return-abrupt-from-tonumber-byteoffset-symbol.js strict pass
 built-ins/DataView/prototype/getBigInt64/return-abrupt-from-tonumber-byteoffset.js sloppy pass
