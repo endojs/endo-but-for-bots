@@ -2559,6 +2559,9 @@ pub(crate) fn decode_intl_bound_functions(
     let mut c = Cursor::new(p, "Intl bound-function state");
     let count = c.u32()? as usize;
     let mut rows = Vec::with_capacity(count.min(p.len() / 17));
+    // An Intl object has at most one bound function: restore would keep
+    // both rows, and the `compare` getter would pick one by hash order.
+    let mut owners = std::collections::BTreeSet::new();
     for _ in 0..count {
         let kind = c.u8()?;
         if kind > 1 {
@@ -2578,6 +2581,11 @@ pub(crate) fn decode_intl_bound_functions(
             ));
         }
         let owner = c.u32()?;
+        if !owners.insert(owner) {
+            return Err(SnapshotError::Corrupt(
+                "Intl bound-function state: owner has more than one row",
+            ));
+        }
         let name_len = c.u32()? as usize;
         let name = String::from_utf8(c.bytes(name_len)?.to_vec())
             .map_err(|_| SnapshotError::Corrupt("Intl bound-function state: name not UTF-8"))?;
@@ -9549,6 +9557,7 @@ mod intl_bound_decoder_refusals {
         let mut second = first.clone();
         second.function = 3;
         second.kind = 1;
+        second.owner = 4;
         assert_eq!(
             decode_intl_bound_functions(&encode_intl_bound_functions(&[
                 first.clone(),
@@ -9556,6 +9565,15 @@ mod intl_bound_decoder_refusals {
             ]))
             .unwrap(),
             vec![first.clone(), second.clone()]
+        );
+        // One Intl object has one bound function, whatever the rows' kinds.
+        let mut repeated = second.clone();
+        repeated.owner = first.owner;
+        assert_eq!(
+            decode_intl_bound_functions(&encode_intl_bound_functions(&[first.clone(), repeated])),
+            Err(SnapshotError::Corrupt(
+                "Intl bound-function state: owner has more than one row"
+            ))
         );
         for function in [2, 1] {
             second.function = function;
