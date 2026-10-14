@@ -1333,6 +1333,17 @@ impl SlotArena {
             .collect()
     }
 
+    /// Every record in index order, read in place: the `HEAP` atom's record
+    /// loop for the streaming whole-heap writer, which must not hold the
+    /// owned copy [`SlotArena::records`] makes (WASM-BLOCKERS.md B7,
+    /// "Checkpointing needs several copies of the heap"). Faults everything
+    /// in first on a lazy arena, exactly as `records` does, so the two read
+    /// the same bytes.
+    pub fn records_iter(&self) -> impl ExactSizeIterator<Item = Slot> + '_ {
+        self.ensure_all_resident();
+        (0..self.capacity() as usize).map(move |i| self.read(i))
+    }
+
     /// Read one record WITHOUT faulting (both storages answer the
     /// placeholder for never-touched lazy records) — the whole-arena
     /// readers' inner loop after their own residency step.
@@ -2675,6 +2686,15 @@ impl ChunkArena {
             ChunkBytes::Plain(v) => v.clone(),
             ChunkBytes::Lazy { cell, .. } => cell.borrow().clone(),
         }
+    }
+
+    /// The whole backing byte vector as a shared view, header discipline
+    /// included: [`ChunkArena::raw_vec`] without the copy, for the streaming
+    /// `BLOC` writer. Faults everything in first on a lazy arena. The guard
+    /// borrows the arena, so nothing can mutate the bytes while it lives.
+    pub fn raw_bytes(&self) -> ChunkSlice<'_> {
+        self.ensure_all_resident();
+        self.view(0, self.len())
     }
 
     /// The bytes of one extent under the current logical length (the

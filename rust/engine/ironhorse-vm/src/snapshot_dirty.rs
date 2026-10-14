@@ -36,6 +36,12 @@ impl SnapshotDirty {
     pub const fn all() -> Self {
         Self(u64::MAX)
     }
+    /// This set with `section` removed: how the streaming snapshot writer
+    /// asks the small-state extractor for every section EXCEPT the ones it
+    /// reads in place from the live tables.
+    pub const fn without(self, section: SnapshotSection) -> Self {
+        Self(self.0 & !section.mask())
+    }
 }
 
 #[derive(Clone)]

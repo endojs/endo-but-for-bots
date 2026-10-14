@@ -36,6 +36,7 @@ use metering::*;
 mod native_ids;
 pub use native_ids::{MathId, Native, NativeMethod};
 mod snapshot_rows;
+mod snapshot_views;
 pub use snapshot_rows::{
     AccessorRow, ArraySnapshot, AsyncGeneratorRequestRow, AsyncGeneratorRow, AsyncRow,
     BoundFunctionRow, CollectionSnapshot, CombinatorRow, DisposableStackRow, DisposalRecordRow,
@@ -46,6 +47,7 @@ pub use snapshot_rows::{
     PromiseReactionRow, PromiseRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot, SavedFrameRow,
     SavedJumpRow, SharedMachineSnapshot, WeakRefRow,
 };
+pub use snapshot_views::{ArrayRowView, CollectionRowView};
 mod symbol_keys;
 use symbol_keys::SymbolKeys;
 mod intl_data;

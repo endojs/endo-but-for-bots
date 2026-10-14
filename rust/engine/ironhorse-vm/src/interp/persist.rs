@@ -460,6 +460,63 @@ impl Interp {
         out
     }
 
+    /// [`Self::arrays_snapshot`] read in place: the same rows in the same
+    /// owner-ascending order, with the same `%Array.prototype%` omission,
+    /// borrowed rather than copied (the streaming snapshot writer's view;
+    /// WASM-BLOCKERS.md B7). The vector holds one small view per array, not
+    /// the items.
+    pub fn arrays_rows(&self) -> Vec<ArrayRowView<'_>> {
+        let mut out: Vec<ArrayRowView<'_>> = self
+            .arrays
+            .iter()
+            .filter(|(owner, a)| {
+                **owner != self.array_proto || a.length != 0 || !a.items().is_empty()
+            })
+            .map(|(owner, a)| ArrayRowView {
+                owner: owner.0,
+                length: a.length,
+                items: a.items(),
+            })
+            .collect();
+        out.sort_unstable_by_key(|row| row.owner);
+        out
+    }
+
+    /// [`Self::index_props_snapshot`] read in place (see
+    /// [`Self::arrays_rows`]); the view's `length` is the row's high-water
+    /// mark.
+    pub fn index_props_rows(&self) -> Vec<ArrayRowView<'_>> {
+        let mut out: Vec<ArrayRowView<'_>> = self
+            .index_props
+            .iter()
+            .map(|(owner, props)| ArrayRowView {
+                owner: owner.0,
+                length: props.length,
+                items: props.items(),
+            })
+            .collect();
+        out.sort_unstable_by_key(|row| row.owner);
+        out
+    }
+
+    /// [`Self::collections_snapshot`] read in place (see
+    /// [`Self::arrays_rows`]): one small view per collection, the entries
+    /// borrowed from the live table.
+    pub fn collections_rows(&self) -> Vec<CollectionRowView<'_>> {
+        let mut out: Vec<CollectionRowView<'_>> = self
+            .collections
+            .iter()
+            .map(|(owner, c)| CollectionRowView {
+                owner: owner.0,
+                kind: c.kind.code(),
+                table_length: c.table_length,
+                data: c,
+            })
+            .collect();
+        out.sort_unstable_by_key(|row| row.owner);
+        out
+    }
+
     /// The first live function backed by an owned code segment.
     ///
     /// The legacy name predates top-level crank-code retention, when only
