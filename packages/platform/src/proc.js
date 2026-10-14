@@ -5,6 +5,7 @@
 import harden from '@endo/harden';
 import fs from 'fs';
 import path from 'path';
+import { constants } from 'node:os';
 
 /** @import { ChildProcess } from 'child_process' */
 
@@ -151,7 +152,7 @@ harden(hasProgram);
 /**
  * Wait for a child process to exit.
  *
- * Resolves with the exit code (defaulting to 0 for `null`),
+ * Resolves with the exit code, or 128 plus the signal number for a signal exit.
  * or rejects if the process emits an `'error'` event.
  *
  * @param {ChildProcess} proc
@@ -163,7 +164,10 @@ export const waitForExit = async proc => {
       const [exe] = proc.spawnargs;
       reject(new Error(`Failed to spawn ${exe}`, { cause: err }));
     });
-    proc.on('exit', code => resolve(code || 0));
+    proc.on('exit', (code, signal) => {
+      const signalNumber = signal && constants.signals[signal];
+      resolve(code ?? (signalNumber ? 128 + signalNumber : 1));
+    });
   });
 };
 harden(waitForExit);
@@ -182,7 +186,10 @@ harden(waitForExit);
 export const waitForExitOrCancel = async (proc, cancelled) => {
   return new Promise((resolve, reject) => {
     proc.on('error', reject);
-    proc.on('exit', code => resolve(code || 0));
+    proc.on('exit', (code, signal) => {
+      const signalNumber = signal && constants.signals[signal];
+      resolve(code ?? (signalNumber ? 128 + signalNumber : 1));
+    });
     cancelled.catch(error => {
       proc.kill();
       reject(error);

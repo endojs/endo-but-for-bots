@@ -17,6 +17,7 @@ import {
   SubagentSpawnerInterface,
   agentNamePattern,
   assertSubagentName,
+  assertSubagentCapabilities,
   reservedSubagentSuffixes,
 } from './subagent.js';
 
@@ -118,6 +119,7 @@ const profileNameFor = handleName => `profile-for-${handleName}`;
  *   prompt. This is what a parent model writes for its subagent, and it must
  *   not be able to displace the instructions the deployment gave.
  * @param {boolean} [options.pin]
+ * @param {import('./subagent.js').SubagentCapability[]} [options.capabilities]
  * @returns {Promise<{ name: string, profileName: string, locator: string }>}
  */
 export const provisionFaeAgent = async ({
@@ -135,7 +137,9 @@ export const provisionFaeAgent = async ({
   systemPrompt,
   delegatedPrompt,
   pin = false,
+  capabilities = [],
 }) => {
+  assertSubagentCapabilities(capabilities);
   readFaeWorkloadConfig(workloadEnv);
   const profileName = profileNameFor(name);
   const driverResultName = `${name}${DRIVER_SUFFIX}`;
@@ -186,7 +190,16 @@ export const provisionFaeAgent = async ({
   const build = async () => {
     await null;
     // 1. The agent's own guest: inbox, pet store, tools.
-    await E(hostAgent).provideGuest(name, { agentName: profileName });
+    const guest = await E(hostAgent).provideGuest(name, {
+      agentName: profileName,
+    });
+    for (const capability of capabilities) {
+      !(await E(guest).has(capability.name)) ||
+        Fail`Subagent inventory name ${q(capability.name)} already exists`;
+    }
+    for (const capability of capabilities) {
+      await E(guest).storeValue(capability.value, capability.name);
+    }
 
     // 2. A spawner caplet, unless this agent is at the delegation bound. It is
     //    a durable formula rather than a live object so that a revived driver
@@ -520,12 +533,13 @@ export const makeSubagentSpawner = ({
   return makeExo('SubagentSpawner', SubagentSpawnerInterface, {
     /**
      * @param {string} name
-     * @param {{ systemPrompt?: string }} [options]
+     * @param {{ systemPrompt?: string, capabilities?: import('./subagent.js').SubagentCapability[] }} [options]
      */
     async spawn(name, options = {}) {
       assertSubagentName(name);
       return serially(async () => {
-        const { systemPrompt: childPrompt } = options;
+        const { systemPrompt: childPrompt, capabilities = [] } = options;
+        assertSubagentCapabilities(capabilities);
         childPrompt === undefined ||
           (typeof childPrompt === 'string' &&
             childPrompt.length <= limits.maxTaskChars) ||
@@ -553,6 +567,7 @@ export const makeSubagentSpawner = ({
           authSecretLocator,
           systemPrompt,
           delegatedPrompt: childPrompt,
+          capabilities,
           // Subagents are working memory, not infrastructure: a daemon restart
           // should not resurrect a tree of them behind the user's back.
           pin: false,
@@ -581,7 +596,7 @@ export const makeSubagentSpawner = ({
     /** @param {string} [methodName] */
     help(methodName) {
       if (methodName === 'spawn') {
-        return 'spawn(name, { systemPrompt? }) — Create a subagent named beneath this agent and return { name, locator }.';
+        return 'spawn(name, { systemPrompt?, capabilities?: [{ name, value }] }) — Create a subagent with its own inventory, install only explicit capabilities, and return { name, locator }.';
       }
       if (methodName === 'stop') {
         return 'stop(name) — Cancel a subagent, its own subagents, and every name they own.';

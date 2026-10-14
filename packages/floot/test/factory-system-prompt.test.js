@@ -197,6 +197,72 @@ const makeWorld = ({ promptEnvironment, fetch, lookupProvider } = {}) => {
 
 const hosted = harden({ backendId: 'test', modelId: 'm' });
 
+test('subagent capability name collision rolls back without replacing inventory', async t => {
+  t.timeout(10_000);
+  const world = makeWorld();
+  t.teardown(world.close);
+  const parent = await E(world.factory).createSession(hosted);
+  const parentId = (await E(parent).getInfo()).id;
+  const guest = world.hostStore.get(`session-agent-${parentId}`);
+  await E(guest).storeValue('explicit', 'source');
+  world.duringNextTurn(async tools => {
+    await t.throwsAsync(
+      E(tools).execute(
+        'spawnSubagent',
+        harden({
+          name: 'helper',
+          attachments: [{ name: 'user', petName: 'source' }],
+        }),
+      ),
+      { message: /already exists/ },
+    );
+  });
+  await world.promptOf(parent);
+  t.false(
+    (await E(world.factory).listSessions()).some(
+      s => s.parentSessionId === parentId,
+    ),
+  );
+  t.is(await E(guest).lookup('source'), 'explicit');
+});
+
+test('subagent spawn installs explicit capabilities without inheriting the parent inventory', async t => {
+  t.timeout(10_000);
+  const world = makeWorld();
+  t.teardown(world.close);
+  const parent = await E(world.factory).createSession(hosted);
+  const parentId = (await E(parent).getInfo()).id;
+  const guest = world.hostStore.get(`session-agent-${parentId}`);
+  const source = Far('ReadOnlySource', { read: () => 'approved source' });
+  await E(guest).storeValue(source, 'source');
+  await E(guest).storeValue('private', 'parent-only');
+  world.duringNextTurn(async tools => {
+    await E(tools).execute(
+      'spawnSubagent',
+      harden({
+        name: 'helper',
+        attachments: [{ name: 'project', petName: 'source' }],
+      }),
+    );
+  });
+  await world.promptOf(parent);
+  const child = (await E(world.factory).listSessions()).find(
+    s => s.parentSessionId === parentId,
+  );
+  t.truthy(child);
+  const childGuest = world.hostStore.get(`session-agent-${child.id}`);
+  t.is(await E(childGuest).lookup('project'), source);
+  t.false(await E(childGuest).has('parent-only'));
+  t.false(await E(childGuest).has('source'));
+  const revived = await world.revive();
+  await E(revived).getSession(child.id);
+  t.is(
+    await E(childGuest).lookup('project'),
+    source,
+    'introduction persists across factory restoration',
+  );
+});
+
 test('a hosted session runs the prompt composed for its backend', async t => {
   t.timeout(10_000);
   const world = makeWorld({ promptEnvironment: sandboxed });
