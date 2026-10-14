@@ -2605,6 +2605,9 @@ impl Interp {
             ("encodeURIComponent", NativeMethod::UriEncodeComponent),
             ("decodeURI", NativeMethod::UriDecode),
             ("decodeURIComponent", NativeMethod::UriDecodeComponent),
+            // Annex B's legacy percent encoding (B.2.1).
+            ("escape", NativeMethod::GlobalEscape),
+            ("unescape", NativeMethod::GlobalUnescape),
         ] {
             let function = self.alloc_named_method(method, name, 1);
             self.intrinsics.insert(name, function);

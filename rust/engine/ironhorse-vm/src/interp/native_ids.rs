@@ -1082,6 +1082,10 @@ pub enum NativeMethod {
     ObjectDefineSetter,
     ObjectLookupGetter,
     ObjectLookupSetter,
+    /// The Annex B `escape` and `unescape` globals (B.2.1, `fx_escape` /
+    /// `fx_unescape`, `xsGlobal.c`).
+    GlobalEscape,
+    GlobalUnescape,
 }
 
 /// One intrinsic (native) function ironhorse models. The variant is the

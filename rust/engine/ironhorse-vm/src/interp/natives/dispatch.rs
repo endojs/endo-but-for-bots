@@ -2578,6 +2578,8 @@ impl Interp {
             | NativeMethod::UriEncodeComponent
             | NativeMethod::UriDecode
             | NativeMethod::UriDecodeComponent
+            | NativeMethod::GlobalEscape
+            | NativeMethod::GlobalUnescape
             | NativeMethod::JsonStringify
             | NativeMethod::JsonParse
             | NativeMethod::ErrorStackGetter
@@ -7601,6 +7603,9 @@ impl Interp {
             | NativeMethod::UriEncodeComponent
             | NativeMethod::UriDecode
             | NativeMethod::UriDecodeComponent => self.call_uri(m, base, argc, code)?,
+            NativeMethod::GlobalEscape | NativeMethod::GlobalUnescape => {
+                self.call_legacy_escape(m, base, argc, code)?
+            }
             NativeMethod::JsonStringify | NativeMethod::JsonParse => {
                 self.call_json(m, base, argc, code)?
             }
