@@ -287,7 +287,13 @@ const makeHost = async (config, cancelled) => {
   // teardown-induced connection closure as an unhandled rejection.
   closed.catch(() => {});
   const bootstrap = getBootstrap();
-  return { host: E(bootstrap).host() };
+  const host = E(bootstrap).host();
+  // A test that never uses the host must not turn teardown into an unhandled
+  // rejection: if the daemon has not answered `host()` when teardown stops it,
+  // CapTP rejects the pending question with "Termination requested".  Tests
+  // that do use the host still see the rejection through their own `await`.
+  host.catch(() => {});
+  return { host };
 };
 
 /**
