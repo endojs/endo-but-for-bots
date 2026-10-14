@@ -1857,6 +1857,46 @@ export const makeOcapnHub = ({
         maybeReleaseRef(row);
       }
     }
+    // Answers the retiree owed other sessions. Each asker's route pins the
+    // answer's row until the asker's collector drops the answer and it
+    // sends op:gc-answers; an asker whose realm has no WeakRef never does,
+    // so the tombstones persisted for good. A route to a retired row can
+    // only break, so record the break in the route itself and let the row
+    // go. Unlike a tombstone, a broken route cannot be passed on as an
+    // argument: a message that mentions it breaks to its sender. One pass
+    // collects the remaining pins, as `isPinned` per row would be
+    // quadratic here.
+    const retiredRoute = harden({
+      local: null,
+      reason: 'ocapn hub: the target session has been retired',
+    });
+    /** @type {Set<string>} */
+    const released = new Set();
+    /** @type {Set<string>} */
+    const pinned = new Set([...publications.values(), ...gifts.values()]);
+    for (const waiters of giftWaiters.values()) {
+      for (const refId of waiters) pinned.add(refId);
+    }
+    for (const other of sessions.values()) {
+      for (const [position, route] of other.answersOwed.entries()) {
+        if ('ref' in route && refs.get(route.ref)?.origin === sessionKey) {
+          released.add(route.ref);
+          other.answersOwed.set(position, retiredRoute);
+        } else if ('ref' in route) {
+          pinned.add(route.ref);
+        } else if ('local' in route && route.local !== null) {
+          pinned.add(route.local);
+        }
+      }
+    }
+    for (const refId of released) {
+      const row = refs.get(refId);
+      if (row !== undefined && row.facing.size === 0 && !pinned.has(refId)) {
+        // Dead: no gc-answers toward the retiree, as `maybeReleaseRef`.
+        refs.delete(refId);
+        if (row.resolver) clearListenerEntries(refId);
+      }
+    }
     session.retired = true;
     dirty = true;
     persist();
