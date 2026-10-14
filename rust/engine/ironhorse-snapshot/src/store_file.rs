@@ -75,15 +75,26 @@ pub const FILE_MAGIC: [u8; 8] = *b"IHSTORE6";
 /// for migration only; see the module docs.
 pub const LEGACY_FILE_MAGIC: [u8; 8] = *b"IHSTORE5";
 
-/// Temp files are uniquely named per process and per commit
-/// (`.tmp-{pid}-{n}`), so two writers can never interleave bytes in a
-/// shared temp inode. Leftover temps from torn commits are inert
-/// (`open` never reads them).
-/// Cross-process last-rename-wins remains bounded by the documented
-/// single-writer-per-path model plus the durable succession check —
-/// a lost lineage is detected at its next commit by its commit token,
-/// never silently merged.
-static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// The unique part of a temporary file's name: 64 random bits drawn once
+/// per process, then a per-process sequence number.
+///
+/// The randomness is the standard library's `RandomState`, whose keys come
+/// from the platform's random source natively and from `random_get` on
+/// WASI, so naming needs no process id, which WASI cannot supply. Writers
+/// also create the file exclusively and draw again on a collision, so two
+/// writers never share a temp inode even if the random bits did collide.
+pub(crate) fn temporary_suffix() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    static NONCE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nonce = *NONCE.get_or_init(|| {
+        std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish()
+    });
+    let n = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{nonce:016x}-{n}")
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DirEntry {
@@ -239,20 +250,33 @@ impl FileStore {
         layout: &Layout<'_>,
         prior: Option<&RefCell<File>>,
     ) -> Result<(), StoreError> {
-        let tmp_path = {
+        // Each commit stages into its own exclusively created temp file
+        // (`.tmp-{nonce}-{n}`, see [`temporary_suffix`]), so two writers
+        // never interleave bytes in a shared temp inode. Leftover temps
+        // from torn commits are inert (`open` never reads them).
+        // Cross-process last-rename-wins remains bounded by the documented
+        // single-writer-per-path model plus the durable succession check:
+        // a lost lineage is detected at its next commit by its commit
+        // token, never silently merged.
+        let (tmp_path, tmp_file) = loop {
             let mut os = self.path.clone().into_os_string();
-            os.push(format!(
-                ".tmp-{}-{}",
-                std::process::id(),
-                TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            ));
-            PathBuf::from(os)
+            os.push(format!(".tmp-{}", temporary_suffix()));
+            let path = PathBuf::from(os);
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(file) => break (path, file),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(io_err(e)),
+            }
         };
         // Stage the whole new file; on ANY failure remove the temp so
         // a flaky disk does not accumulate `.tmp-*` litter beside the
         // store. Leftovers are inert but can accumulate across retries.
         let write_tmp = || -> Result<(), StoreError> {
-            let mut tmp = BufWriter::new(File::create(&tmp_path).map_err(io_err)?);
+            let mut tmp = BufWriter::new(tmp_file);
             layout.write(&mut tmp, prior)?;
             let tmp = tmp.into_inner().map_err(|e| io_err(e.into_error()))?;
             tmp.sync_all().map_err(io_err)?;
@@ -749,6 +773,15 @@ mod tests {
                 )))
             );
         }
+    }
+
+    #[test]
+    fn temporary_suffixes_share_one_random_nonce_and_never_repeat() {
+        let (a, b) = (temporary_suffix(), temporary_suffix());
+        assert_ne!(a, b);
+        let nonce = |suffix: &str| suffix.split_once('-').unwrap().0.to_string();
+        assert_eq!(nonce(&a), nonce(&b), "one nonce per process");
+        assert_eq!(nonce(&a).len(), 16, "64 random bits in hex");
     }
 
     #[test]
