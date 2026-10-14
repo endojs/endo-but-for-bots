@@ -328,10 +328,12 @@ The rest are listed here as they stood.
 
 ### Object MOP: intrinsics, tombstones, harden, petrify
 
-7 open, 5 of them P1; `F085` since fixed.
+7 open, 5 of them P1; `F082` and `F085` since fixed.
 
 - `F081` **P1** Retain ordinary numeric expandos on boxed Strings
 - `F082` **P1** Honor deleted function-metadata tombstones throughout the MOP
+  (fixed: `exotic_own_descriptor` and own keys honor the tombstone, and
+  `bind` reads the target's `length` and `name` through the MOP)
 - `F083` **P1** Throw a catchable TypeError after key coercion
 - `F084` **P2** Include RegExp in the full-MOP defineProperty path (partial)
 - `F085` **P1** Preserve descriptor field presence for proxy defineProperty traps

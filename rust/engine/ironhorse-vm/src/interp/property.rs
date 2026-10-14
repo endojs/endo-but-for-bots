@@ -1548,7 +1548,10 @@ impl Interp {
             }
         }
         let fi = self.functions.get(&inst)?;
-        if self.scalar_key_text(id).as_deref() == Some("length") {
+        // A deleted `length` or `name` stays deleted (ledger F082): `delete`
+        // records a tombstone rather than unlinking a slot.
+        let deleted = self.deleted_fn_meta.contains(&(inst, id));
+        if !deleted && self.scalar_key_text(id).as_deref() == Some("length") {
             return Some(OrdinaryDescriptor {
                 value: Some(Slot::integer(fi.arity as i32)),
                 writable: Some(false),
@@ -1557,7 +1560,7 @@ impl Interp {
                 ..OrdinaryDescriptor::default()
             });
         }
-        if Some(id) == self.name_id {
+        if !deleted && Some(id) == self.name_id {
             return Some(OrdinaryDescriptor {
                 value: Some(Slot::of(Kind::String, Payload::String(fi.name_chunk))),
                 writable: Some(false),
@@ -2105,12 +2108,17 @@ impl Interp {
                 let key = self.read_key_slot(ReadKey::Index(index))?;
                 self.push_prepaid_scratch(&mut out, key)?;
             }
-            self.charge_builtin_work(1)?;
-            let key = self.property_key_slot(length_id)?;
-            self.push_prepaid_scratch(&mut out, key)?;
-            self.charge_builtin_work(1)?;
-            let key = self.property_key_slot(name_id)?;
-            self.push_prepaid_scratch(&mut out, key)?;
+            // A deleted `length` or `name` is gone from the head of the list;
+            // a later definition appends it, as XS appends a new slot.
+            let length_live = !self.deleted_fn_meta.contains(&(inst, length_id));
+            let name_live = !self.deleted_fn_meta.contains(&(inst, name_id));
+            for (id, live) in [(length_id, length_live), (name_id, name_live)] {
+                if live {
+                    self.charge_builtin_work(1)?;
+                    let key = self.property_key_slot(id)?;
+                    self.push_prepaid_scratch(&mut out, key)?;
+                }
+            }
             if has_proto {
                 self.charge_builtin_work(1)?;
                 let key = self.property_key_slot(prototype_id)?;
@@ -2125,8 +2133,8 @@ impl Interp {
                 }
             }
             for id in ordinary_ids {
-                if id == length_id
-                    || id == name_id
+                if (id == length_id && length_live)
+                    || (id == name_id && name_live)
                     || (has_proto && id == prototype_id)
                     || intrinsic_ids.contains(&id)
                     || self.key_id_index(id).is_some()
