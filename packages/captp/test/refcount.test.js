@@ -70,6 +70,40 @@ const makePair = (t, bootA, bootB) => {
 };
 
 test.serial(
+  'a live local capability can be exported again after a peer drops it',
+  async t => {
+    const gcAndFinalize = await makeGcAndFinalize(detectEngineGC());
+    const object = Far('retained-local-object', { ping: () => 'alive' });
+    const { B, drops, rejected } = makePair(
+      t,
+      Far('bootA', { give: () => object }),
+      undefined,
+    );
+    const bootstrap = B.getBootstrap();
+    const borrow = async () => {
+      const presence = await E(bootstrap).give();
+      t.is(await E(presence).ping(), 'alive');
+    };
+    await borrow();
+    await gcAndFinalize();
+    await gcAndFinalize();
+    t.truthy(drops.B.find(drop => drop.slotID === 'o-2'));
+    const presence = await E(bootstrap).give();
+    t.is(
+      await Promise.race([
+        E(presence).ping(),
+        delay(500).then(() => 'unanswered'),
+      ]),
+      'alive',
+    );
+    t.deepEqual(
+      rejected.map(error => error.message),
+      [],
+    );
+  },
+);
+
+test.serial(
   'received question IDs are not counted against our own questions',
   async t => {
     const gcAndFinalize = await makeGcAndFinalize(detectEngineGC());
