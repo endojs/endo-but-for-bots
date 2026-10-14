@@ -627,6 +627,28 @@ struct Scoper<'a> {
     class_field_init_static: NodeTable<usize>,
 }
 
+/// XS's `duplicate variable %s` (`xsScope.c`), which names the binding.
+#[cold]
+#[inline(never)]
+fn duplicate_variable(line: u32, symbol: &Sym) -> ParseError {
+    duplicate_binding(line, "variable", symbol)
+}
+
+/// XS's `duplicate argument %s` and `duplicate variable %s` (`xsScope.c`),
+/// out of line so the recursive hoisting walk does not carry its `format!`.
+#[cold]
+#[inline(never)]
+fn duplicate_binding(line: u32, what: &str, symbol: &Sym) -> ParseError {
+    ParseError {
+        line,
+        kind: crate::parser::ParseErrorKind::Syntax,
+        message: match symbol {
+            Sym::Named(name) => format!("duplicate {what} {name}"),
+            Sym::Anon(_) => format!("duplicate {what}"),
+        },
+    }
+}
+
 fn err(line: u32, msg: &str) -> ParseError {
     ParseError {
         line,
@@ -1435,7 +1457,7 @@ impl Scoper<'_> {
                     | flags::NOT_SIMPLE_PARAMETERS
                     | flags::STRICT;
                 if dtok == Token::Arg && (fnf & dup_ctx != 0) {
-                    return Err(err(node.line, "duplicate argument"));
+                    return Err(duplicate_binding(node.line, "argument", &symbol));
                 }
             } else {
                 let d = self.new_declare(function_scope, Token::Arg, Some(symbol), node.line);
@@ -1457,7 +1479,7 @@ impl Scoper<'_> {
                 }
             }
             if existing.is_some() {
-                return Err(err(node.line, "duplicate variable"));
+                return Err(duplicate_variable(node.line, &symbol));
             }
             let mut d = self.new_declare(scope, node.token, Some(symbol), node.line);
             if node.token == Token::Using && node.flags & flags::AWAITING != 0 {
@@ -1506,7 +1528,7 @@ impl Scoper<'_> {
             }
         }
         if conflict.is_some() {
-            return Err(err(line, "duplicate variable"));
+            return Err(duplicate_variable(line, symbol));
         }
         // add to bodyScope unless already an arg/var in functionScope
         let cover = self
@@ -1552,7 +1574,7 @@ impl Scoper<'_> {
             if let Some(id) = self.scope_get_declare(body_scope, &symbol) {
                 let dtok = self.declare_ref(body_scope, id).token;
                 if dtok == Token::Const || dtok == Token::Let {
-                    return Err(err(node.line, "duplicate variable"));
+                    return Err(duplicate_variable(node.line, &symbol));
                 }
             } else {
                 let mut have = false;
@@ -1572,7 +1594,7 @@ impl Scoper<'_> {
             self.scope_add_define(body_scope, Some(symbol.clone()), node.line);
         } else {
             if self.scope_get_declare(scope, &symbol).is_some() {
-                return Err(err(node.line, "duplicate variable"));
+                return Err(duplicate_variable(node.line, &symbol));
             }
             let d = self.new_declare(scope, Token::Define, Some(symbol.clone()), node.line);
             self.scope_add_declare(scope, d);
@@ -1666,7 +1688,7 @@ impl Scoper<'_> {
                 return Err(err(spec.line, "invalid import"));
             }
             if self.scope_get_declare(scope, &sym).is_some() {
-                return Err(err(spec.line, "duplicate variable"));
+                return Err(duplicate_variable(spec.line, &sym));
             }
             let mut d = self.new_declare(scope, Token::Let, Some(sym), spec.line);
             d.flags |= dflags::CLOSURE | dflags::USE_CLOSURE;

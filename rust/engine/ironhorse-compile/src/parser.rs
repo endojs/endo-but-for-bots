@@ -1314,7 +1314,10 @@ impl<'a> Parser<'a> {
             }
             Token::Divide | Token::DivideAssign => {
                 let divide_assign = self.cur.token == Token::DivideAssign;
-                let rx = self.lexer.read_regexp(divide_assign)?;
+                let rx = match self.lexer.read_regexp(divide_assign) {
+                    Ok(rx) => rx,
+                    Err(e) => return Err(self.regexp_error(e)),
+                };
                 self.cur = rx;
                 let modifier = self.cur.modifier.clone().unwrap_or_default();
                 let body = self.cur.string.clone().unwrap_or_default();
@@ -2272,25 +2275,31 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// A short, stable spelling of a token for error messages (XS uses
-/// `gxTokenNames`; this covers the punctuation/keyword tokens the parser
-/// reports as "missing X").
-fn token_debug(token: Token) -> &'static str {
-    use Token::*;
-    match token {
-        Colon => ":",
-        RightBracket => "]",
-        RightParenthesis => ")",
-        RightBrace => "}",
-        LeftParenthesis => "(",
-        In => "in",
-        Import => "import",
-        New => "new",
-        Super => "super",
-        This => "this",
-        Comma => ",",
-        _ => node_name(token),
+impl Parser<'_> {
+    /// A regexp literal's lex error, with the regexp compiler's diagnostic as
+    /// its message when it has one. Out of line, with every message built
+    /// here, so the recursive productions keep their frames.
+    #[cold]
+    #[inline(never)]
+    fn regexp_error(&mut self, e: LexError) -> ParseError {
+        let mut error = ParseError::from(e);
+        if let Some(reason) = self.lexer.take_regexp_diagnostic() {
+            error.message = reason;
+        }
+        error
     }
+
+    /// XS's `invalid token %s`, out of line for the same reason.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn invalid_token(&self) -> ParseError {
+        self.error(&format!("invalid token {}", self.cur.token.xs_name()))
+    }
+}
+
+/// A token's spelling in error messages, as XS's `gxTokenNames` gives it.
+fn token_debug(token: Token) -> &'static str {
+    token.xs_name()
 }
 
 /// `fxStringToIndex` (`xsCommon.c`): whether a property-key string is a

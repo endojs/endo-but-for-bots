@@ -472,7 +472,7 @@ impl Parser<'_> {
             self.push_node_struct(1, Token::Statement, line)?;
             self.semicolon()
         } else {
-            Err(self.error("invalid token"))
+            Err(self.invalid_token())
         }
     }
 

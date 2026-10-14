@@ -131,6 +131,9 @@ pub struct Lexer<'a> {
     prev_token: Token,
     /// The parse meter (ironhorse's own frozen cost table).
     meter: ParseMeter<'a>,
+    /// The regexp compiler's diagnostic for the last
+    /// [`LexErrorKind::InvalidRegExpPattern`], until the parser takes it.
+    regexp_diagnostic: Option<String>,
 }
 
 impl<'a> Lexer<'a> {
@@ -191,6 +194,7 @@ impl<'a> Lexer<'a> {
             host: false,
             prev_token: Token::NoToken,
             meter,
+            regexp_diagnostic: None,
         };
         // Prime the two-char window (XS calls fxGetNextCharacter twice).
         lexer.la = lexer.read_code();
@@ -1205,6 +1209,13 @@ impl<'a> Lexer<'a> {
 
     // --- regular expressions ---
 
+    /// The regexp compiler's diagnostic behind the last
+    /// [`LexErrorKind::InvalidRegExpPattern`] that [`Self::read_regexp`]
+    /// returned (`( invalid sequence`), which XS reports as the message.
+    pub fn take_regexp_diagnostic(&mut self) -> Option<String> {
+        self.regexp_diagnostic.take()
+    }
+
     /// Port of `fxGetNextRegExp`: delimit a regexp literal. The parser
     /// calls this in expression position after the scanner has already
     /// returned `Divide` (`divide_assign = false`, body starts at the
@@ -1301,8 +1312,9 @@ impl<'a> Lexer<'a> {
         }
         match outcome.result {
             Ok(_) | Err(ironhorse_regexp::CompileError::Unsupported(_)) => {}
-            Err(ironhorse_regexp::CompileError::Syntax(_)) => {
-                return Err(self.err(LexErrorKind::InvalidRegExp))
+            Err(ironhorse_regexp::CompileError::Syntax(reason)) => {
+                self.regexp_diagnostic = Some(reason);
+                return Err(self.err(LexErrorKind::InvalidRegExpPattern));
             }
             Err(ironhorse_regexp::CompileError::BudgetExceeded) => {
                 return Err(self.err(LexErrorKind::RegExpBudgetExceeded))

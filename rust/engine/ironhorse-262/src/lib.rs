@@ -148,6 +148,7 @@ pub fn compile_failure_name(error: &ironhorse_compile::ParseError) -> &'static s
             | LexErrorKind::UnterminatedRegExp
             | LexErrorKind::LineTerminatorInRegExp
             | LexErrorKind::InvalidRegExp
+            | LexErrorKind::InvalidRegExpPattern
             | LexErrorKind::InvalidAtSign
             | LexErrorKind::UnexpectedCharacter(_) => "SyntaxError",
         },
@@ -213,6 +214,27 @@ pub enum IronhorseCompile {
     /// from [`Self::Rejected`] (a clean SyntaxError) so a crash is never
     /// miscounted as a correct rejection.
     Panicked(String),
+}
+
+impl IronhorseCompile {
+    /// The uncaught SyntaxError a [`Self::Rejected`] program throws: the
+    /// parser's message, as XS reports its early errors (`SyntaxError:
+    /// missing ;`), not the `line N: ` display the report string carries.
+    /// Under `eval` the VM already throws that message.
+    fn rejection_throw(&self) -> Halt {
+        let message = match self {
+            Self::Rejected(rendered) => rendered
+                .strip_prefix("line ")
+                .and_then(|rest| rest.split_once(": "))
+                .map_or(rendered.as_str(), |(_, message)| message),
+            _ => "",
+        };
+        if message.is_empty() {
+            Halt::synthetic_throw("SyntaxError")
+        } else {
+            Halt::synthetic_throw(format!("SyntaxError: {message}"))
+        }
+    }
 }
 
 /// One program's dual-run record.
@@ -452,9 +474,9 @@ pub fn dual_run_with(source: &str, compiler: Compiler) -> Option<DualRun> {
     // past the end and surface a spurious `Halt::Decode` ("parse-or-decode"),
     // masking a correct, oracle-agreeing rejection (e.g. a RegExp literal whose
     // backreference is out of range). Present the rejection as the SyntaxError
-    // throw it is — the same bare `SyntaxError` the runtime `new RegExp(bad)`
-    // path already throws (`catchable_syntax_error`) — so the differential
-    // compares two rejections rather than a crash.
+    // throw it is, with the parser's message as XS reports it, so the
+    // differential compares two rejections and their messages rather than a
+    // crash.
     let ironhorse: RunOutcome = match &compile {
         IronhorseCompile::Rejected(_) => RunOutcome {
             meter_raw_this_run: 0,
@@ -468,7 +490,7 @@ pub fn dual_run_with(source: &str, compiler: Compiler) -> Option<DualRun> {
             computrons: 0,
             dispatched: 0,
             meter_raw: 0,
-            halt: ironhorse_vm::Halt::synthetic_throw("SyntaxError"),
+            halt: compile.rejection_throw(),
         },
         _ => run_program_with_symbols(&bytecode, &symbols),
     };
@@ -624,7 +646,7 @@ fn run_compiled_script(
     pump_jobs: bool,
 ) -> RunOutcome {
     let halt = if matches!(compile, IronhorseCompile::Rejected(_)) {
-        Halt::synthetic_throw("SyntaxError")
+        compile.rejection_throw()
     } else {
         let names = ironhorse_vm::parse_symbols(symbols);
         match interp.relink_crank(bytecode, &names) {
