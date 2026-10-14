@@ -1370,6 +1370,10 @@ impl Interp {
                 let mf = self.alloc_named_method(m, name, 1);
                 self.proto_methods.push((promise_ctor, name, mf));
             }
+            let with_resolvers =
+                self.alloc_named_method(NativeMethod::PromiseWithResolvers, "withResolvers", 0);
+            self.proto_methods
+                .push((promise_ctor, "withResolvers", with_resolvers));
             // Installed under the well-known symbol key during the full
             // intrinsic-link pass, once that realm-local key id is available.
             let _ = self.alloc_named_method(

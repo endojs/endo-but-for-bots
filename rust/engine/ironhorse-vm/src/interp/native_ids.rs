@@ -935,6 +935,9 @@ pub enum NativeMethod {
     /// `Promise.any(iterable)` (`fx_Promise_any`): live iterator consumption,
     /// first fulfillment, or an ordered `AggregateError`.
     PromiseAny,
+    /// `Promise.withResolvers()` (`fx_Promise_withResolvers`): a new
+    /// capability of the receiver, as a `{ promise, resolve, reject }` object.
+    PromiseWithResolvers,
     /// A promise's resolve/reject function (XS's `fxResolvePromise`/
     /// `fxRejectPromise` host functions handed to the executor). Recognized
     /// in the `RUN` dispatch by a `promise_functions` side-table lookup, not
