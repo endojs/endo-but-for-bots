@@ -1003,9 +1003,10 @@ struct ArrayBufferData {
 
 /// One TypedArray element type (XS's `gxTypeDispatches` row): the
 /// constructor name, the element byte `size`, and the `shift` (log2 of the
-/// size, so `byteLength == length << shift`). The order mirrors
-/// `gxTypeDispatches` (with `mxFloat16` off, as the oracle target builds
-/// it), so [`Native::TypedArray`]'s index maps 1:1 to the C table.
+/// size, so `byteLength == length << shift`). The first eleven rows follow
+/// `gxTypeDispatches` as XS orders it without `mxFloat16`; `Float16Array`
+/// comes last rather than after `BigUint64Array`, where XS puts it, because
+/// [`Native::TypedArray`]'s index is the persisted kind.
 #[derive(Copy, Clone, Debug)]
 pub struct TypedArrayType {
     pub name: &'static str,
@@ -1013,8 +1014,9 @@ pub struct TypedArrayType {
     pub shift: u8,
 }
 
-/// The concrete TypedArray constructors ironhorse binds, in `gxTypeDispatches`
-/// order. `Native::TypedArray(i)` indexes this table.
+/// The concrete TypedArray constructors ironhorse binds, in
+/// `gxTypeDispatches` order with `Float16Array` appended.
+/// `Native::TypedArray(i)` indexes this table.
 pub const TYPED_ARRAY_TYPES: &[TypedArrayType] = &[
     TypedArrayType {
         name: "BigInt64Array",
@@ -1071,7 +1073,68 @@ pub const TYPED_ARRAY_TYPES: &[TypedArrayType] = &[
         size: 1,
         shift: 0,
     },
+    // Appended, never inserted: a TypedArray's persisted kind indexes this
+    // table, so an insertion would renumber every later family.
+    TypedArrayType {
+        name: "Float16Array",
+        size: 2,
+        shift: 1,
+    },
 ];
+
+/// The IEEE 754 binary16 bits nearest `value`, ties to even, NaN as the
+/// canonical quiet NaN `0x7E00`. Integer-only, after XS's `fxFloat64to16`
+/// (`xsDataView.c`, adapted from half.sourceforge.net), so every host
+/// rounds alike and no value is rounded twice through binary32.
+pub(crate) fn f64_to_f16_bits(value: f64) -> u16 {
+    let round = |bits: u32, guard: u32, sticky: u32| bits + (guard & (sticky | bits));
+    let dbits = value.to_bits();
+    let lo = dbits as u32;
+    let mut hi = (dbits >> 32) as u32;
+    let sign = (hi >> 16) & 0x8000;
+    hi &= 0x7FFF_FFFF;
+    let bits = if hi >= 0x7FF0_0000 {
+        if dbits & 0x000F_FFFF_FFFF_FFFF != 0 {
+            return 0x7E00;
+        }
+        sign | 0x7C00
+    } else if hi >= 0x40F0_0000 {
+        sign | 0x7C00
+    } else if hi >= 0x3F10_0000 {
+        round(
+            sign | (((hi >> 20) - 1008) << 10) | ((hi >> 10) & 0x3FF),
+            (hi >> 9) & 1,
+            u32::from((hi & 0x1FF) | lo != 0),
+        )
+    } else if hi >= 0x3E60_0000 {
+        let shift = 1018 - (hi >> 20);
+        let mantissa = (hi & 0xF_FFFF) | 0x10_0000;
+        round(
+            sign | (mantissa >> (shift + 1)),
+            (mantissa >> shift) & 1,
+            u32::from((mantissa & ((1 << shift) - 1)) | lo != 0),
+        )
+    } else {
+        sign
+    };
+    bits as u16
+}
+
+/// The value of IEEE 754 binary16 `bits`, exactly, after XS's
+/// `fxFloat16to64`.
+pub(crate) fn f16_bits_to_f64(bits: u16) -> f64 {
+    let mut hi = u32::from(bits & 0x8000) << 16;
+    let mut abs = u32::from(bits & 0x7FFF);
+    if abs != 0 {
+        hi |= 0x3F00_0000 << u32::from(abs >= 0x7C00);
+        while abs < 0x400 {
+            abs <<= 1;
+            hi -= 0x10_0000;
+        }
+        hi += abs << 10;
+    }
+    f64::from_bits(u64::from(hi) << 32)
+}
 
 /// A TypedArray instance's internal state (XS's `XS_TYPED_ARRAY_KIND`
 /// dispatch slot + `XS_DATA_VIEW_KIND` view slot + buffer reference). Kept
@@ -3267,6 +3330,8 @@ fn decode_element_le(kind: u8, b: &[u8]) -> Option<Slot> {
                 Slot::number(u as f64)
             }
         }
+        // Float16
+        11 => Slot::number(f16_bits_to_f64(u16::from_le_bytes([b[0], b[1]]))),
         _ => return None,
     })
 }
@@ -3321,6 +3386,8 @@ fn encode_element_le(kind: u8, n: f64) -> Option<Vec<u8>> {
             };
             vec![v as u8]
         }
+        // Float16
+        11 => f64_to_f16_bits(n).to_le_bytes().to_vec(),
         _ => return None,
     })
 }

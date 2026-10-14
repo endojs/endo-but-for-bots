@@ -1214,6 +1214,7 @@ impl Interp {
             ("getUint32", "setUint32", 9),
             ("getFloat32", "setFloat32", 2),
             ("getFloat64", "setFloat64", 3),
+            ("getFloat16", "setFloat16", 11),
             ("getBigInt64", "setBigInt64", 0),
             ("getBigUint64", "setBigUint64", 1),
         ];
@@ -2928,6 +2929,8 @@ impl Interp {
             let mf = self.alloc_named_method(NativeMethod::Math(id), name, arity);
             self.proto_methods.push((math, name, mf));
         }
+        let f16round = self.alloc_named_method(NativeMethod::Math(F16round), "f16round", 1);
+        self.proto_methods.push((math, "f16round", f16round));
         let sum_precise = self.alloc_named_method(NativeMethod::MathSumPrecise, "sumPrecise", 1);
         self.proto_methods.push((math, "sumPrecise", sum_precise));
         // The numeric constants (`fxNextNumberProperty`, XS's `C_M_*`): the

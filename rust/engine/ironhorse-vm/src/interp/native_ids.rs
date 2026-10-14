@@ -44,6 +44,8 @@ pub enum MathId {
     Tan,
     Tanh,
     Trunc,
+    /// `Math.f16round` (`fx_Math_f16round`): the nearest binary16 value.
+    F16round,
 }
 
 /// A native prototype method ironhorse models (dispatched with the receiver as
