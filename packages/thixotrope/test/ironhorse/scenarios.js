@@ -366,3 +366,49 @@ test.serial(
     t.is(await f.daemon.getWorker(f.guestId).evaluate('6 * 7'), 42);
   },
 );
+
+test.serial(
+  "a worker's settled answers are released from the hub by its collector",
+  async t => {
+    t.timeout(120_000);
+    const f = await makeFixture(t);
+    /** The owner's answer rows, and the guest's routes to answers it asked. */
+    const owed = () => {
+      const state = f.store.getHubState();
+      const rows = Object.values(state?.refs ?? {}).filter(
+        row => row.backing === 'answer' && row.origin === f.ownerId,
+      ).length;
+      const routes = Object.keys(
+        state?.sessions?.[f.guestId]?.answersOwed ?? {},
+      ).length;
+      return { rows, routes };
+    };
+    const QUESTIONS = 12;
+    let caller = await f.guest();
+    for (let i = 1; i <= QUESTIONS; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      t.is(await E(caller).incr(), BigInt(i));
+    }
+    // Each call made one answer row at the owner and one route on the guest,
+    // and only the guest's op:gc-answers releases them. With WeakRef in the
+    // realm, the guest's collector drops each settled answer in the crank
+    // that settled it, and the gc frame travels with that delivery's
+    // outbound, so nearly nothing is left owed.
+    let after = owed();
+    t.true(after.rows <= 2, `answer rows ${after.rows} of ${QUESTIONS}`);
+    t.true(after.routes <= 2, `answer routes ${after.routes} of ${QUESTIONS}`);
+
+    // A crash replays both journals from the start, gc frames included: the
+    // regenerated frames keep their numbers, the hub's watermark drops them,
+    // and the counts stay bounded.
+    await f.restart(true);
+    caller = await f.guest();
+    for (let i = 1; i <= QUESTIONS; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      t.is(await E(caller).incr(), BigInt(QUESTIONS + i));
+    }
+    after = owed();
+    t.true(after.rows <= 2, `answer rows ${after.rows} after replay`);
+    t.true(after.routes <= 2, `answer routes ${after.routes} after replay`);
+  },
+);

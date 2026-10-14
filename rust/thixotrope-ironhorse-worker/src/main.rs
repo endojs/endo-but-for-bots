@@ -161,12 +161,60 @@ fn eval(session: &mut StoreSession, source: &str, budget: u64) -> Result<String,
     if !outcome.completed {
         return Err(format!("guest crank halted: {:?}", outcome.halt));
     }
-    // Reclaim completed-crank garbage before persisting the next heap image.
     // Collection is deterministic and runs only after a successful crank;
     // an exhausted or otherwise halted crank must remain a fatal failure.
-    m.collect_garbage();
+    sweep_and_notify(m, budget)?;
     Ok(outcome.result)
 }
+
+/// Reclaim the completed crank's garbage, run the cleanup callbacks the sweep
+/// flagged, and sweep again while their own garbage flags more.
+///
+/// The sweep nulls dead `WeakRef` targets and flags the registries that held
+/// them; the callbacks are guest code, so they run as a crank of their own
+/// here, before this delivery's outbound is taken, rather than at the end of
+/// the next crank's drain. An OCapN peer's finalizers therefore send their gc
+/// frames with the delivery that freed the imports, and no image taken between
+/// deliveries carries a pending cleanup. Both steps happen at points a replay
+/// reaches identically. The rounds share one crank budget, armed before the
+/// first, so a cascade that never ends exhausts it as a crank that never ends
+/// would; and since the sweep itself is unmetered, the rounds are counted too,
+/// so a cascade of callbacks too cheap to spend the budget cannot buy itself a
+/// collection per round for long.
+fn sweep_and_notify(m: &mut Interp, budget: u64) -> Result<(), String> {
+    let mut armed = false;
+    for round in 0.. {
+        m.collect_garbage()
+            .map_err(|e| format!("guest crank halted: {e}"))?;
+        if !m.finalization_cleanup_pending() {
+            return Ok(());
+        }
+        if round == FINALIZATION_ROUNDS {
+            return Err(format!(
+                "guest crank halted: finalization cascade exceeded {FINALIZATION_ROUNDS} rounds"
+            ));
+        }
+        if !armed {
+            let ceiling = (m.meter_index() >> 16).saturating_add(budget);
+            m.rearm_meter(
+                budget.clamp(1, 1000),
+                Box::new(move |spent| spent <= ceiling),
+            );
+            armed = true;
+        }
+        let outcome = m.notify_finalizations();
+        if !outcome.completed {
+            return Err(format!("guest crank halted: {:?}", outcome.halt));
+        }
+    }
+    unreachable!("the round counter is unbounded")
+}
+
+/// Sweep-and-notify rounds a delivery may take before its cascade is halted.
+/// An OCapN peer's finalizers free nothing registered, so a real cascade is a
+/// round or two; a guest whose callbacks register the next doomed object on
+/// every round is spending the host's collector, not its own budget.
+const FINALIZATION_ROUNDS: u32 = 64;
 
 // Kernel locks are released on process death. Never unlink the lock files:
 // replacing their inodes would let two supervisors each hold a different lock.
@@ -688,6 +736,94 @@ mod tests {
         assert_eq!(
             eval(&mut session, "var n; n", limits.crank_budget).unwrap(),
             "3"
+        );
+    }
+
+    #[test]
+    fn finalizers_run_within_the_delivery_that_frees_their_targets() {
+        let signature = Signature::new("worker-finalization");
+        let mut store = MemoryStore::new();
+        let mut session = begin_store_session(Interp::new(), &signature, &mut store)
+            .map_err(|(_, error)| error)
+            .unwrap();
+        let budget = test_limits().crank_budget;
+        eval(
+            &mut session,
+            "globalThis.gone = []; \
+             globalThis.registry = new FinalizationRegistry(held => gone.push(held)); \
+             globalThis.target = {}; registry.register(target, 'a'); 0",
+            budget,
+        )
+        .unwrap();
+        // The target dies in this crank. Its callback has not run when the
+        // script reads `gone`, and has run by the time the crank is answered.
+        assert_eq!(
+            eval(&mut session, "target = null; gone.length", budget).unwrap(),
+            "0"
+        );
+        assert!(!session.machine_mut().finalization_cleanup_pending());
+        assert_eq!(
+            eval(&mut session, "JSON.stringify(gone)", budget).unwrap(),
+            "[\"a\"]"
+        );
+    }
+
+    #[test]
+    fn a_cleanup_cascade_is_followed_to_its_end_and_an_endless_one_is_halted() {
+        let signature = Signature::new("worker-finalization-cascade");
+        let mut store = MemoryStore::new();
+        let mut session = begin_store_session(Interp::new(), &signature, &mut store)
+            .map_err(|(_, error)| error)
+            .unwrap();
+        let budget = test_limits().crank_budget;
+        // Each callback registers one more doomed target, five times over:
+        // every round's garbage flags the next, and the rounds end.
+        eval(
+            &mut session,
+            "globalThis.rounds = 0; \
+             globalThis.registry = new FinalizationRegistry(() => { \
+               rounds += 1; if (rounds < 6) registry.register({}, 0); \
+             }); \
+             registry.register({}, 0); 0",
+            budget,
+        )
+        .unwrap();
+        assert_eq!(eval(&mut session, "rounds", budget).unwrap(), "6");
+        // A cascade without an end is halted: by the round count when its
+        // callbacks are cheap, by the budget the rounds share when they are
+        // not. The cascade begins in the crank that registers it.
+        let cheap = eval(
+            &mut session,
+            "globalThis.endless = new FinalizationRegistry(() => endless.register({}, 0)); \
+             endless.register({}, 0); 0",
+            budget,
+        )
+        .unwrap_err();
+        assert!(cheap.contains("finalization cascade exceeded"), "{cheap}");
+    }
+
+    #[test]
+    fn a_costly_cleanup_cascade_spends_the_rounds_shared_budget() {
+        let signature = Signature::new("worker-finalization-budget");
+        let mut store = MemoryStore::new();
+        let mut session = begin_store_session(Interp::new(), &signature, &mut store)
+            .map_err(|(_, error)| error)
+            .unwrap();
+        // Each round burns well over the small budget's share of 64 rounds,
+        // so the meter halts the cascade before the round count does.
+        let costly = eval(
+            &mut session,
+            "globalThis.costly = new FinalizationRegistry(() => { \
+               let x = 0; for (let i = 0; i < 100000; i += 1) x += i; \
+               costly.register({}, x); \
+             }); \
+             costly.register({}, 0); 0",
+            200_000,
+        )
+        .unwrap_err();
+        assert!(
+            costly.contains("guest crank halted") && !costly.contains("cascade exceeded"),
+            "{costly}"
         );
     }
 }

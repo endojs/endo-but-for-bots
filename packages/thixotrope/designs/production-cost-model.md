@@ -45,9 +45,10 @@ A cancel there frees the guest at once (their bd-1992, in the host application).
    collection proves that no holder remains, since a settled answer can still be passed as an
    argument.
 2. **Collection under Ironhorse comes from the engine.**
-   A parallel effort is adding `WeakRef` and `FinalizationRegistry` to the Ironhorse realm.
+   `WeakRef` and `FinalizationRegistry` landed in the Ironhorse realm (#1446).
    With them, the OCapN client's existing finalizer sends the gc frames, and this package needs no
-   protocol work of its own; section 3 records what it needs from that effort.
+   protocol work of its own; section 3 records how the engine's model meets its needs and the one
+   step the worker adds.
 3. **No backward compatibility.**
    Nothing runs this branch in production.
    State-format migrations, upgrade paths for code already in heaps, and per-worker feature flags
@@ -102,7 +103,7 @@ That ordering decides the triage below.
 | 2.2  | Answer `status` before ready          | Deferred, beside D.5                  |
 | 2.3  | Break routes toward a retired session | Done                                  |
 | 2.4  | Measure what a commit writes          | Measure when convenient               |
-| 3    | Collection under Ironhorse            | Requirements on the parallel effort   |
+| 3    | Collection under Ironhorse            | Done with #1446 and the worker's step |
 | D.1  | Fewer hub writes per flush            | Deferred: moot if the table is small  |
 | D.2  | Batch retirement; index pins          | Deferred: retirement is rare          |
 | D.3  | `hub.close()`                         | Deferred: until 1.3 fails to fix it   |
@@ -218,7 +219,8 @@ Under Ironhorse today they do not: the realm has no `WeakRef` or `FinalizationRe
 The only place `enableImportCollection: false` is set is the replay test double
 (`src/core/peer-replay-engine.js`), which is why the report named the wrong cause for the right
 outcome.
-Done: the README now says what is true today and points at section 3 for what changes it.
+Done: the README said what was true before #1446, and now says that collection runs under
+Ironhorse and how the worker sequences it, pointing at section 3.
 
 ## 2. Structural changes
 
@@ -293,42 +295,48 @@ Collection timing itself is not a tuning knob here; section 3 says why.
 
 ## 3. Collection under Ironhorse
 
-The §2 growth is the OCapN client's import collection not running under Ironhorse (1.5).
-A parallel effort is adding `WeakRef` and `FinalizationRegistry` to the realm.
-Once it lands, a durable worker's import table becomes weak, a dropped answer promise is collected,
-`slotCollectedHook` sends `op:gc-answers`, and the hub releases the row and the route.
-`packages/ocapn/test/gc.test.js` ("op:gc-answers is sent when answer promise is garbage
-collected") shows this path working in Node.
+The §2 growth was the OCapN client's import collection not running under Ironhorse (1.5).
+`WeakRef` and `FinalizationRegistry` landed in the realm (#1446): a durable worker's import table
+is weak, a dropped answer promise is collected, `slotCollectedHook` sends `op:gc-answers`, and the
+hub releases the row and the route.
 
-What this package needs from that effort, stated as requirements rather than design:
+How the engine's model meets this package's requirements:
 
 - **Collection at a journaled point.**
-  Today the worker collects after every successful crank, which is a function of the inbound
-  journal alone.
-  Keep it so; a collection keyed to wall time or memory pressure would make replay emit different
-  gc frames and shift the outbound numbering the hub depends on.
-- **Finalization within the crank that collects.**
-  Finalizer callbacks must run before the delivery's outbound is taken, so the gc frame belongs to
-  a determinate delivery, and before an image is taken, so a restored worker does not fire them
-  again.
-  [Host-managed resources](host-managed-resources.md) reaches the same requirement for native
+  The worker collects after every successful crank, a function of the inbound journal alone, and
+  the engine's sweep runs no guest code and charges nothing.
+  A collection keyed to wall time or memory pressure would make replay emit different gc frames and
+  shift the outbound numbering the hub depends on; none is.
+- **Finalization at a journaled point, and never at load.**
+  The sweep only flags a registry whose target died; the cleanup callbacks are guest code and run
+  as a crank, either when the operator asks (`notify_finalizations`) or at the end of the next
+  completed crank's drain.
+  A pending cleanup travels in an image and fires at the resumed machine's next drain, the same
+  point the original life would have used, so the hub's frame count holds either way; what would
+  break it is firing at load, which the engine does not do.
+  The worker goes further: `sweep_and_notify` runs the callbacks right after each sweep, under one
+  crank budget of their own, and sweeps again while their garbage flags more, so a delivery's gc
+  frames travel with that delivery's outbound rather than lagging to the next, a worker that then
+  sleeps leaves nothing owed, and no image carries a pending cleanup.
+  A cascade without an end spends that budget and halts, as a crank without an end would.
+  [Host-managed resources](host-managed-resources.md) reaches the same shape for native
   resources' collection hooks.
 - **Nothing else pins a settled answer.**
-  Verify that the OCapN client and the worker peer hold a settled answer promise only through the
-  import table, as the Node test implies.
+  Shown by the scenario below: once the guest's calls settle, the owner's answer rows and the
+  guest's routes are gone.
 
-Tests, once the engine work lands:
+Tests:
 
-- In `test/peer-replay-gc.test.js` style: a sleep, wake and replay produces frames identical to the
-  first life, gc frames included.
-- In `test/hub.test.js`, near "released holdings return gc to the origin and shrink the tables": the
-  hub's ref count and total routes are the same after 5 worker-to-adapter calls as after 50, under
-  Ironhorse and across a restart.
-- `test/resource-answer-gc.test.js` extended to the native adapter path.
+- `rust/thixotrope-ironhorse-worker`: a target that dies in a crank has its callback run before
+  the crank is answered; a five-round cascade ends; an endless one is halted.
+- `test/ironhorse/scenarios.js`, "a worker's settled answers are released from the hub by its
+  collector": twelve guest-to-owner calls leave at most two answer rows and routes, where each
+  call left one before; a crash then replays both journals from the start, gc frames included,
+  and the counts stay bounded with the counter correct.
 
 Open: the report also counted 5,384 export tombstones held by workers.
 Exports are released by the importer's `op:gc-exports`, so whether these clear under the same
-mechanism depends on who imports them; check after the engine work lands.
+mechanism depends on who imports them; check on a live installation.
 
 ## Deferred
 

@@ -919,13 +919,12 @@ doubles for the daemon's persistence logic, deliberately not part of
 the public API.
 These test doubles disable Node import finalization because GC-generated
 protocol frames are not journal inputs and cannot be replayed deterministically.
-Production worker peers leave import collection enabled, but under Ironhorse it
-does not run today: the realm has no `WeakRef` or `FinalizationRegistry`, so the
-OCapN client's import table falls back to a strong map and no `op:gc-answers` or
-`op:gc-exports` is ever sent. The answer rows and routes a worker's calls create
-therefore persist until the answerer's session retires; see
-[the production cost model](designs/production-cost-model.md), section 3, for
-what changes this.
+Production worker peers run import collection under Ironhorse as well: the realm
+has `WeakRef` and `FinalizationRegistry`, and the worker sweeps after every
+completed crank, then runs the cleanup callbacks the sweep flagged, under a crank
+budget of their own, before the delivery's outbound is taken. An answer a guest
+drops is therefore released from the hub with the delivery that settled it; see
+[the production cost model](designs/production-cost-model.md), section 3.
 
 ## Workers creating workers
 
