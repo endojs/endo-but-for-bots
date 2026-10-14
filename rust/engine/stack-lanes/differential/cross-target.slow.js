@@ -38,21 +38,22 @@ typeof f + f.length
 // flags: --chunk-ceiling=1610612736
 // Latent, embedder-raised ceilings, value.rs:2222: with a chunk ceiling above about 1 GiB, the
 // chunk arena's amortized doubling asks wasm32 for more than `isize::MAX` before memory runs out.
-// At 1.5 GiB, 17 kept 32M-unit strings return natively and halt on wasm32.
+// At 1.5 GiB, 17 kept 32M-unit strings returned natively and halted on wasm32. The probe builds
+// with `consensus`, whose 2^29-byte chunk cap now refuses this ceiling on both targets.
 var k = [];
 for (var i = 0; i < 17; i++) k.push(String.fromCharCode(97 + i).repeat(32 * 1024 * 1024));
 k.length
 // ---
 // name: scratch-over-2-gib
 // flags: --chunk-ceiling=3758096384
-// interp/admission.rs:236: at a 3.5 GiB chunk ceiling, one scratch buffer over 2 GiB returns
-// natively and halts on wasm32 in `reserved_vec`.
+// interp/admission.rs:236: at a 3.5 GiB chunk ceiling, one scratch buffer over 2 GiB returned
+// natively and halted on wasm32 in `reserved_vec`. The consensus chunk cap now refuses the ceiling.
 'a'.repeat(1100000000).length
 // ---
 // name: chunk-ceiling-2-30-doubling
 // flags: --chunk-ceiling=1073741824
-// Latent: at a 2^30 chunk ceiling, B8's 1M-unit doubling program halts natively and traps on
-// wasm32 when `units_to_be16` cannot allocate 1 GiB.
+// Latent: at a 2^30 chunk ceiling, B8's 1M-unit doubling program halted natively and trapped on
+// wasm32 when `units_to_be16` could not allocate 1 GiB. The consensus chunk cap now refuses it.
 var s = 'x'.repeat(1 << 20); for (;;) s = s + s;
 // ---
 // name: slot-ceiling-kept-objects-doubling
