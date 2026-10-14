@@ -41,6 +41,7 @@ const FRESH_ORDER: &[&str] = &[
     "eval_program_hoist",
     "result",
     "strict",
+    "callee_binding_pending",
     "meter",
     "cost",
     "meter_host",

@@ -406,9 +406,7 @@ impl Interp {
                     ..OrdinaryDescriptor::default()
                 },
             )? {
-                return Err(
-                    self.catchable_type_error_msg("define property: definition rejected".into())
-                );
+                return Err(self.define_rejected_error(Some(id)));
             }
             if let Some(property) = self.find_property(inst, id) {
                 self.slots.get_mut(property).flag =
@@ -477,8 +475,9 @@ impl Interp {
                         });
                     }
                 }
-                if property_flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
-                    let current = self.accessors.get(&(inst, id)).copied().unwrap_or_default();
+                let defined = if property_flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
+                    let previous = self.accessors.get(&(inst, id)).copied();
+                    let current = previous.unwrap_or_default();
                     let accessor = AccessorData {
                         get: if property_flag & XS_GETTER_FLAG != 0 {
                             Some(value)
@@ -492,7 +491,7 @@ impl Interp {
                         },
                     };
                     self.accessors.insert((inst, id), accessor);
-                    self.ordinary_define_own_property(
+                    let defined = self.ordinary_define_own_property(
                         inst,
                         id,
                         OrdinaryDescriptor {
@@ -503,6 +502,14 @@ impl Interp {
                             ..OrdinaryDescriptor::default()
                         },
                     );
+                    if !defined {
+                        // Leave the refused key's accessor record as it was.
+                        match previous {
+                            Some(previous) => self.accessors.insert((inst, id), previous),
+                            None => self.accessors.remove(&(inst, id)),
+                        };
+                    }
+                    defined
                 } else {
                     self.ordinary_define_own_property(
                         inst,
@@ -514,9 +521,15 @@ impl Interp {
                             configurable: Some(property_flag & XS_DONT_DELETE_FLAG == 0),
                             ..OrdinaryDescriptor::default()
                         },
-                    );
-                }
+                    )
+                };
                 self.meter.tick_builtin();
+                // A static member named `prototype` meets the constructor's
+                // non-configurable `prototype` (ClassDefinitionEvaluation's
+                // DefineMethodProperty, ES2024 15.4.4).
+                if !defined {
+                    return Err(self.define_rejected_error(Some(id)));
+                }
                 true
             }
             _ => false,

@@ -27,6 +27,27 @@ impl Interp {
     /// `fxRunDefine`). Grows the item chunk when the index is new (metered by
     /// [`Self::array_item_grow_metering`]) and bumps `length` when the index
     /// reaches past the end; `define` adds the `fxRunDefine` built-in step.
+    /// Whether defining a fresh data item at `index` (CreateDataProperty)
+    /// can take [`Self::array_item_set`]: the array is extensible, the index
+    /// fits a writable length, and any item already there carries no
+    /// attribute flags.
+    pub(in crate::interp) fn array_item_define_is_plain(
+        &self,
+        inst: crate::value::SlotIndex,
+        index: u32,
+    ) -> bool {
+        let Some(array) = self.arrays.get(&inst) else {
+            return false;
+        };
+        match array.items().get(&index) {
+            Some(item) => item.flag == 0 || self.arguments_objects.contains(&inst),
+            None => {
+                self.instance_extensible(inst)
+                    && (index < array.length || self.array_length_writable(inst))
+            }
+        }
+    }
+
     pub(in crate::interp) fn array_item_set(
         &mut self,
         inst: crate::value::SlotIndex,

@@ -91,7 +91,9 @@ impl Interp {
             return Err(self.raise_js(error));
         }
         let accepted = (self.mop_set(code, base, id, value, receiver))?;
-        if !accepted {
+        // PutValue throws on a refused [[Set]] only in strict code; an object
+        // literal's method can be sloppy.
+        if !accepted && self.strict {
             return Err(self.failed_super_set_error(base, id, receiver));
         }
         self.push(value);
@@ -124,7 +126,7 @@ impl Interp {
             return Err(self.raise_js(error));
         }
         let accepted = (self.mop_set(code, super_ref.next, id, value, receiver))?;
-        if !accepted {
+        if !accepted && self.strict {
             return Err(self.failed_super_set_error(super_ref.next, id, receiver));
         }
         self.push(value);

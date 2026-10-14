@@ -113,14 +113,15 @@ impl Interp {
                         );
                     }
                     // SetFullYear alone recovers an invalid Date from +0. Every
-                    // other setter preserves NaN after performing the required
-                    // argument coercions above.
+                    // other setter on a Date that was invalid when it read the
+                    // time value returns NaN and leaves the Date as it is
+                    // (ES2024 21.4.4.20 step 6 and its siblings): a coercion
+                    // above may have set a valid time, which must survive.
                     let base_t = if t.is_finite() {
                         t
                     } else if op == 34 {
                         0.0
                     } else {
-                        self.dates.insert(inst, f64::NAN);
                         return Ok(Slot::number(f64::NAN));
                     };
                     let (year, month, day, _, hour, minute, second, millis) =

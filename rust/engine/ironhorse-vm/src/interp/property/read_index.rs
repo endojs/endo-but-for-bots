@@ -243,6 +243,12 @@ impl Interp {
             if self.proxies.contains_key(&current) {
                 return Ok(HasLevels::Proxy(current, frames));
             }
+            // An index is a canonical numeric key: a TypedArray answers it
+            // without consulting its prototype (ES2024 10.4.5.2).
+            if let Some(&ta) = self.typed_arrays.get(&current) {
+                let found = self.ta_valid_index(ta, f64::from(index)).is_some();
+                return Ok(HasLevels::Answered(found, frames));
+            }
             if self.uninterned_index_own_present(code, current, index)? {
                 return Ok(HasLevels::Answered(true, frames));
             }

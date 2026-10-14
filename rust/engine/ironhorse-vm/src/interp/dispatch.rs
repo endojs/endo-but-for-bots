@@ -379,44 +379,38 @@ impl Interp {
                     let k = self.local_operand(op, code, pc);
                     let top = dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     self.set_local(k, top);
+                    let flag = XS_DONT_SET_FLAG | self.take_callee_binding_flag();
                     if let Some(index) = self.local_index(k) {
-                        self.locals[index].flag |= XS_DONT_SET_FLAG;
+                        self.locals[index].flag |= flag;
                     }
                     pc += size as usize;
                 }
                 XS_CODE_SET_LOCAL_1 | XS_CODE_SET_LOCAL_2 => {
                     let k = self.local_operand(op, code, pc);
-                    let immutable = self
-                        .local_index(k)
-                        .is_some_and(|index| self.locals[index].flag & XS_DONT_SET_FLAG != 0);
-                    if immutable {
-                        let id = self.locals[self.local_index(k).expect("immutable binding")].id;
-                        let error = self.internal_error(
-                            "TypeError",
-                            format!("set {}: const", self.id_name(id)),
+                    if self.local_write_is_guarded(k) {
+                        dispatch_flow!(
+                            self.exec_guarded_local_write(code, pc, return_depth, op, k, false),
+                            pc
                         );
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
+                    } else {
+                        let top =
+                            dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
+                        self.set_local(k, top);
+                        pc += size as usize;
                     }
-                    let top = dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
-                    self.set_local(k, top);
-                    pc += size as usize;
                 }
                 XS_CODE_PULL_LOCAL_1 | XS_CODE_PULL_LOCAL_2 => {
                     let k = self.local_operand(op, code, pc);
-                    let immutable = self
-                        .local_index(k)
-                        .is_some_and(|index| self.locals[index].flag & XS_DONT_SET_FLAG != 0);
-                    if immutable {
-                        let id = self.locals[self.local_index(k).expect("immutable binding")].id;
-                        let error = self.internal_error(
-                            "TypeError",
-                            format!("set {}: const", self.id_name(id)),
+                    if self.local_write_is_guarded(k) {
+                        dispatch_flow!(
+                            self.exec_guarded_local_write(code, pc, return_depth, op, k, true),
+                            pc
                         );
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
+                    } else {
+                        let v = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
+                        self.set_local(k, v);
+                        pc += size as usize;
                     }
-                    let v = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
-                    self.set_local(k, v);
-                    pc += size as usize;
                 }
                 XS_CODE_GET_LOCAL_1 | XS_CODE_GET_LOCAL_2 => {
                     let k = self.local_operand(op, code, pc);
@@ -2911,14 +2905,8 @@ impl Interp {
         op: Opcode,
     ) -> Flow {
         let k = self.closure_index(op, code, pc);
-        let immutable = self
-            .closure_cell(k)
-            .is_some_and(|cell| self.slots.get(cell).flag & XS_DONT_SET_FLAG != 0);
-        if immutable {
-            let id = self.locals[self.local_index(k).expect("immutable binding")].id;
-            let error =
-                self.internal_error("TypeError", format!("set {}: const", self.id_name(id)));
-            dispatch_halt_flow!(self.raise_js(error), self, return_depth, code);
+        if self.closure_write_is_guarded(k) {
+            return self.exec_guarded_closure_write(code, pc, return_depth, op, k, false);
         }
         let top = dispatch_result_flow!(self.peek_checked(), self, return_depth, code);
         self.write_closure_cell(k, top);
@@ -2945,6 +2933,10 @@ impl Interp {
             // indirection), so an eval-published reference observes
             // the same const guard as GET/SET_CLOSURE.
             target.flag |= XS_DONT_SET_FLAG;
+        }
+        let ignore = self.take_callee_binding_flag();
+        if let Some(cell) = self.closure_cell(k) {
+            self.slots.get_mut(cell).flag |= ignore;
         }
         pc += op.size() as usize;
         Flow::Next(pc)
@@ -3007,14 +2999,8 @@ impl Interp {
         op: Opcode,
     ) -> Flow {
         let k = self.closure_index(op, code, pc);
-        let immutable = self
-            .closure_cell(k)
-            .is_some_and(|cell| self.slots.get(cell).flag & XS_DONT_SET_FLAG != 0);
-        if immutable {
-            let id = self.locals[self.local_index(k).expect("immutable binding")].id;
-            let error =
-                self.internal_error("TypeError", format!("set {}: const", self.id_name(id)));
-            dispatch_halt_flow!(self.raise_js(error), self, return_depth, code);
+        if self.closure_write_is_guarded(k) {
+            return self.exec_guarded_closure_write(code, pc, return_depth, op, k, true);
         }
         let v = dispatch_result_flow!(self.pop_checked(), self, return_depth, code);
         self.write_closure_cell(k, v);
@@ -3667,7 +3653,105 @@ impl Interp {
         }
         let f = self.cur_func;
         self.push(Slot::of(Kind::Reference, Payload::Reference(f)));
+        self.callee_binding_pending = !self.strict;
         pc += size as usize;
+        Flow::Next(pc)
+    }
+
+    /// The flag a `CONST_LOCAL` or `CONST_CLOSURE` adds after `CURRENT` in a
+    /// sloppy frame: `XS_DONT_ENUM_FLAG`, which makes a later sloppy write to
+    /// a function expression's own name a no-op, as XS marks it.
+    pub(super) fn take_callee_binding_flag(&mut self) -> u8 {
+        let pending = std::mem::take(&mut self.callee_binding_pending);
+        if pending && !self.strict {
+            XS_DONT_ENUM_FLAG
+        } else {
+            0
+        }
+    }
+
+    /// Whether a write to frame local `k` needs [`Self::exec_guarded_local_write`]:
+    /// the binding is immutable or still in its temporal dead zone.
+    #[inline]
+    fn local_write_is_guarded(&self, k: usize) -> bool {
+        self.local_index(k).is_some_and(|index| {
+            let local = self.locals[index];
+            local.flag & XS_DONT_SET_FLAG != 0 || local.kind == Kind::Uninitialized
+        })
+    }
+
+    /// Whether a write to closure `k` needs [`Self::exec_guarded_closure_write`].
+    #[inline]
+    fn closure_write_is_guarded(&self, k: usize) -> bool {
+        self.closure_cell(k).is_some_and(|cell| {
+            let cell = self.slots.get(cell);
+            cell.flag & XS_DONT_SET_FLAG != 0 || cell.kind == Kind::Uninitialized
+        })
+    }
+
+    /// What a write does to a binding that is in its temporal dead zone or
+    /// immutable, with `xsRun.c`'s `SET_LOCAL`/`SET_CLOSURE` messages: a
+    /// ReferenceError, nothing for a sloppy write to a function expression's
+    /// own name, or a TypeError. XS ignores a strict write to that name too;
+    /// SetMutableBinding throws for one (ES2024 9.1.1.1.5 step 4), as V8
+    /// does, and `xs_departures.rs` records it.
+    fn guarded_write_error(&mut self, binding: Slot, id: u16) -> Option<Step> {
+        let (constructor, what) = if binding.kind == Kind::Uninitialized {
+            ("ReferenceError", "not initialized yet")
+        } else if binding.flag & XS_DONT_ENUM_FLAG != 0 && !self.strict {
+            return None;
+        } else {
+            ("TypeError", "const")
+        };
+        let error = self.internal_error(constructor, format!("set {}: {what}", self.id_name(id)));
+        Some(self.raise_js(error))
+    }
+
+    /// `SET_LOCAL` (or `PULL_LOCAL`, when `pull`) of a guarded local.
+    #[cold]
+    #[inline(never)]
+    fn exec_guarded_local_write(
+        &mut self,
+        code: &[u8],
+        mut pc: usize,
+        return_depth: usize,
+        op: Opcode,
+        k: usize,
+        pull: bool,
+    ) -> Flow {
+        let binding = self.locals[self.local_index(k).expect("a guarded local")];
+        if let Some(error) = self.guarded_write_error(binding, binding.id) {
+            dispatch_halt_flow!(error, self, return_depth, code);
+        }
+        if pull {
+            let _ = dispatch_result_flow!(self.pop_checked(), self, return_depth, code);
+        }
+        pc += op.size() as usize;
+        Flow::Next(pc)
+    }
+
+    /// `SET_CLOSURE` (or `PULL_CLOSURE`, when `pull`) of a guarded closure.
+    #[cold]
+    #[inline(never)]
+    fn exec_guarded_closure_write(
+        &mut self,
+        code: &[u8],
+        mut pc: usize,
+        return_depth: usize,
+        op: Opcode,
+        k: usize,
+        pull: bool,
+    ) -> Flow {
+        let cell = self.closure_cell(k).expect("a guarded closure");
+        let binding = self.slots.get(cell);
+        let id = self.locals[self.local_index(k).expect("a closure binding")].id;
+        if let Some(error) = self.guarded_write_error(binding, id) {
+            dispatch_halt_flow!(error, self, return_depth, code);
+        }
+        if pull {
+            let _ = dispatch_result_flow!(self.pop_checked(), self, return_depth, code);
+        }
+        pc += op.size() as usize;
         Flow::Next(pc)
     }
 

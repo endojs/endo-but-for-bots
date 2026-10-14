@@ -267,6 +267,27 @@ const DEPARTURES: &[Row] = &[
         v8: "true",
         why: "`#a in o` asks PrivateElementFind, which finds a setter-only accessor (ES2024 13.10.1); XS looks the element up as a read",
     },
+    Row {
+        program: "(function f() { try { (function () { 'use strict'; f = 1; })(); return 'ignored ' + typeof f; } catch (e) { return e.constructor.name; } })()",
+        ironhorse: "TypeError",
+        xs: "ignored function",
+        v8: "TypeError",
+        why: "a function expression's own name is an immutable binding, and a STRICT write to it throws (SetMutableBinding, ES2024 9.1.1.1.5 step 4); XS ignores every write once the sloppy function marked the binding",
+    },
+    Row {
+        program: "var proto = {}; Object.defineProperty(proto, 'y', { value: 0, writable: false }); var o = { __proto__: proto, m() { super.y = 1; return 'ok ' + this.y + ' ' + this.hasOwnProperty('y'); } }; o.m()",
+        ironhorse: "ok 0 false",
+        xs: "ok 1 true",
+        v8: "ok 0 false",
+        why: "a sloppy `super.y = v` over an inherited read-only `y` is refused silently and creates nothing (OrdinarySet step 2.a); XS defines an own property",
+    },
+    Row {
+        program: "const c = 1; var r = []; for (var w of [function () { [c] = [2]; }, function () { ({ c } = { c: 2 }); }, function () { for (c of [2]); }]) { try { w(); r.push('wrote ' + c); } catch (e) { r.push(e.constructor.name); } } r.join()",
+        ironhorse: "TypeError,TypeError,TypeError",
+        xs: "wrote 1,wrote 1,wrote 1",
+        v8: "TypeError,TypeError,TypeError",
+        why: "a destructuring or for-of write to a `const` is a TypeError like `c = 2` (SetMutableBinding on an immutable binding with S true, ES2024 9.1.1.1.5 step 4); XS discards it silently",
+    },
 ];
 
 /// Programs where Ironhorse departs from XS and V8 has no counterpart to
