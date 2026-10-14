@@ -248,7 +248,7 @@ fn run_program(options: &Options) {
             .expect("begin a store session");
         let (code, names) = compile(&source);
         let machine = session.machine_mut();
-        configure(machine, &options);
+        configure(machine, options);
         machine.link_intrinsics(&names);
         phase();
         let outcome = machine.run(&code);
@@ -265,7 +265,7 @@ fn run_program(options: &Options) {
     } else {
         let (code, names) = compile(&source);
         let mut machine = Interp::new();
-        configure(&mut machine, &options);
+        configure(&mut machine, options);
         machine.link_intrinsics(&names);
         phase();
         let outcome = machine.run(&code);

@@ -36,5 +36,7 @@ host-side store does; an in-memory store would add its own copy of every row to 
 a phase is the peak up to it, allocator slack and fragmentation included.
 Two heaps whose `heap_peak` agrees can differ by several percent in `linear`, because the order
 of allocations decides how the allocator lays them out.
+Wasm readings repeat to the byte from run to run; native peak RSS moved by up to 0.5 MiB between
+two runs of the whole matrix.
 `heap_peak` counts a reallocation as the old and the new block both live, as they are during the
 copy on wasm, where the allocator cannot remap.
