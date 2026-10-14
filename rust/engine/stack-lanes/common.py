@@ -4,6 +4,7 @@ Every lane runs the same probe (`probe/`) on the same corpus (`cases.rs`) and
 compares each case's output line byte for byte against the native reference.
 A host that traps is recorded as a trap, never as an output.
 """
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -37,11 +38,17 @@ def lane_b_stack(limit_kb):
 class Outcome:
     """One probe invocation on one host."""
 
-    def __init__(self, line=None, trap=None, stderr="", timed_out=False):
+    def __init__(self, line=None, trap=None, stderr="", timed_out=False, panic=None, cause=None):
         self.line = line
         self.trap = trap
         self.stderr = stderr
         self.timed_out = timed_out
+        # With `panics`: the engine panic the run printed (`panic_summary`),
+        # whether the engine contained it (a line follows) or not (a trap).
+        self.panic = panic
+        # What the guest's runtime printed before it aborted, such as Rust's
+        # `memory allocation of N bytes failed`, when a trap followed it.
+        self.cause = cause
         self.shadow_stack = None
         # The shadow stack's size as linked, read from the module by a painting host.
         self.shadow_stack_top = None
@@ -56,6 +63,10 @@ class Outcome:
         d = {"line": self.line, "trap": self.trap, "timed_out": self.timed_out}
         if self.shadow_stack is not None:
             d["shadow_stack"] = self.shadow_stack
+        if self.panic is not None:
+            d["panic"] = self.panic
+        if self.cause is not None:
+            d["cause"] = self.cause
         return d
 
 
@@ -71,15 +82,56 @@ WASMTIME_TRAP = ("wasm trap:",)
 NODE_TRAP = ("TRAP: ",)  # node/run.cjs, for RangeError and WebAssembly.RuntimeError only
 # A wasm frame in V8's stack trace names its function by index.
 WASM_FRAME = re.compile(r"wasm-function\[(\d+)\]")
+# Rust's panic report: `thread '<name>' (<id>) panicked at <file>:<line>:<column>:`,
+# then the message on the next line.
+PANIC = re.compile(r"panicked at (.+?):\d+:\d+:\s*$")
+# What Rust's default allocation-error handler prints before it aborts.
+ALLOCATION_FAILURE = re.compile(r"^memory allocation of \d+ bytes failed$")
+# Where a panic's file is cut, so that the report reads the same on every
+# checkout and toolchain install: an engine file is named from `rust/engine`
+# and a standard-library file from the toolchain's `library`.
+SOURCE_ROOTS = ("/rust/engine/", "/lib/rustlib/src/rust/")
 
 
-def _outcome(completed, trap_markers, signal_is_trap):
+def source_path(path):
+    """A panic's file without the parts that differ by machine; a registry
+    crate's file is named from the crate's own directory."""
+    for root in SOURCE_ROOTS:
+        if root in path:
+            return path.split(root, 1)[1]
+    if "/registry/src/" in path:
+        return path.split("/registry/src/", 1)[1].split("/", 1)[-1]
+    return path
+
+
+def panic_summary(stderr):
+    """The first panic a run printed, as `<message> at <file>`, or None. The
+    line and column are left out so that an edit elsewhere in the file does
+    not change the report."""
+    lines = stderr.splitlines()
+    for i, line in enumerate(lines):
+        m = PANIC.search(line)
+        if m:
+            message = lines[i + 1].strip() if i + 1 < len(lines) else ""
+            return f"{message} at {source_path(m.group(1))}"
+    return None
+
+
+def _outcome(completed, trap_markers, signal_is_trap, panics=False):
+    """One run's outcome. By default an engine panic is a HarnessError. With
+    `panics` it is part of the outcome, since a panic on one target only is
+    what `cross_target.py` looks for: a contained panic (the engine printed a
+    line after it) is recorded with that line, and an uncontained one is a
+    trap."""
     stdout = completed.stdout
     stderr = completed.stderr
     lines = [l for l in stdout.splitlines() if l.startswith(("halt=", "compile="))]
+    panic = None
     if "panicked at" in stderr:
-        # An engine panic is a bug, not a verdict on the case's stack use.
-        raise HarnessError(f"the probe panicked: {stderr.strip()}")
+        if not panics:
+            # An engine panic is a bug, not a verdict on the case's stack use.
+            raise HarnessError(f"the probe panicked: {stderr.strip()}")
+        panic = panic_summary(stderr) or "unparsed panic"
     trap = None
     for line in stderr.splitlines():
         if any(marker in line for marker in trap_markers):
@@ -87,10 +139,28 @@ def _outcome(completed, trap_markers, signal_is_trap):
             break
     if trap is None and signal_is_trap and completed.returncode < 0:
         trap = f"signal {-completed.returncode}"
+    if trap is None and panic is not None and not lines:
+        trap = f"panic: {panic}"
     if trap is None and not lines:
         detail = stderr.strip() or f"exit {completed.returncode} with no output"
         raise HarnessError(detail)
-    return Outcome(line=lines[-1] if lines else None, trap=trap, stderr=stderr)
+    cause = None
+    if trap is not None:
+        cause = next((l.strip() for l in stderr.splitlines() if ALLOCATION_FAILURE.match(l.strip())), None)
+    return Outcome(line=lines[-1] if lines else None, trap=trap, stderr=stderr, panic=panic, cause=cause)
+
+
+def describe(outcome):
+    """An outcome as one comparable string: `timeout`; `trap: <trap>`, with
+    what the runtime printed before it aborted, if anything; or the probe's
+    line, with the engine panic it contained, if any."""
+    if outcome.timed_out:
+        return "timeout"
+    if outcome.trapped:
+        return f"trap: {outcome.trap}" + (f" ({outcome.cause})" if outcome.cause else "")
+    if outcome.panic is not None:
+        return f"{outcome.line} panic={outcome.panic}"
+    return outcome.line
 
 
 def _run(command, stdin, timeout, env=None, preexec_fn=None):
@@ -132,22 +202,45 @@ def largest_stack_kb(limits=None):
     return hard // 1024 - NODE_STACK_SLACK_KB
 
 
-def run_native(probe, args, stdin=None, timeout=600):
+def run_native(probe, args, stdin=None, timeout=600, panics=False):
     """The native probe. A stack overflow aborts its thread's process (SIGABRT)."""
     completed = _run([str(probe), *args], stdin, timeout)
     if completed is None:
         return Outcome(trap=f"timeout after {timeout}s", timed_out=True)
-    return _outcome(completed, NATIVE_TRAP, signal_is_trap=True)
+    return _outcome(completed, NATIVE_TRAP, signal_is_trap=True, panics=panics)
 
 
-def run_wasmtime(wasmtime, wasm, args, max_wasm_stack, stdin=None, timeout=900):
+def run_wasmtime(wasmtime, wasm, args, max_wasm_stack, stdin=None, timeout=900, panics=False):
     """The Wasmtime CLI with a fixed max_wasm_stack; `-W exceptions` is on for exnref."""
     command = [str(wasmtime), "run", "-W", f"max-wasm-stack={max_wasm_stack}", "-W", "exceptions=y",
                str(wasm), *args]
     completed = _run(command, stdin, timeout)
     if completed is None:
         return Outcome(trap=f"timeout after {timeout}s", timed_out=True)
-    return _outcome(completed, WASMTIME_TRAP, signal_is_trap=False)
+    return _outcome(completed, WASMTIME_TRAP, signal_is_trap=False, panics=panics)
+
+
+def run_pairs(work, left, right, jobs, serial=lambda item: False):
+    """Run every item of `work` on two hosts and return, in the order of
+    `work`, `(item, left_result, right_result, error)`: each result is what
+    that host's callable returned for the item, and `error` is the
+    HarnessError text when either host could not run it (both results are
+    then None). One item runs on its two hosts one after the other. The items
+    `serial` selects run one at a time after the rest: they are slow because
+    of their size, and running them side by side could exhaust memory."""
+    def one(item):
+        try:
+            return item, left(item), right(item), None
+        except HarnessError as error:
+            return item, None, None, str(error)
+
+    parallel = [item for item in work if not serial(item)]
+    with ThreadPoolExecutor(max_workers=max(jobs, 1)) as pool:
+        done = dict(zip(map(id, parallel), pool.map(one, parallel)))
+    for item in work:
+        if serial(item):
+            done[id(item)] = one(item)
+    return [done[id(item)] for item in work]
 
 
 def run_node(wasm, args, v8_flags=(), stdin=None, timeout=900, node="node", paint=False, trap_frames=0,

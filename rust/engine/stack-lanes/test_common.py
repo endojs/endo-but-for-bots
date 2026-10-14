@@ -325,5 +325,67 @@ class TrapFrames(unittest.TestCase):
         self.assertEqual(o.trap, "TRAP: Maximum call stack size exceeded")
 
 
+
+class Panics(unittest.TestCase):
+    PANIC = ("thread 'main' (1) panicked at /home/u/endo/rust/engine/ironhorse-vm/src/bulk.rs:479:22:\n"
+             "capacity overflow\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n")
+
+    def test_a_panic_is_summarized_without_the_checkout_or_the_line(self):
+        self.assertEqual(common.panic_summary(self.PANIC), "capacity overflow at ironhorse-vm/src/bulk.rs")
+
+    def test_toolchain_and_registry_paths_are_cut_to_their_own_roots(self):
+        self.assertEqual(common.source_path(
+            "/root/.rustup/toolchains/1.91.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs"),
+            "library/alloc/src/raw_vec/mod.rs")
+        self.assertEqual(common.source_path(
+            "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_segmenter-2.2.0/src/lib.rs"),
+            "icu_segmenter-2.2.0/src/lib.rs")
+
+    def test_an_uncontained_panic_is_a_trap_when_panics_are_outcomes(self):
+        o = common._outcome(completed("", self.PANIC, returncode=101), common.WASMTIME_TRAP, False, panics=True)
+        self.assertTrue(o.trapped)
+        self.assertEqual(common.describe(o), "trap: panic: capacity overflow at ironhorse-vm/src/bulk.rs")
+
+    def test_a_contained_panic_is_recorded_with_the_line(self):
+        o = common._outcome(completed('halt=EngineInvariant("eval:compiler-invariant") result="" meter=4\n',
+                                      self.PANIC), common.WASMTIME_TRAP, False, panics=True)
+        self.assertFalse(o.trapped)
+        self.assertEqual(common.describe(o), 'halt=EngineInvariant("eval:compiler-invariant") result="" meter=4 '
+                                             "panic=capacity overflow at ironhorse-vm/src/bulk.rs")
+
+    def test_a_panic_is_still_a_harness_error_by_default(self):
+        with self.assertRaises(common.HarnessError):
+            common._outcome(completed("halt=Return\n", self.PANIC), common.WASMTIME_TRAP, False)
+
+    def test_describe(self):
+        self.assertEqual(common.describe(common.Outcome(trap="timeout after 9s", timed_out=True)), "timeout")
+        self.assertEqual(common.describe(common.Outcome(line="halt=Return")), "halt=Return")
+        self.assertEqual(common.describe(common.Outcome(trap="signal 6", cause="memory allocation of 8 bytes failed")),
+                         "trap: signal 6 (memory allocation of 8 bytes failed)")
+
+
+class RunPairs(unittest.TestCase):
+    def test_results_keep_the_order_of_the_work_and_slow_items_run_alone(self):
+        running = []
+        peak = []
+
+        def host(item):
+            running.append(item)
+            peak.append(len(running))
+            running.remove(item)
+            return f"{item}!"
+
+        work = ["a", "slow-b", "c", "slow-d"]
+        results = common.run_pairs(work, host, host, jobs=4, serial=lambda item: item.startswith("slow"))
+        self.assertEqual([r[0] for r in results], work)
+        self.assertEqual(results[1], ("slow-b", "slow-b!", "slow-b!", None))
+
+    def test_a_harness_error_is_reported_not_raised(self):
+        def broken(item):
+            raise common.HarnessError("no line")
+
+        (item, left, right, error), = common.run_pairs(["a"], broken, broken, jobs=1)
+        self.assertEqual((item, left, right, error), ("a", None, None, "no line"))
+
 if __name__ == "__main__":
     unittest.main()

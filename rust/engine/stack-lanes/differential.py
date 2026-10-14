@@ -16,8 +16,16 @@ working tree, hands both the same program text, and fails on any difference:
   snippets  the programs in `differential/*.js`, written per change to reach
             what the corpus does not (trap order, revocation mid-chain,
             invariant violations, metering order); a file holds several,
-            separated by `// ---` lines, and a program's first line may be
-            `// flags: --eval-compiler` and/or `--compile-only`.
+            separated by `// ---` lines. A program may open with header
+            lines: `// name: <name>` names it `<file>#<name>` instead of
+            `<file>#<n>`, and `// flags:` takes `--eval-compiler`,
+            `--compile-only`, `--chunk-ceiling=<bytes>` and
+            `--slot-ceiling=<slots>`. The programs of a `*.slow.js` file are
+            slow, like the corpus's `regexp-backtrack`: only `--slow` runs
+            them, one at a time, since they are slow because of their size.
+
+`cross_target.py` runs the same programs on the native and wasm32 builds of
+the working tree.
 
 Every run carries `--digest` (the compile's bytecode, symbols, raw parse
 meter and the sequence of parse-meter charges) and `--meter-trace` (the meter
@@ -36,11 +44,13 @@ which is not a difference but a repair.
   python3 differential.py --base HEAD^      # the last commit against its parent
 """
 import argparse
+from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
 import fcntl
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -56,8 +66,16 @@ SNIPPETS = common.LANES / "differential"
 CACHE = build_probe.PROBE / "target/differential"
 SEPARATOR = "// ---"
 FLAGS = "// flags:"
-SNIPPET_FLAGS = ("--compile-only", "--eval-compiler")
+NAME = "// name:"
+SNIPPET_FLAGS = ("--compile-only", "--eval-compiler", "--chunk-ceiling=<bytes>", "--slot-ceiling=<slots>")
+SNIPPET_FLAG = re.compile(r"--compile-only|--eval-compiler|--chunk-ceiling=\d+|--slot-ceiling=\d+")
+PROGRAM_NAME = re.compile(r"[A-Za-z][A-Za-z0-9._-]*")
+SLOW_SNIPPETS = ".slow.js"
 COMPARED = ("--digest", "--meter-trace")
+
+# One program both builds are handed: its label, the probe flags it runs
+# under, its text, and whether it belongs to the slow shard.
+Program = namedtuple("Program", "label flags source slow")
 
 
 def resolve(rev):
@@ -139,28 +157,52 @@ class SnippetError(ValueError):
 
 def parse_snippets(text, origin):
     """The programs of one snippet file: (name, source, flags). A program's
-    flags line must be its first non-blank line and name only
-    `--compile-only` and `--eval-compiler`."""
+    header is its first non-blank lines that are `// name:` or `// flags:`
+    lines, each at most once; such a line anywhere else is refused. A name
+    starts with a letter and is unique in its file; flags name only
+    `SNIPPET_FLAGS`."""
     text = text.lstrip("﻿")
     programs = []
+    names = set()
     chunk = []
 
     def flush():
         lines = "\n".join(chunk).strip("\n").splitlines()
         if not any(line.strip() for line in lines):
             return
-        name = f"{origin}#{len(programs) + 1}"
+        label = f"{origin}#{len(programs) + 1}"
         flags = []
+        name = None
         first = next(i for i, line in enumerate(lines) if line.strip())
-        if lines[first].strip().startswith(FLAGS):
-            flags = lines[first].strip()[len(FLAGS):].split()
-            unknown = [flag for flag in flags if flag not in SNIPPET_FLAGS]
-            if unknown:
-                raise SnippetError(f"{name}: unknown flags {unknown}; allowed: {list(SNIPPET_FLAGS)}")
-        misplaced = [line for line in lines[first + 1:] if line.strip().startswith(FLAGS)]
+        body = first
+        while body < len(lines) and lines[body].strip().startswith((FLAGS, NAME)):
+            line = lines[body].strip()
+            directive = FLAGS if line.startswith(FLAGS) else NAME
+            value = line[len(directive):].strip()
+            if directive == NAME:
+                if name is not None:
+                    raise SnippetError(f"{label}: a program has one name line")
+                if not PROGRAM_NAME.fullmatch(value):
+                    raise SnippetError(f"{label}: {value!r} is not a name (a letter, then letters, digits, "
+                                       f"'.', '_' or '-')")
+                if value in names:
+                    raise SnippetError(f"{origin}: two programs are named {value!r}")
+                name = value
+            else:
+                if flags:
+                    raise SnippetError(f"{label}: a program has one flags line")
+                flags = value.split()
+                unknown = [flag for flag in flags if not SNIPPET_FLAG.fullmatch(flag)]
+                if unknown:
+                    raise SnippetError(f"{label}: unknown flags {unknown}; allowed: {list(SNIPPET_FLAGS)}")
+            body += 1
+        misplaced = [line for line in lines[body:] if line.strip().startswith((FLAGS, NAME))]
         if misplaced:
-            raise SnippetError(f"{name}: a flags line must be the program's first line")
-        programs.append((name, "\n".join(lines) + "\n", flags))
+            raise SnippetError(f"{label}: a flags or name line must open the program")
+        if name is not None:
+            names.add(name)
+            label = f"{origin}#{name}"
+        programs.append((label, "\n".join(lines) + "\n", flags))
 
     for line in text.splitlines():
         if line.strip() == SEPARATOR:
@@ -176,32 +218,71 @@ def source_flags(compile_only, eval_compiler):
     return (["--compile-only"] if compile_only else []) + (["--eval-compiler"] if eval_compiler else [])
 
 
+def case_label(name):
+    return f"case {name}"
+
+
+def family_label(kind, family, n):
+    return f"{kind} {family} {n}"
+
+
+def snippet_label(name):
+    return f"snippet {name}"
+
+
+def family_requests():
+    """(kind, family, depth) for every family program, around its recorded
+    ceiling."""
+    return [(kind, family, n) for kind in ("heavy", "walker", "chain")
+            for family, ceiling in ceilings.recorded(kind) for n in depths(ceiling)]
+
+
 def family_input(probe, kind, family, n):
     line = subprocess.check_output([str(probe), "family-source", kind, family, str(n)], text=True)
     generated = json.loads(line)
-    return (f"{kind} {family} {n}", source_flags(generated["compile_only"], generated["eval_compiler"]),
-            generated["source"])
+    return Program(family_label(kind, family, n),
+                   source_flags(generated["compile_only"], generated["eval_compiler"]), generated["source"], False)
 
 
-def inputs(probe, include_slow, only, jobs):
-    """(label, flags, source) for every comparison, all as program text."""
+def snippet_inputs():
+    """Every program of every snippet file, slow or not."""
+    work = []
+    for path in sorted(SNIPPETS.glob("*.js")):
+        slow = path.name.endswith(SLOW_SNIPPETS)
+        for name, source, flags in parse_snippets(path.read_text(encoding="utf-8-sig"), path.name):
+            work.append(Program(snippet_label(name), flags, source, slow))
+    return work
+
+
+def in_shard(slow, shard):
+    return shard == "all" or (shard == "slow") == slow
+
+
+def inputs(probe, shard, only, jobs):
+    """Every Program of a shard (`fast`, `slow` or `all`), all as program
+    text; `only` keeps one kind of input. The families have no slow program."""
     work = []
     if only in (None, "corpus"):
         for case in common.dump_cases(probe):
-            if not include_slow and case["name"] in common.SLOW_CASES:
-                continue
-            work.append((f"case {case['name']}", source_flags(not case["run"], case["eval_compiler"]),
-                         case["source"]))
-    if only in (None, "families"):
-        requests = [(kind, family, n) for kind in ("heavy", "walker", "chain")
-                    for family, ceiling in ceilings.recorded(kind) for n in depths(ceiling)]
+            slow = case["name"] in common.SLOW_CASES
+            if in_shard(slow, shard):
+                work.append(Program(case_label(case["name"]), source_flags(not case["run"], case["eval_compiler"]),
+                                    case["source"], slow))
+    if only in (None, "families") and in_shard(False, shard):
         with ThreadPoolExecutor(max_workers=jobs) as pool:
-            work.extend(pool.map(lambda request: family_input(probe, *request), requests))
+            work.extend(pool.map(lambda request: family_input(probe, *request), family_requests()))
     if only in (None, "snippets"):
-        for path in sorted(SNIPPETS.glob("*.js")):
-            for name, source, flags in parse_snippets(path.read_text(encoding="utf-8-sig"), path.name):
-                work.append((f"snippet {name}", flags, source))
+        work.extend(program for program in snippet_inputs() if in_shard(program.slow, shard))
     return work
+
+
+def labels(probe):
+    """The label of every program in every shard, without generating the
+    families' text."""
+    found = {case_label(case["name"]) for case in common.dump_cases(probe)}
+    found.update(family_label(*request) for request in family_requests())
+    found.update(program.label for program in snippet_inputs())
+    return found
 
 
 # ---- comparison ------------------------------------------------------------
@@ -215,11 +296,7 @@ def outcome(probe, flags, source, timeout, compared):
     """What a run printed, as a comparable string: its outcome line, the
     trap, or `timeout`."""
     result = common.run_native(probe, ["source", *flags, *compared], stdin=source, timeout=timeout)
-    if result.timed_out:
-        return "timeout"
-    if result.trapped:
-        return f"trap: {result.trap}"
-    return result.line
+    return common.describe(result)
 
 
 def classify(old, new):
@@ -234,17 +311,19 @@ def classify(old, new):
 
 
 def compare(old_probe, new_probe, work, jobs, timeout, compared):
-    def one(item):
-        label, flags, source = item
-        try:
-            old = outcome(old_probe, flags, source, timeout, compared)
-            new = outcome(new_probe, flags, source, timeout, compared)
-        except common.HarnessError as error:
-            return label, "error", str(error), ""
-        return label, classify(old, new), old, new
-
-    with ThreadPoolExecutor(max_workers=jobs) as pool:
-        return list(pool.map(one, work))
+    """(label, verdict, base, new) for every Program of `work`."""
+    pairs = common.run_pairs(
+        work,
+        lambda program: outcome(old_probe, program.flags, program.source, timeout, compared),
+        lambda program: outcome(new_probe, program.flags, program.source, timeout, compared),
+        jobs, serial=lambda program: program.slow)
+    results = []
+    for program, old, new, error in pairs:
+        if error is not None:
+            results.append((program.label, "error", error, ""))
+        else:
+            results.append((program.label, classify(old, new), old, new))
+    return results
 
 
 FAILING = ("differs", "timeout", "error")
@@ -254,7 +333,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base", default="HEAD", help="the revision to compare against (default: HEAD)")
     parser.add_argument("--only", choices=("corpus", "families", "snippets"))
-    parser.add_argument("--slow", action="store_true", help="include the slow cases")
+    parser.add_argument("--slow", action="store_true", help="include the slow cases and `*.slow.js` snippets")
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 2)
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--no-build", action="store_true", help="use the working tree's last native build")
@@ -283,7 +362,7 @@ def main():
             print(f"the base build ({commit[:12]}) has no {flag}; rebase onto a revision that has it, "
                   f"or pass --allow-partial to compare without it", file=sys.stderr)
             return 2
-    work = inputs(new_probe, args.slow, args.only, args.jobs)
+    work = inputs(new_probe, "all" if args.slow else "fast", args.only, args.jobs)
     if not work:
         print("nothing to compare: no inputs", file=sys.stderr)
         return 2

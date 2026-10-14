@@ -31,6 +31,47 @@ class Snippets(unittest.TestCase):
         with self.assertRaises(differential.SnippetError):
             differential.parse_snippets("x\n// flags: --eval-compiler\n", "k.js")
 
+    def test_a_name_line_names_the_program(self):
+        text = "// name: first\n1\n// ---\n2\n// ---\n// flags: --eval-compiler\n// name: third-1.x\neval('3')\n"
+        programs = differential.parse_snippets(text, "n.js")
+        self.assertEqual([name for name, _, _ in programs], ["n.js#first", "n.js#2", "n.js#third-1.x"])
+        self.assertEqual(programs[2][2], ["--eval-compiler"])
+        self.assertEqual(programs[0][1], "// name: first\n1\n")
+
+    def test_names_are_words_unique_in_their_file_and_open_the_program(self):
+        for text in ("// name: 1st\nx\n", "// name: a b\nx\n", "// name: a\nx\n// ---\n// name: a\ny\n",
+                     "x\n// name: late\n", "// name: a\n// name: b\nx\n",
+                     "// flags: --compile-only\n// flags: --eval-compiler\nx\n"):
+            with self.subTest(text=text):
+                with self.assertRaises(differential.SnippetError):
+                    differential.parse_snippets(text, "m.js")
+
+    def test_ceiling_flags_take_a_number(self):
+        (_, _, flags), = differential.parse_snippets(
+            "// flags: --chunk-ceiling=1073741824 --slot-ceiling=44739242\nx\n", "c.js")
+        self.assertEqual(flags, ["--chunk-ceiling=1073741824", "--slot-ceiling=44739242"])
+        for flag in ("--chunk-ceiling", "--chunk-ceiling=", "--chunk-ceiling=1e9", "--slot-ceiling=-1"):
+            with self.subTest(flag=flag):
+                with self.assertRaises(differential.SnippetError):
+                    differential.parse_snippets(f"// flags: {flag}\nx\n", "c.js")
+
+
+class Shards(unittest.TestCase):
+    def test_slow_programs_belong_to_the_slow_shard_only(self):
+        self.assertTrue(differential.in_shard(False, "fast"))
+        self.assertFalse(differential.in_shard(True, "fast"))
+        self.assertTrue(differential.in_shard(True, "slow"))
+        self.assertFalse(differential.in_shard(False, "slow"))
+        self.assertTrue(differential.in_shard(True, "all") and differential.in_shard(False, "all"))
+
+    def test_the_checked_in_snippets_parse_and_slow_files_are_slow(self):
+        programs = differential.snippet_inputs()
+        self.assertTrue(programs)
+        for program in programs:
+            self.assertEqual(program.slow, ".slow.js#" in program.label, program.label)
+        labels = [program.label for program in programs]
+        self.assertEqual(len(labels), len(set(labels)))
+
 
 class Depths(unittest.TestCase):
     def test_depths_surround_the_ceiling(self):
