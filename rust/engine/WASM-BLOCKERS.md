@@ -455,6 +455,12 @@ Each declared width is the audited 64-bit layout, and a 64-bit build asserts at 
 that it equals `size_of`, so native thresholds cannot move and a layout change fails the build.
 `ironhorse-vm/tests/declared_width_audit.rs` fails when any of these paths returns to `size_of`
 or to `usize` arithmetic.
+Rerun on this tree, every repro in the two tables above now prints the native line on wasm32
+under Wasmtime, and the native line is the same as before the fix.
+The `json.rs:1204` repro was rerun with a 134,136,000-unit filler and its object text built with
+`join`, since the audit did not record how it built that text.
+The release-neutral gate (`stack-lanes/differential.py`) found native output byte-identical to
+the tree before the fix on all 1,763 of its programs.
 The unadmitted host allocations, the snapshot and store findings not marked fixed, and the
 latent issues remain open.
 
