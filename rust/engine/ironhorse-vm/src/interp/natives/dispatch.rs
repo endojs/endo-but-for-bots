@@ -7504,7 +7504,7 @@ impl Interp {
             }
             // `Function.prototype.bind(thisArg, ...boundArgs)`: create a bound
             // function (its creation; the bound call is a `run` trampoline).
-            NativeMethod::FunctionBind => self.make_bound_function(base, argc)?,
+            NativeMethod::FunctionBind => self.make_bound_function(code, base, argc)?,
             NativeMethod::FunctionHasInstance => {
                 Slot::boolean(self.ordinary_has_instance(code, this, arg0)?)
             }

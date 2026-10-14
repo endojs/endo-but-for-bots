@@ -664,6 +664,25 @@ impl Interp {
         }
     }
 
+    /// [[Get]] of a property whose own descriptor is `own`: its value, or
+    /// its getter called on `receiver` (undefined without one).
+    fn own_descriptor_value(
+        &mut self,
+        code: &[u8],
+        own: OrdinaryDescriptor,
+        receiver: Slot,
+    ) -> Result<Slot, Step> {
+        if let Some(value) = own.value {
+            return Ok(value);
+        }
+        match own.get {
+            Some(getter) if getter.kind != Kind::Undefined => {
+                self.run_callback(code, getter, receiver, &[])
+            }
+            _ => Ok(Slot::undefined()),
+        }
+    }
+
     /// `Function.prototype.bind(thisArg, ...boundArgs)`
     /// (`fx_Function_prototype_bind`): create a bound function. The receiver
     /// (`this`, at `base`) must be a modeled function; `thisArg` is arg 0 and the
@@ -672,7 +691,12 @@ impl Interp {
     /// its `.name` is `"bound "` + the target's name; calling it invokes the
     /// target with the bound `this` + bound args prepended through
     /// [`Self::invoke_value`].
-    pub(super) fn make_bound_function(&mut self, base: usize, argc: usize) -> Result<Slot, Step> {
+    pub(super) fn make_bound_function(
+        &mut self,
+        code: &[u8],
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Step> {
         let this = self
             .stack
             .get(base)
@@ -727,21 +751,50 @@ impl Interp {
         } else {
             Vec::new()
         };
-        // Bound `.length` = max(0, target.length - boundArgs) and bound `.name`
-        // = "bound " + target.name (XS reads the target's own `length`/`name`).
-        let target_arity = self.functions.get(&target).map(|fi| fi.arity).unwrap_or(0);
-        let bound_len = target_arity.saturating_sub(nbound);
-        let name_length = self
-            .functions
-            .get(&target)
-            .map(|info| self.str_content(info.name_chunk).len() / 2)
-            .unwrap_or(0);
+        // `Function.prototype.bind` steps 4-10 (ECMA-262 20.2.3.2): the bound
+        // `length` is max(0, target.length - boundArgs) when the target has an
+        // own `length` holding a Number, else 0, and the bound `name` is
+        // "bound " + target.name when that is a String. Both go through the
+        // target's [[GetOwnProperty]] and [[Get]], so a deleted, redefined or
+        // inherited `length`/`name` is the one bound, as in
+        // `fx_Function_prototype_bind`.
+        //
+        // The target is a function, never a Proxy, so its own descriptors are
+        // read without a native frame; only a getter, or a `name` inherited
+        // after a delete, runs the general [[Get]]. A frame here would lower
+        // every bound-call nesting ceiling by one.
+        let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+        let length_id = self.intern_static_key("length");
+        let name_id = self.intern_static_key("name");
+        let mut bound_len = 0.0f64;
+        if let Some(own) = self.mop_get_own_property_inner(code, target, length_id)? {
+            let target_length = self.own_descriptor_value(code, own, target_slot)?;
+            let target_length = match numeric_of(&target_length) {
+                Some(n) if n.is_nan() => 0.0,
+                Some(n) => n.trunc(),
+                None => 0.0,
+            };
+            bound_len = (target_length - f64::from(nbound)).max(0.0);
+        }
+        let target_name = match self.mop_get_own_property_inner(code, target, name_id)? {
+            Some(own) => self.own_descriptor_value(code, own, target_slot)?,
+            None => self.mop_get(code, target, name_id, target_slot)?,
+        };
+        let name_chunk = match target_name.value {
+            Payload::String(off) if target_name.kind == Kind::String => Some(off),
+            _ => None,
+        };
+        let name_length = name_chunk.map_or(0, |off| self.str_content(off).len() / 2);
         let mut bound_units = self.reserve_work_scratch(name_length + 6)?;
         bound_units.extend("bound ".encode_utf16());
-        if let Some(info) = self.functions.get(&target) {
-            bound_units.extend(self.str_units(info.name_chunk));
+        if let Some(off) = name_chunk {
+            bound_units.extend(self.str_units(off));
         }
         let bound_name = SymbolName::from_units(&bound_units).to_string();
+        // A length that `FuncInfo.arity` cannot hold (Infinity, or past
+        // i32::MAX, which the synthesized property reads as an integer) is an
+        // ordinary own data property with the same attributes instead.
+        let synthesized_len = (bound_len <= f64::from(i32::MAX)).then_some(bound_len as u32);
         let inst = self.slots.alloc(Slot::instance(self.function_proto));
         let name_chunk = self.chunks.alloc(&units_to_be16(&bound_units));
         // Register in `functions` (native/method None) so `.length`/`.name`
@@ -751,7 +804,7 @@ impl Interp {
             FuncInfo {
                 name: bound_name,
                 name_chunk,
-                arity: bound_len,
+                arity: synthesized_len.unwrap_or(0),
                 ..FuncInfo::default()
             },
         );
@@ -763,6 +816,21 @@ impl Interp {
                 args: bound_args,
             },
         );
+        if synthesized_len.is_none() {
+            let defined = self.mop_define_own_property(
+                code,
+                inst,
+                length_id,
+                OrdinaryDescriptor {
+                    value: Some(Slot::number(bound_len)),
+                    writable: Some(false),
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                    ..OrdinaryDescriptor::default()
+                },
+            )?;
+            debug_assert!(defined, "a fresh bound function accepts its length");
+        }
         Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
     }
 
