@@ -202,9 +202,22 @@ test.serial(
     const entering = new Promise(resolve => {
       entered = resolve;
     });
+    // The deadline is fired by the test once the endpoint has been entered.
+    // A real timer raced request delivery: on a loaded runner it won before
+    // the endpoint was called, and the wait for entry below never ended.
+    // `timeoutMs` stays at the file default so Node's own header and request
+    // timeouts, which are not injectable, cannot fire first.
+    const deadlines = new Set();
     const listener = await makeProviderHttpListener({
       ...options,
-      timeoutMs: 100,
+      setTimer: (callback, delay) => {
+        t.is(delay, options.timeoutMs);
+        deadlines.add(callback);
+        return callback;
+      },
+      clearTimer: timer => {
+        deadlines.delete(timer);
+      },
       endpoint: Far('endpoint', {
         requestStream() {
           entered();
@@ -220,6 +233,8 @@ test.serial(
     });
     const rejected = t.throwsAsync(response);
     await entering;
+    t.is(deadlines.size, 1);
+    for (const deadline of deadlines) deadline();
     await rejected;
     let cancelled;
     const cancellation = new Promise(resolve => {

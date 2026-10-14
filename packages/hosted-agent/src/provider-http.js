@@ -18,6 +18,11 @@ import { createServer } from 'node:http';
  * slot after disconnect, so repeated timeouts cannot accumulate unbounded work.
  * No request headers or upstream errors cross the capability boundary.
  *
+ * The per-connection deadline timer is an injectable power, as on the fetch
+ * transport, so a test can fire it on demand instead of racing it against
+ * request delivery; Node's own header and request timeouts stay bound to
+ * `timeoutMs` as a backstop.
+ *
  * @param {object} options
  * @param {any} options.endpoint - ProviderInferenceLease, never a SecretBlob
  * @param {number} [options.port] - TCP port (0 asks the OS to allocate one)
@@ -25,6 +30,8 @@ import { createServer } from 'node:http';
  * @param {bigint} options.maxRequestBytes
  * @param {bigint} options.maxResponseBytes
  * @param {number} options.timeoutMs - Signed 32-bit host timer duration
+ * @param {(callback: () => void, delay: number) => unknown} [options.setTimer]
+ * @param {(timer: unknown) => void} [options.clearTimer]
  */
 export const makeProviderHttpListener = async ({
   endpoint,
@@ -33,6 +40,11 @@ export const makeProviderHttpListener = async ({
   maxRequestBytes,
   maxResponseBytes,
   timeoutMs,
+  setTimer = (callback, delay) => globalThis.setTimeout(callback, delay),
+  clearTimer = timer =>
+    globalThis.clearTimeout(
+      /** @type {ReturnType<typeof globalThis.setTimeout>} */ (timer),
+    ),
 }) => {
   (Number.isInteger(port) && port >= 0 && port <= 65_535) || Fail`Invalid port`;
   (Number.isInteger(maxConnections) &&
@@ -63,9 +75,9 @@ export const makeProviderHttpListener = async ({
   server.on('connection', socket => {
     sockets.add(socket);
     // Absolute deadline, including incomplete headers, not an idle timer.
-    const timer = globalThis.setTimeout(() => socket.destroy(), timeoutMs);
+    const timer = setTimer(() => socket.destroy(), timeoutMs);
     socket.once('close', () => {
-      globalThis.clearTimeout(timer);
+      clearTimer(timer);
       sockets.delete(socket);
     });
   });
