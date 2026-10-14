@@ -114,10 +114,9 @@ impl Drop for CasTemporary {
 }
 
 fn cas_temporary(dir: &Path) -> io::Result<(CasTemporary, File)> {
-    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     loop {
-        let n = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let path = dir.join(format!(".snapshot-{}-{n}.tmp", std::process::id()));
+        let suffix = crate::store_file::temporary_suffix();
+        let path = dir.join(format!(".snapshot-{suffix}.tmp"));
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
