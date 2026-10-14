@@ -297,11 +297,13 @@ impl Interp {
         unicode: bool,
     ) -> u64 {
         if unicode {
-            if let Ok(i) = usize::try_from(index) {
-                if i + 1 < subject.len()
-                    && (0xD800..=0xDBFF).contains(&subject[i])
-                    && (0xDC00..=0xDFFF).contains(&subject[i + 1])
-                {
+            // `index` is a guest ToLength (up to 2**53 - 1); never form
+            // `index + 1` in the host's usize, which is 32 bits on wasm32.
+            let pair = usize::try_from(index)
+                .ok()
+                .and_then(|i| subject.get(i..i.checked_add(2)?));
+            if let Some(&[lead, trail]) = pair {
+                if (0xD800..=0xDBFF).contains(&lead) && (0xDC00..=0xDFFF).contains(&trail) {
                     return index.saturating_add(2);
                 }
             }
