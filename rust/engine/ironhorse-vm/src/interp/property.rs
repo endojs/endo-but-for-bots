@@ -455,7 +455,9 @@ impl Interp {
                     configurable: Some(true),
                     ..OrdinaryDescriptor::default()
                 };
-                self.proxy_define_own_property(code, inst, key_id, desc)?;
+                if !self.proxy_define_own_property(code, inst, key_id, desc)? {
+                    return Err(self.define_rejected_error(Some(key_id)));
+                }
             } else {
                 let accepted = self.proxy_set(code, inst, key_id, value, obj)?;
                 // The spec rejects a false strict Proxy Set; pinned XS ignores
@@ -492,7 +494,9 @@ impl Interp {
                     configurable: Some(true),
                     ..OrdinaryDescriptor::default()
                 };
-                self.ordinary_define_own_property(inst, id, descriptor);
+                if !self.ordinary_define_own_property(inst, id, descriptor) {
+                    return Err(self.define_rejected_error(Some(id)));
+                }
                 self.meter.tick_builtin();
             } else {
                 let _ = self.ordinary_set(code, inst, id, value, obj)?;
@@ -516,7 +520,9 @@ impl Interp {
                             configurable: Some(true),
                             ..OrdinaryDescriptor::default()
                         };
-                        let _ = self.array_define_index(inst, Some(key_id), index, descriptor)?;
+                        if !self.array_define_index(inst, Some(key_id), index, descriptor)? {
+                            return Err(self.define_rejected_error(None));
+                        }
                         self.meter.tick_builtin();
                     } else {
                         let accepted = self.ordinary_set(code, inst, key_id, value, obj)?;
@@ -526,7 +532,26 @@ impl Interp {
                     }
                     Ok(())
                 } else if define {
-                    self.array_item_set(inst, index, value, define);
+                    // CreateDataPropertyOrThrow. A literal's fresh array takes
+                    // the item store directly; a class field defined on an
+                    // object a base constructor returned may meet a frozen,
+                    // non-extensible or fixed-length array, which must refuse
+                    // rather than be written through.
+                    if self.array_item_define_is_plain(inst, index) {
+                        self.array_item_set(inst, index, value, define);
+                    } else {
+                        let descriptor = OrdinaryDescriptor {
+                            value: Some(value),
+                            writable: Some(true),
+                            enumerable: Some(true),
+                            configurable: Some(true),
+                            ..OrdinaryDescriptor::default()
+                        };
+                        if !self.array_define_index(inst, None, index, descriptor)? {
+                            return Err(self.define_rejected_error(None));
+                        }
+                        self.meter.tick_builtin();
+                    }
                     Ok(())
                 } else {
                     self.array_index_set(code, inst, index, key_id, value, obj)
@@ -546,9 +571,13 @@ impl Interp {
                             configurable: Some(true),
                             ..OrdinaryDescriptor::default()
                         };
-                        if self.index_prop_define(inst, index, descriptor).is_some() {
-                            self.meter.tick_builtin();
-                            return Ok(());
+                        match self.index_prop_define(inst, index, descriptor) {
+                            Some(true) => {
+                                self.meter.tick_builtin();
+                                return Ok(());
+                            }
+                            Some(false) => return Err(self.define_rejected_error(None)),
+                            None => {}
                         }
                     } else if let Some(accepted) =
                         self.ordinary_index_set(code, inst, index, value, obj)?
@@ -572,7 +601,9 @@ impl Interp {
                         configurable: Some(true),
                         ..OrdinaryDescriptor::default()
                     };
-                    self.ordinary_define_own_property(inst, id, descriptor);
+                    if !self.ordinary_define_own_property(inst, id, descriptor) {
+                        return Err(self.define_rejected_error(None));
+                    }
                     self.meter.tick_builtin();
                 } else {
                     let accepted = self.ordinary_set(code, inst, id, value, obj)?;
@@ -596,14 +627,26 @@ impl Interp {
                 }
                 return Ok(());
             }
-            let accepted = self.array_define_length(
-                code,
-                inst,
+            // A definition is CreateDataProperty's complete descriptor, which
+            // an array's non-configurable `length` refuses.
+            let descriptor = if define {
+                OrdinaryDescriptor {
+                    value: Some(value),
+                    writable: Some(true),
+                    enumerable: Some(true),
+                    configurable: Some(true),
+                    ..OrdinaryDescriptor::default()
+                }
+            } else {
                 OrdinaryDescriptor {
                     value: Some(value),
                     ..OrdinaryDescriptor::default()
-                },
-            )?;
+                }
+            };
+            let accepted = self.array_define_length(code, inst, descriptor)?;
+            if !accepted && define {
+                return Err(self.define_rejected_error(Some(id)));
+            }
             if !accepted && self.strict {
                 // Preserve the spec's failed length-shrink error. XS's array
                 // length setter ignores fxSetArrayLength's false return.
@@ -620,13 +663,23 @@ impl Interp {
                     configurable: Some(true),
                     ..OrdinaryDescriptor::default()
                 };
-                self.ordinary_define_own_property(inst, id, descriptor);
+                if !self.ordinary_define_own_property(inst, id, descriptor) {
+                    return Err(self.define_rejected_error(Some(id)));
+                }
                 self.meter.tick_builtin();
             } else {
                 let _ = self.ordinary_set(code, inst, id, value, obj)?;
             }
             Ok(())
         }
+    }
+
+    /// The TypeError a failed CreateDataPropertyOrThrow throws from a
+    /// definition opcode: XS's `set %s: const` (`XS_CODE_NEW_PROPERTY`), whose
+    /// name is `?` for an index key.
+    pub(super) fn define_rejected_error(&mut self, id: Option<u16>) -> Step {
+        let name = id.map_or_else(|| "?".to_string(), |id| self.property_debug_name(id));
+        self.catchable_type_error_msg(format!("set {name}: const"))
     }
 
     /// `OrdinarySet` of an index on an Array receiver that stores it as an
@@ -1117,6 +1170,17 @@ impl Interp {
         loop {
             if self.proxies.contains_key(&current) {
                 return Ok(HasLevels::Proxy(current, frames));
+            }
+            // A TypedArray answers a canonical numeric key itself and never
+            // consults its prototype (ES2024 10.4.5.2), wherever it sits in
+            // the chain being walked.
+            if let Some(&ta) = self.typed_arrays.get(&current) {
+                if let Some(n) = self.ta_canonical_numeric_id(id) {
+                    return Ok(HasLevels::Answered(
+                        self.ta_valid_index(ta, n).is_some(),
+                        frames,
+                    ));
+                }
             }
             if self.object_own_property_present(code, current, id)? {
                 // Found own: `fxOrdinaryHasProperty` returns before its push.

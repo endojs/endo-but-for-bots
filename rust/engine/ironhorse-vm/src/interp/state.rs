@@ -265,6 +265,23 @@ pub struct Interp {
     /// for the exception/`this` semantics that observe it; the covered
     /// subset does not yet branch on it.
     strict: bool,
+    #[boot_new(false)]
+    #[gc_root(none)]
+    #[quiescent(false)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Set by `CURRENT` in a sloppy frame and taken by the `CONST_LOCAL` or
+    /// `CONST_CLOSURE` that binds a function expression's own name, which
+    /// then ignores a sloppy write: the binding is immutable, but only a
+    /// strict write to it throws (CreateImmutableBinding(name, false),
+    /// ES2024 15.2.5; XS's `ignore` in `fxRunID`). The compiler always emits
+    /// the two together, so it is never set at a crank boundary.
+    callee_binding_pending: bool,
     #[boot_new(Meter::new())]
     #[gc_root(none)]
     #[quiescent(retained)]

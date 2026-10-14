@@ -1573,6 +1573,15 @@ impl Interp {
         }
     }
 
+    /// `CanonicalNumericIndexString(P)` for an interned property key: `None`
+    /// for a symbol or a non-numeric name.
+    pub(in crate::interp) fn ta_canonical_numeric_id(&self, id: u16) -> Option<f64> {
+        if self.is_symbol_key_id(id) {
+            return None;
+        }
+        canonical_numeric_index_string(&self.scalar_key_text(id)?)
+    }
+
     /// `CanonicalNumericIndexString(P)` for an `AT`-encoded key `(id, index)`:
     /// reconstruct the property name string and canonicalize it. A plain
     /// integer index (`id == XS_NO_ID`) is its own canonical decimal; a named

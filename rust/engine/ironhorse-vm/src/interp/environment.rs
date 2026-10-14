@@ -916,6 +916,10 @@ impl Interp {
             return EnvironmentSet::Uninitialized;
         }
         if slot.flag & XS_DONT_SET_FLAG != 0 {
+            // A sloppy write to a function expression's own name is ignored.
+            if slot.flag & XS_DONT_ENUM_FLAG != 0 && !self.strict {
+                return EnvironmentSet::Written;
+            }
             return EnvironmentSet::Const;
         }
         slot.kind = value.kind;
@@ -1100,8 +1104,11 @@ impl Interp {
             // `with`/eval path; a plain write uses `SET_CLOSURE` by index.
             if self.locals[i].kind == Kind::Closure {
                 if let Payload::Reference(cell) = self.locals[i].value {
-                    if self.slots.get(cell).flag & XS_DONT_SET_FLAG != 0 {
-                        return false;
+                    let flag = self.slots.get(cell).flag;
+                    if flag & XS_DONT_SET_FLAG != 0 {
+                        // A sloppy write to a function expression's own name
+                        // is ignored.
+                        return flag & XS_DONT_ENUM_FLAG != 0 && !self.strict;
                     }
                     let c = self.slots.get_mut(cell);
                     c.kind = value.kind;
@@ -1110,7 +1117,7 @@ impl Interp {
                 }
             }
             if self.locals[i].flag & XS_DONT_SET_FLAG != 0 {
-                return false;
+                return self.locals[i].flag & XS_DONT_ENUM_FLAG != 0 && !self.strict;
             }
             self.locals[i].kind = value.kind;
             self.locals[i].value = value.value;
