@@ -93,40 +93,37 @@ function sampleGlobals(
 }
 
 /**
- * The `SturdyRef` permit admits any function under that global name, but SES
- * shares it with every compartment only because the `@endo/sturdyref` shim
- * confers no authority. Before admitting it, check for the shim's identifying
- * statics, `enliven` and `isSturdyRef`, as own data properties holding
+ * Before admitting `Parcel`, check for the shim's identifying statics,
+ * `open`, `locate`, and `isParcel`, as own data properties holding
  * functions, and for an own non-writable, non-configurable `prototype` data
  * property holding an object, as every class constructor has and an arrow,
  * bound, or plain function lacks. The shim's
- * own `isSturdyRefConstructor` reads its statics by `[[Get]]`, so it also
+ * own `isParcelConstructor` reads its statics by `[[Get]]`, so it also
  * accepts inherited or accessor statics; this check is stricter, and reads the
  * global binding and each property by descriptor, without running a getter,
  * refusing an accessor global. Unlike other universal globals, which `lockdown`
- * simply overwrites when configurable, an accessor `SturdyRef` throws even when
+ * simply overwrites when configurable, an accessor `Parcel` throws even when
  * configurable: its getter could return a different value on each read.
  *
- * This is a misconfiguration guard, not an authority boundary: it catches an
- * unrelated application `SturdyRef` global or a broken shim, but any
- * constructor with those two statics passes, whatever it closes over.
+ * This is a misconfiguration guard, not an authority boundary. SES separately
+ * removes `locate` from the shared constructor it exposes to children.
  *
  * Returns the validated value as a record for `makeIntrinsicsCollector`, which
  * admits exactly that value rather than reading the global again: reading the
  * candidate's properties can run a Proxy trap that re-points the global.
  *
  * @param {object} globalObject
- * @returns {{ SturdyRef: unknown }}
+ * @returns {{ Parcel: unknown }}
  */
-export const sampleSturdyRef = globalObject => {
-  if (!hasOwn(globalObject, 'SturdyRef')) {
-    return freeze({ __proto__: null, SturdyRef: undefined });
+export const sampleParcel = globalObject => {
+  if (!hasOwn(globalObject, 'Parcel')) {
+    return freeze({ __proto__: null, Parcel: undefined });
   }
   // Read the binding by descriptor so no getter runs.
-  const binding = getOwnPropertyDescriptor(globalObject, 'SturdyRef');
+  const binding = getOwnPropertyDescriptor(globalObject, 'Parcel');
   if (binding === undefined || !hasOwn(binding, 'value')) {
     throw TypeError(
-      'lockdown expected globalThis.SturdyRef to be a data property, not an accessor',
+      'lockdown expected globalThis.Parcel to be a data property, not an accessor',
     );
   }
   const candidate = binding.value;
@@ -156,16 +153,17 @@ export const sampleSturdyRef = globalObject => {
   };
   if (
     typeof candidate !== 'function' ||
-    !hasOwnData('enliven', isFunction) ||
-    !hasOwnData('isSturdyRef', isFunction) ||
+    !hasOwnData('open', isFunction) ||
+    !hasOwnData('locate', isFunction) ||
+    !hasOwnData('isParcel', isFunction) ||
     !hasOwnData('prototype', value => !isPrimitive(value)) ||
     !isLockedPrototype()
   ) {
     throw TypeError(
-      'lockdown expected globalThis.SturdyRef to be the @endo/sturdyref constructor, with a prototype and enliven and isSturdyRef statics',
+      'lockdown expected globalThis.Parcel to be the @endo/parcel constructor, with a prototype and open, locate, and isParcel statics',
     );
   }
-  return freeze({ __proto__: null, SturdyRef: candidate });
+  return freeze({ __proto__: null, Parcel: candidate });
 };
 
 /**
