@@ -153,6 +153,30 @@ impl Interp {
         }
     }
 
+    /// Whether async generator `gen` is suspended at a `yield*` rather than a
+    /// `yield`: both are one-byte opcodes, so the byte before the saved resume
+    /// pc names the one that suspended it, in the body's own code segment.
+    pub(super) fn async_generator_suspended_in_yield_star(
+        &self,
+        code: &[u8],
+        gen: crate::value::SlotIndex,
+    ) -> bool {
+        let Some(frame) = self
+            .async_generators
+            .get(&gen)
+            .and_then(|g| g.frame.as_ref())
+        else {
+            return false;
+        };
+        let (_, buffer) = self.resume_segment_buffer(frame.cur_func);
+        let body: &[u8] = buffer.as_deref().unwrap_or(code);
+        frame
+            .resume_pc
+            .checked_sub(1)
+            .and_then(|pc| body.get(pc))
+            .is_some_and(|&op| op == crate::Opcode::XS_CODE_YIELD_STAR as u8)
+    }
+
     /// Build a generator `{value, done}` result object (`fxNewGeneratorResult`):
     /// a fresh `%Object.prototype%`-chained object with `value`/`done` own data
     /// properties, metering the calibrated [`GENERATOR_RESULT_METERING`]. The
