@@ -1068,6 +1068,12 @@ impl Interp {
                     0
                 };
                 for index in start..length {
+                    // indexOf asks HasProperty first, which is false once a
+                    // coercion detached the buffer; includes only Gets, so it
+                    // matches `undefined` there.
+                    if operation != 5 && self.ta_valid_index(ta, index as f64).is_none() {
+                        continue;
+                    }
                     let value = self.ta_indexed_element_get(ta, index as f64);
                     let equal = if operation == 5 {
                         self.same_value_zero(&arg0, &value)
@@ -1127,6 +1133,10 @@ impl Interp {
                     length as i128 + relative as i128
                 };
                 while index >= 0 {
+                    if self.ta_valid_index(ta, index as f64).is_none() {
+                        index -= 1;
+                        continue;
+                    }
                     let value = self.ta_indexed_element_get(ta, index as f64);
                     if self.strict_equal(&arg0, &value) {
                         return Ok(Slot::integer(index as i32));

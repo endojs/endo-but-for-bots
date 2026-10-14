@@ -373,6 +373,48 @@ impl Interp {
         }
     }
 
+    /// Whether a dense search (`indexOf`, `lastIndexOf`, `includes`) can read
+    /// its `fromIndex` argument without running guest code: absent, a Number,
+    /// or, when `undefined_is_default`, `undefined`. Anything else needs
+    /// ToIntegerOrInfinity, which can call `valueOf`, throw or shrink the
+    /// array, so the caller takes the generic path, which scans to the length
+    /// it read first.
+    pub(super) fn search_from_index_is_plain(
+        &self,
+        base: usize,
+        argc: usize,
+        undefined_is_default: bool,
+    ) -> bool {
+        argc < 2
+            || match self.stack.get(base + 4 + 1).map(|slot| slot.kind) {
+                Some(Kind::Integer | Kind::Number) => true,
+                Some(Kind::Undefined) => undefined_is_default,
+                _ => false,
+            }
+    }
+
+    /// The first index `lastIndexOf` examines (ES2024 23.1.3.20 steps 4-6),
+    /// for a Number `fromIndex` at `base`+1 or, absent, `length - 1`; `None`
+    /// when nothing is scanned.
+    pub(super) fn arg_to_last_index(&self, base: usize, argc: usize, length: u32) -> Option<u32> {
+        let last = length.checked_sub(1)?;
+        if argc < 2 {
+            return Some(last);
+        }
+        let n = self
+            .stack
+            .get(base + 4 + 1)
+            .and_then(numeric_of)
+            .unwrap_or(0.0);
+        let t = if n.is_nan() { 0.0 } else { n.trunc() };
+        if t >= 0.0 {
+            Some(if t >= f64::from(last) { last } else { t as u32 })
+        } else {
+            let k = f64::from(length) + t;
+            (k >= 0.0).then_some(k as u32)
+        }
+    }
+
     /// ToBoolean with chunk access: a heap string is truthy iff its
     /// content is non-empty (XS's `mxStringLength != 0`); every other kind
     /// defers to the pure [`to_boolean`]. The empty-string case is why this
