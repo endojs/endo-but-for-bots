@@ -96,7 +96,7 @@ fn slicing_lazy_strings_reads_only_the_requested_range() {
         // A refusal must precede even a one-unit payload read in a cold
         // middle extent. Reading the receiver length faults only its header.
         vm.chunks = ChunkArena::lazy_from_parts(byte_size, source);
-        vm.chunks.set_ceiling(byte_size);
+        vm.chunks.set_ceiling(byte_size).unwrap();
         reads.borrow_mut().clear();
         vm.stack[4] = Slot::integer(extent as i32);
         vm.stack[5] = Slot::integer(extent as i32 + 1);

@@ -10,7 +10,7 @@ fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
 #[test]
 fn chunk_ceiling_counts_headers_and_refuses_before_mutation() {
     let mut arena = ChunkArena::new();
-    arena.set_ceiling(7);
+    arena.set_ceiling(7).unwrap();
     arena.alloc(&[1, 2, 3]);
     assert_eq!(arena.byte_size(), 7);
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| arena.alloc(&[])));
@@ -21,7 +21,7 @@ fn chunk_ceiling_counts_headers_and_refuses_before_mutation() {
 #[test]
 fn slot_ceiling_allows_free_list_reuse_but_no_growth() {
     let mut arena = SlotArena::new();
-    arena.set_ceiling(1);
+    arena.set_ceiling(1).unwrap();
     let first = arena.alloc(Slot::integer(1));
     arena.free(first);
     assert_eq!(arena.alloc(Slot::integer(2)), first);
@@ -38,7 +38,7 @@ fn guest_cannot_catch_slot_exhaustion() {
     let (code, names) = compile("try { while (true) { ({a:1}); } } catch (_) { 'caught'; }");
     let mut vm = Interp::new();
     vm.link_intrinsics(&names);
-    vm.set_slot_ceiling(vm.slots().capacity() + 100);
+    vm.set_slot_ceiling(vm.slots().capacity() + 100).unwrap();
     let out = vm.run_bounded(&code, 10_000);
     assert_eq!(out.halt, Halt::HeapExhausted);
     assert!(out.halt.is_panic());
@@ -52,7 +52,8 @@ fn guest_cannot_catch_chunk_exhaustion() {
         compile("try { var s='x'; while (true) { s=s+'abcdefgh'; } } catch (_) { 'caught'; }");
     let mut vm = Interp::new();
     vm.link_intrinsics(&names);
-    vm.set_chunk_ceiling(vm.chunks().byte_size() + 4096);
+    vm.set_chunk_ceiling(vm.chunks().byte_size() + 4096)
+        .unwrap();
     let out = vm.run_bounded(&code, 10_000);
     assert_eq!(out.halt, Halt::HeapExhausted);
     assert!(!out.completed);
@@ -62,7 +63,7 @@ fn guest_cannot_catch_chunk_exhaustion() {
 #[test]
 fn lowering_ceiling_below_existing_heap_refuses_even_allocation_free_code() {
     let mut vm = Interp::new();
-    vm.set_chunk_ceiling(0);
+    vm.set_chunk_ceiling(0).unwrap();
     assert_eq!(vm.run(&[]).halt, Halt::HeapExhausted);
 }
 
@@ -103,7 +104,8 @@ fn guest_sized_temporary_buffers_are_refused_before_they_are_created() {
         let (code, names) = compile(source);
         let mut vm = Interp::new();
         vm.link_intrinsics(&names);
-        vm.set_chunk_ceiling(vm.chunks().byte_size() + 4096);
+        vm.set_chunk_ceiling(vm.chunks().byte_size() + 4096)
+            .unwrap();
         let out = vm.run(&code);
         assert_eq!(out.halt, Halt::HeapExhausted, "{source}");
     }
@@ -146,7 +148,8 @@ fn element_scratch_is_bounded_by_bytes_instead_of_source_element_count() {
         let (code, names) = compile(source);
         let mut vm = Interp::new();
         vm.link_intrinsics(&names);
-        vm.set_chunk_ceiling(vm.chunks().byte_size() + 1_000_000);
+        vm.set_chunk_ceiling(vm.chunks().byte_size() + 1_000_000)
+            .unwrap();
         let out = vm.run(&code);
         assert_eq!(out.halt, Halt::HeapExhausted, "{source}");
         assert!(!vm.is_quiescent());
@@ -163,7 +166,8 @@ fn replacement_expansion_checks_each_append() {
         let (code, names) = compile(source);
         let mut vm = Interp::new();
         vm.link_intrinsics(&names);
-        vm.set_chunk_ceiling(vm.chunks().byte_size() + 100_000);
+        vm.set_chunk_ceiling(vm.chunks().byte_size() + 100_000)
+            .unwrap();
         assert_eq!(vm.run(&code).halt, Halt::HeapExhausted, "{source}");
     }
 }
@@ -175,7 +179,8 @@ fn empty_search_replace_all_streams_positions_under_low_headroom() {
     vm.link_intrinsics(&names);
     // Enough for UTF-16 source/result and construction scratch, less than an
     // extra usize per input code unit. Empty replacement needs no index list.
-    vm.set_chunk_ceiling(vm.chunks().byte_size() + 70_000);
+    vm.set_chunk_ceiling(vm.chunks().byte_size() + 70_000)
+        .unwrap();
     let out = vm.run(&code);
     assert!(out.completed, "{:?}", out.halt);
     assert_eq!(out.result.len(), 10_000);
@@ -202,7 +207,7 @@ fn concat_unicode_expansion_and_dense_copies_share_admission() {
         } else {
             100_000
         };
-        vm.set_chunk_ceiling(vm.chunks().byte_size() + headroom);
+        vm.set_chunk_ceiling(vm.chunks().byte_size() + headroom).unwrap();
         let out = vm.run(&code);
         assert_eq!(out.halt, Halt::HeapExhausted, "{source}");
     }
@@ -218,7 +223,8 @@ fn compact_json_and_argument_lists_obey_element_storage_limits() {
         let (code, names) = compile(source);
         let mut vm = Interp::new();
         vm.link_intrinsics(&names);
-        vm.set_chunk_ceiling(vm.chunks().byte_size() + 60_000);
+        vm.set_chunk_ceiling(vm.chunks().byte_size() + 60_000)
+            .unwrap();
         assert_eq!(vm.run(&code).halt, Halt::HeapExhausted, "{source}");
     }
 }
@@ -228,6 +234,7 @@ fn bound_name_growth_obeys_the_heap_ceiling() {
     let (code, names) = compile("var f=function(){};for(var i=0;i<2000;i++)f=f.bind(null);f()");
     let mut vm = Interp::new();
     vm.link_intrinsics(&names);
-    vm.set_chunk_ceiling(vm.chunks().byte_size() + 100_000);
+    vm.set_chunk_ceiling(vm.chunks().byte_size() + 100_000)
+        .unwrap();
     assert_eq!(vm.run(&code).halt, Halt::HeapExhausted);
 }

@@ -86,7 +86,7 @@ fn splits_preserve_the_chain_and_allocation_choices_across_restore() {
 fn best_fit_then_address_order_reuses_space_at_the_ceiling() {
     let bytes: Vec<_> = [24, 16, 16].into_iter().flat_map(hole).collect();
     let mut chunks = ChunkArena::from_image(bytes);
-    chunks.set_ceiling(56);
+    chunks.set_ceiling(56).unwrap();
     assert!(chunks.can_allocate(12));
     assert_eq!(chunks.alloc(&[1; 12]), ChunkOffset(28));
     assert_eq!(chunks.alloc(&[2; 12]), ChunkOffset(44));

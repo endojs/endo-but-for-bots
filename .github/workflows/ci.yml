@@ -952,7 +952,7 @@ jobs:
         run: |
           cargo test --locked -p ironhorse-vm --features cost-calibration --lib
           cargo test --locked -p ironhorse-vm --features cost-calibration --test golden_computrons
-          cargo test --locked -p ironhorse-vm --features consensus --test golden_computrons
+          cargo test --locked -p ironhorse-vm --features consensus --test golden_computrons --test consensus_ceiling_caps
       - name: Reject calibration in consensus builds
         working-directory: rust/engine
         run: |

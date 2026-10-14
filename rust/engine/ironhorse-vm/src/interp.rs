@@ -2341,13 +2341,17 @@ impl Interp {
     }
 
     /// Set the host's slot-allocation ceiling for subsequent execution.
-    pub fn set_slot_ceiling(&mut self, ceiling: u32) {
-        self.slots.set_ceiling(ceiling);
+    /// A `consensus` build refuses a ceiling above
+    /// [`crate::CONSENSUS_MAX_SLOT_CEILING`] and keeps the current one.
+    pub fn set_slot_ceiling(&mut self, ceiling: u32) -> Result<(), crate::CeilingRefused> {
+        self.slots.set_ceiling(ceiling)
     }
 
     /// Set the host's chunk-allocation ceiling for subsequent execution.
-    pub fn set_chunk_ceiling(&mut self, ceiling: usize) {
-        self.chunks.set_ceiling(ceiling);
+    /// A `consensus` build refuses a ceiling above
+    /// [`crate::CONSENSUS_MAX_CHUNK_CEILING`] and keeps the current one.
+    pub fn set_chunk_ceiling(&mut self, ceiling: usize) -> Result<(), crate::CeilingRefused> {
+        self.chunks.set_ceiling(ceiling)
     }
 
     /// The cost-calibration histogram recorder, present only under the

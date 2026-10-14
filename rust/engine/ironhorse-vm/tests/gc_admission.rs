@@ -48,7 +48,7 @@ fn halts_and_uncaught_throws_do_not_admit_collection() {
             vm.arm_meter(1, Box::new(|_| false));
         }
         if heap {
-            vm.set_slot_ceiling(vm.slots().capacity() + 20);
+            vm.set_slot_ceiling(vm.slots().capacity() + 20).unwrap();
         }
         let result = vm.run_bounded(&code, limit);
         assert!(
@@ -68,7 +68,7 @@ fn halts_and_uncaught_throws_do_not_admit_collection() {
     }
     // Admission must use the lifecycle predicate even without activation frames.
     let mut vm = Interp::new();
-    vm.set_chunk_ceiling(0);
+    vm.set_chunk_ceiling(0).unwrap();
     assert_eq!(vm.run(&[]).halt, Halt::HeapExhausted);
     assert_refused_unchanged(&mut vm);
 }

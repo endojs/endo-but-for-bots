@@ -475,7 +475,7 @@ mod tests {
             let previous = interp.current_environment_id();
             let installed_before = interp.installed_names_len;
             let ceiling = interp.slots.capacity() + allowance;
-            interp.set_slot_ceiling(ceiling);
+            interp.set_slot_ceiling(ceiling).unwrap();
 
             match interp.construct_compartment(&[], 0, Slot::undefined()) {
                 Ok(_) => {

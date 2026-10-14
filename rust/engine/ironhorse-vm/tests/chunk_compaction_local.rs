@@ -138,7 +138,7 @@ fn scattered_garbage_does_not_move_or_fault_a_clean_neighbor() {
     assert_eq!(chunks.byte_size(), 2 * PER);
     assert_eq!(chunks.dirty_extents(), vec![0]);
     assert_eq!(chunks.resident_extent_count(), 1);
-    chunks.set_ceiling(2 * PER);
+    chunks.set_ceiling(2 * PER).unwrap();
     assert!(chunks.can_allocate(PER / 4 - 4));
     assert_eq!(
         chunks.alloc(&vec![9; PER / 4 - 4]),
@@ -167,7 +167,7 @@ fn threshold_is_exact_and_skipped_dead_blocks_do_not_enter_the_free_index() {
         let live = block(&mut plain, PER - dead, 2);
         let neighbor = block(&mut plain, PER, 3);
         let (mut chunks, _) = lazy(&plain);
-        chunks.set_ceiling(2 * PER);
+        chunks.set_ceiling(2 * PER).unwrap();
         let remap = chunks.compact_local(&[live, neighbor]);
         if dead == PER / 4 - 1 {
             assert!(remap.is_empty());
@@ -223,7 +223,7 @@ fn tiny_holes_remain_valid_unreferenced_blocks_across_restore() {
         );
         let mut resumed = ChunkArena::from_image(bytes);
         for chunks in [&mut plain, &mut resumed] {
-            chunks.set_ceiling(chunks.byte_size());
+            chunks.set_ceiling(chunks.byte_size()).unwrap();
             assert!(!chunks.can_allocate(0));
             assert!(chunks.compact_local(&[ChunkOffset(4), anchor]).is_empty());
             assert_eq!(&*chunks.payload(anchor), vec![3; PER - 4]);
@@ -241,7 +241,7 @@ fn a_late_source_failure_leaves_prepared_edits_and_the_index_unpublished() {
     block(&mut plain, PER / 2, 4);
     let last = block(&mut plain, PER / 2, 5);
     let (mut chunks, source) = lazy(&plain);
-    chunks.set_ceiling(3 * PER);
+    chunks.set_ceiling(3 * PER).unwrap();
     assert!(!chunks.can_allocate(0));
     source.reads.borrow_mut().clear();
     *source.fail.borrow_mut() = Some((2, 2)); // Validation succeeds; later copy fails.
@@ -364,7 +364,7 @@ fn dead_crossing_blocks_become_reusable_without_relocating_their_neighbors() {
     );
     assert_eq!(chunks.resident_extent_count(), 2);
     assert_eq!(chunks.byte_size(), 3 * PER);
-    chunks.set_ceiling(3 * PER);
+    chunks.set_ceiling(3 * PER).unwrap();
     assert!(chunks.can_allocate(PER + 16));
     assert_eq!(chunks.resident_extent_count(), 2);
     let mut restored = ChunkArena::from_image(chunks.raw_vec());

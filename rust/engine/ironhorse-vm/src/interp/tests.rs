@@ -1484,7 +1484,7 @@ fn a_failed_pending_global_install_remains_retryable() {
     interp.shared_compartments = true;
     assert!(!interp.environment.binding_names.contains(&map_id));
 
-    interp.set_slot_ceiling(interp.slots.capacity());
+    interp.set_slot_ceiling(interp.slots.capacity()).unwrap();
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         interp.intern_key_reserved(map_name.clone());
     }))
@@ -1494,7 +1494,7 @@ fn a_failed_pending_global_install_remains_retryable() {
     assert!(!interp.environment.binding_names.contains(&map_id));
     assert!(!interp.environment.global_props.contains_key(&map_id));
 
-    interp.set_slot_ceiling(u32::MAX);
+    interp.set_slot_ceiling(u32::MAX).unwrap();
     interp.install_pending_intrinsics();
     assert!(interp.environment.binding_names.contains(&map_id));
     assert!(interp.environment.global_props.contains_key(&map_id));
@@ -1509,7 +1509,7 @@ fn a_failed_pending_surface_install_retains_its_roster_for_retry() {
     let map_id = interp.append_name_key(&map_name);
     interp.shared_compartments = true;
 
-    interp.set_slot_ceiling(interp.slots.capacity());
+    interp.set_slot_ceiling(interp.slots.capacity()).unwrap();
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         interp.install_pending_intrinsics();
     }))
@@ -1520,7 +1520,7 @@ fn a_failed_pending_surface_install_retains_its_roster_for_retry() {
         .ordinary_get_own_descriptor(interp.array_proto, map_id)
         .is_none());
 
-    interp.set_slot_ceiling(u32::MAX);
+    interp.set_slot_ceiling(u32::MAX).unwrap();
     interp.install_pending_intrinsics();
     let map = interp
         .ordinary_get_own_descriptor(interp.array_proto, map_id)
@@ -4101,9 +4101,9 @@ fn in_place_frames_release_their_charge_after_a_panic_or_heap_exhaustion() {
             nest.1,
             "f(60, function () { var a = []; for (;;) a.push({}); })",
         );
-        m.set_slot_ceiling(m.slots.capacity() + 2_000);
+        m.set_slot_ceiling(m.slots.capacity() + 2_000).unwrap();
         let out = m.run(&code);
-        m.set_slot_ceiling(u32::MAX);
+        m.set_slot_ceiling(u32::MAX).unwrap();
         assert!(
             matches!(out.halt, Halt::HeapExhausted),
             "{}: {:?}",

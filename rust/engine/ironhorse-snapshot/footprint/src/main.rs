@@ -169,10 +169,14 @@ fn main() {
     let source = source_of(case, &options);
     let mut machine = Interp::new();
     if let Some(ceiling) = options.get("chunk_ceiling") {
-        machine.set_chunk_ceiling(ceiling.parse().expect("chunk_ceiling"));
+        machine
+            .set_chunk_ceiling(ceiling.parse().expect("chunk_ceiling"))
+            .expect("this build accepts the chunk ceiling");
     }
     if let Some(ceiling) = options.get("slot_ceiling") {
-        machine.set_slot_ceiling(ceiling.parse().expect("slot_ceiling"));
+        machine
+            .set_slot_ceiling(ceiling.parse().expect("slot_ceiling"))
+            .expect("this build accepts the slot ceiling");
     }
     let run_start = Instant::now();
     let result = run(&mut machine, &source);
