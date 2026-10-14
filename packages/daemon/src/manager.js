@@ -81,6 +81,9 @@ import {
   formatId,
 } from './formula-identifier.js';
 import { makeFormulaGraph } from './graph.js';
+import { formulaMetadata, makeReloadableController } from './formula-cache.js';
+
+/** @import { FormulaMetadata } from './formula-cache.js' */
 import { makeChangeTopic } from './pubsub.js';
 import { makeRetentionAccumulator } from './retention-accumulator.js';
 import { makeRetentionPathAccumulator } from './retention-path-accumulator.js';
@@ -711,8 +714,9 @@ const makeDaemonCore = async (
   const controllerForId = new Map();
 
   /**
-   * Forward look-up, for answering "what is the formula for this id".
-   * @type {Map<FormulaIdentifier, Formula>}
+   * Resident formula metadata. Marshal bodies are loaded on demand; their
+   * slots remain resident for graph edges and retention diagnostics.
+   * @type {Map<FormulaIdentifier, FormulaMetadata>}
    */
   const formulaForId = new Map();
 
@@ -751,7 +755,7 @@ const makeDaemonCore = async (
    * providing meaningful edge labels (e.g. "worker", "handle") for the
    * graph snapshot.
    *
-   * @param {Formula} formula
+   * @param {FormulaMetadata} formula
    * @returns {Array<[string, FormulaIdentifier]>}
    */
   const extractLabeledDeps = formula => {
@@ -965,7 +969,7 @@ const makeDaemonCore = async (
     // concurrent operations cannot see the collected formulas.
     // Persistence deletion is deferred to the async phase so that
     // implementations are free to use async I/O.
-    /** @type {Map<FormulaIdentifier, Formula>} */
+    /** @type {Map<FormulaIdentifier, FormulaMetadata>} */
     const collectedFormulas = new Map();
     for (const id of collectedIds) {
       for (const read of formulaReads.get(id) || []) {
@@ -1212,7 +1216,7 @@ const makeDaemonCore = async (
    * design note in `designs/daemon-content-store-gc.md` on the
    * sweep-time refcount for the precise contract.
    *
-   * @param {Formula} formula
+   * @param {FormulaMetadata} formula
    * @param {Set<string>} accum
    * @returns {Promise<void>}
    */
@@ -1242,7 +1246,7 @@ const makeDaemonCore = async (
    * Scratch-mount cleanup unlinks `{statePath}/mounts/{formulaNumber}`
    * for every collected `scratch-mount` formula.
    *
-   * @param {Map<FormulaIdentifier, Formula>} collectedFormulasByid
+   * @param {Map<FormulaIdentifier, FormulaMetadata>} collectedFormulasByid
    * @param {{ candidateHashes: Set<string> | undefined, scratchMountNumbers: Set<FormulaNumber> }} reclamation
    * @returns {Promise<void>}
    */
@@ -1492,7 +1496,7 @@ const makeDaemonCore = async (
     }
 
     const formula = formulaForId.get(id);
-    if (formula !== undefined) {
+    if (formula !== undefined && formula.type !== 'marshal') {
       return formula;
     }
 
@@ -1514,8 +1518,10 @@ const makeDaemonCore = async (
         if (read.collected || collections.has(id)) {
           throw makeError(X`Formula was collected during read for ${q(id)}`);
         }
-        formulaForId.set(id, loadedFormula);
-        formulaGraph.onFormulaAdded(id, loadedFormula);
+        formulaForId.set(id, formulaMetadata(loadedFormula));
+        if (formula === undefined) {
+          formulaGraph.onFormulaAdded(id, loadedFormula);
+        }
       });
       return loadedFormula;
     } finally {
@@ -1529,7 +1535,8 @@ const makeDaemonCore = async (
     if (!isLocalId(inputId)) {
       return 'remote';
     }
-    const { type } = await getFormulaForId(inputId);
+    const { type } =
+      formulaForId.get(inputId) ?? (await getFormulaForId(inputId));
     return type;
   };
 
@@ -1646,17 +1653,18 @@ const makeDaemonCore = async (
 
   const seedFormulaGraphFromPersistence = async () => {
     const formulaRecords = await persistencePowers.listFormulas();
-    const entries = await Promise.all(
-      formulaRecords.map(async ({ number: formulaNumber, node }) => {
-        const fNum = /** @type {FormulaNumber} */ (formulaNumber);
-        const { formula } = await persistencePowers.readFormula(fNum);
-        const id = formatId({
-          number: fNum,
-          node: /** @type {NodeNumber} */ (node || localNodeNumber),
-        });
-        return { id, formula };
-      }),
-    );
+    /** @type {Array<{ id: FormulaIdentifier, formula: FormulaMetadata }>} */
+    const entries = [];
+    // Do not retain all loaded bodies in a Promise.all result during startup.
+    for (const { number: formulaNumber, node } of formulaRecords) {
+      const fNum = /** @type {FormulaNumber} */ (formulaNumber);
+      const { formula } = await persistencePowers.readFormula(fNum);
+      const id = formatId({
+        number: fNum,
+        node: /** @type {NodeNumber} */ (node || localNodeNumber),
+      });
+      entries.push({ id, formula: formulaMetadata(formula) });
+    }
     await withFormulaGraphLock(async () => {
       for (const { id, formula } of entries) {
         if (!formulaForId.has(id)) {
@@ -4637,7 +4645,9 @@ const makeDaemonCore = async (
       if (typeof value === 'object' && value !== null) {
         // @ts-expect-error TypeScript seems to believe the value might be a string here.
         idForRef.add(value, id);
-        refForId.set(id, value);
+        if (formula.type !== 'marshal' || formula.slots.length !== 0) {
+          refForId.set(id, value);
+        }
       }
       return value;
     } else {
@@ -4694,7 +4704,7 @@ const makeDaemonCore = async (
     await persistencePowers.writeFormula(formulaNumber, nodeNumber, formula);
     await withFormulaGraphLock(async () => {
       if (formulaForId.has(id)) return;
-      formulaForId.set(id, formula);
+      formulaForId.set(id, formulaMetadata(formula));
       formulaGraph.onFormulaAdded(id, formula);
     });
     formulaChangeTopic.publisher.next(
@@ -4722,7 +4732,7 @@ const makeDaemonCore = async (
 
     await withFormulaGraphLock(async () => {
       formulaForId.has(id) && assert.Fail`Formula already exists for id ${id}`;
-      formulaForId.set(id, formula);
+      formulaForId.set(id, formulaMetadata(formula));
       formulaGraph.onFormulaAdded(id, formula);
     });
     formulaChangeTopic.publisher.next(
@@ -4730,6 +4740,15 @@ const makeDaemonCore = async (
     );
 
     logLifecycle(id, 'FORMULATE');
+    if (formula.type === 'marshal' && formula.slots.length === 0) {
+      // eslint-disable-next-line no-use-before-define
+      const context = makeContext(id);
+      const controller = makeReloadableController(context, () =>
+        evaluateFormulaForId(id, context),
+      );
+      controllerForId.set(id, controller);
+      return harden({ id, value: controller.value, context });
+    }
     const { promise, resolve } = /** @type {PromiseKit<unknown>} */ (
       makePromiseKit()
     );
@@ -4773,6 +4792,17 @@ const makeDaemonCore = async (
     const existingController = controllerForId.get(id);
     if (existingController !== undefined) {
       return existingController;
+    }
+
+    const metadata = formulaForId.get(id);
+    if (metadata?.type === 'marshal' && metadata.slots.length === 0) {
+      // eslint-disable-next-line no-use-before-define
+      const context = makeContext(id);
+      const controller = makeReloadableController(context, () =>
+        evaluateFormulaForId(id, context),
+      );
+      controllerForId.set(id, controller);
+      return controller;
     }
 
     const { promise, resolve } = /** @type {PromiseKit<unknown>} */ (
@@ -5531,7 +5561,7 @@ const makeDaemonCore = async (
       node: nodeNumber,
     });
     await withFormulaGraphLock(async () => {
-      formulaForId.set(id, formula);
+      formulaForId.set(id, formulaMetadata(formula));
       formulaGraph.onFormulaAdded(id, formula);
     });
     return id;

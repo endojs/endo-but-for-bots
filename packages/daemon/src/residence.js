@@ -3,7 +3,8 @@
 import { makeDefaultCapTPImportExportTables } from '@endo/captp';
 import { q } from '@endo/errors';
 
-/** @import { FormulaIdentifier, Formula } from './types.js' */
+/** @import { FormulaIdentifier } from './types.js' */
+/** @import { FormulaMetadata } from './formula-cache.js' */
 
 /**
  * @typedef {object} ResidenceEvent
@@ -26,7 +27,7 @@ import { q } from '@endo/errors';
  *
  * @param {object} args
  * @param {(ref: unknown) => FormulaIdentifier | undefined} args.getLocalIdForRef
- * @param {(id: FormulaIdentifier) => Formula | undefined} args.getFormula
+ * @param {(id: FormulaIdentifier) => FormulaMetadata | undefined} args.getFormula
  * @param {(workerId: string, reason: Error) => void} args.terminateWorker
  */
 export const makeResidenceTracker = ({

@@ -1,6 +1,7 @@
 // @ts-check
 
-/** @import { Formula, FormulaIdentifier } from './types.js' */
+/** @import { FormulaIdentifier } from './types.js' */
+/** @import { FormulaMetadata } from './formula-cache.js' */
 
 /**
  * @typedef {object} LabeledEdge
@@ -48,7 +49,7 @@
  * it is collected immediately.
  *
  * @param {object} args
- * @param {(formula: Formula) => Array<[string, FormulaIdentifier]>} args.extractLabeledDeps
+ * @param {(formula: FormulaMetadata) => Array<[string, FormulaIdentifier]>} args.extractLabeledDeps
  * @param {(id: FormulaIdentifier) => boolean} args.isLocalId
  * @param {(collectedIds: FormulaIdentifier[]) => void} args.onCollect
  */
@@ -479,7 +480,7 @@ export const makeFormulaGraph = ({
    * group-level edges, and unions related formulas.
    *
    * @param {FormulaIdentifier} id
-   * @param {Formula} formula
+   * @param {FormulaMetadata} formula
    */
   const onFormulaAdded = (id, formula) => {
     // Suppress collection during formula addition. Unions performed
