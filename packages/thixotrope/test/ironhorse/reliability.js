@@ -309,3 +309,72 @@ exec ${quote(binary)} "$@"
     release = await acquireCompetitor(path);
   },
 );
+
+test.serial(
+  'the ownership helper ignores a termination request and exits on release',
+  async t => {
+    t.timeout(30_000);
+    const path = await mkdtemp(join(tmpdir(), 'thixotrope-term-lease-'));
+    let release;
+    t.teardown(async () => {
+      await release?.();
+      await rm(path, { recursive: true, force: true });
+    });
+    const binary =
+      process.env.THIXOTROPE_IRONHORSE_WORKER ??
+      fileURLToPath(
+        new URL(
+          '../../../../target/release/thixotrope-ironhorse-worker',
+          import.meta.url,
+        ),
+      );
+    // The wrapper only records the helper's PID; `exec` keeps it the same.
+    const wrapper = join(path, 'worker');
+    const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
+    await writeFile(
+      wrapper,
+      `#!/bin/sh
+if [ "$1" = "--lock-state" ]; then
+  echo $$ > ${quote(join(path, 'helper.pid'))}
+fi
+exec ${quote(binary)} "$@"
+`,
+      { mode: 0o700 },
+    );
+    const boot = join(path, 'boot.js');
+    await writeFile(boot, 'globalThis.booted = true;');
+    const options = {
+      workerBinary: wrapper,
+      bootPaths: [boot],
+      storePath: join(path, 'heaps'),
+    };
+    const engine = makeIronhorseEngine(nodePowers, options);
+    const { acquireStore } = engine;
+    if (!acquireStore) throw Error('missing ownership support');
+    release = await acquireStore(path);
+    const helperPid = Number(await readFile(join(path, 'helper.pid'), 'utf8'));
+
+    // What a service manager's stop sends to every process in the group.
+    process.kill(helperPid, 'SIGTERM');
+    process.kill(helperPid, 'SIGINT');
+    process.kill(helperPid, 'SIGHUP');
+    // Long enough for a signal that was honored to have taken effect.
+    await new Promise(resolve => setTimeout(resolve, 250));
+    t.notThrows(
+      () => process.kill(helperPid, 0),
+      'the helper is still running',
+    );
+    // And the lease is intact: another supervisor is still refused.
+    const competitor = makeIronhorseEngine(nodePowers, options);
+    const { acquireStore: acquireCompetitor } = competitor;
+    if (!acquireCompetitor) throw Error('missing ownership support');
+    await t.throwsAsync(() => acquireCompetitor(path), { message: /busy/ });
+
+    // Release ends the helper's stdin, which it does honor.
+    await release();
+    release = undefined;
+    t.throws(() => process.kill(helperPid, 0), { code: 'ESRCH' });
+    release = await acquireCompetitor(path);
+  },
+);
+

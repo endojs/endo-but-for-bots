@@ -130,9 +130,25 @@ export const acquireIronhorseRuntime = async (
   /** @type {SpawnedProcess | undefined} */
   let child;
   try {
-    child = spawn(workerBinary, ['--lock-state', statePath], {
-      stdio: ['pipe', ownerFile, 'pipe'],
-    });
+    // The helper exits when its stdin ends, which `release` arranges, or
+    // when it is killed outright. A termination request is addressed to the
+    // supervisor, which shuts down and then releases; were the helper to
+    // honor the one a service manager's stop sends to every process in the
+    // group, its exit would read as ownership lost while the supervisor was
+    // still writing. Dispositions set to ignore survive `exec`, and the
+    // binary forbids the unsafe code a handler would take, so a shell sets
+    // them on the way in.
+    child = spawn(
+      '/bin/sh',
+      [
+        '-c',
+        'trap "" TERM INT HUP; exec "$0" "$@"',
+        workerBinary,
+        '--lock-state',
+        statePath,
+      ],
+      { stdio: ['pipe', ownerFile, 'pipe'] },
+    );
   } catch (error) {
     await ownerFile.close();
     throw error;
