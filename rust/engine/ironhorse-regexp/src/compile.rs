@@ -85,6 +85,21 @@ pub const MAX_CODE_BYTES: usize = 64 << 20;
 pub const MAX_COMPILE_PAYLOAD_BYTES: usize = 64 << 20;
 pub const COMPILE_CHECK_STRIDE: u64 = 1024;
 
+/// Consensus byte charges for the parser's retained records. They decide
+/// where the payload allowance halts a compile, so they must not follow the
+/// host pointer width as `size_of` does (`Node` holds `usize` ids and `Vec`
+/// headers, and a v-mode string alternative is a `Vec<u32>` header plus its
+/// code points). These are the audited 64-bit layouts; a 64-bit build asserts
+/// they still agree, so a layout change is a build error rather than a moved
+/// threshold.
+const NODE_CHARGE: usize = 64;
+const STRING_HEADER_CHARGE: usize = 24;
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(
+    std::mem::size_of::<Node>() == NODE_CHARGE
+        && std::mem::size_of::<Vec<u32>>() == STRING_HEADER_CHARGE
+);
+
 /// Compilation result plus work charged even when parsing fails.
 #[derive(Debug)]
 pub struct CompileOutcome {
@@ -1039,15 +1054,13 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
         if self.nodes.len() >= MAX_COMPILE_NODES {
             stop(CompileStop::Resource);
         }
-        self.work.allocate(std::mem::size_of::<Node>());
+        self.work.allocate(NODE_CHARGE);
         if let Kind::CharSet { chars, strings } = &kind {
             self.work.allocate(
                 std::mem::size_of_val(chars.as_slice())
                     + strings
                         .iter()
-                        .map(|s| {
-                            std::mem::size_of::<Vec<u32>>() + std::mem::size_of_val(s.as_slice())
-                        })
+                        .map(|s| STRING_HEADER_CHARGE + std::mem::size_of_val(s.as_slice()))
                         .sum::<usize>(),
             );
         }
@@ -1456,10 +1469,7 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
                     std::mem::size_of_val(chars.as_slice())
                         + strings
                             .iter()
-                            .map(|s| {
-                                std::mem::size_of::<Vec<u32>>()
-                                    + std::mem::size_of_val(s.as_slice())
-                            })
+                            .map(|s| STRING_HEADER_CHARGE + std::mem::size_of_val(s.as_slice()))
                             .sum::<usize>(),
                 );
                 Ok((chars.clone(), strings.clone()))
@@ -1803,7 +1813,7 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
                         let single = self.charset_single(current[0] as i64);
                         result = self.charset_combine(result, single, MX_CHARSET_UNION_OP)?;
                     } else if current.len() > 1 {
-                        self.work.allocate(std::mem::size_of::<Vec<u32>>());
+                        self.work.allocate(STRING_HEADER_CHARGE);
                         strings
                             .try_reserve(1)
                             .unwrap_or_else(|_| stop(CompileStop::Resource));
