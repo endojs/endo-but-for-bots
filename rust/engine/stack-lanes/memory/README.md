@@ -34,7 +34,7 @@ host-side store does; an in-memory store would add its own copy of every row to 
 
 `linear` is what a host that caps memory sees: wasm linear memory only grows, so a reading after
 a phase is the peak up to it, allocator slack and fragmentation included.
-Two runs of the same heap can differ by about 15% in `linear` while their `heap_peak` agrees to
-the byte, because the order of allocations decides how the allocator lays them out.
+Two heaps whose `heap_peak` agrees can differ by several percent in `linear`, because the order
+of allocations decides how the allocator lays them out.
 `heap_peak` counts a reallocation as the old and the new block both live, as they are during the
 copy on wasm, where the allocator cannot remap.
