@@ -837,13 +837,16 @@ impl StoreManifest {
         let (collect_every, collections) = if store_schema >= 27 {
             let every = u32::from_be_bytes(take4(&mut i)?);
             let collections = u64::from_be_bytes(take8(&mut i)?);
-            let len = u32::from_be_bytes(take4(&mut i)?) as usize;
-            let end = i
-                .checked_add(len)
-                .ok_or(SnapshotError::Corrupt("manifest parent seal length"))?;
-            let bytes = p
-                .get(i..end)
-                .ok_or(SnapshotError::Corrupt("manifest parent seal truncated"))?;
+            let len = u32::from_be_bytes(take4(&mut i)?);
+            // Compared in u64, where the end cannot overflow, so every
+            // target refuses an oversized length as truncation.
+            if u64::from(len) > (p.len() - i) as u64 {
+                return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                    "manifest parent seal truncated",
+                )));
+            }
+            let end = i + len as usize;
+            let bytes = &p[i..end];
             std::str::from_utf8(bytes)
                 .map_err(|_| SnapshotError::Corrupt("manifest parent seal not utf8"))?;
             i = end;
