@@ -460,6 +460,8 @@ that it equals `size_of`, so native thresholds cannot move and a layout change f
 or to `usize` arithmetic.
 Rerun on this tree, every repro in the two tables above now prints the native line on wasm32
 under Wasmtime, and the native line is the same as before the fix.
+The cross-target gate (B6) checks those repros on every engine change and finds them the same
+on both targets, so the expected-divergence list no longer names them.
 The `json.rs:1204` repro was rerun with a 134,136,000-unit filler and its object text built with
 `join`, since the audit did not record how it built that text.
 The release-neutral gate (`stack-lanes/differential.py`) found native output byte-identical to
@@ -846,6 +848,10 @@ A divergence passes only when `stack-lanes/expected-divergence/wasmtime.json` li
 both lines and its B7 site.
 A listed divergence that no longer appears fails, so the list holds exactly the open B7 sites
 the probe reaches, and each B7 fix removes its entries.
+The repros of the fixed B7 sites stay in `cross-target.js` and must agree on both targets, so
+the gate confirms on every engine change that "Admission charged by Rust memory layout" and
+"Arithmetic on the host's `usize`" stay closed; the list holds the unadmitted host allocations
+and the embedder-raised ceilings.
 The B7 repros that need gigabytes natively or minutes on wasm32, in `cross-target.slow.js`, are
 a separate shard (`--shard slow`) that no workflow runs yet.
 The snapshot and store sites need crafted stores or snapshots, which the probe does not take.

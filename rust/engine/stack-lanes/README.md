@@ -123,15 +123,21 @@ that window, so that such a move does not carry it out of the window and pass it
 fixed.
 Every program of `differential/cross-target*.js` also runs in `differential.py`, so a fix
 that moves a native threshold fails there.
+A fixed site's repros stay as regression tests, which the gate checks as `same`: since the
+fixes in B7's "Status", every repro of "Admission charged by Rust memory layout" and
+"Arithmetic on the host's `usize`", with `b3-json-parse.js#reviver-source-list-near-ceiling`.
+The list holds the unadmitted host allocations and, in the slow shard, the embedder-raised
+ceilings.
 
 Not every B7 site is reachable from a guest program on the probe.
 The open snapshot and store findings (the truncated `chunk_len`, duplicate Intl
 bound-function rows, `std::process::id()` in the CAS and file-store names, the error values
 that differ by width), the host floating-point environment and `ironhorse-store-sqlite` need
 a crafted store, a snapshot or a host change.
-`json.rs:1199` is masked by a stricter check before it, `json_escape_string` cannot be
-reached on wasm32 today, and a top-level RegExp literal's compile-time refusal is reached
-through `Function` instead of a 420,000-character literal in a snippet.
+`json_escape_string` cannot be reached on wasm32 today.
+Of the fixed sites, `json.rs:1199` was masked by a stricter check before it and has no repro,
+and a top-level RegExp literal's compile-time refusal is reached through `Function` instead
+of a 420,000-character literal in a snippet.
 
 ## Expected-trap lists
 
