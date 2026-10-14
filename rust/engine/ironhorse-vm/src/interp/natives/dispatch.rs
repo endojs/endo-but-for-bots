@@ -2588,6 +2588,8 @@ impl Interp {
             | NativeMethod::GlobalUnescape
             | NativeMethod::JsonStringify
             | NativeMethod::JsonParse
+            | NativeMethod::JsonRawJson
+            | NativeMethod::JsonIsRawJson
             | NativeMethod::ErrorStackGetter
             | NativeMethod::ErrorStackSetter
             | NativeMethod::ThrowTypeError => {
@@ -7626,9 +7628,10 @@ impl Interp {
             NativeMethod::GlobalEscape | NativeMethod::GlobalUnescape => {
                 self.call_legacy_escape(m, base, argc, code)?
             }
-            NativeMethod::JsonStringify | NativeMethod::JsonParse => {
-                self.call_json(m, base, argc, code)?
-            }
+            NativeMethod::JsonStringify
+            | NativeMethod::JsonParse
+            | NativeMethod::JsonRawJson
+            | NativeMethod::JsonIsRawJson => self.call_json(m, base, argc, code)?,
             NativeMethod::ErrorStackGetter => {
                 let inst = match this.value {
                     Payload::Reference(r) if this.kind == Kind::Reference => r,

@@ -2537,6 +2537,8 @@ impl Interp {
         for (name, m, arity) in [
             ("stringify", NativeMethod::JsonStringify, 3),
             ("parse", NativeMethod::JsonParse, 2),
+            ("rawJSON", NativeMethod::JsonRawJson, 1),
+            ("isRawJSON", NativeMethod::JsonIsRawJson, 1),
         ] {
             let mf = self.alloc_named_method(m, name, arity);
             self.proto_methods.push((json, name, mf));

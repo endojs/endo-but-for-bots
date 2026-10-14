@@ -200,6 +200,7 @@ pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "Iterator:helper-kind",
     "Iterator:helper-symbol",
     "Iterator:missing-constructor",
+    "JSON.rawJSON:text",
     "Object-static:unexpected-proxy",
     "Reflect:unexpected",
     "TypedArray.prototype:operation",

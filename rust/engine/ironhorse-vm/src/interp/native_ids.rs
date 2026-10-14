@@ -728,6 +728,12 @@ pub enum NativeMethod {
     JsonStringify,
     /// `JSON.parse(text)` (`fx_JSON_parse`): parse `text` to a value.
     JsonParse,
+    /// `JSON.rawJSON(text)` (`fx_JSON_rawJSON`): a frozen, null-prototype
+    /// raw JSON object whose `rawJSON` property `JSON.stringify` emits as is.
+    JsonRawJson,
+    /// `JSON.isRawJSON(value)` (`fx_JSON_isRawJSON`): whether `value` is an
+    /// object `JSON.rawJSON` made.
+    JsonIsRawJson,
     /// `Map.prototype.set(k, v)` / `WeakMap.prototype.set(k, v)`
     /// (`fx_Map_prototype_set` / `fx_WeakMap_prototype_set`): insert or update
     /// the entry, returning the receiver. A new key allocates the entry slots
