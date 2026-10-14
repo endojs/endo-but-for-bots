@@ -440,7 +440,7 @@ const makePatternKit = () => {
       }
       case 'error':
       case 'promise':
-      case 'sturdyRef': {
+      case 'parcel': {
         return reject && reject`A ${q(kind)} cannot be a pattern`;
       }
       default: {
@@ -503,8 +503,8 @@ const makePatternKit = () => {
       case 'error': {
         return reject && reject`errors cannot be patterns: ${patt}`;
       }
-      case 'sturdyRef': {
-        return reject && reject`sturdyRefs cannot be patterns: ${patt}`;
+      case 'parcel': {
+        return reject && reject`parcels cannot be patterns: ${patt}`;
       }
       case 'undefined':
       case 'null':
@@ -2308,7 +2308,7 @@ const makePatternKit = () => {
 
 // `getRankCover` is exported too. It takes the `encodePassable` that imputes
 // a sort order as an argument and rejects any pattern whose pass style has no
-// rank, such as a SturdyRef, with an error naming that pass style.
+// rank, such as a Parcel, with an error naming that pass style.
 // `makePatternKit` is not exported.
 export const {
   confirmMatches,

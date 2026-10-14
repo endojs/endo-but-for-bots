@@ -1,5 +1,5 @@
-// Install the realm's SturdyRef before anything below can make one.
-import '@endo/sturdyref/shim.js';
+// Install the realm's Parcel before anything below can make one.
+import '@endo/parcel/shim.js';
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
@@ -15,42 +15,42 @@ import { makeMarshal } from '../src/marshal.js';
 import { makeDotMembraneKit } from '../src/dot-membrane.js';
 
 /** @type {any} */
-const { SturdyRef } = globalThis;
+const { Parcel } = globalThis;
 
-const makeRef = () => new SturdyRef({ enliven: () => 'revived' });
+const makeRef = () => new Parcel('test:marshal', () => 'opened');
 
-// Until marshal gives SturdyRefs a representation, a SturdyRef can be neither
+// Until marshal gives Parcels a representation, a Parcel can be neither
 // rank-ordered nor encoded. Both must fail with a clear error.
 
-test('a SturdyRef cannot be rank-ordered', t => {
+test('a Parcel cannot be rank-ordered', t => {
   const ref = makeRef();
-  t.is(passStyleOf(ref), 'sturdyRef');
-  const message = /"sturdyRef" cannot be rank-ordered/;
+  t.is(passStyleOf(ref), 'parcel');
+  const message = /"parcel" cannot be rank-ordered/;
   t.throws(() => compareRank(ref, 5), { message });
   t.throws(() => compareRank(5, ref), { message });
   t.throws(() => sortByRank(harden([1, ref]), compareRank), { message });
-  t.throws(() => getPassStyleCover('sturdyRef'), { message });
+  t.throws(() => getPassStyleCover('parcel'), { message });
   t.throws(() => compareRank(ref, makeRef()), { message });
 });
 
-test('a SturdyRef compares equal to itself without a rank', t => {
+test('a Parcel compares equal to itself without a rank', t => {
   // compareRank answers 0 for identical operands before it consults their
-  // pass style, so only a SturdyRef compared with a different value throws.
+  // pass style, so only a Parcel compared with a different value throws.
   const ref = makeRef();
   t.is(compareRank(ref, ref), 0);
   const refs = harden([ref, ref]);
   t.is(sortByRank(refs, compareRank), refs);
 });
 
-test('a SturdyRef cannot be encoded', t => {
+test('a Parcel cannot be encoded', t => {
   const encodePassable = makeEncodePassable();
   t.throws(() => encodePassable(makeRef()), {
-    message: /"sturdyRef"/,
+    message: /"parcel"/,
   });
 });
 
-test('a SturdyRef cannot be marshalled', t => {
-  const message = /a "sturdyRef" cannot be marshalled/;
+test('a Parcel cannot be marshalled', t => {
+  const message = /a "parcel" cannot be marshalled/;
   for (const serializeBodyFormat of /** @type {const} */ ([
     'capdata',
     'smallcaps',
@@ -67,10 +67,10 @@ test('a SturdyRef cannot be marshalled', t => {
   }
 });
 
-test('a SturdyRef cannot pass through a membrane', t => {
+test('a Parcel cannot pass through a membrane', t => {
   // The membrane serializes what crosses it, so the encoder's own refusal is
-  // what stops a SturdyRef.
-  const message = /a "sturdyRef" cannot be marshalled/;
+  // what stops a Parcel.
+  const message = /a "parcel" cannot be marshalled/;
   t.throws(() => makeDotMembraneKit(makeRef()), { message });
   const { proxy } = makeDotMembraneKit(
     Far('holder', { getRef: () => makeRef() }),

@@ -533,7 +533,7 @@ const confirmKeyInternal = (val, reject) => {
     }
     case 'error':
     case 'promise':
-    case 'sturdyRef': {
+    case 'parcel': {
       return reject && reject`A ${q(passStyle)} cannot be a key`;
     }
     default: {
