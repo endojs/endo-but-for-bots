@@ -25,9 +25,10 @@ export const provisionFlootFactory = async ({
   const powersId = await E(agent).identify(...path);
   const controllerId = await E(agent).identify(...controllerPath);
   const pinId = await E(agent).identify(...pinPath);
+  const diagnostics = await E(agent).diagnostics();
   /** @param {string} id */
   const inspect = async id => {
-    const formula = await E(agent).getFormula(id);
+    const formula = await E(diagnostics).getFormula(id);
     if (
       formula.type !== 'make-unconfined' ||
       formula.properties.powers?.identifier !== powersId ||
