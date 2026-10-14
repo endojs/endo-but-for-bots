@@ -2413,6 +2413,7 @@ impl Interp {
             | NativeMethod::PromiseAllSettled
             | NativeMethod::PromiseRace
             | NativeMethod::PromiseAny
+            | NativeMethod::PromiseWithResolvers
             | NativeMethod::PromiseResolveFunction
             | NativeMethod::PromiseRejectFunction
             | NativeMethod::PromiseCapabilityExecutor
@@ -5864,6 +5865,18 @@ impl Interp {
             }
             NativeMethod::PromiseAny => {
                 self.promise_combinator(code, CombinatorKind::Any, arg0, this)?
+            }
+            // `Promise.withResolvers()` (`fx_Promise_withResolvers`): a
+            // capability of the receiver, exposed as an ordinary
+            // `{ promise, resolve, reject }` object.
+            NativeMethod::PromiseWithResolvers => {
+                let capability = self.new_promise_capability_for(code, this)?;
+                self.meter.tick_slot_alloc();
+                let result = self.slots.alloc(Slot::instance(self.object_proto));
+                self.define_descriptor_field(result, "promise", capability.promise);
+                self.define_descriptor_field(result, "resolve", capability.resolve);
+                self.define_descriptor_field(result, "reject", capability.reject);
+                Slot::of(Kind::Reference, Payload::Reference(result))
             }
             // The resolve/reject functions settle in the `RUN` dispatch
             // (`call_promise_function`) and never reach here.
