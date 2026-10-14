@@ -2528,92 +2528,50 @@ impl Interp {
             }};
         }
 
-        // GetIterator(items) + the iterate/step loop, with the same intrinsic
-        // fast paths `for..of` uses (dense array, string), and the generic
-        // `@@iterator` protocol for everything else. Arrays/strings the tests
-        // never re-decorate iterate observationally identically to the real
-        // iterator; a plain object with a nullish/absent `@@iterator` throws.
-        match items.value {
-            Payload::Reference(i) if self.arrays.contains_key(&i) => {
-                let mut k = 0u32;
-                loop {
-                    let len = match self.arrays.get(&i) {
-                        Some(a) => a.length,
-                        None => break,
-                    };
-                    if k >= len {
-                        break;
-                    }
-                    let value = self
-                        .arrays
-                        .get(&i)
-                        .and_then(|a| a.items().get(&k))
-                        .copied()
-                        .unwrap_or_else(Slot::undefined);
-                    record!(value);
-                    k += 1;
-                }
+        // GetIterator(items, sync) + the iterate/step loop: `@@iterator` is
+        // read through [[Get]] on the object, or on a primitive's wrapper
+        // prototype, so a deleted, replaced or patched iterator is observed
+        // exactly as `for..of` observes it.
+        if items.kind == Kind::Null {
+            return Err(self.catchable_type_error_msg("cannot coerce null to object".into()));
+        }
+        let iter_id = self
+            .well_known_symbol_property_id("iterator")
+            .unwrap_or(crate::value::XS_NO_ID);
+        let holder = match items.value {
+            Payload::Reference(_) if items.kind == Kind::Symbol => self.symbol_proto,
+            Payload::Reference(obj) => obj,
+            Payload::String(_) if items.kind == Kind::String => self.string_proto,
+            Payload::Integer(_) | Payload::Number(_) => self.number_proto,
+            Payload::BigInt(_) => self.bigint_proto,
+            _ if items.kind == Kind::Boolean => self.boolean_proto,
+            _ => crate::value::SlotIndex::NULL,
+        };
+        let method = if iter_id == crate::value::XS_NO_ID || holder.is_null() {
+            Slot::undefined()
+        } else {
+            self.mop_get(code, holder, iter_id, items)?
+        };
+        if method.kind == Kind::Undefined || method.kind == Kind::Null {
+            return Err(self.catchable_type_error_msg("call: not a function".into()));
+        }
+        let iterator = self.call_primitive_method(code, method, items, &[])?;
+        let iter_inst = match iterator.value {
+            Payload::Reference(x) if iterator.kind == Kind::Reference => x,
+            _ => return Err(self.catchable_type_error_msg("iterator: not an object".into())),
+        };
+        let next_id = self.intern_static_key("next");
+        let next = self.mop_get(code, iter_inst, next_id, iterator)?;
+        // A defensive bound against a pathological non-terminating guest
+        // iterator; the tested iterables are short.
+        for _ in 0..1_000_000 {
+            let step = self.call_primitive_method(code, next, iterator, &[])?;
+            let done = self.iter_result_member(code, step, true)?;
+            if self.truthy(&done) {
+                break;
             }
-            Payload::String(off) if items.kind == Kind::String => {
-                let bytes = self.str_content(off).to_vec();
-                let it = self.make_string_iterator(bytes);
-                let iter_inst = match it.value {
-                    Payload::Reference(x) => x,
-                    _ => {
-                        return Err(Step::Host(Halt::EngineInvariant(
-                            "group-by:invalid-string-iterator",
-                        )))
-                    }
-                };
-                loop {
-                    let result = self.string_iterator_next(iter_inst)?;
-                    let done = self.iter_result_member(code, result, true)?;
-                    if self.truthy(&done) {
-                        break;
-                    }
-                    let value = self.iter_result_member(code, result, false)?;
-                    record!(value);
-                }
-            }
-            Payload::Reference(obj) => {
-                // GetIterator(items, sync): `method = ? GetMethod(items,
-                // @@iterator)`; a nullish/absent method throws TypeError.
-                let iter_id = self
-                    .well_known_symbol_property_id("iterator")
-                    .unwrap_or(crate::value::XS_NO_ID);
-                let method = if iter_id == crate::value::XS_NO_ID {
-                    Slot::undefined()
-                } else {
-                    self.mop_get(code, obj, iter_id, items)?
-                };
-                if method.kind == Kind::Undefined || method.kind == Kind::Null {
-                    return Err(self.catchable_type_error_msg("call: not a function".into()));
-                }
-                let iterator = self.call_primitive_method(code, method, items, &[])?;
-                let iter_inst = match iterator.value {
-                    Payload::Reference(x) if iterator.kind == Kind::Reference => x,
-                    _ => {
-                        return Err(self.catchable_type_error_msg("iterator: not an object".into()))
-                    }
-                };
-                let next_id = self.intern_static_key("next");
-                let next = self.mop_get(code, iter_inst, next_id, iterator)?;
-                // A defensive bound against a pathological non-terminating guest
-                // iterator; the tested iterables are short.
-                for _ in 0..1_000_000 {
-                    let step = self.call_primitive_method(code, next, iterator, &[])?;
-                    let done = self.iter_result_member(code, step, true)?;
-                    if self.truthy(&done) {
-                        break;
-                    }
-                    let value = self.iter_result_member(code, step, false)?;
-                    record!(value);
-                }
-            }
-            _ if items.kind == Kind::Null => {
-                return Err(self.catchable_type_error_msg("cannot coerce null to object".into()))
-            }
-            _ => return Err(self.catchable_type_error_msg("call: not a function".into())),
+            let value = self.iter_result_member(code, step, false)?;
+            record!(value);
         }
 
         if is_map {
