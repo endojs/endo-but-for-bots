@@ -7,6 +7,8 @@ import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 import { makePromiseKit } from '@endo/promise-kit';
 
+import { clearTimeout, setTimeout } from 'node:timers';
+
 import { makeSandboxFactory } from '../src/factory.js';
 
 const lifecycleDetails = harden({
@@ -21,6 +23,20 @@ const scratchProvider = harden({
     throw new Error('mount resolution not needed by lifecycle fixtures');
   },
 });
+
+// Every test here guards the kill-and-reap state machine against a hang, so
+// each carries this per-test timeout and fails with a readable error long
+// before AVA's two-minute file timeout would abandon the worker. It is a hang
+// guard, not a speed bound: the grace fixture below keeps every test off the
+// production grace timers, yet a loaded CI runner (the macOS matrix cells
+// most of all) has stretched tests that take a tenth of a second here past
+// six seconds.
+const HANG_GUARD_MS = 20_000;
+
+// The factory's grace periods, mirrored from factory.js so a test can assert
+// which grace an escalation waited out.
+const KILL_GRACE_MS = 1000;
+const DRAIN_GRACE_MS = 250;
 
 const makeByteSource = () => {
   /** @type {Uint8Array[]} */
@@ -76,9 +92,44 @@ const makeByteSource = () => {
 
 /**
  * @typedef {(ms: number) => { promise: Promise<void>, cancel: () => void }} MakeDelay
+ */
+
+/**
+ * Stand in for the factory's grace timers.
+ *
+ * The production delay sleeps for the real kill and drain grace on an
+ * unreferenced timer. Here a grace elapses on the next macrotask turn, so an
+ * escalation past a refused soft kill or a never-ending stream costs a test
+ * no wall-clock time, and the timer is referenced. That reference matters
+ * when AVA's own timeout fires mid-escalation: it clears the one referenced
+ * timer the test still holds and runs the teardown, and a worker whose only
+ * remaining work is unreferenced timers exits before the teardown's kill
+ * path settles, which AVA reports as a test remaining rather than as a
+ * failure with a reason. Each requested grace is recorded so a test can
+ * assert which one an escalation waited out.
+ */
+const makeGraceFixture = () => {
+  /** @type {number[]} */
+  const requested = [];
+  /** @type {MakeDelay} */
+  const makeDelay = ms => {
+    requested.push(ms);
+    /** @type {ReturnType<typeof setTimeout>} */
+    let timer;
+    /** @type {Promise<void>} */
+    const promise = new Promise(resolve => {
+      timer = setTimeout(resolve, 0);
+    });
+    return harden({ promise, cancel: () => clearTimeout(timer) });
+  };
+  return harden({ makeDelay, requested: () => harden([...requested]) });
+};
+
+/**
  * @param {{ spawnGate?: Promise<unknown>, afterAdmission?: () => void, softRefuse?: boolean, brokenSignals?: boolean, lifecycle?: boolean, context?: any, makeDelay?: MakeDelay, stdin?: { write: (chunk: Uint8Array) => Promise<void>, close: () => Promise<void> } }} [options]
  */
 const makeDriverFixture = (options = {}) => {
+  const grace = makeGraceFixture();
   const stdout = makeByteSource();
   const stderr = makeByteSource();
   const exit = makePromiseKit();
@@ -156,7 +207,7 @@ const makeDriverFixture = (options = {}) => {
       scratchProvider,
       context: options.context,
     },
-    { makeDelay: options.makeDelay },
+    { makeDelay: options.makeDelay ?? grace.makeDelay },
   );
 
   return harden({
@@ -173,6 +224,7 @@ const makeDriverFixture = (options = {}) => {
     counts: () => harden({ spawnCalls, prepareCalls, teardownCalls }),
     admissionAborts: () => admissionAborts,
     exitStatus: () => exit.promise,
+    graces: grace.requested,
   });
 };
 
@@ -195,7 +247,7 @@ const collectReader = async reader => {
 };
 
 test('dispose cancels a pending admission and reaps a late arrival', async t => {
-  t.timeout(2000);
+  t.timeout(HANG_GUARD_MS);
   const gate = makePromiseKit();
   const fixture = makeDriverFixture({ spawnGate: gate.promise });
   const handle = await makeHandle(fixture);
@@ -220,7 +272,7 @@ test('dispose cancels a pending admission and reaps a late arrival', async t => 
 });
 
 test('stdin is an exo-stream writer driven with iterateBytesWriter', async t => {
-  t.timeout(2000);
+  t.timeout(HANG_GUARD_MS);
   /** @type {string[]} */
   const written = [];
   let closes = 0;
@@ -254,7 +306,7 @@ test('stdin is an exo-stream writer driven with iterateBytesWriter', async t => 
 });
 
 test('a process spawned without a writable stdin rejects every write', async t => {
-  t.timeout(2000);
+  t.timeout(HANG_GUARD_MS);
   const fixture = makeDriverFixture();
   const handle = await makeHandle(fixture);
   const proc = await E(handle).spawn(harden(['/bin/true']));
@@ -271,7 +323,7 @@ test('a process spawned without a writable stdin rejects every write', async t =
 });
 
 test('termination after admission resolves still rejects unsettled spawn', async t => {
-  t.timeout(2000);
+  t.timeout(HANG_GUARD_MS);
   const gate = makePromiseKit();
   /** @type {import('../src/types.js').SandboxHandle} */
   let handle;
@@ -294,7 +346,7 @@ test('termination after admission resolves still rejects unsettled spawn', async
 });
 
 test('a never-resolving driver admission cannot hold up disposal', async t => {
-  t.timeout(2000);
+  t.timeout(HANG_GUARD_MS);
   const never = new Promise(() => undefined);
   const fixture = makeDriverFixture({ spawnGate: never });
   const handle = await makeHandle(fixture);
@@ -309,10 +361,7 @@ test('a never-resolving driver admission cannot hold up disposal', async t => {
 });
 
 test('a never-resolving driver admission still honours the timeout', async t => {
-  // A hang guard, not a speed bound: the admission timeout under test is 25ms,
-  // but building the handle beside the rest of the affected set on a loaded
-  // macOS runner has exceeded a two-second budget.
-  t.timeout(10_000);
+  t.timeout(HANG_GUARD_MS);
   const never = new Promise(() => undefined);
   const fixture = makeDriverFixture({ spawnGate: never });
   const handle = await makeHandle(fixture);
@@ -326,6 +375,7 @@ test('a never-resolving driver admission still honours the timeout', async t => 
 });
 
 test('dispose admitted before spawn prevents the driver call', async t => {
+  t.timeout(HANG_GUARD_MS);
   const fixture = makeDriverFixture();
   const handle = await makeHandle(fixture);
   await E(handle).dispose();
@@ -337,6 +387,7 @@ test('dispose admitted before spawn prevents the driver call', async t => {
 });
 
 test('disposal and cancellation are idempotent', async t => {
+  t.timeout(HANG_GUARD_MS);
   const fixture = makeDriverFixture();
   const handle = await makeHandle(fixture);
   const proc = await E(handle).spawn(harden(['/bin/sleep', 'forever']));
@@ -351,6 +402,7 @@ test('disposal and cancellation are idempotent', async t => {
 });
 
 test('owner cancellation disposes children and stops new handles', async t => {
+  t.timeout(HANG_GUARD_MS);
   const { cancelled, cancel } = makeCancelKit();
   const fixture = makeDriverFixture({
     context: harden({ whenCancelled: () => cancelled }),
@@ -367,6 +419,7 @@ test('owner cancellation disposes children and stops new handles', async t => {
 });
 
 test('stdout and stderr stay separate and preserve split UTF-8', async t => {
+  t.timeout(HANG_GUARD_MS);
   const fixture = makeDriverFixture();
   const handle = await makeHandle(fixture);
   t.teardown(() => E(handle).dispose());
@@ -399,7 +452,7 @@ test('stdout and stderr stay separate and preserve split UTF-8', async t => {
 });
 
 test('unconsumed tiny-chunk output coalesces into bounded blocks', async t => {
-  t.timeout(10_000);
+  t.timeout(HANG_GUARD_MS);
   const fixture = makeDriverFixture();
   const handle = await makeHandle(fixture);
   t.teardown(() => E(handle).dispose());
@@ -439,7 +492,7 @@ test('unconsumed tiny-chunk output coalesces into bounded blocks', async t => {
 });
 
 test('reaching one output cap kills and reaps before settlement', async t => {
-  t.timeout(5000);
+  t.timeout(HANG_GUARD_MS);
   const fixture = makeDriverFixture({ softRefuse: true });
   const handle = await makeHandle(fixture);
   t.teardown(() => E(handle).dispose());
@@ -466,6 +519,7 @@ test('reaching one output cap kills and reaps before settlement', async t => {
 });
 
 test('reader rejection uses the same kill-and-reap path', async t => {
+  t.timeout(HANG_GUARD_MS);
   const fixture = makeDriverFixture();
   const handle = await makeHandle(fixture);
   t.teardown(() => E(handle).dispose());
@@ -479,6 +533,7 @@ test('reader rejection uses the same kill-and-reap path', async t => {
 });
 
 test('kill rejects nonterminating signals without touching the process', async t => {
+  t.timeout(HANG_GUARD_MS);
   const fixture = makeDriverFixture();
   const handle = await makeHandle(fixture);
   t.teardown(() => E(handle).dispose());
@@ -501,7 +556,7 @@ test('kill rejects nonterminating signals without touching the process', async t
 });
 
 test('persistent signal failure surfaces a bounded cleanup error', async t => {
-  t.timeout(10_000);
+  t.timeout(HANG_GUARD_MS);
   // Both signal attempts reject and wait() never settles: cleanup must
   // invoke the backend force-teardown path and surface a containment
   // error within a bounded time instead of waiting forever.
@@ -526,7 +581,7 @@ test('persistent signal failure surfaces a bounded cleanup error', async t => {
 });
 
 test('timeout escalates a soft-kill refusal and reaps', async t => {
-  t.timeout(5000);
+  t.timeout(HANG_GUARD_MS);
   const fixture = makeDriverFixture({ softRefuse: true });
   const handle = await makeHandle(fixture);
   t.teardown(() => E(handle).dispose());
@@ -536,15 +591,18 @@ test('timeout escalates a soft-kill refusal and reaps', async t => {
   );
   await t.throwsAsync(() => E(proc).wait(), { message: /timed out/ });
   t.deepEqual(fixture.signals(), ['SIGTERM', 'SIGKILL']);
+  // The hard kill came after the soft kill's grace, and the reap after the
+  // drain's; neither was skipped.
+  t.deepEqual(fixture.graces(), [KILL_GRACE_MS, DRAIN_GRACE_MS]);
 });
 
 test('a descendant-held pipe cannot hold wait past bounded drain', async t => {
-  t.timeout(2000);
+  t.timeout(HANG_GUARD_MS);
   const drain = makePromiseKit();
   const drainStarted = makePromiseKit();
   /** @type {MakeDelay} */
   const makeDelay = ms => {
-    t.is(ms, 250);
+    t.is(ms, DRAIN_GRACE_MS);
     drainStarted.resolve(undefined);
     return harden({ promise: drain.promise, cancel: () => undefined });
   };
@@ -568,6 +626,7 @@ test('a descendant-held pipe cannot hold wait past bounded drain', async t => {
 });
 
 test('driver availability fails closed without lifecycle proof', async t => {
+  t.timeout(HANG_GUARD_MS);
   const fixture = makeDriverFixture({ lifecycle: false });
   const [probe] = await E(fixture.factory).listBackends();
   t.false(probe.available);
