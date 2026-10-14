@@ -2552,6 +2552,7 @@ impl Interp {
             | NativeMethod::SymbolFor
             | NativeMethod::SymbolKeyFor
             | NativeMethod::Math(..)
+            | NativeMethod::MathSumPrecise
             | NativeMethod::ReflectGetPrototypeOf
             | NativeMethod::ReflectSetPrototypeOf
             | NativeMethod::ReflectIsExtensible
@@ -7589,6 +7590,7 @@ impl Interp {
                 }
             }
             NativeMethod::Math(id) => self.call_math(id, base, argc, code)?,
+            NativeMethod::MathSumPrecise => self.math_sum_precise(code, base, argc)?,
             NativeMethod::ReflectGetPrototypeOf
             | NativeMethod::ReflectSetPrototypeOf
             | NativeMethod::ReflectIsExtensible

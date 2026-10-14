@@ -291,6 +291,10 @@ pub enum NativeMethod {
     /// `Error.isError(value)` (`fx_Error_isError`): whether `value` is an
     /// object with an `[[ErrorData]]` internal slot.
     ErrorIsError,
+    /// `Math.sumPrecise(items)` (`fx_Math_sumPrecise`): the exact sum of an
+    /// iterable of Numbers, rounded once. Unlike the [`MathId`] functions it
+    /// iterates, and charges per item.
+    MathSumPrecise,
     DisposableStackUse,
     DisposableStackAdopt,
     DisposableStackDefer,

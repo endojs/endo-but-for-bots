@@ -489,6 +489,20 @@ const UNPAIRED: &[Row] = &[
         v8: "threw Cannot read properties of undefined (reading 'call')|",
         why: "Promise.try lets a throw from the capability's resolve propagate (ES2025 27.2.4.8 step 6); XS's fx_Promise_try calls resolve inside its catch and rejects with what it threw; Node 22 has no Promise.try",
     },
+    Row {
+        program: "var z = 0.5 - 0.5; [Object.is(Math.sumPrecise([z]), 0), Object.is(Math.sumPrecise([0]), 0)].join()",
+        ironhorse: "true,true",
+        xs: "false,true",
+        v8: "throw TypeError: Math.sumPrecise is not a function",
+        why: "Math.sumPrecise of +0 is +0, only -0 items leave the sum -0 (ES2026 21.3.2.34); XS's fx_Math_sumPrecise skips a +0 stored as a double, because C's +0.0 != -0.0 is false, and answers -0; Node 22 has no Math.sumPrecise",
+    },
+    Row {
+        program: "var t; Number.prototype[Symbol.iterator] = function () { 'use strict'; t = typeof this; return [1][Symbol.iterator](); }; var s = Math.sumPrecise(5); t + ',' + s",
+        ironhorse: "number,1",
+        xs: "object,1",
+        v8: "throw TypeError: Math.sumPrecise is not a function",
+        why: "Math.sumPrecise gets its iterator from the items value itself, so a primitive's @@iterator sees the primitive as this (ES2026 21.3.2.34 step 2, GetIterator); XS's fx_Math_sumPrecise converts the items to an object first; Node 22 has no Math.sumPrecise",
+    },
 ];
 
 const KEPT: &[Row] = &[

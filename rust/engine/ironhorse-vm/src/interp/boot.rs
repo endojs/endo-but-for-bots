@@ -2898,6 +2898,8 @@ impl Interp {
             let mf = self.alloc_named_method(NativeMethod::Math(id), name, arity);
             self.proto_methods.push((math, name, mf));
         }
+        let sum_precise = self.alloc_named_method(NativeMethod::MathSumPrecise, "sumPrecise", 1);
+        self.proto_methods.push((math, "sumPrecise", sum_precise));
         // The numeric constants (`fxNextNumberProperty`, XS's `C_M_*`): the
         // exact IEEE doubles from `math.h`, reproduced by Rust's
         // `std::f64::consts` (identical bit patterns).
