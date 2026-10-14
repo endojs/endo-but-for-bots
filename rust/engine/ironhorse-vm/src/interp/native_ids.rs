@@ -976,6 +976,9 @@ pub enum NativeMethod {
     /// annexB stub is literally `*mxResult = *mxThis` — no instance check, no
     /// recompilation, arguments ignored — so the mirror returns `this` as-is.
     RegExpCompile,
+    /// `RegExp.escape(string)` (`fx_RegExp_escape`, `xsre.c`): the string
+    /// with every character that could change a pattern's meaning escaped.
+    RegExpEscape,
     /// `%RegExp.prototype%[Symbol.replace](string, replaceValue)`: coerce the
     /// subject and drive the shared RegExp replacement worker.
     RegExpReplace,

@@ -157,3 +157,34 @@ fn math_sum_precise() {
         ),
     ]);
 }
+
+#[test]
+fn regexp_escape() {
+    check(&[
+        (
+            "[RegExp.escape.name, RegExp.escape.length].join()",
+            "escape,1",
+        ),
+        // A leading digit or ASCII letter, the syntax characters and `/`,
+        // the control escapes and the other punctuators.
+        (
+            "[RegExp.escape('abc'), RegExp.escape('1a'), RegExp.escape('a.b*c'), RegExp.escape('^$\\\\.*+?()[]{}|/'), RegExp.escape('\\t\\n\\v\\f\\r'), RegExp.escape('_'), RegExp.escape('')].join('|')",
+            "\\x61bc|\\x31a|\\x61\\.b\\*c|\\^\\$\\\\\\.\\*\\+\\?\\(\\)\\[\\]\\{\\}\\|\\/|\\t\\n\\v\\f\\r|_|",
+        ),
+        (
+            "RegExp.escape(',-=<>#&!%:;@~\\'`\"')",
+            "\\x2c\\x2d\\x3d\\x3c\\x3e\\x23\\x26\\x21\\x25\\x3a\\x3b\\x40\\x7e\\x27\\x60\\x22",
+        ),
+        // Every WhiteSpace and LineTerminator code point, and a lone
+        // surrogate; XS leaves U+1680, U+2000-U+200A, U+205F and U+3000
+        // (`xs_departures.rs`).
+        (
+            "[RegExp.escape(' \\u00a0\\u202f\\ufeff\\u2028\\u2029'), RegExp.escape('\\u1680\\u2000\\u200a\\u205f\\u3000'), RegExp.escape('\\ud800x\\udc00'), RegExp.escape('\\ud83d\\ude00') === '\\ud83d\\ude00'].join('|')",
+            "\\x20\\xa0\\u202f\\ufeff\\u2028\\u2029|\\u1680\\u2000\\u200a\\u205f\\u3000|\\ud800x\\udc00|true",
+        ),
+        (
+            "var r = []; [undefined, 1, {}, new String('a'), null].forEach(function (v) { try { RegExp.escape(v); r.push('ok'); } catch (e) { r.push(e.name); } }); r.join()",
+            "TypeError,TypeError,TypeError,TypeError,TypeError",
+        ),
+    ]);
+}

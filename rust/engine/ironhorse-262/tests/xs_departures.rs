@@ -503,6 +503,20 @@ const UNPAIRED: &[Row] = &[
         v8: "throw TypeError: Math.sumPrecise is not a function",
         why: "Math.sumPrecise gets its iterator from the items value itself, so a primitive's @@iterator sees the primitive as this (ES2026 21.3.2.34 step 2, GetIterator); XS's fx_Math_sumPrecise converts the items to an object first; Node 22 has no Math.sumPrecise",
     },
+    Row {
+        program: "[RegExp.escape('\\u1680\\u2000\\u200a\\u205f\\u3000'), RegExp.escape('\\u00a0\\u202f')].join('|')",
+        ironhorse: "\\u1680\\u2000\\u200a\\u205f\\u3000|\\xa0\\u202f",
+        xs: "\u{1680}\u{2000}\u{200a}\u{205f}\u{3000}|\\xa0\\u202f",
+        v8: "throw TypeError: RegExp.escape is not a function",
+        why: "RegExp.escape escapes every WhiteSpace code point (ES2025 22.2.5.1.1); XS's fx_RegExp_escape escapes U+00A0 and U+202F but leaves the other space separators; Node 22 has no RegExp.escape",
+    },
+    Row {
+        program: "var e = RegExp.escape('a\\u0000b'); [e.length, RegExp.escape('\\u0000').length].join()",
+        ironhorse: "6,1",
+        xs: "4,0",
+        v8: "throw TypeError: RegExp.escape is not a function",
+        why: "RegExp.escape passes U+0000 through unchanged (ES2025 22.2.5.1.1); XS's fx_RegExp_escape writes it into its NUL-terminated result, which ends the string there; Node 22 has no RegExp.escape",
+    },
 ];
 
 const KEPT: &[Row] = &[
