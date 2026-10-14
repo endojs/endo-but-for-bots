@@ -101,10 +101,20 @@ export const makeFsStore = ({ syncFiles, paths }, statePath) => {
     };
 
     let journalRepaired = false;
+    // The journal's length, from the file the first time and from memory
+    // after: this store is the directory's only writer under the lease, and
+    // the length is asked for every frame written, so it must not cost a
+    // read of the whole journal each time.
+    let journalBase = 0;
+    let journalCount = 0;
+    let journalCounted = false;
 
     /** @returns {{ base: number, lines: Array<string> }} */
     const readJournalFile = () => {
       if (!syncFiles.exists(journalPath)) {
+        journalBase = 0;
+        journalCount = 0;
+        journalCounted = true;
         return { base: 0, lines: [] };
       }
       const text = syncFiles.readText(journalPath);
@@ -119,6 +129,9 @@ export const makeFsStore = ({ syncFiles, paths }, statePath) => {
         entries = entries.slice(0, -1);
         writeJournalFile(header.base, entries);
       }
+      journalBase = header.base;
+      journalCount = entries.length;
+      journalCounted = true;
       return { base: header.base, lines: entries };
     };
 
@@ -130,6 +143,9 @@ export const makeFsStore = ({ syncFiles, paths }, statePath) => {
       const text = [JSON.stringify({ base }), ...lines, ''].join('\n');
       syncFiles.writeTextAtomic(journalPath, text);
       journalRepaired = true;
+      journalBase = base;
+      journalCount = lines.length;
+      journalCounted = true;
     };
 
     const ensureJournalRepaired = () => {
@@ -154,7 +170,10 @@ export const makeFsStore = ({ syncFiles, paths }, statePath) => {
           writeJournalFile(0, []);
         }
         ensureJournalRepaired();
+        if (!journalCounted) readJournalFile();
         syncFiles.appendTextDurable(journalPath, `${JSON.stringify(entry)}\n`);
+        // Counted once durable: a failed append leaves the length as it was.
+        journalCount += 1;
       },
       readJournal: (from = 0) => {
         const { base, lines } = readJournalFile();
@@ -163,8 +182,8 @@ export const makeFsStore = ({ syncFiles, paths }, statePath) => {
           .map(line => JSON.parse(line));
       },
       journalLength: () => {
-        const { base, lines } = readJournalFile();
-        return base + lines.length;
+        if (!journalCounted) readJournalFile();
+        return journalBase + journalCount;
       },
       truncateJournal: upTo => {
         const { base, lines } = readJournalFile();
@@ -179,6 +198,11 @@ export const makeFsStore = ({ syncFiles, paths }, statePath) => {
     return harden(workerStore);
   };
 
+  // One store per worker, so every holder of a worker's store shares its
+  // journal count.
+  /** @type {Map<string, WorkerStore>} */
+  const workerStores = new Map();
+
   /** @type {ThixotropeStore} */
   const store = {
     statePath,
@@ -186,9 +210,17 @@ export const makeFsStore = ({ syncFiles, paths }, statePath) => {
       syncFiles.exists(workersPath)
         ? syncFiles.listDirectory(workersPath).sort()
         : [],
-    provideWorkerStore: makeWorkerStore,
+    provideWorkerStore: workerId => {
+      let workerStore = workerStores.get(workerId);
+      if (workerStore === undefined) {
+        workerStore = makeWorkerStore(workerId);
+        workerStores.set(workerId, workerStore);
+      }
+      return workerStore;
+    },
     deleteWorker: workerId => {
       assertWorkerId(workerId);
+      workerStores.delete(workerId);
       syncFiles.remove(join(workersPath, workerId), {
         recursive: true,
         force: true,

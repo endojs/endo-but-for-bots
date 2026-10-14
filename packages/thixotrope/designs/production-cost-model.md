@@ -94,7 +94,7 @@ That ordering decides the triage below.
 | #    | Proposal                              | Verdict                               |
 | ---- | ------------------------------------- | ------------------------------------- |
 | 1.1  | No Ironhorse commit per crank         | Done                                  |
-| 1.2  | Count the worker journal in memory    | Do                                    |
+| 1.2  | Count the worker journal in memory    | Done                                  |
 | 1.3  | Keep the lease holder alive           | Do                                    |
 | 1.4  | Name vat directories after workers    | Do                                    |
 | 1.5  | Correct the README                    | Do                                    |
@@ -154,12 +154,17 @@ The worker store's `journalLength()` in `src/store/store-fs.js` reads and splits
 worker at start, and `inspectWorkers` for every worker on every `status`.
 A busy worker's journal therefore costs a read proportional to its length on every frame.
 
-Proposed: keep `{ base, count }` per worker store in memory, set at the first read after torn-tail
-repair and advanced in `appendJournal` and `truncateJournal`.
+Done: the worker store keeps the journal's base and count in memory, set by the first read (after
+torn-tail repair) or by any rewrite, and advanced only once an append is durable.
+`journalLength()` reads the file only before anything has been counted; `readJournal` and
+`truncateJournal` still read it, once per wake and once per sleep.
+`makeFsStore` now hands out one store per worker, so the transport, the start sweep and
+`inspectWorkers` share the count, and `deleteWorker` forgets it.
 The store has one owner under the lease, so nothing else can make the count stale.
 
-Tests: a store test that counts file reads per appended frame; extend
-`test/daemon-journal-recovery.test.js`.
+`test/worker-store-journal.test.js` counts file reads across fifty appends and lengths, checks
+absolute indices across truncation, a successor process's agreement, a torn tail left out and
+repaired, and the forgotten store after deletion.
 
 ### 1.3 Keep the lease holder alive through shutdown
 
