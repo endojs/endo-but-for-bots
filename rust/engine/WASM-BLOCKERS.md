@@ -44,8 +44,8 @@ The sites in heap admission and in `usize` arithmetic are fixed, among them a th
 that crashed the wasm32 engine outright.
 Of the rest, most give the same guest program a different answer or a different computron
 count, for example by growing arrays or side tables past wasm32's allocation limits.
-The others are host-side: a checkpoint that aborted on wasm32 (fixed since: the whole-heap writer
-streams), a crafted store, error values, a WASI panic, and a restore that follows hash order.
+The others are host-side, and all are fixed: a checkpoint that aborted on wasm32 (the whole-heap
+writer streams), a crafted store, error values, a WASI panic, and a restore that follows hash order.
 The probes that stay clear of those sites and of the host limits in B3 and B8 matched native
 exactly.
 
@@ -54,7 +54,7 @@ What stands in the way, in order of severity:
 | # | Blocker | Layer | Kind |
 |---|---------|-------|------|
 | B1 | Stable Rust cannot link a wasm artifact with `panic=unwind`; the engine requires unwinding, including for guest-catchable errors; option 1 adopted, std is rebuilt with unwinding on the pinned toolchain (`scripts/build-wasm.py`) | toolchain / engine | **hard**, worked around |
-| B7 | Unadmitted host allocations and snapshot decoding depend on the target, so native and wasm32 diverge in results and metering; heap admission and `usize` arithmetic are fixed | engine | **hard (consensus)** |
+| B7 | Unadmitted host allocations depend on the target, so native and wasm32 diverge in results and metering; heap admission, `usize` arithmetic and snapshot decoding are fixed | engine | **hard (consensus)** |
 | B3 | The native-recursion budget assumes an 8 MiB stack; smaller wasm stacks overflow **before** the budget halts, sometimes on programs the engine accepts natively | engine / host | configuration for Wasmtime and Node, **hard in browsers and workerd** |
 | B8 | The ceilings do not bound memory: up to 4–5× the chunk ceiling for a running string heap, plus one container while a snapshot of it is written (the writer streams now; it used to be about 6×), unbounded for arrays and side tables; a cap that fails `memory.grow` makes programs trap or halt early with `HeapExhausted` where native completes or halts later, and Cloudflare documents replacing the whole isolate, but whether production fails `memory.grow` first is not known | engine / host | **hard under a 128 MB cap** |
 | B2 | Wasm exception-handling encoding: LLVM emits the legacy form by default, and Wasmtime accepts only the standard `exnref` form | toolchain / host | configuration |
@@ -83,16 +83,19 @@ The interpreter, compiler, RegExp and snapshot codec use no `std::thread`, `std:
 `std::env` or networking.
 Three public modules do touch the OS:
 
-- `ironhorse-snapshot`'s documented `FileStore` (`store_file.rs`) uses `std::fs` and
-  `std::process::id()`.
-  On `wasm32-wasip1`, `begin_store_session` into a `FileStore` panics with "unsupported",
-  because `getpid` is unavailable.
+- `ironhorse-snapshot`'s documented `FileStore` (`store_file.rs`) uses `std::fs`.
 - `ironhorse-snapshot`'s `machine` module: `MachineSnapshot::suspend_to_cas` and
-  `resume_from_cas` use `std::fs`, and the CAS temporary name uses `std::process::id()`
-  (`machine.rs:114`), so `suspend_to_cas` also panics on `wasm32-wasip1`.
+  `resume_from_cas` use `std::fs`.
 - `ironhorse-vm`'s hidden `source_scan` module (`source_scan.rs:11`) uses `std::fs`.
 
-All three build, but only `MemoryStore` or a host-imported store is usable on wasm.
+All three build.
+None asks for a process id on WASI any longer (B7), so on `wasm32-wasip1` a `FileStore` session
+and a CAS suspend and resume work in a preopened directory, as `scripts/test-snapshot-wasi.py`
+checks.
+On `wasm32-unknown-unknown`, which has no filesystem, only `MemoryStore` or a host-imported
+store could serve, and a store session still panics there.
+The default commit-token source reads `SystemTime::now()`, which that target does not
+implement, and `begin_store_session` takes no other source outside tests.
 
 `Date.now` does not read a host clock.
 `HashMap` seeding works on both targets.
@@ -405,6 +408,27 @@ Both sites are fixed (see [Status](#status)).
   An overflowing HEAP, STAC or manifest count is refused on both targets, with different
   `Corrupt` messages (`ironhorse-snapshot/src/image.rs:957`, `:4630`, `store.rs:639`).
 
+**Status.**
+Every item above is closed: the first by the streaming writer, and the other four each with a
+test that `scripts/test-snapshot-wasi.py` also runs on `wasm32-wasip1`.
+- The store open gates refuse a `chunk_len` past the u32 chunk offset space, as the manifest
+  decoder and the commit check already did, so a host-imported store's manifest is refused
+  too before any reader narrows it (`ironhorse-snapshot/tests/chunk_length_refusal.rs`).
+  No other decoded `u64` in `ironhorse-snapshot` is narrowed to `usize` unbounded: function
+  body offsets are bounded by their segment first, and the VM narrows saved frame offsets with
+  `try_from`.
+- Decoding refuses a second Intl bound-function row for one owner, and the VM's restore
+  refuses it too (`ironhorse-snapshot/tests/intl_bound_owner_refusal.rs`).
+  Every other side-table decoder already requires strictly ascending keys, and the `compare`
+  getter is the only VM lookup that searches a restored `HashMap` by value.
+- The file store's and the CAS's temporary names no longer use `std::process::id()`.
+  They use 64 random bits drawn once per process from the standard library's `RandomState`
+  and a sequence number, and both writers create the file exclusively and draw again on a
+  collision (`ironhorse-snapshot/tests/temporary_names.rs`).
+- The HEAP and STAC record sizes and the manifest's parent-seal end are computed in `u64`, so
+  an oversized count is refused as truncation, with the same message, on every target
+  (`ironhorse-snapshot/tests/record_count_overflow.rs`, which no longer needs a 32-bit host).
+
 ### Latent: host limits the ceilings can outrun
 
 - **Embedder-raised ceilings.**
@@ -451,10 +475,31 @@ Both sites are fixed (see [Status](#status)).
   A crafted database could alias rows differently by width; the crate does not build for wasm
   today.
 
+**Status.**
+Two of these are closed.
+- Under `consensus`, `set_slot_ceiling` and `set_chunk_ceiling`, and the arenas' own
+  `set_ceiling`, refuse a ceiling above `CONSENSUS_MAX_SLOT_CEILING` (44,739,242 slots, the
+  `isize::MAX` wall for doubling 24-byte records) or `CONSENSUS_MAX_CHUNK_CEILING` (2^29
+  bytes, where the 1M-unit doubling program above halts identically on both targets), and
+  keep the current ceiling (`ironhorse-vm/src/value.rs`,
+  `ironhorse-vm/tests/consensus_ceiling_caps.rs`).
+  The defaults sit under both caps, so no program run under the default ceilings changes.
+  The stack-lanes probe builds with `consensus` and prints the refusal, so the three
+  `cross-target.slow.js` repros that raise the chunk ceiling past the cap now print the same line
+  on both targets.
+  The caps are not yet chosen together against a 4 GiB footprint with room for a checkpoint:
+  the repro at exactly both caps still diverges, and the B8 memory work may lower them.
+- `ironhorse-store-sqlite` range-checks every stored slot-page, chunk-extent and page-edge key
+  into u32, refusing one outside it as a corrupt row, and its page-summary count no longer
+  accepts a negative key in place of page 0
+  (`rust/endo/ironhorse-store-sqlite/tests/row_corruption.rs`).
+
 ### Status
 
-Two of the four families are closed: every site in "Admission charged by Rust memory layout"
-and in "Arithmetic on the host's `usize`" now behaves the same on native and wasm32.
+Three of the four families are closed.
+Every finding in "Snapshots and stores" is closed, as its status above records.
+Every site in "Admission charged by Rust memory layout" and in "Arithmetic on the host's `usize`"
+now behaves the same on native and wasm32:
 
 - Scratch admission (`ironhorse-vm/src/interp/admission.rs`) charges a width each element type
   declares through a `ScratchElement` trait, instead of `size_of::<T>()`.
@@ -483,8 +528,7 @@ The `json.rs:1204` repro was rerun with a 134,136,000-unit filler and its object
 `join`, since the audit did not record how it built that text.
 The release-neutral gate (`stack-lanes/differential.py`) found native output byte-identical to
 the tree before the fix on all 1,763 of its programs.
-The unadmitted host allocations, the snapshot and store findings not marked fixed, and the
-latent issues remain open.
+The unadmitted host allocations and the latent issues not marked closed remain open.
 
 ## B3: the native-recursion budget outruns wasm stacks
 
@@ -909,13 +953,15 @@ recipe, the probe build, the WASI script and the toolchain pin).
 It builds all eight runtime library crates with `scripts/build-wasm.py` for both targets, with
 unwinding (B1), `exnref` (B2) and `consensus` (B4), so it also covers `ironhorse-compile` and
 `ironhorse-runtime`, which the stable build cannot link.
-It then runs `scripts/test-snapshot-wasi.py`, the snapshot's 32-bit overflow refusals on
-`wasm32-wasip1`, so the claim in `architecture-review/2026-09-06/ARCHITECTURE-REVIEW.md` that
-those refusals run on 32-bit WASI in CI now holds.
+It then runs `scripts/test-snapshot-wasi.py` on `wasm32-wasip1`: the snapshot's B7 refusals and
+portability checks that need no compiler, and the consensus ceiling caps, so the claim in
+`architecture-review/2026-09-06/ARCHITECTURE-REVIEW.md` that the overflow refusals run on 32-bit
+WASI in CI now holds.
 The script had been failing since 2026-09-24 (`50f547f71`), when `RandomTokens`, the default
 commit-token source of store sessions, began hashing `std::process::id()`, which panics on
 WASI; checkpointing into a `MemoryStore` panicked on `wasm32-wasip1`.
-That source now leaves the process id out on WASI (`34464d6c6`), and the script passes (2/2).
+That source now leaves the process id out on WASI (`34464d6c6`), and the script passes, now
+with nine tests (9/9).
 On `ubuntu-latest` a cold run of the job, with no cache, took 2 min 18 s.
 The two builds took 97 s, of which rebuilding std took about 10 s per target, and the WASI
 script 13 s; the rest is the engine crates themselves, `ironhorse-vm` above all.
@@ -929,7 +975,7 @@ What the job does not cover:
   It links no wasm executable from the engine; the stack-lanes probe, which does, is built by
   `cross-target-ironhorse` and the nightly lanes.
 - **No engine test suites on wasm.**
-  Only the snapshot's two overflow refusals run there.
+  Only the WASI script's tests run there.
 - **The legacy EH encoding and the default features are not built.**
 
 **Engine test suites on `wasm32-wasip1` (2026-10-14, report only).**
@@ -969,7 +1015,10 @@ For a follow-up deciding what to gate: the 185 binaries without a failure (21, 1
 pass as they are.
 The thread class needs those tests to run inline on targets without threads, taking their stack
 from `max-wasm-stack`.
-The process-id class needs scratch names that do not read the process id.
+The process-id class needs scratch names that do not read the process id; the store's and the
+CAS's temporaries no longer read it (B7), but the tests' own scratch directories still do.
+The width row's cause is fixed: both targets now refuse those counts with the native message
+(B7).
 The file class needs preopened directories, which were not tried, or is native-only by nature,
 like the source scans.
 
