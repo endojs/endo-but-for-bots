@@ -15,6 +15,9 @@
 //! Every run command also takes `--stack`, `--digest` and `--meter-trace`,
 //! and `--chunk-ceiling=<bytes>` and `--slot-ceiling=<slots>`, which set the
 //! machine's allocation ceilings before the run (the defaults otherwise).
+//! The probe builds with `consensus`, which refuses a ceiling above its cap;
+//! a refused ceiling prints `halt=CeilingRefused requested=<n> cap=<n>` in
+//! place of the run, the same line on every target.
 //!
 //! Natively, a case runs on a thread of the documented contract stack
 //! (`NATIVE_STACK_BYTES`), as the recursion-budget tests do. The eval bridge
@@ -185,16 +188,20 @@ fn numeric_flag<T: std::str::FromStr>(args: &[String], name: &str) -> Option<T> 
 
 /// Set the ceilings a run asked for, after the intrinsics are linked, so
 /// that a ceiling below what linking takes halts the run (`HeapExhausted`)
-/// instead of the probe. Kept out of line so that [`run`]'s frame does not
-/// grow.
+/// instead of the probe. A ceiling above a consensus cap is refused before
+/// the run. Kept out of line so that [`run`]'s frame does not grow.
 #[inline(never)]
-fn set_ceilings(machine: &mut ironhorse_vm::Interp, ceilings: Ceilings) {
+fn set_ceilings(
+    machine: &mut ironhorse_vm::Interp,
+    ceilings: Ceilings,
+) -> Result<(), ironhorse_vm::CeilingRefused> {
     if let Some(chunk) = ceilings.chunk {
-        machine.set_chunk_ceiling(chunk);
+        machine.set_chunk_ceiling(chunk)?;
     }
     if let Some(slot) = ceilings.slot {
-        machine.set_slot_ceiling(slot);
+        machine.set_slot_ceiling(slot)?;
     }
+    Ok(())
 }
 
 /// With `--stack`, each stage's native high-water mark is appended as
@@ -237,7 +244,15 @@ fn run(source: &str, compile_only: bool, eval_compiler: bool, extras: Extras, ce
     if eval_compiler {
         machine.set_source_compiler(std::rc::Rc::new(ironhorse_runtime::IronhorseSourceCompiler));
     }
-    set_ceilings(&mut machine, ceilings);
+    if let Err(refused) = set_ceilings(&mut machine, ceilings) {
+        println!(
+            "halt=CeilingRefused requested={} cap={}{}",
+            refused.requested,
+            refused.cap,
+            suffix(compile_bytes)
+        );
+        return;
+    }
     let trace = extras.meter_trace.then(|| arm_meter_trace(&mut machine));
     let (out, run_bytes) = paint::stage(|| machine.run(&bytecode).host_coerced());
     let traced = match trace {

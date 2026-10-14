@@ -71,6 +71,9 @@ list entry survives an insertion above it.
 `// flags:` takes `--eval-compiler`, `--compile-only`, `--chunk-ceiling=<bytes>` and
 `--slot-ceiling=<slots>`; the last two set the machine's allocation ceilings, for the B7
 repros that need a ceiling an embedder could raise.
+The probe builds with `consensus`, so a ceiling above a consensus cap
+(`CONSENSUS_MAX_CHUNK_CEILING`, `CONSENSUS_MAX_SLOT_CEILING`) prints
+`halt=CeilingRefused requested=<n> cap=<n>` in place of the run, the same line on every target.
 
 ## Cross-target comparison
 

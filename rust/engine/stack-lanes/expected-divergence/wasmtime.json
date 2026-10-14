@@ -52,24 +52,6 @@
       "wasm32": "halt=EngineInvariant(\"eval:compiler-invariant\") result=\"\" meter=4771047446416 digest=f054dbcea516bb8a parse_meter=16801792 charges=415:523c3c9ac10df189 checks=4:6dc7ab195a164d27 panic=capacity overflow at ironhorse-compile/src/lexer.rs"
     },
     {
-      "program": "snippet cross-target.slow.js#chunk-arena-doubling",
-      "site": "embedder-raised ceilings: value.rs:2222",
-      "native": "halt=Return result=\"17\" meter=9346468332712 digest=78743d8954a74c2d parse_meter=18313216 charges=409:719d0a838e0e379f checks=102:5a2f17802a912425",
-      "wasm32": "halt=HostAllocationFailed result=\"\" meter=9346466890360 digest=78743d8954a74c2d parse_meter=18313216 charges=409:719d0a838e0e379f checks=99:a5502649b45e78b1"
-    },
-    {
-      "program": "snippet cross-target.slow.js#scratch-over-2-gib",
-      "site": "embedder-raised ceilings: interp/admission.rs:236",
-      "native": "halt=Return result=\"1100000000\" meter=18023500968520 digest=8959d96dafba0f86 parse_meter=7131136 charges=119:5d066758e3e18dc1 checks=2:a0065880a369ff48",
-      "wasm32": "halt=HostAllocationFailed result=\"\" meter=18023500771912 digest=8959d96dafba0f86 parse_meter=7131136 charges=119:5d066758e3e18dc1 checks=2:a0065880a369ff48"
-    },
-    {
-      "program": "snippet cross-target.slow.js#chunk-ceiling-2-30-doubling",
-      "site": "embedder-raised ceilings: set_chunk_ceiling at 2^30",
-      "native": "halt=HeapExhausted result=\"\" meter=18259380792 digest=24664f0f567526b5 parse_meter=10412032 charges=232:4ab68ad8a16e21b4 checks=10:31246dfaaf1bd2c2",
-      "wasm32": "halt=HostAllocationFailed result=\"\" meter=18259380792 digest=24664f0f567526b5 parse_meter=10412032 charges=232:4ab68ad8a16e21b4 checks=10:31246dfaaf1bd2c2"
-    },
-    {
       "program": "snippet cross-target.slow.js#slot-ceiling-kept-objects-doubling",
       "site": "embedder-raised ceilings: set_slot_ceiling at 44,739,242",
       "native": "halt=HeapExhausted result=\"\" meter=31051724475986000 digest=0afb7695ebb45906 parse_meter=21139456 charges=435:4e4873326eede6c2 checks=176202063:ca1bb2842642200a",
