@@ -50,6 +50,10 @@ impl SourceCompiler for Compiler {
                     ..
                 }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
                 ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                    kind: ironhorse_compile::LexErrorKind::RegExpHostAllocationFailed,
+                    ..
+                }) => Err(ironhorse_vm::SourceCompileError::HostAllocationFailed),
+                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
                     kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
                     ..
                 }) => Err(ironhorse_vm::SourceCompileError::MeterAbort),
@@ -95,6 +99,10 @@ impl SourceCompiler for Compiler {
                     ..
                 }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
                 ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                    kind: ironhorse_compile::LexErrorKind::RegExpHostAllocationFailed,
+                    ..
+                }) => Err(ironhorse_vm::SourceCompileError::HostAllocationFailed),
+                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
                     kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
                     ..
                 }) => Err(ironhorse_vm::SourceCompileError::MeterAbort),
@@ -139,6 +147,13 @@ fn eval(session: &mut StoreSession, source: &str, budget: u64) -> Result<String,
                 ..
             }) => "guest crank halted: HeapExhausted during compilation".to_string(),
             ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                kind: ironhorse_compile::LexErrorKind::RegExpHostAllocationFailed,
+                ..
+            }) => format!(
+                "{} during compilation",
+                crank_halted(&ironhorse_vm::Halt::HostAllocationFailed)
+            ),
+            ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
                 kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
                 ..
             })
@@ -159,9 +174,24 @@ fn eval(session: &mut StoreSession, source: &str, budget: u64) -> Result<String,
     };
     let outcome = m.run(&code);
     if !outcome.completed {
-        return Err(format!("guest crank halted: {:?}", outcome.halt));
+        return Err(crank_halted(&outcome.halt));
     }
     Ok(outcome.result)
+}
+
+/// The fatal message for a crank that did not complete. Every such crank is
+/// fatal: the worker reports it and exits before `checkpoint_to_store`, so
+/// nothing the crank did is committed. A host failure
+/// (`Halt::HostAllocationFailed`) is named apart from the program's own
+/// halts because it is not one: the host must not record it as the crank's
+/// outcome, but restore the last commit in a fresh worker and re-drive the
+/// crank there.
+fn crank_halted(halt: &ironhorse_vm::Halt) -> String {
+    if halt.is_host_failure() {
+        format!("host failure, crank not committed: {halt:?}; restore in a fresh worker")
+    } else {
+        format!("guest crank halted: {halt:?}")
+    }
 }
 
 // Kernel locks are released on process death. Never unlink the lock files:
@@ -360,6 +390,23 @@ mod tests {
         assert_eq!(
             session.machine_mut().meter_index(),
             expected.meter_raw + meter.raw()
+        );
+    }
+
+    /// Every incomplete crank is fatal, so none is committed; a host
+    /// allocation failure says so, and is never reported as a guest halt.
+    #[test]
+    fn a_host_allocation_failure_is_fatal_and_named_as_the_hosts() {
+        use ironhorse_vm::Halt;
+        let host = crank_halted(&Halt::HostAllocationFailed);
+        assert!(
+            host.starts_with("host failure, crank not committed"),
+            "{host}"
+        );
+        assert!(!host.contains("guest crank halted"), "{host}");
+        assert_eq!(
+            crank_halted(&Halt::HeapExhausted),
+            "guest crank halted: HeapExhausted"
         );
     }
 
