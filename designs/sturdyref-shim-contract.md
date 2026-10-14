@@ -1,392 +1,266 @@
-# The `SturdyRef` Shim Contract (Layer 1)
+# The `Parcel` Shim Contract (Layer 1)
 
 | | |
 |---|---|
 | **Created** | 2026-09-30 |
+| **Updated** | 2026-10-14 |
 | **Author** | kriscendobot (prompted) |
 | **Status** | Proposed |
 
-## What is the Problem Being Solved?
+## Summary
 
-Endo has no shared, realm-wide notion of a *sturdy reference*: an offline
-reference that can be revived into a live one later. Each layer has invented
-its own. `@endo/ocapn` ships a `WeakMap`-backed `ocapn-sturdyref` tagged record
-([`packages/ocapn/src/client/sturdyrefs.js`](../packages/ocapn/src/client/sturdyrefs.js)). Draft PR
-[#774](https://github.com/endojs/endo-but-for-bots/pull/774) proposes a global
-`SturdyRef` namespace that maps opaque tokens to locator records
-(`fromLocation`/`toLocation`); its global was deliberately withheld from child
-compartments. The maintainer's layering directive on
-[#695](https://github.com/endojs/endo-but-for-bots/pull/695#issuecomment-5903472512)
-(2026-09-30) replaces both with a nine-layer, bottom-up stack. This document
-specifies layer 1, the shim that every higher layer builds on. The tracking
-issue for the arc is
-[kriscendobot/garden#47](https://github.com/kriscendobot/garden/issues/47).
+This document specifies `Parcel`, an opaque, passable box around a location and the procedure for opening it into a live capability.
+It replaces the JavaScript-facing `SturdyRef` name and contract throughout the in-flight nine-layer stack while preserving the OCapN specification's `ocapn-sturdyref` wire tag.
+The historical filename stays in place so the existing draft PR, review links, and layer references remain stable.
 
-The stack, bottom-up:
+A Parcel is neither locator data nor a live presence.
+It can survive serialization and a network partition, but opening it may fail and repeated opens need not produce the same live reference.
+The location is cryptographic authority, so the ability to read it is separate from the ability to hold, pass, or open the Parcel.
 
-1. The `SturdyRef` shim contract (this document; the build reworks #774).
-2. SES: permit `SturdyRef` and propagate it to child compartments.
-3. Pass-style: SturdyRefs become passable, analogous to presences.
-4. Marshal: a representation of SturdyRefs in each encoding.
-5. CapTP: mint SturdyRefs and carry them over the wire.
-6. CapTP: construct a SturdyRef from data (peer id, object id, designator,
-   hints).
-7. OCapN: enliven through the bootstrap / nonce locator.
-8. Daemon: a SturdyRef for a formula, without incarnating it.
-9. Agent API: revisit #695 and #871.
+The design is derived from the maintainer's immutable essay, [Passing Parcels](https://4mudvrv2lxvf556yxjyudkilwqadmclfx736ym3u77bfro4huoka.ocap.site/), and reconciles that proposal with the already-built SturdyRef stack.
+The original layering directive is on [#695](https://github.com/endojs/endo-but-for-bots/pull/695#issuecomment-5903472512), and the layer-1 implementation is the existing draft [#774](https://github.com/endojs/endo-but-for-bots/pull/774).
 
-The directive borrows the shape of the `HandledPromise` shim from
-`@endo/eventual-send`. That shim installs a `HandledPromise` constructor on
-`globalThis` once per realm, and each `HandledPromise` is built with a
-*handler*, an object whose methods (traps) define what happens when the
-promise is sent a message. `Proxy` uses the same pattern: the object has no
-behavior of its own, and the handler supplies it. The directive fixes the
-shape, and this document does not reopen it:
+## Semantics
 
-- A global `SturdyRef` shim, analogous to the `HandledPromise` shim: each copy
-  races to define `SturdyRef` globally, and the first definer wins.
-- A `SturdyRef` is **constructed** the way a `Proxy` or `HandledPromise` is,
-  with a **handler** whose `enliven` hook defines how it is revived. The
-  constructor also captures a string locator for the individual ref, so one
-  handler can serve every SturdyRef minted by a CapTP.
-- `SturdyRef.enliven(ref)` sends an `enliven` message to the ref, which
-  dispatches to its handler's hook with both the ref and its locator. A higher
-  layer, such as a CapTP, uses this hook to define the enlivening procedure.
+The pass style is literally `"parcel"`.
+A Parcel has ordinary local object identity, but the pass style provides no pass-invariant equality and no location-based equality.
+Two Parcels for one capability may be unequal, and two equal location strings are not proof that two grants are the same.
 
-## Design
+`Parcel.open(parcel)` always returns a promise.
+It invokes the captured hook in a later turn, assimilates the hook's returned promise or thenable, and turns a thrown error into a rejection.
+Opening the same Parcel repeatedly dispatches repeatedly and need not converge on one referent.
+Memoization, attenuation, cancellation, revocation, and connection reuse belong in the open hook or the protocol layer that supplies it.
 
-### Surface
+A Parcel survives a partition because its location can be serialized and a later process can construct an equivalent Parcel with an appropriate open hook.
+Survival does not guarantee that the peer remains reachable or continues to honor the location.
+
+A Parcel cannot be used to match a grant.
+Its public surface exposes no location, grant identity, or equality predicate, and a brand check proves only construction by the realm's selected Parcel implementation.
+
+Every Parcel instance is frozen and has no own properties.
+After `lockdown()`, `%InitialParcel%`, `%SharedParcel%`, their statics, and their shared prototype are hardened.
+The Parcel shim must be installed before `lockdown()` so SES can sample, split, and harden the two constructors.
+
+## Surface
 
 ```js
-const ref = new SturdyRef(handler, locator); // handler: { enliven(ref, locator) => value | Promise }
-SturdyRef.enliven(ref);             // => Promise<live reference>
-SturdyRef.isSturdyRef(value);       // => boolean, a brand check that confers no authority
-E.enliven(ref);                     // => Promise<live reference>
+const parcel = new Parcel(location, openHook);
+
+Parcel.isParcel(parcel); // true
+Parcel.open(parcel); // Promise<Passable>
+Parcel.locate(parcel); // string, only on %InitialParcel%
 ```
 
-A handler author's view, end to end:
+The constructor has the following contract.
 
-```js
-const locator = 'ocapn://peer.example/s/abc123';
-const handler = {
-  enliven(_ref, refLocator) {
-    return connectAndFetch(refLocator); // any value or promise
-  },
-};
-const ref = new SturdyRef(handler, locator);
-SturdyRef.isSturdyRef(ref); // true
-Reflect.ownKeys(ref);        // [] (the locator is not reachable from the ref)
-const live = await SturdyRef.enliven(ref); // the value connectAndFetch resolved to
-```
+- `location` must be a string.
+- `openHook` must be a function.
+- The constructor reads and captures both values once.
+- The constructor rejects subclassing and calls without `new`.
+- The instance inherits from the shared hardened `Parcel.prototype`, has `Symbol.toStringTag: 'Parcel'`, has no own properties, and is frozen.
+- The location and hook live in the selected constructor's private `WeakMap` and are not reachable through the instance or prototype.
 
-- **`new SturdyRef(handler, locator)`** requires `handler` to be an object
-  whose `enliven` property is a function and `locator` to be a string, and
-  throws `TypeError` otherwise. A string leaves locator evolution to the
-  protocol that interprets it; layer 1 does not impose an OCapN-shaped record.
-  The constructor reads `handler.enliven` once. This deliberately captures the
-  trap early instead of following `Proxy`'s dynamic trap lookup. That protects
-  only the dispatch target. The constructor does not harden or freeze the
-  handler, so any state the hook reads through
-  `this` or its closure stays mutable and is the handler author's to protect.
-  A handler that keeps mutable state on `this` works; a handler that needs
-  stability hardens itself. It returns a fresh object that is frozen and has
-  no own properties. The object inherits from a hardened
-  `SturdyRef.prototype`, which carries only `constructor` and
-  `Symbol.toStringTag: 'SturdyRef'`. The handler, captured hook, and locator
-  are kept in a closely held `WeakMap` inside the realm's single `SturdyRef`
-  constructor. They are never reachable from the ref. Calling `SturdyRef`
-  without `new` throws, as it does for `Proxy`.
-- **`SturdyRef.enliven(ref)`** returns a promise.
-  - Timing: the hook runs in a later turn.
-  - Call form: the shim invokes the captured hook as
-    `enliven.call(handler, ref, locator)` and resolves the promise with the
-    result. Passing both values lets the handler be shared while preserving
-    access to the particular ref for identity-keyed policy. Because this is an
-    ordinary promise resolution, a hook that returns a thenable has it
-    assimilated.
-  - Failure: if the hook throws, the promise rejects with that error. A
-    non-SturdyRef argument rejects the promise with a `TypeError` whose
-    message begins `SturdyRef.enliven: not a SturdyRef`; it does not throw
-    synchronously. An un-awaited `SturdyRef.enliven(undefined)` therefore
-    surfaces only as an unhandled rejection.
-  - Why the asymmetry with the constructor: `enliven` is the "send" in the
-    directive, eventual-send semantics without depending on
-    `@endo/eventual-send`. A send reports every failure through its promise,
-    so a caller handles a mistyped argument and a revoked ref on one path. The
-    constructor is not a send and fails synchronously, like `new Proxy`.
-  - No caching: each call dispatches afresh, so a ref can be enlivened any
-    number of times, and each call runs the hook again. The handler owns
-    idempotence and identity. If two concurrent enlivens must not both open a
-    connection, or must yield the same presence, the handler memoizes; the
-    shim does not.
-- **`SturdyRef.isSturdyRef(value)`** checks whether `value` is in the
-  constructor's `WeakMap`. It reveals no captured content. Layer 3
-  (pass-style) needs exactly this to recognize refs. It does not use
-  `instanceof`: a prototype chain can be forged with `Object.create`, and an
-  object that inherits from `SturdyRef.prototype` is not thereby a ref. A
-  later simplification must not collapse the brand check into `instanceof`.
-  The brand check proves only that *some* caller built the ref with this
-  realm's constructor. It says nothing about who minted it or whether its
-  handler is trustworthy; see [Provenance](#provenance).
-- **`E.enliven(ref)`** is the `@endo/eventual-send` spelling of
-  `SturdyRef.enliven(ref)`, following the precedent of `E.resolve` as the
-  convenience spelling for the corresponding constructor static. It lands
-  with the layer-1 build.
+The open hook has the call shape `openHook(location, parcel)`.
+The shim invokes it with `this === undefined` in a later turn.
+A single function can therefore serve every Parcel minted by a CapTP or OCapN client, while the location and Parcel arguments identify the particular request.
+The hook may close over mutable policy or connection state, and the shim does not harden that closed-over state.
 
-The ref is **opaque**: `Reflect.ownKeys(ref)` is empty, and nothing on the ref
-or its prototype reaches the handler or locator. Refs have **no
-identification**: two refs built from the same handler and locator are distinct
-and not equal. Each ref has its own object identity, as any object does, but
-the shim offers no equality based on what the locator denotes. Interning by
-locator belongs to the minting layer.
+`Parcel.open(parcel)` rejects with a `TypeError` for a non-Parcel rather than throwing synchronously.
+This keeps argument errors and hook failures on the one promise-returning path.
+The semantic result is a `Passable`, but layer 1 does not depend on `@endo/pass-style` merely to validate the hook's result.
 
-**Name overlap with `@endo/ocapn`.** Until layer 5, `@endo/ocapn` keeps its own
-free functions `isSturdyRef(value)` and `enlivenSturdyRef(sturdyRef, ...)`,
-which operate on the `ocapn-sturdyref` tagged record, not on a `SturdyRef`
-instance. The overlap is accepted for that window: the shim's functions are
-always spelled as statics (`SturdyRef.isSturdyRef`, `SturdyRef.enliven`), and
-the OCapN functions are always imported by name. Layer 5 retires the OCapN
-record and its functions. Because a wrong import silently returns `false`
-rather than throwing, the layer-1 build also records this overlap as a known
-trap in the `@endo/sturdyref` README, not only here.
+`Parcel.isParcel(value)` is a non-authoritative brand check against the selected constructor's private table.
+It does not use `instanceof`, because a forged prototype chain is not a Parcel.
+It does not assert who minted the Parcel, whether its location is valid for a particular protocol, or whether opening it is safe.
 
-### Packaging (Kept from #774)
+`Parcel.locate(parcel)` synchronously returns the captured string and throws a `TypeError` for a non-Parcel.
+This static exists only on `%InitialParcel%`.
+Code that can call it has explicit authority to reveal cryptographic location data and must treat the returned string as a capability.
 
-The package stays `@endo/sturdyref`, with `index.js` as the ponyfill (a
-module that exports the implementation without touching `globalThis`) and
-`shim.js` as the entry that installs it on `globalThis`. It keeps #774's
-first-wins mechanics:
+The operation is named `open`, not `enliven`, because it opens a dormant box rather than sending an eventual message to a live or promised target.
+`SturdyRef.enliven` is replaced by `Parcel.open`.
+`E.enliven` does not survive the pivot, and no `E.open` alias is added.
+Keeping acquisition on the Parcel constructor avoids extending the general eventual-send namespace with a type-specific operation.
 
-- `selectSturdyRef` adopts an existing `globalThis.SturdyRef` if it is valid.
-  Here that means a function with `enliven` and `isSturdyRef` statics. If the
-  existing global lacks either static, it throws. If there is no global, it
-  installs this copy's constructor with `writable: false`,
-  `configurable: false`, `enumerable: false`. Eval twins (two copies of the
-  package loaded in one realm, for example from two versions in
-  `node_modules`) therefore share one constructor and one `WeakMap`, so a ref
-  minted by one twin is recognized and enlivened by another. The shape check
-  cannot detect semantic drift between twins: the first definer's behavior
-  (timing, call form, hook read time) governs every copy. Layer 1 accepts
-  that, because these semantics are settled before `@endo/sturdyref` is first
-  published, so every released copy implements one contract. A later
-  change to those semantics must add a contract marker (for example a
-  `SturdyRef.contract` version static) to the shape check rather than rely on
-  first-wins.
-- `provideSturdyRef` installs lazily; nothing is installed at import time
-  except through the eager `shim.js` entry.
-- Installation may happen before or after `lockdown`, as for the
-  `HandledPromise` shim. Importing the shim before `lockdown` is the ordering
-  layer 2 needs, because SES must see `SturdyRef` at `repairIntrinsics` time
-  to share it with child compartments.
-- The shim wants its constructor, prototype, and statics tamper-proof as soon
-  as they are installed, because every ref in the realm trusts them, and
-  after `lockdown` that means `harden`. Before `lockdown`, though, the shim
-  must not call `@endo/harden`: that installs `Object[Symbol.for('harden')]`, and
-  `lockdown` then throws "Cannot lockdown (repairIntrinsics) if a prior harden
-  implementation has been used and installed".
-- So the shim hardens with `@endo/harden` only when a harden is already
-  present (`globalThis.harden` or `Object[Symbol.for('harden')]`). Otherwise
-  it freezes the constructor, its prototype, and its statics, and leaves
-  hardening to `lockdown`. Refs are frozen at construction either way.
-- **The `@endo/pass-style` dependency is dropped.** #774 minted each token
-  with `Far('SturdyRef', {})`. That makes layer 1 depend on layer 3 and
-  classifies refs as remotables, which is a claim layer 3 must make, not
-  layer 1. At layer 1, `passStyleOf(ref)` rejects a SturdyRef, but not for a
-  generic reason. A ref has no own keys, so it passes the remotable
-  duck-type check in `packages/pass-style/src/remotable.js` vacuously, and
-  is rejected only one step later, because `SturdyRef.prototype` carries no
-  `PASS_STYLE` tag. A ref is therefore one property away from classifying as
-  a remotable. Layer 1 must not put `PASS_STYLE` on `SturdyRef.prototype`,
-  and a layer-1 test pins the rejection so that adding the tag by accident
-  fails the build. Whether and how a ref becomes passable is layer 3's
-  decision, made deliberately.
+The contract uses one open function rather than a handler object.
+There is only one trap, so a handler adds dynamic shape, `this` binding, and mutation questions without providing a second dispatch operation.
+The function still provides the sharing property the old handler was selected for: one open hook can serve every Parcel minted by a transport.
 
-### Child Compartments (Reconciling #774's "Withheld" Property with Layer 2)
+## Initial and shared authority split
 
-#774 withheld the global from child compartments deliberately. The global
-there was an **amplifier**: `toLocation` turned any token into its locator, so
-propagating it would have leaked authority. The handler construction removes
-that reason. The global confers no authority. `new SturdyRef` only builds refs
-around handlers the caller already has (the same as `new Proxy`).
-`isSturdyRef` is a brand check. `enliven` only runs the hook of a ref the
-caller already holds, and holding a sturdy ref is exactly the authority to
-revive it. That argument covers what the global lets a holder *do*. It does
-not cover what a recipient may *believe* about a ref it is handed, which is
-the next section.
+SES exposes two constructors over one brand table and one prototype.
 
-### Provenance
+- `%InitialParcel%` is the first-wins constructor installed on the start compartment's global before lockdown.
+  It has `open`, `locate`, and `isParcel` statics.
+- `%SharedParcel%` is the tamed constructor installed on every compartment created after lockdown.
+  It has `open` and `isParcel`, but deliberately has no `locate` static.
 
-Dropping the withholding moves a risk rather than removing it. Once layer 2
-propagates `SturdyRef`, a guest can call `new SturdyRef(evilHandler)`, and the
-result passes `SturdyRef.isSturdyRef`. If a host or a CapTP enlivened such a
-ref, the guest's hook would run in the host's turn with that ref and locator as
-its arguments. The brand check cannot prevent that: it proves "built by this
-realm's constructor", never "built by a party I trust".
+The split follows `%InitialURL%` and `%SharedURL%` in [`packages/ses/src/tame-url-constructor.js`](../packages/ses/src/tame-url-constructor.js).
+SES adds `tame-parcel-constructor.js`, samples the valid pre-lockdown global, creates a function named `Parcel` whose construction delegates to `%InitialParcel%`, and registers both constructors as intrinsics.
+The shared constructor returns an instance made by the initial constructor and points its own `prototype` property at the same `Parcel.prototype`.
+Both `instanceof` checks and `Parcel.isParcel` therefore agree across the compartment boundary.
 
-Minter provenance is therefore not a layer-1 property, and layer 1 does not
-claim it. It belongs to the layer that accepts refs across a trust boundary.
-Layer 5 owns it for CapTP: a CapTP serializes or enlivens on a peer's behalf
-only refs it finds in its own side table (see
-[Forward Sketch](#forward-sketch-layers-35-no-implementation)), which is a
-provenance check, not a brand check. Layer 8 owns it for the daemon. Until
-those layers exist, the rule for callers is plain: enlivening a ref runs its
-minter's code, so enliven only refs from a source you would let run code in
-your turn, exactly as with calling a function you were handed.
+Before hardening, SES repoints the shared prototype's `constructor` property to `%SharedParcel%`, exactly as URL and Date avoid a powered constructor back-reference.
+Without that step, a child could reach `%InitialParcel%` as `Parcel.prototype.constructor` and recover `locate`.
+The start compartment consequently also observes `parcel.constructor === %SharedParcel%`; its powered constructor remains available as its global `Parcel` binding.
 
-**Stance:** the shim takes no position of its own on propagation. It installs
-on `globalThis`, and SES decides what child compartments see. Before layer 2,
-SES has no permit for `SturdyRef`, so even a pre-lockdown install is not
-admitted as an intrinsic, and a post-lockdown install is never present at
-`repairIntrinsics`.
+Endowing `%InitialParcel%`, or merely its `locate` function, confers location-revelation authority.
+Endowing `%SharedParcel%` does not.
+A child that already holds a location may construct a new Parcel from that string and its own hook, just as it may construct a Proxy from a handler it already holds, but it cannot extract the location from a Parcel it receives.
 
-What a child compartment sees today is read from source, not yet from a run:
-`setGlobalObjectMutableProperties` in
-[`packages/ses/src/global-object.js`](../packages/ses/src/global-object.js)
-populates a new compartment's global only from the `universalPropertyNames`
-table in [`packages/ses/src/permits.js`](../packages/ses/src/permits.js),
-looked up in the permitted intrinsics, never by copying the start
-compartment's `globalThis`. So a `SturdyRef` with no entry in that table
-should be absent from child compartments however it was installed. This is
-an expectation that the layer-1 build's test must confirm, and it is a default,
-not a security property. Layer 2 adds the permit and the
-pre-`repairIntrinsics` install ordering, following `HandledPromise`, and
-propagates the global.
+This split reconciles two earlier choices.
+[#774](https://github.com/endojs/endo-but-for-bots/pull/774) withheld `SturdyRef` from children because its `toLocation` global was an authority amplifier.
+The previous layer-1 contract removed all location-revealing authority and [#1391](https://github.com/endojs/endo-but-for-bots/pull/1391) consequently shared one constructor universally.
+Parcel instead retains the safe propagation property for `%SharedParcel%` while making the host's separately named `%InitialParcel%` the explicit amplifier.
+[#1404](https://github.com/endojs/endo-but-for-bots/pull/1404)'s rule that guests neither produce nor consume identifiers or locators remains intact because guests receive only `%SharedParcel%` and Agent APIs never return `Parcel.locate` results.
 
-**Test change:** #774's `withheld: a child compartment does not see the
-SturdyRef global` becomes a temporary characterization test, named
-`characterization (flips in layer 2): without a SES permit, a child
-compartment does not see SturdyRef`. Its comment says it pins today's
-default, not a guarantee, and that layer 2 replaces it with
-`present at repairIntrinsics -> propagated`. The source comment "withheld from
-confined guests by construction" in #774's `sturdyref-shim.js` is removed.
+## Packaging and first-shim-wins installation
 
-### #774 Test Disposition
+The package is renamed from `@endo/sturdyref` to `@endo/parcel`, and the package directory becomes `packages/parcel`.
+It has an explicit `shim.js` entry for installation and a no-side-effect `no-shim.js` entry for constructor-kit use and tests, following `@endo/eventual-send`.
+Endo bootstrap code imports `@endo/parcel/shim.js` before `lockdown()`.
 
-| #774 test | Layer 1 |
+The shim installs `globalThis.Parcel` only when the property is absent.
+A later copy adopts the existing constructor after validating own data properties for `open`, `locate`, `isParcel`, and `prototype`.
+The global binding is non-writable, non-configurable, and non-enumerable, so all eval twins converge on one brand/location/hook table.
+
+A second compatible shim silently adopts the first.
+The initial release has no version brand because the contract is settled before publication and shape validation catches accidental name collisions.
+A future semantic change that cannot interoperate must add an explicit contract marker rather than weakening first-wins.
+
+Installation after lockdown is unsupported and fails against the frozen global.
+The pre-lockdown constructor and prototype remain bootstrap-mutable only long enough for SES to construct `%SharedParcel%` and repoint the shared prototype's constructor.
+`lockdown()` then hardens both constructors and the prototype as one intrinsic graph.
+Parcel instances are frozen immediately even before lockdown.
+
+## Location ownership and the current stack
+
+The essay's prior-art paragraph describes `@endo/ocapn`'s private `sturdyRefDetails` table as though it were still the sole brand and open table.
+That is true of the `llm` baseline the essay examined, but not of the in-flight stack as a whole.
+
+The stack already separates the responsibilities.
+Layer 1's selected global constructor owns the process-wide brand and open dispatch table.
+Layers 5 and 6 retain narrower protocol tables: OCapN's `sturdyRefDetails` records `(location, secret)` only for refs that its codec may serialize, and CapTP's `sturdyRefData` records reconstruction coordinates.
+Those tables are provenance and serialization-authority checks, not the JavaScript brand.
+This distinction is why refs from eval twins already share `isSturdyRef` and opening behavior even though an unrelated OCapN tracker refuses to serialize them.
+
+The Parcel pivot deliberately changes that second decision.
+The canonical location moves into the selected Parcel table, and trusted serializers in the start compartment use `%InitialParcel%.locate` to recover it.
+The OCapN `sturdyRefDetails` coordinate table and CapTP `sturdyRefData` coordinate table are removed where they merely duplicate that string.
+An OCapN codec serializes only a Parcel whose location parses as an OCapN sturdyref URI, while another CapTP protocol may recognize its own location scheme.
+Protocol recognition replaces module-instance provenance as the serialization admission rule.
+
+This does not expose locations to child compartments.
+It does mean that every start-realm component endowed with `%InitialParcel%` can inspect and serialize any Parcel whose location syntax it understands.
+That is the explicit authority conferred by `%InitialParcel%`, and host bootstrap code must endow `%SharedParcel%` instead when that authority is not intended.
+
+## Naming and encoding ledger
+
+All JavaScript-facing SturdyRef names in the nine-layer stack become Parcel names.
+The historical design filenames and PR numbers remain stable review anchors.
+
+| Surface | Parcel name |
 |---|---|
-| installed after lockdown: hardened and functioning | kept; now covers the constructor and statics |
-| locators are objects, not strings | reversed: the constructor captures a string locator without imposing protocol-specific structure |
-| no location: passStyleOf-opaque, leaks no locator | rewritten: frozen, no own keys, handler and locator unreachable; `passStyleOf` rejects, and `SturdyRef.prototype` has no `PASS_STYLE` property |
-| no identification: same locator mints distinct refs | kept: the same handler and locator mint distinct refs unless the minting layer interns them |
-| withheld from child compartments | becomes a characterization test that layer 2 flips (see above) |
-| first-wins: selections converge on one mapping | kept: a twin's ref passes `isSturdyRef` and `enliven` in the other twin |
-| malformed pre-existing global is rejected | kept, with the new shape check |
-| *(new)* | installed before lockdown: `lockdown()` does not throw (no prior harden installed); afterward `globalThis.SturdyRef` is still the installed constructor, and it and its prototype are frozen. (SES leaves an unpermitted start-compartment global in place and does not reject it; checking against a SES permit waits for layer 2, which adds one.) |
-| *(new)* | enliven dispatches to the hook in a later turn; enlivening one ref twice runs the hook twice and yields both results (no cached settlement); hook throw -> rejection; non-ref -> `TypeError` rejection; handler without `enliven` or a non-string locator throws at construction; call without `new` throws; an object created with `Object.create(SturdyRef.prototype)` fails `isSturdyRef` |
-| *(new)* | the hook runs as `enliven.call(handler, ref, locator)`: inside it, `this === handler`, the first argument is the ref, and the second is its captured string locator |
-| *(new)* | `handler.enliven` is read once, at construction: replacing it on the handler afterward does not change what an existing ref's enliven dispatches to |
-| *(new)* | `E.enliven(ref)` delegates to `SturdyRef.enliven(ref)` and preserves its later-turn, resolution, and rejection behavior |
+| Package and global | `@endo/parcel`, `packages/parcel`, `globalThis.Parcel` |
+| Constructor types and helpers | `Parcel`, `ParcelConstructor`, `makeParcelConstructor`, `provideParcel`, `selectParcel` |
+| Static operations | `Parcel.open`, `Parcel.locate`, `Parcel.isParcel` |
+| Pass style and pattern | `"parcel"`, `ParcelHelper`, `M.parcel()`, `ParcelShape` |
+| Capdata | `{"@qclass":"parcel","index":n}` and `encodeParcelToCapData` / `decodeParcelFromCapData` |
+| Smallcaps | the existing apostrophe slot prefix, with `encodeParcelToSmallcaps` / `decodeParcelFromSmallcaps` names |
+| Encode-passable ordering | the existing compact prefix `t`, keyed as `parcel`; the one-character ordering code is not a public semantic name |
+| Justin rendering | `parcelSlot(index)` and `slotToParcel(slot)` |
+| CapTP | `ParcelData`, `makeParcelFromData`, `getParcelData`, `locateParcel`; exported/imported Parcel slots use `d+` / `d-` (`d` for dormant, because `p` already denotes promises) |
+| OCapN JavaScript | `parcels.js`, `ParcelDetails`, `ParcelTracker`, `makeParcel`, `openParcelDetails`, `parcelDataToDetails`, `parcelDetailsToData`, `OcapnParcelCodec` |
+| OCapN wire | `ocapn-sturdyref` stays unchanged |
+| Daemon | `formula-parcel.js`, `makeFormulaParcelKit`, `parcelForFormula`, `ParcelShape`, `NameOrPathOrParcelShape` |
 
-### Disposition of the Withdrawn HandledPromise-Enliven Vision
+The capdata discriminator and all type, option, callback, variable, test, fixture, changeset, and documentation names use `parcel`, `Parcel`, or `PARCEL` consistently.
+The smallcaps apostrophe and compact-order `t` prefixes remain because they are encoding code points rather than English identifiers, and changing them would add wire and ordering churn with no naming benefit.
 
-Before the #695 layering directive, a garden design job,
-`endo-sturdyref-enliven-design`, set out to add sturdy refs to Endo by
-modeling them as HandledPromises that an `enliven` trap could revive. The
-job was withdrawn when the directive replaced it. Its parts are disposed of
-here so that none of them is lost or silently reintroduced:
+The OCapN record tag `ocapn-sturdyref` is specification-defined and stays byte-for-byte unchanged for Goblins and other implementation interoperability.
+The JavaScript codec can be named `OcapnParcelCodec` while reading and writing that legacy wire tag.
+Whether the OCapN specification's prose should call the value a Parcel while retaining the tag is a separate maintainer and specification-community decision.
 
-- **Sturdyref-as-HandledPromise: rejected.** A promise settles once and is
-  thenable. A sturdy ref can be revived any number of times, and it must not
-  be assimilated by `await` or by `Promise.resolve`. Pass-style would also
-  classify such a ref as a promise. The directive makes `SturdyRef` a distinct
-  global.
-- **An `enliven` meta-trap: absorbed.** The trap moves off the HandledPromise
-  handler and becomes the SturdyRef handler's `enliven` hook.
-- **`HandledPromise.enliven`: rejected.** `SturdyRef.enliven` is the
-  call-through, and HandledPromise is not involved. **`E.enliven`: adopted.**
-  Layer 1 adds it as the eventual-send convenience spelling for
-  `SturdyRef.enliven`, following the precedent of `E.resolve`.
-- **The `Promise.delegate` / `Promise[Symbol.for('enliven')]` stopgap:
-  deferred and orthogonal.** `SturdyRef` does not depend on the native-promise
-  trajectory. If it is standardized, it would be its own proposal.
-- The vision's side questions go to the layers that own them. Revocation
-  belongs to the handler, which can reject. The identity of an enlivened
-  presence belongs to the handler or CapTP, which can memoize. Persistence
-  belongs to layers 5–8.
+## Layer map
 
-### Relation to the `sturdy-refs-endor-syscall` Design
+| Layer | Existing PR | Parcel pivot owned by the layer |
+|---|---|---|
+| 1 | [#774](https://github.com/endojs/endo-but-for-bots/pull/774), contract [#1389](https://github.com/endojs/endo-but-for-bots/pull/1389) | Rename the package/global/types; change constructor to `(location, openHook)`; add `open`, privileged `locate`, and `isParcel`; remove handler/enliven and `E.enliven`; require pre-lockdown first-wins installation. |
+| 2 | [#1391](https://github.com/endojs/endo-but-for-bots/pull/1391) | Replace the universal `SturdyRef` accommodation with `%InitialParcel%` / `%SharedParcel%`, `tame-parcel-constructor.js`, the shared-prototype constructor repair, and lockdown hardening of both constructors. |
+| 3 | [#1392](https://github.com/endojs/endo-but-for-bots/pull/1392) | Rename helpers, types, patterns, tests, and docs; return the literal pass style `"parcel"`; preserve no pass-invariant equality. |
+| 4 | [#1393](https://github.com/endojs/endo-but-for-bots/pull/1393) | Rename marshal callbacks and discriminators to Parcel, use capdata `@qclass: "parcel"`, retain the existing single-character smallcaps and ordered-encoding code points, and update Justin/rank names. |
+| 5 | [#1394](https://github.com/endojs/endo-but-for-bots/pull/1394) | Rename CapTP/OCapN APIs and tests; change CapTP `s+` / `s-` slots to `d+` / `d-`; carry/open Parcels; rename the JavaScript codec while retaining wire tag `ocapn-sturdyref`. |
+| 6 | [#1396](https://github.com/endojs/endo-but-for-bots/pull/1396) | Rename reconstruction APIs to Parcel; format validated data as a canonical location string; construct with the connection-bound open hook; use privileged locate instead of duplicate coordinate tables. |
+| 7 | [#1397](https://github.com/endojs/endo-but-for-bots/pull/1397) | Rename enlivening to opening; make the open hook resolve local locators or fetch through the remote bootstrap and nonce locator; preserve secret-redacting failures. |
+| 8 | [#1398](https://github.com/endojs/endo-but-for-bots/pull/1398) | Rename the formula module and kit; expose `parcelForFormula(id)` without incarnation; keep formula identifiers closely held and locations available only to the host's initial constructor. |
+| 9 | [#1399](https://github.com/endojs/endo-but-for-bots/pull/1399) | Rename the Agent API design and all guards/method references to Parcel; produce, accept, and retain Parcels without giving guests identifier or locator authority. |
 
-[`sturdy-refs-endor-syscall.md`](sturdy-refs-endor-syscall.md) is the
-earlier SturdyRef design, built on #521's `sturdyref` pass-style. Its
-central correction still holds here: a SturdyRef is not a presence, is not
-registered with `HandledPromise`, and `E(ref).foo()` is not a valid
-operation. The bearer enlivens the ref first and sends to the result.
-`SturdyRef.enliven(ref)` is the layer-1 counterpart of that design's
-`enlivenSturdyRef(sturdyRef)`. The "`enliven` message" above means exactly
-this call-through to the handler's hook; `@endo/eventual-send` is unchanged.
+The pivot build updates the existing branches in this order so every downstream layer rebases on the renamed API rather than carrying compatibility aliases.
+The packages are unreleased and the stack is in flight, so no deprecated SturdyRef JavaScript aliases are added.
 
-The two designs differ on what the ref *is*:
+## Related designs
 
-- **Representation: superseded.** That design makes a SturdyRef a
-  pass-by-copy data box carrying `(location, secret)`. Here the ref is an
-  opaque object whose locator string lives in the shim's private side table;
-  whether and how that string passes is decided by layers 3 and 4. Once those
-  layers land, the public data-box representation is retired along with
-  `@endo/ocapn`'s tagged record.
-- **Retention: still live, and not decided here.** That design's
-  worker-side `retain` / `release` syscalls and daemon-side retention table
-  concern the daemon, and layer 8 inherits them as input. Layer 1 takes no
-  position on them.
+The Parcel stack supersedes the JavaScript representation and naming assumed by [#511](https://github.com/endojs/endo-but-for-bots/pull/511), [#539](https://github.com/endojs/endo-but-for-bots/pull/539), [#695](https://github.com/endojs/endo-but-for-bots/pull/695), and [#697](https://github.com/endojs/endo-but-for-bots/pull/697).
+Those designs remain useful records for retention, on-demand acquisition, the Agent provide/accept surface, and cross-peer handoff, respectively, and are not rewritten by this design.
+Where they say a passable is an inert `'sturdyref'` record, a per-OCapN brand, or a guest-visible locator, this design is authoritative instead.
 
-The roadmap entry for `sturdy-refs-endor-syscall` links here.
+[#1404](https://github.com/endojs/endo-but-for-bots/pull/1404) is complementary rather than superseded.
+Its prohibition on guest identifier and locator production/consumption is enforced by giving guests `%SharedParcel%` and keeping `locate` and formula-id conversion in the host.
 
-### Ownership Map
+[`sturdy-refs-endor-syscall.md`](sturdy-refs-endor-syscall.md) remains a historical retention design.
+Its SturdyRef representation is superseded, while its retention alternatives remain input to layers 8 and 9.
 
-| Boundary | Mechanism | Policy / durable state | Value crossing |
-|---|---|---|---|
-| shim <-> handler author | shim: capture a string locator, brand, dispatch | handler: how the locator is interpreted and revived, revocation, memoization, its own mutability | the ref and locator to the hook; the hook's result |
-| shim <-> SES (layer 2) | shim: install on `globalThis`; freeze, or harden if a harden is already present | SES: permit, harden at `lockdown`, propagate | the `SturdyRef` constructor |
-| shim <-> pass-style (layer 3) | shim: `isSturdyRef` | pass-style: classification | a boolean |
-| shim <-> CapTP / daemon (layers 5, 8) | shim: capture the locator and brand the ref | CapTP / daemon: locator interpretation and minter provenance | the ref and locator at construction; the ref at serialization |
+## Ownership map
 
-The shim owns only the in-memory association from a ref to its handler, hook,
-and locator. It owns no durable state and no restart or replay. Commit and
-persistence belong to CapTP and the daemon (layers 5–8).
+| Boundary | Mechanism | Policy | Durable state | Lifecycle / commit authority | Value crossing |
+|---|---|---|---|---|---|
+| Parcel shim -> SES | Install and sample one initial constructor and private table | SES decides which constructor each compartment receives | None | SES creates the shared constructor and hardens the intrinsic graph at lockdown | `%InitialParcel%`, `%SharedParcel%`, and their shared prototype |
+| Parcel -> open hook | Later-turn dispatch with captured location and Parcel | Hook owner decides admission, revocation, memoization, deadlines, and cancellation | Protocol or daemon, not the shim | Hook owner decides connection reuse and reacquisition | location string and Parcel in; a promise for a live Passable out |
+| Parcel -> marshal / CapTP / OCapN | Brand classification, privileged location extraction, and protocol encoding | Each protocol decides whether it recognizes the location syntax | Protocol or daemon persistence store | Protocol session owns send/drop; remote peer decides whether opening succeeds | opaque Parcel in memory; protocol-specific encoding on the wire |
+| Daemon -> guest | `%SharedParcel%`, Agent guards, and retention edges | Daemon decides which formulas may be opened and retained | Daemon formula graph and store | Daemon owns collection, restart, replay, and formula incarnation | Parcel or live Passable, never a formula id or location string |
 
-### Forward Sketch (Layers 3–5, No Implementation)
+The shim owns no durable state.
+The protocol or daemon that persists a location owns durable state.
+The hook owner makes the open/refuse decision, while the daemon or transport owns commit, drop, and retention decisions for its own resources.
+The protocol or daemon owns restart and replay.
+The open hook classifies acquisition success or failure, while a receiving runtime independently decides what to do with that result.
 
-Layer 3 (pass-style) recognizes a SturdyRef using `SturdyRef.isSturdyRef`
-alone and admits it as its own passable category, analogous to a presence.
-Like a remotable, it has object identity and no publicly readable data.
-Marshal (layer 4) represents it as a slot of a distinct kind:
-`convertValToSlot` receives the ref, and the marshal encodings (capdata,
-smallcaps, CBOR) gain a sturdyref marker that sits alongside remotable and
-promise slots. The locator remains private to the shim and handler at this
-layer.
+The inner/outer naming check is satisfied.
+The inner mechanism is named `open`, `Parcel`, and `location`; it does not claim outer daemon concepts such as formula retention, persistence, restart, replay, or commit.
 
-A CapTP (layer 5) uses one shared handler for all the refs it mints. It mints
-each with `new SturdyRef(sharedHandler, locator)`. The shared handler's hook
-receives the particular ref and locator and revives it through the bootstrap /
-nonce locator (layers 6–7), without one closure or handler per ref. For
-serialization and provenance, the CapTP keeps a private table of the refs it
-minted and their locators. Finding a ref in that table is the CapTP's
-provenance check (see [Provenance](#provenance)). This arrangement subsumes
-`@endo/ocapn`'s public `ocapn-sturdyref` tagged record.
+## Test plan
 
-Layer 5 also needs the inverse, locator to an existing ref, if exporting the
-same target twice is to yield the same ref. Layer 1 gives refs no equality by
-locator (two refs built from one handler and locator are distinct), and
-marshal dedups repeated values within a message by object identity, so
-mint-time interning is a layer-5 decision that this layer deliberately does
-not make.
+Layer 1 tests the constructor validation, rejected subclassing, frozen empty instances, forged-prototype rejection, captured-once location and hook, later-turn opening, repeated non-convergent opens, hook rejection, non-Parcel rejection, synchronous privileged locate, and first-shim-wins eval twins.
+The previous `E.enliven` tests are removed rather than renamed.
 
-Only the minting CapTP holds the serialization table, so only it can serialize
-the ref. When CapTP A sends the ref through CapTP B, A emits the locator string
-and B remints a ref with B's shared handler only if B's protocol recognizes the
-locator. Otherwise B rejects it. Choosing a string preserves room to evolve
-locator syntax but deliberately gives up the invariant that every SturdyRef is
-passable over every protocol. Cross-CapTP carrying is therefore a protocol
-compatibility decision, not a new layer-1 hook.
+Layer 2 tests that an absent shim remains valid, a malformed pre-lockdown global is rejected without invoking accessors, the initial constructor has `locate`, the shared constructor does not, both constructors share one prototype and brand, the prototype's constructor cannot recover `%InitialParcel%`, and lockdown hardens both constructors.
+It also reverses #774's withholding test into the precise rule: child compartments receive `%SharedParcel%`, not `%InitialParcel%`.
+
+Layers 3 and 4 test the literal `"parcel"` pass style, lack of pass-invariant equality, capdata and smallcaps round trips, rank stability, and refusal to decode a Parcel as an ordinary slot.
+Layers 5 through 7 test `d+` / `d-` carriage, construction from canonical location data, local and remote opening, partition-and-reconnect behavior, rejection of unsupported location schemes, secret-redacting errors, and Goblins-compatible `ocapn-sturdyref` bytes.
+Layers 8 and 9 test no incarnation before open, no guest access to locations or formula ids, Agent acceptance, retention and drop behavior, and repeated opens that may return distinct live references.
+
+## Rejected alternatives
+
+Keeping `SturdyRef` as a JavaScript alias is rejected because the stack is unreleased and dual naming would preserve the semantic diffusion the pivot is intended to remove.
+Keeping a handler object is rejected because Parcel has one acquisition operation and a function expresses it directly.
+Keeping `enliven` or `E.enliven` is rejected because acquisition is not eventual send.
+Giving every compartment `locate` is rejected because a location is exfiltratable cryptographic authority.
+Removing `locate` entirely is rejected because trusted serializers need a principled way to recover the wire representation without recreating package-private coordinate tables.
+Changing the `ocapn-sturdyref` wire tag is rejected because it would break the specification and Goblins interoperability for a JavaScript naming change.
+
+## Open questions
+
+- Should a future OCapN specification revision adopt the word “Parcel” in prose while retaining the `ocapn-sturdyref` wire tag, or should both the existing term and tag remain at the specification boundary?
+
+This question does not block the pivot build because the interoperable bytes and current specification vocabulary are unchanged.
 
 ## Prompt
 
-> Layer 1 (design) — the SturdyRef shim contract. A global `SturdyRef` shim
-> analogous to the HandledPromise shim: each copy races to define `SturdyRef`
-> globally; first definer wins. A SturdyRef is constructed after the fashion
-> of a Proxy/HandledPromise, with a handler whose `enliven` hook defines both
-> what the ref captures and the procedure for reviving it.
-> `SturdyRef.enliven(ref)` sends an `enliven` message to the sturdyref. The
-> design must reconcile #774, the withdrawn HandledPromise-enliven vision,
-> #774's "withheld from child compartments" property versus layer 2, and
-> sketch layers 3–5. (kriskowal, #695, 2026-09-30, via orchestration
-> `ebfb-sturdyref-layering-20260930`.)
+> Layer 1 (design) — the SturdyRef shim contract.
+> A global `SturdyRef` shim analogous to the HandledPromise shim: each copy races to define `SturdyRef` globally; first definer wins.
+> A SturdyRef is constructed after the fashion of a Proxy/HandledPromise, with a handler whose `enliven` hook defines both what the ref captures and the procedure for reviving it.
+> `SturdyRef.enliven(ref)` sends an `enliven` message to the sturdyref.
+> The design must reconcile #774, the withdrawn HandledPromise-enliven vision, #774's “withheld from child compartments” property versus layer 2, and sketch layers 3–5.
+
+> Revision, 2026-10-14: rename SturdyRef to Parcel across the nine-layer stack and reconcile the contract with the maintainer's “Passing Parcels” essay, including its authority split, preserved semantics, naming consequences, prior-art framing, and open questions.
