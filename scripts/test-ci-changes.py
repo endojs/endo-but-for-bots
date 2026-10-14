@@ -213,6 +213,20 @@ class Repository(unittest.TestCase):
                 self.assertTrue(self.selected(path)["test-ironhorse"])
         self.assertFalse(self.selected("rust/engine/stack-lanes/lane_c.py")["test-ironhorse"])
 
+    def test_every_engine_change_but_documentation_selects_the_cross_target_differential(self):
+        for path in ["rust/engine/ironhorse-vm/src/interp/admission.rs",
+                     "rust/engine/Cargo.lock",
+                     "rust/engine/stack-lanes/cross_target.py",
+                     "rust/engine/stack-lanes/probe/src/main.rs",
+                     "rust/engine/stack-lanes/differential/cross-target.js",
+                     "rust/engine/stack-lanes/expected-divergence/wasmtime.json"]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["cross-target-ironhorse"])
+        for path in ["rust/engine/WASM-BLOCKERS.md", "rust/engine/stack-lanes/README.md",
+                     "packages/cbor/src/encode.js", "rust/ocapn_noise/src/lib.rs"]:
+            with self.subTest(path=path):
+                self.assertFalse(self.selected(path)["cross-target-ironhorse"])
+
     def test_format_helper_inputs(self):
         self.assertTrue(self.selected("rust/engine/scripts/generate-compiler-opcodes.py")["format-ironhorse"])
 

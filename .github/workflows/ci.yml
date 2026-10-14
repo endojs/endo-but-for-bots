@@ -1319,6 +1319,99 @@ jobs:
           path: rust/engine/ironhorse-fuzz/fuzz/artifacts/
           if-no-files-found: ignore
 
+  # WASM-BLOCKERS.md B7: the native and wasm32 probes of this tree, handed the
+  # same programs (the stack-lanes corpus, every family around its ceiling,
+  # and the snippets in rust/engine/stack-lanes/differential/, including the
+  # B7 repros), must agree on halt, result, computrons, meter checks and
+  # bytecode. A divergence passes only when
+  # rust/engine/stack-lanes/expected-divergence/wasmtime.json lists it, and a
+  # listed one that no longer diverges fails, so each B7 fix removes its
+  # entries. This job runs the fast shard; `cross_target.py --shard slow` has
+  # the repros that need gigabytes natively or minutes on wasm32.
+  cross-target-ironhorse:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['cross-target-ironhorse']) }}
+    name: cross-target-ironhorse
+
+    runs-on: ubuntu-latest
+    # Two engine builds (native, and wasm32 with -Zbuild-std) and the fast
+    # shard on both targets.
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: '0'
+      # The Wasmtime CLI lane A runs under (ironhorse-full-test262.yml); bump
+      # both together.
+      WASMTIME_VERSION: v49.0.0
+      WASMTIME_SHA256: a956c279ac6e80109369a285db30fc46f68239fa1bbeb03ccfa8e913bbca85fc
+
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cache Cargo + probe targets
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # The probe is a standalone cargo root with its own target
+          # directory; it holds both builds and the wasm32 standard library.
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/engine/stack-lanes/probe/target
+          key: ${{ runner.os }}-cross-target-${{ hashFiles('rust/engine/Cargo.lock', 'rust/engine/rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cross-target-
+
+      - name: Install the pinned toolchain's wasm target and rust-src
+        # The wasm probe is built with -Zbuild-std (WASM-BLOCKERS.md B1),
+        # which needs rust-src. rustup picks the channel from
+        # rust/engine/rust-toolchain.toml.
+        working-directory: rust/engine
+        run: |
+          set -euo pipefail
+          rustup target add wasm32-wasip1
+          rustup component add rust-src
+
+      - name: Install Wasmtime
+        run: |
+          set -euo pipefail
+          archive="wasmtime-${WASMTIME_VERSION}-x86_64-linux"
+          curl -fsSL -o wasmtime.tar.xz \
+            "https://github.com/bytecodealliance/wasmtime/releases/download/${WASMTIME_VERSION}/${archive}.tar.xz"
+          echo "${WASMTIME_SHA256}  wasmtime.tar.xz" | sha256sum --check
+          tar -xJf wasmtime.tar.xz
+          echo "WASMTIME=${GITHUB_WORKSPACE}/${archive}/wasmtime" >> "$GITHUB_ENV"
+
+      - name: Set up Node
+        # The lane scripts' tests run node/run.cjs when Node is present.
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.x
+
+      - name: Test the lane scripts
+        run: python3 -m unittest discover -s rust/engine/stack-lanes -p 'test_*.py'
+
+      - name: Build the probe, native and wasm32
+        working-directory: rust/engine/stack-lanes
+        run: python3 build_probe.py
+
+      - name: Compare native and wasm32 (fast shard)
+        working-directory: rust/engine/stack-lanes
+        run: python3 cross_target.py --no-build --output cross-target.json
+
+      - name: Upload the comparison
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cross-target
+          path: rust/engine/stack-lanes/cross-target.json
+          if-no-files-found: ignore
+
   test-ocapn-python:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-ocapn-python']) }}

@@ -23,7 +23,7 @@ JOBS = (
     "test-thixotrope-ironhorse", "format-ironhorse", "test-ironhorse",
     "test-ironhorse-calibration", "compare-ironhorse-math",
     "test-ironhorse-oracle", "oracle-sanitizers", "fuzz-ironhorse",
-    "test-ocapn-python",
+    "cross-target-ironhorse", "test-ocapn-python",
     "build-wasm", "browser-tests", "guile-interop", "viable-release",
     "depcheck", "check-action-pins", "package-uniformity", "filter-tests",
 )
@@ -37,7 +37,7 @@ RUST_JOBS = {
     "build-xsnap", "test-thixotrope-ironhorse", "format-ironhorse",
     "test-ironhorse", "test-ironhorse-calibration", "compare-ironhorse-math",
     "test-ironhorse-oracle", "oracle-sanitizers", "fuzz-ironhorse",
-    "build-wasm",
+    "cross-target-ironhorse", "build-wasm",
 }
 WORKFLOWS = {
     ".github/workflows/browser-test.yml": {"browser-tests"},
@@ -283,6 +283,12 @@ def classify(paths, graphs, all_jobs=False):
         jobs["fuzz-ironhorse"] |= any(
             n.startswith("rust:rust/engine/") for n in rust_affected
         )
+        # The native-against-wasm32 differential (WASM-BLOCKERS.md B7): any
+        # engine crate, or a crate one depends on, can move a program's
+        # outcome on one target.
+        jobs["cross-target-ironhorse"] |= any(
+            n.startswith("rust:rust/engine/") for n in rust_affected
+        )
         jobs["build-wasm"] |= "ocapn_noise_protocol_facilities" in crates
 
     for path in paths:
@@ -317,6 +323,11 @@ def classify(paths, graphs, all_jobs=False):
             jobs["check-action-pins"] = True
         if path.endswith(".rs") and (under(path, "rust/engine") or under(path, "rust/endo/ironhorse-store-sqlite")):
             jobs["format-ironhorse"] = True
+        # Every engine change but documentation: the probe's sources, which no
+        # crate graph sees (`stack-lanes/`), its corpus and snippets, the lane
+        # scripts and the expected lists are all inputs of the comparison.
+        if under(path, "rust/engine") and not path.endswith(".md"):
+            jobs["cross-target-ironhorse"] = True
         if path in {
             "c/moddable", ".gitmodules", "rust/endo/xsnap/xsnap-platform.c",
             "rust/endo/xsnap/xsnap-platform.h",
