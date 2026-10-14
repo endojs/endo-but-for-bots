@@ -177,6 +177,70 @@ fn structural_row_damage_fails_closed_where_it_is_decoded() {
     }
 }
 
+/// A row key outside the u32 key space the store writes is a corrupt row,
+/// refused by name wherever a read lists the table. Narrowed with `as`, a
+/// negative key wrapped and one past `u32::MAX` truncated on a 32-bit host,
+/// so the same file could alias rows differently by target width. Open
+/// reads rows by key, so a surplus row is inert there; both validator
+/// levels list every table and refuse it.
+#[test]
+fn out_of_range_row_keys_are_corrupt_rows() {
+    const WIDE: i64 = 1 << 32;
+    for (case, sql, refusal) in [
+        (
+            "slot-page-negative",
+            "INSERT INTO slot_pages (page, bytes) VALUES (-1, x'')".to_string(),
+            "sqlite: slot page key out of range",
+        ),
+        (
+            "slot-page-wide",
+            format!("INSERT INTO slot_pages (page, bytes) VALUES ({WIDE}, x'')"),
+            "sqlite: slot page key out of range",
+        ),
+        (
+            "chunk-extent-negative",
+            "INSERT INTO chunk_exts (ext, bytes) VALUES (-1, x'')".to_string(),
+            "sqlite: chunk extent key out of range",
+        ),
+        (
+            "chunk-extent-wide",
+            format!("INSERT INTO chunk_exts (ext, bytes) VALUES ({WIDE}, x'')"),
+            "sqlite: chunk extent key out of range",
+        ),
+        (
+            "page-edges-negative",
+            "INSERT INTO page_edges (page, targets) VALUES (-1, x'')".to_string(),
+            "sqlite: page edges key out of range",
+        ),
+        (
+            "page-edges-wide",
+            format!("INSERT INTO page_edges (page, targets) VALUES ({WIDE}, x'')"),
+            "sqlite: page edges key out of range",
+        ),
+        // The count still equals the greatest key plus one.
+        (
+            "page-edges-renumbered",
+            "UPDATE page_edges SET page = -1 WHERE page = 0".to_string(),
+            "sqlite: page edges key out of range",
+        ),
+    ] {
+        let dir = common::TempDir::new(&format!("ih-row-key-{case}"));
+        let path = dir.join("heap.sqlite");
+        damaged_store(&path, case, &sql);
+        let store = SqliteHeapStore::open(&path).unwrap();
+        let refusal = Some(StoreError::Snapshot(SnapshotError::Corrupt(refusal)));
+        assert_eq!(validate_store(&store, &sig()).err(), refusal, "{case}");
+        assert_eq!(
+            validate_store_content(&store, &sig()).err(),
+            refusal,
+            "{case}"
+        );
+        if case.starts_with("page-edges") {
+            assert_eq!(store.summary_page_count().err(), refusal, "{case}");
+        }
+    }
+}
+
 /// Derived state is what open trusts without re-deriving it: the
 /// metadata-scale validator does not read it either, and the full
 /// validator re-derives each piece from its source.
