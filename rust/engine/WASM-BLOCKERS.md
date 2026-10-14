@@ -53,14 +53,14 @@ What stands in the way, in order of severity:
 
 | # | Blocker | Layer | Kind |
 |---|---------|-------|------|
-| B1 | Stable Rust cannot link a wasm artifact with `panic=unwind`; the engine requires unwinding, including for guest-catchable errors | toolchain / engine | **hard** |
+| B1 | Stable Rust cannot link a wasm artifact with `panic=unwind`; the engine requires unwinding, including for guest-catchable errors; option 1 adopted, std is rebuilt with unwinding on the pinned toolchain (`scripts/build-wasm.py`) | toolchain / engine | **hard**, worked around |
 | B7 | Unadmitted host allocations and snapshot decoding depend on the target, so native and wasm32 diverge in results and metering; heap admission and `usize` arithmetic are fixed | engine | **hard (consensus)** |
 | B3 | The native-recursion budget assumes an 8 MiB stack; smaller wasm stacks overflow **before** the budget halts, sometimes on programs the engine accepts natively | engine / host | configuration for Wasmtime and Node, **hard in browsers and workerd** |
 | B8 | The ceilings do not bound memory: up to 4–5× the chunk ceiling for a running string heap, plus one container while a snapshot of it is written (the writer streams now; it used to be about 6×), unbounded for arrays and side tables; a cap that fails `memory.grow` makes programs trap or halt early with `HeapExhausted` where native completes or halts later, and Cloudflare documents replacing the whole isolate, but whether production fails `memory.grow` first is not known | engine / host | **hard under a 128 MB cap** |
 | B2 | Wasm exception-handling encoding: LLVM emits the legacy form by default, and Wasmtime accepts only the standard `exnref` form | toolchain / host | configuration |
 | B4 | Default-feature builds diverge between native and wasm in `Math` results and therefore in metering | engine features | configuration (use `consensus`) |
 | B5 | The worker binary depends on threads, `flock`, bundled C SQLite and POSIX files; `FileStore` does not work on WASI | worker / store | port work |
-| B6 | CI runs the engine on wasm only in the native-against-wasm32 differential's fast shard; the one WASI test script is not wired in | CI | process |
+| B6 | CI builds the engine for both wasm targets and runs the one WASI test script (`build-ironhorse-wasm`), and runs the native-against-wasm32 differential's fast shard (`cross-target-ironhorse`); the slow shard and engine test suites on wasm are not run | CI | process |
 
 [Browser-specific considerations](#browser-specific-considerations) follow the blockers.
 
@@ -240,6 +240,19 @@ The probe then shows:
 Option 1 is the only route that works without engine changes.
 Option 3 needs the `Poisoned` refactor first.
 Option 2 lifts the constraint for good.
+
+**Status (2026-10-14): option 1 adopted, accepting the unstable feature for now.**
+The official wasm build is `scripts/build-wasm.py`, the one place the recipe lives.
+It keeps the pinned 1.91.1 compiler and that toolchain's pinned `rust-src`, and stands in for a
+nightly channel with `RUSTC_BOOTSTRAP=1`: a pinned compiler with its pinned `rust-src` is
+reproducible, a nightly channel is not, so `rust-toolchain.toml` does not change.
+The script rebuilds `std` and `panic_unwind` with `-C panic=unwind` and wasm exception handling
+(`-Zbuild-std=std,panic_unwind`) and builds every workspace member that can target wasm for
+`wasm32-wasip1` and `wasm32-unknown-unknown`, with overflow checks on from the workspace
+`release` profile.
+`stack-lanes/build_probe.py` imports its flags and environment, and CI's `build-ironhorse-wasm`
+job runs it on every change to the engine (B6).
+Options 2 and 3 remain the routes that would retire the toolchain cost.
 
 ## B7: native and wasm32 diverge wherever accounting or allocation depends on the host
 
@@ -778,6 +791,12 @@ Legacy EH matters only for older browser engines, which were not tested here.
 Whichever is chosen, the flag must be in `RUSTFLAGS` so that `-Zbuild-std` compiles std with
 the same encoding.
 
+**Status (2026-10-14): `exnref` chosen.**
+`scripts/build-wasm.py` puts `-C llvm-args=-wasm-use-legacy-eh=false` in `RUSTFLAGS`, so the
+rebuilt std and the engine share the encoding, and every host the build is meant for runs it:
+Wasmtime 49, Node 22, Chromium 141 and workerd.
+Legacy EH is not built; a host that needs it is a reason to revisit, not a second artifact.
+
 ## B4: default features diverge from native in results and metering
 
 Without `consensus`, `ironhorse-vm` computes `Math.*` with the platform libm: glibc natively,
@@ -797,6 +816,11 @@ With `consensus` (pure-Rust `libm`, `force-soft-floats`) the two targets agree o
 The worker already enables `consensus`, and the build already rejects `cost-calibration`
 alongside it (`ironhorse-vm/src/lib.rs:25`).
 Floating-point operations outside the `Math` provider are part of the B7 audit.
+
+**Status (2026-10-14): `consensus` is on in the official build.**
+`scripts/build-wasm.py` builds `ironhorse-vm` with `features = ["consensus"]`, as the worker
+and the stack-lanes probe do, so the wasm artifacts CI builds use the pure-Rust `libm` and
+never wasi-libc.
 
 ## B5: the worker binary is not wasm-ready
 
@@ -856,16 +880,34 @@ The B7 repros that need gigabytes natively or minutes on wasm32, in `cross-targe
 a separate shard (`--shard slow`) that no workflow runs yet.
 The snapshot and store sites need crafted stores or snapshots, which the probe does not take.
 
-The only other wasm job, `build-wasm`, builds `rust/ocapn_noise`.
-`rust/engine/scripts/test-snapshot-wasi.py` runs the snapshot's 32-bit overflow refusals on
-`wasm32-wasip1`, and it passes locally (2/2).
-No workflow invokes it, even though
-`architecture-review/2026-09-06/ARCHITECTURE-REVIEW.md` states that those refusals "run on
-32-bit WASI in CI".
-Only the crates the probe links are built for wasm in CI, so nothing stops another clean crate
-from gaining a wasm-incompatible dependency.
-A cheap remaining gate is `cargo build --target wasm32-unknown-unknown` for the six crates that
-build today, plus the existing WASI script.
+The differential builds only the crates the probe links, and only for `wasm32-wasip1`.
+The engine's own wasm build, below, covers the rest; `build-wasm` builds `rust/ocapn_noise`.
+
+**Status (2026-10-14): the build gate is in CI.**
+CI's `build-ironhorse-wasm` job runs on every change to a crate the script builds (and to the
+recipe, the probe build, the WASI script and the toolchain pin).
+It builds all eight runtime library crates with `scripts/build-wasm.py` for both targets, with
+unwinding (B1), `exnref` (B2) and `consensus` (B4), so it also covers `ironhorse-compile` and
+`ironhorse-runtime`, which the stable build cannot link.
+It then runs `scripts/test-snapshot-wasi.py`, the snapshot's 32-bit overflow refusals on
+`wasm32-wasip1`, so the claim in `architecture-review/2026-09-06/ARCHITECTURE-REVIEW.md` that
+those refusals run on 32-bit WASI in CI now holds.
+The script had been failing since 2026-09-24 (`50f547f71`), when `RandomTokens`, the default
+commit-token source of store sessions, began hashing `std::process::id()`, which panics on
+WASI; checkpointing into a `MemoryStore` panicked on `wasm32-wasip1`.
+That source now leaves the process id out on WASI, and the script passes (2/2).
+
+What the job does not cover:
+
+- **No comparison with native.**
+  It compares no results or computrons; `cross-target-ironhorse`, above, does that for the
+  programs the probe runs.
+- **Libraries only.**
+  It links no wasm executable from the engine; the stack-lanes probe, which does, is built by
+  `cross-target-ironhorse` and the nightly lanes.
+- **No engine test suites on wasm.**
+  Only the snapshot's two overflow refusals run there.
+- **The legacy EH encoding and the default features are not built.**
 
 ## Browser-specific considerations
 
@@ -1109,9 +1151,10 @@ Cloudflare, whose 128 MB isolate limit counts it) only once the painted shadow m
 B, `--paint`) for the U2-U4 compositions support it.
 The figures above were measured with 8 MiB; link with `-zstack-size=8388608` to reproduce
 them.
-`stack-lanes/build_probe.py` builds the probe with this recipe in its exnref form and also
-exports `__stack_pointer`, and lane B's hosts, run with `--paint`, paint the shadow stack
-and fail when a mark comes within 64 KiB of it.
+`scripts/build-wasm.py` is the recipe's home, in its exnref form (B2), with `consensus` on
+(B4); `stack-lanes/build_probe.py` imports its flags and environment and also exports
+`__stack_pointer`, and lane B's hosts, run with `--paint`, paint the shadow stack and fail when
+a mark comes within 64 KiB of it.
 
 Running each host:
 
