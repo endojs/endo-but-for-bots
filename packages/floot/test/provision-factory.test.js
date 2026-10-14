@@ -30,13 +30,16 @@ const makeHost = ({
   const calls = [];
   const agent = Far('Host', {
     identify: (...path) => names.get(path.join('/')),
-    getFormula: () =>
-      harden({
-        type: 'make-unconfined',
-        properties: {
-          powers: { identifier: 'powers' },
-          specifier: { value: specifier },
-        },
+    diagnostics: () =>
+      Far('Diagnostics', {
+        getFormula: () =>
+          harden({
+            type: 'make-unconfined',
+            properties: {
+              powers: { identifier: 'powers' },
+              specifier: { value: specifier },
+            },
+          }),
       }),
     getFormulaEnvironment: () => harden(constructionEnv),
     cancel: async path => {

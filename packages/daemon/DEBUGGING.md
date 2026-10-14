@@ -4,6 +4,18 @@ This guide covers the daemon's debugging and observability tools:
 environment variables, log interpretation, and recipes for common
 failure modes.
 
+Persisted marshal formulas keep only their type and capability slots in the
+resident graph cache.
+Reloadable controller callbacks bind explicit arguments rather than sharing the
+formulation scope: a sibling closure captures the original formula, and a shared
+V8 context would keep its serialized body alive after persistence.
+Their serialized bodies are read from persistence when evaluated or inspected.
+For values with no capability slots, the daemon also releases the evaluation
+promise once it settles and reloads the copy data on subsequent reads.
+Values carrying capabilities keep their existing incarnation and identity.
+This memory reclamation works with formula collection disabled and does not
+delete journal records, snapshots, or other durable formulas.
+
 ## Run In Foreground
 
 For easier debugging, the endo daemon can be told not to fork:
