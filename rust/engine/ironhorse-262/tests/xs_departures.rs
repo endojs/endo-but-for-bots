@@ -407,6 +407,13 @@ const DEPARTURES: &[Row] = &[
         v8: "throw ab",
         why: "as above, for reduce over a Proxy, which has no resident index storage, so XS reads its length as 0",
     },
+    Row {
+        program: "['abcdef'.substr(1, Infinity), 'abcdef'.substr(1, 2147483647), 'abcdef'.substr(0, Infinity), 'abcdef'.substr(1, 4294967297)].join()",
+        ironhorse: "bcdef,bcdef,abcdef,bcdef",
+        xs: ",,,b",
+        v8: "bcdef,bcdef,abcdef,bcdef",
+        why: "String.prototype.substr clamps the length to what remains of the string (B.2.2.1); XS's fx_String_prototype_substr converts it with fxToInteger, which wraps it modulo 2**32 into a 32-bit int (+Infinity becomes 0 and 4294967297 becomes 1), and adds it to the start in a 32-bit int, which overflows for 2**31 - 1",
+    },
 ];
 
 /// Programs where Ironhorse departs from XS and V8 has no counterpart to

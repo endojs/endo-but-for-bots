@@ -145,3 +145,31 @@ fn escape_and_unescape() {
         ),
     ]);
 }
+
+#[test]
+fn string_prototype_substr() {
+    check(&[
+        (
+            "[String.prototype.substr.name, String.prototype.substr.length, Object.getOwnPropertyDescriptor(String.prototype, 'substr').enumerable].join()",
+            "substr,2,false",
+        ),
+        (
+            "['abcdef'.substr(1, 2), 'abcdef'.substr(-2), 'abcdef'.substr(-9, 2), 'abcdef'.substr(2), 'abcdef'.substr(2, -1), 'abcdef'.substr(NaN, 2), 'abcdef'.substr(Infinity), 'abcdef'.substr(4, 9), 'abcdef'.substr(1.9, 2.9)].join('|')",
+            "bc|ef|ab|cdef||ab||ef|bc",
+        ),
+        // The specification and V8; XS answers "" for each
+        // (`xs_departures.rs`).
+        (
+            "['abcdef'.substr(1, Infinity), 'abcdef'.substr(1, 2147483647)].join()",
+            "bcdef,bcdef",
+        ),
+        (
+            "var log = []; var s = {toString: function () { log.push('this'); return 'hello'; }}; var a = {valueOf: function () { log.push('start'); return 1; }}; var b = {valueOf: function () { log.push('length'); return 3; }}; [String.prototype.substr.call(s, a, b), log.join()].join('|')",
+            "ell|this,start,length",
+        ),
+        (
+            "var r = []; try { String.prototype.substr.call(null) } catch (e) { r.push(e.name) } [r.join(), String.prototype.substr.call(12345, 1, 2), '\\uD83D\\uDE00'.substr(1).charCodeAt(0)].join('|')",
+            "TypeError|23|56832",
+        ),
+    ]);
+}

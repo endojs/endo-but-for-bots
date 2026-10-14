@@ -2772,6 +2772,7 @@ impl Interp {
             ("at", 1, StringAt),
             ("slice", 2, StringSlice),
             ("substring", 2, StringSubstring),
+            ("substr", 2, StringSubstr),
             ("indexOf", 1, StringIndexOf),
             ("lastIndexOf", 1, StringLastIndexOf),
             ("includes", 1, StringIncludes),

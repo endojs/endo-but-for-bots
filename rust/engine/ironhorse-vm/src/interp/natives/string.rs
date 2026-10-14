@@ -277,13 +277,24 @@ impl Interp {
         self.meter.tick_raw(STRING_METHOD_FRAME_METERING);
         use NativeMethod::*;
         let result = match m {
-            StringSlice | StringSubstring => {
+            StringSlice | StringSubstring | StringSubstr => {
                 // Convert in receiver/start/end order before borrowing any
                 // arena bytes: coercion can allocate or re-enter the guest.
                 let (start, end) = if m == StringSlice {
                     let start = self.string_arg_to_index(code, argn(0), 0, ulen)?;
                     let end = self.string_arg_to_index(code, argn(1), ulen, ulen)?;
                     (clamp(start), clamp(end).max(clamp(start)))
+                } else if m == StringSubstr {
+                    // Annex B `substr(start, length)` (B.2.2.1,
+                    // `fx_String_prototype_substr`): a relative start and a
+                    // count clamped to what remains.
+                    let start = self.string_arg_to_index(code, argn(0), 0, ulen)?;
+                    let count = match argn(1).filter(|value| value.kind != Kind::Undefined) {
+                        Some(value) => self.array_to_integer_or_infinity(code, value)?,
+                        None => ulen as f64,
+                    };
+                    let end = (start as f64 + count.clamp(0.0, ulen as f64)).min(ulen as f64);
+                    (clamp(start), clamp(end as i64).max(clamp(start)))
                 } else {
                     let start = self.string_arg_to_position(code, argn(0), 0, ulen)?;
                     let end = self.string_arg_to_position(code, argn(1), ulen, ulen)?;
@@ -549,6 +560,7 @@ impl Interp {
                 | NativeMethod::StringLastIndexOf
                 | NativeMethod::StringSlice
                 | NativeMethod::StringSubstring
+                | NativeMethod::StringSubstr
         ) {
             return self.call_string_indexed(m, this, base, argc, code);
         }

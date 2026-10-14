@@ -366,9 +366,9 @@ mod on {
                 ArraySort => WorkModel::NLogN,
                 // String linear sweeps — code-unit count.
                 StringSlice | StringIndexOf | StringLastIndexOf | StringRepeat | StringConcat
-                | StringSubstring | StringIncludes | StringStartsWith | StringEndsWith
-                | StringTrim | StringTrimStart | StringTrimEnd | StringToLowerCase
-                | StringToUpperCase => WorkModel::StringLength,
+                | StringSubstring | StringSubstr | StringIncludes | StringStartsWith
+                | StringEndsWith | StringTrim | StringTrimStart | StringTrimEnd
+                | StringToLowerCase | StringToUpperCase => WorkModel::StringLength,
                 // Structured walks — input byte / output node count.
                 JsonParse | JsonStringify => WorkModel::StringLength,
                 // Everything else — scalar `Math.*`, getters, `valueOf`,

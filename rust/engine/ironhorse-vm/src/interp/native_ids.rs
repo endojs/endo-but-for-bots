@@ -550,6 +550,10 @@ pub enum NativeMethod {
     /// (`fx_String_prototype_substring`): the substring between the clamped,
     /// swapped-if-needed offsets.
     StringSubstring,
+    /// Annex B `String.prototype.substr(start[, length])`
+    /// (`fx_String_prototype_substr`): `length` units from the relative
+    /// `start`, clamped to the string.
+    StringSubstr,
     /// `String.prototype.indexOf(search[,from])`
     /// (`fx_String_prototype_indexOf`): the first index of `search` at or after
     /// `from`, or `-1`. Meters one `mxMeterSome` per non-continuation scanned
