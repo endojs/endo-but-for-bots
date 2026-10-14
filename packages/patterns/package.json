@@ -42,9 +42,9 @@
   },
   "devDependencies": {
     "@endo/init": "workspace:^",
+    "@endo/parcel": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/ses-ava": "workspace:^",
-    "@endo/sturdyref": "workspace:^",
     "@fast-check/ava": "catalog:dev",
     "ava": "catalog:dev",
     "babel-eslint": "^10.1.0",
