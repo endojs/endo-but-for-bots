@@ -69,9 +69,10 @@ That re-delivery is replay.
 Two consequences follow.
 Replay must be deterministic: the same journal must yield the same outbound frames, because the
 hub drops replayed output by frame number (`outboundBase + seenOutbound`).
-And the Ironhorse worker's per-crank commit to its incarnation `heap.sqlite` is not the recovery
-path: `src/ironhorse/ironhorse-engine.js` says recovery always starts at the image paired with the
+And the Ironhorse incarnation's `heap.sqlite` is not the recovery path:
+`src/ironhorse/ironhorse-engine.js` says recovery always starts at the image paired with the
 journal cut, and deletes the incarnation's copy when it ends.
+Until 1.1 the worker nonetheless committed to that copy after every crank.
 
 ## How the problems chain
 
@@ -92,14 +93,14 @@ That ordering decides the triage below.
 
 | #    | Proposal                              | Verdict                               |
 | ---- | ------------------------------------- | ------------------------------------- |
-| 1.1  | No Ironhorse commit per crank         | Do first; removes work                |
+| 1.1  | No Ironhorse commit per crank         | Done                                  |
 | 1.2  | Count the worker journal in memory    | Do                                    |
 | 1.3  | Keep the lease holder alive           | Do                                    |
 | 1.4  | Name vat directories after workers    | Do                                    |
 | 1.5  | Correct the README                    | Do                                    |
 | 2.1  | Snapshot awake workers                | Do, with one threshold                |
 | 2.2  | Answer `status` before ready          | Do; the rest of boot work is deferred |
-| 2.3  | Break routes toward a retired session | Do, after reading bd-1991             |
+| 2.3  | Break routes toward a retired session | Done                                  |
 | 2.4  | Measure what a commit writes          | Measure when convenient               |
 | 3    | Collection under Ironhorse            | Requirements on the parallel effort   |
 | D.1  | Fewer hub writes per flush            | Deferred: moot if the table is small  |
@@ -129,26 +130,21 @@ commit re-encodes each section and rewrites each one whose digest changed.
 
 None of this buys durability; see the replay section above.
 
-Proposed:
-
-- Add an optional `commit: false` field to the worker's `eval` request, and send it for
-  deliveries.
-- Have `close` checkpoint before it closes the store.
-  Today it does not, which is safe only because every crank already committed.
-  `snapshot()` closes, copies and relaunches, so this keeps images complete.
-
-The request format is private to this package.
+Done, in a simpler shape than first proposed, and in Thixotrope's own worker binary rather than
+the engine.
+The worker no longer checkpoints after a crank; it checkpoints once in `close_heap`, before it
+closes the file, which the host's `close` and therefore `snapshot()` reach.
+No request field was added: this package is the worker's only consumer, and nothing reads the
+incarnation's file for recovery.
 Outbound frames still come only from a journaled inbound frame, and after a crash replay
-regenerates them and the hub's watermark drops the duplicates, as today.
+regenerates them and the hub's watermark drops the duplicates, as before.
 What it gives up: the worker's promise that no result escapes a crank that failed to commit; a
-storage fault surfaces at snapshot or close instead.
-
+storage fault now surfaces at snapshot or close instead.
 Collection still runs after every crank, and must: section 3 depends on its timing.
 
-Tests: a Rust test in `rust/endo/tests/ironhorse_store_worker.rs` that evaluates without commits,
-closes, reopens and finds the state.
-In `test/ironhorse/reliability.js`, kill a vat after several uncommitted deliveries and check
-that replay sends no duplicate frames past the hub.
+A worker test evaluates several cranks, shows the store's epoch unchanged until `close_heap`, and
+reopens the file to find their state.
+The existing Ironhorse suites cover crash-then-replay.
 
 ### 1.2 Count the worker journal in memory
 
@@ -268,7 +264,11 @@ toward a retired session with a stated reason and releases the rows nothing else
 This stays right with section 3 in place: an asker whose answer is broken drops the promise, the
 collector then releases the route.
 
-Proposed: read the patch and port it.
+Done: ported from #1444 and #1445 as the author's own commit, with the hunk unchanged.
+Left out: the boot-sweep extension and the test that heal tombstones an earlier build left, since
+nothing runs this branch in production and retirement now leaves none; and the `test.failing` for
+growth while the answerer lives, which section 3 covers.
+The comment and test now name the cause recorded in 1.5.
 
 ### 2.4 Measure what an Ironhorse commit writes
 

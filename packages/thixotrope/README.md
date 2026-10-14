@@ -598,11 +598,12 @@ are validated on restoration.
 The engine owns snapshot-format and store-schema versions; see
 [`versions.rs`](../../rust/engine/ironhorse-snapshot/src/versions.rs) for their compatibility roles.
 
-Every completed crank commits an incremental SQLite checkpoint before a reply
-leaves the process. Snapshot references identify immutable, content-addressed
-SQLite files. A running incarnation uses a private writable copy. Sleep folds
-the WAL, saves and syncs an image, then pairs its reference with the transport's
-journal cut and outbound sequence base. Recovery copies **that exact image**
+Snapshot references identify immutable, content-addressed SQLite files. A
+running incarnation uses a private writable copy, which the worker commits when
+it closes rather than after every crank, since nothing recovers from that copy.
+Sleep closes the worker, which folds the WAL, then saves and syncs an image and
+pairs its reference with the transport's journal cut and outbound sequence
+base. Recovery copies **that exact image**
 and replays the journal suffix; it never adopts an abandoned incarnation's
 newer database. Hub input watermarks and a durable outbox commit together before forwarding.
 Destination journals record stable outbox sequence numbers with each frame, so

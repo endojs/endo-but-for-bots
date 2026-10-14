@@ -314,6 +314,20 @@ fn open_heap(
     Ok((store, session, fresh))
 }
 
+/// Commit every crank since the heap's last checkpoint and close the file,
+/// which leaves it self-contained: the host copies it as the worker's image
+/// once `close` has been answered by the process's exit.
+fn close_heap(
+    mut session: StoreSession,
+    signature: &Signature,
+    mut store: SqliteHeapStore,
+) -> Result<(), String> {
+    checkpoint_to_store(&mut session, signature, &mut store)
+        .map_err(|e| format!("checkpoint: {e:?}"))?;
+    drop(session);
+    store.close().map_err(|e| format!("close: {e:?}"))
+}
+
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let path = args.next().ok_or(
@@ -373,14 +387,13 @@ fn run() -> Result<(), String> {
                 return Err(error);
             }
         };
-        // No result or outbound frame escapes a crank that failed to commit.
-        checkpoint_to_store(&mut session, &signature, &mut store)
-            .map_err(|e| format!("checkpoint: {e:?}"))?;
+        // The heap is committed at close, not per crank. The host recovers
+        // a worker from its last image plus its journal, never from this
+        // file, so a checkpoint here bought no durability and cost a rewrite
+        // of every side table the collection above marked dirty.
         reply(&mut stdout, json!({"op":"result", "result":result}))?;
     }
-    drop(session);
-    store.close().map_err(|e| format!("close: {e:?}"))?;
-    Ok(())
+    close_heap(session, &signature, store)
 }
 
 fn main() {
@@ -412,6 +425,27 @@ mod tests {
 
     fn test_limits() -> WorkerLimits {
         WorkerLimits::parse(r#"{"crankBudget":"100000000","bootstrapBudget":"1000000000","slotCeiling":2000000,"chunkCeiling":536870912}"#).unwrap()
+    }
+
+    /// A directory removed when the guard drops.
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_heap_dir(label: &str) -> (std::path::PathBuf, Cleanup) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "thixotrope-worker-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        (dir.clone(), Cleanup(dir))
     }
 
     #[test]
@@ -581,22 +615,7 @@ mod tests {
     #[test]
     fn an_older_schema_heap_is_migrated_before_it_resumes() {
         use ironhorse_snapshot::store::{HeapStore, StoreManifest, STORE_SCHEMA_VERSION};
-        struct Cleanup(std::path::PathBuf);
-        impl Drop for Cleanup {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "thixotrope-worker-migrate-{}-{nanos}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let _cleanup = Cleanup(dir.clone());
+        let (dir, _cleanup) = temp_heap_dir("migrate");
         let path = dir.join("heap.sqlite");
         let path = path.to_str().unwrap();
         let signature = Signature::new("worker-migration-test");
@@ -633,5 +652,42 @@ mod tests {
             }
         );
         assert_eq!(eval(&mut session, "var n; n + 1", 1_000_000).unwrap(), "8");
+    }
+
+    #[test]
+    fn cranks_are_committed_at_close_and_not_before() {
+        use ironhorse_snapshot::store::HeapStore;
+        let (dir, _cleanup) = temp_heap_dir("close");
+        let path = dir.join("heap.sqlite");
+        let path = path.to_str().unwrap();
+        let signature = Signature::new("worker-close-test");
+        let limits = test_limits();
+
+        // As `run` does: boot, then the one checkpoint before the serving loop.
+        let (mut store, mut session, fresh) = open_heap(path, &signature, &limits).unwrap();
+        assert!(fresh);
+        assert_eq!(
+            eval(&mut session, "var n = 0; n", limits.bootstrap_budget).unwrap(),
+            "0"
+        );
+        checkpoint_to_store(&mut session, &signature, &mut store).unwrap();
+        let booted = store.manifest().unwrap().epoch;
+        for expected in ["1", "2", "3"] {
+            assert_eq!(
+                eval(&mut session, "var n; n = n + 1; n", limits.crank_budget).unwrap(),
+                expected
+            );
+        }
+        // A crank commits nothing by itself: the file still holds only the boot.
+        assert_eq!(store.manifest().unwrap().epoch, booted);
+        close_heap(session, &signature, store).unwrap();
+
+        let (store, mut session, fresh) = open_heap(path, &signature, &limits).unwrap();
+        assert!(!fresh);
+        assert!(store.manifest().unwrap().epoch > booted, "close committed");
+        assert_eq!(
+            eval(&mut session, "var n; n", limits.crank_budget).unwrap(),
+            "3"
+        );
     }
 }
