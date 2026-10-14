@@ -533,10 +533,10 @@ SUBTREE:
 OPTIONS:
     --oracle                 gate on XS oracle agreement (default on)
     --no-oracle              do not gate on oracle agreement
-    --case-timeout SECS      hard per-case wall-clock bound; an Ironhorse-only
-                             non-terminator is an ironhorse-hang failure, while
-                             an oracle-only one is an infrastructure skip
-                             (default 10; 0 = off)
+    --case-timeout SECS      hard wall-clock bound on each mode of a case; an
+                             Ironhorse-only non-terminator is an ironhorse-hang
+                             failure, while an oracle-only one is an
+                             infrastructure skip (default 10; 0 = off)
     --gate-meter-exact       legacy flag; oracle computron drift is always advisory
     --repeat N               re-run N times; require identical results, halts, and raw costs
     --features-include F[,F] opt features OUT of the skip set (e.g. ses-xs-parity)

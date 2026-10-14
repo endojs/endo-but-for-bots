@@ -230,7 +230,8 @@ pub struct Config {
     /// endot-ih's skip-list `--features-include`). Empty = no filter. Used
     /// to restrict a whole-tree walk to the `ses-xs-parity` axis.
     pub feature_filter: Vec<String>,
-    /// `--case-timeout SECS`: the hard per-case wall-clock bound. Both the XS
+    /// `--case-timeout SECS`: the hard wall-clock bound on each mode a case
+    /// runs, so a default two-mode case gets twice it. Both the XS
     /// oracle and the ironhorse VM can non-terminate on a pathological source
     /// (e.g. `for (const i = 0; i < 1; i++) {}`, where a missing
     /// assign-to-const `TypeError` spins the loop), so each case is dispatched
@@ -2488,6 +2489,13 @@ fn yaml_quote(s: &str) -> String {
 /// the main thread's ~8 MiB — so a deeply-nested source that ran before would
 /// overflow and SIGSEGV the whole batch (uncatchable by `catch_unwind`), the
 /// exact wedge the bound exists to prevent.
+///
+/// `timeout` bounds each mode the case runs, not the case: a default
+/// two-mode case runs sloppy and strict, each on both engines, under twice
+/// the bound. One bound around both modes left a slow but terminating case
+/// (the `copyWithin/coerced-values-*-detached.js` files, about 23 s of XS
+/// per mode) a few seconds from the 60 s sweep bound, so the nightly sweep
+/// recorded it as an `oracle-nontermination` on some nights only.
 fn run_case_bounded(
     cfg: &Config,
     harness_dir: &Path,
@@ -2497,6 +2505,22 @@ fn run_case_bounded(
     run_case_bounded_with(cfg, harness_dir, src, timeout, run_case)
 }
 
+/// The number of modes [`run_case`] runs for `src`, at least one: the
+/// multiplier [`run_case_bounded`] applies to its per-mode bound.
+fn bounded_mode_count(src: &str) -> u32 {
+    let fm = frontmatter::parse(src);
+    if fm.flags.iter().any(|flag| flag == "module")
+        || fm
+            .features
+            .iter()
+            .any(|feature| is_exact_meter_feature(feature))
+    {
+        return 1;
+    }
+    let (run_sloppy, run_strict, _) = strict_mode_status(&fm.flags);
+    (u32::from(run_sloppy) + u32::from(run_strict)).max(1)
+}
+
 fn run_case_bounded_with(
     cfg: &Config,
     harness_dir: &Path,
@@ -2504,6 +2528,8 @@ fn run_case_bounded_with(
     timeout: std::time::Duration,
     runner: impl FnOnce(&Config, &Path, &str) -> CaseResult + Send + 'static,
 ) -> CaseResult {
+    // The reasons below name the per-mode bound, the one the caller chose.
+    let bound = timeout * bounded_mode_count(src);
     let (tx, rx) = std::sync::mpsc::channel();
     let owned_config = cfg.clone();
     let owned_harness_directory = harness_dir.to_path_buf();
@@ -2526,7 +2552,7 @@ fn run_case_bounded_with(
         // never dropped (forfeits the bound for this one case only).
         Err(_) => return run_case(cfg, harness_dir, src),
     };
-    match rx.recv_timeout(timeout) {
+    match rx.recv_timeout(bound) {
         Ok(r) => {
             let _ = handle.join();
             r
@@ -2547,7 +2573,7 @@ fn run_case_bounded_with(
             let verdict = if ironhorse_terminates_alone(
                 harness_dir,
                 src,
-                timeout,
+                bound,
                 cfg.prelude.as_deref(),
                 cfg.ses_mode,
             ) {
@@ -3852,6 +3878,40 @@ mod tests {
             evaluate_negative_early(&cfg, &run, &early_negative("parse")),
             Verdict::Covered
         );
+    }
+
+    #[test]
+    fn the_case_bound_applies_to_each_mode() {
+        // A runner that takes 1.5 bounds: a two-mode case has two bounds and
+        // completes; a single-mode case has one and times out.
+        let slow = |_: &Config, _: &Path, _: &str| {
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+            CaseResult {
+                verdict: Verdict::Covered,
+                strict_skipped: false,
+                computron_gap: false,
+                mode_outcomes: Vec::new(),
+            }
+        };
+        let bound = std::time::Duration::from_secs(1);
+        let cfg = Config::default();
+        let both = run_case_bounded_with(&cfg, Path::new("."), "1;", bound, slow);
+        assert_eq!(both.verdict, Verdict::Covered);
+        for flag in ["onlyStrict", "noStrict", "raw"] {
+            let source = format!("/*---\nflags: [{flag}]\n---*/\n1;");
+            assert_eq!(bounded_mode_count(&source), 1, "{flag}");
+            let one = run_case_bounded_with(&cfg, Path::new("."), &source, bound, slow);
+            assert_eq!(
+                one.verdict,
+                Verdict::RunSkip(
+                    "oracle-nontermination: oracle failed to terminate within 1s (ironhorse terminates alone)"
+                        .into()
+                ),
+                "{flag}"
+            );
+        }
+        assert_eq!(bounded_mode_count("1;"), 2);
+        assert_eq!(bounded_mode_count("/*---\nflags: [module]\n---*/\n1;"), 1);
     }
 
     #[test]
