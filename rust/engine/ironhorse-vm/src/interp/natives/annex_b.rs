@@ -1,7 +1,22 @@
 //! The Annex B members XS ships (ECMA-262 Annex B.2), ported from
 //! `c/moddable/xs/sources`: `%Object.prototype%`'s `__proto__` accessor and
-//! legacy accessor helpers (`xsObject.c`).
+//! legacy accessor helpers (`xsObject.c`), and the `escape` and `unescape`
+//! globals (`xsGlobal.c`).
 use super::super::*;
+
+const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
+
+/// `escape`'s unescaped set: the ASCII word characters and `@*_+-./`.
+fn escape_keeps(unit: u16) -> bool {
+    u8::try_from(unit).is_ok_and(|byte| byte.is_ascii_alphanumeric() || b"@*_+-./".contains(&byte))
+}
+
+fn hex_value(unit: u16) -> Option<u16> {
+    u8::try_from(unit)
+        .ok()
+        .and_then(|byte| (byte as char).to_digit(16))
+        .map(|digit| digit as u16)
+}
 
 impl Interp {
     /// The `%Object.prototype%` members of [`Self::call_native_method_inner`]
@@ -144,5 +159,120 @@ impl Interp {
             Kind::BigInt => self.bigint_proto,
             _ => crate::value::SlotIndex::NULL,
         }
+    }
+
+    /// `escape(string)` and `unescape(string)` (B.2.1.1, B.2.1.2) over the
+    /// string's UTF-16 code units. Each input unit is charged once, before
+    /// it is first read, and each output growth is admitted before the
+    /// scratch buffer grows, as the URI globals do.
+    /// Out of line from the method dispatcher, whose frame every native
+    /// re-entry carries (`benches/stack_height.py`).
+    #[inline(never)]
+    pub(in crate::interp) fn call_legacy_escape(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<Slot, Step> {
+        let value = if argc > 0 {
+            self.stack
+                .get(base + 4)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
+        } else {
+            Slot::undefined()
+        };
+        self.charge_and_check(0)?;
+        let string = self.to_string_slot(code, value)?;
+        let Payload::String(off) = string.value else {
+            unreachable!("ToString returned a non-string slot");
+        };
+        let len = self.str_len(off);
+        let mut charged = 0;
+        let mut out = Vec::new();
+        let mut pos = 0;
+        while pos < len {
+            let unit = self.legacy_escape_unit(off, pos, &mut charged)?;
+            if m == NativeMethod::GlobalEscape {
+                if escape_keeps(unit) {
+                    self.extend_reserved_units(&mut out, &[unit])?;
+                } else if unit < 0x100 {
+                    let escaped = [
+                        b'%',
+                        HEX_UPPER[(unit >> 4) as usize],
+                        HEX_UPPER[(unit & 15) as usize],
+                    ];
+                    self.extend_reserved_units(&mut out, &escaped.map(u16::from))?;
+                } else {
+                    let escaped = [
+                        b'%',
+                        b'u',
+                        HEX_UPPER[(unit >> 12) as usize],
+                        HEX_UPPER[((unit >> 8) & 15) as usize],
+                        HEX_UPPER[((unit >> 4) & 15) as usize],
+                        HEX_UPPER[(unit & 15) as usize],
+                    ];
+                    self.extend_reserved_units(&mut out, &escaped.map(u16::from))?;
+                }
+                pos += 1;
+                continue;
+            }
+            // `unescape`: `%uXXXX` and `%XX` decode to one code unit; any
+            // other `%` stays as it is.
+            let mut decoded = None;
+            if unit == u16::from(b'%') {
+                if pos + 6 <= len
+                    && self.legacy_escape_unit(off, pos + 1, &mut charged)? == u16::from(b'u')
+                {
+                    decoded = self
+                        .legacy_escape_hex(off, pos + 2, 4, &mut charged)?
+                        .map(|v| (v, 6));
+                }
+                if decoded.is_none() && pos + 3 <= len {
+                    decoded = self
+                        .legacy_escape_hex(off, pos + 1, 2, &mut charged)?
+                        .map(|v| (v, 3));
+                }
+            }
+            let (unit, width) = decoded.unwrap_or((unit, 1));
+            self.extend_reserved_units(&mut out, &[unit])?;
+            pos += width;
+        }
+        Ok(self.new_reserved_string_units(&out))
+    }
+
+    /// The unit at `pos`, charged when no earlier read has charged it.
+    fn legacy_escape_unit(
+        &mut self,
+        off: crate::value::ChunkOffset,
+        pos: usize,
+        charged: &mut usize,
+    ) -> Result<u16, Step> {
+        if pos >= *charged {
+            self.charge_and_check(crate::meter::STRING_METERING)?;
+            *charged = pos + 1;
+        }
+        Ok(self
+            .str_unit_at(off, pos as u32)
+            .expect("escape index within string"))
+    }
+
+    /// The value of the `digits` hexadecimal digits at `pos`, if they all are.
+    fn legacy_escape_hex(
+        &mut self,
+        off: crate::value::ChunkOffset,
+        pos: usize,
+        digits: usize,
+        charged: &mut usize,
+    ) -> Result<Option<u16>, Step> {
+        let mut value = 0;
+        for at in pos..pos + digits {
+            let Some(digit) = hex_value(self.legacy_escape_unit(off, at, charged)?) else {
+                return Ok(None);
+            };
+            value = (value << 4) | digit;
+        }
+        Ok(Some(value))
     }
 }

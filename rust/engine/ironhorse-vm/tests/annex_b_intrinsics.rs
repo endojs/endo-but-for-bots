@@ -114,3 +114,34 @@ fn object_prototype_legacy_accessor_helpers() {
         ),
     ]);
 }
+
+#[test]
+fn escape_and_unescape() {
+    check(&[
+        (
+            "[escape.name, escape.length, unescape.name, unescape.length, Object.getOwnPropertyDescriptor(globalThis, 'escape').enumerable].join()",
+            "escape,1,unescape,1,false",
+        ),
+        (
+            "[escape('a b'), escape('@*_+-./,:;~!'), escape('\\u00e9\\u0100\\uD83D\\uDE00'), escape(), escape('\\uD800')].join('|')",
+            "a%20b|@*_+-./%2C%3A%3B%7E%21|%E9%u0100%uD83D%uDE00|undefined|%uD800",
+        ),
+        // A malformed or truncated escape stays as it is.
+        (
+            "[unescape('%41%u0042%u00e9%zz%u12%u123g%'), unescape('%%41'), unescape('%u%41'), unescape('%4'), unescape('x%u0041x')].join('|')",
+            "AB\u{e9}%zz%u12%u123g%|%A|%uA|%4|xAx",
+        ),
+        (
+            "var u = unescape('%uD83D%uDE00'); [u === '\\uD83D\\uDE00', u.length].join()",
+            "true,2",
+        ),
+        (
+            "var s = ''; for (var i = 0; i < 300; i++) s += String.fromCharCode(i); unescape(escape(s)) === s",
+            "true",
+        ),
+        (
+            "var r = []; try { escape(Symbol()) } catch (e) { r.push(e.name) } try { new unescape('') } catch (e) { r.push(e.name) } r.join()",
+            "TypeError,TypeError",
+        ),
+    ]);
+}
