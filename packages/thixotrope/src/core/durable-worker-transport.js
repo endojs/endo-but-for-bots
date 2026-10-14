@@ -70,6 +70,10 @@ import { WorkerHaltError } from './worker-engine.js';
  * @param {boolean} [options.resident] never put this worker to sleep on the host's own
  *   initiative. An explicit `sleep` is still honoured: residency is the host
  *   declining to take that decision, not a refusal to obey one
+ * @param {number} [options.snapshotEveryDeliveries] snapshot an awake worker
+ *   once this many deliveries have accrued since its last snapshot, so a
+ *   worker that never idles still bounds its journal, and the replay a
+ *   restart needs; omitted means an awake worker snapshots only at sleep
  * @param {() => void} [options.onFatal] retire the failed logical session
  */
 export const makeDurableWorkerTransport = (
@@ -80,6 +84,7 @@ export const makeDurableWorkerTransport = (
     engine,
     onFrame,
     idleSleepMs = undefined,
+    snapshotEveryDeliveries = undefined,
     debugLabel = undefined,
     resident = false,
     onFatal = () => {},
@@ -98,6 +103,9 @@ export const makeDurableWorkerTransport = (
   let outboundBase = 0;
   /** Absolute journal index of the next host→worker frame to deliver. */
   let deliveredUpTo = 0;
+  /** Absolute journal index the recorded snapshot subsumes (from meta). */
+  let snapshotCut = store.getMeta().snapshot?.cut ?? 0;
+  let checkpointQueued = false;
   let deliveredHubSequence = String(store.getMeta().hubDelivery ?? '0');
   let receivedHubSequence = BigInt(deliveredHubSequence);
   for (const { hubSequence } of store.readJournal()) {
@@ -235,6 +243,7 @@ export const makeDurableWorkerTransport = (
     outboundBase = meta.outboundBase ?? 0;
     const snapshotRef = meta.snapshot?.ref ?? null;
     const cut = meta.snapshot?.cut ?? 0;
+    snapshotCut = cut;
     const started = await engine.start({
       debugName,
       snapshot: snapshotRef,
@@ -309,6 +318,26 @@ export const makeDurableWorkerTransport = (
         }
         deliveredUpTo = index + 1;
         if (hubSequence !== undefined) deliveredHubSequence = hubSequence;
+        if (
+          snapshotEveryDeliveries !== undefined &&
+          !resident &&
+          engine.canSnapshot &&
+          !checkpointQueued &&
+          deliveredUpTo - snapshotCut >= snapshotEveryDeliveries
+        ) {
+          // Behind the deliveries already queued, as a sleep would be; the
+          // worker stays awake through it.
+          checkpointQueued = true;
+          enqueue(async () => {
+            checkpointQueued = false;
+            await checkpointInternal();
+          }).catch(error => {
+            logging.error(
+              `thixotrope worker transport ${debugName}: cadence snapshot failed`,
+              error,
+            );
+          });
+        }
       }).catch(error => {
         logging.error(
           `thixotrope worker transport ${debugName}: delivery failed`,
@@ -323,49 +352,55 @@ export const makeDurableWorkerTransport = (
   });
 
   /**
+   * Chain-context only: snapshot the running incarnation, record the
+   * snapshot ref and journal cut, reset the outbound watermark, and
+   * truncate the subsumed journal prefix. The incarnation keeps running:
+   * a sleep terminates it afterwards, a cadence snapshot does not.
+   */
+  const checkpointInternal = async () => {
+    if (incarnation === undefined || !engine.canSnapshot) {
+      return;
+    }
+    const cut = deliveredUpTo;
+    /** @type {unknown} */
+    let ref;
+    try {
+      ref = await incarnation.snapshot();
+    } catch (error) {
+      abandonIncarnation(error);
+    }
+    const previous = store.getMeta().snapshot?.ref;
+    // Record the snapshot before truncating: a crash between the
+    // two leaves subsumed entries in the journal, which the next
+    // wake skips via the recorded cut. The outbound base advances
+    // to the total frames ever emitted: the snapshot subsumes
+    // them, so the next incarnation numbers from here.
+    outboundBase += seenOutbound;
+    seenOutbound = 0;
+    store.setMeta({
+      ...store.getMeta(),
+      snapshot: { ref, cut },
+      outboundBase,
+      hubDelivery: deliveredHubSequence,
+    });
+    store.truncateJournal(cut);
+    snapshotCut = cut;
+    if (previous !== undefined && previous !== ref && engine.releaseSnapshot) {
+      await engine.releaseSnapshot(previous);
+    }
+  };
+
+  /**
    * Put the worker to sleep: after the deliveries already queued drain,
-   * snapshot, record the snapshot ref and journal cut, reset the
-   * outbound watermark, truncate the subsumed journal prefix, and
-   * terminate the incarnation. The OCapN session stays live; the
-   * next frame wakes the worker.
+   * checkpoint and terminate the incarnation. The OCapN session stays
+   * live; the next frame wakes the worker.
    */
   const sleepInternal = () =>
     enqueue(async () => {
       if (incarnation === undefined) {
         return;
       }
-      if (engine.canSnapshot) {
-        const cut = deliveredUpTo;
-        /** @type {unknown} */
-        let ref;
-        try {
-          ref = await incarnation.snapshot();
-        } catch (error) {
-          abandonIncarnation(error);
-        }
-        const previous = store.getMeta().snapshot?.ref;
-        // Record the snapshot before truncating: a crash between the
-        // two leaves subsumed entries in the journal, which the next
-        // wake skips via the recorded cut. The outbound base advances
-        // to the total frames ever emitted: the snapshot subsumes
-        // them, so the next incarnation numbers from here.
-        outboundBase += seenOutbound;
-        seenOutbound = 0;
-        store.setMeta({
-          ...store.getMeta(),
-          snapshot: { ref, cut },
-          outboundBase,
-          hubDelivery: deliveredHubSequence,
-        });
-        store.truncateJournal(cut);
-        if (
-          previous !== undefined &&
-          previous !== ref &&
-          engine.releaseSnapshot
-        ) {
-          await engine.releaseSnapshot(previous);
-        }
-      }
+      await checkpointInternal();
       await terminateIncarnation();
     });
 

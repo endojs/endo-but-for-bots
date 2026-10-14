@@ -150,6 +150,10 @@ const START_NOTICE_MS = 10_000;
  * @param {number} [options.idleSleepMs] put a worker to sleep after this long
  *   with no deliveries (see the durable worker transport's idle-sleep
  *   policy); omitted means workers sleep only on request
+ * @param {number} [options.snapshotEveryDeliveries] snapshot an awake worker
+ *   once this many deliveries have accrued since its last snapshot (see the
+ *   transport's cadence policy); omitted means an awake worker snapshots
+ *   only at sleep
  * @param {boolean} [options.verbose]
  * @returns {Promise<ThixotropeDaemon>}
  */
@@ -163,6 +167,7 @@ const buildDaemon = async (
     resources = {},
     adapterProcesses,
     idleSleepMs = undefined,
+    snapshotEveryDeliveries = undefined,
     verbose = false,
   },
 ) => {
@@ -215,6 +220,7 @@ const buildDaemon = async (
           store: workerStore,
           engine,
           idleSleepMs,
+          snapshotEveryDeliveries,
           debugLabel: workerStore.getMeta().debugLabel,
           // An ephemeral worker is resident by construction. Its state is
           // discarded at the next startup regardless, so snapshotting it on

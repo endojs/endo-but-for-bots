@@ -129,12 +129,12 @@ const save = async (files, path, value) => {
  * Run a single local supervisor. The engine lease encloses socket lifetime.
  * @param {PlatformPowers} platform
  * @param {string} statePath
- * @param {{engine?: WorkerEngine, idleSleepMs?: number}} [options]
+ * @param {{engine?: WorkerEngine, idleSleepMs?: number, snapshotEveryDeliveries?: number}} [options]
  */
 export const serveThixotrope = async (
   platform,
   statePath,
-  { engine, idleSleepMs = 30_000 } = {},
+  { engine, idleSleepMs = 30_000, snapshotEveryDeliveries = 256 } = {},
 ) => {
   const {
     timers,
@@ -302,6 +302,7 @@ export const serveThixotrope = async (
         adapterProcesses: platform.adapterProcesses,
         codec: syrupCodec,
         idleSleepMs,
+        snapshotEveryDeliveries,
         validateState: async () => {
           try {
             config = JSON.parse(await files.readText(configPath));

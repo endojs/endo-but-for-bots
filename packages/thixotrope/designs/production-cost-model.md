@@ -98,7 +98,7 @@ That ordering decides the triage below.
 | 1.3  | Keep the lease holder alive           | Do                                    |
 | 1.4  | Name vat directories after workers    | Do                                    |
 | 1.5  | Correct the README                    | Done                                  |
-| 2.1  | Snapshot awake workers                | Do, with one threshold                |
+| 2.1  | Snapshot awake workers                | Done, with one threshold              |
 | 2.2  | Answer `status` before ready          | Do; the rest of boot work is deferred |
 | 2.3  | Break routes toward a retired session | Done                                  |
 | 2.4  | Measure what a commit writes          | Measure when convenient               |
@@ -225,19 +225,24 @@ runs only on the idle timer, an explicit sleep, or shutdown.
 A worker that never idles never snapshots, so its journal, and every restart's replay, grows
 without bound.
 
-Proposed: factor the image-taking part of `sleepInternal` into a checkpoint that leaves the worker
-awake, and enqueue it after a delivery once `deliveredUpTo - cut` passes `snapshotEveryDeliveries`
-(about 256).
+Done: sleep is now a checkpoint, which leaves the worker awake, followed by termination, and a
+delivery queues a checkpoint once `deliveredUpTo - cut` reaches `snapshotEveryDeliveries`.
+The checkpoint runs behind the deliveries already queued, as a sleep would, so a burst takes one
+snapshot that covers the whole burst.
+The supervisor's default is 256; the daemon and the transport take the option, and resident
+(ephemeral) workers are exempt, as they are from idle sleep.
 One threshold: a worker with slow traffic has a short journal anyway, so no time trigger is
 needed.
 Both engines can take an image while awake: Ironhorse closes, copies and relaunches; the XS worker
 continues after `snapshot-ok`.
-Fold `seenOutbound` into `outboundBase` as sleep does, so numbering stays continuous.
+`seenOutbound` folds into `outboundBase` as at sleep, so numbering runs on.
 
 Cost: an image is proportional to the heap, so the threshold amortizes the report's 6.7 s.
 
-Test: in `test/durable-worker-session.test.js`, a cadence snapshot advances `cut`, truncates the
-journal and leaves the worker awake, and a crash afterwards replays without gaps or duplicates.
+Tests, in `test/durable-worker-session.test.js`: against an engine double, the cadence, the
+continued numbering, a crash that replays only past the cut, and one snapshot per burst; through
+the hub with the snapshotting replay engine, a never-idle worker's journal staying within the
+cadence and recovery from the awake snapshot.
 
 ### 2.2 Answer `status` before the supervisor is ready
 

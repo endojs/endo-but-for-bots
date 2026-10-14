@@ -65,8 +65,12 @@ const COUNTER_SOURCE = `
  * @param {any} options.engine
  * @param {any} options.store a ThixotropeStore
  * @param {string} [options.debugLabel]
+ * @param {number} [options.snapshotEveryDeliveries]
  */
-const makeHubKit = async (t, { workerId, engine, store, debugLabel }) => {
+const makeHubKit = async (
+  t,
+  { workerId, engine, store, debugLabel, snapshotEveryDeliveries },
+) => {
   const hub = makeOcapnHub({ codec: syrupCodec });
   /** @type {any} */
   const holder = {};
@@ -75,6 +79,7 @@ const makeHubKit = async (t, { workerId, engine, store, debugLabel }) => {
     store: store.provideWorkerStore(workerId),
     engine,
     debugLabel,
+    snapshotEveryDeliveries,
     onFrame: (
       /** @type {Uint8Array} */ bytes,
       /** @type {number} */ sequenceNumber,
@@ -292,4 +297,121 @@ test('idle sleeping reports awake until the snapshot commits', async t => {
   t.false(transport.isAwake());
   t.is(store.getMeta().snapshot?.ref, 'snapshot');
   t.is(snapshots, 1);
+});
+
+test('an awake worker snapshots on a delivery cadence and replays only past the cut', async t => {
+  t.timeout(10_000);
+  const workerId = 'b'.repeat(32);
+  const store = makeMemoryStore().provideWorkerStore(workerId);
+  let deliveries = 0;
+  let snapshots = 0;
+  /** @type {number[]} */
+  const sequences = [];
+  const transport = makeDurableWorkerTransport(transportPowers, {
+    workerId,
+    store,
+    snapshotEveryDeliveries: 3,
+    onFrame: (_bytes, sequenceNumber) => {
+      sequences.push(sequenceNumber);
+    },
+    engine: harden({
+      canSnapshot: true,
+      start: async ({ onOutbound }) =>
+        harden({
+          // Echo each frame, so the outbound numbering is observable.
+          deliver: async message => {
+            if (message.t !== 'f') return;
+            deliveries += 1;
+            onOutbound(harden({ t: 'f', b64: message.b64 }));
+          },
+          snapshot: async () => {
+            snapshots += 1;
+            return `snapshot-${snapshots}`;
+          },
+          terminate: async () => {},
+        }),
+    }),
+  });
+  t.teardown(() => transport.retire());
+  /** @param {number} i */
+  const frame = i => frozenBytes(textEncoder.encode(`frame ${i}`));
+  /**
+   * One frame at a time: a wake is a barrier, running after every
+   * operation queued before it, so each delivery completes first.
+   * @param {number} i
+   */
+  const writeOne = async i => {
+    transport.write(frame(i));
+    await transport.wake();
+  };
+
+  for (let i = 0; i < 7; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await writeOne(i);
+  }
+  t.true(transport.isAwake(), 'a cadence snapshot leaves the worker awake');
+  t.is(snapshots, 2, 'at the third and the sixth delivery');
+  t.is(store.getMeta().snapshot?.cut, 6);
+  t.is(store.getMeta().outboundBase, 6);
+  t.is(store.journalLength(), 7);
+  t.is(store.readJournal().length, 1, 'the subsumed prefix was truncated');
+  t.deepEqual(sequences, [1, 2, 3, 4, 5, 6, 7], 'numbering runs on');
+
+  await transport.crash();
+  deliveries = 0;
+  await writeOne(7);
+  t.is(deliveries, 2, 'the wake replayed only the entry past the cut');
+  t.deepEqual(
+    sequences.slice(7),
+    [7, 8],
+    'the regenerated frame keeps its number and the new one follows',
+  );
+  t.is(snapshots, 2, 'two deliveries since the cut: no snapshot yet');
+
+  // A burst queues its deliveries ahead of the snapshot the third one asks
+  // for, so one snapshot covers the whole burst.
+  for (let i = 8; i < 13; i += 1) transport.write(frame(i));
+  // The burst's deliveries queued ahead of the first barrier, and the
+  // snapshot the third of them asked for queued behind it; the second
+  // barrier waits for that snapshot to commit.
+  await transport.wake();
+  await transport.wake();
+  t.is(snapshots, 3, 'one snapshot for the burst');
+  t.is(store.getMeta().snapshot?.cut, 13);
+  t.is(store.readJournal().length, 0);
+});
+
+test('a never-idle worker still bounds its journal by the snapshot cadence', async t => {
+  const store = makeMemoryStore();
+  const workerId = '9'.repeat(32);
+  const workerStore = store.provideWorkerStore(workerId);
+  const { transport, session } = await makeHubKit(t, {
+    workerId,
+    engine: makePeerSnapshottingReplayEngine(nodePowers),
+    store,
+    debugLabel: 'busy',
+    snapshotEveryDeliveries: 2,
+  });
+
+  const shell = await E(
+    E(session.getBootstrap()).fetch(bytesOf('worker')),
+  ).fetch(SHELL_SWISSNUM);
+  const counter = await E(shell).evaluate(COUNTER_SOURCE);
+  for (let i = 1; i <= 5; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    t.is(await E(counter).incr(), i);
+  }
+  await transport.wake();
+  t.true(transport.isAwake(), 'never slept');
+  const { snapshot } = workerStore.getMeta();
+  if (!snapshot) throw t.fail('no snapshot was taken while awake');
+  t.true((snapshot.cut ?? 0) > 0);
+  t.true(
+    workerStore.journalLength() - (snapshot.cut ?? 0) <= 2,
+    'the journal suffix stays within the cadence',
+  );
+
+  await transport.crash();
+  t.is(await E(counter).incr(), 6, 'recovered from the awake snapshot');
+  t.is(await E(counter).getCount(), 6);
 });
