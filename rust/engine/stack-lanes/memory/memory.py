@@ -215,7 +215,8 @@ def measure_shape(native, wasm, wasmtime, shape, ceilings_name):
                         args = probe_args(phase, ceilings, ["--save", str(saved)])
                         row(phase, n, run_wasm(wasmtime, wasm, args, source, dirs=[work]))
                     elif phase == "restore":
-                        row(phase, n, run_wasm(wasmtime, wasm, ["restore", str(saved)], "", dirs=[work]))
+                        args = probe_args("restore", ceilings, [str(saved)])
+                        row(phase, n, run_wasm(wasmtime, wasm, args, "", dirs=[work]))
                         saved.unlink()
                     else:
                         row(phase, n, run_wasm(wasmtime, wasm, probe_args(phase, ceilings), source))
@@ -328,7 +329,11 @@ def recycle(wasm, wasmtime, node):
                                        str(HERE / "recycle.cjs"), str(wasm), str(saved)],
                                       capture_output=True, text=True)
                 if done.returncode != 0:
-                    print(f"node failed: {done.stderr.strip()}")
+                    # A negative code is the signal that killed Node, which a
+                    # guest program cannot cause in a correct host.
+                    rows.append(dict(host="node liftoff", n=n, snapshot_bytes=made["snapshot_bytes"],
+                                     exit=done.returncode, stderr=done.stderr.strip()[-2000:]))
+                    print(f"node failed with exit {done.returncode}: {done.stderr.strip()}")
                     continue
                 fields = json.loads(done.stdout.strip().splitlines()[-1])
                 fields.update(host="node liftoff", n=n, snapshot_bytes=made["snapshot_bytes"])

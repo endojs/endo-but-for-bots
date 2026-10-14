@@ -7,7 +7,7 @@
 //! ih-memory-probe run [options] < program.js
 //! ih-memory-probe snapshot [options] < program.js   # run, then write a whole-heap snapshot
 //! ih-memory-probe checkpoint [options] < program.js # one crank, then checkpoint_to_store
-//! ih-memory-probe restore <snapshot file>           # resume a snapshot, then run `1 + 1`
+//! ih-memory-probe restore <snapshot file> [options]  # resume a snapshot, then run `1 + 1`
 //!
 //! options: --slot-ceiling <n> --chunk-ceiling <bytes> --save <snapshot file>
 //! ```
@@ -317,6 +317,9 @@ fn restore(options: &Options) {
     let mut machine =
         ironhorse_snapshot::from_snapshot_bytes(&bytes, &signature()).expect("resume the snapshot");
     drop(bytes);
+    // Ceilings are host policy, not part of the snapshot: reapply the ones the
+    // heap was built under, or a heap above the defaults refuses its next crank.
+    configure(&mut machine, options);
     let resumed = started.elapsed();
     readings("restore_", &mut out);
     let (code, names) = compile("1 + 1");
@@ -342,7 +345,7 @@ fn main() {
         _ => {
             eprintln!(
                 "usage: ih-memory-probe run|snapshot|checkpoint [--slot-ceiling n] \
-                 [--chunk-ceiling bytes] [--save file] < program.js | restore <file>"
+                 [--chunk-ceiling bytes] [--save file] < program.js | restore <file> [ceilings]"
             );
             std::process::exit(2);
         }
