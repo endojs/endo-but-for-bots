@@ -1186,7 +1186,8 @@ export const makeDaemonicControlPowers = (
         reader,
         cancelled,
         daemonWorkerFacet,
-        { marshalLoadError },
+        // Both ends must release discarded imports and question results.
+        { gcImports: true, marshalLoadError },
         capTpConnectionRegistrar,
       );
 

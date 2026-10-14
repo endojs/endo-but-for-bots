@@ -325,6 +325,9 @@ export const main = async (powers, pid, cancel, cancelled) => {
     cancelled,
     workerFacet,
     {
+      // Match the daemon end: otherwise this long-lived pipe retains every
+      // temporary capability and reply for the lifetime of the worker.
+      gcImports: true,
       marshalSaveError: pushTraceFromMarshal,
       onReject: err => {
         pushTraceFromCapTP(err);
