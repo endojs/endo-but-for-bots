@@ -12,6 +12,9 @@
 This document specifies `Parcel`, an opaque, passable box around a location and the procedure for opening it into a live capability.
 It replaces the JavaScript-facing `SturdyRef` name and contract throughout the in-flight nine-layer stack while preserving the OCapN specification's `ocapn-sturdyref` wire tag.
 The historical filename stays in place so the existing draft PR, review links, and layer references remain stable.
+The canonical cross-layer contract is the
+[`parcel.md` draft](https://github.com/endojs/endo-but-for-bots/pull/1460).
+This document owns layer 1 and records the consequences for its existing stack.
 
 A Parcel is neither locator data nor a live presence.
 It can survive serialization and a network partition, but opening it may fail and repeated opens need not produce the same live reference.
@@ -79,8 +82,9 @@ Code that can call it has explicit authority to reveal cryptographic location da
 
 The operation is named `open`, not `enliven`, because it opens a dormant box rather than sending an eventual message to a live or promised target.
 `SturdyRef.enliven` is replaced by `Parcel.open`.
-`E.enliven` does not survive the pivot, and no `E.open` alias is added.
-Keeping acquisition on the Parcel constructor avoids extending the general eventual-send namespace with a type-specific operation.
+`E.enliven` does not survive the pivot.
+`E.open(parcel)` is added as the eventual-send convenience spelling, following
+the precedent of `E.resolve`, and delegates to `Parcel.open(parcel)`.
 
 The contract uses one open function rather than a handler object.
 There is only one trap, so a handler adds dynamic shape, `this` binding, and mutation questions without providing a second dispatch operation.
@@ -121,14 +125,21 @@ It has an explicit `shim.js` entry for installation and a no-side-effect `no-shi
 Endo bootstrap code imports `@endo/parcel/shim.js` before `lockdown()`.
 
 The shim installs `globalThis.Parcel` only when the property is absent.
-A later copy adopts the existing constructor after validating own data properties for `open`, `locate`, `isParcel`, and `prototype`.
+A later copy adopts an existing initial constructor after validating own data
+properties for `open`, `locate`, `isParcel`, and `prototype`, or an existing
+shared constructor after validating the same shape without `locate`.
 The global binding is non-writable, non-configurable, and non-enumerable, so all eval twins converge on one brand/location/hook table.
 
-A second compatible shim silently adopts the first.
-The initial release has no version brand because the contract is settled before publication and shape validation catches accidental name collisions.
-A future semantic change that cannot interoperate must add an explicit contract marker rather than weakening first-wins.
+A second shim, including a different version, silently adopts the first valid
+constructor without a contract or version marker.
+An incompatible future primitive needs a new spelling rather than weakening
+first-wins.
 
-Installation after lockdown is unsupported and fails against the frozen global.
+The defining installation must happen before lockdown.
+A later evaluation after lockdown, including evaluation in a child compartment,
+adopts the Parcel constructor already visible there and does not attempt to
+replace the frozen global.
+A late evaluation fails only when there is no existing Parcel to adopt.
 The pre-lockdown constructor and prototype remain bootstrap-mutable only long enough for SES to construct `%SharedParcel%` and repoint the shared prototype's constructor.
 `lockdown()` then hardens both constructors and the prototype as one intrinsic graph.
 Parcel instances are frozen immediately even before lockdown.
@@ -164,12 +175,12 @@ The historical design filenames and PR numbers remain stable review anchors.
 | Package and global | `@endo/parcel`, `packages/parcel`, `globalThis.Parcel` |
 | Constructor types and helpers | `Parcel`, `ParcelConstructor`, `makeParcelConstructor`, `provideParcel`, `selectParcel` |
 | Static operations | `Parcel.open`, `Parcel.locate`, `Parcel.isParcel` |
-| Pass style and pattern | `"parcel"`, `ParcelHelper`, `M.parcel()`, `ParcelShape` |
-| Capdata | `{"@qclass":"parcel","index":n}` and `encodeParcelToCapData` / `decodeParcelFromCapData` |
-| Smallcaps | the existing apostrophe slot prefix, with `encodeParcelToSmallcaps` / `decodeParcelFromSmallcaps` names |
+| Pass style and pattern | `"parcel"`, `isParcelObject`, `M.parcel()`, `ParcelShape` |
+| Capdata | inline `{"@qclass":"parcel","location":"<location>"}` and Parcel encode/decode callbacks |
+| Smallcaps | apostrophe plus the inline location string; ordinary leading apostrophes remain escaped |
 | Encode-passable ordering | the existing compact prefix `t`, keyed as `parcel`; the one-character ordering code is not a public semantic name |
-| Justin rendering | `parcelSlot(index)` and `slotToParcel(slot)` |
-| CapTP | `ParcelData`, `makeParcelFromData`, `getParcelData`, `locateParcel`; exported/imported Parcel slots use `d+` / `d-` (`d` for dormant, because `p` already denotes promises) |
+| Justin rendering | inline Parcel rendering and reconstruction with no slot index |
+| CapTP | `ParcelData`, `makeParcelFromData`, `locateParcel`; ordinary carriage is inline, not a renamed `d+` / `d-` slot |
 | OCapN JavaScript | `parcels.js`, `ParcelDetails`, `ParcelTracker`, `makeParcel`, `openParcelDetails`, `parcelDataToDetails`, `parcelDetailsToData`, `OcapnParcelCodec` |
 | OCapN wire | `ocapn-sturdyref` stays unchanged |
 | Daemon | `formula-parcel.js`, `makeFormulaParcelKit`, `parcelForFormula`, `ParcelShape`, `NameOrPathOrParcelShape` |
@@ -185,11 +196,11 @@ Whether the OCapN specification's prose should call the value a Parcel while ret
 
 | Layer | Existing PR | Parcel pivot owned by the layer |
 |---|---|---|
-| 1 | [#774](https://github.com/endojs/endo-but-for-bots/pull/774), contract [#1389](https://github.com/endojs/endo-but-for-bots/pull/1389) | Rename the package/global/types; change constructor to `(location, openHook)`; add `open`, privileged `locate`, and `isParcel`; remove handler/enliven and `E.enliven`; require pre-lockdown first-wins installation. |
+| 1 | [#774](https://github.com/endojs/endo-but-for-bots/pull/774), contract [#1389](https://github.com/endojs/endo-but-for-bots/pull/1389) | Rename the package/global/types; change constructor to `(location, openHook)`; add `open`, privileged `locate`, `isParcel`, and `E.open`; remove handler and `enliven`; define before lockdown and let later shims adopt the visible winner. |
 | 2 | [#1391](https://github.com/endojs/endo-but-for-bots/pull/1391) | Replace the universal `SturdyRef` accommodation with `%InitialParcel%` / `%SharedParcel%`, `tame-parcel-constructor.js`, the shared-prototype constructor repair, and lockdown hardening of both constructors. |
-| 3 | [#1392](https://github.com/endojs/endo-but-for-bots/pull/1392) | Rename helpers, types, patterns, tests, and docs; return the literal pass style `"parcel"`; preserve no pass-invariant equality. |
-| 4 | [#1393](https://github.com/endojs/endo-but-for-bots/pull/1393) | Rename marshal callbacks and discriminators to Parcel, use capdata `@qclass: "parcel"`, retain the existing single-character smallcaps and ordered-encoding code points, and update Justin/rank names. |
-| 5 | [#1394](https://github.com/endojs/endo-but-for-bots/pull/1394) | Rename CapTP/OCapN APIs and tests; change CapTP `s+` / `s-` slots to `d+` / `d-`; carry/open Parcels; rename the JavaScript codec while retaining wire tag `ocapn-sturdyref`. |
+| 3 | [#1392](https://github.com/endojs/endo-but-for-bots/pull/1392) | Rename the special pre-remotable brand check, types, patterns, tests, and docs; return the literal pass style `"parcel"`; preserve no pass-invariant equality. |
+| 4 | [#1393](https://github.com/endojs/endo-but-for-bots/pull/1393) | Use inline capdata `@qclass: "parcel"` plus location and Smallcaps apostrophe plus location; retain the ordered-encoding `t` code point and update Justin/rank names. |
+| 5 | [#1394](https://github.com/endojs/endo-but-for-bots/pull/1394) | Rename CapTP/OCapN APIs and tests; carry Parcels inline instead of renaming `s+` / `s-`; give transport callbacks locate/open authority; retain wire tag `ocapn-sturdyref`. |
 | 6 | [#1396](https://github.com/endojs/endo-but-for-bots/pull/1396) | Rename reconstruction APIs to Parcel; format validated data as a canonical location string; construct with the connection-bound open hook; use privileged locate instead of duplicate coordinate tables. |
 | 7 | [#1397](https://github.com/endojs/endo-but-for-bots/pull/1397) | Rename enlivening to opening; make the open hook resolve local locators or fetch through the remote bootstrap and nonce locator; preserve secret-redacting failures. |
 | 8 | [#1398](https://github.com/endojs/endo-but-for-bots/pull/1398) | Rename the formula module and kit; expose `parcelForFormula(id)` without incarnation; keep formula identifiers closely held and locations available only to the host's initial constructor. |
@@ -231,29 +242,32 @@ The inner mechanism is named `open`, `Parcel`, and `location`; it does not claim
 ## Test plan
 
 Layer 1 tests the constructor validation, rejected subclassing, frozen empty instances, forged-prototype rejection, captured-once location and hook, later-turn opening, repeated non-convergent opens, hook rejection, non-Parcel rejection, synchronous privileged locate, and first-shim-wins eval twins.
-The previous `E.enliven` tests are removed rather than renamed.
+The previous `E.enliven` tests become `E.open` tests.
 
 Layer 2 tests that an absent shim remains valid, a malformed pre-lockdown global is rejected without invoking accessors, the initial constructor has `locate`, the shared constructor does not, both constructors share one prototype and brand, the prototype's constructor cannot recover `%InitialParcel%`, and lockdown hardens both constructors.
 It also reverses #774's withholding test into the precise rule: child compartments receive `%SharedParcel%`, not `%InitialParcel%`.
 
-Layers 3 and 4 test the literal `"parcel"` pass style, lack of pass-invariant equality, capdata and smallcaps round trips, rank stability, and refusal to decode a Parcel as an ordinary slot.
-Layers 5 through 7 test `d+` / `d-` carriage, construction from canonical location data, local and remote opening, partition-and-reconnect behavior, rejection of unsupported location schemes, secret-redacting errors, and Goblins-compatible `ocapn-sturdyref` bytes.
+Layers 3 and 4 test the literal `"parcel"` pass style, lack of pass-invariant equality, inline capdata and Smallcaps round trips, rank stability, and refusal to decode without an authorized Parcel maker.
+Layers 5 through 7 test inline carriage, construction from canonical location data, local and remote opening, partition-and-reconnect behavior, rejection of unsupported location schemes, secret-redacting errors, and Goblins-compatible `ocapn-sturdyref` bytes.
 Layers 8 and 9 test no incarnation before open, no guest access to locations or formula ids, Agent acceptance, retention and drop behavior, and repeated opens that may return distinct live references.
 
 ## Rejected alternatives
 
 Keeping `SturdyRef` as a JavaScript alias is rejected because the stack is unreleased and dual naming would preserve the semantic diffusion the pivot is intended to remove.
 Keeping a handler object is rejected because Parcel has one acquisition operation and a function expresses it directly.
-Keeping `enliven` or `E.enliven` is rejected because acquisition is not eventual send.
+Keeping `enliven` or `E.enliven` is rejected because the Parcel vocabulary is
+`open`; `E.open` retains the convenience without the old metaphor.
 Giving every compartment `locate` is rejected because a location is exfiltratable cryptographic authority.
 Removing `locate` entirely is rejected because trusted serializers need a principled way to recover the wire representation without recreating package-private coordinate tables.
 Changing the `ocapn-sturdyref` wire tag is rejected because it would break the specification and Goblins interoperability for a JavaScript naming change.
 
-## Open questions
+## Design decision
 
-- Should a future OCapN specification revision adopt the word “Parcel” in prose while retaining the `ocapn-sturdyref` wire tag, or should both the existing term and tag remain at the specification boundary?
-
-This question does not block the pivot build because the interoperable bytes and current specification vocabulary are unchanged.
+Parcel is the Endo language representation, while OCapN's on-wire value remains
+a structured capability locator with the specification-defined
+`ocapn-sturdyref` tag.
+The OCapN specification need not adopt the JavaScript-facing term; a
+non-normative Endo mapping may mention Parcels separately.
 
 ## Prompt
 
