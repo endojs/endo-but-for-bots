@@ -2981,6 +2981,23 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/parcel@workspace:packages/parcel":
+  version: 0.0.0-use.local
+  resolution: "@endo/parcel@workspace:packages/parcel"
+  dependencies:
+    "@endo/eventual-send": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/pass-style": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    ses: "workspace:^"
+    tsd: "catalog:dev"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/parser-pipeline@workspace:packages/parser-pipeline":
   version: 0.0.0-use.local
   resolution: "@endo/parser-pipeline@workspace:packages/parser-pipeline"
@@ -3519,22 +3536,6 @@ __metadata:
     c8: "catalog:dev"
     eslint: "catalog:dev"
     ses: "workspace:^"
-    typescript: "catalog:dev"
-  languageName: unknown
-  linkType: soft
-
-"@endo/sturdyref@workspace:packages/sturdyref":
-  version: 0.0.0-use.local
-  resolution: "@endo/sturdyref@workspace:packages/sturdyref"
-  dependencies:
-    "@endo/harden": "workspace:^"
-    "@endo/init": "workspace:^"
-    "@endo/pass-style": "workspace:^"
-    ava: "catalog:dev"
-    c8: "catalog:dev"
-    eslint: "catalog:dev"
-    ses: "workspace:^"
-    tsd: "catalog:dev"
     typescript: "catalog:dev"
   languageName: unknown
   linkType: soft
