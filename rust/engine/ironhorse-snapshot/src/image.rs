@@ -1027,17 +1027,18 @@ fn decode_heap(p: &[u8]) -> Result<(Vec<Slot>, Vec<u32>, u32), SnapshotError> {
         free.push(u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]));
         i += 4;
     }
-    // checked_mul, not `*`: on a 32-bit usize the product can wrap,
-    // and a wrapped `want` would satisfy the truncation gate below
-    // while `slot_count` stays attacker-sized — falsifying the bound
-    // the `seen` scratch depends on. The scratch bound must hold on
-    // every target, including 32-bit hosts.
-    let want = slot_count
-        .checked_mul(SLOT_RECORD_BYTES)
-        .ok_or(SnapshotError::Corrupt("HEAP record count"))?;
-    if p.len() - i < want {
+    // Sized in u64, where a u32 count times the record width cannot
+    // overflow: in usize the product wraps on a 32-bit host, and a wrapped
+    // `want` would satisfy the truncation gate below while `slot_count`
+    // stays attacker-sized, falsifying the bound the `seen` scratch
+    // depends on. Every target refuses an oversized count as truncation,
+    // with the same message, and `want` fits in usize once it is known to
+    // be at most the payload's length.
+    let want = slot_count as u64 * SLOT_RECORD_BYTES as u64;
+    if ((p.len() - i) as u64) < want {
         return Err(SnapshotError::Corrupt("HEAP records truncated"));
     }
+    let want = want as usize;
     if p.len() - i != want {
         return Err(SnapshotError::Corrupt("HEAP trailing bytes"));
     }
@@ -5100,16 +5101,15 @@ pub(crate) fn decode_stack(p: &[u8]) -> Result<Vec<Slot>, SnapshotError> {
         return Err(SnapshotError::Corrupt("STAC header"));
     }
     let count = u32::from_be_bytes([p[0], p[1], p[2], p[3]]) as usize;
-    // checked_mul for the same reason as `decode_heap`'s twin gate: on
-    // a 32-bit usize the product can wrap to a small `want` that
+    // Sized in u64 for the same reason as `decode_heap`'s twin gate: in
+    // usize the product can wrap on a 32-bit host to a small `want` that
     // satisfies the truncation gate below, silently short-decoding the
-    // stack. Both gates must reject overflow on every target.
-    let want = count
-        .checked_mul(SLOT_RECORD_BYTES)
-        .ok_or(SnapshotError::Corrupt("STAC record count"))?;
-    if p.len() - 4 < want {
+    // stack. Every target refuses an oversized count with the same message.
+    let want = count as u64 * SLOT_RECORD_BYTES as u64;
+    if ((p.len() - 4) as u64) < want {
         return Err(SnapshotError::Corrupt("STAC records truncated"));
     }
+    let want = want as usize;
     if p.len() - 4 != want {
         return Err(SnapshotError::Corrupt("STAC trailing bytes"));
     }
