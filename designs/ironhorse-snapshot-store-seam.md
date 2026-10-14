@@ -4856,13 +4856,19 @@ the 2026-09-24 trust-model entry at the top records the decision:
     stored token (zero for an empty store) and refuses a zero token or one equal to its
     predecessor, and the metadata-scale validator refuses a zero stored token.
     Tokens come from a `CommitTokenSource`: `RandomTokens` (SipHash under the standard library's
-    randomly seeded keys, over a process-wide counter, the clock and the process id), which
-    `import_from_container`, `image_to_batch` and every session use; `mint_token` draws again on
-    zero or the predecessor, and a batch whose own token is zero or its predecessor's is rejected
-    as the caller's defect (`BatchRejected`).
-    A session's `set_token_source`, for tests that need reproducible manifests, exists only in tests
-    and under the `unchecked-tooling` feature, since the pairing relies on tokens being distinct
-    across every store a session could be pointed at.
+    randomly seeded keys, over a process-wide counter, the clock and the process id, a constant on
+    WASI), which `import_from_container`, `image_to_batch` and every session use unless the
+    embedder supplies another; `mint_token` draws again on zero or the predecessor and refuses a
+    source stuck on them (`StoreError::TokenSource`), and a batch whose own token is zero or its
+    predecessor's is rejected as the caller's defect (`BatchRejected`).
+    On `wasm32-unknown-unknown`, which has no clock and keys the hashers from addresses that repeat
+    from run to run, `RandomTokens` refuses with `TokenSource`, and a session's commit returns the
+    refusal.
+    The embedder there supplies its host's randomness through `begin_store_session_with_tokens`
+    (or `begin_shared_store_session_with_tokens`) and, for a resumed session, `set_token_source`.
+    Any source must keep tokens distinct across every store a session could be pointed at,
+    restarts included, since the pairing relies on it; tests that need reproducible manifests set
+    one that does not.
     A session retains the section digests it last committed and reads them from the store only at
     its first checkpoint after a resume; the pairing check keeps them exact across a failed commit,
     since a checkpoint proceeds only while the store holds the state the session last committed.
