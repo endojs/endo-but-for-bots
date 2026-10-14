@@ -421,7 +421,12 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
             // last clause of F127). Same story: this fixture holds none, so
             // only the VERS payload moves. Re-measured on top of the guest
             // `lockdown()` work, which moves the boot heap under both pins.
-            "8c2f5a1494ca8445f584134e20cf0d4ae5335f0b45783c9600bdefb7c6837205"
+            // Re-pinned for format version 25 / store schema 37, which carry
+            // `WeakRef` targets (`WKRF`) and `FinalizationRegistry` cells
+            // (`FNRG`). This fixture holds neither, so the atoms are absent
+            // and only the VERS payload moves; the manifest's schema below
+            // moves with it.
+            "31cb86c72b7b7d007f5311664cca77c539b42287e6fc6abadf527aeecc6b82af"
         } else {
             // F189 reserved IDs, with the deterministic provider SIGN.
             // Re-pinned for format version 23 alongside the platform pin,
@@ -439,8 +444,9 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
             // two arms carry DIFFERENT digests, because
             // `derive_boot_fingerprint` folds `MATH_PROVIDER` in only when
             // `deterministic-math` is on, and the final blob (unlike the
-            // markers above) is not signature-normalized.
-            "1a42398605fd2fdd641c0ca6ae1002758d82cc74d3ae40eb2bd785ab7860051a"
+            // markers above) is not signature-normalized. Re-pinned for
+            // format version 25 / store schema 37 with the platform arm.
+            "3907d01096dfc887568fb1a3e410825b6fad2bdc37be2c8c9b157960fa535fdd"
         },
         "canonical final blob hash"
     );
@@ -474,7 +480,7 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
         ),
         (
             &ironhorse_snapshot::Version::current(),
-            36,
+            37,
             &sig,
             3,
             (0, 0, 0)
