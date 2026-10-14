@@ -26,11 +26,13 @@ pub mod image;
 pub mod machine;
 pub use ironhorse_vm::sha256;
 pub mod sidetable;
+mod sink;
 pub mod slot_codec;
 mod snapshot_roster;
 pub mod store;
 pub mod store_file;
 pub mod store_sections;
+mod stream;
 pub mod versions;
 // Backend-parameterized acceptance suites (metamorphic determinism,
 // checkpoint locks) for OTHER crates' backends to instantiate; test

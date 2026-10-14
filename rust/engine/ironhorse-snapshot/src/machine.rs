@@ -2,9 +2,12 @@
 //!
 //! [`MachineSnapshot`] extends `ironhorse_vm::Interp` because the VM owns the
 //! interpreter while this crate owns encoding and persistence validation.
-//! File writes materialize the encoded image, hash that same buffer, and write it;
-//! this is not a constant-memory streaming serializer. CAS publication uses a
-//! content-addressed name and the read path validates content identity.
+//! The write verbs stream the container straight from the live arenas and
+//! side tables (`crate::stream`): a sizing pass fixes every atom's length,
+//! then the bytes go to the sink, a file (hashed on the way), any
+//! `io::Write`, or one exactly pre-sized buffer, with no image of the
+//! machine and no intermediate payload buffers in between. CAS publication
+//! uses a content-addressed name and the read path validates content identity.
 //!
 //! Persistence requires a completed, quiescent crank and admitted side-table state.
 //! A halted crank can retain live registers even when tables appear empty; it must
@@ -24,9 +27,10 @@ use std::path::Path;
 
 use crate::format::{Signature, SnapshotError};
 use crate::image::{
-    read_validated_machine, write_machine, GatedImage, MachineImage, MeterImage, ValidatedSnapshot,
+    read_validated_machine, GatedImage, MachineImage, MeterImage, ValidatedSnapshot,
 };
 use crate::sha256::{hex, Sha256};
+use crate::sink::WriteSink;
 #[cfg(test)]
 use crate::store::image_to_batch_unchecked as image_to_batch;
 use crate::store::{
@@ -35,6 +39,7 @@ use crate::store::{
     SmallState, StoreError, StoreManifest, FREE_SEG_ENTRIES, STORE_SCHEMA_VERSION,
 };
 use crate::store_sections::SMALL_SECTION_COUNT;
+use crate::stream::LiveSnapshot;
 use ironhorse_vm::{Interp, RestoreSession};
 
 /// An error from the file/CAS snapshot surface: either an I/O failure or a
@@ -125,6 +130,26 @@ fn cas_temporary(dir: &Path) -> io::Result<(CasTemporary, File)> {
     }
 }
 
+/// A writer that digests exactly the bytes its inner writer accepts, so
+/// [`MachineSnapshot::write_snapshot_to_file`]'s CAS key is the hash of the
+/// file and never of a re-buffered copy.
+struct HashingWriter<'a> {
+    inner: &'a mut File,
+    hasher: Sha256,
+}
+
+impl Write for HashingWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let accepted = self.inner.write(buf)?;
+        self.hasher.update(&buf[..accepted]);
+        Ok(accepted)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 /// The xsnap-shaped machine snapshot surface, implemented for the ironhorse
 /// [`Interp`] (the engine's machine). See the module docs.
 pub trait MachineSnapshot {
@@ -140,9 +165,13 @@ pub trait MachineSnapshot {
     /// the side-table rows — after [`Self::persist_gate`] admits it.
     ///
     /// The immutable proof prevents mutation between admission and encoding.
-    /// Writers and full-batch builders consume this proof; unchecked tooling
-    /// encoders are separate, explicitly named operations. Incremental
-    /// checkpoints run the same live gate directly over their bound machine.
+    /// The image writer and full-batch builders consume this proof; unchecked
+    /// tooling encoders are separate, explicitly named operations. The
+    /// container write verbs below run the same gate over the live machine
+    /// and stream from it under a shared borrow, which is the same proof;
+    /// incremental checkpoints run the live gate directly over their bound
+    /// machine. An image costs a copy of the heap, so the write verbs never
+    /// build one.
     fn snapshot_image(&self, signature: &Signature) -> Result<GatedImage, MachineSnapshotError>;
 
     /// Test tooling that deliberately discards the persistence proof.
@@ -154,40 +183,48 @@ pub trait MachineSnapshot {
         self.snapshot_image(signature).map(GatedImage::into_image)
     }
 
-    /// Serialize this machine to the in-memory `XS_M` container bytes.
-    /// Refuses whatever [`Self::snapshot_image`] refuses — a machine
-    /// that fails [`Self::persist_gate`], or one whose image stores a
-    /// property id outside the name and symbol-key tables
+    /// Serialize this machine to the in-memory `XS_M` container bytes:
+    /// the bytes [`crate::image::write_machine`] gives for
+    /// [`Self::snapshot_image`], streamed from the live machine into one
+    /// exactly pre-sized buffer instead. Refuses whatever `snapshot_image`
+    /// refuses — a machine that fails [`Self::persist_gate`], or one that
+    /// stores a property id outside the name and symbol-key tables
     /// (`Snapshot(Corrupt(..))`) — so the blob verbs carry exactly the
     /// preconditions `begin_store_session` does.
-    fn write_snapshot(&self, signature: &Signature) -> Result<Vec<u8>, MachineSnapshotError> {
-        Ok(write_machine(&self.snapshot_image(signature)?)?)
-    }
+    fn write_snapshot(&self, signature: &Signature) -> Result<Vec<u8>, MachineSnapshotError>;
 
-    /// Materialize the encoded snapshot, then hash and write that buffer in chunks
-    /// to `file`.
-    /// The image, atom body, and finished container can coexist during encoding
-    /// (roughly three heap images at peak). Return the hex digest after the file
-    /// is flushed and synced,
-    /// so the caller may safely rename it into the CAS (the
-    /// [`Self::suspend_to_cas`] contract).
+    /// Stream the container to `out` — a file, a socket, a hasher — and
+    /// return its length. The same bytes and the same refusals as
+    /// [`Self::write_snapshot`]; the sizing pass runs before the first
+    /// byte is written, so a refused machine writes nothing, while an I/O
+    /// error leaves whatever `out` accepted before it.
+    fn write_snapshot_to(
+        &self,
+        signature: &Signature,
+        out: &mut dyn Write,
+    ) -> Result<u64, MachineSnapshotError>;
+
+    /// Stream the container to `file`, hashing the bytes on the way, and
+    /// return the hex digest after the file is flushed and synced, so the
+    /// caller may safely rename it into the CAS (the
+    /// [`Self::suspend_to_cas`] contract). Nothing of the container is
+    /// held in memory: the writer hands the file 64 KiB at a time, and the
+    /// digest covers exactly the bytes the file accepted.
     fn write_snapshot_to_file(
         &self,
         signature: &Signature,
         file: File,
     ) -> Result<String, MachineSnapshotError> {
-        let bytes = self.write_snapshot(signature)?;
-        let mut hasher = Sha256::new();
         let mut file = file;
-        // Stream the serialized image to disk in chunks, hashing on the
-        // way — the digest is never computed over a re-buffered copy.
-        for chunk in bytes.chunks(64 * 1024) {
-            hasher.update(chunk);
-            file.write_all(chunk)?;
-        }
+        let mut hashing = HashingWriter {
+            inner: &mut file,
+            hasher: Sha256::new(),
+        };
+        self.write_snapshot_to(signature, &mut hashing)?;
+        let digest = hashing.hasher.finalize();
         file.flush()?;
         file.sync_all()?;
-        Ok(hex(&hasher.finalize()))
+        Ok(hex(&digest))
     }
 
     /// Write this machine's snapshot into the CAS directory `cas_dir`: to a
@@ -221,6 +258,23 @@ impl MachineSnapshot for Interp {
             return Err(MachineSnapshotError::PendingStateUnsupported { row });
         }
         Ok(())
+    }
+
+    fn write_snapshot(&self, signature: &Signature) -> Result<Vec<u8>, MachineSnapshotError> {
+        let live = LiveSnapshot::admit(self, signature)?;
+        Ok(live.sized()?.write_to_vec()?)
+    }
+
+    fn write_snapshot_to(
+        &self,
+        signature: &Signature,
+        out: &mut dyn Write,
+    ) -> Result<u64, MachineSnapshotError> {
+        let live = LiveSnapshot::admit(self, signature)?;
+        let sized = live.sized()?;
+        let mut sink = WriteSink::new(out);
+        sized.write_into(&mut sink)?;
+        Ok(sink.finish()?)
     }
 
     fn snapshot_image(&self, signature: &Signature) -> Result<GatedImage, MachineSnapshotError> {
@@ -325,7 +379,7 @@ macro_rules! define_live_side_tables {
         /// collections, registry since schema 7 and errors since schema 9 —
         /// travel alongside, and the symbol-key table travels in the symbols
         /// section).
-        fn small_state_of(interp: &Interp, dirty: ironhorse_vm::SnapshotDirty) -> SmallState {
+        pub(crate) fn small_state_of(interp: &Interp, dirty: ironhorse_vm::SnapshotDirty) -> SmallState {
             let tables = side_tables_of_selected(interp, dirty);
             let (next_id, pairs) = if dirty.contains(ironhorse_vm::SnapshotSection::Symbols) {
                 interp.symbol_key_table()
@@ -3032,6 +3086,18 @@ impl MachineSnapshot for ironhorse_vm::Machine {
     }
     fn snapshot_image(&self, signature: &Signature) -> Result<GatedImage, MachineSnapshotError> {
         self.with_persistence(|interp| interp.snapshot_image(signature))
+            .map_err(|_| MachineSnapshotError::NotQuiescent)?
+    }
+    fn write_snapshot(&self, signature: &Signature) -> Result<Vec<u8>, MachineSnapshotError> {
+        self.with_persistence(|interp| interp.write_snapshot(signature))
+            .map_err(|_| MachineSnapshotError::NotQuiescent)?
+    }
+    fn write_snapshot_to(
+        &self,
+        signature: &Signature,
+        out: &mut dyn Write,
+    ) -> Result<u64, MachineSnapshotError> {
+        self.with_persistence(|interp| interp.write_snapshot_to(signature, out))
             .map_err(|_| MachineSnapshotError::NotQuiescent)?
     }
 }

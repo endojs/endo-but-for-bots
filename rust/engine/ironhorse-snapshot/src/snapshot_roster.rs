@@ -44,8 +44,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::STAC),
                 present(_image): true,
-                encode(state): {
-                    crate::image::encode_stack(&state.stack)
+                encode(state, out): {
+                    crate::image::encode_stack_into(&state.stack, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_stack(bytes).map(|value| crate::image::encode_stack(&value))
@@ -68,8 +68,8 @@ macro_rules! snapshot_payloads {
                 decode_container: [],
                 atom: None,
                 present(_image): false,
-                encode(_state): {
-                    crate::image::encode_u32s(&[])
+                encode(_state, out): {
+                    crate::image::encode_u32s_into(&[], out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_u32s(bytes).map(|_| crate::image::encode_u32s(&[]))
@@ -98,8 +98,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::KEYS),
                 present(_image): true,
-                encode(state): {
-                    crate::image::encode_strings(&state.keys)
+                encode(state, out): {
+                    crate::image::encode_strings_into(&state.keys, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_strings(bytes).map(|value| crate::image::encode_strings(&value))
@@ -132,8 +132,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::NAME),
                 present(_image): true,
-                encode(state): {
-                    crate::image::encode_names(&state.names)
+                encode(state, out): {
+                    crate::image::encode_names_into(&state.names, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_names(bytes).map(|value| crate::image::encode_names(&value))
@@ -175,8 +175,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::SYMB),
                 present(_image): true,
-                encode(state): {
-                    crate::image::encode_symbol_keys(&state.symbols)
+                encode(state, out): {
+                    crate::image::encode_symbol_keys_into(&state.symbols, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_symbol_keys(bytes).map(|value| crate::image::encode_symbol_keys(&value))
@@ -224,8 +224,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::METR),
                 present(_image): true,
-                encode(state): {
-                    state.meter.encode()
+                encode(state, out): {
+                    state.meter.encode_into(out)
                 },
                 canonicalize(bytes): {
                     crate::image::MeterImage::decode(bytes).map(|value| value.encode())
@@ -309,8 +309,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::ARRY),
                 present(image): !image.arrays.is_empty(),
-                encode(state): {
-                    crate::image::encode_arrays(&state.arrays)
+                encode(state, out): {
+                    crate::image::encode_arrays_into(&state.arrays, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_arrays(bytes).map(|value| crate::image::encode_arrays(&value))
@@ -369,8 +369,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::IDXP),
                 present(image): !image.index_props.is_empty(),
-                encode(state): {
-                    crate::image::encode_index_props(&state.index_props)
+                encode(state, out): {
+                    crate::image::encode_index_props_into(&state.index_props, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_index_props(bytes).map(|value| crate::image::encode_index_props(&value))
@@ -430,8 +430,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::COLL),
                 present(image): !image.collections.is_empty(),
-                encode(state): {
-                    crate::image::encode_collections(&state.collections)
+                encode(state, out): {
+                    crate::image::encode_collections_into(&state.collections, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_collections(bytes).map(|value| crate::image::encode_collections(&value))
@@ -482,8 +482,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::REGY),
                 present(image): !image.registry.is_empty(),
-                encode(state): {
-                    crate::image::encode_registry(&state.registry)
+                encode(state, out): {
+                    crate::image::encode_registry_into(&state.registry, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_registry(bytes).map(|value| crate::image::encode_registry(&value))
@@ -551,8 +551,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::ERRD),
                 present(image): !image.errors.is_empty(),
-                encode(state): {
-                    crate::image::encode_errors(&state.errors)
+                encode(state, out): {
+                    crate::image::encode_errors_into(&state.errors, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_errors(bytes).map(|value| crate::image::encode_errors(&value))
@@ -608,8 +608,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::ESTK),
                 present(image): image.errors.iter().any(|error| !error.frames.is_empty()),
-                encode(state): {
-                    crate::image::encode_error_frames(&state.errors)
+                encode(state, out): {
+                    crate::image::encode_error_frames_into(&state.errors, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_error_frames(bytes).map(|_| bytes.to_vec())
@@ -737,8 +737,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::ABUF),
                 present(image): !image.buffers.is_empty(),
-                encode(state): {
-                    crate::image::encode_buffers(&state.buffers)
+                encode(state, out): {
+                    crate::image::encode_buffers_into(&state.buffers, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_buffers(bytes).map(|value| crate::image::encode_buffers(&value))
@@ -793,8 +793,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::TARR),
                 present(image): !image.typed_arrays.is_empty(),
-                encode(state): {
-                    crate::image::encode_typed_arrays(&state.typed_arrays)
+                encode(state, out): {
+                    crate::image::encode_typed_arrays_into(&state.typed_arrays, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_typed_arrays(bytes).map(|value| crate::image::encode_typed_arrays(&value))
@@ -848,8 +848,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::DVIW),
                 present(image): !image.data_views.is_empty(),
-                encode(state): {
-                    crate::image::encode_data_views(&state.data_views)
+                encode(state, out): {
+                    crate::image::encode_data_views_into(&state.data_views, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_data_views(bytes).map(|value| crate::image::encode_data_views(&value))
@@ -914,8 +914,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::WRAP),
                 present(image): !image.wrappers.is_empty(),
-                encode(state): {
-                    crate::image::encode_wrappers(&state.wrappers)
+                encode(state, out): {
+                    crate::image::encode_wrappers_into(&state.wrappers, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_wrappers(bytes).map(|value| crate::image::encode_wrappers(&value))
@@ -985,8 +985,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::REGX),
                 present(image): !image.regexps.is_empty(),
-                encode(state): {
-                    crate::image::encode_regexps(&state.regexps)
+                encode(state, out): {
+                    crate::image::encode_regexps_into(&state.regexps, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_regexps(bytes).map(|value| crate::image::encode_regexps(&value))
@@ -1036,8 +1036,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::ARGB),
                 present(image): !image.arguments_brands.is_empty(),
-                encode(state): {
-                    crate::image::encode_arguments_brands(&state.arguments_brands)
+                encode(state, out): {
+                    crate::image::encode_arguments_brands_into(&state.arguments_brands, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_arguments_brands(bytes)
@@ -1120,8 +1120,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::TMPR),
                 present(image): !image.temporal.is_empty(),
-                encode(state): {
-                    crate::image::encode_temporal(&state.temporal)
+                encode(state, out): {
+                    crate::image::encode_temporal_into(&state.temporal, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_temporal(bytes).map(|value| crate::image::encode_temporal(&value))
@@ -1212,8 +1212,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::INTL),
                 present(image): !image.intl.is_empty(),
-                encode(state): {
-                    crate::image::encode_intl(&state.intl)
+                encode(state, out): {
+                    crate::image::encode_intl_into(&state.intl, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_intl(bytes).map(|value| crate::image::encode_intl(&value))
@@ -1344,8 +1344,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::ITER),
                 present(image): !image.iterators.is_empty(),
-                encode(state): {
-                    crate::image::encode_iterators(&state.iterators)
+                encode(state, out): {
+                    crate::image::encode_iterators_into(&state.iterators, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_iterators(bytes).map(|value| crate::image::encode_iterators(&value))
@@ -1403,8 +1403,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::DATE),
                 present(image): !image.dates.is_empty(),
-                encode(state): {
-                    crate::image::encode_dates(&state.dates)
+                encode(state, out): {
+                    crate::image::encode_dates_into(&state.dates, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_dates(bytes).map(|value| crate::image::encode_dates(&value))
@@ -1571,8 +1571,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::FUNC),
                 present(image): !image.function_state.is_empty(),
-                encode(state): {
-                    crate::image::encode_function_state(&state.function_state)
+                encode(state, out): {
+                    crate::image::encode_function_state_into(&state.function_state, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_function_state(bytes)
@@ -1658,8 +1658,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::PROX),
                 present(image): !image.proxy_state.is_empty(),
-                encode(state): {
-                    crate::image::encode_proxy_state(&state.proxy_state)
+                encode(state, out): {
+                    crate::image::encode_proxy_state_into(&state.proxy_state, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_proxy_state(bytes).map(|value| crate::image::encode_proxy_state(&value))
@@ -1740,8 +1740,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::ACCS),
                 present(image): !image.accessors.is_empty(),
-                encode(state): {
-                    crate::image::encode_accessors(&state.accessors)
+                encode(state, out): {
+                    crate::image::encode_accessors_into(&state.accessors, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_accessors(bytes).map(|value| crate::image::encode_accessors(&value))
@@ -1831,8 +1831,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::IBFN),
                 present(image): !image.intl_bound_functions.is_empty(),
-                encode(state): {
-                    crate::image::encode_intl_bound_functions(&state.intl_bound_functions)
+                encode(state, out): {
+                    crate::image::encode_intl_bound_functions_into(&state.intl_bound_functions, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_intl_bound_functions(bytes)
@@ -1913,8 +1913,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::PRIV),
                 present(image): !image.private_elements.is_empty(),
-                encode(state): {
-                    crate::image::encode_private_elements(&state.private_elements)
+                encode(state, out): {
+                    crate::image::encode_private_elements_into(&state.private_elements, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_private_elements(bytes)
@@ -1972,8 +1972,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::DISP),
                 present(image): !image.disposable_stacks.is_empty(),
-                encode(state): {
-                    crate::image::encode_disposable_stacks(&state.disposable_stacks)
+                encode(state, out): {
+                    crate::image::encode_disposable_stacks_into(&state.disposable_stacks, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_disposable_stacks(bytes)
@@ -2169,8 +2169,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::GENR),
                 present(image): !image.generators.is_empty(),
-                encode(state): {
-                    crate::image::encode_generators(&state.generators)
+                encode(state, out): {
+                    crate::image::encode_generators_into(&state.generators, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_generators(bytes).map(|value| crate::image::encode_generators(&value))
@@ -2496,8 +2496,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::PRMS),
                 present(image): !image.promise_cluster.is_empty(),
-                encode(state): {
-                    crate::image::encode_promise_cluster(&state.promise_cluster)
+                encode(state, out): {
+                    crate::image::encode_promise_cluster_into(&state.promise_cluster, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_promise_cluster_payload(bytes)
@@ -2554,11 +2554,12 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::ASYN),
                 present(image): !image.promise_cluster.async_section_is_empty(),
-                encode(state): {
-                    crate::image::encode_async_section(
+                encode(state, out): {
+                    crate::image::encode_async_section_into(
                         &state.promise_cluster.async_instances,
                         &state.promise_cluster.async_generators,
                         &state.promise_cluster.from_async,
+                        out,
                     )
                 },
                 canonicalize(bytes): {
@@ -2652,10 +2653,9 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::NFLR),
                 present(image): image.name_floor.is_some(),
-                encode(state): {
-                    match state.name_floor {
-                        Some(floor) => floor.to_be_bytes().to_vec(),
-                        None => Vec::new(),
+                encode(state, out): {
+                    if let Some(floor) = state.name_floor {
+                        out.put(&floor.to_be_bytes());
                     }
                 },
                 canonicalize(bytes): {
@@ -2718,8 +2718,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::WKRF),
                 present(image): !image.weak_refs.is_empty(),
-                encode(state): {
-                    crate::image::encode_weak_refs(&state.weak_refs)
+                encode(state, out): {
+                    crate::image::encode_weak_refs_into(&state.weak_refs, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_weak_refs(bytes)
@@ -2788,8 +2788,11 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::FNRG),
                 present(image): !image.finalization_registries.is_empty(),
-                encode(state): {
-                    crate::image::encode_finalization_registries(&state.finalization_registries)
+                encode(state, out): {
+                    crate::image::encode_finalization_registries_into(
+                        &state.finalization_registries,
+                        out,
+                    )
                 },
                 canonicalize(bytes): {
                     crate::image::decode_finalization_registries(bytes)
@@ -2803,6 +2806,7 @@ macro_rules! snapshot_payloads {
 pub(crate) use snapshot_payloads;
 
 use crate::format::FourCc;
+use crate::sink::Sink;
 use crate::store::StoreError;
 use crate::store_sections::SmallSection;
 use crate::SnapshotError;
@@ -2851,7 +2855,7 @@ macro_rules! define_payloads {
         decode_container: [$($container_next:ident, $container_mode:ident, ($reader:ident, [$($version:ident)?], [$($small:ident)?]) $container:block)?],
         atom: $atom:expr,
         present($image:ident): $present:expr,
-        encode($state:ident): $encode:block,
+        encode($state:ident, $out:ident): $encode:block,
         canonicalize($bytes:ident): $canonicalize:block,
         slot_visit: $slot_visit:ident,
     })*) => {
@@ -2945,8 +2949,30 @@ macro_rules! define_payloads {
             Ok(state)
         }
         pub(crate) fn encode_payload(state: &crate::store::SmallState, section: SmallSection) -> Vec<u8> {
+            let mut out = Vec::new();
+            encode_payload_into(state, section, &mut out);
+            out
+        }
+        /// [`encode_payload`] into any sink: the one definition of every
+        /// section's bytes, which the store's framed sections, the image
+        /// writer's atoms and the streaming writer's sizing and write
+        /// passes all share.
+        pub(crate) fn encode_payload_into<S: crate::sink::Sink>(
+            state: &crate::store::SmallState,
+            section: SmallSection,
+            out: &mut S,
+        ) {
             match section {
-                $(SmallSection::$section => { let $state = state; $encode },)*
+                $(SmallSection::$section => { let $state = state; let $out = out; $encode },)*
+            }
+        }
+        /// Whether the container carries `section`'s atom for this small
+        /// state: the roster's content-determined omission rule, asked of
+        /// a [`crate::store::SmallState`] rather than an image (the two
+        /// hold the payload fields under the same names).
+        pub(crate) fn section_present(state: &crate::store::SmallState, section: SmallSection) -> bool {
+            match section {
+                $(SmallSection::$section => { let $image = state; $present },)*
             }
         }
         /// Emit payload atoms in the historical order, with content-determined
@@ -2970,8 +2996,13 @@ macro_rules! define_payloads {
                                 writer.atom(tag, &floor.to_be_bytes())?;
                             }
                         } else {
-                            let $state = image;
-                            writer.atom(tag, &$encode)?;
+                            let mut payload = Vec::new();
+                            {
+                                let $state = image;
+                                let $out = &mut payload;
+                                $encode
+                            }
+                            writer.atom(tag, &payload)?;
                         }
                     }
                 }

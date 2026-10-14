@@ -5,24 +5,24 @@ use ironhorse_vm::snapshot_api::{
     SharedMachineSnapshot,
 };
 
-pub(super) fn encode(state: &SharedMachineSnapshot, out: &mut Vec<u8>) {
-    fn word(out: &mut Vec<u8>, x: u32) {
-        out.extend_from_slice(&x.to_be_bytes());
+pub(super) fn encode<S: Sink>(state: &SharedMachineSnapshot, out: &mut S) {
+    fn word<S: Sink>(out: &mut S, x: u32) {
+        out.put(&x.to_be_bytes());
     }
-    fn words(out: &mut Vec<u8>, xs: &[u32]) {
+    fn words<S: Sink>(out: &mut S, xs: &[u32]) {
         word(out, xs.len() as u32);
         for x in xs {
             word(out, *x);
         }
     }
-    fn pairs(out: &mut Vec<u8>, xs: &[(u32, u32)]) {
+    fn pairs<S: Sink>(out: &mut S, xs: &[(u32, u32)]) {
         word(out, xs.len() as u32);
         for (x, y) in xs {
             word(out, *x);
             word(out, *y);
         }
     }
-    out.extend_from_slice(b"SHRD");
+    out.put(b"SHRD");
     word(out, state.default_global);
     word(out, state.current_global);
     words(out, &state.intrinsic_roots);
@@ -31,11 +31,11 @@ pub(super) fn encode(state: &SharedMachineSnapshot, out: &mut Vec<u8>) {
         word(out, e.global);
         word(out, e.binding_names.len() as u32);
         for id in &e.binding_names {
-            out.extend_from_slice(&id.to_be_bytes());
+            out.put(&id.to_be_bytes());
         }
         encode_modules(&e.modules, out);
-        out.push(e.host_owned as u8);
-        out.push(e.compiler_required as u8);
+        out.put_u8(e.host_owned as u8);
+        out.put_u8(e.compiler_required as u8);
         word(out, e.unhandled_rejection.unwrap_or(u32::MAX));
     }
     pairs(out, &state.function_environments);
@@ -45,39 +45,39 @@ pub(super) fn encode(state: &SharedMachineSnapshot, out: &mut Vec<u8>) {
     word(out, state.evaluators.len() as u32);
     for e in &state.evaluators {
         word(out, e.owner);
-        out.push(e.kind);
+        out.put_u8(e.kind);
         word(out, e.name_chunk);
     }
     words(out, &state.roots);
     word(out, state.jobs.len() as u32);
     for j in &state.jobs {
-        out.push(j.thenable as u8);
-        out.push(j.rejected as u8);
-        crate::slot_codec::encode_slot(&j.value, out);
+        out.put_u8(j.thenable as u8);
+        out.put_u8(j.rejected as u8);
+        crate::slot_codec::put_slot(&j.value, out);
         let r = &j.reaction;
         for v in [&r.on_fulfilled, &r.on_rejected, &r.resolve, &r.reject] {
-            crate::slot_codec::encode_slot(v, out);
+            crate::slot_codec::put_slot(v, out);
         }
-        out.push(r.kind);
+        out.put_u8(r.kind);
         word(out, r.a);
         word(out, r.b);
     }
     words(out, &state.pending_rejections);
     if !state.host_functions.is_empty() {
-        out.extend_from_slice(b"HOST");
+        out.put(b"HOST");
         word(out, state.host_functions.len() as u32);
         for h in &state.host_functions {
             word(out, h.owner);
             for text in [&h.service, &h.name] {
                 word(out, text.len() as u32);
-                out.extend_from_slice(text.as_bytes());
+                out.put(text.as_bytes());
             }
             word(out, h.abi);
             word(out, h.arity);
             word(out, h.name_chunk);
             word(out, h.captures.len() as u32);
             for capture in &h.captures {
-                crate::slot_codec::encode_slot(capture, out);
+                crate::slot_codec::put_slot(capture, out);
             }
         }
     }
@@ -215,13 +215,13 @@ pub(super) fn decode(c: &mut Cursor<'_>) -> Result<SharedMachineSnapshot, Snapsh
     })
 }
 
-fn encode_modules(graph: &ironhorse_vm::snapshot_api::ModuleGraphSnapshot, out: &mut Vec<u8>) {
-    fn word(out: &mut Vec<u8>, x: u32) {
-        out.extend_from_slice(&x.to_be_bytes());
+fn encode_modules<S: Sink>(graph: &ironhorse_vm::snapshot_api::ModuleGraphSnapshot, out: &mut S) {
+    fn word<S: Sink>(out: &mut S, x: u32) {
+        out.put(&x.to_be_bytes());
     }
-    fn text(out: &mut Vec<u8>, s: &str) {
+    fn text<S: Sink>(out: &mut S, s: &str) {
         word(out, s.len() as u32);
-        out.extend_from_slice(s.as_bytes());
+        out.put(s.as_bytes());
     }
     word(out, graph.modules.len() as u32);
     for m in &graph.modules {
@@ -229,7 +229,7 @@ fn encode_modules(graph: &ironhorse_vm::snapshot_api::ModuleGraphSnapshot, out: 
         word(out, m.imports.len() as u32);
         for (request, name, local) in &m.imports {
             text(out, request);
-            out.push(name.is_some() as u8);
+            out.put_u8(name.is_some() as u8);
             if let Some(name) = name {
                 text(out, name);
             }
@@ -237,7 +237,7 @@ fn encode_modules(graph: &ironhorse_vm::snapshot_api::ModuleGraphSnapshot, out: 
         }
         word(out, m.exports.len() as u32);
         for (kind, name, source, import) in &m.exports {
-            out.push(*kind);
+            out.put_u8(*kind);
             text(out, name);
             text(out, source);
             text(out, import);
@@ -245,12 +245,12 @@ fn encode_modules(graph: &ironhorse_vm::snapshot_api::ModuleGraphSnapshot, out: 
         word(out, m.body.len() as u32);
         for (name, value) in &m.body {
             text(out, name);
-            out.push(value.is_some() as u8);
+            out.put_u8(value.is_some() as u8);
             if let Some(value) = value {
-                crate::slot_codec::encode_slot(value, out);
+                crate::slot_codec::put_slot(value, out);
             }
         }
-        out.push(m.status);
+        out.put_u8(m.status);
         word(out, m.environment.len() as u32);
         for (name, cell) in &m.environment {
             text(out, name);
@@ -261,8 +261,8 @@ fn encode_modules(graph: &ironhorse_vm::snapshot_api::ModuleGraphSnapshot, out: 
     }
     word(out, graph.cells.len() as u32);
     for (kind, value, module) in &graph.cells {
-        out.push(*kind);
-        crate::slot_codec::encode_slot(value, out);
+        out.put_u8(*kind);
+        crate::slot_codec::put_slot(value, out);
         word(out, *module);
     }
     word(out, graph.dfs_counter);

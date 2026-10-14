@@ -58,7 +58,7 @@ impl AtomWriter {
 }
 
 /// Check the wire-domain bound without requiring a multi-gigabyte allocation.
-fn atom_size(payload_len: usize) -> Result<u32, SnapshotError> {
+pub(crate) fn atom_size(payload_len: usize) -> Result<u32, SnapshotError> {
     payload_len
         .checked_add(ATOM_HEADER)
         .and_then(|total| u32::try_from(total).ok())
@@ -67,7 +67,10 @@ fn atom_size(payload_len: usize) -> Result<u32, SnapshotError> {
 
 /// Include both headers when admitting a new inner atom. Checking the
 /// cumulative envelope prevents individually valid atoms from overflowing it.
-fn appended_atom_size(body_len: usize, payload_len: usize) -> Result<u32, SnapshotError> {
+pub(crate) fn appended_atom_size(
+    body_len: usize,
+    payload_len: usize,
+) -> Result<u32, SnapshotError> {
     let total = atom_size(payload_len)?;
     let body_len = body_len
         .checked_add(total as usize)

@@ -478,7 +478,7 @@ macro_rules! define_payload_visitors {
         decode_container: [$($container:tt)*],
         atom: $atom:expr,
         present($image:ident): $present:expr,
-        encode($state:ident): $encode:block,
+        encode($state:ident, $out:ident): $encode:block,
         canonicalize($bytes:ident): $canonicalize:block,
         slot_visit: $visit:ident,
     })*) => {
