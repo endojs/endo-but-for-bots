@@ -1418,7 +1418,42 @@ mod tests {
         }
     }
 
-    /// Kind 15 is the next unused cursor kind. The decoder must refuse it
+    /// An `Iterator.concat` helper row (kind 15) keeps its list of items in an
+    /// internal Array named by `iterable`. That list restores; a live
+    /// `iterable` that is not an Array is refused, as its items are where the
+    /// open methods live.
+    #[test]
+    fn an_iterator_concat_row_requires_its_list_to_be_an_array() {
+        for list_is_array in [true, false] {
+            let mut interp = Interp::new();
+            let owner = interp.new_object().0;
+            let list = if list_is_array {
+                interp.new_array().0
+            } else {
+                interp.new_object().0
+            };
+            let holder = interp.new_array().0;
+            let restored = interp.restore_iterators(vec![IteratorRow {
+                owner,
+                iterable: list,
+                result: holder,
+                kind: 15,
+                index: 0,
+                done: false,
+                enum_keys: vec![],
+                str_bytes: vec![],
+            }]);
+            if list_is_array {
+                restored.unwrap();
+                assert_eq!(interp.iterators_snapshot()[0].iterable, list);
+            } else {
+                assert_eq!(restored.unwrap_err().row, "Iterators");
+                assert!(interp.iterators_snapshot().is_empty());
+            }
+        }
+    }
+
+    /// Kind 16 is the next unused cursor kind. The decoder must refuse it
     /// rather than restore a row whose `next()` would index a table it does
     /// not understand.
     #[test]
@@ -1433,7 +1468,7 @@ mod tests {
                     owner,
                     iterable,
                     result: holder,
-                    kind: 15,
+                    kind: 16,
                     index: 0,
                     done: false,
                     enum_keys: vec![],

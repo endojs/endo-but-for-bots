@@ -4061,7 +4061,7 @@ impl Interp {
         }
 
         for r in &rows {
-            if r.kind > 14 {
+            if r.kind > 15 {
                 return Err(RestoreError {
                     row: ROW,
                     reason: "malformed iterator state",
@@ -4076,8 +4076,10 @@ impl Interp {
                 // The re-entrancy latch rides `generation`, which the row does
                 // not carry: a snapshot is only taken at a quiescent point,
                 // where no helper is mid-step, so restore's zero is always the
-                // live value.
-                10..=14 => {
+                // live value. `Iterator.concat` (kind 15) has no underlying
+                // iterator: its `iterable` is the internal Array of
+                // `(item, open method)` pairs, which must really be one.
+                10..=15 => {
                     // A spent helper has released its underlying iterator, so
                     // `iterable` is NULL on a DONE row and must not be on one
                     // that can still yield. The holder array survives either
@@ -4087,6 +4089,11 @@ impl Interp {
                         || !r.enum_keys.is_empty()
                         || !r.str_bytes.is_empty()
                         || !self.arrays.contains_key(&crate::value::SlotIndex(r.result))
+                        || (r.kind == 15
+                            && !r.done
+                            && !self
+                                .arrays
+                                .contains_key(&crate::value::SlotIndex(r.iterable)))
                     {
                         return Err(RestoreError {
                             row: ROW,

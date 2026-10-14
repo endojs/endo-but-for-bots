@@ -2950,7 +2950,7 @@ impl Interp {
         // has unwound, so clearing every latch here is exactly the
         // live value.
         for state in self.iterators.values_mut() {
-            if (10..=14).contains(&state.kind) {
+            if (10..=15).contains(&state.kind) {
                 state.generation = 0;
             }
         }

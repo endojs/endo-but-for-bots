@@ -195,6 +195,7 @@ pub const NOT_IMPLEMENTED_HELPER_LABELS: &[&str] = &[
 pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "Date.toJSON:toISOString-key",
     "GetIterator:symbol",
+    "Iterator.concat:symbol",
     "Iterator.setter:missing-toStringTag",
     "Iterator:helper-id",
     "Iterator:helper-kind",

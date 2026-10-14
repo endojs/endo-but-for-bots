@@ -4599,11 +4599,11 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
             ));
         }
         let kind = c.u8()?;
-        // The engine's cursor kinds are 0..=14 (array values/keys/entries,
+        // The engine's cursor kinds are 0..=15 (array values/keys/entries,
         // for-in, string, collection keys/values/entries, Iterator.from
-        // generic wrappers, RegExp String Iterator, and the five lazy Iterator
-        // helpers map/filter/take/drop/flatMap).
-        if kind > 14 {
+        // generic wrappers, RegExp String Iterator, the five lazy Iterator
+        // helpers map/filter/take/drop/flatMap, and Iterator.concat).
+        if kind > 15 {
             return Err(SnapshotError::Corrupt("iterator cursors: unknown kind"));
         }
         let iterable = c.u32()?;
@@ -4632,7 +4632,7 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
                 "iterator cursors: string cursor outside its text",
             ));
         }
-        if (10..=14).contains(&kind)
+        if (10..=15).contains(&kind)
             && lazy_helper_malformed(
                 iterable,
                 result,
@@ -6364,7 +6364,7 @@ mod tests {
         // 10-14 are the lazy Iterator helpers, whose self-contained shape
         // gate the fixture row already satisfies (a live iterable, a holder
         // in `result`, and empty for-in and string payloads).
-        for kind in 0..=14 {
+        for kind in 0..=15 {
             assert_eq!(
                 decode_iterators(&encode_iterators(&[row(kind)])).unwrap(),
                 vec![row(kind)]
@@ -6383,7 +6383,7 @@ mod tests {
                 ))
             );
         }
-        for kind in [15, 255] {
+        for kind in [16, 255] {
             assert_eq!(
                 decode_iterators(&encode_iterators(&[row(kind)])),
                 Err(SnapshotError::Corrupt("iterator cursors: unknown kind"))
@@ -6391,7 +6391,7 @@ mod tests {
         }
         // A lazy helper row missing its underlying iterator or its holder is
         // refused by shape, not by kind.
-        for kind in 10..=14 {
+        for kind in 10..=15 {
             for broken in [
                 IteratorRow {
                     iterable: u32::MAX,

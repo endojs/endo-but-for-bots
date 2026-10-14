@@ -2341,6 +2341,7 @@ impl Interp {
             | NativeMethod::SetIteratorNext
             | NativeMethod::RegExpStringIteratorNext
             | NativeMethod::IteratorFrom
+            | NativeMethod::IteratorConcat
             | NativeMethod::IteratorWrapperNext
             | NativeMethod::IteratorWrapperReturn
             | NativeMethod::IteratorConstructorGetter
@@ -5498,6 +5499,7 @@ impl Interp {
                 self.regexp_string_iterator_next(code, this)?
             }
             NativeMethod::IteratorFrom => self.iterator_from(code, arg0)?,
+            NativeMethod::IteratorConcat => self.iterator_concat(code, base, argc)?,
             NativeMethod::IteratorWrapperNext => self.iterator_wrapper_next(code, this)?,
             NativeMethod::IteratorWrapperReturn => self.iterator_wrapper_return(code, this)?,
             NativeMethod::IteratorConstructorGetter => {
