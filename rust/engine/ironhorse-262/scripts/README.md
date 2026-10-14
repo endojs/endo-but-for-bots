@@ -52,6 +52,8 @@ gitignored `rust/engine/target/`.
   processes; the script does not claim a per-process memory ceiling.
   Full sweeps use `--case-timeout 60` by default; this can be set to 1–3600
   seconds, but cannot be disabled.
+  The bound applies to each mode a case runs, so a default sloppy-and-strict
+  case gets twice it.
   Generated RegExp subjects and other heavy cases can legitimately exceed the
   standalone `endot-ih` CLI's unchanged 10-second default on shared CI runners.
   A timeout still triggers bounded Ironhorse-only attribution, and retains the
