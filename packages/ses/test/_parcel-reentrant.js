@@ -1,4 +1,4 @@
-// Stands in for a `SturdyRef` global that is a Proxy over a well-shaped
+// Stands in for a `Parcel` global that is a Proxy over a well-shaped
 // constructor, whose `getOwnPropertyDescriptor` trap re-points the global to an
 // unchecked payload while `lockdown` inspects the candidate's statics.
 
@@ -6,9 +6,11 @@ const { defineProperty } = Object;
 const { getOwnPropertyDescriptor } = Reflect;
 
 class Target {
-  static enliven() {}
+  static open() {}
 
-  static isSturdyRef() {
+  static locate() {}
+
+  static isParcel() {
     return false;
   }
 }
@@ -16,11 +18,11 @@ class Target {
 export const payload = () => {};
 
 let armed = true;
-export const SturdyRef = new Proxy(Target, {
+export const Parcel = new Proxy(Target, {
   getOwnPropertyDescriptor(target, name) {
     if (armed) {
       armed = false;
-      defineProperty(globalThis, 'SturdyRef', {
+      defineProperty(globalThis, 'Parcel', {
         value: payload,
         enumerable: false,
         writable: true,
@@ -31,10 +33,10 @@ export const SturdyRef = new Proxy(Target, {
   },
 });
 // Keep the permit's `prototype.constructor` pointing at the admitted value.
-defineProperty(Target.prototype, 'constructor', { value: SturdyRef });
+defineProperty(Target.prototype, 'constructor', { value: Parcel });
 
-defineProperty(globalThis, 'SturdyRef', {
-  value: SturdyRef,
+defineProperty(globalThis, 'Parcel', {
+  value: Parcel,
   enumerable: false,
   writable: true,
   configurable: true,

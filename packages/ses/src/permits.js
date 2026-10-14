@@ -137,10 +137,6 @@ export const universalPropertyNames = {
   harden: 'harden',
 
   HandledPromise: 'HandledPromise', // TODO: Until Promise.delegate (see below).
-
-  // Shimmed by `@endo/sturdyref`. Present only if the shim installed it before
-  // `lockdown`; see the `SturdyRef` permit below.
-  SturdyRef: 'SturdyRef',
 };
 
 /**
@@ -165,6 +161,9 @@ export const initialGlobalPropertyNames = {
   // `%SharedURL%` instead. `lockdown({ urlBlobTaming: 'remove' })` collapses
   // the split by binding `%InitialURL%` to `%SharedURL%` as well.
   URL: '%InitialURL%',
+
+  // The shim-installed constructor with privileged location access.
+  Parcel: '%InitialParcel%',
 
   // Omit `Symbol`, because we want the original to appear on the
   // start compartment without passing through the permits mechanism, since
@@ -224,6 +223,9 @@ export const sharedGlobalPropertyNames = {
   // across the boundary), but `createObjectURL` / `revokeObjectURL` are
   // omitted.
   URL: '%SharedURL%',
+
+  // The shared constructor deliberately omits `locate`.
+  Parcel: '%SharedParcel%',
 
   // *** Other Properties of the Global Object
 
@@ -1746,24 +1748,27 @@ export const permitted = {
     resolve: fn,
   },
 
-  // Shimmed by `@endo/sturdyref`. Like `HandledPromise`, a shared intrinsic
-  // only when shimmed before `lockdown`. Confers no authority: it only wraps
-  // handlers and runs hooks the caller already holds.
-  // Unlike `HandledPromise`, whose shim assigns an ordinary writable,
-  // configurable global, this shim locks its binding first-wins so eval twins
-  // converge on one constructor. That binding is why `lockdown` exempts it from
-  // redefinition, and `SturdyRef` being a name an application may already use
-  // is why `lockdown` checks its shape. Its instances are not yet passable;
-  // see layer 3 (#1392).
-  SturdyRef: {
+  // The first-wins shim installs this constructor before lockdown. It retains
+  // the authority to reveal locations.
+  '%InitialParcel%': {
     '[[Proto]]': '%FunctionPrototype%',
-    enliven: fn,
-    isSturdyRef: fn,
-    prototype: '%SturdyRefPrototype%',
+    open: fn,
+    locate: fn,
+    isParcel: fn,
+    prototype: '%ParcelPrototype%',
   },
 
-  '%SturdyRefPrototype%': {
-    constructor: 'SturdyRef',
+  // SES derives the shared constructor over the initial constructor's brand
+  // table and prototype, but omits location-revelation authority.
+  '%SharedParcel%': {
+    '[[Proto]]': '%FunctionPrototype%',
+    open: fn,
+    isParcel: fn,
+    prototype: '%ParcelPrototype%',
+  },
+
+  '%ParcelPrototype%': {
+    constructor: '%SharedParcel%',
     '@@toStringTag': 'string',
   },
 
