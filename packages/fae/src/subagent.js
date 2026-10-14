@@ -7,6 +7,7 @@ import { E } from '@endo/eventual-send';
 import { M } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
 import { parseLocator } from '@endo/daemon/locator.js';
+import { assertNamePath, assertPetName } from '@endo/daemon/pet-name.js';
 import {
   DEFAULT_WORKLOAD_LIMITS,
   readWorkloadLimit,
@@ -20,6 +21,63 @@ import {
 /** The parent's pet-store directory holding one entry per live subagent. */
 export const SUBAGENT_DIRECTORY = 'subagents';
 harden(SUBAGENT_DIRECTORY);
+
+/** @typedef {{ name: string, value: any }} SubagentCapability */
+/** @typedef {{ name: string, petName: string | string[] }} SubagentAttachment */
+
+const attachmentSchema = harden({
+  type: 'array',
+  description:
+    'Capabilities to give this child explicitly. name is its inventory name ' +
+    '(or mail attachment label); petName is your local name or array of path segments. ' +
+    'A capability does not share your native filesystem path with the child.',
+  items: {
+    type: 'object',
+    properties: {
+      name: { type: 'string' },
+      petName: {
+        anyOf: [
+          { type: 'string' },
+          { type: 'array', items: { type: 'string' }, minItems: 1 },
+        ],
+      },
+    },
+    required: ['name', 'petName'],
+    additionalProperties: false,
+  },
+});
+
+/**
+ * Validate explicit introductions before any child is created or changed.
+ * @param {SubagentCapability[]} capabilities
+ */
+export const assertSubagentCapabilities = capabilities => {
+  Array.isArray(capabilities) || Fail`Subagent capabilities must be an array`;
+  const names = new Set();
+  for (const capability of capabilities) {
+    (capability && typeof capability === 'object') ||
+      Fail`Invalid subagent capability`;
+    assertPetName(capability.name);
+    !names.has(capability.name) || Fail`Duplicate subagent capability name`;
+    Object.hasOwn(capability, 'value') ||
+      Fail`Subagent capability needs a value`;
+    names.add(capability.name);
+  }
+};
+harden(assertSubagentCapabilities);
+
+/** @param {SubagentAttachment[]} attachments */
+const assertAttachments = attachments => {
+  Array.isArray(attachments) || Fail`Subagent attachments must be an array`;
+  assertSubagentCapabilities(
+    attachments.map(({ name }) => ({ name, value: undefined })),
+  );
+  for (const { petName } of attachments) {
+    const path = typeof petName === 'string' ? [petName] : petName;
+    (Array.isArray(path) && path.length > 0) || Fail`Invalid attachment path`;
+    assertNamePath(path);
+  }
+};
 
 /**
  * Infix that makes a subagent's names in the factory host derivable from its
@@ -310,8 +368,9 @@ harden(SubagentSpawnerInterface);
  * @typedef {object} PendingDelegation
  * @property {string} name
  * @property {string} recipient - Locator for the subagent's handle.
- * @property {string} text - The exact single string sent, used to distinguish
- *   this delegation from any other mail to the same subagent.
+ * @property {string[]} strings - The exact text parts sent.
+ * @property {string[]} edgeNames - The exact attachment labels sent, used with
+ *   the text parts to distinguish this ask from other mail to the same child.
  * @property {string | undefined} outboundId - `messageId` of the delegation,
  *   learned when the daemon echoes it into this agent's own mailbox.
  * @property {(answer: { text: string, number: bigint, edgeNames: string[] }) => void} settle
@@ -441,8 +500,13 @@ export const makeSubagentDelegations = ({
           delegation.outboundId === undefined &&
           isSameFormula(to, delegation.recipient) &&
           Array.isArray(message.strings) &&
-          message.strings.length === 1 &&
-          message.strings[0] === delegation.text
+          message.strings.length === delegation.strings.length &&
+          delegation.strings.every(
+            (text, index) => message.strings[index] === text,
+          ) &&
+          (Array.isArray(names) ? names.length : 0) ===
+            delegation.edgeNames.length &&
+          delegation.edgeNames.every((name, index) => names[index] === name)
         ) {
           delegation.outboundId = messageId;
           pendingByOutboundId.set(messageId, delegation);
@@ -502,10 +566,12 @@ export const makeSubagentDelegations = ({
    * @param {string} request.name
    * @param {string} request.task
    * @param {number} request.timeoutSeconds
+   * @param {SubagentAttachment[]} [request.attachments]
    * @returns {Promise<{ text: string, number: bigint, edgeNames: string[] }>}
    */
-  const ask = async ({ name, task, timeoutSeconds }) => {
+  const ask = async ({ name, task, timeoutSeconds, attachments = [] }) => {
     assertSubagentName(name);
+    assertAttachments(attachments);
     (typeof task === 'string' && task !== '' && task.length <= maxTaskChars) ||
       Fail`Subagent task must be a non-empty string of at most ${q(maxTaskChars)} characters`;
     (Number.isInteger(timeoutSeconds) &&
@@ -515,6 +581,9 @@ export const makeSubagentDelegations = ({
     !pendingByName.has(name) ||
       Fail`Subagent ${q(name)} already has a question in flight`;
     if (closedReason !== undefined) throw closedReason;
+    const strings = harden([task, ...attachments.map(() => '')]);
+    const edgeNames = harden(attachments.map(attachment => attachment.name));
+    const petNames = harden(attachments.map(attachment => attachment.petName));
 
     /** @type {import('@endo/promise-kit').PromiseKit<{ text: string, number: bigint, edgeNames: string[] }>} */
     const answerKit = makePromiseKit();
@@ -530,7 +599,8 @@ export const makeSubagentDelegations = ({
       // exists only to hold the slot; `claim` cannot match an empty recipient
       // because `isSameFormula` rejects a non-locator.
       recipient: '',
-      text: task,
+      strings,
+      edgeNames,
       outboundId: undefined,
       settle: answerKit.resolve,
       fail: answerKit.reject,
@@ -576,7 +646,7 @@ export const makeSubagentDelegations = ({
     try {
       // The registry is armed before the send so that the echo of this very
       // message cannot be observed by the inbox loop before it can be matched.
-      await E(powers).send(path, harden([task]), harden([]), harden([]));
+      await E(powers).send(path, strings, edgeNames, petNames);
       const outcome = await Promise.race([
         answerKit.promise.then(answer => harden({ answer })),
         deadline.then(() => harden({ answer: undefined })),
@@ -668,6 +738,8 @@ export const makeSubagentTools = ({
             'Create a subagent: a separate agent with its own conversation, ' +
             'inbox, and pet name directory. Use it to run a self-contained ' +
             'piece of work without spending your own context on it. The ' +
+            'attachments are installed explicitly in its own inventory; ' +
+            'your files and other capabilities are not inherited. The ' +
             'subagent is reachable by mail at the name you choose; put ' +
             'questions to it with askSubagent and release it with stopSubagent.',
           parameters: {
@@ -685,18 +757,33 @@ export const makeSubagentTools = ({
                   "The subagent's standing instructions. Give it the role and " +
                   'the shape of the answer you want back.',
               },
+              attachments: attachmentSchema,
             },
             required: ['name'],
           },
         },
       }),
     async execute(args) {
-      const { name, systemPrompt } = /** @type {any} */ (args);
+      const {
+        name,
+        systemPrompt,
+        attachments = [],
+      } = /** @type {any} */ (args);
       assertSubagentName(name);
+      assertAttachments(attachments);
+      const capabilities = await Promise.all(
+        attachments.map(async ({ name: capabilityName, petName }) => ({
+          name: capabilityName,
+          value: await E(powers).lookup(petName),
+        })),
+      );
       const { locator } = /** @type {any} */ (
         await E(spawner).spawn(
           name,
-          harden(systemPrompt ? { systemPrompt } : {}),
+          harden({
+            ...(systemPrompt ? { systemPrompt } : {}),
+            ...(capabilities.length ? { capabilities } : {}),
+          }),
         )
       );
       // The parent binds the subagent under its own authority, so the spawner
@@ -705,7 +792,7 @@ export const makeSubagentTools = ({
         await E(powers).makeDirectory(SUBAGENT_DIRECTORY);
       }
       await E(powers).storeLocator([SUBAGENT_DIRECTORY, name], locator);
-      return `Spawned subagent "${name}". Ask it something with askSubagent.`;
+      return `Spawned subagent "${name}". Mail path: ["subagents", "${name}"]. Ask it something with askSubagent.`;
     },
     help: () => 'Create a subagent reachable by mail under subagents/<name>.',
   });
@@ -720,7 +807,8 @@ export const makeSubagentTools = ({
           description:
             'Send a task to a subagent by mail and wait for its reply. ' +
             'Returns the reply text. The subagent keeps its own conversation ' +
-            'between questions, so follow-ups can be terse.',
+            'between questions, so follow-ups can be terse. Optional ' +
+            'attachments travel with this task; tell the child to adopt them.',
           parameters: {
             type: 'object',
             properties: {
@@ -738,16 +826,23 @@ export const makeSubagentTools = ({
                 type: 'integer',
                 description: `How long to wait for a reply (default ${replyTimeoutSeconds}).`,
               },
+              attachments: attachmentSchema,
             },
             required: ['name', 'task'],
           },
         },
       }),
     async execute(args) {
-      const { name, task, timeoutSeconds } = /** @type {any} */ (args);
+      const {
+        name,
+        task,
+        timeoutSeconds,
+        attachments = [],
+      } = /** @type {any} */ (args);
       const answer = await delegations.ask({
         name,
         task,
+        attachments,
         timeoutSeconds:
           timeoutSeconds === undefined
             ? replyTimeoutSeconds

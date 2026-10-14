@@ -70,7 +70,10 @@ now use it for their own "is this my own outbound mail?" check as well.
 
 ```ts
 interface SubagentSpawner {
-  spawn(name: string, options?: { systemPrompt?: string }):
+  spawn(name: string, options?: {
+    systemPrompt?: string;
+    capabilities?: { name: string; value: unknown }[];
+  }):
     Promise<{ name: string; locator: string }>;
   stop(name: string): Promise<void>;
   list(): Promise<string[]>;
@@ -129,6 +132,39 @@ either bound a very late message does land in the inbox.
 Teardown is depth-first, so raising the depth bound does not strand a subtree.
 
 ### Attachments
+
+Each child keeps its own inventory and environment.
+Neither spawning nor chatting implicitly copies the parent's inventory or native
+checkout.
+Both `spawnSubagent` and `askSubagent` accept explicit attachments:
+
+```json
+{
+  "name": "researcher",
+  "attachments": [
+    { "name": "project", "petName": ["repository", "readonly"] }
+  ]
+}
+```
+
+For `spawnSubagent`, the parent resolves each local `petName` before creating the
+child, and the spawner stores that value in the child's inventory under `name`.
+Names must be distinct ordinary pet names; existing inventory entries cannot be
+replaced.
+Spawning with attachments does not send a message or start a model turn.
+For `askSubagent`, add `task` to the same argument object.
+Its attachments travel with that correlated task as mail edges; the child uses
+`adopt` with the incoming message number and attachment name to retain them.
+Later asks may supply additional capabilities in the same way.
+
+Ordinary `send` accepts the recipient path `["subagents", "researcher"]`, and
+each entry in its `petNames` array may likewise be a name or an array of path
+segments.
+A slash-containing string is not a path.
+Providing Git or filesystem authority does not mount the parent's absolute
+native path inside the child's separate shell environment.
+Supply a readable snapshot for analysis or prepare a child checkout for shell
+work explicitly.
 
 A reply may carry capabilities, and both harnesses dismiss a claimed reply as
 soon as it is claimed: leaving one would mean that after a restart, with no ask

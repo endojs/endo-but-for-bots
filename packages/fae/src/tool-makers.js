@@ -967,9 +967,12 @@ export const makeSendTool = powers => {
         type: 'object',
         properties: {
           recipient: {
-            type: 'string',
+            anyOf: [
+              { type: 'string' },
+              { type: 'array', items: { type: 'string' }, minItems: 1 },
+            ],
             description:
-              'Who to send to (e.g., "@host", or a petname for an agent).',
+              'Who to send to: a name such as "@host" or a path such as ["subagents", "researcher"]. Slashes in a string are not path separators.',
           },
           strings: {
             type: 'array',
@@ -984,8 +987,14 @@ export const makeSendTool = powers => {
           },
           petNames: {
             type: 'array',
-            items: { type: 'string' },
-            description: 'Your local petnames for the capabilities to attach.',
+            items: {
+              anyOf: [
+                { type: 'string' },
+                { type: 'array', items: { type: 'string' }, minItems: 1 },
+              ],
+            },
+            description:
+              'Your local names or arrays of path segments for the capabilities to attach.',
           },
         },
         required: ['recipient', 'strings'],
@@ -1003,7 +1012,7 @@ export const makeSendTool = powers => {
         strings = [],
         edgeNames = [],
         petNames = [],
-      } = /** @type {{ recipient: string, strings?: string[], edgeNames?: string[], petNames?: string[] }} */ (
+      } = /** @type {{ recipient: string | string[], strings?: string[], edgeNames?: string[], petNames?: (string | string[])[] }} */ (
         args
       );
       if (!recipient) {

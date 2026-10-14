@@ -33,6 +33,7 @@ import {
 } from '@endo/fae/src/turn-engine.js';
 import {
   SubagentSpawnerInterface,
+  assertSubagentCapabilities,
   assertSubagentName,
   isSameFormula,
   makeSubagentDelegations,
@@ -5478,11 +5479,12 @@ export const make = async (
     return makeOwnedExo('SubagentSpawner', SubagentSpawnerInterface, {
       /**
        * @param {string} name
-       * @param {{ systemPrompt?: string }} [options]
+       * @param {{ systemPrompt?: string, capabilities?: import('@endo/fae/src/subagent.js').SubagentCapability[] }} [options]
        */
       async spawn(name, options = {}) {
         assertSubagentName(name);
-        const { systemPrompt: childPrompt } = options;
+        const { systemPrompt: childPrompt, capabilities = [] } = options;
+        assertSubagentCapabilities(capabilities);
         if (
           childPrompt !== undefined &&
           (typeof childPrompt !== 'string' ||
@@ -5530,8 +5532,29 @@ export const make = async (
           },
           parent.inferenceRecipe,
         );
-        const locator = await E(getHost()).locate(`session-${childId}`);
-        return harden({ name, locator });
+        try {
+          const child = await E(getHost()).lookup(`session-agent-${childId}`);
+          for (const capability of capabilities) {
+            !(await E(child).has(capability.name)) ||
+              Fail`Subagent inventory name ${capability.name} already exists`;
+          }
+          for (const capability of capabilities) {
+            await E(child).storeValue(capability.value, capability.name);
+          }
+          const locator = await E(getHost()).locate(`session-${childId}`);
+          return harden({ name, locator });
+        } catch (error) {
+          try {
+            await releaseSession(childId);
+          } catch (cleanupError) {
+            throw new AggregateError(
+              [error, cleanupError],
+              'Subagent capability introduction and cleanup failed',
+              { cause: error },
+            );
+          }
+          throw error;
+        }
       },
 
       /** @param {string} name */
@@ -5556,7 +5579,7 @@ export const make = async (
       /** @param {string} [methodName]  */
       help(methodName) {
         if (methodName === 'spawn') {
-          return 'spawn(name, { systemPrompt? }) — Create a subagent session beneath this one and return { name, locator }.';
+          return 'spawn(name, { systemPrompt?, capabilities?: [{ name, value }] }) — Create a subagent with its own inventory, install only explicit capabilities, and return { name, locator }.';
         }
         if (methodName === 'stop') {
           return 'stop(name) — Delete a subagent session and every session beneath it.';
