@@ -1,4 +1,5 @@
 //! Saved catch targets retain code identity through encoding, migration and GC.
+use ironhorse_snapshot::store_sections::small_state_at_schema;
 use ironhorse_snapshot::CommitToken;
 use ironhorse_snapshot::{
     image::{read_machine, write_machine_unchecked, MachineImage},
@@ -155,7 +156,13 @@ fn schema29_migration_preserves_payloads() {
         store_schema: 29,
         ..current.clone()
     };
-    store.replace_for_migration(&current, &old, &small).unwrap();
+    store
+        .replace_for_migration(
+            &current,
+            &old,
+            &small_state_at_schema(&small, old.store_schema).unwrap(),
+        )
+        .unwrap();
     assert!(migrate_store(&mut store, &signature).unwrap());
     // Every step from 29 on is an identity restamp: the manifest comes back
     // at the current schema with its epoch, counters and token.

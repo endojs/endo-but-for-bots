@@ -40,6 +40,7 @@ fn legacy_utf8_names_migrate_without_changing_ids_or_epoch() {
     use ironhorse_snapshot::format::{Version, NAME, VERS};
     use ironhorse_snapshot::machine::checkpoint_to_store;
     use ironhorse_snapshot::store::{migrate_store, HeapStore, StoreManifest};
+    use ironhorse_snapshot::store_sections::small_state_at_schema;
 
     let signature = Signature::new("surrogate-migration");
     let mut machine = Interp::new();
@@ -70,12 +71,15 @@ fn legacy_utf8_names_migrate_without_changing_ids_or_epoch() {
             .map_err(|(_, e)| e)
             .unwrap(),
     );
-    let small = replace_name_section(&store.read_small_state().unwrap(), &old_names);
     let current = store.manifest().unwrap();
     let mut manifest = StoreManifest {
         store_schema: 25,
         ..current.clone()
     };
+    let small = replace_name_section(
+        &small_state_at_schema(&store.read_small_state().unwrap(), manifest.store_schema).unwrap(),
+        &old_names,
+    );
     manifest.version.format_version = 14;
     store
         .replace_for_migration(&current, &manifest, &small)

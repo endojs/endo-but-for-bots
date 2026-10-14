@@ -1751,6 +1751,8 @@ mod tests {
             intl_bound_functions: vec![],
             private_elements: Default::default(),
             disposable_stacks: vec![],
+            weak_refs: vec![],
+            finalization_registries: vec![],
             generators: vec![],
             promise_cluster: Default::default(),
             arguments_brands: vec![],
@@ -1933,6 +1935,33 @@ mod tests {
             )),
             Err(SnapshotError::Corrupt(
                 "side-table restore: malformed DisposableStacks row"
+            ))
+        );
+        assert_eq!(
+            restore_rows(
+                |rows| rows.weak_refs.push(ironhorse_vm::snapshot_api::WeakRefRow {
+                    owner: u32::MAX,
+                    target: u32::MAX,
+                })
+            ),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: malformed WeakRefs row"
+            ))
+        );
+        assert_eq!(
+            restore_rows(|rows| rows.finalization_registries.push(
+                ironhorse_vm::snapshot_api::FinalizationRegistryRow {
+                    owner: u32::MAX,
+                    callback: ironhorse_vm::Slot::of(
+                        ironhorse_vm::Kind::Reference,
+                        ironhorse_vm::Payload::Reference(ironhorse_vm::SlotIndex(1)),
+                    ),
+                    changed: false,
+                    cells: vec![],
+                }
+            )),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: malformed FinalizationRegistries row"
             ))
         );
     }
@@ -2753,8 +2782,10 @@ mod tests {
 pub(crate) mod extraction_counts {
     use std::cell::Cell;
     thread_local! {
-        static EXTRACT: Cell<[usize; 32]> = const { Cell::new([0; 32]) };
-        static ENCODE: Cell<[usize; 32]> = const { Cell::new([0; 32]) };
+        static EXTRACT: Cell<[usize; crate::store_sections::SMALL_SECTION_COUNT]> =
+            const { Cell::new([0; crate::store_sections::SMALL_SECTION_COUNT]) };
+        static ENCODE: Cell<[usize; crate::store_sections::SMALL_SECTION_COUNT]> =
+            const { Cell::new([0; crate::store_sections::SMALL_SECTION_COUNT]) };
     }
     pub(super) fn record(section: ironhorse_vm::SnapshotSection) {
         EXTRACT.with(|counts| {
@@ -2771,8 +2802,8 @@ pub(crate) mod extraction_counts {
         });
     }
     fn reset() {
-        EXTRACT.set([0; 32]);
-        ENCODE.set([0; 32]);
+        EXTRACT.set([0; crate::store_sections::SMALL_SECTION_COUNT]);
+        ENCODE.set([0; crate::store_sections::SMALL_SECTION_COUNT]);
     }
 
     #[test]

@@ -1900,38 +1900,35 @@ pub struct Interp {
     /// `new FinalizationRegistry(f)` instance chains to it and
     /// `register`/`unregister` resolve.
     finalization_registry_proto: crate::value::SlotIndex,
-    #[boot_new(std::collections::HashMap::new())]
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::WeakRefs.mask()))]
     #[gc_root(none)]
     #[quiescent(retained)]
-    #[persist_refs(none)]
+    #[persist_refs(weak_ref)]
     #[runtime_keys(none)]
     #[gc_hook(late, map)]
     #[gc_chunk(none)]
     #[gc_slots(map, weak_ref)]
     #[gc_weak(weak_ref)]
-    #[snapshot_table(none)]
+    #[snapshot_table(WeakRefs, 43, 43, Serialized, "weak_refs")]
     /// Per-instance `WeakRef` internal slots (XS's `XS_WEAK_REF_KIND`
     /// property, `xsMapSet.c`), keyed by the instance slot like
     /// [`Self::proxies`]. Membership is the brand `deref` checks. The target
     /// is a WEAK edge: full marking never follows it, and the dead-key prune
     /// (`fxMarkWeakStuff`) nulls a target the fixpoint left unmarked; the
     /// conservative partial collector pins it instead. See [`WeakRefData`].
-    ///
-    /// NOT a snapshot table yet: like [`Self::guest_compartments`], a machine
-    /// holding a live `WeakRef` is refused at the persist gate rather than
-    /// restored with an unbranded instance. See
-    /// [`Interp::stored_unpersistable_row_inner`].
-    weak_refs: std::collections::HashMap<crate::value::SlotIndex, WeakRefData>,
-    #[boot_new(std::collections::HashMap::new())]
+    /// Travels as the `WKRF` atom (schema 37 / format 25): the owner and its
+    /// target, nulled or live.
+    weak_refs: Tracked<std::collections::HashMap<crate::value::SlotIndex, WeakRefData>>,
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::FinalizationRegistries.mask()))]
     #[gc_root(registries_with_cells)]
     #[quiescent(retained)]
-    #[persist_refs(none)]
+    #[persist_refs(finalization)]
     #[runtime_keys(none)]
     #[gc_hook(early, map)]
     #[gc_chunk(finalization)]
     #[gc_slots(map, finalization_registry)]
     #[gc_weak(finalization_registry)]
-    #[snapshot_table(none)]
+    #[snapshot_table(FinalizationRegistries, 44, 44, Serialized, "finalization_registries")]
     /// Per-instance `FinalizationRegistry` internal slots (XS's
     /// `XS_FINALIZATION_REGISTRY_KIND` closure and its `[[Cells]]`,
     /// `xsMapSet.c`), keyed by the instance slot. Membership is the brand
@@ -1943,12 +1940,10 @@ pub struct Interp {
     /// it: its callback still runs for a target that dies after the guest
     /// drops the registry. Holdings may be chunk-bearing (a string), so the
     /// table is an EARLY row with a chunk-remap policy. See
-    /// [`FinalizationRegistryData`].
-    ///
-    /// NOT a snapshot table yet; refused at the persist gate while live, like
-    /// [`Self::weak_refs`].
+    /// [`FinalizationRegistryData`]. Travels as the `FNRG` atom (schema 37 /
+    /// format 25): the callback, the CHANGED flag and every cell.
     finalization_registries:
-        std::collections::HashMap<crate::value::SlotIndex, FinalizationRegistryData>,
+        Tracked<std::collections::HashMap<crate::value::SlotIndex, FinalizationRegistryData>>,
     #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::Buffers.mask()))]
     #[gc_root(none)]
     #[quiescent(retained)]

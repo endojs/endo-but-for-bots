@@ -46,6 +46,8 @@ fn every_persisted_holder_keeps_its_native_reference_checks() {
         ("bound_functions", &["index(d.target.0)||names(&d.this_arg)||d.args.iter().any(names)"]),
         ("proxies", &["index(p.target.0)||index(p.handler.0)"]),
         ("disposable_stacks", &[".records.iter()", "names(&r.resource)||names(&r.method)"]),
+        ("weak_refs", &["!w.target.is_null()&&index(w.target.0)"]),
+        ("finalization_registries", &["names(&r.callback)||r.cells.iter().any", "names(&c.holdings)||(!c.target.is_null()&&index(c.target.0))||(!c.token.is_null()&&index(c.token.0))"]),
         ("promises", &["names(&p.result)||p.reactions.iter().any", "names(&r.on_fulfilled)||names(&r.on_rejected)||names(&r.resolve)||names(&r.reject)"]),
         ("combinators", &["names(&c.resolve)||names(&c.reject)"]),
         ("generators", &[".frame.as_ref()", "saved_frame_contains(f,names)"]),

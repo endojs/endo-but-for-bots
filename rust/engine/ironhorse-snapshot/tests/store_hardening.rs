@@ -286,6 +286,8 @@ fn incremental_batch(
         intl: ironhorse_vm::snapshot_api::IntlTables::default(),
         name_floor: None,
         iterators: Vec::new(),
+        weak_refs: Vec::new(),
+        finalization_registries: Vec::new(),
     };
     let mut page_edges: Vec<(u32, Vec<u32>)> = Vec::new();
     let slot_pages: Vec<(u32, Vec<u8>)> = slots

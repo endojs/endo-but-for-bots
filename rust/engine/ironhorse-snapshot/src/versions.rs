@@ -37,7 +37,10 @@
 //! CI compares the ledger prefix and wire constants with the PR base revision
 //! (`scripts/check-row-schema.py`), rejecting repins and reused wire releases.
 //! Do not replace historical pins. Encoding-only releases may advance either
-//! wire version without changing the row schema. Row release 1 records the
+//! wire version without changing the row schema. Row release 6 (container
+//! format 25, store schema 37) adds the `WeakRef` and `FinalizationRegistry`
+//! rows; the schema 36 → 37 ladder step appends their two sections empty.
+//! Row release 1 records the
 //! existing format 20/store 31 contract without changing persisted bytes.
 //!
 //! # Intl data and derived identity

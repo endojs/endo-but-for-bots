@@ -1,3 +1,4 @@
+use ironhorse_snapshot::store_sections::small_state_at_schema;
 use ironhorse_snapshot::CommitToken;
 use ironhorse_snapshot::{
     machine::{checkpoint_to_store, resume_from_store, MachineSnapshot},
@@ -27,7 +28,13 @@ fn schema28_native_name_defaults_migrate_without_rewriting_heap() {
         store_schema: 28,
         ..current.clone()
     };
-    store.replace_for_migration(&current, &old, &small).unwrap();
+    store
+        .replace_for_migration(
+            &current,
+            &old,
+            &small_state_at_schema(&small, old.store_schema).unwrap(),
+        )
+        .unwrap();
 
     assert!(migrate_store(&mut store, &signature).unwrap());
     assert_eq!(store.manifest().unwrap(), current);

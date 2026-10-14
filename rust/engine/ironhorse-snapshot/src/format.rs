@@ -147,6 +147,15 @@ pub const PRMS: FourCc = FourCc(*b"PRMS");
 /// than wider `ERRD` rows, so an older container stays an
 /// encoding-identical subset and the read range keeps its meaning.
 pub const ESTK: FourCc = FourCc(*b"ESTK");
+/// `WKRF` — the `WeakRef` instances (ledger `WeakRefs` row): owner plus
+/// the weak target, `u32::MAX` once a collection cleared it, owner-ascending.
+/// Ironhorse-specific; emitted only when non-empty (see [`ARRY`]).
+pub const WKRF: FourCc = FourCc(*b"WKRF");
+/// `FNRG` — the `FinalizationRegistry` instances (ledger
+/// `FinalizationRegistries` row): owner, cleanup callback, the CHANGED
+/// flag and the cells (weak target, held value, weak token) in registration
+/// order, owner-ascending. Ironhorse-specific; emitted only when non-empty.
+pub const FNRG: FourCc = FourCc(*b"FNRG");
 /// `NFLR` — the installed-names floor: the id ceiling at
 /// or below which partial install passes leave bindings alone. Four
 /// big-endian bytes. Emitted only when it differs from the name-table
@@ -225,7 +234,11 @@ pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 /// format 23 wrote; one carrying accumulations but no generators writes a zero
 /// generator count as a positional placeholder, which is the only case where
 /// that count may be zero.
-pub const IRONHORSE_FORMAT_VERSION: u32 = 24;
+/// Format 25 adds the `WKRF` and `FNRG` atoms after `NFLR`: `WeakRef`
+/// targets and `FinalizationRegistry` callbacks, cells and cleanup flags
+/// (row schema 6). Both are omitted when their table is empty, so a machine
+/// holding neither writes the format-24 atom sequence under the new stamp.
+pub const IRONHORSE_FORMAT_VERSION: u32 = 25;
 
 /// The oldest format version this reader still decodes. Version-1
 /// containers predate the version-2 stamp; every version-1 writer in

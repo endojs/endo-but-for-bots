@@ -417,7 +417,13 @@ mod tests {
             store_schema: 35,
             ..current.clone()
         };
-        let small = store.read_small_state().unwrap();
+        // Schema 35 framed the 32 sections of its day: the restamped state
+        // is framed as that schema framed it.
+        let small = ironhorse_snapshot::store_sections::small_state_at_schema(
+            &store.read_small_state().unwrap(),
+            older.store_schema,
+        )
+        .unwrap();
         store
             .replace_for_migration(&current, &older, &small)
             .unwrap();

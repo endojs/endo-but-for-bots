@@ -2,8 +2,8 @@
 //!
 //! Numeric identities preserve schema 28 framing. Append-only changes require
 //! the snapshot format's migration discipline; reordering is never permitted.
-//! All 32 dirty-mask bits are occupied, so another section also requires widening
-//! the VM tracker.
+//! The dirty mask is 64 bits wide (it held 32 until the weak-reference sections
+//! joined), so there is room for more sections before the tracker widens again.
 //!
 //! This macro supplies names and identities to both crates so dirty tracking
 //! and persisted section dispatch cannot acquire independent inventories.
@@ -46,6 +46,8 @@ macro_rules! snapshot_sections {
             Promises = 29,
             AsyncInstances = 30,
             IndexProperties = 31,
+            WeakRefs = 32,
+            FinalizationRegistries = 33,
         }
     };
 }

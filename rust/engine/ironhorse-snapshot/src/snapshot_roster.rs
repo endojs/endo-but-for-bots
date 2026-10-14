@@ -1231,7 +1231,7 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [iterators: [ironhorse_vm::snapshot_api::IteratorRow] = &[]],
-                gate: [End, [iterators], ([tables], [owned], [], [names_len], [], [], [], [], [], []) {
+                gate: [WeakRefs, [iterators], ([tables], [owned], [], [names_len], [], [], [], [], [], []) {
                     // The iterator cursors: weak owner and result slots bounded; a
                     // collection cursor must name a COVERING collections row (its
                     // `next()` indexes the table unconditionally) with the carried
@@ -1309,7 +1309,7 @@ macro_rules! snapshot_payloads {
                         }
                     }
                 }],
-                restore: [End, [iterators], (interp) {
+                restore: [WeakRefs, [iterators], (interp) {
                     // The iterator cursors (schema 13): validated at decode/bounds
                     // (kinds, cursor ranges, the covering-collection cross-check);
                     // restored AFTER the collections so the covering rows are in hand
@@ -1321,7 +1321,7 @@ macro_rules! snapshot_payloads {
                         ));
                     }
                 }],
-                initialize: [End;
+                initialize: [WeakRefs;
                     #[doc = " The built-in iterator cursors (schema 13; the `ITER` encoding)."]
                     iterators: Vec<ironhorse_vm::snapshot_api::IteratorRow> = Default::default()],
                 legacy_label: "small state iterators section",
@@ -2618,7 +2618,7 @@ macro_rules! snapshot_payloads {
                         )));
                     }
                 },
-                decode_container: [End, replace, (r, [], [small]) {
+                decode_container: [WeakRefs, replace, (r, [], [small]) {
                     let name_floor = match r.find(crate::format::NFLR) {
                         Some(a) => {
                             if a.payload.len() != 4 {
@@ -2668,6 +2668,134 @@ macro_rules! snapshot_payloads {
                     }
                 },
                 slot_visit: metadata,
+            }
+            WeakRefs {
+                image_field: weak_refs,
+                builder: none,
+                live: [weak_refs: Vec<ironhorse_vm::snapshot_api::WeakRefRow> => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::WeakRefs) {
+                        interp.weak_refs_snapshot()
+                    } else {
+                        Default::default()
+                    }
+                }],
+                bounds: [weak_refs: [ironhorse_vm::snapshot_api::WeakRefRow] = &[]],
+                gate: [FinalizationRegistries, [weak_refs], ([], [owned], [], [], [], [], [], [], [], []) {
+                    // A WeakRef's owner is live; its target is live or cleared
+                    // (`u32::MAX`), never a free slot: the dead-key prune nulls a
+                    // target before the sweep frees it.
+                    for row in weak_refs {
+                        owned(row.owner)?;
+                        if row.target != u32::MAX {
+                            owned(row.target)?;
+                        }
+                    }
+                }],
+                restore: [FinalizationRegistries, [weak_refs], (interp) {
+                    interp.restore_weak_refs(weak_refs)
+                        .map_err(|_| SnapshotError::Corrupt("side-table restore: malformed WeakRefs row"))?;
+                }],
+                initialize: [FinalizationRegistries;
+                    #[doc = " `WeakRef` targets (schema 37; `WKRF`)."]
+                    weak_refs: Vec<ironhorse_vm::snapshot_api::WeakRefRow> = Default::default()],
+                legacy_label: "small state weak-ref section",
+                decode_legacy(state, bytes): {
+                    state.weak_refs = if bytes.is_empty() {
+                        Default::default()
+                    } else {
+                        crate::image::decode_weak_refs(bytes)?
+                    };
+                },
+                decode_container: [FinalizationRegistries, replace, (r, [], []) {
+                    let weak_refs = match r.find(crate::format::WKRF) {
+                        Some(a) => present_and_non_empty(
+                            decode_weak_refs(a.payload)?,
+                            "WKRF atom present but empty; the writer omits it",
+                        )?,
+                        None => Vec::new(),
+                    };
+                    weak_refs
+                }],
+                atom: Some(crate::format::WKRF),
+                present(image): !image.weak_refs.is_empty(),
+                encode(state): {
+                    crate::image::encode_weak_refs(&state.weak_refs)
+                },
+                canonicalize(bytes): {
+                    crate::image::decode_weak_refs(bytes)
+                        .map(|value| crate::image::encode_weak_refs(&value))
+                },
+                slot_visit: metadata,
+            }
+            FinalizationRegistries {
+                image_field: finalization_registries,
+                builder: none,
+                live: [finalization_registries: Vec<ironhorse_vm::snapshot_api::FinalizationRegistryRow> => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::FinalizationRegistries) {
+                        interp.finalization_registries_snapshot()
+                    } else {
+                        Default::default()
+                    }
+                }],
+                bounds: [finalization_registries: [ironhorse_vm::snapshot_api::FinalizationRegistryRow] = &[]],
+                gate: [End, [finalization_registries], ([], [owned], [], [], [], [], [], [], [], []) {
+                    // The registry's owner is live; each cell's target and token
+                    // are live or absent (`u32::MAX`); the callback is a reference
+                    // (its callability is the restored functions' cross-table
+                    // obligation, as a disposal method's is). The decoder already
+                    // refused a CHANGED flag with no dead cell behind it.
+                    for row in finalization_registries {
+                        owned(row.owner)?;
+                        if row.callback.kind != Kind::Reference {
+                            return Err(SnapshotError::Corrupt(
+                                "finalization registries: cleanup callback is not a reference",
+                            ));
+                        }
+                        for cell in &row.cells {
+                            if cell.target != u32::MAX {
+                                owned(cell.target)?;
+                            }
+                            if cell.token != u32::MAX {
+                                owned(cell.token)?;
+                            }
+                        }
+                    }
+                }],
+                restore: [End, [finalization_registries], (interp) {
+                    interp.restore_finalization_registries(finalization_registries)
+                        .map_err(|_| SnapshotError::Corrupt("side-table restore: malformed FinalizationRegistries row"))?;
+                }],
+                initialize: [End;
+                    #[doc = " `FinalizationRegistry` callbacks, flags and cells (schema 37; `FNRG`)."]
+                    finalization_registries: Vec<ironhorse_vm::snapshot_api::FinalizationRegistryRow> = Default::default()],
+                legacy_label: "small state finalization-registry section",
+                decode_legacy(state, bytes): {
+                    state.finalization_registries = if bytes.is_empty() {
+                        Default::default()
+                    } else {
+                        crate::image::decode_finalization_registries(bytes)?
+                    };
+                },
+                decode_container: [End, replace, (r, [], []) {
+                    let finalization_registries = match r.find(crate::format::FNRG) {
+                        Some(a) => present_and_non_empty(
+                            decode_finalization_registries(a.payload)?,
+                            "FNRG atom present but empty; the writer omits it",
+                        )?,
+                        None => Vec::new(),
+                    };
+                    finalization_registries
+                }],
+                atom: Some(crate::format::FNRG),
+                present(image): !image.finalization_registries.is_empty(),
+                encode(state): {
+                    crate::image::encode_finalization_registries(&state.finalization_registries)
+                },
+                canonicalize(bytes): {
+                    crate::image::decode_finalization_registries(bytes)
+                        .map(|value| crate::image::encode_finalization_registries(&value))
+                },
+                slot_visit: slots,
             }
         }
     };
@@ -2859,18 +2987,18 @@ macro_rules! define_payloads {
 }
 snapshot_payloads!(define_payloads);
 
-pub(crate) const fn canonical_atom_order() -> [FourCc; 36] {
+pub(crate) const fn canonical_atom_order() -> [FourCc; 38] {
     use crate::format::{BLOC, CREA, HEAP, SIGN, VERS};
-    let mut tags = [VERS; 36];
+    let mut tags = [VERS; 38];
     tags[1] = SIGN;
     tags[2] = CREA;
     tags[3] = BLOC;
     tags[4] = HEAP;
     let mut at = 5;
     let mut row = 0;
-    let mut seen = 0u32;
+    let mut seen = 0u64;
     while row < PAYLOADS.len() {
-        let bit = 1u32 << PAYLOADS[row].section.id();
+        let bit = 1u64 << PAYLOADS[row].section.id();
         assert!(seen & bit == 0);
         seen |= bit;
         if let Some(tag) = PAYLOADS[row].atom {
@@ -3084,6 +3212,8 @@ mod tests {
                 "PrivateElements",
                 "DisposableStacks",
                 "Iterators",
+                "WeakRefs",
+                "FinalizationRegistries",
             ]
         );
     }
@@ -3338,6 +3468,8 @@ mod tests {
                 "Promises",
                 "AsyncInstances",
                 "NameFloor",
+                "WeakRefs",
+                "FinalizationRegistries",
             ]
         );
         for (next, expected) in [
@@ -3504,6 +3636,8 @@ mod tests {
                 "Temporal",
                 "Intl",
                 "Iterators",
+                "WeakRefs",
+                "FinalizationRegistries",
             ]
         );
         for (next, expected) in [
@@ -3626,6 +3760,8 @@ mod tests {
         "intl",
         "name_floor",
         "iterators",
+        "weak_refs",
+        "finalization_registries",
     ];
 
     fn small_field_chain(rows: &[PayloadDesc]) -> Result<Vec<&str>, &'static str> {
@@ -3887,7 +4023,7 @@ mod tests {
                 *b"SYMB", *b"METR", *b"ARRY", *b"IDXP", *b"COLL", *b"REGY", *b"ERRD", *b"ESTK",
                 *b"ABUF", *b"TARR", *b"DVIW", *b"WRAP", *b"REGX", *b"ARGB", *b"TMPR", *b"INTL",
                 *b"ITER", *b"DATE", *b"FUNC", *b"PROX", *b"ACCS", *b"IBFN", *b"PRIV", *b"DISP",
-                *b"GENR", *b"PRMS", *b"ASYN", *b"NFLR",
+                *b"GENR", *b"PRMS", *b"ASYN", *b"NFLR", *b"WKRF", *b"FNRG",
             ]
         );
     }

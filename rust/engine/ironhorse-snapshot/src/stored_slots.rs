@@ -6,10 +6,10 @@ use crate::store::SmallState;
 use ironhorse_vm::snapshot_api::{
     AccessorRow, AsyncGeneratorRequestRow, AsyncGeneratorRow, AsyncRow, BoundFunctionRow,
     CombinatorRow, DisposableStackRow, DisposalRecordRow, EnvironmentRow, EvaluatorRow,
-    FromAsyncRow, FunctionStateSnapshot, GeneratorRow, HostFunctionRow, ModuleGraphSnapshot,
-    ModuleRecordRow, PrivateAccessorRow, PrivateElementSnapshot, PrivateValueRow,
-    PromiseClusterSnapshot, PromiseJobRow, PromiseReactionRow, PromiseRow, SavedFrameRow,
-    SavedJumpRow, SharedMachineSnapshot,
+    FinalizationCellRow, FinalizationRegistryRow, FromAsyncRow, FunctionStateSnapshot,
+    GeneratorRow, HostFunctionRow, ModuleGraphSnapshot, ModuleRecordRow, PrivateAccessorRow,
+    PrivateElementSnapshot, PrivateValueRow, PromiseClusterSnapshot, PromiseJobRow,
+    PromiseReactionRow, PromiseRow, SavedFrameRow, SavedJumpRow, SharedMachineSnapshot, WeakRefRow,
 };
 use ironhorse_vm::Slot;
 
@@ -63,6 +63,7 @@ macro_rules! metadata_row {
         };
     };
 }
+metadata_row!(WeakRefRow, [owner, target]);
 metadata_row!(crate::image::BufferImage, [owner, data, length, flags]);
 metadata_row!(
     ironhorse_vm::snapshot_api::CollatorData,
@@ -364,6 +365,14 @@ row!(DisposableStackRow {
 row!(DisposalRecordRow {
     slots: [resource, method],
     metadata: [pass_resource]
+});
+row!(FinalizationRegistryRow {
+    slots: [callback, cells],
+    metadata: [owner, changed]
+});
+row!(FinalizationCellRow {
+    slots: [holdings],
+    metadata: [target, token]
 });
 row!(GeneratorRow {
     slots: [frame],

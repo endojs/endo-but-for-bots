@@ -38,7 +38,8 @@ use ironhorse_snapshot::store::{
     StoreError, StoreManifest,
 };
 use ironhorse_snapshot::store_sections::{
-    frame_small_state, split_small_state, SectionLeaves, SectionUpdate, SMALL_SECTION_COUNT,
+    frame_small_state_at, section_count_at, section_hash, split_small_state_at, SectionUpdate,
+    SmallSection, SECTIONED_SCHEMA, SMALL_SECTION_COUNT, WEAK_SECTIONS_SCHEMA,
 };
 use ironhorse_snapshot::SnapshotError;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -117,9 +118,12 @@ fn edge_pairs_current(conn: &Connection, epoch: u64) -> Result<bool, StoreError>
     .map_err(sql_err)
 }
 
-/// The caller owns a transaction so section rows and their manifest are atomic.
+/// The caller owns a transaction so section rows and their manifest are
+/// atomic. A sectioned `schema` writes the sections it frames
+/// ([`section_count_at`]): a migration write to an older schema's layout
+/// (a fixture's) writes fewer rows than this build's roster.
 fn write_small_state(conn: &Connection, schema: u32, bytes: &[u8]) -> Result<(), StoreError> {
-    if schema < 28 {
+    if schema < SECTIONED_SCHEMA {
         conn.execute(
             "INSERT INTO small_state (name, bytes) VALUES (?1, ?2)
              ON CONFLICT(name) DO UPDATE SET bytes = excluded.bytes",
@@ -128,18 +132,17 @@ fn write_small_state(conn: &Connection, schema: u32, bytes: &[u8]) -> Result<(),
         .map_err(sql_err)?;
         return Ok(());
     }
-    let sections = split_small_state(bytes)?;
+    let sections = split_small_state_at(bytes, schema)?;
     // Schema DDL belongs to the authorized write transaction. Merely opening
     // a legacy store (which may have an incompatible signature) must not edit it.
-    conn.execute_batch(
+    conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS small_sections (
-           id INTEGER PRIMARY KEY CHECK (id >= 0 AND id < 32),
+           id INTEGER PRIMARY KEY CHECK (id >= 0 AND id < {SMALL_SECTION_COUNT}),
            bytes BLOB NOT NULL,
            hash BLOB NOT NULL CHECK (length(hash) = 32)
-         );",
-    )
+         );"
+    ))
     .map_err(sql_err)?;
-    let leaves = SectionLeaves::from_payloads(&sections);
     let mut upsert = conn
         .prepare(
             "INSERT INTO small_sections (id, bytes, hash) VALUES (?1, ?2, ?3)
@@ -147,10 +150,17 @@ fn write_small_state(conn: &Connection, schema: u32, bytes: &[u8]) -> Result<(),
         )
         .map_err(sql_err)?;
     for (id, payload) in sections.iter().enumerate() {
+        let hash = section_hash(SmallSection::from_id(id as u32)?, payload);
         upsert
-            .execute(params![id as i64, payload, &leaves.hashes()[id][..]])
+            .execute(params![id as i64, payload, &hash[..]])
             .map_err(sql_err)?;
     }
+    // A write to an older schema's layout leaves no row that layout lacks.
+    conn.execute(
+        "DELETE FROM small_sections WHERE id >= ?1",
+        params![sections.len() as i64],
+    )
+    .map_err(sql_err)?;
     conn.execute(
         "DELETE FROM small_state WHERE name = ?1",
         params![SMALL_NAME],
@@ -205,17 +215,18 @@ fn write_section_updates(conn: &Connection, updates: &[SectionUpdate]) -> Result
     Ok(())
 }
 
-/// Read the small state back from its section rows. The stored section
-/// digests are not re-derived here: under the store-seam design's trust
-/// model the rows are the state, and the digests are change detection
-/// only (`validate_store_content` re-derives them).
-fn read_sectioned_state(conn: &Connection) -> Result<Vec<u8>, StoreError> {
+/// Read the small state back from its section rows, as many as the
+/// store's `schema` frames. The stored section digests are not re-derived
+/// here: under the store-seam design's trust model the rows are the state,
+/// and the digests are change detection only (`validate_store_content`
+/// re-derives them).
+fn read_sectioned_state(conn: &Connection, schema: u32) -> Result<Vec<u8>, StoreError> {
     let mut stmt = conn
         .prepare("SELECT id, bytes FROM small_sections ORDER BY id")
         .map_err(sql_err)?;
     let mut rows = stmt.query([]).map_err(sql_err)?;
-    let mut payloads: [Vec<u8>; SMALL_SECTION_COUNT] = std::array::from_fn(|_| Vec::new());
-    for (id, payload) in payloads.iter_mut().enumerate() {
+    let mut payloads: Vec<Vec<u8>> = Vec::with_capacity(section_count_at(schema));
+    for id in 0..section_count_at(schema) {
         let row = rows
             .next()
             .map_err(sql_err)?
@@ -224,12 +235,13 @@ fn read_sectioned_state(conn: &Connection) -> Result<Vec<u8>, StoreError> {
         if found != id as i64 {
             return Err(StoreError::MissingRow("small section", id as u32));
         }
-        *payload = row.get(1).map_err(sql_err)?;
+        payloads.push(row.get(1).map_err(sql_err)?);
     }
     if rows.next().map_err(sql_err)?.is_some() {
         return Err(StoreError::Io("sqlite: extra small sections".into()));
     }
-    frame_small_state(&std::array::from_fn(|id| payloads[id].as_slice()))
+    let refs: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
+    frame_small_state_at(&refs, schema)
 }
 
 /// A SQLite-backed [`HeapStore`]. One store per database file; the
@@ -668,6 +680,16 @@ impl HeapStore for SqliteHeapStore {
             .map_err(sql_err)?;
         let durable = Self::stored_manifest(&tx)?.ok_or(StoreError::Empty)?;
         check_migration_baseline(&durable, from)?;
+        // The section table's DDL bounds the ids at its roster: a store
+        // sectioned before schema 37 bounds them at the 32 of its day, so the
+        // step that appends the weak-reference sections rebuilds the table
+        // (`write_small_state` writes every row either way).
+        if (SECTIONED_SCHEMA..WEAK_SECTIONS_SCHEMA).contains(&from.store_schema)
+            && to.store_schema >= WEAK_SECTIONS_SCHEMA
+        {
+            tx.execute("DROP TABLE IF EXISTS small_sections", [])
+                .map_err(sql_err)?;
+        }
         write_small_state(&tx, to.store_schema, small)?;
         tx.execute("DROP TABLE IF EXISTS leaf_hashes", [])
             .map_err(sql_err)?;
@@ -901,8 +923,8 @@ impl HeapStore for SqliteHeapStore {
 
     fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
         let manifest = Self::stored_manifest(&self.conn)?.ok_or(StoreError::Empty)?;
-        if manifest.store_schema >= 28 {
-            return read_sectioned_state(&self.conn);
+        if manifest.store_schema >= SECTIONED_SCHEMA {
+            return read_sectioned_state(&self.conn, manifest.store_schema);
         }
         self.conn
             .query_row(
@@ -918,8 +940,13 @@ impl HeapStore for SqliteHeapStore {
     }
 
     fn small_section_hashes(&self) -> Result<[[u8; 32]; SMALL_SECTION_COUNT], StoreError> {
-        if Self::stored_manifest(&self.conn)?.is_none() {
-            return Err(StoreError::Empty);
+        let manifest = Self::stored_manifest(&self.conn)?.ok_or(StoreError::Empty)?;
+        // The inventory is this build's roster; a store at an older schema
+        // frames fewer sections, and only the migration ladder reads it.
+        if manifest.store_schema < WEAK_SECTIONS_SCHEMA {
+            return Err(StoreError::NeedsMigration {
+                found: manifest.store_schema,
+            });
         }
         read_section_hashes(&self.conn)
     }
@@ -1325,6 +1352,7 @@ mod tests {
     #[test]
     fn section_migration_preserves_bytes_and_rolls_back_partial_inserts() {
         use ironhorse_snapshot::store::{migrate_store, StoreManifest};
+        use ironhorse_snapshot::store_sections::small_state_at_schema;
         let mut machine = Interp::new();
         let (code, names) = ironhorse_compile::compile_atoms(
             "var a = [1, 'kept', 3]; var m = new Map([[1, 'value']]); 0",
@@ -1339,12 +1367,16 @@ mod tests {
             .unwrap();
         let small = store.read_small_state().unwrap();
         let current = store.manifest().unwrap();
-        // A schema-27 store keeps its small state whole.
+        // A schema-27 store keeps its small state whole, with the 32
+        // sections of its day.
         let old = StoreManifest {
             store_schema: 27,
             ..current.clone()
         };
-        store.replace_for_migration(&current, &old, &small).unwrap();
+        let legacy = small_state_at_schema(&small, old.store_schema).unwrap();
+        store
+            .replace_for_migration(&current, &old, &legacy)
+            .unwrap();
         store
             .conn
             .execute("DELETE FROM small_sections", [])
@@ -1386,7 +1418,7 @@ mod tests {
             if message.contains("migration insert failure"))
         );
         assert_eq!(store.manifest().unwrap(), old);
-        assert_eq!(store.read_small_state().unwrap(), small);
+        assert_eq!(store.read_small_state().unwrap(), legacy);
         assert_eq!(leaf_rows(&store), Some(1));
         assert_eq!(
             store
@@ -1416,7 +1448,7 @@ mod tests {
             if message.contains("migration manifest failure"))
         );
         assert_eq!(store.manifest().unwrap(), old);
-        assert_eq!(store.read_small_state().unwrap(), small);
+        assert_eq!(store.read_small_state().unwrap(), legacy);
         assert_eq!(leaf_rows(&store), Some(1));
         assert_eq!(
             store
@@ -1449,7 +1481,7 @@ mod tests {
                 .query_row("SELECT count(*) FROM small_sections", [], |r| r
                     .get::<_, i64>(0))
                 .unwrap(),
-            32
+            SMALL_SECTION_COUNT as i64
         );
         assert_eq!(
             store

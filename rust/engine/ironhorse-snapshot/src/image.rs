@@ -446,6 +446,10 @@ pub struct MachineImage {
     pub private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot,
     /// `DISP`: explicit resource-management stacks.
     pub disposable_stacks: Vec<ironhorse_vm::snapshot_api::DisposableStackRow>,
+    /// `WKRF`: `WeakRef` targets.
+    pub weak_refs: Vec<ironhorse_vm::snapshot_api::WeakRefRow>,
+    /// `FNRG`: `FinalizationRegistry` callbacks, cleanup flags and cells.
+    pub finalization_registries: Vec<ironhorse_vm::snapshot_api::FinalizationRegistryRow>,
     /// `GENR`: synchronous generator saved activations.
     pub generators: Vec<ironhorse_vm::snapshot_api::GeneratorRow>,
     /// `PRMS`: the promise cluster — settlement state, resolving
@@ -739,6 +743,22 @@ impl MachineImage {
         disposable_stacks: Vec<ironhorse_vm::snapshot_api::DisposableStackRow>,
     ) -> MachineImage {
         self.disposable_stacks = disposable_stacks;
+        self
+    }
+
+    pub fn with_weak_refs(
+        mut self,
+        weak_refs: Vec<ironhorse_vm::snapshot_api::WeakRefRow>,
+    ) -> MachineImage {
+        self.weak_refs = weak_refs;
+        self
+    }
+
+    pub fn with_finalization_registries(
+        mut self,
+        finalization_registries: Vec<ironhorse_vm::snapshot_api::FinalizationRegistryRow>,
+    ) -> MachineImage {
+        self.finalization_registries = finalization_registries;
         self
     }
 
@@ -2424,6 +2444,115 @@ pub(crate) fn encode_disposable_stacks(
         }
     }
     v
+}
+
+pub(crate) fn encode_weak_refs(rows: &[ironhorse_vm::snapshot_api::WeakRefRow]) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+    for row in rows {
+        v.extend_from_slice(&row.owner.to_be_bytes());
+        v.extend_from_slice(&row.target.to_be_bytes());
+    }
+    v
+}
+
+pub(crate) fn decode_weak_refs(
+    p: &[u8],
+) -> Result<Vec<ironhorse_vm::snapshot_api::WeakRefRow>, SnapshotError> {
+    let mut c = Cursor::new(p, "weak refs");
+    let count = c.u32()? as usize;
+    let mut rows = Vec::with_capacity(count.min(p.len() / 8));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        if rows
+            .last()
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::WeakRefRow| owner <= row.owner)
+        {
+            return Err(SnapshotError::Corrupt(
+                "weak refs: owners not strictly ascending",
+            ));
+        }
+        let target = c.u32()?;
+        rows.push(ironhorse_vm::snapshot_api::WeakRefRow { owner, target });
+    }
+    c.done()?;
+    Ok(rows)
+}
+
+pub(crate) fn encode_finalization_registries(
+    rows: &[ironhorse_vm::snapshot_api::FinalizationRegistryRow],
+) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+    for row in rows {
+        v.extend_from_slice(&row.owner.to_be_bytes());
+        crate::slot_codec::encode_slot(&row.callback, &mut v);
+        v.push(row.changed as u8);
+        v.extend_from_slice(&(row.cells.len() as u32).to_be_bytes());
+        for cell in &row.cells {
+            v.extend_from_slice(&cell.target.to_be_bytes());
+            crate::slot_codec::encode_slot(&cell.holdings, &mut v);
+            v.extend_from_slice(&cell.token.to_be_bytes());
+        }
+    }
+    v
+}
+
+pub(crate) fn decode_finalization_registries(
+    p: &[u8],
+) -> Result<Vec<ironhorse_vm::snapshot_api::FinalizationRegistryRow>, SnapshotError> {
+    let mut c = Cursor::new(p, "finalization registries");
+    let count = c.u32()? as usize;
+    let mut rows = Vec::with_capacity(count.min(p.len() / (SLOT_RECORD_BYTES + 9)));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        if rows.last().is_some_and(
+            |row: &ironhorse_vm::snapshot_api::FinalizationRegistryRow| owner <= row.owner,
+        ) {
+            return Err(SnapshotError::Corrupt(
+                "finalization registries: owners not strictly ascending",
+            ));
+        }
+        let callback = c.slot()?;
+        if callback.kind != Kind::Reference {
+            return Err(SnapshotError::Corrupt(
+                "finalization registries: cleanup callback is not a reference",
+            ));
+        }
+        let changed = match c.u8()? {
+            0 => false,
+            1 => true,
+            _ => {
+                return Err(SnapshotError::Corrupt(
+                    "finalization registries: bad boolean byte",
+                ))
+            }
+        };
+        let cell_count = c.u32()? as usize;
+        let mut cells = Vec::with_capacity(cell_count.min(p.len() / (SLOT_RECORD_BYTES + 8)));
+        for _ in 0..cell_count {
+            cells.push(ironhorse_vm::snapshot_api::FinalizationCellRow {
+                target: c.u32()?,
+                holdings: c.slot()?,
+                token: c.u32()?,
+            });
+        }
+        // The cleanup clears the flag once no dead cell remains, so a flagged
+        // registry with every target alive can only be crafted.
+        if changed && cells.iter().all(|cell| cell.target != u32::MAX) {
+            return Err(SnapshotError::Corrupt(
+                "finalization registries: flagged registry holds no dead cell",
+            ));
+        }
+        rows.push(ironhorse_vm::snapshot_api::FinalizationRegistryRow {
+            owner,
+            callback,
+            changed,
+            cells,
+        });
+    }
+    c.done()?;
+    Ok(rows)
 }
 
 pub(crate) fn decode_disposable_stacks(
@@ -6579,6 +6708,8 @@ mod tests {
             intl_bound_functions: Vec::new(),
             private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
+            weak_refs: Vec::new(),
+            finalization_registries: Vec::new(),
             generators: Vec::new(),
             promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
@@ -6780,6 +6911,8 @@ mod tests {
             intl_bound_functions: Vec::new(),
             private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
+            weak_refs: Vec::new(),
+            finalization_registries: Vec::new(),
             generators: Vec::new(),
             promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
@@ -6944,6 +7077,14 @@ mod tests {
             assert!(matches!(
                 decode_disposable_stacks(bytes),
                 Err(SnapshotError::Corrupt("disposable stacks"))
+            ));
+            assert!(matches!(
+                decode_weak_refs(bytes),
+                Err(SnapshotError::Corrupt("weak refs"))
+            ));
+            assert!(matches!(
+                decode_finalization_registries(bytes),
+                Err(SnapshotError::Corrupt("finalization registries"))
             ));
             assert!(matches!(
                 decode_generators(bytes),
@@ -7153,6 +7294,21 @@ mod tests {
             ))
         );
         assert_eq!(
+            append(crate::format::WKRF, encode_weak_refs(&image.weak_refs)),
+            Err(SnapshotError::Corrupt(
+                "WKRF atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(
+                crate::format::FNRG,
+                encode_finalization_registries(&image.finalization_registries)
+            ),
+            Err(SnapshotError::Corrupt(
+                "FNRG atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
             append(crate::format::GENR, encode_generators(&image.generators)),
             Err(SnapshotError::Corrupt(
                 "GENR atom present but empty; the writer omits it"
@@ -7298,6 +7454,8 @@ mod tests {
             intl_bound_functions: Vec::new(),
             private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
+            weak_refs: Vec::new(),
+            finalization_registries: Vec::new(),
             generators: Vec::new(),
             promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
@@ -8660,6 +8818,113 @@ mod object_state_refusals {
         );
         disposed.records.clear();
         assert!(decode_disposable_stacks(&encode_disposable_stacks(&[disposed])).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod weak_decoder_refusals {
+    use super::*;
+    use ironhorse_vm::snapshot_api::{FinalizationCellRow, FinalizationRegistryRow, WeakRefRow};
+    use ironhorse_vm::value::SlotIndex;
+
+    fn reference(index: u32) -> Slot {
+        Slot::of(Kind::Reference, Payload::Reference(SlotIndex(index)))
+    }
+
+    /// Owners ascend strictly in both tables, a registry's CHANGED byte is a
+    /// boolean, its callback is a reference and, when flagged, it holds a
+    /// dead cell; a cleared target and an absent token travel as `u32::MAX`.
+    #[test]
+    fn weak_ref_and_registry_rows_are_ordered_and_well_formed() {
+        let rows = vec![
+            WeakRefRow {
+                owner: 2,
+                target: 5,
+            },
+            WeakRefRow {
+                owner: 3,
+                target: u32::MAX,
+            },
+        ];
+        assert_eq!(decode_weak_refs(&encode_weak_refs(&rows)).unwrap(), rows);
+        for owner in [2, 1] {
+            let mut unordered = rows.clone();
+            unordered[1].owner = owner;
+            assert_eq!(
+                decode_weak_refs(&encode_weak_refs(&unordered)),
+                Err(SnapshotError::Corrupt(
+                    "weak refs: owners not strictly ascending"
+                ))
+            );
+        }
+
+        let first = FinalizationRegistryRow {
+            owner: 4,
+            callback: reference(6),
+            changed: true,
+            cells: vec![
+                FinalizationCellRow {
+                    target: u32::MAX,
+                    holdings: Slot::integer(1),
+                    token: u32::MAX,
+                },
+                FinalizationCellRow {
+                    target: 7,
+                    holdings: Slot::undefined(),
+                    token: 8,
+                },
+            ],
+        };
+        let mut second = first.clone();
+        second.owner = 5;
+        second.changed = false;
+        let both = vec![first.clone(), second.clone()];
+        assert_eq!(
+            decode_finalization_registries(&encode_finalization_registries(&both)).unwrap(),
+            both
+        );
+        for owner in [4, 3] {
+            second.owner = owner;
+            assert_eq!(
+                decode_finalization_registries(&encode_finalization_registries(&[
+                    first.clone(),
+                    second.clone()
+                ])),
+                Err(SnapshotError::Corrupt(
+                    "finalization registries: owners not strictly ascending"
+                ))
+            );
+        }
+        // The CHANGED byte follows the row count, the owner and the callback.
+        let bytes = encode_finalization_registries(std::slice::from_ref(&first));
+        let changed_at = 8 + SLOT_RECORD_BYTES;
+        assert_eq!(bytes[changed_at], 1);
+        for value in [2, 255] {
+            let mut invalid = bytes.clone();
+            invalid[changed_at] = value;
+            assert_eq!(
+                decode_finalization_registries(&invalid),
+                Err(SnapshotError::Corrupt(
+                    "finalization registries: bad boolean byte"
+                ))
+            );
+        }
+        let mut not_callable = first.clone();
+        not_callable.callback = Slot::integer(1);
+        assert_eq!(
+            decode_finalization_registries(&encode_finalization_registries(&[not_callable])),
+            Err(SnapshotError::Corrupt(
+                "finalization registries: cleanup callback is not a reference"
+            ))
+        );
+        let mut all_alive = first;
+        all_alive.cells.remove(0);
+        assert_eq!(
+            decode_finalization_registries(&encode_finalization_registries(&[all_alive])),
+            Err(SnapshotError::Corrupt(
+                "finalization registries: flagged registry holds no dead cell"
+            ))
+        );
     }
 }
 

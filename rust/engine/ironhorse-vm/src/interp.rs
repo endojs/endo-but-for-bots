@@ -39,12 +39,12 @@ mod snapshot_rows;
 pub use snapshot_rows::{
     AccessorRow, ArraySnapshot, AsyncGeneratorRequestRow, AsyncGeneratorRow, AsyncRow,
     BoundFunctionRow, CollectionSnapshot, CombinatorRow, DisposableStackRow, DisposalRecordRow,
-    EnvironmentRow, EvaluatorRow, FromAsyncRow, FunctionRow, FunctionStateSnapshot, GeneratorRow,
-    HostFunctionRow, IndexPropsSnapshot, IntlBoundFunctionRow, IteratorRow, ModuleGraphSnapshot,
-    ModuleRecordRow, PrivateAccessorRow, PrivateElementSnapshot, PrivateValueRow,
-    PromiseClusterSnapshot, PromiseFnRow, PromiseJobRow, PromiseReactionRow, PromiseRow,
-    ProxyRevokerRow, ProxyRow, ProxyStateSnapshot, SavedFrameRow, SavedJumpRow,
-    SharedMachineSnapshot,
+    EnvironmentRow, EvaluatorRow, FinalizationCellRow, FinalizationRegistryRow, FromAsyncRow,
+    FunctionRow, FunctionStateSnapshot, GeneratorRow, HostFunctionRow, IndexPropsSnapshot,
+    IntlBoundFunctionRow, IteratorRow, ModuleGraphSnapshot, ModuleRecordRow, PrivateAccessorRow,
+    PrivateElementSnapshot, PrivateValueRow, PromiseClusterSnapshot, PromiseFnRow, PromiseJobRow,
+    PromiseReactionRow, PromiseRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot, SavedFrameRow,
+    SavedJumpRow, SharedMachineSnapshot, WeakRefRow,
 };
 mod symbol_keys;
 use symbol_keys::SymbolKeys;

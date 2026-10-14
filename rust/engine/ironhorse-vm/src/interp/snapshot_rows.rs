@@ -201,6 +201,35 @@ pub struct DisposableStackRow {
     pub records: Vec<DisposalRecordRow>,
 }
 
+/// A `WeakRef` instance's internal slot (`WKRF`): the owner and its
+/// `[[WeakRefTarget]]`, `u32::MAX` once a collection cleared it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WeakRefRow {
+    pub owner: u32,
+    pub target: u32,
+}
+
+/// One `[[Cells]]` record of a `FinalizationRegistry`: the weakly held
+/// target (`u32::MAX` once dead and awaiting cleanup), the strongly held
+/// holdings, and the weakly held unregister token (`u32::MAX` when absent).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FinalizationCellRow {
+    pub target: u32,
+    pub holdings: Slot,
+    pub token: u32,
+}
+
+/// A `FinalizationRegistry` instance's internal state (`FNRG`): the
+/// cleanup callback, whether a cell died since the last cleanup, and the
+/// cells in registration order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FinalizationRegistryRow {
+    pub owner: u32,
+    pub callback: Slot,
+    pub changed: bool,
+    pub cells: Vec<FinalizationCellRow>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SavedJumpRow {
     pub target_pc: u64,

@@ -18,6 +18,7 @@ use ironhorse_snapshot::store::{
     STORE_SCHEMA_VERSION,
 };
 use ironhorse_snapshot::store_file::FileStore;
+use ironhorse_snapshot::store_sections::small_state_at_schema;
 use ironhorse_snapshot::{Signature, SnapshotError};
 
 fn sig() -> Signature {
@@ -555,11 +556,12 @@ fn stage1_history_at_schema_35_migrates_and_resumes() {
     write_stage1_file_store(&path);
     let mut store = FileStore::open(&path).unwrap();
     let current = store.manifest().unwrap();
-    let small = store.read_small_state().unwrap();
     let old = StoreManifest {
         store_schema: 35,
         ..current.clone()
     };
+    let small =
+        small_state_at_schema(&store.read_small_state().unwrap(), old.store_schema).unwrap();
     store.replace_for_migration(&current, &old, &small).unwrap();
     drop(store);
 

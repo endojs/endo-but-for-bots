@@ -21,6 +21,8 @@ const RESTORE_ROWS: &[&str] = &[
     "intl_bound_functions",
     "private_elements",
     "disposable_stacks",
+    "weak_refs",
+    "finalization_registries",
     "generators",
     "promise_cluster",
     "temporal_records",
@@ -507,6 +509,21 @@ impl RestoreSession {
     ) -> Result<(), RestoreError> {
         self.admit("disposable_stacks")?;
         let result = self.interp.restore_disposable_stacks(rows);
+        self.failed = result.err();
+        result
+    }
+    pub fn restore_weak_refs(&mut self, rows: Vec<WeakRefRow>) -> Result<(), RestoreError> {
+        self.admit("weak_refs")?;
+        let result = self.interp.restore_weak_refs(rows);
+        self.failed = result.err();
+        result
+    }
+    pub fn restore_finalization_registries(
+        &mut self,
+        rows: Vec<FinalizationRegistryRow>,
+    ) -> Result<(), RestoreError> {
+        self.admit("finalization_registries")?;
+        let result = self.interp.restore_finalization_registries(rows);
         self.failed = result.err();
         result
     }

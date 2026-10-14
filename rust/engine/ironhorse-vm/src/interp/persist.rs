@@ -573,24 +573,6 @@ impl Interp {
                 "a live guest `Compartment`, whose environment binding no snapshot carries",
             );
         }
-        // A live `WeakRef` or `FinalizationRegistry` ([`Interp::weak_refs`],
-        // [`Interp::finalization_registries`]), refused on PRESENCE for the
-        // same reason a guest `Compartment` is: the instance is an ordinary
-        // `Kind::Instance` slot whose whole brand -- the weak target, or the
-        // callback and cells -- is membership in a table no section carries.
-        // A resumed machine would hold an instance `deref`/`register` reject
-        // as "not a WeakRef instance", and a registry whose pending cleanups
-        // silently never run. The doomed-set walk cannot see either, so
-        // presence is the gate. The table that would let them travel is a
-        // later increment.
-        if !self.weak_refs.is_empty() {
-            return Some("a live `WeakRef`, whose weak target no snapshot carries");
-        }
-        if !self.finalization_registries.is_empty() {
-            return Some(
-                "a live `FinalizationRegistry`, whose cells and callback no snapshot carries",
-            );
-        }
         // Presence of the INSTANCE is not the whole question, because the
         // instance is not what carries the state. Two things outlive it.
         //
@@ -2202,6 +2184,128 @@ impl Interp {
                             resource: record.resource,
                             method: record.method,
                             pass_resource: record.pass_resource,
+                        })
+                        .collect(),
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// The `WeakRef` rows (`WKRF`), owner-ascending: a cleared target
+    /// travels as `u32::MAX`, exactly as the live table holds it.
+    pub fn weak_refs_snapshot(&self) -> Vec<WeakRefRow> {
+        let mut rows: Vec<WeakRefRow> = self
+            .weak_refs
+            .iter()
+            .map(|(owner, data)| WeakRefRow {
+                owner: owner.0,
+                target: data.target.0,
+            })
+            .collect();
+        rows.sort_unstable_by_key(|row| row.owner);
+        rows
+    }
+
+    /// Validate and restore the `WeakRef` rows as one batch. A live target
+    /// must name a live instance: the dead-key prune nulls a target before
+    /// the sweep frees it, so an honest row never names a free slot.
+    pub(super) fn restore_weak_refs(&mut self, rows: Vec<WeakRefRow>) -> Result<(), RestoreError> {
+        self.validate_restore_owners(rows.iter().map(|row| row.owner), "WeakRefs")?;
+        for row in &rows {
+            if row.target != u32::MAX {
+                self.validate_restore_owner(row.target, "WeakRefs")?;
+            }
+        }
+        for row in rows {
+            self.weak_refs.insert(
+                crate::value::SlotIndex(row.owner),
+                WeakRefData {
+                    target: crate::value::SlotIndex(row.target),
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// The `FinalizationRegistry` rows (`FNRG`), owner-ascending, each with
+    /// its cells in registration order; a dead target or absent token
+    /// travels as `u32::MAX`.
+    pub fn finalization_registries_snapshot(&self) -> Vec<FinalizationRegistryRow> {
+        let mut rows: Vec<FinalizationRegistryRow> = self
+            .finalization_registries
+            .iter()
+            .map(|(owner, data)| FinalizationRegistryRow {
+                owner: owner.0,
+                callback: data.callback,
+                changed: data.changed,
+                cells: data
+                    .cells
+                    .iter()
+                    .map(|cell| FinalizationCellRow {
+                        target: cell.target.0,
+                        holdings: cell.holdings,
+                        token: cell.token.0,
+                    })
+                    .collect(),
+            })
+            .collect();
+        rows.sort_unstable_by_key(|row| row.owner);
+        rows
+    }
+
+    /// Validate and restore the `FinalizationRegistry` rows as one batch.
+    /// The callback must be a reference (construction checked callability;
+    /// its identity is the cross-table obligation restored functions and
+    /// proxies carry); live targets and tokens must name live instances;
+    /// a registry flagged CHANGED must hold at least one dead cell, since
+    /// the cleanup clears the flag once none remain.
+    pub(super) fn restore_finalization_registries(
+        &mut self,
+        rows: Vec<FinalizationRegistryRow>,
+    ) -> Result<(), RestoreError> {
+        self.validate_restore_owners(rows.iter().map(|row| row.owner), "FinalizationRegistries")?;
+        for row in &rows {
+            if row.callback.kind != Kind::Reference {
+                return Err(RestoreError {
+                    row: "FinalizationRegistries",
+                    reason: "cleanup callback is not a reference",
+                });
+            }
+            if row.changed && row.cells.iter().all(|cell| cell.target != u32::MAX) {
+                return Err(RestoreError {
+                    row: "FinalizationRegistries",
+                    reason: "registry flagged for cleanup holds no dead cell",
+                });
+            }
+            for cell in &row.cells {
+                if cell.target != u32::MAX {
+                    self.validate_restore_owner(cell.target, "FinalizationRegistries")?;
+                }
+                if cell.token != u32::MAX {
+                    self.validate_restore_owner(cell.token, "FinalizationRegistries")?;
+                }
+            }
+        }
+        self.validate_restore_values(
+            rows.iter().flat_map(|row| {
+                std::iter::once(row.callback).chain(row.cells.iter().map(|cell| cell.holdings))
+            }),
+            "FinalizationRegistries",
+        )?;
+        for row in rows {
+            self.finalization_registries.insert(
+                crate::value::SlotIndex(row.owner),
+                FinalizationRegistryData {
+                    callback: row.callback,
+                    changed: row.changed,
+                    cells: row
+                        .cells
+                        .into_iter()
+                        .map(|cell| FinalizationCell {
+                            target: crate::value::SlotIndex(cell.target),
+                            holdings: cell.holdings,
+                            token: crate::value::SlotIndex(cell.token),
                         })
                         .collect(),
                 },

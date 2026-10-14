@@ -37,6 +37,19 @@ macro_rules! persist_holder {
     ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, proxies) => {
         $emit! { $vm.$field.values().any(|p| $index(p.target.0) || $index(p.handler.0)) }
     };
+    // A WeakRef holds its target as a bare index; a cleared one holds none.
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, weak_ref) => {
+        $emit! { $vm.$field.values().any(|w| !w.target.is_null() && $index(w.target.0)) }
+    };
+    // A registry holds its callback and each cell's holdings as values, and
+    // each cell's target and token as bare indices (absent once dead).
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, finalization) => {
+        $emit! { $vm.$field.values().any(|r| $names(&r.callback) || r.cells.iter().any(|c| {
+            $names(&c.holdings)
+                || (!c.target.is_null() && $index(c.target.0))
+                || (!c.token.is_null() && $index(c.token.0))
+        })) }
+    };
     ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, disposable) => {
         $emit! { $vm.$field.values().flat_map(|d| d.records.iter()).any(|r| $names(&r.resource) || $names(&r.method)) }
     };

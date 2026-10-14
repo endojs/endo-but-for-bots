@@ -113,7 +113,15 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// commit seal are gone, and the manifest carries a random [`CommitToken`]
 /// in their place. Migration seeds the token from the stored seal and
 /// drops the leaf storage; rows and small-state payloads are unchanged.
-pub const STORE_SCHEMA_VERSION: u32 = 36;
+/// v37: the small state grows two sections — `WeakRef` targets and
+/// `FinalizationRegistry` callbacks, flags and cells (row schema 6, container
+/// format 25). Migration appends both as their CANONICAL empty payloads (a
+/// zero row count each, 16 bytes in all) rather than the ladder's zero-length
+/// frames, since no later step re-canonicalizes the small state as 26 → 27
+/// did for the frames appended before it. A v36-era machine was refused at
+/// the persist gate while it held either table, so it has nothing persisted
+/// in them by definition.
+pub const STORE_SCHEMA_VERSION: u32 = 37;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -1250,7 +1258,7 @@ impl SmallState {
     /// dirty-diffed segment rows — but the section slot
     /// stays so the layout is stable; the atom container path still
     /// carries the list via the image, not this encoding.
-    pub fn encode_sections(&self) -> [Vec<u8>; 32] {
+    pub fn encode_sections(&self) -> [Vec<u8>; crate::store_sections::SMALL_SECTION_COUNT] {
         crate::store_sections::SmallSection::ALL.map(|section| self.encode_section(section))
     }
 
@@ -1682,14 +1690,41 @@ fn migrate_step(manifest: &mut StoreManifest, small: &mut Vec<u8>) -> Result<(),
         7 => manifest.cranks = 0,
         // 25 → 26: NAME entries become canonical XS CESU-8.
         25 => *small = names_to_cesu8(small)?,
-        // 26 → 27: one canonical encoding of the small state.
-        26 => *small = SmallState::decode_legacy(small)?.encode(),
+        // 26 → 27: one canonical encoding of the small state, framed as
+        // schema 27 frames it. The legacy decoder reads this build's whole
+        // roster, so the sections schema 37 appends are read here as the
+        // empty legacy frames the ladder would have appended, and dropped
+        // again from the canonical encoding for the 36 → 37 step to append
+        // in canonical form.
+        26 => {
+            let mut whole = std::mem::take(small);
+            for _ in crate::store_sections::section_count_at(schema + 1)
+                ..crate::store_sections::SMALL_SECTION_COUNT
+            {
+                whole.extend_from_slice(&0u32.to_be_bytes());
+            }
+            *small = crate::store_sections::small_state_at_schema(
+                &SmallState::decode_legacy(&whole)?.encode(),
+                schema + 1,
+            )?;
+        }
         // 27 → 28 split the retired small-state leaf into sections over the
         // same payloads, and 28 through 35 are identity restamps (payloads
         // that an older schema could not carry are simply absent). 35 → 36
         // drops the root, the seal and the leaves, which the manifest
         // decode and `replace_for_migration` take care of.
         27..=35 => {}
+        // 36 → 37: the two weak-reference sections, appended as the canonical
+        // encoding of an empty table (a zero u32 row count framed by its
+        // length), which is what every later reader expects of a stored
+        // section; the zero-length frames the LADDER appends were only ever
+        // canonicalized by the 26 → 27 step, which this step comes after.
+        36 => {
+            for payload in crate::store_sections::weak_sections_empty() {
+                small.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+                small.extend_from_slice(&payload);
+            }
+        }
         _ => match LADDER.iter().find(|&&(target, _)| target - 1 == schema) {
             Some(&(_, extra_len)) => small.resize(small.len() + extra_len, 0),
             None => {
@@ -2568,8 +2603,10 @@ pub fn check_migration_baseline(
 #[derive(Default)]
 pub struct MemoryStore {
     manifest: Option<StoreManifest>,
-    /// The whole framed small state of a store stamped before schema 28,
-    /// which kept it as one leaf; empty once `sections` holds it.
+    /// The framed small state of a store stamped before schema 37: whole,
+    /// as the schemas before 28 kept it, or the 32 sections of 28 through
+    /// 36, which only the migration ladder reads and which this build
+    /// does not keep apart. Empty once `sections` holds the state.
     small: Vec<u8>,
     sections: Option<[Vec<u8>; crate::store_sections::SMALL_SECTION_COUNT]>,
     section_leaves: Option<crate::store_sections::SectionLeaves>,
@@ -2603,10 +2640,15 @@ impl HeapStore for MemoryStore {
         small: &[u8],
     ) -> Result<(), StoreError> {
         check_migration_baseline(&self.manifest()?, from)?;
-        let sections = if to.store_schema >= 28 {
+        let sections = if to.store_schema >= crate::store_sections::WEAK_SECTIONS_SCHEMA {
             let refs = crate::store_sections::split_small_state(small)?;
             Some(std::array::from_fn(|id| refs[id].to_vec()))
         } else {
+            if to.store_schema >= crate::store_sections::SECTIONED_SCHEMA {
+                // Framed at its schema's own count, which this build keeps
+                // whole: only the ladder reads it, at that count.
+                crate::store_sections::split_small_state_at(small, to.store_schema)?;
+            }
             None
         };
         self.section_leaves = sections.as_ref().map(|rows| {
@@ -2994,6 +3036,18 @@ mod tests {
                             "small state index-props section"
                         ))
                     ),
+                    32 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state weak-ref section"
+                        ))
+                    ),
+                    33 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state finalization-registry section"
+                        ))
+                    ),
                     _ => unreachable!(),
                 }
             }
@@ -3166,12 +3220,28 @@ mod tests {
                 }
             );
         }
-        // Every other step leaves the small state alone, except the two
-        // that rewrite it (25 and 26), and 7 resets the crank counter.
+        // 36 → 37 appends the two weak-reference sections as CANONICAL
+        // empty payloads (a zero row count each), not zero-length frames:
+        // nothing after it re-canonicalizes the small state.
+        {
+            let mut manifest = StoreManifest {
+                store_schema: 36,
+                ..base.clone()
+            };
+            let mut small = vec![0x71, 0x00, 0xff];
+            migrate_step(&mut manifest, &mut small).unwrap();
+            let mut expected_small = vec![0x71, 0x00, 0xff];
+            expected_small.extend_from_slice(&[0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0]);
+            assert_eq!(small, expected_small);
+            assert_eq!(manifest.store_schema, 37);
+        }
+        // Every other step leaves the small state alone, except the three
+        // that rewrite it (25, 26 and 36), and 7 resets the crank counter.
         for schema in STORE_SCHEMA_MIN_SUPPORTED..STORE_SCHEMA_VERSION {
             if LADDER.iter().any(|&(target, _)| target == schema + 1)
                 || schema == 25
                 || schema == 26
+                || schema == 36
             {
                 continue;
             }
@@ -3508,6 +3578,8 @@ mod tests {
             intl_bound_functions: Vec::new(),
             private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
+            weak_refs: Vec::new(),
+            finalization_registries: Vec::new(),
             generators: Vec::new(),
             promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
@@ -3549,6 +3621,8 @@ mod tests {
             intl_bound_functions: Vec::new(),
             private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
+            weak_refs: Vec::new(),
+            finalization_registries: Vec::new(),
             generators: Vec::new(),
             promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
@@ -4220,6 +4294,8 @@ mod tests {
             "small state promise section",
             "small state async section",
             "small state index-props section",
+            "small state weak-ref section",
+            "small state finalization-registry section",
         ];
         let sections = crate::store_sections::split_small_state(&canonical).unwrap();
         let mut offset = 0;
@@ -4364,6 +4440,10 @@ mod tests {
             store_schema: 26,
             ..current.clone()
         };
+        // A schema-26 state carries the 32 sections of its day; the two
+        // weak-reference sections schema 37 appends are not part of it, and
+        // the ladder puts them back.
+        let legacy = crate::store_sections::small_state_at_schema(&legacy, 26).unwrap();
         store
             .replace_for_migration(&current, &old, &legacy)
             .unwrap();
@@ -4424,7 +4504,13 @@ mod tests {
             store_schema: STORE_SCHEMA_VERSION - 1,
             ..current.clone()
         };
-        let small = store.read_small_state().unwrap();
+        // Schema 36 had no weak-reference sections: the restamped state is
+        // framed as that schema framed it.
+        let small = crate::store_sections::small_state_at_schema(
+            &store.read_small_state().unwrap(),
+            old.store_schema,
+        )
+        .unwrap();
         store.replace_for_migration(&current, &old, &small).unwrap();
         assert_eq!(
             migrate_store(&mut store, &sig()).unwrap_err(),
@@ -4504,11 +4590,13 @@ mod tests {
             ))
             .unwrap();
         let current = inner.manifest().unwrap();
-        let small = inner.read_small_state().unwrap();
         let stale = StoreManifest {
             store_schema: STORE_SCHEMA_VERSION - 1,
             ..current.clone()
         };
+        let small = inner.read_small_state().unwrap();
+        let stale_small =
+            crate::store_sections::small_state_at_schema(&small, stale.store_schema).unwrap();
         // An unreadable small state: the refusal comes before the read.
         let mut store = ProbeStore {
             inner,
@@ -4542,14 +4630,24 @@ mod tests {
         );
         assert_eq!(store.inner.manifest().unwrap(), current);
         assert_eq!(
-            MemoryStore::new().replace_for_migration(&current, &stale, &small),
+            MemoryStore::new().replace_for_migration(&current, &stale, &stale_small),
             Err(StoreError::Empty)
         );
+        // A write to an older schema's layout takes that schema's framing,
+        // and only that: this build's roster is not what schema 36 framed.
+        assert_eq!(
+            store.inner.replace_for_migration(&current, &stale, &small),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "extra small sections"
+            )))
+        );
+        assert_eq!(store.inner.manifest().unwrap(), current);
         store
             .inner
-            .replace_for_migration(&current, &stale, &small)
+            .replace_for_migration(&current, &stale, &stale_small)
             .unwrap();
         assert_eq!(store.inner.manifest().unwrap(), stale);
+        assert_eq!(store.inner.read_small_state().unwrap(), stale_small);
     }
 
     /// Open and the metadata-scale validator answer the compatibility gates
@@ -4570,7 +4668,11 @@ mod tests {
             store_schema: STORE_SCHEMA_VERSION - 1,
             ..current.clone()
         };
-        let small = inner.read_small_state().unwrap();
+        let small = crate::store_sections::small_state_at_schema(
+            &inner.read_small_state().unwrap(),
+            older.store_schema,
+        )
+        .unwrap();
         inner
             .replace_for_migration(&current, &older, &small)
             .unwrap();

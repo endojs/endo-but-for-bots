@@ -543,29 +543,23 @@ fn dead_tokens_are_dropped_and_weak_refs_do_not_keep_targets_alive_for_each_othe
 }
 
 #[test]
-fn a_machine_holding_a_weak_ref_or_registry_is_not_persistable() {
+fn a_machine_holding_a_weak_ref_or_registry_is_persistable() {
+    // Both tables travel in the snapshot image (`WKRF`/`FNRG`), so neither
+    // trips the persist gate; `ironhorse-snapshot`'s `weak_ref_carry.rs`
+    // proves the round trip.
     let mut m = machine();
     assert_eq!(m.stored_unpersistable_row(), None);
-    assert!(crank(&mut m, "var w = new WeakRef({}); 0;").completed);
-    assert_eq!(
-        m.stored_unpersistable_row(),
-        Some("a live `WeakRef`, whose weak target no snapshot carries")
-    );
-    assert!(crank(&mut m, "w = null; 0;").completed);
-    m.collect_garbage().unwrap();
+    assert!(crank(
+        &mut m,
+        "var w = new WeakRef({}); var r = new FinalizationRegistry(function () {}); r.register({}, 1, {}); 0;"
+    )
+    .completed);
     assert_eq!(m.stored_unpersistable_row(), None);
-    assert!(
-        crank(
-            &mut m,
-            "var r = new FinalizationRegistry(function () {}); 0;"
-        )
-        .completed
-    );
-    assert_eq!(
-        m.stored_unpersistable_row(),
-        Some("a live `FinalizationRegistry`, whose cells and callback no snapshot carries")
-    );
-    assert!(crank(&mut m, "r = null; 0;").completed);
+    assert_eq!(m.weak_refs_snapshot().len(), 1);
+    assert_eq!(m.finalization_registries_snapshot().len(), 1);
     m.collect_garbage().unwrap();
+    // A cleared target and a flagged registry are persistable states too.
     assert_eq!(m.stored_unpersistable_row(), None);
+    assert_eq!(m.weak_refs_snapshot()[0].target, u32::MAX);
+    assert!(m.finalization_registries_snapshot()[0].changed);
 }

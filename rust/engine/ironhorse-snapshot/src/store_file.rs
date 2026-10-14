@@ -1267,11 +1267,17 @@ mod tests {
             ))
             .unwrap();
         let current = writer.manifest().unwrap();
-        let small = writer.read_small_state().unwrap();
         let older = StoreManifest {
             store_schema: 35,
             ..current.clone()
         };
+        // Schema 35 had no weak-reference sections: the restamped state is
+        // framed as that schema framed it.
+        let small = crate::store_sections::small_state_at_schema(
+            &writer.read_small_state().unwrap(),
+            older.store_schema,
+        )
+        .unwrap();
         writer
             .replace_for_migration(&current, &older, &small)
             .unwrap();

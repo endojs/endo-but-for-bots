@@ -548,6 +548,20 @@ mod tests {
             Coverage::Serialized,
             Some("from_async"),
         ),
+        (
+            43,
+            "WeakRefs",
+            "weak_refs",
+            Coverage::Serialized,
+            Some("weak_refs"),
+        ),
+        (
+            44,
+            "FinalizationRegistries",
+            "finalization_registries",
+            Coverage::Serialized,
+            Some("finalization_registries"),
+        ),
     ];
 
     #[test]
@@ -657,6 +671,8 @@ mod tests {
             "private_values",
             "private_accessors",
             "disposable_stacks",
+            "weak_refs",
+            "finalization_registries",
             "regexps",
             "temporal_instants",
             "temporal_durations",
@@ -698,12 +714,6 @@ mod tests {
             // accounts for it here. `designs/ironhorse-guest-compartment.md`
             // § 7 specifies the table that would let it travel.
             "guest_compartments",
-            // `WeakRef` targets and `FinalizationRegistry` cells: cross-crank
-            // state riding NO section, refused at the persist gate by
-            // presence like `guest_compartments` above (the instance is an
-            // ordinary slot whose whole brand is table membership).
-            "weak_refs",
-            "finalization_registries",
             "identity_roots",
             "restored_leases",
             "restored_environment_leases",

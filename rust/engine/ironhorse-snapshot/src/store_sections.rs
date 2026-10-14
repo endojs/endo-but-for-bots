@@ -1,10 +1,11 @@
 //! Stable small-state section identities, framing, and the per-section
 //! digests a checkpoint compares to send only the sections that changed.
 //!
-//! Schema 28 stores the 32 payloads independently. An older store keeps its
-//! small state framed whole until migration splits it. The digests are
-//! change detection: nothing takes one as evidence about its payload (the
-//! store-seam design's trust model).
+//! Schema 28 stores the 32 payloads of its day independently, and schema 37
+//! appends the two weak-reference sections ([`WEAK_SECTIONS_SCHEMA`]). An
+//! older store keeps its small state framed whole until migration splits it.
+//! The digests are change detection: nothing takes one as evidence about its
+//! payload (the store-seam design's trust model).
 use crate::store::StoreError;
 use crate::SnapshotError;
 
@@ -52,12 +53,40 @@ fn checked_section_length(length: usize) -> Result<u32, StoreError> {
     u32::try_from(length).map_err(|_| corrupt("small section length"))
 }
 
-/// Borrow the exact payloads in a current, complete framed small state.
-/// No payload decode/re-encode is permitted at the migration boundary.
-pub fn split_small_state(bytes: &[u8]) -> Result<[&[u8]; SMALL_SECTION_COUNT], StoreError> {
-    let mut sections = [&[][..]; SMALL_SECTION_COUNT];
+/// The first store schema that keeps the small state as sections.
+pub const SECTIONED_SCHEMA: u32 = 28;
+
+/// The store schema that appended [`SmallSection::WeakRefs`] and
+/// [`SmallSection::FinalizationRegistries`]. Every sectioned schema before
+/// it frames exactly the 32 sections schema 28 split, so a store at one of
+/// them is read at its own count ([`section_count_at`]) until the ladder's
+/// 36 → 37 step appends the two.
+pub const WEAK_SECTIONS_SCHEMA: u32 = 37;
+
+/// How many sections a sectioned store at `store_schema` frames.
+pub const fn section_count_at(store_schema: u32) -> usize {
+    if store_schema >= WEAK_SECTIONS_SCHEMA {
+        SMALL_SECTION_COUNT
+    } else {
+        SmallSection::WeakRefs.id() as usize
+    }
+}
+
+/// The payloads the 36 → 37 step appends: the canonical encoding of an
+/// empty `WeakRefs` table and of an empty `FinalizationRegistries` table,
+/// which is what every reader expects of a stored section.
+pub fn weak_sections_empty() -> [Vec<u8>; 2] {
+    [
+        crate::image::encode_weak_refs(&[]),
+        crate::image::encode_finalization_registries(&[]),
+    ]
+}
+
+/// Borrow `count` framed payloads, refusing a short or a long framing.
+fn split_sections(bytes: &[u8], count: usize) -> Result<Vec<&[u8]>, StoreError> {
+    let mut sections = Vec::with_capacity(count);
     let mut rest = bytes;
-    for section in &mut sections {
+    for _ in 0..count {
         let header: [u8; 4] = rest
             .get(..4)
             .ok_or_else(|| corrupt("small section header"))?
@@ -65,15 +94,49 @@ pub fn split_small_state(bytes: &[u8]) -> Result<[&[u8]; SMALL_SECTION_COUNT], S
             .expect("four-byte header");
         rest = &rest[4..];
         let length = u32::from_be_bytes(header) as usize;
-        *section = rest
-            .get(..length)
-            .ok_or_else(|| corrupt("small section payload"))?;
+        sections.push(
+            rest.get(..length)
+                .ok_or_else(|| corrupt("small section payload"))?,
+        );
         rest = &rest[length..];
     }
     if !rest.is_empty() {
         return Err(corrupt("extra small sections"));
     }
     Ok(sections)
+}
+
+/// Borrow the exact payloads in a current, complete framed small state.
+/// No payload decode/re-encode is permitted at the migration boundary.
+pub fn split_small_state(bytes: &[u8]) -> Result<[&[u8]; SMALL_SECTION_COUNT], StoreError> {
+    let sections = split_sections(bytes, SMALL_SECTION_COUNT)?;
+    Ok(std::array::from_fn(|id| sections[id]))
+}
+
+/// Borrow the payloads of a small state framed at the sectioned schema
+/// `store_schema`, which may frame fewer sections than this build keeps
+/// apart: the migration ladder reads a store at an older schema this way
+/// before its appending steps bring the framing up to date.
+pub fn split_small_state_at(bytes: &[u8], store_schema: u32) -> Result<Vec<&[u8]>, StoreError> {
+    split_sections(bytes, section_count_at(store_schema))
+}
+
+/// A current small state as a store at `store_schema` framed it: the
+/// sections that schema did not yet carry are dropped from the tail, which
+/// is exactly what the ladder's appending steps put back. Only a state
+/// whose dropped sections are canonically empty could have come from that
+/// schema, so any other is refused. Fixtures restamp a store with this.
+pub fn small_state_at_schema(small: &[u8], store_schema: u32) -> Result<Vec<u8>, StoreError> {
+    let sections = split_small_state(small)?;
+    let (kept, dropped) = sections.split_at(section_count_at(store_schema));
+    if dropped
+        .iter()
+        .zip(weak_sections_empty().iter())
+        .any(|(found, empty)| *found != empty.as_slice())
+    {
+        return Err(corrupt("small state carries a section its schema lacks"));
+    }
+    frame_sections(kept)
 }
 
 /// A section's digest: SHA-256 over the domain tag, the big-endian section
@@ -90,8 +153,7 @@ fn section_digest(id: u32, bytes: &[u8]) -> [u8; 32] {
     h.finalize()
 }
 
-/// Canonical legacy framing, also used by explicit whole-state export adapters.
-pub fn frame_small_state(sections: &[&[u8]; SMALL_SECTION_COUNT]) -> Result<Vec<u8>, StoreError> {
+fn frame_sections(sections: &[&[u8]]) -> Result<Vec<u8>, StoreError> {
     let mut out = Vec::new();
     for section in sections {
         let length = checked_section_length(section.len())?;
@@ -99,6 +161,20 @@ pub fn frame_small_state(sections: &[&[u8]; SMALL_SECTION_COUNT]) -> Result<Vec<
         out.extend_from_slice(section);
     }
     Ok(out)
+}
+
+/// Canonical legacy framing, also used by explicit whole-state export adapters.
+pub fn frame_small_state(sections: &[&[u8]; SMALL_SECTION_COUNT]) -> Result<Vec<u8>, StoreError> {
+    frame_sections(sections)
+}
+
+/// The framing of a store at the sectioned schema `store_schema`, whose
+/// section count the payloads must match.
+pub fn frame_small_state_at(sections: &[&[u8]], store_schema: u32) -> Result<Vec<u8>, StoreError> {
+    if sections.len() != section_count_at(store_schema) {
+        return Err(corrupt("small section count"));
+    }
+    frame_sections(sections)
 }
 
 /// A sparse update: omission means unchanged; empty bytes replace the payload.
@@ -112,15 +188,16 @@ pub struct SectionUpdate {
 /// Validate identity and completeness before mutating leaves or backend rows.
 /// Backends must additionally admit each payload through its section codec.
 pub fn validate_updates(updates: &[SectionUpdate], initial: bool) -> Result<(), StoreError> {
-    let mut seen = 0u32;
+    let mut seen = 0u64;
     for update in updates {
-        let bit = 1u32 << update.section.id();
+        let bit = 1u64 << update.section.id();
         if seen & bit != 0 {
             return Err(corrupt("duplicate small section"));
         }
         seen |= bit;
     }
-    if initial && seen != u32::MAX {
+    const EVERY_SECTION: u64 = (1u64 << SMALL_SECTION_COUNT) - 1;
+    if initial && seen != EVERY_SECTION {
         return Err(corrupt("missing initial small sections"));
     }
     Ok(())
@@ -280,6 +357,10 @@ mod tests {
             SmallSection::Promises,
             SmallSection::AsyncInstances,
             SmallSection::IndexProperties,
+            // Schema 37 appends the two weak-reference sections; the 32
+            // schema-28 identities above are unchanged.
+            SmallSection::WeakRefs,
+            SmallSection::FinalizationRegistries,
         ];
         assert_eq!(SmallSection::ALL, expected);
         for (id, section) in expected.into_iter().enumerate() {
@@ -315,8 +396,83 @@ mod tests {
             assert_eq!(section.id(), id as u32);
             assert_eq!(SmallSection::from_id(id as u32).unwrap(), *section);
         }
-        assert!(SmallSection::from_id(32).is_err());
+        assert!(SmallSection::from_id(SMALL_SECTION_COUNT as u32).is_err());
         assert!(SmallSection::from_id(u32::MAX).is_err());
+    }
+
+    /// A store at a sectioned schema before 37 frames the 32 sections of
+    /// schema 28: it splits and frames at that count, the current count
+    /// refuses it, and a fixture restamps a current state to it by dropping
+    /// the two canonically empty weak-reference sections, which nothing
+    /// else may stand in for.
+    #[test]
+    fn older_sectioned_schemas_frame_fewer_sections() {
+        assert_eq!(section_count_at(SECTIONED_SCHEMA), 32);
+        assert_eq!(section_count_at(WEAK_SECTIONS_SCHEMA - 1), 32);
+        assert_eq!(section_count_at(WEAK_SECTIONS_SCHEMA), SMALL_SECTION_COUNT);
+        assert_eq!(section_count_at(u32::MAX), SMALL_SECTION_COUNT);
+        let [weak, registries] = weak_sections_empty();
+        assert_eq!(weak, [0, 0, 0, 0]);
+        assert_eq!(registries, [0, 0, 0, 0]);
+
+        let mut payloads = sample_payloads();
+        payloads[SmallSection::WeakRefs.id() as usize] = weak.clone();
+        payloads[SmallSection::FinalizationRegistries.id() as usize] = registries.clone();
+        let refs: [&[u8]; SMALL_SECTION_COUNT] = std::array::from_fn(|id| payloads[id].as_slice());
+        let current = frame_small_state(&refs).unwrap();
+        let older = small_state_at_schema(&current, WEAK_SECTIONS_SCHEMA - 1).unwrap();
+        assert_eq!(&current[..older.len()], &older[..]);
+        assert_eq!(current.len() - older.len(), 16);
+        assert_eq!(
+            small_state_at_schema(&current, SECTIONED_SCHEMA).unwrap(),
+            older
+        );
+        assert_eq!(
+            small_state_at_schema(&current, WEAK_SECTIONS_SCHEMA).unwrap(),
+            current
+        );
+        assert_eq!(
+            split_small_state_at(&older, WEAK_SECTIONS_SCHEMA - 1).unwrap(),
+            &refs[..32]
+        );
+        assert_eq!(
+            frame_small_state_at(&refs[..32], WEAK_SECTIONS_SCHEMA - 1).unwrap(),
+            older
+        );
+        assert_eq!(
+            frame_small_state_at(&refs, WEAK_SECTIONS_SCHEMA).unwrap(),
+            current
+        );
+        assert_eq!(
+            frame_small_state_at(&refs, WEAK_SECTIONS_SCHEMA - 1).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt("small section count"))
+        );
+        assert_eq!(
+            frame_small_state_at(&refs[..32], WEAK_SECTIONS_SCHEMA).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt("small section count"))
+        );
+        assert_eq!(
+            split_small_state(&older).unwrap_err(),
+            corrupt("small section header")
+        );
+        assert_eq!(
+            split_small_state_at(&current, WEAK_SECTIONS_SCHEMA - 1).unwrap_err(),
+            corrupt("extra small sections")
+        );
+
+        let mut held = payloads.clone();
+        held[SmallSection::WeakRefs.id() as usize] = vec![0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3];
+        let held_refs: [&[u8]; SMALL_SECTION_COUNT] = std::array::from_fn(|id| held[id].as_slice());
+        assert_eq!(
+            small_state_at_schema(
+                &frame_small_state(&held_refs).unwrap(),
+                WEAK_SECTIONS_SCHEMA - 1
+            )
+            .unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt(
+                "small state carries a section its schema lacks"
+            ))
+        );
     }
 
     #[test]
@@ -336,7 +492,7 @@ mod tests {
     #[test]
     fn malformed_sections_have_specific_refusals() {
         assert!(matches!(
-            SmallSection::from_id(32),
+            SmallSection::from_id(SMALL_SECTION_COUNT as u32),
             Err(StoreError::Snapshot(crate::format::SnapshotError::Corrupt(
                 "small section id"
             )))

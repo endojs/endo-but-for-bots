@@ -13,43 +13,44 @@ macro_rules! define_snapshot_sections {
             $($name = $id,)*
         }
         // Dirty masks have one bit per semantic section. Growing the roster
-        // requires widening the tracker before introducing another identity.
+        // past the mask width requires widening the tracker before
+        // introducing another identity.
         const _: () = {
-            $(assert!($id < u32::BITS);)*
+            $(assert!($id < u64::BITS);)*
         };
     };
 }
 crate::snapshot_sections!(define_snapshot_sections);
 impl SnapshotSection {
-    pub(crate) const fn mask(self) -> u32 {
-        1u32 << self as u8
+    pub(crate) const fn mask(self) -> u64 {
+        1u64 << self as u8
     }
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct SnapshotDirty(u32);
+pub struct SnapshotDirty(u64);
 impl SnapshotDirty {
     pub fn contains(self, section: SnapshotSection) -> bool {
         self.0 & section.mask() != 0
     }
     pub const fn all() -> Self {
-        Self(u32::MAX)
+        Self(u64::MAX)
     }
 }
 
 #[derive(Clone)]
-pub(crate) struct SnapshotDirt(Rc<Cell<u32>>);
+pub(crate) struct SnapshotDirt(Rc<Cell<u64>>);
 impl Default for SnapshotDirt {
     fn default() -> Self {
-        Self(Rc::new(Cell::new(u32::MAX)))
+        Self(Rc::new(Cell::new(u64::MAX)))
     }
 }
 impl SnapshotDirt {
-    pub(crate) fn mark(&self, mask: u32) {
+    pub(crate) fn mark(&self, mask: u64) {
         self.0.set(self.0.get() | mask);
     }
     pub(crate) fn mark_all(&self) {
-        self.0.set(u32::MAX);
+        self.0.set(u64::MAX);
     }
     pub(crate) fn clear(&self) {
         self.0.set(0);
@@ -65,10 +66,10 @@ impl SnapshotDirt {
 pub(crate) struct Tracked<T> {
     value: T,
     dirt: SnapshotDirt,
-    mask: u32,
+    mask: u64,
 }
 impl<T> Tracked<T> {
-    pub(crate) fn new(value: T, dirt: SnapshotDirt, mask: u32) -> Self {
+    pub(crate) fn new(value: T, dirt: SnapshotDirt, mask: u64) -> Self {
         dirt.mark(mask);
         Self { value, dirt, mask }
     }
@@ -173,7 +174,7 @@ impl ArenaDirt {
     pub(crate) fn clear(&self) {
         self.0.set(0);
     }
-    pub(crate) fn sections(&self, same_arena: bool) -> u32 {
+    pub(crate) fn sections(&self, same_arena: bool) -> u64 {
         let bits = if same_arena { self.0.get() } else { 3 };
         let mut mask = 0;
         if bits & 1 != 0 {

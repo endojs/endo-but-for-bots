@@ -20,6 +20,7 @@ use ironhorse_snapshot::store::{
     migrate_store, validate_store, validate_store_content, HeapStore, StoreError, StoreManifest,
     STORE_SCHEMA_VERSION,
 };
+use ironhorse_snapshot::store_sections::small_state_at_schema;
 use ironhorse_snapshot::{Signature, SnapshotError};
 use ironhorse_store_sqlite::SqliteHeapStore;
 use ironhorse_vm::{parse_symbols, Interp};
@@ -237,11 +238,15 @@ fn stage1_history_at_schema_35_migrates_and_resumes() {
     write_stage1_sqlite_store(&path);
     let mut store = SqliteHeapStore::open(&path).unwrap();
     let current = store.manifest().unwrap();
-    let small = store.read_small_state().unwrap();
     let old = StoreManifest {
         store_schema: 35,
         ..current.clone()
     };
+    // Schema 35 framed the 32 sections of its day, bounded as such by its
+    // section table; the migration widens the table for the two schema 37
+    // appends.
+    let small =
+        small_state_at_schema(&store.read_small_state().unwrap(), old.store_schema).unwrap();
     store.replace_for_migration(&current, &old, &small).unwrap();
     store.close().unwrap();
     rusqlite::Connection::open(&path)
