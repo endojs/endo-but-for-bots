@@ -69,3 +69,35 @@ fn promise_with_resolvers() {
         "a1,b3"
     );
 }
+
+#[test]
+fn promise_try() {
+    check(&[
+        (
+            "var p = Promise.try(function (a, b) { return a + b; }, 1, 2); [p instanceof Promise, Promise.try.name, Promise.try.length].join()",
+            "true,try,1",
+        ),
+        (
+            "var r = []; try { Promise.try.call(undefined, function () {}) } catch (e) { r.push(e.name) } try { Promise.try.call({}, function () {}) } catch (e) { r.push(e.name) } r.push(Promise.try() instanceof Promise); r.join()",
+            "TypeError,TypeError,true",
+        ),
+        // The callback runs synchronously, with `this` undefined.
+        (
+            "var seen = 'unset'; Promise.try(function () { 'use strict'; seen = this; }); String(seen)",
+            "undefined",
+        ),
+        // The specification; XS rejects with what resolve threw
+        // (`xs_departures.rs`).
+        (
+            "var log = []; function C(ex) { ex(function (v) { log.push('res' + v); throw new Error('boom'); }, function (e) { log.push('rej' + e); }); } var out; try { Promise.try.call(C, function () { return 1; }); out = 'returned'; } catch (e) { out = 'threw ' + e.message; } out + '|' + log.join()",
+            "threw boom|res1",
+        ),
+    ]);
+    assert_eq!(
+        run_cranks(&[
+            "var log = []; Promise.try(function (x) { return x * 2; }, 21).then(function (v) { log.push('ok' + v); }); Promise.try(function () { throw 'no'; }).then(null, function (e) { log.push('err' + e); });",
+            "log.join()",
+        ]),
+        "ok42,errno"
+    );
+}
