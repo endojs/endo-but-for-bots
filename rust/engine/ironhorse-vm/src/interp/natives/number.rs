@@ -135,6 +135,14 @@ impl Interp {
                 None => Slot::number(f64::NAN),
                 Some(s) => math_to_integer(self.to_number_f64(code, s)?.trunc()),
             },
+            // `fx_Math_f16round`: round to the nearest binary16 and widen back.
+            F16round => match self.math_arg(base, argc, 0) {
+                None => Slot::number(f64::NAN),
+                Some(s) => {
+                    let n = self.to_number_f64(code, s)?;
+                    Slot::number(f16_bits_to_f64(f64_to_f16_bits(n)))
+                }
+            },
             // `fx_Math_fround`: an integer passes through; otherwise round to
             // the nearest `f32` and widen back.
             Fround => match self.math_arg(base, argc, 0) {

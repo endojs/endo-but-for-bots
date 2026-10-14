@@ -751,6 +751,20 @@ const GAPS: &[Row] = &[
         v8: "no throw",
         why: "a lazy Iterator helper suspended at a yield closes its underlying iterator while executing (GeneratorResumeAbrupt), so a return() reached from that close throws; map, filter, take, drop and flatMap latch done first and answer it, as V8 does. Iterator.concat already refuses",
     },
+    Row {
+        program: "var u = new Uint16Array([0x7c01, 0x3c00, 0xfe00, 0x7fff]); new Float16Array(u.buffer).sort(); Array.from(u, function (x) { return x.toString(16); }).join()",
+        ironhorse: "3c00,7e00,7e00,7e00",
+        xs: "3c00,7c01,fe00,7fff",
+        v8: "throw ReferenceError: Float16Array is not defined",
+        why: "%TypedArray%.prototype.sort decodes, sorts and re-encodes the elements, so every NaN is written back as the canonical 0x7E00 (Float32Array and Float64Array already did the same); XS sorts the raw elements and keeps each NaN's bits, as V8 does for Float32Array",
+    },
+    Row {
+        program: "var w = new Uint32Array([0x7f800001, 0x3f800000, 0xffc00000]); new Float32Array(w.buffer).sort(); Array.from(w, function (x) { return x.toString(16); }).join()",
+        ironhorse: "3f800000,7fc00000,7fc00000",
+        xs: "3f800000,7f800001,ffc00000",
+        v8: "3f800000,7f800001,ffc00000",
+        why: "%TypedArray%.prototype.sort writes a Float32Array's NaNs back as the canonical 0x7FC00000, and a Float64Array's as 0x7FF8000000000000, through the same re-encoding; XS and V8 keep each NaN's bits",
+    },
 ];
 
 /// The engine's answer, as the rows spell it: the completion value, `throw`

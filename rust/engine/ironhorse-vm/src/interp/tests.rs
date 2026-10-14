@@ -4511,3 +4511,27 @@ fn a_walk_that_throws_past_in_place_frames_restores_only_its_own_charge() {
         }
     }
 }
+
+/// Every binary16 value converts to its double and back to its own bits, and
+/// a double exactly between two neighbors rounds to the one with an even
+/// last bit, so `Float16Array`, `DataView` and `Math.f16round` round once,
+/// ties to even.
+#[test]
+fn binary16_conversions_round_trip_and_round_ties_to_even() {
+    use crate::interp::{f16_bits_to_f64, f64_to_f16_bits};
+    for bits in 0..=u16::MAX {
+        let value = f16_bits_to_f64(bits);
+        if value.is_nan() {
+            assert_eq!(f64_to_f16_bits(value), 0x7E00, "{bits:#06x}");
+            continue;
+        }
+        assert_eq!(f64_to_f16_bits(value), bits, "{bits:#06x}");
+    }
+    for bits in 0..0x7C00u16 {
+        let (low, high) = (f16_bits_to_f64(bits), f16_bits_to_f64(bits + 1));
+        let middle = (low + high) / 2.0;
+        let even = if bits & 1 == 0 { bits } else { bits + 1 };
+        assert_eq!(f64_to_f16_bits(middle), even, "{bits:#06x}");
+        assert_eq!(f64_to_f16_bits(-middle), even | 0x8000, "-{bits:#06x}");
+    }
+}

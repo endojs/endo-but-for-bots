@@ -2330,8 +2330,9 @@ impl Interp {
                 self.catchable_type_error_msg("typedArray: not a TypedArray instance".into())
             );
         };
-        // Float32/Float64 (2/3) and Uint8Clamped (10) are not integer views.
-        if matches!(ta.kind, 2 | 3 | 10) {
+        // Float32/Float64 (2/3), Uint8Clamped (10) and Float16 (11) are not
+        // integer views.
+        if matches!(ta.kind, 2 | 3 | 10 | 11) {
             let name = TYPED_ARRAY_TYPES[ta.kind as usize].name;
             return Err(self.catchable_type_error_msg(format!("typedArray: {name} instance")));
         }

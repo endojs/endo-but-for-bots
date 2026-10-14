@@ -293,3 +293,33 @@ fn uint8_array_base64_and_hex() {
         ),
     ]);
 }
+
+#[test]
+fn float16() {
+    check(&[
+        (
+            "[typeof Float16Array, Float16Array.BYTES_PER_ELEMENT, Float16Array.prototype.BYTES_PER_ELEMENT, Object.getPrototypeOf(Float16Array) === Object.getPrototypeOf(Int8Array), Object.prototype.toString.call(new Float16Array(1)), Math.f16round.name, Math.f16round.length, DataView.prototype.getFloat16.length, DataView.prototype.setFloat16.length].join()",
+            "function,2,2,true,[object Float16Array],f16round,1,1,2",
+        ),
+        // Ties round to even, once, from the double; the largest finite
+        // binary16 is 65504, and half its last place more is Infinity.
+        (
+            "[Math.f16round(0.1), Math.f16round(65519.99), Math.f16round(65520), Math.f16round(5.960464477539063e-8), Math.f16round(2.980232238769531e-8), Math.f16round(2.9802322387695315e-8), Math.f16round(1.00048828125), Math.f16round(1.00146484375), Math.f16round(), Object.is(Math.f16round(-0), -0)].join()",
+            "0.0999755859375,65504,Infinity,5.960464477539063e-8,0,0,1,1.001953125,NaN,true",
+        ),
+        (
+            "var d = new DataView(new ArrayBuffer(6)); d.setFloat16(0, 1.5); d.setFloat16(2, -2.75, true); d.setFloat16(4, NaN); [d.getUint16(0), d.getUint16(2, true), d.getFloat16(0), d.getFloat16(2, true), d.getUint16(4)].join()",
+            "15872,49536,1.5,-2.75,32256",
+        ),
+        (
+            "var f = new Float16Array(new Uint16Array([0x7c00, 0xfc00, 0x0001, 0x8000, 0x3c00, 0x7bff, 0x03ff]).buffer); [Array.from(f).map(String).join(), new Float16Array([5, NaN, -1, 2]).sort().join()].join('|')",
+            "Infinity,-Infinity,5.960464477539063e-8,0,1,65504,0.00006097555160522461|-1,2,5,NaN",
+        ),
+        // Not an integer view, so every Atomics operation refuses it before
+        // coercing its index or value.
+        (
+            "var f = new Float16Array(4); ['add', 'and', 'compareExchange', 'exchange', 'load', 'or', 'store', 'sub', 'xor'].map(function (m) { try { Atomics[m](f, { valueOf() { throw 'index' } }, 1, 1); return 'ok'; } catch (e) { return typeof e === 'object' ? e.constructor.name : e; } }).join()",
+            "TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,TypeError",
+        ),
+    ]);
+}
