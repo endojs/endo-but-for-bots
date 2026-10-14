@@ -84,8 +84,10 @@ line number, so a panic on one target is a divergence like any other.
 A corpus case that traps under Wasmtime is expected when lane A's expected-trap list names
 it, at the same stack.
 CI runs the fast shard on every engine change (`cross-target-ironhorse` in
-`.github/workflows/ci.yml`); it takes about four and a half minutes on a GitHub runner, a
-third of it in one `b4-flat.js` program.
+`.github/workflows/ci.yml`).
+On a GitHub runner the comparison has taken two and a half to four and a half minutes, and
+the job about five to seven with the probes' two builds; the slowest program, a `b4-flat.js`
+one, takes over a minute of the comparison by itself.
 The slow shard takes about eleven minutes and needs about 10 GB of memory, most of it for
 the native side of the `Intl.Segmenter` repro.
 
