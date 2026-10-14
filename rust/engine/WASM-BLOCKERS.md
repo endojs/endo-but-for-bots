@@ -909,6 +909,47 @@ What the job does not cover:
   Only the snapshot's two overflow refusals run there.
 - **The legacy EH encoding and the default features are not built.**
 
+**Engine test suites on `wasm32-wasip1` (2026-10-14, report only).**
+The tests of four crates were built with the recipe (release, with `ironhorse-vm`'s `consensus`
+and `store-integrity`, the worker's features) and run one binary at a time under the Wasmtime 49
+CLI: `wasmtime run -W exceptions=y -W max-wasm-stack=8388608`, `--test-threads=1`, and no
+preopened directories.
+Building the 275 test binaries took 355 s on 4 cores.
+No binary trapped or timed out, so every test has a verdict, and nothing was gated or changed:
+
+| Crate | Test binaries (with a failure) | Pass | Fail | Ignored |
+|---|---|---:|---:|---:|
+| `ironhorse-compile` | 27 (2) | 216 | 9 | 5 |
+| `ironhorse-regexp` | 13 (2) | 69 | 3 | 0 |
+| `ironhorse-snapshot` | 71 (30) | 528 | 147 | 25 |
+| `ironhorse-vm` | 164 (27) | 1,023 | 210 | 18 |
+
+Every failure falls in one of four classes, by its last panic:
+
+| Class | compile | regexp | snapshot | vm |
+|---|---:|---:|---:|---:|
+| Threads: the test runs its body on a spawned thread with a native-size stack, and wasip1 has none | 8 | 3 | 3 | 173 |
+| Process id: a scratch directory, `FileStore` or CAS temporary is named with `std::process::id()` | 0 | 0 | 140 | 0 |
+| A file without a preopen: source scans, fixtures and corpus directories read by host path | 1 | 0 | 2 | 37 |
+| Error values differ by width (B7): `image.rs`'s two over-allocation tests expect the native message | 0 | 0 | 2 | 0 |
+
+The thread class includes all of `native_recursion_budget` and the suites that wrap their body
+in `NATIVE_STACK_BYTES`.
+The file class includes 14 `gc_visitation_registry` tests that fail on a `LazyLock` poisoned by
+the first failed source read.
+Apart from the width row, no failure is a wrong result or computron count.
+`golden_computrons`, `math_determinism`, `math_provider_comparison`,
+`parse_meter_determinism` and the RegExp `compile_golden` pass, and so do the tests that catch
+panics, which rely on the rebuilt std's unwinding.
+
+For a follow-up deciding what to gate: the 185 binaries without a failure (21, 11, 30 and 123)
+pass as they are.
+The thread class needs those tests to run inline on targets without threads, taking their stack
+from `max-wasm-stack`.
+The process-id class needs scratch names that do not read the process id.
+The file class needs preopened directories, which were not tried, or is native-only by nature,
+like the source scans.
+
 ## Browser-specific considerations
 
 Everything above applies in a browser.
