@@ -1659,6 +1659,7 @@ impl Interp {
         self.create_math();
         self.create_string_proto();
         self.create_number_globals();
+        self.create_uri_globals();
         self.create_date();
         self.create_json();
         self.create_atomics();
@@ -2500,6 +2501,18 @@ impl Interp {
                     self.proto_methods.push((ctor, name, mf));
                 }
             }
+        }
+    }
+
+    fn create_uri_globals(&mut self) {
+        for (name, method) in [
+            ("encodeURI", NativeMethod::UriEncode),
+            ("encodeURIComponent", NativeMethod::UriEncodeComponent),
+            ("decodeURI", NativeMethod::UriDecode),
+            ("decodeURIComponent", NativeMethod::UriDecodeComponent),
+        ] {
+            let function = self.alloc_named_method(method, name, 1);
+            self.intrinsics.insert(name, function);
         }
     }
 

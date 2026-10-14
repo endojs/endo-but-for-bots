@@ -1052,6 +1052,11 @@ pub enum NativeMethod {
     /// (`fx_FinalizationRegistry_prototype_unregister`): drop every cell
     /// whose token is `token`; `true` when any was.
     FinalizationRegistryUnregister,
+    /// ECMAScript URI percent encoding and decoding globals.
+    UriEncode,
+    UriEncodeComponent,
+    UriDecode,
+    UriDecodeComponent,
 }
 
 /// One intrinsic (native) function ironhorse models. The variant is the

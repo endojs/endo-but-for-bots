@@ -2544,6 +2544,10 @@ impl Interp {
             | NativeMethod::GlobalParseFloat
             | NativeMethod::GlobalIsNaN
             | NativeMethod::GlobalIsFinite
+            | NativeMethod::UriEncode
+            | NativeMethod::UriEncodeComponent
+            | NativeMethod::UriDecode
+            | NativeMethod::UriDecodeComponent
             | NativeMethod::JsonStringify
             | NativeMethod::JsonParse
             | NativeMethod::ErrorStackGetter
@@ -7665,6 +7669,10 @@ impl Interp {
             | NativeMethod::GlobalParseFloat
             | NativeMethod::GlobalIsNaN
             | NativeMethod::GlobalIsFinite => self.call_number(m, this, base, argc, code)?,
+            NativeMethod::UriEncode
+            | NativeMethod::UriEncodeComponent
+            | NativeMethod::UriDecode
+            | NativeMethod::UriDecodeComponent => self.call_uri(m, base, argc, code)?,
             NativeMethod::JsonStringify | NativeMethod::JsonParse => {
                 self.call_json(m, base, argc, code)?
             }
