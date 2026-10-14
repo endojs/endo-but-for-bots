@@ -1,6 +1,6 @@
 /* eslint-disable */
 import { ONE_N } from '@endo/nat';
-import { makeSturdyRef } from '@endo/sturdyref';
+import { makeParcel } from '@endo/parcel';
 import { expectTypeOf } from 'expect-type';
 import { Far } from './make-far.js';
 import { passStyleOf } from './passStyleOf.js';
@@ -14,7 +14,7 @@ import type {
   Passable,
   PassableCap,
   PassStyle,
-  SturdyRefObject,
+  ParcelObject,
 } from './types.js';
 import { PASS_STYLE } from './passStyle-helpers.js';
 import { passableSymbolForName } from './symbol.js';
@@ -60,12 +60,10 @@ expectTypeOf(
   passStyleOf({ [PASS_STYLE]: 'arbitrary' } as const),
 ).toEqualTypeOf<'copyRecord'>();
 expectTypeOf(passStyleOf(remotable)).toEqualTypeOf<'remotable'>();
-declare const sturdyRef: SturdyRefObject;
-expectTypeOf(passStyleOf(sturdyRef)).toEqualTypeOf<'sturdyRef'>();
-// SturdyRefObject restates @endo/sturdyref's SturdyRef; keep them in step.
-expectTypeOf<
-  ReturnType<typeof makeSturdyRef>
->().toEqualTypeOf<SturdyRefObject>();
+declare const parcel: ParcelObject;
+expectTypeOf(passStyleOf(parcel)).toEqualTypeOf<'parcel'>();
+// ParcelObject restates @endo/parcel's Parcel; keep them in step.
+expectTypeOf<ReturnType<typeof makeParcel>>().toEqualTypeOf<ParcelObject>();
 expectTypeOf(passStyleOf(someUnknown)).toEqualTypeOf<PassStyle>();
 
 const expectPassable = (val: Passable) => {};
@@ -81,9 +79,9 @@ expectPassable(fn());
 
 expectPassable({});
 expectPassable({ a: {} });
-expectPassable(sturdyRef);
-expectPassable({ ref: sturdyRef });
-expectPassable([sturdyRef]);
+expectPassable(parcel);
+expectPassable({ ref: parcel });
+expectPassable([parcel]);
 // @ts-expect-error not passable
 expectPassable(fn);
 // FIXME promise for a non-Passable is not Passable
