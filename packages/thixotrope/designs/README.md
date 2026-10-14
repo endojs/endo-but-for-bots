@@ -13,6 +13,9 @@ the implementation, and which of them are done: the installation registry in a v
 own, many workspaces per daemon, resources bound to workers, alarms and the control socket as native
 resources, and where the package can reuse its own building blocks and other Endo packages instead
 of a second implementation.
+[Production cost model](production-cost-model.md) records the changes proposed after an operator's
+five days in production: local fixes, structural changes, and a separate tier of protocol ideas
+that are unexplored and unvalidated.
 Two notes that argued for the manager and adapter model before it was built are kept under
 [archive](archive/): [what a host service had to write](archive/host-service-template.md) and
 [manual persistence vats](archive/manual-persistence-vats.md).
