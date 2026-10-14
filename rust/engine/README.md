@@ -232,8 +232,8 @@ an answer fails the row until the record is updated.
 Its `GAPS` table records the opposite: programs Ironhorse still answers wrongly
 where XS answers rightly, including guest-reachable `NotImplemented` halts.
 Fixing one fails its row, so the record shrinks as the gaps close.
-`ironhorse-262/tests/for_in_nullish_metering.rs` keeps the same kind of record
-for the for-in shapes still metered a computron off XS.
+No such record is kept for computrons: XS-computron parity is a non-goal (see
+"Metering objective"), so the oracle gates results only.
 
 ## Building the oracle: the `c/moddable` pin
 

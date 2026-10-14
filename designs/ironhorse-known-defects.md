@@ -19,8 +19,8 @@ which commits closed which findings and those claims had never been verified.
 Every behavioural claim below was reproduced with `ironhorse_262::dual_run`,
 which runs the same program on IronHorse and on the pinned XS 9.0 oracle and
 compares completion values and the raw 16.16 meter.
-Metering claims are decided by `computrons_agree` and the raw meter, never by
-result agreement alone.
+Metering claims were measured as deltas from XS's raw meter, the review's
+instrument; the doctrine note below says how to read them.
 
 **Doctrine note (2026-09-15).** The XS oracle was this review's *measurement
 instrument*, so the metering entries below quantify deltas against XS. Read
