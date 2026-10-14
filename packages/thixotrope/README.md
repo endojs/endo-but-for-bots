@@ -130,6 +130,15 @@ to lose; `workspace.json` is the table of names the host serves.
 The hub, the peers socket, the registry of installations, the clock and the control socket are the
 daemon's, shared by every workspace.
 A service manager can restart the foreground process; clients never start it implicitly.
+Address a stop to the supervisor alone: under systemd, `KillMode=mixed`, so that SIGTERM reaches
+the foreground process and only the final SIGKILL reaches the group.
+The supervisor stops its workers and then releases the state directory's lease, which a helper
+process holds; the helper ignores SIGTERM, SIGINT and SIGHUP and exits when the supervisor
+releases it, so a stop sent to the whole group does not read as a lost lease while the supervisor
+is still writing.
+The control socket is served last, after the supervisor has restored its workers, so a client that
+finds no socket (`ECONNREFUSED`) while the supervisor is starting should back off and retry rather
+than report it dead.
 
 `attach` evaluates one JavaScript line at a time in the same persisted workspace vat.
 Use `globalThis.name = value` for bindings shared between evaluations.
@@ -206,6 +215,9 @@ experiments; it is not a measure of physical heap reclamation.
 for delivery (including its commit cranks), snapshot creation, and engine startup/wake.
 These are coarse measurements, not a latency benchmark or isolated fsync timings.
 The idle sleep delay is 30 seconds; `stop`, SIGINT, and SIGTERM put workers to sleep before exit.
+A worker that never idles snapshots anyway once 256 deliveries have accrued since its last
+snapshot (`snapshotEveryDeliveries`), so its journal, and the replay a restart needs, stay
+bounded.
 A quarantined application or native manager vat is cleared by `thix remove` of its installation
 and reinstalled; a quarantined workspace vat remains inspectable with `status`, and this version
 offers no command to repair it.
@@ -1116,10 +1128,13 @@ settle normally across restarts.
 
 ## API
 
-`makeThixotropeDaemon(powers, { store, engine, codec, makeNetlayer, resources?, idleSleepMs?, verbose? })`
+`makeThixotropeDaemon(powers, { store, engine, codec, makeNetlayer, resources?, idleSleepMs?, snapshotEveryDeliveries?, verbose? })`
 resolves to a daemon (`idleSleepMs` puts to sleep any worker that has seen no
 deliveries for that long; workers run to quiescence per delivery and
-have no timer queue, so frame silence is exact dormancy):
+have no timer queue, so frame silence is exact dormancy;
+`snapshotEveryDeliveries` snapshots an awake worker once that many
+deliveries have accrued since its last snapshot, so a worker that never
+idles still bounds its journal):
 
 - `createWorker({ debugLabel?, ephemeral?, allocationKey? })` — makes a
   fresh worker under a generated unguessable id, or finds the one made
@@ -1172,7 +1187,12 @@ own resolver back), and pipelining onto an undeposited gift breaks
 rather than queueing.
 Third-party gifts otherwise work in both hub roles, sturdyrefs pass
 through as opaque values, pending answers transfer across sessions,
-and idle sleep is available via `idleSleepMs`.
+and idle sleep is available via `idleSleepMs`, with
+`snapshotEveryDeliveries` for workers that never idle.
+Every frame a host sends a worker is one delivery, journaled and
+delivered in order, so a host handing a worker a large endowment, such
+as a catalog of hundreds of methods, should send it as one message
+rather than as a stream of small frames.
 
 ## Design
 
