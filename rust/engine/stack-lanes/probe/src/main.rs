@@ -12,7 +12,9 @@
 //! ih-stack-probe source [--compile-only] [--eval-compiler]  # the program on standard input
 //! ```
 //!
-//! Every run command also takes `--stack`, `--digest` and `--meter-trace`.
+//! Every run command also takes `--stack`, `--digest` and `--meter-trace`,
+//! and `--chunk-ceiling=<bytes>` and `--slot-ceiling=<slots>`, which set the
+//! machine's allocation ceilings before the run (the defaults otherwise).
 //!
 //! Natively, a case runs on a thread of the documented contract stack
 //! (`NATIVE_STACK_BYTES`), as the recursion-budget tests do. The eval bridge
@@ -30,7 +32,8 @@
 //! records the computron count at each check it is shown, and the line
 //! carries the number of checks and a hash of the counts, so a check that
 //! moves shows even when the total does not. `differential.py`, which
-//! compares two builds, reads both.
+//! compares two builds, and `cross_target.py`, which compares the native and
+//! wasm32 builds of one tree, read both.
 
 #[path = "../../cases.rs"]
 mod cases;
@@ -156,12 +159,50 @@ struct Extras {
     meter_trace: bool,
 }
 
+/// The allocation ceilings `--chunk-ceiling=<bytes>` and
+/// `--slot-ceiling=<slots>` ask for; `None` keeps the machine's default.
+/// Some of the cross-target repros of `WASM-BLOCKERS.md` B7 need a ceiling
+/// an embedder could raise.
+#[derive(Clone, Copy, Default)]
+struct Ceilings {
+    chunk: Option<usize>,
+    slot: Option<u32>,
+}
+
+/// The value of a `--<name>=<n>` argument, if given; a value that does not
+/// parse is a usage error.
+fn numeric_flag<T: std::str::FromStr>(args: &[String], name: &str) -> Option<T> {
+    let prefix = format!("--{name}=");
+    let value = args.iter().find_map(|a| a.strip_prefix(prefix.as_str()))?;
+    match value.parse() {
+        Ok(n) => Some(n),
+        Err(_) => {
+            eprintln!("--{name} takes a number this target can hold, not {value:?}");
+            std::process::exit(2);
+        }
+    }
+}
+
+/// Set the ceilings a run asked for, after the intrinsics are linked, so
+/// that a ceiling below what linking takes halts the run (`HeapExhausted`)
+/// instead of the probe. Kept out of line so that [`run`]'s frame does not
+/// grow.
+#[inline(never)]
+fn set_ceilings(machine: &mut ironhorse_vm::Interp, ceilings: Ceilings) {
+    if let Some(chunk) = ceilings.chunk {
+        machine.set_chunk_ceiling(chunk);
+    }
+    if let Some(slot) = ceilings.slot {
+        machine.set_slot_ceiling(slot);
+    }
+}
+
 /// With `--stack`, each stage's native high-water mark is appended as
 /// ` stack=<bytes>` (0 on wasm, where the host paints the shadow stack); with
 /// `--digest`, the compile's fingerprint ([`digest`]), computed after the
 /// run so it never stands in for the run's own outcome; with
 /// `--meter-trace`, the checks the meter host saw ([`arm_meter_trace`]).
-fn run(source: &str, compile_only: bool, eval_compiler: bool, extras: Extras) {
+fn run(source: &str, compile_only: bool, eval_compiler: bool, extras: Extras, ceilings: Ceilings) {
     let (compiled, compile_bytes) = paint::stage(|| compile(source));
     let suffix = |bytes: usize| {
         let painted = if extras.stack {
@@ -196,6 +237,7 @@ fn run(source: &str, compile_only: bool, eval_compiler: bool, extras: Extras) {
     if eval_compiler {
         machine.set_source_compiler(std::rc::Rc::new(ironhorse_runtime::IronhorseSourceCompiler));
     }
+    set_ceilings(&mut machine, ceilings);
     let trace = extras.meter_trace.then(|| arm_meter_trace(&mut machine));
     let (out, run_bytes) = paint::stage(|| machine.run(&bytecode).host_coerced());
     let traced = match trace {
@@ -269,6 +311,10 @@ fn dispatch(args: Vec<String>) {
         fingerprint: args.iter().any(|a| a == "--digest"),
         meter_trace: args.iter().any(|a| a == "--meter-trace"),
     };
+    let ceilings = Ceilings {
+        chunk: numeric_flag(&args, "chunk-ceiling"),
+        slot: numeric_flag(&args, "slot-ceiling"),
+    };
     match args.get(1).map(String::as_str) {
         Some("dump-cases") => dump_cases(),
         Some("case") => {
@@ -279,6 +325,7 @@ fn dispatch(args: Vec<String>) {
                     compile_only || !case.run,
                     case.eval_compiler,
                     extras,
+                    ceilings,
                 ),
                 None => {
                     eprintln!("unknown case: {name}");
@@ -299,9 +346,13 @@ fn dispatch(args: Vec<String>) {
                 _ => None,
             };
             match generated {
-                Some((source, needs_eval)) => {
-                    run(&source, compile_only || kind == "chain", needs_eval, extras)
-                }
+                Some((source, needs_eval)) => run(
+                    &source,
+                    compile_only || kind == "chain",
+                    needs_eval,
+                    extras,
+                    ceilings,
+                ),
                 None => {
                     eprintln!("unknown family: {kind} {name}");
                     std::process::exit(2);
@@ -318,14 +369,15 @@ fn dispatch(args: Vec<String>) {
             std::io::stdin()
                 .read_to_string(&mut source)
                 .expect("read the program from standard input");
-            run(&source, compile_only, eval_compiler, extras);
+            run(&source, compile_only, eval_compiler, extras, ceilings);
         }
         _ => {
             eprintln!(
                 "usage: ih-stack-probe dump-cases | case <name> [--compile-only] | \
                  family <heavy|walker|chain> <name> <n> | family-source <kind> <name> <n> | \
                  source [--compile-only] [--eval-compiler] \
-                 (a run with --stack, --digest or --meter-trace)"
+                 (a run with --stack, --digest, --meter-trace, \
+                 --chunk-ceiling=<bytes> or --slot-ceiling=<slots>)"
             );
             std::process::exit(2);
         }
