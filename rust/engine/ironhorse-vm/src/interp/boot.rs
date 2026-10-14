@@ -1465,6 +1465,29 @@ impl Interp {
             let mf = self.alloc_named_method(m, name, arity);
             self.proto_methods.push((object_proto, name, mf));
         }
+        // Annex B's `%Object.prototype%` members (B.2.2), as XS's
+        // `fxBuildObject` installs them: the non-enumerable, configurable
+        // `__proto__` accessor and the four legacy accessor helpers.
+        let proto_getter =
+            self.alloc_named_method(NativeMethod::ObjectProtoGetter, "get __proto__", 0);
+        let proto_setter =
+            self.alloc_named_method(NativeMethod::ObjectProtoSetter, "set __proto__", 1);
+        self.proto_accessors.push((
+            object_proto,
+            ProtoAccessorKey::String("__proto__"),
+            proto_getter,
+            Some(proto_setter),
+            "__proto__",
+        ));
+        for (name, m, arity) in [
+            ("__defineGetter__", NativeMethod::ObjectDefineGetter, 2),
+            ("__defineSetter__", NativeMethod::ObjectDefineSetter, 2),
+            ("__lookupGetter__", NativeMethod::ObjectLookupGetter, 1),
+            ("__lookupSetter__", NativeMethod::ObjectLookupSetter, 1),
+        ] {
+            let mf = self.alloc_named_method(m, name, arity);
+            self.proto_methods.push((object_proto, name, mf));
+        }
         // `Object.*` statics — own methods of the `Object` constructor
         // instance (not the prototype), bound at link time only when the
         // program references the name.

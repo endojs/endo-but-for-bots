@@ -1071,6 +1071,17 @@ pub enum NativeMethod {
     UriEncodeComponent,
     UriDecode,
     UriDecodeComponent,
+    /// The Annex B `%Object.prototype%.__proto__` accessor (B.2.2.1,
+    /// `fx_Object_prototype___proto__get` / `…set`): the receiver's
+    /// `[[GetPrototypeOf]]` and `[[SetPrototypeOf]]`.
+    ObjectProtoGetter,
+    ObjectProtoSetter,
+    /// The Annex B legacy accessor helpers of `%Object.prototype%`
+    /// (B.2.2.2-B.2.2.5, `fx_Object_prototype___defineGetter__` &co.).
+    ObjectDefineGetter,
+    ObjectDefineSetter,
+    ObjectLookupGetter,
+    ObjectLookupSetter,
 }
 
 /// One intrinsic (native) function ironhorse models. The variant is the

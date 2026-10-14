@@ -1,4 +1,5 @@
 //! Native builtin implementations, grouped by JavaScript subsystem.
+mod annex_b;
 mod array;
 mod bigint;
 mod buffer;

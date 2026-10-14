@@ -2515,6 +2515,12 @@ impl Interp {
             | NativeMethod::ObjectIsExtensible
             | NativeMethod::ObjectIsSealed
             | NativeMethod::ObjectIsFrozen
+            | NativeMethod::ObjectProtoGetter
+            | NativeMethod::ObjectProtoSetter
+            | NativeMethod::ObjectDefineGetter
+            | NativeMethod::ObjectDefineSetter
+            | NativeMethod::ObjectLookupGetter
+            | NativeMethod::ObjectLookupSetter
             | NativeMethod::GlobalHarden
             | NativeMethod::GlobalPetrify
             | NativeMethod::GlobalLockdown
@@ -7327,6 +7333,14 @@ impl Interp {
             // `designs/ironhorse-native-lockdown.md` for why matching XS and
             // matching SES are different projects).
             NativeMethod::GlobalLockdown => self.do_lockdown(code)?,
+            NativeMethod::ObjectProtoGetter
+            | NativeMethod::ObjectProtoSetter
+            | NativeMethod::ObjectDefineGetter
+            | NativeMethod::ObjectDefineSetter
+            | NativeMethod::ObjectLookupGetter
+            | NativeMethod::ObjectLookupSetter => {
+                self.call_legacy_object(m, base, argc, code, this, arg0)?
+            }
             NativeMethod::CompartmentEvaluate => self.compartment_evaluate(code, this, arg0)?,
             NativeMethod::CompartmentGlobalThisGetter => self.compartment_global_this(this)?,
             NativeMethod::Test262DetachArrayBuffer => {
