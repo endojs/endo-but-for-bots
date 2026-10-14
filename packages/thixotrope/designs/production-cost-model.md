@@ -95,8 +95,8 @@ That ordering decides the triage below.
 | ---- | ------------------------------------- | ------------------------------------- |
 | 1.1  | No Ironhorse commit per crank         | Done                                  |
 | 1.2  | Count the worker journal in memory    | Done                                  |
-| 1.3  | Keep the lease holder alive           | Do                                    |
-| 1.4  | Name vat directories after workers    | Do                                    |
+| 1.3  | Keep the lease holder alive           | Done                                  |
+| 1.4  | Name vat directories after workers    | Done                                  |
 | 1.5  | Correct the README                    | Done                                  |
 | 2.1  | Snapshot awake workers                | Done, with one threshold              |
 | 2.2  | Answer `status` before ready          | Do; the rest of boot work is deferred |
@@ -183,13 +183,16 @@ The lock holder exits, ownership is gone before shutdown begins, and the adapter
 `forgetSession` into a `persist()` the store's ownership guard refuses.
 This is inferred from the code and the report's stack trace; the exit was not reproduced.
 
-Proposed: in `--lock-state` mode, ignore SIGTERM and SIGINT and exit only when stdin closes, which
-`release()` already arranges.
-Advise operators to run the supervisor under `KillMode=mixed`.
+Done: the helper now ignores SIGTERM, SIGINT and SIGHUP and exits only when its stdin closes,
+which `release()` already arranges.
+The binary forbids unsafe code and its dependencies offer no safe signal API, so the host spawns
+it through `sh -c 'trap "" TERM INT HUP; exec "$0" "$@"'`; dispositions set to ignore survive
+`exec`.
+Operators should still run the supervisor under `KillMode=mixed`.
 
-Test: in `test/daemon-shutdown.test.js`, a variant in which ownership is lost before shutdown
-rejects once with `/not owned/`, and nothing escapes uncaught.
-If a crash still reproduces after this, D.3 is the next step.
+The test in `test/ironhorse/reliability.js` sends the helper all three signals, finds it alive and
+the lease still refused to a competitor, then releases and finds it gone.
+If a crash still reproduces, D.3 is the next step.
 
 ### 1.4 Name vat directories after their workers
 
@@ -198,11 +201,12 @@ engine's `start`; the Ironhorse engine ignores it, and each incarnation lives in
 `incarnations/vat-XXXXXX/`.
 The operator had to search heaps to find a chat's vat.
 
-Proposed: use a sanitized `debugName` (`[A-Za-z0-9._-]`, at most about 40 characters) in the
-directory prefix, `vat-<label>-XXXXXX`.
+Done: the directory is `vat-<slug>-XXXXXX`, where the slug is the debug name reduced to
+`[A-Za-z0-9._-]` and at most 40 characters, so `app:chat(fd6a3854)` lives in
+`vat-app-chat-fd6a3854-XXXXXX` and the heap path in `ps` names it too.
 `worker-engine.js` already requires that `debugName` be diagnostic only.
 
-Test: `test/ironhorse/supervisor.js` asserts the directory name.
+The test in `test/ironhorse/reliability.js` starts a worker and asserts the directory name.
 
 ### 1.5 Correct the README
 

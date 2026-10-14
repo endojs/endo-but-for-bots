@@ -378,3 +378,45 @@ exec ${quote(binary)} "$@"
   },
 );
 
+test.serial(
+  "an incarnation directory carries its worker's debug name",
+  async t => {
+    t.timeout(60_000);
+    const path = await mkdtemp(join(tmpdir(), 'thixotrope-vat-name-'));
+    let release;
+    t.teardown(async () => {
+      await release?.();
+      await rm(path, { recursive: true, force: true });
+    });
+    const boot = join(path, 'boot.js');
+    await writeFile(boot, 'globalThis.booted = true;');
+    const engine = makeIronhorseEngine(nodePowers, {
+      workerBinary:
+        process.env.THIXOTROPE_IRONHORSE_WORKER ??
+        fileURLToPath(
+          new URL(
+            '../../../../target/release/thixotrope-ironhorse-worker',
+            import.meta.url,
+          ),
+        ),
+      bootPaths: [boot],
+      storePath: join(path, 'heaps'),
+    });
+    const { acquireStore } = engine;
+    if (!acquireStore) throw Error('missing ownership support');
+    release = await acquireStore(path);
+    const incarnation = await engine.start({
+      debugName: 'app:chat(deadbeef)',
+      snapshot: undefined,
+      onOutbound: () => {},
+    });
+    try {
+      const names = await readdir(join(path, 'heaps', 'incarnations'));
+      t.is(names.length, 1);
+      // An operator maps a chat to its vat from `ls` or the heap path in `ps`.
+      t.regex(names[0], /^vat-app-chat-deadbeef-/);
+    } finally {
+      await incarnation.terminate();
+    }
+  },
+);

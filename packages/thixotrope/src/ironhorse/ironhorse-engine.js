@@ -82,6 +82,15 @@ export const makeIronhorseEngine = (
     }
     return join(images, `${ref}.sqlite`);
   };
+  /**
+   * A directory-safe form of a worker's debug name.
+   * @param {string} name
+   */
+  const slugOf = name =>
+    name
+      .replace(/[^A-Za-z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40);
 
   /** @type {Awaited<ReturnType<typeof acquireIronhorseRuntime>> | undefined} */
   let runtime;
@@ -140,7 +149,7 @@ export const makeIronhorseEngine = (
       };
     },
     releaseSnapshot: async ref => remove(imagePath(ref), { force: true }),
-    start: async ({ snapshot, onOutbound }) => {
+    start: async ({ debugName, snapshot, onOutbound }) => {
       if (!runtime)
         throw Error(
           'Acquire the Ironhorse state directory before starting workers',
@@ -149,7 +158,12 @@ export const makeIronhorseEngine = (
       owned.assertOwned();
       await makeDirectory(images);
       await makeDirectory(work);
-      const directory = await makeTempDirectory(join(work, 'vat-'));
+      // Name the incarnation after its worker, so `ls` and the heap path in
+      // `ps` tell an operator which vat is whose. Diagnostic only: nothing
+      // looks an incarnation up by name.
+      const directory = await makeTempDirectory(
+        join(work, `vat-${slugOf(debugName)}-`),
+      );
       const heap = join(directory, 'heap.sqlite');
       try {
         if (snapshot != null) {
