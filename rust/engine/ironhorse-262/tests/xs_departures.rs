@@ -449,6 +449,13 @@ const DEPARTURES: &[Row] = &[
         v8: "true,true",
         why: "JSON text puts no limit on the length of a number (ES2024 25.5.1), and JSON.rawJSON checks its text the way JSON.parse reads it; XS's JSON parser copies each number token into its 256-byte nameBuffer and throws when the token does not fit",
     },
+    Row {
+        program: "var log = []; var src = {next: function () { throw 1; }, return: function () { log.push('return'); return {}; }}; try { Iterator.prototype.map.call(src, function (x) { return x; }).next(); } catch (e) { log.push('threw'); } var log2 = []; var src2 = {next: function () { return {done: false, value: 1}; }, return: function () { log2.push('return'); throw 2; }}; try { Iterator.prototype.take.call(src2, 0).next(); } catch (e) { log2.push('threw ' + e); } var log3 = []; var inner = {next: function () { throw 3; }, return: function () { log3.push('inner-return'); return {}; }}; inner[Symbol.iterator] = function () { return this; }; var outer = {next: function () { return {done: false, value: 1}; }, return: function () { log3.push('outer-return'); return {}; }}; try { Iterator.prototype.flatMap.call(outer, function () { return inner; }).next(); } catch (e) { log3.push('threw'); } [log.join(), log2.join(), log3.join()].join('|')",
+        ironhorse: "threw|return,threw 2|outer-return,threw",
+        xs: "return,threw|return,return,threw 2|inner-return,outer-return,threw",
+        v8: "threw|return,threw 2|outer-return,threw",
+        why: "a lazy Iterator helper leaves its underlying iterator open when that iterator's next throws (ES2026 27.1.3.3.8), take(0) closes it once (27.1.3.3.11), and flatMap closes only the outer iterator when the inner one's next throws (27.1.3.3.6); XS's fx_IteratorHelper_prototype_next catches any throw from a helper's step and re-enters the step, which closes the underlying iterator for map, filter, take, drop and flatMap as for Iterator.concat, closes flatMap's inner iterator as well, and closes take's iterator a second time after its own close throws",
+    },
 ];
 
 /// Programs where Ironhorse departs from XS and V8 has no counterpart to
@@ -530,6 +537,13 @@ const UNPAIRED: &[Row] = &[
         xs: "4,0",
         v8: "throw TypeError: RegExp.escape is not a function",
         why: "RegExp.escape passes U+0000 through unchanged (ES2025 22.2.5.1.1); XS's fx_RegExp_escape writes it into its NUL-terminated result, which ends the string there; Node 22 has no RegExp.escape",
+    },
+    Row {
+        program: "var log = []; var inner = {next: function () { throw 1; }, return: function () { log.push('return'); return {}; }}; var it = Iterator.concat({[Symbol.iterator]: function () { return inner; }}); try { it.next(); } catch (e) { log.push('threw'); } log.join()",
+        ironhorse: "threw",
+        xs: "return,threw",
+        v8: "throw TypeError: Iterator.concat is not a function",
+        why: "Iterator.concat steps the open iterator with IteratorStepValue, which does not close it when next throws or answers a non-object (ES2026 27.1.3.2.1 step 3.a.v.1); XS's fx_IteratorHelper_prototype_next catches any throw from a helper's step and re-enters the step to close its iterator, here fx_Iterator_concat_step; Node 22 has no Iterator.concat",
     },
 ];
 
@@ -708,6 +722,13 @@ const GAPS: &[Row] = &[
         xs: "String after false",
         v8: "String after false",
         why: "a Proxy is handed each probed index as a key, and above 2^32 - 1 Ironhorse interns that key as a name, so the walk meets the key space's guest ceiling after about 64k steps and throws, and every later new name in the program throws too; findLastIndex, lastIndexOf and reduceRight over such a Proxy meet it the same way (XS answers reduceRight without walking, the departure above)",
+    },
+    Row {
+        program: "var log = []; var src = {next: function () { return {done: false, value: 1}; }, return: function () { try { it.return(); log.push('no throw'); } catch (e) { log.push(e.name); } return {}; }}; Object.setPrototypeOf(src, Iterator.prototype); var it = src.map(function (x) { return x; }); it.next(); it.return(); log.join()",
+        ironhorse: "no throw",
+        xs: "TypeError",
+        v8: "no throw",
+        why: "a lazy Iterator helper suspended at a yield closes its underlying iterator while executing (GeneratorResumeAbrupt), so a return() reached from that close throws; map, filter, take, drop and flatMap latch done first and answer it, as V8 does. Iterator.concat already refuses",
     },
 ];
 

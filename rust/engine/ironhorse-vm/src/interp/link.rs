@@ -455,9 +455,10 @@ impl Interp {
                 self.done_id = Some(self.intern_static_key("done"));
             }
         }
-        // `Array.from`, `Object.fromEntries`, `AggregateError` and
-        // `Math.sumPrecise` perform the full iterator protocol even when the
-        // guest source never spells `next`, `value`, or `done`. Reify those
+        // `Array.from`, `Object.fromEntries`, `AggregateError`,
+        // `Math.sumPrecise` and `Iterator.concat` perform the full iterator
+        // protocol even when the guest source never spells `next`, `value`,
+        // or `done`. Reify those
         // boot-default names before prototype-method linking so the mandatory
         // observable `Get(iterator, "next")` sees
         // `%ArrayIteratorPrototype%.next` (and can also observe an own
@@ -466,6 +467,7 @@ impl Interp {
             || self.symbol_ids.contains_key("fromEntries")
             || self.symbol_ids.contains_key("AggregateError")
             || self.symbol_ids.contains_key("sumPrecise")
+            || self.symbol_ids.contains_key("concat")
         {
             for name in ["next", "done", "value", "return"] {
                 self.intern_static_key(name);

@@ -308,6 +308,26 @@ fn a_flat_map_resumed_inside_an_inner_iterator_resumes_inside_it() {
 }
 
 #[test]
+fn an_iterator_concat_resumed_inside_an_item_resumes_inside_it() {
+    // One `next()` opens the first item and yields its first element, so the
+    // snapshot holds a LIVE, half-drained inner iterator, the list position
+    // past it, and the second item's captured open method. Losing any of
+    // them would repeat or skip elements.
+    assert_twin(
+        "ih-iter-twin-concat",
+        "var cat = 0; var t = 0; \
+         cat = Iterator.concat([1, 2], new Set([3, 4]), [5]); \
+         t = cat.next().value; t",
+        &[
+            "var cat; var t; t = cat.next().value + ',' + cat.next().value; t",
+            "var cat; var t; t = cat.toArray().join(','); t",
+            "var cat; var t; var r = 0; r = cat.next(); t = r.value + ':' + r.done; t",
+        ],
+        &["2,3", "4,5", "undefined:true"],
+    );
+}
+
+#[test]
 fn a_resumed_helper_chain_continues_at_every_stage() {
     assert_twin(
         "ih-iter-twin-lazy-chain",

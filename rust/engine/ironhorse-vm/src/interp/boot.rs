@@ -601,6 +601,8 @@ impl Interp {
             ));
             let from = self.alloc_named_method(NativeMethod::IteratorFrom, "from", 1);
             self.proto_methods.push((iterator_ctor, "from", from));
+            let concat = self.alloc_named_method(NativeMethod::IteratorConcat, "concat", 0);
+            self.proto_methods.push((iterator_ctor, "concat", concat));
             // `%WrapForValidIteratorPrototype%` is shared by every generic
             // iterator wrapper, including calls inherited through a subclass
             // of `Iterator`. It is deliberately distinct from each built-in

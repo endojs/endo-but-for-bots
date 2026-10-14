@@ -222,3 +222,42 @@ fn json_raw_json() {
         ),
     ]);
 }
+
+#[test]
+fn iterator_concat() {
+    check(&[
+        (
+            "[Iterator.concat.name, Iterator.concat.length, Iterator.concat().next().done, Object.prototype.toString.call(Iterator.concat())].join()",
+            "concat,0,true,[object Iterator Helper]",
+        ),
+        (
+            "var it = Iterator.concat([1, 2], new Set([3]), 'ab'.split('')); var out = []; for (var v of it) out.push(v); [out.join(), Object.getPrototypeOf(it) === Object.getPrototypeOf([].values().map(function (x) { return x; })), Iterator.concat([1, 2]).map(function (x) { return x * 10; }).toArray().join()].join('|')",
+            "1,2,3,a,b|true|10,20",
+        ),
+        (
+            "var r = []; [1, 's', null, {}, {[Symbol.iterator]: 1}].forEach(function (v) { try { Iterator.concat([], v); r.push('ok'); } catch (e) { r.push(e.name); } }); r.join()",
+            "TypeError,TypeError,TypeError,TypeError,TypeError",
+        ),
+        // `@@iterator` is read once per item when the helper is made, and
+        // each item is opened only when its turn comes.
+        (
+            "var log = []; var item = {get [Symbol.iterator]() { log.push('get'); return function () { log.push('open'); var i = 0; return {next: function () { log.push('next'); return {done: i++ > 0, value: 9}; }, return: function () { log.push('ret'); return {}; }}; }; }}; var it = Iterator.concat(item, item); log.push('made'); it.next(); it.next(); log.push('|'); it.return(); log.join()",
+            "get,get,made,open,next,next,open,next,|,ret",
+        ),
+        // Before the first `next()` there is nothing to close.
+        (
+            "var log = []; var item = {[Symbol.iterator]: function () { log.push('open'); return {next: function () { return {done: false, value: 1}; }, return: function () { log.push('ret'); return {}; }}; }}; var it = Iterator.concat(item); var a = it.return(); [log.join(), a.done, it.next().done].join()",
+            ",true,true",
+        ),
+        // A helper suspended at a yield closes its inner iterator while
+        // executing, so a request from inside that close is refused.
+        (
+            "var log = []; var src = {[Symbol.iterator]: function () { return {next: function () { return {done: false, value: 1}; }, return: function () { try { it.return(); log.push('no throw'); } catch (e) { log.push(e.name); } return {}; }}; }}; var it = Iterator.concat(src); it.next(); it.return(); [log.join(), it.next().done].join()",
+            "TypeError,true",
+        ),
+        (
+            "var it = Iterator.concat({[Symbol.iterator]: function () { return 5; }}); try { it.next(); 'ok' } catch (e) { e.name + ':' + it.next().done }",
+            "TypeError:true",
+        ),
+    ]);
+}

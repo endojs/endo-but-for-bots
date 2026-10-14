@@ -1298,7 +1298,7 @@ macro_rules! snapshot_payloads {
                                 "iterator cursors: invalid RegExp String Iterator",
                             ));
                         }
-                        if (10..=14).contains(&r.kind)
+                        if (10..=15).contains(&r.kind)
                             && lazy_helper_malformed(
                                 r.iterable,
                                 r.result,

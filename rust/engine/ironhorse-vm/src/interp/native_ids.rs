@@ -1049,6 +1049,9 @@ pub enum NativeMethod {
     MapIteratorNext,
     SetIteratorNext,
     IteratorFrom,
+    /// `Iterator.concat(...items)` (`fx_Iterator_concat`): an Iterator
+    /// Helper yielding each item's iteration in turn.
+    IteratorConcat,
     /// `%WrapForValidIteratorPrototype%.next()`: call the `next` method
     /// captured by `Iterator.from` with the wrapped iterator as receiver.
     IteratorWrapperNext,
