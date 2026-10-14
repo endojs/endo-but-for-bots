@@ -275,12 +275,12 @@ fn ignored_guest_allocation_failure_is_terminal() {
         &c,
         "function allocate() { var a = []; for(var n=0;n<10000;n++) a.push({n:n}); return 1; } 0",
     );
-    m.with_persistence(|i| i.set_slot_ceiling(i.slots().capacity() + 200))
+    m.with_persistence(|i| i.set_slot_ceiling(i.slots().capacity() + 200).unwrap())
         .unwrap();
     let out = evaluate(&c, "host(allocate)");
     assert!(visited.get());
     assert!(matches!(out.halt, Halt::HeapExhausted), "{:?}", out.halt);
-    m.with_persistence(|i| i.set_slot_ceiling(u32::MAX))
+    m.with_persistence(|i| i.set_slot_ceiling(u32::MAX).unwrap())
         .unwrap();
     assert_eq!(eval(&m.new_compartment(), "42"), "42");
     assert!(m.with_persistence(|i| i.is_quiescent()).unwrap());
@@ -456,7 +456,7 @@ fn heap_exhaustion_in_a_callback_under_in_place_frames_leaves_the_ceilings() {
         assert!(before > 100, "{bottom}: ceiling {before}");
         let renders = || m.with_persistence(|i| i.global_string("deep")).unwrap();
         assert!(renders().is_some(), "{bottom}: renders before");
-        m.with_persistence(|i| i.set_slot_ceiling(i.slots().capacity() + 2_000))
+        m.with_persistence(|i| i.set_slot_ceiling(i.slots().capacity() + 2_000).unwrap())
             .unwrap();
         let out = evaluate(&c, "f(60, function () { return host(inner); })");
         assert!(visited.get(), "{bottom}");
@@ -465,7 +465,7 @@ fn heap_exhaustion_in_a_callback_under_in_place_frames_leaves_the_ceilings() {
             "{bottom}: {:?}",
             out.halt
         );
-        m.with_persistence(|i| i.set_slot_ceiling(u32::MAX))
+        m.with_persistence(|i| i.set_slot_ceiling(u32::MAX).unwrap())
             .unwrap();
         assert!(renders().is_some(), "{bottom}: a charge outlived the crank");
         assert_eq!(ceiling(&c), before, "{bottom}");

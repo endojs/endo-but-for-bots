@@ -81,8 +81,9 @@ pub use opcode::{instruction_len, Opcode};
 pub use side_tables::TableDesc;
 pub use symbols::{parse_symbols, parse_symbols_checked, SymbolName};
 pub use value::{
-    BackingCommitAuthority, ChunkArena, ChunkOffset, ChunkSlice, FreeListAck, Kind, PageSource,
-    Payload, Slot, SlotArena, SlotIndex, CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE,
+    BackingCommitAuthority, CeilingRefused, ChunkArena, ChunkOffset, ChunkSlice, FreeListAck, Kind,
+    PageSource, Payload, Slot, SlotArena, SlotIndex, CHUNK_EXTENT_BYTES,
+    CONSENSUS_MAX_CHUNK_CEILING, CONSENSUS_MAX_SLOT_CEILING, SLOTS_PER_PAGE,
 };
 
 /// The native (thread) stack, in bytes, the engine requires for its

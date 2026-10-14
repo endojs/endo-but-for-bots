@@ -1500,7 +1500,12 @@ mod tests {
             .interpreter
             .borrow()
             .current_environment_id();
-        machine.machine.interpreter.borrow_mut().set_slot_ceiling(0);
+        machine
+            .machine
+            .interpreter
+            .borrow_mut()
+            .set_slot_ceiling(0)
+            .unwrap();
         assert_eq!(machine.with_persistence(|_| ()), Err(Halt::HeapExhausted));
         assert_eq!(
             machine
@@ -1530,14 +1535,14 @@ mod tests {
             let mut interp = machine.machine.interpreter.borrow_mut();
             let previous = interp.current_environment_id();
             let ceiling = interp.slots().capacity() + allowance;
-            interp.set_slot_ceiling(ceiling);
+            interp.set_slot_ceiling(ceiling).unwrap();
             drop(interp);
             assert_eq!(machine.with_persistence(|_| ()), Err(Halt::HeapExhausted));
             let mut interp = machine.machine.interpreter.borrow_mut();
             assert_eq!(interp.current_environment_id(), previous);
             assert!(interp.is_quiescent());
             assert_eq!(interp.stored_unpersistable_row(), None);
-            interp.set_slot_ceiling(u32::MAX);
+            interp.set_slot_ceiling(u32::MAX).unwrap();
             drop(interp);
             assert!(pending.snapshot_id().is_some());
             let (code, symbols) = ironhorse_compile::compile_atoms("40 + 2").unwrap();
@@ -1552,7 +1557,12 @@ mod tests {
         let (code, symbols) = ironhorse_compile::compile_atoms("Promise.reject(42); 0").unwrap();
         assert!(a.evaluate_with_symbols(&code, &symbols).completed);
         assert!(machine.run_promise_jobs().completed);
-        machine.machine.interpreter.borrow_mut().set_slot_ceiling(0);
+        machine
+            .machine
+            .interpreter
+            .borrow_mut()
+            .set_slot_ceiling(0)
+            .unwrap();
         assert!(matches!(
             machine.unhandled_rejections(),
             Err(Halt::HeapExhausted)

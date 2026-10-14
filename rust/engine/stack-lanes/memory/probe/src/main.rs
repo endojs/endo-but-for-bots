@@ -214,11 +214,16 @@ fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
 }
 
 fn configure(machine: &mut Interp, options: &Options) {
+    // The probe builds with `consensus`, whose caps refuse a larger ceiling.
     if let Some(slots) = options.slot_ceiling {
-        machine.set_slot_ceiling(slots);
+        machine
+            .set_slot_ceiling(slots)
+            .expect("a slot ceiling the consensus cap admits");
     }
     if let Some(bytes) = options.chunk_ceiling {
-        machine.set_chunk_ceiling(bytes);
+        machine
+            .set_chunk_ceiling(bytes)
+            .expect("a chunk ceiling the consensus cap admits");
     }
     machine.set_source_compiler(std::rc::Rc::new(ironhorse_runtime::IronhorseSourceCompiler));
 }

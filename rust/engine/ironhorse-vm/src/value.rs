@@ -14,6 +14,68 @@
 pub const DEFAULT_SLOT_CEILING: u32 = 1_000_000;
 pub const DEFAULT_CHUNK_CEILING: usize = 256 * 1024 * 1024;
 
+/// The largest slot ceiling a `consensus` build accepts.
+///
+/// A consensus build must give the same result on every target, so it
+/// refuses any ceiling that some target cannot honor, whatever the arena's
+/// capacity history. Rust refuses a single allocation over `isize::MAX`
+/// bytes, which is `2^31 - 1` on wasm32. The slot arena keeps 24-byte
+/// records in a buffer that grows by doubling, so its largest buffer can
+/// reach 48 bytes per slot of ceiling, and `floor((2^31 - 1) / 48)` slots is
+/// the most that wall allows.
+///
+/// wasm32's 4 GiB address space can bind sooner when both arenas are full,
+/// so this cap and [`CONSENSUS_MAX_CHUNK_CEILING`] are a starting point
+/// (`rust/engine/WASM-BLOCKERS.md`, B7 "Latent"): the B8 memory work may
+/// lower them.
+pub const CONSENSUS_MAX_SLOT_CEILING: u32 = 44_739_242;
+
+/// The largest chunk ceiling a `consensus` build accepts: 2^29 bytes.
+///
+/// The `isize::MAX` wall alone would allow 2^30 bytes, since the chunk
+/// arena also grows by doubling, but wasm32's 4 GiB address space binds
+/// sooner. At a 2^30 ceiling a program that halts natively trapped on
+/// wasm32 when a 1 GiB host copy could not be allocated; at 2^29 both
+/// targets halted identically. As with [`CONSENSUS_MAX_SLOT_CEILING`], the
+/// B8 memory work may lower this cap.
+pub const CONSENSUS_MAX_CHUNK_CEILING: usize = 1 << 29;
+
+// The default profile runs unchanged under `consensus`.
+const _: () = assert!(DEFAULT_SLOT_CEILING <= CONSENSUS_MAX_SLOT_CEILING);
+const _: () = assert!(DEFAULT_CHUNK_CEILING <= CONSENSUS_MAX_CHUNK_CEILING);
+
+/// An arena ceiling a `consensus` build refuses because some target could
+/// not honor it ([`CONSENSUS_MAX_SLOT_CEILING`],
+/// [`CONSENSUS_MAX_CHUNK_CEILING`]). Other builds accept every ceiling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CeilingRefused {
+    /// The ceiling asked for.
+    pub requested: u64,
+    /// The largest ceiling this build accepts.
+    pub cap: u64,
+}
+
+impl std::fmt::Display for CeilingRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ceiling {} exceeds the consensus cap {}",
+            self.requested, self.cap
+        )
+    }
+}
+
+impl std::error::Error for CeilingRefused {}
+
+/// Refuse `requested` above `cap` in a `consensus` build; accept it in any
+/// other build.
+fn check_consensus_ceiling(requested: u64, cap: u64) -> Result<(), CeilingRefused> {
+    if cfg!(feature = "consensus") && requested > cap {
+        return Err(CeilingRefused { requested, cap });
+    }
+    Ok(())
+}
+
 /// Private non-guest control transfer from infallible arena APIs to the run
 /// boundary. `resume_unwind` avoids invoking the process panic hook for an
 /// expected resource refusal. Other Rust panics are never converted to this.
@@ -1082,8 +1144,12 @@ impl SlotArena {
     /// Configure the slot-address-space ceiling. Existing records count even
     /// when free; reusing one needs no growth. Policy is host configuration,
     /// reapplied after restore, and is not part of the serialized heap image.
-    pub fn set_ceiling(&mut self, ceiling: u32) {
+    /// A `consensus` build refuses a ceiling above
+    /// [`CONSENSUS_MAX_SLOT_CEILING`] and keeps the current one.
+    pub fn set_ceiling(&mut self, ceiling: u32) -> Result<(), CeilingRefused> {
+        check_consensus_ceiling(u64::from(ceiling), u64::from(CONSENSUS_MAX_SLOT_CEILING))?;
         self.ceiling = ceiling;
+        Ok(())
     }
 
     pub fn ceiling(&self) -> u32 {
@@ -2220,9 +2286,13 @@ impl ChunkArena {
     }
 
     /// Configure the chunk-address-space ceiling, capped by its u32 format.
-    /// Reapply this host policy after snapshot restore.
-    pub fn set_ceiling(&mut self, ceiling: usize) {
+    /// Reapply this host policy after snapshot restore. A `consensus` build
+    /// refuses a ceiling above [`CONSENSUS_MAX_CHUNK_CEILING`] and keeps the
+    /// current one.
+    pub fn set_ceiling(&mut self, ceiling: usize) -> Result<(), CeilingRefused> {
+        check_consensus_ceiling(ceiling as u64, CONSENSUS_MAX_CHUNK_CEILING as u64)?;
         self.ceiling = ceiling.min(ChunkOffset::NULL.0 as usize);
+        Ok(())
     }
 
     pub fn ceiling(&self) -> usize {

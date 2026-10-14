@@ -160,7 +160,10 @@ fn forty_strings_under_a_host_cap_halt_on_the_host_not_the_ceiling() {
 #[test]
 fn a_ceiling_below_the_host_cap_still_halts_deterministically() {
     // The ceiling refuses before the host would: the deterministic halt.
-    let ceiling = |vm: &mut Interp| vm.set_chunk_ceiling(vm.chunks().byte_size() + 16 * MIB);
+    let ceiling = |vm: &mut Interp| {
+        vm.set_chunk_ceiling(vm.chunks().byte_size() + 16 * MIB)
+            .unwrap()
+    };
     let uncapped = run(FORTY_STRINGS, None, ceiling);
     let capped = run(FORTY_STRINGS, Some(64 * MIB), ceiling);
     assert_eq!(uncapped.halt, Halt::HeapExhausted);
