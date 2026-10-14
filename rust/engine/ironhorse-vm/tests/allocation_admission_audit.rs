@@ -628,7 +628,7 @@ fn moved_native_dispatch_methods_cannot_bypass_allocation_admission() {
 #[test]
 fn moved_json_methods_cannot_bypass_allocation_admission() {
     let original = include_str!("../src/interp/natives/json.rs");
-    let anchor = "self.json_reserve_output(state, size)?;";
+    let anchor = "self.json_reserve_output(state, size as u64)?;";
     assert!(original.contains(anchor));
     for allocation in [
         "let raw = Vec::with_capacity(guest);",
