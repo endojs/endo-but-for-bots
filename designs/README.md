@@ -587,7 +587,7 @@ LLM-agent stack).*
 The 2026-09-30 rebase of PR #1116 adds [guest-native-invitations](guest-native-invitations.md) (**In Progress**: the guest `invite`/`accept` surface landed in #1305 and #1310), increasing In Progress from 83 to 84 and the indexed records from 243 to 244.
 
 The 2026-10-14 rebase of PR #1220 adds [thixotrope/host-managed-resources](../packages/thixotrope/designs/host-managed-resources.md) (Proposed), increasing Proposed from 25 to 26 and the indexed records from 244 to 245.
-The same PR adds [thixotrope/production-cost-model](../packages/thixotrope/designs/production-cost-model.md) (Proposed; its protocol tier is explicitly unexplored and unvalidated), increasing Proposed from 26 to 27 and the indexed records from 245 to 246.
+The same PR adds [thixotrope/production-cost-model](../packages/thixotrope/designs/production-cost-model.md) (Proposed), increasing Proposed from 26 to 27 and the indexed records from 245 to 246.
 
 ## Roadmap
 
@@ -1196,7 +1196,7 @@ finalized.
 | thixotrope-on-cloudflare-addendum-single-vat-hub | Proposed | Replaces the base design's architecture with single-vat hubs (vat and OCapN hub tables in one Durable Object) and a per-tenant control object for lifecycle and collection. |
 | `thixotrope/message-delivery` | **Implemented** | Package-level implementation record for the durable message-delivery slice. |
 | `thixotrope/host-managed-resources` | Proposed | Package-level proposal: the installation registry out of the user's workspace, many workspaces per daemon with one default, the control socket kept in the host, typed resource descriptions. |
-| `thixotrope/production-cost-model` | Proposed | Package-level proposals from an operator's five-day production report: batched and journaled hub writes, no Ironhorse commit per crank, shutdown under the lease, warming status and cadence snapshots; a separate tier of protocol ideas (deterministic answer retirement, engine-delivered collection) is unexplored and unvalidated. |
+| `thixotrope/production-cost-model` | Proposed | Package-level triage of an operator's five-day production report: no Ironhorse commit per crank, in-memory journal counts, a lease holder that survives SIGTERM, cadence snapshots and a `status` that answers while booting; the c-list growth is left to the engine's coming `WeakRef` support, with this package's requirements on it stated. Larger changes (a hub journal, background warming) are deferred, and settlement-time gc frames are rejected. |
 | `thixotrope/vat-replacement` | Proposed (exploratory) | Package-level replacement experiment; remains exploratory rather than a committed standalone deliverable. |
 | `daemon/iroh-network-design` | **Implemented** | Package-level Iroh transport implementation supporting the M4 networking cut. |
 
@@ -1636,7 +1636,7 @@ an explicit accounting disposition.
 | `thixotrope/message-delivery` | Implemented, none | M4 |
 | `thixotrope/vat-replacement` | S-M, 3-5 days exploratory | M4 |
 | `thixotrope/host-managed-resources` | M, not estimated; registry move first | M4 |
-| `thixotrope/production-cost-model` | Not estimated; local fixes first, protocol tier unexplored | M4 |
+| `thixotrope/production-cost-model` | S for the first batch; larger items deferred | M4 |
 
 #### Calibration round 2026-05-20
 
