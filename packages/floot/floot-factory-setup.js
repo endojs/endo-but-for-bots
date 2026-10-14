@@ -24,10 +24,11 @@
 // Re-runnable. A daemon re-runs every ENDO_EXTRA setup on each start, and an
 // operator re-runs it to rotate a key or correct the account profile. On a
 // re-run the factory host, its profile, the provider value, and the secret are
-// reused or replaced in place, and only the factory caplet is re-created: it
-// is a pinned unconfined caplet whose module lives in a release checkout, so
-// once older releases are pruned its formula would name a module that no
-// longer exists. Sessions are untouched — the registry lives in the factory
+// reused or replaced in place. The factory is reused when its module and
+// construction environment match; otherwise cancellation must drain before
+// replacement. Hosted deployments name its module through RELEASE_DIR's stable
+// current symlink, so a cold restart loads the pinned release without creating
+// another writer. Sessions are untouched — the registry lives in the factory
 // profile's pet store and each session's history in its own guest.
 //
 // The `machine-admin` preset draws on three grants this script stores on the
@@ -39,7 +40,8 @@
 // absent and is re-derived on every start.
 
 import { existsSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { E } from '@endo/eventual-send';
 import {
@@ -55,6 +57,7 @@ import {
 } from '@endo/hosted-agent/account-bindings.js';
 
 import { assertProviderKind } from './providers/config.js';
+import { provisionFlootFactory } from './src/provision-factory.js';
 import {
   FLOOT_WORKLOAD_ENV_KEYS,
   readFlootWorkloadConfig,
@@ -249,7 +252,9 @@ const provideAccountOracle = async (agent, { dir, provider, factoryHost }) => {
 // mount instead of failing per session.
 const resolveCodePath = () => {
   const configured =
-    env('FLOOT_CODE_PATH') || fileURLToPath(new URL('../../', import.meta.url));
+    env('FLOOT_CODE_PATH') ||
+    env('RELEASE_DIR') ||
+    fileURLToPath(new URL('../../', import.meta.url));
   if (!existsSync(configured)) {
     console.warn(
       `Floot: code path "${configured}" does not exist; full-control sessions will have no source mount.`,
@@ -434,18 +439,19 @@ export const main = async agent => {
     await E(factoryHost).remove('environment-runner');
   }
 
-  // 5. Launch the factory caplet straight into floot/controller. On a re-run,
-  // replace the caplet — the one formula whose module path is tied to a
-  // release checkout — and keep everything it was bound to.
-  if (await E(agent).has(...controllerPath)) {
-    await E(agent).remove(...controllerPath);
-  }
-  if (await E(agent).has(...pinPath)) {
-    await E(agent).remove(...pinPath);
-  }
-  await E(agent).makeUnconfined('@main', flootFactorySpecifier, {
+  // 5. Hosted releases have a stable current symlink. Keeping that specifier
+  // preserves the factory formula through warm restarts while loading the
+  // pinned code anew in the next process. Never launch a second registry
+  // writer merely because setup was rerun; replacement must drain the first.
+  const releaseDir = env('RELEASE_DIR');
+  const { reused: factoryReused } = await provisionFlootFactory({
+    agent,
+    controllerPath,
+    pinPath,
     powersName: revived ? controllerProfilePath : agentName,
-    resultName: controllerPath,
+    specifier: releaseDir
+      ? pathToFileURL(resolve(releaseDir, 'packages/floot/agent.js')).href
+      : flootFactorySpecifier,
     env: factoryEnv,
   });
 
@@ -464,8 +470,8 @@ export const main = async agent => {
     }
   }
 
-  // 7. Single pin: the factory revives all its sessions on daemon restart.
-  await E(agent).copy(controllerPath, pinPath);
+  // 7. The provisioning helper keeps the single pin. The factory revives all
+  // its sessions on daemon restart.
   console.log(
     revived
       ? `Floot factory re-bound to the current release at "${dir}/controller" and pinned (sessions preserved).`
@@ -474,6 +480,7 @@ export const main = async agent => {
 
   // 8. Seed a default session if this is a fresh factory.
   const factory = await E(agent).lookup(controllerPath);
+  if (factoryReused) await E(factory).refreshCredentials();
   const sessions = await E(factory).listSessions();
   if (sessions.length === 0) {
     await E(factory).createSession({ title: 'New chat', spoken: true });
