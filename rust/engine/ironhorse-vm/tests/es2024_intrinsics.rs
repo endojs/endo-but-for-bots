@@ -188,3 +188,37 @@ fn regexp_escape() {
         ),
     ]);
 }
+
+#[test]
+fn json_raw_json() {
+    check(&[
+        (
+            "[JSON.rawJSON.name, JSON.rawJSON.length, JSON.isRawJSON.name, JSON.isRawJSON.length].join()",
+            "rawJSON,1,isRawJSON,1",
+        ),
+        (
+            "var r = JSON.rawJSON('1e1000'); var d = Object.getOwnPropertyDescriptor(r, 'rawJSON'); [Object.getPrototypeOf(r), Object.isFrozen(r), Reflect.ownKeys(r).join(), d.value, d.writable, d.enumerable, d.configurable].join()",
+            ",true,rawJSON,1e1000,false,true,false",
+        ),
+        // `JSON.stringify` emits the text as it is, after `toJSON` and the
+        // replacer and before any unwrapping.
+        (
+            "[JSON.stringify(JSON.rawJSON('12345678901234567890')), JSON.stringify({a: JSON.rawJSON('1e1000'), b: [JSON.rawJSON('\"x\"'), JSON.rawJSON('null')]}), JSON.stringify({toJSON: function () { return JSON.rawJSON('7'); }}), JSON.stringify([1], function (k, v) { return k === '0' ? JSON.rawJSON('8') : v; })].join('|')",
+            "12345678901234567890|{\"a\":1e1000,\"b\":[\"x\",null]}|7|[8]",
+        ),
+        (
+            "['', ' 1', '1 ', '\\t1', '1\\n', '{}', '[]', '[1]', '1,', 'nul', '\"x', '01', '1 2'].map(function (s) { try { JSON.rawJSON(s); return 'ok'; } catch (e) { return e.name; } }).join()",
+            "SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError",
+        ),
+        // Only `JSON.rawJSON` makes a raw JSON object; XS throws for a
+        // missing argument (`xs_departures.rs`).
+        (
+            "[JSON.isRawJSON(JSON.rawJSON(1)), JSON.isRawJSON(), JSON.isRawJSON(null), JSON.isRawJSON(new Proxy(JSON.rawJSON(1), {})), JSON.isRawJSON(Object.freeze(Object.assign(Object.create(null), {rawJSON: '1'})))].join()",
+            "true,false,false,false,false",
+        ),
+        (
+            "var r = JSON.rawJSON(1); var c = {}; for (var k in r) c[k] = 1; [Object.keys(c).join(), JSON.stringify({...r}), JSON.isRawJSON(harden(r))].join('|')",
+            "rawJSON|{\"rawJSON\":\"1\"}|true",
+        ),
+    ]);
+}

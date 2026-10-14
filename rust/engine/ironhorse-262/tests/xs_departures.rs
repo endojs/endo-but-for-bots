@@ -435,6 +435,20 @@ const DEPARTURES: &[Row] = &[
         v8: "NaN,NaN,NaN",
         why: "Date.prototype.setYear, Date.UTC and the Date constructor take the year through ToIntegerOrInfinity, so 2**32 + 50 is outside TimeClip's range (B.2.3.2, ES2024 21.4.3.4, 21.4.2.1); XS's fxDateFullYear, which all three call, converts it with fxToInteger, which wraps it modulo 2**32 to 50, and maps that to 1950",
     },
+    Row {
+        program: "String(JSON.isRawJSON())",
+        ironhorse: "false",
+        xs: "throw TypeError: no text",
+        v8: "false",
+        why: "JSON.isRawJSON answers false for any value without [[IsRawJSON]], undefined included; XS's fx_JSON_isRawJSON throws when it is called without an argument",
+    },
+    Row {
+        program: "[JSON.isRawJSON(JSON.rawJSON('1'.repeat(300))), JSON.parse('1'.repeat(300)) > 1e299].join()",
+        ironhorse: "true,true",
+        xs: "throw SyntaxError: 1: number overflow",
+        v8: "true,true",
+        why: "JSON text puts no limit on the length of a number (ES2024 25.5.1), and JSON.rawJSON checks its text the way JSON.parse reads it; XS's JSON parser copies each number token into its 256-byte nameBuffer and throws when the token does not fit",
+    },
 ];
 
 /// Programs where Ironhorse departs from XS and V8 has no counterpart to

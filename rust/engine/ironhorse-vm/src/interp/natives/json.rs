@@ -553,8 +553,91 @@ impl Interp {
                     reviver,
                 )
             }
+            // `JSON.rawJSON(text)`: the text of one JSON primitive, with no
+            // whitespace at either end, kept as the `rawJSON` property of a
+            // frozen null-prototype object branded `[[IsRawJSON]]`.
+            NativeMethod::JsonRawJson => self.json_raw_json(code, arg0),
+            // `JSON.isRawJSON(value)`: only an object `JSON.rawJSON` made.
+            NativeMethod::JsonIsRawJson => Ok(Slot::boolean(matches!(arg0.value,
+                Payload::Reference(inst) if arg0.kind == Kind::Reference && self.is_raw_json(inst)))),
             _ => Err(Step::Host(Halt::NotImplemented("json:unmodeled"))),
         }
+    }
+
+    /// `JSON.rawJSON(text)`, out of line from [`Self::call_json`], whose
+    /// frame every `JSON.stringify` call carries, so that the text copies
+    /// below do not grow the frame of each replacer and `toJSON` re-entry
+    /// (`benches/stack_height.py`).
+    #[inline(never)]
+    fn json_raw_json(&mut self, code: &[u8], arg0: Slot) -> Result<Slot, Step> {
+        let string = self.to_string_slot(code, arg0)?;
+        let Payload::String(offset) = string.value else {
+            unreachable!("ToString returned a non-string slot")
+        };
+        let units = self.str_units(offset);
+        let blank =
+            |unit: Option<&u16>| unit.is_none_or(|&unit| matches!(unit, 0x09 | 0x0a | 0x0d | 0x20));
+        if blank(units.first()) || blank(units.last()) {
+            return Err(self.catchable_syntax_error());
+        }
+        // An object or array is refused before it is built.
+        if matches!(units[0], 0x5b | 0x7b) {
+            return Err(self.catchable_syntax_error());
+        }
+        self.charge_builtin_work(units.len() as u64)?;
+        self.admit_scratch::<u8>(
+            units
+                .len()
+                .checked_mul(3)
+                .ok_or(Step::Host(Halt::HeapExhausted))?,
+        )?;
+        let input = units_to_wtf8(&units);
+        self.charge_and_check(JSON_PARSE_SETUP_METERING)?;
+        let mut pos = 0usize;
+        self.json_parse_value(&input, &mut pos, false)?;
+        if pos != input.len() {
+            return Err(self.catchable_syntax_error());
+        }
+        Ok(self.new_raw_json(string))
+    }
+
+    /// A `JSON.rawJSON` result: a null-prototype object whose one own
+    /// property, `rawJSON`, is an enumerable, non-writable, non-configurable
+    /// `text`, and which is not extensible. Its `[[IsRawJSON]]` brand is
+    /// XS's internal-slot shape, an unnamed internal Boolean at the head of
+    /// the property chain: own-key enumeration skips internal slots, the
+    /// arenas persist it without a side table, and a frozen object never
+    /// grows a newer head.
+    fn new_raw_json(&mut self, text: Slot) -> Slot {
+        for _ in 0..3 {
+            self.meter.tick_slot_alloc();
+        }
+        let inst = self
+            .slots
+            .alloc(Slot::instance(crate::value::SlotIndex::NULL));
+        let id = self.intern_static_key("rawJSON");
+        self.set_own_unmetered_with_flag(inst, id, text, XS_DONT_SET_FLAG | XS_DONT_DELETE_FLAG);
+        let mut brand = Slot::boolean(true);
+        brand.id = crate::value::XS_NO_ID;
+        brand.flag = XS_INTERNAL_FLAG;
+        brand.next = self.slots.get(inst).next;
+        let brand = self.slots.alloc(brand);
+        self.slots.get_mut(inst).next = brand;
+        self.slots.get_mut(inst).flag |= XS_DONT_PATCH_FLAG;
+        Slot::of(Kind::Reference, Payload::Reference(inst))
+    }
+
+    /// Whether `inst` carries the `[[IsRawJSON]]` brand [`Self::new_raw_json`]
+    /// puts at the head of its property chain.
+    pub(in crate::interp) fn is_raw_json(&self, inst: crate::value::SlotIndex) -> bool {
+        let head = self.slots.get(inst).next;
+        if head.is_null() {
+            return false;
+        }
+        let slot = self.slots.get(head);
+        slot.id == crate::value::XS_NO_ID
+            && slot.flag & XS_INTERNAL_FLAG != 0
+            && slot.kind == Kind::Boolean
     }
 
     /// Resolve JSON.stringify's replacer argument into either a callback or
@@ -800,6 +883,32 @@ impl Interp {
         }
     }
 
+    /// A `JSON.rawJSON` object's serialization: its `rawJSON` text, which is
+    /// already JSON and is emitted as is. `Get(value, "rawJSON")` reads a
+    /// non-writable, non-configurable own data property, so its slot holds
+    /// the answer and the read is unobservable. Out of line, so that the
+    /// frame every `toJSON` and replacer re-entry carries through
+    /// [`Self::json_stringify_open`] does not grow with it
+    /// (`benches/stack_height.py`).
+    #[inline(never)]
+    fn json_stringify_raw(
+        &mut self,
+        object: crate::value::SlotIndex,
+        state: &mut JsonStringifyState,
+    ) -> Result<JsonStrOpened, Step> {
+        let id = self.intern_static_key("rawJSON");
+        let text = self
+            .find_property(object, id)
+            .map(|property| self.slots.get(property).value);
+        let Some(Payload::String(offset)) = text else {
+            return Err(Step::Host(Halt::EngineInvariant("JSON.rawJSON:text")));
+        };
+        self.charge_and_check(JSON_STRINGIFY_SCALAR_METERING)?;
+        let units = self.str_units(offset);
+        self.json_reserve_output(state, units.len() as u64)?;
+        Ok(JsonStrOpened::Value(Some(units)))
+    }
+
     /// The value phase of one `SerializeJSONProperty`, with its light unit
     /// held: `toJSON`, the replacer, unwrapping, then a scalar's text or an
     /// opened container.
@@ -825,6 +934,9 @@ impl Interp {
         }
 
         if let Payload::Reference(object) = value.value {
+            if value.kind == Kind::Reference && self.is_raw_json(object) {
+                return self.json_stringify_raw(object, state);
+            }
             if value.kind == Kind::Reference {
                 if let Some(wrapped) = self.wrapper_data.get(&object).copied() {
                     value = match wrapped.kind {
@@ -911,6 +1023,11 @@ impl Interp {
 
     /// Open `SerializeJSONArray`: the cycle check, the `length` snapshot,
     /// the container's metering and indentation, and the parts' scratch.
+    /// Out of line, as are [`Self::json_stringify_open_object`] and
+    /// [`Self::json_stringify_raw`], so that `json_stringify_value`'s frame,
+    /// which every `toJSON` and replacer re-entry carries, holds none of
+    /// their locals (`benches/stack_height.py`).
+    #[inline(never)]
     fn json_stringify_open_array(
         &mut self,
         code: &[u8],
@@ -949,6 +1066,7 @@ impl Interp {
     /// Open `SerializeJSONObject`: the cycle check, the replacer
     /// PropertyList or one enumeration of own string keys, the container's
     /// metering and indentation, and the parts' scratch.
+    #[inline(never)]
     fn json_stringify_open_object(
         &mut self,
         code: &[u8],
