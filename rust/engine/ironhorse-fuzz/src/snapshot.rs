@@ -7,7 +7,8 @@
 //!   [`roundtrip_program_is_invariant`]): a machine state serialized with
 //!   [`ironhorse_snapshot::write_machine_unchecked`], read back with
 //!   [`ironhorse_snapshot::read_machine`], and re-serialized must be
-//!   **byte-identical**, including non-reflexive NaN payloads. The
+//!   **byte-identical**, NaN payloads included, and read back to an equal
+//!   image. The
 //!   generated-image arm folds fuzzer bytes into an adversarially-shaped
 //!   slot/chunk arena graph directly (fast, oracle-free); the program arm
 //!   **drives the engine** with a generated program — objects, closures,
@@ -854,13 +855,12 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
 /// snapshot must **read back** (a decode failure on our own output is a
 /// defect), and **write → read → write must be byte-identical**.
 ///
-/// Byte-equality is the always-applicable invariant. When `img` is reflexive
-/// under `MachineImage`'s derived `PartialEq` (it contains no NaN), value
-/// equality is checked too. The second check catches a writer that silently
-/// omits a model field: byte idempotence alone would accept both writes
-/// dropping the same field. A NaN-bearing image cannot use derived value
-/// equality (`NaN != NaN`), so it keeps the bit-exact byte check; the slot
-/// codec's `nan_bits_preserved` lock covers that payload directly.
+/// The image read back must also equal the one written. That catches a
+/// writer that silently omits a model field, which byte idempotence alone
+/// would accept when both writes drop the same field. `Payload` compares
+/// numbers by their bits, so a NaN-bearing image equals its round trip too;
+/// the generator builds its NaNs through `Slot::of`, which canonicalizes them
+/// as the writer does.
 pub fn roundtrip_image_is_invariant(img: &MachineImage) -> Result<(), RoundtripDivergence> {
     let sig = fuzz_snapshot_sig();
     let bytes = write_machine_unchecked(img);
@@ -882,8 +882,7 @@ pub fn roundtrip_image_is_invariant(img: &MachineImage) -> Result<(), RoundtripD
             ),
         });
     }
-    let reflexive_twin = img.clone();
-    if img == &reflexive_twin && &back != img {
+    if &back != img {
         return Err(RoundtripDivergence {
             detail: "write→read changed the decoded machine model".to_string(),
         });
@@ -1290,24 +1289,21 @@ mod tests {
     }
 
     #[test]
-    fn nan_payload_round_trips_byte_exact_but_not_parteq() {
+    fn nan_payload_round_trips_byte_exact_and_equal() {
         // Locked trophy (snapshot_roundtrip campaign, originally seed
         // input `22 03 ff ff`, 2026-07-16): an input that generates a
         // machine image carrying a `Number(NaN)` payload. The container
         // round-trips **byte-exactly** (the codec preserves the NaN bit
-        // pattern — the real invariant), but `MachineImage`'s derived
-        // `PartialEq` reports the decoded image unequal to the original
-        // because `NaN != NaN`. The fix is not in the codec (it is
-        // correct) but in the invariant: `roundtrip_image_is_invariant`
-        // asserts write→read→write **byte-equality**, not value
-        // equality, so a non-reflexive float payload is not a false
-        // trophy. The reader's quiescence gate requires an empty stack,
-        // so the seed places the NaN in heap slot 0 (no chunks, one slot,
-        // arm 4, bits 0x7ff8_0000_…).
+        // pattern). It was a false trophy while `Payload` compared numbers
+        // as floats, so `NaN != NaN` made the decoded image unequal to the
+        // original; `Payload` now compares numbers by their bits, and the
+        // decoded image equals the original as well. The reader's
+        // quiescence gate requires an empty stack, so the seed places the
+        // NaN in heap slot 0 (no chunks, one slot, arm 4, bits
+        // 0x7ff8_0000_…).
         let data = [0x00u8, 0x00, 0x04, 0x7f, 0xf8, 0x00, 0x00, 0x00];
         let img = gen_machine_image(&data);
-        // The image genuinely contains a NaN payload (the condition that made
-        // the derived PartialEq fire).
+        // The image genuinely contains a NaN payload.
         let has_nan = img
             .slots
             .iter()
@@ -1328,6 +1324,7 @@ mod tests {
             bytes,
             "write→read→write byte-identical"
         );
+        assert!(back == img, "the NaN-carrying image reads back equal");
     }
 
     #[test]

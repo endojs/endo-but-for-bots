@@ -561,7 +561,7 @@ impl Kind {
 }
 
 /// The 16-byte value payload for the represented XS value-union arms.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug)]
 pub enum Payload {
     None,
     Boolean(bool),
@@ -577,6 +577,40 @@ pub enum Payload {
     /// A BigInt (`Kind::BigInt`): the chunk holding `[sign: u8][LE u32
     /// digits]`. Relocated by the slide-compactor like a `String`.
     BigInt(ChunkOffset),
+}
+
+/// Equality of representation, not of language values: a Number equals
+/// another with the same bits, so a slot holding NaN (the `NaN` global's,
+/// which every machine has) equals itself and a heap or snapshot image equals
+/// its round trip, and `-0` differs from `+0`. The language's equalities
+/// compare the numbers themselves (`same_value`, `same_value_zero`, the
+/// equality operators).
+impl PartialEq for Payload {
+    fn eq(&self, other: &Self) -> bool {
+        match (*self, *other) {
+            (Payload::None, Payload::None) => true,
+            (Payload::Boolean(a), Payload::Boolean(b)) => a == b,
+            (Payload::Integer(a), Payload::Integer(b)) => a == b,
+            (Payload::Number(a), Payload::Number(b)) => a.to_bits() == b.to_bits(),
+            (Payload::String(a), Payload::String(b)) => a == b,
+            (Payload::Reference(a), Payload::Reference(b)) => a == b,
+            (Payload::At(a, x), Payload::At(b, y)) => a == b && x == y,
+            (Payload::BigInt(a), Payload::BigInt(b)) => a == b,
+            // Each variant named, not `_`, so a new one fails to compile
+            // here until it says how it compares.
+            (
+                Payload::None
+                | Payload::Boolean(_)
+                | Payload::Integer(_)
+                | Payload::Number(_)
+                | Payload::String(_)
+                | Payload::Reference(_)
+                | Payload::At(..)
+                | Payload::BigInt(_),
+                _,
+            ) => false,
+        }
+    }
 }
 
 /// One arena slot, with Rust's unspecified field layout (no `repr(C)` contract).
