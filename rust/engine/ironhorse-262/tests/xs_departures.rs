@@ -414,6 +414,27 @@ const DEPARTURES: &[Row] = &[
         v8: "bcdef,bcdef,abcdef,bcdef",
         why: "String.prototype.substr clamps the length to what remains of the string (B.2.2.1); XS's fx_String_prototype_substr converts it with fxToInteger, which wraps it modulo 2**32 into a 32-bit int (+Infinity becomes 0 and 4294967297 becomes 1), and adds it to the start in a 32-bit int, which overflows for 2**31 - 1",
     },
+    Row {
+        program: "var d = new Date(2000, 0, 15); d.setYear(99, 5, 3); [d.getFullYear(), d.getMonth(), d.getDate()].join()",
+        ironhorse: "1999,0,15",
+        xs: "1999,5,3",
+        v8: "1999,0,15",
+        why: "Date.prototype.setYear reads only its year (B.2.3.2); XS's fx_Date_prototype_setYear also takes a month and a date, as setFullYear does",
+    },
+    Row {
+        program: "var a = new Date(NaN), b = new Date(NaN); var bad = {valueOf: function () { throw 1; }}; try { a.setYear(bad); } catch (e) {} try { b.setFullYear(bad); } catch (e) {} [a.getTime(), b.getTime()].join()",
+        ironhorse: "NaN,NaN",
+        xs: "0,0",
+        v8: "NaN,NaN",
+        why: "Date.prototype.setYear and setFullYear convert their arguments before they change the date (B.2.3.2, ES2024 21.4.4.21); XS sets an invalid date to +0 first, which a conversion that throws leaves behind",
+    },
+    Row {
+        program: "[new Date(0).setYear(4294967346), Date.UTC(4294967346, 0), new Date(4294967346, 0).getTime()].join()",
+        ironhorse: "NaN,NaN,NaN",
+        xs: "-631152000000,-631152000000,-631152000000",
+        v8: "NaN,NaN,NaN",
+        why: "Date.prototype.setYear, Date.UTC and the Date constructor take the year through ToIntegerOrInfinity, so 2**32 + 50 is outside TimeClip's range (B.2.3.2, ES2024 21.4.3.4, 21.4.2.1); XS's fxDateFullYear, which all three call, converts it with fxToInteger, which wraps it modulo 2**32 to 50, and maps that to 1950",
+    },
 ];
 
 /// Programs where Ironhorse departs from XS and V8 has no counterpart to
