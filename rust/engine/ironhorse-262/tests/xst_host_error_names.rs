@@ -54,6 +54,7 @@ fn a_real_early_error_still_reports_syntax_error() {
         LexErrorKind::UnterminatedRegExp,
         LexErrorKind::LineTerminatorInRegExp,
         LexErrorKind::InvalidRegExp,
+        LexErrorKind::InvalidRegExpPattern("( invalid sequence".into()),
         LexErrorKind::InvalidNumber,
         LexErrorKind::InvalidEscape,
         LexErrorKind::StrictOctal,

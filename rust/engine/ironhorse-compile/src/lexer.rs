@@ -1301,8 +1301,8 @@ impl<'a> Lexer<'a> {
         }
         match outcome.result {
             Ok(_) | Err(ironhorse_regexp::CompileError::Unsupported(_)) => {}
-            Err(ironhorse_regexp::CompileError::Syntax(_)) => {
-                return Err(self.err(LexErrorKind::InvalidRegExp))
+            Err(ironhorse_regexp::CompileError::Syntax(reason)) => {
+                return Err(self.err(LexErrorKind::InvalidRegExpPattern(reason)))
             }
             Err(ironhorse_regexp::CompileError::BudgetExceeded) => {
                 return Err(self.err(LexErrorKind::RegExpBudgetExceeded))

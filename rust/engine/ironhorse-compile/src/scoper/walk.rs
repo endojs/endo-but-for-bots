@@ -411,7 +411,7 @@ impl Scoper<'_> {
                 for (sym, line) in names {
                     if let Some(s) = &sym {
                         if self.scope_get_declare(scope, s).is_some() {
-                            return Err(err(line, "duplicate variable"));
+                            return Err(duplicate_variable(line, s));
                         }
                     }
                 }

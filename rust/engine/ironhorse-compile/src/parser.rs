@@ -2272,25 +2272,9 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// A short, stable spelling of a token for error messages (XS uses
-/// `gxTokenNames`; this covers the punctuation/keyword tokens the parser
-/// reports as "missing X").
+/// A token's spelling in error messages, as XS's `gxTokenNames` gives it.
 fn token_debug(token: Token) -> &'static str {
-    use Token::*;
-    match token {
-        Colon => ":",
-        RightBracket => "]",
-        RightParenthesis => ")",
-        RightBrace => "}",
-        LeftParenthesis => "(",
-        In => "in",
-        Import => "import",
-        New => "new",
-        Super => "super",
-        This => "this",
-        Comma => ",",
-        _ => node_name(token),
-    }
+    token.xs_name()
 }
 
 /// `fxStringToIndex` (`xsCommon.c`): whether a property-key string is a
