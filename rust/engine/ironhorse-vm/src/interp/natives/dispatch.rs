@@ -2299,7 +2299,13 @@ impl Interp {
             | NativeMethod::Atomic(..)
             | NativeMethod::DataViewAccessor(..)
             | NativeMethod::DataViewGet(..)
-            | NativeMethod::DataViewSet(..) => {
+            | NativeMethod::DataViewSet(..)
+            | NativeMethod::Uint8ArrayFromBase64
+            | NativeMethod::Uint8ArrayFromHex
+            | NativeMethod::Uint8ArraySetFromBase64
+            | NativeMethod::Uint8ArraySetFromHex
+            | NativeMethod::Uint8ArrayToBase64
+            | NativeMethod::Uint8ArrayToHex => {
                 self.native_method_buffer(m, base, argc, code, this, arg0)?
             }
             NativeMethod::ArrayPush
@@ -3872,6 +3878,14 @@ impl Interp {
     ) -> Result<NativeResult, Step> {
         let _ = (base, argc, code, this, arg0);
         let result: Slot = match m {
+            NativeMethod::Uint8ArrayFromBase64
+            | NativeMethod::Uint8ArrayFromHex
+            | NativeMethod::Uint8ArraySetFromBase64
+            | NativeMethod::Uint8ArraySetFromHex
+            | NativeMethod::Uint8ArrayToBase64
+            | NativeMethod::Uint8ArrayToHex => {
+                self.call_uint8_array_base64(m, this, base, argc, code)?
+            }
             NativeMethod::TypedArrayCopyWithin
             | NativeMethod::TypedArrayFill
             | NativeMethod::TypedArraySet

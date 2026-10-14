@@ -261,3 +261,35 @@ fn iterator_concat() {
         ),
     ]);
 }
+
+#[test]
+fn uint8_array_base64_and_hex() {
+    check(&[
+        (
+            "[Uint8Array.fromBase64.length, Uint8Array.fromHex.length, Uint8Array.prototype.setFromBase64.length, Uint8Array.prototype.setFromHex.length, Uint8Array.prototype.toBase64.length, Uint8Array.prototype.toHex.length, typeof Int8Array.fromBase64, typeof Int8Array.prototype.toHex].join()",
+            "1,1,1,1,0,0,undefined,undefined",
+        ),
+        (
+            "[Uint8Array.fromBase64('SGVsbG8=').join(), Uint8Array.fromBase64(' S G V s\\nbG8 ').join(), Uint8Array.fromHex('cafeBABE').join(), new Uint8Array([72, 101, 108, 108, 111]).toBase64(), new Uint8Array([255, 254]).toBase64({alphabet: 'base64url'}), new Uint8Array([1]).toBase64({omitPadding: true}), new Uint8Array([171, 205]).toHex(), Object.getPrototypeOf(Uint8Array.fromHex('00')) === Uint8Array.prototype].join('|')",
+            "72,101,108,108,111|72,101,108,108,111|202,254,186,190|SGVsbG8=|__4=|AQ|abcd|true",
+        ),
+        (
+            "['S', 'SG=', 'S===', 'SGVsbG8=x', 'SGV*', 'SGVsbG9='].map(function (s) { try { return Uint8Array.fromBase64(s).join('-'); } catch (e) { return e.name; } }).join() + '|' + ['SGVsbG9=', 'SG'].map(function (s) { try { return Uint8Array.fromBase64(s, {lastChunkHandling: 'strict'}).join('-'); } catch (e) { return e.name; } }).join() + '|' + ['SGVsbG8', 'SG=='].map(function (s) { return Uint8Array.fromBase64(s, {lastChunkHandling: 'stop-before-partial'}).join('-'); }).join()",
+            "SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError,72-101-108-108-111|SyntaxError,SyntaxError|72-101-108,72",
+        ),
+        // `setFrom*` writes what it decoded before an error, and stops at
+        // the end of the target.
+        (
+            "var v = new Uint8Array(4), w = new Uint8Array(4), e1, e2; try { v.setFromHex('01020x'); } catch (e) { e1 = e.name; } try { w.setFromBase64('AQID*'); } catch (e) { e2 = e.name; } var t = new Uint8Array(4); var r = t.setFromBase64('SGVsbG8gd29ybGQ='); var u = new Uint8Array(8); var s = new Uint8Array(u.buffer, 2, 3).setFromHex('aabbccdd'); [e1, v.join(), e2, w.join(), r.read, r.written, t.join(), s.read, s.written, u.join()].join('|')",
+            "SyntaxError|1,2,0,0|SyntaxError|1,2,3,0|4|3|72,101,108,0|6|3|0,0,170,187,204,0,0,0",
+        ),
+        (
+            "var log = []; var opts = {get alphabet() { log.push('a'); }, get lastChunkHandling() { log.push('l'); }, get omitPadding() { log.push('o'); return 0; }}; Uint8Array.fromBase64('', opts); new Uint8Array(1).toBase64(opts); new Uint8Array(1).setFromBase64('', opts); log.join()",
+            "a,l,a,o,a,l",
+        ),
+        (
+            "var r = []; [function () { Uint8Array.fromBase64(1) }, function () { Uint8Array.fromBase64('', 1) }, function () { Uint8Array.fromBase64('', {alphabet: new String('base64')}) }, function () { Uint8Array.prototype.toHex.call(new Int8Array(1)) }, function () { Uint8Array.fromHex('abc') }, function () { var u = new Uint8Array(1); u.buffer.transfer(); u.toHex(); }, function () { var u = new Uint8Array(1); u.setFromHex('00', {get x() {}}); u.buffer.transfer(); u.setFromHex('00'); }].forEach(function (f) { try { f(); r.push('ok'); } catch (e) { r.push(e.name); } }); r.join()",
+            "TypeError,TypeError,TypeError,TypeError,SyntaxError,TypeError,TypeError",
+        ),
+    ]);
+}

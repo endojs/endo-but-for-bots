@@ -205,6 +205,7 @@ pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "Object-static:unexpected-proxy",
     "Reflect:unexpected",
     "TypedArray.prototype:operation",
+    "Uint8Array:span",
     "add:stack-underflow",
     "apply:unexpected",
     "arithmetic:stack-underflow",

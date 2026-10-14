@@ -1052,6 +1052,15 @@ pub enum NativeMethod {
     /// `Iterator.concat(...items)` (`fx_Iterator_concat`): an Iterator
     /// Helper yielding each item's iteration in turn.
     IteratorConcat,
+    /// The Uint8Array base64 and hex members (`fx_Uint8Array_fromBase64`
+    /// &co., `xsDataView.c`): the two statics on `%Uint8Array%` and the four
+    /// methods on `%Uint8Array.prototype%`.
+    Uint8ArrayFromBase64,
+    Uint8ArrayFromHex,
+    Uint8ArraySetFromBase64,
+    Uint8ArraySetFromHex,
+    Uint8ArrayToBase64,
+    Uint8ArrayToHex,
     /// `%WrapForValidIteratorPrototype%.next()`: call the `next` method
     /// captured by `Iterator.from` with the wrapped iterator as receiver.
     IteratorWrapperNext,

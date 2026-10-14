@@ -782,6 +782,28 @@ impl Interp {
         let of = self.alloc_named_method(NativeMethod::TypedArrayOf, "of", 0);
         self.proto_methods.push((typed_array_ctor, "from", from));
         self.proto_methods.push((typed_array_ctor, "of", of));
+        // `%Uint8Array%`'s own base64 and hex members, as XS's
+        // `fxBuildDataView` installs them on that constructor and prototype.
+        if let Some(&uint8_array) = self.intrinsics.get("Uint8Array") {
+            for (name, method, arity) in [
+                ("fromBase64", NativeMethod::Uint8ArrayFromBase64, 1),
+                ("fromHex", NativeMethod::Uint8ArrayFromHex, 1),
+            ] {
+                let function = self.alloc_named_method(method, name, arity);
+                self.proto_methods.push((uint8_array, name, function));
+            }
+            if let Some(&proto) = self.ctor_prototype.get(&uint8_array) {
+                for (name, method, arity) in [
+                    ("setFromBase64", NativeMethod::Uint8ArraySetFromBase64, 1),
+                    ("setFromHex", NativeMethod::Uint8ArraySetFromHex, 1),
+                    ("toBase64", NativeMethod::Uint8ArrayToBase64, 0),
+                    ("toHex", NativeMethod::Uint8ArrayToHex, 0),
+                ] {
+                    let function = self.alloc_named_method(method, name, arity);
+                    self.proto_methods.push((proto, name, function));
+                }
+            }
+        }
         // Allocated now and installed under the well-known symbol key during
         // intrinsic linking, once that realm-local key id is available.
         let _ = self.alloc_named_method(
