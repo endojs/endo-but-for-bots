@@ -25,13 +25,13 @@
       "program": "snippet cross-target.slow.js#map-entries",
       "site": "bulk.rs:479",
       "native": "halt=Return result=\"33554433\" meter=53352104759704 digest=9c01a48bac96a7d2 parse_meter=15736832 charges=334:2a24a3a50f730ec2 checks=67256323:4965d833628efa0e",
-      "wasm32": "trap: panic: capacity overflow at ironhorse-vm/src/bulk.rs"
+      "wasm32": "halt=HostAllocationFailed result=\"\" meter=53352103563672 digest=9c01a48bac96a7d2 parse_meter=15736832 charges=334:2a24a3a50f730ec2 checks=67256321:bbf8c26966eb62f6"
     },
     {
       "program": "snippet cross-target.slow.js#array-items",
       "site": "bulk.rs:242",
       "native": "halt=Return result=\"80:1000000\" meter=5282477268192 digest=3432cf993fab6698 parse_meter=16793600 charges=485:bed3e8a649691bf2 checks=40000322:46a7a13690f09853",
-      "wasm32": "trap: 2: wasm trap: wasm `unreachable` instruction executed (memory allocation of 320 bytes failed)"
+      "wasm32": "halt=HostAllocationFailed result=\"\" meter=4941637518352 digest=3432cf993fab6698 parse_meter=16793600 charges=485:bed3e8a649691bf2 checks=37323213:98208e692990e147"
     },
     {
       "program": "snippet cross-target.slow.js#intl-segmenter-segments",
@@ -55,25 +55,25 @@
       "program": "snippet cross-target.slow.js#chunk-arena-doubling",
       "site": "embedder-raised ceilings: value.rs:2222",
       "native": "halt=Return result=\"17\" meter=9346468332712 digest=78743d8954a74c2d parse_meter=18313216 charges=409:719d0a838e0e379f checks=102:5a2f17802a912425",
-      "wasm32": "halt=HeapExhausted result=\"\" meter=9346466890360 digest=78743d8954a74c2d parse_meter=18313216 charges=409:719d0a838e0e379f checks=99:a5502649b45e78b1"
+      "wasm32": "halt=HostAllocationFailed result=\"\" meter=9346466890360 digest=78743d8954a74c2d parse_meter=18313216 charges=409:719d0a838e0e379f checks=99:a5502649b45e78b1"
     },
     {
       "program": "snippet cross-target.slow.js#scratch-over-2-gib",
       "site": "embedder-raised ceilings: interp/admission.rs:236",
       "native": "halt=Return result=\"1100000000\" meter=18023500968520 digest=8959d96dafba0f86 parse_meter=7131136 charges=119:5d066758e3e18dc1 checks=2:a0065880a369ff48",
-      "wasm32": "halt=HeapExhausted result=\"\" meter=18023500771912 digest=8959d96dafba0f86 parse_meter=7131136 charges=119:5d066758e3e18dc1 checks=2:a0065880a369ff48"
+      "wasm32": "halt=HostAllocationFailed result=\"\" meter=18023500771912 digest=8959d96dafba0f86 parse_meter=7131136 charges=119:5d066758e3e18dc1 checks=2:a0065880a369ff48"
     },
     {
       "program": "snippet cross-target.slow.js#chunk-ceiling-2-30-doubling",
       "site": "embedder-raised ceilings: set_chunk_ceiling at 2^30",
       "native": "halt=HeapExhausted result=\"\" meter=18259380792 digest=24664f0f567526b5 parse_meter=10412032 charges=232:4ab68ad8a16e21b4 checks=10:31246dfaaf1bd2c2",
-      "wasm32": "trap: 2: wasm trap: wasm `unreachable` instruction executed (memory allocation of 1073741824 bytes failed)"
+      "wasm32": "halt=HostAllocationFailed result=\"\" meter=18259380792 digest=24664f0f567526b5 parse_meter=10412032 charges=232:4ab68ad8a16e21b4 checks=10:31246dfaaf1bd2c2"
     },
     {
       "program": "snippet cross-target.slow.js#slot-ceiling-kept-objects-doubling",
       "site": "embedder-raised ceilings: set_slot_ceiling at 44,739,242",
       "native": "halt=HeapExhausted result=\"\" meter=31051724475986000 digest=0afb7695ebb45906 parse_meter=21139456 charges=435:4e4873326eede6c2 checks=176202063:ca1bb2842642200a",
-      "wasm32": "halt=HeapExhausted result=\"\" meter=18071096881363856 digest=0afb7695ebb45906 parse_meter=21139456 charges=435:4e4873326eede6c2 checks=134367471:76a15f2740371c65"
+      "wasm32": "halt=HostAllocationFailed result=\"\" meter=18071096881363856 digest=0afb7695ebb45906 parse_meter=21139456 charges=435:4e4873326eede6c2 checks=134367471:76a15f2740371c65"
     }
   ]
 }
