@@ -123,12 +123,26 @@ pub const MATCH_CHECK_STRIDE: u64 = 1024;
 pub const MAX_MATCH_STATES: usize = 65_536;
 pub const MAX_MATCH_BYTES: usize = 64 << 20;
 
+/// Consensus byte charges for the matcher's retained records. They decide
+/// `resource_limit`, so they must not follow the host pointer width as
+/// `size_of` does (`State` holds a `Vec`, `AssertionData` a `usize`). These
+/// are the audited 64-bit layouts; a 64-bit build asserts they still agree.
+const STATE_CHARGE: usize = 40;
+const ASSERTION_CHARGE: usize = 16;
+const QUANTIFIER_CHARGE: usize = 12;
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(
+    std::mem::size_of::<State>() == STATE_CHARGE
+        && std::mem::size_of::<AssertionData>() == ASSERTION_CHARGE
+        && std::mem::size_of::<QuantifierData>() == QUANTIFIER_CHARGE
+);
+
 fn save_captures(
     states: &mut Vec<State>,
     captures: &[(i32, i32)],
     base_bytes: usize,
 ) -> Option<Vec<(i32, i32)>> {
-    let state_bytes = std::mem::size_of::<State>().checked_add(std::mem::size_of_val(captures))?;
+    let state_bytes = STATE_CHARGE.checked_add(std::mem::size_of_val(captures))?;
     let count = states.len().checked_add(1)?;
     if count > MAX_MATCH_STATES
         || base_bytes.checked_add(count.checked_mul(state_bytes)?)? > MAX_MATCH_BYTES
@@ -189,14 +203,8 @@ pub fn match_regexp_budgeted(
     let base_bytes = [
         (capture_count, std::mem::size_of::<(i32, i32)>()),
         (name_count, std::mem::size_of::<i32>()),
-        (
-            program.assertion_count,
-            std::mem::size_of::<AssertionData>(),
-        ),
-        (
-            program.quantifier_count,
-            std::mem::size_of::<QuantifierData>(),
-        ),
+        (program.assertion_count, ASSERTION_CHARGE),
+        (program.quantifier_count, QUANTIFIER_CHARGE),
     ]
     .into_iter()
     .try_fold(0usize, |sum, (n, width)| {
