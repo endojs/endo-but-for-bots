@@ -2005,6 +2005,7 @@ impl Interp {
         const ROW: &str = "IntlBoundFunctions";
         let refuse = |reason| RestoreError { row: ROW, reason };
         self.validate_restore_owners(rows.iter().map(|row| row.function), ROW)?;
+        let mut owners = std::collections::BTreeSet::new();
         for row in &rows {
             self.validate_restore_owner(row.owner, ROW)?;
             if self
@@ -2012,6 +2013,11 @@ impl Interp {
                 .contains_key(&crate::value::SlotIndex(row.function))
             {
                 return Err(refuse("function owner already has metadata"));
+            }
+            // One bound function per Intl object: a second would make the
+            // `compare` getter's reverse lookup depend on hash order.
+            if !owners.insert(row.owner) {
+                return Err(refuse("Intl owner has more than one bound function"));
             }
             let owner = crate::value::SlotIndex(row.owner);
             match row.kind {

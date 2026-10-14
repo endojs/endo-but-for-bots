@@ -1066,20 +1066,22 @@ mod tests {
 
     #[test]
     fn bound_intl_rows_are_prevalidated_before_function_installation() {
-        for case in 0..4 {
-            let (code, names) =
-                ironhorse_compile::compile_atoms("var c = new Intl.Collator('en');").unwrap();
+        for case in 0..5 {
+            let (code, names) = ironhorse_compile::compile_atoms(
+                "var c = new Intl.Collator('en'); var d = new Intl.Collator('en');",
+            )
+            .unwrap();
             let mut interp = Interp::new();
             interp.link_intrinsics(&crate::parse_symbols(&names));
             assert!(interp.run(&code).completed);
-            let owner = interp.intl_snapshot().collators[0].0;
+            let collators = interp.intl_snapshot().collators;
             let first = interp.new_object();
             let second = interp.new_object();
             let mut rows = vec![
                 IntlBoundFunctionRow {
                     kind: 0,
                     function: first.0,
-                    owner,
+                    owner: collators[0].0,
                     name: "compare".into(),
                     name_chunk: u32::MAX,
                     arity: 2,
@@ -1087,7 +1089,7 @@ mod tests {
                 IntlBoundFunctionRow {
                     kind: 0,
                     function: second.0,
-                    owner,
+                    owner: collators[1].0,
                     name: "compare".into(),
                     name_chunk: u32::MAX,
                     arity: 2,
@@ -1097,13 +1099,15 @@ mod tests {
                 0 => rows[1].function = first.0,
                 1 => rows[1].owner = second.0,
                 2 => rows[1].name_chunk = 1,
-                _ => rows[1].kind = 2,
+                3 => rows[1].kind = 2,
+                _ => rows[1].owner = rows[0].owner,
             }
             let before = interp.functions.len();
-            assert_eq!(
-                interp.restore_intl_bound_functions(rows).unwrap_err().row,
-                "IntlBoundFunctions"
-            );
+            let error = interp.restore_intl_bound_functions(rows).unwrap_err();
+            assert_eq!(error.row, "IntlBoundFunctions");
+            if case == 4 {
+                assert_eq!(error.reason, "Intl owner has more than one bound function");
+            }
             assert_eq!(interp.functions.len(), before);
             assert!(!interp.functions.contains_key(&first));
         }
