@@ -23,6 +23,7 @@ output line byte for byte against a native reference produced in the same run.
 | `differential.py`, `differential/` | The release-neutral gate for the refactors of Phase 1 onward: the native probe at a base revision against the working tree, both handed the same program text (the corpus, every family around its ceiling, and the per-change programs in `differential/`), compared byte for byte, compiles by bytecode, symbols and every parse-meter charge (`--digest`), runs by where the meter is checked, to the computron (`--meter-trace`). |
 | `cross_target.py`, `differential/cross-target*.js` | The cross-target gate of `WASM-BLOCKERS.md` B7: the native probe against the wasm32 probe under Wasmtime at lane A's stack, both built from the working tree and handed `differential.py`'s programs, compared on the same fields. The two snippet files hold the B7 repros. |
 | `expected-divergence/` | The divergences `cross_target.py` allows, one entry per program with both lines and its B7 site. |
+| `memory/` | Not a stack lane: the memory measurements of `../WASM-MEMORY.md`, a probe of its own that reports linear memory against the slot and chunk ceilings per heap shape while running, at a checkpoint, a whole-heap snapshot and a restore, built with this directory's wasm recipe (`memory/README.md`). |
 | `../benches/stack_height.py` | The native ratchet over the same corpus (`benches/README.md`). |
 
 ## Running
