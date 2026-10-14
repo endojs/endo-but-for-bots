@@ -1,8 +1,8 @@
-import './_sturdyref-shim-enumerable.js';
+import './_parcel-shim-writable.js';
 import '../index.js';
 import test from 'ava';
 
-test('lockdown refuses a locked SturdyRef of the wrong shape', t => {
+test('lockdown refuses a writable non-configurable Parcel', t => {
   // The redefinition error message is engine-specific; assert only the type.
   t.throws(() => lockdown(), { instanceOf: TypeError });
 });
