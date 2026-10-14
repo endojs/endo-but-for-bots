@@ -1,7 +1,7 @@
 import harden from '@endo/harden';
 
 /**
- * @import {SturdyRefObject} from './types.js';
+ * @import {ParcelObject} from './types.js';
  */
 
 const { apply, getOwnPropertyDescriptor, getPrototypeOf, ownKeys } = Reflect;
@@ -23,7 +23,7 @@ const getOwnDataValue = (object, key) => {
 };
 
 /**
- * Like the `remotable` family's tag records, the properties of a SturdyRef
+ * Like the `remotable` family's tag records, the properties of a Parcel
  * prototype must be non-enumerable data properties.
  *
  * @param {object} object
@@ -42,10 +42,10 @@ const hasOwnHiddenDataValue = (object, key, expected) => {
 };
 
 /**
- * A SturdyRef is passable, analogous to a presence: it has object identity
- * and no data. Pass-style senses `globalThis.SturdyRef` (installed first-wins
- * by `@endo/sturdyref`) rather than depending on that package, and asks its
- * `isSturdyRef` brand check rather than `instanceof`, which `Object.create`
+ * A Parcel is passable, analogous to a presence: it has object identity
+ * and no data. Pass-style senses `globalThis.Parcel` (installed first-wins
+ * by `@endo/parcel`) rather than depending on that package, and asks its
+ * `isParcel` brand check rather than `instanceof`, which `Object.create`
  * can forge.
  *
  * The global binding cannot be required to be locked, because a child
@@ -53,7 +53,7 @@ const hasOwnHiddenDataValue = (object, key, expected) => {
  * constructor could be trusted. The shape checks below bound that impostor:
  * it is only ever asked about a frozen, empty object inheriting directly from
  * a shim-shaped prototype, after every other pass style has declined it
- * (`test/sturdyref-lying-global.test.js`). The captured check stays fixed for
+ * (`test/parcel-lying-global.test.js`). The captured check stays fixed for
  * this module's lifetime, as `passStyleOf`'s memo requires.
  *
  * @type {((value: object) => boolean) | undefined}
@@ -62,7 +62,7 @@ let brandCheck;
 
 /**
  * Whether the brand check is already running. `passStyleOf`'s cycle guard is
- * per call, so an `isSturdyRef` that calls back into `passStyleOf` would
+ * per call, so an `isParcel` that calls back into `passStyleOf` would
  * otherwise recurse without bound. A reentrant check rejects its candidate.
  */
 let checking = false;
@@ -72,22 +72,29 @@ let checking = false;
  */
 const provideBrandCheck = () => {
   if (brandCheck === undefined) {
-    const SturdyRef = /** @type {any} */ (globalThis).SturdyRef;
-    if (typeof SturdyRef !== 'function' || !isFrozen(SturdyRef)) {
+    const Parcel = /** @type {any} */ (globalThis).Parcel;
+    if (typeof Parcel !== 'function' || !isFrozen(Parcel)) {
       return undefined;
     }
-    const isSturdyRef = getOwnDataValue(SturdyRef, 'isSturdyRef');
-    const prototype = getOwnDataValue(SturdyRef, 'prototype');
+    const isParcel = getOwnDataValue(Parcel, 'isParcel');
+    const prototype = getOwnDataValue(Parcel, 'prototype');
+    const prototypeConstructor =
+      typeof prototype === 'object' && prototype !== null
+        ? getOwnDataValue(prototype, 'constructor')
+        : undefined;
     if (
-      typeof isSturdyRef !== 'function' ||
-      !isFrozen(isSturdyRef) ||
+      typeof isParcel !== 'function' ||
+      !isFrozen(isParcel) ||
       typeof prototype !== 'object' ||
       prototype === null ||
       !isFrozen(prototype) ||
       getPrototypeOf(prototype) !== objectPrototype ||
       ownKeys(prototype).length !== 2 ||
-      !hasOwnHiddenDataValue(prototype, 'constructor', SturdyRef) ||
-      !hasOwnHiddenDataValue(prototype, toStringTag, 'SturdyRef')
+      typeof prototypeConstructor !== 'function' ||
+      !isFrozen(prototypeConstructor) ||
+      getOwnDataValue(prototypeConstructor, 'prototype') !== prototype ||
+      getOwnDataValue(prototypeConstructor, 'isParcel') !== isParcel ||
+      !hasOwnHiddenDataValue(prototype, toStringTag, 'Parcel')
     ) {
       return undefined;
     }
@@ -100,7 +107,7 @@ const provideBrandCheck = () => {
       }
       checking = true;
       try {
-        return apply(isSturdyRef, SturdyRef, [value]) === true;
+        return apply(isParcel, Parcel, [value]) === true;
       } catch {
         return false;
       } finally {
@@ -113,10 +120,10 @@ const provideBrandCheck = () => {
 
 /**
  * @param {object} candidate an object that is already known to be frozen
- * @returns {candidate is SturdyRefObject}
+ * @returns {candidate is ParcelObject}
  */
-export const isSturdyRefObject = candidate => {
+export const isParcelObject = candidate => {
   const check = provideBrandCheck();
   return check !== undefined && check(candidate);
 };
-harden(isSturdyRefObject);
+harden(isParcelObject);
