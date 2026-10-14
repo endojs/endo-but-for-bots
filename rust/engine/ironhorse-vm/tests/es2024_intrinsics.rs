@@ -101,3 +101,21 @@ fn promise_try() {
         "ok42,errno"
     );
 }
+
+#[test]
+fn error_is_error() {
+    check(&[
+        (
+            "[Error.isError.name, Error.isError.length, Object.getOwnPropertyNames(Error).join('+')].join()",
+            "isError,1,length+name+prototype+isError",
+        ),
+        (
+            "class E extends Error {} var thrown = []; try { null.x } catch (e) { thrown.push(e) } try { JSON.parse('{') } catch (e) { thrown.push(e) } [new Error(), new TypeError(), new AggregateError([]), new SuppressedError(1, 2), new E(), RangeError('x')].concat(thrown).map(Error.isError).join()",
+            "true,true,true,true,true,true,true,true",
+        ),
+        (
+            "[undefined, {}, Error.prototype, Object.create(Error.prototype), new Proxy(new Error(), {}), 'Error', null, Error].map(function (v) { return Error.isError(v); }).join() + ',' + Error.isError()",
+            "false,false,false,false,false,false,false,false,false",
+        ),
+    ]);
+}

@@ -1613,6 +1613,10 @@ impl Interp {
         let error_to_string = self.alloc_named_method(NativeMethod::ErrorToString, "toString", 0);
         self.proto_methods
             .push((error_proto, "toString", error_to_string));
+        if let Some(&error_ctor) = self.intrinsics.get("Error") {
+            let is_error = self.alloc_named_method(NativeMethod::ErrorIsError, "isError", 1);
+            self.proto_methods.push((error_ctor, "isError", is_error));
+        }
         // Each Error prototype's own `name` (per type) and `message` (""),
         // `%Error.prototype%`'s here and every NativeError's below. Placing `name` on
         // the prototype — not the instance — is what makes `err.name` resolve
