@@ -32,4 +32,13 @@ pub const PINNED: &[(&str, &str)] = &[
         "ironhorse-meter-6",
         "4d9abebe68c732f045097da41de323467d6403019a672eb1249521cd476601a5",
     ),
+    // Same weights, new charging points: `ArrayBuffer.prototype.resize` and
+    // `SharedArrayBuffer.prototype.grow` charge their new backing chunk as an
+    // allocation, a buffer constructor's options object is read, and a
+    // SharedArrayBuffer's `byteLength` is an accessor call on
+    // `%SharedArrayBuffer.prototype%` rather than a free read.
+    (
+        "ironhorse-meter-7",
+        "4d9abebe68c732f045097da41de323467d6403019a672eb1249521cd476601a5",
+    ),
 ];
