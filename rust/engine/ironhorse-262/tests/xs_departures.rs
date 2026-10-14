@@ -482,6 +482,13 @@ const UNPAIRED: &[Row] = &[
         v8: "TypeError",
         why: "RevalidateAtomicAccess throws a RangeError when an operand's coercion shrinks the buffer below the accessed element; XS writes past the buffer's new length, and Node 22 throws a TypeError",
     },
+    Row {
+        program: "var log = []; function C(ex) { ex(function (v) { log.push('res' + v); throw new Error('boom'); }, function (e) { log.push('rej' + e); }); } var out; try { Promise.try.call(C, function () { return 1; }); out = 'returned'; } catch (e) { out = 'threw ' + e.message; } out + '|' + log.join()",
+        ironhorse: "threw boom|res1",
+        xs: "returned|res1,rejError: boom",
+        v8: "threw Cannot read properties of undefined (reading 'call')|",
+        why: "Promise.try lets a throw from the capability's resolve propagate (ES2025 27.2.4.8 step 6); XS's fx_Promise_try calls resolve inside its catch and rejects with what it threw; Node 22 has no Promise.try",
+    },
 ];
 
 const KEPT: &[Row] = &[

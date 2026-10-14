@@ -938,6 +938,10 @@ pub enum NativeMethod {
     /// `Promise.withResolvers()` (`fx_Promise_withResolvers`): a new
     /// capability of the receiver, as a `{ promise, resolve, reject }` object.
     PromiseWithResolvers,
+    /// `Promise.try(callback, ...args)` (`fx_Promise_try`): a new capability
+    /// of the receiver, resolved with the callback's result or rejected with
+    /// what it threw.
+    PromiseTry,
     /// A promise's resolve/reject function (XS's `fxResolvePromise`/
     /// `fxRejectPromise` host functions handed to the executor). Recognized
     /// in the `RUN` dispatch by a `promise_functions` side-table lookup, not
