@@ -4248,8 +4248,8 @@ impl Interp {
             // `Array.prototype.indexOf(value[, from])` — dense fast path.
             NativeMethod::ArrayIndexOf => {
                 let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => {
+                    Some(i) if self.search_from_index_is_plain(base, argc, true) => i,
+                    _ => {
                         let result = self.array_generic_readonly(code, m, this, base, argc)?;
                         self.stack.truncate(base);
                         self.push(result);
@@ -4259,8 +4259,9 @@ impl Interp {
                 let target = arg0;
                 self.charge_and_check(ARRAY_METHOD_INDEXOF_FRAME_METERING)?;
                 let length = self.arrays[&inst].length;
+                let from = self.arg_to_index(base, 1, 0, length);
                 let mut found = -1i32;
-                for i in 0..length {
+                for i in from..length {
                     self.charge_and_check(ARRAY_INDEXOF_PER_STEP)?;
                     if let Some(item) = self.arrays[&inst].items().get(&i) {
                         if self.strict_equal(item, &target) {
@@ -4277,8 +4278,8 @@ impl Interp {
             // per-element scan step), calibrated against the pin.
             NativeMethod::ArrayIncludes => {
                 let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => {
+                    Some(i) if self.search_from_index_is_plain(base, argc, true) => i,
+                    _ => {
                         let result = self.array_generic_readonly(code, m, this, base, argc)?;
                         self.stack.truncate(base);
                         self.push(result);
@@ -4305,12 +4306,13 @@ impl Interp {
                 Slot::boolean(found)
             }
             // `Array.prototype.lastIndexOf(value[, from])` — dense fast path.
-            // Scan backward from the end by strict equality; the last matching
-            // index, or `-1`.
+            // Scan backward from `from` (default the last index) by strict
+            // equality; the last matching index, or `-1`. An explicit
+            // `undefined` is 0, not the default, so it takes the generic path.
             NativeMethod::ArrayLastIndexOf => {
                 let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => {
+                    Some(i) if self.search_from_index_is_plain(base, argc, false) => i,
+                    _ => {
                         let result = self.array_generic_readonly(code, m, this, base, argc)?;
                         self.stack.truncate(base);
                         self.push(result);
@@ -4320,8 +4322,11 @@ impl Interp {
                 let target = arg0;
                 self.charge_and_check(ARRAY_LASTINDEXOF_FRAME_METERING)?;
                 let length = self.arrays[&inst].length;
+                let scanned = self
+                    .arg_to_last_index(base, argc, length)
+                    .map_or(0, |last| last + 1);
                 let mut found = -1i32;
-                for i in (0..length).rev() {
+                for i in (0..scanned).rev() {
                     self.charge_and_check(ARRAY_LASTINDEXOF_PER_STEP)?;
                     if let Some(item) = self.arrays[&inst].items().get(&i) {
                         if self.strict_equal(item, &target) {
