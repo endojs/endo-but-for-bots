@@ -314,7 +314,10 @@ var r;
 try { r = JSON.parse(t); } catch (e) { r = e.name; }
 typeof r
 // ---
+// name: reviver-source-list-near-ceiling
 // The same with source tracking (a reviver), so the source-list admission is also in play.
+// It halts on both targets, but natively sooner: the source list is charged by the host's width
+// (WASM-BLOCKERS.md B7, natives/json.rs:1095).
 var filler = 'a'.repeat(2 ** 25);
 var t = '{"k":'.repeat(1500) + '[' + '1,'.repeat(4000000) + '1]' + '}'.repeat(1500);
 var r;
