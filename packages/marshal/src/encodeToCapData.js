@@ -241,8 +241,8 @@ export const makeEncodeToCapData = (encodeOptions = {}) => {
           'error',
         )}: ${encoded}`;
       }
-      case 'sturdyRef': {
-        // Marshal does not yet give a SturdyRef a representation.
+      case 'parcel': {
+        // Marshal does not yet give a Parcel a representation.
         throw Fail`a ${q(passStyle)} cannot be marshalled`;
       }
       default: {

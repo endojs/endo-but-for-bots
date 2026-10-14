@@ -4,22 +4,27 @@ import harden from '@endo/harden';
 
 import { passStyleOf } from '../src/passStyleOf.js';
 
-test('a SturdyRef global without isSturdyRef vouches for nothing', t => {
+const mutableTest =
+  Object.getOwnPropertyDescriptor(globalThis, 'Parcel')?.configurable !== false
+    ? test
+    : test.skip;
+
+mutableTest('a Parcel global without isParcel vouches for nothing', t => {
   // Something other than the shim claimed the global. Recognition must not
   // trust it, and must not throw while looking.
   // The constructor and prototype are frozen, so only the missing
-  // `isSturdyRef` can disqualify it.
-  const impostor = function SturdyRef() {};
+  // `isParcel` can disqualify it.
+  const impostor = function Parcel() {};
   Object.defineProperty(impostor.prototype, Symbol.toStringTag, {
-    value: 'SturdyRef',
+    value: 'Parcel',
   });
   Object.freeze(impostor.prototype);
   Object.freeze(impostor);
-  /** @type {any} */ (globalThis).SturdyRef = impostor;
+  /** @type {any} */ (globalThis).Parcel = impostor;
   try {
     const ref = harden(Object.create(impostor.prototype));
     t.throws(() => passStyleOf(ref));
   } finally {
-    delete (/** @type {any} */ (globalThis).SturdyRef);
+    delete (/** @type {any} */ (globalThis).Parcel);
   }
 });

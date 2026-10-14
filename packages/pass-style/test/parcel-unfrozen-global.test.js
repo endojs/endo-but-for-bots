@@ -3,8 +3,12 @@ import test from '@endo/ses-ava/test.js';
 import { passStyleOf } from '../src/passStyleOf.js';
 
 const { create, defineProperty, freeze } = Object;
+const mutableTest =
+  Object.getOwnPropertyDescriptor(globalThis, 'Parcel')?.configurable !== false
+    ? test
+    : test.skip;
 
-test('an unfrozen SturdyRef global is not trusted', t => {
+mutableTest('an unfrozen Parcel global is not trusted', t => {
   // The shim always freezes its constructor, its statics, and its prototype.
   // A global that could still be changed vouches for nothing.
   // `Object.isFrozen({}) === true` detects unsafe harden taming, under which
@@ -13,20 +17,20 @@ test('an unfrozen SturdyRef global is not trusted', t => {
     t.pass('unsafe taming: isFrozen cannot detect an unfrozen global');
     return;
   }
-  const impostor = function SturdyRef() {};
+  const impostor = function Parcel() {};
   // Shaped like the shim's prototype, so that only the condition under test
   // can reject the impostor.
   defineProperty(impostor.prototype, Symbol.toStringTag, {
-    value: 'SturdyRef',
+    value: 'Parcel',
   });
-  impostor.isSturdyRef = () => true;
-  freeze(impostor.isSturdyRef);
+  impostor.isParcel = () => true;
+  freeze(impostor.isParcel);
   freeze(impostor.prototype);
-  /** @type {any} */ (globalThis).SturdyRef = impostor;
+  /** @type {any} */ (globalThis).Parcel = impostor;
   try {
     const candidate = freeze(create(impostor.prototype));
     t.throws(() => passStyleOf(candidate));
   } finally {
-    delete (/** @type {any} */ (globalThis).SturdyRef);
+    delete (/** @type {any} */ (globalThis).Parcel);
   }
 });

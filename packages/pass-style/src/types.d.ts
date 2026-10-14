@@ -42,7 +42,7 @@ export type PrimitiveStyle = AtomStyle;
 export type ContainerStyle = 'copyRecord' | 'copyArray' | 'tagged';
 
 export type PassStyle =
-  AtomStyle | ContainerStyle | 'remotable' | 'error' | 'promise' | 'sturdyRef';
+  AtomStyle | ContainerStyle | 'remotable' | 'error' | 'promise' | 'parcel';
 
 export type PassStyleMarker = 'tagged' | 'remotable';
 
@@ -61,7 +61,7 @@ export type ExtractStyle<P extends PassStyled<any, any>> = P[typeof PASS_STYLE];
 export type PassByCopy = Atom | Error | CopyArray | CopyRecord | CopyTagged;
 
 /**
- * Excludes `SturdyRefObject`, which is passed by identity but, like its
+ * Excludes `ParcelObject`, which is passed by identity but, like its
  * exclusion from `PassableCap`, has no marshal slot representation yet.
  */
 export type PassByRef =
@@ -88,7 +88,7 @@ export type PassByRef =
  *     remote interaction.
  *   * As a special case to support system observability, error objects are
  *     Passable (PassStyle 'error').
- *   * SturdyRefs (PassStyle 'sturdyRef') are Passable by identity, like
+ *   * Parcels (PassStyle 'parcel') are Passable by identity, like
  *     PassableCaps, but are not PassableCaps: marshal has no slot
  *     representation for them yet.
  *
@@ -100,7 +100,7 @@ export type PassByRef =
 export type Passable<
   PC extends PassableCap = PassableCap,
   E extends Error = Error,
-> = void | Atom | Container<PC, E> | PC | E | SturdyRefObject;
+> = void | Atom | Container<PC, E> | PC | E | ParcelObject;
 
 export type Container<PC extends PassableCap, E extends Error> =
   | CopyArrayInterface<PC, E>
@@ -130,7 +130,7 @@ export type PassStyleOf = {
   (p: Promise<any>): 'promise';
   (p: Error): 'error';
   (p: CopyTagged): 'tagged';
-  (p: SturdyRefObject): 'sturdyRef';
+  (p: ParcelObject): 'parcel';
   (p: readonly any[]): 'copyArray';
   // A `Uint8Array` is also `Iterable<number>`; place its byteArray
   // overload before the Iterable-as-remotable fallback so the more
@@ -193,13 +193,13 @@ export type RemotableObject<I extends InterfaceSpec = string> = PassStyled<
 export type RemotableMethodName = PropertyKey;
 
 /**
- * A SturdyRef is passable, analogous to a presence: it has object identity and
- * no data. This mirrors the `SturdyRef` type of `@endo/sturdyref`, which
+ * A Parcel is passable, analogous to a presence: it has object identity and
+ * no data. This mirrors the `Parcel` type of `@endo/parcel`, which
  * pass-style cannot import without a dependency cycle; `types.test-d.ts`
  * checks that the two stay in step.
  */
-export interface SturdyRefObject {
-  readonly [Symbol.toStringTag]: 'SturdyRef';
+export interface ParcelObject {
+  readonly [Symbol.toStringTag]: 'Parcel';
 }
 
 /**

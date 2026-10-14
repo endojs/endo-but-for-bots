@@ -22,7 +22,7 @@ import {
   isErrorLike,
 } from './error.js';
 import { RemotableHelper } from './remotable.js';
-import { isSturdyRefObject } from './sturdyref.js';
+import { isParcelObject } from './parcel.js';
 
 import { assertPassableSymbol } from './symbol.js';
 import { assertSafePromise } from './safe-promise.js';
@@ -197,13 +197,13 @@ const makePassStyleOf = passStyleHelpers => {
               return helper.styleName;
             }
           }
-          // A SturdyRef carries no PASS_STYLE and no own properties, so no
+          // A Parcel carries no PASS_STYLE and no own properties, so no
           // helper other than the remotable fallback would claim it. Only the
-          // brand check of the global SturdyRef can tell it apart from an
+          // brand check of the global Parcel can tell it apart from an
           // unpassable object. Asking only here means that check can never
           // reclassify a value that already has another pass style.
-          if (isSturdyRefObject(inner)) {
-            return 'sturdyRef';
+          if (isParcelObject(inner)) {
+            return 'parcel';
           }
           // A TypedArray that was not claimed by any helper (most commonly a
           // Uint8Array backed by a mutable ArrayBuffer) must not fall through to

@@ -126,10 +126,10 @@ export const render = value => {
       $value.innerText = remotable[Symbol.toStringTag];
       return $value;
     }
-    case 'sturdyRef': {
+    case 'parcel': {
       const $value = document.createElement('span');
-      $value.className = 'sturdyref';
-      $value.innerText = 'SturdyRef';
+      $value.className = 'parcel';
+      $value.innerText = 'Parcel';
       return $value;
     }
     default: {

@@ -1,5 +1,5 @@
-// Install the realm's SturdyRef before anything below can make one.
-import '@endo/sturdyref/shim.js';
+// Install the realm's Parcel before anything below can make one.
+import '@endo/parcel/shim.js';
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
@@ -17,47 +17,48 @@ import {
 } from '../src/patterns/patternMatchers.js';
 
 /** @type {any} */
-const { SturdyRef } = globalThis;
+const { Parcel } = globalThis;
+const parcelTest = Object.isFrozen(Parcel) ? test : test.skip;
 
-const makeRef = () => new SturdyRef({ enliven: () => 'revived' });
+const makeRef = () => new Parcel('test:patterns', () => 'opened');
 
-// A SturdyRef is passable but, like a promise or an error, is neither a key
+// A Parcel is passable but, like a promise or an error, is neither a key
 // nor a pattern. Predicates must answer false, and assertions must say so,
 // rather than fail with an internal error.
 
-test('a SturdyRef is not a key', t => {
+parcelTest('a Parcel is not a key', t => {
   const ref = makeRef();
-  t.is(passStyleOf(ref), 'sturdyRef');
+  t.is(passStyleOf(ref), 'parcel');
   t.false(isKey(ref));
   t.false(isKey(harden([ref])));
   t.false(isKey(harden({ ref })));
-  const message = /"sturdyRef" cannot be a key/;
+  const message = /"parcel" cannot be a key/;
   t.throws(() => assertKey(ref), { message });
   t.throws(() => keyEQ(ref, ref), { message });
 });
 
-test('a SturdyRef is not a pattern', t => {
+parcelTest('a Parcel is not a pattern', t => {
   const ref = makeRef();
   t.false(isPattern(ref));
   t.false(isPattern(harden([ref])));
   t.false(matches(5, ref));
   t.throws(() => mustMatch(5, ref), {
-    message: /sturdyRefs cannot be patterns/,
+    message: /parcels cannot be patterns/,
   });
 });
 
-test('a SturdyRef cannot bound a range pattern', t => {
-  // Range matchers look up a rank cover, which a SturdyRef does not have.
+parcelTest('a Parcel cannot bound a range pattern', t => {
+  // Range matchers look up a rank cover, which a Parcel does not have.
   // They must reject it as a non-key when the pattern is made.
   const ref = makeRef();
-  const message = /"sturdyRef" cannot be a key/;
+  const message = /"parcel" cannot be a key/;
   t.throws(() => M.lte(ref), { message });
   t.throws(() => M.gte(ref), { message });
   t.throws(() => M.lt(ref), { message });
   t.throws(() => M.gt(ref), { message });
 });
 
-test('a SturdyRef as a specimen fails to match rather than throwing', t => {
+parcelTest('a Parcel as a specimen fails to match rather than throwing', t => {
   const ref = makeRef();
   t.true(matches(ref, M.any()));
   t.false(matches(ref, M.key()));
@@ -69,9 +70,9 @@ test('a SturdyRef as a specimen fails to match rather than throwing', t => {
   t.true(matches(harden({ ref }), harden({ ref: M.any() })));
 });
 
-test('a SturdyRef has no rank cover', t => {
+parcelTest('a Parcel has no rank cover', t => {
   const encodePassable = makeEncodePassable();
   t.throws(() => getRankCover(makeRef(), encodePassable), {
-    message: /"sturdyRef" cannot be rank-ordered/,
+    message: /"parcel" cannot be rank-ordered/,
   });
 });
