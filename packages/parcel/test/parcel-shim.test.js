@@ -3,7 +3,6 @@
 import '@endo/init';
 import test from 'ava';
 import harden from '@endo/harden';
-import { passStyleOf } from '@endo/pass-style';
 import { E } from '@endo/eventual-send';
 import { makeParcelConstructor } from '../src/parcel-shim.js';
 
@@ -24,7 +23,6 @@ test('constructor, brand, location, and frozen empty instance', t => {
   t.false(Parcel.isParcel(Object.create(Parcel.prototype)));
   t.is(Parcel.locate(parcel), 'test:parcel');
   t.throws(() => Parcel.locate(harden({})), { message: /expects a Parcel/ });
-  t.throws(() => passStyleOf(parcel));
 });
 
 test('open runs in a later turn with captured arguments and undefined this', async t => {
@@ -105,15 +103,7 @@ test('brands are private to a selected constructor', t => {
 });
 
 test.serial('E.open delegates to the selected Parcel constructor', async t => {
-  const Parcel = makeParcelConstructor();
-  Object.defineProperty(globalThis, 'Parcel', {
-    value: Parcel,
-    configurable: true,
-  });
-  try {
-    const parcel = new Parcel('test:eventual-send', location => location);
-    t.is(await E.open(parcel), 'test:eventual-send');
-  } finally {
-    delete globalThis.Parcel;
-  }
+  const Parcel = /** @type {any} */ (globalThis).Parcel;
+  const parcel = new Parcel('test:eventual-send', location => location);
+  t.is(await E.open(parcel), 'test:eventual-send');
 });

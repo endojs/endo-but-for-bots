@@ -4,7 +4,6 @@
 // enumerability, which a non-configurable property would reject. Isolated in
 // its own file (its own process) so the pre-seeded global does not leak.
 
-import '@endo/init';
 import test from 'ava';
 import { makeParcelConstructor, selectParcel } from '../src/parcel-shim.js';
 

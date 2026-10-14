@@ -5,7 +5,6 @@
 // copy. Isolated in its own file (its own process) so its pre-seeded global
 // does not perturb the real-install tests.
 
-import '@endo/init';
 import test from 'ava';
 import {
   makeParcelConstructor,

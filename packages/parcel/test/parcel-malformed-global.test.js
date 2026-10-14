@@ -4,7 +4,6 @@
 // statics is rejected loudly rather than silently adopted. Own file (own
 // process) so the pre-seeded global is isolated.
 
-import '@endo/init';
 import test from 'ava';
 import harden from '@endo/harden';
 import { selectParcel } from '../src/parcel-shim.js';
