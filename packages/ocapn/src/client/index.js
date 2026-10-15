@@ -935,8 +935,12 @@ export const makeOcapn = async ({
     makeParcel(location, secret) {
       return parcelTracker.makeParcel(location, secret);
     },
-    // Compatibility aliases for downstream packages updated later in this
-    // stacked series.
+    /**
+     * @deprecated Use `makeParcel`.
+     * @param {OcapnLocation} location
+     * @param {string | Uint8Array} secret
+     * @returns {Parcel}
+     */
     makeSturdyRef(location, secret) {
       return parcelTracker.makeParcel(location, secret);
     },
@@ -956,6 +960,11 @@ export const makeOcapn = async ({
         locator,
       );
     },
+    /**
+     * @deprecated Use `openParcel`.
+     * @param {Parcel} parcel
+     * @returns {Promise<any>}
+     */
     enlivenSturdyRef(parcel) {
       return openParcel(
         parcel,
