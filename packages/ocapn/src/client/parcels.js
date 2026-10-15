@@ -11,8 +11,11 @@ import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
 import { decodeHex, encodeHex } from '@endo/hex';
 import { frozenBytes, thawedBytes } from '@endo/immutable-arraybuffer';
-import { passStyleOf } from '@endo/pass-style';
-import { locate, makeParcel as makeRealmParcel } from '@endo/parcel';
+import {
+  isParcel as isRealmParcel,
+  locate,
+  makeParcel as makeRealmParcel,
+} from '@endo/parcel';
 import {
   decodeSwissnum,
   encodeSwissnum,
@@ -88,13 +91,7 @@ export const parseParcelLocation = parcelLocation => {
  * @param {unknown} value
  * @returns {value is Parcel}
  */
-export const isParcel = value => {
-  try {
-    return passStyleOf(value) === 'parcel';
-  } catch {
-    return false;
-  }
-};
+export const isParcel = value => isRealmParcel(value);
 
 /**
  * Read OCapN coordinates with the caller's privileged initial Parcel
