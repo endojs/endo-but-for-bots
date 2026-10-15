@@ -51,4 +51,10 @@ pub const PINNED: &[(&str, &str)] = &[
         "ironhorse-meter-8",
         "4d9abebe68c732f045097da41de323467d6403019a672eb1249521cd476601a5",
     ),
+    // Same weights; new charging points in the Annex B and ES2024-and-later
+    // built-ins XS ships, and programs that named them and halted now run.
+    (
+        "ironhorse-meter-9",
+        "4d9abebe68c732f045097da41de323467d6403019a672eb1249521cd476601a5",
+    ),
 ];
