@@ -729,6 +729,9 @@ const makePatternKit = () => {
 
     const passStyle = passStyleOf(patt);
     switch (passStyle) {
+      case 'parcel': {
+        throw Fail`A ${q(passStyle)} cannot be rank-ordered`;
+      }
       case 'copyArray': {
         const pattArr = /** @type {CopyArray} */ (patt);
 
