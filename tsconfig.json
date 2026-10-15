@@ -29,6 +29,7 @@
         "packages/lal",
         "packages/monaco-wrapper",
         "packages/platform",
+        "packages/thixotrope",
         "packages/preact-container",
         "packages/preact-social",
         "packages/parser-pipeline/test/fixture/*-error.js",
