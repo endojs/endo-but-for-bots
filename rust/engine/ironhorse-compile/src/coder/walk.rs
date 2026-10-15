@@ -605,7 +605,7 @@ impl Coder<'_, '_> {
                 i,
                 body,
             } => {
-                let items = Self::statement_items(&node.children[0]);
+                let items = statement_items(&node.children[0]);
                 for (j, item) in items.iter().enumerate().skip(i) {
                     let Item::Node(n) = item else { continue };
                     if n.token != Token::Define || !self.code_define_open(n) {

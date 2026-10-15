@@ -43,7 +43,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-use crate::ast::{Item, Node, Value};
+use crate::ast::{statement_items, Item, Node, Value};
 use crate::opcodes::*;
 use crate::scoper::{node_id, ScopeTree};
 use crate::token::Token;
@@ -3155,29 +3155,17 @@ impl Coder<'_, '_> {
     /// `fxScopeCodeDefineNodes` — hoist and code the function-declaration
     /// (`Define`) statements at the top of a scope's body, in source order,
     /// before the ordinary statements. Marks each coded so its in-list
-    /// occurrence is skipped.
+    /// occurrence is skipped. The scoper bound the same defines first
+    /// (`fxScopeBindDefineNodes`).
     #[inline(never)]
     fn code_define_nodes(&mut self, body: &Item) {
-        for item in Self::statement_items(body) {
+        for item in statement_items(body) {
             if let Item::Node(n) = item {
                 if n.token == Token::Define {
                     self.code_define(n);
                 }
             }
         }
-    }
-
-    /// The ordered statement items of a body: a `Statements` node's list,
-    /// or the single statement itself.
-    fn statement_items(body: &Item) -> &[Item] {
-        if let Item::Node(n) = body {
-            if n.token == Token::Statements {
-                if let Some(Item::List(items)) = n.children.first() {
-                    return items;
-                }
-            }
-        }
-        std::slice::from_ref(body)
     }
 
     /// `fxCoderCountParameters` — the leading simple/pattern parameter

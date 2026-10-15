@@ -223,6 +223,23 @@ pub fn item_depth(item: &Item) -> u32 {
     }
 }
 
+/// The ordered statement items of a statement slot: a `Statements` node's
+/// list, or the single statement (or `NULL`) itself. A function
+/// declaration (`Define`) is only ever one of these items, so a scope's
+/// define list (XS's `firstDefineNode`…) is the `Define` nodes among the
+/// items of its statement slots: the scoper binds them, and the coder codes
+/// them, before the statements.
+pub(crate) fn statement_items(body: &Item) -> &[Item] {
+    if let Item::Node(n) = body {
+        if n.token == Token::Statements {
+            if let Some(Item::List(items)) = n.children.first() {
+                return items;
+            }
+        }
+    }
+    std::slice::from_ref(body)
+}
+
 /// The display name XS gives a node kind (`txNodeDescription.name` in
 /// `gxTokenDescriptions`, `xsTree.c`). Used by the fixture dump. Tokens
 /// that are never node kinds map to their own debug name; the ones that

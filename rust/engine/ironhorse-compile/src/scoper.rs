@@ -42,7 +42,7 @@
 
 use crate::node_table::NodeTable;
 
-use crate::ast::{flags, node_name, Item, Node};
+use crate::ast::{flags, node_name, statement_items, Item, Node};
 use crate::parser::{ParseError, Parser};
 use crate::token::Token;
 use ironhorse_text::SymbolName;
@@ -585,6 +585,10 @@ struct Scoper<'a> {
     /// global / sloppy-eval-var / `with` access. The coder reads this to
     /// choose a slot op (`GET_LOCAL`/`LET_LOCAL`/…) over the symbol path.
     resolutions: NodeTable<Option<(usize, u32)>>,
+    /// The `Define` nodes already bound (XS's `mxDefineNodeBoundFlag`): a
+    /// scope binds its function declarations when it is entered
+    /// (`fxScopeBindDefineNodes`), so the statement walk skips them.
+    bound_defines: NodeTable<()>,
     /// `hoister->firstExportLink` — the exported names seen so far, for
     /// duplicate-export detection.
     export_links: Vec<Sym>,
@@ -2050,11 +2054,49 @@ impl Scoper<'_> {
         *self.node_scope.get(&node_id(node)).expect("scope for node")
     }
 
+    /// `fxDefineNodeBind` up to its initializer, which the caller binds:
+    /// look the declared name up and record it. `false` for a define already
+    /// bound (`mxDefineNodeBoundFlag`), having done nothing.
+    fn bind_define_open(&mut self, node: &Node) -> bool {
+        if self.bound_defines.insert(node_id(node), ()).is_some() {
+            return false;
+        }
+        if let Some(sym) = child_sym(node, 0) {
+            let scope = self.scope.unwrap();
+            let resolved = self.scope_lookup(scope, &Sym::Named(sym.clone()), None, false);
+            if let Some((rscope, rid)) = resolved {
+                self.declare_mut(rscope, rid).bound = true;
+            }
+            self.record_access(&sym, node.line, resolved);
+            self.resolutions.insert(node_id(node), resolved);
+        }
+        true
+    }
+
+    /// `fxScopeBindDefineNodes` for a root scope just entered: bind the
+    /// function declarations among `body`'s statements, in source order,
+    /// before the statements (the walk's `Bind::Defines` for the other
+    /// scopes). Each `Define` is charged where the statement walk reaches
+    /// and skips it, as the coder charges the defines it codes first; only
+    /// its initializer and lookup are charged here.
+    fn bind_define_nodes(&mut self, body: &Item) -> Result<(), ParseError> {
+        for item in statement_items(body) {
+            let Item::Node(n) = item else { continue };
+            if n.token == Token::Define && self.bind_define_open(n) {
+                if let Some(initializer) = child(n, 1) {
+                    self.bind_item(initializer)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     #[inline(never)]
     fn bind_program(&mut self, node: &Node) -> Result<(), ParseError> {
         let (si, _) = self.scope_of(node);
         self.fx_scope_binding(si);
         if let Some(body) = child(node, 0) {
+            self.bind_define_nodes(body)?;
             self.bind_item(body)?;
         }
         self.fx_scope_bound(si);
@@ -2067,6 +2109,7 @@ impl Scoper<'_> {
         let (si, _) = self.scope_of(node);
         self.fx_scope_binding(si);
         if let Some(body) = child(node, 0) {
+            self.bind_define_nodes(body)?;
             self.bind_item(body)?;
         }
         self.fx_scope_bound(si);

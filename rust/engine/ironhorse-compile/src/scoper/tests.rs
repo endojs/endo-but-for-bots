@@ -46,7 +46,8 @@ fn program_var_and_function_are_global() {
     // Program `var`/function declares survive in the program scope for the
     // coder to create globals, but `declareCount` discounts them (0) and
     // fxScopeBound marks them closure|useClosure; accesses route to the
-    // global object, not a frame slot.
+    // global object, not a frame slot. The function declaration binds
+    // before the statements (fxScopeBindDefineNodes).
     assert_dump(
         "var x = 1; function f() { return x; }",
         "\
@@ -57,8 +58,8 @@ s0 PROGRAM scopeCount=0 declareCount=0
   s1 FUNCTION scopeCount=0 declareCount=0
     s2 BLOCK declareCount=0
 --- accesses ---
-x -> global
 f -> global
+x -> global
 x -> global
 ",
     );
@@ -120,6 +121,7 @@ fn closure_capture_creates_alias() {
     // `inner` captures `v`; `v` is marked closure in the body block, and
     // `inner`'s scope gains a NoToken closure alias (closureCount=1) that
     // forwards to it — the alias is a real frame slot (scopeCount=1).
+    // `inner` binds before the body's statements (fxScopeBindDefineNodes).
     assert_dump(
         "function outer() { var v = 1; function inner() { return v; } return inner; }",
         "\
@@ -136,9 +138,9 @@ s0 PROGRAM scopeCount=0 declareCount=0
         s4 BLOCK declareCount=0
 --- accesses ---
 outer -> global
-v -> s2:d0
 inner -> s2:d1
 v -> s3:d0
+v -> s2:d0
 inner -> s2:d1
 ",
     );

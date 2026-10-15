@@ -309,3 +309,148 @@ fn catch_receipts_distinguish_absent_simple_and_pattern_parameters() {
         }
     }
 }
+
+/// The `Define` items of a statement slot, as the bind pass and the coder
+/// find them.
+fn scanned_defines(slot: Option<&Item>, found: &mut Vec<(Option<Sym>, u32)>) {
+    for item in slot.map_or(&[][..], statement_items) {
+        if let Item::Node(n) = item {
+            if n.token == Token::Define {
+                found.push((child_sym(n, 0).map(Sym::Named), n.line));
+            }
+        }
+    }
+}
+
+/// Each scope-creating node's scope and the defines its statement slots hold.
+fn scope_scans(
+    item: &Item,
+    scoper: &Scoper<'_>,
+    scans: &mut HashMap<usize, Vec<(Option<Sym>, u32)>>,
+) {
+    match item {
+        Item::Node(node) => {
+            // A static block's statements hoist straight into the static
+            // field function, so its `Body` has no scope.
+            if let Some(&(scope, secondary)) = scoper.node_scope.get(&node_id(node)) {
+                let mut found = Vec::new();
+                let slot = match node.token {
+                    Token::Program | Token::Module | Token::Block | Token::Body => Some(0),
+                    Token::Catch => Some(1),
+                    Token::For => Some(3),
+                    Token::ForIn | Token::ForOf | Token::ForAwaitOf => Some(2),
+                    _ => None,
+                };
+                if node.token == Token::Switch {
+                    if let Some(Item::List(cases)) = node.children.get(1) {
+                        for case in cases {
+                            scanned_defines(node_of_item(case).children.get(1), &mut found);
+                        }
+                    }
+                    assert!(scans.insert(scope, found).is_none());
+                } else if let Some(slot) = slot {
+                    scanned_defines(node.children.get(slot), &mut found);
+                    // A catch with a parameter declares its body in the
+                    // secondary (statement) scope.
+                    let scope = match node.token {
+                        Token::Catch => secondary.unwrap_or(scope),
+                        _ => scope,
+                    };
+                    assert!(scans.insert(scope, found).is_none());
+                }
+            }
+            for child in &node.children {
+                scope_scans(child, scoper, scans);
+            }
+        }
+        Item::List(items) => {
+            for item in items {
+                scope_scans(item, scoper, scans);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn node_of_item(item: &Item) -> &Node {
+    let Item::Node(node) = item else {
+        panic!("a case node")
+    };
+    node
+}
+
+/// XS binds a scope's define list (`firstDefineNode`…, built by the hoist)
+/// when the scope is entered; the bind pass and the coder instead scan the
+/// scope's statement slots for `Define` items. The two agree on every scope
+/// but a function scope, whose list holds a named function expression's
+/// self-name or, for a class's static field function, the declarations of
+/// the static blocks hoisted into it. Every `Define` is bound.
+#[test]
+fn statement_scans_find_each_scope_hoisted_define_list() {
+    let sources = [
+        "function a(){} let x; function b(){ return x; } x;",
+        "function f() { function g(){} { function h(){} let y; function i(){} } return g; }",
+        "async function f() { function* g(){} async function* h(){} }",
+        "try { function a(){} } catch (e) { function b(){} b(); } finally { function c(){} }",
+        "try {} catch ({ message }) { function b(){} } try {} catch { function c(){} }",
+        "for (;;) { function a(){} break; } for (let k in {}) { function b(){} } \
+         for (const v of []) { function c(){} }",
+        "switch (1) { case 0: function a(){} case 1: break; case 2: function b(){} \
+         function c(){} default: function d(){} }",
+        "switch (1) { case 0: { function a(){} } default: }",
+        "label: { function a(){} } if (1) { function b(){} } else { function c(){} }",
+        "(function named() { function inner(){} return named; })();",
+        "class C { static { function s(){} { function t(){} } } m() { function u(){} } }",
+        "let o = { m() { function a(){} }, get g() { function b(){} return 1; } };",
+    ];
+    for source in sources {
+        for (goal, strict) in [
+            (Goal::Script, false),
+            (Goal::Script, true),
+            (Goal::Eval, false),
+            (Goal::Eval, true),
+            (Goal::Module, true),
+        ] {
+            let root = parse(source, goal, strict, goal == Goal::Eval);
+            let scoper = run_phases(&root, goal, |_| {});
+            let mut scans = HashMap::new();
+            scope_scans(&root, &scoper, &mut scans);
+            for (si, scope) in scoper.scopes.iter().enumerate() {
+                if scope.token == Token::Function {
+                    continue;
+                }
+                let hoisted: Vec<_> = scope
+                    .defines
+                    .iter()
+                    .map(|d| (d.symbol.clone(), d.line))
+                    .collect();
+                let scanned = scans.get(&si).cloned().unwrap_or_default();
+                assert_eq!(scanned, hoisted, "scope {si} of {source:?} ({goal:?})");
+            }
+            for define in nodes(&root, Token::Define) {
+                assert!(
+                    scoper.bound_defines.get(&node_id(define)).is_some(),
+                    "{source:?}"
+                );
+            }
+        }
+    }
+    // Exported declarations are statements of the module body too.
+    let root = parse(
+        "export function f(){} export default function(){} export async function g(){}",
+        Goal::Module,
+        true,
+        false,
+    );
+    let scoper = run_phases(&root, Goal::Module, |_| {});
+    let mut scans = HashMap::new();
+    scope_scans(&root, &scoper, &mut scans);
+    let module = &scoper.scopes[scoper.scope_of(node_of_item(&root)).0];
+    let hoisted: Vec<_> = module
+        .defines
+        .iter()
+        .map(|d| (d.symbol.clone(), d.line))
+        .collect();
+    assert_eq!(hoisted.len(), 3);
+    assert_eq!(scans[&scoper.scope_of(node_of_item(&root)).0], hoisted);
+}

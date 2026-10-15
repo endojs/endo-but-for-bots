@@ -3068,3 +3068,78 @@ fn nested_parentheses_preserve_names_despite_the_pin() {
     assert_eq!(symbols, oracle_single.symbols);
     assert_ne!(code, oracle_nested.bytecode);
 }
+
+// A scope binds its function declarations when it is entered, before its
+// statements (XS's `fxScopeBindDefineNodes`). Binding gives each function
+// scope a lookup climbs through a closure alias, and the alias order sets the
+// closure slot indices, so a closure capturing `x` before a declaration
+// capturing `y` must still alias `y` first in every enclosing function.
+#[test]
+fn function_declarations_bind_before_statements() {
+    assert_identical(&[
+        // A function body.
+        "function o() { let x = 1, y = 2; return function g() { let a = () => x; function f() { return y; } } }",
+        // A nested block.
+        "function o() { let x, y; function g() { { let a = () => x; function f() { return y; } } } }",
+        // Declarations on both sides of the closure.
+        "function o() { let x, y, z; return function g() { function f1() { return z; } let a = () => x; function f2() { return y; } } }",
+        // Two function scopes between the block and the bindings.
+        "function o() { let x, y; return function g() { return function h() { { let a = () => x; function f() { return y; } } } } }",
+        // Generator and async declarations.
+        "function o() { let x, y, z; return function g() { let a = () => x; function* f() { yield y; } async function h() { await z; } } }",
+        // A block with disposals reserves its two variables after the defines.
+        "function o() { let x, y; return function g() { { using u = null; let a = () => x; function f() { return y; } } } }",
+        // Catch bodies, with and without a parameter, and the other try blocks.
+        "function o() { let x, y; return function g() { try {} catch (e) { let a = () => x; function f() { return y; } } } }",
+        "function o() { let x, y; return function g() { try {} catch { let a = () => x; function f() { return y; } } } }",
+        "function o() { let x, y; return function g() { try { let a = () => x; function f() { return y; } } finally {} } }",
+        // Loop bodies.
+        "function o() { let x, y; return function g() { for (;;) { let a = () => x; function f() { return y; } break; } } }",
+        "function o() { let x, y; return function g(p) { for (let k in p) { let a = () => x; function f() { return y; } } } }",
+        "function o() { let x, y; return function g(p) { for (const k of p) { let a = () => x + k; function f() { return y; } } } }",
+        // The cases of a switch share its scope, which binds their defines
+        // first; the coder still codes them in place.
+        "function o() { let x, y; return function g(k) { switch (k) { case 0: let a = () => x; case 1: function f() { return y; } } } }",
+        "function o() { let x, y, z; return function g(k) { switch (k) { case 0: function f1() { return z; } case 1: let a = () => x; break; default: function f2() { return y; } } } }",
+        // The program scope binds its declarations first too.
+        "let x = 1, y = 2; let a = () => x; function f() { return y; } function g() { let b = () => x; function h() { return y; } } g();",
+        "'use strict'; let x = 1, y = 2; function g() { let b = () => x; function h() { return y; } }",
+        // A static block's nested block, in the static field function.
+        "let x = 1, y = 2; class A { static { { A.a = () => x; function f() { return y; } } } }",
+        // A direct eval makes every binding a closure, in the same order.
+        "function o() { let x, y; return function g() { let a = () => x; function f() { return y; } eval(''); } }",
+    ]);
+    assert_identical_module(&[
+        "let x = 1, y = 2; export function g() { let a = () => x; function f() { return y; } }",
+        "let x, y; let a = () => x; export function f() { return y; } export default function () { return x + y; }",
+        "let x, y; function g() { { let a = () => x; function f() { return y; } } } export { g };",
+    ]);
+}
+
+// Binding order also decides which bind-time early error is reported, since
+// XS stops at the first. A function declaration's body binds before the
+// statements that precede it, so its error wins over theirs.
+#[test]
+fn bind_time_early_errors_follow_xs_bind_order() {
+    for source in [
+        "({ get a(v) {} });\nfunction f() { p.#b; }",
+        "p.#b;\nfunction f() { ({ get a(v) {} }); }",
+        "function g() { ({ get a(v) {} });\nfunction f() { p.#b; } }",
+        "function g() { { ({ get a(v) {} });\nfunction f() { p.#b; } } }",
+        "function g() { switch (1) { case 0: ({ get a(v) {} });\ncase 1: function f() { p.#b; } } }",
+        "try {} catch { ({ get a(v) {} });\nfunction f() { p.#b; } }",
+        "try {} catch (e) { ({ get a(v) {} });\nfunction f() { p.#b; } }",
+    ] {
+        let oracle = xs_oracle::run(source).expect("oracle");
+        assert!(!oracle.completed, "XS rejects {source:?}");
+        let want = oracle
+            .error
+            .strip_prefix("SyntaxError: ")
+            .expect("a SyntaxError");
+        for result in [compile(source), compile_with(source, false)] {
+            let error = result.expect_err("ironhorse rejects");
+            assert_eq!(error.message, want, "{source:?}");
+            assert_eq!(error.line, 2, "{source:?}");
+        }
+    }
+}

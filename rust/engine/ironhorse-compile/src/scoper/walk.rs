@@ -67,6 +67,13 @@ enum Bind<'n> {
     Leave,
     /// `fxNodeBind` over a run of items, in order (`bind_item` on each).
     Items(&'n [Item], usize),
+    /// `fxScopeBindDefineNodes` for a scope just entered: bind the next
+    /// function declaration (`Define`) among its statements from `i`, before
+    /// the statements themselves. A switch pushes one per case.
+    Defines(&'n [Item], usize),
+    /// Reserve frame variables once the defines are bound
+    /// (`fxBinderPushVariables`): a scope's two disposal variables.
+    Push(i32),
     /// Release frame variables the arm reserved (`fxBinderPopVariables`).
     Pop(i32),
     /// Close a scope the arm entered, first releasing the two disposal
@@ -119,6 +126,12 @@ fn child_items(node: &Node, i: usize) -> &[Item] {
         .get(i)
         .map(std::slice::from_ref)
         .unwrap_or(&[])
+}
+
+/// The statement items of `node`'s statement slot `i`, among which a scope
+/// finds its function declarations (see [`statement_items`]).
+fn define_items(node: &Node, i: usize) -> &[Item] {
+    node.children.get(i).map_or(&[], statement_items)
 }
 
 impl Scoper<'_> {
@@ -468,6 +481,7 @@ impl Scoper<'_> {
                         _ => {}
                     }
                 }
+                Bind::Push(count) => self.push_variables(count),
                 Bind::Pop(count) => self.pop_variables(count),
                 other => self.bind_resume(other, &mut stack)?,
             }
@@ -501,11 +515,12 @@ impl Scoper<'_> {
                 let (si, _) = self.scope_of(node);
                 self.fx_scope_binding(si);
                 let disposal = self.scopes[si].disposable_count > 0;
-                if disposal {
-                    self.push_variables(2);
-                }
                 stack.push(Bind::Bound { si, disposal });
                 stack.push(Bind::Items(child_items(node, 0), 0));
+                if disposal {
+                    stack.push(Bind::Push(2));
+                }
+                stack.push(Bind::Defines(define_items(node, 0), 0));
                 Ok(())
             }
             Token::Function | Token::Generator => {
@@ -525,16 +540,10 @@ impl Scoper<'_> {
                 Ok(())
             }
             Token::Define => {
-                if let Some(sym) = child_sym(node, 0) {
-                    let scope = self.scope.unwrap();
-                    let resolved = self.scope_lookup(scope, &Sym::Named(sym.clone()), None, false);
-                    if let Some((rscope, rid)) = resolved {
-                        self.declare_mut(rscope, rid).bound = true;
-                    }
-                    self.record_access(&sym, node.line, resolved);
-                    self.resolutions.insert(node_id(node), resolved);
+                // Bound already where its scope bound its defines.
+                if self.bind_define_open(node) {
+                    stack.push(Bind::Items(child_items(node, 1), 0));
                 }
-                stack.push(Bind::Items(child_items(node, 1), 0));
                 Ok(())
             }
             // children[0]=reference, children[1]=value; children[0]=target,
@@ -559,30 +568,37 @@ impl Scoper<'_> {
                     // parameter.
                     self.fx_scope_binding(scope);
                     let disposal = self.scopes[scope].disposable_count > 0;
-                    if disposal {
-                        self.push_variables(2);
-                    }
                     stack.push(Bind::CatchStatement {
                         scope: None,
                         statement_scope: scope,
                         disposal,
                     });
                     stack.push(Bind::Items(child_items(node, 1), 0));
+                    if disposal {
+                        stack.push(Bind::Push(2));
+                    }
+                    stack.push(Bind::Defines(define_items(node, 1), 0));
                 }
                 Ok(())
             }
             Token::For => {
+                // A loop body is one statement and never a function
+                // declaration, so this scope's define list is empty. It is
+                // scanned anyway, as `fxForNodeBind` binds it and `code_for`
+                // codes it.
                 let (si, _) = self.scope_of(node);
                 self.fx_scope_binding(si);
                 let disposal = self.scopes[si].disposable_count > 0;
-                if disposal {
-                    self.push_variables(2);
-                }
                 stack.push(Bind::Bound { si, disposal });
                 stack.push(Bind::Items(first_children(node, 4), 0));
+                if disposal {
+                    stack.push(Bind::Push(2));
+                }
+                stack.push(Bind::Defines(define_items(node, 3), 0));
                 Ok(())
             }
             Token::ForIn | Token::ForOf | Token::ForAwaitOf => {
+                // No defines either, as for `For`.
                 let (si, _) = self.scope_of(node);
                 self.push_variables(6);
                 self.fx_scope_binding(si);
@@ -592,6 +608,7 @@ impl Scoper<'_> {
                     disposal: false,
                 });
                 stack.push(Bind::Items(first_children(node, 3), 0));
+                stack.push(Bind::Defines(define_items(node, 2), 0));
                 Ok(())
             }
             Token::Switch => {
@@ -716,7 +733,23 @@ impl Scoper<'_> {
         stack: &mut Vec<Bind<'n>>,
     ) -> Result<(), ParseError> {
         match resume {
-            Bind::Leave | Bind::Items(..) | Bind::Pop(_) => unreachable!("handled by the walk"),
+            Bind::Leave | Bind::Items(..) | Bind::Push(_) | Bind::Pop(_) => {
+                unreachable!("handled by the walk")
+            }
+            Bind::Defines(items, i) => {
+                // Each `Define` is charged where the statement walk reaches
+                // and skips it, as the coder charges the defines it codes
+                // first; only its initializer and lookup are charged here.
+                for (j, item) in items.iter().enumerate().skip(i) {
+                    let Item::Node(n) = item else { continue };
+                    if n.token != Token::Define || !self.bind_define_open(n) {
+                        continue;
+                    }
+                    stack.push(Bind::Defines(items, j + 1));
+                    stack.push(Bind::Items(child_items(n, 1), 0));
+                    break;
+                }
+            }
             Bind::Bound { si, disposal } => {
                 if disposal {
                     self.pop_variables(2);
@@ -725,6 +758,11 @@ impl Scoper<'_> {
             }
             Bind::FunctionParams(function) => {
                 self.bind_base_constructor(function.node, function.si);
+                // `fxFunctionNodeBind` binds the function scope's defines
+                // here. That list holds only a named function expression's
+                // self-name, which resolves in this scope and makes no
+                // closure alias, so it is not bound; the body is a `Body`,
+                // which binds its own defines.
                 let body = child_items(function.node, 2);
                 stack.push(Bind::FunctionBody(function));
                 stack.push(Bind::Items(body, 0));
@@ -742,15 +780,16 @@ impl Scoper<'_> {
             } => {
                 self.fx_scope_binding(statement_scope);
                 let disposal = self.scopes[statement_scope].disposable_count > 0;
-                if disposal {
-                    self.push_variables(2);
-                }
                 stack.push(Bind::CatchStatement {
                     scope: Some(scope),
                     statement_scope,
                     disposal,
                 });
                 stack.push(Bind::Items(child_items(node, 1), 0));
+                if disposal {
+                    stack.push(Bind::Push(2));
+                }
+                stack.push(Bind::Defines(define_items(node, 1), 0));
             }
             Bind::CatchStatement {
                 scope,
@@ -771,11 +810,21 @@ impl Scoper<'_> {
                 let (si, _) = self.scope_of(node);
                 self.fx_scope_binding(si);
                 let disposal = self.scopes[si].disposable_count > 0;
-                if disposal {
-                    self.push_variables(2);
-                }
                 stack.push(Bind::Bound { si, disposal });
                 stack.push(Bind::Items(child_items(node, 1), 0));
+                if disposal {
+                    stack.push(Bind::Push(2));
+                }
+                // The cases' defines, in source order: the cases share the
+                // switch scope. The coder codes them in place, as
+                // `fxSwitchNodeCode` does.
+                if let Some(Item::List(cases)) = node.children.get(1) {
+                    for case in cases.iter().rev() {
+                        if let Item::Node(case) = case {
+                            stack.push(Bind::Defines(define_items(case, 1), 0));
+                        }
+                    }
+                }
             }
             Bind::WithExpression(node) => {
                 let (si, _) = self.scope_of(node);
