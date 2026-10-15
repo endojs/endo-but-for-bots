@@ -230,22 +230,25 @@ mutableSerialTest('a rejected global does not stop a later one', async t => {
   }
 });
 
-mutableSerialTest('a trusted global is not replaced by a later one', async t => {
-  // Once a well-shaped global is captured, a second, equally well-shaped
-  // constructor installed afterward does not displace it.
-  instance += 1;
-  const { isParcelObject } = await import(
-    `../src/parcel.js?instance=${instance}`
-  );
-  const first = makeImpostor();
-  const second = makeImpostor();
-  try {
-    /** @type {any} */ (globalThis).Parcel = first;
-    t.true(isParcelObject(freeze(create(first.prototype))));
-    /** @type {any} */ (globalThis).Parcel = second;
-    t.false(isParcelObject(freeze(create(second.prototype))));
-    t.true(isParcelObject(freeze(create(first.prototype))));
-  } finally {
-    delete (/** @type {any} */ (globalThis).Parcel);
-  }
-});
+mutableSerialTest(
+  'a trusted global is not replaced by a later one',
+  async t => {
+    // Once a well-shaped global is captured, a second, equally well-shaped
+    // constructor installed afterward does not displace it.
+    instance += 1;
+    const { isParcelObject } = await import(
+      `../src/parcel.js?instance=${instance}`
+    );
+    const first = makeImpostor();
+    const second = makeImpostor();
+    try {
+      /** @type {any} */ (globalThis).Parcel = first;
+      t.true(isParcelObject(freeze(create(first.prototype))));
+      /** @type {any} */ (globalThis).Parcel = second;
+      t.false(isParcelObject(freeze(create(second.prototype))));
+      t.true(isParcelObject(freeze(create(first.prototype))));
+    } finally {
+      delete (/** @type {any} */ (globalThis).Parcel);
+    }
+  },
+);
