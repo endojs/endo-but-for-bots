@@ -1,4 +1,4 @@
-# ironhorse-meter-8 runtime cost corpus: label, source, halt, result, raw, computrons
+# ironhorse-meter-9 runtime cost corpus: label, source, halt, result, raw, computrons
 dispatch	1+2*3	return	7	804120	12
 slots	var a={x:1,y:2}; a.x+a.y	return	3	2247776	34
 default-key	var a={}; a.length=3; a.length	return	3	1886512	28
@@ -44,7 +44,7 @@ proxy-construct	new (new Proxy(function(){},{construct:function(){return {x:4}}}
 async-await	var x=0; async function f(){x=await Promise.resolve(4)} f(); 1	return	1	5151848	78
 async-generator	async function* g(){yield 1} g().next(); 1	return	1	3676272	56
 disposal	var x=0;var d=new DisposableStack();d.defer(function(){x=1});d.dispose();x	return	1	4084840	62
-harden	harden({x:{y:1}}).x.y	return	1	11258440	171
+harden	harden({x:{y:1}}).x.y	return	1	12616200	192
 petrify	petrify({x:1}).x	return	1	1509960	23
 integrity	Object.freeze({x:1}).x	return	1	1575496	24
 weakmap	var k={};new WeakMap([[k,3]]).get(k)	return	3	4297192	65
@@ -60,3 +60,17 @@ lazy-take-drop	[...[1,2,3,4,5].values().drop(1).take(2)].join(',')	return	2,3	85
 lazy-flat-map	[...[1,2].values().flatMap(function(v){return [v,v*10]})].join(',')	return	1,10,2,20	14336208	218
 array-buffer-resize	var b=new ArrayBuffer(8,{maxByteLength:64}); var t=new Uint8Array(b); b.resize(32); t[31]=7; b.resize(16); t.length+b.byteLength	return	32	4953040	75
 shared-array-buffer-grow	var s=new SharedArrayBuffer(8,{maxByteLength:64}); var t=new Uint8Array(s); s.grow(32); t[31]=7; t.length+s.byteLength+t[31]	return	71	4838320	73
+annexb-proto	var o={}; o.__proto__=Array.prototype; o.__proto__===Array.prototype	return	true	2410544	36
+annexb-accessor-helpers	var o={}; o.__defineGetter__('x',function(){return 1}); o.__lookupGetter__('x')()+o.x	return	2	4003216	61
+annexb-escape	unescape(escape('a b%'))	return	a b%	1983848	30
+annexb-substr	'abcdef'.substr(1,3)	return	bcd	935240	14
+annexb-year	var d=new Date(0); d.setYear(99); d.getYear()	return	99	2262832	34
+promise-with-resolvers	var r=Promise.withResolvers(); r.resolve(1); typeof r.promise.then	return	function	2565144	39
+promise-try	Promise.try(function(a){return a},1) instanceof Promise	return	true	2828856	43
+error-is-error	Error.isError(new TypeError())	return	true	1231128	18
+sum-precise	Math.sumPrecise([0.1,0.2,0.3])	return	0.6	2920464	44
+regexp-escape	RegExp.escape('a.b')	return	\x61\.b	1131848	17
+raw-json	JSON.stringify({a:JSON.rawJSON('1e1000')})	return	{"a":1e1000}	2346904	35
+iterator-concat	Iterator.concat([1],[2,3]).toArray().join(',')	return	1,2,3	4385016	66
+uint8-base64	Uint8Array.fromBase64(new Uint8Array([1,2,3]).toBase64()).join(',')	return	1,2,3	4331208	66
+float16	Math.f16round(0.1)+new Float16Array([1.5])[0]	return	1.5999755859375	2723424	41

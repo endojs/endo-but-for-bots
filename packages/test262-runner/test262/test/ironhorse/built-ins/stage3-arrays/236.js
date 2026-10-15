@@ -1,7 +1,7 @@
 /*---
 description: stage3-arrays corpus line 236 converted to a test262 case
 flags: [noStrict]
-features: [ironhorse-dual-run, ironhorse-meter-8-raw-11867648, ironhorse-meter-determinism]
+features: [ironhorse-dual-run, ironhorse-meter-9-raw-11867648, ironhorse-meter-determinism]
 info: |
   Converted from corpora/stage3-arrays.js line 236.
   Source: [1,2,3,4].reduceRight(function(a,x){return a+x})
