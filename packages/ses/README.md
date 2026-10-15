@@ -278,8 +278,8 @@ that shim's `Parcel` constructor, including the privileged `Parcel.locate`.
 Child compartments instead receive a shared `Parcel` constructor that creates
 and opens the same parcels but has no `locate`.
 `lockdown` recognizes the constructor by shape, not provenance: it accepts an
-own data property `globalThis.Parcel` holding a constructor with a locked
-`prototype` and distinct `open`, `locate`, and `isParcel` functions, and
+own data property `globalThis.Parcel` holding a constructible function with a
+locked `prototype` and distinct `open`, `locate`, and `isParcel` functions, and
 throws a `TypeError` for any other own `Parcel` binding.
 Like any code that runs before `lockdown`, the `Parcel` installed there is
 trusted, so install only `@endo/parcel/shim.js` or a constructor you vet as
