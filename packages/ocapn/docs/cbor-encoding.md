@@ -823,7 +823,7 @@ the original bytes rather than re-encoding the parsed object.
 ### Sturdyref
 
 ```
-27(["sturdyref",
+27(["parcel",
   peer,                      # OCapN peer record
   swissnum                   # ByteArray
 ])

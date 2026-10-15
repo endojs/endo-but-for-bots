@@ -84,7 +84,7 @@ const AtomCodecs = {
  * @returns {PassableCodecs}
  */
 export const makePassableCodecs = descCodecs => {
-  const { ReferenceCodec, OcapnSturdyRefCodec, HandOffUnionCodec } = descCodecs;
+  const { ReferenceCodec, OcapnParcelCodec, HandOffUnionCodec } = descCodecs;
 
   // OCapN Passable Containers
 
@@ -223,7 +223,7 @@ export const makePassableCodecs = descCodecs => {
       // Special Cases
       signedHandoffReceive: HandOffUnionCodec,
       signedHandoffGive: HandOffUnionCodec,
-      sturdyref: OcapnSturdyRefCodec,
+      parcel: OcapnParcelCodec,
     },
   );
 

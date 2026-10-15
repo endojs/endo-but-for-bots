@@ -11,7 +11,7 @@ import harden from '@endo/harden';
  * @import { HandoffGiveSigEnvelope } from '../codecs/descriptors.js'
  * @import { Logger, SwissNum } from './types.js'
  * @import { GrantTracker, GrantDetails, HandoffGiveDetails } from './grant-tracker.js'
- * @import { SturdyRef, SturdyRefTracker } from './sturdyrefs.js'
+ * @import { Parcel, ParcelTracker } from './parcels.js'
  * @import { MakeRemoteKit, SendHandoff } from './ocapn.js'
  */
 
@@ -26,9 +26,9 @@ import { makeSlot, parseSlot } from '../captp/pairwise.js';
  * @typedef {any} RemoteResolver
  * @typedef {(questionSlot: Slot, ownerLabel?: string) => LocalResolver} MakeLocalResolver
  * @typedef {(slot: Slot) => RemoteResolver} MakeRemoteResolver
- * @typedef {(node: OcapnLocation, swissNum: SwissNum) => Promise<any>} MakeRemoteSturdyRef
+ * @typedef {(node: OcapnLocation, swissNum: SwissNum) => Promise<any>} MakeRemoteParcel
  * @typedef {(signedGive: HandoffGiveSigEnvelope) => Promise<any>} MakeHandoff
- * @typedef {(nodeLocation: OcapnLocation, swissNum: SwissNum) => any} GetRemoteSturdyRef
+ * @typedef {(nodeLocation: OcapnLocation, swissNum: SwissNum) => any} GetRemoteParcel
  * @typedef {EHandler<{}>} RemoteKitHandler
  * @typedef {'object' | 'promise' | 'answer'} SlotTypeName
  */
@@ -71,7 +71,7 @@ import { makeSlot, parseSlot } from '../captp/pairwise.js';
  * @property {(remotePromise: Promise<unknown>) => object} makeLocalResolverForRemotePromise
  * @property {(answerPosition: bigint, promise: Promise<unknown>) => Promise<unknown>} makeLocalAnswerPromiseAndFulfill
  * @property {(position: bigint) => Promise<unknown>} getLocalAnswerValue
- * @property {(location: OcapnLocation, secret: string | Uint8Array) => SturdyRef} makeSturdyRef
+ * @property {(location: OcapnLocation, secret: string | Uint8Array) => Parcel} makeParcel
  * @property {(signedGive: HandoffGiveSigEnvelope) => Promise<unknown>} provideHandoff
  * @property {(signedGive: HandoffGiveDetails) => HandoffGiveSigEnvelope} sendHandoff
  * @property {(value: object) => ValInfo} getInfoForVal
@@ -107,7 +107,7 @@ export const slotTypeToName = type => {
  * @param {OcapnLocation} peerLocation
  * @param {OcapnTable} ocapnTable
  * @param {GrantTracker} grantTracker
- * @param {SturdyRefTracker} sturdyRefTracker
+ * @param {ParcelTracker} parcelTracker
  * @param {MakeRemoteKit} makeRemoteKit
  * @param {MakeHandoff} makeHandoff
  * @param {SendHandoff} sendHandoff
@@ -118,7 +118,7 @@ export const makeReferenceKit = (
   peerLocation,
   ocapnTable,
   grantTracker,
-  sturdyRefTracker,
+  parcelTracker,
   makeRemoteKit,
   makeHandoff,
   sendHandoff,
@@ -445,8 +445,8 @@ export const makeReferenceKit = (
       return answerPromise;
     },
 
-    makeSturdyRef: (location, secret) => {
-      return sturdyRefTracker.makeSturdyRef(location, secret);
+    makeParcel: (location, secret) => {
+      return parcelTracker.makeParcel(location, secret);
     },
 
     provideHandoff: signedGive => {
