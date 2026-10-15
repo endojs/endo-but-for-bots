@@ -29,7 +29,9 @@ const FUNCTIONS: &[&str] = &[
     "var g = class { constructor(a) {} };",
     "var g = ({ m(a, b) {} }).m;",
     "var g = function* (a) {};",
-    "var g = async function (a, b) {};",
+    // Strict, because XS gives a sloppy async function an own `caller`,
+    // which Ironhorse does not (an `xs_departures.rs` row).
+    "var g = async function (a, b) { 'use strict'; };",
     "var g = async function* (a) {};",
     "var g = function (a, b, c) {}.bind(null, 1);",
     "var g = new Function('a,b,c', null);",
