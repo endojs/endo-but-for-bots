@@ -35,7 +35,10 @@ const { arbPassable } = makeArbitraries(fc);
 // See https://github.com/endojs/endo/pull/1737#pullrequestreview-1596595411
 const copyMapComparison = (() => {
   try {
-    return matches(makeCopyMap([]), makeCopyMap([]));
+    return matches(
+      makeCopyMap([]),
+      /** @type {Pattern} */ (/** @type {unknown} */ (makeCopyMap([]))),
+    );
   } catch (_err) {
     return false;
   }
