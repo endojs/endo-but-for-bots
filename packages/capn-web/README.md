@@ -311,7 +311,7 @@ model-deep, mesh-shaped.** The two are complementary, not redundant.
 [^o-handshake]: Handshake (`op:start-session`, location signature, crossed-hellos) — `packages/ocapn/src/client/handshake.js`
 [^o-crypto]: Session id derivation, Ed25519 location signing — `packages/ocapn/src/cryptography.js`
 [^o-handoff]: `HandoffGiveSigEnvelope` / `SignedHandoffReceive` codec, signature verification — `packages/ocapn/src/codecs/descriptors.js`; `deposit-gift` / `withdraw-gift` bootstrap methods — `packages/ocapn/src/client/ocapn.js`
-[^o-sturdy]: Sturdy refs `(location, swissNum)` — `packages/ocapn/src/client/sturdyrefs.js`
+[^o-sturdy]: Sturdy refs `(location, swissNum)` — `packages/ocapn/src/client/parcels.js`
 [^o-ops]: Operation tags `op:deliver`, `op:get`, `op:index`, `op:untag`, `op:listen` — `packages/ocapn/src/codecs/operations.js`
 [^o-gc]: `op:gc-exports` / `op:gc-answers` — `packages/ocapn/src/codecs/operations.js`; per-message refcount batching — `packages/ocapn/src/captp/refcount.js`
 [^o-passable]: OCapN passable codec (selectors, copyTagged, copyArray, copyRecord) — `packages/ocapn/src/codecs/passable.js`, `packages/ocapn/src/codecs/ocapn-pass-style.js`

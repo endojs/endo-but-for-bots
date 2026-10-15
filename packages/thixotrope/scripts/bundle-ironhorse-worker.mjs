@@ -26,6 +26,15 @@ const prologue = await makeBundle(
   readPowers,
   import.meta.resolve('@endo/ironhorse-prelude'),
 );
+// `@endo/init` installs the realm's first-wins Parcel constructor before
+// `lockdown()`; this boot replaces `@endo/init`, so it must do the same. Without
+// it, OCapN's pass-style check reaches `@endo/parcel` after lockdown, which
+// refuses to install Parcel late, and the worker's first delivery throws.
+// Terminated with `;` below for the same reason as the prologue.
+const parcelShim = await makeBundle(
+  readPowers,
+  import.meta.resolve('@endo/parcel/shim.js'),
+);
 // Ironhorse has no host text codecs. Shared with `@endo/test262-runner`'s
 // prelude for the same reason the prologue above is: two independent slices of
 // one magic comment is the duplication this package exists to remove. See that
@@ -36,6 +45,7 @@ fs.writeFileSync(
   `
 ${polyfills}
 ${prologue};
+${parcelShim};
 ${ses}
 // Keep Array.prototype[Symbol.iterator] as a frozen native data property.
 // Ironhorse's typed-array copy profile refuses accessor-based iterator overrides.

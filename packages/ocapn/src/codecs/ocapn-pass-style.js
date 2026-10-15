@@ -5,10 +5,10 @@
  */
 
 import { passStyleOf } from '@endo/pass-style';
-import { isSturdyRef } from '../client/sturdyrefs.js';
+import { isParcel } from '../client/parcels.js';
 
 // We need to extend the PassStyle type to include OCapN-specific types.
-/** @typedef {PassStyle | 'sturdyref' | 'signedHandoffReceive' | 'signedHandoffGive'} OcapnPassStyle */
+/** @typedef {PassStyle | 'parcel' | 'signedHandoffReceive' | 'signedHandoffGive'} OcapnPassStyle */
 
 /**
  * Get the PassStyle of a value, extended to include OCapN-specific types.
@@ -17,8 +17,8 @@ import { isSturdyRef } from '../client/sturdyrefs.js';
  * @returns {OcapnPassStyle}
  */
 export const ocapnPassStyleOf = value => {
-  if (isSturdyRef(value)) {
-    return 'sturdyref';
+  if (isParcel(value)) {
+    return 'parcel';
   }
   if (
     typeof value === 'object' &&
@@ -36,7 +36,10 @@ export const ocapnPassStyleOf = value => {
     );
   }
   try {
-    return passStyleOf(value);
+    const passStyle = passStyleOf(value);
+    // Every realm Parcel takes the OCapN parcel codec, which writes
+    // the ones OCapN minted and refuses the rest.
+    return passStyle === 'parcel' ? 'parcel' : passStyle;
   } catch (error) {
     throw Error(`Unexpected value ${value} for OcapnPassable`, {
       cause: error,

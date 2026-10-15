@@ -1,4 +1,6 @@
 // @ts-check
+// prefer-endo-primitives-exempt: the interop fixture uses Far for one-off wire presences.
+/** @import { Client } from '../../src/client/parcel.types.js' */
 
 import '@endo/init';
 
@@ -9,10 +11,6 @@ import { makeTcpNetLayer } from '../../src/netlayers/tcp-test-only.js';
 import { makeOcapn } from '../../src/client/index.js';
 import { syrupCodec } from '../../src/syrup/index.js';
 import { startGcScheduler } from '../_gc-util.js';
-
-/**
- * @typedef {import('../../src/client/types.js').Client} Client
- */
 
 /**
  * @param {Client} client
@@ -133,18 +131,18 @@ const makeTestObjectTable = client => {
   );
 
   /**
-   * Sturdyref enlivener
+   * Sturdyref opener
    *
-   * This takes a single argument which is an OCapN sturdyref object. The actor should
-   * "enliven" (connect to the node and get a live reference to the object)
-   * the sturdyref and then return that to the messager.
+   * This takes a single argument which is an OCapN parcel object. The actor should
+   * "open" (connect to the node and get a live reference to the object)
+   * the parcel and then return that to the messager.
    */
   testObjectTable.set(
     'gi02I1qghIwPiKGKleCQAOhpy3ZtYRpB',
-    Far('caprefResolver', async sturdyRef => {
-      console.log('caprefResolver called with', { sturdyRef });
-      // SturdyRefs are tagged objects that must be resolved via the client
-      return client.enlivenSturdyRef(sturdyRef);
+    Far('caprefResolver', async parcel => {
+      console.log('caprefResolver called with', { parcel });
+      // Parcels are tagged objects that must be resolved via the client
+      return client.openParcel(parcel);
     }),
   );
 

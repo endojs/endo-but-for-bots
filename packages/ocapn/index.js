@@ -21,6 +21,10 @@
  * @typedef {import('./src/codecs/components.js').OcapnLocation} OcapnLocation
  */
 
+import harden from '@endo/harden';
+
+import { makeParcel } from './src/client/parcels.js';
+
 export { makeOcapn } from './src/client/index.js';
 export {
   decodeSwissnum,
@@ -40,4 +44,9 @@ export {
 } from './src/codecs/descriptors.js';
 export { makePassableCodecs } from './src/codecs/passable.js';
 export { getSelectorName, makeSelector } from './src/selector.js';
-export { makeSturdyRef } from './src/client/sturdyrefs.js';
+export { makeParcel };
+/**
+ * @deprecated Use `makeParcel` from `@endo/ocapn`.
+ */
+export const makeSturdyRef = makeParcel;
+harden(makeSturdyRef);

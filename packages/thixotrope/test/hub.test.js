@@ -522,7 +522,7 @@ test('a pending answer transfers to a third session and settles there', async t 
   );
 });
 
-test('sturdyrefs transit the hub as opaque values', async t => {
+test('parcels transit the hub as opaque values', async t => {
   const hub = makeOcapnHub({ codec: syrupCodec });
   const idA = 'a'.repeat(32);
   const attachedA = await attachWorker(hub, idA, 'echoer');
@@ -544,14 +544,15 @@ test('sturdyrefs transit the hub as opaque values', async t => {
     designator: '127.0.0.1:9999',
     hints: /** @type {const} */ (false),
   });
-  const sturdyRef = attachedC.client.makeSturdyRef(location, 'a-secret');
-  const returned = await E(echo).echo(sturdyRef);
-  t.is(
-    String(returned),
-    '[object ocapn-sturdyref]',
-    'the round-tripped value is a sturdyref again',
+  const parcel = attachedC.client.makeParcel(location, 'a-secret');
+  const returned = await E(echo).echo(parcel);
+  t.true(
+    // OCapN installed the realm Parcel when it minted `parcel`.
+    /** @type {any} */ (globalThis).Parcel.isParcel(returned),
+    'the round-tripped value is a Parcel again',
   );
-  t.not(returned, sturdyRef, 'a fresh reification, same pointer on the wire');
+  t.is(String(returned), '[object Parcel]');
+  t.not(returned, parcel, 'a fresh reification, same pointer on the wire');
 });
 
 test('retiring a holder releases rows and returns gc hints to the origin', async t => {

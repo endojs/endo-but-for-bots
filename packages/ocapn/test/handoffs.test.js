@@ -68,7 +68,7 @@ const makeTestClientTrio = async ({
   };
 };
 
-testWithErrorUnwrapping('sturdyref transported as sturdyref', async t => {
+testWithErrorUnwrapping('parcel transported as parcel', async t => {
   const testObjectTable = new Map();
   testObjectTable.set(
     'Cat',

@@ -1,5 +1,6 @@
 /** @import {RemoteKit, Settler} from '@endo/eventual-send' */
 /** @import {CapData} from '@endo/marshal' */
+/** @import {ParcelObject} from '@endo/pass-style' */
 /** @import {CapTPSlot, TrapHost, TrapGuest, TrapImpl} from './types.js' */
 
 // Your app may need to `import '@endo/eventual-send/shim.js'` to get HandledPromise
@@ -235,6 +236,10 @@ export const makeDefaultCapTPImportExportTables = ({
  * error this CapTP decodes, with the wire-level errorId. Useful for a
  * privileged downstream layer to associate the decoded error with the
  * sender's locally captured context.
+ * @property {(parcel: ParcelObject) => string} [encodeParcel]
+ * privileged callback that locates Parcels for inline carriage
+ * @property {(location: string) => ParcelObject} [decodeParcel]
+ * callback that binds an incoming Parcel location to this transport
  */
 
 /** @type {CapTPRejectionContext} */
@@ -292,6 +297,8 @@ export const makeCapTP = (
     makeCapTPImportExportTables = makeDefaultCapTPImportExportTables,
     marshalSaveError,
     marshalLoadError,
+    encodeParcel,
+    decodeParcel,
   } = opts;
 
   // It's a hazard to have trapGuest and trapHost both enabled, as we may
@@ -426,6 +433,8 @@ export const makeCapTP = (
       serializeBodyFormat: 'capdata',
       marshalSaveError,
       marshalLoadError,
+      encodeParcel,
+      decodeParcel,
     },
   );
 
