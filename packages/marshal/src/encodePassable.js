@@ -929,9 +929,9 @@ harden(isEncodedRemotable);
  * prefix used by any cover so that ordinal mapping keys are always outside
  * the range of valid collection entry keys.
  *
- * `parcel` has no prefix: until marshal gives Parcels a
- * representation, encoding one throws as an unexpected pass style, and
- * rank-ordering one throws as an unordered pass style.
+ * `parcel` has no prefix. Encoding one throws
+ * `a "parcel" cannot be used as a collection passable`, and rank-ordering
+ * one throws `A "parcel" cannot be rank-ordered`.
  */
 export const passStylePrefixes = {
   error: '!',

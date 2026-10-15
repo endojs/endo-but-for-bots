@@ -16,9 +16,7 @@ mutableTest(
   'a lying Parcel global cannot reclassify or observe other values',
   t => {
     // Something other than the shim claimed the global with a brand check that
-    // vouches for everything. Pass-style trusts a frozen constructor, but asks
-    // it only about empty objects that inherit from its own prototype, and only
-    // after every other pass style has declined.
+    // vouches for everything. See the bound in `src/parcel.js`.
     /** @type {unknown[]} */
     const seen = [];
     const impostor = function Parcel() {};

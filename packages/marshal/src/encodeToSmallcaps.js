@@ -268,7 +268,6 @@ export const makeEncodeToSmallcaps = (encodeOptions = {}) => {
         return result;
       }
       case 'parcel': {
-        // Marshal does not yet give a Parcel a representation.
         throw Fail`a ${q(passStyle)} cannot be marshalled`;
       }
       default: {
