@@ -520,14 +520,10 @@ impl Interp {
                         .checked_mul(3)
                         .ok_or(Step::Host(Halt::HeapExhausted))?,
                 )?;
-                // The tokenizer below operates on scalar UTF-8 text. Preserve
-                // correctness at its remaining representation boundary: a
-                // valid surrogate pair round-trips through that text, while a
-                // genuinely unpaired code unit cannot and must stay an honest
-                // named skip instead of being silently changed to U+FFFD.
-                let input = String::from_utf16(&units)
-                    .map_err(|_| Step::Host(Halt::NotImplemented("JSON.parse:lone-surrogate")))?
-                    .into_bytes();
+                // The tokenizer below reads bytes: UTF-8, generalized to WTF-8
+                // so that an unpaired surrogate keeps its own three-byte
+                // sequence and decodes back to the same code unit.
+                let input = units_to_wtf8(&units);
                 self.charge_and_check(JSON_PARSE_SETUP_METERING)?;
                 let mut pos = 0usize;
                 self.json_parse_whitespace(&input, &mut pos);
@@ -1492,31 +1488,19 @@ impl Interp {
                 self.push_prepaid_scratch(&mut out, c as u16)?;
                 i += 1;
             } else {
-                // A raw multi-byte scalar is already valid UTF-8 (the parse
-                // entry gate rejected unpaired UTF-16). Decode its complete
-                // sequence into the exact one- or two-code-unit UTF-16
-                // representation.
-                let width = if c < 0xe0 {
-                    2
-                } else if c < 0xf0 {
-                    3
-                } else {
-                    4
-                };
-                let rest = input
-                    .get(i..i + width)
-                    .ok_or_else(|| self.catchable_syntax_error())?;
-                match std::str::from_utf8(rest)
-                    .ok()
-                    .and_then(|s| s.chars().next())
-                {
-                    Some(ch) => {
-                        let l = ch.len_utf8();
+                // A raw multi-byte sequence of the WTF-8 input: a scalar
+                // decodes to its one or two UTF-16 code units, an unpaired
+                // surrogate to itself.
+                match wtf8_code_point(&input[i..]) {
+                    Some((point, width)) => {
                         let mut encoded = [0u16; 2];
-                        self.extend_prepaid_scratch(&mut out, ch.encode_utf16(&mut encoded))?;
-                        i += l;
+                        self.extend_prepaid_scratch(
+                            &mut out,
+                            code_point_units(point, &mut encoded),
+                        )?;
+                        i += width;
                     }
-                    _ => return Err(self.catchable_syntax_error()),
+                    None => return Err(self.catchable_syntax_error()),
                 }
             }
         }
@@ -2056,11 +2040,87 @@ impl Interp {
         }) = source
         {
             if self.same_value(*original, value) && *start <= *end && *end <= input.len() {
-                let source_value = self.new_string_metered(&input[*start..*end]);
+                let source_value = self.new_string_units(&wtf8_to_units(&input[*start..*end]));
                 let source_id = self.intern_static_key("source");
                 self.set_own_unmetered(context, source_id, source_value);
             }
         }
         Slot::of(Kind::Reference, Payload::Reference(context))
     }
+}
+
+/// Encode UTF-16 code units as WTF-8: UTF-8 for every scalar, and the
+/// three-byte generalized form for an unpaired surrogate.
+fn units_to_wtf8(units: &[u16]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(units.len());
+    for decoded in char::decode_utf16(units.iter().copied()) {
+        match decoded {
+            Ok(ch) => {
+                let mut buffer = [0u8; 4];
+                out.extend_from_slice(ch.encode_utf8(&mut buffer).as_bytes());
+            }
+            Err(error) => {
+                let unit = error.unpaired_surrogate();
+                out.extend_from_slice(&[
+                    0xE0 | (unit >> 12) as u8,
+                    0x80 | ((unit >> 6) & 0x3F) as u8,
+                    0x80 | (unit & 0x3F) as u8,
+                ]);
+            }
+        }
+    }
+    out
+}
+
+/// The code point of the multi-byte WTF-8 sequence at the start of `bytes`,
+/// and its length in bytes.
+fn wtf8_code_point(bytes: &[u8]) -> Option<(u32, usize)> {
+    let lead = u32::from(*bytes.first()?);
+    let (width, mut point) = match lead {
+        0xC0..=0xDF => (2, lead & 0x1F),
+        0xE0..=0xEF => (3, lead & 0x0F),
+        0xF0..=0xF7 => (4, lead & 0x07),
+        _ => return None,
+    };
+    for &byte in bytes.get(1..width)? {
+        if byte & 0xC0 != 0x80 {
+            return None;
+        }
+        point = (point << 6) | u32::from(byte & 0x3F);
+    }
+    Some((point, width))
+}
+
+/// The UTF-16 code units of a code point, a surrogate standing for itself.
+fn code_point_units(point: u32, buffer: &mut [u16; 2]) -> &[u16] {
+    if point < 0x1_0000 {
+        buffer[0] = point as u16;
+        &buffer[..1]
+    } else {
+        let offset = point - 0x1_0000;
+        buffer[0] = 0xD800 | (offset >> 10) as u16;
+        buffer[1] = 0xDC00 | (offset & 0x3FF) as u16;
+        &buffer[..]
+    }
+}
+
+/// Decode WTF-8 bytes, such as a token of the parser's input, back to UTF-16
+/// code units.
+fn wtf8_to_units(bytes: &[u8]) -> Vec<u16> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match wtf8_code_point(&bytes[i..]) {
+            Some((point, width)) => {
+                let mut buffer = [0u16; 2];
+                out.extend_from_slice(code_point_units(point, &mut buffer));
+                i += width;
+            }
+            None => {
+                out.push(u16::from(bytes[i]));
+                i += 1;
+            }
+        }
+    }
+    out
 }

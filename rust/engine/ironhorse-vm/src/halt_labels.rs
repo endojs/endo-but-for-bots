@@ -29,7 +29,6 @@ pub const NOT_IMPLEMENTED_LABELS: &[&str] = &[
     "Date:method",
     "Intl.NumberFormat:compact-locale",
     "Intl.NumberFormat:formatRange",
-    "JSON.parse:lone-surrogate",
     "Number.toString:fractional-non-decimal-radix",
     "String.replace:non-string-receiver",
     "Temporal.Now:method",
