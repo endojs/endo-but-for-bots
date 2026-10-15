@@ -50,8 +50,8 @@ pub use coder::{
     compile_atoms_units_eval_firewalled, compile_atoms_units_eval_with_meter,
     compile_atoms_units_with_meter, compile_atoms_with, compile_atoms_with_budget,
     compile_atoms_with_meter, compile_module, compile_module_atoms, compile_with,
-    declares_top_level_var_or_function, script_goal_deviates, CompileError, CompileReport,
-    CompiledAtoms, EvalContext,
+    declares_top_level_var_or_function, script_goal_deviates, with_xs_bytes, CompileError,
+    CompileReport, CompiledAtoms, EvalContext,
 };
 pub use error::{LexError, LexErrorKind};
 pub use lexer::{BigIntLiteral, Lexeme, Lexer};

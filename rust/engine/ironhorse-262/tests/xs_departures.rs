@@ -330,6 +330,13 @@ const DEPARTURES: &[Row] = &[
         v8: "1,ReferenceError",
         why: "`(eval)(s)` is a direct eval: the parentheses keep the Reference to `eval` (ES2024 13.3.6.1, 13.2.9.2); XS calls it indirectly",
     },
+    Row {
+        program: "var log = ''; Object.defineProperty(Array.prototype, 0, { set: function (v) { log += 's' + v; }, configurable: true }); var a = []; [...a[0]] = [5]; var [...t] = [5, 6]; var r = [7, ...[8]]; delete Array.prototype[0]; [log, t.length, r.hasOwnProperty(0), r.join()].join('|')",
+        ironhorse: "s5|2|true|7,8",
+        xs: "s5ss5s6s7|0|false|,8",
+        v8: "s5|2|true|7,8",
+        why: "a rest element's array and a spread array literal are filled with CreateDataProperty (ES2024 8.6.3, 13.2.4.1), so an inherited index setter runs only for the assignment to the target; XS fills them with [[Set]]",
+    },
 ];
 
 /// Programs where Ironhorse departs from XS and V8 has no counterpart to
@@ -475,13 +482,6 @@ const SHARED: &[Row] = &[
         xs: "ReferenceError",
         v8: "2",
         why: "an arrow function's direct eval sees its enclosing function's arguments",
-    },
-    Row {
-        program: "var log = ''; Object.defineProperty(Array.prototype, 0, { set: function (v) { log += 's' + v; }, configurable: true }); var a = []; [...a[0]] = [5]; delete Array.prototype[0]; log",
-        ironhorse: "s5s",
-        xs: "s5s",
-        v8: "s5",
-        why: "a rest element's array is filled with CreateDataProperty, so an inherited index setter runs once, for the assignment to the target",
     },
 ];
 

@@ -197,7 +197,13 @@ impl Scoper<'_> {
             Token::Call | Token::New => {
                 // children[0] = reference, children[1] = params; `(eval)` is
                 // the same direct-eval reference as `eval`.
-                let reference = node.children.first().map(Item::without_parentheses);
+                let reference = node.children.first().map(|item| {
+                    if crate::coder::xs_bytes() {
+                        item
+                    } else {
+                        item.without_parentheses()
+                    }
+                });
                 if let Some(Item::Node(reference)) = reference {
                     if reference.token == Token::Access {
                         if let Some(sym) = child_sym(reference, 0) {
