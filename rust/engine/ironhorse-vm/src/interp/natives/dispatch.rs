@@ -4021,9 +4021,8 @@ impl Interp {
             }
             // `Atomics.*` — single-agent read-modify-write over an integer
             // TypedArray. All logic (validation, ToIndex, coercion, the RMW)
-            // lives in the helper; a non-integer view / OOB index / non-clean
-            // operand / the blocking-agent surface self-names an honest skip.
-            NativeMethod::Atomic(op) => self.atomics_dispatch(op, base)?,
+            // lives in the helper; the blocking-agent surface is refused.
+            NativeMethod::Atomic(op) => self.atomics_dispatch(code, op, base)?,
             NativeMethod::DataViewAccessor(index) => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.data_views.contains_key(&r) => r,

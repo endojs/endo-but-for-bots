@@ -2125,239 +2125,178 @@ impl Interp {
     }
 
     /// `Atomics.<op>(...)` for the single-agent runtime: read-modify-write uses
-    /// ordinary byte operations on integer and BigInt-element views.
-    /// Unsupported receivers, indices, and operand conversions return
-    /// `Halt::NotImplemented`; wait/notify/waitAsync return `Halt::Refused`.
+    /// ordinary byte operations on integer and BigInt-element views. The
+    /// arguments are validated in XS's order (`xsAtomics.c`): the TypedArray,
+    /// its buffer, the index (`ToIndex`), the operands, then the buffer again,
+    /// since an operand's coercion can detach it. wait/notify/waitAsync return
+    /// `Halt::Refused`.
     /// `op`: 0 add, 1 and, 2 compareExchange, 3 exchange, 4 load, 5 or,
     /// 6 store, 7 sub, 8 xor, 9 isLockFree, >=10 wait/notify/waitAsync.
     pub(in crate::interp) fn atomics_dispatch(
         &mut self,
+        code: &[u8],
         op: u8,
         base: usize,
     ) -> Result<Slot, Step> {
-        let a0 = self
-            .stack
-            .get(base + 4)
-            .copied()
-            .unwrap_or_else(Slot::undefined);
-        let a1 = self
-            .stack
-            .get(base + 5)
-            .copied()
-            .unwrap_or_else(Slot::undefined);
-        let a2 = self
-            .stack
-            .get(base + 6)
-            .copied()
-            .unwrap_or_else(Slot::undefined);
-        let a3 = self
-            .stack
-            .get(base + 7)
-            .copied()
-            .unwrap_or_else(Slot::undefined);
+        let arg = |interp: &Self, i: usize| {
+            interp
+                .stack
+                .get(base + 4 + i)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
+        };
+        let a0 = arg(self, 0);
 
-        // `Atomics.isLockFree(size)`: a pure numeric query. XS
-        // (`fx_Atomics_isLockFree`) reports lock-free only for the 4-byte
-        // element (`(size == 4) ? 1 : 0`); match it exactly.
+        // `Atomics.isLockFree(size)`: XS (`fx_Atomics_isLockFree`) reports
+        // lock-free only for the 4-byte element.
         if op == 9 {
-            let lf = matches!(self.element_value_to_number(a0), Some(v) if v == 4.0);
+            let size = self.atomics_integer_or_infinity(code, a0)?;
             self.meter.tick_raw(ATOMICS_OP_METERING);
-            return Ok(Slot::boolean(lf));
+            return Ok(Slot::boolean(size == 4.0));
         }
         // `wait`/`notify`/`waitAsync` take the explicit host-refusal path.
         if op >= 10 {
             return Err(Step::Host(Halt::Refused("atomics:wait-notify")));
         }
 
-        // ValidateIntegerTypedArray: an integer-element TypedArray receiver.
-        let inst = match a0.value {
-            Payload::Reference(r) if self.typed_arrays.contains_key(&r) => r,
-            _ => return Err(Step::Host(Halt::NotImplemented("atomics:non-typedarray"))),
-        };
-        let ta = self.typed_arrays[&inst];
-        // Int8/16/32 (4/5/6), Uint8/16/32 (7/8/9), and BigInt64/BigUint64
-        // (0/1). Uint8Clamped (10) and float views (2/3) return NotImplemented.
-        if !((4..=9).contains(&ta.kind) || ta.kind <= 1) {
-            return Err(Step::Host(Halt::NotImplemented(
-                "atomics:non-integer-typedarray",
-            )));
-        }
-        // ValidateTypedArray: a detached or out-of-bounds view throws.
+        let ta = self.atomics_integer_typed_array(a0)?;
         let length = self.checked_ta_length(ta)?;
-        // ValidateAtomicAccess: ToIndex(index) in `[0, length)`.
-        let idx = match self.element_value_to_number(a1) {
-            Some(v) if v >= 0.0 && v.fract() == 0.0 && (v as u64) < length as u64 => v as u32,
-            _ => return Err(Step::Host(Halt::NotImplemented("atomics:access-index"))),
+        let index = self.atomics_access_index(code, arg(self, 1), length)?;
+        let bigint = ta.kind <= 1;
+
+        // The operands, in argument order (`expected` before `replacement`),
+        // reduced modulo 2^64; every element width divides 2^64, so the low
+        // bytes are the element's own modular conversion. `store` returns
+        // the converted value itself.
+        let mut operands = [0u64; 2];
+        let mut converted = Slot::undefined();
+        let count = match op {
+            4 => 0,
+            2 => 2,
+            _ => 1,
         };
+        for (i, operand) in operands.iter_mut().enumerate().take(count) {
+            let value = arg(self, 2 + i);
+            if bigint {
+                converted = self.to_bigint_value(code, value)?;
+                *operand = self
+                    .slot_to_bigint_u64(converted)
+                    .expect("ToBigInt returns a BigInt");
+            } else {
+                converted = match (value.kind, value.value) {
+                    (Kind::Integer, Payload::Integer(_)) => value,
+                    _ => {
+                        let n = self.to_number_f64(code, value)?.trunc();
+                        Slot::number(if n.is_nan() || n == 0.0 { 0.0 } else { n })
+                    }
+                };
+                *operand = number_to_u64_wrapping(to_number(&converted));
+            }
+        }
+        if self.detached_buffers.contains(&ta.buffer) {
+            return Err(self.catchable_type_error_msg("typedArray.buffer: detached".into()));
+        }
+        // RevalidateAtomicAccess: an operand's coercion can also shrink a
+        // resizable buffer under the element, which XS then writes past.
+        if index >= self.checked_ta_length(ta)? {
+            return Err(self.catchable_range_error_msg("invalid index".into()));
+        }
+
         let size = TYPED_ARRAY_TYPES[ta.kind as usize].size as usize;
         let data = self.array_buffers[&ta.buffer].data;
-        let bpos = ta.offset as usize + idx as usize * size;
-
-        // The BigInt64/BigUint64 element domain: the read-modify-write runs in
-        // u64 (modulo 2^64, matching the 64-bit element), returning a BigInt.
-        if ta.kind <= 1 {
-            return self.atomics_dispatch_bigint(op, ta.kind, data, bpos, a2, a3);
-        }
-
-        // The current element (an integer view always decodes).
-        let mut old_storage = [0u8; 8];
-        let old_bytes = &mut old_storage[..size];
-        {
-            let bytes = self.chunks.payload(data);
-            old_bytes.copy_from_slice(&bytes[bpos..bpos + size]);
-        }
-        let old_slot = decode_element_le(ta.kind, old_bytes)
-            .ok_or(Step::Host(Halt::NotImplemented("atomics:decode")))?;
-
-        // `load(ta, idx)`: no write.
-        if op == 4 {
-            self.meter.tick_raw(ATOMICS_OP_METERING);
-            return Ok(old_slot);
-        }
-
-        // `compareExchange(ta, idx, expected, replacement)`: replace iff the
-        // stored bytes equal `expected` coerced to the element type.
-        if op == 2 {
-            let expected = self
-                .element_value_to_number(a2)
-                .ok_or(Step::Host(Halt::NotImplemented("atomics:coerce")))?;
-            let replacement = self
-                .element_value_to_number(a3)
-                .ok_or(Step::Host(Halt::NotImplemented("atomics:coerce")))?;
-            let exp_bytes = encode_element_le(ta.kind, expected.trunc())
-                .ok_or(Step::Host(Halt::NotImplemented("atomics:encode")))?;
-            if exp_bytes == old_bytes {
-                let le = encode_element_le(ta.kind, replacement.trunc())
-                    .ok_or(Step::Host(Halt::NotImplemented("atomics:encode")))?;
-                let out = self.chunks.slice_mut(data, bpos + size);
-                out[bpos..bpos + size].copy_from_slice(&le);
-            }
-            self.meter.tick_raw(ATOMICS_OP_METERING);
-            return Ok(old_slot);
-        }
-
-        // The single-operand ops. `store` returns the coerced value; every
-        // other op returns the prior element value.
-        let v = self
-            .element_value_to_number(a2)
-            .ok_or(Step::Host(Halt::NotImplemented("atomics:coerce")))?;
-        let v_i = v.trunc() as i64;
-        let old_i = element_slot_to_i64(old_slot);
-        let (new_i, ret): (i64, Slot) = match op {
-            0 => (old_i.wrapping_add(v_i), old_slot),
-            1 => (old_i & v_i, old_slot),
-            3 => (v_i, old_slot),
-            5 => (old_i | v_i, old_slot),
-            6 => (v_i, Slot::number(v.trunc())),
-            7 => (old_i.wrapping_sub(v_i), old_slot),
-            8 => (old_i ^ v_i, old_slot),
-            _ => return Err(Step::Host(Halt::NotImplemented("atomics:op"))),
+        let bpos = ta.offset as usize + index as usize * size;
+        let mut old_bytes = [0u8; 8];
+        old_bytes[..size].copy_from_slice(&self.chunks.payload(data)[bpos..bpos + size]);
+        let old = u64::from_le_bytes(old_bytes);
+        let mask = if size == 8 {
+            u64::MAX
+        } else {
+            (1u64 << (size * 8)) - 1
         };
-        let le = encode_element_le(ta.kind, new_i as f64)
-            .ok_or(Step::Host(Halt::NotImplemented("atomics:encode")))?;
-        let out = self.chunks.slice_mut(data, bpos + size);
-        out[bpos..bpos + size].copy_from_slice(&le);
-        self.meter.tick_raw(ATOMICS_OP_METERING);
-        Ok(ret)
-    }
-
-    /// The BigInt64/BigUint64 domain of [`Self::atomics_dispatch`]: the
-    /// read-modify-write runs in u64 (two's complement, modulo 2^64 — the exact
-    /// 64-bit element wrap), the operand is `ToBigInt(value)`'s low 64 bits, and
-    /// the result is a freshly allocated BigInt (`store` returns the coerced
-    /// value, every other op the prior element). Values that
-    /// `slot_to_bigint_u64` cannot convert return `Halt::NotImplemented`.
-    fn atomics_dispatch_bigint(
-        &mut self,
-        op: u8,
-        kind: u8,
-        data: crate::value::ChunkOffset,
-        bpos: usize,
-        a2: Slot,
-        a3: Slot,
-    ) -> Result<Slot, Step> {
-        let mut old_b = [0u8; 8];
-        {
-            let bytes = self.chunks.payload(data);
-            old_b.copy_from_slice(&bytes[bpos..bpos + 8]);
-        }
-        let old_u = u64::from_le_bytes(old_b);
-
-        // `load`: no write.
-        if op == 4 {
-            self.meter.tick_raw(ATOMICS_OP_METERING);
-            let (neg, mag) = u64_to_signed_limbs(kind == 0, old_u);
-            return Ok(self.make_bigint(neg, mag));
-        }
-
-        // `compareExchange(ta, idx, expected, replacement)`.
-        if op == 2 {
-            let expected = self
-                .slot_to_bigint_u64(a2)
-                .ok_or(Step::Host(Halt::NotImplemented("atomics:coerce")))?;
-            let replacement = self
-                .slot_to_bigint_u64(a3)
-                .ok_or(Step::Host(Halt::NotImplemented("atomics:coerce")))?;
-            if old_u == expected {
-                let out = self.chunks.slice_mut(data, bpos + 8);
-                out[bpos..bpos + 8].copy_from_slice(&replacement.to_le_bytes());
-            }
-            self.meter.tick_raw(ATOMICS_OP_METERING);
-            let (neg, mag) = u64_to_signed_limbs(kind == 0, old_u);
-            return Ok(self.make_bigint(neg, mag));
-        }
-
-        let v = self
-            .slot_to_bigint_u64(a2)
-            .ok_or(Step::Host(Halt::NotImplemented("atomics:coerce")))?;
-        let new_u: u64 = match op {
-            0 => old_u.wrapping_add(v),
-            1 => old_u & v,
-            3 => v,
-            5 => old_u | v,
-            6 => v,
-            7 => old_u.wrapping_sub(v),
-            8 => old_u ^ v,
-            _ => return Err(Step::Host(Halt::NotImplemented("atomics:op"))),
+        let [v, replacement] = operands;
+        let new = match op {
+            0 => Some(old.wrapping_add(v)),
+            1 => Some(old & v),
+            2 => (v & mask == old).then_some(replacement),
+            3 | 6 => Some(v),
+            4 => None,
+            5 => Some(old | v),
+            7 => Some(old.wrapping_sub(v)),
+            8 => Some(old ^ v),
+            _ => return Err(Step::Host(Halt::EngineInvariant("atomics:op"))),
         };
-        let out = self.chunks.slice_mut(data, bpos + 8);
-        out[bpos..bpos + 8].copy_from_slice(&new_u.to_le_bytes());
+        if let Some(new) = new {
+            let out = self.chunks.slice_mut(data, bpos + size);
+            out[bpos..bpos + size].copy_from_slice(&new.to_le_bytes()[..size]);
+        }
         self.meter.tick_raw(ATOMICS_OP_METERING);
-
-        // `store` returns the coerced value (the original BigInt, or `1n`/`0n`
-        // for a Boolean); every other op returns the prior element.
         if op == 6 {
-            return Ok(match a2.value {
-                Payload::BigInt(_) => a2,
-                Payload::Boolean(b) => self.make_bigint(false, vec![b as u32]),
-                _ => a2,
-            });
+            return Ok(converted);
         }
-        let (neg, mag) = u64_to_signed_limbs(kind == 0, old_u);
-        Ok(self.make_bigint(neg, mag))
+        if bigint {
+            let (neg, mag) = u64_to_signed_limbs(ta.kind == 0, old);
+            return Ok(self.make_bigint(neg, mag));
+        }
+        Ok(decode_element_le(ta.kind, &old_bytes[..size])
+            .expect("an integer element always decodes"))
     }
 
-    /// Coerce a primitive element write value to the `f64` the element
-    /// encoders take (a number/integer identity, a boolean 0/1, `undefined`
-    /// → NaN). An object value (needing `ToPrimitive`/`valueOf`) or a BigInt
-    /// returns `None`. Atomic access and operand conversions map that to
-    /// `Halt::NotImplemented`; `Atomics.isLockFree` returns false instead.
-    fn element_value_to_number(&self, value: Slot) -> Option<f64> {
-        match value.kind {
-            Kind::Integer => match value.value {
-                Payload::Integer(i) => Some(i as f64),
-                _ => None,
-            },
-            Kind::Number => match value.value {
-                Payload::Number(v) => Some(v),
-                _ => None,
-            },
-            Kind::Boolean => match value.value {
-                Payload::Boolean(bv) => Some(if bv { 1.0 } else { 0.0 }),
-                _ => None,
-            },
-            Kind::Undefined => Some(f64::NAN),
-            _ => None,
+    /// XS's `fxCheckAtomicsTypedArray` and the detached half of
+    /// `fxCheckAtomicsArrayBuffer`: an integer-element TypedArray whose buffer
+    /// is attached.
+    fn atomics_integer_typed_array(&mut self, value: Slot) -> Result<TypedArrayData, Step> {
+        let instance = match value.value {
+            Payload::Reference(r) if value.kind == Kind::Reference => r,
+            _ => {
+                return Err(self.catchable_type_error_msg("typedArray: not an object".into()));
+            }
+        };
+        let Some(&ta) = self.typed_arrays.get(&instance) else {
+            return Err(
+                self.catchable_type_error_msg("typedArray: not a TypedArray instance".into())
+            );
+        };
+        // Float32/Float64 (2/3) and Uint8Clamped (10) are not integer views.
+        if matches!(ta.kind, 2 | 3 | 10) {
+            let name = TYPED_ARRAY_TYPES[ta.kind as usize].name;
+            return Err(self.catchable_type_error_msg(format!("typedArray: {name} instance")));
+        }
+        if self.detached_buffers.contains(&ta.buffer) {
+            return Err(self.catchable_type_error_msg("typedArray.buffer: detached".into()));
+        }
+        Ok(ta)
+    }
+
+    /// XS's `fxCheckAtomicsIndex` (`ValidateAtomicAccess`): an in-range
+    /// integer passes as is; anything else is `ToNumber`ed, truncated (NaN is
+    /// 0) and range-checked against the element count.
+    fn atomics_access_index(&mut self, code: &[u8], value: Slot, length: u32) -> Result<u32, Step> {
+        if let (Kind::Integer, Payload::Integer(i)) = (value.kind, value.value) {
+            if i >= 0 && (i as u32) < length {
+                return Ok(i as u32);
+            }
+        }
+        let n = self.to_number_f64(code, value)?.trunc();
+        let n = if n.is_nan() { 0.0 } else { n };
+        if n < 0.0 || n >= length as f64 {
+            return Err(self.catchable_range_error_msg("invalid index".into()));
+        }
+        Ok(n as u32)
+    }
+
+    /// `ToIntegerOrInfinity` with XS's `fxToInteger` diagnostics for the two
+    /// values `ToNumber` rejects.
+    fn atomics_integer_or_infinity(&mut self, code: &[u8], value: Slot) -> Result<f64, Step> {
+        let primitive = self.to_primitive(code, value, false)?;
+        match primitive.kind {
+            Kind::Symbol => {
+                Err(self.catchable_type_error_msg("cannot coerce symbol to integer".into()))
+            }
+            Kind::BigInt => Err(self.catchable_type_error_msg("cannot coerce to integer".into())),
+            _ => {
+                let n = self.to_number_f64(code, primitive)?.trunc();
+                Ok(if n.is_nan() { 0.0 } else { n })
+            }
         }
     }
 
