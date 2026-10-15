@@ -46,7 +46,7 @@ const isHardenInstalled = () =>
  * @returns {ParcelConstructor}
  */
 export const makeParcelConstructor = () => {
-  /** @type {WeakMap<object, { location: string, openHook: ParcelOpenHook }>} */
+  /** @type {WeakMap<Parcel, { location: string, openHook: ParcelOpenHook }>} */
   const details = new SafeWeakMap();
 
   class Parcel {

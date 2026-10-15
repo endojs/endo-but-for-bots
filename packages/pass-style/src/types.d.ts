@@ -1,4 +1,5 @@
 import type { RemotableBrand } from '@endo/eventual-send';
+import type { makeParcel } from '@endo/parcel';
 /* eslint-disable no-use-before-define */
 import { PASS_STYLE } from './passStyle-helpers.js';
 
@@ -193,14 +194,10 @@ export type RemotableMethodName = PropertyKey;
 
 /**
  * A Parcel is passable, analogous to a presence: it has object identity and
- * no data. This mirrors the `Parcel` type of `@endo/parcel`. Pass-style
- * senses `globalThis.Parcel` instead of depending on that package (see
- * `parcel.js`), so it declares the type itself; `types.test-d.ts` checks
- * that the two stay in step.
+ * no data. The runtime recognition in `parcel.js` senses `globalThis.Parcel`
+ * without importing the shim.
  */
-export interface ParcelObject {
-  readonly [Symbol.toStringTag]: 'Parcel';
-}
+export type ParcelObject = ReturnType<typeof makeParcel>;
 
 /**
  * The authority-bearing leaves of a Passable's pass-by-copy superstructure.
