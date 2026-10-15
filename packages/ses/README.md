@@ -273,6 +273,13 @@ This can and should be frozen before running any dynamic code in that
 compartment, yet is not strictly necessary if the compartment only
 runs code from a single party.
 
+If the `@endo/parcel` shim runs before `lockdown`, the start compartment keeps
+that shim's `Parcel` constructor, including the privileged `Parcel.locate`.
+Child compartments instead receive a shared `Parcel` constructor that creates
+and opens the same parcels but has no `locate`.
+`lockdown` throws a `TypeError` if `globalThis.Parcel` exists but is not the
+`@endo/parcel` constructor.
+
 ### Modules
 
 Any code executed within a compartment shares a set of module instances.

@@ -2,9 +2,7 @@
 'ses': major
 ---
 
-Permit a `Parcel` shim installed before `lockdown`.
-SES retains the initial constructor, including privileged `locate`, in the
-start compartment and derives a shared constructor for child compartments
-that exposes only `open` and `isParcel`.
-Both constructors share one prototype and brand table and are hardened at
-lockdown; the shared prototype points back to the shared constructor.
+Support the `@endo/parcel` shim when it is installed before `lockdown`.
+The start compartment keeps the shim's `Parcel`, including the privileged `Parcel.locate`, while child compartments receive a `Parcel` with only `open` and `isParcel`.
+Breaking: `lockdown` now throws a `TypeError` if `globalThis.Parcel` exists and is not the `@endo/parcel` constructor, including an accessor or an unrelated constructor.
+To upgrade, remove or rename any other `globalThis.Parcel` binding before calling `lockdown`, or install `@endo/parcel/shim.js` in its place.
