@@ -575,7 +575,7 @@ targets, so the expected-divergence list holds only the repro at both consensus 
 | `Array` `toLocaleString` (`#array-to-locale-string`) | `HeapExhausted` | 239,703 |
 
 `ironhorse-vm/tests/side_storage_admission.rs` pins where unbounded loops over each charged table
-halt under a 50,000-slot, 4 MiB-chunk ceiling, and `allocation_admission_audit.rs` fails when any
+halt under a 50,000-slot, 1 MiB-chunk ceiling, and `allocation_admission_audit.rs` fails when any
 growth or release site loses its charge.
 `differential.py --slow` against `863a9957` reports 14 of its 1,790 programs changed natively,
 every one a heap-ceiling stress program that now halts at the ceiling (`CHANGELOG.md` lists each).

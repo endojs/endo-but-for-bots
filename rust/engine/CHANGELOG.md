@@ -90,7 +90,7 @@ The cross-target gate (`stack-lanes/cross_target.py`, both shards) finds every r
 "Unadmitted host allocations" the same on native and wasm32, and its expected-divergence list no
 longer names them.
 `tests/side_storage_admission.rs` pins the halt point of each storage kind under a 50,000-slot,
-4 MiB-chunk ceiling, and `ironhorse-snapshot/tests/side_storage_resume.rs` shows whole-heap,
+1 MiB-chunk ceiling, and `ironhorse-snapshot/tests/side_storage_resume.rs` shows whole-heap,
 eager-store and lazy-store resumes halting at the same computron as the machine that never stopped.
 `WASM-MEMORY.md` gives the memory the charged tables take per byte charged, which raises the
 checkpoint's constant in its formula from 5.5 to 6.6.
