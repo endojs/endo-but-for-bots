@@ -142,6 +142,16 @@ fn operand_s1(code: &[u8], pc: usize, off: usize) -> i32 {
     code[pc + off] as i8 as i32
 }
 
+/// The 2- or 4-byte signed offset of a branch whose instruction is `size`
+/// bytes long (XS `mxRunS2`/`mxRunS4`).
+fn operand_wide_branch(code: &[u8], pc: usize, size: i8) -> i32 {
+    if size == 3 {
+        i16::from_le_bytes([code[pc + 1], code[pc + 2]]) as i32
+    } else {
+        i32::from_le_bytes([code[pc + 1], code[pc + 2], code[pc + 3], code[pc + 4]])
+    }
+}
+
 /// An unsigned 1-byte operand (a scope index; XS `mxRunU1`).
 fn operand_u1(code: &[u8], pc: usize, off: usize) -> usize {
     code[pc + off] as usize
@@ -1036,8 +1046,8 @@ impl Interp {
                         pc = branch_target(pc, size, off);
                     }
                 }
-                XS_CODE_BRANCH_ELSE_2 => {
-                    let off = i16::from_le_bytes([code[pc + 1], code[pc + 2]]) as i32;
+                XS_CODE_BRANCH_ELSE_2 | XS_CODE_BRANCH_ELSE_4 => {
+                    let off = operand_wide_branch(code, pc, size);
                     let v = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     let cond = self.truthy(&v);
                     if cond {
@@ -1065,8 +1075,8 @@ impl Interp {
                         pc += size as usize;
                     }
                 }
-                XS_CODE_BRANCH_IF_2 => {
-                    let off = i16::from_le_bytes([code[pc + 1], code[pc + 2]]) as i32;
+                XS_CODE_BRANCH_IF_2 | XS_CODE_BRANCH_IF_4 => {
+                    let off = operand_wide_branch(code, pc, size);
                     let v = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     let cond = self.truthy(&v);
                     if cond {

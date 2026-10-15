@@ -204,3 +204,18 @@ fn concat_joins_buffers_through_the_species_constructor() {
         ));
     }
 }
+
+/// A conditional that jumps over more than 32 KiB of bytecode takes the
+/// 4-byte `branch_else`/`branch_if` forms.
+#[test]
+fn a_conditional_can_jump_over_a_long_body() {
+    let body = "a = a + 1; ".repeat(2500);
+    agrees(&format!(
+        "var a = 0; var x = true; if (x) {{ {body} }} else {{ a = -1; }} \
+         var b = 0; if (!x) {{ {body} }} else {{ b = 7; }} \
+         var c = 0; while (c < 2) {{ c++; {body} }} \
+         var d = x && (function () {{ {body} return 3; }})(); \
+         var e = !x || (function () {{ {body} return 4; }})(); \
+         [a, b, c, d, e].join()"
+    ));
+}
