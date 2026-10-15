@@ -16,13 +16,16 @@ import { makeDotMembraneKit } from '../src/dot-membrane.js';
 
 /** @type {any} */
 const { Parcel } = globalThis;
+// The shims-only AVA configuration installs Parcel before lockdown but does
+// not harden it, and only a frozen Parcel is passable.
+const parcelTest = Object.isFrozen(Parcel) ? test : test.skip;
 
 const makeRef = () => new Parcel('test:marshal', () => 'opened');
 
 // Until marshal gives Parcels a representation, a Parcel can be neither
 // rank-ordered nor encoded. Both must fail with a clear error.
 
-test('a Parcel cannot be rank-ordered', t => {
+parcelTest('a Parcel cannot be rank-ordered', t => {
   const ref = makeRef();
   t.is(passStyleOf(ref), 'parcel');
   const message = /"parcel" cannot be rank-ordered/;
@@ -33,7 +36,7 @@ test('a Parcel cannot be rank-ordered', t => {
   t.throws(() => compareRank(ref, makeRef()), { message });
 });
 
-test('a Parcel compares equal to itself without a rank', t => {
+parcelTest('a Parcel compares equal to itself without a rank', t => {
   // compareRank answers 0 for identical operands before it consults their
   // pass style, so only a Parcel compared with a different value throws.
   const ref = makeRef();
@@ -42,14 +45,14 @@ test('a Parcel compares equal to itself without a rank', t => {
   t.is(sortByRank(refs, compareRank), refs);
 });
 
-test('a Parcel cannot be encoded', t => {
+parcelTest('a Parcel cannot be encoded', t => {
   const encodePassable = makeEncodePassable();
   t.throws(() => encodePassable(makeRef()), {
     message: /"parcel"/,
   });
 });
 
-test('a Parcel cannot be marshalled', t => {
+parcelTest('a Parcel cannot be marshalled', t => {
   const message = /a "parcel" cannot be marshalled/;
   for (const serializeBodyFormat of /** @type {const} */ ([
     'capdata',
@@ -67,7 +70,7 @@ test('a Parcel cannot be marshalled', t => {
   }
 });
 
-test('a Parcel cannot pass through a membrane', t => {
+parcelTest('a Parcel cannot pass through a membrane', t => {
   // The membrane serializes what crosses it, so the encoder's own refusal is
   // what stops a Parcel.
   const message = /a "parcel" cannot be marshalled/;
