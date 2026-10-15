@@ -40,8 +40,4 @@ export {
 } from './src/codecs/descriptors.js';
 export { makePassableCodecs } from './src/codecs/passable.js';
 export { getSelectorName, makeSelector } from './src/selector.js';
-// Keep the old spelling while the stacked consumer-migration layer is pending.
-export {
-  makeParcel,
-  makeParcel as makeSturdyRef,
-} from './src/client/parcels.js';
+export { makeParcel } from './src/client/parcels.js';
