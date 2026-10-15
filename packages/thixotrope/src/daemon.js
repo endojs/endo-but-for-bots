@@ -68,7 +68,7 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  *
  * @typedef {object} ThixotropeDaemon
  * @property {any} location this daemon's OCapN location; combine with a
- *   publication's swissnum to mint a sturdy ref on any peer
+ *   publication's swissnum to mint a Parcel on any peer
  * @property {(secret: string) => { location: any, secret: string }} makeParcelDetails
  * @property {(source: string, endowments?: Record<string, unknown>) => Promise<any>} eval
  *   evaluate in a fresh implicitly-created worker and return the
