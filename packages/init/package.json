@@ -33,6 +33,7 @@
     "@endo/eventual-send": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/lockdown": "workspace:^",
+    "@endo/parcel": "workspace:^",
     "@endo/promise-kit": "workspace:^"
   },
   "files": [

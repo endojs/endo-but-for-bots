@@ -237,6 +237,16 @@ const makeE = HandledPromise => {
         resolve: HandledPromise.resolve,
 
         /**
+         * E.open(parcel) opens a Parcel through the constructor selected by
+         * the current realm. Parcel.open always returns a promise.
+         *
+         * @param {unknown} parcel value to open
+         * @returns {Promise<unknown>}
+         * @readonly
+         */
+        open: parcel => /** @type {any} */ (globalThis).Parcel.open(parcel),
+
+        /**
          * E.sendOnly returns a proxy similar to E, but for which the results
          * are ignored (undefined is returned).
          *
