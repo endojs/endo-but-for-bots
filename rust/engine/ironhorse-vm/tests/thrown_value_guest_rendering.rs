@@ -200,10 +200,6 @@ fn an_engine_fault_in_the_render_propagates_instead_of_becoming_the_sentinel() {
             "eval:no-compiler",
         ),
         (
-            "throw {toString(){ var eval=1; return eval('1') }}",
-            "eval:shadowed-call",
-        ),
-        (
             "throw {toString(){ return import('x') }}",
             "module:dynamic-import",
         ),

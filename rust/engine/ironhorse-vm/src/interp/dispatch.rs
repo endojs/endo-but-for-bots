@@ -630,7 +630,7 @@ impl Interp {
                 XS_CODE_NEW => dispatch_flow!(self.exec_new(code, pc, return_depth, size), pc),
                 XS_CODE_SUPER => dispatch_flow!(self.exec_super(code, pc, return_depth, size), pc),
                 XS_CODE_EVAL | XS_CODE_EVAL_TAIL => {
-                    dispatch_flow!(self.exec_eval(code, pc, return_depth, size), pc)
+                    dispatch_flow!(self.exec_eval(code, pc, return_depth, op, size), pc)
                 }
                 XS_CODE_RUN | XS_CODE_RUN_1 | XS_CODE_RUN_2 | XS_CODE_RUN_4 | XS_CODE_RUN_TAIL
                 | XS_CODE_RUN_TAIL_1 | XS_CODE_RUN_TAIL_2 | XS_CODE_RUN_TAIL_4 => {
@@ -2425,29 +2425,39 @@ impl Interp {
         Flow::Next(pc)
     }
 
-    // Direct `eval(...)` uses its own dynamic-count opcode. The
-    // spec's non-string fast path performs no parsing and returns
-    // argument zero unchanged; this is independently useful and
-    // exact even before runtime source compilation lands. A
-    // syntactically-direct call whose binding was replaced is not
-    // eval and must use ordinary Call; retain that as a precise
-    // gap instead of accidentally granting eval semantics.
+    // Direct `eval(...)` uses its own dynamic-count opcode. A
+    // syntactically-direct call whose callee is not %eval% (the binding
+    // was shadowed or replaced) is an ordinary call, which XS's `EVAL`
+    // makes by falling into `RUN_ALL` (or `RUN_TAIL_ALL`) with the same
+    // count.
     /// The dispatch loop's `EVAL` arm, which also runs `EVAL_TAIL`.
     #[inline(never)]
-    fn exec_eval(&mut self, code: &[u8], mut pc: usize, return_depth: usize, size: i8) -> Flow {
+    fn exec_eval(
+        &mut self,
+        code: &[u8],
+        mut pc: usize,
+        return_depth: usize,
+        op: Opcode,
+        size: i8,
+    ) -> Flow {
         let argc = dispatch_result_flow!(self.pop_run_count(), self, return_depth, code);
         let Some(base) = self.stack.len().checked_sub(argc + 4) else {
             return Flow::Exit(Step::Host(Halt::EngineInvariant("eval:frame-underflow")));
         };
-        let native = match self.stack.get(base + 1).and_then(|slot| match slot.value {
-            Payload::Reference(function) => self.native_of(function),
+        let native = self.stack.get(base + 1).and_then(|slot| match slot.value {
+            Payload::Reference(function) if slot.kind == Kind::Reference => {
+                self.native_of(function)
+            }
             _ => None,
-        }) {
-            Some(native) => native,
-            None => return Flow::Exit(Step::Host(Halt::NotImplemented("eval:shadowed-call"))),
-        };
-        if native != Native::Eval {
-            return Flow::Exit(Step::Host(Halt::NotImplemented("eval:shadowed-call")));
+        });
+        if native != Some(Native::Eval) {
+            self.push(Slot::integer(argc as i32));
+            let run = if op == Opcode::XS_CODE_EVAL_TAIL {
+                Opcode::XS_CODE_RUN_TAIL
+            } else {
+                Opcode::XS_CODE_RUN
+            };
+            return self.exec_run(code, pc, return_depth, run, size);
         }
         // This opcode is emitted only for a **direct** eval call,
         // so the source (if a string) evaluates in the caller's

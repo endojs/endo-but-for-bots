@@ -260,3 +260,21 @@ fn a_super_member_key_converts_after_the_base_is_found() {
         agrees(program);
     }
 }
+
+#[test]
+fn a_direct_eval_call_to_a_shadowed_eval_is_an_ordinary_call() {
+    for program in [
+        "function f() { var eval = function (x) { return 'shadow ' + x; }; return eval('1'); } f()",
+        "function f() { var eval = 1; try { return eval('1'); } catch (e) { return String(e); } } f()",
+        "function f() { var eval = function () { return arguments.length; }; return eval(1, 2, 3); } f()",
+        "function f(eval) { return eval('x'); } f(function (s) { return s + '!'; })",
+        "function g() { var eval = function (x) { return new.target === undefined && x; }; return eval(5); } g()",
+        "var eval = function (x) { return 'global ' + x; }; eval('1')",
+        "var o = { eval(x) { return [this === o, x].join(); } }; with (o) { eval('2') }",
+        // A shadowed eval in tail position.
+        "function t(n) { 'use strict'; let eval = function (k) { return k; }; return eval(n); } t(4)",
+        "var e = eval; function f() { var eval = e; var x = 'local'; return eval('typeof x'); } f()",
+    ] {
+        agrees(program);
+    }
+}
