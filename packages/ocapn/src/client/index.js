@@ -1,4 +1,5 @@
 // @ts-check
+// spell-out-exempt: SwissNum is the OCapN specification's established type name.
 
 /**
  * @import { OcapnLocation } from '../codecs/components.js'

@@ -1,5 +1,6 @@
 // @ts-check
 // prefer-endo-primitives-exempt: the interop fixture uses Far for one-off wire presences.
+/** @import { Client } from '../../src/client/parcel-types.js' */
 
 import '@endo/init';
 
@@ -10,10 +11,6 @@ import { makeTcpNetLayer } from '../../src/netlayers/tcp-test-only.js';
 import { makeOcapn } from '../../src/client/index.js';
 import { syrupCodec } from '../../src/syrup/index.js';
 import { startGcScheduler } from '../_gc-util.js';
-
-/**
- * @typedef {import('../../src/client/parcel-types.js').Client} Client
- */
 
 /**
  * @param {Client} client
