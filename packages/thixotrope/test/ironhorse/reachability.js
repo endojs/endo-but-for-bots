@@ -100,8 +100,8 @@ test.serial(
       network: (handlers, logger) => makeTcpNetLayer({ handlers, logger }),
     });
     t.teardown(() => peer.shutdown());
-    const root = await peer.enlivenSturdyRef(
-      peer.makeSturdyRef(fixture.daemon.location, fixture.publication),
+    const root = await peer.openParcel(
+      peer.makeParcel(fixture.daemon.location, fixture.publication),
     );
     t.is(await E(root).read(), 0n);
     fixture.daemon.unpublish(fixture.publication);

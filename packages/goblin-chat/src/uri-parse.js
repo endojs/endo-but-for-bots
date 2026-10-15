@@ -19,7 +19,7 @@ import { decodeBase64Url } from './base64url.js';
  *                  #:padding? #f)
  *
  * The OCapN draft spec's Syrup serialization for `<ocapn-sturdyref>`
- * carries `swiss-num` as a bytevector (and Endo's `OcapnSturdyRefCodec`
+ * carries `swiss-num` as a bytevector (and Endo's `OcapnParcelCodec`
  * already uses `read/writeBytestring`), so this is the only sound
  * interpretation for an interoperable sturdyref URI.
  *

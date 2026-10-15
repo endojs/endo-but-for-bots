@@ -250,8 +250,8 @@ test.serial('a third-party gift routes through the hub bootstrap', async t => {
       makeTcpNetLayer({ handlers, logger, specifiedDesignator: 'gifter' }),
   });
   t.teardown(() => gifter.shutdown());
-  const counterAtGifter = await gifter.enlivenSturdyRef(
-    gifter.makeSturdyRef(daemon.location, secret),
+  const counterAtGifter = await gifter.openParcel(
+    gifter.makeParcel(daemon.location, secret),
   );
   t.is(await E(counterAtGifter).incr(), 1);
 
@@ -261,8 +261,8 @@ test.serial('a third-party gift routes through the hub bootstrap', async t => {
   // there (signature chain verified against the sessions' handshake
   // identities), and the withdrawn reference routes receiver -> hub ->
   // worker.
-  const taker = await gifter.enlivenSturdyRef(
-    gifter.makeSturdyRef(receiverNetlayer.location, 'taker'),
+  const taker = await gifter.openParcel(
+    gifter.makeParcel(receiverNetlayer.location, 'taker'),
   );
   t.is(
     await E(taker).take(counterAtGifter),
@@ -337,13 +337,13 @@ test.serial(
     });
     t.teardown(() => gifter.shutdown());
 
-    const gadgetAtGifter = await gifter.enlivenSturdyRef(
-      gifter.makeSturdyRef(exporterNetlayer.location, 'gadget'),
+    const gadgetAtGifter = await gifter.openParcel(
+      gifter.makeParcel(exporterNetlayer.location, 'gadget'),
     );
     t.is(await E(gadgetAtGifter).poke(), 'poked');
 
-    const holderAtGifter = await gifter.enlivenSturdyRef(
-      gifter.makeSturdyRef(daemon.location, secret),
+    const holderAtGifter = await gifter.openParcel(
+      gifter.makeParcel(daemon.location, secret),
     );
     t.is(
       await E(holderAtGifter).hold(gadgetAtGifter),
