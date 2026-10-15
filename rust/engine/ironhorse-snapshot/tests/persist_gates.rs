@@ -353,7 +353,7 @@ fn a_resumed_machine_reattaches_without_moving_the_meter_deadline() {
 // guest-storable runtime mint -- the promise resolver, whose
 // `FuncInfo` restore now rebuilds -- every reachable machine's doomed
 // set is EMPTY and the traversal is a future-proofing net: a NEW
-// runtime `alloc_method` mint that escapes to the guest re-arms it,
+// runtime native-method mint that escapes to the guest re-arms it,
 // and the fixtures below (which mint resolvers into every holder
 // shape the traversal walks) become its regression bed.
 //

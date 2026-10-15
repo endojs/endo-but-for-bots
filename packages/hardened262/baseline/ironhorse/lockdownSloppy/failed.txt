@@ -10,7 +10,6 @@ test/TextDecoder/immutable-arraybuffer-intersection.js
 test/TextEncoder/immutable-arraybuffer-intersection.js
 test/freeze/monadic.js
 test/intrinsics/ArrayIteratorPrototype/intrinsic-metadata.js
-test/intrinsics/AsyncIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/GeneratorPrototype/intrinsic-metadata.js
 test/intrinsics/Math/intrinsic-metadata.js
 test/intrinsics/RegExpPrototype/intrinsic-metadata.js

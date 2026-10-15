@@ -351,6 +351,20 @@ const DEPARTURES: &[Row] = &[
         v8: "|string",
         why: "a class value is named before its static elements run (ClassDefinitionEvaluation's SetFunctionName, ES2024 15.7.14), so a name a static block deleted stays deleted; XS names the class when its property is defined, after the block",
     },
+    Row {
+        program: "RegExp.prototype.compile.length",
+        ironhorse: "2",
+        xs: "0",
+        v8: "2",
+        why: "Annex B's RegExp.prototype.compile takes (pattern, flags), so its length is 2 (B.2.4.1)",
+    },
+    Row {
+        program: "var hp = Object.getPrototypeOf([].values().map(function (x) { return x; })); var wp = Object.getPrototypeOf(Iterator.from({ next: function () {} })); [hp.next.length, hp.return.length, wp.next.length, wp.return.length].join()",
+        ironhorse: "0,0,0,0",
+        xs: "1,1,1,1",
+        v8: "0,0,0,0",
+        why: "%IteratorHelperPrototype% and %WrapForValidIteratorPrototype%'s `next` and `return` take no arguments, so their length is 0 (ES2025 27.1.2.1, 27.1.3.2.1)",
+    },
 ];
 
 /// Programs where Ironhorse departs from XS and V8 has no counterpart to
@@ -492,13 +506,6 @@ const SHARED: &[Row] = &[
 /// a passing test or to another table. A halt is recorded as `halt` and its
 /// [`Halt`] label: these are guest-reachable `NotImplemented` halts.
 const GAPS: &[Row] = &[
-    Row {
-        program: "[Array.prototype.join.name, Array.prototype.join.length, Math.max.name, Math.max.length].join()",
-        ironhorse: ",0,,0",
-        xs: "join,1,max,2",
-        v8: "join,1,max,2",
-        why: "a built-in function's `name` and `length` are its specified name and parameter count; Ironhorse gives many the empty string and 0",
-    },
     Row {
         program: "Object.getOwnPropertyNames(Map.prototype).join('+')",
         ironhorse: "set+size+constructor+get+has+delete+forEach+entries+keys+values+clear+getOrInsert+getOrInsertComputed",

@@ -6205,7 +6205,7 @@ impl Interp {
                         ))
                     }
                 };
-                let revoke = self.alloc_method(NativeMethod::ProxyRevoke);
+                let revoke = self.alloc_named_method(NativeMethod::ProxyRevoke, "", 0);
                 self.proxy_revokers.insert(revoke, proxy_inst);
                 let result_obj = self.slots.alloc(Slot::instance(self.object_proto));
                 self.define_descriptor_field(result_obj, "proxy", proxy);

@@ -300,7 +300,7 @@ impl Interp {
                     .iter()
                     .find_map(|(function, owner)| (*owner == inst).then_some(*function));
                 let function = existing.unwrap_or_else(|| {
-                    let f = self.alloc_method(NativeMethod::CollatorCompare);
+                    let f = self.alloc_named_method(NativeMethod::CollatorCompare, "", 2);
                     self.collator_compare_functions.insert(f, inst);
                     f
                 });

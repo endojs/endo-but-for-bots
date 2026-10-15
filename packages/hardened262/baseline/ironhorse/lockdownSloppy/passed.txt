@@ -16,6 +16,7 @@ test/intrinsics/AsyncFunction/inert-stand-in.js
 test/intrinsics/AsyncFunction/intrinsic-metadata.js
 test/intrinsics/AsyncGeneratorFunction/intrinsic-metadata.js
 test/intrinsics/AsyncGeneratorPrototype/intrinsic-metadata.js
+test/intrinsics/AsyncIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/Atomics/intrinsic-metadata.js
 test/intrinsics/DataView/numeric-accessors.js
 test/intrinsics/GeneratorFunction/intrinsic-metadata.js

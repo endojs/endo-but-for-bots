@@ -11,7 +11,7 @@ fn copy_object_in_recycled_boot_slot_is_not_a_boot_native() {
     let disposable = m.slots.alloc(Slot::instance(m.object_proto));
     m.boot_slot_count = m.slots.capacity();
     m.collect_garbage().unwrap();
-    let function = m.alloc_method(NativeMethod::CopyObject);
+    let function = m.alloc_named_method(NativeMethod::CopyObject, "", 0);
     assert_eq!(
         function, disposable,
         "fixture must recycle the seeded object"
