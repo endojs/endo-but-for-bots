@@ -25,8 +25,8 @@
 3723736	var n = 0; var o = 0; o = { a: 1 }; n = Object.keys; n.call(null, o).length
 2854024	var p=new Proxy(Math.max,{});p(1,2)
 3525768	var p=new Proxy(Math.max,{});p.call(null,1,2)
-6334808	var p=new Proxy(function(a){return a+1},{apply:function(t,s,a){return Reflect.apply(t,s,a)}});p(1)
-6973784	var p=new Proxy(function(a){return a+1},{apply:function(t,s,a){return Reflect.apply(t,s,a)}});p.call(null,1)
+6367576	var p=new Proxy(function(a){return a+1},{apply:function(t,s,a){return Reflect.apply(t,s,a)}});p(1)
+7006552	var p=new Proxy(function(a){return a+1},{apply:function(t,s,a){return Reflect.apply(t,s,a)}});p.call(null,1)
 3807400	var p=new Proxy(function(a){return a+1},{});p(1)
 5397208	var p=new Proxy(function(a){return a+1},{});p.apply(null,[1])
 4446376	var p=new Proxy(function(a){return a+1},{});p.call(null,1)

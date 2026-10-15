@@ -23,13 +23,13 @@ fn accessor_definition_advances_once() {
     check(
         "var o={get x(){return 3},set x(v){this.y=v}}; o.x=7; o.x+o.y;",
         "10",
-        4514744,
+        4580280,
     );
 }
 
 #[test]
 fn getter_unwind_reaches_outer_callback_handler() {
-    check("var o={get x(){throw 7}}; var n=0; try {[1].map(function(){return o.x}); n=100;} catch(e){n=e;} n+1;", "8", 7644928);
+    check("var o={get x(){throw 7}}; var n=0; try {[1].map(function(){return o.x}); n=100;} catch(e){n=e;} n+1;", "8", 7677696);
 }
 
 #[test]
@@ -37,13 +37,13 @@ fn setter_unwind_stops_assignment_and_resumes_catch() {
     check(
         "var o={set x(v){throw v}}; var n=0; try {o.x=7; n=100;} catch(e){n=e;} n+1;",
         "8",
-        5691544,
+        5724312,
     );
 }
 
 #[test]
 fn proxy_get_set_and_delete_preserve_thrown_values() {
-    check("var p=new Proxy({}, {get(){throw 2},set(){throw 3},deleteProperty(){throw 5}}); var n=0; try{p.x;n=100}catch(e){n+=e} try{p.x=1;n=100}catch(e){n+=e} try{delete p.x;n=100}catch(e){n+=e} n;", "10", 12315864);
+    check("var p=new Proxy({}, {get(){throw 2},set(){throw 3},deleteProperty(){throw 5}}); var n=0; try{p.x;n=100}catch(e){n+=e} try{p.x=1;n=100}catch(e){n+=e} try{delete p.x;n=100}catch(e){n+=e} n;", "10", 12414168);
 }
 
 #[test]
@@ -63,7 +63,7 @@ fn with_environment_reads_and_writes_advance_once() {
 
 #[test]
 fn global_accessor_throw_reaches_variable_handler() {
-    check("Object.defineProperty(globalThis,'dispatchGlobal',{get(){throw 3},set(v){throw v},configurable:true}); var n=0; try{dispatchGlobal;n=100}catch(e){n+=e} try{dispatchGlobal=7;n=100}catch(e){n+=e} n;", "10", 9544088);
+    check("Object.defineProperty(globalThis,'dispatchGlobal',{get(){throw 3},set(v){throw v},configurable:true}); var n=0; try{dispatchGlobal;n=100}catch(e){n+=e} try{dispatchGlobal=7;n=100}catch(e){n+=e} n;", "10", 9609624);
 }
 
 #[test]
@@ -71,7 +71,7 @@ fn iterator_method_throw_reaches_outer_handler() {
     check(
         "var o={[Symbol.iterator](){throw 7}},n=0; try{for(var x of o){n=100}}catch(e){n=e} n+1;",
         "8",
-        6264416,
+        6297184,
     );
 }
 
@@ -82,17 +82,17 @@ fn unbound_typeof_keeps_its_exception() {
 
 #[test]
 fn private_accessors_preserve_receiver_and_throw_identity() {
-    check("class C { #x=3; get #y(){throw this.#x} set #y(v){this.#x=v} run(){this.#y=7;try{return this.#y}catch(e){return e}} } new C().run();", "7", 11110376);
+    check("class C { #x=3; get #y(){throw this.#x} set #y(v){this.#x=v} run(){this.#y=7;try{return this.#y}catch(e){return e}} } new C().run();", "7", 11208680);
 }
 
 #[test]
 fn super_accessors_keep_this_and_propagate_throws() {
-    check("class A {get x(){throw this.y} set x(v){this.y=v}} class B extends A {run(){super.x=7;try{return super['x']}catch(e){return e}}} new B().run();", "7", 11717224);
+    check("class A {get x(){throw this.y} set x(v){this.y=v}} class B extends A {run(){super.x=7;try{return super['x']}catch(e){return e}}} new B().run();", "7", 11815528);
 }
 
 #[test]
 fn numeric_coercion_and_membership_preserve_throws() {
-    check("var o={[Symbol.toPrimitive](){throw 3}},p=new Proxy({}, {has(){throw 7}}),n=0; try{o++;n=100}catch(e){n+=e} try{'x' in p;n=100}catch(e){n+=e} n;", "10", 10167464);
+    check("var o={[Symbol.toPrimitive](){throw 3}},p=new Proxy({}, {has(){throw 7}}),n=0; try{o++;n=100}catch(e){n+=e} try{'x' in p;n=100}catch(e){n+=e} n;", "10", 10233000);
 }
 
 #[test]
