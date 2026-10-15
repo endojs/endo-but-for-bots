@@ -16386,6 +16386,7 @@ __metadata:
     "@endo/eslint-plugin": "workspace:^"
     "@endo/marshal": "workspace:^"
     "@endo/nat": "workspace:^"
+    "@endo/parcel": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@jessie.js/eslint-plugin": "npm:^0.4.2"
     "@lavamoat/allow-scripts": "npm:^3.4.3"
