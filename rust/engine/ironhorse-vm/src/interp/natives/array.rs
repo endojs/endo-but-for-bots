@@ -3779,23 +3779,8 @@ impl Interp {
         this: Slot,
         base: usize,
     ) -> Result<Slot, Step> {
-        let o = match this.value {
-            Payload::Reference(o) if this.kind == Kind::Reference => o,
-            _ if this.kind == Kind::Null || this.kind == Kind::Undefined => {
-                return Err(self.catchable_type_error_msg(
-                    if this.kind == Kind::Null {
-                        "cannot coerce null to object"
-                    } else {
-                        "cannot coerce undefined to object"
-                    }
-                    .into(),
-                ));
-            }
-            _ => {
-                return Err(Step::Host(Halt::NotImplemented(
-                    Self::array_generic_skip_reason(m),
-                )))
-            }
+        let Payload::Reference(o) = self.array_to_object(this)?.value else {
+            unreachable!("ToObject result")
         };
         let callback = self
             .stack
@@ -3871,23 +3856,8 @@ impl Interp {
         argc: usize,
     ) -> Result<Slot, Step> {
         // `ToObject(this)`.
-        let o = match this.value {
-            Payload::Reference(o) if this.kind == Kind::Reference => o,
-            _ => {
-                if this.kind == Kind::Null || this.kind == Kind::Undefined {
-                    return Err(self.catchable_type_error_msg(
-                        if this.kind == Kind::Null {
-                            "cannot coerce null to object"
-                        } else {
-                            "cannot coerce undefined to object"
-                        }
-                        .into(),
-                    ));
-                }
-                return Err(Step::Host(Halt::NotImplemented(
-                    Self::array_generic_skip_reason(m),
-                )));
-            }
+        let Payload::Reference(o) = self.array_to_object(this)?.value else {
+            unreachable!("ToObject result")
         };
         let recv = Slot::of(Kind::Reference, Payload::Reference(o));
         let arg0 = self

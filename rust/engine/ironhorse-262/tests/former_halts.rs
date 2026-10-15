@@ -302,3 +302,33 @@ fn json_parse_keeps_a_lone_surrogate() {
         agrees(&format!("String({program})"));
     }
 }
+
+#[test]
+fn generic_array_methods_box_a_primitive_receiver() {
+    for program in [
+        "Array.prototype.indexOf.call(\"abc\", \"b\")",
+        "Array.prototype.lastIndexOf.call(\"abcb\", \"b\")",
+        "Array.prototype.includes.call(\"abc\", \"c\")",
+        "Array.prototype.at.call(\"abc\", -1)",
+        "Array.prototype.map.call(\"abc\", function (c) { return c + c }).join()",
+        "Array.prototype.filter.call(\"abcd\", function (c, i) { return i % 2 }).join()",
+        "Array.prototype.forEach.call(\"ab\", function (c, i, o) { globalThis.r = (globalThis.r || \"\") + c + i + typeof o }); r",
+        "Array.prototype.some.call(\"abc\", function (c) { return c === \"b\" })",
+        "Array.prototype.every.call(true, function () { return false })",
+        "Array.prototype.find.call(\"abc\", function (c) { return c > \"a\" })",
+        "Array.prototype.findIndex.call(\"abc\", function (c) { return c > \"a\" })",
+        "Array.prototype.findLast.call(\"abc\", function (c) { return c > \"a\" })",
+        "Array.prototype.findLastIndex.call(\"abc\", function (c) { return c > \"z\" })",
+        "Array.prototype.reduce.call(\"abc\", function (a, c) { return a + c.toUpperCase() })",
+        "Array.prototype.reduceRight.call(\"abc\", function (a, c) { return a + c }, \"\")",
+        "Array.prototype.map.call(5, function () { return 1 }).length",
+        "Array.prototype.filter.call(Symbol(), function () { return 1 }).length",
+        "(function () { Number.prototype.length = 2; Number.prototype[0] = \"x\"; Number.prototype[1] = \"y\"; var r = Array.prototype.map.call(5, function (v, i, o) { return v + i + typeof o }).join(); delete Number.prototype.length; delete Number.prototype[0]; delete Number.prototype[1]; return r })()",
+        "(function () { \"use strict\"; var t; Array.prototype.forEach.call(\"a\", function () { t = typeof this }, 1); return t })()",
+        "(function () { try { Array.prototype.map.call(\"abc\", 1) } catch (e) { return String(e) } })()",
+        "(function () { try { Array.prototype.indexOf.call(null, 1) } catch (e) { return String(e) } })()",
+        "Array.prototype.indexOf.call(10n, 1)",
+    ] {
+        agrees(&format!("String({program})"));
+    }
+}
