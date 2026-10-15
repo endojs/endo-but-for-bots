@@ -13,7 +13,7 @@ import { runMultiplayerSuite, ocapnNetwork } from './_multiplayer-suite.js';
 // `@nets/ocapn`. The OCapN edge is the new external connectivity
 // layer per `designs/daemon-ocapn-external-connectivity.md`, and it
 // is unique enough — Noise-authenticated peer identity, session
-// cache dedupe by location, OCapN sturdyrefs instead of raw `endo://`
+// cache dedupe by location, OCapN parcels instead of raw `endo://`
 // query strings — that running the full daemon-level multiplayer
 // flow over it is the only way to catch regressions that the
 // in-process `networks-ocapn.test.js` cannot reach.
