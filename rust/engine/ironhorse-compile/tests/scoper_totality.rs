@@ -24,15 +24,14 @@
 //! attempt to break it: every construct that can nest a declaration inside a
 //! parameter default without opening a function body.
 //!
-//! **What these probes do and do not establish.** Most of the static-block
-//! roster ends as `Unsupported`, at the CODER's deferred-static-block fold
-//! (coder.rs:3498). That fold runs after the scoper, so the scoper walks
-//! every one of these sources to completion and the audit is not vacuous —
-//! but the reach is asserted below rather than assumed, because a roster that
-//! is refused before the pass under audit is the way this kind of test passes
-//! while testing nothing. `a_static_block_is_still_deferred_by_the_coder`
-//! pins that premise: when static blocks are implemented, it fails, and the
-//! window audit has to be re-run against sources that reach the back end.
+//! **What these probes do and do not establish.** The static-block roster
+//! used to end as `Unsupported`, at the CODER's deferred-static-block fold,
+//! which ran after the scoper, so the audit exercised the scoper alone. Static
+//! blocks now compile, so the roster reaches the back end, and the reach is
+//! asserted below rather than assumed, because a roster that is refused
+//! before the pass under audit is the way this kind of test passes while
+//! testing nothing. `static_blocks_in_the_window_compile_end_to_end` pins
+//! that premise in every mode.
 //!
 //! This file is not a closure of the finding. It pins the shapes that are
 //! known; the gate that does not depend on someone thinking of a shape is
@@ -96,58 +95,60 @@ fn audit(roster: &[&str]) {
 /// body, so they are the two ways to put a `var`/`let`/`const`/`using`
 /// declarator into the window. If any of them reaches scoper.rs:1600, 1621 or
 /// 1689 the `unwrap` is a crash on valid source.
+const PARAMETER_DEFAULT_ROSTER: &[&str] = &[
+    // Static blocks in a parameter default, one per declarator token.
+    "function f(a = class { static { var x; } }) {}",
+    "function f(a = class { static { let x; } }) {}",
+    "function f(a = class { static { const x = 1; } }) {}",
+    "function f(a = class { static { using x = null; } }) {}",
+    "function f(a = class { static { function g() {} } }) {}",
+    "function f(a = class { static { class D {} } }) {}",
+    // The same, one nesting level deeper: a block inside the static block.
+    "function f(a = class { static { { var x; } } }) {}",
+    "function f(a = class { static { if (0) var x; } }) {}",
+    "function f(a = class { static { for (var x of []) ; } }) {}",
+    "function f(a = class { static { try {} catch { var x; } } }) {}",
+    // A static block reached through the heritage clause rather than a
+    // default's own expression.
+    "function f(a = class extends (class { static { var x; } }) {}) {}",
+    // A field initializer, which is an expression but opens its own
+    // synthetic field-init function scope (scoper.rs:2208, 2221).
+    "function f(a = class { p = (() => { var x; return 1; })(); }) {}",
+    "function f(a = class { static p = (() => { let x; return 1; })(); }) {}",
+    // Every function form that clears `body_scope`, each with a static
+    // block in its parameter list.
+    "function* g(a = class { static { var x; } }) {}",
+    "async function h(a = class { static { var x; } }) {}",
+    "async function* i(a = class { static { var x; } }) {}",
+    "(a = class { static { var x; } }) => {}",
+    "async (a = class { static { var x; } }) => {}",
+    "({ m(a = class { static { var x; } }) {} });",
+    "({ get p() { return 0; }, set p(a = class { static { var x; } }) {} });",
+    "(class { m(a = class { static { var x; } }) {} });",
+    "(class { static m(a = class { static { var x; } }) {} });",
+    "(class { #m(a = class { static { var x; } }) {} });",
+    "(class { constructor(a = class { static { var x; } }) {} });",
+    // A destructuring parameter, whose defaults nest arbitrarily deep.
+    "function f({ a = class { static { var x; } } }) {}",
+    "function f([a = class { static { var x; } }]) {}",
+    "function f({ a: { b = class { static { var x; } } } }) {}",
+    "function f(...[a = class { static { var x; } }]) {}",
+    // A function nested in a parameter default, whose OWN parameter
+    // default carries the static block: the window, re-entered.
+    "function f(a = function (b = class { static { var x; } }) {}) {}",
+    "function f(a = ((b = class { static { var x; } }) => 0)) {}",
+    // Controls: the same declarations where `body_scope` IS set. These
+    // must not panic either, and if the roster above ever stops
+    // compiling for an unrelated reason these keep the file honest.
+    "function f(a = function () { var x; }) {}",
+    "function f(a = 1) { var x; }",
+    "class C { static { var x; } }",
+    "var x;",
+];
+
 #[test]
 fn a_declaration_inside_a_parameter_default_does_not_reach_a_none_body_scope() {
-    audit(&[
-        // Static blocks in a parameter default, one per declarator token.
-        "function f(a = class { static { var x; } }) {}",
-        "function f(a = class { static { let x; } }) {}",
-        "function f(a = class { static { const x = 1; } }) {}",
-        "function f(a = class { static { using x = null; } }) {}",
-        "function f(a = class { static { function g() {} } }) {}",
-        "function f(a = class { static { class D {} } }) {}",
-        // The same, one nesting level deeper: a block inside the static block.
-        "function f(a = class { static { { var x; } } }) {}",
-        "function f(a = class { static { if (0) var x; } }) {}",
-        "function f(a = class { static { for (var x of []) ; } }) {}",
-        "function f(a = class { static { try {} catch { var x; } } }) {}",
-        // A static block reached through the heritage clause rather than a
-        // default's own expression.
-        "function f(a = class extends (class { static { var x; } }) {}) {}",
-        // A field initializer, which is an expression but opens its own
-        // synthetic field-init function scope (scoper.rs:2208, 2221).
-        "function f(a = class { p = (() => { var x; return 1; })(); }) {}",
-        "function f(a = class { static p = (() => { let x; return 1; })(); }) {}",
-        // Every function form that clears `body_scope`, each with a static
-        // block in its parameter list.
-        "function* g(a = class { static { var x; } }) {}",
-        "async function h(a = class { static { var x; } }) {}",
-        "async function* i(a = class { static { var x; } }) {}",
-        "(a = class { static { var x; } }) => {}",
-        "async (a = class { static { var x; } }) => {}",
-        "({ m(a = class { static { var x; } }) {} });",
-        "({ get p() { return 0; }, set p(a = class { static { var x; } }) {} });",
-        "(class { m(a = class { static { var x; } }) {} });",
-        "(class { static m(a = class { static { var x; } }) {} });",
-        "(class { #m(a = class { static { var x; } }) {} });",
-        "(class { constructor(a = class { static { var x; } }) {} });",
-        // A destructuring parameter, whose defaults nest arbitrarily deep.
-        "function f({ a = class { static { var x; } } }) {}",
-        "function f([a = class { static { var x; } }]) {}",
-        "function f({ a: { b = class { static { var x; } } } }) {}",
-        "function f(...[a = class { static { var x; } }]) {}",
-        // A function nested in a parameter default, whose OWN parameter
-        // default carries the static block: the window, re-entered.
-        "function f(a = function (b = class { static { var x; } }) {}) {}",
-        "function f(a = ((b = class { static { var x; } }) => 0)) {}",
-        // Controls: the same declarations where `body_scope` IS set. These
-        // must not panic either, and if the roster above ever stops
-        // compiling for an unrelated reason these keep the file honest.
-        "function f(a = function () { var x; }) {}",
-        "function f(a = 1) { var x; }",
-        "class C { static { var x; } }",
-        "var x;",
-    ]);
+    audit(PARAMETER_DEFAULT_ROSTER);
 }
 
 /// The catch shape, whose `statement_scope.unwrap()` (scoper.rs:2527) is
@@ -155,21 +156,23 @@ fn a_declaration_inside_a_parameter_default_does_not_reach_a_none_body_scope() {
 ///
 /// `code_catch` is where this finding's first reachable panic lived, so the
 /// scoper's own catch handling gets the same roster the coder's did.
+const CATCH_ROSTER: &[&str] = &[
+    "try {} catch {}",
+    "try {} catch (e) {}",
+    "try {} catch ({ a }) {}",
+    "try {} catch ([a]) {}",
+    "try {} catch ({ a = class { static { var x; } } }) {}",
+    "try {} catch (e) { var e; }",
+    "try {} catch (e) { function f() {} }",
+    "try {} catch { function f() {} }",
+    "try {} catch (e) {} finally {}",
+    "try { try {} catch (e) {} } catch (e) {}",
+    "function f(a = (() => { try {} catch (e) {} })()) {}",
+];
+
 #[test]
 fn every_catch_shape_answers() {
-    audit(&[
-        "try {} catch {}",
-        "try {} catch (e) {}",
-        "try {} catch ({ a }) {}",
-        "try {} catch ([a]) {}",
-        "try {} catch ({ a = class { static { var x; } } }) {}",
-        "try {} catch (e) { var e; }",
-        "try {} catch (e) { function f() {} }",
-        "try {} catch { function f() {} }",
-        "try {} catch (e) {} finally {}",
-        "try { try {} catch (e) {} } catch (e) {}",
-        "function f(a = (() => { try {} catch (e) {} })()) {}",
-    ]);
+    audit(CATCH_ROSTER);
 }
 
 /// The scopes a declaration can be hoisted into without a function between it
@@ -202,26 +205,32 @@ fn every_scope_bearing_statement_answers() {
 ///
 /// A class static block is the only way to put a STATEMENT into an expression
 /// position without an intervening function body, so it is the only way to
-/// put a declarator into the `body_scope == None` window. The scoper handles
-/// these sources — it is the coder that refuses them, at its deferred
-/// static-block fold (coder.rs:3498), after the scoper has already walked
-/// them — so the audit above is a real exercise of the scoper.
-///
-/// It is NOT a real exercise of anything downstream. When static blocks stop
-/// being deferred this test fails, which is the intent: the window audit then
-/// has to be re-run against sources that reach the back end.
+/// put a declarator into the `body_scope == None` window. The coder used to
+/// refuse these sources at its deferred static-block fold, after the scoper
+/// had walked them, so the audit exercised the scoper and nothing downstream.
+/// Static blocks now compile, and every static-block source of the
+/// parameter-default and catch rosters reaches the back end in every mode, so
+/// the audits above exercise the whole compiler.
 #[test]
-fn a_static_block_is_still_deferred_by_the_coder() {
-    for source in [
-        "class C { static { var x; } }",
-        "function f(a = class { static { var x; } }) {}",
-    ] {
-        assert_eq!(
-            outcome(source, Goal::Script, false),
-            Ok("unsupported"),
-            "{source}"
-        );
+fn static_blocks_in_the_window_compile_end_to_end() {
+    let mut checked = 0;
+    for source in PARAMETER_DEFAULT_ROSTER
+        .iter()
+        .chain(CATCH_ROSTER)
+        .filter(|source| source.contains("static {"))
+    {
+        for &(goal, strict) in MODES {
+            assert_eq!(
+                outcome(source, goal, strict),
+                Ok("compiled"),
+                "{source} ({goal:?}, strict={strict})"
+            );
+        }
+        checked += 1;
     }
+    // Every static-block source of both rosters; a roster that loses them
+    // would leave this test proving nothing.
+    assert!(checked >= 30, "only {checked} static-block sources checked");
 }
 
 /// The declarations that DO reach the back end, so the roster is not made

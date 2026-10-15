@@ -2014,13 +2014,9 @@ fn cross_construct_integration() {
 
 // Static initializer blocks (child 6). A `static { … }` block folds into
 // the same `constructorInit` field-init function as the static data fields
-// (in source order), running its statements directly (no `this` /
-// `NEW_PROPERTY`) with `this` bound to the constructor. Covers blocks mixed
-// with static fields, multiple blocks, `super`, control flow, and
-// interleaving with methods. Deferred: a block with its own lexical
-// declarations — XS RESERVEs those slots in the constructorInit function
-// via its `scopeMaximum`; the inline-synthesized field-init function here
-// has no such precomputed frame count yet (loud fold, never mis-emitted).
+// (in source order), with no `this` / `NEW_PROPERTY` and with `this` bound to
+// the constructor. Covers blocks mixed with static fields, multiple blocks,
+// `super`, control flow, and interleaving with methods.
 #[test]
 fn static_blocks() {
     assert_identical(&[
@@ -2033,6 +2029,68 @@ fn static_blocks() {
         "(class extends A{static{super.x;}});",
         "(class{m(){}static{this.n=1;}});",
         "(class{static{for(;;)break;}});",
+    ]);
+}
+
+// A static block that declares is XS's `XS_TOKEN_BODY` node inside the
+// `constructorInit` function: its own block scope (`fxBodyNodeHoist`), whose
+// declarations count toward the function's `RESERVE` and get their slots,
+// hoisted function values and `UNWIND` from `fxBodyNodeCode`. Each block is
+// its own `var` scope. Covers every declaration kind, nested blocks, closures
+// that capture a block binding (through the field function's closure aliases
+// too), `this` / `super` / `new.target`, a direct `eval` reaching block
+// bindings, `using`, private names, nesting, and blocks mixed with fields.
+#[test]
+fn static_blocks_with_declarations() {
+    assert_identical(&[
+        "class A { static x = 1; static { let y = 2; A.z = y } } A.z",
+        "class A { static { var y = 3; A.z = y } } A.z",
+        "class A { static { const f = () => 4; A.z = f() } } A.z",
+        "class A { static { function f() { return 2 } A.y = f() } } A.y",
+        "class A { static { class B {} A.y = typeof B } } A.y",
+        "class A { static { var x = 1 } static { A.y = typeof x } } A.y",
+        "class A { static { var x; } static { let x; } }",
+        "class A { static { var x = 1; var x = 2; A.z = x } } A.z",
+        "class A { static { let a = 1; { let b = 2; A.z = a + b } } } A.z",
+        "class A { static { let a = 1; { let b = a; A.f = () => b; } } } A.f()",
+        "class A { static { var v = 1; A.f = function () { return v; } } } A.f()",
+        "class A { static { let a = 1; function f() { return a; } A.z = f() } } A.z",
+        "class A { static { var a = 1; { function b() { return a; } } A.z = b } }",
+        "class A { static { let [a, b] = [1, 2]; let { c } = { c: 3 }; A.z = a + b + c } } A.z",
+        "let o = 5; class A { static { let y = o; A.z = () => y + o } } A.z()",
+        "function outer() { let o = 5; class A { static { let y = o; A.z = () => y + o } } return A.z(); } outer()",
+        "class A { static { A.t = this; let x = this; } } A.t === A",
+        "class A { static { let t = () => this; let n = () => new.target; } }",
+        "class B { static m() { return 7 } } class A extends B { static { let q = super.m(); A.z = q } } A.z",
+        "class B { static m() { return 7 } } class A extends B { static { const g = () => super.m(); A.z = g() } } A.z",
+        "class A { static { let y = 2; eval(\"A.z = y\") } } A.z",
+        "class A { static { var y = 2; eval(\"var w = 3; A.z = y + w\") } } A.z",
+        "class A { static { let y = 2; A.z = eval(\"y\") } static x = eval(\"1\") } A.z",
+        "class A { static { using x = null; A.z = 1 } } A.z",
+        "class A { static { { using x = null; let y = 1; } } }",
+        "class A { static { try { throw 1 } catch (e) { let q = e; A.z = q } } } A.z",
+        "class A { static { for (let i = 0; i < 3; i++) { A.z = () => i } } } A.z()",
+        "class A { static { switch (1) { case 1: let s = 1; A.z = s } } } A.z",
+        "class A { static #p = 1; static { let y = A.#p; A.z = y } } A.z",
+        "class A { static #m() { return 3 } static { let f = () => A.#m(); A.z = f() } } A.z",
+        "class A { #a; static #b; static { let z = 1; } #c() {} static #d() {} }",
+        "class A { static x; static { var y; } static [Symbol.iterator] = 1; static { let z; } }",
+        "class A { static { class B { static { let q = 3; B.z = q } } A.z = B.z } } A.z",
+        "class A { static { async function f() { return 1 } function* g() { yield 1 } } }",
+        "x => class { static { let y = x; } }",
+    ]);
+    // A static block's early errors: `arguments`, `await`, a `return`, a
+    // redeclaration within one block (each block is one var scope).
+    assert_both_reject(&[
+        "class A { static { var arguments; } }",
+        "class A { static { let x = () => arguments; } }",
+        "class A { static { let await = 1; } }",
+        "class A { static { await: 1 } }",
+        "class A { static { return; } }",
+        "class A { static { let y; var y; } }",
+        "class A { static { var y; let y; } }",
+        "class A { static { { let y; var y; } } }",
+        "class A { static { function f() {} let f; } }",
     ]);
 }
 
