@@ -46,7 +46,7 @@ not need AWS-native scale can stay on the simpler shape from
 In scope:
 
 - The five AWS-native substitutions named above.
-- The configuration seam (`[storage]` section in `config.toml`,
+- The configuration interface (`[storage]` section in `config.toml`,
   `type = "aws"`) that switches a Gateway from generic-Linux mode to
   AWS-attuned mode.
 - Per-tenant isolation primitives across S3, DynamoDB, and Route53.
@@ -84,7 +84,7 @@ The AWS-attuned Gateway stores them in S3.
 The CAS holds **only immutable content**.
 OCapN-Noise session state (negotiated keys, nonce counters, replay windows) is **not** stored in S3, in the CAS, or in DynamoDB.
 That state is mutable per frame, and restoring a stale `(key, nonce)` pair from an asynchronous snapshot would reuse a ChaCha20-Poly1305 nonce, which is catastrophic.
-Live cipher state therefore stays **process-local**, held behind the `encrypt` / `decrypt` closures of the Noise session that owns it (per [`gateway-package`](gateway-package.md) § Feature 8).
+Live cipher state therefore stays **process-local**, held in memory by the Noise session that owns it (the Noise layer of [`gateway-package`](gateway-package.md) § Feature 8).
 A Gateway acting as a **relay** never holds endpoint cipher state at all: it forwards ciphertext between endpoints and never decrypts.
 When a data-plane process restarts, its sessions are lost and peers re-handshake from scratch; no resumption from persisted cipher state exists.
 
@@ -116,9 +116,11 @@ This matters most for the `public` and `signed-url` modes below, where the clien
 Every write therefore follows this sequence:
 
 1. The data plane uploads the bytes to a fresh `staging/<tenant-id>/<upload-id>` key.
-2. The data plane recomputes SHA-256 over the staged bytes (streaming, or via S3's `ChecksumSHA256` returned for the full object) and compares it to the claimed hash.
+2. The data plane recomputes SHA-256 over the staged bytes and compares it to the claimed hash.
+   It either hashes while streaming the upload, or relies on S3's `ChecksumSHA256` **only** with checksum type `FULL_OBJECT`; a multipart upload's default `COMPOSITE` checksum is a hash of part hashes, not of the content, and is never compared to a CAS key.
    On mismatch, the staged object is deleted and the write fails.
 3. On match, the data plane copies the staged object to `tenants/<tenant-id>/cas/<sha256-hex>` with `If-None-Match: *`, so an existing final object is never overwritten.
+   Phase 1 must confirm that S3 honors `If-None-Match` on `CopyObject`; AWS documents conditional writes for `PutObject` and `CompleteMultipartUpload`. If the copy does not honor it, the final write is a `PutObject` (or multipart completion) of the staged bytes with `If-None-Match: *` instead.
    A `412 Precondition Failed` means the content already exists; because the key is the hash, the existing object is equivalent and the write succeeds as a dedup.
 4. The staged object is deleted.
    A lifecycle rule expires anything left under `staging/` after 1 day; staging objects are never referenced or served.
@@ -126,7 +128,7 @@ Every write therefore follows this sequence:
 Final CAS keys are **immutable**: no code path issues a `PutObject` or `CopyObject` onto an existing final key, and the instance and tenant-session policies deny `s3:PutObject` on `tenants/*/cas/*` except through the conditional copy above.
 The bucket enables S3 Object Lock in governance mode (or, at minimum, versioning) so an accidental overwrite is detectable and recoverable.
 
-Before **binding** a hash into a Weblet formula's `content_root_ref`, and before issuing a CloudFront URL or presigned URL for it, the Gateway confirms the final object exists and that its stored `ChecksumSHA256` equals the key.
+Before **binding** a hash into a Weblet formula's `content_root_ref`, and before issuing a CloudFront URL or presigned URL for it, the Gateway confirms the final object exists and that its stored `FULL_OBJECT` `ChecksumSHA256` equals the key.
 The `gateway-proxy` mode additionally recomputes the hash while streaming and aborts the response on mismatch.
 A presigned URL or CloudFront redirect is issued **only** for an object that passed this check.
 
@@ -138,14 +140,27 @@ Per-tenant isolation is therefore enforced with **per-request, tenant-scoped ses
 1. The **instance role** of a data-plane EC2 has **no** S3 or DynamoDB data access.
    Its only storage-relevant permission is `sts:AssumeRole` and `sts:TagSession` on a single `endo-gateway-tenant-access` role.
 2. After authenticating a request and determining its tenant (from the Host header binding and the request's credential), the data plane calls `sts:AssumeRole` on `endo-gateway-tenant-access` with the session tag `tenant-id=<tid>`.
-3. The `endo-gateway-tenant-access` trust policy admits only the data-plane instance role, **requires** the `tenant-id` session tag (`aws:RequestTag/tenant-id` present and matching the tenant-id format), and sets no transitive tags (`sts:TransitiveTagKeys` is denied), so a tenant session cannot chain into another tenant.
-4. The tenant-access role's permission policy grants S3 access to `s3://endo-gateway-cas-<deployment>/tenants/${aws:PrincipalTag/tenant-id}/*` and `staging/${aws:PrincipalTag/tenant-id}/*`, and DynamoDB access only to items whose partition key begins with `TENANT#${aws:PrincipalTag/tenant-id}` (via `dynamodb:LeadingKeys`).
+3. The `endo-gateway-tenant-access` trust policy admits only the data-plane instance role, **requires** the `tenant-id` session tag (`aws:RequestTag/tenant-id` present and matching the tenant-ID grammar below), and sets no transitive tags (`sts:TransitiveTagKeys` is denied), so a tenant session cannot chain into another tenant.
+4. The tenant-access role's permission policy grants S3 access to `s3://endo-gateway-cas-<deployment>/tenants/${aws:PrincipalTag/tenant-id}/*` and `staging/${aws:PrincipalTag/tenant-id}/*`.
+   DynamoDB access is granted by two statements, each with an **exact** or **delimiter-terminated** `dynamodb:LeadingKeys` condition, never a bare prefix:
+   - on the table, `ForAllValues:StringEquals` `dynamodb:LeadingKeys = TENANT#${aws:PrincipalTag/tenant-id}`;
+   - on the account GSI (§ Single-table schema), `ForAllValues:StringLike` `dynamodb:LeadingKeys = ${aws:PrincipalTag/tenant-id}#*`.
    Here `${aws:PrincipalTag/tenant-id}` resolves to the **session** tag, which differs per tenant session.
+
+**Tenant-ID grammar.** A tenant ID is 26 characters of lowercase RFC 4648 base32 (`^[a-z2-7]{26}$`, 128 random bits), minted by the control plane and never chosen by a tenant.
+The grammar contains no `#` and no `/`, and every ID has the same length, so tenant `t1` can never match `t10`'s partition key, GSI key, or S3 prefix.
+The trust policy rejects a `tenant-id` session tag that does not match the grammar (`StringLike` on the pattern's length plus a deny on any `#` or `/`), and the control plane validates the grammar again before calling `AssumeRole`.
+Account IDs are 64 characters of lowercase hex (`^[0-9a-f]{64}$`, per [`daemon-256-bit-identifiers`](daemon-256-bit-identifiers.md)); they likewise contain no `#` or `/` and have a fixed length.
 5. The data plane caches each tenant's session credentials for a short duration (15 minutes, the STS minimum, refreshed before expiry) in a per-tenant map, so the `AssumeRole` cost is amortized across requests.
    A request handler receives only the credential for its authenticated tenant; no handler is given a credential map.
 
 A bug that confuses tenants inside one request handler can still misuse that handler's credential, but it cannot reach another tenant's prefix with it.
 Cross-tenant access requires an explicit operator override through a separate operator role.
+
+The per-request sessions limit **bugs**, not a **compromised** instance.
+The instance role may call `AssumeRole` with any well-formed `tenant-id` tag, so code running on a compromised data-plane instance can mint a session for every tenant and holds every tenant's storage.
+This is the same blast radius as the generic-Linux Gateway's single process holding the whole CAS directory.
+Binding the session tag to an enclave-verified account credential (§ Nitro Enclaves) would narrow it and is a candidate follow-up, not part of this design.
 
 For shared (public) content, the `shared/cas/` prefix holds objects
 that any tenant may read but only the operator may write.
@@ -155,7 +170,7 @@ and other content that is the same across tenants.
 ### Garbage collection
 
 S3 lifecycle rules cannot consult a DynamoDB reference count, so expiry of CAS objects is **not** driven by lifecycle rules.
-Each CAS object has a DynamoDB GC row (`pk = TENANT#<tid>` or `SHARED`, `sk = CAS#<sha256-hex>`) with attributes `refcount`, `state` (`live` or `condemned`), and `zero_since` / `condemned_at` timestamps.
+Each CAS object has a DynamoDB GC row (`pk = TENANT#<tid>` or `SHARED`, `sk = CAS#<sha256-hex>`) with attributes `refcount`, `state` (`live`, `condemned`, or `deleting`), and `zero_since` / `condemned_at` timestamps.
 The state machine:
 
 1. **Reference.** Adding a reference is a conditional update: `SET refcount = refcount + 1 ... CONDITION state = live`.
@@ -164,11 +179,23 @@ The state machine:
    The condition prevents driving the count negative.
 3. **Condemn.** A GC sweeper scans for rows with `refcount = 0` and `zero_since` older than the grace period (default 7 days) and transitions them with `SET state = condemned, condemned_at = now CONDITION state = live AND refcount = 0 AND zero_since = <observed>`.
    Any concurrent reference in between makes the condition fail and the object survives.
-4. **Delete.** After a second, shorter delay (default 1 hour, longer than any in-flight write sequence), the sweeper performs a conditional **delete of the DynamoDB row** with `CONDITION state = condemned AND condemned_at = <observed>`.
-   Only if that delete succeeds does it issue the S3 `DeleteObject` for the CAS key.
-   A reference that resurrected the row in the meantime makes the conditional delete fail, and the S3 object is left in place.
+4. **Delete.** After a second, shorter delay (default 1 hour, longer than any in-flight write sequence), the sweeper **tombstones** the row instead of deleting it: `SET state = deleting CONDITION state = condemned AND condemned_at = <observed>`.
+   A reference that resurrected the row in the meantime makes this condition fail, and the S3 object is left in place.
+   Only after the tombstone write succeeds does the sweeper issue the S3 `DeleteObject`, and only after S3 confirms the delete does it remove the row with `CONDITION state = deleting`.
+   Both steps are idempotent; a sweeper that crashes between them finds the `deleting` row on its next pass and finishes the job.
 
-A residual race (a resurrection that lands between the DynamoDB delete and the S3 `DeleteObject`) is closed by step 1: the resurrecting writer always runs the verified write sequence, so it re-uploads the bytes if they are gone.
+A writer never resurrects a `deleting` row.
+Resurrection (step 1) is permitted only from `condemned` or from an absent row, and a writer that finds `deleting` backs off and retries until the row is gone.
+The row is absent only after the S3 object is gone, so every interleaving falls into one of these cases:
+
+| Interleaving | Outcome |
+|---|---|
+| Writer resurrects from `condemned` before the tombstone | Tombstone condition fails; object and row survive. |
+| Writer sees `deleting` | Writer waits; no reference is recorded against bytes about to be deleted. |
+| Writer finds the row absent (the delete finished) | Its verified write re-uploads: `If-None-Match: *` succeeds because the final object is gone, and the row is created `live`. |
+| Writer's copy gets `412` (object exists) and then finds the row absent | Cannot happen: the row is removed only after `DeleteObject` succeeds, so an absent row implies an absent object. The writer still re-checks object existence after creating the row and re-runs the write sequence if it is missing. |
+
+The last row is the dedup branch: the existence check at the copy and the row creation are separated in time, so the writer confirms the object after its conditional put rather than trusting the earlier `412`.
 No lifecycle rule expires objects under `tenants/*/cas/` or `shared/cas/`.
 Storage-class transitions (Standard to Standard-Infrequent-Access after 30 days, to Glacier Instant Retrieval after 90 days) are safe and remain lifecycle-driven, because they do not destroy content.
 Shared CAS objects are never condemned automatically; the operator manages them.
@@ -345,7 +372,16 @@ interface GatewayEnclaveService {
 interface AccountCredentialRequest {
   tenantId: TenantId;
   accountId: AccountId;           // 256-bit hex per daemon-256-bit-identifiers
+  authorizationExpiry: bigint;    // ms since epoch, chosen by the operator
   onboardingAuthorization: Uint8Array; // operator-signed, see below
+}
+
+interface AccountCredential {
+  tenantId: TenantId;
+  accountId: AccountId;
+  issuanceTime: bigint;           // ms since epoch, enclave clock
+  issuingKeyId: string;           // KMS key version, ASCII
+  signature: Uint8Array;
 }
 
 interface RowAad {
@@ -360,10 +396,19 @@ interface RowAad {
 `issueAccountCredential` signs only after it checks that:
 
 - `accountId` is a well-formed 256-bit hex identifier and `tenantId` is well-formed;
-- `onboardingAuthorization` is a signature, by the operator's onboarding key (whose public half is baked into the enclave image and therefore covered by the PCR), over `(tenantId, accountId, expiry)`, and that the authorization has not expired;
+- `onboardingAuthorization` is a signature, by the operator's onboarding key (whose public half is baked into the enclave image and therefore covered by the PCR), over `"endo-gateway/onboarding-authorization/v1\0" || tenantId || accountId || authorizationExpiry` in the encoding below, and that `authorizationExpiry` has not passed;
 - the enclave itself supplies `issuance-time` (from its own clock) and the current `issuing-key-id`, so the caller cannot choose either field.
 
 The parent therefore cannot ask the enclave to sign arbitrary bytes under the issuing key, and cannot mint a credential for an account the operator did not authorize.
+
+**Signed encodings.** Every signed message is the purpose prefix (ASCII, ending in one `\0` byte) followed by fixed-order fields, so a signer and a verifier can never disagree about the bytes:
+
+- `tenantId`: the 26 ASCII bytes of the tenant ID (the grammar in § Per-tenant prefix);
+- `accountId`: the 32 raw bytes the 64-character lowercase hex ID decodes to (uppercase hex is rejected, not folded);
+- `authorizationExpiry`, `issuanceTime`: unsigned 64-bit big-endian milliseconds;
+- `issuingKeyId`: one length byte, then its ASCII bytes.
+
+`canonical(credential)` is `tenantId || accountId || issuanceTime || issuingKeyId` in that encoding; the `signature` field is never part of the signed bytes.
 
 `verifyAccountCredential` is the counterpart the data plane calls: it re-derives the domain-separated message from the credential's fields and checks the signature against the issuing-key version named in the credential, accepting the prior version only during a rotation grace period.
 Because the issuing key's public half is not secret, a later optimization may export it (with its version) to data-plane instances for local verification; the enclave operation remains the reference verifier.
@@ -515,8 +560,8 @@ is a re-issuance, not an identity-preserving rotation. This design
 therefore claims to resolve the **verification and custody** side
 of Open Question 4 for the account credential, and explicitly
 leaves the Pass-Invariant-Eq identity-preservation question open
-(it is the same open question the parent inherits from
-[`endo-gateway`](endo-gateway.md) § Open Questions 1). The
+(it is the Pass-Invariant-Eq follow-up the parent carries under
+its Open Question 4). The
 remaining *user-visible workflow* question (do clients re-issue on
 rotation, or is the old token valid for the full grace period?) is
 the operator's product call.
@@ -599,9 +644,9 @@ It is **partial**, not full, because "per-tenant first-bind-wins
 is trivial" holds only where a tenant is a **single trust domain**.
 A tenant that contains several mutually-distrusting accounts still
 needs an intra-tenant allocation rule; that missing half is named
-and resolved (falling back to the parent's `authenticated-allocation`
-mode keyed by `ACCOUNT#<aid>`) in § Correspondence between
-row-identity and handle-identity below.
+and resolved (by the parent's gateway-allocated identifier
+namespace) in § Correspondence between row-identity and
+handle-identity below.
 
 ## DynamoDB as the SQLite Analogue
 
@@ -630,40 +675,35 @@ Per-tenant items prefix `pk` with the tenant ID:
 |----|-----|-----------|------------|
 | `TENANT#<tid>` | `META` | Tenant metadata | name, plan, created_at, custom_domains |
 | `TENANT#<tid>` | `ACCOUNT#<aid>` | Account record | tenant_account (`<tid>#<aid>`, GSI key), created_at, status, credential_hash (`encryptRow` envelope) |
-| `TENANT#<tid>` | `LEDGER#<aid>` | Resource ledger (**deferred: reserved key prefix only, see note below**) | compute, storage, network counters; token balance |
+| `TENANT#<tid>` | `LEDGER#<aid>` | Resource ledger (backs the parent's `ResourceLedger`, see below) | compute, storage, network counters; token balance |
 | `TENANT#<tid>` | `WEBLET#<formula-id>` | Weblet binding | virtual_host, content_root_ref, mime_types, ssr_handler |
 | `TENANT#<tid>` | `RELAY#<pubkey-hex>` | Relay registration (ephemeral routing metadata only) | hostname, daemon_key_id, registered_at, last_seen, serving_instance |
 | `TENANT#<tid>` | `SESSION#<session-id>` | Active OCapN session (hot, metadata only) | last_seen, peer_key_id (never key material or nonce counters) |
-| `TENANT#<tid>` or `SHARED` | `CAS#<sha256-hex>` | CAS reference count and GC state | refcount, state (`live` / `condemned`), zero_since, condemned_at |
+| `TENANT#<tid>` or `SHARED` | `CAS#<sha256-hex>` | CAS reference count and GC state | refcount, state (`live` / `condemned` / `deleting`), zero_since, condemned_at |
 | `SHARED` | `WEBLET#<formula-id>` | Operator-managed shared weblet (Chat, etc.) | same as WEBLET above |
 
 A **GSI** on `(tenant_account, sk)`, where `tenant_account` is the composite string `<tenant-id>#<account-id>`, lets the Gateway look up everything related to a single account.
 The GSI partition key includes the tenant ID because account IDs are tenant-local: two tenants may hold the same account ID, and a GSI keyed by `account_id` alone would return both tenants' rows to one account query.
 Every item that participates in the GSI writes `tenant_account` from its own `pk` tenant, and the tenant-scoped session policy (§ Per-tenant prefix) restricts GSI queries to keys beginning with the session's tenant ID.
 
-### The `LEDGER#` row is a reserved prefix, not a settled schema
+### The `LEDGER#` row backs the parent's `ResourceLedger`
 
-[`gateway-package`](gateway-package.md) Feature 1b **defers** the
-resource ledger: it withholds the `ResourceLedger` shape from the
-design surface precisely because the gateway-side-vs-daemon-side
-compute-metering **trust boundary** is unsettled, and requires a
-follow-up design to land before any phase depends on it. This
-AWS-attuned design does **not** override that deferral, and the
-`LEDGER#<aid>` row above must not be read as settling the ledger's
-schema. It is included only to **reserve the sort-key prefix**
-(`LEDGER#`) so a later single-table migration does not collide with
-it; the attribute list (`compute, storage, network counters; token
-balance`) is illustrative of the *kind* of counters such a row
-would hold, not a committed column set. The actual ledger
-schema (which counters exist, who may read them, who may charge,
-and where the authoritative meter lives: gateway, daemon, or
-split) is owned by the parent's Feature 1b follow-up design and
-lands there first. If that follow-up chooses a shape incompatible
-with a single DynamoDB row (for example, splitting the meter across
-the gateway and the user daemon), this reserved prefix is dropped
-rather than forcing the ledger into it. This design raises **no**
-new resolution of the ledger trust boundary; it defers to the
-parent exactly as the parent requires.
+[`gateway-package`](gateway-package.md) places the per-account
+resource ledger in the gateway (Design Decision 8) and exposes it as
+the `ResourceLedger` exo of Feature 1 (`getBalance`,
+`chargeBalance`, `purchaseTokens`). The `LEDGER#<aid>` row is the
+AWS-attuned storage for that exo's per-account state, replacing the
+generic-Linux `state.db` table. It changes where the balance is
+stored, not who may read or charge it: the `ResourceLedger` surface
+and its authority stay exactly as the parent defines them. The
+attribute list in the table above is illustrative; the column set
+follows whatever the parent's ledger phase settles, and the
+payment-proof wire shape stays deferred with the parent's Open
+Question 1.
+
+Balance updates are conditional writes (`SET balance = balance - :n
+CONDITION balance >= :n`), so two data-plane instances charging the
+same account concurrently cannot drive it negative.
 
 ### Correspondence between row-identity and handle-identity
 
@@ -685,7 +725,7 @@ parallel unreconciled:
   CapTP traffic to a user's daemon.
   A `UserDaemonHandle` is a CapTP presence, which is connection-relative: it cannot be serialized into a row and reanimated by another process after its connection ends.
   The `RELAY#<pubkey-hex>` row therefore stores **only non-authority routing metadata** (tenant, hostname, daemon public-key id, the data-plane instance currently serving the registration, registration and last-seen timestamps) and **never** anything sufficient to reconstruct a capability.
-  Relay registrations are **ephemeral**: when a data-plane instance restarts, the handles it held are gone, its `RELAY#` rows are marked stale, and the affected daemons reconnect to the registration endpoint and re-register, exactly as [`endo-gateway`](endo-gateway.md) describes for restart recovery.
+  Relay registrations are **ephemeral**: when a data-plane instance restarts, the handles it held are gone, its `RELAY#` rows are marked stale, and the affected daemons reconnect to the registration endpoint and re-register, exactly as [`gateway-package`](gateway-package.md) § Restart semantics describes for the generic-Linux gateway.
   Until a daemon re-registers, requests for its hostname fail with a 503, as in the generic-Linux shape.
   The row exists so the control plane can see which hostnames are registered and where, not so any process can resume a relay from it.
 - A **tenant is a single trust domain** for the purpose of
@@ -694,11 +734,13 @@ parallel unreconciled:
   because a `TENANT#<tid>` is one trust domain. Where a tenant
   contains several mutually-distrusting **accounts**, the
   intra-tenant allocation among those accounts falls back to the
-  parent design's `authenticated-allocation` mode keyed by
-  `ACCOUNT#<aid>` namespace, not to row-ownership. This is the
-  missing half the earlier draft hedged as "partially resolves":
-  cross-tenant is resolved by DNS; intra-tenant cross-account is
-  resolved by the parent's authenticated-allocation mode.
+  parent design's resolution of its Open Question 3: the gateway
+  allocates the `Host` identifier per weblet formula, so two
+  accounts binding the same short name receive distinct
+  identifiers, and row-ownership plays no part. Cross-tenant
+  allocation is resolved by DNS; intra-tenant cross-account
+  allocation is resolved by the parent's gateway-allocated
+  identifiers.
 
 The two identity models are therefore **not** orthogonal and
 **not** interchangeable: the capability model owns *authority to
@@ -754,9 +796,9 @@ The combination of S3 prefix + tenant-scoped session credentials + the DynamoDB 
 covers all three cases (per-tenant isolation, cross-tenant
 dedup, garbage collection).
 
-## Configuration Seam
+## Configuration Interface
 
-[`gateway-aws-deployment`](gateway-aws-deployment.md) § Seam to the
+[`gateway-aws-deployment`](gateway-aws-deployment.md) § Boundary with the
 AWS-Attuned Variant named the `[storage]` configuration section.
 This design fleshes it out:
 
@@ -861,7 +903,7 @@ flowchart TB
 
 ## Phased Implementation
 
-**Phase A**: Configuration seam in `@endo/gateway` (`type = "aws"`
+**Phase A**: Configuration interface in `@endo/gateway` (`type = "aws"`
 mode of `[storage]` and `[routing]`). DynamoDB single-table schema
 lands and Gateway's state-store API switches behind the configuration
 flag. S3 CAS lands and Gateway's CAS API switches similarly. Both
@@ -894,16 +936,16 @@ These phases live downstream of
 packaging) and
 [`gateway-aws-deployment`](gateway-aws-deployment.md) phases A
 through C (which establish the basic AWS deployment).
-Roughly speaking, the AWS-attuned variant is **Milestone 1 plus 2
-quarters** (per the README's milestone framing); the multi-tenant
-shape is a serious piece of software in its own right.
+The README places this design in M5 (Public Hosting & Billing),
+after the M3 gateway substrate; the multi-tenant shape is a
+serious piece of software in its own right.
 
 ## Test Catalog
 
 The AWS-native trust boundaries this design introduces carry their
 own adversarial coverage obligations, distinct from the
-generic-Linux catalog in [`gateway-package`](gateway-package.md)
-§ Test Catalog (which this design references rather than repeats).
+generic-Linux surfaces of [`gateway-package`](gateway-package.md),
+whose tests land with that design's phases.
 Each row lands with the phase that lands its boundary.
 
 | Trust boundary | Adversarial tests |
@@ -912,7 +954,7 @@ Each row lands with the phase that lands its boundary.
 | Enclave operation policy (no oracle) | The enclave exposes no operation that signs or decrypts caller-chosen bytes; `signNoiseHandshake` rejects inputs that are not 32 bytes; a Noise handshake signature submitted to `verifyAccountCredential` fails (key separation and domain prefix); `issueAccountCredential` refuses a request without a valid, unexpired operator onboarding authorization, and ignores any caller-supplied issuance time or key id; `decryptRow` refuses when the presented credential's tenant differs from the AAD's tenant. |
 | Row-encryption envelope | `decryptRow(encryptRow(x, aad), aad)` returns `x`; a ciphertext moved to a different `pk`, `sk`, column, table, or tenant fails authentication; a `RowAad` whose `pk` is not `TENANT#<tenantId>` is rejected; a tampered `key-version` or `version` byte fails; rows written under the prior row key still decrypt after rotation. |
 | Durable-key rotation / dual-verification | A credential signed by the prior issuing-key version verifies under `verifyAccountCredential` **during** the grace period and fails **after** it; a credential signed by neither the current nor prior version always fails; the credential's `issuing-key-id` must match a KMS key version the enclave will verify against. |
-| Per-tenant DynamoDB isolation | A request scoped to `TENANT#<a>` cannot read or write `TENANT#<b>` items; **GSI collision**: tenants `a` and `b` each create an account with the same account ID, and an account query through the `(tenant_account, sk)` GSI as tenant `a` returns only tenant `a`'s rows; a tenant-`a` session cannot query a GSI key beginning `b#`; the `LEDGER#` prefix is inert (no code path reads it as a settled ledger) until the Feature 1b follow-up lands. |
+| Per-tenant DynamoDB isolation | A request scoped to `TENANT#<a>` cannot read or write `TENANT#<b>` items; **GSI collision**: tenants `a` and `b` each create an account with the same account ID, and an account query through the `(tenant_account, sk)` GSI as tenant `a` returns only tenant `a`'s rows; a tenant-`a` session cannot query a GSI key beginning `b#`; two instances charging one account concurrently cannot drive its `LEDGER#` balance negative. |
 | Per-tenant session credentials | The data-plane instance role alone cannot read or write any S3 object or DynamoDB item; `AssumeRole` on the tenant-access role without a `tenant-id` session tag is denied; a tenant-`a` session cannot read `tenants/b/` or `staging/b/` objects or `TENANT#b` items; a tenant session cannot assume the role again with a different tag (no transitive tags). |
 | Per-tenant S3 prefix isolation | A signed URL / IAM path scoped to one tenant's prefix cannot read another tenant's objects; the `CAS#` reference count cannot be driven negative to delete an object another tenant still references. |
 | Content-addressed integrity | An upload whose bytes do not hash to the claimed key is rejected and never reaches `tenants/*/cas/`; a write to an existing final CAS key does not overwrite it (`If-None-Match`); a final object whose bytes were altered out of band is refused at bind time, is never given a CloudFront or presigned URL, and aborts a `gateway-proxy` stream on mismatch; objects under `staging/` are never served. |
@@ -968,7 +1010,7 @@ Each row lands with the phase that lands its boundary.
    Public static content goes through the CDN; the Gateway is not
    a bytes-shoveling proxy for content that does not need it.
 
-8. **Configuration seam at `[storage].type`.**
+8. **Configuration interface at `[storage].type`.**
    One codebase, two configurations: generic-Linux mode for
    self-hosted deployments and AWS-attuned mode for the hosted
    service. No fork.

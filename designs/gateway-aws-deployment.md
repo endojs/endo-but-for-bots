@@ -167,8 +167,8 @@ A single VPC `10.0.0.0/16` per region, with three public subnets
 subnets (`10.0.11.0/24`, `10.0.12.0/24`, `10.0.13.0/24`), one of each
 per Availability Zone.
 
-The ALB lives in the public subnets; the gateway EC2 instances live
-in the private subnets.
+The ALB lives in the public subnets, which hold nothing else; the
+gateway EC2 instances live in the private subnets.
 Outbound internet from the private subnets routes through a NAT
 Gateway (one per AZ, for HA).
 Inbound internet reaches the gateways only via the ALB.
@@ -177,11 +177,30 @@ Inbound internet reaches the gateways only via the ALB.
 
 The ALB terminates TLS using an ACM-issued wildcard certificate for
 `*.endojs.org` (the production domain) and forwards plaintext HTTP to
-the gateway instances on port 3469.
+the gateway instances on port 8920, the parent's HTTP default
+([`gateway-package`](gateway-package.md) Design Decision 2).
 The ALB sets `X-Forwarded-Proto`, `X-Forwarded-For`, and
-`X-Forwarded-Host` headers; the gateway's trusted-proxy configuration
-([`gateway-package`](gateway-package.md) § Feature 9) lists the VPC's
-CIDR as the trusted source for these headers.
+`X-Forwarded-Host` headers, and the gateway routes on
+`X-Forwarded-Host` when it trusts the peer, so trusting a forger
+would let it reach another tenant's weblet.
+The gateway's trusted-proxy configuration
+([`gateway-package`](gateway-package.md) § Feature 9) therefore
+trusts **only the ALB**:
+
+- `cidrs` lists exactly the ALB's dedicated public subnets
+  (`10.0.1.0/24`, `10.0.2.0/24`, `10.0.3.0/24`), where nothing but
+  ALB nodes runs.
+  The whole-VPC CIDR (`10.0.0.0/16`) must **not** appear in the
+  list: it would let any VPC peer (another instance, a Lambda, a
+  compromised replica) forge `X-Forwarded-Host`.
+- `maxHops` is `1`: the ALB is the only proxy.
+- The instance security group admits the gateway port only from the
+  ALB's security group, so nothing else in the VPC can open a
+  connection that the CIDR rule would then have to judge.
+- The ALB appends the connecting address to `X-Forwarded-For`, so
+  the gateway takes the client IP as the **rightmost** entry that is
+  not in the trusted list; entries to its left are client-supplied
+  and are never used for rate limiting.
 
 The ALB target group health check hits `GET /healthz` (a new endpoint
 the gateway exposes; covered in *Open Questions* below); a 200
@@ -207,7 +226,10 @@ The launch template specifies:
   § Instance-type benchmark below.
 - Volume: 20 GiB gp3 root volume.
   The gateway's persistent state lives in the volume (sqlite at
-  `/var/lib/endo-gateway/state.db`, content-addressed cache at
+  `/var/lib/endo-gateway/state.db`, opened through the built-in
+  `node:sqlite` binding per
+  [`gateway-packaging-ci`](gateway-packaging-ci.md) § sqlite (or
+  sibling) database, content-addressed cache at
   `/var/cache/endo-gateway/`).
   The cache is reconstructible; the sqlite ledger is not, and
   motivates either daily snapshots or the AWS-attuned variant's move
@@ -217,18 +239,21 @@ The launch template specifies:
   Parameter Store namespace, and write access to the CloudWatch Logs
   log group.
 - Security group: ingress only from the ALB security group on port
-  3469; egress unrestricted.
+  8920; egress unrestricted.
 - User data: a `cloud-init` script that fetches the per-instance
   bearer token from Secrets Manager, renders
   `/etc/endo-gateway/config.toml` from a Parameter Store template,
-  and starts the gateway via `systemctl`.
+  and runs `systemctl enable --now endo-gateway.service` on the deb's
+  packaged unit, the same step `endo gateway start` performs on a
+  packaged host ([`gateway-package`](gateway-package.md) § Root User
+  and Service CLI).
 
 The ASG configuration:
 
 - Desired capacity: 3 (one per AZ).
 - Minimum capacity: 2 (so a single-AZ outage still has 2 instances
   serving).
-- Maximum capacity: 6 (room for burst, e.g., during a deploy).
+- Maximum capacity: 6 (room for burst, for example during a deploy).
 - Health check type: ELB (uses the ALB target group health, not
   just instance status).
 - Termination policy: oldest-launch-template first (so deploys roll
@@ -271,18 +296,22 @@ design must surface rather than ship silently:
 
 - The virtual-host registration table and the relay-registration
   table are populated via the host-local UDS bootstrap and held
-  **in-process** ([`gateway-package`](gateway-package.md) Feature 2,
-  Feature 4). A `bind()` or `registerRelay()` that lands on replica
+  **in-process**, rebuilt from incoming registrations on each start
+  rather than persisted ([`gateway-package`](gateway-package.md)
+  § Feature 2, § Feature 4, § Restart semantics). A `bind()` or
+  `registerRelay()` that lands on replica
   A is **invisible** to replicas B and C. The ALB distributes
   requests across replicas that disagree on whether a given vhost
   or relay exists, so the same `Host` header routes
   non-deterministically.
-- Worse, Feature 2's `authenticated-allocation` namespace-conflict
-  check (the mechanism specifically relied on to stop malicious
-  squatting on a multi-tenant host) is a **per-replica** check
-  with no cross-replica visibility. Two users racing the same name
-  against two different replicas both "win" locally, so the check
-  fails to prevent the very race it exists to close.
+- Worse, the gateway itself allocates the weblet-identifier
+  namespace that `Host` carries (the identifier or a registered
+  prefix of it; [`gateway-package`](gateway-package.md) § Feature 2
+  and Open Question 3), which is what keeps two users' bindings from
+  colliding on a multi-tenant host. Each replica's allocator has no
+  view of the others, so two replicas can register the same prefix
+  for different weblets, and the guarantee that gateway allocation
+  rules out collisions does not hold across the fleet.
 
 This is not a nuance; it is a correctness break for any deployment
 that both (a) runs two or more replicas and (b) accepts registrations at
@@ -300,8 +329,9 @@ ASG to shapes where it is actually safe, and names the fix:
    route: the ASG replicas are **read-mostly** serving instances,
    and there is no runtime UDS registration on the fleet.
 2. **The real fix is a shared store.** Cross-replica-consistent
-   runtime registration requires moving the registration and relay
-   tables out of per-instance sqlite into a shared store. That is
+   runtime registration requires moving the registration, relay, and
+   prefix-allocation tables out of per-instance memory and sqlite
+   into a shared store. That is
    exactly the control-plane / data-plane split and DynamoDB-backed
    registration that [`gateway-aws-attuned`](gateway-aws-attuned.md)
    specifies (2 long-lived control-plane instances own admin/UDS;
@@ -319,11 +349,15 @@ Decision 8 restate this so the rationale is not lost.
 
 ### Route53
 
-A single A-record `gateway.endojs.org` aliased to the ALB.
-The wildcard for `*.endojs.org` covers virtual-hosted weblets per
-[`gateway-package`](gateway-package.md) § Feature 2, all aliased to
-the same ALB; the gateway routes by `Host` header to the
-corresponding Weblet formula.
+A single A-record `gateway.endojs.org` aliased to the ALB, plus a
+wildcard `*.endojs.org` alias to the same ALB so any hostname a
+client puts in front of the gateway reaches it under the wildcard
+certificate.
+Virtual hosting is not DNS-based
+([`gateway-package`](gateway-package.md) § Feature 2): the gateway
+routes on the gateway-assigned weblet identifier (or registered
+prefix) that the client carries in `Host`, so no per-weblet DNS
+record or certificate is ever provisioned.
 
 DNS-level routing (subdomains pointing to different ALBs or different
 regions) is **out of scope for this design**; that work belongs to
@@ -412,7 +446,8 @@ variable "gateway_version" {
   type = string
 }
 
-# Full 40-hex-digit fingerprint of the endojs apt repository key.
+# Full 40-hex-digit fingerprint of the endojs apt repository key's
+# primary key, uppercase as gpg prints it.
 # Pinned in the template's committed defaults (reviewed like code) and
 # overridable from the SSM parameter /endo-gateway/apt-key-fingerprint
 # during key rotation; never derived from the downloaded key itself.
@@ -446,16 +481,20 @@ build {
 
   provisioner "shell" {
     inline = [
-      # Fetch the endojs apt repository key and verify its fingerprint
-      # against the pinned value before trusting it; fail closed on
-      # mismatch so a substituted key never reaches the keyring.
+      # Fetch the endojs apt repository key, import it into a
+      # throwaway GNUPGHOME, require exactly one primary key whose
+      # fingerprint is the pinned value, and write the keyring from
+      # that key alone (never from the downloaded file). Fail closed.
       "set -eu",
-      "curl -fsSL https://apt.endojs.org/key.gpg -o /tmp/endojs.gpg",
-      "fpr=$(gpg --show-keys --with-colons /tmp/endojs.gpg | awk -F: '$1 == \"fpr\" { print $10; exit }')",
-      "if [ \"$fpr\" != \"${var.apt_key_fingerprint}\" ]; then echo \"endojs apt key fingerprint mismatch: got $fpr\" >&2; exit 1; fi",
+      "curl -fsSL https://apt.endojs.org/key.gpg -o /tmp/endojs.asc",
+      "export GNUPGHOME=$(mktemp -d)",
+      "gpg --batch --quiet --import /tmp/endojs.asc",
+      "fprs=$(gpg --batch --with-colons --list-keys | awk -F: '$1 == \"pub\" { want = 1; next } $1 == \"fpr\" && want { print $10; want = 0 }')",
+      "if [ \"$fprs\" != \"${var.apt_key_fingerprint}\" ]; then echo \"endojs apt key check failed: want exactly ${var.apt_key_fingerprint}, got: $fprs\" >&2; exit 1; fi",
       "sudo install -d -m 0755 /etc/apt/keyrings",
-      "gpg --dearmor < /tmp/endojs.gpg | sudo tee /etc/apt/keyrings/endojs.gpg > /dev/null",
+      "gpg --batch --export ${var.apt_key_fingerprint} | sudo tee /etc/apt/keyrings/endojs.gpg > /dev/null",
       "sudo chmod 0644 /etc/apt/keyrings/endojs.gpg",
+      "rm -rf \"$GNUPGHOME\" /tmp/endojs.asc",
       "echo 'deb [signed-by=/etc/apt/keyrings/endojs.gpg] https://apt.endojs.org stable main' | sudo tee /etc/apt/sources.list.d/endojs.list",
       "sudo apt-get update",
       "sudo apt-get install -y endo-gateway=${var.gateway_version}",
@@ -475,6 +514,26 @@ The fingerprint therefore comes from a channel independent of
 parameter, both written by the maintainer at repository bootstrap),
 and the build fails rather than proceeding if the downloaded key does
 not match.
+The check counts **primary-key** fingerprints only (an `fpr` record
+that follows a `pub` record, not one that follows a `sub`), and the
+whole list must equal the single pinned value.
+Checking only the first `fpr` would be wrong: a file holding
+`[pinned key, attacker key]` passes that test, and dearmoring the
+downloaded file would then put both keys behind `signed-by=`, so
+the attacker's key could sign the repository metadata.
+Writing the keyring with `gpg --export <pinned-fpr>` from the
+temporary `GNUPGHOME` means only the verified key (with its own
+subkeys) reaches `/etc/apt/keyrings/endojs.gpg`, whatever else the
+download contained.
+
+The Packer build's tests cover the failure cases, each of which must
+fail the build before anything is written under `/etc/apt/`:
+
+- a single key whose fingerprint differs from the pinned value;
+- a two-key file containing the pinned key plus another key (in
+  either order);
+- an empty or non-key file (`gpg --import` exits non-zero under
+  `set -e`, and the fingerprint list would be empty in any case).
 The keyring lives in `/etc/apt/keyrings/`, the location Debian and
 Ubuntu reserve for locally managed repository keys, and is referenced
 only by this repository's `signed-by=` option, so the key cannot
@@ -532,8 +591,8 @@ rolls the ASG to the new AMI.
 
 ### Artifact contract with the packaging design
 
-The seam between
-[`gateway-packaging-ci`](gateway-packaging-ci.md) and this design is:
+The artifact contract defines the interface between
+[`gateway-packaging-ci`](gateway-packaging-ci.md) and this design:
 
 | Artifact | Producer | Consumer | Location |
 |----------|----------|----------|----------|
@@ -556,8 +615,8 @@ so the AMI references a single deb version unambiguously.
 | Apt-repo GPG signing key (private) | Secrets Manager `endo-gateway/apt-repo/signing-key` | Manual, infrequent | `gateway-packaging-ci` workflow (cross-account read) |
 | Yum-repo GPG signing key (private) | Secrets Manager `endo-gateway/yum-repo/signing-key` | Manual, infrequent | `gateway-packaging-ci` workflow (cross-account read) |
 | SSH bastion key | Secrets Manager `endo-gateway/bastion/ssh-key` | Manual, on personnel changes | bastion host on user creation |
-| Payment processor key (when Feature 1 lands) | Secrets Manager `endo-gateway/payment-processor/key` | Per processor rotation policy | gateway process (lazy fetch) |
-| Observability backend credential (e.g., Datadog API key, if used) | Secrets Manager `endo-gateway/observability/backend` | Per backend policy | cloud-init at boot |
+| Payment processor key (when the Feature 1 reference payment-processor adapter lands, parent Phase 4) | Secrets Manager `endo-gateway/payment-processor/key` | Per processor rotation policy | the operator-supplied `PaymentProcessor` exo in the gateway process (lazy fetch) |
+| Observability backend credential (for example a Datadog API key, if used) | Secrets Manager `endo-gateway/observability/backend` | Per backend policy | cloud-init at boot |
 
 ### Why Secrets Manager over Parameter Store
 
@@ -711,7 +770,7 @@ Cost-reduction follow-ups:
 A staging environment runs at roughly 1/3 the production cost (1
 instance, 1 NAT Gateway, smaller ALB): ~$90/month.
 
-## Seam to the AWS-Attuned Variant
+## Boundary with the AWS-Attuned Variant
 
 [`gateway-aws-attuned`](gateway-aws-attuned.md) replaces several of
 this design's "generic Linux service" choices with AWS-native services:
@@ -724,7 +783,7 @@ this design's "generic Linux service" choices with AWS-native services:
 | Single `gateway.endojs.org` ALB target | Route53-based per-subdomain routing to per-tenant ALBs |
 | Persistent ASG with `c7g.large` instances | Mix of EC2 (control plane) and Lambda (per-request handlers) |
 
-The seam is **the gateway process's storage interface**.
+The boundary is **the gateway process's storage interface**.
 The package and the AMI are the same; the configuration differs.
 A `[storage]` section in `config.toml`:
 
@@ -786,10 +845,12 @@ credentials).
 **Phase E**: Staging environment alongside production. Same Terraform
 modules, different `envs/staging/` variables.
 
-These phases live inside Milestone 1's "remote-access" framing
-([`gateway-package`](gateway-package.md) inherits M1 placement);
-phases A through C are on the critical path to a publicly-reachable
-gateway, D and E are quality improvements.
+These phases follow the parent's Phase 4 (public service: relay,
+terminating-proxy support, and OS packaging;
+[`gateway-package`](gateway-package.md) § Phased Implementation),
+since they consume its packages; phases A through C are on the
+critical path to a publicly-reachable gateway, D and E are quality
+improvements.
 
 ## Design Decisions
 
@@ -825,8 +886,8 @@ gateway, D and E are quality improvements.
 7. **Blue/green via ASG instance refresh for the first cut.**
    Canary deferred; instance refresh covers the common case.
 
-8. **Sqlite local state for now, with named seam to the AWS-attuned
-   variant.**
+8. **Sqlite local state for now, with a named boundary to the
+   AWS-attuned variant.**
    Deployment-portability taste (not prematurely coupling to
    AWS-native storage) is a *secondary* reason to keep sqlite for
    the first cut. The **primary** reason the storage layer must
@@ -839,7 +900,7 @@ gateway, D and E are quality improvements.
    a config-baked read-mostly fleet; runtime multi-user
    registration across a live ASG requires the shared store that
    [`gateway-aws-attuned`](gateway-aws-attuned.md) introduces
-   (DynamoDB + control/data-plane split). The seam to the
+   (DynamoDB + control/data-plane split). The boundary with the
    AWS-attuned variant is thus a **correctness** boundary, not
    merely a portability one, and this decision states that plainly
    so the cost of deferring the move is not understated.
@@ -865,7 +926,7 @@ gateway, D and E are quality improvements.
 2. **`/healthz` endpoint specification.**
    The ALB health check needs a gateway endpoint that returns 200
    when the gateway is ready to serve.
-   What counts as "ready"? Listening on 3469 is necessary but
+   What counts as "ready"? Listening on 8920 is necessary but
    insufficient (the registration table may be empty, the sqlite
    migration may be running).
    Surfaced; the gateway's first-cut implementation should land

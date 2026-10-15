@@ -67,11 +67,19 @@ Out of scope (deferred to siblings or follow-ups):
 - AWS-attuned Gateway variant (S3 CAS, Nitro Enclaves, Route53; see
   [`gateway-aws-attuned`](gateway-aws-attuned.md)).
 - Windows packaging (no `.msi` / `.appx` / chocolatey).
-  The gateway is Linux-first; Windows users run the Familiar-bundled
-  variant per [`gateway-package`](gateway-package.md) § Feature 5.
-- macOS packaging.
-  Same rationale as Windows; the Familiar bundles the gateway for
-  per-user use, and a system-service shape on macOS waits for demand.
+  [`gateway-package`](gateway-package.md) § Cross-platform service
+  shape names the Windows Service shape, and § Root User and Service
+  CLI has `endo gateway start` register it; this design ships no
+  native installer for it.
+  Windows desktop users run the Familiar-bundled variant per
+  [`gateway-package`](gateway-package.md) § Feature 5.
+- macOS packaging (no `.pkg`, no Homebrew formula in this CI).
+  Same rationale as Windows: the parent's launchd `LaunchDaemon`
+  shape is installed by `endo gateway start` or the Familiar
+  installer, not by a package this workflow builds.
+  The `brew/` recipe in open PR endojs/endo-but-for-bots#412 is
+  outside this workflow until a macOS system-service package has
+  demand.
 - BSD packaging (FreeBSD ports, OpenBSD pkg).
   Track demand; revisit when a maintainer steps up.
 - Implementation of `@endo/gateway` itself.
@@ -86,7 +94,7 @@ JavaScript bundle, not stacked one on top of the other.
 
 ```mermaid
 flowchart TD
-    src[Source tree<br/>endojs/endo monorepo] --> bundle[esbuild bundle<br/>endo-gateway.cjs<br/>+ node binary]
+    src[Source tree<br/>endojs/endo monorepo] --> bundle[esbuild bundle<br/>endo-gateway.cjs<br/>+ per-arch node binary]
 
     bundle --> deb[debian/<br/>endo-gateway_VERSION_amd64.deb]
     bundle --> rpm[rpm/<br/>endo-gateway-VERSION.x86_64.rpm]
@@ -95,7 +103,7 @@ flowchart TD
 
     deb --> sign1[sign with apt repo key]
     rpm --> sign2[sign with yum repo key]
-    arch --> sign3[sign with maintainer key]
+    arch --> sign3[record tarball sha256<br/>in PKGBUILD]
     docker --> sign4[cosign sign]
 
     sign1 --> aptrepo[(apt.endojs.org)]
@@ -104,12 +112,22 @@ flowchart TD
     sign4 --> registry[(ghcr.io / Docker Hub)]
 ```
 
-The common bundle is the same artifact `familiar-release.yml` already
-produces: an esbuild output that bundles `@endo/gateway` and its
-transitive dependencies into a single `endo-gateway.cjs` plus a
+The common bundle follows the pattern `familiar-release.yml` already
+uses: an esbuild output that bundles `@endo/gateway` and its
+transitive dependencies into a single `endo-gateway.cjs`, plus a
 downloaded Node.js binary
 ([`familiar-daemon-bundling`](familiar-daemon-bundling.md) is the
 reference pattern).
+The bundle's entry point imports `@endo/init` first, so SES
+`lockdown()` runs before any module that calls `harden` is
+evaluated; esbuild preserves that import order in the single file.
+The bundle job downloads **one Node.js binary per architecture**
+(`linux-x64` and `linux-arm64`) at a single pinned patch version,
+verified against that release's signed `SHASUMS256.txt`.
+Every target installs the binary for its own architecture at
+`/usr/lib/endo-gateway/node` next to
+`/usr/lib/endo-gateway/endo-gateway.cjs`; `/usr/bin/endo-gateway` is
+a two-line launcher that `exec`s the one with the other.
 Each packaging job stages that bundle into the distribution's expected
 layout, runs the distribution's build tool, and signs the result.
 
@@ -132,8 +150,12 @@ images.
 
 Common across all four:
 
-- Same `@endo/gateway` source tree, same git tag, same Node.js binary
-  version pin.
+- Same `@endo/gateway` source tree, same git tag, same Node.js
+  version pin (one per-architecture binary of that version, not one
+  binary).
+  The Docker image copies the same per-arch binary from the bundle
+  rather than inheriting Node.js from a floating base image (see
+  § Docker).
 - Same systemd unit template (per
   [`gateway-package`](gateway-package.md) § Feature 10 sketch).
 - Same data directory layout
@@ -153,7 +175,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g. 0.1.0)'
+        description: 'Release version, strict semver (for example 0.1.0)'
         required: false
         type: string
   push:
@@ -169,9 +191,22 @@ jobs:
   bundle:
     name: Build bundle
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
-      # corepack + Node 22 + yarn install --immutable
+      # checkout with fetch-depth: 0 (the ancestry check needs history)
+      # id: version -- resolve and validate VERSION (§ Triggers):
+      #   tag push: VERSION="${GITHUB_REF_NAME#gateway-v}", then
+      #     git merge-base --is-ancestor "$GITHUB_SHA" origin/master
+      #   dispatch: VERSION="${{ inputs.version }}" (passed via env:,
+      #     never interpolated into the script text)
+      #   both: fail unless VERSION matches
+      #     ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$
+      #   prerelease=true when VERSION carries a -suffix
+      # corepack + pinned Node 22.x (>= 22.13) + yarn install --immutable
       # yarn workspace @endo/gateway step:bundle
+      # download linux-x64 and linux-arm64 node binaries, check SHASUMS256
       # upload bundle artifact
 
   # One packaging job per target, each its own (per-arch) matrix,
@@ -187,7 +222,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       # download bundle artifact
-      # run packaging/deb/build-deb.sh
+      # run packages/gateway/packaging/debian/build-deb.sh
       # sign, upload signed artifact
 
   package-rpm:
@@ -201,18 +236,21 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       # download bundle artifact
-      # run packaging/rpm/build-rpm.sh
+      # run packages/gateway/packaging/rpm/build-rpm.sh
       # sign, upload signed artifact
 
   package-arch:
     needs: bundle
     runs-on: ubuntu-latest
     steps:
-      # download bundle artifact, render PKGBUILD, upload
+      # download bundle artifact, render PKGBUILD (substitute
+      # __VERSION__ and the sha256), fail if 'SKIP' remains, upload
 
   package-docker:
     needs: bundle
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       # buildx multi-arch (amd64, arm64), push by digest, cosign sign
 
@@ -241,11 +279,12 @@ jobs:
       # push PKGBUILD update to AUR
 
   publish-docker:
-    needs: package-docker
+    needs: [bundle, package-docker]
     if: startsWith(github.ref, 'refs/tags/gateway-v')
     runs-on: ubuntu-latest
     steps:
-      # tag the pushed digest as VERSION and latest on ghcr.io
+      # tag the pushed digest as VERSION on ghcr.io; also as latest
+      # only when needs.bundle.outputs.prerelease == 'false'
 
   release:
     needs: [publish-apt, publish-rpm, publish-aur, publish-docker]
@@ -287,21 +326,33 @@ advertises a version for amd64 that is missing for arm64.
 |-----------|--------|-----------|
 | Target | deb, rpm, arch, docker | The four packaging targets named by the parent design. |
 | Architecture | amd64 / x86_64, arm64 / aarch64 | The two architectures that cover modern server fleets. Arch user repo skips arm64 (AUR convention; Arch ARM is a separate distribution). |
-| Node.js LTS | One pin per gateway release (today: 22.x) | Following the maintainers' Node.js LTS-window cadence (each gateway release tracks the active LTS line); the gateway pins one LTS at build time and CI matrix-tests the supported range elsewhere (`ci.yml`). |
+| Node.js LTS | One patch-version pin per gateway release (today: a 22.x release >= 22.13.0, for `node:sqlite`) | Following the maintainers' Node.js LTS-window cadence (each gateway release tracks the active LTS line); the gateway pins one LTS at build time and CI matrix-tests the supported range elsewhere (`ci.yml`). |
 
 The package jobs produce **7 artifacts per release**: 2 deb (amd64, arm64),
 2 rpm (x86_64, aarch64), 1 PKGBUILD (Arch x86_64 only), 2 Docker tags
 (amd64 and arm64, combined into a multi-arch manifest).
-Each artifact carries the same version string and the same bundled
-Node.js binary version.
+Each artifact carries the same version string and the same Node.js
+version, bundled as the binary for its own architecture.
 
 ### Triggers
 
 - **Tag push** `gateway-v<semver>`: full pipeline runs and publishes
   artifacts.
-  The tag is on the release commit on `master`; the workflow refuses
-  to run on any branch other than `master`.
-- **Manual dispatch with `version` input**: builds the artifacts and
+  The `gateway-v*` filter is only a coarse match, so the `bundle` job
+  strips the `gateway-v` prefix to get `VERSION` and fails the run
+  unless `VERSION` is strict semver (`MAJOR.MINOR.PATCH` with an
+  optional `-pre-release` suffix, no `+build` metadata).
+  It also fails unless the tagged commit is an ancestor of `master`
+  (`git merge-base --is-ancestor "$GITHUB_SHA" origin/master`), which
+  is the mechanism behind "release tags are cut from `master`".
+  Every artifact name and the Docker tag use the stripped `VERSION`
+  (`0.1.0`, not `gateway-v0.1.0`).
+  A pre-release `VERSION` (`0.2.0-rc.1`) publishes under its own
+  version but never moves Docker `:latest` or the apt / yum `stable`
+  channel.
+- **Manual dispatch with `version` input**: the input goes through
+  the same semver check before it is substituted into `__VERSION__`
+  or any file name, then the workflow builds the artifacts and
   attaches them to a *draft* GitHub Release without publishing to
   the apt / yum / AUR / docker registries.
   This is the staging path: a maintainer dispatches a build, smoke-
@@ -309,10 +360,19 @@ Node.js binary version.
 - **PR**: a `package-smoke` job in `ci.yml` builds the deb and the
   Docker image without signing or publishing, to catch packaging
   regressions before they reach a release.
-  The smoke job runs on every PR that touches `packages/gateway/`,
-  `packaging/`, or `.github/workflows/gateway-release.yml`.
+  The smoke job runs on every PR that touches `packages/gateway/`
+  (which includes `packages/gateway/packaging/`) or
+  `.github/workflows/gateway-release.yml`.
 
 ## Per-Distribution Conventions
+
+The recipes live under `packages/gateway/packaging/`, one
+subdirectory per target (`debian/`, `rpm/`, `arch/`, `docker/`), the
+location open PR endojs/endo-but-for-bots#412 already uses.
+This supersedes the top-level `packaging/{deb,rpm,arch,docker}/`
+named in [`gateway-package`](gateway-package.md) § Feature 10, so
+the recipes version with the package they ship and there is one
+tree, not two.
 
 ### What the package guarantees
 
@@ -337,12 +397,25 @@ on regardless of distribution:
 Each per-distribution hook below lands these same invariants
 through its idiomatic mechanism.
 
+These are the same paths and modes
+[`gateway-package`](gateway-package.md) § Root User and Service CLI
+lists for the system gateway, and the unit is the one sketched in
+§ Feature 10 (`Type=notify`, `RuntimeDirectory=`, `StateDirectory=`,
+`CacheDirectory=`, `LogsDirectory=`).
+On a packaged host, `endo gateway start` verifies the packaged unit
+rather than writing its own, then runs `systemctl enable --now`;
+`endo gateway stop` and `endo gateway log` map to `systemctl stop`
+and `journalctl -u endo-gateway.service -f` as the parent describes.
+The package does not start the service itself; the operator starts
+it after editing the config, with either `endo gateway start` or
+`systemctl start`.
+
 ### Debian / Ubuntu (`.deb`)
 
-Layout under `packaging/deb/`:
+Layout under `packages/gateway/packaging/debian/`:
 
 ```
-packaging/deb/
+packages/gateway/packaging/debian/
   debian/
     changelog                # generated from git tag history
     control                  # package metadata, dependencies
@@ -407,12 +480,13 @@ filesystem-level customizations.
 
 ### RHEL / Fedora (`.rpm`)
 
-Layout under `packaging/rpm/`:
+Layout under `packages/gateway/packaging/rpm/`:
 
 ```
-packaging/rpm/
+packages/gateway/packaging/rpm/
   endo-gateway.spec
-  endo-gateway.service       # systemd unit (same content as the .deb)
+  endo-gateway.service       # systemd unit (as the .deb, but with
+                             # EnvironmentFile=-/etc/sysconfig/endo-gateway)
   endo-gateway.sysconfig     # /etc/sysconfig/endo-gateway template
   build-rpm.sh               # called by CI; runs rpmbuild
 ```
@@ -451,6 +525,8 @@ getent passwd endo > /dev/null || \
 
 %files
 %attr(0755, root, root) /usr/bin/endo-gateway
+%attr(0755, root, root) /usr/lib/endo-gateway/node
+%attr(0644, root, root) /usr/lib/endo-gateway/endo-gateway.cjs
 %dir %attr(0750, endo, endo) /var/lib/endo-gateway
 %dir %attr(0750, endo, endo) /var/cache/endo-gateway
 %dir %attr(0750, root, endo) /etc/endo-gateway
@@ -464,10 +540,10 @@ land as `.rpmnew` files alongside.
 
 ### Arch (`PKGBUILD`)
 
-Layout under `packaging/arch/`:
+Layout under `packages/gateway/packaging/arch/`:
 
 ```
-packaging/arch/
+packages/gateway/packaging/arch/
   PKGBUILD
   endo-gateway.install       # pre/post hooks
   endo-gateway.service       # systemd unit
@@ -487,17 +563,27 @@ depends=('systemd')
 backup=('etc/endo-gateway/config.toml')
 install='endo-gateway.install'
 source=("https://github.com/endojs/endo/releases/download/gateway-v${pkgver}/endo-gateway-${pkgver}.tar.gz")
-sha256sums=('SKIP')      # CI substitutes the actual sha256 at build
+sha256sums=('__SHA256__')  # CI substitutes the tarball's sha256
 
 package() {
   cd "${srcdir}/endo-gateway-${pkgver}"
   install -Dm0755 endo-gateway "${pkgdir}/usr/bin/endo-gateway"
+  install -Dm0755 node "${pkgdir}/usr/lib/endo-gateway/node"
+  install -Dm0644 endo-gateway.cjs \
+    "${pkgdir}/usr/lib/endo-gateway/endo-gateway.cjs"
   install -Dm0644 endo-gateway.service \
     "${pkgdir}/usr/lib/systemd/system/endo-gateway.service"
   install -Dm0640 config.toml.example \
     "${pkgdir}/etc/endo-gateway/config.toml.example"
 }
 ```
+
+The `package-arch` job substitutes `__VERSION__` (after the semver
+check in § Triggers) and `__SHA256__` (computed from the release
+tarball it uploads), then fails if `__VERSION__`, `__SHA256__`, or
+`SKIP` remains anywhere in the rendered `PKGBUILD`.
+A `SKIP` checksum would let `makepkg` install whatever the source URL
+serves, so it must never reach the AUR.
 
 Arch ARM (the separate distribution for ARM hardware) is not in scope
 for the first cut; the AUR convention prioritizes `x86_64` first, and
@@ -512,10 +598,10 @@ git remote.
 
 ### Docker
 
-Layout under `packaging/docker/`:
+Layout under `packages/gateway/packaging/docker/`:
 
 ```
-packaging/docker/
+packages/gateway/packaging/docker/
   Dockerfile
   docker-entrypoint.sh
   config.toml.example
@@ -524,12 +610,14 @@ packaging/docker/
 The `Dockerfile`:
 
 ```dockerfile
-FROM node:22-slim AS runtime
+# Pinned by digest; Node.js comes from the bundle, not the base image.
+FROM debian:bookworm-slim@sha256:<pinned-digest> AS runtime
+ARG TARGETARCH
 
 # UID/GID of the in-container service account. Overridable at build
 # time so the image can match the ownership of host volumes; the
-# default sits outside the range base images use for interactive
-# accounts (node:22-slim already ships `node` at UID 1000).
+# default sits outside the range commonly used for interactive
+# accounts (UID 1000 and up).
 ARG ENDO_UID=10001
 ARG ENDO_GID=10001
 
@@ -544,31 +632,48 @@ RUN groupadd --system --gid "${ENDO_GID}" endo && \
     chown root:endo /etc/endo-gateway && \
     chmod 0750 /etc/endo-gateway
 
-COPY --chown=root:endo --chmod=0640 packaging/docker/config.toml.example \
+COPY --chown=root:endo --chmod=0640 packages/gateway/packaging/docker/config.toml.example \
      /etc/endo-gateway/config.toml.example
-COPY --chown=root:endo --chmod=0640 packaging/docker/config.toml.example \
+COPY --chown=root:endo --chmod=0640 packages/gateway/packaging/docker/config.toml.example \
      /etc/endo-gateway/config.toml
 
 USER endo
 WORKDIR /var/lib/endo-gateway
 
-COPY --chown=endo:endo bundles/endo-gateway.cjs ./endo-gateway.cjs
-COPY --chown=endo:endo packaging/docker/docker-entrypoint.sh ./entrypoint.sh
+COPY --chown=root:root --chmod=0755 bundles/node-${TARGETARCH} \
+     /usr/lib/endo-gateway/node
+COPY --chown=root:root --chmod=0644 bundles/endo-gateway.cjs \
+     /usr/lib/endo-gateway/endo-gateway.cjs
+COPY --chown=root:root --chmod=0755 packages/gateway/packaging/docker/docker-entrypoint.sh \
+     /usr/lib/endo-gateway/entrypoint.sh
 
 VOLUME /var/lib/endo-gateway
 VOLUME /etc/endo-gateway
-EXPOSE 3469
+EXPOSE 8920
 
-ENV ENDO_HTTP_ADDR=0.0.0.0:3469
-ENTRYPOINT ["/var/lib/endo-gateway/entrypoint.sh"]
-CMD ["node", "/var/lib/endo-gateway/endo-gateway.cjs"]
+ENV ENDO_HTTP_ADDR=0.0.0.0:8920
+ENTRYPOINT ["/usr/lib/endo-gateway/entrypoint.sh"]
+CMD ["/usr/lib/endo-gateway/node", "/usr/lib/endo-gateway/endo-gateway.cjs"]
 ```
+
+The image copies the bundle job's per-architecture Node.js binary
+(`bundles/node-amd64` or `bundles/node-arm64`, selected by buildx's
+`TARGETARCH`) instead of starting `FROM node:22-slim`, so the
+container runs exactly the Node.js patch version the deb, rpm, and
+Arch packages run, and a base-image rebuild cannot change it.
+The base image is pinned by digest and bumped deliberately.
+The port is the parent's HTTP default, 8920
+([`gateway-package`](gateway-package.md) Design Decision 2; 3469 is
+reserved there for a future CBOR-frame transport).
+The bundle, binary, and entrypoint are root-owned, read-only to
+`endo`, and outside the state volume, so a bind mount over
+`/var/lib/endo-gateway` cannot hide them.
 
 The service account's UID and GID are the build arguments
 `ENDO_UID` and `ENDO_GID`, both defaulting to `10001`.
-The default deliberately avoids UID `1000`, which `node:22-slim`
-already assigns to its `node` user and which commonly belongs to the
-first interactive account on a host.
+The default deliberately avoids UID `1000`, which commonly belongs to
+the first interactive account on a host (and to the `node` user in
+the official `node` images).
 Volume ownership follows the same numbers:
 
 - **Named volumes** are seeded from the image on first mount, so they
@@ -594,30 +699,46 @@ empty bind mount, then `exec`s the gateway:
 set -eu
 if [ ! -r /etc/endo-gateway/config.toml ]; then
   echo "endo-gateway: /etc/endo-gateway/config.toml is missing or unreadable;" >&2
-  echo "provide one in the mounted config directory (see packaging/docker/config.toml.example)." >&2
+  echo "provide one in the mounted config directory (see /etc/endo-gateway/config.toml.example in the image)." >&2
   exit 78
 fi
 exec "$@"
 ```
 
-Multi-arch build via `docker buildx`:
+Multi-arch build via `docker buildx` in `package-docker`, pushing by
+digest only (no tags), then tagging in `publish-docker`:
 
 ```yaml
+# package-docker
 - name: Set up Docker Buildx
   uses: docker/setup-buildx-action@v3
-- name: Build and push (multi-arch)
+- name: Build and push by digest (multi-arch)
+  id: build
   uses: docker/build-push-action@v6
   with:
     context: .
-    file: packaging/docker/Dockerfile
+    file: packages/gateway/packaging/docker/Dockerfile
     platforms: linux/amd64,linux/arm64
-    push: true
-    tags: |
-      ghcr.io/endojs/gateway:${{ github.ref_name }}
-      ghcr.io/endojs/gateway:latest
+    outputs: type=image,name=ghcr.io/endojs/gateway,push-by-digest=true,push=true
     cache-from: type=gha
     cache-to: type=gha,mode=max
+
+# publish-docker (VERSION is the validated, prefix-stripped semver)
+- name: Tag the digest
+  env:
+    VERSION: ${{ needs.bundle.outputs.version }}
+    PRERELEASE: ${{ needs.bundle.outputs.prerelease }}
+    DIGEST: ${{ needs.package-docker.outputs.digest }}
+  run: |
+    tags="-t ghcr.io/endojs/gateway:$VERSION"
+    if [ "$PRERELEASE" = false ]; then
+      tags="$tags -t ghcr.io/endojs/gateway:latest"
+    fi
+    docker buildx imagetools create $tags "ghcr.io/endojs/gateway@$DIGEST"
 ```
+
+The Docker tag is `0.1.0`, never `gateway-v0.1.0`, and only a
+non-pre-release version moves `:latest`.
 
 The Docker image is pushed to **`ghcr.io/endojs/gateway`** (the
 project's existing GitHub Container Registry namespace) by default.
@@ -632,7 +753,7 @@ identity-switch flow.
 |----------|-----|---------|---------|
 | `.deb` | Repository signing key (gpg, RSA 4096) | GitHub Secrets `APT_REPO_SIGNING_KEY` | `aptly publish` step at release time |
 | `.rpm` | Repository signing key (gpg, RSA 4096) | GitHub Secrets `YUM_REPO_SIGNING_KEY` | `rpmsign --resign` step at release time |
-| PKGBUILD | Maintainer key (committed sha256, AUR convention) | n/a (PKGBUILD source URLs carry their own sha256) | `makepkg --geninteg` at build time |
+| PKGBUILD | No signing key; integrity is the source tarball's sha256 in the published `PKGBUILD` (AUR convention) | n/a (the template carries `__SHA256__`; CI substitutes the real digest and fails if `SKIP` or a placeholder survives) | `package-arch` job at build time |
 | Docker | Sigstore cosign keyless signature | GitHub OIDC token (no long-lived key) | `cosign sign` step after image push |
 
 ### Repository keys vs. maintainer keys
@@ -781,8 +902,8 @@ Users install with their AUR helper of choice (`yay`, `paru`, etc.).
 
 ### Docker (`ghcr.io/endojs/gateway`)
 
-Push to GitHub Container Registry on tag push, tagged with the version
-and `latest`.
+Push to GitHub Container Registry on tag push, tagged with the
+prefix-stripped version, plus `latest` for non-pre-release versions.
 A multi-arch manifest lets `docker pull ghcr.io/endojs/gateway:latest`
 work transparently on amd64 and arm64 hosts.
 
@@ -800,7 +921,11 @@ A release of `@endo/gateway@0.1.0` produces:
 - `ghcr.io/endojs/gateway:0.1.0`
 
 The git tag is `gateway-v0.1.0`, matching the `familiar-v*` tag
-convention.
+convention; every artifact uses the version with the `gateway-v`
+prefix stripped (§ Triggers).
+A pre-release such as `0.2.0-rc.1` keeps that string for the npm
+version and Docker tag, and becomes `0.2.0~rc.1` in the deb, rpm, and
+Arch versions so the package managers sort it before `0.2.0`.
 
 The Familiar-bundled variant
 ([`gateway-package`](gateway-package.md) § Feature 5) carries the same
@@ -813,7 +938,8 @@ The first cut is **on-demand, maintainer-tagged**.
 Once the gateway lands in the wild and a regular cadence is justified,
 move to a monthly release on the last Tuesday of each month (the
 established pattern for upstream Linux distribution packages).
-Pinning the cadence here is premature; the design records the seam.
+Pinning the cadence here is premature; the design records where it
+would change.
 
 ### Channels
 
@@ -869,26 +995,48 @@ is missing.
 Upward migrations run automatically on startup, recording each step
 to a `migrations.log` adjacent to the state.
 
-State here is the multi-tenant CAS and the relay registration table,
-whose schemas are defined in [`gateway-package`](gateway-package.md)
-and are referenced rather than re-defined here. The per-account
-resource ledger is **deliberately excluded** from the set of
-versioned state this design plans a migration for: its schema is
-**not** defined in [`gateway-package`](gateway-package.md), since
-Feature 1b there defers the ledger (no schema, no CapTP surface) to an
-unwritten follow-up design. This design therefore does not version a
-schema that does not yet exist; when the follow-up lands the ledger's
-schema, the ledger joins the versioned-state set and this migration
-story is extended to cover it. Until then, `STATE_VERSION` covers
-only the CAS and the relay table.
+State here follows [`gateway-package`](gateway-package.md)
+§ Restart semantics: the gateway persists operator policy files, the
+sqlite weblet-formula table, and the CAS cache, while the
+registration table is rebuilt from incoming user-daemon registrations
+on every start and is never persisted, so it has nothing to migrate.
+`STATE_VERSION` covers `state.db`; the CAS cache under
+`/var/cache/endo-gateway/` is reconstructible, so a cache-layout change
+discards and refills it rather than migrating it.
+
+The per-account resource ledger also lives in the gateway
+([`gateway-package`](gateway-package.md) Design Decision 8: a
+`ResourceLedger` exo with `getBalance`, `chargeBalance`, and
+`purchaseTokens`, per § Feature 1 and § Capability Surface), and its
+plumbing lands in the parent's Phase 2.
+The parent fixes that method surface but not the ledger's storage
+tables, and Open Question 1 there defers the payment-token mechanism.
+When the Feature 1 implementation defines those tables, they go in
+`state.db` under the same `PRAGMA user_version` migrations below.
+Unlike the cache, balances are not reconstructible, so ledger tables
+are migrated in place and covered by the state backup, never
+discarded.
 
 ### sqlite (or sibling) database
 
-The state ledger backs onto a local sqlite file at
+The gateway's persistent tables back onto a local sqlite file at
 `/var/lib/endo-gateway/state.db` for the first cut.
 Sqlite's `PRAGMA user_version` carries the schema version; the
 gateway's startup-time migration step bumps it through registered
 migrations.
+
+The binding is Node.js's built-in **`node:sqlite`** (`DatabaseSync`).
+It is unflagged from Node.js 22.13.0, so `@endo/gateway` declares
+`"engines": { "node": ">=22.13.0" }`, narrower than the monorepo
+root's `^20.17.0 || >=22.9.0`, and the pinned bundled Node.js
+(§ Matrix dimensions) must satisfy it.
+Any Node.js 20 CI leg (for example the 20.17.x job in
+`ocapn-guile-interop.yml`) cannot load the gateway and must not run
+its tests.
+A native addon such as `better-sqlite3` was rejected because a `.node`
+binary cannot be inlined into the single `endo-gateway.cjs`; it would
+have to ship per architecture beside the bundle and load through a
+filesystem path, which breaks the one-file bundle shape.
 The AWS-attuned variant
 ([`gateway-aws-attuned`](gateway-aws-attuned.md)) replaces sqlite with
 a cloud-native equivalent (DynamoDB, Aurora Serverless, or RDS
@@ -905,8 +1053,8 @@ package's filesystem layout.
 | [familiar-daemon-bundling](familiar-daemon-bundling.md) | Reference for the esbuild bundle shape the gateway packages consume; same `step:bundle` pattern. |
 | [familiar-bundled-agents](familiar-bundled-agents.md) | Sibling bundling pattern; gateway packaging follows the same Node.js binary download approach. |
 | [ci-no-npm-lifecycle](ci-no-npm-lifecycle.md) | The packaging workflow inherits the `YARN_ENABLE_SCRIPTS=false` posture; lifecycle scripts run in no packaging job. |
-| [daemon-docker-selfhost](daemon-docker-selfhost.md) | Prior Docker design for the daemon (port 8920, `ENDO_ADDR`); this design's Docker image is the gateway counterpart (port 3469, `ENDO_HTTP_ADDR`). The two coexist during the transition; long-term the daemon container embeds the gateway and the standalone gateway image is the system-service variant. |
-| [gateway-aws-deployment](gateway-aws-deployment.md) | **Stacked sibling.** Consumes this design's signed artifacts and deploys them to AWS. The artifact contract (what filenames, what signatures, what registry URLs) is the seam. |
+| [daemon-docker-selfhost](daemon-docker-selfhost.md) | Prior Docker design for the daemon (port 8920, `ENDO_ADDR`). [`gateway-package`](gateway-package.md) § Feature 10 makes this design's image (gateway as PID 1, `ENDO_HTTP_ADDR`, same port 8920) the target that story is revised onto, with user daemons in sidecar containers sharing the bootstrap socket volume. |
+| [gateway-aws-deployment](gateway-aws-deployment.md) | **Stacked sibling.** Consumes this design's signed artifacts and deploys them to AWS. The artifact contract (what filenames, what signatures, what registry URLs) defines the interface between the two designs. |
 | [gateway-aws-attuned](gateway-aws-attuned.md) | **Stacked grandchild.** The AWS-attuned variant of the gateway whose state backend (S3 + DynamoDB) replaces the local sqlite this design's packages install. |
 
 ## Phased Implementation
@@ -966,16 +1114,20 @@ Phase D depends on
    No drift, no per-distribution version games.
    One tag, one version, four artifacts.
 
-6. **Linux-first; Windows and macOS via Familiar.**
-   The gateway is intended as a system-service deployment shape.
-   Windows and macOS users run the Familiar-bundled variant.
-   This decision can be revisited once a system-service shape on
+6. **Linux-first; no Windows or macOS packages from this CI.**
+   The parent's launchd and Windows Service shapes
+   ([`gateway-package`](gateway-package.md) § Cross-platform service
+   shape) are installed by `endo gateway start` or the Familiar
+   installer, not by an artifact this workflow builds; desktop users
+   run the Familiar-bundled variant.
+   This decision can be revisited once a packaged system service on
    either platform has demand.
 
 7. **Sqlite as the local state backend for the first cut.**
-   Sqlite is in the standard library on every Linux distribution
-   (no extra package dependency), `PRAGMA user_version` covers
-   migration metadata, and the AWS-attuned variant
+   The `node:sqlite` binding ships inside the pinned Node.js binary
+   (no extra package dependency and no native addon to bundle),
+   `PRAGMA user_version` covers migration metadata, and the
+   AWS-attuned variant
    ([`gateway-aws-attuned`](gateway-aws-attuned.md)) replaces it
    transparently to the packaging layer.
 
