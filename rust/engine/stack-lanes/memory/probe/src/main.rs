@@ -233,6 +233,7 @@ fn outcome_fields(machine: &Interp, outcome: &RunOutcome, out: &mut Vec<String>)
     out.push(format!("result={:?}", outcome.result));
     out.push(format!("meter={}", machine.meter_index()));
     out.push(format!("chunk_bytes={}", machine.chunks().byte_size()));
+    out.push(format!("side_bytes={}", machine.side_storage_bytes()));
     out.push(format!("chunk_ceiling={}", machine.chunks().ceiling()));
     out.push(format!("slots={}", machine.slots().capacity()));
     out.push(format!("slot_ceiling={}", machine.slots().ceiling()));
@@ -335,6 +336,7 @@ fn restore(options: &Options) {
     out.push(format!("result={:?}", outcome.result));
     out.push(format!("slots={}", machine.slots().capacity()));
     out.push(format!("chunk_bytes={}", machine.chunks().byte_size()));
+    out.push(format!("side_bytes={}", machine.side_storage_bytes()));
     out.push(format!("read_us={}", read.as_micros()));
     out.push(format!("resume_us={}", (resumed - read).as_micros()));
     out.push(format!("first_crank_us={}", (first - resumed).as_micros()));

@@ -14,8 +14,9 @@ runs the wasm probe under the Wasmtime CLI:
   checkpoint  the same program as one crank of a fresh store session, then
               `checkpoint_to_store` into a store that discards rows.
 
-Array items and Map and Set entries are admitted against no ceiling today, so
-those shapes run at fixed sizes instead.
+Array items and Map and Set entries are charged against the chunk ceiling,
+so those shapes find it the way the string shapes do, and their per-chunk-byte
+coefficients count the side storage charged beside the chunks.
 
   python3 memory.py                          # build both probes, then the whole matrix
   python3 memory.py --no-build --shape strings --ceilings default
@@ -59,16 +60,17 @@ CEILINGS = {
     "small": (250_000, 32 * MIB),
 }
 
-# shape: (program, binding ceiling, fill N, fixed sizes for unadmitted shapes)
+# shape: (program, binding ceiling, fill N, fixed sizes for a shape no ceiling
+# binds)
 SHAPES = {
     "strings": ("strings.js", "chunk", 4096, None),
     "string-doubling": ("string-doubling.js", "chunk", 24, None),
     "small-strings": ("small-strings.js", "chunk", 50_000_000, None),
     "objects": ("objects.js", "slot", 50_000_000, None),
     "mixed": ("mixed.js", "slot", 50_000_000, None),
-    "arrays": ("arrays.js", None, None, (1_000_000, 4_000_000)),
-    "maps": ("maps.js", None, None, (1_000_000, 4_000_000)),
-    "sets": ("sets.js", None, None, (1_000_000, 4_000_000)),
+    "arrays": ("arrays.js", "chunk", 50_000_000, None),
+    "maps": ("maps.js", "chunk", 50_000_000, None),
+    "sets": ("sets.js", "chunk", 50_000_000, None),
 }
 
 
@@ -352,9 +354,10 @@ PHASES = ("run", "checkpoint", "snapshot", "restore")
 def summarize(paths):
     """Print saved `--output` files as the report's two Markdown tables: the
     linear memory each phase reached per shape, and the same as coefficients,
-    linear memory above the empty instance per unit the heap holds (per chunk
-    byte for string shapes, bytes per slot for slot-bound shapes, bytes per
-    element for the unadmitted ones)."""
+    linear memory above the empty instance per unit the heap holds (per byte
+    charged against the chunk ceiling, chunks and side storage, for the shapes
+    it binds, bytes per slot for slot-bound shapes, bytes per element for a
+    shape no ceiling binds)."""
     rows = []
     for path in paths:
         rows += [r for r in json.loads(Path(path).read_text()).get("rows", []) if "trap" not in r]
@@ -382,7 +385,7 @@ def summarize(paths):
         base = empty.get(ceilings, 0)
         binding = SHAPES.get(shape, (None, None))[1]
         if binding == "chunk":
-            unit, per, fmt = "bytes per chunk byte", r["chunk_bytes"], "{:.2f}"
+            unit, per, fmt = "bytes per chunk byte", r["chunk_bytes"] + r.get("side_bytes", 0), "{:.2f}"
         elif binding == "slot":
             unit, per, fmt = "bytes per slot", r["slots"], "{:,.0f}"
         else:
@@ -436,7 +439,7 @@ def main():
                 rows.append(baseline(wasm, wasmtime, ceilings_name))
             for shape in args.shape or list(SHAPES):
                 if SHAPES[shape][3] is not None and ceilings_name not in ("default", "custom"):
-                    continue  # unadmitted: the ceilings do not bound it
+                    continue  # no ceiling binds it, so a profile adds nothing
                 rows += measure_shape(native, None if args.native else wasm, wasmtime, shape,
                                       ceilings_name)
         report["rows"] = rows
