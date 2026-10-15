@@ -13,6 +13,7 @@ import {
 const byteArrayFromHex = hex => frozenBytes(decodeHex(hex));
 
 /** @import { Passable } from '@endo/pass-style' */
+/** @import {RankComparison} from '../src/types.types.js' */
 
 /**
  * Essentially a ponyfill for Array.prototype.toSorted, for use before
@@ -20,7 +21,7 @@ const byteArrayFromHex = hex => frozenBytes(decodeHex(hex));
  *
  * @template [T=unknown]
  * @param {T[]} elements
- * @param {(left: T, right: T) => import('../src/types.js').RankComparison} comp
+ * @param {(left: T, right: T) => RankComparison} comp
  * @returns {T[]}
  */
 export const sorted = (elements, comp) => [...elements].sort(comp);
@@ -29,7 +30,7 @@ harden(sorted);
 /**
  * @param {string} left
  * @param {string} right
- * @returns {import('../src/types.js').RankComparison}
+ * @returns {RankComparison}
  */
 export const compareByUtf16CodeUnit = (left, right) =>
   // eslint-disable-next-line no-nested-ternary

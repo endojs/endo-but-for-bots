@@ -47,10 +47,10 @@ corresponds with arbitrary value comparison (cf.
 [Patterns: Rank order and key order](https://github.com/endojs/endo/blob/master/packages/patterns/README.md#rank-order-and-key-order).
 Rather than accepting `convertValToSlot` and `convertSlotToVal` functions and
 keeping a "slots" side table, `makePassableKit` expects
-{encode,decode}{Remotable,Promise,Error,SturdyRef} functions that directly
+{encode,decode}{Remotable,Promise,Error,Parcel} functions that directly
 convert between instances of the respective pass styles and properly-formatted
 encodings (in which Remotable encodings start with "r", Promise encodings start
-with "?", Error encodings start with "!", SturdyRef encodings start with "t",
+with "?", Error encodings start with "!", Parcel encodings start with "t",
 and all other details are left to the provided functions).
 `makePassableKit` supports two variations of this format: "legacyOrdered" and
 "compactOrdered". The former is the default for historical reasons (see

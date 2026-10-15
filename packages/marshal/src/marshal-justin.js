@@ -13,7 +13,7 @@ import { makeMarshal } from './marshal.js';
 /**
  * @import {Stringable} from 'ses';
  * @import {Passable} from '@endo/pass-style';
- * @import {Encoding} from './types.js';
+ * @import {Encoding} from './types.types.js';
  */
 
 const { ownKeys } = Reflect;
@@ -197,13 +197,9 @@ const decodeToJustin = (encoding, shouldIndent = false, slots = []) => {
           }
           return;
         }
-        case 'sturdyRef': {
-          const { index } = rawTree;
-          assert.typeof(index, 'number');
-          Nat(index);
-          // As in `decodeFromCapData`, a sturdyRef carries no iface.
-          !('iface' in rawTree) ||
-            Fail`unexpected encoded sturdyRef property ${q('iface')}`;
+        case 'parcel': {
+          const { location } = rawTree;
+          assert.typeof(location, 'string');
           return;
         }
         case 'hilbert': {
@@ -390,21 +386,8 @@ const decodeToJustin = (encoding, shouldIndent = false, slots = []) => {
             : out.next(`slot(${index},${nestedRender(iface)})`);
         }
 
-        case 'sturdyRef': {
-          const index = Number(Nat(rawTree.index));
-          if (index < slots.length) {
-            const oldOut = out;
-            let renderedSlot;
-            try {
-              out = makeNoIndenter();
-              decode(slots[index]);
-              renderedSlot = out.done();
-            } finally {
-              out = oldOut;
-            }
-            return out.next(`slotToSturdyRef(${renderedSlot})`);
-          }
-          return out.next(`sturdyRefSlot(${index})`);
+        case 'parcel': {
+          return out.next(`parcel(${quote(rawTree.location)})`);
         }
 
         case 'hilbert': {

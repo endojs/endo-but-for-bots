@@ -3,14 +3,15 @@ import { Fail } from '@endo/errors';
 import { makeMarshal } from './marshal.js';
 
 /** @import {Passable} from '@endo/pass-style' */
+/** @import {ConvertSlotToVal, ConvertValToSlot} from './types.types.js' */
 
 const { freeze } = Object;
 
-/** @type {import('./types.js').ConvertValToSlot<any>} */
+/** @type {ConvertValToSlot<any>} */
 const doNotConvertValToSlot = val =>
   Fail`Marshal's stringify rejects presences and promises ${val}`;
 
-/** @type {import('./types.js').ConvertSlotToVal<any>} */
+/** @type {ConvertSlotToVal<any>} */
 const doNotConvertSlotToVal = (slot, _iface) =>
   Fail`Marshal's parse must not encode any slots ${slot}`;
 

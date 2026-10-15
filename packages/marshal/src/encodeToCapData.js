@@ -19,30 +19,8 @@ import { thawedBytes, frozenBytes } from '@endo/immutable-arraybuffer';
 import { encodeHex, decodeHex } from '@endo/hex';
 import { X, Fail, q } from '@endo/errors';
 
-/** @import {Passable, RemotableObject, SturdyRef} from '@endo/pass-style' */
-/** @import {Encoding, EncodingUnion} from './types.js' */
-
-/**
- * Like `passStyleOf(val) === 'sturdyRef'`, but returns false rather than
- * throwing for a value that is not passable, since capdata tolerates
- * whatever `convertSlotToVal` returns for a 'slot'. A SturdyRef is always
- * frozen, so an unfrozen value (such as an unhardened presence) is rejected
- * without calling `passStyleOf`, and without allocating the error that
- * `passStyleOf` would throw for it.
- *
- * @param {unknown} val
- * @returns {val is SturdyRef}
- */
-const isPassableSturdyRef = val => {
-  if (typeof val !== 'object' || val === null || !isFrozen(val)) {
-    return false;
-  }
-  try {
-    return passStyleOf(/** @type {Passable} */ (val)) === 'sturdyRef';
-  } catch {
-    return false;
-  }
-};
+/** @import {Passable, RemotableObject, ParcelObject} from '@endo/pass-style' */
+/** @import {Encoding, EncodingUnion} from './types.types.js' */
 
 const { ownKeys } = Reflect;
 const { isArray } = Array;
@@ -53,7 +31,6 @@ const {
   entries,
   fromEntries,
   freeze,
-  isFrozen,
   hasOwn,
 } = Object;
 
@@ -92,9 +69,9 @@ const qclassMatches = (encoded, qclass) =>
  *   encodeRecur: (p: Passable) => Encoding
  * ) => Encoding} [encodePromiseToCapData]
  * @property {(
- *   sturdyRef: SturdyRef,
+ *   parcel: ParcelObject,
  *   encodeRecur: (p: Passable) => Encoding
- * ) => Encoding} [encodeSturdyRefToCapData]
+ * ) => Encoding} [encodeParcelToCapData]
  * @property {(
  *   error: Error,
  *   encodeRecur: (p: Passable) => Encoding
@@ -105,8 +82,7 @@ const dontEncodeRemotableToCapData = rem => Fail`remotable unexpected: ${rem}`;
 
 const dontEncodePromiseToCapData = prom => Fail`promise unexpected: ${prom}`;
 
-const dontEncodeSturdyRefToCapData = sturdyRef =>
-  Fail`sturdyRef unexpected: ${sturdyRef}`;
+const dontEncodeParcelToCapData = parcel => Fail`parcel unexpected: ${parcel}`;
 
 const dontEncodeErrorToCapData = err => Fail`error object unexpected: ${err}`;
 
@@ -118,7 +94,7 @@ export const makeEncodeToCapData = (encodeOptions = {}) => {
   const {
     encodeRemotableToCapData = dontEncodeRemotableToCapData,
     encodePromiseToCapData = dontEncodePromiseToCapData,
-    encodeSturdyRefToCapData = dontEncodeSturdyRefToCapData,
+    encodeParcelToCapData = dontEncodeParcelToCapData,
     encodeErrorToCapData = dontEncodeErrorToCapData,
   } = encodeOptions;
 
@@ -262,17 +238,14 @@ export const makeEncodeToCapData = (encodeOptions = {}) => {
           'slot',
         )}: ${encoded}`;
       }
-      case 'sturdyRef': {
-        const encoded = encodeSturdyRefToCapData(
-          passable,
-          encodeToCapDataRecur,
-        );
-        if (qclassMatches(encoded, 'sturdyRef')) {
+      case 'parcel': {
+        const encoded = encodeParcelToCapData(passable, encodeToCapDataRecur);
+        if (qclassMatches(encoded, 'parcel')) {
           return encoded;
         }
-        throw Fail`internal: SturdyRef encoding must be an object with ${q(
+        throw Fail`internal: Parcel encoding must be an object with ${q(
           QCLASS,
-        )} ${q('sturdyRef')}: ${encoded}`;
+        )} ${q('parcel')}: ${encoded}`;
       }
       case 'error': {
         const encoded = encodeErrorToCapData(passable, encodeToCapDataRecur);
@@ -283,9 +256,6 @@ export const makeEncodeToCapData = (encodeOptions = {}) => {
           QCLASS,
           'error',
         )}: ${encoded}`;
-      }
-      case 'parcel': {
-        throw Fail`a ${q(passStyle)} cannot be marshalled`;
       }
       default: {
         throw assert.fail(
@@ -326,9 +296,9 @@ harden(makeEncodeToCapData);
  *   decodeRecur: (e: Encoding) => Passable
  * ) => (Promise|RemotableObject)} [decodePromiseFromCapData]
  * @property {(
- *   encodedSturdyRef: Encoding,
+ *   encodedParcel: Encoding,
  *   decodeRecur: (e: Encoding) => Passable
- * ) => SturdyRef} [decodeSturdyRefFromCapData]
+ * ) => ParcelObject} [decodeParcelFromCapData]
  * @property {(
  *   encodedError: Encoding,
  *   decodeRecur: (e: Encoding) => Passable
@@ -337,8 +307,8 @@ harden(makeEncodeToCapData);
 
 const dontDecodeRemotableOrPromiseFromCapData = slotEncoding =>
   Fail`remotable or promise unexpected: ${slotEncoding}`;
-const dontDecodeSturdyRefFromCapData = sturdyRefEncoding =>
-  Fail`sturdyRef unexpected: ${sturdyRefEncoding}`;
+const dontDecodeParcelFromCapData = parcelEncoding =>
+  Fail`parcel unexpected: ${parcelEncoding}`;
 const dontDecodeErrorFromCapData = errorEncoding =>
   Fail`error unexpected: ${errorEncoding}`;
 
@@ -359,7 +329,7 @@ export const makeDecodeFromCapData = (decodeOptions = {}) => {
   const {
     decodeRemotableFromCapData = dontDecodeRemotableOrPromiseFromCapData,
     decodePromiseFromCapData = dontDecodeRemotableOrPromiseFromCapData,
-    decodeSturdyRefFromCapData = dontDecodeSturdyRefFromCapData,
+    decodeParcelFromCapData = dontDecodeParcelFromCapData,
     decodeErrorFromCapData = dontDecodeErrorFromCapData,
   } = decodeOptions;
 
@@ -442,26 +412,19 @@ export const makeDecodeFromCapData = (decodeOptions = {}) => {
           // a promise or a remotable, since that would break some
           // capdata clients. We are deprecating capdata, and these clients
           // will need to update before switching to smallcaps.
-          // It does reject a SturdyRef, which no capdata client expects in
-          // a 'slot'. The slot cache is keyed only by index, so without this
-          // check a SturdyRef decoded under a 'sturdyRef' tag could be
-          // reused under a 'slot' tag for the same index.
-          !isPassableSturdyRef(decoded) ||
-            Fail`a sturdyRef cannot be decoded as a slot: ${decoded}`;
           return decoded;
         }
-        case 'sturdyRef': {
-          // Unlike a 'slot', a 'sturdyRef' names its kind, so the decoder
-          // checks that the result is a SturdyRef. The 'slot' case above
-          // checks the converse.
-          const decoded = decodeSturdyRefFromCapData(
+        case 'parcel': {
+          // A parcel names its kind, so the decoder checks the callback's
+          // result instead of trusting arbitrary transport data.
+          const decoded = decodeParcelFromCapData(
             jsonEncoded,
             decodeFromCapData,
           );
-          if (passStyleOf(decoded) === 'sturdyRef') {
+          if (passStyleOf(decoded) === 'parcel') {
             return decoded;
           }
-          throw Fail`a sturdyRef encoding must decode to a sturdyRef: ${decoded}`;
+          throw Fail`a parcel encoding must decode to a parcel: ${decoded}`;
         }
         case 'error': {
           const decoded = decodeErrorFromCapData(
