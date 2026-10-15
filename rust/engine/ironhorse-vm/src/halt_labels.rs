@@ -62,7 +62,6 @@ pub const NOT_IMPLEMENTED_LABELS: &[&str] = &[
     "defineProperty:non-string-key",
     "defineProperty:partial-descriptor",
     "defineProperty:redefine",
-    "equal",
     "eval:compiler-unimplemented",
     "eval:no-compiler",
     "eval:shadowed-call",

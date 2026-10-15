@@ -219,3 +219,34 @@ fn a_conditional_can_jump_over_a_long_body() {
          [a, b, c, d, e].join()"
     ));
 }
+
+#[test]
+fn a_bigint_loosely_equals_a_string_holding_its_value() {
+    for pair in [
+        "1n == '1'",
+        "'1' == 1n",
+        "1n != '1'",
+        "0n == '-0'",
+        "0n == ''",
+        "0n == ' '",
+        "1n == ' 1 '",
+        "1n == '1n'",
+        "1n == '0x1'",
+        "1n == '1.0'",
+        "-1n == '-1'",
+        "-1n == '-0x1'",
+        "2n ** 70n == '1180591620717411303424'",
+        "2n ** 70n == '1180591620717411303425'",
+        "1n == '1e0'",
+        "1n == '\\u00a01'",
+        "1n === '1'",
+        "255n == '0xff'",
+        "5n == '0b101'",
+        "8n == '0o10'",
+        "1n == '+1'",
+        "1n == Object('1')",
+        "Object(1n) == '1'",
+    ] {
+        agrees(&format!("String({pair})"));
+    }
+}
