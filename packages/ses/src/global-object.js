@@ -5,12 +5,86 @@ import {
   defineProperty,
   entries,
   freeze,
+  getOwnPropertyDescriptor,
   hasOwn,
+  is,
   unscopablesSymbol,
 } from './commons.js';
 import { makeEvalFunction } from './make-eval-function.js';
 import { makeFunctionConstructor } from './make-function-constructor.js';
 import { constantProperties, universalPropertyNames } from './permits.js';
+
+/**
+ * Initial or shared globals that a shim may install before `lockdown`, locked
+ * first-wins, and that `lockdown` then leaves in place rather than redefining.
+ * Any other pre-lockdown non-configurable binding among the names `lockdown`
+ * defines makes it throw.
+ */
+const firstWinsPropertyNames = freeze({
+  __proto__: null,
+  Parcel: true,
+});
+
+/**
+ * Whether a pre-existing global binding is exactly the locked data property a
+ * first-wins shim installs, holding the intrinsic `lockdown` sampled.
+ * The value comparison matters: a reentrant Proxy trap can re-point the
+ * binding after sampling.
+ *
+ * @param {PropertyDescriptor | undefined} descriptor
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+const isFirstWinsDescriptor = (descriptor, value) =>
+  descriptor !== undefined &&
+  hasOwn(descriptor, 'value') &&
+  is(descriptor.value, value) &&
+  descriptor.writable === false &&
+  descriptor.enumerable === false &&
+  descriptor.configurable === false;
+
+/**
+ * Define the first-wins globals, ahead of the general install loop, which
+ * skips them.
+ * A child global starts without these bindings and receives the ordinary
+ * mutable shared binding.
+ * On the start global, the shim's locked binding stays in place, and a binding
+ * deleted or re-pointed after sampling is restored to the sampled value,
+ * locked.
+ *
+ * @param {object} globalObject
+ * @param {object} intrinsics
+ * @param {object} newGlobalPropertyNames
+ * @param {boolean} isStartGlobal
+ */
+const defineFirstWinsGlobals = (
+  globalObject,
+  intrinsics,
+  newGlobalPropertyNames,
+  isStartGlobal,
+) => {
+  for (const [name, intrinsicName] of entries(newGlobalPropertyNames)) {
+    if (
+      hasOwn(firstWinsPropertyNames, name) &&
+      hasOwn(intrinsics, intrinsicName)
+    ) {
+      const value = intrinsics[intrinsicName];
+      const descriptor = getOwnPropertyDescriptor(globalObject, name);
+      if (!isFirstWinsDescriptor(descriptor, value)) {
+        const locked =
+          descriptor === undefined
+            ? isStartGlobal
+            : !is(descriptor.value, value);
+        defineProperty(globalObject, name, {
+          value,
+          writable: !locked,
+          enumerable: false,
+          configurable: !locked,
+        });
+      }
+    }
+  }
+};
 
 /**
  * The host's ordinary global object is not provided by a `with` block, so
@@ -97,8 +171,18 @@ export const setGlobalObjectMutableProperties = (
     }
   }
 
+  defineFirstWinsGlobals(
+    globalObject,
+    intrinsics,
+    newGlobalPropertyNames,
+    parentCompartment === undefined,
+  );
+
   for (const [name, intrinsicName] of entries(newGlobalPropertyNames)) {
-    if (hasOwn(intrinsics, intrinsicName)) {
+    if (
+      hasOwn(intrinsics, intrinsicName) &&
+      !hasOwn(firstWinsPropertyNames, name)
+    ) {
       defineProperty(globalObject, name, {
         value: intrinsics[intrinsicName],
         writable: true,

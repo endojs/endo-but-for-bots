@@ -94,7 +94,7 @@
     "test": "ava",
     "test:hermes": "./scripts/hermes-test.sh",
     "test:types": "tsc --project tsconfig.test-types.json",
-    "test:xs": "xst dist/ses.umd.js test/_lockdown-safe.js",
+    "test:xs": "xst dist/ses.umd.js test/_lockdown-safe.js && xst test/_parcel-shim-first.js dist/ses.umd.js test/_parcel-xs-smoke.js",
     "postpack": "git clean -fX -e node_modules/"
   },
   "dependencies": {
@@ -103,6 +103,7 @@
     "@endo/immutable-arraybuffer": "workspace:^"
   },
   "devDependencies": {
+    "@fast-check/ava": "catalog:dev",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "core-js": "^3.50.0",

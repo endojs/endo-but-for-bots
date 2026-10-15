@@ -1,8 +1,10 @@
 import { cauterizeProperty } from './cauterize-property.js';
 import {
+  Object,
   TypeError,
   WeakSet,
   arrayFilter,
+  construct,
   create,
   defineProperty,
   entries,
@@ -26,6 +28,7 @@ import {
 
 /**
  * @import {Reporter} from './reporting-types.js'
+ * @import {ParcelSample} from './parcel.types.js'
  */
 
 const isFunction = obj => typeof obj === 'function';
@@ -64,7 +67,7 @@ function initProperties(obj, descs) {
 }
 
 // sampleGlobals creates an intrinsics object, suitable for
-// interinsicsCollector.addIntrinsics, from the named properties of a global
+// intrinsicsCollector.addIntrinsics, from the named properties of a global
 // object.
 function sampleGlobals(globalObject, newPropertyNames) {
   const newIntrinsics = { __proto__: null };
@@ -75,6 +78,100 @@ function sampleGlobals(globalObject, newPropertyNames) {
   }
   return newIntrinsics;
 }
+
+/**
+ * Validate a pre-lockdown own `globalThis.Parcel` binding and snapshot, by
+ * descriptor, the members SES delegates to, so no getter or Proxy `get` trap
+ * can substitute a different value later.
+ * Returns `undefined` when the global has no own `Parcel` property.
+ * Throws a `TypeError` for an accessor binding or a value that is not a
+ * constructible function with a locked `prototype` and distinct own `open`,
+ * `locate`, and `isParcel` functions.
+ *
+ * The check rejects an accidental, unrelated `Parcel` global but does not
+ * establish provenance: like every other pre-lockdown change to the start
+ * compartment, the `Parcel` it accepts is trusted.
+ *
+ * @param {object} globalObject
+ * @returns {ParcelSample | undefined}
+ */
+export const sampleParcel = globalObject => {
+  if (!hasOwn(globalObject, 'Parcel')) {
+    return undefined;
+  }
+  const binding = getOwnPropertyDescriptor(globalObject, 'Parcel');
+  if (binding === undefined || !hasOwn(binding, 'value')) {
+    throw TypeError(
+      'lockdown expected globalThis.Parcel to be a data property, not an accessor',
+    );
+  }
+  const candidate = binding.value;
+  /** @type {Record<string, any>} */
+  const snapshot = { __proto__: null };
+  /**
+   * @param {string} name
+   * @param {(value: unknown) => boolean} predicate
+   */
+  const hasOwnData = (name, predicate) => {
+    const descriptor = getOwnPropertyDescriptor(candidate, name);
+    if (
+      descriptor === undefined ||
+      !hasOwn(descriptor, 'value') ||
+      !predicate(descriptor.value)
+    ) {
+      return false;
+    }
+    snapshot[name] = descriptor.value;
+    return true;
+  };
+  // A class constructor's `prototype` is non-writable and non-configurable.
+  // Requiring that pins the value: a Proxy candidate must then report the same
+  // `prototype` to `completePrototypes`, which reads it by `[[Get]]`, as it
+  // reported here by descriptor.
+  const isLockedPrototype = () => {
+    const descriptor = getOwnPropertyDescriptor(candidate, 'prototype');
+    return (
+      descriptor !== undefined &&
+      descriptor.writable === false &&
+      descriptor.configurable === false
+    );
+  };
+  // A callable with a locked own `prototype` need not be constructible: an
+  // arrow function can be given one. `construct` throws unless its new target
+  // has a `[[Construct]]` internal method.
+  const isConstructor = () => {
+    try {
+      construct(Object, [], candidate);
+      return true;
+    } catch (_error) {
+      return false;
+    }
+  };
+  // Aliasing `locate` as `open` or `isParcel` would hand location authority to
+  // every child compartment.
+  const isLocateDistinct = () =>
+    snapshot.locate !== snapshot.open && snapshot.locate !== snapshot.isParcel;
+  if (
+    typeof candidate !== 'function' ||
+    !hasOwnData('open', isFunction) ||
+    !hasOwnData('locate', isFunction) ||
+    !hasOwnData('isParcel', isFunction) ||
+    !hasOwnData('prototype', value => !isPrimitive(value)) ||
+    !isLockedPrototype() ||
+    !isLocateDistinct() ||
+    !isConstructor()
+  ) {
+    throw TypeError(
+      'lockdown expected globalThis.Parcel to be a compatible Parcel constructor, with a locked prototype and distinct open, locate, and isParcel statics',
+    );
+  }
+  return freeze({
+    Parcel: candidate,
+    open: snapshot.open,
+    isParcel: snapshot.isParcel,
+    prototype: snapshot.prototype,
+  });
+};
 
 /**
  * @param {Reporter} reporter

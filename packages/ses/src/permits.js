@@ -162,6 +162,9 @@ export const initialGlobalPropertyNames = {
   // the split by binding `%InitialURL%` to `%SharedURL%` as well.
   URL: '%InitialURL%',
 
+  // The shim-installed constructor with privileged location access.
+  Parcel: '%InitialParcel%',
+
   // Omit `Symbol`, because we want the original to appear on the
   // start compartment without passing through the permits mechanism, since
   // we want to preserve all its properties, even if we never heard of them.
@@ -220,6 +223,9 @@ export const sharedGlobalPropertyNames = {
   // across the boundary), but `createObjectURL` / `revokeObjectURL` are
   // omitted.
   URL: '%SharedURL%',
+
+  // The shared constructor deliberately omits `locate`.
+  Parcel: '%SharedParcel%',
 
   // *** Other Properties of the Global Object
 
@@ -1740,6 +1746,30 @@ export const permitted = {
     getSendOnly: fn,
     prototype: '%PromisePrototype%',
     resolve: fn,
+  },
+
+  // The first-wins shim installs this constructor before lockdown. It retains
+  // the authority to reveal locations.
+  '%InitialParcel%': {
+    '[[Proto]]': '%FunctionPrototype%',
+    open: fn,
+    locate: fn,
+    isParcel: fn,
+    prototype: '%ParcelPrototype%',
+  },
+
+  // SES derives the shared constructor over the initial constructor's brand
+  // table and prototype, but omits location-revelation authority.
+  '%SharedParcel%': {
+    '[[Proto]]': '%FunctionPrototype%',
+    open: fn,
+    isParcel: fn,
+    prototype: '%ParcelPrototype%',
+  },
+
+  '%ParcelPrototype%': {
+    constructor: '%SharedParcel%',
+    '@@toStringTag': 'string',
   },
 
   // https://github.com/tc39/proposal-source-phase-imports?tab=readme-ov-file#js-module-source

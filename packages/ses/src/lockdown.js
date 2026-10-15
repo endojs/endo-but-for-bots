@@ -31,7 +31,7 @@ import {
   getPrototypeOf,
 } from './commons.js';
 import { makeHardener } from './make-hardener.js';
-import { makeIntrinsicsCollector } from './intrinsics.js';
+import { makeIntrinsicsCollector, sampleParcel } from './intrinsics.js';
 import removeUnpermittedIntrinsics from './permits-intrinsics.js';
 import tameFunctionConstructors from './tame-function-constructors.js';
 import tameDateConstructor from './tame-date-constructor.js';
@@ -40,6 +40,7 @@ import tameTemporalObject from './tame-temporal-object.js';
 import { tameNaNSideChannel } from './tame-nan-sidechannel.js';
 import tameRegExpConstructor from './tame-regexp-constructor.js';
 import tameUrlConstructor from './tame-url-constructor.js';
+import tameParcelConstructor from './tame-parcel-constructor.js';
 import enablePropertyOverrides from './enable-property-overrides.js';
 import tameLocaleMethods from './tame-locale-methods.js';
 import {
@@ -348,6 +349,7 @@ export const repairIntrinsics = (options = {}) => {
   // shimmed functions as honorary native functions.
   const markVirtualizedNativeFunction = tameFunctionToString();
 
+  const parcelSample = sampleParcel(globalThis);
   const { addIntrinsics, completePrototypes, finalIntrinsics } =
     makeIntrinsicsCollector(reporter);
 
@@ -364,6 +366,7 @@ export const repairIntrinsics = (options = {}) => {
   addIntrinsics(tameRegExpConstructor(regExpTaming));
   addIntrinsics(tameSymbolConstructor());
   addIntrinsics(tameUrlConstructor(urlBlobTaming));
+  addIntrinsics(tameParcelConstructor(parcelSample));
   addIntrinsics(shimArrayBufferTransfer());
   addIntrinsics(tameModuleSource());
 
