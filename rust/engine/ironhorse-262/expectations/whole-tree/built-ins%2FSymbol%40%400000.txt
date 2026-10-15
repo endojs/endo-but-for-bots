@@ -1,6 +1,6 @@
 # engine=ironhorse features=default corpus=built-ins/Symbol tip=be13516fb6441b950ba8a3df97eb34062c186972
 built-ins/Symbol/auto-boxing-non-strict.js sloppy pass
-built-ins/Symbol/auto-boxing-strict.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Symbol/auto-boxing-strict.js strict pass
 built-ins/Symbol/constructor.js sloppy pass
 built-ins/Symbol/constructor.js strict pass
 built-ins/Symbol/desc-to-string-symbol.js sloppy pass

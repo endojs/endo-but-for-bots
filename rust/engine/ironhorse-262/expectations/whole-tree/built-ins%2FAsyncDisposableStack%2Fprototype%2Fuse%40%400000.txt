@@ -17,10 +17,10 @@ built-ins/AsyncDisposableStack/prototype/use/gets-value-Symbol.dispose-property-
 built-ins/AsyncDisposableStack/prototype/use/gets-value-Symbol.dispose-property-after-trying-Symbol.asyncDispose.js strict pass
 built-ins/AsyncDisposableStack/prototype/use/gets-value-Symbol.dispose-property-once.js sloppy pass
 built-ins/AsyncDisposableStack/prototype/use/gets-value-Symbol.dispose-property-once.js strict pass
-built-ins/AsyncDisposableStack/prototype/use/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/AsyncDisposableStack/prototype/use/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/AsyncDisposableStack/prototype/use/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be use; name value should be use"
-built-ins/AsyncDisposableStack/prototype/use/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be use; name value should be use"
+built-ins/AsyncDisposableStack/prototype/use/length.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/length.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/name.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/name.js strict pass
 built-ins/AsyncDisposableStack/prototype/use/not-a-constructor.js sloppy pass
 built-ins/AsyncDisposableStack/prototype/use/not-a-constructor.js strict pass
 built-ins/AsyncDisposableStack/prototype/use/prop-desc.js sloppy pass

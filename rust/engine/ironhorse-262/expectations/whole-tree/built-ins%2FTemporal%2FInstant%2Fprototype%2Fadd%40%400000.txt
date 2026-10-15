@@ -35,12 +35,12 @@ built-ins/Temporal/Instant/prototype/add/disallowed-duration-units.js sloppy ski
 built-ins/Temporal/Instant/prototype/add/disallowed-duration-units.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Instant/prototype/add/infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Instant/prototype/add/infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/Instant/prototype/add/length.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Instant/prototype/add/length.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/prototype/add/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/prototype/add/length.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Instant/prototype/add/minimum-maximum-instant.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Instant/prototype/add/minimum-maximum-instant.js strict skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Instant/prototype/add/name.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Instant/prototype/add/name.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/prototype/add/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/prototype/add/name.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Instant/prototype/add/negative-infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Instant/prototype/add/negative-infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Instant/prototype/add/non-integer-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal

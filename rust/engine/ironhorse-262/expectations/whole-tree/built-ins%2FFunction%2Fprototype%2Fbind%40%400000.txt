@@ -175,26 +175,26 @@ built-ins/Function/prototype/bind/instance-construct-newtarget-self-reflect.js s
 built-ins/Function/prototype/bind/instance-construct-newtarget-self-reflect.js strict pass
 built-ins/Function/prototype/bind/instance-length-default-value.js sloppy pass
 built-ins/Function/prototype/bind/instance-length-default-value.js strict pass
-built-ins/Function/prototype/bind/instance-length-exceeds-int32.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«0», «2147483648») to be true"
-built-ins/Function/prototype/bind/instance-length-exceeds-int32.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«0», «2147483648») to be true"
+built-ins/Function/prototype/bind/instance-length-exceeds-int32.js sloppy pass
+built-ins/Function/prototype/bind/instance-length-exceeds-int32.js strict pass
 built-ins/Function/prototype/bind/instance-length-prop-desc.js sloppy pass
 built-ins/Function/prototype/bind/instance-length-prop-desc.js strict pass
 built-ins/Function/prototype/bind/instance-length-remaining-args.js sloppy pass
 built-ins/Function/prototype/bind/instance-length-remaining-args.js strict pass
-built-ins/Function/prototype/bind/instance-length-tointeger.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: target length of infinity, zero bound arguments Expected SameValue(«0», «Infinity») to be true"
-built-ins/Function/prototype/bind/instance-length-tointeger.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: target length of infinity, zero bound arguments Expected SameValue(«0», «Infinity») to be true"
-built-ins/Function/prototype/bind/instance-name-chained.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"bound bound \"», «\"bound bound target\"») to be true"
-built-ins/Function/prototype/bind/instance-name-chained.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"bound bound \"», «\"bound bound target\"») to be true"
-built-ins/Function/prototype/bind/instance-name-error.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
-built-ins/Function/prototype/bind/instance-name-error.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+built-ins/Function/prototype/bind/instance-length-tointeger.js sloppy pass
+built-ins/Function/prototype/bind/instance-length-tointeger.js strict pass
+built-ins/Function/prototype/bind/instance-name-chained.js sloppy pass
+built-ins/Function/prototype/bind/instance-name-chained.js strict pass
+built-ins/Function/prototype/bind/instance-name-error.js sloppy pass
+built-ins/Function/prototype/bind/instance-name-error.js strict pass
 built-ins/Function/prototype/bind/instance-name-non-string.js sloppy pass
 built-ins/Function/prototype/bind/instance-name-non-string.js strict pass
-built-ins/Function/prototype/bind/instance-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"bound \"», «\"bound target\"») to be true"
-built-ins/Function/prototype/bind/instance-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"bound \"», «\"bound target\"») to be true"
-built-ins/Function/prototype/bind/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/Function/prototype/bind/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/Function/prototype/bind/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be bind; name value should be bind"
-built-ins/Function/prototype/bind/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be bind; name value should be bind"
+built-ins/Function/prototype/bind/instance-name.js sloppy pass
+built-ins/Function/prototype/bind/instance-name.js strict pass
+built-ins/Function/prototype/bind/length.js sloppy pass
+built-ins/Function/prototype/bind/length.js strict pass
+built-ins/Function/prototype/bind/name.js sloppy pass
+built-ins/Function/prototype/bind/name.js strict pass
 built-ins/Function/prototype/bind/not-a-constructor.js sloppy pass
 built-ins/Function/prototype/bind/not-a-constructor.js strict pass
 built-ins/Function/prototype/bind/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure

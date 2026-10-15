@@ -21,10 +21,10 @@ built-ins/Temporal/Duration/prototype/with/copy-properties-not-undefined.js slop
 built-ins/Temporal/Duration/prototype/with/copy-properties-not-undefined.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/with/infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/with/infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/Duration/prototype/with/length.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Duration/prototype/with/length.js strict skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Duration/prototype/with/name.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Duration/prototype/with/name.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/prototype/with/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/length.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/name.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/with/negative-infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/with/negative-infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/with/non-integer-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal

@@ -53,8 +53,8 @@ language/expressions/class/dstr/gen-meth-obj-ptrn-rest-val-obj.js sloppy pass
 language/expressions/class/dstr/gen-meth-obj-ptrn-rest-val-obj.js strict pass
 language/expressions/class/dstr/gen-meth-static-ary-init-iter-close.js sloppy pass
 language/expressions/class/dstr/gen-meth-static-ary-init-iter-close.js strict pass
-language/expressions/class/dstr/gen-meth-static-ary-init-iter-get-err-array-prototype.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/class/dstr/gen-meth-static-ary-init-iter-get-err-array-prototype.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/class/dstr/gen-meth-static-ary-init-iter-get-err-array-prototype.js sloppy pass
+language/expressions/class/dstr/gen-meth-static-ary-init-iter-get-err-array-prototype.js strict pass
 language/expressions/class/dstr/gen-meth-static-ary-init-iter-get-err.js sloppy pass
 language/expressions/class/dstr/gen-meth-static-ary-init-iter-get-err.js strict pass
 language/expressions/class/dstr/gen-meth-static-ary-init-iter-no-close.js sloppy pass
@@ -173,8 +173,8 @@ language/expressions/class/dstr/gen-meth-static-ary-ptrn-rest-obj-prop-id.js slo
 language/expressions/class/dstr/gen-meth-static-ary-ptrn-rest-obj-prop-id.js strict pass
 language/expressions/class/dstr/gen-meth-static-dflt-ary-init-iter-close.js sloppy pass
 language/expressions/class/dstr/gen-meth-static-dflt-ary-init-iter-close.js strict pass
-language/expressions/class/dstr/gen-meth-static-dflt-ary-init-iter-get-err-array-prototype.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/class/dstr/gen-meth-static-dflt-ary-init-iter-get-err-array-prototype.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/class/dstr/gen-meth-static-dflt-ary-init-iter-get-err-array-prototype.js sloppy pass
+language/expressions/class/dstr/gen-meth-static-dflt-ary-init-iter-get-err-array-prototype.js strict pass
 language/expressions/class/dstr/gen-meth-static-dflt-ary-init-iter-get-err.js sloppy pass
 language/expressions/class/dstr/gen-meth-static-dflt-ary-init-iter-get-err.js strict pass
 language/expressions/class/dstr/gen-meth-static-dflt-ary-init-iter-no-close.js sloppy pass

@@ -98,8 +98,8 @@ language/statements/await-using/puts-initializer-on-top-of-disposableresourcesta
 language/statements/await-using/puts-initializer-on-top-of-disposableresourcestack-subsequent-usings.js sloppy pass
 language/statements/await-using/puts-initializer-on-top-of-disposableresourcestack-subsequent-usings.js strict pass
 language/statements/await-using/redeclaration-error-from-within-strict-mode-function-await-using.js sloppy pass
-language/statements/await-using/throws-error-as-is-if-only-one-error-during-disposal.js sloppy skip:async:reported-failure
-language/statements/await-using/throws-error-as-is-if-only-one-error-during-disposal.js strict skip:async:reported-failure
+language/statements/await-using/throws-error-as-is-if-only-one-error-during-disposal.js sloppy pass
+language/statements/await-using/throws-error-as-is-if-only-one-error-during-disposal.js strict pass
 language/statements/await-using/throws-if-initializer-Symbol.asyncDispose-property-is-null.js sloppy pass
 language/statements/await-using/throws-if-initializer-Symbol.asyncDispose-property-is-null.js strict pass
 language/statements/await-using/throws-if-initializer-Symbol.asyncDispose-property-is-undefined.js sloppy pass
@@ -116,5 +116,5 @@ language/statements/await-using/throws-if-initializer-missing-both-Symbol.asyncD
 language/statements/await-using/throws-if-initializer-missing-both-Symbol.asyncDispose-and-Symbol.dispose.js strict pass
 language/statements/await-using/throws-if-initializer-not-object.js sloppy pass
 language/statements/await-using/throws-if-initializer-not-object.js strict pass
-language/statements/await-using/throws-suppressederror-if-multiple-errors-during-disposal.js sloppy skip:async:reported-failure
-language/statements/await-using/throws-suppressederror-if-multiple-errors-during-disposal.js strict skip:async:reported-failure
+language/statements/await-using/throws-suppressederror-if-multiple-errors-during-disposal.js sloppy pass
+language/statements/await-using/throws-suppressederror-if-multiple-errors-during-disposal.js strict pass

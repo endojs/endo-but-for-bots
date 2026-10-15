@@ -33,8 +33,8 @@ built-ins/ArrayIteratorPrototype/next/iteration.js sloppy pass
 built-ins/ArrayIteratorPrototype/next/iteration.js strict pass
 built-ins/ArrayIteratorPrototype/next/length.js sloppy pass
 built-ins/ArrayIteratorPrototype/next/length.js strict pass
-built-ins/ArrayIteratorPrototype/next/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be next; name value should be next"
-built-ins/ArrayIteratorPrototype/next/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be next; name value should be next"
+built-ins/ArrayIteratorPrototype/next/name.js sloppy pass
+built-ins/ArrayIteratorPrototype/next/name.js strict pass
 built-ins/ArrayIteratorPrototype/next/non-own-slots.js sloppy pass
 built-ins/ArrayIteratorPrototype/next/non-own-slots.js strict pass
 built-ins/ArrayIteratorPrototype/next/property-descriptor.js sloppy pass

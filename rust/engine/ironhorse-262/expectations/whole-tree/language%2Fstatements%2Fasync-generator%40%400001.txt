@@ -1,21 +1,21 @@
 # engine=ironhorse features=default corpus=language/statements/async-generator tip=be13516fb6441b950ba8a3df97eb34062c186972
-language/statements/async-generator/yield-star-next-then-returns-abrupt.js sloppy skip:async:reported-failure
-language/statements/async-generator/yield-star-next-then-returns-abrupt.js strict skip:async:reported-failure
+language/statements/async-generator/yield-star-next-then-returns-abrupt.js sloppy pass
+language/statements/async-generator/yield-star-next-then-returns-abrupt.js strict pass
 language/statements/async-generator/yield-star-normal-notdone-iter-value-throws.js sloppy pass
 language/statements/async-generator/yield-star-normal-notdone-iter-value-throws.js strict pass
-language/statements/async-generator/yield-star-promise-not-unwrapped.js sloppy skip:async:reported-failure
-language/statements/async-generator/yield-star-promise-not-unwrapped.js strict skip:async:reported-failure
+language/statements/async-generator/yield-star-promise-not-unwrapped.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: yield* should not unwrap promises from manually-implemented async iterators Expected SameValue(«\"unwrapped value\"», «[object Promise]») to be true (the oracle completed)"
+language/statements/async-generator/yield-star-promise-not-unwrapped.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: yield* should not unwrap promises from manually-implemented async iterators Expected SameValue(«\"unwrapped value\"», «[object Promise]») to be true (the oracle completed)"
 language/statements/async-generator/yield-star-return-missing-value-is-awaited.js sloppy pass
 language/statements/async-generator/yield-star-return-missing-value-is-awaited.js strict pass
 language/statements/async-generator/yield-star-return-notdone-iter-value-throws.js sloppy pass
 language/statements/async-generator/yield-star-return-notdone-iter-value-throws.js strict pass
-language/statements/async-generator/yield-star-return-then-getter-ticks.js sloppy skip:async:reported-failure
-language/statements/async-generator/yield-star-return-then-getter-ticks.js strict skip:async:reported-failure
-language/statements/async-generator/yield-star-sync-next.js sloppy skip:async:reported-failure
-language/statements/async-generator/yield-star-sync-next.js strict skip:async:reported-failure
-language/statements/async-generator/yield-star-sync-return.js sloppy skip:async:reported-failure
-language/statements/async-generator/yield-star-sync-return.js strict skip:async:reported-failure
-language/statements/async-generator/yield-star-sync-throw.js sloppy skip:async:reported-failure
-language/statements/async-generator/yield-star-sync-throw.js strict skip:async:reported-failure
+language/statements/async-generator/yield-star-return-then-getter-ticks.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Actual [start, tick 1, tick 2, get then, tick 3, get return, get then] and expected [start, tick 1, get then, tick 2, get return, get then, tick 3] should have the same contents. Ticks for return with thenable getter (the oracle completed)"
+language/statements/async-generator/yield-star-return-then-getter-ticks.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Actual [start, tick 1, tick 2, get then, tick 3, get return, get then] and expected [start, tick 1, get then, tick 2, get return, get then, tick 3] should have the same contents. Ticks for return with thenable getter (the oracle completed)"
+language/statements/async-generator/yield-star-sync-next.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
+language/statements/async-generator/yield-star-sync-next.js strict fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
+language/statements/async-generator/yield-star-sync-return.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
+language/statements/async-generator/yield-star-sync-return.js strict fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
+language/statements/async-generator/yield-star-sync-throw.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
+language/statements/async-generator/yield-star-sync-throw.js strict fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
 language/statements/async-generator/yield-star-throw-notdone-iter-value-throws.js sloppy pass
 language/statements/async-generator/yield-star-throw-notdone-iter-value-throws.js strict pass

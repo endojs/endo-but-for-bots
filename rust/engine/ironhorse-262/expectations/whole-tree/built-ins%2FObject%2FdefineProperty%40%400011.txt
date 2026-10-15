@@ -29,8 +29,8 @@ built-ins/Object/defineProperty/coerced-P-grow.js sloppy skip:shared-positive-te
 built-ins/Object/defineProperty/coerced-P-grow.js strict skip:shared-positive-test-failure
 built-ins/Object/defineProperty/coerced-P-shrink.js sloppy skip:shared-positive-test-failure
 built-ins/Object/defineProperty/coerced-P-shrink.js strict skip:shared-positive-test-failure
-built-ins/Object/defineProperty/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be defineProperty; name value should be defineProperty"
-built-ins/Object/defineProperty/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be defineProperty; name value should be defineProperty"
+built-ins/Object/defineProperty/name.js sloppy pass
+built-ins/Object/defineProperty/name.js strict pass
 built-ins/Object/defineProperty/not-a-constructor.js sloppy pass
 built-ins/Object/defineProperty/not-a-constructor.js strict pass
 built-ins/Object/defineProperty/property-description-must-be-an-object-not-bigint.js sloppy pass

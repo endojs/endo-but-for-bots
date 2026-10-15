@@ -40,8 +40,8 @@ language/expressions/yield/star-array.js sloppy pass
 language/expressions/yield/star-array.js strict pass
 language/expressions/yield/star-in-iteration-stmt.js sloppy pass
 language/expressions/yield/star-in-iteration-stmt.js strict pass
-language/expressions/yield/star-in-rltn-expr.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
-language/expressions/yield/star-in-rltn-expr.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+language/expressions/yield/star-in-rltn-expr.js sloppy pass
+language/expressions/yield/star-in-rltn-expr.js strict pass
 language/expressions/yield/star-iterable.js sloppy pass
 language/expressions/yield/star-iterable.js strict pass
 language/expressions/yield/star-return-is-null.js sloppy pass

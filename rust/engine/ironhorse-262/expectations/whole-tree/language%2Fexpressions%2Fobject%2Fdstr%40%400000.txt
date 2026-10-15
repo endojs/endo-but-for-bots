@@ -1,8 +1,8 @@
 # engine=ironhorse features=default corpus=language/expressions/object/dstr tip=be13516fb6441b950ba8a3df97eb34062c186972
 language/expressions/object/dstr/async-gen-meth-ary-init-iter-close.js sloppy pass
 language/expressions/object/dstr/async-gen-meth-ary-init-iter-close.js strict pass
-language/expressions/object/dstr/async-gen-meth-ary-init-iter-get-err-array-prototype.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/object/dstr/async-gen-meth-ary-init-iter-get-err-array-prototype.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/object/dstr/async-gen-meth-ary-init-iter-get-err-array-prototype.js sloppy pass
+language/expressions/object/dstr/async-gen-meth-ary-init-iter-get-err-array-prototype.js strict pass
 language/expressions/object/dstr/async-gen-meth-ary-init-iter-get-err.js sloppy pass
 language/expressions/object/dstr/async-gen-meth-ary-init-iter-get-err.js strict pass
 language/expressions/object/dstr/async-gen-meth-ary-init-iter-no-close.js sloppy pass
@@ -121,8 +121,8 @@ language/expressions/object/dstr/async-gen-meth-ary-ptrn-rest-obj-prop-id.js slo
 language/expressions/object/dstr/async-gen-meth-ary-ptrn-rest-obj-prop-id.js strict pass
 language/expressions/object/dstr/async-gen-meth-dflt-ary-init-iter-close.js sloppy pass
 language/expressions/object/dstr/async-gen-meth-dflt-ary-init-iter-close.js strict pass
-language/expressions/object/dstr/async-gen-meth-dflt-ary-init-iter-get-err-array-prototype.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/object/dstr/async-gen-meth-dflt-ary-init-iter-get-err-array-prototype.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/object/dstr/async-gen-meth-dflt-ary-init-iter-get-err-array-prototype.js sloppy pass
+language/expressions/object/dstr/async-gen-meth-dflt-ary-init-iter-get-err-array-prototype.js strict pass
 language/expressions/object/dstr/async-gen-meth-dflt-ary-init-iter-get-err.js sloppy pass
 language/expressions/object/dstr/async-gen-meth-dflt-ary-init-iter-get-err.js strict pass
 language/expressions/object/dstr/async-gen-meth-dflt-ary-init-iter-no-close.js sloppy pass

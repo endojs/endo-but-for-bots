@@ -91,8 +91,8 @@ language/statements/for-of/dstr/array-rest-nested-obj.js sloppy pass
 language/statements/for-of/dstr/array-rest-nested-obj.js strict pass
 language/statements/for-of/dstr/array-rest-put-const.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
 language/statements/for-of/dstr/array-rest-put-const.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/statements/for-of/dstr/array-rest-put-let.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
-language/statements/for-of/dstr/array-rest-put-let.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/statements/for-of/dstr/array-rest-put-let.js sloppy pass
+language/statements/for-of/dstr/array-rest-put-let.js strict pass
 language/statements/for-of/dstr/array-rest-put-prop-ref-no-get.js sloppy pass
 language/statements/for-of/dstr/array-rest-put-prop-ref-no-get.js strict pass
 language/statements/for-of/dstr/array-rest-put-prop-ref-user-err-iter-close-skip.js sloppy pass
@@ -109,8 +109,8 @@ language/statements/for-of/dstr/array-rest-yield-ident-invalid.js strict pass
 language/statements/for-of/dstr/array-rest-yield-ident-valid.js sloppy pass
 language/statements/for-of/dstr/const-ary-init-iter-close.js sloppy pass
 language/statements/for-of/dstr/const-ary-init-iter-close.js strict pass
-language/statements/for-of/dstr/const-ary-init-iter-get-err-array-prototype.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/statements/for-of/dstr/const-ary-init-iter-get-err-array-prototype.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/for-of/dstr/const-ary-init-iter-get-err-array-prototype.js sloppy pass
+language/statements/for-of/dstr/const-ary-init-iter-get-err-array-prototype.js strict pass
 language/statements/for-of/dstr/const-ary-init-iter-get-err.js sloppy pass
 language/statements/for-of/dstr/const-ary-init-iter-get-err.js strict pass
 language/statements/for-of/dstr/const-ary-init-iter-no-close.js sloppy pass

@@ -9,10 +9,10 @@ built-ins/Temporal/Instant/prototype/round/branding.js sloppy skip:oracle-host-m
 built-ins/Temporal/Instant/prototype/round/branding.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Instant/prototype/round/builtin.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Instant/prototype/round/builtin.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/Instant/prototype/round/length.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Instant/prototype/round/length.js strict skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Instant/prototype/round/name.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Instant/prototype/round/name.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/prototype/round/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/prototype/round/length.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/prototype/round/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/prototype/round/name.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Instant/prototype/round/negative-instant.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Instant/prototype/round/negative-instant.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Instant/prototype/round/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"

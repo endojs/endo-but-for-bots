@@ -23,10 +23,10 @@ intl402/Intl/supportedValuesOf/currencies.js sloppy skip:oracle-host-missing-int
 intl402/Intl/supportedValuesOf/currencies.js strict skip:oracle-host-missing-intl
 intl402/Intl/supportedValuesOf/invalid-key.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: key:  Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: key: undefined Expected a RangeError but got a TypeError\""
 intl402/Intl/supportedValuesOf/invalid-key.js strict fail:"abort-value-differs: oracle=\"Test262Error: key:  Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: key: undefined Expected a RangeError but got a TypeError\""
-intl402/Intl/supportedValuesOf/length.js sloppy skip:oracle-host-missing-global:Intl
-intl402/Intl/supportedValuesOf/length.js strict skip:oracle-host-missing-global:Intl
-intl402/Intl/supportedValuesOf/name.js sloppy skip:oracle-host-missing-global:Intl
-intl402/Intl/supportedValuesOf/name.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/supportedValuesOf/length.js sloppy skip:oracle-host-missing-intl
+intl402/Intl/supportedValuesOf/length.js strict skip:oracle-host-missing-intl
+intl402/Intl/supportedValuesOf/name.js sloppy skip:oracle-host-missing-intl
+intl402/Intl/supportedValuesOf/name.js strict skip:oracle-host-missing-intl
 intl402/Intl/supportedValuesOf/numberingSystems-accepted-by-DateTimeFormat.js sloppy skip:oracle-host-missing-global:Intl
 intl402/Intl/supportedValuesOf/numberingSystems-accepted-by-DateTimeFormat.js strict skip:oracle-host-missing-global:Intl
 intl402/Intl/supportedValuesOf/numberingSystems-accepted-by-NumberFormat.js sloppy skip:oracle-host-missing-global:Intl

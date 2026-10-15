@@ -39,8 +39,8 @@ language/statements/for-await-of/head-const-init.js sloppy pass
 language/statements/for-await-of/head-const-init.js strict pass
 language/statements/for-await-of/head-let-init.js sloppy pass
 language/statements/for-await-of/head-let-init.js strict pass
-language/statements/for-await-of/head-lhs-async.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid for await\" ironhorse=\"SyntaxError\""
-language/statements/for-await-of/head-lhs-async.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid for await\" ironhorse=\"SyntaxError\""
+language/statements/for-await-of/head-lhs-async.js sloppy skip:shared-positive-test-failure
+language/statements/for-await-of/head-lhs-async.js strict skip:shared-positive-test-failure
 language/statements/for-await-of/head-using-init.js sloppy pass
 language/statements/for-await-of/head-using-init.js strict pass
 language/statements/for-await-of/head-var-init.js sloppy pass
@@ -58,9 +58,9 @@ language/statements/for-await-of/iterator-close-throw-get-method-non-callable.js
 language/statements/for-await-of/let-array-with-newline.js sloppy pass
 language/statements/for-await-of/let-block-with-newline.js sloppy pass
 language/statements/for-await-of/let-identifier-with-newline.js sloppy pass
-language/statements/for-await-of/ticks-with-async-iter-resolved-promise-and-constructor-lookup-two.js sloppy skip:async:reported-failure
-language/statements/for-await-of/ticks-with-async-iter-resolved-promise-and-constructor-lookup-two.js strict skip:async:reported-failure
+language/statements/for-await-of/ticks-with-async-iter-resolved-promise-and-constructor-lookup-two.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Actual [pre, tick 1, loop, tick 2, post] and expected [pre, constructor, tick 1, loop, constructor, tick 2, post] should have the same contents. Ticks and constructor lookups (the oracle completed)"
+language/statements/for-await-of/ticks-with-async-iter-resolved-promise-and-constructor-lookup-two.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Actual [pre, tick 1, loop, tick 2, post] and expected [pre, constructor, tick 1, loop, constructor, tick 2, post] should have the same contents. Ticks and constructor lookups (the oracle completed)"
 language/statements/for-await-of/ticks-with-async-iter-resolved-promise-and-constructor-lookup.js sloppy pass
 language/statements/for-await-of/ticks-with-async-iter-resolved-promise-and-constructor-lookup.js strict pass
-language/statements/for-await-of/ticks-with-sync-iter-resolved-promise-and-constructor-lookup.js sloppy skip:async:reported-failure
-language/statements/for-await-of/ticks-with-sync-iter-resolved-promise-and-constructor-lookup.js strict skip:async:reported-failure
+language/statements/for-await-of/ticks-with-sync-iter-resolved-promise-and-constructor-lookup.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Actual [pre, tick 1, loop, tick 2, post, tick 3, tick 4] and expected [pre, constructor, constructor, tick 1, tick 2, loop, constructor, tick 3, tick 4, post] should have the same contents. Ticks and constructor lookups (the oracle completed)"
+language/statements/for-await-of/ticks-with-sync-iter-resolved-promise-and-constructor-lookup.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Actual [pre, tick 1, loop, tick 2, post, tick 3, tick 4] and expected [pre, constructor, constructor, tick 1, tick 2, loop, constructor, tick 3, tick 4, post] should have the same contents. Ticks and constructor lookups (the oracle completed)"

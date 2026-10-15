@@ -7,8 +7,8 @@ intl402/Collator/prototype/compare/canonically-equivalent-strings.js sloppy skip
 intl402/Collator/prototype/compare/canonically-equivalent-strings.js strict skip:oracle-host-missing-intl
 intl402/Collator/prototype/compare/compare-function-builtin.js sloppy skip:oracle-host-missing-intl
 intl402/Collator/prototype/compare/compare-function-builtin.js strict skip:oracle-host-missing-intl
-intl402/Collator/prototype/compare/compare-function-length.js sloppy skip:oracle-host-missing-global:Intl
-intl402/Collator/prototype/compare/compare-function-length.js strict skip:oracle-host-missing-global:Intl
+intl402/Collator/prototype/compare/compare-function-length.js sloppy skip:oracle-host-missing-intl
+intl402/Collator/prototype/compare/compare-function-length.js strict skip:oracle-host-missing-intl
 intl402/Collator/prototype/compare/compare-function-name.js sloppy skip:oracle-host-missing-intl
 intl402/Collator/prototype/compare/compare-function-name.js strict skip:oracle-host-missing-intl
 intl402/Collator/prototype/compare/compare-function-property-order.js sloppy skip:oracle-host-missing-intl

@@ -87,7 +87,8 @@ built-ins/Temporal/ZonedDateTime/prototype/until/does-not-include-higher-units-t
 built-ins/Temporal/ZonedDateTime/prototype/until/does-not-include-higher-units-than-necessary.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/exact-multiple-of-larger-unit.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/exact-multiple-of-larger-unit.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/ZonedDateTime/prototype/until/float64-representable-integer.js sloppy fail:"ironhorse-worker-panic:attempt to add with overflow"
+built-ins/Temporal/ZonedDateTime/prototype/until/float64-representable-integer.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/until/float64-representable-integer.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/invalid-increments.js sloppy skip:oracle-host-missing-temporal

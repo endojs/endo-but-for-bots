@@ -1,8 +1,8 @@
 # engine=ironhorse features=default corpus=language/expressions/class/elements tip=be13516fb6441b950ba8a3df97eb34062c186972
 language/expressions/class/elements/fields-asi-same-line-2.js sloppy pass
 language/expressions/class/elements/fields-asi-same-line-2.js strict pass
-language/expressions/class/elements/fields-computed-name-static-propname-prototype.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/class/elements/fields-computed-name-static-propname-prototype.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/class/elements/fields-computed-name-static-propname-prototype.js sloppy pass
+language/expressions/class/elements/fields-computed-name-static-propname-prototype.js strict pass
 language/expressions/class/elements/fields-duplicate-privatenames.js sloppy pass
 language/expressions/class/elements/fields-duplicate-privatenames.js strict pass
 language/expressions/class/elements/fields-literal-name-propname-constructor.js sloppy pass

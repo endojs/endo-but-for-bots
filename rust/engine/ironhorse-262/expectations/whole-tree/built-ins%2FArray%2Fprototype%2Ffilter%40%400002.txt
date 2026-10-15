@@ -33,8 +33,8 @@ built-ins/Array/prototype/filter/15.4.4.20-9-c-iii-8.js sloppy pass
 built-ins/Array/prototype/filter/15.4.4.20-9-c-iii-8.js strict pass
 built-ins/Array/prototype/filter/15.4.4.20-9-c-iii-9.js sloppy pass
 built-ins/Array/prototype/filter/15.4.4.20-9-c-iii-9.js strict pass
-built-ins/Array/prototype/filter/call-with-boolean.js sloppy skip:unsupported-opcode:filter:non-dense-array
-built-ins/Array/prototype/filter/call-with-boolean.js strict skip:unsupported-opcode:filter:non-dense-array
+built-ins/Array/prototype/filter/call-with-boolean.js sloppy pass
+built-ins/Array/prototype/filter/call-with-boolean.js strict pass
 built-ins/Array/prototype/filter/callbackfn-resize-arraybuffer.js sloppy pass
 built-ins/Array/prototype/filter/callbackfn-resize-arraybuffer.js strict pass
 built-ins/Array/prototype/filter/create-ctor-non-object.js sloppy pass
@@ -63,10 +63,10 @@ built-ins/Array/prototype/filter/create-species-undef.js sloppy pass
 built-ins/Array/prototype/filter/create-species-undef.js strict pass
 built-ins/Array/prototype/filter/create-species.js sloppy pass
 built-ins/Array/prototype/filter/create-species.js strict pass
-built-ins/Array/prototype/filter/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/Array/prototype/filter/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/Array/prototype/filter/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be filter; name value should be filter"
-built-ins/Array/prototype/filter/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be filter; name value should be filter"
+built-ins/Array/prototype/filter/length.js sloppy pass
+built-ins/Array/prototype/filter/length.js strict pass
+built-ins/Array/prototype/filter/name.js sloppy pass
+built-ins/Array/prototype/filter/name.js strict pass
 built-ins/Array/prototype/filter/not-a-constructor.js sloppy pass
 built-ins/Array/prototype/filter/not-a-constructor.js strict pass
 built-ins/Array/prototype/filter/prop-desc.js sloppy pass

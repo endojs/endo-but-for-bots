@@ -13,10 +13,10 @@ built-ins/Math/round/S15.8.2.15_A6.js sloppy pass
 built-ins/Math/round/S15.8.2.15_A6.js strict pass
 built-ins/Math/round/S15.8.2.15_A7.js sloppy pass
 built-ins/Math/round/S15.8.2.15_A7.js strict pass
-built-ins/Math/round/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/Math/round/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/Math/round/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be round; name value should be round"
-built-ins/Math/round/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be round; name value should be round"
+built-ins/Math/round/length.js sloppy pass
+built-ins/Math/round/length.js strict pass
+built-ins/Math/round/name.js sloppy pass
+built-ins/Math/round/name.js strict pass
 built-ins/Math/round/not-a-constructor.js sloppy pass
 built-ins/Math/round/not-a-constructor.js strict pass
 built-ins/Math/round/prop-desc.js sloppy pass

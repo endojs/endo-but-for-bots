@@ -72,10 +72,10 @@ language/expressions/equals/bigint-and-number-extremes.js sloppy pass
 language/expressions/equals/bigint-and-number-extremes.js strict pass
 language/expressions/equals/bigint-and-number.js sloppy pass
 language/expressions/equals/bigint-and-number.js strict pass
-language/expressions/equals/bigint-and-object.js sloppy skip:unsupported-opcode:equal
-language/expressions/equals/bigint-and-object.js strict skip:unsupported-opcode:equal
-language/expressions/equals/bigint-and-string.js sloppy skip:unsupported-opcode:equal
-language/expressions/equals/bigint-and-string.js strict skip:unsupported-opcode:equal
+language/expressions/equals/bigint-and-object.js sloppy pass
+language/expressions/equals/bigint-and-object.js strict pass
+language/expressions/equals/bigint-and-string.js sloppy pass
+language/expressions/equals/bigint-and-string.js strict pass
 language/expressions/equals/coerce-symbol-to-prim-err.js sloppy pass
 language/expressions/equals/coerce-symbol-to-prim-err.js strict pass
 language/expressions/equals/coerce-symbol-to-prim-invocation.js sloppy pass

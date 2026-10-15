@@ -70,7 +70,7 @@ language/expressions/does-not-equals/bigint-and-number-extremes.js sloppy pass
 language/expressions/does-not-equals/bigint-and-number-extremes.js strict pass
 language/expressions/does-not-equals/bigint-and-number.js sloppy pass
 language/expressions/does-not-equals/bigint-and-number.js strict pass
-language/expressions/does-not-equals/bigint-and-object.js sloppy skip:unsupported-opcode:equal
-language/expressions/does-not-equals/bigint-and-object.js strict skip:unsupported-opcode:equal
-language/expressions/does-not-equals/bigint-and-string.js sloppy skip:unsupported-opcode:equal
-language/expressions/does-not-equals/bigint-and-string.js strict skip:unsupported-opcode:equal
+language/expressions/does-not-equals/bigint-and-object.js sloppy pass
+language/expressions/does-not-equals/bigint-and-object.js strict pass
+language/expressions/does-not-equals/bigint-and-string.js sloppy pass
+language/expressions/does-not-equals/bigint-and-string.js strict pass

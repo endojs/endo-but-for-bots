@@ -57,12 +57,12 @@ language/statements/class/async-gen-method/yield-identifier-spread-strict.js str
 language/statements/class/async-gen-method/yield-identifier-strict.js strict pass
 language/statements/class/async-gen-method/yield-promise-reject-next-catch.js sloppy pass
 language/statements/class/async-gen-method/yield-promise-reject-next-catch.js strict pass
-language/statements/class/async-gen-method/yield-promise-reject-next-for-await-of-async-iterator.js sloppy skip:async:reported-failure
-language/statements/class/async-gen-method/yield-promise-reject-next-for-await-of-async-iterator.js strict skip:async:reported-failure
+language/statements/class/async-gen-method/yield-promise-reject-next-for-await-of-async-iterator.js sloppy pass
+language/statements/class/async-gen-method/yield-promise-reject-next-for-await-of-async-iterator.js strict pass
 language/statements/class/async-gen-method/yield-promise-reject-next-for-await-of-sync-iterator.js sloppy pass
 language/statements/class/async-gen-method/yield-promise-reject-next-for-await-of-sync-iterator.js strict pass
-language/statements/class/async-gen-method/yield-promise-reject-next-yield-star-async-iterator.js sloppy skip:async:reported-failure
-language/statements/class/async-gen-method/yield-promise-reject-next-yield-star-async-iterator.js strict skip:async:reported-failure
+language/statements/class/async-gen-method/yield-promise-reject-next-yield-star-async-iterator.js sloppy pass
+language/statements/class/async-gen-method/yield-promise-reject-next-yield-star-async-iterator.js strict pass
 language/statements/class/async-gen-method/yield-promise-reject-next-yield-star-sync-iterator.js sloppy pass
 language/statements/class/async-gen-method/yield-promise-reject-next-yield-star-sync-iterator.js strict pass
 language/statements/class/async-gen-method/yield-promise-reject-next.js sloppy pass
@@ -93,8 +93,8 @@ language/statements/class/async-gen-method/yield-star-getiter-async-not-callable
 language/statements/class/async-gen-method/yield-star-getiter-async-not-callable-string-throw.js strict pass
 language/statements/class/async-gen-method/yield-star-getiter-async-not-callable-symbol-throw.js sloppy pass
 language/statements/class/async-gen-method/yield-star-getiter-async-not-callable-symbol-throw.js strict pass
-language/statements/class/async-gen-method/yield-star-getiter-async-null-sync-get-abrupt.js sloppy skip:async:reported-failure
-language/statements/class/async-gen-method/yield-star-getiter-async-null-sync-get-abrupt.js strict skip:async:reported-failure
+language/statements/class/async-gen-method/yield-star-getiter-async-null-sync-get-abrupt.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
+language/statements/class/async-gen-method/yield-star-getiter-async-null-sync-get-abrupt.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
 language/statements/class/async-gen-method/yield-star-getiter-async-returns-abrupt.js sloppy pass
 language/statements/class/async-gen-method/yield-star-getiter-async-returns-abrupt.js strict pass
 language/statements/class/async-gen-method/yield-star-getiter-async-returns-boolean-throw.js sloppy pass
@@ -109,10 +109,10 @@ language/statements/class/async-gen-method/yield-star-getiter-async-returns-symb
 language/statements/class/async-gen-method/yield-star-getiter-async-returns-symbol-throw.js strict pass
 language/statements/class/async-gen-method/yield-star-getiter-async-returns-undefined-throw.js sloppy pass
 language/statements/class/async-gen-method/yield-star-getiter-async-returns-undefined-throw.js strict pass
-language/statements/class/async-gen-method/yield-star-getiter-async-undefined-sync-get-abrupt.js sloppy skip:async:reported-failure
-language/statements/class/async-gen-method/yield-star-getiter-async-undefined-sync-get-abrupt.js strict skip:async:reported-failure
-language/statements/class/async-gen-method/yield-star-getiter-sync-get-abrupt.js sloppy skip:async:reported-failure
-language/statements/class/async-gen-method/yield-star-getiter-sync-get-abrupt.js strict skip:async:reported-failure
+language/statements/class/async-gen-method/yield-star-getiter-async-undefined-sync-get-abrupt.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
+language/statements/class/async-gen-method/yield-star-getiter-async-undefined-sync-get-abrupt.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
+language/statements/class/async-gen-method/yield-star-getiter-sync-get-abrupt.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
+language/statements/class/async-gen-method/yield-star-getiter-sync-get-abrupt.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
 language/statements/class/async-gen-method/yield-star-getiter-sync-not-callable-boolean-throw.js sloppy pass
 language/statements/class/async-gen-method/yield-star-getiter-sync-not-callable-boolean-throw.js strict pass
 language/statements/class/async-gen-method/yield-star-getiter-sync-not-callable-number-throw.js sloppy pass
@@ -123,8 +123,8 @@ language/statements/class/async-gen-method/yield-star-getiter-sync-not-callable-
 language/statements/class/async-gen-method/yield-star-getiter-sync-not-callable-string-throw.js strict pass
 language/statements/class/async-gen-method/yield-star-getiter-sync-not-callable-symbol-throw.js sloppy pass
 language/statements/class/async-gen-method/yield-star-getiter-sync-not-callable-symbol-throw.js strict pass
-language/statements/class/async-gen-method/yield-star-getiter-sync-returns-abrupt.js sloppy skip:async:reported-failure
-language/statements/class/async-gen-method/yield-star-getiter-sync-returns-abrupt.js strict skip:async:reported-failure
+language/statements/class/async-gen-method/yield-star-getiter-sync-returns-abrupt.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
+language/statements/class/async-gen-method/yield-star-getiter-sync-returns-abrupt.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
 language/statements/class/async-gen-method/yield-star-getiter-sync-returns-boolean-throw.js sloppy pass
 language/statements/class/async-gen-method/yield-star-getiter-sync-returns-boolean-throw.js strict pass
 language/statements/class/async-gen-method/yield-star-getiter-sync-returns-null-throw.js sloppy pass
@@ -161,8 +161,8 @@ language/statements/class/async-gen-method/yield-star-next-not-callable-symbol-t
 language/statements/class/async-gen-method/yield-star-next-not-callable-symbol-throw.js strict pass
 language/statements/class/async-gen-method/yield-star-next-not-callable-undefined-throw.js sloppy pass
 language/statements/class/async-gen-method/yield-star-next-not-callable-undefined-throw.js strict pass
-language/statements/class/async-gen-method/yield-star-next-then-get-abrupt.js sloppy skip:async:reported-failure
-language/statements/class/async-gen-method/yield-star-next-then-get-abrupt.js strict skip:async:reported-failure
+language/statements/class/async-gen-method/yield-star-next-then-get-abrupt.js sloppy pass
+language/statements/class/async-gen-method/yield-star-next-then-get-abrupt.js strict pass
 language/statements/class/async-gen-method/yield-star-next-then-non-callable-boolean-fulfillpromise.js sloppy pass
 language/statements/class/async-gen-method/yield-star-next-then-non-callable-boolean-fulfillpromise.js strict pass
 language/statements/class/async-gen-method/yield-star-next-then-non-callable-null-fulfillpromise.js sloppy pass
@@ -177,11 +177,11 @@ language/statements/class/async-gen-method/yield-star-next-then-non-callable-sym
 language/statements/class/async-gen-method/yield-star-next-then-non-callable-symbol-fulfillpromise.js strict pass
 language/statements/class/async-gen-method/yield-star-next-then-non-callable-undefined-fulfillpromise.js sloppy pass
 language/statements/class/async-gen-method/yield-star-next-then-non-callable-undefined-fulfillpromise.js strict pass
-language/statements/class/async-gen-method/yield-star-next-then-returns-abrupt.js sloppy skip:async:reported-failure
-language/statements/class/async-gen-method/yield-star-next-then-returns-abrupt.js strict skip:async:reported-failure
-language/statements/class/async-gen-method/yield-star-sync-next.js sloppy skip:async:reported-failure
-language/statements/class/async-gen-method/yield-star-sync-next.js strict skip:async:reported-failure
-language/statements/class/async-gen-method/yield-star-sync-return.js sloppy skip:async:reported-failure
-language/statements/class/async-gen-method/yield-star-sync-return.js strict skip:async:reported-failure
-language/statements/class/async-gen-method/yield-star-sync-throw.js sloppy skip:async:reported-failure
-language/statements/class/async-gen-method/yield-star-sync-throw.js strict skip:async:reported-failure
+language/statements/class/async-gen-method/yield-star-next-then-returns-abrupt.js sloppy pass
+language/statements/class/async-gen-method/yield-star-next-then-returns-abrupt.js strict pass
+language/statements/class/async-gen-method/yield-star-sync-next.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
+language/statements/class/async-gen-method/yield-star-sync-next.js strict fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
+language/statements/class/async-gen-method/yield-star-sync-return.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
+language/statements/class/async-gen-method/yield-star-sync-return.js strict fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
+language/statements/class/async-gen-method/yield-star-sync-throw.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
+language/statements/class/async-gen-method/yield-star-sync-throw.js strict fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"

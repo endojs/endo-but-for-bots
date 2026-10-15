@@ -11,8 +11,8 @@ built-ins/TypedArrayConstructors/ctors/object-arg/custom-proto-access-throws.js 
 built-ins/TypedArrayConstructors/ctors/object-arg/custom-proto-access-throws.js strict pass
 built-ins/TypedArrayConstructors/ctors/object-arg/iterated-array-changed-by-tonumber.js sloppy pass
 built-ins/TypedArrayConstructors/ctors/object-arg/iterated-array-changed-by-tonumber.js strict pass
-built-ins/TypedArrayConstructors/ctors/object-arg/iterated-array-with-modified-array-iterator.js sloppy skip:unsupported-opcode:native-call:TypedArray:from-array-like
-built-ins/TypedArrayConstructors/ctors/object-arg/iterated-array-with-modified-array-iterator.js strict skip:unsupported-opcode:native-call:TypedArray:from-array-like
+built-ins/TypedArrayConstructors/ctors/object-arg/iterated-array-with-modified-array-iterator.js sloppy pass
+built-ins/TypedArrayConstructors/ctors/object-arg/iterated-array-with-modified-array-iterator.js strict pass
 built-ins/TypedArrayConstructors/ctors/object-arg/iterating-throws.js sloppy pass
 built-ins/TypedArrayConstructors/ctors/object-arg/iterating-throws.js strict pass
 built-ins/TypedArrayConstructors/ctors/object-arg/iterator-is-null-as-array-like.js sloppy pass

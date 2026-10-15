@@ -15,10 +15,10 @@ built-ins/Array/prototype/copyWithin/fill-holes.js sloppy pass
 built-ins/Array/prototype/copyWithin/fill-holes.js strict pass
 built-ins/Array/prototype/copyWithin/length-near-integer-limit.js sloppy pass
 built-ins/Array/prototype/copyWithin/length-near-integer-limit.js strict pass
-built-ins/Array/prototype/copyWithin/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 2; length value should be 2"
-built-ins/Array/prototype/copyWithin/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 2; length value should be 2"
-built-ins/Array/prototype/copyWithin/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be copyWithin; name value should be copyWithin"
-built-ins/Array/prototype/copyWithin/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be copyWithin; name value should be copyWithin"
+built-ins/Array/prototype/copyWithin/length.js sloppy pass
+built-ins/Array/prototype/copyWithin/length.js strict pass
+built-ins/Array/prototype/copyWithin/name.js sloppy pass
+built-ins/Array/prototype/copyWithin/name.js strict pass
 built-ins/Array/prototype/copyWithin/negative-end.js sloppy pass
 built-ins/Array/prototype/copyWithin/negative-end.js strict pass
 built-ins/Array/prototype/copyWithin/negative-out-of-bounds-end.js sloppy pass

@@ -23,10 +23,10 @@ built-ins/ArrayBuffer/isView/arg-is-typedarray.js sloppy pass
 built-ins/ArrayBuffer/isView/arg-is-typedarray.js strict pass
 built-ins/ArrayBuffer/isView/invoked-as-a-fn.js sloppy pass
 built-ins/ArrayBuffer/isView/invoked-as-a-fn.js strict pass
-built-ins/ArrayBuffer/isView/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/ArrayBuffer/isView/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/ArrayBuffer/isView/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be isView; name value should be isView"
-built-ins/ArrayBuffer/isView/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be isView; name value should be isView"
+built-ins/ArrayBuffer/isView/length.js sloppy pass
+built-ins/ArrayBuffer/isView/length.js strict pass
+built-ins/ArrayBuffer/isView/name.js sloppy pass
+built-ins/ArrayBuffer/isView/name.js strict pass
 built-ins/ArrayBuffer/isView/no-arg.js sloppy pass
 built-ins/ArrayBuffer/isView/no-arg.js strict pass
 built-ins/ArrayBuffer/isView/not-a-constructor.js sloppy pass

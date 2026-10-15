@@ -23,8 +23,8 @@ language/expressions/logical-assignment/left-hand-side-private-reference-data-pr
 language/expressions/logical-assignment/left-hand-side-private-reference-data-property-short-circuit-nullish.js strict pass
 language/expressions/logical-assignment/left-hand-side-private-reference-data-property-short-circuit-or.js sloppy pass
 language/expressions/logical-assignment/left-hand-side-private-reference-data-property-short-circuit-or.js strict pass
-language/expressions/logical-assignment/left-hand-side-private-reference-method-and.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/logical-assignment/left-hand-side-private-reference-method-and.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/logical-assignment/left-hand-side-private-reference-method-and.js sloppy pass
+language/expressions/logical-assignment/left-hand-side-private-reference-method-and.js strict pass
 language/expressions/logical-assignment/left-hand-side-private-reference-method-short-circuit-nullish.js sloppy pass
 language/expressions/logical-assignment/left-hand-side-private-reference-method-short-circuit-nullish.js strict pass
 language/expressions/logical-assignment/left-hand-side-private-reference-method-short-circuit-or.js sloppy pass

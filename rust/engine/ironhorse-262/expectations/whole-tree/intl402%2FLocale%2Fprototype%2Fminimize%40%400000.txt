@@ -3,8 +3,8 @@ intl402/Locale/prototype/minimize/branding.js sloppy skip:oracle-host-missing-in
 intl402/Locale/prototype/minimize/branding.js strict skip:oracle-host-missing-intl
 intl402/Locale/prototype/minimize/length.js sloppy skip:oracle-host-missing-intl
 intl402/Locale/prototype/minimize/length.js strict skip:oracle-host-missing-intl
-intl402/Locale/prototype/minimize/name.js sloppy skip:oracle-host-missing-global:Intl
-intl402/Locale/prototype/minimize/name.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/minimize/name.js sloppy skip:oracle-host-missing-intl
+intl402/Locale/prototype/minimize/name.js strict skip:oracle-host-missing-intl
 intl402/Locale/prototype/minimize/prop-desc.js sloppy skip:oracle-host-missing-intl
 intl402/Locale/prototype/minimize/prop-desc.js strict skip:oracle-host-missing-intl
 intl402/Locale/prototype/minimize/removing-likely-subtags-first-adds-likely-subtags.js sloppy skip:oracle-host-missing-global:Intl

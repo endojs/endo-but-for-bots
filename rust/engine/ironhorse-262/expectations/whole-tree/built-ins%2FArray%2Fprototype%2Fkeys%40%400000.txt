@@ -5,8 +5,8 @@ built-ins/Array/prototype/keys/iteration.js sloppy pass
 built-ins/Array/prototype/keys/iteration.js strict pass
 built-ins/Array/prototype/keys/length.js sloppy pass
 built-ins/Array/prototype/keys/length.js strict pass
-built-ins/Array/prototype/keys/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be keys; name value should be keys"
-built-ins/Array/prototype/keys/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be keys; name value should be keys"
+built-ins/Array/prototype/keys/name.js sloppy pass
+built-ins/Array/prototype/keys/name.js strict pass
 built-ins/Array/prototype/keys/not-a-constructor.js sloppy pass
 built-ins/Array/prototype/keys/not-a-constructor.js strict pass
 built-ins/Array/prototype/keys/prop-desc.js sloppy pass

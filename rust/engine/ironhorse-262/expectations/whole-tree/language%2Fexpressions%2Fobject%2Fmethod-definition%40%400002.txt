@@ -48,10 +48,10 @@ language/expressions/object/method-definition/name-length-dflt.js sloppy pass
 language/expressions/object/method-definition/name-length-dflt.js strict pass
 language/expressions/object/method-definition/name-length.js sloppy pass
 language/expressions/object/method-definition/name-length.js strict pass
-language/expressions/object/method-definition/name-name-prop-string.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be method; name value should be method"
-language/expressions/object/method-definition/name-name-prop-string.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be method; name value should be method"
-language/expressions/object/method-definition/name-name-prop-symbol.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be [method]; name value should be [method]"
-language/expressions/object/method-definition/name-name-prop-symbol.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be [method]; name value should be [method]"
+language/expressions/object/method-definition/name-name-prop-string.js sloppy pass
+language/expressions/object/method-definition/name-name-prop-string.js strict pass
+language/expressions/object/method-definition/name-name-prop-symbol.js sloppy pass
+language/expressions/object/method-definition/name-name-prop-symbol.js strict pass
 language/expressions/object/method-definition/name-param-id-yield.js sloppy pass
 language/expressions/object/method-definition/name-param-init-yield.js sloppy pass
 language/expressions/object/method-definition/name-param-redecl.js sloppy pass

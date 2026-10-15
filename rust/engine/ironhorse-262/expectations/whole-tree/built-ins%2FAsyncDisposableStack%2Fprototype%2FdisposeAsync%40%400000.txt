@@ -9,16 +9,16 @@ built-ins/AsyncDisposableStack/prototype/disposeAsync/does-not-reinvoke-disposer
 built-ins/AsyncDisposableStack/prototype/disposeAsync/does-not-reinvoke-disposers-if-dispose-already-started.js strict pass
 built-ins/AsyncDisposableStack/prototype/disposeAsync/does-not-reject-if-already-disposed.js sloppy pass
 built-ins/AsyncDisposableStack/prototype/disposeAsync/does-not-reject-if-already-disposed.js strict pass
-built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-null.js sloppy skip:async:reported-failure
-built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-null.js strict skip:async:reported-failure
-built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-undefined.js sloppy skip:async:reported-failure
-built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-undefined.js strict skip:async:reported-failure
+built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-null.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Actual [dispose, job 1, job 2] and expected [job 1, dispose, job 2] should have the same contents.  (the oracle completed)"
+built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-null.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Actual [dispose, job 1, job 2] and expected [job 1, dispose, job 2] should have the same contents.  (the oracle completed)"
+built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-undefined.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Actual [dispose, job 1, job 2] and expected [job 1, dispose, job 2] should have the same contents.  (the oracle completed)"
+built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-undefined.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Actual [dispose, job 1, job 2] and expected [job 1, dispose, job 2] should have the same contents.  (the oracle completed)"
 built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-skipped-when-empty.js sloppy pass
 built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-skipped-when-empty.js strict pass
 built-ins/AsyncDisposableStack/prototype/disposeAsync/length.js sloppy pass
 built-ins/AsyncDisposableStack/prototype/disposeAsync/length.js strict pass
-built-ins/AsyncDisposableStack/prototype/disposeAsync/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be disposeAsync; name value should be disposeAsync"
-built-ins/AsyncDisposableStack/prototype/disposeAsync/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be disposeAsync; name value should be disposeAsync"
+built-ins/AsyncDisposableStack/prototype/disposeAsync/name.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/name.js strict pass
 built-ins/AsyncDisposableStack/prototype/disposeAsync/not-a-constructor.js sloppy pass
 built-ins/AsyncDisposableStack/prototype/disposeAsync/not-a-constructor.js strict pass
 built-ins/AsyncDisposableStack/prototype/disposeAsync/prop-desc.js sloppy pass

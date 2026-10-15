@@ -1,10 +1,10 @@
 # engine=ironhorse features=default corpus=built-ins/Object/getOwnPropertyDescriptors tip=be13516fb6441b950ba8a3df97eb34062c186972
 built-ins/Object/getOwnPropertyDescriptors/exception-not-object-coercible.js sloppy pass
 built-ins/Object/getOwnPropertyDescriptors/exception-not-object-coercible.js strict pass
-built-ins/Object/getOwnPropertyDescriptors/function-length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/Object/getOwnPropertyDescriptors/function-length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/Object/getOwnPropertyDescriptors/function-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be getOwnPropertyDescriptors; name value should be getOwnPropertyDescriptors"
-built-ins/Object/getOwnPropertyDescriptors/function-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be getOwnPropertyDescriptors; name value should be getOwnPropertyDescriptors"
+built-ins/Object/getOwnPropertyDescriptors/function-length.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptors/function-length.js strict pass
+built-ins/Object/getOwnPropertyDescriptors/function-name.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptors/function-name.js strict pass
 built-ins/Object/getOwnPropertyDescriptors/function-property-descriptor.js sloppy pass
 built-ins/Object/getOwnPropertyDescriptors/function-property-descriptor.js strict pass
 built-ins/Object/getOwnPropertyDescriptors/inherited-properties-omitted.js sloppy pass

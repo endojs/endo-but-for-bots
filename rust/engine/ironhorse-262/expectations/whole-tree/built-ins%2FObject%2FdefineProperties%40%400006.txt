@@ -39,8 +39,8 @@ built-ins/Object/defineProperties/15.2.3.7-6-a-98.js sloppy pass
 built-ins/Object/defineProperties/15.2.3.7-6-a-98.js strict pass
 built-ins/Object/defineProperties/15.2.3.7-6-a-99.js sloppy pass
 built-ins/Object/defineProperties/15.2.3.7-6-a-99.js strict pass
-built-ins/Object/defineProperties/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be defineProperties; name value should be defineProperties"
-built-ins/Object/defineProperties/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be defineProperties; name value should be defineProperties"
+built-ins/Object/defineProperties/name.js sloppy pass
+built-ins/Object/defineProperties/name.js strict pass
 built-ins/Object/defineProperties/not-a-constructor.js sloppy pass
 built-ins/Object/defineProperties/not-a-constructor.js strict pass
 built-ins/Object/defineProperties/property-description-must-be-an-object-not-bigint.js sloppy pass

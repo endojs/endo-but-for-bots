@@ -41,12 +41,12 @@ built-ins/Temporal/Duration/from/infinity-throws-rangeerror.js sloppy fail:"over
 built-ins/Temporal/Duration/from/infinity-throws-rangeerror.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
 built-ins/Temporal/Duration/from/invalid-type.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: name = years, value = Symbol() Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: name = years, value = 0 Expected a TypeError but got a RangeError\""
 built-ins/Temporal/Duration/from/invalid-type.js strict fail:"abort-value-differs: oracle=\"Test262Error: name = years, value = Symbol() Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: name = years, value = 0 Expected a TypeError but got a RangeError\""
-built-ins/Temporal/Duration/from/length.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Duration/from/length.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/from/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/length.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/from/lower-limit.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/from/lower-limit.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/Duration/from/name.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Duration/from/name.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/from/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/name.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/from/negative-inifinity-throws-rangeerror.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
 built-ins/Temporal/Duration/from/negative-inifinity-throws-rangeerror.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
 built-ins/Temporal/Duration/from/non-integer-throws-rangeerror.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"

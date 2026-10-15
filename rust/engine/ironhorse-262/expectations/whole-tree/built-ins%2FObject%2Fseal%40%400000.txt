@@ -5,10 +5,10 @@ built-ins/Object/seal/configurable-attribute-all-own-properties-set-from-true-to
 built-ins/Object/seal/configurable-attribute-all-own-properties-set-from-true-to-false-property-are-unaltered.js strict pass
 built-ins/Object/seal/configurable-attribute-own-accessor-property-set-from-true-to-false-property-are-unaltered.js sloppy pass
 built-ins/Object/seal/configurable-attribute-own-accessor-property-set-from-true-to-false-property-are-unaltered.js strict pass
-built-ins/Object/seal/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/Object/seal/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/Object/seal/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be seal; name value should be seal"
-built-ins/Object/seal/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be seal; name value should be seal"
+built-ins/Object/seal/length.js sloppy pass
+built-ins/Object/seal/length.js strict pass
+built-ins/Object/seal/name.js sloppy pass
+built-ins/Object/seal/name.js strict pass
 built-ins/Object/seal/not-a-constructor.js sloppy pass
 built-ins/Object/seal/not-a-constructor.js strict pass
 built-ins/Object/seal/object-seal-all-own-properties-of-o-are-already-non-configurable.js sloppy pass
@@ -83,8 +83,8 @@ built-ins/Object/seal/object-seal-the-extension-of-o-is-prevented-already.js slo
 built-ins/Object/seal/object-seal-the-extension-of-o-is-prevented-already.js strict pass
 built-ins/Object/seal/proxy-no-ownkeys-returned-keys-order.js sloppy pass
 built-ins/Object/seal/proxy-no-ownkeys-returned-keys-order.js strict pass
-built-ins/Object/seal/proxy-with-defineProperty-handler.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: writable Expected SameValue(«false», «undefined») to be true"
-built-ins/Object/seal/proxy-with-defineProperty-handler.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: writable Expected SameValue(«false», «undefined») to be true"
+built-ins/Object/seal/proxy-with-defineProperty-handler.js sloppy pass
+built-ins/Object/seal/proxy-with-defineProperty-handler.js strict pass
 built-ins/Object/seal/seal-aggregateerror.js sloppy pass
 built-ins/Object/seal/seal-aggregateerror.js strict pass
 built-ins/Object/seal/seal-arraybuffer.js sloppy pass

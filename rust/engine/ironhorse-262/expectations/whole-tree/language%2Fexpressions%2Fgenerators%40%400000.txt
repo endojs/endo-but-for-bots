@@ -40,9 +40,9 @@ language/expressions/generators/length-property-descriptor.js sloppy pass
 language/expressions/generators/length-property-descriptor.js strict pass
 language/expressions/generators/name.js sloppy pass
 language/expressions/generators/name.js strict pass
-language/expressions/generators/named-no-strict-reassign-fn-name-in-body-in-arrow.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: set BindingIdentifier: const"
-language/expressions/generators/named-no-strict-reassign-fn-name-in-body-in-eval.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: set BindingIdentifier: const"
-language/expressions/generators/named-no-strict-reassign-fn-name-in-body.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: set BindingIdentifier: const"
+language/expressions/generators/named-no-strict-reassign-fn-name-in-body-in-arrow.js sloppy pass
+language/expressions/generators/named-no-strict-reassign-fn-name-in-body-in-eval.js sloppy pass
+language/expressions/generators/named-no-strict-reassign-fn-name-in-body.js sloppy pass
 language/expressions/generators/named-strict-error-reassign-fn-name-in-body-in-arrow.js strict pass
 language/expressions/generators/named-strict-error-reassign-fn-name-in-body-in-eval.js strict pass
 language/expressions/generators/named-strict-error-reassign-fn-name-in-body.js strict pass
@@ -84,8 +84,8 @@ language/expressions/generators/params-trailing-comma-multiple.js sloppy pass
 language/expressions/generators/params-trailing-comma-multiple.js strict pass
 language/expressions/generators/params-trailing-comma-single.js sloppy pass
 language/expressions/generators/params-trailing-comma-single.js strict pass
-language/expressions/generators/prototype-own-properties.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«1», «0») to be true"
-language/expressions/generators/prototype-own-properties.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«1», «0») to be true"
+language/expressions/generators/prototype-own-properties.js sloppy pass
+language/expressions/generators/prototype-own-properties.js strict pass
 language/expressions/generators/prototype-property-descriptor.js sloppy pass
 language/expressions/generators/prototype-property-descriptor.js strict pass
 language/expressions/generators/prototype-relation-to-function.js sloppy pass
@@ -105,7 +105,7 @@ language/expressions/generators/return.js strict pass
 language/expressions/generators/scope-body-lex-distinct.js sloppy pass
 language/expressions/generators/scope-name-var-close.js sloppy pass
 language/expressions/generators/scope-name-var-close.js strict pass
-language/expressions/generators/scope-name-var-open-non-strict.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: set g: const"
+language/expressions/generators/scope-name-var-open-non-strict.js sloppy pass
 language/expressions/generators/scope-name-var-open-strict.js strict pass
 language/expressions/generators/scope-param-elem-var-close.js sloppy pass
 language/expressions/generators/scope-param-elem-var-open.js sloppy pass

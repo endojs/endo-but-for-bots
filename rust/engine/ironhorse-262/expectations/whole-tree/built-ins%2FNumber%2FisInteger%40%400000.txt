@@ -5,10 +5,10 @@ built-ins/Number/isInteger/infinity.js sloppy pass
 built-ins/Number/isInteger/infinity.js strict pass
 built-ins/Number/isInteger/integers.js sloppy pass
 built-ins/Number/isInteger/integers.js strict pass
-built-ins/Number/isInteger/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/Number/isInteger/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/Number/isInteger/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be isInteger; name value should be isInteger"
-built-ins/Number/isInteger/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be isInteger; name value should be isInteger"
+built-ins/Number/isInteger/length.js sloppy pass
+built-ins/Number/isInteger/length.js strict pass
+built-ins/Number/isInteger/name.js sloppy pass
+built-ins/Number/isInteger/name.js strict pass
 built-ins/Number/isInteger/nan.js sloppy pass
 built-ins/Number/isInteger/nan.js strict pass
 built-ins/Number/isInteger/non-integers.js sloppy pass

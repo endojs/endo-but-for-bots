@@ -70,20 +70,20 @@ language/expressions/object/cpn-obj-lit-computed-property-name-from-string-liter
 language/expressions/object/cpn-obj-lit-computed-property-name-from-string-literal.js strict pass
 language/expressions/object/cpn-obj-lit-computed-property-name-from-yield-expression.js sloppy pass
 language/expressions/object/cpn-obj-lit-computed-property-name-from-yield-expression.js strict pass
-language/expressions/object/fn-name-accessor-get.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be get id; name value should be get id"
-language/expressions/object/fn-name-accessor-get.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be get id; name value should be get id"
-language/expressions/object/fn-name-accessor-set.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be set id; name value should be set id"
-language/expressions/object/fn-name-accessor-set.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be set id; name value should be set id"
-language/expressions/object/fn-name-arrow.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be id; name value should be id"
-language/expressions/object/fn-name-arrow.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be id; name value should be id"
-language/expressions/object/fn-name-class.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be id; name value should be id"
-language/expressions/object/fn-name-class.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be id; name value should be id"
-language/expressions/object/fn-name-cover.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be id; name value should be id"
-language/expressions/object/fn-name-cover.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be id; name value should be id"
-language/expressions/object/fn-name-fn.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be id; name value should be id"
-language/expressions/object/fn-name-fn.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be id; name value should be id"
-language/expressions/object/fn-name-gen.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be [test262]; name value should be [test262]"
-language/expressions/object/fn-name-gen.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be [test262]; name value should be [test262]"
+language/expressions/object/fn-name-accessor-get.js sloppy pass
+language/expressions/object/fn-name-accessor-get.js strict pass
+language/expressions/object/fn-name-accessor-set.js sloppy pass
+language/expressions/object/fn-name-accessor-set.js strict pass
+language/expressions/object/fn-name-arrow.js sloppy pass
+language/expressions/object/fn-name-arrow.js strict pass
+language/expressions/object/fn-name-class.js sloppy pass
+language/expressions/object/fn-name-class.js strict pass
+language/expressions/object/fn-name-cover.js sloppy pass
+language/expressions/object/fn-name-cover.js strict pass
+language/expressions/object/fn-name-fn.js sloppy pass
+language/expressions/object/fn-name-fn.js strict pass
+language/expressions/object/fn-name-gen.js sloppy pass
+language/expressions/object/fn-name-gen.js strict pass
 language/expressions/object/getter-body-strict-inside.js sloppy pass
 language/expressions/object/getter-body-strict-outside.js strict pass
 language/expressions/object/getter-param-dflt.js sloppy pass

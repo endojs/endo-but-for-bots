@@ -113,7 +113,7 @@ language/expressions/super/prop-dot-cls-val.js sloppy pass
 language/expressions/super/prop-dot-cls-val.js strict pass
 language/expressions/super/prop-dot-obj-null-proto.js sloppy pass
 language/expressions/super/prop-dot-obj-null-proto.js strict pass
-language/expressions/super/prop-dot-obj-ref-non-strict.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: set y: not extensible"
+language/expressions/super/prop-dot-obj-ref-non-strict.js sloppy pass
 language/expressions/super/prop-dot-obj-ref-strict.js strict pass
 language/expressions/super/prop-dot-obj-ref-this.js sloppy pass
 language/expressions/super/prop-dot-obj-ref-this.js strict pass
@@ -125,8 +125,8 @@ language/expressions/super/prop-dot-obj-val.js sloppy pass
 language/expressions/super/prop-dot-obj-val.js strict pass
 language/expressions/super/prop-expr-cls-err.js sloppy pass
 language/expressions/super/prop-expr-cls-err.js strict pass
-language/expressions/super/prop-expr-cls-key-err.js sloppy skip:unsupported-opcode:super_at:key
-language/expressions/super/prop-expr-cls-key-err.js strict skip:unsupported-opcode:super_at:key
+language/expressions/super/prop-expr-cls-key-err.js sloppy pass
+language/expressions/super/prop-expr-cls-key-err.js strict pass
 language/expressions/super/prop-expr-cls-null-proto.js sloppy pass
 language/expressions/super/prop-expr-cls-null-proto.js strict pass
 language/expressions/super/prop-expr-cls-ref-strict.js sloppy pass
@@ -143,21 +143,21 @@ language/expressions/super/prop-expr-cls-val-from-eval.js sloppy pass
 language/expressions/super/prop-expr-cls-val-from-eval.js strict pass
 language/expressions/super/prop-expr-cls-val.js sloppy pass
 language/expressions/super/prop-expr-cls-val.js strict pass
-language/expressions/super/prop-expr-getsuperbase-before-topropertykey-getvalue.js sloppy skip:unsupported-opcode:super_at:key
-language/expressions/super/prop-expr-getsuperbase-before-topropertykey-getvalue.js strict skip:unsupported-opcode:super_at:key
-language/expressions/super/prop-expr-getsuperbase-before-topropertykey-putvalue-compound-assign.js sloppy skip:unsupported-opcode:super_at:key
-language/expressions/super/prop-expr-getsuperbase-before-topropertykey-putvalue-compound-assign.js strict skip:unsupported-opcode:super_at:key
-language/expressions/super/prop-expr-getsuperbase-before-topropertykey-putvalue-increment.js sloppy skip:unsupported-opcode:super_at:key
-language/expressions/super/prop-expr-getsuperbase-before-topropertykey-putvalue-increment.js strict skip:unsupported-opcode:super_at:key
-language/expressions/super/prop-expr-getsuperbase-before-topropertykey-putvalue.js sloppy skip:unsupported-opcode:super_at:key
-language/expressions/super/prop-expr-getsuperbase-before-topropertykey-putvalue.js strict skip:unsupported-opcode:super_at:key
+language/expressions/super/prop-expr-getsuperbase-before-topropertykey-getvalue.js sloppy pass
+language/expressions/super/prop-expr-getsuperbase-before-topropertykey-getvalue.js strict pass
+language/expressions/super/prop-expr-getsuperbase-before-topropertykey-putvalue-compound-assign.js sloppy pass
+language/expressions/super/prop-expr-getsuperbase-before-topropertykey-putvalue-compound-assign.js strict pass
+language/expressions/super/prop-expr-getsuperbase-before-topropertykey-putvalue-increment.js sloppy pass
+language/expressions/super/prop-expr-getsuperbase-before-topropertykey-putvalue-increment.js strict pass
+language/expressions/super/prop-expr-getsuperbase-before-topropertykey-putvalue.js sloppy pass
+language/expressions/super/prop-expr-getsuperbase-before-topropertykey-putvalue.js strict pass
 language/expressions/super/prop-expr-obj-err.js sloppy pass
 language/expressions/super/prop-expr-obj-err.js strict pass
-language/expressions/super/prop-expr-obj-key-err.js sloppy skip:unsupported-opcode:super_at:key
-language/expressions/super/prop-expr-obj-key-err.js strict skip:unsupported-opcode:super_at:key
+language/expressions/super/prop-expr-obj-key-err.js sloppy pass
+language/expressions/super/prop-expr-obj-key-err.js strict pass
 language/expressions/super/prop-expr-obj-null-proto.js sloppy pass
 language/expressions/super/prop-expr-obj-null-proto.js strict pass
-language/expressions/super/prop-expr-obj-ref-non-strict.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: set y: not extensible"
+language/expressions/super/prop-expr-obj-ref-non-strict.js sloppy pass
 language/expressions/super/prop-expr-obj-ref-strict.js strict pass
 language/expressions/super/prop-expr-obj-ref-this.js sloppy pass
 language/expressions/super/prop-expr-obj-ref-this.js strict pass

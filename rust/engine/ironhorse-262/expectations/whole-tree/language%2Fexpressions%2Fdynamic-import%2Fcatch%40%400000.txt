@@ -6,14 +6,14 @@ language/expressions/dynamic-import/catch/nested-arrow-import-catch-eval-rqstd-a
 language/expressions/dynamic-import/catch/nested-arrow-import-catch-eval-script-code-target.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-arrow-import-catch-file-does-not-exist.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-arrow-import-catch-file-does-not-exist.js strict skip:unsupported-opcode:module:dynamic-import
-language/expressions/dynamic-import/catch/nested-arrow-import-catch-import-defer-specifier-tostring-abrupt-rejects.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
-language/expressions/dynamic-import/catch/nested-arrow-import-catch-import-defer-specifier-tostring-abrupt-rejects.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
-language/expressions/dynamic-import/catch/nested-arrow-import-catch-import-source-source-text-module.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-arrow-import-catch-import-source-source-text-module.js strict skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-arrow-import-catch-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-arrow-import-catch-import-source-specifier-tostring-abrupt-rejects.js strict skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-arrow-import-catch-import-source-specifier-tostring.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-arrow-import-catch-import-source-specifier-tostring.js strict skip:parse-or-decode
+language/expressions/dynamic-import/catch/nested-arrow-import-catch-import-defer-specifier-tostring-abrupt-rejects.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-arrow-import-catch-import-defer-specifier-tostring-abrupt-rejects.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-arrow-import-catch-import-source-source-text-module.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-arrow-import-catch-import-source-source-text-module.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-arrow-import-catch-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-arrow-import-catch-import-source-specifier-tostring-abrupt-rejects.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-arrow-import-catch-import-source-specifier-tostring.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-arrow-import-catch-import-source-specifier-tostring.js strict skip:shared-positive-test-failure
 language/expressions/dynamic-import/catch/nested-arrow-import-catch-instn-iee-err-ambiguous-import.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-arrow-import-catch-instn-iee-err-ambiguous-import.js strict skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-arrow-import-catch-instn-iee-err-circular.js sloppy skip:unsupported-opcode:module:dynamic-import
@@ -27,14 +27,14 @@ language/expressions/dynamic-import/catch/nested-async-arrow-function-await-eval
 language/expressions/dynamic-import/catch/nested-async-arrow-function-await-eval-script-code-target.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-arrow-function-await-file-does-not-exist.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-arrow-function-await-file-does-not-exist.js strict skip:unsupported-opcode:module:dynamic-import
-language/expressions/dynamic-import/catch/nested-async-arrow-function-await-import-defer-specifier-tostring-abrupt-rejects.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
-language/expressions/dynamic-import/catch/nested-async-arrow-function-await-import-defer-specifier-tostring-abrupt-rejects.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
-language/expressions/dynamic-import/catch/nested-async-arrow-function-await-import-source-source-text-module.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-arrow-function-await-import-source-source-text-module.js strict skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-arrow-function-await-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-arrow-function-await-import-source-specifier-tostring-abrupt-rejects.js strict skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-arrow-function-await-import-source-specifier-tostring.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-arrow-function-await-import-source-specifier-tostring.js strict skip:parse-or-decode
+language/expressions/dynamic-import/catch/nested-async-arrow-function-await-import-defer-specifier-tostring-abrupt-rejects.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-arrow-function-await-import-defer-specifier-tostring-abrupt-rejects.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-arrow-function-await-import-source-source-text-module.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-arrow-function-await-import-source-source-text-module.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-arrow-function-await-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-arrow-function-await-import-source-specifier-tostring-abrupt-rejects.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-arrow-function-await-import-source-specifier-tostring.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-arrow-function-await-import-source-specifier-tostring.js strict skip:shared-positive-test-failure
 language/expressions/dynamic-import/catch/nested-async-arrow-function-await-instn-iee-err-ambiguous-import.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-arrow-function-await-instn-iee-err-ambiguous-import.js strict skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-arrow-function-await-instn-iee-err-circular.js sloppy skip:unsupported-opcode:module:dynamic-import
@@ -48,14 +48,14 @@ language/expressions/dynamic-import/catch/nested-async-arrow-function-return-awa
 language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-eval-script-code-target.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-file-does-not-exist.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-file-does-not-exist.js strict skip:unsupported-opcode:module:dynamic-import
-language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-import-defer-specifier-tostring-abrupt-rejects.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
-language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-import-defer-specifier-tostring-abrupt-rejects.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
-language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-import-source-source-text-module.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-import-source-source-text-module.js strict skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-import-source-specifier-tostring-abrupt-rejects.js strict skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-import-source-specifier-tostring.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-import-source-specifier-tostring.js strict skip:parse-or-decode
+language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-import-defer-specifier-tostring-abrupt-rejects.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-import-defer-specifier-tostring-abrupt-rejects.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-import-source-source-text-module.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-import-source-source-text-module.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-import-source-specifier-tostring-abrupt-rejects.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-import-source-specifier-tostring.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-import-source-specifier-tostring.js strict skip:shared-positive-test-failure
 language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-instn-iee-err-ambiguous-import.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-instn-iee-err-ambiguous-import.js strict skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-arrow-function-return-await-instn-iee-err-circular.js sloppy skip:unsupported-opcode:module:dynamic-import
@@ -69,14 +69,14 @@ language/expressions/dynamic-import/catch/nested-async-function-await-eval-rqstd
 language/expressions/dynamic-import/catch/nested-async-function-await-eval-script-code-target.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-function-await-file-does-not-exist.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-function-await-file-does-not-exist.js strict skip:unsupported-opcode:module:dynamic-import
-language/expressions/dynamic-import/catch/nested-async-function-await-import-defer-specifier-tostring-abrupt-rejects.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
-language/expressions/dynamic-import/catch/nested-async-function-await-import-defer-specifier-tostring-abrupt-rejects.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
-language/expressions/dynamic-import/catch/nested-async-function-await-import-source-source-text-module.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-function-await-import-source-source-text-module.js strict skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-function-await-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-function-await-import-source-specifier-tostring-abrupt-rejects.js strict skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-function-await-import-source-specifier-tostring.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-function-await-import-source-specifier-tostring.js strict skip:parse-or-decode
+language/expressions/dynamic-import/catch/nested-async-function-await-import-defer-specifier-tostring-abrupt-rejects.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-function-await-import-defer-specifier-tostring-abrupt-rejects.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-function-await-import-source-source-text-module.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-function-await-import-source-source-text-module.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-function-await-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-function-await-import-source-specifier-tostring-abrupt-rejects.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-function-await-import-source-specifier-tostring.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-function-await-import-source-specifier-tostring.js strict skip:shared-positive-test-failure
 language/expressions/dynamic-import/catch/nested-async-function-await-instn-iee-err-ambiguous-import.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-function-await-instn-iee-err-ambiguous-import.js strict skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-function-await-instn-iee-err-circular.js sloppy skip:unsupported-opcode:module:dynamic-import
@@ -90,14 +90,14 @@ language/expressions/dynamic-import/catch/nested-async-function-eval-rqstd-abrup
 language/expressions/dynamic-import/catch/nested-async-function-eval-script-code-target.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-function-file-does-not-exist.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-function-file-does-not-exist.js strict skip:unsupported-opcode:module:dynamic-import
-language/expressions/dynamic-import/catch/nested-async-function-import-defer-specifier-tostring-abrupt-rejects.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
-language/expressions/dynamic-import/catch/nested-async-function-import-defer-specifier-tostring-abrupt-rejects.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
-language/expressions/dynamic-import/catch/nested-async-function-import-source-source-text-module.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-function-import-source-source-text-module.js strict skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-function-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-function-import-source-specifier-tostring-abrupt-rejects.js strict skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-function-import-source-specifier-tostring.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-function-import-source-specifier-tostring.js strict skip:parse-or-decode
+language/expressions/dynamic-import/catch/nested-async-function-import-defer-specifier-tostring-abrupt-rejects.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-function-import-defer-specifier-tostring-abrupt-rejects.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-function-import-source-source-text-module.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-function-import-source-source-text-module.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-function-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-function-import-source-specifier-tostring-abrupt-rejects.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-function-import-source-specifier-tostring.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-function-import-source-specifier-tostring.js strict skip:shared-positive-test-failure
 language/expressions/dynamic-import/catch/nested-async-function-instn-iee-err-ambiguous-import.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-function-instn-iee-err-ambiguous-import.js strict skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-function-instn-iee-err-circular.js sloppy skip:unsupported-opcode:module:dynamic-import
@@ -109,14 +109,14 @@ language/expressions/dynamic-import/catch/nested-async-function-return-await-eva
 language/expressions/dynamic-import/catch/nested-async-function-return-await-eval-script-code-target.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-function-return-await-file-does-not-exist.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-function-return-await-file-does-not-exist.js strict skip:unsupported-opcode:module:dynamic-import
-language/expressions/dynamic-import/catch/nested-async-function-return-await-import-defer-specifier-tostring-abrupt-rejects.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
-language/expressions/dynamic-import/catch/nested-async-function-return-await-import-defer-specifier-tostring-abrupt-rejects.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
-language/expressions/dynamic-import/catch/nested-async-function-return-await-import-source-source-text-module.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-function-return-await-import-source-source-text-module.js strict skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-function-return-await-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-function-return-await-import-source-specifier-tostring-abrupt-rejects.js strict skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-function-return-await-import-source-specifier-tostring.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-function-return-await-import-source-specifier-tostring.js strict skip:parse-or-decode
+language/expressions/dynamic-import/catch/nested-async-function-return-await-import-defer-specifier-tostring-abrupt-rejects.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-function-return-await-import-defer-specifier-tostring-abrupt-rejects.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-function-return-await-import-source-source-text-module.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-function-return-await-import-source-source-text-module.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-function-return-await-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-function-return-await-import-source-specifier-tostring-abrupt-rejects.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-function-return-await-import-source-specifier-tostring.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-function-return-await-import-source-specifier-tostring.js strict skip:shared-positive-test-failure
 language/expressions/dynamic-import/catch/nested-async-function-return-await-instn-iee-err-ambiguous-import.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-function-return-await-instn-iee-err-ambiguous-import.js strict skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-function-return-await-instn-iee-err-circular.js sloppy skip:unsupported-opcode:module:dynamic-import
@@ -132,14 +132,14 @@ language/expressions/dynamic-import/catch/nested-async-gen-await-eval-rqstd-abru
 language/expressions/dynamic-import/catch/nested-async-gen-await-eval-script-code-target.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-gen-await-file-does-not-exist.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-gen-await-file-does-not-exist.js strict skip:unsupported-opcode:module:dynamic-import
-language/expressions/dynamic-import/catch/nested-async-gen-await-import-defer-specifier-tostring-abrupt-rejects.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
-language/expressions/dynamic-import/catch/nested-async-gen-await-import-defer-specifier-tostring-abrupt-rejects.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
-language/expressions/dynamic-import/catch/nested-async-gen-await-import-source-source-text-module.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-gen-await-import-source-source-text-module.js strict skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-gen-await-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-gen-await-import-source-specifier-tostring-abrupt-rejects.js strict skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-gen-await-import-source-specifier-tostring.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-gen-await-import-source-specifier-tostring.js strict skip:parse-or-decode
+language/expressions/dynamic-import/catch/nested-async-gen-await-import-defer-specifier-tostring-abrupt-rejects.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-gen-await-import-defer-specifier-tostring-abrupt-rejects.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-gen-await-import-source-source-text-module.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-gen-await-import-source-source-text-module.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-gen-await-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-gen-await-import-source-specifier-tostring-abrupt-rejects.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-gen-await-import-source-specifier-tostring.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-gen-await-import-source-specifier-tostring.js strict skip:shared-positive-test-failure
 language/expressions/dynamic-import/catch/nested-async-gen-await-instn-iee-err-ambiguous-import.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-gen-await-instn-iee-err-ambiguous-import.js strict skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-gen-await-instn-iee-err-circular.js sloppy skip:unsupported-opcode:module:dynamic-import
@@ -153,14 +153,14 @@ language/expressions/dynamic-import/catch/nested-async-gen-return-await-eval-rqs
 language/expressions/dynamic-import/catch/nested-async-gen-return-await-eval-script-code-target.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-gen-return-await-file-does-not-exist.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-gen-return-await-file-does-not-exist.js strict skip:unsupported-opcode:module:dynamic-import
-language/expressions/dynamic-import/catch/nested-async-gen-return-await-import-defer-specifier-tostring-abrupt-rejects.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
-language/expressions/dynamic-import/catch/nested-async-gen-return-await-import-defer-specifier-tostring-abrupt-rejects.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
-language/expressions/dynamic-import/catch/nested-async-gen-return-await-import-source-source-text-module.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-gen-return-await-import-source-source-text-module.js strict skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-gen-return-await-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-gen-return-await-import-source-specifier-tostring-abrupt-rejects.js strict skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-gen-return-await-import-source-specifier-tostring.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-async-gen-return-await-import-source-specifier-tostring.js strict skip:parse-or-decode
+language/expressions/dynamic-import/catch/nested-async-gen-return-await-import-defer-specifier-tostring-abrupt-rejects.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-gen-return-await-import-defer-specifier-tostring-abrupt-rejects.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-gen-return-await-import-source-source-text-module.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-gen-return-await-import-source-source-text-module.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-gen-return-await-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-gen-return-await-import-source-specifier-tostring-abrupt-rejects.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-gen-return-await-import-source-specifier-tostring.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-async-gen-return-await-import-source-specifier-tostring.js strict skip:shared-positive-test-failure
 language/expressions/dynamic-import/catch/nested-async-gen-return-await-instn-iee-err-ambiguous-import.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-gen-return-await-instn-iee-err-ambiguous-import.js strict skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-async-gen-return-await-instn-iee-err-circular.js sloppy skip:unsupported-opcode:module:dynamic-import
@@ -174,14 +174,14 @@ language/expressions/dynamic-import/catch/nested-block-import-catch-eval-rqstd-a
 language/expressions/dynamic-import/catch/nested-block-import-catch-eval-script-code-target.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-block-import-catch-file-does-not-exist.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-block-import-catch-file-does-not-exist.js strict skip:unsupported-opcode:module:dynamic-import
-language/expressions/dynamic-import/catch/nested-block-import-catch-import-defer-specifier-tostring-abrupt-rejects.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
-language/expressions/dynamic-import/catch/nested-block-import-catch-import-defer-specifier-tostring-abrupt-rejects.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
-language/expressions/dynamic-import/catch/nested-block-import-catch-import-source-source-text-module.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-block-import-catch-import-source-source-text-module.js strict skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-block-import-catch-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-block-import-catch-import-source-specifier-tostring-abrupt-rejects.js strict skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-block-import-catch-import-source-specifier-tostring.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-block-import-catch-import-source-specifier-tostring.js strict skip:parse-or-decode
+language/expressions/dynamic-import/catch/nested-block-import-catch-import-defer-specifier-tostring-abrupt-rejects.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-block-import-catch-import-defer-specifier-tostring-abrupt-rejects.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-block-import-catch-import-source-source-text-module.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-block-import-catch-import-source-source-text-module.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-block-import-catch-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-block-import-catch-import-source-specifier-tostring-abrupt-rejects.js strict skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-block-import-catch-import-source-specifier-tostring.js sloppy skip:shared-positive-test-failure
+language/expressions/dynamic-import/catch/nested-block-import-catch-import-source-specifier-tostring.js strict skip:shared-positive-test-failure
 language/expressions/dynamic-import/catch/nested-block-import-catch-instn-iee-err-ambiguous-import.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-block-import-catch-instn-iee-err-ambiguous-import.js strict skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-block-import-catch-instn-iee-err-circular.js sloppy skip:unsupported-opcode:module:dynamic-import

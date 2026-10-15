@@ -1,6 +1,6 @@
 # engine=ironhorse features=default corpus=language/statements/for-await-of tip=be13516fb6441b950ba8a3df97eb34062c186972
-language/statements/for-await-of/async-from-sync-iterator-continuation-abrupt-completion-get-constructor.js sloppy skip:async:reported-failure
-language/statements/for-await-of/async-from-sync-iterator-continuation-abrupt-completion-get-constructor.js strict skip:async:reported-failure
+language/statements/for-await-of/async-from-sync-iterator-continuation-abrupt-completion-get-constructor.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Actual [start, tick 1, tick 2, never reached] and expected [start, tick 1, tick 2, catch] should have the same contents.  (the oracle completed)"
+language/statements/for-await-of/async-from-sync-iterator-continuation-abrupt-completion-get-constructor.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Actual [start, tick 1, tick 2, never reached] and expected [start, tick 1, tick 2, catch] should have the same contents.  (the oracle completed)"
 language/statements/for-await-of/async-func-decl-dstr-array-elem-init-assignment.js sloppy pass
 language/statements/for-await-of/async-func-decl-dstr-array-elem-init-assignment.js strict pass
 language/statements/for-await-of/async-func-decl-dstr-array-elem-init-evaluation.js sloppy pass

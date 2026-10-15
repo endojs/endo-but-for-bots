@@ -54,8 +54,8 @@ language/statements/generators/params-trailing-comma-multiple.js sloppy pass
 language/statements/generators/params-trailing-comma-multiple.js strict pass
 language/statements/generators/params-trailing-comma-single.js sloppy pass
 language/statements/generators/params-trailing-comma-single.js strict pass
-language/statements/generators/prototype-own-properties.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«1», «0») to be true"
-language/statements/generators/prototype-own-properties.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«1», «0») to be true"
+language/statements/generators/prototype-own-properties.js sloppy pass
+language/statements/generators/prototype-own-properties.js strict pass
 language/statements/generators/prototype-property-descriptor.js sloppy pass
 language/statements/generators/prototype-property-descriptor.js strict pass
 language/statements/generators/prototype-relation-to-function.js sloppy pass

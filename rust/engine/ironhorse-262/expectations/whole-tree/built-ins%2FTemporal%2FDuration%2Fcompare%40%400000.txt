@@ -31,10 +31,10 @@ built-ins/Temporal/Duration/compare/exhaustive.js sloppy skip:oracle-host-missin
 built-ins/Temporal/Duration/compare/exhaustive.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/compare/instances-identical.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/compare/instances-identical.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/Duration/compare/length.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Duration/compare/length.js strict skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Duration/compare/name.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Duration/compare/name.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/length.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/name.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/compare/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
 built-ins/Temporal/Duration/compare/not-a-constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
 built-ins/Temporal/Duration/compare/options-object.js sloppy skip:oracle-host-missing-temporal

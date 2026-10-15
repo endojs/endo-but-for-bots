@@ -67,8 +67,8 @@ language/statements/for-of/dstr/obj-prop-nested-obj.js sloppy pass
 language/statements/for-of/dstr/obj-prop-nested-obj.js strict pass
 language/statements/for-of/dstr/obj-prop-put-const.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
 language/statements/for-of/dstr/obj-prop-put-const.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/statements/for-of/dstr/obj-prop-put-let.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
-language/statements/for-of/dstr/obj-prop-put-let.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/statements/for-of/dstr/obj-prop-put-let.js sloppy pass
+language/statements/for-of/dstr/obj-prop-put-let.js strict pass
 language/statements/for-of/dstr/obj-prop-put-order.js sloppy pass
 language/statements/for-of/dstr/obj-prop-put-order.js strict pass
 language/statements/for-of/dstr/obj-prop-put-prop-ref-no-get.js sloppy pass
@@ -134,8 +134,8 @@ language/statements/for-of/dstr/obj-rest-valid-object.js sloppy pass
 language/statements/for-of/dstr/obj-rest-valid-object.js strict pass
 language/statements/for-of/dstr/var-ary-init-iter-close.js sloppy pass
 language/statements/for-of/dstr/var-ary-init-iter-close.js strict pass
-language/statements/for-of/dstr/var-ary-init-iter-get-err-array-prototype.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/statements/for-of/dstr/var-ary-init-iter-get-err-array-prototype.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/for-of/dstr/var-ary-init-iter-get-err-array-prototype.js sloppy pass
+language/statements/for-of/dstr/var-ary-init-iter-get-err-array-prototype.js strict pass
 language/statements/for-of/dstr/var-ary-init-iter-get-err.js sloppy pass
 language/statements/for-of/dstr/var-ary-init-iter-get-err.js strict pass
 language/statements/for-of/dstr/var-ary-init-iter-no-close.js sloppy pass

@@ -27,8 +27,8 @@ built-ins/Array/prototype/reverse/length-exceeding-integer-limit-with-proxy.js s
 built-ins/Array/prototype/reverse/length-exceeding-integer-limit-with-proxy.js strict pass
 built-ins/Array/prototype/reverse/length.js sloppy pass
 built-ins/Array/prototype/reverse/length.js strict pass
-built-ins/Array/prototype/reverse/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be reverse; name value should be reverse"
-built-ins/Array/prototype/reverse/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be reverse; name value should be reverse"
+built-ins/Array/prototype/reverse/name.js sloppy pass
+built-ins/Array/prototype/reverse/name.js strict pass
 built-ins/Array/prototype/reverse/not-a-constructor.js sloppy pass
 built-ins/Array/prototype/reverse/not-a-constructor.js strict pass
 built-ins/Array/prototype/reverse/prop-desc.js sloppy pass

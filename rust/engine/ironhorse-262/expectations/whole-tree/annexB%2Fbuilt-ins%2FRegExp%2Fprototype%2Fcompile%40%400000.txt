@@ -11,10 +11,10 @@ annexB/built-ins/RegExp/prototype/compile/flags-to-string.js sloppy skip:shared-
 annexB/built-ins/RegExp/prototype/compile/flags-to-string.js strict skip:shared-test262-failure
 annexB/built-ins/RegExp/prototype/compile/flags-undefined.js sloppy skip:shared-test262-failure
 annexB/built-ins/RegExp/prototype/compile/flags-undefined.js strict skip:shared-test262-failure
-annexB/built-ins/RegExp/prototype/compile/length.js sloppy skip:shared-test262-failure
-annexB/built-ins/RegExp/prototype/compile/length.js strict skip:shared-test262-failure
-annexB/built-ins/RegExp/prototype/compile/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be compile; name value should be compile"
-annexB/built-ins/RegExp/prototype/compile/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be compile; name value should be compile"
+annexB/built-ins/RegExp/prototype/compile/length.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: length descriptor value should be 2; length value should be 2"
+annexB/built-ins/RegExp/prototype/compile/length.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: length descriptor value should be 2; length value should be 2"
+annexB/built-ins/RegExp/prototype/compile/name.js sloppy pass
+annexB/built-ins/RegExp/prototype/compile/name.js strict pass
 annexB/built-ins/RegExp/prototype/compile/pattern-regexp-distinct.js sloppy skip:shared-test262-failure
 annexB/built-ins/RegExp/prototype/compile/pattern-regexp-distinct.js strict skip:shared-test262-failure
 annexB/built-ins/RegExp/prototype/compile/pattern-regexp-flags-defined.js sloppy skip:shared-test262-failure

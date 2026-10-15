@@ -35,10 +35,10 @@ built-ins/Array/prototype/join/coerced-separator-grow.js sloppy skip:shared-posi
 built-ins/Array/prototype/join/coerced-separator-grow.js strict skip:shared-positive-test-failure
 built-ins/Array/prototype/join/coerced-separator-shrink.js sloppy skip:shared-positive-test-failure
 built-ins/Array/prototype/join/coerced-separator-shrink.js strict skip:shared-positive-test-failure
-built-ins/Array/prototype/join/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/Array/prototype/join/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/Array/prototype/join/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be join; name value should be join"
-built-ins/Array/prototype/join/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be join; name value should be join"
+built-ins/Array/prototype/join/length.js sloppy pass
+built-ins/Array/prototype/join/length.js strict pass
+built-ins/Array/prototype/join/name.js sloppy pass
+built-ins/Array/prototype/join/name.js strict pass
 built-ins/Array/prototype/join/not-a-constructor.js sloppy pass
 built-ins/Array/prototype/join/not-a-constructor.js strict pass
 built-ins/Array/prototype/join/prop-desc.js sloppy pass

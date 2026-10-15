@@ -1,12 +1,12 @@
 # engine=ironhorse features=default corpus=language/expressions/object/method-definition tip=be13516fb6441b950ba8a3df97eb34062c186972
-language/expressions/object/method-definition/async-gen-yield-star-next-then-returns-abrupt.js sloppy skip:async:reported-failure
-language/expressions/object/method-definition/async-gen-yield-star-next-then-returns-abrupt.js strict skip:async:reported-failure
-language/expressions/object/method-definition/async-gen-yield-star-sync-next.js sloppy skip:async:reported-failure
-language/expressions/object/method-definition/async-gen-yield-star-sync-next.js strict skip:async:reported-failure
-language/expressions/object/method-definition/async-gen-yield-star-sync-return.js sloppy skip:async:reported-failure
-language/expressions/object/method-definition/async-gen-yield-star-sync-return.js strict skip:async:reported-failure
-language/expressions/object/method-definition/async-gen-yield-star-sync-throw.js sloppy skip:async:reported-failure
-language/expressions/object/method-definition/async-gen-yield-star-sync-throw.js strict skip:async:reported-failure
+language/expressions/object/method-definition/async-gen-yield-star-next-then-returns-abrupt.js sloppy pass
+language/expressions/object/method-definition/async-gen-yield-star-next-then-returns-abrupt.js strict pass
+language/expressions/object/method-definition/async-gen-yield-star-sync-next.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
+language/expressions/object/method-definition/async-gen-yield-star-sync-next.js strict fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
+language/expressions/object/method-definition/async-gen-yield-star-sync-return.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
+language/expressions/object/method-definition/async-gen-yield-star-sync-return.js strict fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
+language/expressions/object/method-definition/async-gen-yield-star-sync-throw.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
+language/expressions/object/method-definition/async-gen-yield-star-sync-throw.js strict fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
 language/expressions/object/method-definition/async-meth-array-destructuring-param-strict-body.js sloppy pass
 language/expressions/object/method-definition/async-meth-array-destructuring-param-strict-body.js strict pass
 language/expressions/object/method-definition/async-meth-dflt-params-abrupt.js sloppy pass
@@ -93,10 +93,10 @@ language/expressions/object/method-definition/escaped-set-t.js sloppy pass
 language/expressions/object/method-definition/escaped-set-t.js strict pass
 language/expressions/object/method-definition/escaped-set.js sloppy pass
 language/expressions/object/method-definition/escaped-set.js strict pass
-language/expressions/object/method-definition/fn-name-fn.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be id; name value should be id"
-language/expressions/object/method-definition/fn-name-fn.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be id; name value should be id"
-language/expressions/object/method-definition/fn-name-gen.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be [test262]; name value should be [test262]"
-language/expressions/object/method-definition/fn-name-gen.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be [test262]; name value should be [test262]"
+language/expressions/object/method-definition/fn-name-fn.js sloppy pass
+language/expressions/object/method-definition/fn-name-fn.js strict pass
+language/expressions/object/method-definition/fn-name-gen.js sloppy pass
+language/expressions/object/method-definition/fn-name-gen.js strict pass
 language/expressions/object/method-definition/gen-meth-array-destructuring-param-strict-body.js sloppy pass
 language/expressions/object/method-definition/gen-meth-array-destructuring-param-strict-body.js strict pass
 language/expressions/object/method-definition/gen-meth-dflt-params-abrupt.js sloppy pass
@@ -160,8 +160,8 @@ language/expressions/object/method-definition/generator-length.js sloppy pass
 language/expressions/object/method-definition/generator-length.js strict pass
 language/expressions/object/method-definition/generator-name-prop-string.js sloppy pass
 language/expressions/object/method-definition/generator-name-prop-string.js strict pass
-language/expressions/object/method-definition/generator-name-prop-symbol.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be [method]; name value should be [method]"
-language/expressions/object/method-definition/generator-name-prop-symbol.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be [method]; name value should be [method]"
+language/expressions/object/method-definition/generator-name-prop-symbol.js sloppy pass
+language/expressions/object/method-definition/generator-name-prop-symbol.js strict pass
 language/expressions/object/method-definition/generator-no-yield.js sloppy pass
 language/expressions/object/method-definition/generator-no-yield.js strict pass
 language/expressions/object/method-definition/generator-param-id-yield.js sloppy pass

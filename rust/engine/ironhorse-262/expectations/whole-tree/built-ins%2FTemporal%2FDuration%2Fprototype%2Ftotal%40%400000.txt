@@ -19,10 +19,10 @@ built-ins/Temporal/Duration/prototype/total/does-not-accept-non-string-primitive
 built-ins/Temporal/Duration/prototype/total/does-not-accept-non-string-primitives-for-relativeTo.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Duration/prototype/total/incorrect-properties-ignored.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/total/incorrect-properties-ignored.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/Duration/prototype/total/length.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Duration/prototype/total/length.js strict skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Duration/prototype/total/name.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Duration/prototype/total/name.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/prototype/total/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/total/length.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/total/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/total/name.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/total/no-dst-day-length.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/total/no-dst-day-length.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/total/no-precision-loss-for-small-units.js sloppy skip:oracle-host-missing-temporal

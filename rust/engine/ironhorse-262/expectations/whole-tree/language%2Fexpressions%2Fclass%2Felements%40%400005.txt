@@ -159,10 +159,10 @@ language/expressions/class/elements/private-arrow-fnc-init-err-contains-argument
 language/expressions/class/elements/private-arrow-fnc-init-err-contains-arguments.js strict pass
 language/expressions/class/elements/private-arrow-fnc-init-err-contains-super.js sloppy pass
 language/expressions/class/elements/private-arrow-fnc-init-err-contains-super.js strict pass
-language/expressions/class/elements/private-async-generator-method-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"\"», «\"#method\"») to be true"
-language/expressions/class/elements/private-async-generator-method-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"\"», «\"#method\"») to be true"
-language/expressions/class/elements/private-async-method-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"\"», «\"#method\"») to be true"
-language/expressions/class/elements/private-async-method-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"\"», «\"#method\"») to be true"
+language/expressions/class/elements/private-async-generator-method-name.js sloppy pass
+language/expressions/class/elements/private-async-generator-method-name.js strict pass
+language/expressions/class/elements/private-async-method-name.js sloppy pass
+language/expressions/class/elements/private-async-method-name.js strict pass
 language/expressions/class/elements/private-derived-cls-direct-eval-contains-superproperty-1.js sloppy pass
 language/expressions/class/elements/private-derived-cls-direct-eval-contains-superproperty-1.js strict pass
 language/expressions/class/elements/private-derived-cls-direct-eval-contains-superproperty-2.js sloppy pass

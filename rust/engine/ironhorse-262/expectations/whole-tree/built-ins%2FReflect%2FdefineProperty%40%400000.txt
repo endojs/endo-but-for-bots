@@ -5,10 +5,10 @@ built-ins/Reflect/defineProperty/define-symbol-properties.js sloppy pass
 built-ins/Reflect/defineProperty/define-symbol-properties.js strict pass
 built-ins/Reflect/defineProperty/defineProperty.js sloppy pass
 built-ins/Reflect/defineProperty/defineProperty.js strict pass
-built-ins/Reflect/defineProperty/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 3; length value should be 3"
-built-ins/Reflect/defineProperty/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 3; length value should be 3"
-built-ins/Reflect/defineProperty/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be defineProperty; name value should be defineProperty"
-built-ins/Reflect/defineProperty/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be defineProperty; name value should be defineProperty"
+built-ins/Reflect/defineProperty/length.js sloppy pass
+built-ins/Reflect/defineProperty/length.js strict pass
+built-ins/Reflect/defineProperty/name.js sloppy pass
+built-ins/Reflect/defineProperty/name.js strict pass
 built-ins/Reflect/defineProperty/not-a-constructor.js sloppy pass
 built-ins/Reflect/defineProperty/not-a-constructor.js strict pass
 built-ins/Reflect/defineProperty/return-abrupt-from-attributes.js sloppy pass

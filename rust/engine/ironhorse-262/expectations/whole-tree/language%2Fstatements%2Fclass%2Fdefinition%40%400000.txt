@@ -37,20 +37,20 @@ language/statements/class/definition/fn-length-static-precedence-order.js sloppy
 language/statements/class/definition/fn-length-static-precedence-order.js strict pass
 language/statements/class/definition/fn-length-static-precedence.js sloppy pass
 language/statements/class/definition/fn-length-static-precedence.js strict pass
-language/statements/class/definition/fn-name-accessor-get.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be get id; name value should be get id"
-language/statements/class/definition/fn-name-accessor-get.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be get id; name value should be get id"
-language/statements/class/definition/fn-name-accessor-set.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be set id; name value should be set id"
-language/statements/class/definition/fn-name-accessor-set.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be set id; name value should be set id"
-language/statements/class/definition/fn-name-gen-method.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be [test262]; name value should be [test262]"
-language/statements/class/definition/fn-name-gen-method.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be [test262]; name value should be [test262]"
-language/statements/class/definition/fn-name-method.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be id; name value should be id"
-language/statements/class/definition/fn-name-method.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be id; name value should be id"
+language/statements/class/definition/fn-name-accessor-get.js sloppy pass
+language/statements/class/definition/fn-name-accessor-get.js strict pass
+language/statements/class/definition/fn-name-accessor-set.js sloppy pass
+language/statements/class/definition/fn-name-accessor-set.js strict pass
+language/statements/class/definition/fn-name-gen-method.js sloppy pass
+language/statements/class/definition/fn-name-gen-method.js strict pass
+language/statements/class/definition/fn-name-method.js sloppy pass
+language/statements/class/definition/fn-name-method.js strict pass
 language/statements/class/definition/fn-name-static-precedence-order.js sloppy pass
 language/statements/class/definition/fn-name-static-precedence-order.js strict pass
 language/statements/class/definition/fn-name-static-precedence.js sloppy pass
 language/statements/class/definition/fn-name-static-precedence.js strict pass
-language/statements/class/definition/getters-non-configurable-err.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/statements/class/definition/getters-non-configurable-err.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/definition/getters-non-configurable-err.js sloppy pass
+language/statements/class/definition/getters-non-configurable-err.js strict pass
 language/statements/class/definition/getters-prop-desc.js sloppy pass
 language/statements/class/definition/getters-prop-desc.js strict pass
 language/statements/class/definition/getters-restricted-ids.js sloppy pass
@@ -113,8 +113,8 @@ language/statements/class/definition/prototype-setter.js sloppy pass
 language/statements/class/definition/prototype-setter.js strict pass
 language/statements/class/definition/prototype-wiring.js sloppy pass
 language/statements/class/definition/prototype-wiring.js strict pass
-language/statements/class/definition/setters-non-configurable-err.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/statements/class/definition/setters-non-configurable-err.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/definition/setters-non-configurable-err.js sloppy pass
+language/statements/class/definition/setters-non-configurable-err.js strict pass
 language/statements/class/definition/setters-prop-desc.js sloppy pass
 language/statements/class/definition/setters-prop-desc.js strict pass
 language/statements/class/definition/setters-restricted-ids.js sloppy pass

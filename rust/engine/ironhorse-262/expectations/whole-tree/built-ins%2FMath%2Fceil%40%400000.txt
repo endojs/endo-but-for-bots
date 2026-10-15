@@ -13,10 +13,10 @@ built-ins/Math/ceil/S15.8.2.6_A6.js sloppy pass
 built-ins/Math/ceil/S15.8.2.6_A6.js strict pass
 built-ins/Math/ceil/S15.8.2.6_A7.js sloppy pass
 built-ins/Math/ceil/S15.8.2.6_A7.js strict pass
-built-ins/Math/ceil/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/Math/ceil/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/Math/ceil/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be ceil; name value should be ceil"
-built-ins/Math/ceil/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be ceil; name value should be ceil"
+built-ins/Math/ceil/length.js sloppy pass
+built-ins/Math/ceil/length.js strict pass
+built-ins/Math/ceil/name.js sloppy pass
+built-ins/Math/ceil/name.js strict pass
 built-ins/Math/ceil/not-a-constructor.js sloppy pass
 built-ins/Math/ceil/not-a-constructor.js strict pass
 built-ins/Math/ceil/prop-desc.js sloppy pass

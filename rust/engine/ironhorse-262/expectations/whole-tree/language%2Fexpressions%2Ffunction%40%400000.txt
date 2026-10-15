@@ -43,9 +43,9 @@ language/expressions/function/name-eval-strict.js strict pass
 language/expressions/function/name-eval-stricteval.js sloppy pass
 language/expressions/function/name.js sloppy pass
 language/expressions/function/name.js strict pass
-language/expressions/function/named-no-strict-reassign-fn-name-in-body-in-arrow.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: set BindingIdentifier: const"
-language/expressions/function/named-no-strict-reassign-fn-name-in-body-in-eval.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: set BindingIdentifier: const"
-language/expressions/function/named-no-strict-reassign-fn-name-in-body.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: set BindingIdentifier: const"
+language/expressions/function/named-no-strict-reassign-fn-name-in-body-in-arrow.js sloppy pass
+language/expressions/function/named-no-strict-reassign-fn-name-in-body-in-eval.js sloppy pass
+language/expressions/function/named-no-strict-reassign-fn-name-in-body.js sloppy pass
 language/expressions/function/named-strict-error-reassign-fn-name-in-body-in-arrow.js strict pass
 language/expressions/function/named-strict-error-reassign-fn-name-in-body-in-eval.js strict pass
 language/expressions/function/named-strict-error-reassign-fn-name-in-body.js strict pass
@@ -80,7 +80,7 @@ language/expressions/function/rest-params-trailing-comma-early-error.js strict p
 language/expressions/function/scope-body-lex-distinct.js sloppy pass
 language/expressions/function/scope-name-var-close.js sloppy pass
 language/expressions/function/scope-name-var-close.js strict pass
-language/expressions/function/scope-name-var-open-non-strict.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: set f: const"
+language/expressions/function/scope-name-var-open-non-strict.js sloppy pass
 language/expressions/function/scope-name-var-open-strict.js strict pass
 language/expressions/function/scope-param-elem-var-close.js sloppy pass
 language/expressions/function/scope-param-elem-var-open.js sloppy pass

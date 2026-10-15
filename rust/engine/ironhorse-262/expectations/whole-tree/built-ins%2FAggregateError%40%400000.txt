@@ -35,5 +35,5 @@ built-ins/AggregateError/prop-desc.js sloppy pass
 built-ins/AggregateError/prop-desc.js strict pass
 built-ins/AggregateError/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
 built-ins/AggregateError/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
-built-ins/AggregateError/proto.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"
-built-ins/AggregateError/proto.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"
+built-ins/AggregateError/proto.js sloppy pass
+built-ins/AggregateError/proto.js strict pass

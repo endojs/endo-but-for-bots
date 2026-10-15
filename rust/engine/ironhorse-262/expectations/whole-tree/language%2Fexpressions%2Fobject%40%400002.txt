@@ -97,8 +97,8 @@ language/expressions/object/identifier-shorthand-static-invalid-strict-mode.js s
 language/expressions/object/identifier-shorthand-yield-invalid-strict-mode.js sloppy pass
 language/expressions/object/let-non-strict-access.js sloppy pass
 language/expressions/object/let-non-strict-syntax.js sloppy pass
-language/expressions/object/literal-property-name-bigint.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: missing identifier\" ironhorse=\"SyntaxError\""
-language/expressions/object/literal-property-name-bigint.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: missing identifier\" ironhorse=\"SyntaxError\""
+language/expressions/object/literal-property-name-bigint.js sloppy skip:shared-positive-test-failure
+language/expressions/object/literal-property-name-bigint.js strict skip:shared-positive-test-failure
 language/expressions/object/method.js sloppy pass
 language/expressions/object/method.js strict pass
 language/expressions/object/not-defined.js sloppy pass

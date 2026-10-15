@@ -46,5 +46,5 @@ language/types/reference/get-value-prop-base-primitive.js sloppy pass
 language/types/reference/get-value-prop-base-primitive.js strict pass
 language/types/reference/put-value-prop-base-primitive-realm.js sloppy skip:shared-positive-test-failure
 language/types/reference/put-value-prop-base-primitive-realm.js strict skip:shared-positive-test-failure
-language/types/reference/put-value-prop-base-primitive.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number Expected SameValue(«0», «1») to be true"
-language/types/reference/put-value-prop-base-primitive.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number Expected SameValue(«0», «1») to be true"
+language/types/reference/put-value-prop-base-primitive.js sloppy pass
+language/types/reference/put-value-prop-base-primitive.js strict pass

@@ -29,5 +29,5 @@ built-ins/SuppressedError/prop-desc.js sloppy pass
 built-ins/SuppressedError/prop-desc.js strict pass
 built-ins/SuppressedError/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
 built-ins/SuppressedError/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
-built-ins/SuppressedError/proto.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"
-built-ins/SuppressedError/proto.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"
+built-ins/SuppressedError/proto.js sloppy pass
+built-ins/SuppressedError/proto.js strict pass

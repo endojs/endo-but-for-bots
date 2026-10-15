@@ -1,23 +1,23 @@
 # engine=ironhorse features=default corpus=annexB/language/function-code tip=be13516fb6441b950ba8a3df97eb34062c186972
-annexB/language/function-code/if-stmt-else-decl-func-block-scoping.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
-annexB/language/function-code/if-stmt-else-decl-func-existing-block-fn-no-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
-annexB/language/function-code/if-stmt-else-decl-func-existing-block-fn-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
-annexB/language/function-code/if-stmt-else-decl-func-existing-fn-no-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
-annexB/language/function-code/if-stmt-else-decl-func-existing-fn-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
-annexB/language/function-code/if-stmt-else-decl-func-existing-var-no-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
-annexB/language/function-code/if-stmt-else-decl-func-existing-var-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
-annexB/language/function-code/if-stmt-else-decl-func-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
-annexB/language/function-code/if-stmt-else-decl-func-no-skip-try.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
-annexB/language/function-code/if-stmt-else-decl-func-skip-dft-param.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
-annexB/language/function-code/if-stmt-else-decl-func-skip-early-err-block.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
-annexB/language/function-code/if-stmt-else-decl-func-skip-early-err-for-in.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
-annexB/language/function-code/if-stmt-else-decl-func-skip-early-err-for-of.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
-annexB/language/function-code/if-stmt-else-decl-func-skip-early-err-for.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
-annexB/language/function-code/if-stmt-else-decl-func-skip-early-err-switch.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
-annexB/language/function-code/if-stmt-else-decl-func-skip-early-err-try.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
-annexB/language/function-code/if-stmt-else-decl-func-skip-early-err.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
-annexB/language/function-code/if-stmt-else-decl-func-skip-param.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
-annexB/language/function-code/if-stmt-else-decl-func-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-stmt-else-decl-func-block-scoping.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/if-stmt-else-decl-func-existing-block-fn-no-init.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/if-stmt-else-decl-func-existing-block-fn-update.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/if-stmt-else-decl-func-existing-fn-no-init.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/if-stmt-else-decl-func-existing-fn-update.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/if-stmt-else-decl-func-existing-var-no-init.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/if-stmt-else-decl-func-existing-var-update.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/if-stmt-else-decl-func-init.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/if-stmt-else-decl-func-no-skip-try.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/if-stmt-else-decl-func-skip-dft-param.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/if-stmt-else-decl-func-skip-early-err-block.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/if-stmt-else-decl-func-skip-early-err-for-in.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/if-stmt-else-decl-func-skip-early-err-for-of.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/if-stmt-else-decl-func-skip-early-err-for.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/if-stmt-else-decl-func-skip-early-err-switch.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/if-stmt-else-decl-func-skip-early-err-try.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/if-stmt-else-decl-func-skip-early-err.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/if-stmt-else-decl-func-skip-param.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/if-stmt-else-decl-func-update.js sloppy skip:shared-positive-test-failure
 annexB/language/function-code/switch-case-decl-nostrict.js sloppy skip:shared-test262-failure
 annexB/language/function-code/switch-case-func-block-scoping.js sloppy skip:shared-positive-test-failure
 annexB/language/function-code/switch-case-func-existing-block-fn-no-init.js sloppy skip:shared-positive-test-failure

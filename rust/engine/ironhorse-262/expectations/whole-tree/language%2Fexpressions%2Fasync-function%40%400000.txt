@@ -73,9 +73,9 @@ language/expressions/async-function/named-params-trailing-comma-multiple.js slop
 language/expressions/async-function/named-params-trailing-comma-multiple.js strict pass
 language/expressions/async-function/named-params-trailing-comma-single.js sloppy pass
 language/expressions/async-function/named-params-trailing-comma-single.js strict pass
-language/expressions/async-function/named-reassign-fn-name-in-body-in-arrow.js sloppy skip:async:reported-failure
-language/expressions/async-function/named-reassign-fn-name-in-body-in-eval.js sloppy skip:async:reported-failure
-language/expressions/async-function/named-reassign-fn-name-in-body.js sloppy skip:async:reported-failure
+language/expressions/async-function/named-reassign-fn-name-in-body-in-arrow.js sloppy pass
+language/expressions/async-function/named-reassign-fn-name-in-body-in-eval.js sloppy pass
+language/expressions/async-function/named-reassign-fn-name-in-body.js sloppy pass
 language/expressions/async-function/named-rest-param-strict-body.js sloppy pass
 language/expressions/async-function/named-rest-param-strict-body.js strict pass
 language/expressions/async-function/named-rest-params-trailing-comma-early-error.js sloppy pass

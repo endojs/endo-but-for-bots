@@ -47,10 +47,10 @@ built-ins/Temporal/Instant/from/instant-string.js sloppy fail:"abort-value-diffe
 built-ins/Temporal/Instant/from/instant-string.js strict fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not an instant Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError: Temporal.Instant: invalid instant string\""
 built-ins/Temporal/Instant/from/leap-second.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Instant/from/leap-second.js strict skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Instant/from/length.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Instant/from/length.js strict skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Instant/from/name.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Instant/from/name.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/from/length.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/from/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/from/name.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Instant/from/no-fractional-minutes-hours.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Fractional minutes not allowed in time string Expected a RangeError but got a ReferenceError"
 built-ins/Temporal/Instant/from/no-fractional-minutes-hours.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Fractional minutes not allowed in time string Expected a RangeError but got a ReferenceError"
 built-ins/Temporal/Instant/from/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
