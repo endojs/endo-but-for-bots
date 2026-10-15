@@ -15,17 +15,9 @@ import { makeFunctionConstructor } from './make-function-constructor.js';
 import { constantProperties, universalPropertyNames } from './permits.js';
 
 /**
- * Universal globals that a shim may install before `lockdown`, locked
- * first-wins, and that `lockdown` then leaves in place rather than redefining.
- * Every other universal global keeps the fail-closed behavior: a pre-lockdown
- * non-configurable binding makes `lockdown` throw.
- * So after `lockdown`, these are the only universal globals whose
- * start-compartment binding stays non-writable and non-configurable; a child
- * compartment's binding is writable and configurable as usual.
- *
- * A first-wins entry may appear in either the universal or initial global map.
- * Parcel is initial-only because it includes `locate`; child compartments get
- * `%SharedParcel%` instead.
+ * Globals that a shim may install before `lockdown`, locked first-wins, and
+ * that `lockdown` then leaves in place rather than redefining.
+ * Any other pre-lockdown non-configurable binding makes `lockdown` throw.
  */
 const firstWinsPropertyNames = freeze({
   __proto__: null,
@@ -33,15 +25,10 @@ const firstWinsPropertyNames = freeze({
 });
 
 /**
- * Whether a pre-existing global binding is exactly the first-wins shape a shim
- * installs: a non-writable, non-enumerable, non-configurable data property
- * whose value is the intrinsic `lockdown` would install. Any other shape falls
- * through to the ordinary redefinition, which throws on a non-configurable
- * binding, so a misconfigured shim fails loudly.
- * The value comparison is a real check, not a formality: a shape check that
- * reenters user code (for example a Proxy trap) can re-point the binding to a
- * different locked value after `lockdown` sampled the intrinsic, and this
- * comparison is what keeps `lockdown` from leaving that value in place.
+ * Whether a pre-existing global binding is exactly the locked data property a
+ * first-wins shim installs, holding the intrinsic `lockdown` sampled.
+ * The value comparison matters: a reentrant Proxy trap can re-point the
+ * binding after sampling.
  *
  * @param {PropertyDescriptor | undefined} descriptor
  * @param {unknown} value
@@ -135,18 +122,10 @@ export const setGlobalObjectMutableProperties = (
       if (hasOwn(firstWinsPropertyNames, name)) {
         const descriptor = getOwnPropertyDescriptor(globalObject, name);
         if (isFirstWinsDescriptor(descriptor, value)) {
-          // The shim already locked the start compartment's binding to the very
-          // intrinsic we would install, so leave it. A child compartment gets
-          // the same value from its own call to this function, where its fresh
-          // global object has no such binding yet.
           // eslint-disable-next-line no-continue
           continue;
         }
-        // A binding whose value is no longer the intrinsic `lockdown` sampled
-        // was re-pointed while `lockdown` ran (for example by a Proxy trap
-        // reentered during the shape check). Restore the sampled value with
-        // the first-wins lock, so the re-pointing cannot leave the start
-        // compartment's binding open to a later rebind.
+        // Restore a re-pointed binding to the sampled value, still locked.
         locked =
           descriptor !== undefined &&
           !(hasOwn(descriptor, 'value') && is(descriptor.value, value));
