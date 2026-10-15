@@ -766,7 +766,7 @@ fn conversion_helpers_keep_output_admission() {
 fn parser_and_collection_paths_keep_incremental_admission() {
     for (name, seam) in [
         ("arraylike_to_vec", "reserve_work_scratch"),
-        ("iterable_to_list_inner", "push_prepaid_scratch"),
+        ("iterable_method_to_list_inner", "push_prepaid_scratch"),
         ("json_parse_array_element", "admit_scratch::<Slot>"),
         (
             "json_parse_object_member",
