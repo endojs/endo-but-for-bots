@@ -777,6 +777,14 @@ impl Scoper<'_> {
     /// its body) inside it so their inner scopes chain through the field
     /// function. `is_static` members carry a `Body` static block whose body is
     /// child 0; a data field's value is child 1. Returns the scope index.
+    ///
+    /// XS's field function is a `FUNCTION` node with a strict `BODY`, which
+    /// `fxBodyNodeHoist` makes the hoister's `environmentNode`, so a direct
+    /// `eval` in a field value marks that body rather than the enclosing
+    /// function's. The mark changes nothing XS codes, since the body is
+    /// strict, and this port's field function has no body node to carry it,
+    /// so the members hoist with no environment node, which the `Call` arm
+    /// reads as nothing to mark.
     #[inline(never)]
     fn hoist_field_init_scope(
         &mut self,
@@ -792,6 +800,7 @@ impl Scoper<'_> {
         self.scope = Some(fi);
         let fs = self.function_scope;
         let bs = self.body_scope;
+        let env = self.environment_node.take();
         self.function_scope = Some(fi);
         self.body_scope = Some(fi);
         for m in members {
@@ -806,6 +815,7 @@ impl Scoper<'_> {
         }
         self.function_scope = fs;
         self.body_scope = bs;
+        self.environment_node = env;
         self.fx_scope_hoisted(fi);
         Ok(fi)
     }

@@ -2721,6 +2721,80 @@ fn class_field_init_direct_eval() {
     ]);
 }
 
+// A direct `eval` in a class-field initializer inside a function. XS moves
+// the initializer into the class's field function (`instanceInit` /
+// `constructorInit`), whose strict `BODY` is the hoister's `environmentNode`
+// while the initializer hoists, so the eval marks that body and not the
+// enclosing function's: the enclosing function opens its body as a block
+// (`fxScopeCodingBlock`, its declarations published by the poisoned scope's
+// `with`), not with the sloppy direct-eval prelude (`null; with; pop`). The
+// field function stores its environment with `FUNCTION_ENVIRONMENT` because
+// its scope carries the eval, which the Script goal compares too.
+//
+// An eval in a computed key or an `extends` clause is not here: it runs in
+// the enclosing function, which Ironhorse gives its `arguments` binding once
+// the eval is hoisted, where XS gives it none and reports `arguments` as an
+// undefined variable.
+#[test]
+fn class_field_init_direct_eval_in_function() {
+    assert_identical(&[
+        // the two shapes: a static field and an instance field
+        "function f() { class A { static x = eval(\"1\") } }",
+        "function f() { class A { x = eval(\"1\") } }",
+        // computed keys
+        "function f() { class A { [\"k\"] = eval(\"1\") } }",
+        "function f() { var k = \"k\"; class A { static [k] = eval(\"1\"); [k + 1] = eval(\"2\") } }",
+        // private fields
+        "function f() { class A { #x = eval(\"1\") } }",
+        "function f() { class A { static #x = eval(\"1\") } }",
+        "function f() { class A { #x = 1; y = eval(\"this.#x\") } }",
+        "function f() { class A { #m() {} y = eval(\"this.#m\") } }",
+        // arrows inside the initializer
+        "function f() { class A { x = () => eval(\"1\") } }",
+        "function f() { class A { x = () => { eval(\"1\") } } }",
+        "function f() { class A { static x = () => eval(\"1\") } }",
+        "function f() { class A { x = async () => eval(\"1\") } }",
+        // nested functions and classes
+        "function f() { class A { x = function () { eval(\"1\") } } }",
+        "function f() { class A { x = function* () { eval(\"1\") } } }",
+        "function f() { class A { x = class { y = eval(\"1\") } } }",
+        "function f() { class A { x = class { [eval(\"1\")] = 1 } } }",
+        "function f() { class A { x = function () { class B { y = eval(\"1\") } } } }",
+        "function f() { function g() { class A { x = eval(\"1\") } } }",
+        "function f() { () => { class A { x = eval(\"1\") } } }",
+        "function f() { class A { x = eval(\"1\") } class B { static y = eval(\"2\") } }",
+        "function f() { return class { x = eval(\"1\") } }",
+        "function f() { class A extends Object { x = eval(\"1\") } }",
+        // the enclosing function's own declarations, parameters and evals
+        "function f() { var v; let l; function g() {} class A { x = eval(\"v + l\") } }",
+        "function f(a, b) { class A { x = eval(\"a\") } }",
+        "function f(a = 1) { class A { x = eval(\"a\") } }",
+        "function f() { eval(\"1\"); class A { x = eval(\"2\") } }",
+        "function f() { class A { x = 1; m() { return eval(\"1\") } } }",
+        "function f() { class A { x = eval(\"1\"); m() { eval(\"2\") } } }",
+        // not a direct eval
+        "function f() { class A { x = (0, eval)(\"1\") } }",
+        // strict and sloppy enclosing functions
+        "'use strict'; function f() { class A { x = eval(\"1\") } }",
+        "function f() { 'use strict'; class A { x = eval(\"1\") } }",
+        "(function () { class A { x = eval(\"1\") } })",
+        // generators and async functions
+        "function* g() { class A { x = eval(\"1\") } }",
+        "async function f() { class A { x = eval(\"1\") } }",
+        "async function* f() { class A { x = eval(\"1\") } }",
+        "async () => { class A { static x = eval(\"1\") } }",
+        // static blocks beside and holding the eval
+        "function f() { class A { x = eval(\"1\"); static { this.y = 1; } } }",
+        "function f() { class A { static { eval(\"1\") } } }",
+        // a block, not a function, around the class
+        "{ class A { x = eval(\"1\") } }",
+    ]);
+    assert_identical_module(&[
+        "class A { x = eval(\"1\") }",
+        "function f() { class A { static x = eval(\"1\") } }",
+    ]);
+}
+
 // A captured named-function-expression self-name — the `tco-call-args`
 // fold (stage-5 fix4 3/4, slice 3). When a nested function captures the
 // enclosing function's own name (`function f(){ g=()=>f; }`), XS's

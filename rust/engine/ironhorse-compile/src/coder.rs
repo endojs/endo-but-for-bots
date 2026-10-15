@@ -3583,10 +3583,12 @@ impl Coder<'_, '_> {
 
         // Store the captured closures into the new function's environment,
         // running in the enclosing class frame (`fxScopeCodeStore`). At eval
-        // scope the environment is a `FUNCTION_ENVIRONMENT`; otherwise a
-        // captured field function needs a plain `ENVIRONMENT`.
+        // scope, or when a field value holds a direct `eval` (`fi`'s
+        // `mxEvalFlag`), the environment is a `FUNCTION_ENVIRONMENT`;
+        // otherwise a captured field function needs a plain `ENVIRONMENT`.
         let has_captures = self.tree.scopes[fi].closure_count != 0;
-        if saved_eval {
+        let scope_eval = self.tree.scopes[fi].flags & crate::scoper::SCOPE_EVAL != 0;
+        if scope_eval || saved_eval {
             self.add_byte(1, XS_CODE_FUNCTION_ENVIRONMENT);
             self.scope_code_store(fi);
             self.add_byte(-1, XS_CODE_POP);
