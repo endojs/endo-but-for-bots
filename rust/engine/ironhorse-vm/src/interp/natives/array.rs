@@ -2049,8 +2049,7 @@ impl Interp {
     // or allocating method with observable species. Reads use the object MOP
     // (`mop_get`/`mop_has`) so accessors, inherited holes, and Proxy traps are
     // honored; allocating methods additionally use `ArraySpeciesCreate` and
-    // `CreateDataPropertyOrThrow`. An unmodeled primitive receiver keeps the
-    // method's original named skip.
+    // `CreateDataPropertyOrThrow`. A primitive receiver is boxed first.
 
     /// The property **id** for integer element index `k` (its canonical decimal
     /// string key), interned like any ordinary string key.
@@ -2233,11 +2232,15 @@ impl Interp {
     /// caller (`find`/`findIndex`/`findLast`/`includes`/`at` reach `get` with
     /// no preceding `has`) would re-arm that on its own.
     ///
-    /// A name is only ever LOOKED UP here, never minted. That matters most
-    /// for a chain carrying a Proxy, where every index is "answerable"
-    /// because an absent one can still invoke an observable trap: the trap
-    /// does have to be called, but `read_key_slot` spells its key from the
-    /// index the way `fxKeyAt` does, so calling it costs no id.
+    /// An array index's name is only ever LOOKED UP here, never minted. That
+    /// matters most for a chain carrying a Proxy, where every index is
+    /// "answerable" because an absent one can still invoke an observable
+    /// trap: the trap does have to be called, but `read_key_slot` spells its
+    /// key from the index the way `fxKeyAt` does, so calling it costs no id.
+    /// Above 2^32 - 1 the key is an ordinary name, which
+    /// [`Self::array_index_read_key`] interns as XS does, so a Proxy walk
+    /// there spends one id per step and meets the key space's guest ceiling
+    /// after about 64k steps.
     pub(in crate::interp) fn array_generic_index_read_key(
         &mut self,
         o: crate::value::SlotIndex,
@@ -2387,9 +2390,10 @@ impl Interp {
         };
 
         // The loop performs an observable `Get` at every index, so a Proxy or
-        // accessor-backed pathological length cannot be skipped ahead. Keep
-        // the same bounded-completion policy as the other generic Array
-        // methods; any abrupt completion in the reachable prefix still wins.
+        // accessor-backed pathological length cannot be skipped ahead, and it
+        // accumulates the joined string as it goes. Refuse past 2^24 indices
+        // or output units; any abrupt completion in the reachable prefix
+        // still wins.
         const GENERIC_JOIN_CAP: u64 = 1 << 24;
         const GENERIC_JOIN_OUTPUT_CAP: usize = 1 << 24;
         let mut result = Vec::new();
@@ -3090,27 +3094,6 @@ impl Interp {
         match self.arrays[&inst].items().get(&index).copied() {
             Some(item) => Ok(item),
             None => self.array_generic_get(code, inst, u64::from(index)),
-        }
-    }
-
-    /// The original per-method named skip reason (kept byte-identical to the
-    /// dense arm's) for a receiver the generic path does not model.
-    fn array_generic_skip_reason(m: NativeMethod) -> &'static str {
-        match m {
-            NativeMethod::ArrayForEach => "forEach:non-dense-array",
-            NativeMethod::ArrayMap => "map:non-dense-array",
-            NativeMethod::ArrayFilter => "filter:non-dense-array",
-            NativeMethod::ArraySome | NativeMethod::ArrayEvery => "some/every:non-dense-array",
-            NativeMethod::ArrayFind | NativeMethod::ArrayFindIndex => "find:non-dense-array",
-            NativeMethod::ArrayFindLast | NativeMethod::ArrayFindLastIndex => {
-                "findLast:non-dense-array"
-            }
-            NativeMethod::ArrayReduce | NativeMethod::ArrayReduceRight => "reduce:non-dense-array",
-            NativeMethod::ArrayIndexOf => "indexOf:non-dense-array",
-            NativeMethod::ArrayLastIndexOf => "lastIndexOf:non-dense-array",
-            NativeMethod::ArrayIncludes => "includes:non-dense-array",
-            NativeMethod::ArrayAt => "at:non-dense-array",
-            _ => "array:non-dense-array",
         }
     }
 
@@ -3842,7 +3825,8 @@ impl Interp {
     /// Generic `map`/`filter` over sparse Arrays, arguments, array-like
     /// objects, and Proxies. Both snapshot `length`, skip absent properties via
     /// `HasProperty`, read inherited/accessor values via `Get`, and create the
-    /// result through `ArraySpeciesCreate`.
+    /// result through `ArraySpeciesCreate`. No step count stops the walk: each
+    /// step charges the meter, which is what bounds a metered run.
     pub(in crate::interp) fn array_generic_map_filter(
         &mut self,
         code: &[u8],
@@ -3867,16 +3851,11 @@ impl Interp {
         if !self.is_callable_value(callback) {
             return Err(self.catchable_type_error_msg("callback: not a function".into()));
         }
-        // Allocating methods cannot short-circuit, so decline pathological
-        // array-like lengths before a case spends seconds walking empty keys.
-        // This remains far above the conformance fixtures' real work sets.
-        const GENERIC_ITER_CAP: u64 = 1 << 16;
         let is_map = m == NativeMethod::ArrayMap;
         let target = self.array_generic_species_create(code, o, if is_map { len } else { 0 })?;
         let recv = Slot::of(Kind::Reference, Payload::Reference(o));
         let mut to = 0u64;
         let mut k = 0u64;
-        let mut linear_steps = 0u64;
         while k < len {
             let present = match self.array_generic_next_present_index(o, k, len) {
                 Some(Some(next)) => {
@@ -3884,15 +3863,7 @@ impl Interp {
                     true
                 }
                 Some(None) => break,
-                None => {
-                    if linear_steps >= GENERIC_ITER_CAP {
-                        return Err(Step::Host(Halt::NotImplemented(
-                            Self::array_generic_skip_reason(m),
-                        )));
-                    }
-                    linear_steps += 1;
-                    self.array_generic_has(code, o, k)?
-                }
+                None => self.array_generic_has(code, o, k)?,
             };
             self.charge_builtin_work(1)?;
             if !present {
@@ -3916,8 +3887,11 @@ impl Interp {
     /// Generic fallback for the non-allocating read-only `Array.prototype`
     /// methods over an array-like / sparse / proxy receiver. Returns the
     /// method's result, or the appropriate catchable `TypeError` (bad `this` /
-    /// non-callable callback / empty reduce with no seed), or the original
-    /// named `Unsupported` skip for an unmodeled receiver / callback.
+    /// non-callable callback / empty reduce with no seed).
+    ///
+    /// A generic `length` may be up to 2^53−1, and no step count stops a walk
+    /// short of it: each step charges the meter, which is what bounds a
+    /// metered run.
     pub(in crate::interp) fn array_generic_readonly(
         &mut self,
         code: &[u8],
@@ -3946,19 +3920,6 @@ impl Interp {
         let len = self.array_generic_length(code, o)?;
         self.charge_builtin_work(2)?;
 
-        // A generic array-like `length` may be up to 2^53−1. A real engine
-        // iterates the whole range, but no test262 case *expects completion* of
-        // a multi-billion-iteration scan (they pair a huge `length` with an
-        // accessor / proxy trap that throws — or a match — within the first few
-        // indices). Bound the index loop so a pathological length neither
-        // OOMs (materializing indices) nor hangs (tripping the case timeout →
-        // an ironhorse-failure). Exceeding the bound returns the method's
-        // ORIGINAL named skip, so such a case stays `skipped` exactly as before
-        // this generic path existed — never a new failure. The cap is far above
-        // any real test's iteration count.
-        const GENERIC_ITER_CAP: u64 = 1 << 24;
-        let over_cap = Step::Host(Halt::NotImplemented(Self::array_generic_skip_reason(m)));
-
         match m {
             NativeMethod::ArrayForEach => {
                 let callback = arg0;
@@ -3967,7 +3928,6 @@ impl Interp {
                     return Err(self.catchable_type_error_msg("callback: not a function".into()));
                 }
                 let mut k = 0u64;
-                let mut linear_steps = 0u64;
                 while k < len {
                     let present = match self.array_generic_next_present_index(o, k, len) {
                         Some(Some(next)) => {
@@ -3975,13 +3935,7 @@ impl Interp {
                             true
                         }
                         Some(None) => break,
-                        None => {
-                            if linear_steps >= GENERIC_ITER_CAP {
-                                return Err(over_cap);
-                            }
-                            linear_steps += 1;
-                            self.array_generic_has(code, o, k)?
-                        }
+                        None => self.array_generic_has(code, o, k)?,
                     };
                     self.charge_builtin_work(1)?;
                     if present {
@@ -4001,7 +3955,6 @@ impl Interp {
                     return Err(self.catchable_type_error_msg("callback: not a function".into()));
                 }
                 let mut k = 0u64;
-                let mut linear_steps = 0u64;
                 while k < len {
                     let present = match self.array_generic_next_present_index(o, k, len) {
                         Some(Some(next)) => {
@@ -4009,13 +3962,7 @@ impl Interp {
                             true
                         }
                         Some(None) => break,
-                        None => {
-                            if linear_steps >= GENERIC_ITER_CAP {
-                                return Err(over_cap);
-                            }
-                            linear_steps += 1;
-                            self.array_generic_has(code, o, k)?
-                        }
+                        None => self.array_generic_has(code, o, k)?,
                     };
                     self.charge_builtin_work(1)?;
                     if present {
@@ -4054,7 +4001,6 @@ impl Interp {
                 if !self.is_callable_value(predicate) {
                     return Err(self.catchable_type_error_msg("callback: not a function".into()));
                 }
-                let mut iters: u64 = 0;
                 let step = |slf: &mut Self, k: u64| -> Result<Option<Slot>, Step> {
                     slf.charge_builtin_work(1)?;
                     let kv = slf.array_generic_get(code, o, k)?;
@@ -4074,19 +4020,12 @@ impl Interp {
                     let mut k = len;
                     while k > 0 {
                         k -= 1;
-                        iters += 1;
-                        if iters > GENERIC_ITER_CAP {
-                            return Err(over_cap);
-                        }
                         if let Some(hit) = step(self, k)? {
                             return Ok(hit);
                         }
                     }
                 } else {
                     for k in 0..len {
-                        if k >= GENERIC_ITER_CAP {
-                            return Err(over_cap);
-                        }
                         if let Some(hit) = step(self, k)? {
                             return Ok(hit);
                         }
@@ -4104,19 +4043,9 @@ impl Interp {
                 if !self.is_callable_value(callback) {
                     return Err(self.catchable_type_error_msg("callback: not a function".into()));
                 }
-                // The XS differential oracle mis-handles a fold over an
-                // array-like whose `length` exceeds the 2^32 array-index space
-                // (it mis-visits the near-2^53 indices and rejects a source
-                // ironhorse folds correctly — e.g.
-                // `reduceRight/length-near-integer-limit.js`, where ironhorse
-                // matches the spec but XS throws). Decline the generic fold
-                // there so the case stays a named skip rather than assert a
-                // divergence against a non-compliant oracle; every
-                // realistic-length fold is unaffected (indexOf/lastIndexOf at
-                // the same length agree with XS and stay covered).
-                if len > u32::MAX as u64 {
-                    return Err(over_cap);
-                }
+                // A `length` above 2^32 - 1 folds here as specified. XS folds
+                // only its resident index storage there; the departure is
+                // recorded in `ironhorse-262/tests/xs_departures.rs`.
                 let has_initial = argc >= 2;
                 // Fold index in `[0, len)`, ascending (reduce) or descending
                 // (reduceRight), without materializing the range.
@@ -4136,9 +4065,6 @@ impl Interp {
                     // TypeError.
                     let mut seed: Option<Slot> = None;
                     while cursor < len {
-                        if cursor >= GENERIC_ITER_CAP {
-                            return Err(over_cap);
-                        }
                         let k = idx_at(cursor);
                         cursor += 1;
                         self.charge_builtin_work(1)?;
@@ -4155,9 +4081,6 @@ impl Interp {
                     }
                 };
                 while cursor < len {
-                    if cursor >= GENERIC_ITER_CAP {
-                        return Err(over_cap);
-                    }
                     let k = idx_at(cursor);
                     cursor += 1;
                     self.charge_builtin_work(1)?;
@@ -4195,7 +4118,6 @@ impl Interp {
                         from as u64
                     }
                 };
-                let mut linear_steps = 0u64;
                 while k < len {
                     let present = match self.array_generic_next_present_index(o, k, len) {
                         Some(Some(next)) => {
@@ -4203,13 +4125,7 @@ impl Interp {
                             true
                         }
                         Some(None) => break,
-                        None => {
-                            if linear_steps >= GENERIC_ITER_CAP {
-                                return Err(over_cap);
-                            }
-                            linear_steps += 1;
-                            self.array_generic_has(code, o, k)?
-                        }
+                        None => self.array_generic_has(code, o, k)?,
                     };
                     self.charge_builtin_work(1)?;
                     if present {
@@ -4241,7 +4157,6 @@ impl Interp {
                 } else {
                     len as i128 + n as i128
                 };
-                let mut linear_steps = 0u64;
                 while k >= 0 {
                     let mut ku = k as u64;
                     let present = match self.array_generic_previous_present_index(o, ku) {
@@ -4251,13 +4166,7 @@ impl Interp {
                             true
                         }
                         Some(None) => break,
-                        None => {
-                            if linear_steps >= GENERIC_ITER_CAP {
-                                return Err(over_cap);
-                            }
-                            linear_steps += 1;
-                            self.array_generic_has(code, o, ku)?
-                        }
+                        None => self.array_generic_has(code, o, ku)?,
                     };
                     self.charge_builtin_work(1)?;
                     if present {
@@ -4291,11 +4200,7 @@ impl Interp {
                 } else {
                     (len as i128 + n as i128) as u64
                 };
-                let start = k;
                 while k < len {
-                    if k - start >= GENERIC_ITER_CAP {
-                        return Err(over_cap);
-                    }
                     self.charge_builtin_work(1)?;
                     let ek = self.array_generic_get(code, o, k)?;
                     if self.same_value_zero(&search, &ek) {
@@ -4317,9 +4222,7 @@ impl Interp {
                 }
                 self.array_generic_get(code, o, k as u64)
             }
-            _ => Err(Step::Host(Halt::NotImplemented(
-                Self::array_generic_skip_reason(m),
-            ))),
+            _ => unreachable!("generic read-only method"),
         }
     }
 

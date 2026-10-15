@@ -129,21 +129,10 @@ pub const REFUSED_LABELS: &[&str] = &[
     "unshift:oversized-array-like",
 ];
 
-/// The declined labels produced by the two label-returning helpers the
-/// dynamic `Halt::NotImplemented(…)` sites route through
-/// (`native_unsupported_name`, `array_generic_skip_reason`). Sorted by byte
-/// order.
+/// The declined labels produced by the label-returning helper the dynamic
+/// `Halt::NotImplemented(…)` sites route through (`native_unsupported_name`).
+/// Sorted by byte order.
 pub const NOT_IMPLEMENTED_HELPER_LABELS: &[&str] = &[
-    "array:non-dense-array",
-    "at:non-dense-array",
-    "filter:non-dense-array",
-    "find:non-dense-array",
-    "findLast:non-dense-array",
-    "forEach:non-dense-array",
-    "includes:non-dense-array",
-    "indexOf:non-dense-array",
-    "lastIndexOf:non-dense-array",
-    "map:non-dense-array",
     "native-call:AggregateError",
     "native-call:Array",
     "native-call:ArrayBuffer",
@@ -199,8 +188,6 @@ pub const NOT_IMPLEMENTED_HELPER_LABELS: &[&str] = &[
     "native-call:WeakSet",
     "native-call:eval",
     "native-call:host",
-    "reduce:non-dense-array",
-    "some/every:non-dense-array",
 ];
 
 /// Labels of the interpreter's own invariant guards: the engine reporting
@@ -335,7 +322,7 @@ fn is_opcode_mnemonic(label: &str) -> bool {
 }
 
 /// Is `label` a registered missing implementation? True for the literal labels, the
-/// two helpers' labels, and any opcode mnemonic. Every other label, including
+/// helper's labels, and any opcode mnemonic. Every other label, including
 /// every [`ENGINE_INVARIANT_LABELS`] entry, is not: a NotImplemented or Refused halt that
 /// carries it is a finding, not a skip.
 pub fn is_not_implemented_label(label: &str) -> bool {
