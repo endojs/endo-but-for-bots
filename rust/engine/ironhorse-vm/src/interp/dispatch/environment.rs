@@ -3,7 +3,12 @@
 use super::super::*;
 
 impl Interp {
-    pub(super) fn dispatch_eval_reference(&mut self, code: &[u8], name: u16) -> Result<(), Step> {
+    pub(super) fn dispatch_eval_reference(
+        &mut self,
+        code: &[u8],
+        name: u16,
+        next_opcode: Option<u8>,
+    ) -> Result<(), Step> {
         // Additive `with`/eval environment walk: consult the active
         // environment chain first (XS's `mxEnvironment` walk). When
         // an object environment binds `name` (scopable), push a real
@@ -16,7 +21,18 @@ impl Interp {
         // walk; that throw is a catchable guest error.
         let resolved = (self.resolve_env_reference(code, name))?;
         if let Some(target) = resolved {
-            self.push(Slot::of(Kind::Reference, Payload::Reference(target)));
+            let reference = Slot::of(Kind::Reference, Payload::Reference(target));
+            // A call through a `with` object's binding takes that object as
+            // its receiver (WithBaseObject): when the callee load follows,
+            // XS overwrites the `undefined` receiver the call pushed below.
+            if next_opcode == Some(Opcode::XS_CODE_GET_THIS_VARIABLE as u8)
+                && !self.is_environment_instance(target)
+            {
+                if let Some(receiver) = self.stack.last_mut() {
+                    *receiver = reference;
+                }
+            }
+            self.push(reference);
             return Ok(());
         }
         let env = if self.id_map.contains_key(&name) {
