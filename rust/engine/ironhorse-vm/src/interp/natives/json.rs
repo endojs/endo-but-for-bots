@@ -1490,8 +1490,8 @@ impl Interp {
             } else {
                 // A raw multi-byte sequence of the WTF-8 input: a scalar
                 // decodes to its one or two UTF-16 code units, an unpaired
-                // surrogate to itself.
-                match wtf8_code_point(&input[i..]) {
+                // surrogate to itself. A sequence is at most four bytes.
+                match wtf8_code_point(&input[i..n.min(i + 4)]) {
                     Some((point, width)) => {
                         let mut encoded = [0u16; 2];
                         self.extend_prepaid_scratch(
@@ -2048,9 +2048,10 @@ impl Interp {
 }
 
 /// Encode UTF-16 code units as WTF-8: UTF-8 for every scalar, and the
-/// three-byte generalized form for an unpaired surrogate.
+/// three-byte generalized form for an unpaired surrogate. The caller admits
+/// the three bytes a unit can take.
 fn units_to_wtf8(units: &[u16]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(units.len());
+    let mut out = Vec::new();
     for decoded in char::decode_utf16(units.iter().copied()) {
         match decoded {
             Ok(ch) => {
@@ -2103,9 +2104,9 @@ fn code_point_units(point: u32, buffer: &mut [u16; 2]) -> &[u16] {
 }
 
 /// Decode WTF-8 bytes, such as a token of the parser's input, back to UTF-16
-/// code units.
+/// code units, no more of them than there are bytes, which the parse admitted.
 fn wtf8_to_units(bytes: &[u8]) -> Vec<u16> {
-    let mut out = Vec::with_capacity(bytes.len());
+    let mut out = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
         match wtf8_code_point(&bytes[i..]) {
