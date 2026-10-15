@@ -149,6 +149,20 @@ const DEPARTURES: &[Row] = &[
         why: "ContainsArguments in a field initializer is an early SyntaxError, also through a nested direct eval",
     },
     Row {
+        program: "function f() { class A { [eval('arguments.length')] = 1; } return Object.keys(new A()).join(); } f(1, 2)",
+        ironhorse: "2",
+        xs: "throw ReferenceError: get arguments: undefined variable",
+        v8: "2",
+        why: "a direct eval in a class element's computed key runs in the enclosing function, so it sees that function's arguments object; XS's parser drops the eval flag at the end of a class (fxClassExpression keeps only mxArgumentsFlag), so the enclosing function gets no `arguments` binding",
+    },
+    Row {
+        program: "function f() { class A extends eval('arguments.length === 2 ? Object : null') {} return Object.getPrototypeOf(A) === Object; } f(1, 2)",
+        ironhorse: "true",
+        xs: "throw ReferenceError: get arguments: undefined variable",
+        v8: "true",
+        why: "as above, for a direct eval in the `extends` clause",
+    },
+    Row {
         program: "class C { static x = eval('this === C'); } C.x",
         ironhorse: "true",
         xs: "throw ReferenceError: get C: not initialized yet",
