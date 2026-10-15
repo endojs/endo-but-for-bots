@@ -207,7 +207,7 @@ checksum = "e4a2c462a4d927d512f5f882a033ddd62f33a05bb9f230d98f736ac3dc85938f"
 
 [[package]]
 name = "ironhorse-262"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "ironhorse-compile",
  "ironhorse-runtime",
@@ -218,7 +218,7 @@ dependencies = [
 
 [[package]]
 name = "ironhorse-compile"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "ironhorse-meter",
  "ironhorse-regexp",
@@ -229,7 +229,7 @@ dependencies = [
 
 [[package]]
 name = "ironhorse-fuzz"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "arbitrary",
  "ironhorse-262",
@@ -242,11 +242,11 @@ dependencies = [
 
 [[package]]
 name = "ironhorse-meter"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "ironhorse-regexp"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "ironhorse-meter",
  "ironhorse-unicode",
@@ -255,7 +255,7 @@ dependencies = [
 
 [[package]]
 name = "ironhorse-runtime"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "ironhorse-compile",
  "ironhorse-vm",
@@ -263,7 +263,7 @@ dependencies = [
 
 [[package]]
 name = "ironhorse-snapshot"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "ironhorse-compile",
  "ironhorse-snapshot",
@@ -272,15 +272,15 @@ dependencies = [
 
 [[package]]
 name = "ironhorse-text"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "ironhorse-unicode"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "ironhorse-vm"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "icu_normalizer",
  "icu_segmenter",
@@ -446,7 +446,7 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
 name = "xs-oracle"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "cc",
  "ironhorse-vm",
