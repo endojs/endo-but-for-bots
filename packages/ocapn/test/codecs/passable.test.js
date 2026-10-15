@@ -212,7 +212,7 @@ const table = [
       ),
   },
   {
-    name: 'tagged with Parcel',
+    name: 'tagged with sturdyRef',
     skip: !parcelIsInstalled,
     makeValue: testKit =>
       makeTagged(

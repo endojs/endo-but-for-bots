@@ -6,7 +6,7 @@
  * @import { HandoffReceiveSigEnvelope } from '../codecs/descriptors.js'
  * @import { OcapnKeyPair, OcapnPublicKey } from '../cryptography.js'
  * @import { GrantTracker } from './grant-tracker.js'
- * @import { Parcel, ParcelTracker } from './parcels.js'
+ * @import { SturdyRef, SturdyRefTracker } from './sturdyrefs.js'
  * @import { Ocapn } from './ocapn.js'
  * @import { ERef, FarRef } from '@endo/eventual-send'
  * @import { RemotableObject } from '@endo/pass-style'
@@ -22,7 +22,7 @@
  * @typedef {Uint8Array & { _brand: 'SessionId' }} SessionId
  * From OCapN spec. Id for a session between two peers.
  * @typedef {Uint8Array & { _brand: 'SwissNum' }} SwissNum
- * From OCapN spec. Used for resolving Parcels.
+ * From OCapN spec. Used for resolving SturdyRefs.
  * @typedef {Uint8Array & { _brand: 'PublicKeyId' }} PublicKeyId
  * From OCapN spec. Identifier for a public key (double SHA-256 hash of key descriptor).
  */
@@ -338,7 +338,7 @@
  * @property {string} captpVersion
  * @property {GrantTracker} grantTracker
  * @property {SessionManager} sessionManager
- * @property {ParcelTracker} parcelTracker
+ * @property {SturdyRefTracker} sturdyRefTracker
  * @property {(location: OcapnLocation) => Promise<InternalSession<Bootstrap>>} provideInternalSession
  * Returns the full InternalSession object with all internal properties for debugging/testing.
  */
@@ -346,7 +346,7 @@
 /**
  * The caller-owned table `makeOcapn` consults when a peer asks for a
  * local capability (via `bootstrap.fetch(secret)`) or when resolving a
- * self-local `Parcel`. Any object with a `get(secret)` that returns a
+ * self-local `SturdyRef`. Any object with a `get(secret)` that returns a
  * capability, `undefined`, or a promise of either works; a plain `Map`
  * is a valid `NonceLocator`.
  *
@@ -367,20 +367,16 @@
  * @typedef {object} Client
  * @property {(location: OcapnLocation) => Promise<Session<Bootstrap>>} provideSession
  *   Open (or reuse) a CapTP session to the peer at `location`.
- * @property {(location: OcapnLocation, secret: string | Uint8Array) => Parcel} makeParcel
- *   Mint a Parcel: an addressable, passable `(location, secret)`
+ * @property {(location: OcapnLocation, secret: string | Uint8Array) => SturdyRef} makeSturdyRef
+ *   Mint a SturdyRef: an addressable, passable `(location, secret)`
  *   pair. The secret may be a printable-ASCII string (the friendly
  *   form for locators keyed by name) or raw bytes for arbitrary-byte
- *   parcels (e.g. the 24-byte randoms Spritely Goblins mints).
+ *   sturdyrefs (e.g. the 24-byte randoms Spritely Goblins mints).
  *   Peers resolve the secret against their own `NonceLocator`.
- * @property {(parcel: Parcel) => Promise<any>} openParcel
- *   Resolve a Parcel to a live capability: local Parcels go
- *   through the injected locator; remote Parcels fetch from the
+ * @property {(sturdyRef: SturdyRef) => Promise<any>} enlivenSturdyRef
+ *   Resolve a SturdyRef to a live capability: local SturdyRefs go
+ *   through the injected locator; remote SturdyRefs fetch from the
  *   peer's bootstrap.
- * @property {(location: OcapnLocation, secret: string | Uint8Array) => Parcel} makeSturdyRef
- *   Compatibility alias for consumers migrated later in the stacked series.
- * @property {(parcel: Parcel) => Promise<any>} enlivenSturdyRef
- *   Compatibility alias for consumers migrated later in the stacked series.
  * @property {() => void} shutdown
  * @property {ClientDebug} [_debug]
  *   Only present when the client was constructed with `debugMode:

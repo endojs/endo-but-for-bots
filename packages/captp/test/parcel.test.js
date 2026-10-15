@@ -1,4 +1,5 @@
 import '@endo/parcel/shim.js';
+// prefer-endo-primitives-exempt: CapTP fixtures use Far for one-off wire presences.
 import test from '@endo/ses-ava/test.js';
 
 import { Far } from '@endo/marshal';

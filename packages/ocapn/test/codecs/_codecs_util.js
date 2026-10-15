@@ -7,6 +7,7 @@
  * @import { HandoffGiveSigEnvelope, HandoffReceiveSigEnvelope } from '../../src/codecs/descriptors.js'
  * @import { DataCodec as DataCodec } from '../../src/syrup/codec.js'
  * @import { OcapnReader, OcapnWriter } from '../../src/codec-interface.js'
+ * @import { ParcelTracker } from '../../src/client/parcels.js'
  * @import { Settler } from '@endo/eventual-send'
  * @import { PublicKeyId, SessionId, SwissNum } from '../../src/client/types.js'
  */
@@ -166,7 +167,7 @@ export const exampleReceiverSideId = /** @type {PublicKeyId} */ (
 /**
  * @typedef {object} CodecTestKit
  * @property {ReferenceKit} referenceKit
- * @property {import('../../src/client/parcels.js').ParcelTracker} parcelTracker
+ * @property {ParcelTracker} parcelTracker
  * @property {(position: bigint) => object} makeLocalObject
  * @property {(position: bigint) => Promise<unknown>} makeLocalPromise
  * @property {(position: bigint) => Promise<unknown>} makeRemoteAnswer

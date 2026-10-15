@@ -1,4 +1,5 @@
 // @ts-check
+// prefer-endo-primitives-exempt: OCapN fixtures use Far for one-off wire presences.
 import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
 import { Far, makeTagged } from '@endo/marshal';

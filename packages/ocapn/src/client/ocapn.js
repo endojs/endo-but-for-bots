@@ -1,4 +1,5 @@
 // @ts-check
+// spell-out-exempt: SwissNum is the OCapN specification's domain term.
 
 /**
  * @import { FarRef, RemoteKit, Settler } from '@endo/eventual-send'

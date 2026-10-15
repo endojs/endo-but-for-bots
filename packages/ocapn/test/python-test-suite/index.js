@@ -1,4 +1,5 @@
 // @ts-check
+// prefer-endo-primitives-exempt: the interop fixture uses Far for one-off wire presences.
 
 import '@endo/init';
 
@@ -11,7 +12,7 @@ import { syrupCodec } from '../../src/syrup/index.js';
 import { startGcScheduler } from '../_gc-util.js';
 
 /**
- * @typedef {import('../../src/client/types.js').Client} Client
+ * @typedef {import('../../src/client/parcel-types.js').Client} Client
  */
 
 /**

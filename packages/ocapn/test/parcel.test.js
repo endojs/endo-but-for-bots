@@ -1,4 +1,5 @@
 // spell-out-exempt: swissNum spells the OCapN "Swiss number" domain term used package-wide.
+// prefer-endo-primitives-exempt: OCapN fixtures use Far for one-off wire presences.
 // @ts-check
 
 import { E } from '@endo/eventual-send';

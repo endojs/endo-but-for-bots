@@ -1,4 +1,5 @@
 // @ts-check
+// spell-out-exempt: SwissNum is the OCapN specification's domain term.
 
 import harden from '@endo/harden';
 
