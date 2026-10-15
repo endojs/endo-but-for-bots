@@ -1444,12 +1444,8 @@ impl<'a> Parser<'a> {
             self.push_node_struct(2, Token::ImportCall, line)?;
         } else if self.cur.token == Token::Dot {
             self.get_next_token()?;
-            if self.cur.token == Token::Identifier
-                && self.cur.symbol.as_ref().and_then(SymbolName::as_str) == Some("source")
-                && !self.cur.escaped
-            {
-                return Err(self.unsupported_error("source-phase import"));
-            }
+            // XS 8.3.1 predates source-phase imports, so `import.source` is
+            // the "invalid import." of any other `import.` form.
             if self.cur.token == Token::Identifier
                 && self.cur.symbol.as_ref().and_then(SymbolName::as_str) == Some("meta")
                 && !self.cur.escaped

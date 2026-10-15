@@ -1241,10 +1241,10 @@ mod tests {
 
     #[test]
     fn compiler_seam_constructs_unsupported_for_valid_unported_syntax() {
-        let source = "import.source('module');";
+        let source = "class A { static { let y = 1; } }";
         let run = dual_run_with(source, Compiler::Ironhorse).expect("oracle reference runs");
         assert!(
-            matches!(run.ironhorse_compile, IronhorseCompile::Unsupported(ref message) if message.contains("source-phase import")),
+            matches!(run.ironhorse_compile, IronhorseCompile::Unsupported(ref message) if message.contains("static block with lexical declarations")),
             "the production compiler seam must distinguish valid unported syntax: {:?}",
             run.ironhorse_compile
         );

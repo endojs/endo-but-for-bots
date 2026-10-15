@@ -505,3 +505,15 @@ fn a_typed_array_takes_an_iterable_or_an_array_like() {
         agrees(&format!("String({program})"));
     }
 }
+
+/// XS 8.3.1 predates source-phase imports: `import.source` is a SyntaxError.
+#[test]
+fn import_source_is_a_syntax_error() {
+    for program in [
+        "try { eval('import.source'); 'parsed' } catch (e) { String(e) }",
+        "try { eval('import.source(\"x\")'); 'parsed' } catch (e) { String(e) }",
+        "try { new Function('return import.source(\"./x.js\")'); 'parsed' } catch (e) { String(e) }",
+    ] {
+        agrees(program);
+    }
+}
