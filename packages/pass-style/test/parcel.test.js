@@ -1,4 +1,3 @@
-// Install the realm's Parcel before anything below can make one.
 import '@endo/parcel/shim.js';
 import test from '@endo/ses-ava/test.js';
 
@@ -20,14 +19,14 @@ const { Parcel } = globalThis;
 // configurations. The adversarial-global tests below cover shims-only mode.
 const parcelTest = Object.isFrozen(Parcel) ? test : test.skip;
 
-const makeRef = (value = 'opened') => new Parcel('test:parcel', () => value);
+const makeParcel = (value = 'opened') => new Parcel('test:parcel', () => value);
 
 parcelTest('passStyleOf recognizes a Parcel', t => {
-  const ref = makeRef();
-  t.is(passStyleOf(ref), 'parcel');
-  t.true(isPassable(ref));
+  const parcel = makeParcel();
+  t.is(passStyleOf(parcel), 'parcel');
+  t.true(isPassable(parcel));
   // Memoized recognition gives the same answer.
-  t.is(passStyleOf(ref), 'parcel');
+  t.is(passStyleOf(parcel), 'parcel');
 });
 
 parcelTest('distinct Parcels are distinct passables', t => {
@@ -40,10 +39,10 @@ parcelTest('distinct Parcels are distinct passables', t => {
 });
 
 parcelTest('a Parcel nests in pass-by-copy containers', t => {
-  const ref = makeRef();
-  t.is(passStyleOf(harden({ ref, note: 'hi' })), 'copyRecord');
-  t.is(passStyleOf(harden([ref, ref])), 'copyArray');
-  t.is(passStyleOf(makeTagged('box', ref)), 'tagged');
+  const parcel = makeParcel();
+  t.is(passStyleOf(harden({ parcel, note: 'hi' })), 'copyRecord');
+  t.is(passStyleOf(harden([parcel, parcel])), 'copyArray');
+  t.is(passStyleOf(makeTagged('box', parcel)), 'tagged');
 });
 
 parcelTest('recognition is by brand, not by prototype', t => {
@@ -67,23 +66,23 @@ parcelTest('a remotable is still a remotable', t => {
 });
 
 parcelTest('deeplyFulfilled leaves a Parcel as is', async t => {
-  const ref = makeRef();
-  const fulfilled = await deeplyFulfilled(ref);
-  t.is(fulfilled, ref);
-  const record = await deeplyFulfilled(harden({ ref }));
-  t.is(record.ref, ref);
+  const parcel = makeParcel();
+  const fulfilled = await deeplyFulfilled(parcel);
+  t.is(fulfilled, parcel);
+  const record = await deeplyFulfilled(harden({ parcel }));
+  t.is(record.parcel, parcel);
 });
 
 parcelTest('recognition does not open', async t => {
   let opened = 0;
-  const ref = new Parcel('test:recognition', () => {
+  const parcel = new Parcel('test:recognition', () => {
     opened += 1;
     return 'live';
   });
-  t.is(passStyleOf(ref), 'parcel');
+  t.is(passStyleOf(parcel), 'parcel');
   await null;
   t.is(opened, 0);
-  t.is(await Parcel.open(ref), 'live');
+  t.is(await Parcel.open(parcel), 'live');
   t.is(opened, 1);
 });
 

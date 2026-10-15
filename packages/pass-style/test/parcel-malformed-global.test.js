@@ -12,8 +12,6 @@ const mutableTest =
 mutableTest('a Parcel global without isParcel vouches for nothing', t => {
   // Something other than the shim claimed the global. Recognition must not
   // trust it, and must not throw while looking.
-  // The constructor and prototype are frozen, so only the missing
-  // `isParcel` can disqualify it.
   const impostor = function Parcel() {};
   Object.defineProperty(impostor.prototype, Symbol.toStringTag, {
     value: 'Parcel',
@@ -22,8 +20,8 @@ mutableTest('a Parcel global without isParcel vouches for nothing', t => {
   Object.freeze(impostor);
   /** @type {any} */ (globalThis).Parcel = impostor;
   try {
-    const ref = harden(Object.create(impostor.prototype));
-    t.throws(() => passStyleOf(ref));
+    const forged = harden(Object.create(impostor.prototype));
+    t.throws(() => passStyleOf(forged));
   } finally {
     delete (/** @type {any} */ (globalThis).Parcel);
   }
