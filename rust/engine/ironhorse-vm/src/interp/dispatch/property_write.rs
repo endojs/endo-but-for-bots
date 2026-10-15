@@ -13,20 +13,16 @@ impl Interp {
     ) -> Result<Option<usize>, Step> {
         let value = self.pop_checked()?;
         let obj = self.pop_checked()?;
-        // A primitive symbol's `Payload::Reference` is its
-        // DESCRIPTION slot, not an instance — so it must be
-        // matched off BEFORE the generic reference arm, or
-        // `sym.k = v` runs the description's setters and stores on
-        // it. XS boxes the primitive, finds the fresh wrapper
-        // non-extensible, and stores nothing: a sloppy no-op, a
-        // strict TypeError.
-        if obj.kind == Kind::Symbol {
-            if self.strict {
-                let error = self.internal_error(
-                    "TypeError",
-                    format!("set {}: not extensible", self.property_debug_name(id)),
-                );
-                return Err(self.raise_js(error));
+        // A primitive base, matched on its KIND before the reference arm: a
+        // primitive symbol's `Payload::Reference` is its DESCRIPTION slot,
+        // not an instance, and must never be written through.
+        if let Some(proto) = self.primitive_wrapper_proto(obj) {
+            let accepted = match (self.primitive_set_in_place(code, obj, proto, id, value))? {
+                SetInPlace::Done(accepted) => accepted,
+                SetInPlace::Entered(body_start) => return Ok(Some(body_start)),
+            };
+            if !accepted && self.strict {
+                return Err(self.failed_primitive_set_error(obj, proto, id));
             }
         } else if let Payload::Reference(inst) = obj.value {
             if self.proxies.contains_key(&inst) {
@@ -110,6 +106,76 @@ impl Interp {
         }
         self.push(value);
         Ok(None)
+    }
+
+    /// The wrapper prototype of a primitive base (ToObject's), or `None`
+    /// for an object, `null` or `undefined`.
+    pub(in crate::interp) fn primitive_wrapper_proto(
+        &self,
+        base: Slot,
+    ) -> Option<crate::value::SlotIndex> {
+        match base.kind {
+            Kind::String => Some(self.string_proto),
+            Kind::Integer | Kind::Number => Some(self.number_proto),
+            Kind::Boolean => Some(self.boolean_proto),
+            Kind::Symbol => Some(self.symbol_proto),
+            Kind::BigInt => Some(self.bigint_proto),
+            _ => None,
+        }
+    }
+
+    /// Whether `id` names one of a primitive string's own properties, its
+    /// `length` or an index below it: read-only, so a write refuses.
+    pub(in crate::interp) fn string_owns_key(&self, base: Slot, id: u16) -> bool {
+        let Payload::String(off) = base.value else {
+            return false;
+        };
+        let Some(name) = self.scalar_key_text(id) else {
+            return false;
+        };
+        let length = self.str_content(off).len() / 2;
+        name == "length" || string_to_index(&name).is_some_and(|index| (index as usize) < length)
+    }
+
+    /// PutValue on a primitive base (ES2024 6.2.5.6): `ToObject(base).[[Set]]`
+    /// with the primitive itself as the receiver. A string's own indices and
+    /// `length` are read-only, so the write is refused; otherwise the
+    /// wrapper prototype's chain answers, so an inherited setter or a Proxy
+    /// `set` trap runs, and a new property is refused because the receiver
+    /// is not an object (OrdinarySetWithOwnDescriptor step 2.c). A setter
+    /// runs in place, as on an object.
+    pub(super) fn primitive_set_in_place(
+        &mut self,
+        code: &[u8],
+        base: Slot,
+        proto: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+    ) -> Result<SetInPlace, Step> {
+        if self.string_owns_key(base, id) {
+            return Ok(SetInPlace::Done(false));
+        }
+        self.set_property_in_place(code, proto, id, value, base)
+    }
+
+    /// The strict TypeError for a refused primitive write, in XS's words: a
+    /// string's own key and a new property are `not extensible`, an
+    /// inherited read-only property `not writable`, a getter-only accessor
+    /// `no setter`.
+    pub(in crate::interp) fn failed_primitive_set_error(
+        &mut self,
+        base: Slot,
+        proto: crate::value::SlotIndex,
+        id: u16,
+    ) -> Step {
+        if self.string_owns_key(base, id) {
+            let error = self.internal_error(
+                "TypeError",
+                format!("set {}: not extensible", self.property_debug_name(id)),
+            );
+            return self.raise_js(error);
+        }
+        self.failed_set_error(proto, id, "set")
     }
 
     pub(super) fn dispatch_delete_property(&mut self, code: &[u8], id: u16) -> Result<(), Step> {

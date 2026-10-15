@@ -274,12 +274,46 @@ fn malformed_suspended_assignment_targets_are_refused() {
         original.slots[non_instance_base.next.0 as usize].kind,
         Kind::Instance
     );
+    // A super reference whose receiver is a primitive carries its kind in
+    // `flag`; a live base, a known kind and a payload of that kind.
+    let live_base = SlotIndex(original.promise_cluster.async_instances[0].frame.cur_func);
+    let primitive_super = |kind: u8, value: Payload, base: SlotIndex| {
+        let mut slot = Slot::of(Kind::EnvReference, value);
+        slot.flag = ironhorse_vm::value::SUPER_PRIMITIVE_RECEIVER | kind;
+        slot.next = base;
+        slot
+    };
+    let integer = Kind::Integer as u8;
     for (label, invalid, guest_position) in [
         ("sentinel with base", invalid_base, false),
         ("invalid receiver", invalid_receiver, false),
         ("invalid flags", invalid_flags, false),
         ("invalid super base", invalid_super_base, false),
         ("non-instance super base", non_instance_base, false),
+        (
+            "primitive super receiver without a base",
+            primitive_super(integer, Payload::Integer(5), SlotIndex::NULL),
+            false,
+        ),
+        (
+            "primitive super receiver of no kind",
+            primitive_super(0x7f, Payload::Integer(5), live_base),
+            false,
+        ),
+        (
+            "primitive super receiver flagged as an object",
+            primitive_super(
+                Kind::Reference as u8,
+                Payload::Reference(live_base),
+                live_base,
+            ),
+            false,
+        ),
+        (
+            "primitive super receiver of another kind",
+            primitive_super(Kind::String as u8, Payload::Integer(5), live_base),
+            false,
+        ),
         (
             "bad environment payload",
             Slot::of(Kind::EnvReference, Payload::Integer(0)),
@@ -355,6 +389,44 @@ fn computed_super_preserves_receiver_and_delays_null_base_errors() {
         let mut resumed = from_snapshot_bytes(&bytes, &signature).unwrap();
         crank(&mut resumed, "release(42); 0");
         assert_eq!(crank(&mut resumed, "done").2, expected);
+        assert_eq!(
+            twin(
+                &source,
+                &["release(42); 0", "done"],
+                &mut MemoryStore::new()
+            )
+            .last()
+            .unwrap()
+            .2,
+            expected
+        );
+    }
+}
+
+#[test]
+fn computed_super_carries_a_primitive_receiver_through_collection_and_restore() {
+    // A strict method's `this` stays the primitive in the suspended super
+    // reference, its chunk relocated by compaction like any stack value's.
+    for (receiver, expected) in [
+        ("5", "number:5:42"),
+        ("'ab' + 'c'.repeat(3)", "string:abccc:42"),
+        ("Symbol('s')", "symbol:Symbol(s):42"),
+        (
+            "12345678901234567890n * 3n",
+            "bigint:37037036703703703670:42",
+        ),
+        ("undefined", "undefined:undefined:42"),
+    ] {
+        let source = format!("var release; var gate = new Promise(r => release = r); var done; var key = 'value'; var junk = []; for (var i = 0; i < 64; i++) junk.push('x' + i); junk = null; class A {{ async f() {{ super[key] = await gate; }} }} Object.setPrototypeOf(A.prototype, {{ set value(v) {{ 'use strict'; done = typeof this + ':' + String(this) + ':' + v; }} }}); A.prototype.f.call({receiver});");
+        let signature = Signature::new("super-primitive-receiver");
+        let mut machine = boot(&source);
+        machine.collect_garbage().unwrap();
+        let bytes = machine.write_snapshot(&signature).unwrap();
+        let mut restored = from_snapshot_bytes(&bytes, &signature).unwrap();
+        for machine in [&mut machine, &mut restored] {
+            crank(machine, "release(42); 0");
+            assert_eq!(crank(machine, "done").2, expected, "{source}");
+        }
         assert_eq!(
             twin(
                 &source,

@@ -25,14 +25,6 @@ use ironhorse_262::{dual_run, Agreement};
 /// subject, with that reason. Verified on the pinned oracle.
 const KNOWN_DIVERGENCES: &[(&str, &str)] = &[
     (
-        "var r=0; function f(){ 'use strict'; var s='abc'; try { s[0] = 'x'; r=s } catch(e){ r=e instanceof TypeError } } f(); r",
-        "strict indexed write to a primitive string is a silent no-op; XS throws (property_at_set on primitives, adjacent to F007)",
-    ),
-    (
-        "function f(){ 'use strict'; var s=Symbol('a'); try { s['x']=1; return 'ok' } catch(e){ return e.name } } f()",
-        "the symbol reach-through is closed (the write stores nothing), but a strict COMPUTED write to any primitive receiver is still a silent no-op where XS throws — the `property_at_set`-on-primitives entry above, of which this is the symbol shape",
-    ),
-    (
         "var o={toString(){ throw 5 }}; throw o",
         "the oracle shim reports a throwing exception-stringification as its own marker; the port renders the fallback stub (F026/F093)",
     ),

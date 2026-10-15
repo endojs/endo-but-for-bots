@@ -2566,6 +2566,19 @@ impl Interp {
                         return Err(refuse("invalid suspended property key"));
                     }
                 }
+                (Kind::EnvReference, _)
+                    if value.flag & crate::value::SUPER_PRIMITIVE_RECEIVER != 0 =>
+                {
+                    // A computed super reference with a non-object receiver.
+                    let Some(receiver) = value.super_receiver() else {
+                        return Err(refuse("invalid suspended super reference"));
+                    };
+                    if value.id != 0 || value.next.is_null() {
+                        return Err(refuse("invalid suspended super reference"));
+                    }
+                    self.validate_restore_value_shape(receiver, ROW)?;
+                    self.validate_restore_owner(value.next.0, ROW)?;
+                }
                 (Kind::EnvReference, Payload::Reference(receiver)) => {
                     if value.id != 0 || value.flag != 0 {
                         return Err(refuse("invalid suspended environment reference"));

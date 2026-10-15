@@ -3486,15 +3486,23 @@ impl Interp {
             None => return Flow::Exit(Step::Host(Halt::EngineInvariant("super_at:stack"))),
         };
         let key_pos = receiver_pos + 1;
+        // A strict method's receiver may be any value: the reference keeps
+        // it as it is, where XS converts it to an object.
         let receiver = self.stack[receiver_pos];
-        let receiver_ref = match receiver.value {
-            Payload::Reference(object) if receiver.kind == Kind::Reference => object,
-            _ => {
-                return Flow::Exit(Step::Host(Halt::NotImplemented(
-                    "super_at:primitive-receiver",
-                )))
-            }
-        };
+        if !matches!(
+            receiver.kind,
+            Kind::Reference
+                | Kind::Undefined
+                | Kind::Null
+                | Kind::Boolean
+                | Kind::Integer
+                | Kind::Number
+                | Kind::String
+                | Kind::Symbol
+                | Kind::BigInt
+        ) {
+            return Flow::Exit(Step::Host(Halt::EngineInvariant("super_at:receiver")));
+        }
         let home = self
             .functions
             .get(&self.cur_func)
@@ -3524,9 +3532,7 @@ impl Interp {
             // not match its kind, the engine's own value being malformed.
             None => return Flow::Exit(Step::Host(Halt::EngineInvariant("super_at:key-kind"))),
         };
-        let mut super_ref = Slot::of(Kind::EnvReference, Payload::Reference(receiver_ref));
-        super_ref.next = base;
-        self.stack[receiver_pos] = super_ref;
+        self.stack[receiver_pos] = Slot::super_reference(receiver, base);
         self.stack[key_pos] = key;
         pc += size as usize;
         Flow::Next(pc)
