@@ -21,8 +21,12 @@ them, every wasm table and every capped-host halt below repeated to the byte.
 The native and recycle files are from `0a42c5a3`: the widths equal the 64-bit `size_of` they
 replace, so native output does not change, and they change what admission charges, not what a
 run that completes allocates.
-Two have not landed: array-item and side-table admission, and the consensus caps on
-`set_chunk_ceiling` and `set_slot_ceiling`.
+Array-item and side-table admission
+([endojs/endo-but-for-bots#1457](https://github.com/endojs/endo-but-for-bots/pull/1457)) landed
+after the rest of this report: it charges array items and Map and Set entries against the chunk
+ceiling, not the slot ceiling as this report had assumed, so its figures were re-measured on top
+of it and the tables that depend on them recomputed ([Side-table admission](#side-table-admission)).
+The consensus caps on `set_chunk_ceiling` and `set_slot_ceiling` have not landed.
 [The formula](#the-worst-case-formula) says which constants each of them moves.
 
 ## Decisions
@@ -32,28 +36,31 @@ Two have not landed: array-item and side-table admission, and the consensus caps
   50 per slot of slot ceiling, over a 7.25 MiB empty instance.
   A checkpoint or a whole-heap snapshot adds at most one container to that, 1.0 byte per chunk
   byte and 20 per slot; an eager restore, now the costliest phase, takes 6.0 and 114.
-  Array items and Map and Set entries are bounded by no ceiling and cost up to 221 and 424 bytes
-  each at a checkpoint.
+  Array items and Map and Set entries are charged against the chunk ceiling, and at a checkpoint
+  they take up to 6.6 and 4.2 bytes per byte charged, which raises the checkpoint's 5.5 per chunk
+  byte to 6.6.
 - **Ceilings belong at powers of two.**
   Both arenas grow by doubling, so a slot ceiling just past 2^20 took 91 bytes per slot where 2^20
   took 48, and a 160 MiB chunk ceiling took 3.27 bytes per chunk byte where 256 MiB took 2.04.
 - **A 128 MB Cloudflare isolate: 4 MiB of chunks and 262,144 slots.**
   Every phase then stays within 69 MiB of the 98 MiB left after the host, by the formula with a
   15% margin; no measured shape passed 40 MiB.
-  Once side tables are admitted a vat keeps at most about 9.4 MB of container under them: the
-  7.65 MB SES boot heap fits only if its slots and chunks each do, and the 17.27 MB counter vat
-  does not.
+  A vat keeps at most about 9.4 MB of container under them, and its side tables now share the
+  4 MiB with its chunks: the 7.65 MB SES boot heap fits only if its slots do and its chunks and
+  side storage together do, and the 17.27 MB counter vat does not.
 - **A 512 MB container (the native worker): 32 MiB of chunks and 1,048,576 slots.**
-  The worst phase is 292 MiB by the native formula, and 246 MiB measured; both Thixotrope heaps
+  The worst phase is 259 MiB by the native formula, and 246 MiB measured; both Thixotrope heaps
   fit.
   64 MiB and 2^20 overrun the budget at a checkpoint by the formula.
-- **An uncapped native host: keep the defaults** (256 MiB, 1,000,000 slots; worst 1,588 MiB),
+- **An uncapped native host: keep the defaults** (256 MiB, 1,000,000 slots; worst 1,571 MiB),
   and raise them no further than the consensus caps.
 - **The consensus caps should be 2^28 bytes and 2^23 (8,388,608) slots**, not 2^29 and
   44,739,242.
   At the proposed caps every phase overruns wasm32's 4 GiB (5,111 MiB running, 9,135 MiB at an
-  eager restore); at 2^28 and 2^23 the costliest phase needs 2,824 MiB, and 3,383 once a restored
+  eager restore); at 2^28 and 2^23 the costliest phase needs 2,824 MiB, and 3,335 once a restored
   arena outgrows its ceiling.
+  With side tables charged against the chunk ceiling, 2^27 and 2^24 now leaves more room than
+  2^28 and 2^23 ([below](#the-consensus-caps)).
 - **Recycle an instance at a crank boundary once its linear memory passes
   T(C, S) = 1.15 × (7.25 MiB + 6.0·C + 114·S)**, the most a fresh instance at those ceilings
   needs to restore and run a crank, and always after a trap or a host failure.
@@ -101,8 +108,8 @@ The shapes:
 | Small strings | strings of 1,024 units, kept | chunks |
 | Objects | a linked list of two-property objects | slots |
 | A vat-like mix | records in a Map by string id, each an object with a string, a number and a three-element array | slots, then chunks |
-| Arrays | integers pushed onto one array | nothing |
-| Maps, Sets | integer entries | nothing |
+| Arrays | integers pushed onto one array | chunks |
+| Maps, Sets | integer entries | chunks |
 
 The allocator's layout decides how much linear memory a given peak takes.
 At their checkpoints under 250,000 slots and 32 MiB, small strings and the mix both peaked at
@@ -212,7 +219,7 @@ W(C, S) = 1.15 × (L0 + a·C + b·S)            L0 = 7.25 MiB (4 MiB of it the s
 
 phase        a (per chunk byte)   b (bytes per slot)
 running      4.5                  50
-checkpoint   5.5                  70       (110.5 once side tables are admitted, below)
+checkpoint   6.6                  70
 snapshot     5.5                  70
 restore      6.0                  114
 ```
@@ -236,21 +243,23 @@ prediction.
 
 The same check held for the mix at 250,000 slots and 32 MiB, at 4 MiB and 2^18 slots, and at
 8 MiB and 2^19.
-Unadmitted storage adds `i·items + e·entries`, with `i` = 57, 221, 81, 128 and `e` = 133, 424,
-173, 222 bytes in the four phases; today nothing bounds either term.
+Array items and Map and Set entries count toward `C` at what they are charged
+([Side-table admission](#side-table-admission)); every phase's `a` covers them, and the
+checkpoint's 6.6 is theirs, an array heap's re-encoded items.
 Off a power of two, or on a restored arena, the slot term can nearly double (91 against 48 bytes
 per slot) and the chunk term grow by half again (3.27 against 2.04).
 At the default ceilings the formula gives 1,388 MiB running, 1,704 MiB for a snapshot and 1,900
-MiB for a restore, against 1,153, 897 and 1,470 MiB measured.
+MiB for a restore, against 1,153, 897 and 1,470 MiB measured, and 2,028 MiB at a checkpoint,
+against 850 MiB measured for the array heap at 95% of the ceiling.
 
 What the sibling tasks change:
 
-- **Admitting array items and side tables** turns `i` and `e` into slot charges.
-  Charging 2 slots per array item and 4 per Map or Set entry keeps every phase's per-slot cost
-  within the object list's, except the checkpoint's, where `b` rises from 70 to 110.5 (an array
-  item's 221 bytes over its 2 slots; a Map entry's 424 over 4 is 106); that is the figure the
-  recommendations below use.
-  Charging less leaves the side tables' per-slot cost above the objects' in that phase.
+- **Admitting array items and side tables**, which has landed, charges them against the chunk
+  ceiling, 32 bytes per item and 96 per entry by capacity class, rather than 2 and 4 slots, as this
+  report first assumed.
+  Per byte charged they stay within every phase's `a` except the checkpoint's, which rises from 5.5
+  to 6.6, and the checkpoint's `b` stays 70 rather than the 110.5 a slot charge would have needed
+  ([Side-table admission](#side-table-admission)); the recommendations below use 6.6 and 70.
 - **The streaming snapshot writer**, which has landed, moved the snapshot row from 6.9 and 117
   (a whole image and the encoder's buffers beside the heap) to running plus one container.
   It took the string heaps' snapshots from 5.5 to 6.9 per chunk byte down to their running cost,
@@ -276,6 +285,51 @@ Four engine changes would lower the constants themselves, and none is made here:
 - checkpointing a changed array or Map section by its dirty part, as B8's incremental section
   encoding proposes, would cut `i` and `e` at the checkpoint.
 
+## Side-table admission
+
+Since [endojs/endo-but-for-bots#1457](https://github.com/endojs/endo-but-for-bots/pull/1457), array
+items and index properties are charged 32 bytes each, and Map, Set, WeakMap and WeakSet entries 96,
+against the chunk ceiling, by the capacity class of their count: 0, 4, then powers of two
+(`ironhorse-vm/src/side_storage.rs`).
+The array, Map and Set shapes therefore find that ceiling the way the string shapes do: at 256 MiB,
+4,194,304 array items or 2,097,152 entries complete, and the next class would pass it.
+Re-measured on that branch, rebased on `7031f33b`, per byte charged against the chunk ceiling
+(chunks and side storage together), wasm32 under Wasmtime:
+
+| Shape | Running | At the ceiling | Checkpoint | Snapshot | Restore |
+|---|---:|---:|---:|---:|---:|
+| Array items | 1.70 | 1.79 | 6.58 | 2.41 | 3.80 |
+| Map entries | 1.65 | 1.93 | 4.24 | 2.33 | 2.20 |
+| Set members | 1.93 | 1.93 | 4.24 | 2.33 | 2.20 |
+
+At 250,000 slots and 32 MiB the array row repeated within 0.01, and Maps and Sets ran at 1.93 to
+2.07 with 4.21, 2.07 and 2.20 in the other phases.
+Natively (peak RSS, default ceilings) array items took 1.78 running (1.88 at the ceiling), 5.12 at
+a checkpoint, 2.50 at a snapshot and 3.44 at a restore, and Map and Set entries 1.47, 3.18, 1.67
+and 1.70.
+
+Every figure is inside its phase's `a` except the array checkpoint's: `checkpoint_to_store`
+re-encodes the items section whole (WASM-BLOCKERS.md B8), so the checkpoint's `a` is now 6.6 on
+wasm32 and 5.12 natively, and its `b` stays the object list's.
+These are the per-element costs the fixed-size runs above found (221 bytes per array item and up
+to 424 per entry at a checkpoint) divided by the charge, give or take where a count sits in its
+class: the runs are at 95% of a full one.
+
+The vat-like mix, each record a Map entry and a three-element array beside its object and string,
+re-measured within 1.1% of its earlier figures at the default ceilings and at 250,000 slots and
+32 MiB, where its slots bind first (its side storage took 43.3 MiB of 256 and 10.8 of 32).
+Under 4 MiB and 2^18 slots, where its chunks bound it already, the side storage now shares that
+ceiling, so it holds 8,192 records rather than 14,592, at lower footprints (MiB of linear memory):
+
+| 4 MiB, 2^18 slots | Records at 95% | Running | Checkpoint | Snapshot | Restore | Snapshot size (MB) |
+|---|---:|---:|---:|---:|---:|---:|
+| Before side-table admission | 13,862 | 25.4 | 39.6 | 32.4 | 37.5 | 7.39 |
+| After | 7,782 | 16.1 | 24.4 | 20.1 | 23.8 | 4.14 |
+
+The object list repeated to the byte.
+The string shapes keep their strings in an array, whose items take less than 2% of a 4 MiB ceiling;
+they were not re-measured.
+
 ## Recommended ceilings
 
 ### A 128 MB Cloudflare isolate
@@ -286,15 +340,15 @@ set by 20.2 MB, and the JS heap held 4.6 MB.
 Whether compiled wasm code counts toward the cap is one of the unknowns below, so the host's share
 is taken as 24 MiB, leaving 98 MiB of linear memory, of which the 4 MiB shadow stack is part of
 L0.
-With admitted side tables (`b` = 110.5 at the checkpoint):
+With side tables charged against the chunk ceiling (`a` = 6.6 and `b` = 70 at the checkpoint):
 
 | Ceilings | Running | Checkpoint | Snapshot | Restore | Fits 98 MiB |
 |---|---:|---:|---:|---:|---|
-| 4 MiB, 2^18 slots | 43 | 65 | 54 | 69 | every phase |
-| 8 MiB, 2^18 slots | 64 | 91 | 79 | 96 | every phase, by 2 MiB |
-| 4 MiB, 2^19 slots | 58 | 97 | 74 | 102 | not at a restore |
-| 8 MiB, 2^19 slots | 79 | 123 | 99 | 129 | running only |
-| 16 MiB, 2^20 slots | 149 | 237 | 190 | 250 | no phase |
+| 4 MiB, 2^18 slots | 43 | 59 | 54 | 69 | every phase |
+| 8 MiB, 2^18 slots | 64 | 89 | 79 | 96 | every phase, by 2 MiB |
+| 4 MiB, 2^19 slots | 58 | 79 | 74 | 102 | not at a restore |
+| 8 MiB, 2^19 slots | 79 | 109 | 99 | 129 | running only |
+| 16 MiB, 2^20 slots | 149 | 210 | 190 | 250 | no phase |
 
 **Recommended: a chunk ceiling of 2^22 bytes (4 MiB) and a slot ceiling of 2^18 (262,144).**
 Measured under them, no shape passed 40 MiB in any phase: the vat-like mix reached 25.4 running,
@@ -305,14 +359,17 @@ below measures that share.
 Under 8 MiB and 2^19 the mix measured 71.9 at its checkpoint, inside the budget, but a heap that
 fills both ceilings with their costliest shapes would not be.
 
-Once side tables are admitted, a vat keeps at most 262,144 slots and 4 MiB of chunks under them,
-about 9.4 MB of container (5.24 MB of slot records and 4.19 MB of chunks).
-At 95% of those ceilings the measured snapshots were 5.00 MB for objects and 7.39 MB for the mix.
-The SES boot heap's 7.65 MB container is at that edge, and fits only if its slots and chunks each
-do.
+A vat keeps at most 262,144 slots and 4 MiB of chunks and side storage under them, about 9.4 MB
+of container (5.24 MB of slot records and 4.19 MB of chunks; a side table's rows are smaller than
+its charge).
+At 95% of those ceilings the measured snapshots were 5.00 MB for objects and 7.39 MB for the mix
+before side-table admission, and 4.14 MB for the mix after it, which now reaches the chunk ceiling
+at 8,192 records instead of 14,592: its Map entries and arrays take 1.7 MiB of the 4.
+The SES boot heap's 7.65 MB container is at that edge, and fits only if its slots fit and its
+chunks and side storage together do; this report did not measure its side storage.
 The counter vat's 17.27 MB is nearly twice what the ceilings hold.
-Today, with side tables unadmitted, its 1,006 slot pages (at most 257,536 slots) fit inside 2^18,
-and it loads only if less than 4 MiB of the other 12.1 MB of its container is chunks.
+Its 1,006 slot pages (at most 257,536 slots) fit inside 2^18, and it loads only if less than 4 MiB
+of the other 12.1 MB of its container is chunks and side storage.
 
 That is not because the counter vat is too big for the isolate: the Cloudflare review measured it
 at 42.13 MiB after a lazy wake and 77.75 MiB after an eager one and a chunk-allocating crank,
@@ -322,23 +379,24 @@ It is that ceilings large enough to admit it, such as 16 MiB of chunks, let a ru
 So a vat of the counter vat's size can run on Cloudflare only with its memory bounded by the cap's
 enforcement rather than by its ceilings, until lazy wake and the engine changes above lower the
 constants.
-Until side tables are admitted, nothing bounds an array or a Map under any ceilings: under a
+Before side-table admission nothing bounded an array or a Map under any ceilings: under a
 128 MiB Wasmtime cap, four million array items, Map entries or Set members each ended in
 `HostAllocationFailed`.
+Under 4 MiB of chunks they now halt `HeapExhausted` long before that.
 
 ### A 512 MB container
 
 A Container runs the native worker, so the native constants apply, measured against zero: L0
 about 3 MiB (the native probe's resident set before its program), `a` = 4.05 running, 5.05 at a
-checkpoint and a snapshot, and 4.07 at a restore, `b` = 33, 89 at a checkpoint with admitted side
-tables, 53 and 92.
+checkpoint and a snapshot, and 4.07 at a restore, `b` = 33, 53 and 92; the checkpoint takes 5.12
+and 55, its array heap's re-encoded items and its measured object list.
 Leaving 48 MiB of the 488 MiB for the worker's own process and SQLite, 440 MiB remains.
 
 | Ceilings | Running | Checkpoint | Snapshot | Restore | Fits 440 MiB |
 |---|---:|---:|---:|---:|---|
-| 64 MiB, 2^20 slots | 340 | 478 | 436 | 409 | not at a checkpoint |
-| 64 MiB, 2^19 slots | 321 | 426 | 406 | 356 | every phase, by 14 MiB |
-| 32 MiB, 2^20 slots | 190 | 292 | 250 | 259 | every phase |
+| 64 MiB, 2^20 slots | 340 | 444 | 436 | 409 | not at a checkpoint |
+| 64 MiB, 2^19 slots | 321 | 412 | 406 | 356 | every phase, by 28 MiB |
+| 32 MiB, 2^20 slots | 190 | 255 | 250 | 259 | every phase |
 
 **Recommended: a chunk ceiling of 2^25 bytes (32 MiB) and a slot ceiling of 2^20 (1,048,576).**
 Measured under them natively, the doubled string reached 133.5 MiB running, at the ceiling, and
@@ -353,10 +411,10 @@ A vat keeps up to about 21 MB of slot records and 32 MiB of chunks, so both Thix
 ### An uncapped native host
 
 **Recommended: the defaults**, 2^28 bytes (256 MiB) of chunks and 1,000,000 slots.
-The native formula gives at most 1,588 MiB in any phase, at a checkpoint; side tables are bounded
-only by the host, which reached 4 to 6.6 GiB in B7's repros.
+The native formula gives at most 1,571 MiB in any phase, at a checkpoint; side tables, bounded
+only by the host before their admission (4 to 6.6 GiB in B7's repros), are within it.
 Raise them only as far as the consensus caps, 2^28 bytes and 2^23 slots, which the native formula
-puts at 2,309 MiB at a checkpoint.
+puts at 2,048 MiB at a restore.
 A consensus group that includes a wasm32 replica is held to what that replica can honor, which is
 what the caps are for.
 
@@ -368,24 +426,28 @@ wall of B7's latent paragraph.
 
 | Caps | Running | Checkpoint | Snapshot | Restore |
 |---|---:|---:|---:|---:|
-| 2^29 bytes, 44,739,242 slots | 5,111 | 8,669 | 6,681 | 9,135 |
-| 2^29 bytes, 2^22 slots | 2,888 | 3,755 | 3,569 | 4,066 |
-| 2^28 bytes, 2^24 slots | 2,253 | 3,661 | 2,916 | 3,872 |
-| **2^28 bytes, 2^23 slots** | 1,793 | 2,644 | 2,272 | 2,824 |
-| 2^27 bytes, 2^24 slots | 1,591 | 2,851 | 2,106 | 2,989 |
+| 2^29 bytes, 44,739,242 slots | 5,111 | 7,329 | 6,681 | 9,135 |
+| 2^29 bytes, 2^22 slots | 2,888 | 4,216 | 3,569 | 4,066 |
+| 2^28 bytes, 2^24 slots | 2,253 | 3,239 | 2,916 | 3,872 |
+| **2^28 bytes, 2^23 slots** | 1,793 | 2,595 | 2,272 | 2,824 |
+| 2^27 bytes, 2^24 slots | 1,591 | 2,268 | 2,106 | 2,989 |
 
-MiB of wasm32 linear memory by the formula, with admitted side tables; the address space is
-4,096.
+MiB of wasm32 linear memory by the formula, with side tables charged against the chunk ceiling;
+the address space is 4,096.
 At the proposed caps every phase overruns it, and running alone needs 5,111 MiB; with B7's
 measured 73 bytes per slot at 44,000,000 objects, where the slot vector has doubled to 2^26, it
 needs 6,240.
 At 2^28 bytes and 2^23 slots the costliest phase, the restore, needs 2,824 MiB.
 A restored arena that grows past its ceiling's power of two, at 91 bytes per slot rather than 50
 and 3.27 per chunk byte rather than 2.04, adds 739 MiB to the running and checkpoint rows there,
-putting the checkpoint at 3,383 and leaving 713 MiB for what the formula does not see.
-2^28 and 2^24 fits the formula by 224 MiB, and overruns by 681 once that penalty is counted
-(4,777 at the checkpoint); 2^29 and 2^22 fits it by 30.
-2^27 and 2^24 fits with the penalty too, by 309 MiB, less than half the margin.
+putting the checkpoint at 3,335 and leaving 761 MiB for what the formula does not see.
+2^28 and 2^24 fits the formula by 224 MiB, and overruns by 260 once that penalty is counted
+(4,356 at the checkpoint); 2^29 and 2^22 no longer fits it, its checkpoint needing 4,216.
+2^27 and 2^24 fits with the penalty too, by 893 MiB.
+That is more room than 2^28 and 2^23 leaves: with a slot charge for side tables, this pair fit by
+309 MiB, less than half the margin, and that comparison was the reason for preferring 2^28 and
+2^23.
+The caps task should weigh the two pairs again on these numbers.
 The chunk cap is then today's default ceiling, and the slot cap eight times it.
 
 Two conditions come with them.
@@ -578,6 +640,9 @@ above.
 | Native, default ceilings | `python3 memory.py --no-build --native --ceilings default --output results/native.json` | `native.json` |
 | The container candidates, native | `python3 memory.py --no-build --native --shape strings --shape string-doubling --shape small-strings --shape objects --shape mixed --ceiling 1048576 33554432 --output results/container-2-20-32MiB-native.json`, and `1048576 67108864` into `container-2-20-64MiB-native.json` | `container-2-20-32MiB-native.json`, `container-2-20-64MiB-native.json` |
 | The recycle cost | `python3 memory.py --no-build --recycle --output results/recycle.json` | `recycle.json` |
+| Side tables against the chunk ceiling | `python3 memory.py --shape arrays --shape maps --shape sets --output results/side-tables.json` | `side-tables.json` |
+| Side tables, native | `python3 memory.py --no-build --native --shape arrays --shape maps --shape sets --ceilings default --output results/side-tables-native.json` | `side-tables-native.json` |
+| The mix after side-table admission | `python3 memory.py --no-build --shape mixed --output results/side-tables-mixed.json`, with `--native --ceilings default` into `side-tables-mixed-native.json`, and `--shape mixed --shape objects --ceiling 262144 4194304` into `side-tables-cloudflare-2-18-4MiB.json` | `side-tables-mixed.json`, `side-tables-mixed-native.json`, `side-tables-cloudflare-2-18-4MiB.json` |
 | A string snapshot under a 256 MiB cap | `for n in 32 40; do sed "s/__N__/$n/" programs/strings.js \| $WASMTIME run -W exceptions=y -W max-memory-size=268435456 probe/target/wasm32-wasip1/release/ih-memory-probe.wasm snapshot; done` | |
 | Node's crash | `gdb -batch -ex run -ex bt --args node --liftoff-only --experimental-wasm-exnref recycle.cjs probe/target/wasm32-wasip1/release/ih-memory-probe.wasm <a snapshot of 50,000 records>` | |
 

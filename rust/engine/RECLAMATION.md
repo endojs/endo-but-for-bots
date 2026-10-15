@@ -53,7 +53,13 @@ historical fixture files remain preserved.
 
 The existing defaults remain one million slot addresses and 256 MiB of chunk storage.
 Custom ceilings are host policy and must be reapplied after restore.
-These limits do not bound total process memory or all aggregate side-table allocations.
+These limits do not bound total process memory.
+Array items, index properties, Map/Set/WeakMap/WeakSet entries and `Intl.Segmenter` results are
+charged against the chunk ceiling at declared widths (`ironhorse-vm/src/side_storage.rs`).
+Deletes and clears release their charge at once, and garbage collection releases the charge of
+the rows it drops.
+A restore derives the charge from the restored tables rather than persisting it.
+Other side tables are still not charged (see `WASM-BLOCKERS.md` B7).
 No collection runs within a crank.
 Allocations can reuse previously reclaimed space, but newly unreachable garbage waits until
 a supported boundary.

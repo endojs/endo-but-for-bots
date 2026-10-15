@@ -131,7 +131,7 @@ A fixed site's repros stay as regression tests, which the gate checks as `same`:
 fixes in B7's "Status", every repro of "Admission charged by Rust memory layout",
 "Arithmetic on the host's `usize`" and "Unadmitted host allocations", with
 `b3-json-parse.js#reviver-source-list-near-ceiling`.
-The list holds the embedder-raised ceilings, all in the slow shard.
+The list holds the repro at both consensus caps, in the slow shard.
 
 Not every B7 site is reachable from a guest program on the probe.
 The open snapshot and store findings (the truncated `chunk_len`, duplicate Intl

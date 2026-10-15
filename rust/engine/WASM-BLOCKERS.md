@@ -40,12 +40,13 @@ A `wasm32-unknown-unknown` build needs **no imports at all**.
 
 It is **not** yet deterministic across targets, even with `consensus` on.
 An audit confirmed 27 sites where native x86_64 and wasm32 behave differently (B7).
-The sites in heap admission and in `usize` arithmetic are fixed, among them a three-line program
-that crashed the wasm32 engine outright.
-Of the rest, most give the same guest program a different answer or a different computron
-count, for example by growing arrays or side tables past wasm32's allocation limits.
+The sites in heap admission, in `usize` arithmetic and in unadmitted host allocations are fixed,
+among them a three-line program that crashed the wasm32 engine outright, and the arrays and side
+tables that grew past wasm32's allocation limits.
 The others are host-side, and all are fixed: a checkpoint that aborted on wasm32 (the whole-heap
 writer streams), a crafted store, error values, a WASI panic, and a restore that follows hash order.
+What remains are B7's latent issues, among them ceilings raised to exactly the consensus caps,
+which still diverge.
 The probes that stay clear of those sites and of the host limits in B3 and B8 matched native
 exactly.
 
@@ -54,9 +55,9 @@ What stands in the way, in order of severity:
 | # | Blocker | Layer | Kind |
 |---|---------|-------|------|
 | B1 | Stable Rust cannot link a wasm artifact with `panic=unwind`; the engine requires unwinding, including for guest-catchable errors; option 1 adopted, std is rebuilt with unwinding on the pinned toolchain (`scripts/build-wasm.py`) | toolchain / engine | **hard**, worked around |
-| B7 | Unadmitted host allocations depend on the target, so native and wasm32 diverge in results and metering; heap admission, `usize` arithmetic and snapshot decoding are fixed | engine | **hard (consensus)** |
+| B7 | Ceilings raised to the consensus caps still depend on the target, so native and wasm32 can diverge in results and metering; heap admission, `usize` arithmetic, snapshot decoding and unadmitted host allocations are fixed | engine | **hard (consensus)** |
 | B3 | The native-recursion budget assumes an 8 MiB stack; smaller wasm stacks overflow **before** the budget halts, sometimes on programs the engine accepts natively | engine / host | configuration for Wasmtime and Node, **hard in browsers and workerd** |
-| B8 | The ceilings do not bound memory: up to 4–5× the chunk ceiling for a running string heap, plus one container while a snapshot of it is written (the writer streams now; it used to be about 6×), unbounded for arrays and side tables; a cap that fails `memory.grow` makes programs trap or halt early with `HeapExhausted` where native completes or halts later, and Cloudflare documents replacing the whole isolate, but whether production fails `memory.grow` first is not known | engine / host | **hard under a 128 MB cap** |
+| B8 | The ceilings do not bound memory: up to 4–5× the chunk ceiling for a running string heap, plus one container while a snapshot of it is written (the writer streams now; it used to be about 6×), and up to 6.6× at a checkpoint of an array heap now that array items and side tables are charged against it; a cap that fails `memory.grow` makes programs trap or halt early with `HeapExhausted` where native completes or halts later, and Cloudflare documents replacing the whole isolate, but whether production fails `memory.grow` first is not known | engine / host | **hard under a 128 MB cap** |
 | B2 | Wasm exception-handling encoding: LLVM emits the legacy form by default, and Wasmtime accepts only the standard `exnref` form | toolchain / host | configuration |
 | B4 | Default-feature builds diverge between native and wasm in `Math` results and therefore in metering | engine features | configuration (use `consensus`) |
 | B5 | The worker binary depends on threads, `flock`, bundled C SQLite and POSIX files; `FileStore` does not work on WASI | worker / store | port work |
@@ -321,7 +322,8 @@ native thresholds do not move.
 
 ### Unadmitted host allocations
 
-Some guest-driven storage is never admitted against a ceiling at all.
+Some guest-driven storage was never admitted against a ceiling at all.
+Every site below is fixed (see [Status](#status)); the wasm32 column is from before the fix.
 Its only bound is host memory, and wasm32 has less of it.
 Rust's `Vec` also refuses any single allocation larger than `isize::MAX` bytes, which is
 2 GiB on wasm32.
@@ -338,16 +340,15 @@ At the same point native completes, or halts deterministically.
 | Typed-array `join`, typed-array and array `toLocaleString` (`natives/buffer.rs:558`, `:287`, `natives/array.rs:4482`) | a long separator or long elements | `HeapExhausted` | capacity-overflow panic, trap |
 | `Function` constructor (`interp/eval.rs:226`, then `ironhorse-compile/src/lexer.rs:167`) | `Function(s,s,…,'')` with a 268.8M-code-point assembled source | `Return function12` | `EngineInvariant("eval:compiler-invariant")` |
 
-Since B8's `Halt::HostAllocationFailed`, the Map and Set and the array rows end in that halt on
-wasm32 instead of trapping, as do the latent repros below whose wasm32 side trapped or halted
-`HeapExhausted` on a host refusal; the other rows still trap as listed
-(`stack-lanes/expected-divergence/wasmtime.json` records each line).
-The same sites break native resource accounting too.
+After B8's `Halt::HostAllocationFailed`, and before the fix, the Map and Set and the array rows
+ended in that halt on wasm32 instead of trapping, as do the latent repros below whose wasm32 side
+trapped or halted `HeapExhausted` on a host refusal.
+The same sites broke native resource accounting too.
 Under the default ceilings the native process reached about 4–6.6 GiB of RSS in these repros.
 With a slot ceiling of 50,000, one million Map entries, Set entries, array items or indexed
-properties still succeed.
-The fix is to admit side-table and array-item storage, and guest-amplified host copies, against
-the ceilings before allocating.
+properties still succeeded.
+The fix admits side-table and array-item storage, and guest-amplified host copies, against the
+chunk ceiling before allocating.
 
 ### Arithmetic on the host's `usize`
 
@@ -461,7 +462,9 @@ test that `scripts/test-snapshot-wasi.py` also runs on `wasm32-wasip1`.
   `units_to_be16` cannot allocate 1 GiB.
   At 2^29 both targets halt identically, but with the slot ceiling at 44,739,242, 44,000,000
   kept objects take 3.23 GB of wasm32 linear memory, and the same doubling after them traps on
-  wasm32 again.
+  wasm32 again (it halts `HostAllocationFailed` now).
+  Kept in an array, the objects now halt both targets at the chunk ceiling first, because their
+  array items are charged against it; the repro keeps them as a prototype chain, one slot each.
   The two caps must be chosen together, so that both arenas' worst-case footprint (B8) fits in
   4 GiB with room left for a checkpoint: one container's worth when it is written to memory,
   and 64 KiB when it is written to a file, now that the encoder streams (see "Checkpointing
@@ -508,10 +511,10 @@ Two of these are closed.
 
 ### Status
 
-Three of the four families are closed.
+All four families are closed.
 Every finding in "Snapshots and stores" is closed, as its status above records.
-Every site in "Admission charged by Rust memory layout" and in "Arithmetic on the host's `usize`"
-now behaves the same on native and wasm32:
+Every site in "Admission charged by Rust memory layout", in "Arithmetic on the host's `usize`" and
+in "Unadmitted host allocations" now behaves the same on native and wasm32:
 
 - Scratch admission (`ironhorse-vm/src/interp/admission.rs`) charges a width each element type
   declares through a `ScratchElement` trait, instead of `size_of::<T>()`.
@@ -526,6 +529,21 @@ now behaves the same on native and wasm32:
   guest index in `usize`, which closes `natives/regexp.rs:301`.
 - `JSON.stringify` admits a container's size in `u64` before narrowing it, which closes
   `natives/json.rs:163`.
+- Array items, index properties, Map, Set, WeakMap and WeakSet entries and `Intl.Segmenter`
+  results are charged against the chunk ceiling (`ironhorse-vm/src/side_storage.rs`), at widths
+  declared through the same `ScratchElement` table: 32 bytes per item, 96 per entry (the entry and
+  its lookup index), and 2 per retained input unit and 24 per segment.
+  A growable table is charged by the capacity class of its count (0, 4, then powers of two), a
+  function of the count alone, so neither host layout nor the order of operations moves a halt,
+  and the ledger is derived from the tables on restore rather than persisted.
+  Guest-amplified host copies (typed-array `join` and `toLocaleString`, `Array` `toLocaleString`,
+  the `ListFormat` result and the `Function` source) are bounded by the ceiling before they grow,
+  and `ListFormat` collects its list by reference.
+  This closes `bulk.rs:479` and `:242`, `interp/locale.rs:308`, `natives/dispatch.rs:1967` and
+  `intl.rs:757`, `natives/buffer.rs:558` and `:287`, `natives/array.rs:4482`, and
+  `interp/eval.rs:226`.
+  Unlike the others it changes which programs complete, so it is a release change (engine 0.0.2,
+  `CHANGELOG.md`).
 
 The line numbers are the audit's.
 Each declared width is the audited 64-bit layout, and a 64-bit build asserts at compile time
@@ -540,7 +558,43 @@ The `json.rs:1204` repro was rerun with a 134,136,000-unit filler and its object
 `join`, since the audit did not record how it built that text.
 The release-neutral gate (`stack-lanes/differential.py`) found native output byte-identical to
 the tree before the fix on all 1,763 of its programs.
-The unadmitted host allocations and the latent issues not marked closed remain open.
+
+The side-storage fix was checked the same way.
+Both cross-target shards find every repro of "Unadmitted host allocations" the same on both
+targets, so the expected-divergence list holds only the repro at both consensus caps:
+
+| Repro (`stack-lanes/differential/`) | Native and wasm32 | Computrons |
+|---|---|---:|
+| Map entries, 2^25 + 1 (`cross-target.slow.js#map-entries`) | `HeapExhausted` | 50,880,814 |
+| 80 kept arrays of 1,000,000 items (`#array-items`) | `HeapExhausted` | 7,229,417 |
+| 11 kept segmentations of 32M units (`#intl-segmenter-segments`) | `HeapExhausted` | 8,389,201 |
+| `ListFormat` of 2,000 references, then a number (`#intl-list-format-copy`) | `Return "TypeError"` | 324,102 |
+| `Function` with a 268.8M-code-point source (`#function-constructor-source`) | `HeapExhausted` | 5,600,396 |
+| Typed-array `join` (`cross-target.js#typed-array-join`) | `HeapExhausted` | 16,922 |
+| Typed-array `toLocaleString` (`#typed-array-to-locale-string`) | `HeapExhausted` | 27,706 |
+| `Array` `toLocaleString` (`#array-to-locale-string`) | `HeapExhausted` | 239,703 |
+
+`ironhorse-vm/tests/side_storage_admission.rs` pins where unbounded loops over each charged table
+halt under a 50,000-slot, 4 MiB-chunk ceiling, and `allocation_admission_audit.rs` fails when any
+growth or release site loses its charge.
+`differential.py --slow` against `863a9957` reports 14 of its 1,790 programs changed natively,
+every one a heap-ceiling stress program that now halts at the ceiling (`CHANGELOG.md` lists each).
+
+Guest-sized storage outside those tables is still unadmitted, found by the same audit of
+`ironhorse-vm/src` and left for later work:
+
+- Retained per-object copies: the frame names and message an `Error` captures; `Symbol.for`
+  registry keys; the string a string iterator, `matchAll` iterator or for-in cursor copies; a
+  compiled `RegExp` program and its source; a bound function's arguments; a suspended generator's
+  or async function's frame; `DisposableStack` records; option strings kept by `Intl` objects;
+  and the bytecode `eval` and `Function` keep.
+  Each grows with one object's input, and the slot ceiling bounds only the number of objects.
+- Transient copies built before their check: the operands of string `+` and of BigInt
+  multiplication before the chunk allocation, a `JSON.stringify` replacer's property list,
+  `Intl.Collator` comparison buffers, locale-tag parsing, and argument lists that `apply` spreads
+  past the value-stack budget.
+
+The latent issues not marked closed remain open.
 
 ## B3: the native-recursion budget outruns wasm stacks
 
@@ -713,13 +767,18 @@ Measured:
   Doubling from `'a'` halts at 9,908 pages (649 MB).
 - The same doubling stopped at 64 million code units completes normally with 945 MB of linear
   memory; `'a'.repeat(64*1024*1024)` needs 414 MB.
-- Array items and the Map, Set and Intl side tables are not admitted at all (B7).
+- Array items and the Map, Set and Intl side tables were not admitted at all (B7).
   Ten million `a.push(0)` calls grew linear memory to 583 MB while the chunk arena held 12 KB.
   Native repros reached about 4–6.6 GiB of RSS under the default ceilings (B7).
+  They are charged against the chunk ceiling now: the same push loop halts `HeapExhausted` when
+  its count reaches 4,194,304, whose next capacity class would pass 256 MiB, at 235.8 MiB of
+  linear memory and 240.5 MiB of native peak RSS (the memory lane's array shape at the ceiling).
 
 So for heaps dominated by strings the running footprint is up to 4–5× the chunk ceiling
 (doubling a large string is the worst case measured while running; push loops of strings halted
-at 2.1–2.2×), and for heaps dominated by arrays or side tables no ceiling bounds it.
+at 2.1–2.2×), and heaps dominated by arrays or side tables, which no ceiling bounded, now take at
+most 2.1 bytes of linear memory per byte they are charged while running and 6.6 at a checkpoint
+([WASM-MEMORY.md](WASM-MEMORY.md)).
 A whole-heap snapshot used to add several copies (B7), and the worst-case footprint had to
 count them: under the default ceilings, writing a 252 MB snapshot of strings took wasm32 from
 557 MB to 1.56 GB of linear memory, 5.8× the chunk ceiling, and at 2^29 the same pattern reached
@@ -744,7 +803,7 @@ Natively the snapshot's own share of the peak fell from 1.94 GB over the run's h
 the doubling reallocations were the cost.
 So for a whole-heap snapshot the worst case is the running footprint plus one container, and a
 container is bounded by the ceilings: the chunk arena verbatim, 20 bytes per slot record, and
-the side tables, which no ceiling bounds yet.
+the side tables' rows, which the chunk ceiling now bounds as well.
 
 The Thixotrope worker's per-crank `checkpoint_to_store` copies only the dirty chunk extents and
 slot pages, but it re-encodes each changed section, such as all arrays' items or all Maps'
@@ -767,8 +826,10 @@ On wasm32 the session's first full commit, which still builds an image and a who
 already grown linear memory to 129 MB and 268 MB, and neither checkpoint grew it further: the
 re-encoding fits in what that first commit freed, so on this path the first commit, not the
 checkpoint, sets the mark.
-Ceilings that admit array items and side tables must leave room for that re-encoding until the
-sections are encoded incrementally.
+Now that the chunk ceiling admits array items and side tables, its checkpoint coefficient leaves
+room for that re-encoding: 6.6 bytes of wasm32 linear memory per byte charged for array items and
+4.2 for Map and Set entries ([WASM-MEMORY.md](WASM-MEMORY.md)), until the sections are encoded
+incrementally.
 
 **Incremental section encoding, a proposal.**
 The dirty tracking is a 32-bit mask with one bit per section (`ironhorse-vm/src/snapshot_dirty.rs`);
@@ -841,8 +902,9 @@ recycle an instance.
 A host allocator's refusal now halts with its own `Halt::HostAllocationFailed`, which the embedder
 never commits: under a 128 MiB Wasmtime cap the forty-string loop above ends in it instead of in
 `HeapExhausted`.
-Array items and side tables are still admitted against no ceiling, and the allocations that remain
-infallible still trap under a cap.
+Array items and side tables are now charged against the chunk ceiling (B7 "Status"), which
+raises the checkpoint's per-chunk-byte constant from 5.5 to 6.6 (WASM-MEMORY.md); the allocations
+that remain infallible still trap under a cap.
 
 ## B2: which exception-handling encoding the host supports
 
@@ -949,9 +1011,9 @@ both lines and its B7 site.
 A listed divergence that no longer appears fails, so the list holds exactly the open B7 sites
 the probe reaches, and each B7 fix removes its entries.
 The repros of the fixed B7 sites stay in `cross-target.js` and must agree on both targets, so
-the gate confirms on every engine change that "Admission charged by Rust memory layout" and
-"Arithmetic on the host's `usize`" stay closed; the list holds the unadmitted host allocations
-and the embedder-raised ceilings.
+the gate confirms on every engine change that "Admission charged by Rust memory layout",
+"Arithmetic on the host's `usize`" and "Unadmitted host allocations" stay closed; the list holds
+the repro at both consensus caps.
 The B7 repros that need gigabytes natively or minutes on wasm32, in `cross-target.slow.js`, are
 a separate shard (`--shard slow`) that no workflow runs yet.
 The snapshot and store sites need crafted stores or snapshots, which the probe does not take.

@@ -1,5 +1,100 @@
 # IronHorse historical implementation and acceptance evidence
 
+## 2026-10-15 — release change: side storage is charged against the chunk ceiling
+
+Engine version 0.0.2 (`[workspace.package] version` in `Cargo.toml`).
+This is a release change: it changes which programs complete.
+A program that keeps large arrays, many index properties, large Maps, Sets, WeakMaps or WeakSets, or
+`Intl.Segmenter` results now halts with an uncatchable `HeapExhausted` at the chunk ceiling.
+Before, such a program completed natively, using up to several GiB of host memory, and trapped or
+halted `HostAllocationFailed` on wasm32 (`WASM-BLOCKERS.md` B7, "Unadmitted host allocations"; B8).
+A program below the ceilings runs as before: no result, computron, meter check, bytecode byte or
+parse-meter charge changes.
+`stack-lanes/differential.py --slow` against `863a9957f` reports 14 of its 1,790 programs changed,
+all of them heap-ceiling stress programs; each new halt is a ceiling halt, and the cross-target gate
+finds every one the same natively and on wasm32:
+
+| Program (`stack-lanes/differential/`) | Before | After | Responsible charge |
+|---|---|---|---|
+| `b3-json-parse.js#32` | `HeapExhausted`, 15,105,058 computrons | `HeapExhausted`, 13,694,669 | the parsed array's items |
+| `b3-json-parse.js#reviver-source-list-near-ceiling` | `HeapExhausted`, 13,124,682 | `HeapExhausted`, 12,278,448 | the parsed array's items |
+| `b4-flat.js#29` | `Return "RangeError:property key space exhausted"`, 6,232,134,501 | `HeapExhausted`, 4,404,023,882 | the five-million-item `push` loop, halted at 4,194,304 items before `flat` runs |
+| `b5-json-stringify.js#30` | `HeapExhausted`, 4,400,457 | `HeapExhausted`, 4,400,374 | the 80 two-item arrays, about 5 KB |
+| `cross-target.js#regexp-replace-global` | `HeapExhausted`, 33,552,627 | `HeapExhausted`, 33,534,773 | the match arrays of a global replace, 128 bytes of items each, beside a filler at the ceiling |
+| `cross-target.js#json-parse-reviver-array` | `HeapExhausted`, 33,550,029 | `HeapExhausted`, 33,549,823 | the parsed 1,000-item array beside a filler at the ceiling |
+| `cross-target.js#json-parse-reviver-object` | `HeapExhausted`, 33,568,746 | `HeapExhausted`, 33,567,824 | the 1,000-item array that builds the object's text, beside a filler at the ceiling |
+| `cross-target.js#typed-array-join` | `HeapExhausted`, 26,653 | `HeapExhausted`, 16,922 | the result copy, bounded before it grows |
+| `cross-target.js#typed-array-to-locale-string` | `HeapExhausted`, 69,750 | `HeapExhausted`, 27,706 | the result copy, bounded before it grows |
+| `cross-target.js#array-to-locale-string` | `HeapExhausted`, 278,647 | `HeapExhausted`, 239,703 | the result copy, bounded before it grows |
+| `cross-target.slow.js#map-entries` | `Return "33554433"`, 814,088,512 | `HeapExhausted`, 50,880,814 | the Map's entries |
+| `cross-target.slow.js#array-items` | `Return "80:1000000"`, 80,604,206 | `HeapExhausted`, 7,229,417 | the kept arrays' items |
+| `cross-target.slow.js#intl-segmenter-segments` | `Return "11"`, 8,389,523 | `HeapExhausted`, 8,389,201 | the kept `%Segments%` objects |
+| `cross-target.slow.js#function-constructor-source` | `Return "function12"`, 91,000,561 | `HeapExhausted`, 5,600,396 | the assembled source, bounded before it grows |
+
+Before, on wasm32, the Map and array repros halted `HostAllocationFailed`, the `Segmenter` repro
+trapped, the `Function` repro halted `EngineInvariant` after a contained panic, and the three copies
+above them panicked growing past `isize::MAX` bytes.
+
+The new charges, at declared 64-bit widths (`ironhorse-vm/src/side_storage.rs`, declared through
+scratch admission's `ScratchElement` table):
+
+| Storage | Bytes charged per element | Charged for |
+|---|---:|---|
+| Array items and index properties | 32, the `(u32, Slot)` record | the capacity class of the present items |
+| Map, Set, WeakMap and WeakSet entries | 96: 56 for the entry record, 40 for its lookup index | the capacity class of the live entries |
+| A `%Segments%` object | 2 per input code unit, 24 per segment | its exact length |
+
+The capacity class of a count is 0 for none, 4 for one to four, and the next power of two above
+that.
+It depends on the count alone, so a push loop touches the ledger once per doubling.
+A 64-bit build asserts each width against the record's layout; a record that grows fails to compile
+until its width is re-declared.
+The ledger lives beside the chunk arena and is checked with it: an append fits only when the chunk
+bytes, the side storage and the new payload together stay within the ceiling.
+It is not persisted.
+A restore derives it from the rebuilt tables, as does a collection after dropping rows, and so
+does a crank that ends in a resource stop, because the unwind can drop storage a native had
+charged but not yet installed.
+A restored machine therefore charges exactly what the machine that built the same heap charges.
+Growth the ceiling admitted but the host allocator refused still halts `HostAllocationFailed`.
+
+Behaviour that changed with the accounting:
+
+- Map and Set deletes still leave tombstones, but the entry list compacts them once they
+  outnumber the live entries.
+  Iterators and the native loops (`forEach` and the Set methods) now hold entry sequence
+  numbers, not physical positions, so they survive compaction.
+  A set/delete loop on distinct keys used to grow host memory without bound; it now runs in bounded
+  storage, and tombstones are never charged.
+- String and BigInt keys are indexed by a per-process keyed hash of their content, confirmed by
+  comparing the stored key, instead of by a copy of the content.
+  One long string used as a key in many collections was copied into each of them.
+- `Set.prototype.intersection`, `isSubsetOf` and `isDisjointFrom` walk the receiver by sequence
+  number.
+  When a `has` callback clears the set and adds to it, the walk now visits the added elements, as
+  ECMA-262's in-place `clear` specifies; it used to resume at the old physical index.
+  `forEach` still stops at a `clear()`, as XS does.
+- `Intl.ListFormat` collects its list by reference.
+  A list of many references to one long string, followed by a non-string, throws its catchable
+  `TypeError` on every target; it used to copy every element first.
+- Guest-amplified host copies are bounded by the ceiling before they grow, without a meter
+  checkpoint: `%TypedArray%.prototype.join` and `toLocaleString`,
+  `Array.prototype.toLocaleString`, the `Intl.ListFormat` result, and the source the `Function`
+  constructor family assembles.
+  So are the transient lists of a typed-array `filter`, Set `union` and `symmetricDifference`, and
+  `Object.groupBy`/`Map.groupBy`.
+- A run refuses to start when the chunk bytes and side storage already exceed a lowered ceiling.
+
+The snapshot format is unchanged.
+The cross-target gate (`stack-lanes/cross_target.py`, both shards) finds every repro of B7's
+"Unadmitted host allocations" the same on native and wasm32, and its expected-divergence list no
+longer names them.
+`tests/side_storage_admission.rs` pins the halt point of each storage kind under a 50,000-slot,
+4 MiB-chunk ceiling, and `ironhorse-snapshot/tests/side_storage_resume.rs` shows whole-heap,
+eager-store and lazy-store resumes halting at the same computron as the machine that never stopped.
+`WASM-MEMORY.md` gives the memory the charged tables take per byte charged, which raises the
+checkpoint's constant in its formula from 5.5 to 6.6.
+
 ## 2026-09-09 — archive of the README stage narrative
 
 Moved verbatim from the README at `96db92e23`.
