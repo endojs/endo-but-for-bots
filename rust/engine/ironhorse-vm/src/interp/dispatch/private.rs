@@ -60,6 +60,18 @@ impl Interp {
                 });
             }
         }
+        if flag & XS_NAME_FLAG != 0 {
+            let prefix = if flag & XS_GETTER_FLAG != 0 {
+                "get "
+            } else if flag & XS_SETTER_FLAG != 0 {
+                "set "
+            } else {
+                ""
+            };
+            let private_name =
+                self.locals[self.local_index(index).expect("private name binding")].id;
+            self.name_defined_function(value, DefinedKey::Id(private_name), prefix);
+        }
         if flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
             let current = self
                 .private_accessors

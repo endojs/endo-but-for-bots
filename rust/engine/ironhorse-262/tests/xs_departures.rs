@@ -372,6 +372,13 @@ const DEPARTURES: &[Row] = &[
         v8: "undefined,null",
         why: "a super reference reads from the home object's prototype with `this` as the receiver, whatever its type (ES2024 13.3.7.3, 6.2.5.5); XS converts `this` to an object, which throws for undefined and null",
     },
+    Row {
+        program: "[({ f: class { static { delete this.name; } } }).f.name, typeof ({ g: class { static { delete this.name; } } }).g.name].join('|')",
+        ironhorse: "|string",
+        xs: "f|string",
+        v8: "|string",
+        why: "a class value is named before its static elements run (ClassDefinitionEvaluation's SetFunctionName, ES2024 15.7.14), so a name a static block deleted stays deleted; XS names the class when its property is defined, after the block",
+    },
 ];
 
 /// Programs where Ironhorse departs from XS and V8 has no counterpart to
@@ -527,13 +534,6 @@ const SHARED: &[Row] = &[
 /// a passing test or to another table. A halt is recorded as `halt` and its
 /// [`Halt`] label: these are guest-reachable `NotImplemented` halts.
 const GAPS: &[Row] = &[
-    Row {
-        program: "class A { m() {} get g() { return 1; } static s() {} } [A.prototype.m.name, Object.getOwnPropertyDescriptor(A.prototype, 'g').get.name, A.s.name, ({ b() {} }).b.name].join()",
-        ironhorse: ",,,",
-        xs: "m,get g,s,b",
-        v8: "m,get g,s,b",
-        why: "a method's, accessor's or static method's `name` is its property key, `get `/`set ` prefixed for an accessor (SetFunctionName); Ironhorse names every method the empty string",
-    },
     Row {
         program: "[Array.prototype.join.name, Array.prototype.join.length, Math.max.name, Math.max.length].join()",
         ironhorse: ",0,,0",

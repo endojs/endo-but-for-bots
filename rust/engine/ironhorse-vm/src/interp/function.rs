@@ -901,4 +901,65 @@ impl Interp {
             }
         }
     }
+
+    /// SetFunctionName for a definition the compiler flagged `XS_NAME_FLAG`
+    /// (XS's `fxRenameFunction` from `fxOrdinaryDefineOwnProperty` and
+    /// `fxDefinePrivateProperty`): an anonymous function or class value takes
+    /// its key's name, `prefix`ed for an accessor; a symbol key gives its
+    /// description in brackets, or the empty string without one. Only a
+    /// function whose own `name` is still the synthesized empty string is
+    /// renamed: a class that defined its own `name`, or deleted it in a static
+    /// block, keeps that, as the specification names a class before its
+    /// static elements run.
+    pub(in crate::interp) fn name_defined_function(
+        &mut self,
+        value: Slot,
+        key: DefinedKey,
+        prefix: &str,
+    ) {
+        let Payload::Reference(f) = value.value else {
+            return;
+        };
+        let Some(name_id) = self.name_id else {
+            return;
+        };
+        let anonymous = value.kind == Kind::Reference
+            && self
+                .functions
+                .get(&f)
+                .is_some_and(|info| info.name.is_empty())
+            && !self.deleted_fn_meta.contains(&(f, name_id))
+            && self.find_property(f, name_id).is_none();
+        if !anonymous {
+            return;
+        }
+        let mut units: Vec<u16> = prefix.encode_utf16().collect();
+        match key {
+            DefinedKey::Index(index) => units.extend(index.to_string().encode_utf16()),
+            DefinedKey::Id(id) => match self.symbol_key_ids.descriptor(id) {
+                Some(descriptor) => {
+                    if let Payload::String(off) = self.slots.get(descriptor).value {
+                        units.push(u16::from(b'['));
+                        units.extend(self.str_units(off));
+                        units.push(u16::from(b']'));
+                    }
+                }
+                None => {
+                    if let Some(name) = (id as usize)
+                        .checked_sub(1)
+                        .and_then(|i| self.symbol_names.get(i))
+                    {
+                        units.extend(name.to_units());
+                    }
+                }
+            },
+        }
+        let name_chunk = self.chunks.alloc(&units_to_be16(&units));
+        let name = SymbolName::from_units(&units).to_string();
+        self.functions.update(&f, |info| {
+            info.name = name;
+            info.name_chunk = name_chunk;
+        });
+        self.meter.tick_builtin_some(2);
+    }
 }

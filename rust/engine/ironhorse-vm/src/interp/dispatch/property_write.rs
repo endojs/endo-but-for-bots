@@ -380,6 +380,14 @@ impl Interp {
                     self.ordinary_define_own_property(inst, id, descriptor);
                 }
                 self.meter.tick_builtin();
+                if property_flag & XS_NAME_FLAG != 0 {
+                    let prefix = if property_flag & XS_GETTER_FLAG != 0 {
+                        "get "
+                    } else {
+                        "set "
+                    };
+                    self.name_defined_function(value, DefinedKey::Id(id), prefix);
+                }
                 return Ok(());
             }
             // `fxRunDefine` creating a data property: one
@@ -419,31 +427,8 @@ impl Interp {
                 }
             }
             self.meter.tick_builtin();
-            // An object-literal generator method (`{ *m(){} }`)
-            // compiles the value as an ANONYMOUS `GENERATOR_FUNCTION`
-            // renamed here by `fxRenameFunction` (`XS_METHOD` define
-            // flag), charging two built-in steps — XS does this for a
-            // generator method but not a plain `{ m(){} }` (which is
-            // already bit-exact without it). Name it and charge the
-            // rename so the method's `.name`/computrons match.
-            if let Payload::Reference(f) = value.value {
-                let needs_rename = self
-                    .functions
-                    .get(&f)
-                    .map(|fi| fi.is_generator && fi.name.is_empty())
-                    .unwrap_or(false);
-                if needs_rename {
-                    self.meter.tick_builtin_some(2);
-                    let fname = (id as usize)
-                        .checked_sub(1)
-                        .and_then(|i| self.symbol_names.get(i).cloned())
-                        .unwrap_or_default();
-                    let name_chunk = self.chunks.alloc(&units_to_be16(&fname.to_units()));
-                    self.functions.update(&f, |fi| {
-                        fi.name = fname.to_string();
-                        fi.name_chunk = name_chunk;
-                    });
-                }
+            if property_flag & XS_NAME_FLAG != 0 {
+                self.name_defined_function(value, DefinedKey::Id(id), "");
             }
         }
         Ok(())
@@ -529,6 +514,16 @@ impl Interp {
                 if !defined {
                     return Err(self.define_rejected_error(Some(id)));
                 }
+                if property_flag & XS_NAME_FLAG != 0 {
+                    let prefix = if property_flag & XS_GETTER_FLAG != 0 {
+                        "get "
+                    } else if property_flag & XS_SETTER_FLAG != 0 {
+                        "set "
+                    } else {
+                        ""
+                    };
+                    self.name_defined_function(value, DefinedKey::Id(id), prefix);
+                }
                 true
             }
             _ => false,
@@ -545,6 +540,15 @@ impl Interp {
             {
                 if let Some(array) = self.arrays.get_mut(&inst) {
                     array.set_item_flag(index, property_flag);
+                }
+            }
+            if property_flag & XS_NAME_FLAG != 0 {
+                match key.value {
+                    Payload::At(crate::value::XS_NO_ID, index) => {
+                        self.name_defined_function(value, DefinedKey::Index(index), "")
+                    }
+                    Payload::At(id, _) => self.name_defined_function(value, DefinedKey::Id(id), ""),
+                    _ => {}
                 }
             }
         }

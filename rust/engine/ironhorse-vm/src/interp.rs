@@ -443,6 +443,10 @@ pub const XS_DONT_SET_FLAG: u8 = 8; // writable: false
 pub const XS_METHOD_FLAG: u8 = 16;
 pub const XS_GETTER_FLAG: u8 = 32;
 pub const XS_SETTER_FLAG: u8 = 64;
+/// XS define-mask bit (`xsCommon.h`), never stored on a property: the
+/// defined value is an anonymous function definition that takes its name
+/// from the key ([`Interp::name_defined_function`]).
+pub const XS_NAME_FLAG: u8 = 1;
 /// XS instance-slot flag bit (`xsAll.h`): a non-extensible instance carries
 /// `XS_DONT_PATCH_FLAG` on its own `XS_INSTANCE_KIND` slot's `flag` byte
 /// (`mxBehaviorPreventExtensions` sets it, `mxBehaviorIsExtensible` reads it).
@@ -2128,6 +2132,14 @@ enum GenResume {
     Value(Slot),
     /// The generator's body resumed in the caller's loop: continue there.
     Entered(usize),
+}
+
+/// The key a flagged definition names its function after: an interned id,
+/// or an array index that has none.
+#[derive(Copy, Clone, Debug)]
+enum DefinedKey {
+    Id(u16),
+    Index(u32),
 }
 
 /// What `SET_PROPERTY`'s `[[Set]]` of an ordinary object made of the
