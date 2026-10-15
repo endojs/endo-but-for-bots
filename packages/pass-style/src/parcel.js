@@ -44,19 +44,19 @@ const hasOwnHiddenDataValue = (object, key, expected) => {
 };
 
 /**
- * A Parcel is passable, analogous to a presence: it has object identity
- * and no data. Pass-style senses `globalThis.Parcel` (installed first-wins
- * by `@endo/parcel`) rather than depending on that package, and asks its
- * `isParcel` brand check rather than `instanceof`, which `Object.create`
- * can forge.
+ * A Parcel is a passable dormant capability with no exposed data. Pass-style
+ * senses `globalThis.Parcel` (installed first-wins by `@endo/parcel`) rather
+ * than importing the shim, and asks its `isParcel` brand check rather than
+ * `instanceof`, which `Object.create` can forge.
  *
  * The global binding cannot be required to be locked, because a child
  * compartment's copy of a shared intrinsic is writable, so an impostor
  * constructor could be trusted. The shape checks below bound that impostor:
  * it is only ever asked about a frozen, empty object inheriting directly from
  * a shim-shaped prototype, after every other pass style has declined it
- * (`test/parcel-lying-global.test.js`). The captured check stays fixed for
- * this module's lifetime, as `passStyleOf`'s memo requires.
+ * (`test/parcel-pre-shim-fixture.js`). A rejected global may be replaced by a
+ * later shim, but a captured valid check stays fixed for this module's
+ * lifetime, as `passStyleOf`'s memo requires.
  *
  * @type {((value: object) => boolean) | undefined}
  */
@@ -74,7 +74,9 @@ let checking = false;
  */
 const provideBrandCheck = () => {
   if (brandCheck === undefined) {
-    const Parcel = /** @type {any} */ (globalThis).Parcel;
+    // Reading through the descriptor avoids invoking a hostile pre-shim
+    // accessor on the global object.
+    const Parcel = getOwnDataValue(globalThis, 'Parcel');
     if (typeof Parcel !== 'function' || !isFrozen(Parcel)) {
       return undefined;
     }
