@@ -5055,6 +5055,23 @@ impl Coder<'_, '_> {
                     }
                     self.code_delete_value(item);
                 }
+                // `delete o?.b`: delete the Reference the chain produces, or
+                // answer `true` when a base short-circuits (ES2024 13.5.1.2).
+                // An Ironhorse departure in the bytes: XS's `fxNodeCodeDelete`
+                // codes the chain as a value and answers `true` without
+                // deleting anything.
+                Token::Chain => {
+                    let end = self.create_target();
+                    let saved = self.enter_chain(self.stack_level + 1);
+                    self.code_delete(&n.children[0]);
+                    self.add_branch(0, XS_CODE_BRANCH_1, end);
+                    // A short-circuit lands here with the chain's
+                    // `undefined` in the result's place.
+                    self.leave_chain(saved);
+                    self.add_byte(-1, XS_CODE_POP);
+                    self.add_byte(1, XS_CODE_TRUE);
+                    self.place_target(0, end);
+                }
                 // fxNodeCodeDelete: evaluate, discard, push `true`.
                 _ => self.code_delete_value(item),
             },
