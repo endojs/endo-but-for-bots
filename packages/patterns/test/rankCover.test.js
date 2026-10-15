@@ -31,43 +31,48 @@ const formats = ['legacyOrdered', 'compactOrdered'];
 const isInteriorRange = (inner, outer) =>
   compareRank(outer[0], inner[0]) <= 0 && compareRank(inner[1], outer[1]) <= 0;
 
-const {
-  arbKey,
-  arbPassable,
-  arbLiftedPassable: arbPassableAndPattern,
-} = makeArbitraries(fc, {
-  excludePassStyles: ['byteArray'],
-  transformKeyableLeaves: x => /** @type {(Arbitrary<Key>)[]} */ (x),
-  arbLiftingDetail: fc.oneof(
-    { withCrossShrink: true },
-    { arbitrary: fc.constant(false), weight: 80 },
-    { arbitrary: fc.constant(true), weight: 20 },
-  ),
-  lift: ([x, patt = x], shouldMakeMatcher) => {
-    try {
-      const specimen = harden(x);
-      if (passStyleOf(specimen) === 'parcel') return M.any();
-      const matchKind = shouldMakeMatcher ? kindOf(specimen) : undefined;
-      if (matchKind) return M.kind(matchKind);
-    } catch (_err) {}
-    return patt;
+const { arbKey, arbLiftedPassable: arbPassableAndPattern } = makeArbitraries(
+  fc,
+  {
+    excludePassStyles: ['byteArray'],
+    transformKeyableLeaves: x => /** @type {(Arbitrary<Key>)[]} */ (x),
+    arbLiftingDetail: fc.oneof(
+      { withCrossShrink: true },
+      { arbitrary: fc.constant(false), weight: 80 },
+      { arbitrary: fc.constant(true), weight: 20 },
+    ),
+    lift: ([x, patt = x], shouldMakeMatcher) => {
+      try {
+        const specimen = harden(x);
+        if (passStyleOf(specimen) === 'parcel') return M.any();
+        const matchKind = shouldMakeMatcher ? kindOf(specimen) : undefined;
+        if (matchKind) return M.kind(matchKind);
+      } catch (_err) {}
+      return patt;
+    },
   },
+);
+
+// A Parcel cannot be a rank-cover pattern, so arrays used as patterns
+// draw their elements from Parcel-free Passables.
+const { arbPassable: arbPatternElement } = makeArbitraries(fc, {
+  excludePassStyles: ['byteArray', 'parcel'],
 });
 
 /**
  * @param {string} titlePrefix
- * @param {Implementation<[encodePassable: (val: Passable) => string, format: string]>} testFn
+ * @param {Implementation<[encodePassable: (value: Passable) => string, format: string]>} testFn
  */
 const testAcrossFormats = (titlePrefix, testFn) => {
   for (const format of formats) {
     /** @type {Map<Passable, string> } */
     const ids = new Map();
-    const encodePrefixed = (prefix, val) => {
-      const foundId = ids.get(val);
+    const encodePrefixed = (prefix, value) => {
+      const foundId = ids.get(value);
       if (foundId) return foundId;
       const n = Math.floor(Math.random() * 10_000);
       const newId = `${prefix}${n.toString().padStart(4, '0')}`;
-      ids.set(val, newId);
+      ids.set(value, newId);
       return newId;
     };
     const { encodePassable } = makePassableKit({
@@ -78,8 +83,7 @@ const testAcrossFormats = (titlePrefix, testFn) => {
       encodeError: e => encodePrefixed('!', e),
     });
     test(`${titlePrefix} - ${format}`, async t =>
-      testFn(t, encodePassable, format),
-    );
+      testFn(t, encodePassable, format));
   }
 };
 
@@ -147,7 +151,7 @@ testAcrossFormats(
     await fc.assert(
       fc.property(
         arbKey,
-        fc.array(arbPassable, { minLength: 1, maxLength }),
+        fc.array(arbPatternElement, { minLength: 1, maxLength }),
         (key, rest) => {
           let nonKeyIndex = rest.findIndex(x => !isKey(x));
           if (nonKeyIndex === -1) {
