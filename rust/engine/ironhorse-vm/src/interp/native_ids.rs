@@ -935,7 +935,7 @@ pub enum NativeMethod {
     /// `fxRejectPromise` host functions handed to the executor). Recognized
     /// in the `RUN` dispatch by a `promise_functions` side-table lookup, not
     /// bound as a prototype method; this variant is the marker the
-    /// `alloc_method` name/length machinery uses.
+    /// `alloc_named_method` name/length machinery uses.
     PromiseResolveFunction,
     PromiseRejectFunction,
     /// The anonymous length-2 closure `NewPromiseCapability` passes to a

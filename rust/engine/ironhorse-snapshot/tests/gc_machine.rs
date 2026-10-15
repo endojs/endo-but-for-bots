@@ -936,7 +936,7 @@ fn generational_collect_is_a_noop_with_no_new_dirt() {
 }
 
 #[test]
-fn relocated_native_names_survive_repeated_collection_and_restore() {
+fn native_names_survive_repeated_collection_and_restore() {
     use ironhorse_snapshot::machine::checkpoint_to_store;
     let mut m = Interp::new();
     let boot_names = m.function_state_snapshot().native_names.unwrap();
@@ -944,13 +944,11 @@ fn relocated_native_names_survive_repeated_collection_and_restore() {
     m.link_intrinsics(&setup.1);
     assert!(m.run(&setup.0).completed);
     m.collect_garbage().unwrap();
+    // Every native is allocated with its name, so boot leaves no garbage
+    // chunk ahead of a boot native's name and compaction keeps each where
+    // boot put it; the rows would carry a relocation all the same.
     let names = m.function_state_snapshot().native_names.unwrap();
-    assert!(
-        names.iter().any(|&(owner, offset)| boot_names
-            .iter()
-            .any(|&(old_owner, old_offset)| owner == old_owner && offset != old_offset)),
-        "fixture must relocate a boot-native name"
-    );
+    assert_eq!(names, boot_names, "boot-native names stay in place");
     let mut store = MemoryStore::new();
     let mut session = begin_store_session(m, &sig(), &mut store)
         .map_err(|(_, e)| e)

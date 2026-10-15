@@ -2059,7 +2059,7 @@ impl Interp {
     /// The dispatch loop's `COPY_OBJECT` arm.
     #[inline(never)]
     fn exec_copy_object(&mut self, mut pc: usize, ilen: usize) -> Flow {
-        let function = self.alloc_method(NativeMethod::CopyObject);
+        let function = self.alloc_named_method(NativeMethod::CopyObject, "", 0);
         self.push(Slot::of(Kind::Reference, Payload::Reference(function)));
         pc += ilen;
         Flow::Next(pc)
