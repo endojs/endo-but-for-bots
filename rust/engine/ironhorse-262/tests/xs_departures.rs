@@ -288,6 +288,13 @@ const DEPARTURES: &[Row] = &[
         v8: "TypeError,TypeError,TypeError",
         why: "a destructuring or for-of write to a `const` is a TypeError like `c = 2` (SetMutableBinding on an immutable binding with S true, ES2024 9.1.1.1.5 step 4); XS discards it silently",
     },
+    Row {
+        program: "'use strict'; var o = { m() { delete super.x; } }; try { o.m.call(undefined); 'ok' } catch (e) { e.constructor.name }",
+        ironhorse: "ReferenceError",
+        xs: "TypeError",
+        v8: "ReferenceError",
+        why: "`delete super.x` throws a ReferenceError (ES2024 13.5.1.2 step 4); a super reference never converts `this` to an object, which is where XS throws",
+    },
 ];
 
 /// Programs where Ironhorse departs from XS and V8 has no counterpart to

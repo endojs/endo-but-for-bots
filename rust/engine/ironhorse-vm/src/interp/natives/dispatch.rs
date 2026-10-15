@@ -1500,7 +1500,9 @@ impl Interp {
                         Kind::Reference => {
                             let primitive = self.to_primitive(code, a, true)?;
                             if primitive.kind == Kind::Symbol {
-                                return Err(Step::Host(Halt::NotImplemented("to_string:symbol")));
+                                return Err(self.catchable_type_error_msg(
+                                    "cannot coerce symbol to string".into(),
+                                ));
                             }
                             self.to_string_slot_metered(primitive)
                         }
