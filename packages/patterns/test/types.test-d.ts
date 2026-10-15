@@ -4,6 +4,7 @@ import type {
   CopyRecord,
   CopyArray,
   CopyTagged,
+  ParcelObject,
   RemotableObject,
 } from '@endo/pass-style';
 import type { RemotableBrand } from '@endo/eventual-send';
@@ -34,6 +35,15 @@ M.arrayOf(M.any);
 M.arrayOf(M.any());
 
 const passable: Passable = null as any;
+const parcel: ParcelObject = null as any;
+// @ts-expect-error a Parcel cannot be a Key
+const parcelKey: Key = parcel;
+// @ts-expect-error a Parcel cannot be nested in a Key
+const nestedParcelKey: Key = [parcel];
+// @ts-expect-error a Parcel cannot be a Pattern
+const parcelPattern: Pattern = parcel;
+// @ts-expect-error a Parcel cannot be nested in a Pattern
+const nestedParcelPattern: Pattern = { parcel };
 {
   const result = isKey(passable);
   expectTypeOf(result).toEqualTypeOf<boolean>();
@@ -838,6 +848,15 @@ expectTypeOf(null as unknown as TypeFromPattern<null>).toEqualTypeOf<null>();
   const p = M.kind('copyRecord');
   type T = TypeFromPattern<typeof p>;
   expectTypeOf(null as unknown as T).toEqualTypeOf<CopyRecord>();
+}
+
+// M.kind('parcel') → ParcelObject
+{
+  const p = M.kind('parcel');
+  type T = TypeFromPattern<typeof p>;
+  expectTypeOf(null as unknown as T).toEqualTypeOf<
+    import('@endo/pass-style').ParcelObject
+  >();
 }
 
 // M.set() → CopySet (via kind)

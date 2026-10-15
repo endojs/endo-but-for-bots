@@ -15,6 +15,7 @@ import type {
   PassableCap,
   PassStyle,
   ParcelObject,
+  PureData,
 } from './types.js';
 import { PASS_STYLE } from './passStyle-helpers.js';
 import { passableSymbolForName } from './symbol.js';
@@ -95,5 +96,12 @@ expectPassable(copyTagged);
 expectPassable(Promise.resolve(remotable));
 expectPassable({ a: Promise.resolve(remotable) });
 expectPassable({ a: Promise.resolve(fn) });
+
+const expectPureData = (value: PureData) => value;
+expectPureData(harden({ nested: [1, 'two'] }));
+// @ts-expect-error a Parcel is a dormant capability, not pure data
+expectPureData(parcel);
+// @ts-expect-error nested Parcels are not pure data
+expectPureData(harden({ nested: [parcel] }));
 
 expectTypeOf((cond: boolean, details?: unknown) => cond).toExtend<Checker>();

@@ -387,7 +387,7 @@ harden(toPassableError);
  * the results of coercing those errors to passable errors.
  *
  * @param {unknown} specimen
- * @returns {Passable<never, Error>}
+ * @returns {Passable<never, Error, never>}
  */
 export const toThrowable = specimen => {
   harden(specimen);
@@ -434,6 +434,6 @@ export const toThrowable = specimen => {
       }
     }
   }
-  return /** @type {Passable<never,never>} */ (specimen);
+  return /** @type {Passable<never, never, never>} */ (specimen);
 };
 harden(toThrowable);
