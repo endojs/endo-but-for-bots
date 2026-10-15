@@ -66,26 +66,10 @@ function initProperties(obj, descs) {
 // sampleGlobals creates an intrinsics object, suitable for
 // intrinsicsCollector.addIntrinsics, from the named properties of a global
 // object.
-// An intrinsic named in `presampled` takes its value from there instead of a
-// fresh read of the global object; an `undefined` value there means absent.
-/**
- * @param {any} globalObject
- * @param {Record<string, string>} newPropertyNames
- * @param {Record<string, unknown>} [presampled]
- */
-function sampleGlobals(
-  globalObject,
-  newPropertyNames,
-  presampled = { __proto__: null },
-) {
+function sampleGlobals(globalObject, newPropertyNames) {
   const newIntrinsics = { __proto__: null };
   for (const [globalName, intrinsicName] of entries(newPropertyNames)) {
-    if (hasOwn(presampled, intrinsicName)) {
-      const value = presampled[intrinsicName];
-      if (value !== undefined) {
-        newIntrinsics[intrinsicName] = value;
-      }
-    } else if (hasOwn(globalObject, globalName)) {
+    if (hasOwn(globalObject, globalName)) {
       newIntrinsics[intrinsicName] = globalObject[globalName];
     }
   }
@@ -93,31 +77,27 @@ function sampleGlobals(
 }
 
 /**
- * Before admitting `Parcel`, check for the shim's identifying statics,
- * `open`, `locate`, and `isParcel`, as own data properties holding
- * functions, and for an own non-writable, non-configurable `prototype` data
- * property holding an object, as every class constructor has and an arrow,
- * bound, or plain function lacks. The shim's
- * own `isParcelConstructor` reads its statics by `[[Get]]`, so it also
- * accepts inherited or accessor statics; this check is stricter, and reads the
- * global binding and each property by descriptor, without running a getter,
- * refusing an accessor global. Unlike other universal globals, which `lockdown`
- * simply overwrites when configurable, an accessor `Parcel` throws even when
- * configurable: its getter could return a different value on each read.
- *
- * This is a misconfiguration guard, not an authority boundary. SES separately
- * removes `locate` from the shared constructor it exposes to children.
- *
- * Returns the validated value as a record for `makeIntrinsicsCollector`, which
- * admits exactly that value rather than reading the global again: reading the
- * candidate's properties can run a Proxy trap that re-points the global.
+ * @typedef {object} ParcelSample
+ * @property {any} Parcel the shim-installed constructor
+ * @property {(parcel: unknown) => Promise<unknown>} open
+ * @property {(value: unknown) => boolean} isParcel
+ * @property {object} prototype
+ */
+
+/**
+ * Validate a pre-lockdown `globalThis.Parcel` and snapshot the members SES
+ * delegates to, reading each by descriptor so that no getter or Proxy `get`
+ * trap can substitute a different value later.
+ * Returns `undefined` when no `Parcel` global is present.
+ * Throws a `TypeError` for an accessor binding or a value that lacks the
+ * `@endo/parcel` constructor shape.
  *
  * @param {object} globalObject
- * @returns {{ Parcel: unknown }}
+ * @returns {ParcelSample | undefined}
  */
 export const sampleParcel = globalObject => {
   if (!hasOwn(globalObject, 'Parcel')) {
-    return freeze({ __proto__: null, Parcel: undefined });
+    return undefined;
   }
   // Read the binding by descriptor so no getter runs.
   const binding = getOwnPropertyDescriptor(globalObject, 'Parcel');
@@ -127,17 +107,23 @@ export const sampleParcel = globalObject => {
     );
   }
   const candidate = binding.value;
+  /** @type {Record<string, any>} */
+  const snapshot = { __proto__: null };
   /**
    * @param {string} name
    * @param {(value: unknown) => boolean} predicate
    */
   const hasOwnData = (name, predicate) => {
     const descriptor = getOwnPropertyDescriptor(candidate, name);
-    return (
-      descriptor !== undefined &&
-      hasOwn(descriptor, 'value') &&
-      predicate(descriptor.value)
-    );
+    if (
+      descriptor === undefined ||
+      !hasOwn(descriptor, 'value') ||
+      !predicate(descriptor.value)
+    ) {
+      return false;
+    }
+    snapshot[name] = descriptor.value;
+    return true;
   };
   // A class constructor's `prototype` is non-writable and non-configurable.
   // Requiring that pins the value: a Proxy candidate must then report the same
@@ -163,18 +149,18 @@ export const sampleParcel = globalObject => {
       'lockdown expected globalThis.Parcel to be the @endo/parcel constructor, with a prototype and open, locate, and isParcel statics',
     );
   }
-  return freeze({ __proto__: null, Parcel: candidate });
+  return freeze({
+    Parcel: candidate,
+    open: snapshot.open,
+    isParcel: snapshot.isParcel,
+    prototype: snapshot.prototype,
+  });
 };
 
 /**
  * @param {Reporter} reporter
- * @param {Record<string, unknown>} [presampled] universal intrinsics already
- * validated, admitted as given rather than read again from `globalThis`.
  */
-export const makeIntrinsicsCollector = (
-  reporter,
-  presampled = { __proto__: null },
-) => {
+export const makeIntrinsicsCollector = reporter => {
   /** @type {Record<any, any>} */
   const intrinsics = create(null);
   let pseudoNatives;
@@ -258,7 +244,7 @@ export const makeIntrinsicsCollector = (
   freeze(intrinsicsCollector);
 
   addIntrinsics(constantProperties);
-  addIntrinsics(sampleGlobals(globalThis, universalPropertyNames, presampled));
+  addIntrinsics(sampleGlobals(globalThis, universalPropertyNames));
 
   return intrinsicsCollector;
 };

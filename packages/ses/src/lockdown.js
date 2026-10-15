@@ -366,7 +366,7 @@ export const repairIntrinsics = (options = {}) => {
   addIntrinsics(tameRegExpConstructor(regExpTaming));
   addIntrinsics(tameSymbolConstructor());
   addIntrinsics(tameUrlConstructor(urlBlobTaming));
-  addIntrinsics(tameParcelConstructor(parcelSample.Parcel));
+  addIntrinsics(tameParcelConstructor(parcelSample));
   addIntrinsics(shimArrayBufferTransfer());
   addIntrinsics(tameModuleSource());
 
