@@ -90,6 +90,7 @@ impl Interp {
                 new_target,
                 derived_native_construct,
             )?,
+            Native::Eval => self.native_eval(base, has_target)?,
             _ => self.native_ctor_core(
                 native,
                 base,
@@ -1305,6 +1306,46 @@ impl Interp {
         Ok(result)
     }
 
+    /// `eval`, out of line on its own rather than an arm of
+    /// [`Self::native_ctor_core`]: a nest of `eval`s, direct or indirect,
+    /// re-enters through it once per level, so each level carries this frame
+    /// and the thin dispatcher's, not the union of every remaining native's.
+    ///
+    /// A non-string input is returned unchanged (the spec's "not a String"
+    /// fast return); a string is compiled and executed in this realm through
+    /// the source-execution bridge ([`Self::eval_source`]) — the principled
+    /// compiler/VM seam that replaced the former `eval:string-source` text
+    /// boundary. The completion value becomes the call's result. `eval` is
+    /// never constructable.
+    #[inline(never)]
+    fn native_eval(&mut self, base: usize, has_target: bool) -> Result<Slot, Step> {
+        if has_target {
+            return Err(self.catchable_type_error_msg("new: not a constructor".into()));
+        }
+        // Argument 0 is at `base + 4`; a missing argument reads `undefined`.
+        let source = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        if source.kind != Kind::String {
+            return Ok(source);
+        }
+        let text = match source.value {
+            Payload::String(off) => self.str_units(off),
+            _ => Vec::new(),
+        };
+        // A direct eval inherits the caller's strictness; an indirect eval of
+        // ordinary source is sloppy (a `"use strict"` prologue still promotes
+        // it, in the compiler). `self.strict` is the calling script or
+        // function frame's strictness at this direct-eval site.
+        let strict = self.eval_direct && self.strict;
+        // XS's `XS_FIELD_FLAG`: the calling frame is a class field
+        // initializer, which opens with `BEGIN_STRICT_FIELD`.
+        let field = self.eval_direct && self.running_field_initializer();
+        self.eval_source_in(&text, strict, field)
+    }
+
     /// The remaining natives of [`Self::call_native_inner`], out of line
     /// (STACK-DEPTH-REFACTOR.md A1): a re-entrant call through one of them
     /// carries this family's frame and the thin dispatcher's, not the union of
@@ -1343,38 +1384,6 @@ impl Interp {
                     return Err(self.catchable_type_error_msg("new: not a constructor".into()));
                 }
                 self.call_host(base, argc, code)?
-            }
-            // `eval`: a non-string input is returned unchanged (the spec's
-            // "not a String" fast return); a string is compiled and executed
-            // in this realm through the source-execution bridge
-            // ([`Self::eval_source`]) — the principled compiler/VM seam that
-            // replaced the former `eval:string-source` text boundary. The
-            // completion value becomes the call's result. `eval` is never
-            // constructable.
-            Native::Eval => {
-                if has_target {
-                    return Err(self.catchable_type_error_msg("new: not a constructor".into()));
-                }
-                let source = arg(0);
-                if source.kind == Kind::String {
-                    let text = match source.value {
-                        Payload::String(off) => self.str_units(off),
-                        _ => Vec::new(),
-                    };
-                    // A direct eval inherits the caller's strictness; an
-                    // indirect eval of ordinary source is sloppy (a
-                    // `"use strict"` prologue still promotes it, in the
-                    // compiler). `self.strict` is the calling script or
-                    // function frame's strictness at this direct-eval site.
-                    let strict = self.eval_direct && self.strict;
-                    // XS's `XS_FIELD_FLAG`: the calling frame is a class
-                    // field initializer, which opens with
-                    // `BEGIN_STRICT_FIELD`.
-                    let field = self.eval_direct && self.running_field_initializer();
-                    self.eval_source_in(&text, strict, field)?
-                } else {
-                    source
-                }
             }
             // The dynamic-function constructor family (`Function`,
             // `%GeneratorFunction%`, `%AsyncFunction%`,
@@ -2341,6 +2350,17 @@ impl Interp {
             | NativeMethod::ArrayEntries => {
                 self.native_method_array(m, base, argc, code, this, arg0)?
             }
+            // The iterator methods a nest re-enters once per level (a chain of
+            // `take` or `map` helpers, a nest of async generators), each out of
+            // line on its own rather than in `native_method_iterator`.
+            NativeMethod::IteratorHelperNext => {
+                NativeResult::Value(self.iterator_helper_next(code, this)?)
+            }
+            NativeMethod::AsyncGeneratorNext
+            | NativeMethod::AsyncGeneratorReturn
+            | NativeMethod::AsyncGeneratorThrow => {
+                self.native_async_generator_method(m, code, this, arg0)?
+            }
             NativeMethod::ArrayIteratorNext
             | NativeMethod::EnumeratorNext
             | NativeMethod::MapIteratorNext
@@ -2355,14 +2375,10 @@ impl Interp {
             | NativeMethod::IteratorConstructorSetter
             | NativeMethod::IteratorToStringTagSetter
             | NativeMethod::IteratorHelper(..)
-            | NativeMethod::IteratorHelperNext
             | NativeMethod::IteratorHelperReturn
             | NativeMethod::GeneratorNext
             | NativeMethod::GeneratorReturn
             | NativeMethod::GeneratorThrow
-            | NativeMethod::AsyncGeneratorNext
-            | NativeMethod::AsyncGeneratorReturn
-            | NativeMethod::AsyncGeneratorThrow
             | NativeMethod::AsyncIteratorIdentity => {
                 self.native_method_iterator(m, base, argc, code, this, arg0)?
             }
@@ -5538,7 +5554,6 @@ impl Interp {
                 // identity, not from guest code.
                 return Err(Step::Host(Halt::EngineInvariant("Iterator:helper-id")));
             }
-            NativeMethod::IteratorHelperNext => self.iterator_helper_next(code, this)?,
             NativeMethod::IteratorHelperReturn => self.iterator_helper_return(code, this)?,
             // `%GeneratorPrototype%.next/return/throw` (`fx_Generator_prototype_
             // aux`): resume the suspended body and return `{value, done}`. A
@@ -5576,26 +5591,36 @@ impl Interp {
                 };
                 self.resume_generator(code, gen, arg0, GenStatus::Throw)?
             }
-            NativeMethod::AsyncGeneratorNext => match this.value {
-                Payload::Reference(r) if self.async_generators.contains_key(&r) => {
-                    self.enqueue_async_generator(code, r, arg0, GenStatus::Next)?
-                }
-                _ => self.reject_async_generator_brand()?,
-            },
-            NativeMethod::AsyncGeneratorReturn => match this.value {
-                Payload::Reference(r) if self.async_generators.contains_key(&r) => {
-                    self.enqueue_async_generator(code, r, arg0, GenStatus::Return)?
-                }
-                _ => self.reject_async_generator_brand()?,
-            },
-            NativeMethod::AsyncGeneratorThrow => match this.value {
-                Payload::Reference(r) if self.async_generators.contains_key(&r) => {
-                    self.enqueue_async_generator(code, r, arg0, GenStatus::Throw)?
-                }
-                _ => self.reject_async_generator_brand()?,
-            },
             NativeMethod::AsyncIteratorIdentity => this,
             _ => unreachable!("not one of the iterator and generator methods"),
+        };
+        Ok(NativeResult::Value(result))
+    }
+
+    /// `%AsyncGeneratorPrototype%.next/return/throw`, out of line on their own
+    /// rather than arms of [`Self::native_method_iterator`]: each level of a
+    /// nest of async generators re-enters through one of them, so a level
+    /// carries this frame and the thin dispatcher's, not the union of every
+    /// iterator method's.
+    #[inline(never)]
+    fn native_async_generator_method(
+        &mut self,
+        m: NativeMethod,
+        code: &[u8],
+        this: Slot,
+        arg0: Slot,
+    ) -> Result<NativeResult, Step> {
+        let status = match m {
+            NativeMethod::AsyncGeneratorNext => GenStatus::Next,
+            NativeMethod::AsyncGeneratorReturn => GenStatus::Return,
+            NativeMethod::AsyncGeneratorThrow => GenStatus::Throw,
+            _ => unreachable!("not one of the async generator methods"),
+        };
+        let result = match this.value {
+            Payload::Reference(r) if self.async_generators.contains_key(&r) => {
+                self.enqueue_async_generator(code, r, arg0, status)?
+            }
+            _ => self.reject_async_generator_brand()?,
         };
         Ok(NativeResult::Value(result))
     }
