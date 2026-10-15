@@ -1,4 +1,5 @@
 import test from '@endo/ses-ava/test.js';
+// prefer-endo-primitives-exempt: this low-level pass-style test cannot depend on @endo/exo, which depends on pass-style.
 
 import harden from '@endo/harden';
 
