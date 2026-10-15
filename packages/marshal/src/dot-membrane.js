@@ -9,7 +9,7 @@ import {
   passStyleOf,
   getRemotableMethodNames,
 } from '@endo/pass-style';
-import { Fail } from '@endo/errors';
+import { Fail, q } from '@endo/errors';
 import { makeMarshal } from './marshal.js';
 
 /**
@@ -108,6 +108,11 @@ const makeConverter = (mirrorConverter = undefined) => {
           yours = Far(iface, fromEntries(yourMethods));
         }
         break;
+      }
+      case 'parcel': {
+        // `pass` already rejected it by marshalling; this arm keeps the same
+        // error if that ever changes.
+        throw Fail`a ${q(passStyle)} cannot be marshalled`;
       }
       default: {
         Fail`internal: Unrecognized passStyle ${passStyle}`;
