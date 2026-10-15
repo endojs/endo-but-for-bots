@@ -3,11 +3,14 @@ import '@endo/parcel/shim.js';
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
+import { makeParcel } from '@endo/parcel';
+import { fc } from '@fast-check/ava';
 import { passStyleOf, isPassable } from '../src/passStyleOf.js';
 import { deeplyFulfilled } from '../src/deeplyFulfilled.js';
 import { Far } from '../src/make-far.js';
 import { makeTagged } from '../src/makeTagged.js';
 import { PASS_STYLE } from '../src/passStyle-helpers.js';
+import { makeArbitraries } from '../tools.js';
 
 const { create, freeze } = Object;
 
@@ -20,10 +23,8 @@ const { Parcel } = globalThis;
 // configurations. The adversarial-global tests below cover shims-only mode.
 const parcelTest = Object.isFrozen(Parcel) ? test : test.skip;
 
-const makeParcel = (value = 'opened') => new Parcel('test:parcel', () => value);
-
 parcelTest('passStyleOf recognizes a Parcel', t => {
-  const parcel = makeParcel();
+  const parcel = makeParcel('test:parcel', () => 'opened');
   t.is(passStyleOf(parcel), 'parcel');
   t.true(isPassable(parcel));
   // Memoized recognition gives the same answer.
@@ -40,10 +41,25 @@ parcelTest('distinct Parcels are distinct passables', t => {
 });
 
 parcelTest('a Parcel nests in pass-by-copy containers', t => {
-  const parcel = makeParcel();
+  const parcel = makeParcel('test:parcel', () => 'opened');
   t.is(passStyleOf(harden({ parcel, note: 'hi' })), 'copyRecord');
   t.is(passStyleOf(harden([parcel, parcel])), 'copyArray');
   t.is(passStyleOf(makeTagged('box', parcel)), 'tagged');
+});
+
+parcelTest('Parcel passability composes with generated passables', async t => {
+  const { arbPassable } = makeArbitraries(fc);
+  await fc.assert(
+    fc.property(arbPassable, fc.string(), (value, location) => {
+      const parcel = makeParcel(location, () => value);
+      t.is(passStyleOf(harden([parcel, value])), 'copyArray');
+      t.is(passStyleOf(harden({ parcel, value })), 'copyRecord');
+      t.is(
+        passStyleOf(makeTagged('parcelBox', harden([parcel, value]))),
+        'tagged',
+      );
+    }),
+  );
 });
 
 parcelTest('recognition is by brand, not by prototype', t => {
@@ -67,7 +83,7 @@ parcelTest('a remotable is still a remotable', t => {
 });
 
 parcelTest('deeplyFulfilled leaves a Parcel as is', async t => {
-  const parcel = makeParcel();
+  const parcel = makeParcel('test:parcel', () => 'opened');
   const fulfilled = await deeplyFulfilled(parcel);
   t.is(fulfilled, parcel);
   const record = await deeplyFulfilled(harden({ parcel }));
