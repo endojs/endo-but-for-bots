@@ -1,11 +1,11 @@
 // @ts-check
 export {};
 
-/** @import {Passable, PassableCap, SturdyRef} from '@endo/pass-style' */
+/** @import {Passable, PassableCap, ParcelObject} from '@endo/pass-style' */
 
 /**
  * @template Slot
- * @template {PassableCap | SturdyRef} [Value=any]
+ * @template {PassableCap} [Value=any]
  * @callback ConvertValToSlot
  * @param {Value} val
  * @returns {Slot}
@@ -13,7 +13,7 @@ export {};
 
 /**
  * @template Slot
- * @template {PassableCap | SturdyRef} [Value=any]
+ * @template {PassableCap} [Value=any]
  * @callback ConvertSlotToVal
  * @param {Slot} slot
  * @param {string} [iface]
@@ -42,7 +42,7 @@ export {};
  *           EncodingClass<'slot'> & { index: number,
  *                                     iface?: string
  *           } |
- *           EncodingClass<'sturdyRef'> & { index: number } |
+ *           EncodingClass<'parcel'> & { location: string } |
  *           EncodingClass<'hilbert'> & { original: Encoding,
  *                                        rest?: Encoding
  *           } |
@@ -140,6 +140,12 @@ export {};
  * the sender's locally captured context without having to fish the id
  * out of the SES `tagError` side table. Hook exceptions are caught and
  * logged so that decoding cannot be poisoned by a misbehaving hook.
+ * @property {(parcel: ParcelObject) => string=} encodeParcel Privileged hook
+ * that obtains the transport location for a Parcel. Without this hook a
+ * marshal rejects Parcels rather than exposing their location ambiently.
+ * @property {(location: string) => ParcelObject=} decodeParcel Hook that binds
+ * an incoming location to this transport's open authority. Without this hook
+ * a marshal rejects Parcel encodings.
  * @property {'capdata'|'smallcaps'} [serializeBodyFormat]
  * Formatting to use in the "body" property in objects returned from
  * `serialize`. The body string for each case:
