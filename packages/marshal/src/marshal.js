@@ -21,7 +21,7 @@ import {
 
 /**
  * @import {ConvertSlotToVal, ConvertValToSlot, FromCapData, MakeMarshalOptions, ToCapData} from './types.js';
- * @import {Passable, PassableCap, RemotableObject, SturdyRef} from '@endo/pass-style';
+ * @import {Passable, PassableCap, RemotableObject, ParcelObject} from '@endo/pass-style';
  * @import {InterfaceSpec} from '@endo/pass-style';
  * @import {Encoding} from './types.js';
  */
@@ -29,7 +29,6 @@ import {
 const { defineProperties, hasOwn } = Object;
 const { isArray } = Array;
 const { ownKeys } = Reflect;
-const { isSafeInteger } = Number;
 
 /** @type {ConvertValToSlot<any>} */
 const defaultValToSlotFn = x => x;
@@ -60,6 +59,8 @@ export const makeMarshal = (
     // the wire). Lets a privileged downstream layer correlate the
     // decoded error object with the sender's locally captured context.
     marshalLoadError = undefined,
+    encodeParcel = parcel => Fail`parcel unexpected: ${parcel}`,
+    decodeParcel = location => Fail`parcel unexpected: ${location}`,
     // Default to 'capdata' because it was implemented first.
     // Sometimes, ontogeny does recapitulate phylogeny ;)
     serializeBodyFormat = 'capdata',
@@ -69,6 +70,11 @@ export const makeMarshal = (
   errorTagging === 'on' ||
     errorTagging === 'off' ||
     Fail`The errorTagging option can only be "on" or "off" ${errorTagging}`;
+  const locateParcel = parcel => {
+    const location = encodeParcel(parcel);
+    assert.typeof(location, 'string');
+    return location;
+  };
   const nextErrorId = () => {
     errorIdNum += 1;
     return `error:${marshalName}#${errorIdNum}`;
@@ -83,7 +89,7 @@ export const makeMarshal = (
     const slotMap = new Map();
 
     /**
-     * @param {PassableCap | SturdyRef} passable
+     * @param {PassableCap} passable
      * @returns {{index: number, repeat: boolean}}
      */
     const encodeSlotCommon = passable => {
@@ -165,17 +171,9 @@ export const makeMarshal = (
       const encodePromiseToCapData = (promise, _encodeRecur) =>
         encodeSlotToCapData(promise);
 
-      /**
-       * A SturdyRef occupies a slot like a remotable or a promise, but its
-       * encoding names its kind, so that the decoder can tell it apart.
-       * It carries no iface.
-       *
-       * @type {(sturdyRef: SturdyRef, encodeRecur: (p: Passable) => Encoding) => Encoding}
-       */
-      const encodeSturdyRefToCapData = (sturdyRef, _encodeRecur) => {
-        const { index } = encodeSlotCommon(sturdyRef);
-        return harden({ [QCLASS]: 'sturdyRef', index });
-      };
+      /** @type {(parcel: ParcelObject, encodeRecur: (p: Passable) => Encoding) => Encoding} */
+      const encodeParcelToCapData = (parcel, _encodeRecur) =>
+        harden({ [QCLASS]: 'parcel', location: locateParcel(parcel) });
 
       /**
        * Even if an Error is not actually passable, we'd rather send
@@ -195,7 +193,7 @@ export const makeMarshal = (
       const encodeToCapData = makeEncodeToCapData({
         encodeRemotableToCapData,
         encodePromiseToCapData,
-        encodeSturdyRefToCapData,
+        encodeParcelToCapData,
         encodeErrorToCapData,
       });
 
@@ -228,8 +226,8 @@ export const makeMarshal = (
       const encodePromiseToSmallcaps = (promise, _encodeRecur) =>
         encodeSlotToSmallcaps('&', promise);
 
-      const encodeSturdyRefToSmallcaps = (sturdyRef, _encodeRecur) =>
-        encodeSlotToSmallcaps("'", sturdyRef);
+      const encodeParcelToSmallcaps = (parcel, _encodeRecur) =>
+        `'${locateParcel(parcel)}`;
 
       const encodeErrorToSmallcaps = (err, encodeRecur) => {
         const errData = encodeErrorCommon(err, encodeRecur);
@@ -240,7 +238,7 @@ export const makeMarshal = (
       const encodeToSmallcaps = makeEncodeToSmallcaps({
         encodeRemotableToSmallcaps,
         encodePromiseToSmallcaps,
-        encodeSturdyRefToSmallcaps,
+        encodeParcelToSmallcaps,
         encodeErrorToSmallcaps,
       });
 
@@ -259,12 +257,12 @@ export const makeMarshal = (
   };
 
   const makeFullRevive = slots => {
-    /** @type {Map<number, RemotableObject | Promise | SturdyRef>} */
+    /** @type {Map<number, any>} */
     const valMap = new Map();
 
     /**
      * @param {{iface?: string, index: number}} slotData
-     * @returns {RemotableObject | Promise | SturdyRef}
+     * @returns {any}
      */
     const decodeSlotCommon = slotData => {
       const { iface = undefined, index, ...rest } = slotData;
@@ -276,10 +274,7 @@ export const makeMarshal = (
       }
       // TODO SECURITY HAZARD: must enfoce that remotable vs promise
       // is according to the encoded string. The cache is keyed only by
-      // index and shared by remotables, promises, and SturdyRefs, so a
-      // cached value may come back under a different tag. Each caller must
-      // check the kind it expects; capdata's 'slot' checks only that the
-      // value is not a SturdyRef.
+      // index and shared by remotables and promises.
       const slot = slots[Number(Nat(index))];
       const val = convertSlotToVal(slot, iface);
       valMap.set(index, val);
@@ -380,17 +375,19 @@ export const makeMarshal = (
       return decodeErrorCommon(errData, decodeRecur);
     };
 
-    const decodeSturdyRefFromCapData = (rawTree, _decodeRecur) => {
-      const { [QCLASS]: _, ...slotData } = rawTree;
-      !hasOwn(slotData, 'iface') ||
-        Fail`unexpected encoded sturdyRef property ${q('iface')}`;
-      return /** @type {SturdyRef} */ (decodeSlotCommon(slotData));
+    const decodeParcelFromCapData = (rawTree, _decodeRecur) => {
+      const { [QCLASS]: _, location, ...rest } = rawTree;
+      ownKeys(rest).length === 0 ||
+        Fail`unexpected encoded parcel properties ${q(ownKeys(rest))}`;
+      typeof location === 'string' ||
+        Fail`parcel location must be a string: ${location}`;
+      return decodeParcel(location);
     };
 
     const reviveFromCapData = makeDecodeFromCapData({
       decodeRemotableFromCapData: decodeRemotableOrPromiseFromCapData,
       decodePromiseFromCapData: decodeRemotableOrPromiseFromCapData,
-      decodeSturdyRefFromCapData,
+      decodeParcelFromCapData,
       decodeErrorFromCapData,
     });
 
@@ -421,24 +418,11 @@ export const makeMarshal = (
     /**
      * @param {string} stringEncoding
      * @param {(e: unknown) => Passable} _decodeRecur
-     * @returns {SturdyRef}
+     * @returns {ParcelObject}
      */
-    const decodeSturdyRefFromSmallcaps = (stringEncoding, _decodeRecur) => {
+    const decodeParcelFromSmallcaps = (stringEncoding, _decodeRecur) => {
       assert(stringEncoding.charAt(0) === "'");
-      // A SturdyRef encoding carries no iface, and `Number` alone would
-      // accept "", " 0", "0x0", and "0e0" as slot 0, so require one
-      // canonical decimal index. `isSafeInteger` rejects digit strings too
-      // long to parse exactly; the index is then bounded by the slots
-      // array, as for "$" and "&". Those two keep their lenient `Number`
-      // parse for compatibility with existing senders, while "'" has no
-      // legacy senders and can be strict from the start. Every spelling of
-      // an index parses to the same cache key, so the leniency cannot alias
-      // two slots.
-      const digits = stringEncoding.slice(1);
-      const index = Number(digits);
-      (/^(?:0|[1-9][0-9]*)$/.test(digits) && isSafeInteger(index)) ||
-        Fail`sturdyRef encoding must be "'" followed by a slot index: ${q(stringEncoding)}`;
-      return /** @type {SturdyRef} */ (decodeSlotCommon({ index }));
+      return decodeParcel(stringEncoding.slice(1));
     };
 
     const decodeErrorFromSmallcaps = (encoding, decodeRecur) => {
@@ -453,7 +437,7 @@ export const makeMarshal = (
       decodeRemotableFromSmallcaps,
       // @ts-ignore XXX SmallCapsEncoding
       decodePromiseFromSmallcaps,
-      decodeSturdyRefFromSmallcaps,
+      decodeParcelFromSmallcaps,
       decodeErrorFromSmallcaps,
     });
 

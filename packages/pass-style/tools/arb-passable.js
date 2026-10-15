@@ -5,6 +5,7 @@ import '../src/types.js';
 import { Far } from '../src/make-far.js';
 import { makeTagged } from '../src/makeTagged.js';
 import { nameForPassableSymbol, passableSymbolForName } from '../src/symbol.js';
+import { passStyleOf } from '../src/passStyleOf.js';
 
 /**
  * @import { Arbitrary } from 'fast-check';
@@ -28,20 +29,27 @@ export const exampleBob = Far('bob', {});
 export const exampleCarol = Far('carol', {});
 
 /**
- * Make SturdyRefs to serve as leaves, if the realm has a `SturdyRef`.
- * Pass-style does not depend on `@endo/sturdyref`, so this senses the
+ * Make Parcels to serve as leaves, if the realm has a `Parcel`.
+ * Pass-style does not depend on `@endo/parcel`, so this senses the
  * global the shim installs, the way `passStyleOf` does.
  *
  * @returns {Passable[]}
  */
-const makeExampleSturdyRefs = () => {
-  const { SturdyRef } = /** @type {any} */ (globalThis);
-  if (typeof SturdyRef !== 'function') {
+const makeExampleParcels = () => {
+  const { Parcel } = /** @type {any} */ (globalThis);
+  if (typeof Parcel !== 'function' || !Object.isFrozen(Parcel)) {
     return [];
   }
-  return ['dave', 'erin'].map(
-    label => new SturdyRef(harden({ enliven: () => Far(label, {}) })),
+  const parcels = ['dave', 'erin'].map(
+    label => new Parcel(`test:${label}`, () => Far(label, {})),
   );
+  try {
+    return parcels.every(parcel => passStyleOf(parcel) === 'parcel')
+      ? parcels
+      : [];
+  } catch {
+    return [];
+  }
 };
 
 /**
@@ -62,8 +70,8 @@ const makeExampleSturdyRefs = () => {
  * @template [LiftingDetail=unknown]
  * @param {typeof import('@fast-check/ava').fc} fc
  * @param {object} [options]
- * @param {Array<'byteArray' | 'sturdyRef'>} [options.excludePassStyles]
- *   `sturdyRef` leaves appear only where the realm has a `SturdyRef`, and
+ * @param {Array<'byteArray' | 'parcel'>} [options.excludePassStyles]
+ *   `parcel` leaves appear only where the realm has a `Parcel`, and
  *   are not keys, so they appear only in `arbPassable`.
  * @param {<T extends Passable>(input: LiftedInput<T, Lifted>, detail: LiftingDetail) => T | Lifted} [options.lift]
  * @param {Arbitrary<LiftingDetail>} [options.arbLiftingDetail]
@@ -156,15 +164,13 @@ export const makeArbitraries = (
 
   const arbKeyLeaf = fc.oneof(...keyableLeaves);
 
-  const exampleSturdyRefs = excludePassStyles.includes('sturdyRef')
+  const exampleParcels = excludePassStyles.includes('parcel')
     ? []
-    : makeExampleSturdyRefs();
+    : makeExampleParcels();
 
   const arbLeaf = fc.oneof(
     ...keyableLeaves,
-    ...(exampleSturdyRefs.length > 0
-      ? [fc.constantFrom(...exampleSturdyRefs)]
-      : []),
+    ...(exampleParcels.length > 0 ? [fc.constantFrom(...exampleParcels)] : []),
     arbString.map(
       s => Error(s),
       v => (v instanceof Error ? v.message : reject('not an Error')),

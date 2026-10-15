@@ -10,7 +10,7 @@ import type {
   PassStyle,
   Atom,
   RemotableObject,
-  SturdyRef,
+  ParcelObject,
 } from '@endo/pass-style';
 import type {
   PartialCompare,
@@ -129,7 +129,7 @@ export type GetRankCover = (
  * We hope the "Shape" metaphor helps remind us of this type-like imprecision
  * of Patterns.
  */
-export type Pattern = Exclude<Passable, Error | Promise<any> | SturdyRef>;
+export type Pattern = Exclude<Passable, Error | Promise<any> | ParcelObject>;
 
 // CAVEAT: We use a string constant rather than a `unique symbol` here to
 // avoid declaration-emit issues that have appeared in downstream packages
