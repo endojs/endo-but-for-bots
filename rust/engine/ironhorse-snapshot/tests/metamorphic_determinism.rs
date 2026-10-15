@@ -142,6 +142,9 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
     // getter moved all five once more with the blob and the geometry, both
     // arms re-measured; format 26 / store schema 38 move the VERS payload and
     // the manifest's schema, and this fixture holds no resizable buffer.
+    // The `ironhorse-meter-8` release name moved the three format markers and
+    // the blob, both arms re-measured; the two meter markers name their own
+    // release, and the boot heap and the geometry did not move.
     let mut previous = session.machine().snapshot_image(&sig).unwrap().into_image();
     // Historical hashes describe the platform profile. Normalize only SIGN.
     let mut platform_signature = sig.encode();
@@ -167,7 +170,7 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
     format19.version.format_version = 19;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format19)),
-        "9ba482b0e344c9c9f0e2357ddefa8759bf32c2156bc7c466a57d078eae61ac4a"
+        "c7e8ebf458702c95aa81f24d34613a74d510088d4a6897dc5db2228fc6e58431"
     );
 
     let mut format20 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -175,7 +178,7 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
     format20.version.format_version = 20;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format20)),
-        "b253ceb2e71f61b1ef3d149ef20c1d5eed0efef79c360bb3bb5ab2394b6f4a9a"
+        "5a074f09f468158efd134767ac1216df8072beeeea2a92b53127f4e171258d31"
     );
 
     let mut format21 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -183,7 +186,7 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
     format21.version.format_version = 21;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format21)),
-        "8e8217726e0d69e338257e2f9237289d4af2044d35e00953ec39d153a5a92bf8"
+        "e6fae9e962f56f0bf953641f9fef58bf5e52ccc3bbae489c61ad141db3381a15"
     );
 
     let blob = session
@@ -438,7 +441,7 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
             // (`FNRG`). This fixture holds neither, so the atoms are absent
             // and only the VERS payload moves; the manifest's schema below
             // moves with it.
-            "b262738142ca0eaabebd4622ac8807e0bed5c5fbf5e223e1d680487f07ee08f1"
+            "01782c4ecb9e3cd8e2e0b044f59fcfd81b42a7c67b6a8318f7f4175ff8e95d9d"
         } else {
             // F189 reserved IDs, with the deterministic provider SIGN.
             // Re-pinned for format version 23 alongside the platform pin,
@@ -458,7 +461,7 @@ fn golden_vector_pins_canonical_bytes_and_manifest() {
             // `deterministic-math` is on, and the final blob (unlike the
             // markers above) is not signature-normalized. Re-pinned for
             // format version 25 / store schema 37 with the platform arm.
-            "bcad5e5a81e22ef3eef2a13eabc262331180b7c5b098e3c1f42f72711d60094c"
+            "0506aa5aa38e455cb1725fd3322180f932a9a4e881206f980c1c106e52c1b61a"
         },
         "canonical final blob hash"
     );
