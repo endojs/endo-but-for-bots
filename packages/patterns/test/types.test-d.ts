@@ -850,13 +850,11 @@ expectTypeOf(null as unknown as TypeFromPattern<null>).toEqualTypeOf<null>();
   expectTypeOf(null as unknown as T).toEqualTypeOf<CopyRecord>();
 }
 
-// M.kind('parcel') → ParcelObject
+// M.kind('parcel') -> ParcelObject
 {
   const parcelPattern = M.kind('parcel');
   type T = TypeFromPattern<typeof parcelPattern>;
-  expectTypeOf(null as unknown as T).toEqualTypeOf<
-    import('@endo/pass-style').ParcelObject
-  >();
+  expectTypeOf(null as unknown as T).toEqualTypeOf<ParcelObject>();
 }
 
 // M.set() → CopySet (via kind)

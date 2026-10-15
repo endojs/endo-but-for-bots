@@ -81,19 +81,22 @@ const decisions = new WeakMap();
 
 /**
  * Validates the shape of a global Parcel constructor. Every step treats
- * `Parcel` as untrusted: a Proxy can run its traps during these reflective
+ * `candidateConstructor` as untrusted: a Proxy can run its traps during these reflective
  * operations, which cannot be avoided, but whatever it throws only declines
  * recognition.
  *
- * @param {unknown} Parcel
+ * @param {unknown} candidateConstructor
  * @returns {((value: object) => boolean) | undefined}
  */
-const makeBrandCheck = Parcel => {
-  if (typeof Parcel !== 'function' || !isFrozen(Parcel)) {
+const makeBrandCheck = candidateConstructor => {
+  if (
+    typeof candidateConstructor !== 'function' ||
+    !isFrozen(candidateConstructor)
+  ) {
     return undefined;
   }
-  const isParcel = getOwnDataValue(Parcel, 'isParcel');
-  const prototype = getOwnDataValue(Parcel, 'prototype');
+  const isParcel = getOwnDataValue(candidateConstructor, 'isParcel');
+  const prototype = getOwnDataValue(candidateConstructor, 'prototype');
   if (
     typeof isParcel !== 'function' ||
     !isFrozen(isParcel) ||
@@ -139,7 +142,7 @@ const makeBrandCheck = Parcel => {
     checking = true;
     let decision = false;
     try {
-      decision = apply(isParcel, Parcel, [value]) === true;
+      decision = apply(isParcel, candidateConstructor, [value]) === true;
     } catch {
       // A throwing brand check declines its candidate.
     } finally {
