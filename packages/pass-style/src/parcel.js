@@ -18,8 +18,10 @@ const { toStringTag } = Symbol;
  * property
  */
 const getOwnDataValue = (object, key) => {
-  const desc = getOwnPropertyDescriptor(object, key);
-  return desc !== undefined && 'value' in desc ? desc.value : undefined;
+  const descriptor = getOwnPropertyDescriptor(object, key);
+  return descriptor !== undefined && 'value' in descriptor
+    ? descriptor.value
+    : undefined;
 };
 
 /**
@@ -32,12 +34,12 @@ const getOwnDataValue = (object, key) => {
  * @returns {boolean}
  */
 const hasOwnHiddenDataValue = (object, key, expected) => {
-  const desc = getOwnPropertyDescriptor(object, key);
+  const descriptor = getOwnPropertyDescriptor(object, key);
   return (
-    desc !== undefined &&
-    'value' in desc &&
-    !desc.enumerable &&
-    desc.value === expected
+    descriptor !== undefined &&
+    'value' in descriptor &&
+    !descriptor.enumerable &&
+    descriptor.value === expected
   );
 };
 

@@ -1,4 +1,3 @@
-// Install the realm's Parcel before anything below can make one.
 import '@endo/parcel/shim.js';
 import test from '@endo/ses-ava/test.js';
 
@@ -20,29 +19,29 @@ import {
 const { Parcel } = globalThis;
 const parcelTest = Object.isFrozen(Parcel) ? test : test.skip;
 
-const makeRef = () => new Parcel('test:patterns', () => 'opened');
+const makeParcel = () => new Parcel('test:patterns', () => 'opened');
 
 // A Parcel is passable but, like a promise or an error, is neither a key
 // nor a pattern. Predicates must answer false, and assertions must say so,
 // rather than fail with an internal error.
 
 parcelTest('a Parcel is not a key', t => {
-  const ref = makeRef();
-  t.is(passStyleOf(ref), 'parcel');
-  t.false(isKey(ref));
-  t.false(isKey(harden([ref])));
-  t.false(isKey(harden({ ref })));
+  const parcel = makeParcel();
+  t.is(passStyleOf(parcel), 'parcel');
+  t.false(isKey(parcel));
+  t.false(isKey(harden([parcel])));
+  t.false(isKey(harden({ parcel })));
   const message = /"parcel" cannot be a key/;
-  t.throws(() => assertKey(ref), { message });
-  t.throws(() => keyEQ(ref, ref), { message });
+  t.throws(() => assertKey(parcel), { message });
+  t.throws(() => keyEQ(parcel, parcel), { message });
 });
 
 parcelTest('a Parcel is not a pattern', t => {
-  const ref = makeRef();
-  t.false(isPattern(ref));
-  t.false(isPattern(harden([ref])));
-  t.false(matches(5, ref));
-  t.throws(() => mustMatch(5, ref), {
+  const parcel = makeParcel();
+  t.false(isPattern(parcel));
+  t.false(isPattern(harden([parcel])));
+  t.false(matches(5, parcel));
+  t.throws(() => mustMatch(5, parcel), {
     message: /parcels cannot be patterns/,
   });
 });
@@ -50,29 +49,29 @@ parcelTest('a Parcel is not a pattern', t => {
 parcelTest('a Parcel cannot bound a range pattern', t => {
   // Range matchers look up a rank cover, which a Parcel does not have.
   // They must reject it as a non-key when the pattern is made.
-  const ref = makeRef();
+  const parcel = makeParcel();
   const message = /"parcel" cannot be a key/;
-  t.throws(() => M.lte(ref), { message });
-  t.throws(() => M.gte(ref), { message });
-  t.throws(() => M.lt(ref), { message });
-  t.throws(() => M.gt(ref), { message });
+  t.throws(() => M.lte(parcel), { message });
+  t.throws(() => M.gte(parcel), { message });
+  t.throws(() => M.lt(parcel), { message });
+  t.throws(() => M.gt(parcel), { message });
 });
 
 parcelTest('a Parcel as a specimen fails to match rather than throwing', t => {
-  const ref = makeRef();
-  t.true(matches(ref, M.any()));
-  t.false(matches(ref, M.key()));
-  t.false(matches(ref, M.scalar()));
-  t.false(matches(ref, M.remotable()));
-  t.false(matches(ref, 3));
-  t.false(matches(harden({ ref }), M.key()));
-  t.false(matches(harden({ ref }), harden({ ref: M.key() })));
-  t.true(matches(harden({ ref }), harden({ ref: M.any() })));
+  const parcel = makeParcel();
+  t.true(matches(parcel, M.any()));
+  t.false(matches(parcel, M.key()));
+  t.false(matches(parcel, M.scalar()));
+  t.false(matches(parcel, M.remotable()));
+  t.false(matches(parcel, 3));
+  t.false(matches(harden({ parcel }), M.key()));
+  t.false(matches(harden({ parcel }), harden({ parcel: M.key() })));
+  t.true(matches(harden({ parcel }), harden({ parcel: M.any() })));
 });
 
 parcelTest('a Parcel has no rank cover', t => {
   const encodePassable = makeEncodePassable();
-  t.throws(() => getRankCover(makeRef(), encodePassable), {
+  t.throws(() => getRankCover(makeParcel(), encodePassable), {
     message: /"parcel" cannot be rank-ordered/,
   });
 });
