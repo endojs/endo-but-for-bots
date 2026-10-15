@@ -108,6 +108,40 @@ impl Interp {
                 }
             }
         };
+        self.iterable_method_to_list_inner(code, items, iterator_method)
+    }
+
+    /// `IteratorToList(GetIteratorFromMethod(items, method))`, for a caller
+    /// that has already read `items[@@iterator]` (once, as the specification
+    /// does) and decided to iterate.
+    pub(super) fn iterable_method_to_list(
+        &mut self,
+        code: &[u8],
+        items: Slot,
+        iterator_method: Slot,
+    ) -> Result<Vec<Slot>, Step> {
+        let outcome = self.run_guest_under_native_try(CallerHandlers::Isolate, |machine| {
+            let value_id = machine.intern_static_key("value");
+            let done_id = machine.intern_static_key("done");
+            machine.value_id = Some(value_id);
+            machine.done_id = Some(done_id);
+            machine.iterable_method_to_list_inner(code, items, iterator_method)
+        });
+        match outcome {
+            Ok(Ok(values)) => Ok(values),
+            Ok(Err(error)) => Err(self.raise_js(error)),
+            Err(halt) => Err(halt),
+        }
+    }
+
+    fn iterable_method_to_list_inner(
+        &mut self,
+        code: &[u8],
+        items: Slot,
+        iterator_method: Slot,
+    ) -> Result<Result<Vec<Slot>, Slot>, Step> {
+        let value_id = self.intern_static_key("value");
+        let done_id = self.intern_static_key("done");
         if !self.is_callable_value(iterator_method) {
             return Ok(Err(
                 self.internal_error("TypeError", "call: not a function".into())
@@ -127,6 +161,9 @@ impl Interp {
             }
         };
         let next_id = self.intern_static_key("next");
+        // A `next` key interned here, not by the program, may still owe the
+        // intrinsic iterator prototypes their lazily linked `next` methods.
+        self.install_pending_intrinsics();
         let next = match self
             .array_from_try(|this| this.mop_get(code, iterator_inst, next_id, iterator))?
         {

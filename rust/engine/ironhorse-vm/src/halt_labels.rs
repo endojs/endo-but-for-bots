@@ -75,7 +75,6 @@ pub const NOT_IMPLEMENTED_LABELS: &[&str] = &[
     "native-call:ArrayBuffer:resizable",
     "native-call:SharedArrayBuffer:growable",
     // Custom iterator protocols and array-like interleaving are not yet modeled.
-    "native-call:TypedArray:from-array-like",
     "number:unmodeled",
     "opcode:no-code",
     "private:missing-brand",

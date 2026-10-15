@@ -376,16 +376,13 @@ fn the_ses_shim_prelude_reaches_a_pinned_slice_of_the_parity_corpus() {
 /// **The `Worker` column is the ratchet.** It is the corpus run in the realm
 /// the worker ships, and it is expected to go UP and never down.
 ///
-/// **The `Defaults` column is a second ratchet, on an engine gap.** Four cases
-/// halt under SES's default `overrideTaming: 'moderate'` with
-/// `native-call:TypedArray:from-array-like`, and pass under the worker's
-/// `'min'`. That is not two facts but one: `bundle-ironhorse-worker.mjs` picked
-/// `'min'` for exactly this reason -- its comment says Ironhorse's typed-array
-/// copy profile refuses accessor-based iterator overrides, which is what
-/// `'moderate'` installs on `Array.prototype`. When the engine implements that
-/// native call, these four flip to `PASS` and the column ratchets with them.
-/// Until then it names the gap rather than hiding behind the option that dodges
-/// it.
+/// **The `Defaults` column is a second ratchet**, run under SES's default
+/// `overrideTaming: 'moderate'`. `bundle-ironhorse-worker.mjs` picked `'min'`
+/// because Ironhorse's typed-array copy once halted
+/// (`native-call:TypedArray:from-array-like`) on the accessor-based iterator
+/// overrides `'moderate'` installs on `Array.prototype`, which four of these
+/// cases reach. The copy now follows any iterator, so those four pass under
+/// both option sets, and the column keeps them passing.
 ///
 /// An earlier revision of `packages/test262-runner/README.md` reported the
 /// `Defaults` column as if it were unconditional -- "four are blocked
@@ -414,17 +411,17 @@ const POST_LOCKDOWN: &[(&str, &str, &str)] = &[
     (
         "built-ins/ImmutableArrayBuffer/pass-style-bytes/byte-array-brand.js",
         "PASS",
-        "HALT:native-call:TypedArray:from-array-like",
+        "PASS",
     ),
     (
         "built-ins/ImmutableArrayBuffer/pass-style-bytes/byte-readers.js",
         "PASS",
-        "HALT:native-call:TypedArray:from-array-like",
+        "PASS",
     ),
     (
         "built-ins/ImmutableArrayBuffer/pass-style-bytes/native-or-emulated-shape.js",
         "PASS",
-        "HALT:native-call:TypedArray:from-array-like",
+        "PASS",
     ),
     (
         "built-ins/ImmutableArrayBuffer/view-behavior-matrix/ses-hosts.js",
@@ -434,7 +431,7 @@ const POST_LOCKDOWN: &[(&str, &str, &str)] = &[
     (
         "built-ins/TextDecoder/immutable-arraybuffer-intersection.js",
         "PASS",
-        "HALT:native-call:TypedArray:from-array-like",
+        "PASS",
     ),
     (
         "built-ins/TextEncoder/immutable-arraybuffer-intersection.js",
