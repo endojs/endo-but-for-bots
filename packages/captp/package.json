@@ -48,6 +48,7 @@
   },
   "devDependencies": {
     "@endo/init": "workspace:^",
+    "@endo/parcel": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
@@ -62,8 +63,7 @@
     "@endo/marshal": "workspace:^",
     "@endo/nat": "workspace:^",
     "@endo/pass-style": "workspace:^",
-    "@endo/promise-kit": "workspace:^",
-    "@endo/sturdyref": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
   },
   "bugs": {
     "url": "https://github.com/endojs/endo/issues"
