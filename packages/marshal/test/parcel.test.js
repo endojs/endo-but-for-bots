@@ -1,4 +1,5 @@
 import '@endo/parcel/shim.js';
+// prefer-endo-primitives-exempt: this low-level marshal test cannot depend on @endo/exo, which depends on marshal.
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';

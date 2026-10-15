@@ -9,4 +9,4 @@ A child compartment recognizes Parcels only when the shim was installed before `
 At runtime, nothing changes when no `Parcel` shim has run.
 
 This is a type-level change: the exported `PassStyle` union gains `'parcel'`, and `Passable` admits the new `ParcelObject` type, alone or inside a container.
-A consumer with an exhaustive `switch` over `PassStyle`, or a `Record<PassStyle, …>` table, stops type-checking until it adds a `'parcel'` case or narrows with `Exclude<PassStyle, 'parcel'>`.
+A consumer with an exhaustive `switch` over `PassStyle`, or a `Record<PassStyle, ...>` table, stops type-checking until it adds a `'parcel'` case or narrows with `Exclude<PassStyle, 'parcel'>`.
