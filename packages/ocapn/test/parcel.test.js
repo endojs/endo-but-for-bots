@@ -148,6 +148,27 @@ parcelTest('a Parcel for another location scheme is refused by OCapN', t => {
   }
 });
 
+parcelTest("one OCapN instance can forward another instance's Parcel", t => {
+  const first = makeCodecTestKit();
+  const second = makeCodecTestKit();
+  const parcel = first.parcelTracker.makeParcel(
+    harden({
+      type: /** @type {const} */ ('ocapn-peer'),
+      network: 'tcp-test-only',
+      transport: 'tcp',
+      designator: '127.0.0.1:9999',
+      hints: /** @type {const} */ (false),
+    }),
+    'forwarded-secret',
+  );
+
+  for (const codec of AllCodecs) {
+    const writer = codec.makeWriter({ name: 'forwarded Parcel' });
+    t.notThrows(() => second.PassableCodec.write(parcel, writer));
+    t.true(writer.getBytes().byteLength > 0);
+  }
+});
+
 parcelTestWithErrorUnwrapping(
   'isParcel correctly identifies Parcels',
   async t => {
