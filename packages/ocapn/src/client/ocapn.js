@@ -10,7 +10,7 @@
  * @import { HandoffGiveSigEnvelope, HandoffReceiveSigEnvelope } from '../codecs/descriptors.js'
  * @import { OcapnReader } from '../codec-interface.js'
  * @import { OcapnCodec } from '../codec-interface.js'
- * @import { SturdyRefTracker } from './sturdyrefs.js'
+ * @import { ParcelTracker } from './parcels.js'
  * @import { Connection, InternalSession, LocationId, Logger, OcapnBootstrap, ProvideImport, SessionId, SwissNum } from './types.js'
  * @import { OcapnPublicKey, Cryptography } from '../cryptography.js'
  */
@@ -42,9 +42,9 @@ import { makeGrantDetails } from './grant-tracker.js';
  * @typedef {any} RemoteResolver
  * @typedef {(questionSlot: Slot, ownerLabel?: string) => LocalResolver} MakeLocalResolver
  * @typedef {(slot: Slot) => RemoteResolver} MakeRemoteResolver
- * @typedef {(node: OcapnLocation, swissNum: SwissNum) => Promise<any>} MakeRemoteSturdyRef
+ * @typedef {(node: OcapnLocation, swissNum: SwissNum) => Promise<any>} MakeRemoteParcel
  * @typedef {(signedGive: HandoffGiveSigEnvelope) => Promise<any>} MakeHandoff
- * @typedef {(nodeLocation: OcapnLocation, swissNum: SwissNum) => any} GetRemoteSturdyRef
+ * @typedef {(nodeLocation: OcapnLocation, swissNum: SwissNum) => any} GetRemoteParcel
  * @typedef {'object' | 'promise' | 'question'} SlotType
  */
 
@@ -489,7 +489,7 @@ const makeCodecKit = (referenceKit, codec) => {
  * @param {string} label
  * @param {Logger} logger
  * @param {SessionId} sessionId
- * @param {SturdyRefTracker} sturdyRefTracker
+ * @param {ParcelTracker} parcelTracker
  * @param {ReferenceKit} referenceKit
  * @param {Map<string, any>} giftTable
  * @param {(sessionId: SessionId) => OcapnPublicKey | undefined} getPeerPublicKeyForSessionId
@@ -500,7 +500,7 @@ const makeBootstrapObject = (
   label,
   logger,
   sessionId,
-  sturdyRefTracker,
+  parcelTracker,
   referenceKit,
   giftTable,
   getPeerPublicKeyForSessionId,
@@ -514,7 +514,7 @@ const makeBootstrapObject = (
      * @returns {Promise<any>}
      */
     fetch: async swissnum => {
-      const object = await sturdyRefTracker.lookup(swissnum);
+      const object = await parcelTracker.lookup(swissnum);
       if (object === undefined) {
         // Do not echo the swissnum/secret bytes in the error: the
         // rejection rides back to the peer over CapTP, and is also
@@ -706,7 +706,7 @@ const makeBootstrapObject = (
  * @param {() => void} endSession
  * @param {GrantTracker} grantTracker
  * @param {Map<string, any>} giftTable
- * @param {SturdyRefTracker} sturdyRefTracker
+ * @param {ParcelTracker} parcelTracker
  * @param {OcapnCodec} codec
  * @param {Cryptography} cryptography
  * @param {string} [ourIdLabel]
@@ -735,7 +735,7 @@ export const makeOcapn = (
   endSession,
   grantTracker,
   giftTable,
-  sturdyRefTracker,
+  parcelTracker,
   codec,
   cryptography,
   ourIdLabel = 'OCapN',
@@ -1322,7 +1322,7 @@ export const makeOcapn = (
     peerLocation,
     ocapnTable,
     grantTracker,
-    sturdyRefTracker,
+    parcelTracker,
     makeRemoteKit,
     makeHandoff,
     sendHandoff,
@@ -1378,7 +1378,7 @@ export const makeOcapn = (
     ourIdLabel,
     logger,
     sessionId,
-    sturdyRefTracker,
+    parcelTracker,
     referenceKit,
     giftTable,
     getPeerPublicKeyForSessionId,
