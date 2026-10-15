@@ -102,8 +102,8 @@ built-ins/Array/prototype/reduceRight/call-with-boolean.js sloppy pass
 built-ins/Array/prototype/reduceRight/call-with-boolean.js strict pass
 built-ins/Array/prototype/reduceRight/callbackfn-resize-arraybuffer.js sloppy pass
 built-ins/Array/prototype/reduceRight/callbackfn-resize-arraybuffer.js strict pass
-built-ins/Array/prototype/reduceRight/length-near-integer-limit.js sloppy skip:unsupported-opcode:reduce:non-dense-array
-built-ins/Array/prototype/reduceRight/length-near-integer-limit.js strict skip:unsupported-opcode:reduce:non-dense-array
+built-ins/Array/prototype/reduceRight/length-near-integer-limit.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: The value of acc.length is expected to be 2 Expected SameValue(«undefined», «2») to be true"
+built-ins/Array/prototype/reduceRight/length-near-integer-limit.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: The value of acc.length is expected to be 2 Expected SameValue(«undefined», «2») to be true"
 built-ins/Array/prototype/reduceRight/length.js sloppy pass
 built-ins/Array/prototype/reduceRight/length.js strict pass
 built-ins/Array/prototype/reduceRight/name.js sloppy pass
