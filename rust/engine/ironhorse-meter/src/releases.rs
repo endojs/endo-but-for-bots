@@ -41,4 +41,11 @@ pub const PINNED: &[(&str, &str)] = &[
         "ironhorse-meter-7",
         "4d9abebe68c732f045097da41de323467d6403019a672eb1249521cd476601a5",
     ),
+    // Same weights, new compiler charging: `new eval(...)` is no longer
+    // hoisted as a direct eval, so a function containing one is scoped and
+    // coded without the eval prelude, and its compilation and run charge less.
+    (
+        "ironhorse-meter-8",
+        "4d9abebe68c732f045097da41de323467d6403019a672eb1249521cd476601a5",
+    ),
 ];

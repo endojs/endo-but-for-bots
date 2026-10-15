@@ -1,4 +1,4 @@
-# ironhorse-meter-7 runtime cost corpus: label, source, halt, result, raw, computrons
+# ironhorse-meter-8 runtime cost corpus: label, source, halt, result, raw, computrons
 dispatch	1+2*3	return	7	804120	12
 slots	var a={x:1,y:2}; a.x+a.y	return	3	2247776	34
 default-key	var a={}; a.length=3; a.length	return	3	1886512	28
@@ -58,3 +58,4 @@ lazy-take-drop	[...[1,2,3,4,5].values().drop(1).take(2)].join(',')	return	2,3	86
 lazy-flat-map	[...[1,2].values().flatMap(function(v){return [v,v*10]})].join(',')	return	1,10,2,20	14532816	221
 array-buffer-resize	var b=new ArrayBuffer(8,{maxByteLength:64}); var t=new Uint8Array(b); b.resize(32); t[31]=7; b.resize(16); t.length+b.byteLength	return	32	4953040	75
 shared-array-buffer-grow	var s=new SharedArrayBuffer(8,{maxByteLength:64}); var t=new Uint8Array(s); s.grow(32); t[31]=7; t.length+s.byteLength+t[31]	return	71	4838320	73
+new-eval	function f(a){var x=a;try{new eval('x')}catch(e){return e instanceof TypeError?x:0}} f(7)	return	7	5888536	89
