@@ -521,20 +521,6 @@ const GAPS: &[Row] = &[
         why: "Function.prototype.bind accepts any callable receiver; on a Proxy Ironhorse halts",
     },
     Row {
-        program: "(1.5).toString(2)",
-        ironhorse: "halt NotImplemented(\"Number.toString:fractional-non-decimal-radix\")",
-        xs: "1.1",
-        v8: "1.1",
-        why: "Number.prototype.toString with a radix other than 10 renders a fraction; Ironhorse halts",
-    },
-    Row {
-        program: "(1e21).toString(36)",
-        ironhorse: "halt NotImplemented(\"Number.toString:fractional-non-decimal-radix\")",
-        xs: "5v1j4f4ds7c000",
-        v8: "5v1j4f4ds7c000",
-        why: "Number.prototype.toString with a radix other than 10 renders an integer above 2**53; Ironhorse halts",
-    },
-    Row {
         program: "typeof Object.getOwnPropertyDescriptor(RegExp.prototype, 'flags')",
         ironhorse: "undefined",
         xs: "object",
