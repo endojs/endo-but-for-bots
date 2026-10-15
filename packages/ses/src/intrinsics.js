@@ -80,20 +80,17 @@ function sampleGlobals(globalObject, newPropertyNames) {
 }
 
 /**
- * Validate a pre-lockdown own `globalThis.Parcel` binding and snapshot the
- * members SES delegates to, reading each by descriptor so that no getter or
- * Proxy `get` trap can substitute a different value later.
+ * Validate a pre-lockdown own `globalThis.Parcel` binding and snapshot, by
+ * descriptor, the members SES delegates to, so no getter or Proxy `get` trap
+ * can substitute a different value later.
  * Returns `undefined` when the global has no own `Parcel` property.
- * Throws a `TypeError` for an accessor binding or a value that lacks the
- * compatible constructor shape: a constructor with a locked `prototype` and
- * distinct own `open`, `locate`, and `isParcel` functions.
+ * Throws a `TypeError` for an accessor binding or a value that is not a
+ * constructible function with a locked `prototype` and distinct own `open`,
+ * `locate`, and `isParcel` functions.
  *
- * The check is structural and does not establish provenance.
- * Like every other pre-lockdown change to the start compartment, the `Parcel`
- * it accepts is trusted: SES cannot tell `@endo/parcel` from a compatible
- * constructor, nor stop pre-lockdown code from installing one whose `open` or
- * `[[Construct]]` leaks authority.
- * The check rejects an accidental, unrelated `Parcel` global.
+ * The check rejects an accidental, unrelated `Parcel` global but does not
+ * establish provenance: like every other pre-lockdown change to the start
+ * compartment, the `Parcel` it accepts is trusted.
  *
  * @param {object} globalObject
  * @returns {ParcelSample | undefined}
@@ -102,7 +99,6 @@ export const sampleParcel = globalObject => {
   if (!hasOwn(globalObject, 'Parcel')) {
     return undefined;
   }
-  // Read the binding by descriptor so no getter runs.
   const binding = getOwnPropertyDescriptor(globalObject, 'Parcel');
   if (binding === undefined || !hasOwn(binding, 'value')) {
     throw TypeError(
