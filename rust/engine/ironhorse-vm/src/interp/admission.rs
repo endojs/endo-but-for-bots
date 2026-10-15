@@ -43,6 +43,13 @@ scratch_element! {
     Option<Slot> => 24,
     Option<crate::value::SlotIndex> => 8,
     Vec<u16> => 24,
+    // Side storage (`crate::side_storage`), charged by capacity class while
+    // its table holds it.
+    crate::bulk::CollEntry => 56,
+    Option<CollKey> => 16,
+    (CollKey, usize) => 24,
+    (usize, usize, bool) => 24,
+    (Slot, Vec<Slot>) => 48,
 }
 
 impl Interp {

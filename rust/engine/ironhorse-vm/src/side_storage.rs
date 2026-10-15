@@ -13,10 +13,11 @@
 //!
 //! - **Declared widths.** Each storage kind is charged a fixed width per
 //!   element, the audited 64-bit layout of the record that holds it, never
-//!   `size_of` on the running target (wasm32's pointers are half as wide). A
-//!   64-bit build asserts each width against the layout, so a record that
-//!   grows fails to compile until its width is re-declared, which is a
-//!   release change.
+//!   `size_of` on the running target (wasm32's pointers are half as wide).
+//!   The widths are declared with scratch admission's
+//!   ([`crate::interp::ScratchElement`]), whose 64-bit build asserts each one
+//!   against the layout, so a record that grows fails to compile until its
+//!   width is re-declared, which is a release change.
 //! - **A pure growth policy.** Growable tables are charged by capacity
 //!   class, [`capacity_class`] of their element count: zero when empty,
 //!   then [`MIN_CLASS`], then each power of two. The class is a function of
@@ -28,47 +29,39 @@
 //! The ledger is never persisted. It is derived from the tables on restore
 //! and after collection (`Interp::rederive_side_reserved`), the same points
 //! at which [`crate::value::ChunkArena`]'s reclaimed chunks become reusable,
-//! and after a crank that halts `HeapExhausted`, whose unwind can drop
+//! and after a crank that ends in a resource stop, whose unwind can drop
 //! storage a native had charged but not yet installed in a table.
 
 use crate::bulk::{CollEntry, CollKey};
+use crate::interp::ScratchElement;
 use crate::value::Slot;
 
+/// The declared width of one `T`, in bytes.
+const fn width<T: ScratchElement>() -> u64 {
+    T::CHARGE as u64
+}
+
 /// One array item or index property: its `(u32, Slot)` record.
-pub(crate) const ARRAY_ITEM_BYTES: u64 = 32;
+pub(crate) const ARRAY_ITEM_BYTES: u64 = width::<(u32, Slot)>();
 /// One Map/Set/WeakMap/WeakSet entry in the insertion-ordered list.
-pub(crate) const COLLECTION_ENTRY_BYTES: u64 = 56;
+pub(crate) const COLLECTION_ENTRY_BYTES: u64 = width::<CollEntry>();
 /// The same entry's lookup index: its `Option<CollKey>` position record and
 /// its `(CollKey, usize)` hash-table bucket.
-pub(crate) const COLLECTION_INDEX_BYTES: u64 = 40;
+pub(crate) const COLLECTION_INDEX_BYTES: u64 =
+    width::<Option<CollKey>>() + width::<(CollKey, usize)>();
 /// One UTF-16 code unit of the input a `%Segments%` object retains.
-pub(crate) const SEGMENT_UNIT_BYTES: u64 = 2;
+pub(crate) const SEGMENT_UNIT_BYTES: u64 = width::<u16>();
 /// One `(start, end, is_word_like)` segment record.
-pub(crate) const SEGMENT_BYTES: u64 = 24;
+pub(crate) const SEGMENT_BYTES: u64 = width::<(usize, usize, bool)>();
 
 /// One `Slot` in a transient host list a built-in collects (a typed-array
 /// `filter`'s kept values, a Set method's result, a `groupBy` bucket).
-pub(crate) const SLOT_BYTES: u64 = 24;
+pub(crate) const SLOT_BYTES: u64 = width::<Slot>();
 /// One `groupBy` bucket record: its key and the vector of its values.
-pub(crate) const GROUP_BUCKET_BYTES: u64 = 48;
+pub(crate) const GROUP_BUCKET_BYTES: u64 = width::<(Slot, Vec<Slot>)>();
 
 /// The smallest nonzero capacity class.
 pub(crate) const MIN_CLASS: u64 = 4;
-
-#[cfg(target_pointer_width = "64")]
-const _: () = {
-    use std::mem::size_of;
-    assert!(size_of::<(u32, Slot)>() as u64 == ARRAY_ITEM_BYTES);
-    assert!(size_of::<CollEntry>() as u64 == COLLECTION_ENTRY_BYTES);
-    assert!(
-        (size_of::<Option<CollKey>>() + size_of::<(CollKey, usize)>()) as u64
-            == COLLECTION_INDEX_BYTES
-    );
-    assert!(size_of::<u16>() as u64 == SEGMENT_UNIT_BYTES);
-    assert!(size_of::<(usize, usize, bool)>() as u64 == SEGMENT_BYTES);
-    assert!(size_of::<Slot>() as u64 == SLOT_BYTES);
-    assert!(size_of::<(Slot, Vec<Slot>)>() as u64 == GROUP_BUCKET_BYTES);
-};
 
 /// The capacity charged for `count` elements: 0, then [`MIN_CLASS`], then
 /// the next power of two.
@@ -135,5 +128,6 @@ mod tests {
         assert_eq!(array_items_charge(5), 8 * 32);
         assert_eq!(collection_charge(1), 4 * 96);
         assert_eq!(segments_charge(10, 3), 20 + 72);
+        assert_eq!((SLOT_BYTES, GROUP_BUCKET_BYTES), (24, 48));
     }
 }

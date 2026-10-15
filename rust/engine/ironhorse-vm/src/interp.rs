@@ -27,6 +27,7 @@
 mod state;
 
 mod admission;
+pub(crate) use admission::ScratchElement;
 mod apply;
 mod code;
 mod coerce;
@@ -2897,7 +2898,10 @@ impl Interp {
             self.run_inner(shared, execute_script, pump_jobs, guest_thrown_rendering)
         })) {
             Ok(outcome) => {
-                if matches!(outcome.halt, Halt::HeapExhausted | Halt::HostAllocationFailed) {
+                if matches!(
+                    outcome.halt,
+                    Halt::HeapExhausted | Halt::HostAllocationFailed
+                ) {
                     // A nested boundary caught the stop; the unwind below it
                     // can still have dropped charged storage.
                     self.rederive_side_reserved();
