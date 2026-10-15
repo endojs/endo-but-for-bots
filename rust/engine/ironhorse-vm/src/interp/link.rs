@@ -84,10 +84,24 @@ impl Interp {
     /// — so this cannot perturb top-level behavior. Called after the eval
     /// bridge relinks a unit's symbols.
     pub(super) fn refresh_special_ids_from_symbols(&mut self) {
+        self.refresh_special_ids_matching(None);
+    }
+
+    /// [`Self::refresh_special_ids_from_symbols`] for one name only, when
+    /// `only` is given. Appending a name to the table can fill no cache but
+    /// that name's: every other special name is either in the table already,
+    /// with its cache filled when it entered, or still absent from it.
+    pub(super) fn refresh_special_ids_matching(&mut self, only: Option<&SymbolName>) {
+        let only = match only.map(SymbolName::as_str) {
+            // No special name has a lone surrogate.
+            Some(None) => return,
+            Some(Some(name)) => Some(name),
+            None => None,
+        };
         let id_of = |ids: &SymbolIds, want: &str| ids.get(want).copied();
         macro_rules! fill {
             ($field:expr, $name:literal) => {
-                if $field.is_none() {
+                if $field.is_none() && only.is_none_or(|name| name == $name) {
                     $field = id_of(&self.symbol_ids, $name);
                 }
             };

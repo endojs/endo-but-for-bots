@@ -130,9 +130,11 @@ impl Interp {
         // differently from its own resumed twin — a result AND
         // computron divergence, checked for `value`/`done` by
         // `ironhorse-snapshot/tests/iterator_result_carry.rs`. The
-        // refresh is additive (fills only `None` caches) and O(a few
-        // map lookups) on the rare novel-intern path.
-        self.refresh_special_ids_from_symbols();
+        // refresh is additive (fills only `None` caches) and looks up
+        // only the name just appended, the one cache it can fill: a link
+        // appends every standard global's name, and refreshing all the
+        // caches for each of them was most of a fresh machine's link time.
+        self.refresh_special_ids_matching(Some(&name));
         id
     }
 
