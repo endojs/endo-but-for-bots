@@ -588,7 +588,7 @@ struct Eval {
 /// [`evaluate`] path and the async path ([`run_async_case`]), which supplies
 /// its own dual-run so it can additionally read the completion latch.
 // Proprietary corpus cases may pin an engine-versioned raw total, for example
-// `ironhorse-meter-7-raw-N`: Iron Horse's own frozen cost, the only meter
+// `ironhorse-meter-8-raw-N`: Iron Horse's own frozen cost, the only meter
 // value the gate can fail on. The historical `ironhorse-meter-exact` tag
 // (XS-computron evidence) also matches this predicate but activates no gate:
 // XS cost drift is always advisory (XS-computron parity is a non-goal), and
@@ -614,12 +614,12 @@ fn verdict_for(cfg: &Config, run: &DualRun, fm: &Frontmatter, meter_exact_gate: 
     if meter_exact_gate && !pins.is_empty() {
         if pins.len() != 1
             || fm.features.iter().any(|f| f == "ironhorse-meter-exact")
-            || ironhorse_vm::meter::COST_TABLE_VERSION != "ironhorse-meter-7"
+            || ironhorse_vm::meter::COST_TABLE_VERSION != "ironhorse-meter-8"
         {
             return Verdict::Fail("invalid or incompatible version-4 meter pin".into());
         }
         let Some(expected) = pins[0]
-            .strip_prefix("ironhorse-meter-7-raw-")
+            .strip_prefix("ironhorse-meter-8-raw-")
             .and_then(|n| n.parse::<u64>().ok())
         else {
             return Verdict::Fail("invalid version-4 raw meter pin".into());
@@ -4169,7 +4169,7 @@ mod tests {
         run.result_agrees = true;
         run.ironhorse_meter_raw = 42;
         let mut fm = Frontmatter {
-            features: vec!["ironhorse-meter-7-raw-42".into()],
+            features: vec!["ironhorse-meter-8-raw-42".into()],
             ..Frontmatter::default()
         };
         assert!(matches!(
@@ -4183,13 +4183,13 @@ mod tests {
         ));
         run.result_agrees = true;
         for tags in [
-            vec!["ironhorse-meter-7-raw-0"],
-            vec!["ironhorse-meter-7-raw-nope"],
-            vec!["ironhorse-meter-7-raw-18446744073709551616"],
+            vec!["ironhorse-meter-8-raw-0"],
+            vec!["ironhorse-meter-8-raw-nope"],
+            vec!["ironhorse-meter-8-raw-18446744073709551616"],
             vec!["ironhorse-meter-3-raw-42"],
             vec!["ironhorse-meter-4-raw-42"],
-            vec!["ironhorse-meter-7-raw-42", "ironhorse-meter-7-raw-42"],
-            vec!["ironhorse-meter-exact", "ironhorse-meter-7-raw-42"],
+            vec!["ironhorse-meter-8-raw-42", "ironhorse-meter-8-raw-42"],
+            vec!["ironhorse-meter-exact", "ironhorse-meter-8-raw-42"],
         ] {
             fm.features = tags.into_iter().map(str::to_owned).collect();
             assert!(
@@ -4198,7 +4198,7 @@ mod tests {
                 fm.features
             );
         }
-        fm.features = vec!["ironhorse-meter-7-raw-0".into()];
+        fm.features = vec!["ironhorse-meter-8-raw-0".into()];
         run.ironhorse_meter_raw = 0;
         assert!(matches!(
             verdict_for(&cfg, &run, &fm, true),

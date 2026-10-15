@@ -7,7 +7,7 @@
 //! and its result for a nullish operand but lists no keys and has no first
 //! level to walk. Ironhorse charged such a loop the whole creation cluster
 //! calibrated on an empty object, which counts an own-keys collection it
-//! does not do, so `ironhorse-meter-6` charges
+//! does not do, so `ironhorse-meter-6` (and later releases) charges
 //! `FOR_IN_NULLISH_ENUMERATOR_METERING` instead. Its size was taken from
 //! XS's count at the time; the oracle-free `for-in-nullish` row of
 //! `ironhorse-vm/tests/fixtures/computrons.tsv` pins Ironhorse's own cost,
