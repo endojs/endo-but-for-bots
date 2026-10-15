@@ -86,11 +86,11 @@ parcelTest('recognition does not open', async t => {
   t.is(opened, 1);
 });
 
-parcelTest('the constructor rejects a foreign newTarget', t => {
+parcelTest('the constructor rejects a foreign subclass prototype', t => {
   class Subclass extends Parcel {}
   // @ts-expect-error The inherited type correctly exposes no public subclass
   // constructor; the runtime call verifies that bypassing it is also rejected.
   t.throws(() => new Subclass('test:subclass', () => 'x'), {
-    message: /cannot be subclassed/,
+    message: /shared Parcel prototype/,
   });
 });
