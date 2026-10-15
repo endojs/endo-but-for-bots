@@ -158,6 +158,15 @@ fn a_buffer_options_object_without_max_byte_length_is_fixed_length() {
     }
 }
 
+/// XS copies a source the species constructor grew past the end of the
+/// result; Ironhorse copies only what fits, so the oracle cannot run this.
+#[test]
+fn concat_copies_only_what_fits_of_a_grown_source() {
+    let program = "var a = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]); var g = new ArrayBuffer(1, { maxByteLength: 8 }); var b = new Uint8Array([9]).buffer; b.constructor = { [Symbol.species]: function (n) { g.resize(8); new Uint8Array(g).set(a); return new ArrayBuffer(n) } }; var r = new Uint8Array(b.concat(g)).join(); if (r !== '9,1') throw new Error(r);";
+    let outcome = run_script_source(program).expect("the program compiles");
+    assert!(outcome.completed, "{:?}", outcome.halt);
+}
+
 #[test]
 fn concat_joins_buffers_through_the_species_constructor() {
     for program in [
@@ -186,11 +195,17 @@ fn concat_joins_buffers_through_the_species_constructor() {
     }
 }
 
-/// XS copies a source the species constructor grew past the end of the
-/// result; Ironhorse copies only what fits, so the oracle cannot run this.
+/// A conditional that jumps over more than 32 KiB of bytecode takes the
+/// 4-byte `branch_else`/`branch_if` forms.
 #[test]
-fn concat_copies_only_what_fits_of_a_grown_source() {
-    let program = "var a = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]); var g = new ArrayBuffer(1, { maxByteLength: 8 }); var b = new Uint8Array([9]).buffer; b.constructor = { [Symbol.species]: function (n) { g.resize(8); new Uint8Array(g).set(a); return new ArrayBuffer(n) } }; var r = new Uint8Array(b.concat(g)).join(); if (r !== '9,1') throw new Error(r);";
-    let outcome = run_script_source(program).expect("the program compiles");
-    assert!(outcome.completed, "{:?}", outcome.halt);
+fn a_conditional_can_jump_over_a_long_body() {
+    let body = "a = a + 1; ".repeat(2500);
+    agrees(&format!(
+        "var a = 0; var x = true; if (x) {{ {body} }} else {{ a = -1; }} \
+         var b = 0; if (!x) {{ {body} }} else {{ b = 7; }} \
+         var c = 0; while (c < 2) {{ c++; {body} }} \
+         var d = x && (function () {{ {body} return 3; }})(); \
+         var e = !x || (function () {{ {body} return 4; }})(); \
+         [a, b, c, d, e].join()"
+    ));
 }
