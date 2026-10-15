@@ -336,6 +336,28 @@ impl Interp {
         Ok(())
     }
 
+    /// Whether a NEW_PROPERTY is the compiler's `caller` define on a sloppy
+    /// async function, which this departure drops: an async function has
+    /// no own `caller` (ECMA-262 17.1, Forbidden Extensions). XS's compiler
+    /// defines `caller` (undefined, non-enumerable) on every sloppy plain
+    /// function, async ones included, and Ironhorse's compiler keeps XS's
+    /// bytes. Only that define matches: its value and attributes, onto a
+    /// function whose [[Prototype]] is still %AsyncFunction.prototype%, as
+    /// it is between ASYNC_FUNCTION and the define.
+    fn is_async_function_caller_define(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+        property_flag: u8,
+    ) -> bool {
+        property_flag == XS_DONT_ENUM_FLAG
+            && value.kind == Kind::Undefined
+            && self.instance_prototype(inst) == self.async_function_proto
+            && self.functions.contains_key(&inst)
+            && id == self.intern_static_key("caller")
+    }
+
     pub(super) fn dispatch_new_property(
         &mut self,
         code: &[u8],
@@ -345,6 +367,9 @@ impl Interp {
         let value = self.pop_checked()?;
         let obj = self.pop_checked()?;
         if let Payload::Reference(inst) = obj.value {
+            if self.is_async_function_caller_define(inst, id, value, property_flag) {
+                return Ok(());
+            }
             if property_flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
                 if property_flag & XS_METHOD_FLAG != 0 {
                     if let Payload::Reference(f) = value.value {

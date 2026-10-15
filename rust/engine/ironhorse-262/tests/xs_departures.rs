@@ -274,6 +274,13 @@ const DEPARTURES: &[Row] = &[
         v8: "false",
         why: "Atomics.isLockFree takes ToIntegerOrInfinity of its size (ES2024 25.4.6); XS wraps it to 32 bits first",
     },
+    Row {
+        program: "var A = Object.getPrototypeOf(async function () {}).constructor; [async function () {}, A('return 1')].map(function (f) { return Object.getOwnPropertyNames(f).join('+'); }).join()",
+        ironhorse: "length+name,length+name",
+        xs: "length+name+caller,length+name+caller",
+        v8: "length+name,length+name",
+        why: "an async function has no own `caller` (Forbidden Extensions, ES2024 17.1); XS's compiler defines one on every sloppy plain function, and Ironhorse keeps XS's bytes but drops that define",
+    },
 ];
 
 /// Programs where Ironhorse departs from XS and V8 has no counterpart to
@@ -412,13 +419,6 @@ const SHARED: &[Row] = &[
         xs: "ReferenceError",
         v8: "1",
         why: "`(eval)(s)` is still a direct eval: the parentheses keep the Reference to `eval` (PerformEval through a direct call)",
-    },
-    Row {
-        program: "Object.prototype.hasOwnProperty.call(async function () {}, 'caller')",
-        ironhorse: "true",
-        xs: "true",
-        v8: "false",
-        why: "an async function has no own `caller` (Forbidden Extensions, 17.1)",
     },
     Row {
         program: "var o = { b: 1 }; var r = delete o?.b; [r, 'b' in o].join()",
