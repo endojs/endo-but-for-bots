@@ -6,3 +6,4 @@ Rank-ordering a pass style that has no rank, such as the new `'parcel'` of `@end
 Marshalling one with `toCapData` or `serialize`, in either body format, throws an error naming the `'parcel'` pass style rather than an internal error.
 Passing one through a dot-membrane does the same.
 `compareRank` still answers 0 when both operands are the same Parcel, as it does for any identical operands.
+These paths are reachable only once a `Parcel` shim is installed; without one, behavior is unchanged.

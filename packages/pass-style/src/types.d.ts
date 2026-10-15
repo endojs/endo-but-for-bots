@@ -61,8 +61,8 @@ export type ExtractStyle<P extends PassStyled<any, any>> = P[typeof PASS_STYLE];
 export type PassByCopy = Atom | Error | CopyArray | CopyRecord | CopyTagged;
 
 /**
- * Excludes `ParcelObject`, which is passed by identity but, like its
- * exclusion from `PassableCap`, has no marshal slot representation yet.
+ * Excludes `ParcelObject`, which is passed by identity but has no marshal
+ * slot representation.
  */
 export type PassByRef =
   | RemotableObject
@@ -89,8 +89,7 @@ export type PassByRef =
  *   * As a special case to support system observability, error objects are
  *     Passable (PassStyle 'error').
  *   * Parcels (PassStyle 'parcel') are Passable by identity, like
- *     PassableCaps, but are not PassableCaps: marshal has no slot
- *     representation for them yet.
+ *     PassableCaps, but are not PassableCaps.
  *
  * A Passable is essentially a pass-by-copy superstructure with a
  * pass-by-reference
@@ -194,9 +193,10 @@ export type RemotableMethodName = PropertyKey;
 
 /**
  * A Parcel is passable, analogous to a presence: it has object identity and
- * no data. This mirrors the `Parcel` type of `@endo/parcel`, which
- * pass-style cannot import without a dependency cycle; `types.test-d.ts`
- * checks that the two stay in step.
+ * no data. This mirrors the `Parcel` type of `@endo/parcel`. Pass-style
+ * senses `globalThis.Parcel` instead of depending on that package (see
+ * `parcel.js`), so it declares the type itself; `types.test-d.ts` checks
+ * that the two stay in step.
  */
 export interface ParcelObject {
   readonly [Symbol.toStringTag]: 'Parcel';

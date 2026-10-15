@@ -155,6 +155,8 @@ setPrototypeOf(passStyleRanks, null);
 harden(passStyleRanks);
 
 /**
+ * Looks up a pass style's rank, failing for a pass style that has none.
+ *
  * @param {PassStyle} passStyle
  */
 const getPassStyleRank = passStyle => {

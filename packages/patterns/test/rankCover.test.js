@@ -35,7 +35,6 @@ const {
   arbPassable,
   arbLiftedPassable: arbPassableAndPattern,
 } = makeArbitraries(fc, {
-  // Parcel rank encoding lands with the marshal layer above this PR.
   excludePassStyles: ['byteArray', 'parcel'],
   transformKeyableLeaves: x => /** @type {(Arbitrary<Key>)[]} */ (x),
   arbLiftingDetail: fc.oneof(
