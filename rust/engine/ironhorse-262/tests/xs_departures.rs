@@ -281,6 +281,20 @@ const DEPARTURES: &[Row] = &[
         v8: "length+name,length+name",
         why: "an async function has no own `caller` (Forbidden Extensions, ES2024 17.1); XS's compiler defines one on every sloppy plain function, and Ironhorse keeps XS's bytes but drops that define",
     },
+    Row {
+        program: "var o = { b: { c: 1 }, d: 1, e: 1 }; var r = [delete o?.b.c, delete o?.['d'], delete (o?.e), 'c' in o.b, 'd' in o, 'e' in o]; var f = Object.freeze({ b: 1 }); r.push(delete f?.b); r.join()",
+        ironhorse: "true,true,true,false,false,false,false",
+        xs: "true,true,true,true,true,true,true",
+        v8: "true,true,true,false,false,false,false",
+        why: "`delete o?.b` deletes the Reference the optional chain produces (ES2024 13.5.1.2), refused on a frozen object; XS's compiler codes the chain as a value and answers `true` without deleting",
+    },
+    Row {
+        program: "'use strict'; var f = Object.freeze({ b: 1 }); try { delete f?.b; 'deleted' } catch (e) { e.constructor.name }",
+        ironhorse: "TypeError",
+        xs: "deleted",
+        v8: "TypeError",
+        why: "a strict `delete o?.b` that the object refuses throws (ES2024 13.5.1.2 step 4.e)",
+    },
 ];
 
 /// Programs where Ironhorse departs from XS and V8 has no counterpart to
@@ -419,13 +433,6 @@ const SHARED: &[Row] = &[
         xs: "ReferenceError",
         v8: "1",
         why: "`(eval)(s)` is still a direct eval: the parentheses keep the Reference to `eval` (PerformEval through a direct call)",
-    },
-    Row {
-        program: "var o = { b: 1 }; var r = delete o?.b; [r, 'b' in o].join()",
-        ironhorse: "true,true",
-        xs: "true,true",
-        v8: "true,false",
-        why: "`delete o?.b` deletes the property when `o` is not nullish",
     },
     Row {
         program: "var log = ''; Object.defineProperty(Array.prototype, 0, { set: function (v) { log += 's' + v; }, configurable: true }); var a = []; [...a[0]] = [5]; delete Array.prototype[0]; log",

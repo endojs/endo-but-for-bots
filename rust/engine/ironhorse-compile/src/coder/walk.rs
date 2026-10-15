@@ -986,7 +986,7 @@ impl Coder<'_, '_> {
 
 /// An outer chain, saved while a nested one is coded: its target, its
 /// landing level and the floor of its pads.
-type SavedChain = (Option<usize>, i32, usize);
+pub(super) type SavedChain = (Option<usize>, i32, usize);
 
 /// The optional-chain landings. XS sends every `?.` short-circuit of a chain
 /// to one target, whatever the stack holds at the branch; these keep each
@@ -998,7 +998,7 @@ impl Coder<'_, '_> {
     /// Install a chain whose short-circuits land at `level`, with no pads of
     /// an outer chain: a parenthesized chain ends where its parentheses do.
     /// The outer chain's pads stay on the stack, below the new floor.
-    fn enter_chain(&mut self, level: i32) -> SavedChain {
+    pub(super) fn enter_chain(&mut self, level: i32) -> SavedChain {
         let target = self.create_target();
         (
             self.chain_target.replace(target),
@@ -1009,7 +1009,7 @@ impl Coder<'_, '_> {
 
     /// Place the chain's target and restore the outer chain. Every pad the
     /// chain pushed was popped by the optional call that pushed it.
-    fn leave_chain(&mut self, saved: SavedChain) {
+    pub(super) fn leave_chain(&mut self, saved: SavedChain) {
         let target = self.chain_target.expect("inside a chain");
         self.place_target(0, target);
         debug_assert_eq!(self.chain_pads.len(), self.chain_pads_floor);

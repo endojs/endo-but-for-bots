@@ -20,6 +20,11 @@
 //! byte difference a genuine finding (see `rust/engine/README.md` § "Script
 //! goal vs. the oracle's eval framing").
 //!
+//! One coder departure from XS is deliberate and shows up here as a
+//! divergence: `delete` over an optional chain (`delete o?.b`) deletes the
+//! chain's member, where XS codes the chain as a value and deletes nothing.
+//! `coder_byte_identity.rs`'s `delete_over_an_optional_chain_departs` pins it.
+//!
 //! **Stage bar** (design § Feasibility Verdict): `divergent == 0` *and*
 //! accept/reject agreement, over the full corpus. A byte divergence on a
 //! program both engines accept is the KILL CRITERION signal — it is never

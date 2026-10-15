@@ -1012,6 +1012,29 @@ fn increment_decrement_delete() {
     ]);
 }
 
+/// `delete` over an optional chain is a pinned departure from XS's bytes:
+/// XS codes the chain as a value and answers `true` without deleting
+/// (`fxNodeCodeDelete`), where ES2024 13.5.1.2 deletes the Reference the
+/// chain produces. Ironhorse deletes the chain's last member inside the
+/// chain and swaps a short-circuit's `undefined` for `true`. The chain
+/// itself, as a value, stays byte-identical.
+#[test]
+fn delete_over_an_optional_chain_departs() {
+    assert_identical(&["o?.b;", "o?.b.c;", "o?.[k];", "delete o.b;"]);
+    // What the departure does is pinned at run time, against XS and V8, by
+    // `ironhorse-262/tests/xs_departures.rs`; here, only that it departs.
+    for src in [
+        "delete o?.b;",
+        "delete o?.b.c;",
+        "delete o?.[k];",
+        "delete (o?.b);",
+    ] {
+        let want = xs_oracle::run(src).expect("oracle compile").bytecode;
+        let got = compile_with(src, false).expect("ironhorse compile");
+        assert_ne!(got, want, "{src}: the departure must still depart");
+    }
+}
+
 #[test]
 fn object_and_array_literals() {
     assert_identical(&[
