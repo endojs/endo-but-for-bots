@@ -6,7 +6,7 @@
  * @import { HandoffReceiveSigEnvelope } from '../codecs/descriptors.js'
  * @import { OcapnKeyPair, OcapnPublicKey } from '../cryptography.js'
  * @import { GrantTracker } from './grant-tracker.js'
- * @import { SturdyRef, SturdyRefTracker } from './sturdyrefs.js'
+ * @import { SturdyRef, SturdyRefTracker } from './sturdyrefs.types.js'
  * @import { Ocapn } from './ocapn.js'
  * @import { ERef, FarRef } from '@endo/eventual-send'
  * @import { RemotableObject } from '@endo/pass-style'

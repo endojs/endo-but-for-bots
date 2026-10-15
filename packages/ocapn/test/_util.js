@@ -6,7 +6,7 @@ import harden from '@endo/harden';
 
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
 /**
- * @import { Client } from '../src/client/parcel-types.js'
+ * @import { Client } from '../src/client/parcel.types.js'
  * @import { ClientDebug, Connection, InternalSession, LocationId, NonceLocator, SwissNum } from '../src/client/types.js'
  * @import { OcapnLocation } from '../src/codecs/components.js'
  * @import { TcpTestOnlyNetLayer } from '../src/netlayers/tcp-test-only.js'

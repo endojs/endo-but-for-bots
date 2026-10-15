@@ -1,6 +1,6 @@
 // @ts-check
 // prefer-endo-primitives-exempt: the interop fixture uses Far for one-off wire presences.
-/** @import { Client } from '../../src/client/parcel-types.js' */
+/** @import { Client } from '../../src/client/parcel.types.js' */
 
 import '@endo/init';
 
