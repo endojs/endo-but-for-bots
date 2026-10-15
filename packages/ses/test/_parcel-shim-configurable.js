@@ -2,7 +2,11 @@
 // what `lockdown` would install, but the binding is configurable, which is not
 // the first-wins shape `@endo/parcel` installs.
 
-class Parcel {
+export {};
+
+const fixtureGlobal = /** @type {any} */ (globalThis);
+
+const configurableParcel = class Parcel {
   static open() {}
 
   static locate() {}
@@ -10,10 +14,10 @@ class Parcel {
   static isParcel() {
     return false;
   }
-}
+};
 
-Object.defineProperty(globalThis, 'Parcel', {
-  value: Parcel,
+Object.defineProperty(fixtureGlobal, 'Parcel', {
+  value: configurableParcel,
   enumerable: false,
   writable: false,
   configurable: true,

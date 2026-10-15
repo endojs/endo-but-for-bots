@@ -4,6 +4,7 @@
 
 const { defineProperty } = Object;
 const { getOwnPropertyDescriptor } = Reflect;
+const fixtureGlobal = /** @type {any} */ (globalThis);
 
 class Target {
   static open() {}
@@ -22,7 +23,7 @@ export const Parcel = new Proxy(Target, {
   getOwnPropertyDescriptor(target, name) {
     if (armed) {
       armed = false;
-      defineProperty(globalThis, 'Parcel', {
+      defineProperty(fixtureGlobal, 'Parcel', {
         value: payload,
         enumerable: false,
         writable: true,
@@ -35,7 +36,7 @@ export const Parcel = new Proxy(Target, {
 // Keep the permit's `prototype.constructor` pointing at the admitted value.
 defineProperty(Target.prototype, 'constructor', { value: Parcel });
 
-defineProperty(globalThis, 'Parcel', {
+defineProperty(fixtureGlobal, 'Parcel', {
   value: Parcel,
   enumerable: false,
   writable: true,

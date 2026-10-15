@@ -3,7 +3,11 @@
 // every later read, so a check that reads the global by `[[Get]]` would
 // validate one value and let `lockdown` sample another.
 
-class Parcel {
+export {};
+
+const fixtureGlobal = /** @type {any} */ (globalThis);
+
+const accessorParcel = class Parcel {
   static open() {}
 
   static locate() {}
@@ -11,13 +15,13 @@ class Parcel {
   static isParcel() {
     return false;
   }
-}
+};
 
 let reads = 0;
-Object.defineProperty(globalThis, 'Parcel', {
+Object.defineProperty(fixtureGlobal, 'Parcel', {
   get() {
     reads += 1;
-    return reads === 1 ? Parcel : function Impostor() {};
+    return reads === 1 ? accessorParcel : function Impostor() {};
   },
   enumerable: false,
   configurable: true,

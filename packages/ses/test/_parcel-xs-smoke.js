@@ -1,14 +1,13 @@
 // Run on XS after ./_parcel-shim-first.js and the SES bundle, as a script
 // with no test framework: each failed check throws.
-/* global Parcel */
-
 const check = (condition, message) => {
   if (!condition) {
     throw Error(`Parcel XS smoke: ${message}`);
   }
 };
 
-const shimmed = /** @type {any} */ (Parcel);
+const fixtureGlobal = /** @type {any} */ (globalThis);
+const shimmed = fixtureGlobal.Parcel;
 lockdown();
 
 const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'Parcel');

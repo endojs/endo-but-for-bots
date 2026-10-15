@@ -2,15 +2,18 @@
 // `isParcel` statics but is not a constructor: an arrow function, which has
 // no own `prototype`.
 
+export {};
+
 const { defineProperty } = Object;
+const fixtureGlobal = /** @type {any} */ (globalThis);
 
-const Parcel = () => {};
-Parcel.open = () => {};
-Parcel.locate = () => '';
-Parcel.isParcel = () => false;
+const arrowParcel = () => {};
+arrowParcel.open = () => {};
+arrowParcel.locate = () => '';
+arrowParcel.isParcel = () => false;
 
-defineProperty(globalThis, 'Parcel', {
-  value: Parcel,
+defineProperty(fixtureGlobal, 'Parcel', {
+  value: arrowParcel,
   enumerable: false,
   writable: false,
   configurable: false,
