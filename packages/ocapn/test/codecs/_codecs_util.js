@@ -22,7 +22,7 @@ import {
   makeGrantDetails,
 } from '../../src/client/grant-tracker.js';
 import { makeReferenceKit } from '../../src/client/ref-kit.js';
-import { makeSturdyRefTracker } from '../../src/client/sturdyrefs.js';
+import { makeParcelTracker } from '../../src/client/parcels.js';
 import { makeDescCodecs } from '../../src/codecs/descriptors.js';
 import { makePassableCodecs } from '../../src/codecs/passable.js';
 import { makeOcapnOperationsCodecs } from '../../src/codecs/operations.js';
@@ -166,7 +166,7 @@ export const exampleReceiverSideId = /** @type {PublicKeyId} */ (
 /**
  * @typedef {object} CodecTestKit
  * @property {ReferenceKit} referenceKit
- * @property {import('../../src/client/sturdyrefs.js').SturdyRefTracker} sturdyRefTracker
+ * @property {import('../../src/client/parcels.js').ParcelTracker} parcelTracker
  * @property {(position: bigint) => object} makeLocalObject
  * @property {(position: bigint) => Promise<unknown>} makeLocalPromise
  * @property {(position: bigint) => Promise<unknown>} makeRemoteAnswer
@@ -221,10 +221,10 @@ export const makeCodecTestKit = (
     return harden({ promise, settler });
   };
 
-  // Mock SturdyRef tracker for tests; an empty Map satisfies the
+  // Mock Parcel tracker for tests; an empty Map satisfies the
   // duck-typed `NonceLocator.get(secret)` contract.
   const locator = new Map();
-  const sturdyRefTracker = makeSturdyRefTracker(locator);
+  const parcelTracker = makeParcelTracker(locator);
   const testHandoffMap = new Map();
 
   /**
@@ -271,7 +271,7 @@ export const makeCodecTestKit = (
     peerLocation,
     ocapnTable,
     grantTracker,
-    sturdyRefTracker,
+    parcelTracker,
     makeRemoteKit,
     makeHandoff,
     sendHandoff,
@@ -315,7 +315,7 @@ export const makeCodecTestKit = (
 
   return {
     referenceKit,
-    sturdyRefTracker,
+    parcelTracker,
     makeLocalObject,
     makeLocalPromise,
     makeRemoteAnswer,
@@ -330,6 +330,7 @@ export const makeCodecTestKit = (
  * @typedef {object} CodecTestEntry
  * @property {string} name
  * @property {boolean} [only] // only run this test (via test.only)
+ * @property {boolean} [skip] // skip this test (via test.skip)
  * @property {OcapnLocation} [ownLocation]
  * @property {OcapnLocation} [peerLocation]
  * @property {DataCodec} [dataCodec] - Data codec to test (e.g., PassableCodec)
@@ -448,8 +449,8 @@ export const runTableTests = (
 ) => {
   let hasOnly = false;
   for (const [index, entry] of table.entries()) {
-    const { name = `test-${index}`, only } = entry;
-    const testFunction = only ? test.only : test;
+    const { name = `test-${index}`, only, skip } = entry;
+    const testFunction = skip ? test.skip : only ? test.only : test;
     if (only) {
       hasOnly = true;
     }

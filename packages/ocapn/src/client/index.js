@@ -4,7 +4,7 @@
  * @import { OcapnLocation } from '../codecs/components.js'
  * @import { OcapnPublicKey } from '../cryptography.js'
  * @import { OcapnCodec } from '../codec-interface.js'
- * @import { SturdyRef } from './sturdyrefs.js'
+ * @import { Parcel } from './parcels.js'
  * @import { Client, Connection, InternalSession, LocationId, Logger, NetLayer, NetlayerHandlers, NetworkSession, NonceLocator, OcapnNetwork, PendingSession, SelfIdentity, Session, SessionManager, SocketOperations, SwissNum } from './types.js'
  */
 
@@ -13,11 +13,7 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { writeOcapnHandshakeMessage } from '../codecs/operations.js';
 import { makeCryptography } from '../cryptography.js';
 import { makeGrantTracker } from './grant-tracker.js';
-import {
-  makeSturdyRefTracker,
-  enlivenSturdyRef,
-  enlivenSturdyRefDetails,
-} from './sturdyrefs.js';
+import { makeParcelTracker, openParcel, openParcelDetails } from './parcels.js';
 import { locationToLocationId, toHex } from './util.js';
 import {
   handleHandshakeMessageData,
@@ -537,15 +533,10 @@ export const makeOcapn = async ({
   };
 
   const grantTracker = makeGrantTracker();
-  // The SturdyRefs this client mints enliven through this client. The
-  // session helpers are declared below; they are only reached on enliven.
-  const sturdyRefTracker = makeSturdyRefTracker(locator, details =>
-    enlivenSturdyRefDetails(
-      details,
-      provideInternalSession,
-      isSelfLocation,
-      locator,
-    ),
+  // The Parcels this client mints open through this client. The
+  // session helpers are declared below; they are only reached on open.
+  const parcelTracker = makeParcelTracker(locator, details =>
+    openParcelDetails(details, provideInternalSession, isSelfLocation, locator),
   );
 
   /**
@@ -624,7 +615,7 @@ export const makeOcapn = async ({
       },
       grantTracker,
       giftTable,
-      sturdyRefTracker,
+      parcelTracker,
       codec,
       cryptography,
       debugLabel,
@@ -937,22 +928,22 @@ export const makeOcapn = async ({
      *
      * @param {OcapnLocation} location
      * @param {string | Uint8Array} secret
-     * @returns {SturdyRef}
+     * @returns {Parcel}
      */
-    makeSturdyRef(location, secret) {
-      return sturdyRefTracker.makeSturdyRef(location, secret);
+    makeParcel(location, secret) {
+      return parcelTracker.makeParcel(location, secret);
     },
     /**
-     * Resolve a `SturdyRef` to a live capability. Local SturdyRefs flow
-     * through the injected locator; remote SturdyRefs fetch from the
+     * Resolve a `Parcel` to a live capability. Local Parcels flow
+     * through the injected locator; remote Parcels fetch from the
      * peer's bootstrap.
      *
-     * @param {SturdyRef} sturdyRef
+     * @param {Parcel} parcel
      * @returns {Promise<any>}
      */
-    enlivenSturdyRef(sturdyRef) {
-      return enlivenSturdyRef(
-        sturdyRef,
+    openParcel(parcel) {
+      return openParcel(
+        parcel,
         provideInternalSession,
         isSelfLocation,
         locator,
@@ -972,7 +963,7 @@ export const makeOcapn = async ({
       captpVersion,
       grantTracker,
       sessionManager,
-      sturdyRefTracker,
+      parcelTracker,
       provideInternalSession,
     };
   }

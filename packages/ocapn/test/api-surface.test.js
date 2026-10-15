@@ -41,7 +41,7 @@ const INTERNAL_ONLY_TYPES = [
   'InternalSession',
   'PendingSession',
   'GrantTracker',
-  'SturdyRefTracker',
+  'ParcelTracker',
   'ReferenceKit',
 ];
 
