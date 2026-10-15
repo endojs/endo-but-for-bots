@@ -305,6 +305,17 @@ impl Interp {
     /// `function_environment` opcodes. Meters the measured allocation
     /// cluster [`FUNCTION_DEFINE_METERING`].
     pub(super) fn new_function(&mut self, name: u16) -> crate::value::SlotIndex {
+        self.new_function_with_prototype(name, true)
+    }
+
+    /// [`Self::new_function`], with the default `.prototype` object's
+    /// `constructor` back-reference only when `constructor_link`: a generator
+    /// function's prototype object has none (ES2024 15.5.4, 27.3.4).
+    fn new_function_with_prototype(
+        &mut self,
+        name: u16,
+        constructor_link: bool,
+    ) -> crate::value::SlotIndex {
         self.meter.tick_raw(FUNCTION_DEFINE_METERING);
         // `fxNewFunctionInstance` runs `fxRenameFunction`; naming the
         // instance with a real id (an inferred `var f = function(){}` or a
@@ -356,7 +367,7 @@ impl Interp {
         // [`FUNCTION_DEFINE_METERING`] cluster, so it is written unmetered —
         // and only when the program names `constructor` (otherwise the property
         // is unobservable and non-`constructor` programs stay byte-identical).
-        if let Some(cid) = self.constructor_id {
+        if let Some(cid) = self.constructor_id.filter(|_| constructor_link) {
             self.set_own_unmetered_with_flag(
                 proto,
                 cid,
@@ -395,7 +406,7 @@ impl Interp {
     /// function instance; that extra allocation cluster over the plain
     /// `function` define is the calibrated [`GENERATOR_FUNCTION_EXTRA_METERING`].
     pub(super) fn new_generator_function(&mut self, name: u16) -> crate::value::SlotIndex {
-        let f = self.new_function(name);
+        let f = self.new_function_with_prototype(name, false);
         // Re-chain the function instance's own `[[Prototype]]` to
         // `%GeneratorFunction.prototype%` (XS's `mxGeneratorFunctionPrototype`)
         // rather than `%Function.prototype%`, so `(function*(){}).constructor`

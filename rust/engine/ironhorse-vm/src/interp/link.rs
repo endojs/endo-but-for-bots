@@ -620,28 +620,30 @@ impl Interp {
                 );
             }
         }
-        // `%AsyncGeneratorPrototype%.constructor` points to `%AsyncGenerator%`
-        // (the common function prototype object), not to the dynamic
-        // `%AsyncGeneratorFunction%` constructor.  Its descriptor is
+        // `%GeneratorPrototype%.constructor` and
+        // `%AsyncGeneratorPrototype%.constructor` point to `%GeneratorFunction.prototype%`
+        // and `%AsyncGeneratorFunction.prototype%` (ES2024 27.5.1.1,
+        // 27.6.1.1), not to the dynamic constructors. Each descriptor is
         // non-writable, non-enumerable, and configurable.
         if let Some(cid) = self.constructor_id.filter(|&id| keep(id)) {
-            if full
-                || (self
-                    .find_property(self.async_generator_proto, cid)
-                    .is_none()
-                    && !self
-                        .accessors
-                        .contains_key(&(self.async_generator_proto, cid)))
-            {
-                self.set_own_unmetered_with_flag(
+            for (proto, function_proto) in [
+                (
                     self.async_generator_proto,
-                    cid,
-                    Slot::of(
-                        Kind::Reference,
-                        Payload::Reference(self.async_generator_function_proto),
-                    ),
-                    XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG,
-                );
+                    self.async_generator_function_proto,
+                ),
+                (self.generator_proto, self.generator_function_proto),
+            ] {
+                if full
+                    || (self.find_property(proto, cid).is_none()
+                        && !self.accessors.contains_key(&(proto, cid)))
+                {
+                    self.set_own_unmetered_with_flag(
+                        proto,
+                        cid,
+                        Slot::of(Kind::Reference, Payload::Reference(function_proto)),
+                        XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG,
+                    );
+                }
             }
         }
         // Inherited prototype data (Error `name`/`message`).

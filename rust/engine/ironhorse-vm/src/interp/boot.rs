@@ -531,6 +531,24 @@ impl Interp {
                     .push((proto, "BYTES_PER_ELEMENT", Slot::integer(size)));
             }
         }
+        // Each NativeError constructor's [[Prototype]] is %Error% (ES2024
+        // 20.5.6.2, 20.5.7.2), as XS's `fxBuildError` builds them.
+        if let Some(&error_ctor) = self.intrinsics.get("Error") {
+            for name in [
+                "EvalError",
+                "RangeError",
+                "ReferenceError",
+                "SyntaxError",
+                "TypeError",
+                "URIError",
+                "AggregateError",
+                "SuppressedError",
+            ] {
+                if let Some(&ctor) = self.intrinsics.get(name) {
+                    self.slots.get_mut(ctor).value = Payload::Reference(error_ctor);
+                }
+            }
+        }
         // Remember `%Array.prototype%` — every array literal / `new Array`
         // instance chains to it so its methods resolve up the chain.
         self.array_proto = self

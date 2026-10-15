@@ -549,13 +549,6 @@ const GAPS: &[Row] = &[
         why: "on %RegExp.prototype% the flag accessors answer `(?:)` and the empty string, so toString renders `/(?:)/`",
     },
     Row {
-        program: "Object.getPrototypeOf(TypeError) === Error",
-        ironhorse: "false",
-        xs: "true",
-        v8: "true",
-        why: "each NativeError constructor's [[Prototype]] is %Error%",
-    },
-    Row {
         program: "Object.prototype.toString.call(globalThis)",
         ironhorse: "[object Object]",
         xs: "[object global]",
