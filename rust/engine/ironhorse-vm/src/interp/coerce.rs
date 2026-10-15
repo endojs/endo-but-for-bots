@@ -646,6 +646,28 @@ impl Interp {
         Ok(())
     }
 
+    /// `IsLooselyEqual` of a BigInt and a String (ES2024 7.2.14 steps 6-7):
+    /// the string is read with `StringToBigInt`, and one that is not an
+    /// integer literal is never equal. Like the relational comparison, the
+    /// exact values are compared without allocating the parsed BigInt.
+    fn bigint_string_loose_eq(&self, a: Slot, b: Slot) -> bool {
+        let (big, string) = if a.kind == Kind::BigInt {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        let (Payload::BigInt(x), Payload::String(y)) = (big.value, string.value) else {
+            return false;
+        };
+        let text = self.str_scalar_text(y);
+        text.as_deref()
+            .and_then(parse_bigint_string)
+            .is_some_and(|(ny, my)| {
+                let (nx, mx) = self.read_bigint(x);
+                bi_cmp(nx, &mx, ny, &my).is_eq()
+            })
+    }
+
     /// Equality (`===`/`!==`/`==`/`!=`). String↔string compares content
     /// bytes; string↔{null,undefined,symbol} is unequal on both operators;
     /// loose string↔{number,boolean} applies `ToNumber` after any object
@@ -714,12 +736,8 @@ impl Interp {
                 }
             }
             (Kind::String, Kind::Symbol) | (Kind::Symbol, Kind::String) => false,
-            (Kind::String, _) | (_, Kind::String) => {
-                if strict {
-                    false // `===` across types is false without coercion
-                } else {
-                    return Err(Step::Host(Halt::NotImplemented("equal"))); // `==` needs ToNumber(string)
-                }
+            (Kind::String, Kind::BigInt) | (Kind::BigInt, Kind::String) => {
+                !strict && self.bigint_string_loose_eq(a, b)
             }
             // BigInt `===`/`==`. Both BigInt: compare sign+magnitude
             // (`fxBigIntCompare` → `fxBigInt_comp`). The compare itself neither
@@ -779,16 +797,6 @@ impl Interp {
                 }
             }
             (Kind::BigInt, Kind::Symbol) | (Kind::Symbol, Kind::BigInt) => false,
-            // BigInt↔String still needs arbitrary-precision StringToBigInt and
-            // its allocation metering. Keep that boundary named rather than
-            // round through an imprecise Number.
-            (Kind::BigInt, _) | (_, Kind::BigInt) => {
-                if strict {
-                    false
-                } else {
-                    return Err(Step::Host(Halt::NotImplemented("equal")));
-                }
-            }
             _ => {
                 if strict {
                     strict_equals(&a, &b)
