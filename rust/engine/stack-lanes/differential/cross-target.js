@@ -2,9 +2,9 @@
 // WASM-BLOCKERS.md B7: the repros of the B7 tables that run in seconds. cross_target.py runs them
 // on the native and wasm32 probes and expected-divergence/wasmtime.json lists each one that still
 // diverges; differential.py runs them natively, so a B7 fix that moves a native threshold fails
-// there. The repros of "Admission charged by Rust memory layout" and "Arithmetic on the host's
-// `usize`" agree on both targets since those families were fixed (B7 "Status"), and stay as
-// regression tests that the gate checks as `same`. Their fillers bring the chunk arena to a few
+// there. The repros of "Admission charged by Rust memory layout", "Arithmetic on the host's
+// `usize`" and "Unadmitted host allocations" agree on both targets since those families were
+// fixed (B7 "Status"), and stay as regression tests that the gate checks as `same`. Their fillers bring the chunk arena to a few
 // kilobytes of its 256 MiB ceiling, where a charge of `size_of::<T>()` halted natively and
 // completed on wasm32; a declared width now halts both.
 //
@@ -99,9 +99,10 @@ var a = new Array(1000000); for (var i = 0; i < 450; i++) a = [a];
 try { JSON.stringify(a, null, 10).length; } catch (e) { e.name + ':' + e.message; }
 // ---
 // name: typed-array-join
-// Unadmitted host allocations, natives/buffer.rs:558: `%TypedArray%.prototype.join` builds its
-// result in a host `Vec` before admitting it. Past 2^29 units the next growth asks wasm32 for
-// more than `isize::MAX` bytes and panics; natively the result is refused at admission.
+// Unadmitted host allocations, natives/buffer.rs:558: `%TypedArray%.prototype.join` built its
+// result in a host `Vec` before admitting it. Past 2^29 units the next growth asked wasm32 for
+// more than `isize::MAX` bytes and panicked; natively the result was refused at admission. The
+// copy is bounded by the chunk ceiling before it grows now, on both targets.
 new Uint8Array(8193).join('x'.repeat(65536)).length
 // ---
 // name: typed-array-to-locale-string

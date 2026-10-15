@@ -128,10 +128,10 @@ fixed.
 Every program of `differential/cross-target*.js` also runs in `differential.py`, so a fix
 that moves a native threshold fails there.
 A fixed site's repros stay as regression tests, which the gate checks as `same`: since the
-fixes in B7's "Status", every repro of "Admission charged by Rust memory layout" and
-"Arithmetic on the host's `usize`", with `b3-json-parse.js#reviver-source-list-near-ceiling`.
-The list holds the unadmitted host allocations and, in the slow shard, the embedder-raised
-ceilings.
+fixes in B7's "Status", every repro of "Admission charged by Rust memory layout",
+"Arithmetic on the host's `usize`" and "Unadmitted host allocations", with
+`b3-json-parse.js#reviver-source-list-near-ceiling`.
+The list holds the embedder-raised ceilings, all in the slow shard.
 
 Not every B7 site is reachable from a guest program on the probe.
 The open snapshot and store findings (the truncated `chunk_len`, duplicate Intl
