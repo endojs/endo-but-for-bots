@@ -4012,7 +4012,20 @@ impl Interp {
                 // handler — or escape to the host (`Halt::Throw`),
                 // which `step_async` turns into a result-promise
                 // rejection.
-                let v = dispatch_result_flow!(self.peek_checked(), self, return_depth, code);
+                //
+                // A `throw()` resuming a `yield*` is the exception: its
+                // epilogue stores the sent value and pops it before this
+                // check, so the frame can hold no operand, and XS reads
+                // whatever slot lies below. Its catch target never reads
+                // the exception (it passes the stored value to the
+                // delegate's `throw`), so raise `undefined` rather than
+                // read past the frame or halt on an empty stack.
+                let frame_base = self.call_stack.last().map_or(0, |caller| caller.stack_base);
+                let v = if self.stack.len() > frame_base {
+                    dispatch_result_flow!(self.peek_checked(), self, return_depth, code)
+                } else {
+                    Slot::undefined()
+                };
                 dispatch_halt_flow!(self.raise_js(v), self, return_depth, code);
             }
             ResumeStatus::Return => {

@@ -65,3 +65,17 @@ fn a_rejected_value_from_a_sync_yield_star_delegate_rejects_the_request() {
         settles_as_xs(body);
     }
 }
+
+/// A `throw()` queued while the generator runs resumes its `yield*` from a
+/// promise job, where nothing lies below the generator's frame, and reaches
+/// the delegate's `throw`: the status check after the `yield*` read the stack
+/// its epilogue had just emptied (`value-stack:underflow`).
+#[test]
+fn a_queued_throw_into_a_yield_star_reaches_the_delegate() {
+    for body in [
+        "var r = []; async function* h() { try { yield 1; } catch (e) { r.push('inner ' + e.message); yield 5; } } async function* g() { yield* h(); } var it = g(); var first = it.next(); var thrown = it.throw(new Error('x')); r.push((await first).value, (await thrown).value); return r.join()",
+        "function* h() { try { yield 1; } catch (e) { yield 'inner ' + e.message; } } async function* g() { yield* h(); } var it = g(); var first = it.next(); var thrown = it.throw(new Error('x')); return [(await first).value, (await thrown).value].join()",
+    ] {
+        settles_as_xs(body);
+    }
+}
