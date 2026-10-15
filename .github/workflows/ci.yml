@@ -826,15 +826,20 @@ jobs:
           - profile: debug
             check: test-ironhorse
             os: ubuntu-latest
+            timeout: 30
           - profile: release
             check: test-ironhorse-release
             os: ubuntu-latest
+            timeout: 30
           # Run the same golden snapshots on a second host platform.
+          # The macOS runners take 23 to 28 minutes for these steps from a
+          # cold build, which left no room for the cache save under 30.
           - profile: debug
             check: test-ironhorse-macos
             os: macos-latest
+            timeout: 40
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.timeout }}
 
     steps:
       - name: Require successful change detection
