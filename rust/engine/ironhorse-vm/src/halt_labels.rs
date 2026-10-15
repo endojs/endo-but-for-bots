@@ -80,7 +80,6 @@ pub const NOT_IMPLEMENTED_LABELS: &[&str] = &[
     "opcode:no-code",
     "private:missing-brand",
     "proxy:construct-nonuser-target",
-    "reduce:concurrent-mutation",
     "set_super:no-home",
     "string-method:unmodeled",
     "super_at:no-home",
