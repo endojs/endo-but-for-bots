@@ -105,7 +105,7 @@
       "path": "../stream-node/tsconfig.composite.json"
     },
     {
-      "path": "../sturdyref/tsconfig.composite.json"
+      "path": "../parcel/tsconfig.composite.json"
     },
     {
       "path": "../tar/tsconfig.composite.json"

@@ -126,7 +126,7 @@ import {
   EndoInterface,
 } from './interfaces.js';
 import { makeTraceAggregator } from './trace-aggregator.js';
-import { makeFormulaSturdyRefKit } from './formula-sturdyref.js';
+import { makeFormulaParcelKit } from './formula-parcel.js';
 import { getUnredactedStackString } from './unredacted-stack.js';
 
 /** @import { Passable } from '@endo/pass-style' */
@@ -1438,7 +1438,7 @@ const makeDaemonCore = async (
       provideController(id).value
     );
 
-  const { sturdyRefForFormula, formulaIdOf } = makeFormulaSturdyRefKit({
+  const { parcelForFormula, formulaIdOf } = makeFormulaParcelKit({
     provide,
   });
 
@@ -8458,7 +8458,7 @@ const makeDaemonCore = async (
   return {
     formulateEndo,
     provide,
-    sturdyRefForFormula,
+    parcelForFormula,
     formulaIdOf,
     nodeNumber: localNodeNumber,
     capTpConnectionRegistrar,

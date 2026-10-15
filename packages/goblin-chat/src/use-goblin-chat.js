@@ -431,13 +431,13 @@ export const useGoblinChat = ({
 
         dispatch({ type: 'set-status', status: 'enlivening sturdyref…' });
 
-        // makeSturdyRef takes either a printable-ASCII string (for
+        // makeParcel takes either a printable-ASCII string (for
         // friendly-name locators) or raw bytes (for Spritely-style
         // arbitrary-byte swissnums). The URI parser returned the raw
         // bytes form, so unwrap the SwissNum branded type back to a
         // plain Uint8Array.
-        const sref = client.makeSturdyRef(location, swissnumToBytes(swissNum));
-        const chatroom = await client.enlivenSturdyRef(sref);
+        const sref = client.makeParcel(location, swissnumToBytes(swissNum));
+        const chatroom = await client.openParcel(sref);
 
         dispatch({ type: 'set-status', status: 'fetching room name…' });
         /** @type {string | undefined} */

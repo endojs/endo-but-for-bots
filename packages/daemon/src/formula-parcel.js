@@ -1,13 +1,13 @@
 // @ts-check
 
-/* A SturdyRef for a daemon formula, obtained without incarnating it.
+/* A Parcel for a daemon formula, obtained without incarnating it.
  *
  * The daemon's formula graph names every value it can make by a formula
  * identifier. Handing out a live reference requires incarnating the formula,
- * which may start a worker, open a store, or dial a peer. A SturdyRef for a
+ * which may start a worker, open a store, or dial a peer. A Parcel for a
  * formula defers all of that: minting the ref records only the identifier,
- * and the formula is incarnated when, and only when, someone enlivens the
- * ref (see `@endo/sturdyref`'s `enliven`).
+ * and the formula is incarnated when, and only when, someone opens the
+ * ref (see `@endo/parcel`'s `open`).
  *
  * The identifier is closely held. The ref's handler closes over it, and the
  * only way to recover it from a ref is the `formulaIdOf` function of the kit
@@ -16,29 +16,29 @@
  *
  * Minting adds no retention edge: a ref does not keep its formula alive
  * against the formula graph's collector. A holder that needs the formula to
- * survive must keep it reachable by other means; enlivening a ref whose
+ * survive must keep it reachable by other means; opening a ref whose
  * formula has been collected rejects, because `provide` itself refuses a
  * collected formula (see `getFormulaForId` in `manager.js`).
  *
  * A ref is passable, so it may reach a holder who does not hold the kit.
- * Errors from enlivening are `provide`'s own; the daemon's collected-formula
+ * Errors from opening are `provide`'s own; the daemon's collected-formula
  * error redacts the identifier, but other failures of `provide` may not.
  *
- * `sturdyRefForFormula` carries the same authority as `provide`: whoever
- * holds a ref it mints gets the formula's value on enlivening. Hold the kit
+ * `parcelForFormula` carries the same authority as `provide`: whoever
+ * holds a ref it mints gets the formula's value on opening. Hold the kit
  * only where `provide` is already held, and mint only from an identifier the
  * caller already has authority over, never from a caller-supplied string.
  *
- * The OCapN client (`@endo/ocapn`'s `makeSturdyRefTracker`) mints the same
- * realm-shared `@endo/sturdyref` kind of ref; the two differ only in which
- * closely held tracker mints and enlivens them.
+ * The OCapN client (`@endo/ocapn`'s `makeParcelTracker`) mints the same
+ * realm-shared `@endo/parcel` kind of ref; the two differ only in which
+ * closely held tracker mints and opens them.
  */
 
 import harden from '@endo/harden';
-import { makeSturdyRef, isSturdyRef } from '@endo/sturdyref';
+import { makeParcel, isParcel } from '@endo/parcel';
 import { assertValidId } from './formula-identifier.js';
 
-/** @import { SturdyRef } from '@endo/pass-style' */
+/** @import { ParcelObject } from '@endo/pass-style' */
 /** @import { FormulaIdentifier } from './types.js' */
 
 /**
@@ -47,51 +47,47 @@ import { assertValidId } from './formula-identifier.js';
  *   named by `id` (or returns its existing incarnation) and returns its value,
  *   rejecting if the formula is unknown or has been collected.
  */
-export const makeFormulaSturdyRefKit = ({ provide }) => {
+export const makeFormulaParcelKit = ({ provide }) => {
   /**
    * From each minted ref to the formula identifier it designates. Never
    * reachable from the ref itself.
    *
-   * @type {WeakMap<SturdyRef, FormulaIdentifier>}
+   * @type {WeakMap<ParcelObject, FormulaIdentifier>}
    */
-  const formulaIdForSturdyRef = new WeakMap();
+  const formulaIdForParcel = new WeakMap();
 
   /**
-   * Mint a SturdyRef designating the local formula `formulaId`. Does not
-   * incarnate the formula and does not consult the formula graph; enlivening
+   * Mint a Parcel designating the local formula `formulaId`. Does not
+   * incarnate the formula and does not consult the formula graph; opening
    * the ref calls `provide`, which incarnates the formula, or rejects if the
    * daemon knows no such formula or has collected it. This kit is for the
    * daemon's own formulas; a ref to an object on another node is minted and
-   * enlivened by the OCapN client's `makeSturdyRefTracker`.
+   * opened by the OCapN client's `makeParcelTracker`.
    *
    * @param {FormulaIdentifier} formulaId
-   * @returns {SturdyRef}
+   * @returns {ParcelObject}
    */
-  const sturdyRefForFormula = formulaId => {
+  const parcelForFormula = formulaId => {
     assertValidId(formulaId);
-    const ref = /** @type {SturdyRef} */ (
-      makeSturdyRef(
-        harden({
-          enliven: () => provide(formulaId),
-        }),
-      )
+    const parcel = /** @type {ParcelObject} */ (
+      makeParcel(formulaId, () => provide(formulaId))
     );
-    formulaIdForSturdyRef.set(ref, formulaId);
-    return ref;
+    formulaIdForParcel.set(parcel, formulaId);
+    return parcel;
   };
 
   /**
    * The formula identifier a ref minted by this kit designates, or
-   * `undefined` for any other value, including SturdyRefs minted elsewhere.
+   * `undefined` for any other value, including Parcels minted elsewhere.
    *
    * @param {unknown} ref
    * @returns {FormulaIdentifier | undefined}
    */
   const formulaIdOf = ref =>
-    isSturdyRef(ref)
-      ? formulaIdForSturdyRef.get(/** @type {SturdyRef} */ (ref))
+    isParcel(ref)
+      ? formulaIdForParcel.get(/** @type {ParcelObject} */ (ref))
       : undefined;
 
-  return harden({ sturdyRefForFormula, formulaIdOf });
+  return harden({ parcelForFormula, formulaIdOf });
 };
-harden(makeFormulaSturdyRefKit);
+harden(makeFormulaParcelKit);
