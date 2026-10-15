@@ -823,10 +823,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The debug lanes run the whole engine suite twice (platform and
+          # deterministic Math) and already took 27 (macOS) and 29 (Linux)
+          # minutes; a slow cache restore alone tipped macOS past 30 with
+          # every step green. Their bound is for a hang, not for that drift.
           - profile: debug
             check: test-ironhorse
             os: ubuntu-latest
-            timeout: 30
+            timeout: 45
           - profile: release
             check: test-ironhorse-release
             os: ubuntu-latest
@@ -837,7 +841,7 @@ jobs:
           - profile: debug
             check: test-ironhorse-macos
             os: macos-latest
-            timeout: 40
+            timeout: 45
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout }}
 
