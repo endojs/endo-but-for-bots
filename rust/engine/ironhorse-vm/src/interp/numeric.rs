@@ -460,15 +460,21 @@ pub(super) fn loose_equals(a: &Slot, b: &Slot) -> bool {
     }
 }
 
-/// The i64 value of a decoded integer TypedArray element (an `Integer` or, for
-/// a large `Uint32`, a `Number` slot). Used as the arithmetic operand of an
-/// `Atomics` read-modify-write; the write re-wraps to the element width.
-pub(super) fn element_slot_to_i64(s: Slot) -> i64 {
-    match s.value {
-        Payload::Integer(i) => i as i64,
-        Payload::Number(n) => n as i64,
-        _ => 0,
+/// A Number's integer part modulo 2^64 (NaN and the infinities are 0): the
+/// bits every integer element conversion (`ToInt8` ... `ToUint32`) keeps the
+/// low bytes of, since each element width divides 64. A Rust `f64 as u64`
+/// cast saturates instead.
+pub(super) fn number_to_u64_wrapping(n: f64) -> u64 {
+    if !n.is_finite() {
+        return 0;
     }
+    let n = n.trunc();
+    if n.abs() < 9_223_372_036_854_775_808.0 {
+        return n as i64 as u64;
+    }
+    // At or above 2^63 a Number is a multiple of 2^11, so the remainder and
+    // its complement are exact.
+    n.rem_euclid(18_446_744_073_709_551_616.0) as u64
 }
 
 /// Render a value without access to its arenas.

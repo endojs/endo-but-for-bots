@@ -267,6 +267,13 @@ const DEPARTURES: &[Row] = &[
         v8: "ReferenceError",
         why: "`delete super.x` throws a ReferenceError (ES2024 13.5.1.2 step 4); a super reference never converts `this` to an object, which is where XS throws",
     },
+    Row {
+        program: "Atomics.isLockFree(2 ** 32 + 4)",
+        ironhorse: "false",
+        xs: "true",
+        v8: "false",
+        why: "Atomics.isLockFree takes ToIntegerOrInfinity of its size (ES2024 25.4.6); XS wraps it to 32 bits first",
+    },
 ];
 
 /// Programs where Ironhorse departs from XS and V8 has no counterpart to
@@ -498,20 +505,6 @@ const GAPS: &[Row] = &[
         xs: "5v1j4f4ds7c000",
         v8: "5v1j4f4ds7c000",
         why: "Number.prototype.toString with a radix other than 10 renders an integer above 2**53; Ironhorse halts",
-    },
-    Row {
-        program: "Atomics.add(new Int32Array(1), '0', 2)",
-        ironhorse: "halt NotImplemented(\"atomics:access-index\")",
-        xs: "0",
-        v8: "0",
-        why: "Atomics operations convert their index with ToIndex; Ironhorse halts on a non-number index",
-    },
-    Row {
-        program: "var t = new Int32Array(1); Atomics.store(t, 0, '7'); t[0]",
-        ironhorse: "halt NotImplemented(\"atomics:coerce\")",
-        xs: "7",
-        v8: "7",
-        why: "Atomics operations convert their value with ToIntegerOrInfinity; Ironhorse halts on a non-number value",
     },
     Row {
         program: "typeof Object.getOwnPropertyDescriptor(RegExp.prototype, 'flags')",
