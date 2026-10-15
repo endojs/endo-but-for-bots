@@ -917,6 +917,9 @@ impl Interp {
                 XS_CODE_SET_SUPER_AT => {
                     dispatch_flow!(self.exec_set_super_at(code, pc, return_depth, size), pc)
                 }
+                XS_CODE_DELETE_SUPER | XS_CODE_DELETE_SUPER_AT => {
+                    dispatch_flow!(self.exec_delete_super(code, pc, return_depth, op), pc)
+                }
                 XS_CODE_TEMPLATE_CACHE => dispatch_flow!(self.exec_template_cache(pc, size), pc),
                 XS_CODE_TEMPLATE => dispatch_flow!(self.exec_template(pc, size), pc),
                 // `this` (XS_CODE_THIS, xsRun.c:1334): push the frame's
@@ -3586,6 +3589,29 @@ impl Interp {
         Flow::Next(pc)
     }
 
+    // `delete super.x` and `delete super[k]` (XS_CODE_DELETE_SUPER /
+    // DELETE_SUPER_AT, xsRun.c:2286): a super reference is never
+    // deletable, so both throw once the reference has evaluated
+    // (13.5.1.2). The computed key is not converted to a property key.
+    /// The dispatch loop's `DELETE_SUPER` and `DELETE_SUPER_AT` arms.
+    #[cold]
+    #[inline(never)]
+    fn exec_delete_super(
+        &mut self,
+        code: &[u8],
+        pc: usize,
+        return_depth: usize,
+        op: Opcode,
+    ) -> Flow {
+        let name = if op == Opcode::XS_CODE_DELETE_SUPER {
+            self.property_debug_name(operand_id(code, pc, 1))
+        } else {
+            "?".to_string()
+        };
+        let error = self.internal_error("ReferenceError", format!("delete super.{name}"));
+        dispatch_halt_flow!(self.raise_js(error), self, return_depth, code);
+    }
+
     // The current realm's hidden template registry. The following
     // compiler-emitted get/set-property uses the site's private
     // key, so a repeated evaluation of the same parse node reuses
@@ -3762,7 +3788,7 @@ impl Interp {
     // coerce with `ToNumber` (no metering — `fxToNumber` on a
     // primitive allocates nothing); a string/reference/bigint
     // needs the ToPrimitive/BigInt path outside the covered
-    // primitive subset, so it self-names unsupported.
+    // primitive subset; a symbol throws there.
     /// The dispatch loop's `TO_NUMERIC` arm.
     #[inline(never)]
     fn exec_to_numeric(
@@ -3780,7 +3806,7 @@ impl Interp {
                     *s = Slot::number(to_number(&top));
                 }
             }
-            Kind::String | Kind::Reference => {
+            Kind::String | Kind::Reference | Kind::Symbol => {
                 let numeric = dispatch_result_flow!(
                     self.to_number_value(code, top),
                     self,
@@ -3792,8 +3818,8 @@ impl Interp {
                 }
             }
             _ => {
-                return Flow::Exit(Step::Host(Halt::NotImplemented(
-                    "to_numeric:unmodeled-kind",
+                return Flow::Exit(Step::Host(Halt::EngineInvariant(
+                    "to_numeric:non-value-kind",
                 )))
             }
         }

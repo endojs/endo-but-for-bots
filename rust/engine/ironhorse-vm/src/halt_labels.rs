@@ -103,8 +103,6 @@ pub const NOT_IMPLEMENTED_LABELS: &[&str] = &[
     "template:raw",
     "toString:reference-element",
     "to_instance:primitive-box",
-    "to_numeric:unmodeled-kind",
-    "to_string:symbol",
     "typed-array-set:bigint",
     "typed-array-species:symbol",
 ];

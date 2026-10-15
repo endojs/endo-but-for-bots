@@ -7,7 +7,7 @@ impl Interp {
         let top = self.peek_checked()?;
         let primitive = (self.to_primitive(code, top, true))?;
         if primitive.kind == Kind::Symbol {
-            return Err(Step::Host(Halt::NotImplemented("to_string:symbol")));
+            return Err(self.catchable_type_error_msg("cannot coerce symbol to string".into()));
         }
         let value = self.to_string_slot_metered(primitive);
         if let Some(top) = self.stack.last_mut() {
