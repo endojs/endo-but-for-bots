@@ -1090,7 +1090,12 @@ jobs:
 
       - name: Check engine Clippy warnings
         working-directory: rust/engine
-        run: cargo +1.88.0 clippy --locked --workspace --no-deps -- -D warnings
+        # `--all-targets` lints `#[cfg(test)]` modules, `tests/*.rs` and
+        # `examples/` too. Without it, a lint or rustc warning there reaches
+        # no gate, since the build step above compiles libraries and
+        # binaries only. Dev-dependencies are already in Cargo.lock, so the
+        # cache key above still covers this step.
+        run: cargo +1.88.0 clippy --locked --workspace --all-targets --no-deps -- -D warnings
 
       - name: Vendor test262 at the pinned SHA
         # `corpus_compiler_totality.rs` compiles every test262 source and
