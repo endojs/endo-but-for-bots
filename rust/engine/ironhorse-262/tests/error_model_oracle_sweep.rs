@@ -25,10 +25,6 @@ use ironhorse_262::{dual_run, Agreement};
 /// subject, with that reason. Verified on the pinned oracle.
 const KNOWN_DIVERGENCES: &[(&str, &str)] = &[
     (
-        "var r=0; function f(){ 'use strict'; var o=Object.freeze({x:1}); try{ with(o){ } }catch(e){ r='caught' } } r",
-        "early SyntaxError text: the compile-time abort carries no XS message (review F151)",
-    ),
-    (
         "var r=0; function f(){ 'use strict'; var s='abc'; try { s[0] = 'x'; r=s } catch(e){ r=e instanceof TypeError } } f(); r",
         "strict indexed write to a primitive string is a silent no-op; XS throws (property_at_set on primitives, adjacent to F007)",
     ),
