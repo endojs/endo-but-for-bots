@@ -1784,6 +1784,10 @@ impl Interp {
         })
     }
 
+    /// Out of line, as `llm` built it: folded into the `with_native_frame`
+    /// closure of [`Self::mop_set`], it made that closure a 384-byte frame of
+    /// its own on every level an inherited Proxy `set` trap re-enters.
+    #[inline(never)]
     pub(super) fn mop_set_inner(
         &mut self,
         code: &[u8],

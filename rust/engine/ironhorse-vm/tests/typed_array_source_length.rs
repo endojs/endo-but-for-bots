@@ -134,17 +134,21 @@ fn a_dense_array_and_a_source_view_still_copy() {
 
 #[test]
 fn inherited_iterator_overrides_do_not_take_the_snapshot_path() {
-    for source in [
+    // An `undefined` iterator makes the source an array-like, read element by
+    // element with each conversion in between, so the `valueOf` that writes
+    // `a[1]` is seen; a replaced iterator or `next` is followed.
+    completes_with(
         "var a=[{valueOf:function(){a[1]=99;return 1;}},2]; Array.prototype[Symbol.iterator]=undefined; new Uint8Array(a)[1]",
+        "99",
+    );
+    completes_with(
         "var a=[1,2]; var p=Object.create(Array.prototype); p[Symbol.iterator]=function(){return {next:function(){return {done:true};}};}; Object.setPrototypeOf(a,p); new Uint8Array(a).length",
+        "0",
+    );
+    completes_with(
         "var p=Object.getPrototypeOf([][Symbol.iterator]()); p.next=function(){return {done:true};}; new Uint8Array([1,2]).length",
-    ] {
-        assert_eq!(
-            run(source).halt,
-            Halt::NotImplemented("native-call:TypedArray:from-array-like"),
-            "{source}",
-        );
-    }
+        "0",
+    );
 }
 
 #[test]
@@ -153,10 +157,11 @@ fn runtime_next_key_does_not_hide_the_intrinsic_iterator() {
         "JSON.parse('{\"ne'+'xt\":1}'); new Uint8Array([1,2])[1]",
         "2",
     );
-    assert_eq!(
-        run("var p=Object.getPrototypeOf([][Symbol.iterator]()); delete p.next; new Uint8Array([1,2])").halt,
-        Halt::NotImplemented("native-call:TypedArray:from-array-like"),
-        "pending installation must not restore an explicitly deleted next",
+    // Pending installation must not restore an explicitly deleted next.
+    completes_with(
+        "var p=Object.getPrototypeOf([][Symbol.iterator]()); delete p.next; \
+         try { new Uint8Array([1,2]); 'ok' } catch (e) { String(e) }",
+        "TypeError: call: not a function",
     );
 }
 

@@ -450,3 +450,48 @@ fn bind_takes_any_callable_and_its_prototype() {
         agrees(&format!("String({program})"));
     }
 }
+
+/// `new TA(object)` reads `@@iterator` once: an iterable (an Array whose
+/// iteration was replaced included) is collected first, an array-like is read
+/// element by element with each conversion in between.
+#[test]
+fn a_typed_array_takes_an_iterable_or_an_array_like() {
+    for program in [
+        "(function () { var x = [1, 2]; x[Symbol.iterator] = function* () { yield 7 }; return new Uint8Array(x).join() })()",
+        "(function () { var saved = Array.prototype[Symbol.iterator]; Array.prototype[Symbol.iterator] = function* () { yield 9; yield 8 }; try { return new Uint8Array([1, 2, 3]).join() } finally { Array.prototype[Symbol.iterator] = saved } })()",
+        "(function () { var AIP = Object.getPrototypeOf([][Symbol.iterator]()); var next = AIP.next; var n = 0; AIP.next = function () { n++; return next.call(this) }; try { return [new Int16Array([5, 6]).join(), n].join('|') } finally { AIP.next = next } })()",
+        "(function () { var x = [1, 2, 3]; Object.defineProperty(x, Symbol.iterator, { get() { return function* () { yield 4 } } }); return new Float64Array(x).join() })()",
+        "(function () { var x = [1, 2]; x[Symbol.iterator] = function* () { yield { valueOf() { return 3 } }; yield '4' }; return new Int32Array(x).join() })()",
+        "(function () { class T extends Uint8Array {} var x = [1]; x[Symbol.iterator] = function* () { yield 2 }; var t = new T(x); return [t instanceof T, t[0]].join() })()",
+        "(function () { var x = [1, 2]; x[Symbol.iterator] = function* () { yield 1n }; return new BigInt64Array(x).join() })()",
+        "(function () { var x = [1, 2]; x[Symbol.iterator] = function* () { yield 1n }; try { new Uint8Array(x) } catch (e) { return String(e) } })()",
+        "(function () { var x = [1, 2]; x[Symbol.iterator] = 5; try { new Uint8Array(x) } catch (e) { return e.constructor.name } })()",
+        "new Uint8Array([3, 4, 5]).join()",
+        "new Uint8Array(new Set([1, 2, 2, 3])).join()",
+        "new Uint8Array({ length: 2, 0: 7, 1: 8 }).join()",
+        "(function () { var a = [{ valueOf: function () { a[1] = 99; return 1; } }, 2]; a[Symbol.iterator] = undefined; return new Uint8Array(a)[1] })()",
+        "(function () { var a = { length: 2, 0: { valueOf: function () { a[1] = 99; return 1; } }, 1: 2 }; return new Uint8Array(a)[1] })()",
+        "(function () { var log = []; var a = { get length() { log.push('len'); return 2 }, get 0() { log.push('g0'); return { valueOf() { log.push('v0'); return 1 } } }, get 1() { log.push('g1'); return 2 } }; new Uint8Array(a); return log.join() })()",
+        "(function () { var saved = Array.prototype[Symbol.iterator]; Array.prototype[Symbol.iterator] = undefined; try { var a = [{ valueOf: function () { a[1] = 99; return 1; } }, 2]; return new Uint8Array(a)[1] } finally { Array.prototype[Symbol.iterator] = saved } })()",
+        "(function () { var log = []; var o = { length: 1, 0: 5 }; Object.defineProperty(o, Symbol.iterator, { get() { log.push('it'); return undefined } }); new Int8Array(o); return log.join() })()",
+        "(function () { var log = []; var o = {}; Object.defineProperty(o, Symbol.iterator, { get() { log.push('it'); return function* () { yield 3 } } }); return [new Int8Array(o).join(), log.join()].join('|') })()",
+        "(function () { var o = { length: -5 }; return new Int8Array(o).length })()",
+        "(function () { var o = { length: '3', 0: '1', 2: 7 }; return new Int8Array(o).join() })()",
+        "(function () { var o = { length: 2 ** 32 }; try { new Int8Array(o) } catch (e) { return String(e) } })()",
+        "(function () { var p = new Proxy({ length: 2, 0: 1, 1: 2 }, {}); return new Int8Array(p).join() })()",
+        "(function () { var o = { length: 2, 0: 1, get 1() { throw new EvalError('x') } }; try { new Int8Array(o) } catch (e) { return String(e) } })()",
+        "(function () { var o = { [Symbol.iterator]: 1 }; try { new Int8Array(o) } catch (e) { return String(e) } })()",
+        "(function () { var it = { [Symbol.iterator]() { return { next() { throw new EvalError('n') } } } }; try { new Int8Array(it) } catch (e) { return String(e) } })()",
+        "new Uint8Array(new Map([[1, 2]])).join()",
+        "(function () { function f() { return new Int16Array(arguments).join() } return f(1, 2, 3) })()",
+        "(function () { class T extends Int8Array {} var t = new T({ length: 1, 0: 4 }); return [t instanceof T, t[0]].join() })()",
+        "new BigInt64Array({ length: 2, 0: 1n, 1: 2n }).join()",
+        "(function () { try { new BigInt64Array({ length: 1, 0: 1 }) } catch (e) { return String(e) } })()",
+        "new Float32Array('12').join()",
+        "(function () { var o = { length: 3, 0: 1, 1: 2, 2: 3 }; return new Uint8ClampedArray(o).join() })()",
+        "new AggregateError({ [Symbol.iterator]: function* () { yield 1; yield 2 } }).errors.length",
+        "new Int8Array({ [Symbol.iterator]() { return [7][Symbol.iterator]() } }).join()",
+    ] {
+        agrees(&format!("String({program})"));
+    }
+}

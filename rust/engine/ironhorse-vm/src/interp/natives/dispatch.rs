@@ -845,203 +845,23 @@ impl Interp {
                     // materialize real BigInt values so same-domain copies work
                     // and cross-domain copies throw the required TypeError.
                     Payload::Reference(r)
-                        if self.arrays.contains_key(&r) || self.typed_arrays.contains_key(&r) =>
+                        if self.typed_arrays.contains_key(&r)
+                            || (self.arrays.contains_key(&r)
+                                && self.array_iterates_intrinsically(r)) =>
                     {
-                        // The source LENGTH decides the allocation, so read it,
-                        // bound it, and charge for it BEFORE materializing
-                        // anything. This used to collect `0..len` into a
-                        // `Vec<Slot>` and sanity-check afterwards, which made
-                        // the source length an *unmetered allocation
-                        // instruction*: a sparse `a.length = 200_000_000` —
-                        // ordinary JS state, and ordinary snapshot bytes no
-                        // decoder can refuse, since a sparse array is legitimate
-                        // — reserved 32 bytes per declared element before any
-                        // bound and before any charge. What that costs depends
-                        // on the host and both outcomes are bad: where the
-                        // reservation fails, `handle_alloc_error` ABORTS THE
-                        // PROCESS, which no `catch_unwind` can contain; where
-                        // overcommit lets it succeed, the worker stalls filling
-                        // slots the meter never sees (measured: 132 seconds and
-                        // 8.6 GB for a two-call program).
-                        //
-                        // Ordered this way the from-source path is exposed
-                        // exactly as much as the length form `new TA(n)` it is
-                        // equivalent to, and no more: the bound rejects first,
-                        // and `alloc_array_buffer` charges
-                        // `tick_chunk_new(byte_length)` before it allocates.
-                        // `tests/typed_array_source_length.rs` holds the
-                        // deadline that keeps the order this way round.
-                        let (length, source_ta) = if let Some(src) = self.arrays.get(&r) {
-                            (src.length, None)
-                        } else {
-                            let src = self.typed_arrays[&r];
-                            // The prototype read above is guest code that can
-                            // detach or shrink the source
-                            // (InitializeTypedArrayFromTypedArray; XS's
-                            // `fxCheckDataViewSize`): copying it then read stale
-                            // bytes out of a detached or shorter buffer.
-                            (self.checked_ta_length(src)?, Some(src))
-                        };
-                        // A sparse snapshot is valid only with the intrinsic
-                        // array iterator and its intrinsic next method. Check
-                        // the resolved methods across the chain: an inherited
-                        // override is just as observable as an own property.
-                        if source_ta.is_none() {
-                            // Runtime keys (for example from JSON.parse) can
-                            // precede their lazy intrinsic bindings. Complete
-                            // that installation before inspecting next.
-                            self.install_pending_intrinsics();
-                            let iterator_id = self
-                                .well_known_symbol_property_id("iterator")
-                                .expect("well-known iterator symbol");
-                            // Unreferenced intrinsic names are linked lazily.
-                            // If no next key exists, guest code cannot yet have
-                            // replaced or deleted the intrinsic next method.
-                            let intrinsic_next = self.symbol_ids.get("next").is_none_or(|&id| {
-                                self.chain_resolves_native_data_method(
-                                    self.array_iterator_proto,
-                                    id,
-                                    NativeMethod::ArrayIteratorNext,
-                                )
-                            });
-                            if !self.chain_resolves_native_data_method(
-                                r,
-                                iterator_id,
-                                NativeMethod::ArrayValues,
-                            ) || !intrinsic_next
-                            {
-                                return Err(Step::Host(Halt::NotImplemented(
-                                    "native-call:TypedArray:from-array-like",
-                                )));
-                            }
-                        }
-                        // XS's `fx_TypedArray` caps the byte length at
-                        // `0x7FFFFFFF`, after the prototype read.
-                        if length > (0x7FFF_FFFFu32 >> shift) {
-                            return Err(self.catchable_range_error_msg("byteLength too big".into()));
-                        }
-                        let byte_length = length << shift;
-                        self.meter.tick_raw(TYPED_ARRAY_LENGTH_CTOR_FRAME_METERING);
-                        let buffer = self.alloc_array_buffer(byte_length)?;
-                        let inst = self.slots.alloc(Slot::instance(proto));
-                        let ta = TypedArrayData {
-                            kind: idx,
-                            buffer,
-                            offset: 0,
-                            array_length: Some(length),
-                            resizable_buffer: false,
-                        };
-                        self.typed_arrays.insert(inst, ta);
-                        // An ARRAY source is snapshotted up front — the spec's
-                        // `IteratorToList` materializes every value BEFORE any
-                        // element coercion runs, so a `valueOf` that mutates the
-                        // source mid-copy (`iterated-array-changed-by-tonumber`)
-                        // must not change later reads. The snapshot CLONES the
-                        // source's sparse `items()` map (present entries only),
-                        // NOT a dense `0..length` `Vec<Slot>`: the declared
-                        // length is guest-controlled and unbounded up to the
-                        // arm's own cap, so a dense snapshot would re-arm the
-                        // dense-allocation hazard: reserving
-                        // `length * size_of::<Slot>()` outside the meter,
-                        // while `alloc_array_buffer` charged only the packed
-                        // `byte_length`. Cloning `items()` keeps the allocation
-                        // proportional to the storage the meter already charged
-                        // (present entries), and an absent index reads
-                        // `undefined` from the clone exactly as a hole would.
-                        // The snapshot comes AFTER the length bound and the
-                        // metered `alloc_array_buffer` charge above, so the
-                        // admission ordering (reject first, charge second, only
-                        // then any length-proportional allocation;
-                        // `tests/typed_array_source_length.rs`) still holds and
-                        // the length-proportional allocation the ordering exists
-                        // to bound — the backing store — remains the only one. A
-                        // TypedArray source needs no snapshot: its element reads
-                        // are pure numeric loads and its element coercions run no
-                        // guest code, so nothing can mutate it between reads. A
-                        // hole reads `undefined` (-> NaN -> 0 for an integer
-                        // view), matching the default-iterator result.
-                        let snapshot: Option<std::collections::BTreeMap<u32, Slot>> = source_ta
-                            .map_or_else(
-                                || self.arrays.get(&r).map(|src| src.items().clone()),
-                                |_| None,
-                            );
-                        for i in 0..length {
-                            let v = match source_ta {
-                                Some(src) if src.kind <= 1 => {
-                                    self.typed_array_element_get_bigint(src, i)
-                                }
-                                Some(src) => self
-                                    .typed_array_element_get(src, i)
-                                    .expect("numeric TypedArray element decodes"),
-                                None => snapshot
-                                    .as_ref()
-                                    .and_then(|items| items.get(&i).copied())
-                                    .unwrap_or_else(Slot::undefined),
-                            };
-                            self.typed_array_element_set(code, ta, i, v)?;
-                            self.meter
-                                .tick_raw(TYPED_ARRAY_FROM_SOURCE_ELEMENT_METERING);
-                        }
-                        Slot::of(Kind::Reference, Payload::Reference(inst))
+                        self.typed_array_from_source(code, idx, proto, r)?
                     }
                     // Any other **object** source (an array-like, custom
-                    // iterable, Map/Set, or proxy) first traverses the same
-                    // iterator/array-like protocol as `Array.from`. Re-enter
-                    // this constructor with the resulting dense Array so the
-                    // bounded allocation and element-coercion path above stays
-                    // single-sourced. A Symbol/BigInt first argument is a
+                    // iterable, an Array whose iteration was replaced, Map/Set,
+                    // or proxy) takes the iterator or array-like protocol
+                    // (`fx_TypedArray_from_object`). A Symbol/BigInt first
+                    // argument is a
                     // primitive, not an Object (its `Payload` is a Reference to
                     // the interned symbol/bigint), so it falls through to the
                     // length path below, where `ToNumber` throws a catchable
                     // TypeError exactly as the spec's `ToIndex` does.
-                    Payload::Reference(_) if a.kind == Kind::Reference => {
-                        let array_ctor = self
-                            .intrinsics
-                            .get("Array")
-                            .copied()
-                            .expect("Array intrinsic");
-                        let array_ctor = Slot::of(Kind::Reference, Payload::Reference(array_ctor));
-                        let collect_base = self.stack.len();
-                        self.push(array_ctor);
-                        self.push(Slot::undefined());
-                        self.push(Slot::undefined());
-                        self.push(Slot::of(Kind::Uninitialized, Payload::None));
-                        self.push(a);
-                        let collected = self.array_from(code, collect_base, 1);
-                        self.stack.truncate(collect_base);
-                        let collected = collected?;
-
-                        let typed_array_ctor = self
-                            .stack
-                            .get(base + 1)
-                            .copied()
-                            .unwrap_or_else(Slot::undefined);
-                        let construct_base = self.stack.len();
-                        self.push(Slot::of(Kind::Uninitialized, Payload::None));
-                        self.push(typed_array_ctor);
-                        self.push(Slot::undefined());
-                        self.push(Slot::of(Kind::Uninitialized, Payload::None));
-                        self.push(collected);
-                        let constructed = self.call_native(
-                            Native::TypedArray(idx),
-                            construct_base,
-                            1,
-                            true,
-                            code,
-                        );
-                        match constructed {
-                            // The re-entry constructs with no `new.target` of
-                            // its own; the prototype this construct already
-                            // read is the one the result takes.
-                            Ok(()) => {
-                                let constructed = self.pop_checked()?;
-                                self.adopt_prototype(constructed, Some(proto))
-                            }
-                            Err(halt) => {
-                                self.stack.truncate(construct_base);
-                                return Err(halt);
-                            }
-                        }
+                    Payload::Reference(source) if a.kind == Kind::Reference => {
+                        self.typed_array_from_object(code, idx, proto, source, a)?
                     }
                     // Length form: `new TA(n)`. `n` is `ToIndex`-coerced.
                     _ => {
@@ -1193,6 +1013,188 @@ impl Interp {
             _ => unreachable!("not one of the ArrayBuffer, TypedArray and DataView constructors"),
         };
         Ok(result)
+    }
+
+    /// `new TA(source)` from a dense Array (taken as the list its intrinsic
+    /// iteration yields, or the list an iterable's iteration collected) or a source
+    /// TypedArray: allocate a fresh backing store of `length << shift` and
+    /// copy each element, coercing per the destination element type.
+    fn typed_array_from_source(
+        &mut self,
+        code: &[u8],
+        idx: u8,
+        proto: crate::value::SlotIndex,
+        r: crate::value::SlotIndex,
+    ) -> Result<Slot, Step> {
+        let shift = TYPED_ARRAY_TYPES[idx as usize].shift as u32;
+        // The source LENGTH decides the allocation, so read it,
+        // bound it, and charge for it BEFORE materializing
+        // anything. This used to collect `0..len` into a
+        // `Vec<Slot>` and sanity-check afterwards, which made
+        // the source length an *unmetered allocation
+        // instruction*: a sparse `a.length = 200_000_000` —
+        // ordinary JS state, and ordinary snapshot bytes no
+        // decoder can refuse, since a sparse array is legitimate
+        // — reserved 32 bytes per declared element before any
+        // bound and before any charge. What that costs depends
+        // on the host and both outcomes are bad: where the
+        // reservation fails, `handle_alloc_error` ABORTS THE
+        // PROCESS, which no `catch_unwind` can contain; where
+        // overcommit lets it succeed, the worker stalls filling
+        // slots the meter never sees (measured: 132 seconds and
+        // 8.6 GB for a two-call program).
+        //
+        // Ordered this way the from-source path is exposed
+        // exactly as much as the length form `new TA(n)` it is
+        // equivalent to, and no more: the bound rejects first,
+        // and `alloc_array_buffer` charges
+        // `tick_chunk_new(byte_length)` before it allocates.
+        // `tests/typed_array_source_length.rs` holds the
+        // deadline that keeps the order this way round.
+        let (length, source_ta) = if let Some(src) = self.arrays.get(&r) {
+            (src.length, None)
+        } else {
+            let src = self.typed_arrays[&r];
+            // The prototype read above is guest code that can
+            // detach or shrink the source
+            // (InitializeTypedArrayFromTypedArray; XS's
+            // `fxCheckDataViewSize`): copying it then read stale
+            // bytes out of a detached or shorter buffer.
+            (self.checked_ta_length(src)?, Some(src))
+        };
+        // XS's `fx_TypedArray` caps the byte length at
+        // `0x7FFFFFFF`, after the prototype read.
+        if length > (0x7FFF_FFFFu32 >> shift) {
+            return Err(self.catchable_range_error_msg("byteLength too big".into()));
+        }
+        let byte_length = length << shift;
+        self.meter.tick_raw(TYPED_ARRAY_LENGTH_CTOR_FRAME_METERING);
+        let buffer = self.alloc_array_buffer(byte_length)?;
+        let inst = self.slots.alloc(Slot::instance(proto));
+        let ta = TypedArrayData {
+            kind: idx,
+            buffer,
+            offset: 0,
+            array_length: Some(length),
+            resizable_buffer: false,
+        };
+        self.typed_arrays.insert(inst, ta);
+        // An ARRAY source is snapshotted up front — the spec's
+        // `IteratorToList` materializes every value BEFORE any
+        // element coercion runs, so a `valueOf` that mutates the
+        // source mid-copy (`iterated-array-changed-by-tonumber`)
+        // must not change later reads. The snapshot CLONES the
+        // source's sparse `items()` map (present entries only),
+        // NOT a dense `0..length` `Vec<Slot>`: the declared
+        // length is guest-controlled and unbounded up to the
+        // arm's own cap, so a dense snapshot would re-arm the
+        // dense-allocation hazard: reserving
+        // `length * size_of::<Slot>()` outside the meter,
+        // while `alloc_array_buffer` charged only the packed
+        // `byte_length`. Cloning `items()` keeps the allocation
+        // proportional to the storage the meter already charged
+        // (present entries), and an absent index reads
+        // `undefined` from the clone exactly as a hole would.
+        // The snapshot comes AFTER the length bound and the
+        // metered `alloc_array_buffer` charge above, so the
+        // admission ordering (reject first, charge second, only
+        // then any length-proportional allocation;
+        // `tests/typed_array_source_length.rs`) still holds and
+        // the length-proportional allocation the ordering exists
+        // to bound — the backing store — remains the only one. A
+        // TypedArray source needs no snapshot: its element reads
+        // are pure numeric loads and its element coercions run no
+        // guest code, so nothing can mutate it between reads. A
+        // hole reads `undefined` (-> NaN -> 0 for an integer
+        // view), matching the default-iterator result.
+        let snapshot: Option<std::collections::BTreeMap<u32, Slot>> = source_ta.map_or_else(
+            || self.arrays.get(&r).map(|src| src.items().clone()),
+            |_| None,
+        );
+        for i in 0..length {
+            let v = match source_ta {
+                Some(src) if src.kind <= 1 => self.typed_array_element_get_bigint(src, i),
+                Some(src) => self
+                    .typed_array_element_get(src, i)
+                    .expect("numeric TypedArray element decodes"),
+                None => snapshot
+                    .as_ref()
+                    .and_then(|items| items.get(&i).copied())
+                    .unwrap_or_else(Slot::undefined),
+            };
+            self.typed_array_element_set(code, ta, i, v)?;
+            self.meter
+                .tick_raw(TYPED_ARRAY_FROM_SOURCE_ELEMENT_METERING);
+        }
+        Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
+    }
+
+    /// `new TA(object)` for an object that is neither a TypedArray nor an
+    /// Array iterating intrinsically (ECMA-262 23.2.5.1 steps 6.c.iii-vi, as
+    /// XS's `fx_TypedArray_from_object`): `@@iterator` is read once; an
+    /// iterable is collected into a list first, while an array-like is read
+    /// element by element, each `Get` followed by its element's conversion
+    /// and store.
+    fn typed_array_from_object(
+        &mut self,
+        code: &[u8],
+        idx: u8,
+        proto: crate::value::SlotIndex,
+        source: crate::value::SlotIndex,
+        source_slot: Slot,
+    ) -> Result<Slot, Step> {
+        let iterator_id = self
+            .well_known_symbol_property_id("iterator")
+            .expect("well-known iterator symbol");
+        let using_iterator = self.mop_get(code, source, iterator_id, source_slot)?;
+        if !matches!(using_iterator.kind, Kind::Undefined | Kind::Null) {
+            let values = self.iterable_method_to_list(code, source_slot, using_iterator)?;
+            let list = self.array_from_slots(&values);
+            let Payload::Reference(list_ref) = list.value else {
+                unreachable!("array_from_slots returns an Array")
+            };
+            // The list stays rooted while element conversions run guest
+            // code. It is copied as a list, never iterated again.
+            let root = self.stack.len();
+            self.push(list);
+            let constructed = self.typed_array_from_source(code, idx, proto, list_ref);
+            self.stack.truncate(root);
+            return constructed;
+        }
+        let shift = TYPED_ARRAY_TYPES[idx as usize].shift as u32;
+        let length_id = self.intern_static_key("length");
+        let length = self.mop_get(code, source, length_id, source_slot)?;
+        let length = self.to_length_value(code, length)?;
+        // XS's `fx_TypedArray` caps the byte length at `0x7FFFFFFF`.
+        if length > u64::from(0x7FFF_FFFFu32 >> shift) {
+            return Err(self.catchable_range_error_msg("byteLength too big".into()));
+        }
+        let length = length as u32;
+        self.meter.tick_raw(TYPED_ARRAY_LENGTH_CTOR_FRAME_METERING);
+        let buffer = self.alloc_array_buffer(length << shift)?;
+        let inst = self.slots.alloc(Slot::instance(proto));
+        let ta = TypedArrayData {
+            kind: idx,
+            buffer,
+            offset: 0,
+            array_length: Some(length),
+            resizable_buffer: false,
+        };
+        self.typed_arrays.insert(inst, ta);
+        let result = Slot::of(Kind::Reference, Payload::Reference(inst));
+        let root = self.stack.len();
+        self.push(result);
+        let filled: Result<(), Step> = (|| {
+            for k in 0..length {
+                let value = self.array_generic_get(code, source, u64::from(k))?;
+                self.typed_array_element_set(code, ta, k, value)?;
+                self.meter
+                    .tick_raw(TYPED_ARRAY_FROM_SOURCE_ELEMENT_METERING);
+            }
+            Ok(())
+        })();
+        self.stack.truncate(root);
+        filled.map(|()| result)
     }
 
     /// A TypedArray construct's prototype: a subclass's (or a

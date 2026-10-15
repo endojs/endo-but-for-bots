@@ -73,7 +73,6 @@ pub const NOT_IMPLEMENTED_LABELS: &[&str] = &[
     "module:static-linking",
     "module:top-level-await",
     // Custom iterator protocols and array-like interleaving are not yet modeled.
-    "native-call:TypedArray:from-array-like",
     "number:unmodeled",
     "opcode:no-code",
     "private:missing-brand",

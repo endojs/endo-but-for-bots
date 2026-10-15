@@ -24,6 +24,10 @@ impl Interp {
     // element-definition completion.
     // ------------------------------------------------------------------
 
+    /// Out of line: inlined, `Array.from`'s whole body joins
+    /// `native_method_array`'s frame, which every native Array method's
+    /// recursion (`join` re-entering through an element's `toString`) pays.
+    #[inline(never)]
     pub(in crate::interp) fn array_from(
         &mut self,
         code: &[u8],
@@ -3020,6 +3024,37 @@ impl Interp {
         } else {
             Ok(n.trunc())
         }
+    }
+
+    /// Whether iterating the Array `array` with the iterator protocol would
+    /// yield exactly its elements: its `@@iterator` resolves to the intrinsic
+    /// `values` and %ArrayIteratorPrototype%'s `next` is the intrinsic one,
+    /// both as plain data properties, so reading them runs no guest code and a
+    /// snapshot of the elements is the protocol's result. An inherited
+    /// override is as observable as an own one, so the whole chain is checked.
+    pub(in crate::interp) fn array_iterates_intrinsically(
+        &mut self,
+        array: crate::value::SlotIndex,
+    ) -> bool {
+        // Runtime keys (for example from JSON.parse) can precede their lazy
+        // intrinsic bindings. Complete that installation before inspecting
+        // next.
+        self.install_pending_intrinsics();
+        let iterator_id = self
+            .well_known_symbol_property_id("iterator")
+            .expect("well-known iterator symbol");
+        // Unreferenced intrinsic names are linked lazily. If no next key
+        // exists, guest code cannot yet have replaced or deleted the intrinsic
+        // next method.
+        let intrinsic_next = self.symbol_ids.get("next").is_none_or(|&id| {
+            self.chain_resolves_native_data_method(
+                self.array_iterator_proto,
+                id,
+                NativeMethod::ArrayIteratorNext,
+            )
+        });
+        intrinsic_next
+            && self.chain_resolves_native_data_method(array, iterator_id, NativeMethod::ArrayValues)
     }
 
     /// The element a dense fast path's callback visits at `index`, or `None`
