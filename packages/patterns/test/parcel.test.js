@@ -3,7 +3,8 @@ import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
 import { makeParcel } from '@endo/parcel';
-import { passStyleOf } from '@endo/pass-style';
+import { makeTagged, passStyleOf } from '@endo/pass-style';
+import { fc as fastCheck } from '@fast-check/ava';
 import { makeEncodePassable } from '@endo/marshal';
 
 import { isKey, assertKey } from '../src/keys/checkKey.js';
@@ -21,6 +22,21 @@ const { Parcel } = globalThis;
 const parcelTest = Object.isFrozen(Parcel) ? test : test.skip;
 
 const makeTestParcel = () => makeParcel('test:patterns', () => 'opened');
+
+/**
+ * @param {any} inner
+ * @param {'array' | 'record' | 'tagged'} kind
+ */
+const wrapParcel = (inner, kind) => {
+  switch (kind) {
+    case 'array':
+      return harden([inner]);
+    case 'record':
+      return harden({ inner });
+    default:
+      return makeTagged('parcelBox', inner);
+  }
+};
 
 // A Parcel is passable but, like a promise or an error, is neither a key
 // nor a pattern. Predicates must answer false, and assertions must say so,
@@ -82,4 +98,27 @@ parcelTest('a Parcel has no rank cover', t => {
   t.throws(() => getRankCover(makeTestParcel(), encodePassable), {
     message: /"parcel" cannot be rank-ordered/,
   });
+});
+
+parcelTest('Parcels nested at any depth are neither keys nor patterns', t => {
+  fastCheck.assert(
+    fastCheck.property(
+      fastCheck.array(
+        fastCheck.constantFrom(
+          /** @type {const} */ ('array'),
+          /** @type {const} */ ('record'),
+          /** @type {const} */ ('tagged'),
+        ),
+        { maxLength: 8 },
+      ),
+      path => {
+        const context = path.reduce(wrapParcel, makeTestParcel());
+        t.false(isKey(context));
+        t.false(isPattern(context));
+        t.true(matches(context, M.any()));
+        t.false(matches(context, M.key()));
+      },
+    ),
+    { numRuns: 200 },
+  );
 });

@@ -4,7 +4,7 @@ import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
 import { makeParcel } from '@endo/parcel';
-import { fc } from '@fast-check/ava';
+import { fc as fastCheck } from '@fast-check/ava';
 import { passStyleOf, isPassable } from '../src/passStyleOf.js';
 import { deeplyFulfilled } from '../src/deeplyFulfilled.js';
 import { Far } from '../src/make-far.js';
@@ -48,17 +48,58 @@ parcelTest('a Parcel nests in pass-by-copy containers', t => {
 });
 
 parcelTest('Parcel passability composes with generated passables', async t => {
-  const { arbPassable } = makeArbitraries(fc);
-  await fc.assert(
-    fc.property(arbPassable, fc.string(), (value, location) => {
-      const parcel = makeParcel(location, () => value);
-      t.is(passStyleOf(harden([parcel, value])), 'copyArray');
-      t.is(passStyleOf(harden({ parcel, value })), 'copyRecord');
-      t.is(
-        passStyleOf(makeTagged('parcelBox', harden([parcel, value]))),
-        'tagged',
-      );
-    }),
+  const { arbPassable: passableArbitrary } = makeArbitraries(fastCheck);
+  await fastCheck.assert(
+    fastCheck.property(
+      passableArbitrary,
+      fastCheck.string(),
+      (value, location) => {
+        const parcel = makeParcel(location, () => value);
+        t.is(passStyleOf(harden([parcel, value])), 'copyArray');
+        t.is(passStyleOf(harden({ parcel, value })), 'copyRecord');
+        t.is(
+          passStyleOf(makeTagged('parcelBox', harden([parcel, value]))),
+          'tagged',
+        );
+      },
+    ),
+  );
+});
+
+parcelTest('Parcels nested at any depth are passable', t => {
+  /**
+   * @param {unknown} inner
+   * @param {'array' | 'record' | 'tagged'} kind
+   */
+  const wrapParcel = (inner, kind) => {
+    switch (kind) {
+      case 'array':
+        return harden([inner]);
+      case 'record':
+        return harden({ inner });
+      default:
+        return makeTagged('parcelBox', /** @type {any} */ (inner));
+    }
+  };
+  fastCheck.assert(
+    fastCheck.property(
+      fastCheck.array(
+        fastCheck.constantFrom(
+          /** @type {const} */ ('array'),
+          /** @type {const} */ ('record'),
+          /** @type {const} */ ('tagged'),
+        ),
+        { maxLength: 8 },
+      ),
+      path => {
+        const context = path.reduce(
+          wrapParcel,
+          /** @type {unknown} */ (makeParcel('test:parcel', () => 'opened')),
+        );
+        t.true(isPassable(context));
+      },
+    ),
+    { numRuns: 200 },
   );
 });
 

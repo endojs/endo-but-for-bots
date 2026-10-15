@@ -13,6 +13,7 @@ import type {
   CopyTaggedInterface,
   Passable,
   PassableCap,
+  PassByRef,
   PassStyle,
   ParcelObject,
   PureData,
@@ -103,5 +104,9 @@ expectPureData(harden({ nested: [1, 'two'] }));
 expectPureData(parcel);
 // @ts-expect-error nested Parcels are not pure data
 expectPureData(harden({ nested: [parcel] }));
+
+// A Parcel is passed by identity but has no marshal slot representation.
+// @ts-expect-error a Parcel is not PassByRef
+const parcelRef: PassByRef = parcel;
 
 expectTypeOf((cond: boolean, details?: unknown) => cond).toExtend<Checker>();

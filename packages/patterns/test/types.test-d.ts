@@ -852,8 +852,8 @@ expectTypeOf(null as unknown as TypeFromPattern<null>).toEqualTypeOf<null>();
 
 // M.kind('parcel') → ParcelObject
 {
-  const p = M.kind('parcel');
-  type T = TypeFromPattern<typeof p>;
+  const parcelPattern = M.kind('parcel');
+  type T = TypeFromPattern<typeof parcelPattern>;
   expectTypeOf(null as unknown as T).toEqualTypeOf<
     import('@endo/pass-style').ParcelObject
   >();
