@@ -1,4 +1,5 @@
 import harden from '@endo/harden';
+// spell-out-exempt: the established public parameter is `val`; the Parcel arm only returns it unchanged.
 import { X, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { isPromise } from '@endo/promise-kit';
