@@ -84,8 +84,8 @@ test.serial('live remote references survive a daemon restart', async t => {
   const client = await makeDurableClient('restart-client');
   t.teardown(() => client.shutdown());
 
-  const remoteCounter = await client.enlivenSturdyRef(
-    client.makeSturdyRef(daemon1.location, secret),
+  const remoteCounter = await client.openParcel(
+    client.makeParcel(daemon1.location, secret),
   );
   t.is(await E(remoteCounter).incr(), 1);
   t.is(await E(remoteCounter).incr(), 2);
@@ -118,8 +118,8 @@ test.serial('a resumed session continues without a handshake', async t => {
 
   const client = await makeDurableClient('keys-client');
   t.teardown(() => client.shutdown());
-  const remoteCounter = await client.enlivenSturdyRef(
-    client.makeSturdyRef(daemon1.location, secret),
+  const remoteCounter = await client.openParcel(
+    client.makeParcel(daemon1.location, secret),
   );
   t.is(await E(remoteCounter).incr(), 1);
 
@@ -175,8 +175,8 @@ test.serial('a promise resolution crosses a daemon restart', async t => {
 
   const client = await makeDurableClient('promise-client');
   t.teardown(() => client.shutdown());
-  const remoteGifter = await client.enlivenSturdyRef(
-    client.makeSturdyRef(daemon1.location, secret),
+  const remoteGifter = await client.openParcel(
+    client.makeParcel(daemon1.location, secret),
   );
 
   // The client imports the worker's still-pending promise (and its
@@ -251,8 +251,8 @@ test.serial('an answer a resource owes rejects after a restart', async t => {
 
   const client = await makeDurableClient('answer-client');
   t.teardown(() => client.shutdown());
-  const remoteWaiter = await client.enlivenSturdyRef(
-    client.makeSturdyRef(daemon1.location, secret),
+  const remoteWaiter = await client.openParcel(
+    client.makeParcel(daemon1.location, secret),
   );
   t.is(await E(remoteWaiter).ping(), 'pong');
   t.is(await E(remoteWaiter).getFailure(), null, 'the wait is outstanding');
@@ -295,8 +295,8 @@ test.serial(
     const client = await makeDurableClient('gap-client');
     t.teardown(() => client.shutdown());
 
-    const remoteCounter = await client.enlivenSturdyRef(
-      client.makeSturdyRef(daemon1.location, secret),
+    const remoteCounter = await client.openParcel(
+      client.makeParcel(daemon1.location, secret),
     );
     t.is(await E(remoteCounter).incr(), 1);
 
@@ -329,8 +329,8 @@ test.serial('sessions survive repeated daemon restarts', async t => {
   const client = await makeDurableClient('serial-client');
   t.teardown(() => client.shutdown());
 
-  const remoteCounter = await client.enlivenSturdyRef(
-    client.makeSturdyRef(daemon.location, secret),
+  const remoteCounter = await client.openParcel(
+    client.makeParcel(daemon.location, secret),
   );
   t.is(await E(remoteCounter).incr(), 1);
 
@@ -397,11 +397,11 @@ test.serial(
     const holderSecret = holder1.publish(holder);
     const gifter = await makeDurableClient('both-restart-gifter');
     t.teardown(() => gifter.shutdown());
-    const remoteCounter = await gifter.enlivenSturdyRef(
-      gifter.makeSturdyRef(exporter1.location, counterSecret),
+    const remoteCounter = await gifter.openParcel(
+      gifter.makeParcel(exporter1.location, counterSecret),
     );
-    const remoteHolder = await gifter.enlivenSturdyRef(
-      gifter.makeSturdyRef(holder1.location, holderSecret),
+    const remoteHolder = await gifter.openParcel(
+      gifter.makeParcel(holder1.location, holderSecret),
     );
     t.true(await E(remoteHolder).hold(remoteCounter));
     t.is(await E(remoteCounter).getCount(), 0);

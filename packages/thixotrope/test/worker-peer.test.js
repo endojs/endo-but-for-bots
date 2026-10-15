@@ -9,7 +9,7 @@ import { makePipeNetwork } from '../src/pipe-network.js';
 import { makeWorkerPeer } from '../src/worker-peer.js';
 import { makeTestOcapn } from './_util.js';
 
-// Wire swissnums are (immutable) bytes, as `enlivenSturdyRef` encodes.
+// Wire swissnums are (immutable) bytes, as `openParcel` encodes.
 const SHELL_SWISSNUM = frozenBytes(new TextEncoder().encode('shell'));
 
 const COUNTER_SOURCE = `
