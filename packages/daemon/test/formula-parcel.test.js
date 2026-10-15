@@ -2,9 +2,9 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { passStyleOf } from '@endo/pass-style';
-import { enliven, isSturdyRef, makeSturdyRef } from '@endo/sturdyref';
+import { open, isParcel, makeParcel } from '@endo/parcel';
 import { formatId } from '../src/formula-identifier.js';
-import { makeFormulaSturdyRefKit } from '../src/formula-sturdyref.js';
+import { makeFormulaParcelKit } from '../src/formula-parcel.js';
 
 const node = 'a'.repeat(64);
 const idOf = n => formatId({ number: n.repeat(64), node });
@@ -28,61 +28,61 @@ const makeFormulaGraph = formulas => {
   return { provide, incarnations };
 };
 
-test('minting a SturdyRef for a formula does not incarnate it', t => {
+test('minting a Parcel for a formula does not incarnate it', t => {
   const id = idOf('1');
   const graph = makeFormulaGraph(new Map([[id, () => ({ hello: 'world' })]]));
-  const { sturdyRefForFormula, formulaIdOf } = makeFormulaSturdyRefKit(graph);
+  const { parcelForFormula, formulaIdOf } = makeFormulaParcelKit(graph);
 
-  const ref = sturdyRefForFormula(id);
-  t.true(isSturdyRef(ref));
+  const ref = parcelForFormula(id);
+  t.true(isParcel(ref));
   t.true(Object.isFrozen(ref));
   t.deepEqual(Reflect.ownKeys(ref), [], 'the ref reveals nothing');
-  t.is(passStyleOf(ref), 'sturdyRef');
+  t.is(passStyleOf(ref), 'parcel');
   t.is(formulaIdOf(ref), id);
   t.deepEqual(graph.incarnations, [], 'no incarnation side effect');
 });
 
-test('enlivening the SturdyRef incarnates the formula', async t => {
+test('opening the Parcel incarnates the formula', async t => {
   const id = idOf('2');
   const graph = makeFormulaGraph(new Map([[id, () => ({ hello: 'world' })]]));
-  const { sturdyRefForFormula } = makeFormulaSturdyRefKit(graph);
+  const { parcelForFormula } = makeFormulaParcelKit(graph);
 
-  const ref = sturdyRefForFormula(id);
-  const pending = enliven(ref);
-  t.deepEqual(graph.incarnations, [], 'enlivening happens in a later turn');
+  const ref = parcelForFormula(id);
+  const pending = open(ref);
+  t.deepEqual(graph.incarnations, [], 'opening happens in a later turn');
   const value = await pending;
   t.deepEqual(value, { hello: 'world' });
   t.deepEqual(graph.incarnations, [id]);
 
-  // Enlivening again, or through a second ref, reuses the incarnation.
-  const again = await enliven(sturdyRefForFormula(id));
+  // Opening again, or through a second ref, reuses the incarnation.
+  const again = await open(parcelForFormula(id));
   t.is(again, value);
   t.deepEqual(graph.incarnations, [id]);
 });
 
-test('enlivening a ref to an unknown formula rejects', async t => {
+test('opening a ref to an unknown formula rejects', async t => {
   const id = idOf('3');
   const graph = makeFormulaGraph(new Map());
-  const { sturdyRefForFormula } = makeFormulaSturdyRefKit(graph);
-  const ref = sturdyRefForFormula(id);
-  await t.throwsAsync(() => enliven(ref), { message: /No formula/ });
+  const { parcelForFormula } = makeFormulaParcelKit(graph);
+  const ref = parcelForFormula(id);
+  await t.throwsAsync(() => open(ref), { message: /No formula/ });
 });
 
 test('minting rejects an invalid formula identifier', t => {
-  const { sturdyRefForFormula } = makeFormulaSturdyRefKit(
+  const { parcelForFormula } = makeFormulaParcelKit(
     makeFormulaGraph(new Map()),
   );
-  t.throws(() => sturdyRefForFormula('not-an-id'));
+  t.throws(() => parcelForFormula('not-an-id'));
 });
 
 test('formulaIdOf is closely held by the minting kit', t => {
   const id = idOf('4');
   const graph = makeFormulaGraph(new Map([[id, () => ({})]]));
-  const kit = makeFormulaSturdyRefKit(graph);
-  const other = makeFormulaSturdyRefKit(graph);
-  const ref = kit.sturdyRefForFormula(id);
+  const kit = makeFormulaParcelKit(graph);
+  const other = makeFormulaParcelKit(graph);
+  const ref = kit.parcelForFormula(id);
   t.is(other.formulaIdOf(ref), undefined);
-  t.is(kit.formulaIdOf(makeSturdyRef({ enliven: () => 1 })), undefined);
+  t.is(kit.formulaIdOf(makeParcel(idOf('5'), () => 1)), undefined);
   t.is(kit.formulaIdOf({}), undefined);
   t.is(kit.formulaIdOf(id), undefined);
 });

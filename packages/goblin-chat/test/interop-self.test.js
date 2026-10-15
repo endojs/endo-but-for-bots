@@ -8,7 +8,7 @@
  * websocket netlayer) — but here both sides run in this process. One
  * side hosts the JS port of `^chatroom` and registers it under a
  * known swissnum on a websocket netlayer; the other side enlivens it
- * via `makeSturdyRef` + `enlivenSturdyRef` and joins as a remote
+ * via `makeParcel` + `openParcel` and joins as a remote
  * participant.
  *
  * Both sides are driven by the same `runChatParticipant` helper that
@@ -73,11 +73,8 @@ test('endo OCapN client interops with the JS goblin-chat backend', async t => {
   });
 
   try {
-    const sturdyRef = remoteClient.makeSturdyRef(
-      hostNetlayer.location,
-      ROOM_SWISS,
-    );
-    const remoteChatroom = await remoteClient.enlivenSturdyRef(sturdyRef);
+    const parcel = remoteClient.makeParcel(hostNetlayer.location, ROOM_SWISS);
+    const remoteChatroom = await remoteClient.openParcel(parcel);
 
     // Both sides run the same driver. Each subscribes, waits to see a
     // non-self `user-joined`, sends its local message, and resolves
