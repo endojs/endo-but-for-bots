@@ -32,4 +32,13 @@ pub const PINNED: &[(&str, &str)] = &[
         "ironhorse-meter-6",
         "4d9abebe68c732f045097da41de323467d6403019a672eb1249521cd476601a5",
     ),
+    // Same weights. Charging points move: a write to a primitive base runs
+    // [[Set]], a definition flagged to name its anonymous function renames
+    // it, dense array searches start at fromIndex, iteration and TypedArray
+    // construction read @@iterator through the property protocol, and the
+    // compiler's spec departures emit different code.
+    (
+        "ironhorse-meter-7",
+        "4d9abebe68c732f045097da41de323467d6403019a672eb1249521cd476601a5",
+    ),
 ];
