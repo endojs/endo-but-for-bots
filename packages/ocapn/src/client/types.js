@@ -377,6 +377,10 @@
  *   Resolve a Parcel to a live capability: local Parcels go
  *   through the injected locator; remote Parcels fetch from the
  *   peer's bootstrap.
+ * @property {(location: OcapnLocation, secret: string | Uint8Array) => Parcel} makeSturdyRef
+ *   Compatibility alias for consumers migrated later in the stacked series.
+ * @property {(parcel: Parcel) => Promise<any>} enlivenSturdyRef
+ *   Compatibility alias for consumers migrated later in the stacked series.
  * @property {() => void} shutdown
  * @property {ClientDebug} [_debug]
  *   Only present when the client was constructed with `debugMode:
