@@ -375,9 +375,10 @@ subset relationships.
 Understanding the type hierarchy:
 
 ```
-Passable (everything that can pass)
+Passable (everything passStyleOf classifies)
 ├── Error
 ├── Promise
+├── Parcel (local only; not yet marshalled)
 ├── Key (stable, comparable)
 │   ├── Primitives (null, undefined, boolean, number, bigint, string, symbol)
 │   ├── Remotable
@@ -391,7 +392,8 @@ Passable (everything that can pass)
     └── Key-like with Matcher leaves
 ```
 
-- **Passable**: Can cross vat boundaries (from @endo/pass-style)
+- **Passable**: Classified by `passStyleOf` (from @endo/pass-style); every
+  Passable except a Parcel can cross vat boundaries
 - **Key**: Stable and comparable subset of Passable
 - **Pattern**: Describes a subset of Passables for matching
 

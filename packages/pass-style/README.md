@@ -9,11 +9,14 @@ The **@endo/pass-style** package defines the `Passable` type and provides the
 `PassStyle`.
 This classification determines how values can safely be passed between isolated
 compartments or across network boundaries.
+Classification is local: a transport carries only the pass styles it supports,
+and the generic marshal does not yet carry a `'parcel'`.
 
 Every passable value has exactly one pass style from a fixed set of
 possibilities.
 The key distinction is between **pass-by-copy** (the value itself is copied)
 and **Pass-by-reference**.
+A **dormant capability** (Parcel) is recognized locally but is neither.
 
 ## Pass Styles
 
@@ -157,9 +160,7 @@ The object remains in its original location.
 
 **Use for:** Objects with behavior, mutable state, capabilities, large objects
 
-**Pass styles:** remotable, promise, error, parcel
-
-A Parcel is recognized locally only: the generic marshal rejects it in either body format, so it cannot yet cross a marshal boundary.
+**Pass styles:** remotable, promise, error
 
 ```javascript
 const service = Far('Service', {
@@ -169,6 +170,16 @@ const service = Far('Service', {
 // When passed, only a reference is passed
 // Method calls are forwarded to the original object
 ```
+
+### Dormant capability
+
+A Parcel has object identity and no exposed data, but it is not
+pass-by-reference: `PassByRef` excludes it, and the generic marshal rejects it
+in either body format, so it cannot yet cross a marshal boundary.
+`passStyleOf` recognizes one only when `@endo/parcel/shim.js` installed the
+global `Parcel` before lockdown.
+
+**Pass styles:** parcel
 
 ## Type Guards
 
