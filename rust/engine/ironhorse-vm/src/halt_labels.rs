@@ -39,7 +39,6 @@ pub const NOT_IMPLEMENTED_LABELS: &[&str] = &[
     "Temporal.ZonedDateTime:method",
     "TypedArray.prototype:readonly-operation",
     "apply:non-user-function-receiver",
-    "array-buffer-concat:unsupported",
     "array-species:symbol",
     "async-generator:new-target",
     "bind:new-bound-target",

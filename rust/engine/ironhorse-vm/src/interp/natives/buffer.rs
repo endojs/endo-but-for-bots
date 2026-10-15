@@ -298,6 +298,79 @@ impl Interp {
         Ok(result)
     }
 
+    /// `ArrayBuffer.prototype.concat(...buffers)`, an XS extension
+    /// (`fx_ArrayBuffer_prototype_concat`): a buffer made through
+    /// `SpeciesConstructor` holding the receiver's bytes, then each
+    /// argument's. An argument may be a SharedArrayBuffer; a buffer detached
+    /// before the copy contributes no bytes. A source the species
+    /// constructor grows contributes only what still fits, where XS copies
+    /// past the result.
+    pub(in crate::interp) fn array_buffer_concat(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Step> {
+        let source = self
+            .array_buffer_ref(this)
+            .filter(|buffer| !self.shared_buffers.contains(buffer))
+            .ok_or_else(|| {
+                self.catchable_type_error_msg("this: not an ArrayBuffer instance".into())
+            })?;
+        let mut sources = Self::reserved_vec(argc + 1)?;
+        sources.push(source);
+        let mut length = u64::from(self.array_buffers[&source].length);
+        for i in 0..argc {
+            let arg = self
+                .stack
+                .get(base + 4 + i)
+                .copied()
+                .unwrap_or_else(Slot::undefined);
+            let Some(buffer) = self.array_buffer_ref(arg) else {
+                return Err(self.catchable_type_error_msg(format!(
+                    "arguments[{i}]: not an ArrayBuffer instance"
+                )));
+            };
+            length += u64::from(self.array_buffers[&buffer].length);
+            sources.push(buffer);
+        }
+
+        let constructor = self.buffer_species_constructor(code, this, source, "ArrayBuffer")?;
+        let result = self.construct_value(
+            code,
+            constructor,
+            &[Slot::number(length as f64)],
+            constructor,
+        )?;
+        let result_ref = self
+            .array_buffer_ref(result)
+            .filter(|buffer| !self.shared_buffers.contains(buffer))
+            .ok_or_else(|| self.catchable_type_error_msg("not an ArrayBuffer instance".into()))?;
+        if result_ref == source {
+            return Err(self.catchable_type_error_msg("same ArrayBuffer instance".into()));
+        }
+        let room = self.array_buffers[&result_ref].length as usize;
+        if (room as u64) < length {
+            return Err(self.catchable_type_error_msg("smaller ArrayBuffer instance".into()));
+        }
+
+        // The species constructor ran user code, so each length is read again.
+        let mut at = 0usize;
+        for buffer in sources {
+            let record = self.array_buffers[&buffer];
+            let count = (record.length as usize).min(room - at);
+            if count > 0 {
+                let bytes = self.chunks.payload(record.data)[..count].to_vec();
+                let target = self.array_buffers[&result_ref];
+                let out = self.chunks.slice_mut(target.data, at + count);
+                out[at..at + count].copy_from_slice(&bytes);
+            }
+            at += count;
+        }
+        Ok(result)
+    }
+
     /// `ArrayBufferCopyAndDetach(O, newLength, preserveResizability)`: allocate
     /// a realm-intrinsic buffer, copy the common prefix, zero-fill any
     /// extension, then detach the source. `transfer` keeps a resizable

@@ -3999,13 +3999,7 @@ impl Interp {
             NativeMethod::SharedArrayBufferSlice => {
                 self.shared_array_buffer_slice(code, this, base, argc)?
             }
-            // `ArrayBuffer.prototype.concat`: the XS extension remains an
-            // honest named skip.
-            NativeMethod::ArrayBufferConcat => {
-                return Err(Step::Host(Halt::NotImplemented(
-                    "array-buffer-concat:unsupported",
-                )))
-            }
+            NativeMethod::ArrayBufferConcat => self.array_buffer_concat(code, this, base, argc)?,
             // `ArrayBuffer.isView(arg)` (`fx_ArrayBuffer_isView`): `true` iff
             // the argument is a TypedArray or DataView view, else `false`. The
             // host-frame residual is calibrated raw against the pin.
