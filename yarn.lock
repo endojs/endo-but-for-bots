@@ -16753,6 +16753,7 @@ __metadata:
     "@endo/cache-map": "workspace:^"
     "@endo/env-options": "workspace:^"
     "@endo/immutable-arraybuffer": "workspace:^"
+    "@fast-check/ava": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     core-js: "npm:^3.50.0"
