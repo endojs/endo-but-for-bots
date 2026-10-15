@@ -108,76 +108,6 @@ impl Interp {
         Ok(None)
     }
 
-    /// The wrapper prototype of a primitive base (ToObject's), or `None`
-    /// for an object, `null` or `undefined`.
-    pub(in crate::interp) fn primitive_wrapper_proto(
-        &self,
-        base: Slot,
-    ) -> Option<crate::value::SlotIndex> {
-        match base.kind {
-            Kind::String => Some(self.string_proto),
-            Kind::Integer | Kind::Number => Some(self.number_proto),
-            Kind::Boolean => Some(self.boolean_proto),
-            Kind::Symbol => Some(self.symbol_proto),
-            Kind::BigInt => Some(self.bigint_proto),
-            _ => None,
-        }
-    }
-
-    /// Whether `id` names one of a primitive string's own properties, its
-    /// `length` or an index below it: read-only, so a write refuses.
-    pub(in crate::interp) fn string_owns_key(&self, base: Slot, id: u16) -> bool {
-        let Payload::String(off) = base.value else {
-            return false;
-        };
-        let Some(name) = self.scalar_key_text(id) else {
-            return false;
-        };
-        let length = self.str_content(off).len() / 2;
-        name == "length" || string_to_index(&name).is_some_and(|index| (index as usize) < length)
-    }
-
-    /// PutValue on a primitive base (ES2024 6.2.5.6): `ToObject(base).[[Set]]`
-    /// with the primitive itself as the receiver. A string's own indices and
-    /// `length` are read-only, so the write is refused; otherwise the
-    /// wrapper prototype's chain answers, so an inherited setter or a Proxy
-    /// `set` trap runs, and a new property is refused because the receiver
-    /// is not an object (OrdinarySetWithOwnDescriptor step 2.c). A setter
-    /// runs in place, as on an object.
-    pub(super) fn primitive_set_in_place(
-        &mut self,
-        code: &[u8],
-        base: Slot,
-        proto: crate::value::SlotIndex,
-        id: u16,
-        value: Slot,
-    ) -> Result<SetInPlace, Step> {
-        if self.string_owns_key(base, id) {
-            return Ok(SetInPlace::Done(false));
-        }
-        self.set_property_in_place(code, proto, id, value, base)
-    }
-
-    /// The strict TypeError for a refused primitive write, in XS's words: a
-    /// string's own key and a new property are `not extensible`, an
-    /// inherited read-only property `not writable`, a getter-only accessor
-    /// `no setter`.
-    pub(in crate::interp) fn failed_primitive_set_error(
-        &mut self,
-        base: Slot,
-        proto: crate::value::SlotIndex,
-        id: u16,
-    ) -> Step {
-        if self.string_owns_key(base, id) {
-            let error = self.internal_error(
-                "TypeError",
-                format!("set {}: not extensible", self.property_debug_name(id)),
-            );
-            return self.raise_js(error);
-        }
-        self.failed_set_error(proto, id, "set")
-    }
-
     pub(super) fn dispatch_delete_property(&mut self, code: &[u8], id: u16) -> Result<(), Step> {
         let obj = self.peek_checked()?;
         if obj.kind == Kind::EnvReference {
@@ -400,28 +330,6 @@ impl Interp {
         }
         self.push(Slot::boolean(deleted));
         Ok(())
-    }
-
-    /// Whether a NEW_PROPERTY is the compiler's `caller` define on a sloppy
-    /// async function, which this departure drops: an async function has
-    /// no own `caller` (ECMA-262 17.1, Forbidden Extensions). XS's compiler
-    /// defines `caller` (undefined, non-enumerable) on every sloppy plain
-    /// function, async ones included, and Ironhorse's compiler keeps XS's
-    /// bytes. Only that define matches: its value and attributes, onto a
-    /// function whose [[Prototype]] is still %AsyncFunction.prototype%, as
-    /// it is between ASYNC_FUNCTION and the define.
-    fn is_async_function_caller_define(
-        &mut self,
-        inst: crate::value::SlotIndex,
-        id: u16,
-        value: Slot,
-        property_flag: u8,
-    ) -> bool {
-        property_flag == XS_DONT_ENUM_FLAG
-            && value.kind == Kind::Undefined
-            && self.instance_prototype(inst) == self.async_function_proto
-            && self.functions.contains_key(&inst)
-            && id == self.intern_static_key("caller")
     }
 
     pub(super) fn dispatch_new_property(
