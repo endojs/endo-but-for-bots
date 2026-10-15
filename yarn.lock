@@ -2988,7 +2988,6 @@ __metadata:
   dependencies:
     "@endo/eventual-send": "workspace:^"
     "@endo/harden": "workspace:^"
-    "@endo/init": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
