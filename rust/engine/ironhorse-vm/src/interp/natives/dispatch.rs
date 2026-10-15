@@ -5867,42 +5867,8 @@ impl Interp {
             NativeMethod::PromiseAny => {
                 self.promise_combinator(code, CombinatorKind::Any, arg0, this)?
             }
-            // `Promise.withResolvers()` (`fx_Promise_withResolvers`): a
-            // capability of the receiver, exposed as an ordinary
-            // `{ promise, resolve, reject }` object.
-            NativeMethod::PromiseWithResolvers => {
-                let capability = self.new_promise_capability_for(code, this)?;
-                self.meter.tick_slot_alloc();
-                let result = self.slots.alloc(Slot::instance(self.object_proto));
-                self.define_descriptor_field(result, "promise", capability.promise);
-                self.define_descriptor_field(result, "resolve", capability.resolve);
-                self.define_descriptor_field(result, "reject", capability.reject);
-                Slot::of(Kind::Reference, Payload::Reference(result))
-            }
-            // `Promise.try(callback, ...args)` (`fx_Promise_try`): call the
-            // callback synchronously with `this` undefined, then resolve the
-            // receiver's new capability with its result, or reject it with
-            // what the call threw. A throw from the capability's own resolve
-            // or reject propagates.
-            NativeMethod::PromiseTry => {
-                if this.kind != Kind::Reference {
-                    return Err(self.catchable_type_error_msg("this: not an object".into()));
-                }
-                let capability = self.new_promise_capability_for(code, this)?;
-                let args = self.frame_arguments(base, argc)?;
-                let (callback, rest) = args
-                    .split_first()
-                    .map_or((Slot::undefined(), &[][..]), |(f, rest)| (*f, rest));
-                match self.call_any_catching_throw(code, callback, Slot::undefined(), rest)? {
-                    Ok(value) => {
-                        self.call_any(code, capability.resolve, Slot::undefined(), &[value])?;
-                    }
-                    Err(thrown) => {
-                        self.call_any(code, capability.reject, Slot::undefined(), &[thrown])?;
-                    }
-                }
-                capability.promise
-            }
+            NativeMethod::PromiseWithResolvers => self.promise_with_resolvers(code, this)?,
+            NativeMethod::PromiseTry => self.promise_try(code, this, base, argc)?,
             // The resolve/reject functions settle in the `RUN` dispatch
             // (`call_promise_function`) and never reach here.
             NativeMethod::PromiseResolveFunction
