@@ -99,6 +99,35 @@ fn crank(m: &mut Interp, source: &str) -> String {
     outcome.result
 }
 
+/// Execution charges a meter release moved on purpose, which the historical
+/// cost controls (`state_golden_meter_4.tsv`, `state_golden_format_16.tsv`)
+/// still hold at their old values: label, the controls' initial and final
+/// meter, and the current ones. `ironhorse-meter-8` charges the rename of each
+/// function a literal defines as a method, accessor or private method.
+const RELEASE_MOVED_COSTS: &[(&str, &str, &str, &str, &str)] = &[
+    ("proxy", "3332800", "6137096", "3365568", "6169864"),
+    ("accessor", "3351488", "5959152", "3417024", "6024688"),
+    ("private", "6794336", "8861328", "6827104", "8894096"),
+];
+
+/// A row's execution charges against a historical cost control: equal, or
+/// moved exactly as [`RELEASE_MOVED_COSTS`] records.
+fn assert_control_costs(label: &str, current: (&str, &str), control: (&str, &str), name: &str) {
+    match RELEASE_MOVED_COSTS
+        .iter()
+        .find(|(moved, ..)| *moved == label)
+    {
+        Some(&(_, old_initial, old_final, new_initial, new_final)) => {
+            assert_eq!(control, (old_initial, old_final), "{label}: {name} control");
+            assert_eq!(current, (new_initial, new_final), "{label}: moved charges");
+        }
+        None => assert_eq!(
+            current, control,
+            "{label}: {name} execution-only charges stay fixed"
+        ),
+    }
+}
+
 #[test]
 fn carried_state_has_frozen_bytes_manifests_costs_and_continuations() {
     assert_eq!(ironhorse_vm::COST_TABLE_VERSION, "ironhorse-meter-8");
@@ -146,12 +175,13 @@ fn carried_state_has_frozen_bytes_manifests_costs_and_continuations() {
             .map(|line| line.split('\t').collect::<Vec<_>>())
             .find(|row| row[0] == label)
             .unwrap();
-        assert_eq!(
+        assert_control_costs(label, (f[7], f[8]), (prior[7], prior[8]), "meter-4");
+        assert_control_costs(
+            label,
             (f[7], f[8]),
-            (prior[7], prior[8]),
-            "execution-only charges stay fixed"
+            (format_16[7], format_16[8]),
+            "format-16",
         );
-        assert_eq!((f[7], f[8]), (format_16[7], format_16[8]));
         let control: Vec<_> = controls
             .lines()
             .skip(1)
@@ -372,11 +402,7 @@ fn regenerate_persistence_identities() {
                 .iter()
                 .find(|row| row[0] == label)
                 .unwrap_or_else(|| panic!("{}: no row for {label}", control.name));
-            assert_eq!(
-                (&f[7], &f[8]),
-                (&row[7], &row[8]),
-                "{label}: {name} execution-only charges stay fixed"
-            );
+            assert_control_costs(label, (&f[7], &f[8]), (&row[7], &row[8]), name);
         }
 
         let machine = fresh(&f[1]);
