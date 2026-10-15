@@ -34,7 +34,6 @@ export const Parcel = new Proxy(Target, {
     return get(target, name, receiver);
   },
 });
-// Keep the permit's `prototype.constructor` pointing at the admitted value.
 defineProperty(Target.prototype, 'constructor', { value: Parcel });
 export const { open, locate } = Target;
 

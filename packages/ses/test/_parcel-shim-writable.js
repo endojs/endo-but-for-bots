@@ -1,6 +1,5 @@
-// Stands in for a misconfigured `Parcel` shim: the value matches what
-// `lockdown` would install, but the non-configurable global is writable, which
-// is not the first-wins shape `@endo/parcel` installs.
+// Stands in for a misconfigured `Parcel` shim whose binding is not the
+// first-wins shape `@endo/parcel` installs: here, it is writable.
 
 export {};
 

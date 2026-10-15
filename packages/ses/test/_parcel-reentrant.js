@@ -33,7 +33,6 @@ export const Parcel = new Proxy(Target, {
     return getOwnPropertyDescriptor(target, name);
   },
 });
-// Keep the permit's `prototype.constructor` pointing at the admitted value.
 defineProperty(Target.prototype, 'constructor', { value: Parcel });
 
 defineProperty(fixtureGlobal, 'Parcel', {

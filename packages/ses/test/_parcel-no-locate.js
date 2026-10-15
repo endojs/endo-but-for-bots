@@ -1,6 +1,4 @@
-// Stands in for a `Parcel` global with every part of the compatible shape
-// except `locate`: a class with a locked `prototype` and `open` and `isParcel`
-// statics.
+// Stands in for a `Parcel` global that lacks only `locate`.
 
 export {};
 

@@ -3,6 +3,5 @@ import '../index.js';
 import test from 'ava';
 
 test('lockdown refuses a writable non-configurable Parcel', t => {
-  // The redefinition error message is engine-specific; assert only the type.
   t.throws(() => lockdown(), { instanceOf: TypeError });
 });
