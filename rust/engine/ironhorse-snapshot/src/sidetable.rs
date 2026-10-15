@@ -754,6 +754,7 @@ mod tests {
             "env",
             "direct_eval_hoist",
             "eval_direct",
+            "callee_binding_pending",
             "active_segment",
             "top_level_code",
             "result",
@@ -1272,6 +1273,7 @@ mod tests {
             "resume_status",
             "eval_direct",
             "direct_eval_hoist",
+            "callee_binding_pending",
             // The in-flight thrown value.
             "exception",
             // The native-recursion budget in flight: every guarded entry
