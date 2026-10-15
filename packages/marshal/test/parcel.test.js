@@ -75,6 +75,24 @@ for (const serializeBodyFormat of /** @type {const} */ ([
       message: /parcel unexpected/,
     });
   });
+
+  parcelTest(
+    `${serializeBodyFormat} checks that decodeParcel yields a Parcel`,
+    t => {
+      const { toCapData } = makeMarshal(undefined, undefined, {
+        serializeBodyFormat,
+        encodeParcel,
+      });
+      const capData = toCapData(makeParcel('test:not-a-parcel'));
+      const { fromCapData } = makeMarshal(undefined, undefined, {
+        serializeBodyFormat,
+        decodeParcel: location => harden({ location }),
+      });
+      t.throws(() => fromCapData(capData), {
+        message: /a parcel encoding must decode to a parcel/,
+      });
+    },
+  );
 }
 
 parcelTest('capdata validates an inline Parcel encoding', t => {
@@ -126,4 +144,13 @@ parcelTest('ordered encoding retains the t category for Parcel', t => {
   }
   t.is(passStylePrefixes.parcel, 't');
   t.is(compareRank(parcel, makeParcel('test:other')), 0);
+});
+
+parcelTest('ordered encoding checks the Parcel prefix', t => {
+  const { encodePassable } = makePassableKit({
+    encodeParcel: _value => 'r0',
+  });
+  t.throws(() => encodePassable(makeParcel('test:prefix')), {
+    message: /Parcel encoding must start with "t"/,
+  });
 });
