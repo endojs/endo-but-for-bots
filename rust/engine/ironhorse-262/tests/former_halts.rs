@@ -333,6 +333,99 @@ fn generic_array_methods_box_a_primitive_receiver() {
     }
 }
 
+/// The generic `map` and `filter` stopped after 2^16 indices of a receiver
+/// they probe one by one (a Proxy, a String).
+#[test]
+fn generic_map_and_filter_walk_past_two_to_the_sixteen() {
+    for program in [
+        "Array.prototype.filter.call(new Proxy({ length: 70000 }, {}), function () { return true }).length",
+        "Array.prototype.map.call(new Proxy({ length: 70000 }, {}), function () { return 1 }).length",
+        "Array.prototype.filter.call(new Proxy({ length: 70000, 69999: 'z' }, {}), function () { return true }).join()",
+        "Array.prototype.map.call(new Proxy({ length: 70000, 69999: 'z' }, {}), function (v, i) { return v + i })[69999]",
+        "Array.prototype.filter.call('x'.repeat(70000) + 'y', function (c) { return c === 'y' }).join()",
+    ] {
+        agrees(&format!("String({program})"));
+    }
+}
+
+/// The generic `reduce` and `reduceRight` declined a `length` above
+/// 2^32 - 1. XS agrees on these folds, whose elements sit in its resident
+/// index storage; `xs_departures.rs` records two it does not.
+#[test]
+fn generic_reduce_folds_a_length_past_two_to_the_thirty_two() {
+    for program in [
+        "Array.prototype.reduce.call({ length: 2 ** 32, 0: 'a', 1: 'b' }, function (acc, v, i) { if (i === 1) throw acc + v; return acc + v; }, '')",
+        "Array.prototype.reduce.call({ length: 2 ** 53 - 1, 0: 'a', 1: 'b' }, function (acc, v, i) { if (i === 1) throw acc + v; return acc + v; })",
+        "Array.prototype.reduceRight.call({ length: 2 ** 32, [2 ** 32 - 2]: 'a' }, function (acc, v, i) { throw v + i }, 0)",
+    ] {
+        agrees(&format!("try {{ {program} }} catch (e) {{ String(e) }}"));
+    }
+}
+
+// The read-only generic walks stopped after 2^24 indices of a receiver they
+// probe one by one: a Proxy, TypedArray or String wrapper, or for `find*`,
+// `includes` and the folds, which probe every index, any array-like. Each
+// walk below takes 2^24 + 1 steps: seconds in an optimized build, from half a
+// minute to a few minutes in an unoptimized one. Their oracle-free copies in
+// `ironhorse-vm/tests/generic_array_walks_run_to_length.rs` run in CI's
+// release lane.
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "2^24 + 1 steps: run with --release")]
+fn generic_for_each_walks_past_two_to_the_twenty_four() {
+    agrees("var n = 0; Array.prototype.forEach.call(new Proxy({ length: 2 ** 24 + 1, [2 ** 24]: 1 }, {}), function (v, i) { n += v + i }); n");
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "2^24 + 1 steps: run with --release")]
+fn generic_some_and_every_walk_past_two_to_the_twenty_four() {
+    agrees(
+        "Array.prototype.some.call(new Proxy({ length: 2 ** 24 + 1, [2 ** 24]: 1 }, {}), Boolean)",
+    );
+    agrees(
+        "Array.prototype.every.call(new Proxy({ length: 2 ** 24 + 1, [2 ** 24]: 0 }, {}), Boolean)",
+    );
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "2^24 + 1 steps: run with --release")]
+fn generic_find_walks_past_two_to_the_twenty_four() {
+    agrees("Array.prototype.find.call({ length: 2 ** 24 + 1, [2 ** 24]: 'x' }, Boolean)");
+    agrees("Array.prototype.findIndex.call({ length: 2 ** 24 + 1, [2 ** 24]: 'x' }, Boolean)");
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "2^24 + 1 steps: run with --release")]
+fn generic_find_last_walks_past_two_to_the_twenty_four() {
+    agrees("Array.prototype.findLast.call({ length: 2 ** 24 + 1, 0: 'x' }, Boolean)");
+    agrees("Array.prototype.findLastIndex.call({ length: 2 ** 24 + 1, 0: 'x' }, Boolean)");
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "2^24 + 1 steps: run with --release")]
+fn generic_reduce_walks_past_two_to_the_twenty_four() {
+    agrees("Array.prototype.reduce.call({ length: 2 ** 24 + 1, [2 ** 24]: 'x' }, function (acc, v, i) { return acc + v + i }, '')");
+    agrees("Array.prototype.reduceRight.call({ length: 2 ** 24 + 1, 0: 'x' }, function (acc, v, i) { return acc + v + i }, '')");
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "2^24 + 1 steps: run with --release")]
+fn generic_index_of_walks_past_two_to_the_twenty_four() {
+    agrees("Array.prototype.indexOf.call(new Proxy({ length: 2 ** 24 + 1, [2 ** 24]: 1 }, {}), 1)");
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "2^24 + 1 steps: run with --release")]
+fn generic_last_index_of_walks_past_two_to_the_twenty_four() {
+    agrees("Array.prototype.lastIndexOf.call(new Proxy({ length: 2 ** 24 + 1, 0: 1 }, {}), 1)");
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "2^24 + 1 steps: run with --release")]
+fn generic_includes_walks_past_two_to_the_twenty_four() {
+    agrees("Array.prototype.includes.call({ length: 2 ** 24 + 1, [2 ** 24]: 1 }, 1)");
+}
+
 /// A callback can delete an element of the dense array it walks (exposing
 /// an inherited one), turn one into an accessor, or shorten the array; the
 /// walk still visits what HasProperty and Get answer.

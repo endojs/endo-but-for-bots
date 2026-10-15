@@ -14,9 +14,9 @@
 //!    label is in `ENGINE_INVARIANT_LABELS` — so a new label fails the build
 //!    until it is deliberately classified, and a stale registry entry is
 //!    removed rather than left as a silent exemption;
-//! 2. the two label-returning helpers the dynamic `NotImplemented(…)` sites
-//!    route through (`native_unsupported_name`, `array_generic_skip_reason`)
-//!    return only the literals in `NOT_IMPLEMENTED_HELPER_LABELS`, and every other
+//! 2. the label-returning helper the dynamic `NotImplemented(…)` sites route
+//!    through (`native_unsupported_name`) returns only the literals in
+//!    `NOT_IMPLEMENTED_HELPER_LABELS`, and every other
 //!    non-literal argument is one of the enumerated [`DECLINED_DYNAMIC_FORMS`];
 //! 3. the variants are only ever spelled `Halt::NotImplemented(` /
 //!    `Halt::EngineInvariant(` — never imported, aliased (a `Halt::{…}` or
@@ -57,13 +57,12 @@ use ironhorse_vm::halt_labels::{
 /// elsewhere: opcode mnemonics (`other.name()` at the dispatch loop's default
 /// arm only, the `gxCodeNames` table in `opcode.rs`, accepted by
 /// `is_not_implemented_label`), the
-/// two helpers above, and the regexp crate's own compile-time
+/// helper above, and the regexp crate's own compile-time
 /// `CompileError::Unsupported` labels (`regexp_feature`), which that crate
 /// owns and which today it never constructs. `_` is the wildcard of a `match`
 /// pattern in this crate's own tests, not a construction.
 const DECLINED_DYNAMIC_FORMS: &[&str] = &[
     "_",
-    "Self::array_generic_skip_reason(m)",
     "native_unsupported_name(native)",
     "other.name()",
     "regexp_feature",
@@ -248,8 +247,8 @@ fn dynamic_forms_ignore_layout_but_keep_the_call_shape() {
             "native_unsupported_name(native)",
         ),
         (
-            "Self::array_generic_skip_reason(m),",
-            "Self::array_generic_skip_reason(m)",
+            "native_unsupported_name(native),",
+            "native_unsupported_name(native)",
         ),
         ("other.name(),", "other.name()"),
     ] {
@@ -378,14 +377,10 @@ fn engine_invariant_labels_mirror_the_construction_sites() {
 }
 
 #[test]
-fn declined_helpers_return_only_registered_labels() {
-    let mut found = BTreeSet::new();
-    for marker in [
-        "fn native_unsupported_name(",
-        "fn array_generic_skip_reason(",
-    ] {
-        found.extend(string_literals(&fn_body(marker)));
-    }
+fn declined_helper_returns_only_registered_labels() {
+    let found = string_literals(&fn_body("fn native_unsupported_name("))
+        .into_iter()
+        .collect();
     diff(
         "declined helper labels",
         &found,
