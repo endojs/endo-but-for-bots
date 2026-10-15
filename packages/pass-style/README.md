@@ -159,6 +159,8 @@ The object remains in its original location.
 
 **Pass styles:** remotable, promise, error, parcel
 
+A Parcel is recognized locally only: the generic marshal rejects it in either body format, so it cannot yet cross a marshal boundary.
+
 ```javascript
 const service = Far('Service', {
   getData() { return data; }
