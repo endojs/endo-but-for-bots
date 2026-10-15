@@ -28,7 +28,7 @@ import {
 
 /**
  * @import {Reporter} from './reporting-types.js'
- * @import {ParcelSample} from './parcel-types.js'
+ * @import {ParcelSample} from './parcel.types.js'
  */
 
 const isFunction = obj => typeof obj === 'function';

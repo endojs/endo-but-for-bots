@@ -3,7 +3,7 @@
 import { TypeError, construct, defineProperties, freeze } from './commons.js';
 
 /**
- * @import {ParcelSample} from './parcel-types.js'
+ * @import {ParcelSample} from './parcel.types.js'
  */
 
 /**
