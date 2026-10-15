@@ -288,3 +288,27 @@ fn a_direct_eval_call_to_a_shadowed_eval_is_an_ordinary_call() {
         agrees(program);
     }
 }
+
+#[test]
+fn json_parse_keeps_a_lone_surrogate() {
+    for program in [
+        "JSON.parse(String.fromCharCode(34, 0xd800, 34)).length",
+        "JSON.parse(String.fromCharCode(34, 0xd800, 34)).charCodeAt(0)",
+        "JSON.parse(\"[\\\"a\" + String.fromCharCode(0xdc00) + \"b\\\", 1]\")[0].length",
+        "JSON.parse(\"[\\\"a\" + String.fromCharCode(0xdc00) + \"b\\\", 1]\")[0].charCodeAt(1)",
+        "(function () { try { JSON.parse(String.fromCharCode(0xd800)) } catch (e) { return e.constructor.name } })()",
+        "(function () { try { JSON.parse(\"[1, \" + String.fromCharCode(0xdfff) + \"]\") } catch (e) { return e.constructor.name } })()",
+        "(function () { var s; JSON.parse(String.fromCharCode(34, 0xd800, 34), function (k, v, c) { s = c && c.source; return v }); return [s.length, s.charCodeAt(1)].join() })()",
+        "(function () { var s; JSON.parse(String.fromCharCode(34, 0xe9, 0xd83d, 0xde00, 34), function (k, v, c) { s = c && c.source; return v }); return [s.length, s.charCodeAt(1), s.charCodeAt(2), s.charCodeAt(3)].join() })()",
+        "JSON.parse(String.fromCharCode(34, 0xd800, 0xdc00, 34)).length",
+        "JSON.parse(String.fromCharCode(34, 0xdbff, 0xd800, 34)).length",
+        "JSON.parse(String.fromCharCode(34, 0xdc00, 0xd800, 0xdc00, 0xd800, 34)).split(\"\").map(function (c) { return c.charCodeAt(0) }).join()",
+        "Object.keys(JSON.parse(\"{\\\"\" + String.fromCharCode(0xd834) + \"\\\": 1}\"))[0].charCodeAt(0)",
+        "JSON.parse(\"{\\\"\" + String.fromCharCode(0xd834) + \"\\\": \" + \"\\\"\" + String.fromCharCode(0xdd1e) + \"x\\\"}\")[String.fromCharCode(0xd834)].length",
+        "JSON.parse(String.fromCharCode(34, 0xe9, 0x20ac, 0xd83d, 0xde00, 34)).length",
+        "JSON.stringify(JSON.parse(String.fromCharCode(34, 0xd800, 34)))",
+        "JSON.parse(\"\\\"\\\\ud800\\\"\").length",
+    ] {
+        agrees(&format!("String({program})"));
+    }
+}
