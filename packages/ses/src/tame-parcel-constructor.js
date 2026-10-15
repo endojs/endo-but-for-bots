@@ -3,16 +3,22 @@
 import { TypeError, construct, defineProperties, freeze } from './commons.js';
 
 /**
- * Derive the powerless `%SharedParcel%` constructor from the shim-installed
- * `%InitialParcel%` constructor. Both constructors use the initial
- * constructor's prototype and private brand table, but only the initial
- * constructor exposes `locate`.
+ * @import {ParcelSample} from './parcel-types.js'
+ */
+
+/**
+ * Derive the `%SharedParcel%` constructor, which has no `locate`, from the
+ * `%InitialParcel%` constructor that `sampleParcel` validated.
+ * Both constructors use the initial constructor's prototype and private brand
+ * table, but only the initial constructor exposes `locate`.
  *
  * Every member comes from the descriptor snapshot `sampleParcel` validated,
  * never from a fresh `[[Get]]` on the candidate, which a Proxy could answer
  * with `locate`.
+ * Construction delegates to the initial constructor, which pre-lockdown code
+ * supplied and SES trusts as it trusts any other pre-lockdown change.
  *
- * @param {import('./intrinsics.js').ParcelSample | undefined} sample
+ * @param {ParcelSample | undefined} sample
  */
 export default function tameParcelConstructor(sample) {
   if (sample === undefined) {

@@ -5,6 +5,6 @@ import test from 'ava';
 test('lockdown refuses a Parcel that is not the shim constructor', t => {
   t.throws(() => lockdown(), {
     instanceOf: TypeError,
-    message: /@endo\/parcel constructor/,
+    message: /compatible Parcel constructor/,
   });
 });

@@ -1,8 +1,10 @@
 import { cauterizeProperty } from './cauterize-property.js';
 import {
+  Object,
   TypeError,
   WeakSet,
   arrayFilter,
+  construct,
   create,
   defineProperty,
   entries,
@@ -26,6 +28,7 @@ import {
 
 /**
  * @import {Reporter} from './reporting-types.js'
+ * @import {ParcelSample} from './parcel-types.js'
  */
 
 const isFunction = obj => typeof obj === 'function';
@@ -77,20 +80,20 @@ function sampleGlobals(globalObject, newPropertyNames) {
 }
 
 /**
- * @typedef {object} ParcelSample
- * @property {any} Parcel the shim-installed constructor
- * @property {(parcel: unknown) => Promise<unknown>} open
- * @property {(value: unknown) => boolean} isParcel
- * @property {object} prototype
- */
-
-/**
- * Validate a pre-lockdown `globalThis.Parcel` and snapshot the members SES
- * delegates to, reading each by descriptor so that no getter or Proxy `get`
- * trap can substitute a different value later.
- * Returns `undefined` when no `Parcel` global is present.
+ * Validate a pre-lockdown own `globalThis.Parcel` binding and snapshot the
+ * members SES delegates to, reading each by descriptor so that no getter or
+ * Proxy `get` trap can substitute a different value later.
+ * Returns `undefined` when the global has no own `Parcel` property.
  * Throws a `TypeError` for an accessor binding or a value that lacks the
- * `@endo/parcel` constructor shape.
+ * compatible constructor shape: a constructor with a locked `prototype` and
+ * distinct own `open`, `locate`, and `isParcel` functions.
+ *
+ * The check is structural and does not establish provenance.
+ * Like every other pre-lockdown change to the start compartment, the `Parcel`
+ * it accepts is trusted: SES cannot tell `@endo/parcel` from a compatible
+ * constructor, nor stop pre-lockdown code from installing one whose `open` or
+ * `[[Construct]]` leaks authority.
+ * The check rejects an accidental, unrelated `Parcel` global.
  *
  * @param {object} globalObject
  * @returns {ParcelSample | undefined}
@@ -137,16 +140,33 @@ export const sampleParcel = globalObject => {
       descriptor.configurable === false
     );
   };
+  // A callable with a locked own `prototype` need not be constructible: an
+  // arrow function can be given one. `construct` throws unless its new target
+  // has a `[[Construct]]` internal method.
+  const isConstructor = () => {
+    try {
+      construct(Object, [], candidate);
+      return true;
+    } catch (_error) {
+      return false;
+    }
+  };
+  // Aliasing `locate` as `open` or `isParcel` would hand location authority to
+  // every child compartment.
+  const isLocateDistinct = () =>
+    snapshot.locate !== snapshot.open && snapshot.locate !== snapshot.isParcel;
   if (
     typeof candidate !== 'function' ||
     !hasOwnData('open', isFunction) ||
     !hasOwnData('locate', isFunction) ||
     !hasOwnData('isParcel', isFunction) ||
     !hasOwnData('prototype', value => !isPrimitive(value)) ||
-    !isLockedPrototype()
+    !isLockedPrototype() ||
+    !isLocateDistinct() ||
+    !isConstructor()
   ) {
     throw TypeError(
-      'lockdown expected globalThis.Parcel to be the @endo/parcel constructor, with a prototype and open, locate, and isParcel statics',
+      'lockdown expected globalThis.Parcel to be a compatible Parcel constructor, with a locked prototype and distinct open, locate, and isParcel statics',
     );
   }
   return freeze({
