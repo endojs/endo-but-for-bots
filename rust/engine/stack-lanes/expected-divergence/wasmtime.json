@@ -4,24 +4,6 @@
   },
   "expected_divergences": [
     {
-      "program": "snippet cross-target.js#typed-array-join",
-      "site": "natives/buffer.rs:558",
-      "native": "halt=HeapExhausted result=\"\" meter=1746767504 digest=8415b35cf2caa6a9 parse_meter=10530816 charges=172:c0ed157f3a90ffc8 checks=3:fcf2784c446302aa",
-      "wasm32": "trap: panic: capacity overflow at library/alloc/src/raw_vec/mod.rs"
-    },
-    {
-      "program": "snippet cross-target.js#typed-array-to-locale-string",
-      "site": "natives/buffer.rs:287",
-      "native": "halt=HeapExhausted result=\"\" meter=4571159984 digest=14dd1c02f6164a1d parse_meter=12615680 charges=303:b29db517bdb98f03 checks=13:171e8bf98868c8d2",
-      "wasm32": "trap: panic: capacity overflow at library/alloc/src/raw_vec/mod.rs"
-    },
-    {
-      "program": "snippet cross-target.js#array-to-locale-string",
-      "site": "natives/array.rs:4482",
-      "native": "halt=HeapExhausted result=\"\" meter=18261409832 digest=ec2e0546b35033f0 parse_meter=18481152 charges=498:d35c82818299841d checks=30771:5f821fcd1858645b",
-      "wasm32": "trap: panic: capacity overflow at library/alloc/src/raw_vec/mod.rs"
-    },
-    {
       "program": "snippet cross-target.slow.js#map-entries",
       "site": "bulk.rs:479",
       "native": "halt=Return result=\"33554433\" meter=53352104759704 digest=9c01a48bac96a7d2 parse_meter=15736832 charges=334:2a24a3a50f730ec2 checks=67256323:4965d833628efa0e",
