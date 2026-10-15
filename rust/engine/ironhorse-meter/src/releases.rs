@@ -41,4 +41,12 @@ pub const PINNED: &[(&str, &str)] = &[
         "ironhorse-meter-7",
         "4d9abebe68c732f045097da41de323467d6403019a672eb1249521cd476601a5",
     ),
+    // Same weights, new charging points: a direct `eval` in a class field
+    // initializer no longer marks the enclosing function's body, so that
+    // body compiles without the sloppy direct-eval prelude and runs fewer
+    // codes, and the field function stores its environment as XS does.
+    (
+        "ironhorse-meter-8",
+        "4d9abebe68c732f045097da41de323467d6403019a672eb1249521cd476601a5",
+    ),
 ];

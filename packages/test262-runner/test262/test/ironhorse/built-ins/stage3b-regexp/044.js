@@ -1,7 +1,7 @@
 /*---
 description: stage3b-regexp corpus line 44 converted to a test262 case
 flags: [noStrict]
-features: [ironhorse-dual-run, ironhorse-meter-7-raw-6546920, ironhorse-meter-determinism]
+features: [ironhorse-dual-run, ironhorse-meter-8-raw-6546920, ironhorse-meter-determinism]
 info: |
   Converted from corpora/stage3b-regexp.js line 44.
   Source: /a/g.lastIndex

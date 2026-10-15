@@ -12,7 +12,7 @@ mod releases;
 pub use releases::PINNED;
 pub mod sha256;
 pub use default_keys::DEFAULT_KEYS;
-pub const COST_TABLE_VERSION: &str = "ironhorse-meter-7";
+pub const COST_TABLE_VERSION: &str = "ironhorse-meter-8";
 
 macro_rules! weights {
     ($($name:ident = $value:expr;)*) => {
@@ -347,7 +347,7 @@ mod tests {
     use super::*;
     #[test]
     fn frozen_release() {
-        assert_eq!(COST_TABLE_VERSION, "ironhorse-meter-7");
+        assert_eq!(COST_TABLE_VERSION, "ironhorse-meter-8");
         let expected = PINNED
             .iter()
             .find(|(version, _)| *version == COST_TABLE_VERSION)

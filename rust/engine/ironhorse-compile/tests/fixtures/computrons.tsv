@@ -1,4 +1,4 @@
-# ironhorse-meter-7 source, lexical whole, compilation raw, compilation whole
+# ironhorse-meter-8 source, lexical whole, compilation raw, compilation whole
 1 + 2 * 3	8	2895872	44
 (a, b) => a + b	13	4521984	69
 if (x) { y } else { z }	17	4337664	66
@@ -14,3 +14,5 @@ let [x, ...rest] = arr; let { p, q: r } = obj;	33	13201408	201
 async function a() { await p; for await (const v of s) {} }	35	12718080	194
 function* gen() { yield 1; yield* other() }	26	11767808	179
 "use strict"; const k = 1; k;	17	3702784	56
+function f() { class A { x = eval("1") } }	27	11165696	170
+function f() { class A { static x = eval("1") } }	30	10485760	160
