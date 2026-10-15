@@ -1035,6 +1035,24 @@ fn delete_over_an_optional_chain_departs() {
     }
 }
 
+/// A call through a parenthesized `eval` is a pinned departure from XS's
+/// bytes: `(eval)(s)` keeps the Reference, so it is a direct eval (ES2024
+/// 13.3.6.1, 13.2.9.2), coded with `EVAL`; XS calls it indirectly with
+/// `RUN`. A comma expression still makes the call indirect.
+#[test]
+fn a_parenthesized_eval_call_departs() {
+    assert_identical(&["(0,eval)(s);", "eval(s);", "(f)(s);"]);
+    for src in [
+        "(eval)(s);",
+        "((eval))(s);",
+        "function f(){var x=1;return (eval)('x');}",
+    ] {
+        let want = xs_oracle::run(src).expect("oracle compile").bytecode;
+        let got = compile_with(src, false).expect("ironhorse compile");
+        assert_ne!(got, want, "{src}: the departure must still depart");
+    }
+}
+
 #[test]
 fn object_and_array_literals() {
     assert_identical(&[

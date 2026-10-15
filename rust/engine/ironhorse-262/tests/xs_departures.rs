@@ -295,6 +295,13 @@ const DEPARTURES: &[Row] = &[
         v8: "TypeError",
         why: "a strict `delete o?.b` that the object refuses throws (ES2024 13.5.1.2 step 4.e)",
     },
+    Row {
+        program: "function f() { var x = 1; var r = []; try { r.push((eval)('x')); } catch (e) { r.push(e.constructor.name); } try { r.push((0, eval)('x')); } catch (e) { r.push(e.constructor.name); } return r.join(); } f()",
+        ironhorse: "1,ReferenceError",
+        xs: "ReferenceError,ReferenceError",
+        v8: "1,ReferenceError",
+        why: "`(eval)(s)` is a direct eval: the parentheses keep the Reference to `eval` (ES2024 13.3.6.1, 13.2.9.2); XS calls it indirectly",
+    },
 ];
 
 /// Programs where Ironhorse departs from XS and V8 has no counterpart to
@@ -426,13 +433,6 @@ const SHARED: &[Row] = &[
         xs: "ReferenceError",
         v8: "2",
         why: "an arrow function's direct eval sees its enclosing function's arguments",
-    },
-    Row {
-        program: "function f() { var x = 1; try { return (eval)('x'); } catch (e) { return e.constructor.name; } } f()",
-        ironhorse: "ReferenceError",
-        xs: "ReferenceError",
-        v8: "1",
-        why: "`(eval)(s)` is still a direct eval: the parentheses keep the Reference to `eval` (PerformEval through a direct call)",
     },
     Row {
         program: "var log = ''; Object.defineProperty(Array.prototype, 0, { set: function (v) { log += 's' + v; }, configurable: true }); var a = []; [...a[0]] = [5]; delete Array.prototype[0]; log",

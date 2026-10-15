@@ -740,7 +740,7 @@ impl<'a> Parser<'a> {
     /// The symbol of the top-of-stack `Access` node (its `child[0]`), if
     /// any.
     fn top_access_symbol(&self) -> Option<SymbolName> {
-        if let Some(Item::Node(node)) = self.stack.last() {
+        if let Some(Item::Node(node)) = self.stack.last().map(Item::without_parentheses) {
             if node.token == Token::Access {
                 if let Some(Item::Symbol(s)) = node.children.first() {
                     return Some(SymbolName::from_units(s));

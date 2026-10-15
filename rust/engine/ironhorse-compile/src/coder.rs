@@ -4756,7 +4756,9 @@ impl Coder<'_, '_> {
     /// Whether a call's reference is the `eval` identifier
     /// (`fxCallNodeHoist`'s syntactic test).
     fn is_direct_eval(item: &Item) -> bool {
-        matches!(item, Item::Node(n) if n.token == Token::Access
+        // `(eval)(s)` is direct too: the parentheses keep the Reference
+        // (ES2024 13.3.6.1). A departure from XS, which calls it indirectly.
+        matches!(item.without_parentheses(), Item::Node(n) if n.token == Token::Access
             && matches!(n.children.first(), Some(Item::Symbol(s)) if SymbolName::from_units(s) == "eval"))
     }
 

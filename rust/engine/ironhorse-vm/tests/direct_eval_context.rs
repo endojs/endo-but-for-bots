@@ -143,12 +143,13 @@ fn private_names_resolve_through_the_caller() {
             r#"class C { #x = 7; m() { return eval(...['this.#x']); } } try { new C().m() } catch (e) { e.constructor.name }"#,
             r#"7"#,
         ),
-        // XS, and so Ironhorse, compiles a parenthesized `(eval)(...)` as an
-        // indirect eval. The specification calls it direct, and V8 answers 7.
+        // A parenthesized `(eval)(...)` is a direct eval, as the specification
+        // and V8 have it; XS compiles it as an indirect eval and throws a
+        // SyntaxError (an `xs_departures.rs` row).
         (
             "parenthesized_callee",
             r#"class C { #x = 7; m() { return (eval)('this.#x'); } } try { new C().m() } catch (e) { e.constructor.name }"#,
-            r#"SyntaxError"#,
+            r#"7"#,
         ),
         (
             "async_method",
