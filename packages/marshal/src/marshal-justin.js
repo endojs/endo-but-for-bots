@@ -13,7 +13,7 @@ import { makeMarshal } from './marshal.js';
 /**
  * @import {Stringable} from 'ses';
  * @import {Passable} from '@endo/pass-style';
- * @import {Encoding} from './types.js';
+ * @import {Encoding} from './types.types.js';
  */
 
 const { ownKeys } = Reflect;
@@ -195,6 +195,11 @@ const decodeToJustin = (encoding, shouldIndent = false, slots = []) => {
           if (iface !== undefined) {
             assert.typeof(iface, 'string');
           }
+          return;
+        }
+        case 'parcel': {
+          const { location } = rawTree;
+          assert.typeof(location, 'string');
           return;
         }
         case 'hilbert': {
@@ -379,6 +384,10 @@ const decodeToJustin = (encoding, shouldIndent = false, slots = []) => {
           return iface === undefined
             ? out.next(`slot(${index})`)
             : out.next(`slot(${index},${nestedRender(iface)})`);
+        }
+
+        case 'parcel': {
+          return out.next(`parcel(${quote(rawTree.location)})`);
         }
 
         case 'hilbert': {

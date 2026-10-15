@@ -3,139 +3,155 @@ import '@endo/parcel/shim.js';
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
-import { Far, makeTagged, passStyleOf } from '@endo/pass-style';
-import { makeArbitraries } from '@endo/pass-style/tools.js';
-import { makeParcel } from '@endo/parcel';
-import { fc } from '@fast-check/ava';
+import { passStyleOf } from '@endo/pass-style';
 
-import {
-  compareRank,
-  getPassStyleCover,
-  isRankSorted,
-  assertRankSorted,
-  sortByRank,
-} from '../src/rankOrder.js';
-import { makeEncodePassable } from '../src/encodePassable.js';
 import { makeMarshal } from '../src/marshal.js';
-import { makeDotMembraneKit } from '../src/dot-membrane.js';
+import { decodeToJustin } from '../src/marshal-justin.js';
+import { makePassableKit, passStylePrefixes } from '../src/encodePassable.js';
+import { compareRank } from '../src/rankOrder.js';
 
 /** @type {any} */
 const { Parcel } = globalThis;
-// The shims-only AVA configuration installs Parcel before lockdown but does
-// not harden it, and only a frozen Parcel is passable.
-const parcelTest = Object.isFrozen(Parcel) ? test : test.skip;
 
-/** @import {Passable} from '@endo/pass-style' */
+const locations = new WeakMap();
+const makeParcel = location => {
+  const parcel = new Parcel(location, loc => `opened:${loc}`);
+  locations.set(parcel, location);
+  return parcel;
+};
+const encodeParcel = parcel => locations.get(parcel);
+const decodeParcel = location => makeParcel(location);
+let parcelIsPassable = false;
+try {
+  parcelIsPassable = passStyleOf(makeParcel('test:probe')) === 'parcel';
+} catch {
+  // The shims-only configuration has not hardened the constructor yet.
+}
+const parcelTest = parcelIsPassable ? test : test.skip;
 
-const makeTestParcel = () => makeParcel('test:marshal', () => 'opened');
+for (const serializeBodyFormat of /** @type {const} */ ([
+  'capdata',
+  'smallcaps',
+])) {
+  parcelTest(
+    `Parcel round-trips inline through ${serializeBodyFormat}`,
+    async t => {
+      const { toCapData, fromCapData } = makeMarshal(undefined, undefined, {
+        serializeBodyFormat,
+        encodeParcel,
+        decodeParcel,
+      });
+      const parcel = makeParcel('#ocapn=1&peer=alice&value=secret');
+      const capData = toCapData(harden({ parcel, again: parcel }));
+      t.deepEqual(capData.slots, []);
+      const expectedBody =
+        serializeBodyFormat === 'capdata'
+          ? '{"again":{"@qclass":"parcel","location":"#ocapn=1&peer=alice&value=secret"},"parcel":{"@qclass":"parcel","location":"#ocapn=1&peer=alice&value=secret"}}'
+          : `#{"again":"'#ocapn=1&peer=alice&value=secret","parcel":"'#ocapn=1&peer=alice&value=secret"}`;
+      t.is(capData.body, expectedBody);
 
-// Until marshal gives Parcels a representation, a Parcel can be neither
-// rank-ordered nor encoded. Both must fail with a clear error.
+      const decoded = /** @type {any} */ (fromCapData(capData));
+      t.is(passStyleOf(decoded.parcel), 'parcel');
+      t.is(passStyleOf(decoded.again), 'parcel');
+      t.is(
+        await Parcel.open(decoded.parcel),
+        'opened:#ocapn=1&peer=alice&value=secret',
+      );
+    },
+  );
 
-parcelTest('a Parcel cannot be rank-ordered', t => {
-  const parcel = makeTestParcel();
+  parcelTest(`${serializeBodyFormat} requires explicit Parcel authority`, t => {
+    const parcel = makeParcel('test:no-authority');
+    const plain = makeMarshal(undefined, undefined, { serializeBodyFormat });
+    t.throws(() => plain.toCapData(parcel), {
+      message: /parcel unexpected/,
+    });
+
+    const body =
+      serializeBodyFormat === 'capdata'
+        ? '{"@qclass":"parcel","location":"test:no-authority"}'
+        : `#"'test:no-authority"`;
+    t.throws(() => plain.fromCapData({ body, slots: [] }), {
+      message: /parcel unexpected/,
+    });
+  });
+
+  parcelTest(
+    `${serializeBodyFormat} checks that decodeParcel yields a Parcel`,
+    t => {
+      const { toCapData } = makeMarshal(undefined, undefined, {
+        serializeBodyFormat,
+        encodeParcel,
+      });
+      const capData = toCapData(makeParcel('test:not-a-parcel'));
+      const { fromCapData } = makeMarshal(undefined, undefined, {
+        serializeBodyFormat,
+        // A deliberately wrong hook result, to reach the decoder's check.
+        decodeParcel: location => /** @type {any} */ (harden({ location })),
+      });
+      t.throws(() => fromCapData(capData), {
+        message: /a parcel encoding must decode to a parcel/,
+      });
+    },
+  );
+}
+
+parcelTest('capdata validates an inline Parcel encoding', t => {
+  const { fromCapData } = makeMarshal(undefined, undefined, { decodeParcel });
+  t.throws(
+    () =>
+      fromCapData({
+        body: '{"@qclass":"parcel","location":3}',
+        slots: [],
+      }),
+    { message: /location must be a string/ },
+  );
+  t.throws(
+    () =>
+      fromCapData({
+        body: '{"@qclass":"parcel","location":"x","index":0}',
+        slots: [],
+      }),
+    { message: /unexpected encoded parcel properties/ },
+  );
+});
+
+parcelTest('decodeToJustin renders a Parcel location inline', t => {
+  const body = harden({ '@qclass': 'parcel', location: 'test:justin' });
+  t.is(decodeToJustin(body), 'parcel("test:justin")');
+  const compartment = new Compartment({
+    parcel: location => makeParcel(location),
+  });
+  const parcel = compartment.evaluate(`(${decodeToJustin(body)})`);
   t.is(passStyleOf(parcel), 'parcel');
-  const message = /"parcel" cannot be rank-ordered/;
-  t.throws(() => compareRank(parcel, 5), { message });
-  t.throws(() => compareRank(5, parcel), { message });
-  t.throws(() => sortByRank(harden([1, parcel]), compareRank), { message });
-  t.throws(() => getPassStyleCover('parcel'), { message });
-  t.throws(() => compareRank(parcel, makeTestParcel()), { message });
+  t.is(encodeParcel(parcel), 'test:justin');
 });
 
-parcelTest('a Parcel compares equal to itself without a rank', t => {
-  // compareRank answers 0 for identical operands before it consults their
-  // pass style, so only a Parcel compared with a different value throws.
-  const parcel = makeTestParcel();
-  t.is(compareRank(parcel, parcel), 0);
-  const parcels = harden([parcel, parcel]);
-  t.is(sortByRank(parcels, compareRank), parcels);
-});
-
-parcelTest('a singleton Parcel does not require a rank', t => {
-  const singleton = harden([makeTestParcel()]);
-  t.true(isRankSorted(singleton, compareRank));
-  t.notThrows(() => assertRankSorted(singleton, compareRank));
-  t.is(sortByRank(singleton, compareRank), singleton);
-});
-
-parcelTest('a Parcel cannot be encoded', t => {
-  const parcel = makeTestParcel();
+parcelTest('ordered encoding retains the t category for Parcel', t => {
+  const parcel = makeParcel('test:ordered');
+  const parcels = [parcel];
   for (const format of /** @type {const} */ ([
     'legacyOrdered',
     'compactOrdered',
   ])) {
-    const encodePassable = makeEncodePassable({ format });
-    for (const value of [
-      parcel,
-      harden([parcel]),
-      makeTagged('parcelBox', parcel),
-    ]) {
-      t.throws(() => encodePassable(value), { message: /"parcel"/ }, format);
-    }
-  }
-});
-
-parcelTest('a Parcel cannot be marshalled', t => {
-  const message = /a "parcel" cannot be marshalled/;
-  for (const serializeBodyFormat of /** @type {const} */ ([
-    'capdata',
-    'smallcaps',
-  ])) {
-    const { toCapData } = makeMarshal(undefined, undefined, {
-      serializeBodyFormat,
+    const { encodePassable, decodePassable } = makePassableKit({
+      format,
+      encodeParcel: value => `t${parcels.indexOf(value)}`,
+      decodeParcel: encoding => parcels[Number(encoding.slice(1))],
     });
-    t.throws(
-      () => toCapData(makeTestParcel()),
-      { message },
-      serializeBodyFormat,
-    );
-    t.throws(
-      () => toCapData(harden({ nested: [makeTestParcel()] })),
-      { message },
-      serializeBodyFormat,
-    );
-    t.throws(
-      () => toCapData(makeTagged('parcelBox', makeTestParcel())),
-      { message },
-      serializeBodyFormat,
-    );
+    const encoded = encodePassable(parcel);
+    t.true(encoded.includes('t0'), encoded);
+    t.is(decodePassable(encoded), parcel);
   }
+  t.is(passStylePrefixes.parcel, 't');
+  t.is(compareRank(parcel, makeParcel('test:other')), 0);
 });
 
-parcelTest(
-  'generated Parcel contexts remain unrankable and unmarshalable',
-  async t => {
-    const { arbPassable } = makeArbitraries(fc);
-    const parcelContextArbitrary = /** @type {any} */ (arbPassable);
-    const marshals = /** @type {const} */ (['capdata', 'smallcaps']).map(
-      serializeBodyFormat =>
-        makeMarshal(undefined, undefined, { serializeBodyFormat }).toCapData,
-    );
-    await fc.assert(
-      fc.property(parcelContextArbitrary, value => {
-        const passable = /** @type {Passable} */ (value);
-        const parcel = makeTestParcel();
-        t.throws(() => compareRank(parcel, passable), {
-          message: /"parcel" cannot be rank-ordered/,
-        });
-        for (const toCapData of marshals) {
-          t.throws(() => toCapData(harden([parcel, passable])), {
-            message: /a "parcel" cannot be marshalled/,
-          });
-        }
-      }),
-    );
-  },
-);
-
-parcelTest('a Parcel cannot pass through a membrane', t => {
-  // The membrane serializes what crosses it, so the encoder's own refusal is
-  // what stops a Parcel.
-  const message = /a "parcel" cannot be marshalled/;
-  t.throws(() => makeDotMembraneKit(makeTestParcel()), { message });
-  const { proxy } = makeDotMembraneKit(
-    Far('holder', { getParcel: () => makeTestParcel() }),
-  );
-  t.throws(() => proxy.getParcel(), { message });
+parcelTest('ordered encoding checks the Parcel prefix', t => {
+  const { encodePassable } = makePassableKit({
+    encodeParcel: _value => 'r0',
+  });
+  t.throws(() => encodePassable(makeParcel('test:prefix')), {
+    message: /Parcel encoding must start with "t"/,
+  });
 });

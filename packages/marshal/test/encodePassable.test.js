@@ -1,5 +1,7 @@
 // @ts-nocheck
 /* eslint-disable no-bitwise */
+// Install the realm's Parcel so the arbitraries generate Parcels.
+import '@endo/parcel/shim.js';
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
@@ -48,11 +50,13 @@ const makeSimplePassableKit = ({ statelessSuffix } = {}) => {
       ? {
           encodeRemotable: r => `r${statelessSuffix}`,
           encodePromise: p => `?${statelessSuffix}`,
+          encodeParcel: ref => `t${statelessSuffix}`,
           encodeError: err => `!${statelessSuffix}`,
         }
       : {
           encodeRemotable: r => encodeSpecial('r', r),
           encodePromise: p => encodeSpecial('?', p),
+          encodeParcel: ref => encodeSpecial('t', ref),
           encodeError: err => encodeSpecial('!', err),
         };
   const encodePassableLegacy = makeEncodePassable({ ...encoders });
@@ -63,6 +67,7 @@ const makeSimplePassableKit = ({ statelessSuffix } = {}) => {
   const decodePassable = makeDecodePassable({
     decodeRemotable: e => decodeSpecial('r', e),
     decodePromise: e => decodeSpecial('?', e),
+    decodeParcel: e => decodeSpecial('t', e),
     decodeError: e => decodeSpecial('!', e),
   });
 

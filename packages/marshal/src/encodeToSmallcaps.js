@@ -21,7 +21,7 @@ import {
 import { thawedBytes, frozenBytes } from '@endo/immutable-arraybuffer';
 import { encodeHex, decodeHex } from '@endo/hex';
 
-/** @import {Passable, RemotableObject} from '@endo/pass-style' */
+/** @import {Passable, RemotableObject, ParcelObject} from '@endo/pass-style' */
 // FIXME define actual types
 /** @typedef {any} SmallcapsEncoding */
 /** @typedef {any} SmallcapsEncodingUnion */
@@ -59,8 +59,9 @@ const DASH = '-'.charCodeAt(0);
  *  * `%` - symbol
  *  * `$` - remotable
  *  * `&` - promise
+ *  * `'` - parcel location
  *
- * All other special characters (`"'(),`) are reserved for future use.
+ * All other special characters (`"(),`) are reserved for future use.
  *
  * The manifest constants that smallcaps currently uses for values:
  *  * `#undefined`
@@ -99,6 +100,10 @@ const startsSpecial = encodedStr => {
  *   encodeRecur: (p: Passable) => SmallcapsEncoding
  * ) => SmallcapsEncoding} [encodePromiseToSmallcaps]
  * @property {(
+ *   parcel: ParcelObject,
+ *   encodeRecur: (p: Passable) => SmallcapsEncoding
+ * ) => SmallcapsEncoding} [encodeParcelToSmallcaps]
+ * @property {(
  *   error: Error,
  *   encodeRecur: (p: Passable) => SmallcapsEncoding
  * ) => SmallcapsEncoding} [encodeErrorToSmallcaps]
@@ -108,6 +113,8 @@ const dontEncodeRemotableToSmallcaps = rem =>
   Fail`remotable unexpected: ${rem}`;
 
 const dontEncodePromiseToSmallcaps = prom => Fail`promise unexpected: ${prom}`;
+
+const dontEncodeParcelToSmallcaps = ref => Fail`parcel unexpected: ${ref}`;
 
 const dontEncodeErrorToSmallcaps = err =>
   Fail`error object unexpected: ${q(err)}`;
@@ -123,6 +130,7 @@ export const makeEncodeToSmallcaps = (encodeOptions = {}) => {
   const {
     encodeRemotableToSmallcaps = dontEncodeRemotableToSmallcaps,
     encodePromiseToSmallcaps = dontEncodePromiseToSmallcaps,
+    encodeParcelToSmallcaps = dontEncodeParcelToSmallcaps,
     encodeErrorToSmallcaps = dontEncodeErrorToSmallcaps,
   } = encodeOptions;
 
@@ -262,13 +270,20 @@ export const makeEncodeToSmallcaps = (encodeOptions = {}) => {
         }
         throw Fail`internal: Promise encoding must start with "&": ${result}`;
       }
+      case 'parcel': {
+        const result = encodeParcelToSmallcaps(
+          passable,
+          encodeToSmallcapsRecur,
+        );
+        if (typeof result === 'string' && result.charAt(0) === "'") {
+          return result;
+        }
+        throw Fail`internal: Parcel encoding must start with "'": ${result}`;
+      }
       case 'error': {
         const result = encodeErrorToSmallcaps(passable, encodeToSmallcapsRecur);
         assertEncodedError(result);
         return result;
-      }
-      case 'parcel': {
-        throw Fail`a ${q(passStyle)} cannot be marshalled`;
       }
       default: {
         throw assert.fail(
@@ -313,6 +328,10 @@ harden(makeEncodeToSmallcaps);
  *   decodeRecur: (e :SmallcapsEncoding) => Passable
  * ) => Promise} [decodePromiseFromSmallcaps]
  * @property {(
+ *   encodedParcel: SmallcapsEncoding,
+ *   decodeRecur: (e: SmallcapsEncoding) => Passable
+ * ) => ParcelObject} [decodeParcelFromSmallcaps]
+ * @property {(
  *   encodedError: SmallcapsEncoding,
  *   decodeRecur: (e :SmallcapsEncoding) => Passable
  * ) => Error} [decodeErrorFromSmallcaps]
@@ -322,6 +341,8 @@ const dontDecodeRemotableFromSmallcaps = encoding =>
   Fail`remotable unexpected: ${encoding}`;
 const dontDecodePromiseFromSmallcaps = encoding =>
   Fail`promise unexpected: ${encoding}`;
+const dontDecodeParcelFromSmallcaps = encoding =>
+  Fail`parcel unexpected: ${encoding}`;
 const dontDecodeErrorFromSmallcaps = encoding =>
   Fail`error unexpected: ${q(encoding)}`;
 
@@ -333,6 +354,7 @@ export const makeDecodeFromSmallcaps = (decodeOptions = {}) => {
   const {
     decodeRemotableFromSmallcaps = dontDecodeRemotableFromSmallcaps,
     decodePromiseFromSmallcaps = dontDecodePromiseFromSmallcaps,
+    decodeParcelFromSmallcaps = dontDecodeParcelFromSmallcaps,
     decodeErrorFromSmallcaps = dontDecodeErrorFromSmallcaps,
   } = decodeOptions;
 
@@ -398,7 +420,7 @@ export const makeDecodeFromSmallcaps = (decodeOptions = {}) => {
             );
             // @ts-ignore XXX SmallCapsEncoding
             if (passStyleOf(result) !== 'remotable') {
-              Fail`internal: decodeRemotableFromSmallcaps option must return a remotable: ${result}`;
+              Fail`a remotable encoding must decode to a remotable: ${result}`;
             }
             return result;
           }
@@ -408,7 +430,17 @@ export const makeDecodeFromSmallcaps = (decodeOptions = {}) => {
               decodeFromSmallcaps,
             );
             if (passStyleOf(result) !== 'promise') {
-              Fail`internal: decodePromiseFromSmallcaps option must return a promise: ${result}`;
+              Fail`a promise encoding must decode to a promise: ${result}`;
+            }
+            return result;
+          }
+          case "'": {
+            const result = decodeParcelFromSmallcaps(
+              encoding,
+              decodeFromSmallcaps,
+            );
+            if (passStyleOf(result) !== 'parcel') {
+              Fail`a parcel encoding must decode to a parcel: ${result}`;
             }
             return result;
           }
