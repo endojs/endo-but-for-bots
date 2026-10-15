@@ -149,6 +149,128 @@ impl Interp {
         Ok(result)
     }
 
+    /// The `maxByteLength` an ArrayBuffer or SharedArrayBuffer constructor's
+    /// options argument asks for (XS's `fx_ArrayBuffer`): `None` for a
+    /// fixed-length buffer, when `options` is not an object or its
+    /// `maxByteLength` is undefined. A `byteLength` above it is a RangeError.
+    pub(in crate::interp) fn buffer_max_byte_length(
+        &mut self,
+        code: &[u8],
+        byte_length: f64,
+        options: Slot,
+    ) -> Result<Option<f64>, Step> {
+        let options_ref = match options.value {
+            Payload::Reference(reference) if options.kind == Kind::Reference => reference,
+            _ => return Ok(None),
+        };
+        let id = self.intern_static_key("maxByteLength");
+        let max = self.mop_get(code, options_ref, id, options)?;
+        if max.kind == Kind::Undefined {
+            return Ok(None);
+        }
+        let max = self.safe_byte_length(code, max)?;
+        if byte_length > max {
+            return Err(self.catchable_range_error_msg("byteLength > maxByteLength".into()));
+        }
+        Ok(Some(max))
+    }
+
+    /// `ArrayBuffer.prototype.resize(newLength)` (`fx_ArrayBuffer_prototype_resize`)
+    /// over the engine's buffers, none of which is resizable: the receiver,
+    /// the length conversion and the detached check run, then the
+    /// "not resizable" TypeError.
+    pub(in crate::interp) fn array_buffer_resize(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+        base: usize,
+        new_length: Slot,
+    ) -> Result<Slot, Step> {
+        let buffer = self
+            .array_buffer_ref(this)
+            .filter(|buffer| !self.shared_buffers.contains(buffer))
+            .ok_or_else(|| {
+                self.catchable_type_error_msg("this: not an ArrayBuffer instance".into())
+            })?;
+        if self.arg_to_byte_length(base, 0, 0).is_none() {
+            self.to_index_arg(code, new_length)?;
+        }
+        if self.detached_buffers.contains(&buffer) {
+            return Err(self.catchable_type_error_msg("detached buffer".into()));
+        }
+        Err(self.catchable_type_error_msg("not resizable".into()))
+    }
+
+    /// `ArrayBuffer.prototype.concat(...buffers)`, an XS extension
+    /// (`fx_ArrayBuffer_prototype_concat`): a buffer made through
+    /// `SpeciesConstructor` holding the receiver's bytes, then each
+    /// argument's. An argument may be a SharedArrayBuffer; a buffer detached
+    /// before the copy contributes no bytes.
+    pub(in crate::interp) fn array_buffer_concat(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Step> {
+        let source = self
+            .array_buffer_ref(this)
+            .filter(|buffer| !self.shared_buffers.contains(buffer))
+            .ok_or_else(|| {
+                self.catchable_type_error_msg("this: not an ArrayBuffer instance".into())
+            })?;
+        let mut sources = Self::reserved_vec(argc + 1)?;
+        sources.push(source);
+        let mut length = u64::from(self.array_buffers[&source].length);
+        for i in 0..argc {
+            let arg = self
+                .stack
+                .get(base + 4 + i)
+                .copied()
+                .unwrap_or_else(Slot::undefined);
+            let Some(buffer) = self.array_buffer_ref(arg) else {
+                return Err(self.catchable_type_error_msg(format!(
+                    "arguments[{i}]: not an ArrayBuffer instance"
+                )));
+            };
+            length += u64::from(self.array_buffers[&buffer].length);
+            sources.push(buffer);
+        }
+
+        let constructor = self.array_buffer_species_constructor(code, this, source)?;
+        let result = self.construct_value(
+            code,
+            constructor,
+            &[Slot::number(length as f64)],
+            constructor,
+        )?;
+        let result_ref = self
+            .array_buffer_ref(result)
+            .filter(|buffer| !self.shared_buffers.contains(buffer))
+            .ok_or_else(|| self.catchable_type_error_msg("not an ArrayBuffer instance".into()))?;
+        if result_ref == source {
+            return Err(self.catchable_type_error_msg("same ArrayBuffer instance".into()));
+        }
+        if u64::from(self.array_buffers[&result_ref].length) < length {
+            return Err(self.catchable_type_error_msg("smaller ArrayBuffer instance".into()));
+        }
+
+        // The species constructor ran user code, so each length is read again.
+        let mut at = 0usize;
+        for buffer in sources {
+            let record = self.array_buffers[&buffer];
+            let count = record.length as usize;
+            if count > 0 {
+                let bytes = self.chunks.payload(record.data)[..count].to_vec();
+                let target = self.array_buffers[&result_ref];
+                let out = self.chunks.slice_mut(target.data, at + count);
+                out[at..at + count].copy_from_slice(&bytes);
+            }
+            at += count;
+        }
+        Ok(result)
+    }
+
     /// `ArrayBufferCopyAndDetach` for the engine's fixed-length ArrayBuffer
     /// model. Both public transfer methods are identical until resizable
     /// buffers are introduced: allocate a realm-intrinsic fixed buffer, copy

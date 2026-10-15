@@ -133,3 +133,74 @@ fn atomics_wrap_operands_to_the_element_width() {
         agrees(program);
     }
 }
+
+#[test]
+fn a_buffer_options_object_without_max_byte_length_is_fixed_length() {
+    for program in [
+        "new ArrayBuffer(4, {}).resizable",
+        "new ArrayBuffer(4, { maxByteLength: undefined }).resizable",
+        "new ArrayBuffer(8, { maxByteLength: 4 })",
+        "new ArrayBuffer(8, { maxByteLength: -1 })",
+        "new ArrayBuffer(8, { get maxByteLength() { throw new SyntaxError('g') } })",
+        "new ArrayBuffer({ valueOf() { throw new EvalError('len') } }, { get maxByteLength() { throw new SyntaxError('g') } })",
+        "new ArrayBuffer(4, new Proxy({}, { get(t, k) { return String(k) } }))",
+        "new ArrayBuffer(4, function () {}).byteLength",
+        "new ArrayBuffer(4, 16).byteLength",
+        "new ArrayBuffer(4, { maxByteLength: 2 ** 53 })",
+        "new SharedArrayBuffer(8, { maxByteLength: 4 })",
+        "new SharedArrayBuffer(4, { maxByteLength: undefined }).byteLength",
+        "(function () { var log = []; new ArrayBuffer(4, { get maxByteLength() { log.push('m'); } }); return log.join() })()",
+        "(function () { var b = new ArrayBuffer(2); b.constructor = { [Symbol.species]: function () { return 1 } }; return b.slice() })()",
+    ] {
+        agrees(&format!(
+            "try {{ String({program}) }} catch (e) {{ 'throw ' + String(e) }}"
+        ));
+    }
+}
+
+#[test]
+fn resize_checks_its_receiver_and_length_before_refusing() {
+    for program in [
+        "ArrayBuffer.prototype.resize.call(1, 0)",
+        "ArrayBuffer.prototype.resize.call(new SharedArrayBuffer(1), 0)",
+        "new ArrayBuffer(8).resize(4)",
+        "new ArrayBuffer(8).resize(-1)",
+        "new ArrayBuffer(8).resize()",
+        "new ArrayBuffer(8).resize('3')",
+        "new ArrayBuffer(8).resize({ valueOf() { throw new EvalError('v') } })",
+        "(function () { var b = new ArrayBuffer(8); $262.detachArrayBuffer(b); return b.resize(1); })()",
+        "(function () { var b = new ArrayBuffer(8); return b.resize({ valueOf() { $262.detachArrayBuffer(b); return 1 } }); })()",
+    ] {
+        agrees(&format!(
+            "try {{ String({program}) }} catch (e) {{ 'throw ' + String(e) }}"
+        ));
+    }
+}
+
+#[test]
+fn concat_joins_buffers_through_the_species_constructor() {
+    for program in [
+        "new ArrayBuffer(2).concat(new ArrayBuffer(3)).byteLength",
+        "new Uint8Array(new Uint8Array([1,2]).buffer.concat(new Uint8Array([3]).buffer, new Uint8Array([4,5]).buffer)).join()",
+        "new ArrayBuffer(2).concat(new SharedArrayBuffer(3)).byteLength",
+        "new Uint8Array(new Uint8Array([9]).buffer.concat(new Uint8Array(new SharedArrayBuffer(2)).fill(7).buffer)).join()",
+        "new ArrayBuffer(2).concat({}).byteLength",
+        "new ArrayBuffer(2).concat(new ArrayBuffer(1), 5).byteLength",
+        "ArrayBuffer.prototype.concat.call(new SharedArrayBuffer(2)).byteLength",
+        "ArrayBuffer.prototype.concat.call({})",
+        "new ArrayBuffer(2).concat().byteLength",
+        "(function () { var b = new ArrayBuffer(4); $262.detachArrayBuffer(b); return b.concat(new ArrayBuffer(2)).byteLength })()",
+        "(function () { class B extends ArrayBuffer {} var r = new B(2).concat(new ArrayBuffer(1)); return r instanceof B })()",
+        "(function () { var b = new ArrayBuffer(2); b.constructor = { [Symbol.species]: function () { return b } }; return b.concat() })()",
+        "(function () { var b = new ArrayBuffer(2); b.constructor = { [Symbol.species]: function () { return 1 } }; return b.concat() })()",
+        "(function () { var b = new ArrayBuffer(2); b.constructor = { [Symbol.species]: function () { return 1 } }; return b.slice() })()",
+        "(function () { var b = new ArrayBuffer(2); b.constructor = { [Symbol.species]: function () { return new ArrayBuffer(1) } }; return b.concat() })()",
+        "(function () { var b = new ArrayBuffer(2); b.constructor = { [Symbol.species]: function () { return new SharedArrayBuffer(4) } }; return b.concat() })()",
+        "(function () { var a = new ArrayBuffer(3); var b = new ArrayBuffer(2); b.constructor = { [Symbol.species]: function (n) { $262.detachArrayBuffer(a); return new ArrayBuffer(n) } }; return b.concat(a).byteLength })()",
+        "(function () { var a = new Uint8Array([1, 2, 3]).buffer; var b = new Uint8Array([4]).buffer; b.constructor = { [Symbol.species]: function (n) { $262.detachArrayBuffer(a); return new ArrayBuffer(n + 1) } }; return new Uint8Array(b.concat(a, b)).join() })()",
+    ] {
+        agrees(&format!(
+            "try {{ String({program}) }} catch (e) {{ 'throw ' + String(e) }}"
+        ));
+    }
+}

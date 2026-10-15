@@ -479,13 +479,6 @@ const GAPS: &[Row] = &[
         why: "resizable ArrayBuffers (ES2024 25.1.3.1); Ironhorse halts on a maxByteLength",
     },
     Row {
-        program: "new ArrayBuffer(4, {}).resizable",
-        ironhorse: "halt NotImplemented(\"native-call:ArrayBuffer:resizable\")",
-        xs: "false",
-        v8: "false",
-        why: "an options object without maxByteLength makes a fixed-length buffer; Ironhorse halts on any options object",
-    },
-    Row {
         program: "new SharedArrayBuffer(8, { maxByteLength: 16 }).growable",
         ironhorse: "halt NotImplemented(\"native-call:SharedArrayBuffer:growable\")",
         xs: "true",

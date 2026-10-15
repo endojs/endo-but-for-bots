@@ -657,22 +657,24 @@ impl Interp {
             // `XS_BUFFER_INFO_KIND` length slot), folded with the native host
             // frame into [`ARRAY_BUFFER_CTOR_FRAME_METERING`]; the backing
             // store is a single `fxNewChunk(byteLength)`. A resizable buffer
-            // (a reference second argument carrying `maxByteLength`), a
-            // negative/oversized/non-integer byteLength (each a RangeError),
-            // and the `ArrayBuffer(n)` call without `new` (a TypeError) are
-            // honest named skips — their abort metering is a later increment.
+            // (an options object whose `maxByteLength` is not undefined) is
+            // an honest named skip once its lengths are checked.
             Native::ArrayBuffer if has_target => {
-                if argc >= 2 && arg(1).kind == Kind::Reference {
-                    return Err(Step::Host(Halt::NotImplemented(
-                        "native-call:ArrayBuffer:resizable",
-                    )));
-                }
                 let a = arg(0);
+                let options = if argc >= 2 { arg(1) } else { Slot::undefined() };
                 // ToIndex before a subclass's prototype, as XS's
                 // `fxArgToSafeByteLength` runs before
                 // `fxGetPrototypeFromConstructor`; a length too large to
                 // allocate fails after the read.
                 let length = self.safe_byte_length(code, a)?;
+                if self
+                    .buffer_max_byte_length(code, length, options)?
+                    .is_some()
+                {
+                    return Err(Step::Host(Halt::NotImplemented(
+                        "native-call:ArrayBuffer:resizable",
+                    )));
+                }
                 let proto =
                     self.derived_construct_prototype(code, new_target, derived_native_construct)?;
                 let byte_length = self.index_from_number(length)?;
@@ -682,21 +684,25 @@ impl Interp {
             }
             // `new SharedArrayBuffer(byteLength)` (`xsAtomics.c`
             // `fx_SharedArrayBuffer`). Single-agent: a plain byte buffer marked
-            // shared. Only the integer/number fixed-length form is covered; a
-            // growable buffer (2nd option-bag arg) or a byteLength needing
-            // general ToNumber self-names an honest skip.
+            // shared. A growable buffer (an options object whose
+            // `maxByteLength` is not undefined) is an honest named skip once
+            // its lengths are checked.
             Native::SharedArrayBuffer if has_target => {
-                if argc >= 2 && arg(1).kind == Kind::Reference {
-                    return Err(Step::Host(Halt::NotImplemented(
-                        "native-call:SharedArrayBuffer:growable",
-                    )));
-                }
                 let a = arg(0);
+                let options = if argc >= 2 { arg(1) } else { Slot::undefined() };
                 // ToIndex before a subclass's prototype, as XS's
                 // `fxArgToSafeByteLength` runs before
                 // `fxGetPrototypeFromConstructor`; a length too large to
                 // allocate fails after the read.
                 let length = self.safe_byte_length(code, a)?;
+                if self
+                    .buffer_max_byte_length(code, length, options)?
+                    .is_some()
+                {
+                    return Err(Step::Host(Halt::NotImplemented(
+                        "native-call:SharedArrayBuffer:growable",
+                    )));
+                }
                 let proto =
                     self.derived_construct_prototype(code, new_target, derived_native_construct)?;
                 let byte_length = self.index_from_number(length)?;
@@ -3928,18 +3934,8 @@ impl Interp {
                     _ => unreachable!(),
                 }
             }
-            // `ArrayBuffer.prototype.resize`/`concat`: resizable buffers and
-            // the XS concat extension remain honest named skips.
-            NativeMethod::ArrayBufferResize => {
-                return Err(Step::Host(Halt::NotImplemented(
-                    "array-buffer-resize:unsupported",
-                )))
-            }
-            NativeMethod::ArrayBufferConcat => {
-                return Err(Step::Host(Halt::NotImplemented(
-                    "array-buffer-concat:unsupported",
-                )))
-            }
+            NativeMethod::ArrayBufferResize => self.array_buffer_resize(code, this, base, arg0)?,
+            NativeMethod::ArrayBufferConcat => self.array_buffer_concat(code, this, base, argc)?,
             // `ArrayBuffer.isView(arg)` (`fx_ArrayBuffer_isView`): `true` iff
             // the argument is a TypedArray or DataView view, else `false`. The
             // host-frame residual is calibrated raw against the pin.
