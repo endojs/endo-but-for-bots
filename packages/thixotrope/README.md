@@ -17,7 +17,7 @@ daemon is mostly a forwarding and slot-rewriting hub
 every message between them is structurally transcoded through
 persisted c-list tables — the daemon reifies no presences, no
 promises, no subscriptions for routed traffic.
-Worker exports published under a swissnum become OCapN sturdy refs
+Worker exports published under a swissnum become OCapN Parcels
 answered by the hub's bootstrap from its publications table.
 
 Workers are sleepy.
@@ -365,7 +365,7 @@ const counter = await worker.evaluate(`
   })()
 `);
 const secret = daemon.publish(counter);
-// Any OCapN peer can now mint a sturdy ref from (daemon.location, secret)
+// Any OCapN peer can now mint a Parcel from (daemon.location, secret)
 // and call the counter — across worker sleeps and daemon restarts.
 console.log(await E(counter).incr()); // 1, via the in-process endpoint
 
@@ -680,7 +680,7 @@ have no timer queue, so frame silence is exact dormancy):
 - `collectVats({ keep? })` — vat-level mark-and-sweep over the hub's
   reference tables; resolves to the swept ids.
 - `location` and `makeParcelDetails(secret)` — what a peer needs to
-  mint a sturdy ref.
+  mint a Parcel.
 - `shutdown()` — snapshots and parks every worker, then closes the
   endpoint and the netlayer.
 - `crash()` — abandons live state the way a power failure would (for
@@ -707,7 +707,7 @@ snapshots), and the remaining loud hub limits — a listen on the
 sender's own export breaks (the wire format cannot hand a session its
 own resolver back), and pipelining onto an undeposited gift breaks
 rather than queueing.
-Third-party gifts otherwise work in both hub roles, sturdyrefs pass
+Third-party gifts otherwise work in both hub roles, Parcels pass
 through as opaque values, pending answers transfer across sessions,
 and idle sleep is available via `idleSleepMs`.
 
