@@ -17,13 +17,13 @@ check(descriptor?.configurable === false, 'start binding stays locked');
 check(Object.isFrozen(shimmed), 'constructor is hardened');
 check(Object.isFrozen(shimmed.prototype), 'prototype is hardened');
 
-const c = new Compartment();
-const shared = /** @type {any} */ (c.globalThis.Parcel);
+const compartment = new Compartment();
+const shared = /** @type {any} */ (compartment.globalThis.Parcel);
 check(shared !== shimmed, 'child receives the shared constructor');
-check(c.evaluate('Parcel') === shared, 'child code resolves shared Parcel');
+check(compartment.evaluate('Parcel') === shared, 'child code resolves shared Parcel');
 check(typeof shimmed.locate === 'function', 'initial constructor has locate');
 check(!Object.hasOwn(shared, 'locate'), 'shared constructor omits locate');
 check(shared.prototype === shimmed.prototype, 'constructors share a prototype');
 check(shared.prototype.constructor === shared, 'prototype points to shared');
-const grandchild = c.evaluate('new Compartment()');
+const grandchild = compartment.evaluate('new Compartment()');
 check(grandchild.globalThis.Parcel === shared, 'grandchild shares it');

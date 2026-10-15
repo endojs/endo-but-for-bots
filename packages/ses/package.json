@@ -103,6 +103,7 @@
     "@endo/immutable-arraybuffer": "workspace:^"
   },
   "devDependencies": {
+    "@fast-check/ava": "catalog:dev",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "core-js": "^3.50.0",

@@ -1,6 +1,7 @@
 import './_parcel-shim-first.js';
 import '../index.js';
 import test from 'ava';
+import { fc } from '@fast-check/ava';
 
 const InitialParcel = /** @type {any} */ (globalThis).Parcel;
 lockdown();
@@ -89,4 +90,31 @@ test('the shared constructor delegates construction with its new target', t => {
       ),
     { message: /Parcel construction requires the shared Parcel prototype/ },
   );
+});
+
+test('shared construction keeps each location and parcel distinct', async t => {
+  await fc.assert(
+    fc.asyncProperty(
+      fc.uniqueArray(fc.string(), { minLength: 1, maxLength: 20 }),
+      async locations => {
+        const openHook = harden((location, specimen) =>
+          harden({ location, specimen }),
+        );
+        const parcels = locations.map(
+          location => new SharedParcel(location, openHook),
+        );
+        const opened = await Promise.all(
+          parcels.map(parcel => SharedParcel.open(parcel)),
+        );
+        return parcels.every(
+          (parcel, index) =>
+            SharedParcel.isParcel(parcel) &&
+            InitialParcel.locate(parcel) === locations[index] &&
+            opened[index].location === locations[index] &&
+            opened[index].specimen === parcel,
+        );
+      },
+    ),
+  );
+  t.pass();
 });
