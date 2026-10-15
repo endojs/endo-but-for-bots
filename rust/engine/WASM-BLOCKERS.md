@@ -973,7 +973,7 @@ The script had been failing since 2026-09-24 (`50f547f71`), when `RandomTokens`,
 commit-token source of store sessions, began hashing `std::process::id()`, which panics on
 WASI; checkpointing into a `MemoryStore` panicked on `wasm32-wasip1`.
 That source now leaves the process id out on WASI (`34464d6c6`), and the script passes, now
-with nine tests (9/9).
+with thirteen tests (13/13), the embedder-chosen commit-token sources among them.
 On `ubuntu-latest` a cold run of the job, with no cache, took 2 min 18 s.
 The two builds took 97 s, of which rebuilding std took about 10 s per target, and the WASI
 script 13 s; the rest is the engine crates themselves, `ironhorse-vm` above all.
