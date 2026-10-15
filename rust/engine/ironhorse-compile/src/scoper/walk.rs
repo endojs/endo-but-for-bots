@@ -194,7 +194,11 @@ impl Scoper<'_> {
                 self.hoist_function_enter(node, true, stack);
                 Ok(())
             }
-            Token::Call | Token::New => {
+            // `fxCallNodeHoist`. Only a call can be a direct `eval`: XS's
+            // `gxNewNodeDispatch` hoists through the generic `fxNodeHoist`,
+            // so `new eval(...)` falls to the default arm and poisons nothing
+            // (ECMA-262 likewise makes a direct eval a CallExpression only).
+            Token::Call => {
                 // children[0] = reference, children[1] = params
                 if let Some(reference) = child_node(node, 0) {
                     if reference.token == Token::Access {

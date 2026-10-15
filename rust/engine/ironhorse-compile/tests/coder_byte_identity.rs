@@ -546,6 +546,55 @@ fn eval_in_parameter_default() {
     ]);
 }
 
+// `new eval(...)` is **not** a direct `eval`: a direct eval is only a
+// CallExpression (ECMA-262 PerformEval's `direct` is set by the
+// CallExpression evaluation alone), and XS agrees — only `gxCallNodeDispatch`
+// hoists through `fxCallNodeHoist`, while `gxNewNodeDispatch` uses the generic
+// `fxNodeHoist`. So `new eval(...)` poisons no scope, materializes no
+// `arguments`, and publishes no parameters into a `with` environment; the
+// enclosing function codes exactly as if the callee were any other identifier.
+// (At runtime `eval` is not a constructor and both engines throw a TypeError.)
+#[test]
+fn new_eval_is_not_direct_eval() {
+    assert_identical(&[
+        // function declarations, with and without body declarations
+        "function f() { new eval(\"1\") }",
+        "function f() { var x; new eval(\"1\") }",
+        "function f(a, b) { let x; new eval('a'); var y; function g(){} }",
+        "function f() { return new eval('1'); }",
+        "function f() { new eval; }",
+        // function expressions, parameters, `arguments`
+        "(function() { new eval('1'); });",
+        "(function(a) { new eval('a'); let z; });",
+        "(function(a = 1, ...r) { new eval('a'); });",
+        "(function() { new eval('1'); return arguments; });",
+        "function f(a = new eval('1')) { return a; }",
+        // strict
+        "'use strict'; function f() { new eval('1'); }",
+        "'use strict'; (function(a) { new eval('a'); var y; let z; function g(){} });",
+        // arrows, concise and block-bodied, inside a function
+        "() => new eval('1');",
+        "(a) => { var x; new eval('a'); };",
+        "function f() { var x; return () => new eval('x'); }",
+        "'use strict'; function f(a) { return (b) => { let c; new eval('a'); }; }",
+        // nested functions, and a mixed direct / `new` pair
+        "(function() { var x; (function() { new eval('2'); var z; }); });",
+        "(function() { new eval('1'); (function() { eval('2'); }); });",
+        "(function() { eval('1'); new eval('2'); var y; });",
+        "function a() { var x = 1; function b() { var y; return new eval('x'); } return b; }",
+        // generators, async functions, methods
+        "function* g() { var x; new eval('1'); }",
+        "async function f() { let x; new eval('1'); }",
+        "class C { m() { var x; new eval('1'); } }",
+        "({ m() { new eval('1'); } });",
+        // program and block level
+        "var x; new eval('1');",
+        "{ let x; new eval('1'); }",
+        // `new` of a call to `eval`: the inner call is still direct
+        "function f() { var x; new (eval('Object'))(); }",
+    ]);
+}
+
 #[test]
 fn literals_and_operators() {
     assert_identical(&[
