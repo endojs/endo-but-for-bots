@@ -30,3 +30,17 @@ check(shared.prototype === shimmed.prototype, 'constructors share a prototype');
 check(shared.prototype.constructor === shared, 'prototype points to shared');
 const grandchild = compartment.evaluate('new Compartment()');
 check(grandchild.globalThis.Parcel === shared, 'grandchild shares it');
+
+const parcel = compartment.evaluate(`new Parcel('test:xs', () => 'opened')`);
+check(shimmed.isParcel(parcel), 'shared construction uses the initial brand');
+check(shared.isParcel(parcel), 'shared isParcel recognizes it');
+check(shimmed.locate(parcel) === 'test:xs', 'initial locate recovers it');
+check(parcel instanceof shared, 'parcel inherits the shared prototype');
+check(shared.open(parcel) instanceof Promise, 'shared open returns a promise');
+let subclassRefused = false;
+try {
+  compartment.evaluate(`new (class extends Parcel {})('test:sub', () => {})`);
+} catch (_error) {
+  subclassRefused = true;
+}
+check(subclassRefused, 'new.target reaches the initial constructor');
