@@ -2648,6 +2648,7 @@ __metadata:
     "@endo/eventual-send": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/lockdown": "workspace:^"
+    "@endo/parcel": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     ava: "catalog:dev"
     eslint: "catalog:dev"
@@ -3024,6 +3025,21 @@ __metadata:
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
+"@endo/parcel@workspace:^, @endo/parcel@workspace:packages/parcel":
+  version: 0.0.0-use.local
+  resolution: "@endo/parcel@workspace:packages/parcel"
+  dependencies:
+    "@endo/eventual-send": "workspace:^"
+    "@endo/harden": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    ses: "workspace:^"
+    tsd: "catalog:dev"
     typescript: "catalog:dev"
   languageName: unknown
   linkType: soft
@@ -16509,6 +16525,7 @@ __metadata:
     "@endo/eslint-plugin": "workspace:^"
     "@endo/marshal": "workspace:^"
     "@endo/nat": "workspace:^"
+    "@endo/parcel": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@jessie.js/eslint-plugin": "npm:^0.4.2"
     "@lavamoat/allow-scripts": "npm:^3.4.3"
