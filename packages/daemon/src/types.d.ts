@@ -3206,11 +3206,11 @@ export interface DaemonCoreExternal {
   formulateEndo: DaemonCore['formulateEndo'];
   nodeNumber: NodeNumber;
   provide: DaemonCore['provide'];
-  sturdyRefForFormula: ReturnType<
-    typeof import('./formula-sturdyref.js').makeFormulaSturdyRefKit
-  >['sturdyRefForFormula'];
+  parcelForFormula: ReturnType<
+    typeof import('./formula-parcel.js').makeFormulaParcelKit
+  >['parcelForFormula'];
   formulaIdOf: ReturnType<
-    typeof import('./formula-sturdyref.js').makeFormulaSturdyRefKit
+    typeof import('./formula-parcel.js').makeFormulaParcelKit
   >['formulaIdOf'];
   capTpConnectionRegistrar: CapTpConnectionRegistrar;
 }
