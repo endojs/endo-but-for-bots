@@ -40,4 +40,4 @@ export {
 } from './src/codecs/descriptors.js';
 export { makePassableCodecs } from './src/codecs/passable.js';
 export { getSelectorName, makeSelector } from './src/selector.js';
-export { makeSturdyRef } from './src/client/sturdyrefs.js';
+export { makeParcel } from './src/client/parcels.js';

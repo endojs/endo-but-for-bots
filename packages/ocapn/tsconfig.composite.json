@@ -45,7 +45,7 @@
       "path": "../stream/tsconfig.composite.json"
     },
     {
-      "path": "../sturdyref/tsconfig.composite.json"
+      "path": "../parcel/tsconfig.composite.json"
     },
     {
       "path": "../syrup-frame/tsconfig.composite.json"

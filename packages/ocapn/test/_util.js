@@ -42,7 +42,7 @@ import { locationToLocationId } from '../src/client/util.js';
  *   getId: TestRemoteMethod,
  *   getNumber: TestRemoteMethod,
  *   getRecord: TestRemoteMethod,
- *   getSturdyRef: TestRemoteMethod,
+ *   getParcel: TestRemoteMethod,
  *   getValue: TestRemoteMethod,
  *   greet: TestRemoteMethod,
  *   increment: TestRemoteMethod,

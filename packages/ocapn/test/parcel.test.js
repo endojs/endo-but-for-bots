@@ -5,7 +5,7 @@ import { E } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
 import harden from '@endo/harden';
 import { passStyleOf } from '@endo/pass-style';
-import { provideSturdyRef } from '@endo/sturdyref';
+import baseTest from '@endo/ses-ava/test.js';
 import { test, testWithErrorUnwrapping, makeTestClient } from './_util.js';
 import {
   decodeSwissnum,
@@ -14,15 +14,21 @@ import {
   swissnumToBytes,
 } from '../src/client/util.js';
 import {
-  isSturdyRef,
-  getSturdyRefDetails,
-  makeSturdyRef,
-  makeSturdyRefTracker,
-} from '../src/client/sturdyrefs.js';
+  isParcel,
+  getParcelDetails,
+  makeParcel,
+  makeParcelTracker,
+} from '../src/client/parcels.js';
 import { ocapnPassStyleOf } from '../src/codecs/ocapn-pass-style.js';
 import { AllCodecs, makeCodecTestKit } from './codecs/_codecs_util.js';
 
-const SturdyRef = provideSturdyRef();
+const Parcel = globalThis.Parcel;
+const parcelIsInstalled =
+  typeof Parcel === 'function' && Object.isFrozen(Parcel.prototype);
+const parcelTest = parcelIsInstalled ? test : baseTest.skip;
+const parcelTestWithErrorUnwrapping = parcelIsInstalled
+  ? testWithErrorUnwrapping
+  : baseTest.skip;
 
 test('swissnum text conversion rejects U+0080 without changing raw bytes', t => {
   t.throws(() => encodeSwissnum('\u0080'), { instanceOf: RangeError });
@@ -32,10 +38,10 @@ test('swissnum text conversion rejects U+0080 without changing raw bytes', t => 
   t.deepEqual([...swissnumToBytes(swissNum)], [0x80]);
 });
 
-test('SturdyRef lookup preserves non-ASCII swissnum bytes', async t => {
+test('Parcel lookup preserves non-ASCII swissnum bytes', async t => {
   /** @type {unknown[]} */
   const lookedUpSecrets = [];
-  const tracker = makeSturdyRefTracker({
+  const tracker = makeParcelTracker({
     get: secret => {
       lookedUpSecrets.push(secret);
       return 'found';
@@ -48,147 +54,144 @@ test('SturdyRef lookup preserves non-ASCII swissnum bytes', async t => {
   t.deepEqual([.../** @type {Uint8Array} */ (lookedUpSecret)], [0x80]);
 });
 
-testWithErrorUnwrapping('SturdyRef is a realm SturdyRef', async t => {
+parcelTestWithErrorUnwrapping('Parcel is a realm Parcel', async t => {
   const { client: clientA, location: locationB } = await makeTestClient({
     debugLabel: 'A',
   });
   const { client: clientB } = await makeTestClient({ debugLabel: 'B' });
 
-  const sturdyRef = clientA.makeSturdyRef(locationB, 'test-object');
+  const parcel = clientA.makeParcel(locationB, 'test-object');
 
-  t.true(SturdyRef.isSturdyRef(sturdyRef), 'brand check accepts it');
-  t.is(passStyleOf(sturdyRef), 'sturdyRef', 'passStyleOf returns sturdyRef');
-  t.is(
-    ocapnPassStyleOf(sturdyRef),
-    'sturdyref',
-    'ocapnPassStyleOf returns sturdyref',
-  );
-  t.is(Object.getPrototypeOf(sturdyRef), SturdyRef.prototype);
-  t.deepEqual(Reflect.ownKeys(sturdyRef), [], 'no own properties');
+  t.true(Parcel.isParcel(parcel), 'brand check accepts it');
+  t.is(passStyleOf(parcel), 'parcel', 'passStyleOf returns parcel');
+  t.is(ocapnPassStyleOf(parcel), 'parcel', 'ocapnPassStyleOf returns parcel');
+  t.is(Object.getPrototypeOf(parcel), Parcel.prototype);
+  t.deepEqual(Reflect.ownKeys(parcel), [], 'no own properties');
 
   clientA.shutdown();
   clientB.shutdown();
 });
 
-testWithErrorUnwrapping("SturdyRef doesn't expose secret/location", async t => {
-  const { client: clientA, location: locationB } = await makeTestClient({
-    debugLabel: 'A',
-  });
-  const { client: clientB } = await makeTestClient({ debugLabel: 'B' });
-
-  const sturdyRef = clientA.makeSturdyRef(locationB, 'test-object');
-
-  t.false('location' in sturdyRef, 'no location property');
-  t.false('secret' in sturdyRef, 'no secret property');
-  t.false('swissNum' in sturdyRef, 'no swissNum property');
-
-  const stringified = String(sturdyRef);
-  t.is(stringified, '[object SturdyRef]', 'stringification shows no details');
-
-  clientA.shutdown();
-  clientB.shutdown();
-});
-
-test('a SturdyRef minted without a client refuses to enliven', async t => {
-  const location = harden({
-    type: /** @type {const} */ ('ocapn-peer'),
-    network: 'tcp-test',
-    transport: 'tcp',
-    designator: '127.0.0.1:9999',
-    hints: /** @type {const} */ (false),
-  });
-  const sturdyRef = makeSturdyRef(location, 'a-secret');
-  t.true(isSturdyRef(sturdyRef));
-  await t.throwsAsync(() => SturdyRef.enliven(sturdyRef), {
-    message: /minted without an OCapN client/,
-  });
-});
-
-test('the public SturdyRef mint takes no custom enliven', async t => {
-  const location = harden({
-    type: /** @type {const} */ ('ocapn-peer'),
-    network: 'tcp-test',
-    transport: 'tcp',
-    designator: '127.0.0.1:9999',
-    hints: /** @type {const} */ (false),
-  });
-  // A caller-supplied enliven could resolve to something other than the
-  // (location, secret) the codec writes, so the public mint ignores it.
-  const decoy = Far('decoy', {});
-  const sturdyRef = /** @type {any} */ (makeSturdyRef)(
-    location,
-    'a-secret',
-    async () => decoy,
-  );
-  t.deepEqual(getSturdyRefDetails(sturdyRef), { location, secret: 'a-secret' });
-  await t.throwsAsync(() => SturdyRef.enliven(sturdyRef), {
-    message: /minted without an OCapN client/,
-  });
-});
-
-test('a foreign realm SturdyRef is not an OCapN SturdyRef', t => {
-  const foreign = /** @type {any} */ (
-    new SturdyRef({ enliven: () => 'elsewhere' })
-  );
-  t.is(ocapnPassStyleOf(foreign), 'sturdyref', 'takes the sturdyref codec');
-  t.false(isSturdyRef(foreign), 'but OCapN has no details for it');
-  t.is(getSturdyRefDetails(foreign), undefined);
-  const { PassableCodec } = makeCodecTestKit();
-  for (const codec of AllCodecs) {
-    const writer = codec.makeWriter({ name: 'foreign SturdyRef' });
-    const error = t.throws(() => PassableCodec.write(foreign, writer));
-    let messages = '';
-    for (let e = /** @type {any} */ (error); e; e = e.cause) {
-      messages += `${e.message}\n`;
-    }
-    t.regex(messages, /SturdyRef was not minted by OCapN/);
-  }
-});
-
-testWithErrorUnwrapping(
-  'isSturdyRef correctly identifies SturdyRefs',
+parcelTestWithErrorUnwrapping(
+  "Parcel doesn't expose secret/location",
   async t => {
     const { client: clientA, location: locationB } = await makeTestClient({
       debugLabel: 'A',
     });
     const { client: clientB } = await makeTestClient({ debugLabel: 'B' });
 
-    const sturdyRef = clientA.makeSturdyRef(locationB, 'test');
+    const parcel = clientA.makeParcel(locationB, 'test-object');
 
-    t.true(isSturdyRef(sturdyRef), 'isSturdyRef returns true for SturdyRef');
-    t.false(isSturdyRef({}), 'isSturdyRef returns false for plain object');
-    t.false(isSturdyRef(null), 'isSturdyRef returns false for null');
-    t.false(isSturdyRef(undefined), 'isSturdyRef returns false for undefined');
-    t.false(isSturdyRef('string'), 'isSturdyRef returns false for string');
+    t.false('location' in parcel, 'no location property');
+    t.false('secret' in parcel, 'no secret property');
+    t.false('swissNum' in parcel, 'no swissNum property');
+
+    const stringified = String(parcel);
+    t.is(stringified, '[object Parcel]', 'stringification shows no details');
 
     clientA.shutdown();
     clientB.shutdown();
   },
 );
 
-testWithErrorUnwrapping(
-  'getSturdyRefDetails returns correct details',
+parcelTest('a Parcel minted without a client refuses to open', async t => {
+  const location = harden({
+    type: /** @type {const} */ ('ocapn-peer'),
+    network: 'tcp-test',
+    transport: 'tcp',
+    designator: '127.0.0.1:9999',
+    hints: /** @type {const} */ (false),
+  });
+  const parcel = makeParcel(location, 'a-secret');
+  t.true(isParcel(parcel));
+  await t.throwsAsync(() => Parcel.open(parcel), {
+    message: /minted without an OCapN client/,
+  });
+});
+
+parcelTest('the public Parcel mint takes no custom open', async t => {
+  const location = harden({
+    type: /** @type {const} */ ('ocapn-peer'),
+    network: 'tcp-test',
+    transport: 'tcp',
+    designator: '127.0.0.1:9999',
+    hints: /** @type {const} */ (false),
+  });
+  // A caller-supplied open could resolve to something other than the
+  // (location, secret) the codec writes, so the public mint ignores it.
+  const decoy = Far('decoy', {});
+  const parcel = /** @type {any} */ (makeParcel)(
+    location,
+    'a-secret',
+    async () => decoy,
+  );
+  t.deepEqual(getParcelDetails(parcel), { location, secret: 'a-secret' });
+  await t.throwsAsync(() => Parcel.open(parcel), {
+    message: /minted without an OCapN client/,
+  });
+});
+
+parcelTest('a Parcel for another location scheme is refused by OCapN', t => {
+  const foreign = new Parcel('other:elsewhere', () => 'elsewhere');
+  t.is(ocapnPassStyleOf(foreign), 'parcel', 'takes the parcel codec');
+  t.true(isParcel(foreign), 'it remains a realm Parcel');
+  t.is(getParcelDetails(foreign), undefined);
+  const { PassableCodec } = makeCodecTestKit();
+  for (const codec of AllCodecs) {
+    const writer = codec.makeWriter({ name: 'foreign Parcel' });
+    const error = t.throws(() => PassableCodec.write(foreign, writer));
+    let messages = '';
+    for (let e = /** @type {any} */ (error); e; e = e.cause) {
+      messages += `${e.message}\n`;
+    }
+    t.regex(messages, /Parcel location is not an OCapN location/);
+  }
+});
+
+parcelTestWithErrorUnwrapping(
+  'isParcel correctly identifies Parcels',
   async t => {
     const { client: clientA, location: locationB } = await makeTestClient({
       debugLabel: 'A',
     });
     const { client: clientB } = await makeTestClient({ debugLabel: 'B' });
 
-    const sturdyRef = clientA.makeSturdyRef(locationB, 'test-object');
+    const parcel = clientA.makeParcel(locationB, 'test');
 
-    const details = getSturdyRefDetails(sturdyRef);
-    t.truthy(details, 'getSturdyRefDetails returns details');
+    t.true(isParcel(parcel), 'isParcel returns true for Parcel');
+    t.false(isParcel({}), 'isParcel returns false for plain object');
+    t.false(isParcel(null), 'isParcel returns false for null');
+    t.false(isParcel(undefined), 'isParcel returns false for undefined');
+    t.false(isParcel('string'), 'isParcel returns false for string');
+
+    clientA.shutdown();
+    clientB.shutdown();
+  },
+);
+
+parcelTestWithErrorUnwrapping(
+  'getParcelDetails returns correct details',
+  async t => {
+    const { client: clientA, location: locationB } = await makeTestClient({
+      debugLabel: 'A',
+    });
+    const { client: clientB } = await makeTestClient({ debugLabel: 'B' });
+
+    const parcel = clientA.makeParcel(locationB, 'test-object');
+
+    const details = getParcelDetails(parcel);
+    t.truthy(details, 'getParcelDetails returns details');
     if (details) {
       t.deepEqual(details.location, locationB, 'location matches');
       t.is(details.secret, 'test-object', 'secret matches');
     }
 
-    const notASturdyRef = /** @type {any} */ ({});
-    const noDetails = getSturdyRefDetails(notASturdyRef);
+    const notAParcel = /** @type {any} */ ({});
+    const noDetails = getParcelDetails(notAParcel);
     t.is(
       noDetails,
       undefined,
-      'getSturdyRefDetails returns undefined for non-SturdyRef',
+      'getParcelDetails returns undefined for non-Parcel',
     );
 
     clientA.shutdown();
@@ -196,7 +199,7 @@ testWithErrorUnwrapping(
   },
 );
 
-test('client.enlivenSturdyRef() returns promise for fetched value', async t => {
+parcelTest('client.openParcel() returns promise for fetched value', async t => {
   const testObjectTable = new Map();
   const testObject = Far('TestObject', {
     getValue: () => 42,
@@ -209,14 +212,11 @@ test('client.enlivenSturdyRef() returns promise for fetched value', async t => {
     makeDefaultSwissnumTable: () => testObjectTable,
   });
 
-  const sturdyRef = clientA.makeSturdyRef(locationB, 'test-object');
+  const parcel = clientA.makeParcel(locationB, 'test-object');
 
-  const resolveResult = clientA.enlivenSturdyRef(sturdyRef);
-  t.truthy(resolveResult, 'enlivenSturdyRef returns something');
-  t.truthy(
-    resolveResult instanceof Promise,
-    'enlivenSturdyRef returns a promise',
-  );
+  const resolveResult = clientA.openParcel(parcel);
+  t.truthy(resolveResult, 'openParcel returns something');
+  t.truthy(resolveResult instanceof Promise, 'openParcel returns a promise');
 
   const resolved = await resolveResult;
   const value = await E(resolved).getValue();
@@ -226,7 +226,7 @@ test('client.enlivenSturdyRef() returns promise for fetched value', async t => {
   clientB.shutdown();
 });
 
-test('SturdyRef.enliven() fetches through the minting client', async t => {
+parcelTest('Parcel.open() fetches through the minting client', async t => {
   const testObjectTable = new Map();
   testObjectTable.set(
     'test-object',
@@ -241,15 +241,15 @@ test('SturdyRef.enliven() fetches through the minting client', async t => {
     makeDefaultSwissnumTable: () => testObjectTable,
   });
 
-  const sturdyRef = clientA.makeSturdyRef(locationB, 'test-object');
-  const resolved = /** @type {any} */ (await SturdyRef.enliven(sturdyRef));
+  const parcel = clientA.makeParcel(locationB, 'test-object');
+  const resolved = /** @type {any} */ (await Parcel.open(parcel));
   t.is(await E(resolved).getValue(), 42);
 
   clientA.shutdown();
   clientB.shutdown();
 });
 
-test('Resolved values are not SturdyRefs', async t => {
+parcelTest('Resolved values are not Parcels', async t => {
   const testObjectTable = new Map();
   const testObject = Far('TestObject', {
     getValue: () => 42,
@@ -262,13 +262,13 @@ test('Resolved values are not SturdyRefs', async t => {
     makeDefaultSwissnumTable: () => testObjectTable,
   });
 
-  const sturdyRef = clientA.makeSturdyRef(locationB, 'test-object');
+  const parcel = clientA.makeParcel(locationB, 'test-object');
 
-  t.true(isSturdyRef(sturdyRef), 'sturdyRef is a SturdyRef before resolve');
+  t.true(isParcel(parcel), 'parcel is a Parcel before resolve');
 
-  const resolved = await clientA.enlivenSturdyRef(sturdyRef);
+  const resolved = await clientA.openParcel(parcel);
 
-  t.false(isSturdyRef(resolved), 'resolved value is not a SturdyRef');
+  t.false(isParcel(resolved), 'resolved value is not a Parcel');
 
   const value = await E(resolved).getValue();
   t.is(value, 42, 'resolved value works correctly');
@@ -277,7 +277,7 @@ test('Resolved values are not SturdyRefs', async t => {
   clientB.shutdown();
 });
 
-test('SturdyRef to self-location can be resolved', async t => {
+parcelTest('Parcel to self-location can be resolved', async t => {
   const testObjectTable = new Map();
   const testObject = Far('TestObject', {
     getValue: () => 42,
@@ -289,13 +289,13 @@ test('SturdyRef to self-location can be resolved', async t => {
     makeDefaultSwissnumTable: () => testObjectTable,
   });
 
-  const sturdyRef = clientA.makeSturdyRef(locationA, 'test-object');
+  const parcel = clientA.makeParcel(locationA, 'test-object');
 
-  t.true(isSturdyRef(sturdyRef), 'sturdyRef is a SturdyRef');
+  t.true(isParcel(parcel), 'parcel is a Parcel');
 
-  const resolved = await clientA.enlivenSturdyRef(sturdyRef);
+  const resolved = await clientA.openParcel(parcel);
 
-  t.false(isSturdyRef(resolved), 'resolved value is not a SturdyRef');
+  t.false(isParcel(resolved), 'resolved value is not a Parcel');
 
   const value = await E(resolved).getValue();
   t.is(value, 42, 'resolved self-location value works correctly');
