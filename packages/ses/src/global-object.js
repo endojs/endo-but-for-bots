@@ -150,9 +150,13 @@ export const setGlobalObjectMutableProperties = (
         // eslint-disable-next-line no-continue
         continue;
       }
+      // On the start global, a binding that vanished after sampling was
+      // deleted during lockdown, so restore it locked. A child global starts
+      // without one.
       locked =
-        descriptor !== undefined &&
-        !(hasOwn(descriptor, 'value') && is(descriptor.value, value));
+        descriptor === undefined
+          ? parentCompartment === undefined
+          : !(hasOwn(descriptor, 'value') && is(descriptor.value, value));
     }
     if (hasOwn(intrinsics, intrinsicName)) {
       defineProperty(globalObject, name, {
