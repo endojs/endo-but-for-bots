@@ -393,6 +393,20 @@ const DEPARTURES: &[Row] = &[
         v8: "0,0,0,0",
         why: "%IteratorHelperPrototype% and %WrapForValidIteratorPrototype%'s `next` and `return` take no arguments, so their length is 0 (ES2025 27.1.2.1, 27.1.3.2.1)",
     },
+    Row {
+        program: "var log = []; var o = { length: 2 ** 53 - 1 }; o[2 ** 53 - 2] = 'a'; o[2 ** 53 - 4] = 'b'; try { Array.prototype.reduceRight.call(o, function (acc, v, i) { log.push(v + i); if (v === 'b') throw 0; return acc; }, 0); } catch (e) {} log.join()",
+        ironhorse: "a9007199254740990,b9007199254740988",
+        xs: "",
+        v8: "a9007199254740990,b9007199254740988",
+        why: "LengthOfArrayLike admits a length up to 2^53 - 1, so reduceRight folds from just below it; XS's fxGetArrayLimit (also behind reduce, forEach, some, every, filter, find, findIndex, join, toLocaleString and %ArrayIteratorPrototype%.next) replaces a length above 2^32 - 1 with its resident index storage's, which holds no index that large, so XS folds nothing (test262 reduceRight/length-near-integer-limit.js)",
+    },
+    Row {
+        program: "Array.prototype.reduce.call(new Proxy({ length: 2 ** 32, 0: 'a', 1: 'b' }, {}), function (acc, v, i) { if (i === 1) throw acc + v; return acc + v; }, '')",
+        ironhorse: "throw ab",
+        xs: "",
+        v8: "throw ab",
+        why: "as above, for reduce over a Proxy, which has no resident index storage, so XS reads its length as 0",
+    },
 ];
 
 /// Programs where Ironhorse departs from XS and V8 has no counterpart to
@@ -610,6 +624,13 @@ const GAPS: &[Row] = &[
         xs: "new: proxy is not a constructor",
         v8: "r.proxy is not a constructor",
         why: "a Proxy keeps [[Construct]] from its target through revocation; Ironhorse drops the target on revocation and throws the revocation error",
+    },
+    Row {
+        program: "var n = 0; try { Array.prototype.findLast.call(new Proxy({ length: 2 ** 53 - 1 }, { get(t, k) { if (k === 'length') return t.length; if (++n === 70000) throw 'stop ' + String(k) } }), function () { return false }) } catch (e) { e.constructor.name + ' after ' + (n > 60000 && n < 70000) }",
+        ironhorse: "RangeError after true",
+        xs: "String after false",
+        v8: "String after false",
+        why: "a Proxy is handed each probed index as a key, and above 2^32 - 1 Ironhorse interns that key as a name, so the walk meets the key space's guest ceiling after about 64k steps and throws, and every later new name in the program throws too; findLastIndex, lastIndexOf and reduceRight over such a Proxy meet it the same way (XS answers reduceRight without walking, the departure above)",
     },
 ];
 
