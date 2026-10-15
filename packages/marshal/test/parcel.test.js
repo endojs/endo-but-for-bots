@@ -6,7 +6,7 @@ import harden from '@endo/harden';
 import { Far, makeTagged, passStyleOf } from '@endo/pass-style';
 import { makeArbitraries } from '@endo/pass-style/tools.js';
 import { makeParcel } from '@endo/parcel';
-import { fc } from '@fast-check/ava';
+import { fc as fastCheck } from '@fast-check/ava';
 
 import {
   compareRank,
@@ -29,8 +29,30 @@ const parcelTest = Object.isFrozen(Parcel) ? test : test.skip;
 
 const makeTestParcel = () => makeParcel('test:marshal', () => 'opened');
 
-// Until marshal gives Parcels a representation, a Parcel can be neither
-// rank-ordered nor encoded. Both must fail with a clear error.
+/**
+ * @param {Passable} inner
+ * @param {'array' | 'record' | 'tagged'} kind
+ * @returns {Passable}
+ */
+const wrapParcel = (inner, kind) => {
+  switch (kind) {
+    case 'array':
+      return harden([inner]);
+    case 'record':
+      return harden({ inner });
+    default:
+      return makeTagged('parcelBox', inner);
+  }
+};
+
+const wrapperPathArbitrary = fastCheck.array(
+  fastCheck.constantFrom(
+    /** @type {const} */ ('array'),
+    /** @type {const} */ ('record'),
+    /** @type {const} */ ('tagged'),
+  ),
+  { maxLength: 8 },
+);
 
 parcelTest('a Parcel cannot be rank-ordered', t => {
   const parcel = makeTestParcel();
@@ -42,6 +64,34 @@ parcelTest('a Parcel cannot be rank-ordered', t => {
   t.throws(() => getPassStyleCover('parcel'), { message });
   t.throws(() => compareRank(parcel, makeTestParcel()), { message });
 });
+
+parcelTest(
+  'distinct containers of the same Parcel cannot be rank-ordered',
+  t => {
+    const parcel = makeTestParcel();
+    const message = /"parcel" cannot be rank-ordered/;
+    t.throws(() => compareRank(harden([parcel]), harden([parcel])), {
+      message,
+    });
+    t.throws(() => compareRank(harden({ parcel }), harden({ parcel })), {
+      message,
+    });
+    t.throws(
+      () =>
+        compareRank(
+          makeTagged('parcelBox', parcel),
+          makeTagged('parcelBox', parcel),
+        ),
+      { message },
+    );
+    const shared = harden([parcel]);
+    t.throws(() => compareRank(harden([shared]), harden([shared])), {
+      message,
+    });
+    const remotable = Far('remotable', {});
+    t.is(compareRank(harden([remotable]), harden([remotable])), 0);
+  },
+);
 
 parcelTest('a Parcel compares equal to itself without a rank', t => {
   // compareRank answers 0 for identical operands before it consults their
@@ -104,16 +154,16 @@ parcelTest('a Parcel cannot be marshalled', t => {
 });
 
 parcelTest(
-  'generated Parcel contexts remain unrankable and unmarshalable',
+  'Parcels beside generated passables remain unrankable and unmarshallable',
   async t => {
-    const { arbPassable } = makeArbitraries(fc);
-    const parcelContextArbitrary = /** @type {any} */ (arbPassable);
+    const { arbPassable: passableArbitrary } = makeArbitraries(fastCheck);
+    const parcelContextArbitrary = /** @type {any} */ (passableArbitrary);
     const marshals = /** @type {const} */ (['capdata', 'smallcaps']).map(
       serializeBodyFormat =>
         makeMarshal(undefined, undefined, { serializeBodyFormat }).toCapData,
     );
-    await fc.assert(
-      fc.property(parcelContextArbitrary, value => {
+    await fastCheck.assert(
+      fastCheck.property(parcelContextArbitrary, value => {
         const passable = /** @type {Passable} */ (value);
         const parcel = makeTestParcel();
         t.throws(() => compareRank(parcel, passable), {
@@ -129,9 +179,32 @@ parcelTest(
   },
 );
 
+parcelTest('Parcels nested at any depth cannot be encoded or marshalled', t => {
+  const encoders = /** @type {const} */ ([
+    'legacyOrdered',
+    'compactOrdered',
+  ]).map(format => makeEncodePassable({ format }));
+  const marshals = /** @type {const} */ (['capdata', 'smallcaps']).map(
+    serializeBodyFormat =>
+      makeMarshal(undefined, undefined, { serializeBodyFormat }).toCapData,
+  );
+  fastCheck.assert(
+    fastCheck.property(wrapperPathArbitrary, path => {
+      const context = path.reduce(wrapParcel, makeTestParcel());
+      for (const encodePassable of encoders) {
+        t.throws(() => encodePassable(context), { message: /"parcel"/ });
+      }
+      for (const toCapData of marshals) {
+        t.throws(() => toCapData(context), {
+          message: /a "parcel" cannot be marshalled/,
+        });
+      }
+    }),
+    { numRuns: 200 },
+  );
+});
+
 parcelTest('a Parcel cannot pass through a membrane', t => {
-  // The membrane serializes what crosses it, so the encoder's own refusal is
-  // what stops a Parcel.
   const message = /a "parcel" cannot be marshalled/;
   t.throws(() => makeDotMembraneKit(makeTestParcel()), { message });
   const { proxy } = makeDotMembraneKit(

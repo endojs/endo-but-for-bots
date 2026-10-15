@@ -233,13 +233,33 @@ const comparatorMirrorImages = new WeakMap();
  * @returns {RankComparatorKit}
  */
 export const makeComparatorKit = (compareRemotables = (_x, _y) => NaN) => {
-  /** @type {PartialCompare} */
-  const comparator = (left, right) => {
+  /**
+   * @param {any} left
+   * @param {any} right
+   * @param {boolean} nested whether `left` and `right` are corresponding parts
+   * of distinct containers
+   * @returns {PartialComparison}
+   */
+  const compareParts = (left, right, nested) => {
     // Identical operands are equal before their pass style is consulted, so a
     // value without a rank, such as a Parcel, still compares equal to
-    // itself.
+    // itself. Distinct containers still compare their identical parts, so
+    // that a Parcel nested in either cannot escape rank ordering.
     if (sameValueZero(left, right)) {
-      return 0;
+      if (!nested || typeof left !== 'object' || left === null) {
+        return 0;
+      }
+      const style = passStyleOf(left);
+      if (style === 'parcel') {
+        throw Fail`A ${q(style)} cannot be rank-ordered`;
+      }
+      if (
+        style !== 'copyArray' &&
+        style !== 'copyRecord' &&
+        style !== 'tagged'
+      ) {
+        return 0;
+      }
     }
     const leftStyle = passStyleOf(left);
     const rightStyle = passStyleOf(right);
@@ -292,7 +312,7 @@ export const makeComparatorKit = (compareRemotables = (_x, _y) => NaN) => {
         }
       }
       case 'symbol': {
-        return comparator(
+        return compareNested(
           nameForPassableSymbol(left),
           nameForPassableSymbol(right),
         );
@@ -315,26 +335,26 @@ export const makeComparatorKit = (compareRemotables = (_x, _y) => NaN) => {
         const leftNames = recordNames(left);
         const rightNames = recordNames(right);
 
-        const result = comparator(leftNames, rightNames);
+        const result = compareNested(leftNames, rightNames);
         if (result !== 0) {
           return result;
         }
         const leftValues = recordValues(left, leftNames);
         const rightValues = recordValues(right, rightNames);
-        return comparator(leftValues, rightValues);
+        return compareNested(leftValues, rightValues);
       }
       case 'copyArray': {
         // Lexicographic
         const len = Math.min(left.length, right.length);
         for (let i = 0; i < len; i += 1) {
-          const result = comparator(left[i], right[i]);
+          const result = compareNested(left[i], right[i]);
           if (result !== 0) {
             return result;
           }
         }
         // If all matching elements were tied, then according to their lengths.
         // If array X is a prefix of array Y, then X has an earlier rank than Y.
-        return comparator(left.length, right.length);
+        return compareNested(left.length, right.length);
       }
       case 'byteArray': {
         // ByteArrays compare by shortlex.
@@ -373,11 +393,11 @@ export const makeComparatorKit = (compareRemotables = (_x, _y) => NaN) => {
       }
       case 'tagged': {
         // Lexicographic by `[Symbol.toStringTag]` then `.payload`.
-        const labelComp = comparator(getTag(left), getTag(right));
+        const labelComp = compareNested(getTag(left), getTag(right));
         if (labelComp !== 0) {
           return labelComp;
         }
-        return comparator(left.payload, right.payload);
+        return compareNested(left.payload, right.payload);
       }
       default: {
         throw Fail`Unrecognized passStyle: ${q(leftStyle)}`;
@@ -385,6 +405,12 @@ export const makeComparatorKit = (compareRemotables = (_x, _y) => NaN) => {
     }
     /* eslint-enable */
   };
+
+  /** @type {PartialCompare} */
+  const compareNested = (left, right) => compareParts(left, right, true);
+
+  /** @type {PartialCompare} */
+  const comparator = (left, right) => compareParts(left, right, false);
 
   /** @type {RankCompare} */
   const outerComparator = (x, y) =>
