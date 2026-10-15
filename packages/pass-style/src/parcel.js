@@ -7,6 +7,7 @@ import harden from '@endo/harden';
 const { apply, getOwnPropertyDescriptor, getPrototypeOf, ownKeys } = Reflect;
 const { isFrozen, prototype: objectPrototype } = Object;
 const { toStringTag } = Symbol;
+const { get: weakMapGet, has: weakMapHas, set: weakMapSet } = WeakMap.prototype;
 
 /**
  * Reads an own data property without invoking an accessor, which could throw
@@ -70,54 +71,97 @@ let brandCheck;
 let checking = false;
 
 /**
+ * The brand check's answer for each candidate it was asked about. A frozen
+ * `isParcel` can still close over mutable state, so its first answer is kept
+ * to make classification stable.
+ *
+ * @type {WeakMap<object, boolean>}
+ */
+const decisions = new WeakMap();
+
+/**
+ * Validates the shape of a global Parcel constructor. Every step treats
+ * `Parcel` as untrusted: a Proxy can run its traps during these reflective
+ * operations, which cannot be avoided, but whatever it throws only declines
+ * recognition.
+ *
+ * @param {unknown} Parcel
+ * @returns {((value: object) => boolean) | undefined}
+ */
+const makeBrandCheck = Parcel => {
+  if (typeof Parcel !== 'function' || !isFrozen(Parcel)) {
+    return undefined;
+  }
+  const isParcel = getOwnDataValue(Parcel, 'isParcel');
+  const prototype = getOwnDataValue(Parcel, 'prototype');
+  if (
+    typeof isParcel !== 'function' ||
+    !isFrozen(isParcel) ||
+    typeof prototype !== 'object' ||
+    prototype === null ||
+    !isFrozen(prototype) ||
+    getPrototypeOf(prototype) !== objectPrototype ||
+    ownKeys(prototype).length !== 2 ||
+    !hasOwnHiddenDataValue(prototype, toStringTag, 'Parcel')
+  ) {
+    return undefined;
+  }
+  // A child compartment's shared constructor is not its prototype's
+  // constructor, so only the constructor's shape is checked.
+  const constructorDescriptor = getOwnPropertyDescriptor(
+    prototype,
+    'constructor',
+  );
+  const prototypeConstructor =
+    constructorDescriptor !== undefined &&
+    'value' in constructorDescriptor &&
+    !constructorDescriptor.enumerable
+      ? constructorDescriptor.value
+      : undefined;
+  if (
+    typeof prototypeConstructor !== 'function' ||
+    !isFrozen(prototypeConstructor) ||
+    getOwnDataValue(prototypeConstructor, 'prototype') !== prototype ||
+    getOwnDataValue(prototypeConstructor, 'isParcel') !== isParcel
+  ) {
+    return undefined;
+  }
+  return value => {
+    if (getPrototypeOf(value) !== prototype || ownKeys(value).length !== 0) {
+      return false;
+    }
+    if (apply(weakMapHas, decisions, [value])) {
+      return apply(weakMapGet, decisions, [value]);
+    }
+    if (checking) {
+      return false;
+    }
+    checking = true;
+    let decision = false;
+    try {
+      decision = apply(isParcel, Parcel, [value]) === true;
+    } catch {
+      // A throwing brand check declines its candidate.
+    } finally {
+      checking = false;
+    }
+    apply(weakMapSet, decisions, [value, decision]);
+    return decision;
+  };
+};
+
+/**
  * @returns {((value: object) => boolean) | undefined}
  */
 const provideBrandCheck = () => {
   if (brandCheck === undefined) {
-    // Reading through the descriptor avoids invoking a hostile pre-shim
-    // accessor on the global object.
-    const Parcel = getOwnDataValue(globalThis, 'Parcel');
-    if (typeof Parcel !== 'function' || !isFrozen(Parcel)) {
+    try {
+      // Reading through the descriptor avoids invoking a hostile pre-shim
+      // accessor on the global object.
+      brandCheck = makeBrandCheck(getOwnDataValue(globalThis, 'Parcel'));
+    } catch {
       return undefined;
     }
-    const isParcel = getOwnDataValue(Parcel, 'isParcel');
-    const prototype = getOwnDataValue(Parcel, 'prototype');
-    const prototypeConstructor =
-      typeof prototype === 'object' && prototype !== null
-        ? getOwnDataValue(prototype, 'constructor')
-        : undefined;
-    if (
-      typeof isParcel !== 'function' ||
-      !isFrozen(isParcel) ||
-      typeof prototype !== 'object' ||
-      prototype === null ||
-      !isFrozen(prototype) ||
-      getPrototypeOf(prototype) !== objectPrototype ||
-      ownKeys(prototype).length !== 2 ||
-      typeof prototypeConstructor !== 'function' ||
-      !isFrozen(prototypeConstructor) ||
-      getOwnDataValue(prototypeConstructor, 'prototype') !== prototype ||
-      getOwnDataValue(prototypeConstructor, 'isParcel') !== isParcel ||
-      !hasOwnHiddenDataValue(prototype, toStringTag, 'Parcel')
-    ) {
-      return undefined;
-    }
-    brandCheck = value => {
-      if (getPrototypeOf(value) !== prototype || ownKeys(value).length !== 0) {
-        return false;
-      }
-      if (checking) {
-        return false;
-      }
-      checking = true;
-      try {
-        return apply(isParcel, Parcel, [value]) === true;
-      } catch {
-        return false;
-      } finally {
-        checking = false;
-      }
-    };
   }
   return brandCheck;
 };

@@ -114,6 +114,17 @@ const brokenImpostors = {
         value: 'Parcel',
       });
     }),
+  'enumerable-constructor': () =>
+    makeImpostor(impostor => {
+      impostor.prototype = {};
+      defineProperty(impostor.prototype, 'constructor', {
+        enumerable: true,
+        value: impostor,
+      });
+      defineProperty(impostor.prototype, Symbol.toStringTag, {
+        value: 'Parcel',
+      });
+    }),
   'accessor-check': () =>
     makeImpostor(
       impostor => {
@@ -228,6 +239,52 @@ if (scenario === 'absent') {
   const { passStyleOf } = await import('../src/passStyleOf.js');
   assert.throws(() => passStyleOf(throwing));
   assert.throws(() => passStyleOf(truthy));
+} else if (scenario === 'throwing-then-true') {
+  const impostor = function Parcel() {};
+  defineProperty(impostor.prototype, Symbol.toStringTag, { value: 'Parcel' });
+  const throwing = candidateFor(impostor);
+  const genuine = candidateFor(impostor);
+  impostor.isParcel = value => {
+    if (value === throwing) throw Error('boom');
+    return true;
+  };
+  freeze(impostor.prototype);
+  freeze(impostor.isParcel);
+  install(freeze(impostor));
+  const { passStyleOf } = await import('../src/passStyleOf.js');
+  assert.throws(() => passStyleOf(throwing));
+  assert.equal(passStyleOf(genuine), 'parcel');
+} else if (scenario === 'stateful') {
+  let calls = 0;
+  const impostor = makeImpostor(candidate => {
+    candidate.isParcel = () => {
+      calls += 1;
+      return calls % 2 === 0;
+    };
+  });
+  install(impostor);
+  const { passStyleOf } = await import('../src/passStyleOf.js');
+  const declined = candidateFor(impostor);
+  assert.throws(() => passStyleOf(declined));
+  assert.throws(() => passStyleOf(declined));
+  assert.equal(calls, 1);
+  assert.equal(passStyleOf(candidateFor(impostor)), 'parcel');
+} else if (scenario === 'proxy-global') {
+  let traps = 0;
+  install(
+    new Proxy(
+      freeze(function Parcel() {}),
+      {
+        isExtensible() {
+          traps += 1;
+          throw Error('proxy trap');
+        },
+      },
+    ),
+  );
+  const isParcelObject = await importParcelCheck();
+  assert.equal(isParcelObject(freeze({})), false);
+  assert.equal(traps, 1);
 } else if (scenario === 'unfrozen-global') {
   const impostor = function Parcel() {};
   defineProperty(impostor.prototype, Symbol.toStringTag, { value: 'Parcel' });

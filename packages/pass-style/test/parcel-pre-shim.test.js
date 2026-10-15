@@ -21,6 +21,7 @@ const scenarios = [
   'foreign-parent',
   'foreign-constructor',
   'enumerable-tag',
+  'enumerable-constructor',
   'accessor-check',
   'accessor-global',
   'replacement',
@@ -29,6 +30,9 @@ const scenarios = [
   'malformed',
   'reentrant',
   'throwing',
+  'throwing-then-true',
+  'stateful',
+  'proxy-global',
   'unfrozen-global',
 ];
 
