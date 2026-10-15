@@ -14,6 +14,7 @@ import {
   swissnumToBytes,
 } from '../src/client/util.js';
 import {
+  formatParcelLocation,
   isParcel,
   getParcelDetails,
   makeParcel,
@@ -145,6 +146,44 @@ parcelTest('a Parcel for another location scheme is refused by OCapN', t => {
       messages += `${e.message}\n`;
     }
     t.regex(messages, /Parcel location is not an OCapN location/);
+  }
+});
+
+parcelTest('OCapN carries a Parcel it did not mint', t => {
+  const location = harden({
+    type: /** @type {const} */ ('ocapn-peer'),
+    network: 'tcp-test',
+    transport: 'tcp',
+    designator: '127.0.0.1:9999',
+    hints: /** @type {const} */ (false),
+  });
+  const parcel = new Parcel(
+    formatParcelLocation(location, 'shared-secret'),
+    () => 'foreign-open-hook',
+  );
+  const { PassableCodec } = makeCodecTestKit();
+
+  for (const codec of AllCodecs) {
+    const writer = codec.makeWriter({ name: 'foreign OCapN Parcel' });
+    PassableCodec.write(parcel, writer);
+    const reader = codec.makeReader(writer.getBytes(), {
+      name: 'foreign OCapN Parcel',
+    });
+    const received = PassableCodec.read(reader);
+    const details = getParcelDetails(received);
+    t.truthy(details);
+    if (details) {
+      t.like(details.location, {
+        type: location.type,
+        transport: location.transport,
+        designator: location.designator,
+        hints: location.hints,
+      });
+      t.deepEqual(
+        [.../** @type {Uint8Array} */ (details.secret)],
+        [...encodeSwissnum('shared-secret')],
+      );
+    }
   }
 });
 
