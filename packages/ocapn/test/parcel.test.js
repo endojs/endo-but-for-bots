@@ -188,6 +188,37 @@ parcelTest('OCapN carries a Parcel it did not mint', t => {
   }
 });
 
+parcelTest("one OCapN instance can forward another instance's Parcel", t => {
+  const first = makeCodecTestKit();
+  const second = makeCodecTestKit();
+  const parcel = first.parcelTracker.makeParcel(
+    harden({
+      type: /** @type {const} */ ('ocapn-peer'),
+      network: 'tcp-test-only',
+      transport: 'tcp',
+      designator: '127.0.0.1:9999',
+      hints: /** @type {const} */ (false),
+    }),
+    'forwarded-secret',
+  );
+
+  for (const codec of AllCodecs) {
+    const writer = codec.makeWriter({ name: 'forwarded Parcel' });
+    t.notThrows(() => second.PassableCodec.write(parcel, writer));
+    t.true(writer.getBytes().byteLength > 0);
+    const reader = codec.makeReader(writer.getBytes(), {
+      name: 'forwarded Parcel',
+    });
+    const received = second.PassableCodec.read(reader);
+    t.true(isParcel(received));
+    t.not(received, parcel);
+    t.like(getParcelDetails(received)?.location, {
+      transport: 'tcp',
+      designator: '127.0.0.1:9999',
+    });
+  }
+});
+
 parcelTestWithErrorUnwrapping(
   'isParcel correctly identifies Parcels',
   async t => {
