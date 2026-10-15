@@ -1612,8 +1612,9 @@ impl Interp {
                 }
                 Ok(accumulator)
             }
-            _ => Err(Step::Host(Halt::NotImplemented(
-                "TypedArray.prototype:readonly-operation",
+            // The boot roster numbers exactly the operations above.
+            _ => Err(Step::Host(Halt::EngineInvariant(
+                "TypedArray.prototype:operation",
             ))),
         }
     }

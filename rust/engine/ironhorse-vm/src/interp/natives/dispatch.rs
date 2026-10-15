@@ -7061,15 +7061,7 @@ impl Interp {
                     Payload::Reference(object) if arg0.kind == Kind::Reference => object,
                     _ => return Err(self.catchable_type_error_msg("invalid object".into())),
                 };
-                if self.is_ordinary_object(target)
-                    || self.arrays.contains_key(&target)
-                    || self.collections.contains_key(&target)
-                    || self.array_buffers.contains_key(&target)
-                    || self.data_views.contains_key(&target)
-                    || self.wrapper_data.contains_key(&target)
-                    || self.regexps.contains_key(&target)
-                    || self.proxies.contains_key(&target)
-                {
+                if !self.typed_arrays.contains_key(&target) {
                     let key = self
                         .stack
                         .get(base + 5)
@@ -7096,7 +7088,7 @@ impl Interp {
                         return Err(self.catchable_type_error_msg("invalid descriptor".into()));
                     }
                     arg0
-                } else if self.typed_arrays.contains_key(&target) {
+                } else {
                     // The integer-indexed exotic `[[DefineOwnProperty]]`
                     // (10.4.5.3) under `DefinePropertyOrThrow`: a canonical
                     // numeric index accepts only a valid-index, value-carrying
@@ -7137,169 +7129,6 @@ impl Interp {
                         // observes), not an uncatchable host escape.
                         return Err(self.catchable_type_error_msg("invalid descriptor".into()));
                     }
-                    arg0
-                } else {
-                    let arg1 = self
-                        .stack
-                        .get(base + 5)
-                        .copied()
-                        .unwrap_or_else(Slot::undefined);
-                    let arg2 = self
-                        .stack
-                        .get(base + 6)
-                        .copied()
-                        .unwrap_or_else(Slot::undefined);
-                    let inst = match arg0.value {
-                        Payload::Reference(o) => o,
-                        _ => {
-                            return Err(Step::Host(Halt::NotImplemented(
-                                "defineProperty:non-object",
-                            )))
-                        }
-                    };
-                    if self.arrays.contains_key(&inst)
-                        || self.collections.contains_key(&inst)
-                        || self.typed_arrays.contains_key(&inst)
-                        || self.array_buffers.contains_key(&inst)
-                        || self.data_views.contains_key(&inst)
-                        || self.wrapper_data.contains_key(&inst)
-                    {
-                        return Err(Step::Host(Halt::NotImplemented(
-                            "defineProperty:exotic-object",
-                        )));
-                    }
-                    let descref = match arg2.value {
-                        Payload::Reference(d) => d,
-                        _ => {
-                            return Err(Step::Host(Halt::NotImplemented(
-                                "defineProperty:non-object-descriptor",
-                            )))
-                        }
-                    };
-                    // A symbol key resolves to its interned key id (`mxID(symbol)`);
-                    // a string key interns as a name, rejecting an index-valued
-                    // string (the exotic-index corner) and a boot default-key name
-                    // the program never symbol-referenced (the intern-table gate —
-                    // it cannot be keyed soundly).
-                    let key_id = match arg1.kind {
-                        Kind::Symbol => match arg1.value {
-                            Payload::Reference(desc) => self.intern_symbol_key(desc)?,
-                            _ => {
-                                return Err(Step::Host(Halt::NotImplemented(
-                                    "defineProperty:bad-symbol-key",
-                                )))
-                            }
-                        },
-                        Kind::String => {
-                            let key = match arg1.value {
-                                Payload::String(off) => {
-                                    SymbolName::from_units(&self.str_units(off))
-                                }
-                                _ => {
-                                    return Err(Step::Host(Halt::NotImplemented(
-                                        "defineProperty:non-string-key",
-                                    )))
-                                }
-                            };
-                            if key.as_str().and_then(string_to_index).is_some() {
-                                return Err(Step::Host(Halt::NotImplemented(
-                                    "defineProperty:index-key",
-                                )));
-                            }
-                            if !self.symbol_ids.contains_key(&key)
-                                && key.as_str().is_some_and(|s| self.default_keys.contains(s))
-                            {
-                                return Err(Step::Host(Halt::NotImplemented(
-                                    "defineProperty:ambiguous-default-key",
-                                )));
-                            }
-                            self.intern_key(&key)?
-                        }
-                        _ => {
-                            return Err(Step::Host(Halt::NotImplemented(
-                                "defineProperty:non-string-key",
-                            )))
-                        }
-                    };
-                    // Read the descriptor's four data fields (their keys are the
-                    // descriptor literal's program symbols). Any get/set present,
-                    // or any of the four absent, is outside the covered shape.
-                    let field = |slf: &Self, name: &str| -> Option<Slot> {
-                        slf.symbol_ids
-                            .get(name)
-                            .and_then(|&fid| slf.find_property(descref, fid))
-                            .map(|p| {
-                                let s = slf.slots.get(p);
-                                Slot::of(s.kind, s.value)
-                            })
-                    };
-                    if field(self, "get").is_some() || field(self, "set").is_some() {
-                        return Err(Step::Host(Halt::NotImplemented(
-                            "defineProperty:accessor-descriptor",
-                        )));
-                    }
-                    let (value, writable, enumerable, configurable) = match (
-                        field(self, "value"),
-                        field(self, "writable"),
-                        field(self, "enumerable"),
-                        field(self, "configurable"),
-                    ) {
-                        (Some(v), Some(w), Some(e), Some(c)) => (v, w, e, c),
-                        _ => {
-                            return Err(Step::Host(Halt::NotImplemented(
-                                "defineProperty:partial-descriptor",
-                            )))
-                        }
-                    };
-                    // The three attribute flags coerce the field values to boolean
-                    // (XS's `fxToBoolean`); a non-boolean attribute is outside the
-                    // covered shape (its coercion metering is unmodeled here).
-                    let as_bool = |s: Slot| -> Option<bool> {
-                        match s.kind {
-                            Kind::Boolean => Some(matches!(s.value, Payload::Boolean(true))),
-                            _ => None,
-                        }
-                    };
-                    let (w, e, c) = match (
-                        as_bool(writable),
-                        as_bool(enumerable),
-                        as_bool(configurable),
-                    ) {
-                        (Some(w), Some(e), Some(c)) => (w, e, c),
-                        _ => {
-                            return Err(Step::Host(Halt::NotImplemented(
-                                "defineProperty:non-boolean-attribute",
-                            )))
-                        }
-                    };
-                    let id = key_id;
-                    // Only a genuinely-new own property is covered; a redefine runs
-                    // the configurable-compatibility checks (different metering).
-                    if self.find_property(inst, id).is_some() {
-                        return Err(Step::Host(Halt::NotImplemented("defineProperty:redefine")));
-                    }
-                    let mut flag = 0u8;
-                    if !w {
-                        flag |= XS_DONT_SET_FLAG;
-                    }
-                    if !e {
-                        flag |= XS_DONT_ENUM_FLAG;
-                    }
-                    if !c {
-                        flag |= XS_DONT_DELETE_FLAG;
-                    }
-                    // The whole `fxDescriptorToSlot` field read +
-                    // `fxOrdinaryDefineOwnProperty` create, folded into one measured
-                    // residual (the property slot built with per-allocation metering
-                    // suppressed); a novel key's intern slot is metered above.
-                    self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
-                    let mut prop = value;
-                    prop.id = id;
-                    prop.flag = flag;
-                    let head = self.slots.get(inst).next;
-                    prop.next = head;
-                    let idx = self.slots.alloc(prop);
-                    self.slots.get_mut(inst).next = idx;
                     arg0
                 }
             }
