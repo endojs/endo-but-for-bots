@@ -74,11 +74,8 @@ itIroh('OCapN session over two real iroh endpoints', async t => {
   const peerB = await makeIrohPeer({ name: 'iroh-real-B' });
   t.teardown(() => peerB.client.shutdown());
 
-  const sturdyRef = peerB.client.makeSturdyRef(
-    peerA.netlayer.location,
-    'Greeter',
-  );
-  const greeter = await peerB.client.enlivenSturdyRef(sturdyRef);
+  const parcel = peerB.client.makeParcel(peerA.netlayer.location, 'Greeter');
+  const greeter = await peerB.client.openParcel(parcel);
   const reply = await E(greeter).hello('Alice');
   t.is(reply, 'hello, Alice');
 });

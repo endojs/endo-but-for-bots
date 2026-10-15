@@ -47,7 +47,7 @@ if (!available) {
   );
 }
 
-// Wire swissnums are (immutable) bytes, as `enlivenSturdyRef` encodes.
+// Wire swissnums are (immutable) bytes, as `openParcel` encodes.
 const SHELL_SWISSNUM = frozenBytes(new TextEncoder().encode('shell'));
 
 const COUNTER_SOURCE = `
