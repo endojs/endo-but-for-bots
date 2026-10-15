@@ -36,6 +36,9 @@
       "path": "../nat/tsconfig.composite.json"
     },
     {
+      "path": "../parcel/tsconfig.composite.json"
+    },
+    {
       "path": "../pass-style/tsconfig.composite.json"
     },
     {
@@ -43,9 +46,6 @@
     },
     {
       "path": "../stream/tsconfig.composite.json"
-    },
-    {
-      "path": "../parcel/tsconfig.composite.json"
     },
     {
       "path": "../syrup-frame/tsconfig.composite.json"
