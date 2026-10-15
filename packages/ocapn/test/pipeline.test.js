@@ -588,8 +588,8 @@ test('pipeline: verify args in deliver messages', async t => {
 test('pipeline: three-party handoff shows B forwarding to C on behalf of A', async t => {
   // Setup:
   // - C has an object "Counter" that A wants to use
-  // - B has a "Broker" that holds a sturdyref to C's Counter
-  // - When A calls getCounter, B enlivens the sturdyref to get the Counter from C
+  // - B has a "Broker" that holds a parcel to C's Counter
+  // - When A calls getCounter, B opens the parcel to get the Counter from C
   // - A pipelines calls on the Counter
   // - We verify via transcripts that B forwards A's messages to C
   //
@@ -627,18 +627,18 @@ test('pipeline: three-party handoff shows B forwarding to C on behalf of A', asy
   /** @type {any} */
   let clientKitB;
 
-  // B's object table - the Broker enlivens a sturdyref to get the counter from C
+  // B's object table - the Broker opens a parcel to get the counter from C
   const bObjectTable = new Map();
   bObjectTable.set(
     'Broker',
     Far('broker', {
       getCounter: () => {
-        // B resolves the SturdyRef to C's Counter
-        const sturdyRef = clientKitB.client.makeSturdyRef(
+        // B resolves the Parcel to C's Counter
+        const parcel = clientKitB.client.makeParcel(
           clientKitC.location,
           'Counter',
         );
-        return clientKitB.client.enlivenSturdyRef(sturdyRef);
+        return clientKitB.client.openParcel(parcel);
       },
     }),
   );
@@ -658,7 +658,7 @@ test('pipeline: three-party handoff shows B forwarding to C on behalf of A', asy
 
   try {
     // B eagerly establishes session to C so we can record the B→C transcript
-    // The sturdyref enlivening will reuse this existing session
+    // The parcel opening will reuse this existing session
     const sessionBtoC = await clientKitB.debug.provideInternalSession(
       clientKitC.location,
     );
@@ -681,7 +681,7 @@ test('pipeline: three-party handoff shows B forwarding to C on behalf of A', asy
       fetchRemote(bootstrapBfromA, encodeSwissnum('Broker'))
     );
 
-    // A calls getCounter (pipelined) - this causes B to enliven the sturdyref to C
+    // A calls getCounter (pipelined) - this causes B to open the parcel to C
     const counter = E(broker).getCounter();
 
     // A pipelines calls on the counter (which is from C)
@@ -744,7 +744,7 @@ test('pipeline: three-party handoff shows B forwarding to C on behalf of A', asy
     // Verify B→C transcript: B forwards A's calls to C
     // Note: Messages are interleaved - C responds to fetch before B forwards other calls
     assertMessageTranscript(t, recorderBtoC.transcript, [
-      // B enlivens sturdyref by fetching Counter from C
+      // B opens parcel by fetching Counter from C
       { from: 'B', message: { type: 'op:deliver' } },
       // C sends resolution for fetch
       {
