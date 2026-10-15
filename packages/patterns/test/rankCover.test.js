@@ -4,6 +4,7 @@ import harden from '@endo/harden';
 import test from '@endo/ses-ava/test.js';
 
 import { fc } from '@fast-check/ava';
+import { passStyleOf } from '@endo/pass-style';
 import { makeArbitraries } from '@endo/pass-style/tools.js';
 
 import { q } from '@endo/errors';
@@ -44,7 +45,9 @@ const {
   ),
   lift: ([x, patt = x], shouldMakeMatcher) => {
     try {
-      const matchKind = shouldMakeMatcher ? kindOf(harden(x)) : undefined;
+      const specimen = harden(x);
+      if (passStyleOf(specimen) === 'parcel') return M.any();
+      const matchKind = shouldMakeMatcher ? kindOf(specimen) : undefined;
       if (matchKind) return M.kind(matchKind);
     } catch (_err) {}
     return patt;
@@ -53,7 +56,7 @@ const {
 
 /**
  * @param {string} titlePrefix
- * @param {Implementation<[encodePassable: (val: Passable) => string]>} testFn
+ * @param {Implementation<[encodePassable: (val: Passable) => string, format: string]>} testFn
  */
 const testAcrossFormats = (titlePrefix, testFn) => {
   for (const format of formats) {
@@ -71,14 +74,23 @@ const testAcrossFormats = (titlePrefix, testFn) => {
       format,
       encodeRemotable: r => encodePrefixed('r', r),
       encodePromise: p => encodePrefixed('?', p),
+      encodeParcel: p => encodePrefixed('t', p),
       encodeError: e => encodePrefixed('!', e),
     });
-    test(`${titlePrefix} - ${format}`, async t => testFn(t, encodePassable));
+    test(`${titlePrefix} - ${format}`, async t =>
+      testFn(t, encodePassable, format),
+    );
   }
 };
 
-testAcrossFormats('static ranks', async (t, encodePassable) => {
-  t.snapshot(provideStaticRanks(encodePassable));
+testAcrossFormats('static ranks', async (t, encodePassable, format) => {
+  const ranks = provideStaticRanks(encodePassable);
+  const prefix = format === 'compactOrdered' ? '~' : '';
+  t.deepEqual(ranks.parcel, {
+    cover: [`${prefix}t`, `${prefix}u`],
+    index: 11,
+  });
+  t.deepEqual(ranks['*'].cover, [`${prefix}`, `${prefix}{`]);
 });
 
 testAcrossFormats(
