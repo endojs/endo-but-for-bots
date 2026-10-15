@@ -1,6 +1,6 @@
 // @ts-nocheck
 
-import '@endo/init';
+import './_prepare.js';
 import test from 'ava';
 import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
