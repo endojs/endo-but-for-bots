@@ -423,3 +423,30 @@ fn number_to_string_renders_any_value_in_any_radix() {
          [out.length, s.length, h].join(' ')",
     );
 }
+
+/// `bind` accepts any callable, a Proxy included, and the bound function
+/// inherits from the target's [[Prototype]].
+#[test]
+fn bind_takes_any_callable_and_its_prototype() {
+    for program in [
+        "Function.prototype.bind.call(new Proxy(function () {}, {}), null).name",
+        "(function () { var f = function () {}; Object.setPrototypeOf(f, null); return String(Object.getPrototypeOf(Function.prototype.bind.call(f)) === null) })()",
+        "(function () { var A = async function () {}; return Object.getPrototypeOf(A.bind()) === Object.getPrototypeOf(A) })()",
+        "(function () { class B {} class C extends B {} return Object.getPrototypeOf(C.bind()) === B })()",
+        "(function () { var log = []; var p = new Proxy(function (a, b) { return [this && this.t, a, b].join() }, { getPrototypeOf(t) { log.push('proto'); return Function.prototype }, getOwnPropertyDescriptor(t, k) { log.push('gopd:' + String(k)); return Reflect.getOwnPropertyDescriptor(t, k) }, get(t, k) { log.push('get:' + String(k)); return Reflect.get(t, k) } }); var b = Function.prototype.bind.call(p, { t: 'T' }, 1); return [log.join(), b(2), b.name, b.length].join('|') })()",
+        "(function () { var p = new Proxy(function () {}, { get(t, k) { return k === 'name' ? 'pn' : k === 'length' ? 7 : undefined } }); var b = Function.prototype.bind.call(p, null, 1, 2); return [b.name, b.length].join() })()",
+        "(function () { var p = new Proxy(function () {}, { getOwnPropertyDescriptor() { return undefined }, get(t, k) { return k === 'length' ? 7 : Reflect.get(t, k) } }); return Function.prototype.bind.call(p).length })()",
+        "(function () { var P = new Proxy(function C(x) { this.x = x }, {}); var B = Function.prototype.bind.call(P, null, 5); var o = new B(); return [o.x, o instanceof B, Object.getPrototypeOf(o) === P.prototype].join() })()",
+        "(function () { var log = []; var P = new Proxy(function () {}, { construct(t, a, nt) { log.push(a.join() + ':' + (nt === t)); return {} } }); var B = Function.prototype.bind.call(P, null, 1); new B(2); return log.join() })()",
+        "(function () { var P = new Proxy(() => 1, {}); var B = Function.prototype.bind.call(P); try { new B() } catch (e) { return String(e) } })()",
+        "(function () { var P = new Proxy(function () { return this }, { apply(t, th, a) { return [typeof th, a.length].join() } }); return Function.prototype.bind.call(P, 'x', 1, 2)(3) })()",
+        "(function () { var p = Proxy.revocable(function () {}, {}); p.revoke(); try { Function.prototype.bind.call(p.proxy); return 'ok' } catch (e) { return String(e) } })()",
+        "(function () { var r = Proxy.revocable(function () {}, {}); var b = Function.prototype.bind.call(r.proxy); r.revoke(); try { b(); return 'ok' } catch (e) { return e.constructor.name } })()",
+        "(function () { var p = new Proxy(function () {}, { getPrototypeOf() { throw new EvalError('gp') } }); try { Function.prototype.bind.call(p) } catch (e) { return String(e) } })()",
+        "(function () { var p = new Proxy(function () {}, { getPrototypeOf() { return null } }); return String(Object.getPrototypeOf(Function.prototype.bind.call(p))) })()",
+        "(function () { var b = Function.prototype.bind.call(Function.prototype.bind.call(new Proxy(function (a, b, c) { return a + b + c }, {}), null, 'a'), null, 'b'); return [b('c'), b.name, b.length].join() })()",
+        "(function () { var o = {}; var b = Object.prototype.toString.bind(); return [typeof b, Object.getPrototypeOf(b) === Function.prototype].join() })()",
+    ] {
+        agrees(&format!("String({program})"));
+    }
+}

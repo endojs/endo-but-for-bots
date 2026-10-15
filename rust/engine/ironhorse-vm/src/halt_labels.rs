@@ -40,7 +40,6 @@ pub const NOT_IMPLEMENTED_LABELS: &[&str] = &[
     "array-species:symbol",
     "async-generator:new-target",
     "bind:new-bound-target",
-    "bind:non-user-function-receiver",
     "call:non-user-function-receiver",
     "callback:non-user-function",
     "compartment:dynamic-import",

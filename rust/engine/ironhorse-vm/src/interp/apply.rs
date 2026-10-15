@@ -450,9 +450,9 @@ impl Interp {
     /// bytecode (see [`Self::bound_construct_enters_bytecode`]): take the
     /// frame at `base` apart and run BoundFunction [[Construct]] through the
     /// general construct, `new.target` the bound function unless a `super()`
-    /// named its own. (A Proxy target would take this path too, but `bind`
-    /// on a Proxy still halts.) Out of line, so the dispatch loop's `RUN` arm,
-    /// which every native re-entry holds, does not carry its locals.
+    /// named its own. A Proxy target takes this path too. Out of line, so the
+    /// dispatch loop's `RUN` arm, which every native re-entry holds, does not
+    /// carry its locals.
     #[inline(never)]
     pub(super) fn construct_bound_native(
         &mut self,
