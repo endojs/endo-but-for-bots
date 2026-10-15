@@ -20,7 +20,10 @@ check(Object.isFrozen(shimmed.prototype), 'prototype is hardened');
 const compartment = new Compartment();
 const shared = /** @type {any} */ (compartment.globalThis.Parcel);
 check(shared !== shimmed, 'child receives the shared constructor');
-check(compartment.evaluate('Parcel') === shared, 'child code resolves shared Parcel');
+check(
+  compartment.evaluate('Parcel') === shared,
+  'child code resolves shared Parcel',
+);
 check(typeof shimmed.locate === 'function', 'initial constructor has locate');
 check(!Object.hasOwn(shared, 'locate'), 'shared constructor omits locate');
 check(shared.prototype === shimmed.prototype, 'constructors share a prototype');
