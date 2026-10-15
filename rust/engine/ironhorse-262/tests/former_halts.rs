@@ -517,3 +517,100 @@ fn import_source_is_a_syntax_error() {
         agrees(program);
     }
 }
+
+/// A class `static { … }` block that declares a binding. Each block is its
+/// own scope inside the class's static field function, and its own `var`
+/// scope; `this` is the class and `super` its parent's constructor.
+#[test]
+fn a_static_block_declares_its_own_bindings() {
+    let programs = [
+        "class A { static x = 1; static { let y = 2; A.z = y } } A.z",
+        "class A { static { var y = 3; A.z = y } } A.z",
+        "class A { static { const f = () => 4; A.z = f() } } A.z",
+        "class A { static { function f() { return 2 } A.y = f() } } A.y",
+        "class A { static { class B {} A.y = typeof B } } A.y",
+        "class A { static { var x = 1 } static { A.y = typeof x } } A.y",
+        "class A { static { let x = 1 } static { A.y = typeof x } } A.y",
+        "var x = 'outer'; class A { static { var x = 'inner' } } x",
+        // Nested blocks.
+        "class A { static { let a = 1; { let b = 2; { const c = 3; A.z = a + b + c } } } } A.z",
+        "class A { static { let a = 1; { let a = 2; A.inner = a } A.z = [a, A.inner].join() } } A.z",
+        // A closure that captures a block binding, and outlives the block.
+        "class A { static { let n = 0; A.next = () => ++n } } A.next(); A.next()",
+        "class A { static { let a = 'a'; { let b = 'b'; A.f = () => a + b } } } A.f()",
+        "class A { static { var v = 1; A.f = function () { return v++ } } } A.f() + A.f()",
+        "class A { static { const fs = []; for (let i = 0; i < 3; i++) fs.push(() => i); A.z = fs.map(f => f()).join() } } A.z",
+        "function outer() { let o = 5; class A { static { let y = o * 2; A.z = () => y + o } } return A.z() } outer()",
+        "let o = 5; class A { static { let y = o; A.z = () => y + o } } A.z()",
+        // `this` and `super` inside the block, and in its closures.
+        "class A { static { let self = this; A.same = self === A } } A.same",
+        "class A { static { let f = () => this; A.same = f() === A } } A.same",
+        "class A { static { let t = typeof new.target; A.t = t } } A.t",
+        "class B { static m() { return 7 } } class A extends B { static { let q = super.m(); A.z = q } } A.z",
+        "class B { static m() { return this.name } } class A extends B { static { const g = () => super.m(); A.z = g() } } A.z",
+        // Function and class declarations, and a function's own hoisting.
+        "class A { static { A.z = f(); function f() { return 'hoisted' } } } A.z",
+        "class A { static { let a = 1; function f() { return a } A.z = f() } } A.z",
+        "class A { static { class B { static { let q = 3; B.z = q } } A.z = B.z } } A.z",
+        "class A { static { function* g() { yield 1; yield 2 } A.z = [...g()].join() } } A.z",
+        // Destructuring, `try`, `switch`, private names, interleaved fields.
+        "class A { static { let [a, b] = [1, 2]; let { c } = { c: 3 }; A.z = a + b + c } } A.z",
+        "class A { static { let q; try { throw 1 } catch (e) { q = e + 1 } A.z = q } } A.z",
+        "class A { static { var s; switch (1) { case 1: let t = 'one'; s = t } A.z = s } } A.z",
+        "class A { static #p = 4; static { let y = A.#p; A.z = y } } A.z",
+        "class A { static #m() { return 3 } static { let f = () => A.#m(); A.z = f() } } A.z",
+        "class A { static a = 1; static { var b = A.a + 1; A.b = b } static c = A.b + 1; static { let d = A.c + 1; A.d = d } } A.d",
+        // A direct `eval` reaching the block's bindings. (It names the class
+        // through `this`: XS resolves a class declaration's own name, inside
+        // an `eval` in its static initializers, to the outer binding still
+        // in its TDZ, where V8 and Ironhorse find the inner one.)
+        "class A { static { let y = 2; A.z = eval('y + 1') } } A.z",
+        "class A { static { var y = 2; eval('var w = 3; this.z = y + w') } } A.z",
+        "class A { static { const y = 2; { let q = 1; this.z = eval('y + q') } } } A.z",
+        // `using`, disposed as the block ends.
+        "class A { static { A.log = []; using x = { [Symbol.dispose]() { A.log.push('d') } }; A.log.push('u') } } A.log.join()",
+    ];
+    for program in programs {
+        agrees(program);
+        // The same class inside `eval` and `new Function`.
+        let quoted = program.replace('\\', "\\\\").replace('\'', "\\'");
+        agrees(&format!("eval('{quoted}')"));
+        let body = match program.rsplit_once("} ") {
+            Some((class, tail)) => format!("{class}}} return {tail}"),
+            None => program.to_string(),
+        };
+        let body = body.replace('\\', "\\\\").replace('\'', "\\'");
+        agrees(&format!("new Function('{body}')()"));
+    }
+}
+
+/// `arguments` is a SyntaxError in a static block, however deep in its
+/// arrows, as are `await` as an identifier, a `return`, and a lexical
+/// redeclaration; each reaches `eval` and `new Function` as one.
+#[test]
+fn a_static_block_has_its_own_early_errors() {
+    for program in [
+        "class A { static { var arguments } }",
+        "class A { static { let f = () => arguments } }",
+        "class A { static { let f = () => () => arguments[0] } }",
+        "class A { static { let await = 1 } }",
+        "class A { static { return } }",
+        "class A { static { let y; var y } }",
+        "class A { static { let y; let y } }",
+        "class A { static { { let y; var y } } }",
+        "class A { static { function f() {} let f } }",
+    ] {
+        let quoted = program.replace('\'', "\\'");
+        agrees(&format!(
+            "try {{ eval('{quoted}'); 'parsed' }} catch (e) {{ String(e) }}"
+        ));
+        agrees(&format!(
+            "try {{ new Function('{quoted}'); 'parsed' }} catch (e) {{ String(e) }}"
+        ));
+    }
+    // `arguments` in an ordinary function nested in the block is that
+    // function's own.
+    agrees(
+        "class A { static { let f = function () { return arguments.length }; A.z = f(1, 2) } } A.z",
+    );
+}

@@ -3543,30 +3543,17 @@ impl Coder<'_, '_> {
         // computed-key / private-brand / private-value member closures AND
         // outer bindings a field value captures — drive the frame
         // `RESERVE`/`RETRIEVE` (`scopeCount == scopeMaximum` = closures + peak
-        // value-temporary depth) and the closure-slot access indices.
-        // A field-init function scope holds only member-access / value
-        // use-closure aliases; a real (non-alias) declare means a
-        // `static { … }` block hoisted a lexical declaration into it (its
-        // own frame reservation + block coding is the remaining class-tail
-        // fold). Keep it a loud, named fold rather than a mis-emit.
-        if self.tree.scopes[fi]
-            .declares
-            .iter()
-            .any(|d| d.flags & crate::scoper::dflags::USE_CLOSURE == 0)
-        {
-            // A deliberate fold, not an invariant violation: this compiler
-            // has not ported a static block's own frame reservation. Reported
-            // as `Unsupported` so it reads as the coverage gap it is, rather
-            // than as a compiler that died (F063).
-            // The fold is per-class, so the first field's line is the
-            // closest source position available here.
-            let line = fields.first().map_or(0, |f| f.line);
-            self.report_kind(
-                line,
-                crate::parser::ParseErrorKind::Unsupported,
-                "static block with lexical declarations deferred",
-            );
-        }
+        // value-temporary depth, which counts each `static { … }` block's
+        // declarations) and the closure-slot access indices. The scope holds
+        // only those use-closure aliases: a static block declares in its own
+        // block scope.
+        debug_assert!(
+            self.tree.scopes[fi]
+                .declares
+                .iter()
+                .all(|d| d.flags & crate::scoper::dflags::USE_CLOSURE != 0),
+            "a field-init function scope declares only closure aliases"
+        );
         let reserve = *self
             .tree
             .scope_counts
@@ -3581,7 +3568,7 @@ impl Coder<'_, '_> {
         // operands (a get/set pair shares one brand slot via the scoper's
         // use-closure dedup).
         for field in fields {
-            // Static blocks bind their body directly, with no member alias.
+            // A static block has its own scope and no member alias.
             let slots = if field.token == Token::Body {
                 crate::scoper::MemberAccess::default()
             } else {
@@ -3647,10 +3634,11 @@ impl Coder<'_, '_> {
     #[inline(never)]
     fn code_field(&mut self, p: &Node, plan: &FieldPlan) {
         use crate::ast::flags as f;
-        // A `static { … }` block runs its statements directly (no
-        // `this`/property install), with `this` bound to the constructor.
+        // A `static { … }` block is a `Body` (`fxBodyNodeCode`): its own
+        // block scope around its statements, with no `this`/property install
+        // (`this` is the constructor the field function runs on).
         if p.token == Token::Body {
-            self.code(&p.children[0]);
+            self.code_node(p);
             return;
         }
         self.add_byte(1, XS_CODE_THIS);

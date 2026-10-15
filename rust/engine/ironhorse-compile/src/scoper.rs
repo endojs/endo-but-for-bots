@@ -790,10 +790,13 @@ impl Scoper<'_> {
 
     /// Create a field-init function scope (XS's `instanceInit` /
     /// `constructorInit`) at hoist time, parented to the current (class body)
-    /// scope, and hoist each member's value (or, for a `static { … }` block,
-    /// its body) inside it so their inner scopes chain through the field
-    /// function. `is_static` members carry a `Body` static block whose body is
-    /// child 0; a data field's value is child 1. Returns the scope index.
+    /// scope, and hoist each member's value (or a `static { … }` block)
+    /// inside it so their inner scopes chain through the field function. A
+    /// data field's value is child 1. A static block is XS's `XS_TOKEN_BODY`
+    /// node, which `fxClassExpression` moves into `constructorInit`'s
+    /// statements whole, so it hoists as a `Body` (`fxBodyNodeHoist`): its
+    /// own block scope, made the hoister's `bodyScope` (so a `var` stays in
+    /// its block) and its `environmentNode`. Returns the scope index.
     #[inline(never)]
     fn hoist_field_init_scope(
         &mut self,
@@ -813,10 +816,7 @@ impl Scoper<'_> {
         self.body_scope = Some(fi);
         for m in members {
             if is_static && m.token == Token::Body {
-                // A static block: hoist its statements (child 0) directly.
-                if let Some(body) = m.children.first() {
-                    self.hoist_item(body)?;
-                }
+                self.hoist_dispatch(m)?;
             } else if let Some(v) = m.children.get(1) {
                 self.hoist_item(v)?;
             }
@@ -1304,7 +1304,7 @@ impl Scoper<'_> {
         // the `constructorInit` function (`fxClassExpression`), so under the
         // class scope we hoist only the member stubs — a computed key, a
         // private method's function — and defer each field's value (and each
-        // static block's body) to the matching field-init function scope. The
+        // static block) to the matching field-init function scope. The
         // field values are collected in source order (XS's second-pass order;
         // private methods contribute no value).
         let engage = class_has_instance_field(node);
@@ -1323,7 +1323,7 @@ impl Scoper<'_> {
                     self.hoist_item(item)?;
                     continue;
                 }
-                // A `static { … }` block's body runs inside the constructorInit
+                // A `static { … }` block runs inside the constructorInit
                 // function scope.
                 if m.token == Token::Body {
                     static_ci_values.push(m);
@@ -1879,8 +1879,8 @@ impl Scoper<'_> {
         // fields + `static { … }` blocks, both in source order), instance vs
         // static. A member's class-definition-time part (a computed key, a
         // private method function) binds at the class scope now; its value (or
-        // a static block's body) defers to the field function pass. References
-        // into the AST.
+        // a static block) defers to the field function pass. References into
+        // the AST.
         let mut inst_methods: Vec<&Node> = Vec::new();
         let mut inst_data: Vec<&Node> = Vec::new();
         let mut static_methods: Vec<&Node> = Vec::new();
@@ -1898,7 +1898,7 @@ impl Scoper<'_> {
                     self.bind_item(item)?;
                     continue;
                 }
-                // A `static { … }` block: its body binds inside constructorInit.
+                // A `static { … }` block binds inside constructorInit.
                 if m.token == Token::Body {
                     static_data.push(m);
                     continue;
@@ -1984,9 +1984,10 @@ impl Scoper<'_> {
     /// in two-pass order look its member accesses (`atAccess` / `valueAccess` /
     /// `symbolAccess`) up from inside it — creating use-closure aliases in
     /// field order (`fxFieldNodeBind`) — then bind the value (whose own outer
-    /// captures interleave), or, for a `static { … }` block, its body.
-    /// `scopeCount == scopeMaximum` = the captured closures plus the peak
-    /// temporary depth of the field values. Records each member's fi aliases.
+    /// captures interleave), or bind a `static { … }` block as the `Body` it
+    /// is (`fxBlockNodeBind`). `scopeCount == scopeMaximum` = the captured
+    /// closures plus the peak temporary depth of the field values and the
+    /// static blocks' declarations. Records each member's fi aliases.
     #[inline(never)]
     fn bind_field_init_scope(
         &mut self,
@@ -2000,12 +2001,10 @@ impl Scoper<'_> {
         self.scope_maximum = 0;
         self.fx_scope_binding(fi);
         for m in ordered {
-            // A `static { … }` block runs its body (child 0) directly inside
-            // the field function — no member access, no value install.
+            // A `static { … }` block binds its own block scope inside the
+            // field function — no member access, no value install.
             if m.token == Token::Body {
-                if let Some(body) = m.children.first() {
-                    self.bind_item(body)?;
-                }
+                self.bind_dispatch(m)?;
                 continue;
             }
             let access = self

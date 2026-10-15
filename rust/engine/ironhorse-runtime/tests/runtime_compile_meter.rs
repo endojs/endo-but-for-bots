@@ -187,7 +187,7 @@ fn a_pattern_declaration_without_an_initializer_is_a_catchable_syntax_error() {
 
 #[test]
 fn compiler_errors_and_unwinds_retain_live_charges() {
-    for source in ["'unterminated", "var =", "class C { static { let x=1; } }"] {
+    for source in ["'unterminated", "var =", "({a = 1});"] {
         let mut raw = 0;
         let result =
             IronhorseSourceCompiler.compile_source(source, false, u64::MAX, &mut |delta| {

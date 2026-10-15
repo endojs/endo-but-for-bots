@@ -176,22 +176,21 @@ fn embedding_host_retains_charges_across_a_compiler_unwind() {
     //
     // The fixture used to be a source that PANICKED the coder, caught here
     // with `catch_unwind`. That is no longer available and its absence is the
-    // point: the static-block fold now returns a structured `Unsupported`
-    // rather than dying (architecture finding F063), so there is no known
-    // source that panics this compiler to use as a fixture.
+    // point: the coder reports rather than dying (architecture finding F063),
+    // so there is no known source that panics this compiler to use as a
+    // fixture. Its successor, the static-block fold's structured
+    // `Unsupported`, is gone too now that static blocks compile, so the
+    // fixture is an early error only the coder detects: a cover-initialized
+    // name in an object literal that is not a destructuring target.
     let meter = ironhorse_compile::ParseMeter::with_budget(u64::MAX);
-    let error = ironhorse_compile::compile_atoms_with_meter(
-        "class C { static { let x=1; } }",
-        false,
-        meter.clone(),
-    )
-    .expect_err("the static-block fold is a named coder gap");
-    assert_eq!(
-        error.kind,
-        ParseErrorKind::Unsupported,
-        "the fold must stay a named coverage gap, not become a SyntaxError"
+    let error = ironhorse_compile::compile_atoms_with_meter("({a = 1});", false, meter.clone())
+        .expect_err("the coder reports the early error");
+    assert_eq!(error.kind, ParseErrorKind::Syntax);
+    assert_eq!(error.message, "invalid initializer");
+    assert!(
+        meter.raw() > 0,
+        "the work before the report is still billed"
     );
-    assert!(meter.raw() > 0, "the work before the fold is still billed");
     assert!(!meter.exhausted(), "the host did not refuse");
 }
 

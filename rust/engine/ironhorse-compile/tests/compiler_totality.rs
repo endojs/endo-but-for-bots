@@ -9,8 +9,9 @@
 //! routed through the coder's error channel with an explicit KIND: a
 //! CoverInitializedName used as an expression is `Syntax` (a spec early
 //! error, and the guest sees a catchable `SyntaxError`), and a static block
-//! with lexical declarations is `Unsupported` (a fold this compiler has not
-//! ported, and an honest coverage gap). The classification now survives the
+//! with lexical declarations was `Unsupported` (a fold this compiler had not
+//! ported, and an honest coverage gap) until it was ported; it now
+//! compiles. The classification now survives the
 //! whole way out: `SourceCompileError::Invariant` reaches the VM as an
 //! uncatchable `Halt::EngineInvariant`, and the test262 harness files a
 //! caught panic under `compiler-panicked:<phase>` rather than sharing
@@ -60,7 +61,7 @@ fn outcome(source: &str) -> Result<&'static str, String> {
 #[test]
 fn the_findings_probes_return_rather_than_panic() {
     for (source, expected) in [
-        ("class C { static { let x = 1; } }", "unsupported"),
+        ("class C { static { let x = 1; } }", "compiled"),
         ("({a = 1});", "syntax"),
         ("({a: {b = 1}});", "syntax"),
     ] {

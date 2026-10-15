@@ -1219,34 +1219,28 @@ mod tests {
 
     #[test]
     fn compiler_seam_endor_fold_is_a_clean_abort_not_a_panic() {
-        // A construct the coder folds on must, through the `Ironhorse` seam,
-        // produce empty bytecode that ironhorse-vm treats as an abort — never a
-        // harness panic. Private member *reads/writes* and the `#x in o`
-        // brand check now code byte-identically (this child), so this uses a
-        // still-deferred class-tail construct: a `static { … }` block with
-        // its own lexical declarations, whose field-function frame
-        // reservation is the remaining fold.
-        let src = "class C { static { let x = 1; } } new C()";
+        // An error the coder reports, which unwinds out of the pass, must,
+        // through the `Ironhorse` seam, produce empty bytecode that
+        // ironhorse-vm treats as an abort — never a harness panic. The coder
+        // has no deferred fold left to use here (the last, a `static { … }`
+        // block with its own declarations, now compiles), so this uses an
+        // early error only the coder detects: a cover-initialized name that
+        // is not a destructuring target.
+        let src = "({a = 1}); new C()";
         let ironhorse = dual_run_with(src, Compiler::Ironhorse).expect("oracle reference runs");
         assert!(
+            matches!(ironhorse.ironhorse_compile, IronhorseCompile::Rejected(ref message) if message.contains("invalid initializer")),
+            "the coder's report must reach the seam: {:?}",
+            ironhorse.ironhorse_compile
+        );
+        assert!(
             ironhorse.bytecode.is_empty(),
-            "an ironhorse coder fold must yield empty bytecode via the seam"
+            "a coder report must yield empty bytecode via the seam"
         );
         assert_ne!(
             ironhorse.agreement,
             Agreement::BothComplete,
-            "an empty-bytecode ironhorse run must not spuriously complete like the oracle"
-        );
-    }
-
-    #[test]
-    fn compiler_seam_constructs_unsupported_for_valid_unported_syntax() {
-        let source = "class A { static { let y = 1; } }";
-        let run = dual_run_with(source, Compiler::Ironhorse).expect("oracle reference runs");
-        assert!(
-            matches!(run.ironhorse_compile, IronhorseCompile::Unsupported(ref message) if message.contains("static block with lexical declarations")),
-            "the production compiler seam must distinguish valid unported syntax: {:?}",
-            run.ironhorse_compile
+            "an empty-bytecode ironhorse run must not spuriously complete"
         );
     }
 
