@@ -858,7 +858,7 @@ fn an_unbound_lazy_machine_refuses_a_fault_from_a_store_that_moved() {
     let mut lazy = resume_from_store_lazy(old.clone(), &sig()).expect("lazy resume");
     crank(&mut lazy, "backed[1].v = -1;");
     assert_eq!(
-        checkpoint_to_store(&mut lazy, &sig(), &mut Forward(&mut *old.borrow_mut())).unwrap(),
+        checkpoint_to_store(&mut lazy, &sig(), &mut Forward(&mut old.borrow_mut())).unwrap(),
         3
     );
     evict_all(&lazy, &old);
