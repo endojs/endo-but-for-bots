@@ -1854,6 +1854,7 @@ __metadata:
     "@endo/netstring": "workspace:^"
     "@endo/ocapn": "workspace:^"
     "@endo/ocapn-noise": "workspace:^"
+    "@endo/parcel": "workspace:^"
     "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/platform": "workspace:^"
