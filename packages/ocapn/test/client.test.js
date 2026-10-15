@@ -33,7 +33,7 @@ const { makeOcapnKeyPair, signLocation } = makeCryptography(syrupCodec);
 /** @typedef {() => ERef<(...args: unknown[]) => unknown>} TestCallableProvider */
 /** @typedef {{ echo: (...args: unknown[]) => ERef<TestRemoteObject> }} TestEchoObject */
 /** @typedef {{ slowMethod: () => ERef<TestRemoteObject> }} TestSlowObject */
-/** @typedef {{ getSturdyRef: (...args: unknown[]) => ERef<TestCallableObject> }} TestSturdyRefReturner */
+/** @typedef {{ getParcel: (...args: unknown[]) => ERef<TestCallableObject> }} TestParcelReturner */
 /** @typedef {() => ERef<TestRecord>} TestRecordProvider */
 /** @typedef {() => ERef<TestRemoteObject>} TestRemoteObjectProvider */
 /** @typedef {{ slowMethod: () => ERef<unknown>, fastMethod: () => ERef<unknown> }} TestSlowResponder */
@@ -686,15 +686,15 @@ testWithErrorUnwrapping(
 );
 
 testWithErrorUnwrapping(
-  'deliver to promise resolving to sturdyref should fail without disconnecting (can only deliver to "remotable" pass-style)',
+  'deliver to promise resolving to parcel should fail without disconnecting (can only deliver to "remotable" pass-style)',
   async t => {
     const testObjectTable = new Map();
     testObjectTable.set(
-      'SturdyRefReturner',
-      Far('sturdyRefReturner', {
-        getSturdyRef: location =>
+      'ParcelReturner',
+      Far('parcelReturner', {
+        getParcel: location =>
           // eslint-disable-next-line no-use-before-define
-          clientKitB.client.makeSturdyRef(location, 'target'),
+          clientKitB.client.makeParcel(location, 'target'),
       }),
     );
 
@@ -713,34 +713,29 @@ testWithErrorUnwrapping(
         throw new Error('Connection A to B should exist');
       }
 
-      // Get Bob's SturdyRefReturner
+      // Get Bob's ParcelReturner
       const bootstrapB = ocapnA.getRemoteBootstrap();
-      const sturdyRefReturner =
-        await /** @type {ERef<TestSturdyRefReturner>} */ (
-          fetchRemote(bootstrapB, encodeSwissnum('SturdyRefReturner'))
-        );
+      const parcelReturner = await /** @type {ERef<TestParcelReturner>} */ (
+        fetchRemote(bootstrapB, encodeSwissnum('ParcelReturner'))
+      );
 
-      // Get a promise that will resolve to a sturdyref
-      // (Bob's method returns a sturdyref)
-      const promiseThatResolvesToSturdyRef = E(sturdyRefReturner).getSturdyRef(
+      // Get a promise that will resolve to a parcel
+      // (Bob's method returns a parcel)
+      const promiseThatResolvesToParcel = E(parcelReturner).getParcel(
         clientKitB.location,
       );
 
       // Attempt to deliver to this promise should fail when it resolves
-      // because sturdyref pass-style is not 'remotable'
+      // because parcel pass-style is not 'remotable'
       const error = await t.throwsAsync(
         async () => {
-          await E(promiseThatResolvesToSturdyRef)(
-            'some-method',
-            'arg1',
-            'arg2',
-          );
+          await E(promiseThatResolvesToParcel)('some-method', 'arg1', 'arg2');
         },
         {
           instanceOf: Error,
-          message: /Cannot apply functions to values with pass-style sturdyref/,
+          message: /Cannot apply functions to values with pass-style parcel/,
         },
-        'Delivering to a promise that resolves to a sturdyref should throw',
+        'Delivering to a promise that resolves to a parcel should throw',
       );
 
       t.truthy(error, 'Error should be thrown');
@@ -755,10 +750,10 @@ testWithErrorUnwrapping(
       );
 
       // Verify we can still make successful calls
-      const anotherSturdyRef = await E(sturdyRefReturner).getSturdyRef(
+      const anotherParcel = await E(parcelReturner).getParcel(
         clientKitB.location,
       );
-      t.truthy(anotherSturdyRef, 'Should still be able to make calls');
+      t.truthy(anotherParcel, 'Should still be able to make calls');
     } finally {
       shutdownBoth();
     }
