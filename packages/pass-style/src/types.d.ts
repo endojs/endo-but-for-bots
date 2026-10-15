@@ -42,7 +42,7 @@ export type PrimitiveStyle = AtomStyle;
 export type ContainerStyle = 'copyRecord' | 'copyArray' | 'tagged';
 
 export type PassStyle =
-  AtomStyle | ContainerStyle | 'remotable' | 'error' | 'promise' | 'sturdyRef';
+  AtomStyle | ContainerStyle | 'remotable' | 'error' | 'promise' | 'parcel';
 
 export type PassStyleMarker = 'tagged' | 'remotable';
 
@@ -65,7 +65,8 @@ export type PassByRef =
   | RemotableBrand<any, any>
   | Promise<RemotableObject>
   | Promise<RemotableBrand<any, any>>
-  | Promise<PassByCopy>;
+  | Promise<PassByCopy>
+  | ParcelObject;
 
 /**
  * A Passable is acyclic data that can be marshalled. It must be hardened to
@@ -84,6 +85,8 @@ export type PassByRef =
  *     remote interaction.
  *   * As a special case to support system observability, error objects are
  *     Passable (PassStyle 'error').
+ *   * Parcels (PassStyle 'parcel') are passable by identity, but use an
+ *     inline transport representation instead of a marshal slot.
  *
  * A Passable is essentially a pass-by-copy superstructure with a
  * pass-by-reference
@@ -131,7 +134,7 @@ export type PassStyleOf = {
   (p: Promise<any>): 'promise';
   (p: Error): 'error';
   (p: CopyTagged): 'tagged';
-  (p: ParcelObject): 'sturdyRef';
+  (p: ParcelObject): 'parcel';
   (p: readonly any[]): 'copyArray';
   // A `Uint8Array` is also `Iterable<number>`; place its byteArray
   // overload before the Iterable-as-remotable fallback so the more
@@ -194,15 +197,15 @@ export type RemotableObject<I extends InterfaceSpec = string> = PassStyled<
 export type RemotableMethodName = PropertyKey;
 
 /**
- * A ParcelObject is passable, analogous to a presence: it has object identity and
- * no data. `passStyleOf` returns `'sturdyRef'` for a value that the realm's
- * `ParcelObject.isParcelObject` brand check accepts (see `@endo/sturdyref`). The ref
- * is frozen, has no own properties, and inherits only `constructor` and
- * `Symbol.toStringTag` from `ParcelObject.prototype`. What it refers to is known
- * only to the handler it was constructed with.
+ * A ParcelObject is passable, analogous to a presence: it has object identity
+ * and no data. `passStyleOf` returns `'parcel'` for a value accepted by the
+ * realm's `Parcel.isParcel` brand check (see `@endo/parcel`). A Parcel is
+ * frozen, has no own properties, and inherits only `constructor` and
+ * `Symbol.toStringTag` from `Parcel.prototype`. Its location and open hook are
+ * known only to the constructor's private state.
  */
 export interface ParcelObject {
-  readonly [Symbol.toStringTag]: 'ParcelObject';
+  readonly [Symbol.toStringTag]: 'Parcel';
 }
 
 /**
