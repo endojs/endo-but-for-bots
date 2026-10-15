@@ -112,43 +112,88 @@ pub(super) fn parse_int(bytes: &[u8], mut radix: i32) -> Slot {
     }
 }
 
-/// The non-decimal integral arm of `Number.prototype.toString(radix)`.
-/// ECMAScript permits an implementation-defined digit algorithm for this
-/// radix-generalized spelling. Integers up to the exact-number boundary need
-/// no rounding choice, so repeated division produces the canonical digits.
-pub(super) fn number_to_radix_string(number: f64, radix: u32) -> Option<Vec<u8>> {
+/// The non-decimal arm of `Number.prototype.toString(radix)`. ECMAScript
+/// leaves the digits of a radix other than 10 implementation-defined, so this
+/// is XS's algorithm (`fx_Number_prototype_toString`, after V8's): the
+/// fraction emits digits until they distinguish the value from its neighbors
+/// (at most 2047), rounding the last one half to even, and an integer part
+/// past `2**53 * radix` is divided down, its low digits written as zeros.
+pub(super) fn number_to_radix_string(number: f64, radix: u32) -> Vec<u8> {
+    const DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    const FRACTION_PART_LENGTH: usize = 2048;
     if number.is_nan() {
-        return Some(b"NaN".to_vec());
+        return b"NaN".to_vec();
     }
-    if number == f64::INFINITY {
-        return Some(b"Infinity".to_vec());
-    }
-    if number == f64::NEG_INFINITY {
-        return Some(b"-Infinity".to_vec());
+    if number.is_infinite() {
+        return if number < 0.0 {
+            b"-Infinity".to_vec()
+        } else {
+            b"Infinity".to_vec()
+        };
     }
     if number == 0.0 {
-        return Some(b"0".to_vec());
+        return b"0".to_vec();
     }
-    if number.fract() != 0.0 || number.abs() > 9007199254740992.0 {
-        return None;
+    let radix_f = f64::from(radix);
+    let value = number.abs();
+    let mut integer = value.floor();
+    let mut fraction = value - integer;
+    // Half the gap to the next Number up, and never below the least
+    // subnormal.
+    let next = f64::from_bits(value.to_bits() + 1);
+    let mut delta = (0.5 * (next - value)).max(f64::from_bits(1));
+    let mut fraction_digits = Vec::new();
+    if fraction >= delta {
+        loop {
+            fraction *= radix_f;
+            delta *= radix_f;
+            let digit = fraction as usize;
+            fraction_digits.push(DIGITS[digit]);
+            fraction -= digit as f64;
+            if (fraction > 0.5 || (fraction == 0.5 && digit & 1 == 1)) && fraction + delta > 1.0 {
+                // Round up, carrying into the integer part when every
+                // fraction digit was the radix's last.
+                loop {
+                    let Some(last) = fraction_digits.pop() else {
+                        integer += 1.0;
+                        break;
+                    };
+                    let last = DIGITS.iter().position(|&d| d == last).unwrap_or(0);
+                    if last + 1 < radix as usize {
+                        fraction_digits.push(DIGITS[last + 1]);
+                        break;
+                    }
+                }
+                break;
+            }
+            if fraction < delta || fraction_digits.len() + 1 >= FRACTION_PART_LENGTH {
+                break;
+            }
+        }
     }
-    let negative = number.is_sign_negative();
-    let mut magnitude = number.abs() as u64;
     let mut reversed = Vec::new();
-    while magnitude != 0 {
-        let digit = (magnitude % radix as u64) as u8;
-        reversed.push(if digit < 10 {
-            b'0' + digit
-        } else {
-            b'a' + digit - 10
-        });
-        magnitude /= radix as u64;
+    let exact_limit = 9_007_199_254_740_991.0 * radix_f;
+    while integer > exact_limit {
+        reversed.push(b'0');
+        integer /= radix_f;
     }
-    if negative {
+    loop {
+        let modulo = integer % radix_f;
+        reversed.push(DIGITS[modulo as usize]);
+        integer = (integer - modulo) / radix_f;
+        if integer < 1.0 {
+            break;
+        }
+    }
+    if number < 0.0 {
         reversed.push(b'-');
     }
     reversed.reverse();
-    Some(reversed)
+    if !fraction_digits.is_empty() {
+        reversed.push(b'.');
+        reversed.extend_from_slice(&fraction_digits);
+    }
+    reversed
 }
 
 /// `fxStringToNumber` (`xsdtoa.c`): coerce a CESU-8 string to a number.

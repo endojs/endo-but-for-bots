@@ -462,14 +462,7 @@ impl Interp {
                     self.to_string_slot_metered(prim)
                 } else {
                     let n = to_number(&prim);
-                    let bytes = match number_to_radix_string(n, radix) {
-                        Some(bytes) => bytes,
-                        None => {
-                            return Err(Step::Host(Halt::NotImplemented(
-                                "Number.toString:fractional-non-decimal-radix",
-                            )));
-                        }
-                    };
+                    let bytes = number_to_radix_string(n, radix);
                     self.meter.tick_builtin();
                     let off = self.alloc_str_text_metered(&bytes)?;
                     Slot::of(Kind::String, Payload::String(off))

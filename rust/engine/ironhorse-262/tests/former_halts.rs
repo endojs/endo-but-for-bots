@@ -403,3 +403,33 @@ fn a_dense_array_walk_follows_its_callback_mutations() {
         agrees(&format!("String({program})"));
     }
 }
+
+#[test]
+fn number_to_string_renders_any_value_in_any_radix() {
+    for program in [
+        "(1.5).toString(2)",
+        "(1e21).toString(36)",
+        "(2 ** 53 + 2).toString(2).length",
+        "(-0.25).toString(2)",
+        "(0.1).toString(3)",
+        "(1 / 3).toString(3)",
+        "(255.5).toString(16)",
+        "(Number.MAX_VALUE).toString(36)",
+        "(Number.MIN_VALUE).toString(2).length",
+        "(1 - 2 ** -53).toString(2)",
+        "(-987654.321).toString(7)",
+        "(2 ** 100 + 3).toString(5)",
+    ] {
+        agrees(program);
+    }
+    // Every radix over a spread of magnitudes, folded into one hash so a
+    // single differing digit fails the comparison.
+    agrees(
+        "var seed = 12345; function rnd() { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; } \
+         var vals = [0.5, -0.25, 1.5, 0.1, 1 / 3, 2 / 3, 1e21, 1e-7, 123.456, 2 ** 53 + 2, 2 ** 60, 5e-324, 1e-300, 4.35, -0]; \
+         for (var i = 0; i < 100; i++) { var e = Math.floor(rnd() * 80) - 40; vals.push((rnd() - 0.5) * Math.pow(10, e)); vals.push(Math.floor(rnd() * 1e6) / 1024); } \
+         var out = []; for (var r = 2; r <= 36; r++) { for (var j = 0; j < vals.length; j++) out.push(vals[j].toString(r)); } \
+         var h = 0; var s = out.join(','); for (var k = 0; k < s.length; k++) h = (h * 31 + s.charCodeAt(k)) % 1000000007; \
+         [out.length, s.length, h].join(' ')",
+    );
+}

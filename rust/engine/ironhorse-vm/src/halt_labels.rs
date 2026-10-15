@@ -29,7 +29,6 @@ pub const NOT_IMPLEMENTED_LABELS: &[&str] = &[
     "Date:method",
     "Intl.NumberFormat:compact-locale",
     "Intl.NumberFormat:formatRange",
-    "Number.toString:fractional-non-decimal-radix",
     "String.replace:non-string-receiver",
     "Temporal.Now:method",
     "Temporal.Plain:difference-calendar",
