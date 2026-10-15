@@ -1506,8 +1506,9 @@ impl Interp {
         ilen: usize,
     ) -> Flow {
         let name = operand_id(code, pc, 1);
+        let next_opcode = code.get(pc + ilen).copied();
         dispatch_result_flow!(
-            self.dispatch_eval_reference(code, name),
+            self.dispatch_eval_reference(code, name, next_opcode),
             self,
             return_depth,
             code
