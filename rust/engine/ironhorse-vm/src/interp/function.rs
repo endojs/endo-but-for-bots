@@ -707,18 +707,29 @@ impl Interp {
         // shape is handled directly by the call opcode. A **native** receiver
         // (native constructor/method) is equally in `functions`, so it binds
         // through the same record — its bound call re-dispatches the native.
-        // `Function.prototype.bind` step 2 (ECMA-262 20.2.3.2): if the target
-        // is **not callable**, throw a TypeError (catchable). A callable proxy
-        // is bindable per spec, but a bound-of-proxy call is not yet modeled,
-        // so keep the honest skip rather than throw wrongly.
+        // A callable Proxy binds too: its bound call and construct go through
+        // the general Call and Construct. `Function.prototype.bind` step 2
+        // (ECMA-262 20.2.3.2): if the target is **not callable**, throw a
+        // TypeError (catchable).
         let target = match this.value {
-            Payload::Reference(r) if self.functions.contains_key(&r) => r,
-            Payload::Reference(r) if self.slot_is_callable(r) => {
-                return Err(Step::Host(Halt::NotImplemented(
-                    "bind:non-user-function-receiver",
-                )));
+            Payload::Reference(r)
+                if self.functions.contains_key(&r) || self.slot_is_callable(r) =>
+            {
+                r
             }
             _ => return Err(self.catchable_type_error_msg("this: not a Function instance".into())),
+        };
+        let proxy_target = self.proxies.contains_key(&target);
+        // BoundFunctionCreate takes its [[Prototype]] from the target's
+        // [[GetPrototypeOf]] (ECMA-262 10.4.1.3 step 1), a Proxy's trap
+        // included, before `length` and `name` are read.
+        let proto = if proxy_target {
+            match self.mop_get_prototype(code, target)?.value {
+                Payload::Reference(proto) => proto,
+                _ => crate::value::SlotIndex::NULL,
+            }
+        } else {
+            self.instance_prototype(target)
         };
         let this_arg = self
             .stack
@@ -759,16 +770,26 @@ impl Interp {
         // inherited `length`/`name` is the one bound, as in
         // `fx_Function_prototype_bind`.
         //
-        // The target is a function, never a Proxy, so its own descriptors are
-        // read without a native frame; only a getter, or a `name` inherited
-        // after a delete, runs the general [[Get]]. A frame here would lower
-        // every bound-call nesting ceiling by one.
+        // A function's own descriptors are read without a native frame; only
+        // a getter, or a `name` inherited after a delete, runs the general
+        // [[Get]]. A frame here would lower every bound-call nesting ceiling
+        // by one. A Proxy target answers through its traps: HasOwnProperty
+        // (`getOwnPropertyDescriptor`), then Get (`get`).
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let length_id = self.intern_static_key("length");
         let name_id = self.intern_static_key("name");
         let mut bound_len = 0.0f64;
-        if let Some(own) = self.mop_get_own_property_inner(code, target, length_id)? {
-            let target_length = self.own_descriptor_value(code, own, target_slot)?;
+        let own_length = if proxy_target {
+            self.mop_get_own_property(code, target, length_id)?
+        } else {
+            self.mop_get_own_property_inner(code, target, length_id)?
+        };
+        if let Some(own) = own_length {
+            let target_length = if proxy_target {
+                self.mop_get(code, target, length_id, target_slot)?
+            } else {
+                self.own_descriptor_value(code, own, target_slot)?
+            };
             let target_length = match numeric_of(&target_length) {
                 Some(n) if n.is_nan() => 0.0,
                 Some(n) => n.trunc(),
@@ -776,9 +797,13 @@ impl Interp {
             };
             bound_len = (target_length - f64::from(nbound)).max(0.0);
         }
-        let target_name = match self.mop_get_own_property_inner(code, target, name_id)? {
-            Some(own) => self.own_descriptor_value(code, own, target_slot)?,
-            None => self.mop_get(code, target, name_id, target_slot)?,
+        let target_name = if proxy_target {
+            self.mop_get(code, target, name_id, target_slot)?
+        } else {
+            match self.mop_get_own_property_inner(code, target, name_id)? {
+                Some(own) => self.own_descriptor_value(code, own, target_slot)?,
+                None => self.mop_get(code, target, name_id, target_slot)?,
+            }
         };
         let name_chunk = match target_name.value {
             Payload::String(off) if target_name.kind == Kind::String => Some(off),
@@ -795,7 +820,7 @@ impl Interp {
         // i32::MAX, which the synthesized property reads as an integer) is an
         // ordinary own data property with the same attributes instead.
         let synthesized_len = (bound_len <= f64::from(i32::MAX)).then_some(bound_len as u32);
-        let inst = self.slots.alloc(Slot::instance(self.function_proto));
+        let inst = self.slots.alloc(Slot::instance(proto));
         let name_chunk = self.chunks.alloc(&units_to_be16(&bound_units));
         // Register in `functions` (native/method None) so `.length`/`.name`
         // read back the bound values through the ordinary GET_PROPERTY arm.

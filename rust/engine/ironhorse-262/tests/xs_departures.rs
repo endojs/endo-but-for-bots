@@ -472,13 +472,6 @@ const GAPS: &[Row] = &[
         why: "the members a program's text names (here `clear`) are linked before the rest, so the reflected order of a built-in prototype depends on unrelated identifiers in the program",
     },
     Row {
-        program: "Function.prototype.bind.call(new Proxy(function () {}, {}), null).name",
-        ironhorse: "halt NotImplemented(\"bind:non-user-function-receiver\")",
-        xs: "bound ",
-        v8: "bound ",
-        why: "Function.prototype.bind accepts any callable receiver; on a Proxy Ironhorse halts",
-    },
-    Row {
         program: "new ArrayBuffer(8, { maxByteLength: 16 }).resizable",
         ironhorse: "halt NotImplemented(\"native-call:ArrayBuffer:resizable\")",
         xs: "true",
