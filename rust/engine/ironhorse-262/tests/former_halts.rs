@@ -250,3 +250,23 @@ fn a_bigint_loosely_equals_a_string_holding_its_value() {
         agrees(&format!("String({pair})"));
     }
 }
+
+#[test]
+fn a_super_member_key_converts_after_the_base_is_found() {
+    for program in [
+        "class A { m() { return super[{ toString() { return \"toString\" } }] === Object.prototype.toString } } new A().m()",
+        "var log = []; var o = { m() { try { super[{ toString() { log.push(\"s\"); return \"x\" } }] = (log.push(\"v\"), 2) } catch (e) { log.push(e.constructor.name) } } }; Object.setPrototypeOf(o, null); o.m(); log.join()",
+        "var log = []; var o = { m() { try { return super[{ toString() { log.push(\"s\"); return \"x\" } }] } catch (e) { log.push(e.constructor.name) } } }; Object.setPrototypeOf(o, null); o.m(); log.join()",
+        "var log = []; var o = { m() { super[{ toString() { log.push(\"s\"); return \"x\" } }] = (log.push(\"v\"), 2) } }; o.m(); log.join() + o.x",
+        "var log = []; var p = { x: 10 }; var o = { __proto__: p, m() { super[{ toString() { log.push(\"s\"); return \"x\" } }] += (log.push(\"v\"), 2); return o.x } }; [o.m(), log.join(), p.x].join()",
+        "var log = []; var p = { x: 10 }; var o = { __proto__: p, m() { return super[{ toString() { log.push(\"s\"); return \"x\" } }]++ } }; [o.m(), log.join(), o.x, p.x].join()",
+        "var p = { f() { return this === o } }; var o = { __proto__: p, m() { return super[{ [Symbol.toPrimitive]() { return \"f\" } }]() } }; o.m()",
+        "var s = Symbol(); var p = { [s]: 3 }; var o = { __proto__: p, m() { return super[Object(s)] } }; o.m()",
+        "var p = { 1: \"one\" }; var o = { __proto__: p, m() { return super[{ valueOf() { return 2 }, toString() { return \"1\" } }] } }; o.m()",
+        "var o = { m() { return super[{ toString() { throw new EvalError(\"k\") } }] } }; try { o.m() } catch (e) { e.constructor.name }",
+        "var o = { m() { return delete super[{ toString() { throw new EvalError(\"k\") } }] } }; try { o.m() } catch (e) { e.constructor.name }",
+        "class B { static get x() { return \"bx\" } } class C extends B { static m() { return super[{ toString() { return \"x\" } }] } } C.m()",
+    ] {
+        agrees(program);
+    }
+}

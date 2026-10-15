@@ -3492,14 +3492,25 @@ impl Interp {
             return Flow::Exit(Step::Host(Halt::NotImplemented("super_at:no-home")));
         }
         let base = self.instance_prototype(home);
-        let key = match dispatch_result_flow!(
-            self.resolve_at_key(self.stack[key_pos]),
-            self,
-            return_depth,
-            code
-        ) {
+        let mut key = self.stack[key_pos];
+        if key.kind == Kind::Reference {
+            // An object key converts only once GetValue or PutValue has
+            // found the base, so a null [[Prototype]] throws first
+            // (ECMA-262 6.2.5.5 step 3), as XS's SUPER_AT does. A
+            // primitive key's conversion is unobservable, and its null
+            // base stays deferred to the access.
+            if base.is_null() {
+                let error = self.internal_error("TypeError", "super: base is null".into());
+                dispatch_halt_flow!(self.raise_js(error), self, return_depth, code);
+            }
+            key =
+                dispatch_result_flow!(self.to_primitive(code, key, true), self, return_depth, code);
+        }
+        let key = match dispatch_result_flow!(self.resolve_at_key(key), self, return_depth, code) {
             Some(key) => key,
-            None => return Flow::Exit(Step::Host(Halt::NotImplemented("super_at:key"))),
+            // Every primitive kind resolves; `None` is a payload that does
+            // not match its kind, the engine's own value being malformed.
+            None => return Flow::Exit(Step::Host(Halt::EngineInvariant("super_at:key-kind"))),
         };
         let mut super_ref = Slot::of(Kind::EnvReference, Payload::Reference(receiver_ref));
         super_ref.next = base;

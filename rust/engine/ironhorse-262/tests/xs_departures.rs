@@ -311,6 +311,13 @@ const UNPAIRED: &[Row] = &[
 
 const KEPT: &[Row] = &[
     Row {
+        program: "var log = []; var o = { m() { try { return super[{ toString() { log.push('s'); return 'x'; } }]; } catch (e) { log.push(e.constructor.name); } } }; Object.setPrototypeOf(o, null); o.m(); log.join()",
+        ironhorse: "TypeError",
+        xs: "TypeError",
+        v8: "s,TypeError",
+        why: "GetValue on a super reference converts its base, here a null [[Prototype]], before its key (ES2024 6.2.5.5 step 3), so the key's toString never runs; V8 converts the key first",
+    },
+    Row {
         program: "var o = {a: 1, b: 2}; var r = []; for (var k in o) { r.push(k); Object.defineProperty(o, 'b', {enumerable: false}); } r.join()",
         ironhorse: "a",
         xs: "a",
