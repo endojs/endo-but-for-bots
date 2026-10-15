@@ -1,5 +1,4 @@
 import type { RemotableBrand } from '@endo/eventual-send';
-import type { makeParcel } from '@endo/parcel';
 /* eslint-disable no-use-before-define */
 import { PASS_STYLE } from './passStyle-helpers.js';
 
@@ -62,8 +61,8 @@ export type ExtractStyle<P extends PassStyled<any, any>> = P[typeof PASS_STYLE];
 export type PassByCopy = Atom | Error | CopyArray | CopyRecord | CopyTagged;
 
 /**
- * Excludes `ParcelObject`, which is passed by identity but has no marshal
- * slot representation.
+ * Excludes `ParcelObject`, a dormant capability that has object identity but
+ * no marshal slot representation, so it is not pass-by-reference.
  */
 export type PassByRef =
   | RemotableObject
@@ -107,7 +106,7 @@ export type Passable<
 export type Container<
   PC extends PassableCap,
   E extends Error,
-  P extends ParcelObject,
+  P extends ParcelObject = ParcelObject,
 > =
   | CopyArrayInterface<PC, E, P>
   | CopyRecordInterface<PC, E, P>
@@ -205,11 +204,16 @@ export type RemotableObject<I extends InterfaceSpec = string> = PassStyled<
 export type RemotableMethodName = PropertyKey;
 
 /**
- * A Parcel is a passable dormant capability with no exposed data. The runtime
- * recognition in `parcel.js` senses `globalThis.Parcel` without importing the
- * shim.
+ * A Parcel is a passable dormant capability with no exposed data.
+ *
+ * This package owns the type structurally, so that it has no dependency on
+ * `@endo/parcel`, whose `Parcel` type is assignable to it. At runtime,
+ * `src/parcel.js` senses `globalThis.Parcel` and asks its brand check rather
+ * than importing the shim.
  */
-export type ParcelObject = ReturnType<typeof makeParcel>;
+export type ParcelObject = {
+  readonly [Symbol.toStringTag]: 'Parcel';
+};
 
 /**
  * The authority-bearing leaves of a Passable's pass-by-copy superstructure.

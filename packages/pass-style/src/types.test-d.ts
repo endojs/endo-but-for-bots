@@ -64,8 +64,10 @@ expectTypeOf(
 expectTypeOf(passStyleOf(remotable)).toEqualTypeOf<'remotable'>();
 declare const parcel: ParcelObject;
 expectTypeOf(passStyleOf(parcel)).toEqualTypeOf<'parcel'>();
-// ParcelObject restates @endo/parcel's Parcel; keep them in step.
-expectTypeOf<ReturnType<typeof makeParcel>>().toEqualTypeOf<ParcelObject>();
+// ParcelObject is structural; @endo/parcel's Parcel must stay assignable to it.
+expectTypeOf<ReturnType<typeof makeParcel>>().toExtend<ParcelObject>();
+// A plain record cannot pose as a Parcel.
+expectTypeOf<{ a: 1 }>().not.toExtend<ParcelObject>();
 expectTypeOf(passStyleOf(someUnknown)).toEqualTypeOf<PassStyle>();
 
 const expectPassable = (val: Passable) => {};
@@ -105,7 +107,7 @@ expectPureData(parcel);
 // @ts-expect-error nested Parcels are not pure data
 expectPureData(harden({ nested: [parcel] }));
 
-// A Parcel is passed by identity but has no marshal slot representation.
+// A Parcel has object identity but no marshal slot representation.
 // @ts-expect-error a Parcel is not PassByRef
 const parcelRef: PassByRef = parcel;
 

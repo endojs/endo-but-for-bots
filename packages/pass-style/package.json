@@ -40,12 +40,12 @@
     "@endo/eventual-send": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/is-well-formed-string": "workspace:^",
-    "@endo/parcel": "workspace:^",
     "@endo/promise-kit": "workspace:^"
   },
   "devDependencies": {
     "@endo/immutable-arraybuffer": "workspace:^",
     "@endo/init": "workspace:^",
+    "@endo/parcel": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "@fast-check/ava": "catalog:dev",
     "ava": "catalog:dev",
