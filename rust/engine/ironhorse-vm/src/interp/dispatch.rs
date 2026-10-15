@@ -395,27 +395,19 @@ impl Interp {
                     }
                     pc += size as usize;
                 }
-                XS_CODE_SET_LOCAL_1 | XS_CODE_SET_LOCAL_2 => {
+                XS_CODE_SET_LOCAL_1 | XS_CODE_SET_LOCAL_2 | XS_CODE_PULL_LOCAL_1
+                | XS_CODE_PULL_LOCAL_2 => {
                     let k = self.local_operand(op, code, pc);
                     if self.local_write_is_guarded(k) {
                         dispatch_flow!(
-                            self.exec_guarded_local_write(code, pc, return_depth, op, k, false),
+                            self.exec_guarded_local_write(code, pc, return_depth, op, k),
                             pc
                         );
-                    } else {
+                    } else if matches!(op, XS_CODE_SET_LOCAL_1 | XS_CODE_SET_LOCAL_2) {
                         let top =
                             dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                         self.set_local(k, top);
                         pc += size as usize;
-                    }
-                }
-                XS_CODE_PULL_LOCAL_1 | XS_CODE_PULL_LOCAL_2 => {
-                    let k = self.local_operand(op, code, pc);
-                    if self.local_write_is_guarded(k) {
-                        dispatch_flow!(
-                            self.exec_guarded_local_write(code, pc, return_depth, op, k, true),
-                            pc
-                        );
                     } else {
                         let v = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                         self.set_local(k, v);
@@ -629,11 +621,9 @@ impl Interp {
                 }
                 XS_CODE_NEW => dispatch_flow!(self.exec_new(code, pc, return_depth, size), pc),
                 XS_CODE_SUPER => dispatch_flow!(self.exec_super(code, pc, return_depth, size), pc),
-                XS_CODE_EVAL | XS_CODE_EVAL_TAIL => {
-                    dispatch_flow!(self.exec_eval(code, pc, return_depth, op, size), pc)
-                }
-                XS_CODE_RUN | XS_CODE_RUN_1 | XS_CODE_RUN_2 | XS_CODE_RUN_4 | XS_CODE_RUN_TAIL
-                | XS_CODE_RUN_TAIL_1 | XS_CODE_RUN_TAIL_2 | XS_CODE_RUN_TAIL_4 => {
+                XS_CODE_EVAL | XS_CODE_EVAL_TAIL | XS_CODE_RUN | XS_CODE_RUN_1 | XS_CODE_RUN_2
+                | XS_CODE_RUN_4 | XS_CODE_RUN_TAIL | XS_CODE_RUN_TAIL_1 | XS_CODE_RUN_TAIL_2
+                | XS_CODE_RUN_TAIL_4 => {
                     dispatch_flow!(self.exec_run(code, pc, return_depth, op, size), pc)
                 }
                 // `argument i` (`XS_CODE_ARGUMENT`): push the frame's i-th
@@ -669,8 +659,21 @@ impl Interp {
                     self.write_closure_cell(k, top);
                     pc += op.size() as usize;
                 }
-                XS_CODE_SET_CLOSURE_1 | XS_CODE_SET_CLOSURE_2 => {
-                    dispatch_flow!(self.exec_set_closure(code, pc, return_depth, op), pc)
+                XS_CODE_SET_CLOSURE_1
+                | XS_CODE_SET_CLOSURE_2
+                | XS_CODE_PULL_CLOSURE_1
+                | XS_CODE_PULL_CLOSURE_2 => {
+                    let k = self.closure_index(op, code, pc);
+                    if self.closure_write_is_guarded(k) {
+                        dispatch_flow!(
+                            self.exec_guarded_closure_write(code, pc, return_depth, op, k),
+                            pc
+                        )
+                    } else if matches!(op, XS_CODE_SET_CLOSURE_1 | XS_CODE_SET_CLOSURE_2) {
+                        dispatch_flow!(self.exec_set_closure(code, pc, return_depth, op, k), pc)
+                    } else {
+                        dispatch_flow!(self.exec_pull_closure(code, pc, return_depth, op, k), pc)
+                    }
                 }
                 XS_CODE_CONST_CLOSURE_1 | XS_CODE_CONST_CLOSURE_2 => {
                     dispatch_flow!(self.exec_const_closure(code, pc, return_depth, op), pc)
@@ -683,9 +686,6 @@ impl Interp {
                 }
                 XS_CODE_REFRESH_LOCAL_1 | XS_CODE_REFRESH_LOCAL_2 => {
                     dispatch_flow!(self.exec_refresh_local(pc, op), pc)
-                }
-                XS_CODE_PULL_CLOSURE_1 | XS_CODE_PULL_CLOSURE_2 => {
-                    dispatch_flow!(self.exec_pull_closure(code, pc, return_depth, op), pc)
                 }
                 XS_CODE_RETRIEVE_1 | XS_CODE_RETRIEVE_2 => {
                     dispatch_flow!(self.exec_retrieve(code, pc, op), pc)
@@ -2425,72 +2425,19 @@ impl Interp {
         Flow::Next(pc)
     }
 
-    // Direct `eval(...)` uses its own dynamic-count opcode. A
-    // syntactically-direct call whose callee is not %eval% (the binding
-    // was shadowed or replaced) is an ordinary call, which XS's `EVAL`
-    // makes by falling into `RUN_ALL` (or `RUN_TAIL_ALL`) with the same
-    // count.
-    /// The dispatch loop's `EVAL` arm, which also runs `EVAL_TAIL`.
-    #[inline(never)]
-    fn exec_eval(
-        &mut self,
-        code: &[u8],
-        mut pc: usize,
-        return_depth: usize,
-        op: Opcode,
-        size: i8,
-    ) -> Flow {
-        let argc = dispatch_result_flow!(self.pop_run_count(), self, return_depth, code);
-        let Some(base) = self.stack.len().checked_sub(argc + 4) else {
-            return Flow::Exit(Step::Host(Halt::EngineInvariant("eval:frame-underflow")));
-        };
-        let native = self.stack.get(base + 1).and_then(|slot| match slot.value {
-            Payload::Reference(function) if slot.kind == Kind::Reference => {
-                self.native_of(function)
-            }
-            _ => None,
-        });
-        if native != Some(Native::Eval) {
-            self.push(Slot::integer(argc as i32));
-            let run = if op == Opcode::XS_CODE_EVAL_TAIL {
-                Opcode::XS_CODE_RUN_TAIL
-            } else {
-                Opcode::XS_CODE_RUN
-            };
-            return self.exec_run(code, pc, return_depth, run, size);
-        }
-        // This opcode is emitted only for a **direct** eval call,
-        // so the source (if a string) evaluates in the caller's
-        // scope and strictness. The flag scopes that signal to this
-        // one native call; `eval_source` clears it for any nested
-        // eval the unit itself performs.
-        self.eval_direct = self
-            .stack
-            .get(base + 1)
-            .is_some_and(|slot| match slot.value {
-                Payload::Reference(function) => self.functions.get(&function).is_some_and(|info| {
-                    info.global_env.is_null() || info.global_env == self.environment.global_obj
-                }),
-                _ => false,
-            });
-        let outcome = self.call_native(Native::Eval, base, argc, false, code);
-        self.eval_direct = false;
-        dispatch_result_flow!(outcome, self, return_depth, code);
-        if self.check_meter() == MeterCheck::Abort {
-            return Flow::Exit(Step::Host(Halt::MeterAbort));
-        }
-        pc += size as usize;
-        Flow::Next(pc)
-    }
-
     // `run`/`run_N` (`XS_CODE_RUN*`): invoke the function with N
     // arguments. Stack below the N args is
     // `[THIS, FUNCTION, RESULT, FRAME]` (XS's frame geometry:
     // args below the frame, `result`/`function`/`this` at fixed
     // offsets). Enter the callee's body frame; the call-entry
     // `mxFirstCode` meter check fires here.
+    //
+    // A direct `eval(...)` uses its own dynamic-count opcode, `EVAL`. A
+    // syntactically direct call whose callee is not %eval% (the binding was
+    // shadowed or replaced) is an ordinary call, which XS's `EVAL` makes by
+    // falling into `RUN_ALL` (or `RUN_TAIL_ALL`) with the same count.
     /// The dispatch loop's `RUN` arm, which also runs `RUN_1`, `RUN_2`, `RUN_4`, `RUN_TAIL`,
-    /// `RUN_TAIL_1`, `RUN_TAIL_2` and `RUN_TAIL_4`.
+    /// `RUN_TAIL_1`, `RUN_TAIL_2`, `RUN_TAIL_4`, `EVAL` and `EVAL_TAIL`.
     #[inline(never)]
     fn exec_run(
         &mut self,
@@ -2502,7 +2449,7 @@ impl Interp {
     ) -> Flow {
         use Opcode::*;
         let argc = match op {
-            XS_CODE_RUN | XS_CODE_RUN_TAIL => {
+            XS_CODE_RUN | XS_CODE_RUN_TAIL | XS_CODE_EVAL | XS_CODE_EVAL_TAIL => {
                 dispatch_result_flow!(self.pop_run_count(), self, return_depth, code)
             }
             XS_CODE_RUN_1 | XS_CODE_RUN_TAIL_1 => code[pc + 1] as usize,
@@ -2512,6 +2459,41 @@ impl Interp {
             _ => u32::from_le_bytes([code[pc + 1], code[pc + 2], code[pc + 3], code[pc + 4]])
                 as usize,
         };
+        if matches!(op, XS_CODE_EVAL | XS_CODE_EVAL_TAIL) {
+            let Some(base) = self.stack.len().checked_sub(argc + 4) else {
+                return Flow::Exit(Step::Host(Halt::EngineInvariant("eval:frame-underflow")));
+            };
+            let callee = self.stack[base + 1];
+            let is_eval = match callee.value {
+                Payload::Reference(function) if callee.kind == Kind::Reference => {
+                    self.native_of(function) == Some(Native::Eval)
+                }
+                _ => false,
+            };
+            if is_eval {
+                // The source (if a string) evaluates in the caller's scope
+                // and strictness. The flag scopes that signal to this one
+                // native call; `eval_source` clears it for any nested eval
+                // the unit itself performs.
+                self.eval_direct = match callee.value {
+                    Payload::Reference(function) => {
+                        self.functions.get(&function).is_some_and(|info| {
+                            info.global_env.is_null()
+                                || info.global_env == self.environment.global_obj
+                        })
+                    }
+                    _ => false,
+                };
+                let outcome = self.call_native(Native::Eval, base, argc, false, code);
+                self.eval_direct = false;
+                dispatch_result_flow!(outcome, self, return_depth, code);
+                if self.check_meter() == MeterCheck::Abort {
+                    return Flow::Exit(Step::Host(Halt::MeterAbort));
+                }
+                pc += size as usize;
+                return Flow::Next(pc);
+            }
+        }
         let ret_pc = pc + size as usize;
         // A native (intrinsic) callee runs a C handler in place
         // rather than entering a bytecode frame (XS's
@@ -2929,11 +2911,8 @@ impl Interp {
         mut pc: usize,
         return_depth: usize,
         op: Opcode,
+        k: usize,
     ) -> Flow {
-        let k = self.closure_index(op, code, pc);
-        if self.closure_write_is_guarded(k) {
-            return self.exec_guarded_closure_write(code, pc, return_depth, op, k, false);
-        }
         let top = dispatch_result_flow!(self.peek_checked(), self, return_depth, code);
         self.write_closure_cell(k, top);
         pc += op.size() as usize;
@@ -3023,11 +3002,8 @@ impl Interp {
         mut pc: usize,
         return_depth: usize,
         op: Opcode,
+        k: usize,
     ) -> Flow {
-        let k = self.closure_index(op, code, pc);
-        if self.closure_write_is_guarded(k) {
-            return self.exec_guarded_closure_write(code, pc, return_depth, op, k, true);
-        }
         let v = dispatch_result_flow!(self.pop_checked(), self, return_depth, code);
         self.write_closure_cell(k, v);
         pc += op.size() as usize;
@@ -3773,7 +3749,7 @@ impl Interp {
         Some(self.raise_js(error))
     }
 
-    /// `SET_LOCAL` (or `PULL_LOCAL`, when `pull`) of a guarded local.
+    /// `SET_LOCAL` or `PULL_LOCAL` of a guarded local.
     #[cold]
     #[inline(never)]
     fn exec_guarded_local_write(
@@ -3783,20 +3759,22 @@ impl Interp {
         return_depth: usize,
         op: Opcode,
         k: usize,
-        pull: bool,
     ) -> Flow {
         let binding = self.locals[self.local_index(k).expect("a guarded local")];
         if let Some(error) = self.guarded_write_error(binding, binding.id) {
             dispatch_halt_flow!(error, self, return_depth, code);
         }
-        if pull {
+        if matches!(
+            op,
+            Opcode::XS_CODE_PULL_LOCAL_1 | Opcode::XS_CODE_PULL_LOCAL_2
+        ) {
             let _ = dispatch_result_flow!(self.pop_checked(), self, return_depth, code);
         }
         pc += op.size() as usize;
         Flow::Next(pc)
     }
 
-    /// `SET_CLOSURE` (or `PULL_CLOSURE`, when `pull`) of a guarded closure.
+    /// `SET_CLOSURE` or `PULL_CLOSURE` of a guarded closure.
     #[cold]
     #[inline(never)]
     fn exec_guarded_closure_write(
@@ -3806,7 +3784,6 @@ impl Interp {
         return_depth: usize,
         op: Opcode,
         k: usize,
-        pull: bool,
     ) -> Flow {
         let cell = self.closure_cell(k).expect("a guarded closure");
         let binding = self.slots.get(cell);
@@ -3814,7 +3791,10 @@ impl Interp {
         if let Some(error) = self.guarded_write_error(binding, id) {
             dispatch_halt_flow!(error, self, return_depth, code);
         }
-        if pull {
+        if matches!(
+            op,
+            Opcode::XS_CODE_PULL_CLOSURE_1 | Opcode::XS_CODE_PULL_CLOSURE_2
+        ) {
             let _ = dispatch_result_flow!(self.pop_checked(), self, return_depth, code);
         }
         pc += op.size() as usize;
