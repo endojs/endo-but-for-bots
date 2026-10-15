@@ -86,7 +86,8 @@ for (const serializeBodyFormat of /** @type {const} */ ([
       const capData = toCapData(makeParcel('test:not-a-parcel'));
       const { fromCapData } = makeMarshal(undefined, undefined, {
         serializeBodyFormat,
-        decodeParcel: location => harden({ location }),
+        // A deliberately wrong hook result, to reach the decoder's check.
+        decodeParcel: location => /** @type {any} */ (harden({ location })),
       });
       t.throws(() => fromCapData(capData), {
         message: /a parcel encoding must decode to a parcel/,
