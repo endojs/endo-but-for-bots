@@ -64,7 +64,6 @@ pub const NOT_IMPLEMENTED_LABELS: &[&str] = &[
     "defineProperty:redefine",
     "eval:compiler-unimplemented",
     "eval:no-compiler",
-    "eval:shadowed-call",
     "for_in:non-object-receiver",
     "generator:new-target",
     "get_super:no-home",
