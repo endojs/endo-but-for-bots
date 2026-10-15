@@ -209,7 +209,7 @@ mutableSerialTest('a throwing isParcel accessor is not trusted', async t => {
   );
 });
 
-test.serial('a rejected global does not stop a later one', async t => {
+mutableSerialTest('a rejected global does not stop a later one', async t => {
   // Only a trusted global is captured, so a malformed one that appears first
   // cannot keep the shim's from being recognized afterward.
   instance += 1;
@@ -230,7 +230,7 @@ test.serial('a rejected global does not stop a later one', async t => {
   }
 });
 
-test.serial('a trusted global is not replaced by a later one', async t => {
+mutableSerialTest('a trusted global is not replaced by a later one', async t => {
   // Once a well-shaped global is captured, a second, equally well-shaped
   // constructor installed afterward does not displace it.
   instance += 1;
