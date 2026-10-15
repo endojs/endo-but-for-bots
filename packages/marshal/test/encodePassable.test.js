@@ -1,7 +1,7 @@
 // @ts-nocheck
 /* eslint-disable no-bitwise */
-// Install the realm's SturdyRef so the arbitraries generate SturdyRefs.
-import '@endo/sturdyref/shim.js';
+// Install the realm's Parcel so the arbitraries generate Parcels.
+import '@endo/parcel/shim.js';
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
@@ -50,13 +50,13 @@ const makeSimplePassableKit = ({ statelessSuffix } = {}) => {
       ? {
           encodeRemotable: r => `r${statelessSuffix}`,
           encodePromise: p => `?${statelessSuffix}`,
-          encodeSturdyRef: ref => `t${statelessSuffix}`,
+          encodeParcel: ref => `t${statelessSuffix}`,
           encodeError: err => `!${statelessSuffix}`,
         }
       : {
           encodeRemotable: r => encodeSpecial('r', r),
           encodePromise: p => encodeSpecial('?', p),
-          encodeSturdyRef: ref => encodeSpecial('t', ref),
+          encodeParcel: ref => encodeSpecial('t', ref),
           encodeError: err => encodeSpecial('!', err),
         };
   const encodePassableLegacy = makeEncodePassable({ ...encoders });
@@ -67,7 +67,7 @@ const makeSimplePassableKit = ({ statelessSuffix } = {}) => {
   const decodePassable = makeDecodePassable({
     decodeRemotable: e => decodeSpecial('r', e),
     decodePromise: e => decodeSpecial('?', e),
-    decodeSturdyRef: e => decodeSpecial('t', e),
+    decodeParcel: e => decodeSpecial('t', e),
     decodeError: e => decodeSpecial('!', e),
   });
 

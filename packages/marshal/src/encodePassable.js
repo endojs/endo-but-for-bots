@@ -15,7 +15,7 @@ import { thawedBytes, frozenBytes } from '@endo/immutable-arraybuffer';
 import { encodeHex, decodeHex } from '@endo/hex';
 
 /**
- * @import {CopyRecord, PassStyle, Passable, RemotableObject, ByteArray, SturdyRef} from '@endo/pass-style'
+ * @import {CopyRecord, PassStyle, Passable, RemotableObject, ByteArray, ParcelObject} from '@endo/pass-style'
  */
 
 const { isArray } = Array;
@@ -585,15 +585,15 @@ const makeEncodePromise = (unsafeEncodePromise, verifyEncoding) => {
   return encodePromise;
 };
 
-const makeEncodeSturdyRef = (unsafeEncodeSturdyRef, verifyEncoding) => {
-  const encodeSturdyRef = (ref, innerEncode) => {
-    const encoding = unsafeEncodeSturdyRef(ref, innerEncode);
+const makeEncodeParcel = (unsafeEncodeParcel, verifyEncoding) => {
+  const encodeParcel = (ref, innerEncode) => {
+    const encoding = unsafeEncodeParcel(ref, innerEncode);
     (typeof encoding === 'string' && encoding.charAt(0) === 't') ||
-      Fail`SturdyRef encoding must start with "t": ${encoding}`;
-    verifyEncoding(encoding, 'SturdyRef');
+      Fail`Parcel encoding must start with "t": ${encoding}`;
+    verifyEncoding(encoding, 'Parcel');
     return encoding;
   };
-  return encodeSturdyRef;
+  return encodeParcel;
 };
 
 const makeEncodeError = (unsafeEncodeError, verifyEncoding) => {
@@ -618,9 +618,9 @@ const makeEncodeError = (unsafeEncodeError, verifyEncoding) => {
  *   encodeRecur: (p: Passable) => string,
  * ) => string} [encodePromise]
  * @property {(
- *   sturdyRef: SturdyRef,
+ *   parcel: ParcelObject,
  *   encodeRecur: (p: Passable) => string,
- * ) => string} [encodeSturdyRef]
+ * ) => string} [encodeParcel]
  * @property {(
  *   error: Error,
  *   encodeRecur: (p: Passable) => string,
@@ -638,7 +638,7 @@ const makeInnerEncode = (encodeStringSuffix, encodeArray, options) => {
   const {
     encodeRemotable: unsafeEncodeRemotable,
     encodePromise: unsafeEncodePromise,
-    encodeSturdyRef: unsafeEncodeSturdyRef,
+    encodeParcel: unsafeEncodeParcel,
     encodeError: unsafeEncodeError,
     verifyEncoding = () => {},
   } = options;
@@ -647,10 +647,7 @@ const makeInnerEncode = (encodeStringSuffix, encodeArray, options) => {
     verifyEncoding,
   );
   const encodePromise = makeEncodePromise(unsafeEncodePromise, verifyEncoding);
-  const encodeSturdyRef = makeEncodeSturdyRef(
-    unsafeEncodeSturdyRef,
-    verifyEncoding,
-  );
+  const encodeParcel = makeEncodeParcel(unsafeEncodeParcel, verifyEncoding);
   const encodeError = makeEncodeError(unsafeEncodeError, verifyEncoding);
 
   const innerEncode = passable => {
@@ -696,8 +693,8 @@ const makeInnerEncode = (encodeStringSuffix, encodeArray, options) => {
       case 'promise': {
         return encodePromise(passable, innerEncode);
       }
-      case 'sturdyRef': {
-        return encodeSturdyRef(passable, innerEncode);
+      case 'parcel': {
+        return encodeParcel(passable, innerEncode);
       }
       case 'symbol': {
         // Strings and symbols share encoding logic.
@@ -736,9 +733,9 @@ const makeInnerEncode = (encodeStringSuffix, encodeArray, options) => {
  *   decodeRecur: (e: string) => Passable
  * ) => Promise} [decodePromise]
  * @property {(
- *   encodedSturdyRef: string,
+ *   encodedParcel: string,
  *   decodeRecur: (e: string) => Passable
- * ) => SturdyRef} [decodeSturdyRef]
+ * ) => ParcelObject} [decodeParcel]
  * @property {(
  *   encodedError: string,
  *   decodeRecur: (e: string) => Passable
@@ -749,7 +746,7 @@ const liberalDecoders = /** @type {Required<DecodeOptions>} */ (
   /** @type {unknown} */ ({
     decodeRemotable: (_encoding, _innerDecode) => undefined,
     decodePromise: (_encoding, _innerDecode) => undefined,
-    decodeSturdyRef: (_encoding, _innerDecode) => undefined,
+    decodeParcel: (_encoding, _innerDecode) => undefined,
     decodeError: (_encoding, _innerDecode) => undefined,
   })
 );
@@ -761,8 +758,7 @@ const liberalDecoders = /** @type {Required<DecodeOptions>} */ (
  * @returns {(encoded: string, skip?: number) => Passable}
  */
 const makeInnerDecode = (decodeStringSuffix, decodeArray, options) => {
-  const { decodeRemotable, decodePromise, decodeSturdyRef, decodeError } =
-    options;
+  const { decodeRemotable, decodePromise, decodeParcel, decodeError } = options;
   /** @type {(encoded: string, skip?: number) => Passable} */
   const innerDecode = (encoded, skip = 0) => {
     switch (encoded.charAt(skip)) {
@@ -798,7 +794,7 @@ const makeInnerDecode = (decodeStringSuffix, decodeArray, options) => {
         return decodePromise(getSuffix(encoded, skip), innerDecode);
       }
       case 't': {
-        return decodeSturdyRef(getSuffix(encoded, skip), innerDecode);
+        return decodeParcel(getSuffix(encoded, skip), innerDecode);
       }
       case '!': {
         return decodeError(getSuffix(encoded, skip), innerDecode);
@@ -844,13 +840,13 @@ export const makePassableKit = (options = {}) => {
   const {
     encodeRemotable = (r, _) => Fail`remotable unexpected: ${r}`,
     encodePromise = (p, _) => Fail`promise unexpected: ${p}`,
-    encodeSturdyRef = (ref, _) => Fail`sturdyRef unexpected: ${ref}`,
+    encodeParcel = (ref, _) => Fail`parcel unexpected: ${ref}`,
     encodeError = (err, _) => Fail`error unexpected: ${err}`,
     format = 'legacyOrdered',
 
     decodeRemotable = (encoding, _) => Fail`remotable unexpected: ${encoding}`,
     decodePromise = (encoding, _) => Fail`promise unexpected: ${encoding}`,
-    decodeSturdyRef = (encoding, _) => Fail`sturdyRef unexpected: ${encoding}`,
+    decodeParcel = (encoding, _) => Fail`parcel unexpected: ${encoding}`,
     decodeError = (encoding, _) => Fail`error unexpected: ${encoding}`,
   } = options;
 
@@ -859,7 +855,7 @@ export const makePassableKit = (options = {}) => {
   const encodeOptions = {
     encodeRemotable,
     encodePromise,
-    encodeSturdyRef,
+    encodeParcel,
     encodeError,
     format,
   };
@@ -905,7 +901,7 @@ export const makePassableKit = (options = {}) => {
   const decodeOptions = {
     decodeRemotable,
     decodePromise,
-    decodeSturdyRef,
+    decodeParcel,
     decodeError,
   };
   const decodeCompact = makeInnerDecode(
@@ -974,9 +970,9 @@ harden(isEncodedRemotable);
  * prefix used by any cover so that ordinal mapping keys are always outside
  * the range of valid collection entry keys.
  *
- * `sturdyRef` uses `t`. Like a remotable or a promise, a SturdyRef has no
+ * `parcel` uses `t`. Like a remotable or a promise, a Parcel has no
  * data of its own, so its encoding after the prefix is whatever the
- * `encodeSturdyRef` option supplies.
+ * `encodeParcel` option supplies.
  */
 export const passStylePrefixes = {
   error: '!',
@@ -990,7 +986,7 @@ export const passStylePrefixes = {
   bigint: 'np',
   remotable: 'r',
   string: 's',
-  sturdyRef: 't',
+  parcel: 't',
   null: 'v',
   symbol: 'y',
   // Because Array.prototype.sort puts undefined values at the end without
