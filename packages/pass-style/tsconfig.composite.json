@@ -24,6 +24,9 @@
       "path": "../is-well-formed-string/tsconfig.composite.json"
     },
     {
+      "path": "../parcel/tsconfig.composite.json"
+    },
+    {
       "path": "../promise-kit/tsconfig.composite.json"
     }
   ]
