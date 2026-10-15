@@ -56,7 +56,6 @@ test/TextEncoder/immutable-arraybuffer-intersection.js
 test/freeze/monadic.js
 test/harden/stamp.js
 test/intrinsics/ArrayIteratorPrototype/intrinsic-metadata.js
-test/intrinsics/GeneratorPrototype/intrinsic-metadata.js
 test/intrinsics/Math/intrinsic-metadata.js
 test/intrinsics/RegExpPrototype/intrinsic-metadata.js
 test/intrinsics/StringIteratorPrototype/intrinsic-metadata.js
