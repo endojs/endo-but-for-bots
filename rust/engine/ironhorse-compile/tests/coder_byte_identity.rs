@@ -259,6 +259,26 @@ fn strict_with_top_level_declarations(src: &str) -> bool {
 /// where it must differ (the hoist,
 /// [`strict_script_hoists_top_level_declarations`] pins the exact bytes).
 fn assert_identical(corpus: &[&str]) {
+    // XS's bytes at Ironhorse's deliberate departures, so the rest of each
+    // program is still compared byte for byte; `assert_departs` pins the
+    // departures themselves.
+    ironhorse_compile::with_xs_bytes(|| assert_identical_bytes(corpus));
+}
+
+/// Pin a deliberate departure from XS's compiler: under
+/// `with_xs_bytes` each source compiles to XS's bytes exactly, and without
+/// it to different bytes. What the departure does is pinned at run time,
+/// against XS and V8, by `ironhorse-262/tests/xs_departures.rs`.
+fn assert_departs(corpus: &[&str]) {
+    assert_identical(corpus);
+    for &src in corpus {
+        let want = xs_oracle::run(src).expect("oracle compile").bytecode;
+        let got = compile_with(src, false).expect("ironhorse compile");
+        assert_ne!(got, want, "{src}: the departure must still depart");
+    }
+}
+
+fn assert_identical_bytes(corpus: &[&str]) {
     let mut fails: Vec<String> = Vec::new();
     for &src in corpus {
         let bounded = ironhorse_compile::compile_atoms_with_budget(src, false, u64::MAX);
@@ -1015,24 +1035,16 @@ fn increment_decrement_delete() {
 /// `delete` over an optional chain is a pinned departure from XS's bytes:
 /// XS codes the chain as a value and answers `true` without deleting
 /// (`fxNodeCodeDelete`), where ES2024 13.5.1.2 deletes the Reference the
-/// chain produces. Ironhorse deletes the chain's last member inside the
-/// chain and swaps a short-circuit's `undefined` for `true`. The chain
-/// itself, as a value, stays byte-identical.
+/// chain produces. The chain itself, as a value, stays byte-identical.
 #[test]
 fn delete_over_an_optional_chain_departs() {
     assert_identical(&["o?.b;", "o?.b.c;", "o?.[k];", "delete o.b;"]);
-    // What the departure does is pinned at run time, against XS and V8, by
-    // `ironhorse-262/tests/xs_departures.rs`; here, only that it departs.
-    for src in [
+    assert_departs(&[
         "delete o?.b;",
         "delete o?.b.c;",
         "delete o?.[k];",
         "delete (o?.b);",
-    ] {
-        let want = xs_oracle::run(src).expect("oracle compile").bytecode;
-        let got = compile_with(src, false).expect("ironhorse compile");
-        assert_ne!(got, want, "{src}: the departure must still depart");
-    }
+    ]);
 }
 
 /// A call through a parenthesized `eval` is a pinned departure from XS's
@@ -1042,15 +1054,27 @@ fn delete_over_an_optional_chain_departs() {
 #[test]
 fn a_parenthesized_eval_call_departs() {
     assert_identical(&["(0,eval)(s);", "eval(s);", "(f)(s);"]);
-    for src in [
+    assert_departs(&[
         "(eval)(s);",
         "((eval))(s);",
         "function f(){var x=1;return (eval)('x');}",
-    ] {
-        let want = xs_oracle::run(src).expect("oracle compile").bytecode;
-        let got = compile_with(src, false).expect("ironhorse compile");
-        assert_ne!(got, want, "{src}: the departure must still depart");
-    }
+    ]);
+}
+
+/// A spread array literal and a rest element fill their array with
+/// CreateDataProperty (`NEW_PROPERTY_AT`), where XS uses [[Set]]
+/// (`SET_PROPERTY_AT`), so an inherited index setter runs on XS.
+#[test]
+fn spread_and_rest_fills_depart() {
+    assert_identical(&["[1,2];", "[a,b]=x;"]);
+    assert_departs(&[
+        "[...a];",
+        "[1,...a,2];",
+        "[...a,,b];",
+        "[a,...r]=x;",
+        "let[a,...r]=x;",
+        "(function([a,...r]){return r;});",
+    ]);
 }
 
 #[test]

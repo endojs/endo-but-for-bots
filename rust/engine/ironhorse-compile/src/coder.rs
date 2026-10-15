@@ -1057,6 +1057,40 @@ impl<'a, 'm> Coder<'a, 'm> {
 /// a program's header shape.
 pub use crate::scoper::Goal;
 
+thread_local! {
+    /// Whether the compiler emits XS's own bytes where Ironhorse departs
+    /// from XS's compiler (see [`with_xs_bytes`]).
+    static XS_BYTES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` with the compiler emitting XS's own bytecode at each place where
+/// Ironhorse's compiler deliberately departs from XS's, so that a
+/// byte-identity differential still compares everything else byte for
+/// byte. The departures, each pinned by `coder_byte_identity.rs` and
+/// recorded in `ironhorse-262/tests/xs_departures.rs`:
+///
+/// - `delete o?.b` deletes the chain's member (XS deletes nothing);
+/// - `(eval)(s)` is a direct eval (XS calls it indirectly);
+/// - an array literal's spread and a rest element fill their array with
+///   CreateDataProperty (XS uses [[Set]], so an inherited setter runs).
+///
+/// For differential harnesses only: the bytes it produces carry XS's bugs.
+pub fn with_xs_bytes<R>(f: impl FnOnce() -> R) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            XS_BYTES.with(|flag| flag.set(self.0));
+        }
+    }
+    let _restore = Restore(XS_BYTES.with(|flag| flag.replace(true)));
+    f()
+}
+
+/// Whether [`with_xs_bytes`] is in effect on this thread.
+pub(crate) fn xs_bytes() -> bool {
+    XS_BYTES.with(std::cell::Cell::get)
+}
+
 /// Whether `source` declares a top-level `var` or function — the programs
 /// whose observable behavior can differ between [`Goal::Script`] and
 /// [`Goal::Eval`], because only a declaration reaches
@@ -4260,8 +4294,10 @@ impl Coder<'_, '_> {
                 self.add_byte(0, XS_CODE_AT);
                 self.add_index(1, XS_CODE_GET_LOCAL_1, result);
                 self.add_symbol(0, XS_CODE_GET_PROPERTY, "value");
-                self.add_byte(-2, XS_CODE_SET_PROPERTY_AT);
-                self.add_byte(-1, XS_CODE_POP);
+                // CreateDataProperty, not [[Set]] (ES2024 8.6.3,
+                // IteratorBindingInitialization): an inherited index
+                // setter must not run.
+                self.code_fill_element();
 
                 self.add_branch(0, XS_CODE_BRANCH_1, next_target);
                 self.place_target(1, done_target);
@@ -4758,7 +4794,12 @@ impl Coder<'_, '_> {
     fn is_direct_eval(item: &Item) -> bool {
         // `(eval)(s)` is direct too: the parentheses keep the Reference
         // (ES2024 13.3.6.1). A departure from XS, which calls it indirectly.
-        matches!(item.without_parentheses(), Item::Node(n) if n.token == Token::Access
+        let item = if xs_bytes() {
+            item
+        } else {
+            item.without_parentheses()
+        };
+        matches!(item, Item::Node(n) if n.token == Token::Access
             && matches!(n.children.first(), Some(Item::Symbol(s)) if SymbolName::from_units(s) == "eval"))
     }
 
@@ -4913,8 +4954,9 @@ impl Coder<'_, '_> {
                     self.add_byte(0, XS_CODE_AT);
                     self.add_index(0, XS_CODE_GET_LOCAL_1, result);
                     self.add_symbol(0, XS_CODE_GET_PROPERTY, "value");
-                    self.add_byte(-2, XS_CODE_SET_PROPERTY_AT);
-                    self.add_byte(-1, XS_CODE_POP);
+                    // CreateDataPropertyOrThrow (ES2024 13.2.4.1
+                    // ArrayAccumulation), not [[Set]].
+                    self.code_fill_element();
                     self.add_index(1, XS_CODE_GET_LOCAL_1, counter);
                     self.add_byte(0, XS_CODE_INCREMENT);
                     self.add_index(-1, XS_CODE_PULL_LOCAL_1, counter);
@@ -4926,8 +4968,7 @@ impl Coder<'_, '_> {
                     self.add_index(1, XS_CODE_GET_LOCAL_1, counter);
                     self.add_byte(0, XS_CODE_AT);
                     self.code(item);
-                    self.add_byte(-2, XS_CODE_SET_PROPERTY_AT);
-                    self.add_byte(-1, XS_CODE_POP);
+                    self.code_fill_element();
                     self.add_index(1, XS_CODE_GET_LOCAL_1, counter);
                     self.add_byte(0, XS_CODE_INCREMENT);
                     self.add_index(-1, XS_CODE_PULL_LOCAL_1, counter);
@@ -4962,6 +5003,21 @@ impl Coder<'_, '_> {
             }
         }
         self.unuse_temporaries(1);
+    }
+
+    /// Store the value on top of `[array, at, value]` as an element of a
+    /// spread array literal or a rest element's array, consuming all three:
+    /// a CreateDataProperty (`NEW_PROPERTY_AT`, attribute flag 0), so an
+    /// inherited index setter does not run. XS stores with [[Set]]
+    /// (`SET_PROPERTY_AT` then `POP`), which [`with_xs_bytes`] restores.
+    fn code_fill_element(&mut self) {
+        if xs_bytes() {
+            self.add_byte(-2, XS_CODE_SET_PROPERTY_AT);
+            self.add_byte(-1, XS_CODE_POP);
+        } else {
+            self.add_byte(-3, XS_CODE_NEW_PROPERTY_AT);
+            self.add_integer(0, XS_CODE_INTEGER_1, 0);
+        }
     }
 
     /// `fxPostfixExpressionNodeCode` — codes both `x++`/`x--` and the
@@ -5062,7 +5118,7 @@ impl Coder<'_, '_> {
                 // An Ironhorse departure in the bytes: XS's `fxNodeCodeDelete`
                 // codes the chain as a value and answers `true` without
                 // deleting anything.
-                Token::Chain => {
+                Token::Chain if !xs_bytes() => {
                     let end = self.create_target();
                     let saved = self.enter_chain(self.stack_level + 1);
                     self.code_delete(&n.children[0]);
