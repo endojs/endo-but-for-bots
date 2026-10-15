@@ -17,11 +17,11 @@ export default function tameParcelConstructor(InitialParcel) {
 
   // Constructor emulation is one of the repository's documented exceptions
   // to the function-keyword rule. The function's specified name is Parcel.
-  const SharedParcel = function Parcel(...rest) {
-    if (new.target !== SharedParcel) {
-      throw TypeError('Parcel cannot be called or subclassed');
+  const SharedParcel = function Parcel(location, openHook) {
+    if (new.target === undefined) {
+      throw TypeError('Parcel requires new');
     }
-    return construct(InitialParcel, rest, InitialParcel);
+    return construct(InitialParcel, [location, openHook], new.target);
   };
 
   defineProperties(SharedParcel, {

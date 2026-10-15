@@ -75,11 +75,11 @@ test('child code cannot recover the initial constructor', t => {
   t.is(grandchild.globalThis.Parcel, SharedParcel);
 });
 
-test('the shared constructor refuses calls and subclassing', t => {
+test('the shared constructor delegates construction with its new target', t => {
   t.is(SharedParcel.name, 'Parcel');
   t.is(SharedParcel.length, 2);
   t.throws(() => SharedParcel('test:call', () => {}), {
-    message: /Parcel cannot be called or subclassed/,
+    message: /Parcel requires new/,
   });
   const compartment = new Compartment();
   t.throws(
@@ -87,6 +87,6 @@ test('the shared constructor refuses calls and subclassing', t => {
       compartment.evaluate(
         `new (class extends Parcel {})('test:sub', () => {})`,
       ),
-    { message: /Parcel cannot be called or subclassed/ },
+    { message: /Parcel construction requires the shared Parcel prototype/ },
   );
 });

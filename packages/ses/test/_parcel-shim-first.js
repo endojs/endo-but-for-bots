@@ -9,8 +9,10 @@ const details = new WeakMap();
 
 class Parcel {
   constructor(location, openHook) {
-    if (new.target !== Parcel) {
-      throw TypeError('Parcel cannot be subclassed');
+    if (new.target.prototype !== Parcel.prototype) {
+      throw TypeError(
+        'Parcel construction requires the shared Parcel prototype',
+      );
     }
     if (typeof location !== 'string') {
       throw TypeError('Parcel location must be a string');
