@@ -83,13 +83,18 @@ def main():
             "})();\n",
             encoding="utf-8",
         )
+        # node:wasi's fast API callbacks allocate, and a collection one of
+        # them starts (seen in fd_write) crashes Node with SIGSEGV as it
+        # walks the calling frame. The ordinary callbacks are safe to
+        # collect in.
+        node = ["node", "--no-turbo-fast-api-calls", str(runner)]
         subprocess.run(
             [
                 "cargo", f"+{args.toolchain}", "test",
                 "--manifest-path", str(manifest),
                 "--target", "wasm32-wasip1",
                 "--target-dir", str(engine / "target"),
-                "--config", "target.wasm32-wasip1.runner=" + json.dumps(["node", str(runner)]),
+                "--config", "target.wasm32-wasip1.runner=" + json.dumps(node),
                 "--", "--test-threads=1",
             ],
             check=True,
