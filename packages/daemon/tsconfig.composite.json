@@ -84,6 +84,9 @@
       "path": "../ocapn-noise/tsconfig.composite.json"
     },
     {
+      "path": "../parcel/tsconfig.composite.json"
+    },
+    {
       "path": "../pass-style/tsconfig.composite.json"
     },
     {
@@ -103,9 +106,6 @@
     },
     {
       "path": "../stream-node/tsconfig.composite.json"
-    },
-    {
-      "path": "../parcel/tsconfig.composite.json"
     },
     {
       "path": "../tar/tsconfig.composite.json"
