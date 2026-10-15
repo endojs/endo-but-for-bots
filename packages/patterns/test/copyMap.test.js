@@ -13,6 +13,8 @@ import {
 } from '../src/keys/checkKey.js';
 import { matches } from '../src/patterns/patternMatchers.js';
 
+/** @import {Pattern} from '../src/types.js' */
+
 const assertIsCopyMap = (t, m) => {
   t.is(passStyleOf(m), 'tagged');
   t.is(getTag(m), 'copyMap');
@@ -139,7 +141,10 @@ test('matching', t => {
   // not yet been decided.
   // See https://github.com/endojs/endo/pull/1737#pullrequestreview-1596595411
   try {
-    matches(makeCopyMap([]), makeCopyMap([])) || Fail`Unexpected match failure`;
+    matches(
+      makeCopyMap([]),
+      /** @type {Pattern} */ (/** @type {unknown} */ (makeCopyMap([]))),
+    ) || Fail`Unexpected match failure`;
     t.fail('CopyMap comparison support (time to test unconditionally?)');
   } catch (_err) {
     // no CopyMap comparison support

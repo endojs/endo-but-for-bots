@@ -73,9 +73,9 @@ export type PassByRef =
   | Promise<PassByCopy>;
 
 /**
- * A Passable is acyclic data that can be marshalled. It must be hardened to
- * remain
- * stable (even if some components are proxies; see PureData restriction below),
+ * A Passable is acyclic data that a transport can classify for passage. It
+ * must be hardened to remain stable (even if some components are proxies; see
+ * PureData restriction below),
  * and is classified by PassStyle:
  *   * Atomic values have an AtomStyle (PassStyle
  *     'undefined' | 'null' | 'boolean' | 'number' | 'bigint'
@@ -89,8 +89,9 @@ export type PassByRef =
  *     remote interaction.
  *   * As a special case to support system observability, error objects are
  *     Passable (PassStyle 'error').
- *   * Parcels (PassStyle 'parcel') are Passable by identity, like
- *     PassableCaps, but are not PassableCaps.
+ *   * Parcels (PassStyle 'parcel') are dormant capabilities. They are
+ *     Passable but are not PassableCaps. A transport needs explicit Parcel
+ *     support to carry one; the generic marshal does not yet provide it.
  *
  * A Passable is essentially a pass-by-copy superstructure with a
  * pass-by-reference
@@ -100,24 +101,35 @@ export type PassByRef =
 export type Passable<
   PC extends PassableCap = PassableCap,
   E extends Error = Error,
-> = void | Atom | Container<PC, E> | PC | E | ParcelObject;
+  P extends ParcelObject = ParcelObject,
+> = void | Atom | Container<PC, E, P> | PC | E | P;
 
-export type Container<PC extends PassableCap, E extends Error> =
-  | CopyArrayInterface<PC, E>
-  | CopyRecordInterface<PC, E>
-  | CopyTaggedInterface<PC, E>;
+export type Container<
+  PC extends PassableCap,
+  E extends Error,
+  P extends ParcelObject,
+> =
+  | CopyArrayInterface<PC, E, P>
+  | CopyRecordInterface<PC, E, P>
+  | CopyTaggedInterface<PC, E, P>;
 export interface CopyArrayInterface<
   PC extends PassableCap,
   E extends Error,
-> extends CopyArray<Passable<PC, E>> {}
+  P extends ParcelObject = ParcelObject,
+> extends CopyArray<Passable<PC, E, P>> {}
 export interface CopyRecordInterface<
   PC extends PassableCap,
   E extends Error,
-> extends CopyRecord<Passable<PC, E>> {}
+  P extends ParcelObject = ParcelObject,
+> extends CopyRecord<Passable<PC, E, P>> {
+  readonly [PASS_STYLE]?: never;
+  readonly [Symbol.toStringTag]?: never;
+}
 export interface CopyTaggedInterface<
   PC extends PassableCap,
   E extends Error,
-> extends CopyTagged<string, Passable<PC, E>> {}
+  P extends ParcelObject = ParcelObject,
+> extends CopyTagged<string, Passable<PC, E, P>> {}
 
 export type PassStyleOf = {
   (p: undefined): 'undefined';
@@ -165,7 +177,7 @@ export type PassStyleOf = {
  * trip (as exists between vats) to produce data structures disconnected from
  * any potential proxies.
  */
-export type PureData = Passable<never, never>;
+export type PureData = Passable<never, never, never>;
 
 /**
  * @deprecated this type doesn't carry the type of the behavior for remote
@@ -193,9 +205,9 @@ export type RemotableObject<I extends InterfaceSpec = string> = PassStyled<
 export type RemotableMethodName = PropertyKey;
 
 /**
- * A Parcel is passable, analogous to a presence: it has object identity and
- * no data. The runtime recognition in `parcel.js` senses `globalThis.Parcel`
- * without importing the shim.
+ * A Parcel is a passable dormant capability with no exposed data. The runtime
+ * recognition in `parcel.js` senses `globalThis.Parcel` without importing the
+ * shim.
  */
 export type ParcelObject = ReturnType<typeof makeParcel>;
 
