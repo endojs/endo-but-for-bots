@@ -145,6 +145,26 @@ pub enum Item {
     List(Vec<Item>),
 }
 
+impl Item {
+    /// The expression a run of single-item parentheses wraps: `(eval)` and
+    /// `((eval))` are `eval`. A parenthesized expression keeps its Reference
+    /// (ES2024 13.2.9.2), so a call through one is a call through the
+    /// expression inside. Only parentheses make a one-item `Expressions`
+    /// node in an operand position.
+    pub fn without_parentheses(&self) -> &Item {
+        let mut item = self;
+        while let Item::Node(node) = item {
+            match (node.token, node.children.first()) {
+                (Token::Expressions, Some(Item::List(items))) if items.len() == 1 => {
+                    item = &items[0];
+                }
+                _ => break,
+            }
+        }
+        item
+    }
+}
+
 /// The deepest tree the compiler will build or walk, in [`Node::depth`]
 /// levels.
 ///
