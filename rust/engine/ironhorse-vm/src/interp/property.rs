@@ -373,10 +373,21 @@ impl Interp {
             }
             current = self.instance_prototype(current);
         }
+        // A strict method's primitive receiver refuses a new or inherited
+        // data property (OrdinarySetWithOwnDescriptor step 2.c); XS, which
+        // converts it to an object first, words the error as for a
+        // non-extensible object, or fails the conversion itself.
+        if matches!(receiver.kind, Kind::Undefined | Kind::Null) {
+            return self.catchable_type_error_msg(cannot_coerce_to_object(receiver.kind));
+        }
+        if receiver.kind != Kind::Reference {
+            let name = self.property_debug_name(id);
+            return self.catchable_type_error_msg(format!("set {name}: not extensible"));
+        }
         let Payload::Reference(object) = receiver.value else {
             return self.catchable_type_error_msg("set: receiver is not an object".into());
         };
-        if receiver.kind != Kind::Reference || self.proxies.contains_key(&object) {
+        if self.proxies.contains_key(&object) {
             return self.catchable_type_error_msg("set: receiver rejected assignment".into());
         }
         let descriptor = self
@@ -419,16 +430,26 @@ impl Interp {
         if matches!(obj.kind, Kind::Null | Kind::Undefined) {
             return Err(self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)));
         }
-        // A primitive symbol carries `Payload::Reference(desc)` — its
-        // description slot, NOT an instance. Without this guard `sym[k] = v`
-        // reached THROUGH the symbol into the description: it ran that
-        // object's setters and stored on it, which let an object handed to
-        // `Symbol()` be written through a value that is routinely treated as
-        // opaque. A symbol joins the other primitive receivers here: the write
-        // stores nothing. (XS additionally throws for the strict form, as it
-        // does for every primitive receiver; that gap is the standing
-        // `property_at_set`-on-primitives divergence, not this one.)
-        if obj.kind == Kind::Symbol {
+        // A primitive base, matched on its KIND: a primitive symbol carries
+        // `Payload::Reference(desc)`, its description slot, NOT an instance,
+        // and must never be written through. PutValue runs the wrapper's
+        // [[Set]] with the primitive as the receiver.
+        if let Some(proto) = self.primitive_wrapper_proto(obj) {
+            let id = match key.value {
+                Payload::At(id, index) if id == crate::value::XS_NO_ID => {
+                    self.intern_key(index.to_string())?
+                }
+                Payload::At(id, _) => id,
+                _ => return Err(Step::Host(Halt::EngineInvariant("set_property_at:key"))),
+            };
+            let accepted = if self.string_owns_key(obj, id) {
+                false
+            } else {
+                self.mop_set(code, proto, id, value, obj)?
+            };
+            if !accepted && self.strict {
+                return Err(self.failed_primitive_set_error(obj, proto, id));
+            }
             return Ok(());
         }
         let inst = match obj.value {

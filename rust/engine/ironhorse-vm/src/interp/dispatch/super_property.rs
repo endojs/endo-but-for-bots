@@ -32,9 +32,8 @@ impl Interp {
     pub(super) fn dispatch_get_super_at(&mut self, code: &[u8]) -> Result<(), Step> {
         let key = self.pop_checked()?;
         let super_ref = self.pop_checked()?;
-        let receiver_ref = match super_ref.value {
-            Payload::Reference(receiver) if super_ref.kind == Kind::EnvReference => receiver,
-            _ => return Err(Step::Host(Halt::EngineInvariant("get_super_at:reference"))),
+        let Some(receiver) = super_ref.super_receiver() else {
+            return Err(Step::Host(Halt::EngineInvariant("get_super_at:reference")));
         };
         // A read mints nothing: an index the key table has never
         // held stays an index (`ReadKey`).
@@ -48,7 +47,6 @@ impl Interp {
             Payload::At(id, _) => ReadKey::Id(id),
             _ => return Err(Step::Host(Halt::EngineInvariant("get_super_at:key"))),
         };
-        let receiver = Slot::of(Kind::Reference, Payload::Reference(receiver_ref));
         // A computed super reference defers the null-base
         // TypeError to GetValue (ECMA-262 6.2.5.5 via ToObject).
         // XS rejects earlier in SUPER_AT, before coercing the key,
@@ -104,9 +102,8 @@ impl Interp {
         let value = self.pop_checked()?;
         let key = self.pop_checked()?;
         let super_ref = self.pop_checked()?;
-        let receiver_ref = match super_ref.value {
-            Payload::Reference(receiver) if super_ref.kind == Kind::EnvReference => receiver,
-            _ => return Err(Step::Host(Halt::EngineInvariant("set_super_at:reference"))),
+        let Some(receiver) = super_ref.super_receiver() else {
+            return Err(Step::Host(Halt::EngineInvariant("set_super_at:reference")));
         };
         let id = match key.value {
             Payload::At(id, index) if id == crate::value::XS_NO_ID => {
@@ -115,7 +112,6 @@ impl Interp {
             Payload::At(id, _) => id,
             _ => return Err(Step::Host(Halt::EngineInvariant("set_super_at:key"))),
         };
-        let receiver = Slot::of(Kind::Reference, Payload::Reference(receiver_ref));
         // A computed super reference defers the null-base
         // TypeError to PutValue (ECMA-262 6.2.5.6 via ToObject),
         // after both the key and the RHS have evaluated.

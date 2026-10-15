@@ -384,7 +384,8 @@ pub enum Kind {
     /// payload's `Reference` is slot 0 for the global environment, or
     /// `SlotIndex::NULL` for the active frame's own scope. Computed super
     /// references instead carry the actual receiver and store the base
-    /// prototype in `next`. These forms can survive in a suspended stack.
+    /// prototype in `next` ([`Slot::super_reference`]). These forms can
+    /// survive in a suspended stack.
     EnvReference = 12,
     /// A computed property key produced by `XS_CODE_AT`/`AT_2` (XS's
     /// `XS_AT_KIND`) and consumed by `GET_PROPERTY_AT`/`SET_PROPERTY_AT`/
@@ -477,7 +478,38 @@ pub fn canonicalize_nan(n: f64) -> f64 {
     }
 }
 
+/// The `flag` bit of a computed super reference whose receiver is not an
+/// object: the low bits hold the receiver's [`Kind`], and the payload is
+/// the receiver's own.
+pub const SUPER_PRIMITIVE_RECEIVER: u8 = 0x80;
+
 impl Slot {
+    /// The computed super reference `SUPER_AT` leaves for
+    /// `GET_SUPER_AT`/`SET_SUPER_AT`: an [`Kind::EnvReference`] carrying the
+    /// receiver, which a strict method may have as a primitive, `undefined`
+    /// or `null` (a super reference never converts `this` to an object), and
+    /// the base prototype in `next`.
+    pub fn super_reference(receiver: Slot, base: SlotIndex) -> Slot {
+        let mut slot = Slot::of(Kind::EnvReference, receiver.value);
+        if receiver.kind != Kind::Reference {
+            slot.flag = SUPER_PRIMITIVE_RECEIVER | receiver.kind as u8;
+        }
+        slot.next = base;
+        slot
+    }
+    /// The receiver a [`Slot::super_reference`] carries, or `None` for any
+    /// other slot.
+    pub fn super_receiver(self) -> Option<Slot> {
+        if self.kind != Kind::EnvReference {
+            return None;
+        }
+        if self.flag & SUPER_PRIMITIVE_RECEIVER == 0 {
+            return matches!(self.value, Payload::Reference(_))
+                .then(|| Slot::of(Kind::Reference, self.value));
+        }
+        let kind = Kind::from_u8(self.flag & !SUPER_PRIMITIVE_RECEIVER)?;
+        (kind != Kind::Reference).then(|| Slot::of(kind, self.value))
+    }
     #[inline]
     pub fn undefined() -> Slot {
         Slot::of(Kind::Undefined, Payload::None)

@@ -309,6 +309,41 @@ const DEPARTURES: &[Row] = &[
         v8: "s5|2|true|7,8",
         why: "a rest element's array and a spread array literal are filled with CreateDataProperty (ES2024 8.6.3, 13.2.4.1), so an inherited index setter runs only for the assignment to the target; XS fills them with [[Set]]",
     },
+    Row {
+        program: "'use strict'; var log = []; Object.defineProperty(Number.prototype, 'z', { set: function (v) { log.push(typeof this, v); }, configurable: true }); (5).z = 1; (5)['z'] = 2; log.join()",
+        ironhorse: "number,1,number,2",
+        xs: "object,1,object,2",
+        v8: "number,1,number,2",
+        why: "PutValue on a primitive base calls the wrapper's [[Set]] with the primitive itself as the receiver (ES2024 6.2.5.6 step 5.b), so a strict setter's `this` is the primitive; XS passes the wrapper object",
+    },
+    Row {
+        program: "var log = []; Object.setPrototypeOf(Number.prototype, new Proxy({}, { set: function (t, k, v, r) { log.push(typeof r, k, v); return true; } })); (5).q = 1; (5)[7] = 2; log.join()",
+        ironhorse: "number,q,1,number,7,2",
+        xs: "object,q,1,object,7,2",
+        v8: "number,q,1,number,7,2",
+        why: "a Proxy `set` trap reached from a primitive base receives the primitive as its receiver (ES2024 6.2.5.6 step 5.b, 10.5.9 step 8); XS passes the wrapper object",
+    },
+    Row {
+        program: "var log = []; Object.setPrototypeOf(Number.prototype, new Proxy({}, { get: function (t, k, r) { log.push(typeof r, String(k)); } })); (5).q; (5)[7]; log.join()",
+        ironhorse: "number,q,number,7",
+        xs: "object,q,object,7",
+        v8: "number,q,number,7",
+        why: "a Proxy `get` trap reached from a primitive base receives the primitive as its receiver (ES2024 6.2.5.5 step 3.b, 10.5.8 step 8); XS passes the wrapper object",
+    },
+    Row {
+        program: "'use strict'; var log = []; class A { m(k) { super[k] = 7; } n() { super.s = 8; } } Object.defineProperty(Object.prototype, 's', { set(v) { log.push(typeof this + v); }, configurable: true }); [5, 'ab', true, Symbol(), 5n].forEach(function (p) { A.prototype.m.call(p, 's'); A.prototype.n.call(p); }); log.join()",
+        ironhorse: "number7,number8,string7,string8,boolean7,boolean8,symbol7,symbol8,bigint7,bigint8",
+        xs: "object7,object8,object7,object8,object7,object8,object7,object8,object7,object8",
+        v8: "number7,number8,string7,string8,boolean7,boolean8,symbol7,symbol8,bigint7,bigint8",
+        why: "a super reference keeps a strict method's primitive `this` as its receiver (ES2024 13.3.7.3 MakeSuperPropertyReference), so an inherited setter's `this` is the primitive; XS converts `this` to an object",
+    },
+    Row {
+        program: "'use strict'; class A { m() { return super.g; } n(k) { return super[k]; } } Object.defineProperty(Object.prototype, 'g', { get() { return String(this); }, configurable: true }); var r; try { r = [A.prototype.m.call(undefined), A.prototype.n.call(null, 'g')].join(); } catch (e) { r = String(e) } r",
+        ironhorse: "undefined,null",
+        xs: "TypeError: cannot coerce undefined to object",
+        v8: "undefined,null",
+        why: "a super reference reads from the home object's prototype with `this` as the receiver, whatever its type (ES2024 13.3.7.3, 6.2.5.5); XS converts `this` to an object, which throws for undefined and null",
+    },
 ];
 
 /// Programs where Ironhorse departs from XS and V8 has no counterpart to
@@ -533,20 +568,6 @@ const GAPS: &[Row] = &[
         xs: "function,function,function",
         v8: "function,function,function",
         why: "%TypedArray.prototype% lacks ES2023's toSorted, toReversed and with",
-    },
-    Row {
-        program: "var log = []; Object.defineProperty(Number.prototype, 'z', { set: function (v) { log.push(typeof this); }, configurable: true }); (5).z = 1; delete Number.prototype.z; log.join()",
-        ironhorse: "",
-        xs: "object",
-        v8: "object",
-        why: "a write to a primitive's property runs an inherited setter, with the primitive boxed in sloppy code; Ironhorse never calls it",
-    },
-    Row {
-        program: "'use strict'; try { (5).y = 1; 'wrote' } catch (e) { e.constructor.name }",
-        ironhorse: "wrote",
-        xs: "TypeError",
-        v8: "TypeError",
-        why: "in strict code a write to a primitive's own-less property throws a TypeError (OrdinarySet on a non-object receiver); Ironhorse ignores it",
     },
     Row {
         program: "var s = new SharedArrayBuffer(4); [Object.getPrototypeOf(s) === SharedArrayBuffer.prototype, s instanceof SharedArrayBuffer, Reflect.ownKeys(SharedArrayBuffer.prototype).map(String).join('+')].join()",
