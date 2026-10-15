@@ -846,7 +846,7 @@ export const makeOcapnHub = ({
         return refTokenFor(row.refId);
       },
       /**
-       * Sturdyrefs are opaque pointers: they transit the hub as plain
+       * Parcels are opaque pointers: they transit the hub as plain
        * values, re-encoded verbatim toward the destination.
        *
        * @param {any} location
