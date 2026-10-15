@@ -342,3 +342,64 @@ fn generic_array_methods_box_a_primitive_receiver() {
         agrees(&format!("String({program})"));
     }
 }
+
+/// A callback can delete an element of the dense array it walks (exposing
+/// an inherited one), turn one into an accessor, or shorten the array; the
+/// walk still visits what HasProperty and Get answer.
+#[test]
+fn a_dense_array_walk_follows_its_callback_mutations() {
+    for program in [
+        "(function () { var a = [1, 2, 3]; Array.prototype[1] = 'p'; var r = []; try { a.forEach(function (x, y, z) { if (r.length === 0) delete a[1]; r.push(String(x) + '/' + String(y)); return false; }) } finally { delete Array.prototype[1]; } return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.forEach(function (x, y, z) { if (r.length === 0) { Object.defineProperty(a, 2, { get: function () { return 'g'; }, configurable: true }); Object.defineProperty(a, 3, { value: 'v', writable: false }); } r.push([x, y].map(String).join('/')); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.forEach(function (x, y) { if (r.length === 0) a.length = 1; r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.forEach(function (x, y) { if (r.length === 0) a.push(9); r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3]; Array.prototype[1] = 'p'; var r = []; try { a.map(function (x, y, z) { if (r.length === 0) delete a[1]; r.push(String(x) + '/' + String(y)); return false; }) } finally { delete Array.prototype[1]; } return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.map(function (x, y, z) { if (r.length === 0) { Object.defineProperty(a, 2, { get: function () { return 'g'; }, configurable: true }); Object.defineProperty(a, 3, { value: 'v', writable: false }); } r.push([x, y].map(String).join('/')); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.map(function (x, y) { if (r.length === 0) a.length = 1; r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.map(function (x, y) { if (r.length === 0) a.push(9); r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3]; Array.prototype[1] = 'p'; var r = []; try { a.filter(function (x, y, z) { if (r.length === 0) delete a[1]; r.push(String(x) + '/' + String(y)); return false; }) } finally { delete Array.prototype[1]; } return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.filter(function (x, y, z) { if (r.length === 0) { Object.defineProperty(a, 2, { get: function () { return 'g'; }, configurable: true }); Object.defineProperty(a, 3, { value: 'v', writable: false }); } r.push([x, y].map(String).join('/')); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.filter(function (x, y) { if (r.length === 0) a.length = 1; r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.filter(function (x, y) { if (r.length === 0) a.push(9); r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3]; Array.prototype[1] = 'p'; var r = []; try { a.some(function (x, y, z) { if (r.length === 0) delete a[1]; r.push(String(x) + '/' + String(y)); return false; }) } finally { delete Array.prototype[1]; } return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.some(function (x, y, z) { if (r.length === 0) { Object.defineProperty(a, 2, { get: function () { return 'g'; }, configurable: true }); Object.defineProperty(a, 3, { value: 'v', writable: false }); } r.push([x, y].map(String).join('/')); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.some(function (x, y) { if (r.length === 0) a.length = 1; r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.some(function (x, y) { if (r.length === 0) a.push(9); r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3]; Array.prototype[1] = 'p'; var r = []; try { a.every(function (x, y, z) { if (r.length === 0) delete a[1]; r.push(String(x) + '/' + String(y)); return false; }) } finally { delete Array.prototype[1]; } return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.every(function (x, y, z) { if (r.length === 0) { Object.defineProperty(a, 2, { get: function () { return 'g'; }, configurable: true }); Object.defineProperty(a, 3, { value: 'v', writable: false }); } r.push([x, y].map(String).join('/')); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.every(function (x, y) { if (r.length === 0) a.length = 1; r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.every(function (x, y) { if (r.length === 0) a.push(9); r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3]; Array.prototype[1] = 'p'; var r = []; try { a.find(function (x, y, z) { if (r.length === 0) delete a[1]; r.push(String(x) + '/' + String(y)); return false; }) } finally { delete Array.prototype[1]; } return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.find(function (x, y, z) { if (r.length === 0) { Object.defineProperty(a, 2, { get: function () { return 'g'; }, configurable: true }); Object.defineProperty(a, 3, { value: 'v', writable: false }); } r.push([x, y].map(String).join('/')); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.find(function (x, y) { if (r.length === 0) a.length = 1; r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.find(function (x, y) { if (r.length === 0) a.push(9); r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3]; Array.prototype[1] = 'p'; var r = []; try { a.findIndex(function (x, y, z) { if (r.length === 0) delete a[1]; r.push(String(x) + '/' + String(y)); return false; }) } finally { delete Array.prototype[1]; } return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.findIndex(function (x, y, z) { if (r.length === 0) { Object.defineProperty(a, 2, { get: function () { return 'g'; }, configurable: true }); Object.defineProperty(a, 3, { value: 'v', writable: false }); } r.push([x, y].map(String).join('/')); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.findIndex(function (x, y) { if (r.length === 0) a.length = 1; r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.findIndex(function (x, y) { if (r.length === 0) a.push(9); r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3]; Array.prototype[1] = 'p'; var r = []; try { a.findLast(function (x, y, z) { if (r.length === 0) delete a[1]; r.push(String(x) + '/' + String(y)); return false; }) } finally { delete Array.prototype[1]; } return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.findLast(function (x, y, z) { if (r.length === 0) { Object.defineProperty(a, 2, { get: function () { return 'g'; }, configurable: true }); Object.defineProperty(a, 3, { value: 'v', writable: false }); } r.push([x, y].map(String).join('/')); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.findLast(function (x, y) { if (r.length === 0) a.length = 1; r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.findLast(function (x, y) { if (r.length === 0) a.push(9); r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3]; Array.prototype[1] = 'p'; var r = []; try { a.findLastIndex(function (x, y, z) { if (r.length === 0) delete a[1]; r.push(String(x) + '/' + String(y)); return false; }) } finally { delete Array.prototype[1]; } return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.findLastIndex(function (x, y, z) { if (r.length === 0) { Object.defineProperty(a, 2, { get: function () { return 'g'; }, configurable: true }); Object.defineProperty(a, 3, { value: 'v', writable: false }); } r.push([x, y].map(String).join('/')); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.findLastIndex(function (x, y) { if (r.length === 0) a.length = 1; r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.findLastIndex(function (x, y) { if (r.length === 0) a.push(9); r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3]; Array.prototype[1] = 'p'; var r = []; try { a.reduce(function (x, y, z) { if (r.length === 0) delete a[1]; r.push(String(x) + '/' + String(y)); return false; }) } finally { delete Array.prototype[1]; } return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.reduce(function (x, y, z) { if (r.length === 0) { Object.defineProperty(a, 2, { get: function () { return 'g'; }, configurable: true }); Object.defineProperty(a, 3, { value: 'v', writable: false }); } r.push([x, y].map(String).join('/')); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.reduce(function (x, y) { if (r.length === 0) a.length = 1; r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.reduce(function (x, y) { if (r.length === 0) a.push(9); r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3]; Array.prototype[1] = 'p'; var r = []; try { a.reduceRight(function (x, y, z) { if (r.length === 0) delete a[1]; r.push(String(x) + '/' + String(y)); return false; }) } finally { delete Array.prototype[1]; } return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.reduceRight(function (x, y, z) { if (r.length === 0) { Object.defineProperty(a, 2, { get: function () { return 'g'; }, configurable: true }); Object.defineProperty(a, 3, { value: 'v', writable: false }); } r.push([x, y].map(String).join('/')); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.reduceRight(function (x, y) { if (r.length === 0) a.length = 1; r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "(function () { var a = [1, 2, 3, 4]; var r = []; a.reduceRight(function (x, y) { if (r.length === 0) a.push(9); r.push(String(x) + '/' + String(y)); return false; }); return r.join() })()",
+        "[1, 2, 3].reduce(function (acc, x, i, a) { if (i === 1) delete a[2]; return acc + x; })",
+        "[1, 2, 3].reduceRight(function (acc, x, i, a) { if (i === 1) delete a[0]; return acc + x; })",
+        "(function () { try { [].reduce(function () {}) } catch (e) { return String(e) } })()",
+        "[5].reduce(function () { return 1 })",
+        "[].reduce(function () { return 1 }, 7)",
+        "[1, 2, 3].map(function (x, i, a) { if (i === 0) a.length = 2; return x * 2 }).join()",
+    ] {
+        agrees(&format!("String({program})"));
+    }
+}

@@ -3458,7 +3458,7 @@ impl Interp {
                 let length = self.arrays[&inst].length;
                 self.meter.tick_raw(ARRAY_FOREACH_FRAME_METERING);
                 for i in 0..length {
-                    let item = self.arrays[&inst].items().get(&i).copied();
+                    let item = self.dense_item_or_inherited(code, inst, i)?;
                     if let Some(item) = item {
                         self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
                         let cb_args = [item, Slot::integer(i as i32), this];
@@ -3497,7 +3497,7 @@ impl Interp {
                     .push(Slot::of(Kind::Reference, Payload::Reference(result)));
                 let mapped: Result<(), Step> = (|| {
                     for i in 0..length {
-                        let item = self.arrays[&inst].items().get(&i).copied();
+                        let item = self.dense_item_or_inherited(code, inst, i)?;
                         if let Some(item) = item {
                             self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
                             let cb_args = [item, Slot::integer(i as i32), this];
@@ -3553,7 +3553,7 @@ impl Interp {
                 self.meter.tick_raw(ARRAY_SOMEEVERY_FRAME_METERING);
                 let mut answer = is_every;
                 for i in 0..length {
-                    let item = self.arrays[&inst].items().get(&i).copied();
+                    let item = self.dense_item_or_inherited(code, inst, i)?;
                     if let Some(item) = item {
                         self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
                         let cb_args = [item, Slot::integer(i as i32), this];
@@ -3606,11 +3606,7 @@ impl Interp {
                 }
                 let mut found: Option<(u32, Slot)> = None;
                 for i in 0..length {
-                    let item = self.arrays[&inst]
-                        .items()
-                        .get(&i)
-                        .copied()
-                        .unwrap_or_else(Slot::undefined);
+                    let item = self.dense_item_or_get(code, inst, i)?;
                     self.meter.tick_raw(ARRAY_FIND_PER_ELEM_METERING);
                     let cb_args = [item, Slot::integer(i as i32), this];
                     let r = self.run_callback(code, callback, this_arg, &cb_args)?;
@@ -3664,7 +3660,7 @@ impl Interp {
                 self.meter.tick_raw(ARRAY_FILTER_FRAME_METERING);
                 let mut kept: Vec<Slot> = Vec::new();
                 for i in 0..length {
-                    let item = self.arrays[&inst].items().get(&i).copied();
+                    let item = self.dense_item_or_inherited(code, inst, i)?;
                     if let Some(item) = item {
                         self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
                         let cb_args = [item, Slot::integer(i as i32), this];
@@ -3714,50 +3710,32 @@ impl Interp {
                     return Err(self.catchable_type_error_msg("callback: not a function".into()));
                 }
                 self.meter.tick_raw(ARRAY_REDUCE_FRAME_METERING);
-                // The present indices in fold order.
-                let buffer = self.reserve_work_scratch(self.arrays[&inst].items().len())?;
-                let order = if right {
-                    Self::fill_scratch(buffer, self.arrays[&inst].items().keys().rev().copied())
-                } else {
-                    Self::fill_scratch(buffer, self.arrays[&inst].items().keys().copied())
-                };
-                let mut it = order.into_iter();
+                // Every index of the length read up front, in fold order. A
+                // dense array has them all when the fold starts; a callback
+                // can delete one or expose an inherited one later.
+                let length = self.arrays[&inst].length;
+                let mut order = (0..length).map(|k| if right { length - 1 - k } else { k });
                 let mut acc = if argc >= 2 {
                     self.stack
                         .get(base + 4 + 1)
                         .copied()
                         .unwrap_or_else(Slot::undefined)
                 } else {
-                    match it.next() {
+                    match order.next() {
                         Some(i) => {
                             // The seed-finding scan (one iteration for a dense
                             // array — the first/last present element).
                             self.meter.tick_raw(ARRAY_REDUCE_INIT_SCAN_METERING);
-                            match self.arrays[&inst].items().get(&i) {
-                                Some(s) => *s,
-                                None => {
-                                    return Err(Step::Host(Halt::NotImplemented(
-                                        "reduce:concurrent-mutation",
-                                    )))
-                                }
-                            }
+                            self.arrays[&inst].items()[&i]
                         }
                         None => {
                             return Err(self.catchable_type_error_msg("no initial value".into()))
                         }
                     }
                 };
-                for i in it {
-                    // A prior callback may have mutated the receiver (e.g. the
-                    // test262 `delete arr[i]` pattern); a vanished snapshotted
-                    // index self-names rather than panicking on a missing key.
-                    let item = match self.arrays[&inst].items().get(&i) {
-                        Some(s) => *s,
-                        None => {
-                            return Err(Step::Host(Halt::NotImplemented(
-                                "reduce:concurrent-mutation",
-                            )))
-                        }
+                for i in order {
+                    let Some(item) = self.dense_item_or_inherited(code, inst, i)? else {
+                        continue;
                     };
                     self.meter.tick_raw(ARRAY_REDUCE_PER_ELEM_METERING);
                     let cb_args = [acc, item, Slot::integer(i as i32), this];
@@ -3798,11 +3776,7 @@ impl Interp {
                 }
                 let mut found: Option<(u32, Slot)> = None;
                 for i in (0..length).rev() {
-                    let item = self.arrays[&inst]
-                        .items()
-                        .get(&i)
-                        .copied()
-                        .unwrap_or_else(Slot::undefined);
+                    let item = self.dense_item_or_get(code, inst, i)?;
                     self.meter.tick_raw(ARRAY_FIND_PER_ELEM_METERING);
                     let cb_args = [item, Slot::integer(i as i32), this];
                     let r = self.run_callback(code, callback, this_arg, &cb_args)?;

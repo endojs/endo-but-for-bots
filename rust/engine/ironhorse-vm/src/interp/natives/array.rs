@@ -2292,7 +2292,7 @@ impl Interp {
 
     /// `? HasProperty(O, ToString(k))` over a generic receiver, index-safe via
     /// the shared non-interning probe.
-    fn array_generic_has(
+    pub(in crate::interp) fn array_generic_has(
         &mut self,
         code: &[u8],
         o: crate::value::SlotIndex,
@@ -3012,6 +3012,42 @@ impl Interp {
             Ok(n)
         } else {
             Ok(n.trunc())
+        }
+    }
+
+    /// The element a dense fast path's callback visits at `index`, or `None`
+    /// to skip it: the item itself while it is still a plain own element,
+    /// otherwise what HasProperty and Get answer. The array is dense when
+    /// the walk starts, but a callback can delete an element (exposing an
+    /// inherited one), make it an accessor (which leaves the item map), or
+    /// shorten the array.
+    pub(in crate::interp) fn dense_item_or_inherited(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        index: u32,
+    ) -> Result<Option<Slot>, Step> {
+        if let Some(item) = self.arrays[&inst].items().get(&index).copied() {
+            return Ok(Some(item));
+        }
+        if !self.array_generic_has(code, inst, u64::from(index))? {
+            return Ok(None);
+        }
+        self.array_generic_get(code, inst, u64::from(index))
+            .map(Some)
+    }
+
+    /// As [`Self::dense_item_or_inherited`] for `find` and its relatives,
+    /// which visit every index with Get, a hole included.
+    pub(in crate::interp) fn dense_item_or_get(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        index: u32,
+    ) -> Result<Slot, Step> {
+        match self.arrays[&inst].items().get(&index).copied() {
+            Some(item) => Ok(item),
+            None => self.array_generic_get(code, inst, u64::from(index)),
         }
     }
 
