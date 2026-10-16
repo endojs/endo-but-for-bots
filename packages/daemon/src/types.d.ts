@@ -426,6 +426,13 @@ export interface EnvironmentAdmin {
     active: boolean;
   }>;
   stop(): Promise<void>;
+  /**
+   * Operator attestation after independently excluding a lost owner's admission
+   * and proving its native producers/resources stopped. Only cold interrupted
+   * environments with no acquired controller accept this. Records the evidence
+   * before reopening admission; does not perform or establish native cleanup.
+   */
+  acknowledgeExternalCleanup(note: string): Promise<void>;
   setNetworkPolicy(policy: 'off' | 'public-internet'): Promise<void>;
   dispose(): Promise<void>;
   help(): string;

@@ -16,9 +16,10 @@ const recipe = harden({
 const flush = async () => {
   for (let i = 0; i < 20; i += 1) await null; // eslint-disable-line no-await-in-loop
 };
-/** @param {{ stored?: string, provide?: () => any, remove?: () => any, write?: (text: string) => any }} [options] */
+/** @param {{ stored?: string, provide?: () => any, remove?: () => any, write?: (text: string, name: string) => any }} [options] */
 const fixture = async ({ stored, provide, remove, write } = {}) => {
   let text = stored;
+  const otherTexts = new Map();
   const calls = [];
   const workspace = Far('Workspace', {});
   const nativeShell = Far('NativeShell', {
@@ -59,9 +60,10 @@ const fixture = async ({ stored, provide, remove, write } = {}) => {
   });
   const directory = Far('State', {
     maybeReadText: async () => text,
-    writeText: async (_name, value) => {
-      if (write) await write(value);
-      text = value;
+    writeText: async (name, value) => {
+      if (write) await write(value, name);
+      if (name === 'lifecycle') text = value;
+      else otherTexts.set(name, value);
     },
   });
   const resolve = async role => {
@@ -80,6 +82,7 @@ const fixture = async ({ stored, provide, remove, write } = {}) => {
     directory,
     resolve,
     nativeShell,
+    getNamedText: name => otherTexts.get(name),
     getText: () => {
       if (text === undefined) throw Error('Missing lifecycle state');
       return text;
@@ -238,4 +241,222 @@ test('recipe refuses open records and invalid execution bounds', t => {
     { ...recipe, policy: { ...recipe.policy, timeoutMs: 0 } },
   ])
     t.throws(() => assertEnvironmentRecipe(harden(invalid)));
+});
+
+test('failed execution retires its native owner before a later command; no effect is replayed', async t => {
+  t.timeout(5000);
+  let owners = 0;
+  let effects = 0;
+  let stops = 0;
+  const stopped = makePromiseKit();
+  const stopEntered = makePromiseKit();
+  const f = await fixture({
+    provide: () => {
+      owners += 1;
+      const first = owners === 1;
+      return Far('RecoverableController', {
+        open: () =>
+          Far('NativeShell', {
+            exec: async () => {
+              effects += 1;
+              if (first) throw Error('Shell command timed out; slice disposed');
+              return harden({
+                stdout: 'fresh',
+                stderr: '',
+                exitCode: 0,
+                signal: null,
+                truncated: false,
+              });
+            },
+          }),
+        stop: async () => {
+          stops += 1;
+          stopEntered.resolve(undefined);
+          await stopped.promise;
+        },
+      });
+    },
+  });
+  const failed = t.throwsAsync(E(f.owner.shell).exec('sh', harden([])), {
+    message: /timed out/,
+  });
+  await stopEntered.promise;
+  t.is(owners, 1);
+  t.is(effects, 1);
+  await t.throwsAsync(E(f.owner.shell).exec('sh', harden([])), {
+    message: /stopped/,
+  });
+  t.is(owners, 1, 'no successor before native cleanup acknowledgement');
+  stopped.resolve(undefined);
+  await failed;
+  t.is((await E(f.owner.admin).inspect()).phase, 'idle');
+  const result = await E(f.owner.shell).exec('sh', harden([]));
+  t.is(result.stdout, 'fresh');
+  t.is(owners, 2);
+  t.is(effects, 2, 'failed command was never automatically replayed');
+  t.is(stops, 1);
+  t.is(f.calls.filter(call => call[0] === 'remove').length, 0);
+  await f.owner.shutdown();
+});
+
+test('failed execution retains its exact owner when cleanup fails', async t => {
+  t.timeout(5000);
+  let owners = 0;
+  let stops = 0;
+  let refuse = true;
+  const f = await fixture({
+    provide: () => {
+      owners += 1;
+      return Far('FailedController', {
+        open: () =>
+          Far('FailedShell', {
+            exec: () => {
+              throw Error('sandbox handle has been disposed');
+            },
+          }),
+        stop: () => {
+          stops += 1;
+          if (refuse) throw Error('containment pending');
+        },
+      });
+    },
+  });
+  await t.throwsAsync(E(f.owner.shell).exec('sh', harden([])), {
+    message: /native cleanup remains pending/,
+  });
+  await t.throwsAsync(E(f.owner.shell).exec('sh', harden([])), {
+    message: /stopped/,
+  });
+  t.is(owners, 1);
+  t.is(stops, 1);
+  refuse = false;
+  await E(f.owner.admin).stop();
+  t.is(stops, 2, 'operator retries the original retained cleanup owner');
+  t.is((await E(f.owner.admin).inspect()).phase, 'idle');
+  await f.owner.shutdown();
+});
+
+test('ordinary nonzero command status retains the usable native owner', async t => {
+  t.timeout(5000);
+  let owners = 0;
+  let stops = 0;
+  const f = await fixture({
+    provide: () => {
+      owners += 1;
+      return Far('Controller', {
+        open: () =>
+          Far('Shell', {
+            exec: () =>
+              harden({
+                stdout: '',
+                stderr: 'test failed',
+                exitCode: 37,
+                signal: null,
+                truncated: false,
+              }),
+          }),
+        stop: () => {
+          stops += 1;
+        },
+      });
+    },
+  });
+  for (let i = 0; i < 2; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    t.is((await E(f.owner.shell).exec('sh', harden([]))).exitCode, 37);
+  }
+  t.is(owners, 1);
+  t.is(stops, 0);
+  await f.owner.shutdown();
+});
+
+test('operator records external cleanup before reopening a cold interrupted environment', async t => {
+  const written = [];
+  const f = await fixture({
+    stored: JSON.stringify({ phase: 'active', networkPolicy: 'off' }),
+    write: (_text, name) => written.push(name),
+  });
+  await t.throwsAsync(E(f.owner.shell).exec('sh', harden([])), {
+    message: /operator cleanup/,
+  });
+  const note =
+    'Old service admission excluded; original cgroup drained and recorded native resources reclaimed.';
+  await E(f.owner.admin).acknowledgeExternalCleanup(note);
+  t.deepEqual(written, ['external-cleanup', 'lifecycle']);
+  t.deepEqual(JSON.parse(f.getNamedText('external-cleanup')), {
+    environment: 'exact-id',
+    note,
+  });
+  t.deepEqual(
+    f.calls,
+    [],
+    'acknowledgement never revives a runner to infer cleanup',
+  );
+  t.false((await E(f.owner.admin).inspect()).interrupted);
+  await E(f.owner.shell).exec('sh', harden([]));
+  t.is(f.calls.filter(call => call[0] === 'provide').length, 1);
+  t.is(f.calls.filter(call => call[0] === 'remove').length, 0);
+  await f.owner.shutdown();
+});
+
+test('external cleanup cannot bypass a live owner, idle state, or a failed in-process intent', async t => {
+  const f = await fixture();
+  await t.throwsAsync(
+    E(f.owner.admin).acknowledgeExternalCleanup('operator evidence'),
+    {
+      message: /interrupted restored environment/,
+    },
+  );
+  await E(f.owner.shell).exec('sh', harden([]));
+  await t.throwsAsync(
+    E(f.owner.admin).acknowledgeExternalCleanup('operator evidence'),
+    {
+      message: /interrupted restored environment/,
+    },
+  );
+  await E(f.owner.shell).exec('sh', harden([]));
+  t.is(f.calls.filter(call => call[0] === 'stop').length, 0);
+  await f.owner.shutdown();
+  const failed = await fixture({
+    write: () => {
+      throw Error('lost intent ACK');
+    },
+  });
+  await t.throwsAsync(E(failed.owner.shell).exec('sh', harden([])), {
+    message: /lost intent ACK/,
+  });
+  await t.throwsAsync(
+    E(failed.owner.admin).acknowledgeExternalCleanup('operator evidence'),
+    {
+      message: /interrupted restored environment/,
+    },
+  );
+  t.deepEqual(failed.calls, []);
+});
+
+test('external cleanup publication failure preserves the fence and permits explicit retry', async t => {
+  let refuse = true;
+  const f = await fixture({
+    stored: JSON.stringify({ phase: 'active', networkPolicy: 'off' }),
+    write: (_text, name) => {
+      if (refuse && name === 'external-cleanup')
+        throw Error('cleanup note ACK lost');
+    },
+  });
+  await t.throwsAsync(E(f.owner.admin).acknowledgeExternalCleanup(' '), {
+    message: /nonempty note/,
+  });
+  await t.throwsAsync(
+    E(f.owner.admin).acknowledgeExternalCleanup('operator evidence'),
+    { message: /note ACK lost/ },
+  );
+  await t.throwsAsync(E(f.owner.shell).exec('sh', harden([])), {
+    message: /stopped/,
+  });
+  t.is(JSON.parse(f.getText()).phase, 'active');
+  t.deepEqual(f.calls, []);
+  refuse = false;
+  await E(f.owner.admin).acknowledgeExternalCleanup('operator evidence');
+  await E(f.owner.shell).exec('sh', harden([]));
+  await f.owner.shutdown();
 });
