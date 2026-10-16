@@ -1189,7 +1189,7 @@ finalized.
 | ocapn-network-transport-separation | In Progress | Foundation for transport abstraction |
 | ocapn-tcp-for-test-extraction | In Progress | Clean separation before Noise |
 | ocapn-tcp-syrup-framing | **Complete** | Comma-less netstring variant (`@endo/syrup-frame`), the default framing of the `tcp-testing-only` netlayer |
-| syrups | Deprecated | Consolidated with PR 29's `@endo/syrups` (same shape: `Uint8Array` chunks in, `Uint8Array`-delimited messages out); see [`ocapn-tcp-syrup-framing.md`](ocapn-tcp-syrup-framing.md) |
+| syrups | Deprecated | Consolidated into `@endo/syrup-frame` (same shape: `Uint8Array` chunks in, `Uint8Array`-delimited messages out); see [`ocapn-tcp-syrup-framing.md`](ocapn-tcp-syrup-framing.md) |
 | cbor-frame | In Progress (PR #288 open) | `@endo/cbor-frame` reader/writer for length-prefixed CBOR byte strings; peer of `@endo/syrup-frame` and `@endo/netstring` |
 | cbor-codec | Phases 1–2 implemented | Shared canonical-CBOR primitive codec (`@endo/cbor`) extracted from `packages/ocapn/src/cbor` and PR #124's `packages/slots/src/cbor.js`; also serves the M11 `endor` slot-machine line; complement of the framing package `@endo/cbor-frame` (impl PR #288) |
 | slots-ocapn-op-lanes | In Progress | Seven-verb slot-machine protocol: distinct get/index/untag operations, matching Eventual Send surfaces, dedicated scalar payloads, and JavaScript/Rust supervisor parity; candidate implementation in draft [endojs/endo-but-for-bots#990](https://github.com/endojs/endo-but-for-bots/pull/990) |
@@ -1909,7 +1909,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | hardener-indexed-cardinality | S | 1 day | — | Out-of-milestone `master`-based optimization: conjoined cardinality-count-plus-last-key-ordering test for the purely indexed TypedArray fast path, regression matrix, and focused benchmark |
 | ocapn-network-transport-separation | M-L | 1.5 weeks | 4 | Architectural refactor (M-L bumped 1.2x) |
 | ocapn-tcp-for-test-extraction | S-M | 3 days | 4 | Code relocation |
-| ocapn-tcp-syrup-framing | S-M | 3 days | 4 | `@endo/syrups` package, new `tcp+syrups` netlayer; design merged (PR #108); impl PR #109 open |
+| ~~ocapn-tcp-syrup-framing~~ | — | — | 4 | Complete: `@endo/syrup-frame` package, default `framing: 'syrup'` on the existing `tcp-testing-only` netlayer (38fe6787d, bdb9ddc50; design PR #108); the proposed `@endo/syrups` and `tcp+syrups` netlayer were not built |
 | ~~syrup-frame~~ | — | — | 4 | Consolidated into `ocapn-tcp-syrup-framing` (PR 29); see [`syrup-frame.md`](syrup-frame.md) |
 | ~~cbor-frame~~ | — | — | 4 | New `@endo/cbor-frame` package (implemented, PR #288); design merged with syrup framing in PR #86 |
 | cbor-codec | S | 2-3 days | 4 | New `@endo/cbor` package plus ocapn and slots migrations; slots adoption gated on PR #124 landing |

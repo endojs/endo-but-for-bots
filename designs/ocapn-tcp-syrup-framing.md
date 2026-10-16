@@ -7,30 +7,80 @@
 | **Author** | Kris Kowal (prompted) |
 | **Status** | **Complete** |
 
-## Implementation Status
+## As Built
 
-This design shipped on `llm` on 2026-05-20, with two departures
-from the text below:
+This section is the authoritative description of what shipped.
+The design shipped to the `llm` branch on 2026-05-20.
+Everything after *Original Proposal* below is the design as first
+proposed, kept for its problem statement, grammar, and rationale;
+where it disagrees with this section, this section wins.
 
-- The package is named `@endo/syrup-frame` (`packages/syrup-frame/`),
-  not `@endo/syrups`, for parallelism with `@endo/cbor-frame`.
-  It exports `makeSyrupReader` and `makeSyrupWriter`
-  (38fe6787d).
-- The framing landed on the existing `tcp-testing-only` netlayer
-  rather than a new `tcp-syrups` network identifier.
-  `makeTcpNetLayer` in `packages/ocapn/src/netlayers/tcp-test-only.js`
-  takes a `framing` option: `'syrup'` is the default and routes
-  inbound bytes through the `@endo/syrup-frame` reader, so each
-  `handleMessageData` call carries one whole message; `'none'` keeps
-  the raw-chunk behavior only for the Python `ocapn-test-suite`
-  `testing_only_tcp` peer (bdb9ddc50, tested by
-  `packages/ocapn/test/netlayer-tcp-syrup.test.js`).
-  This is Option 3 of *Compatibility with Other OCapN
-  Implementations*, with an escape hatch for the Python suite, so
-  Phase 2 (netstring framing for `tcp-testing-only`) and the separate
-  Phase 3 identifier were not built.
+**Package.**
+The framer is `@endo/syrup-frame` (`packages/syrup-frame/`), not the
+proposed `@endo/syrups`, for parallelism with `@endo/cbor-frame`.
+It exports `makeSyrupReader` and `makeSyrupWriter` (38fe6787d).
+The grammar, the `maxMessageLength` and `name` reader options, and
+the `chunked` writer option are as specified in *Grammar*, *Reader*,
+and *Writer* below.
 
-Two pieces remain, and both belong to other work:
+```
+packages/
+  syrup-frame/                <len>:<bytes> framing
+    index.js
+    reader.js                 makeSyrupReader
+    writer.js                 makeSyrupWriter
+    test/syrup-frame.test.js
+  ocapn/
+    src/netlayers/
+      tcp-test-only.js        framing: 'syrup' (default) | 'none'
+```
+
+**Netlayer.**
+The framing landed on the existing `tcp-testing-only` netlayer, not
+on a new `tcp-syrups` network identifier (bdb9ddc50).
+`makeTcpNetLayer` in `packages/ocapn/src/netlayers/tcp-test-only.js`
+takes a `framing` option:
+
+- `'syrup'` (the default) routes inbound bytes through the
+  `@endo/syrup-frame` reader, so each `handleMessageData` call
+  carries one whole message, and wraps each outbound write in a frame.
+- `'none'` keeps the raw-chunk behavior, solely to interoperate with
+  the Python `ocapn-test-suite` `testing_only_tcp` peer, which does
+  not frame.
+
+This is Option 3 of *Compatibility with Other OCapN Implementations*
+(change the test-only transport's framing unilaterally), with an
+escape hatch for the Python suite.
+It replaces the proposal's Option 2 recommendation, so Phase 2
+(netstring framing for `tcp-testing-only`) and Phase 3 (a separate
+`tcp-syrups` netlayer) were not built.
+
+**Compatibility tradeoff.**
+Because both framings share the `tcp-testing-only` identifier, a
+locator does not say which framing its peer speaks, and the two are
+not wire-compatible.
+Peers must agree on the framing out of band: Endo-to-Endo traffic
+uses the `'syrup'` default, and only a connection to the Python test
+suite passes `framing: 'none'`.
+This deliberately gives up the locator-level disambiguation that the
+proposal's Option 2 and Design Decision 5 promised, in exchange for
+carrying one netlayer and no netstring framer.
+The proposal's *No dual-protocol support* still holds in the sense
+that matters: no reader peeks to guess the framing; the choice is
+fixed per netlayer instance.
+
+**Test evidence.**
+`packages/syrup-frame/test/syrup-frame.test.js` covers the reader and
+writer, including reassembly across adversarial chunk boundaries
+("round-trip across adversarial chunk boundaries").
+`packages/ocapn/test/netlayer-tcp-syrup.test.js` covers the netlayer
+wiring: the on-wire bytes carry a `<length>:` prefix and no trailing
+comma, a message round-trips between two peers, and an unknown
+`framing` value is rejected.
+It does not itself force a message across separate TCP `data` events;
+fragmentation coverage lives in the framer's tests.
+
+**Remaining work, owned elsewhere.**
 
 - The `while (reader.index < data.length)` loops in
   `handleHandshakeMessageData` (`packages/ocapn/src/client/handshake.js`)
@@ -38,20 +88,30 @@ Two pieces remain, and both belong to other work:
   stay because `'none'` framing still delivers arbitrary chunks.
   Removing them needs every netlayer to deliver whole frames, which
   for TCP means the Python suite adopting syrup framing (PR #242)
-  and dropping `'none'`. The handshake's move into the TCP network
-  belongs to
+  and dropping `'none'`.
+  The handshake's move into the TCP network belongs to
   [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md).
 - Phase 4 (proposing the comma-less variant upstream to OCapN) is
   opportunistic and outside this roadmap.
 
-## What is the Problem Being Solved?
+## Original Proposal
+
+> **Historical.**
+> The rest of this document is the design as proposed on 2026-04-23,
+> written in proposal voice.
+> Its package name (`@endo/syrups`), export names
+> (`makeSyrupsReader`/`makeSyrupsWriter`), `tcp-syrups` identifier,
+> Option 2 recommendation, package layout, and phases are superseded
+> by *As Built* above.
+
+### What is the Problem Being Solved?
 
 The OCapN TCP transport (`tcp-testing-only` today, see
 `packages/ocapn/src/netlayers/tcp-test-only.js`) has a latent framing
 problem and a latent redundancy problem.
 Both can be resolved with the same change.
 
-### The latent framing bug
+#### The latent framing bug
 
 The current `tcp-test-only` netlayer ships raw bytes straight from the TCP
 socket into OCapN:
@@ -96,7 +156,7 @@ The handshake has survived in practice because `op:start-session` is
 small and tends to fit in a single TCP segment on loopback, but the code
 is structurally incorrect.
 
-### The redundancy that motivates the fix
+#### The redundancy that motivates the fix
 
 The Endo daemon's own TCP transport
 (`packages/daemon/src/networks/tcp-netstring.js`) does *not* have this
@@ -145,9 +205,9 @@ This design proposes a new sibling package to `@endo/netstring`
 implementing exactly this comma-less variant, and migrating the OCapN
 TCP transport to use it.
 
-## Design
+### Design
 
-### The new package
+#### The new package
 
 **Name.**
 We want a name that is concise, honest about what the grammar is, and
@@ -187,7 +247,7 @@ on review of PR 86.
 
 The remainder of this document uses `@endo/syrups` as the working name.
 
-### Grammar
+#### Grammar
 
 ```
 frame   = length ":" payload
@@ -222,7 +282,7 @@ Byte-level examples:
 | `hello` | `5:hello,` (8 bytes) | `5:hello` (7 bytes) |
 | `op:start-session` record (say 240 B) | `240:<240 bytes>,` (245 bytes) | `240:<240 bytes>` (244 bytes) |
 
-### Package shape
+#### Package shape
 
 The package mirrors `@endo/netstring` module-for-module so that the
 migration is a mechanical rename at call sites.
@@ -253,7 +313,7 @@ Unlike `@endo/netstring`, we do *not* carry forward the legacy
 `netstringReader` / `netstringWriter` aliases.
 This package is new and has no legacy callers.
 
-### Reader
+#### Reader
 
 ```js
 // @ts-check
@@ -288,7 +348,7 @@ semantics.
 Error messages are reworded from "netstring" to "syrups" so that
 log diagnostics do not misattribute failures.
 
-### Writer
+#### Writer
 
 ```js
 // @ts-check
@@ -320,7 +380,7 @@ The `chunked` option and its zero-copy behavior are preserved verbatim.
 Back-pressure semantics, the concurrent-write handling, and the
 close-early race are all unchanged.
 
-### Tests
+#### Tests
 
 `test/syrups.test.js` is ported from
 `packages/netstring/test/netstring.test.js` with:
@@ -337,7 +397,7 @@ close-early race are all unchanged.
   concurrent writes of small records whose encoded frames are expected
   to straddle arbitrary chunk boundaries.
 
-### Dependencies
+#### Dependencies
 
 Same as `@endo/netstring`:
 
@@ -352,9 +412,9 @@ Same as `@endo/netstring`:
 }
 ```
 
-## Migration
+### Migration
 
-### Call sites affected in the OCapN packages
+#### Call sites affected in the OCapN packages
 
 Searching for `@endo/netstring` in `packages/ocapn/` and
 `packages/ocapn-noise/` yields **no direct imports today**.
@@ -372,7 +432,7 @@ The call sites that will be modified to introduce `@endo/syrups`:
 | `packages/ocapn/src/client/types.js` | `SocketOperations.write` stays `(bytes: Uint8Array) => void`; `NetlayerHandlers.handleMessageData` signature changes to emphasize that the `data` parameter is now a single decoded frame rather than an arbitrary chunk. |
 | `packages/ocapn/package.json` | Add `@endo/syrups` dependency. |
 
-### Where does framing live?
+#### Where does framing live?
 
 Two options, with consequences:
 
@@ -404,7 +464,7 @@ networks own transport concerns and deliver sessions (and, by extension,
 framed messages) to the core.
 Framing is a transport concern.
 
-### Sequencing
+#### Sequencing
 
 The two-sided nature of a wire-format change dictates the rollout order:
 
@@ -427,7 +487,7 @@ The two-sided nature of a wire-format change dictates the rollout order:
    Whether to do it depends on whether we want the locator to advertise
    the framing variant; see the next section.
 
-### No dual-protocol support
+#### No dual-protocol support
 
 We do not plan to implement a compatibility mode that reads either
 netstrings or syrups frames.
@@ -437,7 +497,7 @@ Both sides can upgrade in lockstep.
 Complicating the reader with a peek-for-comma fallback would permanently
 poison the grammar.
 
-## Compatibility with Other OCapN Implementations
+### Compatibility with Other OCapN Implementations
 
 The OCapN draft specification describes a netlayer for "TCP with
 netstring framing."
@@ -487,7 +547,7 @@ The existing `tcp-testing-only` netlayer gets a correctness fix
 and a new sibling netlayer (`tcp-syrups`) gets the comma-less framing.
 If and when OCapN adopts the change, `tcp-testing-only` can be retired.
 
-### Implications for ocapn-network-transport-separation and
+#### Implications for ocapn-network-transport-separation and
 ocapn-tcp-for-test-extraction
 
 This design layers cleanly on top of both precursor designs.
@@ -507,7 +567,7 @@ With `@endo/syrups`, `handleHandshakeMessageData` reads exactly one
 frame, decodes one Syrup record, and hands off.
 The `while (syrupReader.index < data.length)` loop disappears.
 
-## Package Layout
+### Package Layout
 
 ```
 packages/
@@ -545,7 +605,7 @@ What lives where:
   `tcp-test-only.js` (with real `@endo/netstring` framing to address
   the chunk-boundary bug) and the new `tcp-syrups.js`.
 
-## Dependencies
+### Dependencies
 
 | Design | Relationship |
 |---|---|
@@ -553,7 +613,7 @@ What lives where:
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | Sibling. The handshake logic moving into the TCP network flows through the syrups framer. |
 | [ocapn-noise-network](ocapn-noise-network.md) | Independent. Noise transport has its own framing (Noise transport messages carry their own length). The syrups framer applies only to TCP-variant networks. |
 
-## Phased Implementation
+### Phased Implementation
 
 1. **Phase 1: Publish `@endo/syrups`.**
    Port `reader.js`, `writer.js`, and tests from `@endo/netstring` with
@@ -584,7 +644,7 @@ What lives where:
    Outcome of this phase is out of scope for Endo's own roadmap; it
    happens opportunistically.
 
-## Design Decisions
+### Design Decisions
 
 1. **Grammar is comma-less, not length-in-binary.**
    We considered more radical departures (big-endian `u32` length
@@ -626,7 +686,7 @@ What lives where:
    The new writer carries it forward unchanged, minus the trailing
    `COMMA_BUFFER` part of the concurrent writes.
 
-## Known Gaps and TODOs
+### Known Gaps and TODOs
 
 - [ ] Decide whether to rename `tcp-testing-only` once it has real
   netstring framing or leave the name to signal "spec-draft, not
