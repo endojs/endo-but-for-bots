@@ -10,12 +10,14 @@ import stack_height
 
 class ParseMetrics(unittest.TestCase):
     def test_parses_compile_and_run_lines(self):
+        # libtest's shape under --nocapture: the test's output continues the
+        # line that names the test, and the verdict follows on a line of its own.
         output = (
             "running 1 test\n"
-            "STACK_METRIC floor.compile 8192 compiled\n"
+            "test native_stack_high_water_marks ... STACK_METRIC floor.compile 8192 compiled\n"
             "STACK_METRIC floor.run 12288 completed result=\"1\"\n"
             "STACK_METRIC proxy-get-10k.run 516096 ReentryLimit result=\"\"\n"
-            "test native_stack_high_water_marks ... ok\n"
+            "ok\n"
         )
         self.assertEqual(
             stack_height.parse_metrics(output),

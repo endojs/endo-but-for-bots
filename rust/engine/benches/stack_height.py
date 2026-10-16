@@ -45,12 +45,15 @@ PROVENANCE_KEYS = ("target", "rustc", "profile")
 
 
 def parse_metrics(output):
-    """`STACK_METRIC <case>.<stage> <bytes> <outcome> [result=...]` lines to a dict."""
+    """`STACK_METRIC <case>.<stage> <bytes> <outcome> [result=...]` lines to a dict.
+    The first metric shares its line with libtest's `test <name> ... `, which
+    the test's own output continues."""
     metrics = {}
     for line in output.splitlines():
-        if not line.startswith("STACK_METRIC "):
+        start = line.find("STACK_METRIC ")
+        if start < 0:
             continue
-        fields = line.split(maxsplit=4)
+        fields = line[start:].split(maxsplit=4)
         if len(fields) < 4:
             raise ValueError(f"malformed metric line: {line!r}")
         _, name, raw, outcome = fields[:4]
