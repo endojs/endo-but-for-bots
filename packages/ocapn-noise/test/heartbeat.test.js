@@ -6,7 +6,6 @@ import test from '@endo/ses-ava/test.js';
 
 import { cborCodec } from '@endo/ocapn/cbor';
 import { syrupCodec } from '@endo/ocapn/syrup';
-import { readOcapnHeartbeatMessage } from '@endo/ocapn/operations';
 import { makeOcapnNoiseNetwork } from '../index.js';
 import { makeMockTransportPair } from '../src/transports/mock.js';
 
@@ -81,13 +80,13 @@ for (const [codecName, codec] of /** @type {const} */ ([
 }
 
 test('a silent peer is detected as lost after the session timeout', async t => {
-  // B does not heartbeat and never writes, as if it had crashed.
-  const { sessionA, sessionB } = await connectPair(
+  // B's heartbeat is far slower than A's session timeout and B never
+  // writes, so A hears nothing, as if B had crashed.
+  const { sessionA } = await connectPair(
     t,
     { codec: cborCodec, heartbeat },
-    { codec: cborCodec },
+    { codec: cborCodec, heartbeat: { intervalMs: 60_000 } },
   );
-  t.false(sessionB.getLiveness().heartbeat);
 
   await t.throwsAsync(() => sessionA.reader.next(undefined), {
     message: /no traffic from peer for 500ms; session lost/,
@@ -104,31 +103,33 @@ test('a silent peer is detected as lost after the session timeout', async t => {
   });
 });
 
-test('a peer without heartbeats receives op:ping and op:pong frames', async t => {
+test('a peer without heartbeats receives no heartbeat frames', async t => {
   const { sessionA, sessionB } = await connectPair(
     t,
     { codec: cborCodec, heartbeat },
+    { codec: cborCodec, heartbeat: false },
+  );
+  // The capability bit of op:session-hello: heartbeats run only when
+  // both sides advertise them.
+  t.false(sessionA.getLiveness().heartbeat);
+  t.false(sessionB.getLiveness().heartbeat);
+  // Idle well past A's session timeout: A neither sends B heartbeats nor
+  // takes B's silence for loss.
+  await delay(heartbeat.sessionTimeoutMs * 2);
+  await sessionA.writer.next(Uint8Array.of(9));
+  const first = await sessionB.reader.next(undefined);
+  t.deepEqual(first, { done: false, value: Uint8Array.of(9) });
+  sessionA.close();
+});
+
+test('heartbeats are on by default', async t => {
+  const { sessionA, sessionB } = await connectPair(
+    t,
+    { codec: cborCodec },
     { codec: cborCodec },
   );
-  const first = await sessionB.reader.next(undefined);
-  const second = await sessionB.reader.next(undefined);
-  t.false(first.done);
-  t.false(second.done);
-  if (!first.done && !second.done) {
-    t.deepEqual(readOcapnHeartbeatMessage(cborCodec.makeReader(first.value)), {
-      type: 'op:ping',
-      epoch: 0n,
-      sequence: 0n,
-    });
-    t.deepEqual(readOcapnHeartbeatMessage(cborCodec.makeReader(second.value)), {
-      type: 'op:pong',
-      epoch: 0n,
-      sequence: 0n,
-      // A has decrypted only B's identity greeting and session hello,
-      // nonces 0 and 1.
-      lastAckedRecvNonce: 1n,
-    });
-  }
+  t.true(sessionA.getLiveness().heartbeat);
+  t.true(sessionB.getLiveness().heartbeat);
   sessionA.close();
 });
 
