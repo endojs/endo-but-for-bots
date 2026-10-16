@@ -3726,7 +3726,7 @@ export const make = async (
    * disagree.
    *
    * @param {string} id
-   * @param {{ executionState?: string, backendId: string } | undefined} entry
+   * @param {{ executionState?: string, backendId: string, presetId?: string } | undefined} entry
    */
   const projectExecution = (id, entry) => {
     // A resume fences the session while it publishes permission to run, so
@@ -3735,7 +3735,11 @@ export const make = async (
     let state = entry?.executionState || 'running';
     if (resumeTokens.has(id)) state = 'stopped';
     else if (stopFences.has(id)) state = 'stopping';
-    return harden({ state, supported: isHostedSession(entry) });
+    return harden({
+      state,
+      supported:
+        isHostedSession(entry) || entry?.presetId === DEVELOPMENT_PRESET_ID,
+    });
   };
   const executionState = async id =>
     projectExecution(id, await assertSessionReady(id));
@@ -3755,7 +3759,8 @@ export const make = async (
       });
     const stopping = (async () => {
       const entry = await assertSessionReady(id);
-      if (!isHostedSession(entry)) {
+      const hosted = isHostedSession(entry);
+      if (!hosted && entry.presetId !== DEVELOPMENT_PRESET_ID) {
         stopFences.delete(id);
         throw Error('This backend has no hosted sandbox to stop');
       }
@@ -3778,18 +3783,26 @@ export const make = async (
       const mount = hostedMountClients.get(id);
       const closed = mount?.close();
       void closed?.catch(() => undefined);
-      const backend = (await getHostedBackends()).get(entry.backendId);
-      if (!backend) {
+      const backend = hosted
+        ? (await getHostedBackends()).get(entry.backendId)
+        : undefined;
+      if (hosted && !backend) {
         await intent;
         throw Error('Hosted backend unavailable; stop remains pending');
       }
-      await attempt(() => E(backend.factory).stop(harden({ sessionId: id })));
+      const stopNative = async () => {
+        await null;
+        if (backend) await E(backend.factory).stop(harden({ sessionId: id }));
+        const environment = await developmentAdmin(id);
+        if (environment) await E(environment).stop();
+      };
+      await attempt(stopNative);
       // Observe late acquisition before claiming completion. The admission
       // fence prevents new acquisitions and the second stop covers late ones.
       const agent = pending ? await agentForCleanup(pending) : undefined;
       const lateMount = hostedMountClients.get(id);
       if (lateMount) await attempt(() => lateMount.close());
-      await attempt(() => E(backend.factory).stop(harden({ sessionId: id })));
+      await attempt(stopNative);
       if (agent) await attempt(() => agent.shutdown(true));
       await intent;
       if (failures.length)

@@ -13,7 +13,11 @@ import {
   // Test-only shared daemon fixture; deliberately not a public package export.
   // eslint-disable-next-line import/no-relative-packages
 } from '../../workflow/test/fake-agent.js';
-import { devReviewChart, provisionDevReview } from '../dev-review.js';
+import {
+  devReviewChart,
+  makeDevReviewChart,
+  provisionDevReview,
+} from '../dev-review.js';
 import { make as makeReader } from '../review-reader.js';
 import { make as makeProject } from '../review-project.js';
 import { make as makeConnection } from '../review-connection.js';
@@ -45,6 +49,64 @@ test('candidate pinning rejects moving refs before consulting Git', async t => {
   await E(project).revParse('main', 'base-1');
   t.is(refs[2], 'main');
 });
+
+for (const implementationTimeoutMs of [Infinity, 60_000]) {
+  test(`implementation timeout ${implementationTimeoutMs} survives workflow restart`, async t => {
+    t.timeout(20_000);
+    const { powers, controls } = makeFakeAgent();
+    const clock = makeFakeClock();
+    const h1 = await makeWorkflowService({ powers, clock });
+    t.teardown(h1.stop);
+    const { runId } = await E(h1.service).start(
+      makeDevReviewChart({ implementationTimeoutMs }),
+      harden({
+        params: {
+          title: 'Search',
+          summary: 'Add search.',
+          base: BASE,
+          projectName: 'project',
+          reviewers: ['alice'],
+          rounds: 2n,
+        },
+        endowments: {
+          project: Far('Project', { revParse: () => harden({ oid: BASE }) }),
+          developer: {},
+          alice: {},
+          operator: {},
+          initiator: {},
+        },
+      }),
+    );
+    await settle(200);
+    const before = await E(await E(h1.service).run(runId)).status();
+    t.is(before.configuration.state, 'implement');
+    const askId = before.pending.find(record => record.kind === 'ask').effectId;
+    await clock.advance(30_000);
+    await settle(100);
+    h1.stop();
+    const h2 = await makeWorkflowService({ powers: controls.restart(), clock });
+    t.teardown(h2.stop);
+    await settle(200);
+    const run = await E(h2.service).run(runId);
+    await clock.advance(30_001);
+    await settle(200);
+    if (implementationTimeoutMs === Infinity) {
+      await clock.advance(365 * 86_400_000);
+      await settle(200);
+      const status = await E(run).status();
+      t.is(status.context.round, 0n);
+      t.is(status.context.remaining, 2n);
+      t.is(status.pending.length, 1);
+      t.is(status.pending[0].effectId, askId);
+      t.is(controls.messageCount('request', 'Implement'), 1);
+    } else {
+      const status = await E(run).status();
+      t.is(status.context.round, 1n);
+      t.is(status.context.remaining, 1n);
+      t.is(controls.messageCount('request', 'Implement'), 2);
+    }
+  });
+}
 
 test('design handoff pins candidates, repeats review, and durably notifies readiness', async t => {
   t.timeout(20_000);
@@ -205,7 +267,7 @@ test('provisioning registers attenuated capabilities before granting them', asyn
   };
   const reader = Far('Reader', { revParse: () => harden({ oid: BASE }) });
   const project = register(Far('Writer', { readOnly: () => reader }));
-  /** @type {{ params: { reviewers: string[] }, endowments: { project: unknown } } | undefined} */
+  /** @type {{ chart: any, params: { reviewers: string[] }, endowments: { project: unknown } } | undefined} */
   let factoryConfig;
   const service = register(
     Far('Service', {
@@ -249,6 +311,7 @@ test('provisioning registers attenuated capabilities before granting them', asyn
     reviewers: [reviewer],
     initiator,
     operator: register(Far('Operator', {})),
+    implementationTimeoutMs: 60_000,
   };
   const { fid } = await provisionDevReview(options);
   t.is(fid, 'factory-test');
@@ -257,6 +320,7 @@ test('provisioning registers attenuated capabilities before granting them', asyn
   t.true(registered.has(stores.get('initiator').get('dev-review')));
   if (factoryConfig === undefined) throw Error('Factory was not provisioned');
   t.deepEqual(factoryConfig.params.reviewers, ['reviewer-0']);
+  t.is(factoryConfig.chart.states.implement.entry[1].ms, 60_000);
   t.not(factoryConfig.endowments.project, project);
   await t.throwsAsync(provisionDevReview(options), {
     message: 'This conversation already has a dev-review connection',
