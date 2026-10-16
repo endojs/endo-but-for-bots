@@ -501,7 +501,7 @@ LLM-agent stack).*
 | [thixotrope-on-cloudflare-addendum-single-vat-hub](thixotrope-on-cloudflare-addendum-single-vat-hub.md) | 2026-09-24 | 2026-09-24 | Proposed |
 | [thixotrope-on-cloudflare-review](thixotrope-on-cloudflare-review.md) | 2026-09-24 | 2026-09-24 | Reference |
 | [thixotrope-wasm-worker](thixotrope-wasm-worker.md) | 2026-10-14 | 2026-10-15 | Proposed |
-| [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | In Progress |
+| [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-10-16 | In Progress |
 | [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md) | 2026-04-23 | 2026-05-06 | **Complete** |
 | [syrup-frame](syrup-frame.md) | 2026-05-04 | 2026-05-06 | Deprecated |
 | [cbor-frame](cbor-frame.md) | 2026-05-04 | 2026-07-15 | In Progress (PR #288 open) |
@@ -1187,7 +1187,7 @@ finalized.
 | Design | Status | Notes |
 |--------|--------|-------|
 | ocapn-network-transport-separation | In Progress | Foundation for transport abstraction |
-| ocapn-tcp-for-test-extraction | In Progress | Clean separation before Noise |
+| ocapn-tcp-for-test-extraction | In Progress | `np` already bypasses the core hello (PR #137); remaining: move `op:start-session` into a `start-session` network adapter and delete core's fallback |
 | ocapn-tcp-syrup-framing | **Complete** | Comma-less netstring variant (`@endo/syrups`) on a distinct `tcp+syrups` netlayer identifier |
 | syrups | Deprecated | Consolidated with PR 29's `@endo/syrups` (same shape: `Uint8Array` chunks in, `Uint8Array`-delimited messages out); see [`ocapn-tcp-syrup-framing.md`](ocapn-tcp-syrup-framing.md) |
 | cbor-frame | In Progress (PR #288 open) | `@endo/cbor-frame` reader/writer for length-prefixed CBOR byte strings; peer of `@endo/syrup-frame` and `@endo/netstring` |
