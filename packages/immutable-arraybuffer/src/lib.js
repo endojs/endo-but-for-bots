@@ -1538,13 +1538,22 @@ for (const key of ownKeys(freezableDataViewLibProperties)) {
  * it leaves behind can be tested against a global that is NOT an ordinary
  * object -- which is the case that matters. `defineProperty(obj, k, { value })`
  * merges on an ordinary object, leaving the other attributes alone; a Node.js
- * `vm` context's global is a PROXY whose `defineProperty` instead completes a
- * partial descriptor with the spec's `false` defaults. So the attributes are
+ * `vm` context's global is V8's GLOBAL PROXY -- not an ECMAScript `Proxy`,
+ * `util.types.isProxy` says no -- and its `defineProperty` interceptor
+ * instead completes a partial descriptor with the spec's `false` defaults. So the attributes are
  * spelled out here. Omitting them turned these globals non-writable and
  * NON-CONFIGURABLE inside a `vm` realm, where SES's `lockdown()` then aborted
  * with `TypeError: Cannot redefine property: BigInt64Array` -- it repairs the
  * global object by redefining the intrinsics it permits, and cannot redefine a
  * non-configurable one.
+ *
+ * Two constraints on the caller, because this function enforces neither.
+ * `globalObject` must be the caller's OWN global: the constructors installed
+ * are this realm's, so handing it a foreign global cross-wires prototypes
+ * there (`new Uint8Array()` in that realm would answer `false` to its own
+ * `instanceof Uint8Array`). And it is not idempotent -- a second call mints
+ * fresh TypedArray constructors. The detect-then-skip gate that makes the
+ * first evaluation win lives in `shim.js`, not here.
  *
  * @param {object} globalObject
  */
