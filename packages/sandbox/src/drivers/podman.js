@@ -2739,6 +2739,41 @@ export const makePodmanDriver = ({
         let proxyFailure;
         try {
           status = await proxyExited;
+          // `podman start --attach` can exit successfully even when the
+          // container failed (including termination by signal). Read the
+          // immutable operation's engine record before removal erases it.
+          // A failed/detached proxy is already a failure; never turn it into
+          // success based on a container record.
+          if (status.code === 0 && status.signal === null) {
+            const result = await collectCleanup(
+              cp,
+              'podman',
+              podmanArgs(slice.runtime, [
+                'container',
+                'inspect',
+                '--format',
+                '{{json .State}}',
+                containerReference,
+              ]),
+              { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
+            );
+            if (result.code !== 0 || result.signal !== null) {
+              throw makeError(X`Podman operation exit status unavailable`);
+            }
+            const state = JSON.parse(result.stdout);
+            const code = state?.ExitCode;
+            if (
+              !['exited', 'stopped'].includes(state?.Status) ||
+              state.Running !== false ||
+              typeof code !== 'number' ||
+              !Number.isInteger(code) ||
+              code < 0 ||
+              code > 255
+            ) {
+              throw makeError(X`Invalid Podman operation exit status`);
+            }
+            status = { code, signal: null };
+          }
         } catch (e) {
           proxyFailure = e;
         }
