@@ -51,8 +51,8 @@ Counts at the time of writing, over the 16 runs the corpus produces
 | lane | passing | notes |
 | --- | --- | --- |
 | `test262:xs` | not measured here | needs `xst`; build the `c/moddable` submodule |
-| `test262:node` | **16 / 16** | the `lockdown()` case took three fixes; below |
-| `test262:ironhorse-host` | **16 / 16** | the number this ratchet tracks |
+| `test262:node` | **16 / 16** | hand-run, like every row here; the `lockdown()` case took three fixes, below |
+| `test262:ironhorse-host` | **16 / 16** | the number this ratchet tracks; needs `c/moddable` too, via `xs-oracle` |
 | `test262:ironhorse` | 0 / 8 covered, 1 failed | the two `Compartment` cases now RUN; see below |
 
 Both hosts now pass the whole corpus. `Symbol.toStringTag-lockdown.js` — whose
@@ -60,7 +60,8 @@ sloppy and strict runs are the two that used to be red on each — was red for
 unrelated reasons on each, which is why neither host's number was ever a
 ceiling for the other. See "The `lockdown()` case" below.
 
-It went 6/16 to 14/16 in four steps, each of which this lane surfaced:
+The Ironhorse lane went 6/16 to 14/16 in four steps, each of which it
+surfaced:
 
 1. a `return` out of a `switch` left the discriminant on the value stack, so
    a call in an argument list corrupted the caller's pending operands;
@@ -105,11 +106,13 @@ Removing layer 1 let `lockdown()` run, and it aborted on
 `globalThis.require('node:util')`, because the realm it runs in has none of its
 own — eshost builds its `vm` context with exactly
 `{ setTimeout, require, console, print }`.
-Those classes belong to the *host* realm, and `permits-intrinsics.js` cannot
-clean a `[[Prototype]]` it cannot reach, so it aborts rather than guess.
+Those classes belong to the *host* realm, and `permits-intrinsics.js` aborts
+on the mismatch — its own comment is "We can't clean [[Prototype]], therefore
+abort".
 The prelude now hands the loans back in its `lockdown` wrapper, the way the
-hardener is handed back. The six cases that need the codecs never call
-`lockdown()`; the one that calls it never touches them.
+hardener is handed back.
+The split is measured, not assumed: of the eight cases exactly two reference
+the codecs and exactly one calls `lockdown()`, with no overlap.
 
 **Node, layer 3: a partial descriptor, and the real bug.**
 Removing layer 2 got as far as
@@ -117,8 +120,9 @@ Removing layer 2 got as far as
 `@endo/immutable-arraybuffer`'s shim replaced the eleven global TypedArray
 constructors with `defineProperty(globalThis, name, { value })`, relying on the
 merge semantics an *ordinary* object gives a partial descriptor.
-A `vm` context's global is a Proxy, and its `defineProperty` fills in the
-spec's `false` defaults instead of merging — so in a `vm` realm the shim
+A `vm` context's global is V8's *global proxy* — not an ECMAScript `Proxy` —
+and its `defineProperty` interceptor fills in the spec's `false` defaults
+instead of merging — so in a `vm` realm the shim
 silently made those globals non-configurable, and `lockdown()` could not repair
 them.
 This one was not the corpus's to work around: the descriptor is now spelled out

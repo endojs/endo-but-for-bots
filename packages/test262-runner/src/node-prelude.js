@@ -30,15 +30,24 @@ globalThis.lockdown = options => {
   // `intrinsics.TextEncoder.__proto__`, finds the host realm's
   // `Function.prototype` instead of this one's, and aborts with
   // `Unexpected [[Prototype]] at intrinsics.TextEncoder.__proto__ (expected
-  // %FunctionPrototype%)` -- it cannot clean a `[[Prototype]]` it cannot
-  // reach, and it is right not to try.
+  // %FunctionPrototype%)`. Its own comment is blunter than "cannot reach":
+  // "We can't clean [[Prototype]], therefore abort" -- the test is a
+  // mismatch, and a mismatch is as far as it looks.
   //
   // So hand them back on the way in, the way
   // `./install-pre-lockdown-harden.js` hands back its hardener. The split is
-  // clean rather than lucky: the six cases that need the codecs never call
-  // `lockdown()`, and the one case that calls it never touches them. Only our
-  // own loans are withdrawn, so a case that installed its own codec keeps it
-  // and gets SES's own diagnostic rather than a silent removal.
+  // clean rather than lucky, and measured: of the eight corpus cases exactly
+  // TWO reference the codecs (the `TextEncoder`/`TextDecoder`
+  // `immutable-arraybuffer-intersection.js` pair), exactly ONE calls
+  // `lockdown()` (`Symbol.toStringTag-lockdown.js`), there is no overlap, and
+  // nothing in `test262/harness/` calls `lockdown()` either. Only our own
+  // loans are withdrawn, by identity, so a case that installed its own
+  // in-realm codec keeps it -- and `lockdown()` then accepts it, since an
+  // in-realm class is exactly what the permits want.
+  //
+  // The loans are not restored afterwards. Nothing observes that today: the
+  // one case that locks down uses no codec, and no case catches a `lockdown()`
+  // throw. A case that did both would need this revisited.
   if (globalThis.TextEncoder === TextEncoder) {
     delete (/** @type {any} */ (globalThis).TextEncoder);
   }

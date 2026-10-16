@@ -5,7 +5,7 @@
  * and `lockdown()`, withdrawn again before `lockdown()` sees it.
  *
  * This corpus needs `passStyleOf` and the `@endo/bytes` helpers as globals, and
- * six of its eight cases never call `lockdown()` at all -- so those modules
+ * seven of its eight cases never call `lockdown()` at all -- so those modules
  * have to load first. They all call `harden()` at module scope, which means
  * something hardens BEFORE `lockdown()`, and that is the one situation
  * `@endo/ironhorse-prelude` deliberately does not decide for its embedders.
@@ -53,10 +53,22 @@
  * Nothing Ironhorse-specific here -- this is the CORPUS's repair, which is why
  * it lives in the test harness rather than in `@endo/ironhorse-prelude`. Both
  * `ironhorse-prelude.js` and `node-prelude.js` import it, for the same reason
- * and at the same point in their order. `xs-prelude.js` does NOT, and that is
- * not a judgement: `xst` is unavailable without building the `c/moddable`
- * submodule, so whether XS needs it is unmeasured here and guessing would put
- * an unverified repair in the one lane nobody can run.
+ * and at the same point in their order -- after `ses/assert-shim.js`, before
+ * `./expose-pass-style-bytes-globals.js`. That position is deliberate, not
+ * load-bearing on every host: moving it ahead of `ses/lockdown-shim.js` was
+ * measured to leave the node lane at 16/16, because the shim then adopts this
+ * hardener itself and the poisoning slot is still never touched. Keep it here
+ * anyway, so the shim keeps its OWN traversing hardener for the guest. `xs-prelude.js` does NOT, and should
+ * not: XS installs a NATIVE `globalThis.harden` for the selector to adopt
+ * (`fx_harden`, bound as a host function in
+ * `rust/engine/xs-oracle/csrc/xs_shim.c`), so it never reaches the poisoning
+ * slot and needs no stand-in. Adding one would REPLACE that native `harden`
+ * with a non-traversing stand-in and then `delete` the global -- a loss
+ * rather than a no-op. That lane also cannot be run here: `xst` needs the
+ * `c/moddable` submodule built, and so does `test262:ironhorse-host`, whose
+ * `ironhorse-xst` binary depends on `xs-oracle`. Two of the four lanes are
+ * unrunnable on a bare checkout, so this rests on reading those sources
+ * rather than on measuring the lane.
  */
 
 import { makeHardener } from '@endo/harden/make-hardener.js';
