@@ -399,6 +399,7 @@ LLM-agent stack).*
 | [runtime-container-fs-mount](runtime-container-fs-mount.md) | 2026-08-10 | 2026-09-08 | **Complete** |
 | [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) | 2026-06-23 | 2026-10-15 | Proposed (Parcel carriage and opening across Slot Machine) |
 | [parcel](parcel.md) | 2026-10-14 | 2026-10-14 | Proposed |
+| [sturdyref-agent-api](sturdyref-agent-api.md) | 2026-09-30 | 2026-10-16 | Proposed (layer 9 of the Parcel stack; Slot Machine opening and export-table lifetime) |
 | [daemon-rename-to-manager](daemon-rename-to-manager.md) | 2026-05-04 | 2026-05-05 | In Progress |
 | [daemon-guest-eval-simplification](daemon-guest-eval-simplification.md) | 2026-03-21 | 2026-05-04 | **Implemented** |
 | [daemon-docker-selfhost](daemon-docker-selfhost.md) | 2026-03-02 | 2026-03-02 | In Progress |
