@@ -1,7 +1,10 @@
 // @ts-check
 /* global setTimeout, clearTimeout, setInterval, clearInterval */
 
-/** @import { HeartbeatOptions } from './types.js' */
+/**
+ * @import { HeartbeatOptions } from './types.js'
+ * @import { OcapnHeartbeatMessage } from '@endo/ocapn/operations'
+ */
 
 /**
  * @typedef {import('./types.js').ByteStream} ByteStream
@@ -895,7 +898,7 @@ export const makeOcapnNoiseNetwork = ({
     let pingSequence = 0n;
     let pongSequence = 0n;
     /** @type {bigint | undefined} */
-    let peerAckedRecvNonce;
+    let peerLastAckedRecvNonce;
     /** @type {ReturnType<typeof setInterval> | undefined} */
     let heartbeatTimer;
     /** @type {ReturnType<typeof setTimeout> | undefined} */
@@ -1051,7 +1054,7 @@ export const makeOcapnNoiseNetwork = ({
        */
       const absorbHeartbeat = plainText => {
         if (!isHeartbeatFrame(plainText)) return false;
-        /** @type {{ type: string, epoch: bigint, lastAckedRecvNonce?: bigint }} */
+        /** @type {OcapnHeartbeatMessage} */
         let message;
         try {
           const messageReader = codec.makeReader(plainText);
@@ -1066,17 +1069,16 @@ export const makeOcapnNoiseNetwork = ({
         }
         // A heartbeat from an earlier epoch is a straggler from an
         // obsolete transport instance.
-        if (message.epoch < epoch) return true;
+        if (message.epoch < epoch || message.type !== 'op:pong') return true;
         const { lastAckedRecvNonce } = message;
         // An acknowledgment of a nonce this side has not yet used is not
         // evidence of anything, so it is ignored rather than recorded.
         if (
-          lastAckedRecvNonce !== undefined &&
           lastAckedRecvNonce < getSentCount() &&
-          (peerAckedRecvNonce === undefined ||
-            lastAckedRecvNonce > peerAckedRecvNonce)
+          (peerLastAckedRecvNonce === undefined ||
+            lastAckedRecvNonce > peerLastAckedRecvNonce)
         ) {
-          peerAckedRecvNonce = lastAckedRecvNonce;
+          peerLastAckedRecvNonce = lastAckedRecvNonce;
         }
         return true;
       };
@@ -1293,7 +1295,7 @@ export const makeOcapnNoiseNetwork = ({
           heartbeat: heartbeatSettings !== undefined,
           epoch,
           lastAckedRecvNonce: getLastReceivedNonce(),
-          peerAckedRecvNonce,
+          peerLastAckedRecvNonce,
         }),
       close,
     });

@@ -90,15 +90,32 @@ export const OcapnHeartbeatOperationsCodecs = makeRecordUnionCodec(
 );
 
 /**
+ * @typedef {object} OcapnPingMessage
+ * @property {'op:ping'} type
+ * @property {bigint} epoch
+ * @property {bigint} sequence
+ */
+
+/**
+ * @typedef {object} OcapnPongMessage
+ * @property {'op:pong'} type
+ * @property {bigint} epoch
+ * @property {bigint} sequence
+ * @property {bigint} lastAckedRecvNonce
+ */
+
+/** @typedef {OcapnPingMessage | OcapnPongMessage} OcapnHeartbeatMessage */
+
+/**
  * @param {OcapnReader} reader
- * @returns {any}
+ * @returns {OcapnHeartbeatMessage}
  */
 export const readOcapnHeartbeatMessage = reader => {
   return OcapnHeartbeatOperationsCodecs.read(reader);
 };
 
 /**
- * @param {any} message
+ * @param {OcapnHeartbeatMessage} message
  * @param {OcapnCodec} codec
  * @returns {Uint8Array}
  */
