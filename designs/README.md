@@ -502,7 +502,7 @@ LLM-agent stack).*
 | [thixotrope-on-cloudflare-review](thixotrope-on-cloudflare-review.md) | 2026-09-24 | 2026-09-24 | Reference |
 | [thixotrope-wasm-worker](thixotrope-wasm-worker.md) | 2026-10-14 | 2026-10-15 | Proposed |
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | In Progress |
-| [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md) | 2026-04-23 | 2026-05-06 | **Complete** |
+| [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md) | 2026-04-23 | 2026-10-16 | **Complete** |
 | [syrup-frame](syrup-frame.md) | 2026-05-04 | 2026-05-06 | Deprecated |
 | [cbor-frame](cbor-frame.md) | 2026-05-04 | 2026-07-15 | In Progress (PR #288 open) |
 | [cbor-codec](cbor-codec.md) | 2026-07-12 | 2026-07-28 | Phases 1–2 implemented |
@@ -1188,7 +1188,7 @@ finalized.
 |--------|--------|-------|
 | ocapn-network-transport-separation | In Progress | Foundation for transport abstraction |
 | ocapn-tcp-for-test-extraction | In Progress | Clean separation before Noise |
-| ocapn-tcp-syrup-framing | **Complete** | Comma-less netstring variant (`@endo/syrups`) on a distinct `tcp+syrups` netlayer identifier |
+| ocapn-tcp-syrup-framing | **Complete** | Comma-less netstring variant (`@endo/syrup-frame`), the default framing of the `tcp-testing-only` netlayer |
 | syrups | Deprecated | Consolidated with PR 29's `@endo/syrups` (same shape: `Uint8Array` chunks in, `Uint8Array`-delimited messages out); see [`ocapn-tcp-syrup-framing.md`](ocapn-tcp-syrup-framing.md) |
 | cbor-frame | In Progress (PR #288 open) | `@endo/cbor-frame` reader/writer for length-prefixed CBOR byte strings; peer of `@endo/syrup-frame` and `@endo/netstring` |
 | cbor-codec | Phases 1–2 implemented | Shared canonical-CBOR primitive codec (`@endo/cbor`) extracted from `packages/ocapn/src/cbor` and PR #124's `packages/slots/src/cbor.js`; also serves the M11 `endor` slot-machine line; complement of the framing package `@endo/cbor-frame` (impl PR #288) |

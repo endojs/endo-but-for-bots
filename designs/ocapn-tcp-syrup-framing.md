@@ -3,9 +3,46 @@
 | | |
 |---|---|
 | **Created** | 2026-04-23 |
-| **Updated** | 2026-05-06 |
+| **Updated** | 2026-10-16 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | **Complete** |
+
+## Implementation Status
+
+This design shipped on `llm` on 2026-05-20, with two departures
+from the text below:
+
+- The package is named `@endo/syrup-frame` (`packages/syrup-frame/`),
+  not `@endo/syrups`, for parallelism with `@endo/cbor-frame`.
+  It exports `makeSyrupReader` and `makeSyrupWriter`
+  (38fe6787d).
+- The framing landed on the existing `tcp-testing-only` netlayer
+  rather than a new `tcp-syrups` network identifier.
+  `makeTcpNetLayer` in `packages/ocapn/src/netlayers/tcp-test-only.js`
+  takes a `framing` option: `'syrup'` is the default and routes
+  inbound bytes through the `@endo/syrup-frame` reader, so each
+  `handleMessageData` call carries one whole message; `'none'` keeps
+  the raw-chunk behavior only for the Python `ocapn-test-suite`
+  `testing_only_tcp` peer (bdb9ddc50, tested by
+  `packages/ocapn/test/netlayer-tcp-syrup.test.js`).
+  This is Option 3 of *Compatibility with Other OCapN
+  Implementations*, with an escape hatch for the Python suite, so
+  Phase 2 (netstring framing for `tcp-testing-only`) and the separate
+  Phase 3 identifier were not built.
+
+Two pieces remain, and both belong to other work:
+
+- The `while (reader.index < data.length)` loops in
+  `handleHandshakeMessageData` (`packages/ocapn/src/client/handshake.js`)
+  and the session dispatcher (`packages/ocapn/src/client/ocapn.js`)
+  stay because `'none'` framing still delivers arbitrary chunks.
+  Removing them needs every netlayer to deliver whole frames, which
+  for TCP means the Python suite adopting syrup framing (PR #242)
+  and dropping `'none'`. The handshake's move into the TCP network
+  belongs to
+  [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md).
+- Phase 4 (proposing the comma-less variant upstream to OCapN) is
+  opportunistic and outside this roadmap.
 
 ## What is the Problem Being Solved?
 
