@@ -9,7 +9,6 @@
  */
 
 import harden from '@endo/harden';
-import { ONE_N, ZERO_N } from '@endo/nat';
 import {
   readOcapnHandshakeMessage,
   writeOcapnHandshakeMessage,
@@ -17,6 +16,7 @@ import {
 import { makeSessionId } from '../cryptography.js';
 import { compareImmutableArrayBuffers } from '../bytewise-compare.js';
 import { locationToLocationId } from './util.js';
+import { makeSession } from './session.js';
 
 /**
  * @param {Connection} connection
@@ -65,57 +65,6 @@ const compareSessionKeysForCrossedHellos = (
       ? [outgoingConnection, incommingConnection]
       : [incommingConnection, outgoingConnection];
   return { preferredConnection, connectionToClose };
-};
-
-/**
- * @import { InternalSession } from './types.js'
- */
-
-/**
- * @param {object} options
- * @param {SessionId} options.id
- * @param {SelfIdentity} options.selfIdentity
- * @param {OcapnLocation} options.peerLocation
- * @param {OcapnPublicKey} options.peerPublicKey
- * @param {OcapnSignature} options.peerLocationSig
- * @param {Ocapn} options.ocapn
- * @param {Connection} options.connection
- * @returns {InternalSession}
- */
-export const makeSession = ({
-  id,
-  selfIdentity,
-  peerLocation,
-  peerPublicKey,
-  peerLocationSig,
-  ocapn,
-  connection,
-}) => {
-  const { keyPair, location, locationSignature } = selfIdentity;
-  let nextHandoffCount = ZERO_N;
-  return harden({
-    id,
-    connection,
-    ocapn,
-    peer: {
-      publicKey: peerPublicKey,
-      location: peerLocation,
-      locationSignature: peerLocationSig,
-    },
-    self: {
-      keyPair,
-      location,
-      locationSignature,
-    },
-    getHandoffCount: () => {
-      return nextHandoffCount;
-    },
-    takeNextHandoffCount: () => {
-      const current = nextHandoffCount;
-      nextHandoffCount += ONE_N;
-      return current;
-    },
-  });
 };
 
 /**

@@ -15,11 +15,8 @@ import { makeCryptography } from '../cryptography.js';
 import { makeGrantTracker } from './grant-tracker.js';
 import { makeSturdyRefTracker, enlivenSturdyRef } from './sturdyrefs.js';
 import { locationToLocationId, toHex } from './util.js';
-import {
-  handleHandshakeMessageData,
-  makeSession,
-  sendHandshake,
-} from './handshake.js';
+import { handleHandshakeMessageData, sendHandshake } from './handshake.js';
+import { makeSession } from './session.js';
 import { makeOcapn as makeOcapnCore } from './ocapn.js';
 
 /**
