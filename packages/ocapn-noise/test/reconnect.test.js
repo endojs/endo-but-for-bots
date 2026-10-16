@@ -255,11 +255,14 @@ test('the session aborts once SESSION_HARD_TIMEOUT passes unreconnected', async 
 });
 
 test('writes fail fast in the last stretch of the reconnect budget', async t => {
+  // The last stretch opens 200ms into reconnecting and the session aborts
+  // at 5s, so a loaded runner that stalls the write by seconds still lands
+  // it inside the window rather than after the abort.
   const { sessionA, injector } = await connectLossyPair(t, cborCodec, {
     reconnectA: {
       backoffInitialMs: 20,
-      backoffMaxMs: 1000,
-      hardTimeoutMs: 1200,
+      backoffMaxMs: 4800,
+      hardTimeoutMs: 5000,
     },
   });
   injector.refuse(true);
