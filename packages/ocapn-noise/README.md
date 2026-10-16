@@ -185,3 +185,30 @@ await session.writer.next(new TextEncoder().encode('hello'));
 Both peers must share the same OCapN wire codec; the Noise handshake
 provides mutual Ed25519 authentication but leaves codec selection to
 the embedding application.
+
+## Session heartbeats
+
+Heartbeats are off by default.
+Pass `heartbeat` to detect a peer that has gone silent:
+
+```js
+const network = makeOcapnNoiseNetwork({
+  codec: cborCodec,
+  heartbeat: { intervalMs: 5000, sessionTimeoutMs: 30000 },
+});
+```
+
+Each session then sends `op:ping` and `op:pong` inside the Noise
+channel every `intervalMs`.
+It closes with an error once `sessionTimeoutMs` (default six intervals,
+at least three) pass without any frame from the peer.
+The network absorbs heartbeat frames, so the session reader never sees
+them.
+`session.getLiveness()` returns a `SessionLiveness` snapshot: whether
+heartbeats are on, the epoch, the highest nonce this side has received,
+and the highest of its own nonces the peer has acknowledged.
+
+`op:ping` and `op:pong` are proposed OCapN operations, pending
+OCapN-org review.
+Enable heartbeats only toward peers that absorb them, because a peer
+that does not know them aborts the session.

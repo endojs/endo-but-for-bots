@@ -108,16 +108,17 @@ export interface OcapnNoiseSession {
  * `intervalMs`, and the session closes with an error once
  * `sessionTimeoutMs` elapse without any frame from the peer.
  *
- * `op:ping` and `op:pong` are proposed OCapN operations, pending
- * OCapN-org review. Enable heartbeats only toward peers that absorb
- * them: a peer that does not know them aborts the session.
+ * Enable heartbeats only toward peers that absorb them: a peer that
+ * does not know `op:ping` and `op:pong` aborts the session. The peer's
+ * interval must also be well under this side's `sessionTimeoutMs`, or
+ * this side drops a healthy session.
  */
 export interface HeartbeatOptions {
-  /** `HEARTBEAT_INTERVAL`. Default 5000. */
+  /** Milliseconds between heartbeats. Default 5000. */
   intervalMs?: number;
   /**
-   * `SESSION_TIMEOUT`. Default six intervals (30000 for the default
-   * interval); must be at least three intervals.
+   * Milliseconds without a frame from the peer before the session is
+   * lost. Default six intervals; must be at least three intervals.
    */
   sessionTimeoutMs?: number;
 }
@@ -125,17 +126,17 @@ export interface HeartbeatOptions {
 export interface SessionLiveness {
   /** Whether this session sends and absorbs heartbeats. */
   heartbeat: boolean;
-  /** The transport instance number; 0 until reconnect exists. */
+  /** The transport instance number. */
   epoch: bigint;
   /**
    * The highest Noise nonce this side has decrypted, or `undefined`
-   * before the first transport message from the peer. `op:pong` reports
-   * it, so no `op:pong` is sent while it is `undefined`.
+   * before the first transport message from the peer.
    */
   lastAckedRecvNonce: bigint | undefined;
   /**
    * The highest of this side's send nonces the peer has acknowledged
-   * by `op:pong`, or `undefined` before the first `op:pong`.
+   * by `op:pong`, or `undefined` before the first `op:pong`. An
+   * acknowledgment of a nonce this side has not used is ignored.
    */
   peerAckedRecvNonce: bigint | undefined;
 }
@@ -199,6 +200,10 @@ export interface OcapnNoiseNetwork {
 
 export interface MakeOcapnNoiseNetworkOptions {
   codec: OcapnCodec;
+  handshakeTimeoutMs?: number;
+  maxInProgressPerLocalKey?: number;
+  /** Off by default; see `HeartbeatOptions`. */
+  heartbeat?: HeartbeatOptions;
 }
 
 export declare function makeOcapnNoiseNetwork(
