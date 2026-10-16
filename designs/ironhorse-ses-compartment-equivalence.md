@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-15 |
-| **Updated** | 2026-09-18 |
+| **Updated** | 2026-10-16 |
 | **Author** | kumavis (prompted) |
 | **Status** | Proposed |
 | **Source** | Measured while working Phase 4 of [ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md) |
@@ -373,9 +373,10 @@ The overlap is not the interesting part; the one that took longest is.
 | `view-behavior-matrix/ses-hosts.js` | pass | **pass** |
 | `TextEncoder`/`TextDecoder` intersection | pass | **pass** |
 
-`Symbol.toStringTag-lockdown.js` is the last one to fall, and it is the only
-case node still fails — the node host reports 14/16, both failures on that file
-(one file, sloppy and strict).
+`Symbol.toStringTag-lockdown.js` is the last one to fall, and it was the only
+case node still failed — the node host reported 14/16, both failures on that
+file (one file, sloppy and strict).
+Node now reports 16/16; see § Node's three layers below.
 It used to fail on BOTH hosts, but **for two different reasons**, and an earlier
 revision of this section asserted node's reason for Ironhorse as well and
 concluded "it is not an Ironhorse gap".
@@ -417,6 +418,35 @@ So this IS an Ironhorse gap, and a sharper one than "no host passes it": the
 engine's own `harden` freezes intrinsics that a later `lockdown()` still needs
 to tame. A native `lockdown()` would not inherit the node problem, but it does
 have to answer this one.
+
+### Node's three layers
+
+Node reached 16/16 only after three independent causes were removed, each
+hidden behind the one in front of it: the poisoned `Object[@harden]` slot, then
+a borrowed cross-realm `TextEncoder`, then
+`@endo/immutable-arraybuffer`'s shim leaving the global TypedArray
+constructors non-configurable inside a `vm` realm.
+The full account, with the message each one produced, lives in
+`packages/test262-runner/README.md` § The `lockdown()` case, and is not
+repeated here: this document is superseded, and a second copy would be a second
+thing to keep true.
+
+Two findings generalize beyond that lane and belong on the record:
+
+- **A borrowed cross-realm intrinsic cannot survive `lockdown()`.**
+  `permits-intrinsics.js` will not clean a `[[Prototype]]` it cannot reach, and
+  it is right not to try. A prelude that borrows from its host must hand the
+  loans back before locking down, or not borrow at all.
+- **The third layer was a bug outside the harness**, in a published package,
+  and it reaches any SES embedder that loads
+  `@endo/immutable-arraybuffer`'s shim inside a Node.js `vm` realm. It was
+  invisible because a real global is an ordinary object, where the shim's
+  partial descriptor merges exactly as intended; a `vm` global is a Proxy and
+  fills in `configurable: false` instead.
+
+The pass count did not move until the last of the three went, which is the
+lesson worth keeping: a lane that is red for layered reasons reports the same
+number after real progress, and only the failure MESSAGE shows the movement.
 
 Two things the prelude had to get right, both of which are the
 `worker-rust-xs.md:515-520` dependency in miniature:
@@ -597,9 +627,11 @@ The preludes import `./expose-pass-style-bytes-globals.js`, which pulls
 `harden` for its selector to adopt, `@endo/harden` installs its own at
 `Object[Symbol.for('harden')]`, and `repairIntrinsics` refuses to run at all
 when it finds one (`packages/ses/src/lockdown.js:395`).
-The corpus's one such case, `Symbol.toStringTag-lockdown.js`, is red on node
-for that reason — the host reports 14/16 — and three cases ported from
+The corpus's one such case, `Symbol.toStringTag-lockdown.js`, was red on node
+for that reason — the host reported 14/16 — and three cases ported from
 `lockdown.test.js` and `harden.test.js` failed identically when tried.
+That reason is now fixed, and it turned out to be the first of three; see
+§ Node's three layers.
 
 Ironhorse is red on the same case for a DIFFERENT reason, measured above: its
 native `harden` deep-freezes `Function.prototype`, so SES's
@@ -1322,13 +1354,13 @@ claim about the shim route rests on.
 **Two of this document's own open gaps were never carried into the triage.**
 Neither is assigned:
 
-- The prelude's `@endo/harden` interaction **on the node host**. #1294 solves
-  the IronHorse half with `install-pre-lockdown-harden.js`, and its own
-  description says wiring the same repair to node "is a separate change with
-  its own baseline to move". Until someone does, node stays at 14/16 for a
-  reason we have already diagnosed and fixed elsewhere. The item's second
+- The prelude's `@endo/harden` interaction **on the node host** is DONE: node
+  reports 16/16. Wiring `install-pre-lockdown-harden.js` into
+  `node-prelude.js` was necessary but not sufficient -- see § Node's three
+  layers for the two further causes it uncovered, one of them a bug in
+  `@endo/immutable-arraybuffer` rather than in the harness. The item's second
   clause -- porting SES's own lockdown/`Compartment` assertions into the
-  `ses-xs-parity` corpus -- is untouched.
+  `ses-xs-parity` corpus -- remains untouched and unassigned.
 - The stage-4 bar does not run `bootstrap_ses`'s closing `run_promise_jobs()`,
   so it cannot see a divergence in how the two engines settle what
   `@endo/eventual-send`'s shim leaves pending.
