@@ -127,8 +127,12 @@ export interface SessionLiveness {
   heartbeat: boolean;
   /** The transport instance number; 0 until reconnect exists. */
   epoch: bigint;
-  /** The highest Noise nonce this side has decrypted. */
-  lastAckedRecvNonce: bigint;
+  /**
+   * The highest Noise nonce this side has decrypted, or `undefined`
+   * before the first transport message from the peer. `op:pong` reports
+   * it, so no `op:pong` is sent while it is `undefined`.
+   */
+  lastAckedRecvNonce: bigint | undefined;
   /**
    * The highest of this side's send nonces the peer has acknowledged
    * by `op:pong`, or `undefined` before the first `op:pong`.
