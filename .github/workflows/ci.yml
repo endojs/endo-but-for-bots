@@ -219,6 +219,23 @@ jobs:
 
       # end macro
 
+      # @endo/preact-container and @endo/preact-social both begin their
+      # `test` script with `playwright install chromium`, and Turbo runs the
+      # two in parallel. Playwright serializes installs on a lock in its
+      # browser cache and gives up after about eight minutes, so one slow
+      # Chromium download fails the other package before its tests start.
+      # Install here first, through both workspaces in case their Playwright
+      # versions ever differ, so both scripts find Chromium present. Turbo's
+      # strict env mode withholds PLAYWRIGHT_BROWSERS_PATH and XDG_CACHE_HOME
+      # from its tasks; unset them so this install lands where the tasks look.
+      - name: Install Playwright Chromium
+        if: contains(env.CI_PACKAGES, '@endo/preact-')
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          unset PLAYWRIGHT_BROWSERS_PATH XDG_CACHE_HOME
+          yarn workspace @endo/preact-container playwright install chromium
+          yarn workspace @endo/preact-social playwright install chromium
+
       # The detector selects changed workspaces and recursive dependents.
       # Turbo builds their prerequisites and runs only these exact names.
       - name: Run yarn test (affected set)
