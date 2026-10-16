@@ -331,6 +331,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
+| [https-fragment-locators](https-fragment-locators.md) | 2026-10-16 | — | Proposed |
 | [guest-native-invitations](guest-native-invitations.md) | 2026-09-02 | 2026-10-02 | In Progress |
 | [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | 2026-09-08 | 2026-09-09 | In Progress |
 | [gateway-sites-publication](gateway-sites-publication.md) | 2026-07-20 | 2026-07-20 | Proposed |
@@ -588,6 +589,8 @@ The 2026-09-30 rebase of PR #1116 adds [guest-native-invitations](guest-native-i
 The 2026-10-14 pass adds [thixotrope-wasm-worker](thixotrope-wasm-worker.md) (**Proposed**: the B5 plan with its spike); it joins the M4 table, the dependency graph (between the base Cloudflare design and its addendum) and the estimates table. Its Phases 0b–4 add about 12 days of M4 work that waits on nothing else in M4 and can run beside it, so M4's projected duration and the timeline are unchanged; its Phase 5 waits on the Cloudflare review's blockers 7–11, like the two Cloudflare designs, and is not placed on the timeline.
 
 **Current totals (2026-10-16, re-derived from the summary table):** 77 Complete/Implemented, 83 In Progress, 18 Not Started, 30 Proposed, 3 Active, 21 Reference, 4 Deprecated, 3 Draft, 5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phases 1–2 implemented* and [genie-integration](genie-integration.md) as a *Largely realized* retrospective (**249 indexed records**). The bucket sum is 249. A qualified cell folds by its leading status (an `In Progress (PR #284)` is In Progress, a `Superseded by …` is Superseded, a `Proposed (exploratory)` is Proposed). The 2026-10-07 paragraph's totals (245 records, 26 Proposed, 84 In Progress, 2 Draft, with the later one-row increments) were incremented rather than re-derived and had drifted from the table by three rows; this count replaces them. The 2026-10-16 pass adds [ironhorse-intrinsic-fault-in](ironhorse-intrinsic-fault-in.md) (Proposed) to the summary table, the M11 table, the dependency graph and the estimates table (Proposed 29 -> 30, records 248 -> 249), unestimated. The raw corpus is 252 files (`designs/*.md` plus `packages/*/designs/*.md`): six ledger/support files are excluded (this README, `ARCHIVE.md`, `AGENTS.md`, `CLAUDE.md`, and the two package design-directory indexes), four already-indexed channel-thread research records lie outside those globs, and one design file, [daemon-mount-visible-roots](daemon-mount-visible-roots.md) (Proposed, 2026-09-30), is in the corpus but not yet in the summary table; indexing it is left to the next grooming pass, since this pass changes no other row.
+
+The 2026-10-16 https-fragment-locators pass adds [https-fragment-locators](https-fragment-locators.md) (**Proposed**) to the summary table, the M8 table, the dependency graph (ahead of familiar-deep-link-invitations) and the estimates table: Proposed 30 -> 31, records 249 -> 250. Its 12-14 days are M8 work that runs before the deep-link row; its daemon and minion.town phases do not wait on the rest of M8 and can land early, so M8's projected range and the timeline are unchanged.
 
 ## Roadmap
 
@@ -937,6 +940,8 @@ flowchart TD
     subgraph App Sharing Cut
         aship[app-sharing-milestone<br/><i>PROPOSED</i>]
         adeep[familiar-deep-link-invitations<br/><i>PROPOSED</i>]
+        hfrag[https-fragment-locators<br/><i>PROPOSED</i>]
+        hfrag --> adeep
         ashare[endo-app-sharing<br/><i>PROPOSED</i>]
         auihost[familiar-app-ui-hosting<br/><i>PROPOSED</i>]
         onoise --> adeep
@@ -1439,6 +1444,7 @@ deep-link -> P2 app + sandboxed UI -> P3 clone).
 | Design | Status | Pillar | Notes |
 |--------|--------|--------|-------|
 | app-sharing-milestone | Proposed | — | Milestone roadmap doc; verified current state + P0-P3 plan |
+| https-fragment-locators | Proposed | 2 — connect peers | Replaces every `endo://` locator with `https://<base>/{adopt,invite}/#v=1&type=…&id=…&peer=…&at=…` (bare `#…` when no base); fragment-capture page, dual-stack parser, per-agent `locatorBase`, error redaction. Precedes familiar-deep-link-invitations, whose `endo://invite/` envelope it supersedes |
 | familiar-deep-link-invitations | In Progress | 2 — connect peers | New: `endo://` capture in shell -> Chat confirm + naming modal -> `host.accept` (daemon `invite`/`accept` already Complete) |
 | guest-native-invitations | In Progress | 2 — connect peers | `invite`/`accept` on `EndoGuest` landed (#1305, #1310; host `accept` converged, no minted guest); remaining: durable invitation state machine in the formula store, returned `{ status }` outcomes, collection-driven revocation, newcomer guest provisioning |
 | endo-app-sharing | In Progress | 3 — make & share apps | New: app handle (source + exec + ui + `cloneable`); cross-daemon clone as a single streamed tree-archive into a pluggable durable backing (default zip) vs remote reference — no per-blob hashing |
@@ -1986,6 +1992,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | endopi-stdio-rpc-bridge | M | 4-5 days | 3 | LF-delimited JSONL RPC for embedding the Lal/Fae agent in another process; short-term shape before `endor-bus-tui` |
 | endopi-extension-package-manifest | S-M | 3 days | 10 | `package.json` `endo` keyword bundling guests + skills + prompts + providers in one install |
 | app-sharing-milestone | — | — | 8 | Roadmap doc; no implementation of its own (reference for the P0-P3 sequencing) |
+| https-fragment-locators | M-L | 12-14 days | 8 | Five phases: daemon grammar + redaction (3d), formatter + `locatorBase` + deadline (4d), minion.town capture page (3d), CLI/Chat (1-2d), Familiar launch scheme (3d, folds into deep-link) |
 | familiar-deep-link-invitations | S-M | 3 days | 8 | `endo://` capture in shell + Chat confirm/naming modal; daemon `invite`/`accept` already Complete |
 | endo-app-sharing | M | 4-5 days | 8 | App handle + cross-daemon `endo clone` (hash-verified) vs remote reference (1.2x bump) |
 | familiar-app-ui-hosting | M | 4-5 days | 8 | App UI manifest + sandbox tiers over the existing weblet substrate (1.2x bump) |
