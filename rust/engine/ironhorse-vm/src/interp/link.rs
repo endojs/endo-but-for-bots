@@ -164,6 +164,11 @@ impl Interp {
         // name. Including them in the install floor preserves guest deletions.
         self.intern_static_key("name");
         self.intern_static_key("message");
+        // SerializeJSONProperty reads `toJSON` implicitly, and
+        // `Date.prototype.toJSON` reads `toISOString` (interned with it by the
+        // install pass), so `JSON.stringify` of a Date reached by a later
+        // crank, `eval`, a Compartment or a computed name finds them.
+        self.intern_static_key("toJSON");
         // A non-guest-reachable descriptor in the persisted symbol-key table
         // marks the current arguments layout. Unlike a reserved string, this
         // cannot be pre-interned or spoofed by guest JavaScript; no property
