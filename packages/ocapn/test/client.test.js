@@ -342,10 +342,9 @@ test('provideSession throws and cleans up pending session on handshake abort', a
   });
 
   const hasPendingSession = () => {
-    const pendingSession =
-      clientKitA.debug.sessionManager.getPendingSessionPromise(
-        clientKitB.locationId,
-      );
+    const pendingSession = clientKitA.debug.getEstablishingSession(
+      clientKitB.locationId,
+    );
     return pendingSession !== undefined;
   };
 
@@ -693,7 +692,6 @@ testWithErrorUnwrapping(
       'SturdyRefReturner',
       Far('sturdyRefReturner', {
         getSturdyRef: location =>
-          // eslint-disable-next-line no-use-before-define
           clientKitB.client.makeSturdyRef(location, 'target'),
       }),
     );

@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { makeStartSessionNetwork } from '@endo/ocapn/netlayer/start-session';
 import { makeThixotropeDaemon } from '../src/daemon.js';
 import { makeDurableNetLayer } from '../src/durable-netlayer.js';
 import { makeFsStore } from '../src/store-fs.js';
@@ -21,7 +22,11 @@ import {
 
 /** @import {ExecutionContext, TestFn} from 'ava' */
 
-/** @param {ExecutionContext} t @param {string} path @param {'replay' | 'ironhorse'} kind */
+/**
+ * @param {ExecutionContext} t @param {string} path @param {'replay' | 'ironhorse'} kind
+ * @param path
+ * @param kind
+ */
 const launch = async (t, path, kind) => {
   const child = fork(
     fileURLToPath(new URL('./_remote-process-daemon.mjs', import.meta.url)),
@@ -67,7 +72,10 @@ const launch = async (t, path, kind) => {
   return { child, exited, receive, ready };
 };
 
-/** @param {TestFn} test @param {'replay' | 'ironhorse'} kind */
+/**
+ * @param {TestFn} test @param {'replay' | 'ironhorse'} kind
+ * @param kind
+ */
 export const registerRemoteProcessTests = (test, kind) => {
   for (const phase of ['before-dispatch', 'after-dispatch']) {
     test.serial(
@@ -127,16 +135,19 @@ export const registerRemoteProcessTests = (test, kind) => {
         const publication = sender.publish(caller);
         const client = await makeTestOcapn({
           codec: syrupCodec,
-          network: (handlers, logger) =>
-            makeDurableNetLayer({
-              handlers,
-              logger,
-              makeBaseNetlayer: powers =>
-                makeTcpNetLayer({
-                  ...powers,
-                  specifiedDesignator: `${basename(path)}-client`,
-                }),
-            }),
+          network: makeStartSessionNetwork(
+            (handlers, logger) =>
+              makeDurableNetLayer({
+                handlers,
+                logger,
+                makeBaseNetlayer: powers =>
+                  makeTcpNetLayer({
+                    ...powers,
+                    specifiedDesignator: `${basename(path)}-client`,
+                  }),
+              }),
+            { codec: syrupCodec },
+          ),
         });
         t.teardown(() => client.shutdown());
         const counter = await client.enlivenSturdyRef(

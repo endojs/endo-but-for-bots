@@ -5,6 +5,7 @@ import { E } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
 import { makeOcapn } from '../src/client/index.js';
 import { makeTcpNetLayer } from '../src/netlayers/tcp-test-only.js';
+import { makeStartSessionNetwork } from '../src/netlayers/start-session.js';
 import { encodeSwissnum } from '../src/client/util.js';
 import { syrupCodec } from '../src/syrup/index.js';
 import { makeTestOcapn, test } from './_util.js';
@@ -22,17 +23,20 @@ import { makeTestOcapn, test } from './_util.js';
  * @param {NetlayerRef<Awaited<ReturnType<typeof makeTcpNetLayer>>>} netlayerRef
  * @param {string} specifiedDesignator
  */
-const captureTcpNetLayer =
-  (netlayerRef, specifiedDesignator) => (handlers, logger) =>
-    makeTcpNetLayer({
-      handlers,
-      logger,
-      specifiedDesignator,
-      framing: 'syrup',
-    }).then(netlayer => {
-      netlayerRef.netlayer = netlayer;
-      return netlayer;
-    });
+const captureTcpNetLayer = (netlayerRef, specifiedDesignator) =>
+  makeStartSessionNetwork(
+    (handlers, logger) =>
+      makeTcpNetLayer({
+        handlers,
+        logger,
+        specifiedDesignator,
+        framing: 'syrup',
+      }).then(netlayer => {
+        netlayerRef.netlayer = netlayer;
+        return netlayer;
+      }),
+    { codec: syrupCodec },
+  );
 
 const COMMA = ','.charCodeAt(0);
 const COLON = ':'.charCodeAt(0);

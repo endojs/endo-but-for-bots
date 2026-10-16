@@ -18,6 +18,7 @@ import { Far } from '@endo/far';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
+import { makeStartSessionNetwork } from '@endo/ocapn/netlayer/start-session';
 import { makeThixotropeDaemon } from '../src/daemon.js';
 import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
 import { makeTimerResource } from '../src/resources.js';
@@ -38,7 +39,11 @@ const COUNTER_SOURCE = `
 `;
 
 /** @import { ExecutionContext } from 'ava' */
-/** @param {ExecutionContext} t @param {{ onDeleteWorker?: (id: string) => void }} [options] */
+/**
+ * @param {ExecutionContext} t @param {{ onDeleteWorker?: (id: string) => void }} [options]
+ * @param root0
+ * @param root0.onDeleteWorker
+ */
 const makeDaemon = async (t, { onDeleteWorker = () => {} } = {}) => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-daemon-test-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
@@ -224,14 +229,17 @@ test.serial('a third-party gift routes through the hub bootstrap', async t => {
     codec: syrupCodec,
     debugLabel: 'gift-receiver',
     locator: receiverLocator,
-    network: async (/** @type {any} */ handlers, /** @type {any} */ logger) => {
-      receiverNetlayer = await makeTcpNetLayer({
-        handlers,
-        logger,
-        specifiedDesignator: 'receiver',
-      });
-      return receiverNetlayer;
-    },
+    network: makeStartSessionNetwork(
+      async (/** @type {any} */ handlers, /** @type {any} */ logger) => {
+        receiverNetlayer = await makeTcpNetLayer({
+          handlers,
+          logger,
+          specifiedDesignator: 'receiver',
+        });
+        return receiverNetlayer;
+      },
+      { codec: syrupCodec },
+    ),
   });
   t.teardown(() => receiver.shutdown());
   receiverLocator.set(
@@ -246,8 +254,11 @@ test.serial('a third-party gift routes through the hub bootstrap', async t => {
   const gifter = await makeTestOcapn({
     codec: syrupCodec,
     debugLabel: 'gifter',
-    network: (/** @type {any} */ handlers, /** @type {any} */ logger) =>
-      makeTcpNetLayer({ handlers, logger, specifiedDesignator: 'gifter' }),
+    network: makeStartSessionNetwork(
+      (/** @type {any} */ handlers, /** @type {any} */ logger) =>
+        makeTcpNetLayer({ handlers, logger, specifiedDesignator: 'gifter' }),
+      { codec: syrupCodec },
+    ),
   });
   t.teardown(() => gifter.shutdown());
   const counterAtGifter = await gifter.enlivenSturdyRef(
@@ -303,17 +314,17 @@ test.serial(
       codec: syrupCodec,
       debugLabel: 'exporter',
       locator: exporterLocator,
-      network: async (
-        /** @type {any} */ handlers,
-        /** @type {any} */ logger,
-      ) => {
-        exporterNetlayer = await makeTcpNetLayer({
-          handlers,
-          logger,
-          specifiedDesignator: 'exporter',
-        });
-        return exporterNetlayer;
-      },
+      network: makeStartSessionNetwork(
+        async (/** @type {any} */ handlers, /** @type {any} */ logger) => {
+          exporterNetlayer = await makeTcpNetLayer({
+            handlers,
+            logger,
+            specifiedDesignator: 'exporter',
+          });
+          return exporterNetlayer;
+        },
+        { codec: syrupCodec },
+      ),
     });
     t.teardown(() => exporter.shutdown());
     exporterLocator.set(
@@ -332,8 +343,11 @@ test.serial(
     const gifter = await makeTestOcapn({
       codec: syrupCodec,
       debugLabel: 'redeeming-gifter',
-      network: (/** @type {any} */ handlers, /** @type {any} */ logger) =>
-        makeTcpNetLayer({ handlers, logger, specifiedDesignator: 'gifter2' }),
+      network: makeStartSessionNetwork(
+        (/** @type {any} */ handlers, /** @type {any} */ logger) =>
+          makeTcpNetLayer({ handlers, logger, specifiedDesignator: 'gifter2' }),
+        { codec: syrupCodec },
+      ),
     });
     t.teardown(() => gifter.shutdown());
 

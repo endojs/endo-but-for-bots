@@ -108,30 +108,18 @@
  *   (and a codec passed to `makeOcapn({ codec })` must match).
  * @property {() => void} shutdown - Shut the network down, closing
  *   outgoing and inbound state.
- * @property {((location: OcapnLocation) => Connection | Promise<Connection>)} [connect] -
- *   Establish a raw connection to a peer. Required unless the network
- *   implements `provideSession`. May be synchronous or asynchronous;
- *   the client always awaits the result.
- * @property {((location: OcapnLocation) => Promise<NetworkSession | undefined>)} [provideSession] -
- *   Return a fully authenticated session; the client bypasses its own
- *   handshake machinery. Required unless the network implements `connect`.
- *   May resolve undefined to decline the location, in which case the
- *   client falls back to the `connect` + handshake path (used by
- *   routing networks that front several transports).
+ * @property {((location: OcapnLocation) => Promise<NetworkSession | AdoptableSession | undefined>)} [provideSession] -
+ *   Return a fully authenticated session. OCapN core runs no handshake
+ *   of its own. The result is either a `NetworkSession` (pull: core
+ *   pumps its `reader`) or an `AdoptableSession` the network already
+ *   passed to `SessionHandlers.adoptSession` (push: core returns the
+ *   session it adopted). Resolving undefined declines the location, and
+ *   core rejects with "no network accepts location". A network that only
+ *   adopts sessions (and never dials) may omit it.
  * @property {OcapnLocation} [location] - A representative location of
  *   this network, used for self-location checks. Networks that do not
  *   have a single fixed location may omit this.
  * @property {LocationId} [locationId] - Cached locationId for `location`.
- * @property {((connection: Connection, captpVersion: string, selfIdentity: SelfIdentity, codec: import('../codec-interface.js').OcapnCodec) => void)} [sendSessionHandshake] -
- *   Optional custom handshake for outgoing connections. If present, the
- *   network owns the handshake bytes for this connection instead of the
- *   default `op:start-session`. `selfIdentity` is supplied by the client
- *   for networks that share its identity layer; networks with their own
- *   identity (e.g. Noise) can ignore it.
- * @property {((connection: Connection, data: Uint8Array, selfIdentity: SelfIdentity, captpVersion: string) => boolean)} [handleSessionHandshake] -
- *   Optional custom handler for incoming handshake bytes. Returns true
- *   if the data was consumed as a network-level handshake message, or
- *   false to let the client fall back to the default handler.
  * @property {AsyncIterable<NetworkSession>} [inboundSessions] -
  *   Async iterable yielding fully-authenticated `NetworkSession`s that
  *   the network accepted without a corresponding `provideSession` call
@@ -244,22 +232,60 @@
 /**
  * @typedef {object} SessionManager
  * @property {(location: LocationId) => InternalSession | undefined} getActiveSession
- * @property {(location: LocationId) => Connection | undefined} getOutgoingConnection
- * @property {(location: LocationId) => Promise<InternalSession> | undefined} getPendingSessionPromise
- * @property {(connection: Connection) => InternalSession | undefined} getSessionForConnection
- * @property {(location: LocationId, connection: Connection) => PendingSession} makePendingSession
- * @property {(location: LocationId, connection: Connection, session: InternalSession) => void} resolveSession
- * @property {(connection: Connection) => void} deleteConnection
- * When a connection is no longer relevant to establishing a session.
- * Does not close the connection. Does not close or delete the session.
+ * @property {(location: LocationId, session: InternalSession) => void} resolveSession
  * @property {(session: InternalSession) => void} endSession
  * When a session has ended (eg connection closed).
  * Does not close the connection. Does not delete the session.
  * Does not communicate with the peer.
- * @property {(connection: Connection) => boolean} rejectPendingSessionForConnection
- * Finds and rejects any pending session associated with the given connection.
- * Returns true if a pending session was found and rejected, false otherwise.
  * @property {(sessionId: SessionId) => OcapnPublicKey | undefined} getPeerPublicKeyForSessionId
+ */
+
+/**
+ * The handlers OCapN core gives a network factory
+ * (`makeOcapn({ network: factory })` calls `factory(sessionHandlers, logger)`).
+ *
+ * Trust assumption: a session passed to `adoptSession` (or resolved from
+ * `OcapnNetwork.provideSession` / yielded by `inboundSessions`) is already
+ * authenticated by its network. Core does no peer verification of its own;
+ * it runs CapTP over whatever the network vouches for. Networks that speak
+ * `op:start-session` compose `makeStartSessionNetwork` from
+ * `@endo/ocapn/netlayer/start-session`.
+ *
+ * @typedef {object} SessionHandlers
+ * @property {(session: AdoptableSession) => AdoptedSession} adoptSession
+ *   Synchronously wire an authenticated session into the session manager
+ *   and return its inbound sink and restore hooks. Each session object may
+ *   be adopted once.
+ */
+
+/**
+ * An authenticated session a network pushes into core.
+ *
+ * @typedef {object} AdoptableSession
+ * @property {SessionId} sessionId
+ * @property {SelfIdentity} selfIdentity
+ * @property {Uint8Array} remotePublicKeyBytes
+ * @property {OcapnLocation} remoteLocation
+ * @property {OcapnSignature} remoteLocationSignature
+ * @property {boolean} isInitiator
+ * @property {(bytes: Uint8Array) => void} write - Write one OCapN message.
+ * @property {() => void} close
+ * @property {any} [hookKey] - Passed to `SessionHooks` callbacks in place
+ *   of core's internal connection, so an embedder keeps the identity it
+ *   registered.
+ */
+
+/**
+ * What core returns from `adoptSession`.
+ *
+ * @typedef {object} AdoptedSession
+ * @property {(bytes: Uint8Array) => void} dispatch - Deliver one OCapN
+ *   message, synchronously.
+ * @property {(reason?: Error) => void} end - The peer is gone; abort CapTP.
+ * @property {ResumedSession['restoreExport']} restoreExport
+ * @property {ResumedSession['restorePendingResolver']} restorePendingResolver
+ * @property {ResumedSession['provideImport']} provideImport
+ * @property {ResumedSession['advanceAnswerPosition']} advanceAnswerPosition
  */
 
 /**
@@ -270,11 +296,11 @@
  */
 
 /**
- * Handlers returned by registerNetlayer for the netlayer to call.
+ * Handlers `makeStartSessionNetwork` gives a connect-style netlayer.
  * @typedef {object} NetlayerHandlers
  * @property {(netlayer: NetLayer, isOutgoing: boolean, socket: SocketOperations) => Connection} makeConnection
- * Creates a connection wrapper. Client internally handles identity creation.
- * Caller is responsible for initiating handshake if needed (client does this in establishSession).
+ * Creates a connection wrapper. The start-session adapter handles identity
+ * creation and initiates the handshake for outgoing connections.
  * @property {(connection: Connection, data: Uint8Array) => void} handleMessageData
  * @property {(connection: Connection, reason?: Error) => void} handleConnectionClose
  * @property {(connection: Connection, resumption: SessionResumption) => ResumedSession} resumeSession
@@ -335,11 +361,11 @@
  * @typedef {object} ClientDebug
  * @property {Logger} logger
  * @property {string} debugLabel
- * @property {string} captpVersion
  * @property {GrantTracker} grantTracker
  * @property {SessionManager} sessionManager
  * @property {SturdyRefTracker} sturdyRefTracker
  * @property {(location: OcapnLocation) => Promise<InternalSession<Bootstrap>>} provideInternalSession
+ * @property {(locationId: LocationId) => Promise<InternalSession> | undefined} getEstablishingSession
  * Returns the full InternalSession object with all internal properties for debugging/testing.
  */
 

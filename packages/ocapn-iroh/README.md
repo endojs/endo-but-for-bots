@@ -55,10 +55,14 @@ identifies sessions by the full location URI (designator *and* hints).
 import { makeOcapn } from '@endo/ocapn';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import { makeIrohNetLayer } from '@endo/ocapn-iroh';
+import { makeStartSessionNetwork } from '@endo/ocapn/netlayer/start-session';
 
 const client = await makeOcapn({
   codec: syrupCodec,
-  network: (handlers, logger) => makeIrohNetLayer({ handlers, logger }),
+  network: makeStartSessionNetwork(
+    (handlers, logger) => makeIrohNetLayer({ handlers, logger }),
+    { codec: syrupCodec },
+  ),
   locator: new Map([['Greeter', greeter]]),
 });
 ```

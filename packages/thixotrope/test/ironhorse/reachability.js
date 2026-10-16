@@ -7,6 +7,7 @@ import { access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
 
+import { makeStartSessionNetwork } from '@endo/ocapn/netlayer/start-session';
 import { makeTestOcapn } from '../_util.js';
 import { makeFixture } from './_fixture.js';
 
@@ -97,7 +98,10 @@ test.serial(
     const fixture = await makeFixture(t);
     const peer = await makeTestOcapn({
       codec: syrupCodec,
-      network: (handlers, logger) => makeTcpNetLayer({ handlers, logger }),
+      network: makeStartSessionNetwork(
+        (handlers, logger) => makeTcpNetLayer({ handlers, logger }),
+        { codec: syrupCodec },
+      ),
     });
     t.teardown(() => peer.shutdown());
     const root = await peer.enlivenSturdyRef(

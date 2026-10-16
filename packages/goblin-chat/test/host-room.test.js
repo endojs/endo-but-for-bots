@@ -26,6 +26,7 @@ import { decodeSwissnum, makeOcapn } from '@endo/ocapn';
 import { makeWebSocketNetLayer } from '@endo/ocapn/netlayer/ws';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
+import { makeStartSessionNetwork } from '@endo/ocapn/netlayer/start-session';
 import { hostRoom, hostRegistry } from '../src/host-room.js';
 import { parseLocator } from '../src/uri-parse.js';
 
@@ -59,13 +60,16 @@ test.serial(
     const remote = await makeOcapn({
       codec: syrupCodec,
       captpVersion: CAPTP_VERSION,
-      network: handlers =>
-        makeWebSocketNetLayer({
-          handlers,
-          // tests run quietly; the netlayer logger only fires on
-          // exceptional paths anyway.
-          logger: { log: () => {}, info: () => {}, error: () => {} },
-        }),
+      network: makeStartSessionNetwork(
+        handlers =>
+          makeWebSocketNetLayer({
+            handlers,
+            // tests run quietly; the netlayer logger only fires on
+            // exceptional paths anyway.
+            logger: { log: () => {}, info: () => {}, error: () => {} },
+          }),
+        { codec: syrupCodec },
+      ),
     });
 
     try {

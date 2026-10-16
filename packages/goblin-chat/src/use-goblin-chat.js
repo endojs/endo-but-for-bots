@@ -40,6 +40,7 @@ import { Far } from '@endo/marshal';
 import { makeOcapn, swissnumToBytes } from '@endo/ocapn';
 import { makeWebSocketNetLayer } from '@endo/ocapn/netlayer/ws';
 import { syrupCodec } from '@endo/ocapn/syrup';
+import { makeStartSessionNetwork } from '@endo/ocapn/netlayer/start-session';
 import { makeUserControllerPair } from './backend.js';
 import { parseLocator } from './uri-parse.js';
 import { encodeBase64Url } from './base64url.js';
@@ -189,7 +190,7 @@ const makeReducerLogger = (dispatch, source, logSink) => {
 
 /**
  * @typedef {object} GoblinChatConfig
- * @property {string} [captpVersion]    Forwarded to `makeOcapn`.
+ * @property {string} [captpVersion]    Forwarded to `makeStartSessionNetwork`.
  * @property {boolean} [verbose=true]   Forwarded to `makeOcapn`. The
  *   default is `true` because the dedicated log panel is the whole
  *   point of having a logger; `info` lines flowing through is what
@@ -417,15 +418,20 @@ export const useGoblinChat = ({
         const client = await makeOcapn({
           codec: syrupCodec,
           verbose,
-          ...(captpVersion ? { captpVersion } : {}),
           logger: makeReducerLogger(dispatch, 'client', logSink),
-          network: handlers =>
-            makeWebSocketNetLayer({
-              handlers,
-              logger: makeReducerLogger(dispatch, 'netlayer', logSink),
-              specifiedHostname: '127.0.0.1',
-              specifiedPort: 0,
-            }),
+          network: makeStartSessionNetwork(
+            handlers =>
+              makeWebSocketNetLayer({
+                handlers,
+                logger: makeReducerLogger(dispatch, 'netlayer', logSink),
+                specifiedHostname: '127.0.0.1',
+                specifiedPort: 0,
+              }),
+            {
+              codec: syrupCodec,
+              ...(captpVersion ? { captpVersion } : {}),
+            },
+          ),
         });
         sessionRef.current.client = client;
 

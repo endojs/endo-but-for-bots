@@ -20,6 +20,7 @@ import '@endo/init';
 import { makeOcapn } from '@endo/ocapn';
 import { makeWebSocketNetLayer } from '@endo/ocapn/netlayer/ws';
 import { syrupCodec } from '@endo/ocapn/syrup';
+import { makeStartSessionNetwork } from '@endo/ocapn/netlayer/start-session';
 import { decodeBase64Url } from '../../src/base64url.js';
 import { runChatParticipant } from '../../src/interop-driver.js';
 
@@ -106,9 +107,11 @@ const main = async () => {
   const client = await makeOcapn({
     codec: syrupCodec,
     verbose: true,
-    captpVersion,
-    network: (handlers, logger) =>
-      makeWebSocketNetLayer({ handlers, logger, specifiedPort: port }),
+    network: makeStartSessionNetwork(
+      (handlers, logger) =>
+        makeWebSocketNetLayer({ handlers, logger, specifiedPort: port }),
+      { codec: syrupCodec, captpVersion },
+    ),
   });
   try {
     const sturdyRef = client.makeSturdyRef(location, swissNum);
