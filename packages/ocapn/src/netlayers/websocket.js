@@ -6,7 +6,7 @@ import harden from '@endo/harden';
 import { thawedBytes, frozenBytes } from '@endo/immutable-arraybuffer';
 
 import { makeCryptography } from '../cryptography.js';
-import { locationToLocationId } from '../client/util.js';
+import { locationNetworkId, locationToLocationId } from '../client/util.js';
 import { makeSyrupReader } from '../syrup/decode.js';
 import { makeSyrupWriter } from '../syrup/encode.js';
 import { syrupCodec } from '../syrup/index.js';
@@ -311,7 +311,8 @@ export const makeWebSocketNetLayer = async ({
   /** @type {OcapnLocation} */
   const localLocation = {
     type: 'ocapn-peer',
-    transport: 'websocket',
+    network: 'websocket',
+    transport: 'websocket', // Legacy; prefer `network`.
     designator,
     hints: {
       url: publicUrl,
@@ -330,8 +331,9 @@ export const makeWebSocketNetLayer = async ({
    * @returns {Connection}
    */
   const connect = remoteLocation => {
-    if (remoteLocation.transport !== localLocation.transport) {
-      throw Error(`Unsupported transport: ${remoteLocation.transport}`);
+    const remoteNetworkId = locationNetworkId(remoteLocation);
+    if (remoteNetworkId !== locationNetworkId(localLocation)) {
+      throw Error(`Unsupported network: ${remoteNetworkId}`);
     }
     if (
       typeof remoteLocation.hints !== 'object' ||

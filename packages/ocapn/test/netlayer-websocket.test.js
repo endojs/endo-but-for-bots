@@ -140,3 +140,33 @@ test('websocket netlayer rejects peer with mismatched designator', async t => {
     clientB.shutdown();
   }
 });
+
+test('websocket netlayer rejects a peer on another network', async t => {
+  /** @type {NetlayerRef<Awaited<ReturnType<typeof makeWebSocketNetLayer>>>} */
+  const netlayerRef = {};
+  const client = await makeTestOcapn({
+    codec: syrupCodec,
+    network: captureWebSocketNetLayer(netlayerRef),
+    debugLabel: 'ws-network',
+  });
+  try {
+    if (!netlayerRef.netlayer) {
+      throw Error('makeWebSocketNetLayer did not resolve a netlayer');
+    }
+    const { netlayer } = netlayerRef;
+    t.throws(() => netlayer.connect({ ...netlayer.location, network: 'np' }), {
+      message: /Unsupported network: np/,
+    });
+    t.throws(
+      () =>
+        netlayer.connect({
+          ...netlayer.location,
+          network: undefined,
+          transport: 'tcp-testing-only',
+        }),
+      { message: /Unsupported network: tcp-testing-only/ },
+    );
+  } finally {
+    client.shutdown();
+  }
+});
