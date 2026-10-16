@@ -4743,8 +4743,12 @@ const makeDaemonCore = async (
     if (formula.type === 'marshal' && formula.slots.length === 0) {
       // eslint-disable-next-line no-use-before-define
       const context = makeContext(id);
-      const controller = makeReloadableController(context, () =>
-        evaluateFormulaForId(id, context),
+      // An arrow here shares a lexical context with the graph-lock callback,
+      // which captures formula. Bind explicit arguments so the controller
+      // cannot retain that context and the serialized body of a new formula.
+      const controller = makeReloadableController(
+        context,
+        evaluateFormulaForId.bind(undefined, id, context),
       );
       controllerForId.set(id, controller);
       return harden({ id, value: controller.value, context });
@@ -4798,8 +4802,9 @@ const makeDaemonCore = async (
     if (metadata?.type === 'marshal' && metadata.slots.length === 0) {
       // eslint-disable-next-line no-use-before-define
       const context = makeContext(id);
-      const controller = makeReloadableController(context, () =>
-        evaluateFormulaForId(id, context),
+      const controller = makeReloadableController(
+        context,
+        evaluateFormulaForId.bind(undefined, id, context),
       );
       controllerForId.set(id, controller);
       return controller;

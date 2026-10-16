@@ -6,6 +6,9 @@ failure modes.
 
 Persisted marshal formulas keep only their type and capability slots in the
 resident graph cache.
+Reloadable controller callbacks bind explicit arguments rather than sharing the
+formulation scope: a sibling closure captures the original formula, and a shared
+V8 context would keep its serialized body alive after persistence.
 Their serialized bodies are read from persistence when evaluated or inspected.
 For values with no capability slots, the daemon also releases the evaluation
 promise once it settles and reloads the copy data on subsequent reads.

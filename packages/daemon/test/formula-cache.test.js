@@ -71,6 +71,8 @@ test.serial(
     );
     /** @type {WeakRef<object>[]} */
     const formulas = [];
+    /** @type {WeakRef<object>[]} */
+    const writtenFormulas = [];
     const daemon = await makeDaemon(
       {
         ...powers,
@@ -98,6 +100,15 @@ test.serial(
         },
         persistence: {
           ...powers.persistence,
+          writeFormula: async (formulaNumber, nodeNumber, formula) => {
+            if (formula.type === 'marshal' && formula.slots.length === 0)
+              writtenFormulas.push(new WeakRef(formula));
+            return powers.persistence.writeFormula(
+              formulaNumber,
+              nodeNumber,
+              formula,
+            );
+          },
           readFormula: async number => {
             const result = await powers.persistence.readFormula(number);
             if (result.formula.type === 'marshal')
@@ -137,6 +148,11 @@ test.serial(
     await E(host).remove('snapshot-0');
     const collect = makeCollector();
     await collect();
+    t.true(writtenFormulas.length >= 12);
+    t.true(
+      writtenFormulas.every(ref => ref.deref() === undefined),
+      'newly written formulas are not retained by controller closures',
+    );
     t.true(formulas.length > 0);
     t.true(
       formulas.every(ref => ref.deref() === undefined),
