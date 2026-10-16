@@ -880,16 +880,42 @@ export const makeOcapnNoiseNetwork = ({
     let heartbeatTimer;
     /** @type {ReturnType<typeof setTimeout> | undefined} */
     let livenessTimer;
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let writeStallTimer;
+
+    // The session-level outbound queue: plaintext frames the session
+    // has accepted but the current transport instance has not. A frame
+    // is rendered and encrypted only when it reaches the transport, so
+    // the queue can outlive the transport instance it was filled for.
+    /** @type {Array<{ heartbeat: boolean, render: () => Uint8Array }>} */
+    const outbound = [];
+    let queuedHeartbeatFrames = 0;
+    // The identity greeting, sent before the session exists, took send
+    // nonce 0.
+    let sentCount = 1n;
+    /** @type {Promise<void>} */
+    let drained = Promise.resolve();
+    let draining = false;
+
+    /** @type {() => void} */
+    let resolveClosed = () => {};
+    /** @type {Promise<void>} */
+    const closedPromise = new Promise(resolve => {
+      resolveClosed = resolve;
+    });
 
     const stopHeartbeat = () => {
       if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer);
       if (livenessTimer !== undefined) clearTimeout(livenessTimer);
+      if (writeStallTimer !== undefined) clearTimeout(writeStallTimer);
       heartbeatTimer = undefined;
       livenessTimer = undefined;
+      writeStallTimer = undefined;
     };
 
     const fireOnClose = () => {
       stopHeartbeat();
+      resolveClosed();
       try {
         onClose();
       } catch (_e) {
@@ -909,6 +935,8 @@ export const makeOcapnNoiseNetwork = ({
 
     /** @type {Reader<Uint8Array>} */
     let reader;
+    /** @type {(plainText: Uint8Array) => void} */
+    let enqueueFrame = () => {};
 
     if (heartbeatSettings === undefined) {
       reader = harden({
@@ -950,35 +978,111 @@ export const makeOcapnNoiseNetwork = ({
       const { intervalMs, sessionTimeoutMs } = heartbeatSettings;
 
       /**
-       * @param {Uint8Array} plainText
+       * @typedef {{ done: true } | { done: false, value: Uint8Array } | { error: Error }} InboundItem
        */
-      const sendFrame = plainText => {
+      /** @type {AsyncQueue<InboundItem>} */
+      const inbound = makeQueue();
+
+      /**
+       * End the session with an error that the reader surfaces.
+       *
+       * @param {Error} error
+       */
+      const fail = error => {
         if (closed) return;
-        // Encrypt and enqueue in the same turn so frames reach the
-        // transport in nonce order.
-        Promise.resolve(stream.writer.next(encrypt(plainText))).catch(() => {});
+        inbound.put(harden({ error }));
+        close();
+      };
+
+      // A transport write that does not complete within the session
+      // timeout is loss, not a stall: the peer, hearing nothing from us
+      // for as long, has given up on this transport instance too.
+      const onWriteStall = () => {
+        fail(
+          makeError(
+            X`ocapn-noise: transport write stalled for ${q(sessionTimeoutMs)}ms; session lost`,
+          ),
+        );
+      };
+
+      // Hand queued frames to the transport one at a time, in order.
+      // Encrypting at hand-off keeps the Noise nonce order equal to the
+      // transport order however long a frame waits in the queue.
+      const drain = async () => {
+        await null;
+        while (!closed && outbound.length > 0) {
+          const frame = outbound[0];
+          writeStallTimer = setTimeout(onWriteStall, sessionTimeoutMs);
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            await stream.writer.next(encrypt(frame.render()));
+          } catch (error) {
+            fail(/** @type {Error} */ (error));
+            return;
+          } finally {
+            clearTimeout(writeStallTimer);
+            writeStallTimer = undefined;
+          }
+          sentCount += 1n;
+          outbound.shift();
+          if (frame.heartbeat) queuedHeartbeatFrames -= 1;
+        }
+      };
+
+      /**
+       * @param {{ heartbeat: boolean, render: () => Uint8Array }} frame
+       */
+      const enqueue = frame => {
+        if (closed) return;
+        outbound.push(frame);
+        if (frame.heartbeat) queuedHeartbeatFrames += 1;
+        if (!draining) {
+          draining = true;
+          drained = drain().finally(() => {
+            draining = false;
+          });
+        }
+      };
+
+      enqueueFrame = plainText => {
+        // The caller may reuse its buffer once the write resolves, and
+        // the frame can wait in the queue past that.
+        const copy = plainText.slice();
+        enqueue({ heartbeat: false, render: () => copy });
       };
 
       const sendHeartbeat = () => {
-        sendFrame(
-          writeOcapnHeartbeatMessage(
-            { type: 'op:ping', epoch, sequence: pingSequence },
-            codec,
-          ),
-        );
+        // While the transport is stalled, heartbeats already waiting in
+        // the queue carry all the liveness a fresh pair would, so do
+        // not let a stall pile them up.
+        if (queuedHeartbeatFrames > 0) return;
+        const ping = pingSequence;
         pingSequence += 1n;
-        sendFrame(
-          writeOcapnHeartbeatMessage(
-            {
-              type: 'op:pong',
-              epoch,
-              sequence: pongSequence,
-              lastAckedRecvNonce: getReceivedCount() - 1n,
-            },
-            codec,
-          ),
-        );
+        enqueue({
+          heartbeat: true,
+          render: () =>
+            writeOcapnHeartbeatMessage(
+              { type: 'op:ping', epoch, sequence: ping },
+              codec,
+            ),
+        });
+        const pong = pongSequence;
         pongSequence += 1n;
+        enqueue({
+          heartbeat: true,
+          // Rendered at hand-off, so the acknowledgement is current
+          // even when the frame waited out a stall.
+          render: () =>
+            writeOcapnHeartbeatMessage(
+              {
+                type: 'op:pong',
+                epoch,
+                sequence: pong,
+                lastAckedRecvNonce: getReceivedCount() - 1n,
+              },
+              codec,
+            ),
+        });
       };
 
       /**
@@ -1022,22 +1126,12 @@ export const makeOcapnNoiseNetwork = ({
         return true;
       };
 
-      /**
-       * @typedef {{ done: true } | { done: false, value: Uint8Array } | { error: Error }} InboundItem
-       */
-      /** @type {AsyncQueue<InboundItem>} */
-      const inbound = makeQueue();
-
       const onSessionTimeout = () => {
-        if (closed) return;
-        inbound.put(
-          harden({
-            error: makeError(
-              X`ocapn-noise: no traffic from peer for ${q(sessionTimeoutMs)}ms; session lost`,
-            ),
-          }),
+        fail(
+          makeError(
+            X`ocapn-noise: no traffic from peer for ${q(sessionTimeoutMs)}ms; session lost`,
+          ),
         );
-        close();
       };
 
       const resetLivenessTimer = () => {
@@ -1069,8 +1163,7 @@ export const makeOcapnNoiseNetwork = ({
             }
             plainText = decrypt(result.value);
           } catch (error) {
-            inbound.put(harden({ error: /** @type {Error} */ (error) }));
-            close();
+            fail(/** @type {Error} */ (error));
             return;
           }
           resetLivenessTimer();
@@ -1125,11 +1218,20 @@ export const makeOcapnNoiseNetwork = ({
       next: async value => {
         await null;
         if (closed) return harden({ done: true, value: undefined });
+        if (heartbeatSettings !== undefined) {
+          // The session queue owns the frame from here; a transport
+          // stall delays it but does not block the caller.
+          enqueueFrame(value);
+          return harden({ done: false, value: undefined });
+        }
         await stream.writer.next(encrypt(value));
         return harden({ done: false, value: undefined });
       },
       return: async () => {
         await null;
+        // Deliver what the session already accepted before ending the
+        // stream, unless the session is lost first.
+        await Promise.race([drained, closedPromise]);
         if (!closed) {
           closed = true;
           await stream.writer.return(undefined);
@@ -1177,6 +1279,9 @@ export const makeOcapnNoiseNetwork = ({
           epoch,
           lastAckedRecvNonce: getReceivedCount() - 1n,
           peerAckedRecvNonce,
+          lastSentNonce:
+            heartbeatSettings === undefined ? undefined : sentCount - 1n,
+          queuedFrames: outbound.length,
         }),
       close,
     });
