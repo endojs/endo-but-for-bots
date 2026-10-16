@@ -193,6 +193,11 @@ const DEFAULT_SESSION_TIMEOUT_INTERVALS = 6;
 /** The design's floor: `SESSION_TIMEOUT >= 3 * HEARTBEAT_INTERVAL`. */
 const MIN_SESSION_TIMEOUT_INTERVALS = 3;
 
+// Outbound frames a heartbeat session queues before `writer.next`
+// waits for the transport to take some, so a stalled or slow transport
+// pushes back on the writer instead of growing the queue without bound.
+const OUTBOUND_HIGH_WATER_FRAMES = 64;
+
 /**
  * @param {HeartbeatOptions | undefined} heartbeat
  * @returns {{ intervalMs: number, sessionTimeoutMs: number } | undefined}
@@ -887,7 +892,10 @@ export const makeOcapnNoiseNetwork = ({
     // has accepted but the current transport instance has not. A frame
     // is rendered and encrypted only when it reaches the transport, so
     // the queue can outlive the transport instance it was filled for.
-    /** @type {Array<{ heartbeat: boolean, render: () => Uint8Array }>} */
+    /**
+     * @typedef {{ heartbeat: boolean, render: () => Uint8Array }} OutboundFrame
+     */
+    /** @type {OutboundFrame[]} */
     const outbound = [];
     let queuedHeartbeatFrames = 0;
     // The identity greeting, sent before the session exists, took send
@@ -896,6 +904,14 @@ export const makeOcapnNoiseNetwork = ({
     /** @type {Promise<void>} */
     let drained = Promise.resolve();
     let draining = false;
+    // Writers waiting for the queue to fall below its high-water mark.
+    /** @type {Array<() => void>} */
+    let spaceWaiters = [];
+    const releaseSpaceWaiters = () => {
+      const released = spaceWaiters;
+      spaceWaiters = [];
+      for (const resolve of released) resolve();
+    };
 
     /** @type {() => void} */
     let resolveClosed = () => {};
@@ -916,6 +932,7 @@ export const makeOcapnNoiseNetwork = ({
     const fireOnClose = () => {
       stopHeartbeat();
       resolveClosed();
+      releaseSpaceWaiters();
       try {
         onClose();
       } catch (_e) {
@@ -1008,29 +1025,39 @@ export const makeOcapnNoiseNetwork = ({
       // Hand queued frames to the transport one at a time, in order.
       // Encrypting at hand-off keeps the Noise nonce order equal to the
       // transport order however long a frame waits in the queue.
+      // `draining` is cleared in the same turn as the final empty-queue
+      // check, so a frame enqueued after that check starts a new drain
+      // rather than waiting for the next heartbeat.
       const drain = async () => {
         await null;
-        while (!closed && outbound.length > 0) {
-          const frame = outbound[0];
-          writeStallTimer = setTimeout(onWriteStall, sessionTimeoutMs);
-          try {
-            // eslint-disable-next-line no-await-in-loop
-            await stream.writer.next(encrypt(frame.render()));
-          } catch (error) {
-            fail(/** @type {Error} */ (error));
-            return;
-          } finally {
-            clearTimeout(writeStallTimer);
-            writeStallTimer = undefined;
+        try {
+          while (!closed && outbound.length > 0) {
+            const frame = outbound[0];
+            writeStallTimer = setTimeout(onWriteStall, sessionTimeoutMs);
+            try {
+              // eslint-disable-next-line no-await-in-loop
+              await stream.writer.next(encrypt(frame.render()));
+            } catch (error) {
+              fail(/** @type {Error} */ (error));
+              return;
+            } finally {
+              clearTimeout(writeStallTimer);
+              writeStallTimer = undefined;
+            }
+            sentCount += 1n;
+            outbound.shift();
+            if (frame.heartbeat) queuedHeartbeatFrames -= 1;
+            if (outbound.length < OUTBOUND_HIGH_WATER_FRAMES) {
+              releaseSpaceWaiters();
+            }
           }
-          sentCount += 1n;
-          outbound.shift();
-          if (frame.heartbeat) queuedHeartbeatFrames -= 1;
+        } finally {
+          draining = false;
         }
       };
 
       /**
-       * @param {{ heartbeat: boolean, render: () => Uint8Array }} frame
+       * @param {OutboundFrame} frame
        */
       const enqueue = frame => {
         if (closed) return;
@@ -1038,9 +1065,7 @@ export const makeOcapnNoiseNetwork = ({
         if (frame.heartbeat) queuedHeartbeatFrames += 1;
         if (!draining) {
           draining = true;
-          drained = drain().finally(() => {
-            draining = false;
-          });
+          drained = drain();
         }
       };
 
@@ -1219,9 +1244,15 @@ export const makeOcapnNoiseNetwork = ({
         await null;
         if (closed) return harden({ done: true, value: undefined });
         if (heartbeatSettings !== undefined) {
-          // The session queue owns the frame from here; a transport
-          // stall delays it but does not block the caller.
+          // The session queue owns the frame from here. The caller waits
+          // only while the queue is at its high-water mark; a transport
+          // write error ends the session and surfaces through the reader.
           enqueueFrame(value);
+          if (outbound.length >= OUTBOUND_HIGH_WATER_FRAMES) {
+            await new Promise(resolve => {
+              spaceWaiters.push(() => resolve(undefined));
+            });
+          }
           return harden({ done: false, value: undefined });
         }
         await stream.writer.next(encrypt(value));
@@ -1229,8 +1260,7 @@ export const makeOcapnNoiseNetwork = ({
       },
       return: async () => {
         await null;
-        // Deliver what the session already accepted before ending the
-        // stream, unless the session is lost first.
+        // Flush the queue first, unless the session is lost.
         await Promise.race([drained, closedPromise]);
         if (!closed) {
           closed = true;
