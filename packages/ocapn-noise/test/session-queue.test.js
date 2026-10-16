@@ -99,7 +99,7 @@ for (const [codecName, codec] of /** @type {const} */ ([
     t.is(recovered.epoch, 0n);
     t.true(/** @type {bigint} */ (recovered.lastSentNonce) > sentBefore);
     t.true(
-      sessionB.getLiveness().lastAckedRecvNonce >=
+      /** @type {bigint} */ (sessionB.getLiveness().lastAckedRecvNonce) >=
         /** @type {bigint} */ (recovered.lastSentNonce) - 2n,
     );
 

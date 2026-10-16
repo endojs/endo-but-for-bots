@@ -9,6 +9,7 @@
 
 import {
   makeCodec,
+  makeExpectedLengthBytestringCodec,
   makeRecordUnionCodec,
   makeTypeHintUnionCodec,
 } from '../syrup/codec.js';
@@ -88,6 +89,65 @@ export const OcapnHeartbeatOperationsCodecs = makeRecordUnionCodec(
     OpPong: OpPongCodec,
   },
 );
+
+// Proposed, pending OCapN-org review: the session control records of
+// designs/ocapn-noise-session-reconnect.md. The OCapN-Noise network
+// exchanges `op:session-hello` right after `op:start-session` on every
+// transport instance, and sends `op:session-end` before a deliberate
+// close. Both are consumed by the network and never reach the session.
+//
+// `features` is a bitset of what the sender supports (bit 0: heartbeat,
+// bit 1: reconnect). `epoch` numbers the transport instance: 0 opens a
+// session, and a reconnect names the next epoch of the session that
+// `session` (the 32-byte Noise transcript hash of its first handshake)
+// identifies. `received` counts the session frames the sender has
+// delivered so far, so the peer replays exactly the frames that a lost
+// transport instance did not carry.
+const OpSessionHelloCodec = makeOcapnRecordCodecFromDefinition(
+  'OpSessionHello',
+  'op:session-hello',
+  {
+    features: NonNegativeIntegerCodec,
+    epoch: NonNegativeIntegerCodec,
+    session: makeExpectedLengthBytestringCodec('SessionToken', 32),
+    received: NonNegativeIntegerCodec,
+  },
+);
+
+const OpSessionEndCodec = makeOcapnRecordCodecFromDefinition(
+  'OpSessionEnd',
+  'op:session-end',
+  {
+    epoch: NonNegativeIntegerCodec,
+  },
+);
+
+export const OcapnSessionControlCodecs = makeRecordUnionCodec(
+  'OcapnSessionControl',
+  {
+    OpSessionHello: OpSessionHelloCodec,
+    OpSessionEnd: OpSessionEndCodec,
+  },
+);
+
+/**
+ * @param {OcapnReader} reader
+ * @returns {any}
+ */
+export const readOcapnSessionControlMessage = reader => {
+  return OcapnSessionControlCodecs.read(reader);
+};
+
+/**
+ * @param {any} message
+ * @param {OcapnCodec} codec
+ * @returns {Uint8Array}
+ */
+export const writeOcapnSessionControlMessage = (message, codec) => {
+  const writer = codec.makeWriter();
+  OcapnSessionControlCodecs.write(message, writer);
+  return writer.getBytes();
+};
 
 /**
  * @param {OcapnReader} reader

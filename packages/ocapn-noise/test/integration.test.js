@@ -2,7 +2,7 @@
 // prefer-endo-primitives-exempt: these tests use the bare Far remotables of
 // the @endo/ocapn suites; this package does not depend on @endo/exo.
 
-/** @import { HeartbeatOptions } from '../src/types.js' */
+/** @import { HeartbeatOptions, OcapnNoiseTransport, ReconnectOptions } from '../src/types.js' */
 
 import test from '@endo/ses-ava/test.js';
 import harden from '@endo/harden';
@@ -14,6 +14,7 @@ import { cborCodec } from '@endo/ocapn/cbor';
 
 import { makeOcapnNoiseNetwork } from '../index.js';
 import { makeMockMeshFabric } from './_fabric.js';
+import { makeLossyTransport } from './_loss-injector.js';
 
 /**
  * Spin up one `@endo/ocapn` instance backed by a noise network wired
@@ -26,6 +27,8 @@ import { makeMockMeshFabric } from './_fabric.js';
  *   name: string,
  *   locator?: Map<string, any>,
  *   heartbeat?: HeartbeatOptions,
+ *   reconnect?: ReconnectOptions,
+ *   wrapTransport?: (transport: OcapnNoiseTransport) => OcapnNoiseTransport,
  * }} options
  */
 const makeNoisePeer = async ({
@@ -33,11 +36,17 @@ const makeNoisePeer = async ({
   name,
   locator = new Map(),
   heartbeat,
+  reconnect,
+  wrapTransport = transport => transport,
 }) => {
-  const network = makeOcapnNoiseNetwork({ codec: cborCodec, heartbeat });
+  const network = makeOcapnNoiseNetwork({
+    codec: cborCodec,
+    heartbeat,
+    reconnect,
+  });
   const signingKeys = network.generateSigningKeys();
   const keyId = network.addSigningKeys(signingKeys);
-  await network.addTransport(fabric.transportFor(name));
+  await network.addTransport(wrapTransport(fabric.transportFor(name)));
   const location = network.locationFor(keyId);
 
   // `makeOcapn` takes the codec and network at construction; the
@@ -118,6 +127,62 @@ test('heartbeats keep an idle CapTP session usable', async t => {
     setTimeout(resolve, heartbeat.sessionTimeoutMs * 3),
   );
   t.is(await E(greeter).hello('Bob'), 'hello, Bob');
+});
+
+test('a CapTP session rides out a lost transport instance', async t => {
+  const fabric = makeMockMeshFabric();
+  t.teardown(() => fabric.shutdown());
+  const heartbeat = { intervalMs: 50, sessionTimeoutMs: 500 };
+  const reconnect = { backoffInitialMs: 20, backoffMaxMs: 200 };
+
+  let calls = 0;
+  const locatorA = new Map();
+  locatorA.set(
+    'Greeter',
+    Far('Greeter', {
+      hello: (who = 'world') => {
+        calls += 1;
+        return `hello, ${who}`;
+      },
+    }),
+  );
+  const peerA = await makeNoisePeer({
+    fabric,
+    name: 'A',
+    locator: locatorA,
+    heartbeat,
+    reconnect,
+  });
+  t.teardown(() => peerA.client.shutdown());
+  /** @type {ReturnType<typeof makeLossyTransport> | undefined} */
+  let injector;
+  const peerB = await makeNoisePeer({
+    fabric,
+    name: 'B',
+    heartbeat,
+    reconnect,
+    wrapTransport: transport => {
+      injector = makeLossyTransport(transport);
+      return injector.transport;
+    },
+  });
+  t.teardown(() => peerB.client.shutdown());
+
+  const sturdyRef = peerB.client.makeSturdyRef(peerA.location, 'Greeter');
+  const greeter = await peerB.client.enlivenSturdyRef(sturdyRef);
+  t.is(await E(greeter).hello('Alice'), 'hello, Alice');
+
+  // A call made into the partition is answered on the replacement
+  // transport instance, exactly once, by the same CapTP session.
+  /** @type {ReturnType<typeof makeLossyTransport>} */ (injector).sever();
+  t.is(await E(greeter).hello('Carol'), 'hello, Carol');
+  t.is(await E(greeter).hello('Dave'), 'hello, Dave');
+  t.is(calls, 3);
+  t.true(
+    /** @type {ReturnType<typeof makeLossyTransport>} */ (
+      injector
+    ).getConnects() >= 2,
+  );
 });
 
 test('three-party handoff: A forwards a cap from B into C, and C invokes it', async t => {
