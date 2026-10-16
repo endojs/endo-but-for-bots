@@ -1565,6 +1565,12 @@ impl Interp {
     /// the next item with its captured method. A throw from opening, from
     /// `next`, or from the result propagates without a close, as the
     /// specification's `?` does; the caller latches the helper done.
+    ///
+    /// Out of line for the reason `iterator_helper_flat_map_step` is: a
+    /// `take`, `drop`, `map` or `filter` chain re-enters through
+    /// `iterator_helper_next` once per level and never through this step, so
+    /// inlined it would grow the frame every level of those chains carries.
+    #[inline(never)]
     fn iterator_concat_step(
         &mut self,
         code: &[u8],
