@@ -1,6 +1,11 @@
 // @ts-nocheck
 
-import '@endo/init/debug.js';
+// Not '@endo/init/debug.js': its `overrideTaming: 'min'` leaves
+// Error.prototype.message non-assignable, and Node 24's bundled undici
+// (behind globalThis.fetch) assigns `this.message` in its ClientDestroyedError
+// constructor, so tearing down the fetch connection throws an unhandled
+// TypeError. The daemon runs under '@endo/init' (moderate taming), as here.
+import '@endo/init';
 
 import test from 'ava';
 import { E } from '@endo/eventual-send';
