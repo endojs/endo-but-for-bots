@@ -221,8 +221,12 @@ const normalizeHeartbeatOptions = heartbeat => {
 /**
  * Count the transport-phase messages the receiving Noise CipherState
  * has accepted. Each successful `decrypt` consumes exactly one nonce,
- * so the count minus one is the highest receive nonce, which `op:pong`
- * acknowledges.
+ * so once the count is nonzero, the count minus one is the highest
+ * receive nonce, which `op:pong` acknowledges. While the count is zero
+ * no nonce has been received and there is nothing to acknowledge.
+ *
+ * The session must decrypt through the returned `decrypt`, not the raw
+ * one it wraps, or the count stays at zero.
  *
  * @param {(bytes: Uint8Array) => Uint8Array} decrypt
  */
@@ -881,6 +885,17 @@ export const makeOcapnNoiseNetwork = ({
     /** @type {ReturnType<typeof setTimeout> | undefined} */
     let livenessTimer;
 
+    /**
+     * The highest receive nonce, or `undefined` before the first
+     * transport message has been decrypted.
+     *
+     * @returns {bigint | undefined}
+     */
+    const getLastReceivedNonce = () => {
+      const receivedCount = getReceivedCount();
+      return receivedCount === 0n ? undefined : receivedCount - 1n;
+    };
+
     const stopHeartbeat = () => {
       if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer);
       if (livenessTimer !== undefined) clearTimeout(livenessTimer);
@@ -967,13 +982,17 @@ export const makeOcapnNoiseNetwork = ({
           ),
         );
         pingSequence += 1n;
+        const lastAckedRecvNonce = getLastReceivedNonce();
+        // Until the peer's first frame arrives there is no nonce to
+        // acknowledge, so the tick carries only the `op:ping`.
+        if (lastAckedRecvNonce === undefined) return;
         sendFrame(
           writeOcapnHeartbeatMessage(
             {
               type: 'op:pong',
               epoch,
               sequence: pongSequence,
-              lastAckedRecvNonce: getReceivedCount() - 1n,
+              lastAckedRecvNonce,
             },
             codec,
           ),
@@ -982,31 +1001,53 @@ export const makeOcapnNoiseNetwork = ({
       };
 
       /**
-       * Absorb a heartbeat operation, reporting whether the frame was
-       * one. Any other frame belongs to the session above.
+       * Whether a frame is labelled as a heartbeat operation. Both
+       * codecs open a record with its label: Syrup inside the record
+       * brackets, CBOR as the first element of the record's tagged
+       * array. A frame that is not a record, or does not begin like one,
+       * is not a heartbeat.
        *
        * @param {Uint8Array} plainText
        * @returns {boolean}
        */
-      const absorbHeartbeat = plainText => {
-        /** @type {{ type: string, epoch: bigint, lastAckedRecvNonce?: bigint }} */
-        let message;
+      const isHeartbeatFrame = plainText => {
         try {
           const peekReader = codec.makeReader(plainText);
           if (peekReader.peekTypeHint() !== 'record') return false;
           peekReader.enterRecord();
           const label = peekReader.readRecordLabel();
-          if (
-            label.type === 'bytestring' ||
-            (label.value !== 'op:ping' && label.value !== 'op:pong')
-          ) {
-            return false;
-          }
-          const messageReader = codec.makeReader(plainText);
-          message = readOcapnHeartbeatMessage(messageReader);
-          if (messageReader.index !== plainText.length) return false;
+          return (
+            label.type !== 'bytestring' &&
+            (label.value === 'op:ping' || label.value === 'op:pong')
+          );
         } catch (_error) {
           return false;
+        }
+      };
+
+      /**
+       * Absorb a heartbeat operation, reporting whether the frame was
+       * one. Any other frame belongs to the session above. A frame
+       * labelled `op:ping` or `op:pong` that does not parse as one is a
+       * malformed operation, which aborts the session.
+       *
+       * @param {Uint8Array} plainText
+       * @returns {boolean}
+       */
+      const absorbHeartbeat = plainText => {
+        if (!isHeartbeatFrame(plainText)) return false;
+        /** @type {{ type: string, epoch: bigint, lastAckedRecvNonce?: bigint }} */
+        let message;
+        try {
+          const messageReader = codec.makeReader(plainText);
+          message = readOcapnHeartbeatMessage(messageReader);
+          if (messageReader.index !== plainText.length) {
+            throw makeError(X`trailing bytes after heartbeat operation`);
+          }
+        } catch (error) {
+          throw makeError(
+            X`ocapn-noise: malformed heartbeat operation from peer: ${error}`,
+          );
         }
         // A heartbeat from an earlier epoch is a straggler from an
         // obsolete transport instance: dropped without effect.
@@ -1074,9 +1115,30 @@ export const makeOcapnNoiseNetwork = ({
             return;
           }
           resetLivenessTimer();
-          if (!absorbHeartbeat(plainText)) {
+          /** @type {boolean} */
+          let absorbed;
+          try {
+            absorbed = absorbHeartbeat(plainText);
+          } catch (error) {
+            inbound.put(harden({ error: /** @type {Error} */ (error) }));
+            close();
+            return;
+          }
+          if (!absorbed) {
             inbound.put(harden({ done: false, value: plainText }));
           }
+        }
+      };
+
+      // A timer callback must never throw: a failure to encode or
+      // encrypt a heartbeat ends the session instead.
+      const tick = () => {
+        if (closed) return;
+        try {
+          sendHeartbeat();
+        } catch (error) {
+          inbound.put(harden({ error: /** @type {Error} */ (error) }));
+          close();
         }
       };
 
@@ -1096,6 +1158,8 @@ export const makeOcapnNoiseNetwork = ({
           await null;
           if (!closed) {
             closed = true;
+            // Release the transport reader too, so the pump stops.
+            Promise.resolve(stream.reader.return(undefined)).catch(() => {});
             await stream.writer.return(undefined);
             fireOnClose();
           }
@@ -1105,6 +1169,7 @@ export const makeOcapnNoiseNetwork = ({
           await null;
           if (!closed) {
             closed = true;
+            Promise.resolve(stream.reader.return(undefined)).catch(() => {});
             await stream.writer.throw(err);
             fireOnClose();
           }
@@ -1116,7 +1181,7 @@ export const makeOcapnNoiseNetwork = ({
       });
 
       resetLivenessTimer();
-      heartbeatTimer = setInterval(sendHeartbeat, intervalMs);
+      heartbeatTimer = setInterval(tick, intervalMs);
       void pump();
     }
 
@@ -1175,7 +1240,7 @@ export const makeOcapnNoiseNetwork = ({
         harden({
           heartbeat: heartbeatSettings !== undefined,
           epoch,
-          lastAckedRecvNonce: getReceivedCount() - 1n,
+          lastAckedRecvNonce: getLastReceivedNonce(),
           peerAckedRecvNonce,
         }),
       close,
