@@ -79,7 +79,6 @@ export const makeStallableTransport = transport => {
       release();
       release = undefined;
     },
-    /** How many writes are waiting on the stall. */
     getHeldWrites: () => heldWrites,
   });
 };

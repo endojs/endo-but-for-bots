@@ -1,6 +1,7 @@
 // @ts-check
 
 /** @import { ExecutionContext } from 'ava' */
+/** @import { OcapnCodec } from '@endo/ocapn/codec-interface' */
 
 import harden from '@endo/harden';
 import test from '@endo/ses-ava/test.js';
@@ -21,15 +22,27 @@ const delay = milliseconds =>
 const heartbeat = { intervalMs: 50, sessionTimeoutMs: 500 };
 
 /**
+ * @param {() => boolean} predicate
+ */
+const until = async predicate => {
+  await null;
+  while (!predicate()) {
+    // eslint-disable-next-line no-await-in-loop
+    await delay(1);
+  }
+};
+
+/**
  * Connect A to B over a mock transport whose writes from A can be
  * stalled.
  *
  * @param {ExecutionContext<unknown>} t
- * @param {import('@endo/ocapn/codec-interface').OcapnCodec} codec
+ * @param {OcapnCodec} codec
+ * @param {{ intervalMs: number, sessionTimeoutMs: number }} [settings]
  */
-const connectStallablePair = async (t, codec) => {
-  const netA = makeOcapnNoiseNetwork({ codec, heartbeat });
-  const netB = makeOcapnNoiseNetwork({ codec, heartbeat });
+const connectStallablePair = async (t, codec, settings = heartbeat) => {
+  const netA = makeOcapnNoiseNetwork({ codec, heartbeat: settings });
+  const netB = makeOcapnNoiseNetwork({ codec, heartbeat: settings });
   t.teardown(() => {
     netA.shutdown();
     netB.shutdown();
@@ -56,13 +69,16 @@ for (const [codecName, codec] of /** @type {const} */ ([
       t,
       codec,
     );
+    injector.stall();
+    // Sample the send nonce only once the stall holds a write, so a
+    // write already in flight when the stall began is counted.
+    await until(() => injector.getHeldWrites() === 1);
     const sentBefore = /** @type {bigint} */ (
       sessionA.getLiveness().lastSentNonce
     );
 
-    injector.stall();
-    // Stall for longer than HEARTBEAT_INTERVAL, writing as we go. The
-    // writes resolve although nothing reaches the transport.
+    // Stall for longer than the heartbeat interval, writing as we go.
+    // The writes resolve although nothing reaches the transport.
     for (const byte of [1, 2, 3]) {
       // eslint-disable-next-line no-await-in-loop
       t.deepEqual(await sessionA.writer.next(Uint8Array.of(byte)), {
@@ -104,7 +120,6 @@ for (const [codecName, codec] of /** @type {const} */ ([
         /** @type {bigint} */ (recovered.lastSentNonce) - 2n,
     );
 
-    // The session survived: traffic still flows both ways.
     await sessionB.writer.next(Uint8Array.of(9));
     const back = await sessionA.reader.next(undefined);
     t.false(back.done);
@@ -120,7 +135,6 @@ test('a stall that outlasts the session timeout is a loss on both sides', async 
   injector.stall();
   await sessionA.writer.next(Uint8Array.of(1));
 
-  // B hears nothing from A for the session timeout.
   await t.throwsAsync(() => sessionB.reader.next(undefined), {
     message: /no traffic from peer for 500ms; session lost/,
   });
@@ -166,6 +180,75 @@ test('a held write times out as a loss even while the peer is heard', async t =>
     message: /transport write stalled for 500ms; session lost/,
   });
   injector.resume();
+});
+
+test('writer.next waits while the queue is at its high-water mark', async t => {
+  const { sessionA, sessionB, injector } = await connectStallablePair(
+    t,
+    cborCodec,
+  );
+  injector.stall();
+  const count = 80;
+  let settled = 0;
+  const writes = [];
+  for (let i = 0; i < count; i += 1) {
+    writes.push(
+      sessionA.writer.next(Uint8Array.of(i)).then(result => {
+        settled += 1;
+        return result;
+      }),
+    );
+  }
+  await delay(heartbeat.intervalMs);
+  t.true(settled > 0, `settled ${settled}`);
+  t.true(settled < count, `settled ${settled}`);
+
+  injector.resume();
+  await Promise.all(writes);
+  for (let i = 0; i < count; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const received = await sessionB.reader.next(undefined);
+    t.false(received.done);
+    if (!received.done) t.deepEqual([...received.value], [i]);
+  }
+});
+
+test('a write enqueued as a drain finishes is sent without waiting for a heartbeat', async t => {
+  // Heartbeats far apart, so only a fresh drain can deliver the frame.
+  const { sessionA, sessionB, injector } = await connectStallablePair(
+    t,
+    cborCodec,
+    { intervalMs: 10_000, sessionTimeoutMs: 60_000 },
+  );
+  // Release a held write, then enqueue the next frame some turns later,
+  // sweeping the turns at which the drain loop exits.
+  for (let turns = 0; turns < 16; turns += 1) {
+    injector.stall();
+    // eslint-disable-next-line no-await-in-loop
+    await sessionA.writer.next(Uint8Array.of(0));
+    injector.resume();
+    for (let i = 0; i < turns; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await null;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await sessionA.writer.next(Uint8Array.of(turns + 1));
+    for (const byte of [0, turns + 1]) {
+      // eslint-disable-next-line no-await-in-loop
+      const received = await Promise.race([
+        sessionB.reader.next(undefined),
+        delay(1000).then(
+          () =>
+            /** @type {IteratorReturnResult<undefined>} */ ({
+              done: true,
+              value: undefined,
+            }),
+        ),
+      ]);
+      t.false(received.done, `frame ${byte} stranded after ${turns} turns`);
+      if (!received.done) t.deepEqual([...received.value], [byte]);
+    }
+  }
 });
 
 test('writer.return delivers queued frames before ending the stream', async t => {
