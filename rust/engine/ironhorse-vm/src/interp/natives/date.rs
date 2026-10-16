@@ -61,13 +61,7 @@ impl Interp {
                     let Payload::Reference(inst) = object.value else {
                         unreachable!("ToObject result")
                     };
-                    let id = self
-                        .symbol_ids
-                        .get("toISOString")
-                        .copied()
-                        .ok_or(Step::Host(Halt::EngineInvariant(
-                            "Date.toJSON:toISOString-key",
-                        )))?;
+                    let id = self.intern_implicit_key("toISOString");
                     let method = self.mop_get(code, inst, id, object)?;
                     return self.invoke_value(code, method, object, &[]);
                 }
