@@ -98,6 +98,24 @@ impl Interp {
         self.intern_key_reserved(name)
     }
 
+    /// [`Self::intern_static_key`] for a key a native reads implicitly, such
+    /// as SerializeJSONProperty's `toJSON`: when no install pass has covered
+    /// the name yet, install the intrinsic members it names before the read.
+    ///
+    /// A name at or below the installed-names floor has had its members
+    /// installed, so a missing one was deleted by the guest and stays deleted;
+    /// only a name above the floor, interned here or by an earlier runtime
+    /// intern such as a `JSON.parse` key, still owes its members. The floor is
+    /// persisted (`NFLR`), so a resumed machine installs at the same read as
+    /// its live twin, and the install is unmetered, as at link.
+    pub(in crate::interp) fn intern_implicit_key(&mut self, name: &'static str) -> u16 {
+        let id = self.intern_static_key(name);
+        if usize::from(id) > self.installed_names_len {
+            self.install_pending_intrinsics();
+        }
+        id
+    }
+
     /// Append a novel string key to the name table and hand out its id (the
     /// new table position). The table IS the persisted id→name map (the NAME
     /// row), so a key interned here round-trips a snapshot with its id — the

@@ -922,7 +922,7 @@ impl Interp {
         cost: &mut u64,
     ) -> Result<JsonStrOpened, Step> {
         if value.kind == Kind::Reference || value.kind == Kind::BigInt {
-            let to_json_id = self.intern_static_key("toJSON");
+            let to_json_id = self.intern_implicit_key("toJSON");
             let to_json = self.json_stringify_get_v(code, value, to_json_id)?;
             if self.is_callable_value(to_json) {
                 value = self.run_callback(code, to_json, value, &[key])?;

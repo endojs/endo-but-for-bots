@@ -176,3 +176,50 @@ fn the_installed_names_floor_survives_resume() {
     let lazy = resume_from_store_lazy(store, &carry::sig()).expect("lazy resume");
     assert_eq!(lazy.machine().installed_names_floor(), floor);
 }
+
+/// `JSON.stringify` reads `toJSON` implicitly. A crank that first reaches
+/// `Date` after a resume installs `Date.prototype.toJSON` at that read, on the
+/// resumed machine as on its live twin.
+#[test]
+fn a_resumed_machine_installs_an_implicitly_read_member_at_first_use() {
+    assert_twin(
+        "ih-floor-twin-implicit-read",
+        "var t = 0; t",
+        &[
+            "JSON.stringify(new Date(0))",
+            "JSON.stringify(new globalThis['Da' + 'te'](1))",
+        ],
+        &[
+            "\"1970-01-01T00:00:00.000Z\"",
+            "\"1970-01-01T00:00:00.001Z\"",
+        ],
+    );
+}
+
+/// The same when a `JSON.parse` key interned `toJSON` before the resume
+/// without installing the members it names.
+#[test]
+fn a_resumed_machine_installs_a_guest_interned_implicit_read() {
+    assert_twin(
+        "ih-floor-twin-implicit-guest",
+        "var o = JSON.parse('{\"toJSON\":1}'); 0",
+        &["JSON.stringify(new Date(0))"],
+        &["\"1970-01-01T00:00:00.000Z\""],
+    );
+}
+
+/// A member the guest deleted stays deleted at a later implicit read, live
+/// and resumed.
+#[test]
+fn an_implicit_read_resurrects_no_deleted_member() {
+    assert_twin(
+        "ih-floor-twin-implicit-deleted",
+        "delete Date.prototype.toJSON; 0",
+        &[
+            "JSON.stringify(new Date(0))",
+            "JSON.stringify(new globalThis['Da' + 'te'](0))",
+            "Date.prototype.hasOwnProperty('to' + 'JSON')",
+        ],
+        &["{}", "{}", "false"],
+    );
+}
