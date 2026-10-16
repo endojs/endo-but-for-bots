@@ -1056,6 +1056,15 @@ or failed in-process owner, revive a runner to infer cleanup, delete HOME, or
 resolve historical command outcomes. This is an operator attestation boundary,
 analogous to explicit uncertain-turn resolution, not automatic crash recovery.
 
+Floot's stop/resume control also supports development sessions on Fae/provider
+backends. A mail turn has no UI turn handle, so cancelling only that UI slot
+cannot stop it. Session stop fences admission, aborts the streaming agent and
+inbox, and reaches the retained environment admin before and after acquisition.
+Native cleanup failure keeps the durable stopping state; explicit resume is
+required after a successful stop and reconstruction retains the stopped state.
+Resume restarts inbox processing: operators must dismiss obsolete settled
+workflow requests before resuming a recovered developer.
+
 A separate recovery obstruction was captured inside V8's ephemeron-table rehash
 while `make-hardener.js` marked a decoder function in its global WeakSet. The
 observed table had 8,388,608 slots. Node 24 contains V8's large-ephemeron hash

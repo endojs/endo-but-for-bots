@@ -7,6 +7,7 @@ import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iter
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { setImmediate } from 'node:timers';
 import { make } from '../agent.js';
+import { makePromiseKit } from './_promise-kit.js';
 
 const world = (
   t,
@@ -19,12 +20,16 @@ const world = (
     responseOutput = undefined,
     shellOutput = 'ok',
     refuseCheckpoint = false,
+    executeShell = undefined,
+    onNativeStop = undefined,
   } = {},
 ) => {
   t.timeout(10_000);
   const requests = [];
   const endpoints = [];
   const inboxes = [];
+  const shellCalls = [];
+  let nativeStops = 0;
   let cliCreates = 0;
   let guestCreates = 0;
   let checkpointRefusals = 0;
@@ -132,19 +137,30 @@ const world = (
       environments += 1;
       store.set(
         adminName,
-        Far('EnvironmentAdmin', { stop: () => {}, setNetworkPolicy: () => {} }),
+        Far('EnvironmentAdmin', {
+          stop: () => {
+            nativeStops += 1;
+            return onNativeStop?.();
+          },
+          setNetworkPolicy: () => {},
+        }),
       );
       store.set(
         shellName,
         Far('Shell', {
-          exec: () =>
-            harden({
-              stdout: shellOutput,
-              stderr: '',
-              exitCode: 0,
-              signal: null,
-              truncated: false,
-            }),
+          exec: (...args) => {
+            shellCalls.push(args);
+            return (
+              executeShell?.() ??
+              harden({
+                stdout: shellOutput,
+                stderr: '',
+                exitCode: 0,
+                signal: null,
+                truncated: false,
+              })
+            );
+          },
           inspect: () =>
             harden({
               allowedCommands: ['sh'],
@@ -173,7 +189,8 @@ const world = (
           remove: name => {
             values.delete(name);
           },
-          locate: () => 'test-locator',
+          locate: () =>
+            `endo://${'a'.repeat(64)}/${'b'.repeat(64)}?type=handle`,
           followMessages: () => {
             const inbox = makeBufferedReader();
             inboxes.push(inbox);
@@ -207,12 +224,151 @@ const world = (
     store,
     requests,
     endpoints,
+    inboxes,
+    shellCalls,
+    nativeStops: () => nativeStops,
     cliCreates: () => cliCreates,
     guestCreates: () => guestCreates,
     environments: () => environments,
     checkpointRefusals: () => checkpointRefusals,
   };
 };
+
+test('development Fae stop cancels a hidden inbox command and preserves stopped state on restart', async t => {
+  const execution = makePromiseKit();
+  t.teardown(() =>
+    execution.resolve(
+      harden({
+        stdout: 'stopped',
+        stderr: '',
+        exitCode: 0,
+        signal: null,
+        truncated: false,
+      }),
+    ),
+  );
+  let offerTool = true;
+  const subject = world(t, {
+    development: true,
+    executeShell: () => execution.promise,
+    onNativeStop: () =>
+      execution.resolve(
+        harden({
+          stdout: 'stopped',
+          stderr: '',
+          exitCode: 0,
+          signal: null,
+          truncated: false,
+        }),
+      ),
+    responseOutput: () => {
+      if (!offerTool) return undefined;
+      offerTool = false;
+      return [
+        {
+          type: 'function_call',
+          call_id: 'native-once',
+          name: 'runCommand',
+          arguments: JSON.stringify({
+            command: 'sh',
+            args: ['-c', 'one effect'],
+          }),
+        },
+      ];
+    },
+  });
+  const session = await E(subject.factory).createSession({
+    presetId: 'development',
+    backendId: 'fae-codex',
+    modelId: 'luna',
+    networkPolicy: 'off',
+  });
+  const { id } = await E(session).getInfo();
+  for (let i = 0; i < 100 && subject.inboxes.length === 0; i += 1)
+    await new Promise(r => setImmediate(r));
+  subject.inboxes.at(-1).push(
+    harden({
+      number: 1n,
+      type: 'package',
+      from: `endo://${'a'.repeat(64)}/${'c'.repeat(64)}?type=handle`,
+      strings: ['Inbox implementation work'],
+      names: [],
+    }),
+  );
+  for (let i = 0; i < 100 && subject.shellCalls.length === 0; i += 1)
+    await new Promise(r => setImmediate(r));
+  t.is(subject.shellCalls.length, 1);
+  t.is(
+    await E(session).getCurrentTurn(),
+    null,
+    'mail execution has no UI turn handle',
+  );
+  t.deepEqual(await E(session).getExecutionState(), {
+    state: 'running',
+    supported: true,
+  });
+  t.is((await E(session).emergencyStop()).state, 'stopped');
+  t.true(
+    subject.nativeStops() >= 2,
+    'stop reaches the retained admin before and after acquisition',
+  );
+  t.is(subject.requests.length, 1);
+  t.true(subject.endpoints.every(endpoint => endpoint.revoked));
+  t.is((await E(session).getTurns()).at(-1).state, 'cancelled');
+  const count = subject.requests.length;
+  const restoredFactory = await subject.restart();
+  const restored = await E(restoredFactory).getSession(id);
+  t.is((await E(restored).getExecutionState()).state, 'stopped');
+  t.is(
+    subject.requests.length,
+    count,
+    'stopped restoration does not dispatch mail or inference',
+  );
+  await E(restored).resume();
+  t.is(
+    subject.requests.length,
+    count,
+    'resume alone does not replay the cancelled model request',
+  );
+  await E(
+    await E(restored).startTurn('Fresh bounded implementation instruction'),
+  ).whenFinished();
+  t.is(subject.requests.length, count + 1);
+  t.is(
+    subject.shellCalls.length,
+    1,
+    'the earlier native command is not replayed',
+  );
+  await E(restored).emergencyStop();
+  await subject.close();
+});
+
+test('development Fae stop keeps admission fenced until native cleanup succeeds', async t => {
+  let refuse = true;
+  const subject = world(t, {
+    development: true,
+    onNativeStop: () => {
+      if (refuse) throw Error('native cleanup pending');
+    },
+  });
+  const session = await E(subject.factory).createSession({
+    presetId: 'development',
+    backendId: 'fae-codex',
+    modelId: 'luna',
+    networkPolicy: 'off',
+  });
+  await t.throwsAsync(E(session).emergencyStop(), {
+    message: /Session stop incomplete/,
+  });
+  t.is((await E(session).getExecutionState()).state, 'stopping');
+  await t.throwsAsync(E(session).resume(), {
+    message: /Finish emergency stop/,
+  });
+  t.is(subject.requests.length, 0);
+  refuse = false;
+  t.is((await E(session).emergencyStop()).state, 'stopped');
+  await subject.close();
+});
 
 test('development factory revival refuses a public Shell with missing private admin', async t => {
   const subject = world(t, { development: true });
