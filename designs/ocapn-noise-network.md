@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-02-14 |
-| **Updated** | 2026-05-18 |
+| **Updated** | 2026-10-16 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | **Complete** |
 
@@ -150,10 +150,9 @@ const makeOcapnNoiseNetwork = async ({ signingKeys, transports, handlers }) => {
     async connect(remoteLocation) {
       // a. Select transport from remote hints
       // b. Open byte stream via transport.connect(hints)
-      // c. Run Noise XX handshake as initiator:
+      // c. Run Noise IK handshake as initiator:
       //    - Write SYN (prefixed with intended responder key)
-      //    - Read SYNACK, validate responder identity
-      //    - Write ACK
+      //    - Read SYNACK (handshake complete; no ACK)
       // d. Obtain encrypt/decrypt functions from completed handshake
       // e. Return NetworkSession with encrypted write/read
     },
@@ -165,25 +164,24 @@ const makeOcapnNoiseNetwork = async ({ signingKeys, transports, handlers }) => {
 
 ### Session Establishment
 
-The Noise handshake replaces `op:start-session` entirely:
+As built (`Noise_IK_25519_ChaChaPoly_BLAKE2s`; review and rationale in
+[ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md)):
 
 1. **Initiator** opens a byte stream via the selected transport.
 2. **Initiator** writes the SYN message (164 bytes): intended responder's
-   Ed25519 public key (32 bytes) + Noise XX first message (132 bytes).
-3. **Responder** reads SYN, verifies it's intended for them, writes SYNACK
-   (193 bytes): contains responder's Ed25519 public key, encoding negotiation,
-   signature.
-4. **Initiator** reads SYNACK, verifies responder identity and signature,
-   writes ACK (64 bytes).
-5. Both sides now have `encrypt` and `decrypt` functions (ChaCha20-Poly1305).
-6. The `NetworkSession` is delivered to OCapN core. All subsequent CapTP
-   messages are encrypted.
-
-No `op:start-session` is sent. The Noise handshake provides:
-- Mutual authentication (both parties prove possession of their Ed25519 keys).
-- Key agreement (ephemeral x25519 keys negotiated by Noise).
-- Encryption (ChaCha20-Poly1305 from the Noise session).
-- Encoding negotiation (piggybacked on SYNACK per current implementation).
+   Ed25519 public key (32 bytes, cleartext routing prefix) + Noise IK first
+   message (132 bytes) whose encrypted payload carries the initiator's
+   Ed25519 key and encoding offer.
+3. **Responder** reads SYN, verifies it is intended for them and that the
+   initiator's claimed Ed25519 key maps to its Noise static, and writes the
+   SYNACK (49 bytes) carrying the accepted encoding. Both static X25519 keys
+   are derived from the Ed25519 identities; there is no bonding signature
+   and no ACK.
+4. Both sides exchange `op:start-session` inside the tunnel, each carrying a
+   location signature bound to the Noise handshake hash. The peer is treated
+   as live only after this exchange succeeds.
+5. The `NetworkSession` is delivered to OCapN core. All subsequent CapTP
+   messages are encrypted (ChaCha20-Poly1305).
 
 ### Package Structure
 
@@ -222,8 +220,9 @@ Alternatively, the transport plugins could be subdirectories of
 
 ## Security Considerations
 
-- The Noise Protocol (XX pattern) provides strong forward secrecy and mutual
-  authentication. This is a significant security improvement over tcp-for-test.
+- The Noise Protocol (IK pattern; see
+  [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md))
+  provides strong forward secrecy and mutual authentication. This is a significant security improvement over tcp-for-test.
 - Encrypted messages have a max size of 65535 - 16 = 65519 bytes (ChaCha20-Poly1305
   with 16-byte auth tag). Larger OCapN messages must be chunked. This limit
   should be documented.
