@@ -1070,9 +1070,8 @@ export const makeOcapn = (
       const { reason } = message;
       abort(reason);
     },
-    // Session liveness belongs to the network (the OCapN-Noise network
-    // absorbs heartbeats before they reach the session). One that does
-    // reach the session is evidence of liveness and nothing more.
+    // Liveness belongs to the network, which absorbs heartbeats before
+    // the session sees them.
     'op:ping': () => {},
     'op:pong': () => {},
   });
