@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-10-01 |
-| **Updated** | 2026-10-16 |
+| **Updated** | 2026-10-17 |
 | **Author** | kumavis (prompted) |
 | **Status** | Initial implementation complete; Tokyo acceptance passed |
 
@@ -1029,6 +1029,15 @@ Reuse a scoped controller where its existing cleanup authority is suitable;
 do not copy a native supervisor into the environment caplet.
 Failed or uncertain cleanup keeps the environment fenced, with operator-assisted
 cleanup where needed; this does not select process-loss recovery from #1323.
+
+2026-10-17: a rejected native Shell execution now retires its retained controller
+through the same stop barrier. Timeouts and containment failures can permanently
+dispose the underlying sandbox slice; caching that slice stranded every later
+command. The failed command is never replayed. Cleanup runs outside the serialized
+command queue, which stop itself must join. Successful cleanup preserves HOME and
+allows the next command to acquire a fresh controller. Failed cleanup retains the
+exact owner and the admission fence for an explicit admin stop retry. Ordinary
+nonzero exit results do not retire a usable controller.
 
 ### Formula collection and permanent cleanup
 

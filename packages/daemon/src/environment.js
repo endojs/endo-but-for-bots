@@ -180,17 +180,45 @@ export const makeEnvironment = async ({ id, recipe, directory, resolve }) => {
   };
   const shell = makeExo('EnvironmentShell', ShellInterface, {
     inspect: async () => recipe.policy,
-    exec: (command, args, options = {}) =>
-      inOrder(async () => {
+    exec: (command, args, options = {}) => {
+      let failedController;
+      const pending = inOrder(async () => {
         recipe.policy.allowedCommands.includes(command) ||
           Fail`Command is not in the environment allowlist`;
         const selected = await start();
         const version = epoch;
-        const result = await E(selected).exec(command, args, harden(options));
+        let result;
+        try {
+          result = await E(selected).exec(command, args, harden(options));
+        } catch (error) {
+          // A timeout/reader/containment failure can permanently dispose the
+          // native slice. Retire this exact owner, without replaying the
+          // command or assuming that a rejected command proved native exit.
+          failedController = controller;
+          throw error;
+        }
         check();
         version === epoch || Fail`Environment command was interrupted`;
         return result;
-      }),
+      });
+      return pending.catch(async error => {
+        await null;
+        if (failedController && controller === failedController) {
+          // Outside inOrder: stop must join the command queue, so awaiting it
+          // from within the failed operation would deadlock on that operation.
+          try {
+            await stop();
+          } catch (cleanupError) {
+            throw new AggregateError(
+              [error, cleanupError],
+              'Environment command failed; native cleanup remains pending',
+              { cause: cleanupError },
+            );
+          }
+        }
+        throw error;
+      });
+    },
   });
   const administer = operation => {
     (!closed && !maintenance) ||

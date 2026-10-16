@@ -239,3 +239,130 @@ test('recipe refuses open records and invalid execution bounds', t => {
   ])
     t.throws(() => assertEnvironmentRecipe(harden(invalid)));
 });
+
+test('failed execution retires its native owner before a later command; no effect is replayed', async t => {
+  t.timeout(5000);
+  let owners = 0;
+  let effects = 0;
+  let stops = 0;
+  const stopped = makePromiseKit();
+  const stopEntered = makePromiseKit();
+  const f = await fixture({
+    provide: () => {
+      owners += 1;
+      const first = owners === 1;
+      return Far('RecoverableController', {
+        open: () =>
+          Far('NativeShell', {
+            exec: async () => {
+              effects += 1;
+              if (first) throw Error('Shell command timed out; slice disposed');
+              return harden({
+                stdout: 'fresh',
+                stderr: '',
+                exitCode: 0,
+                signal: null,
+                truncated: false,
+              });
+            },
+          }),
+        stop: async () => {
+          stops += 1;
+          stopEntered.resolve(undefined);
+          await stopped.promise;
+        },
+      });
+    },
+  });
+  const failed = t.throwsAsync(E(f.owner.shell).exec('sh', harden([])), {
+    message: /timed out/,
+  });
+  await stopEntered.promise;
+  t.is(owners, 1);
+  t.is(effects, 1);
+  await t.throwsAsync(E(f.owner.shell).exec('sh', harden([])), {
+    message: /stopped/,
+  });
+  t.is(owners, 1, 'no successor before native cleanup acknowledgement');
+  stopped.resolve(undefined);
+  await failed;
+  t.is((await E(f.owner.admin).inspect()).phase, 'idle');
+  const result = await E(f.owner.shell).exec('sh', harden([]));
+  t.is(result.stdout, 'fresh');
+  t.is(owners, 2);
+  t.is(effects, 2, 'failed command was never automatically replayed');
+  t.is(stops, 1);
+  t.is(f.calls.filter(call => call[0] === 'remove').length, 0);
+  await f.owner.shutdown();
+});
+
+test('failed execution retains its exact owner when cleanup fails', async t => {
+  t.timeout(5000);
+  let owners = 0;
+  let stops = 0;
+  let refuse = true;
+  const f = await fixture({
+    provide: () => {
+      owners += 1;
+      return Far('FailedController', {
+        open: () =>
+          Far('FailedShell', {
+            exec: () => {
+              throw Error('sandbox handle has been disposed');
+            },
+          }),
+        stop: () => {
+          stops += 1;
+          if (refuse) throw Error('containment pending');
+        },
+      });
+    },
+  });
+  await t.throwsAsync(E(f.owner.shell).exec('sh', harden([])), {
+    message: /native cleanup remains pending/,
+  });
+  await t.throwsAsync(E(f.owner.shell).exec('sh', harden([])), {
+    message: /stopped/,
+  });
+  t.is(owners, 1);
+  t.is(stops, 1);
+  refuse = false;
+  await E(f.owner.admin).stop();
+  t.is(stops, 2, 'operator retries the original retained cleanup owner');
+  t.is((await E(f.owner.admin).inspect()).phase, 'idle');
+  await f.owner.shutdown();
+});
+
+test('ordinary nonzero command status retains the usable native owner', async t => {
+  t.timeout(5000);
+  let owners = 0;
+  let stops = 0;
+  const f = await fixture({
+    provide: () => {
+      owners += 1;
+      return Far('Controller', {
+        open: () =>
+          Far('Shell', {
+            exec: () =>
+              harden({
+                stdout: '',
+                stderr: 'test failed',
+                exitCode: 37,
+                signal: null,
+                truncated: false,
+              }),
+          }),
+        stop: () => {
+          stops += 1;
+        },
+      });
+    },
+  });
+  for (let i = 0; i < 2; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    t.is((await E(f.owner.shell).exec('sh', harden([]))).exitCode, 37);
+  }
+  t.is(owners, 1);
+  t.is(stops, 0);
+  await f.owner.shutdown();
+});
