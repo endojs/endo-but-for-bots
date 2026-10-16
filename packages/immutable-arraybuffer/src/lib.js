@@ -1529,3 +1529,38 @@ for (const [name, method] of entries(dataViewWriters)) {
 for (const key of ownKeys(freezableDataViewLibProperties)) {
   defineProperty(freezableDataViewLibProperties, key, { enumerable: false });
 }
+
+/**
+ * Replace the eleven concrete TypedArray constructors and `DataView` on a
+ * global object with the emulated constructors.
+ *
+ * Takes the target global rather than reading `globalThis`, so the descriptor
+ * it leaves behind can be tested against a global that is NOT an ordinary
+ * object -- which is the case that matters. `defineProperty(obj, k, { value })`
+ * merges on an ordinary object, leaving the other attributes alone; a Node.js
+ * `vm` context's global is a PROXY whose `defineProperty` instead completes a
+ * partial descriptor with the spec's `false` defaults. So the attributes are
+ * spelled out here. Omitting them turned these globals non-writable and
+ * NON-CONFIGURABLE inside a `vm` realm, where SES's `lockdown()` then aborted
+ * with `TypeError: Cannot redefine property: BigInt64Array` -- it repairs the
+ * global object by redefining the intrinsics it permits, and cannot redefine a
+ * non-configurable one.
+ *
+ * @param {object} globalObject
+ */
+export const installEmulatedGlobalConstructors = globalObject => {
+  for (const { name, Constructor } of concreteTypedArrayConstructors) {
+    defineProperty(globalObject, name, {
+      value: makeEmulatedTypedArrayConstructor(Constructor),
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+  }
+  defineProperty(globalObject, 'DataView', {
+    value: EmulatedDataView,
+    writable: true,
+    enumerable: false,
+    configurable: true,
+  });
+};
