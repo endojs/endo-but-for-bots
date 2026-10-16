@@ -6,7 +6,10 @@ import test from '@endo/ses-ava/test.js';
 
 import { cborCodec } from '@endo/ocapn/cbor';
 import { syrupCodec } from '@endo/ocapn/syrup';
-import { readOcapnHeartbeatMessage } from '@endo/ocapn/operations';
+import {
+  readOcapnHeartbeatMessage,
+  writeOcapnHeartbeatMessage,
+} from '@endo/ocapn/operations';
 import { makeOcapnNoiseNetwork } from '../index.js';
 import { makeMockTransportPair } from '../src/transports/mock.js';
 
@@ -70,13 +73,13 @@ for (const [codecName, codec] of /** @type {const} */ ([
     t.is(livenessA.epoch, 0n);
     // Each side has decrypted the peer's identity greeting plus many
     // heartbeats, and has heard the peer acknowledge some of its own.
-    t.true(livenessA.lastAckedRecvNonce > 4n);
-    t.true(livenessB.lastAckedRecvNonce > 4n);
+    t.true(/** @type {bigint} */ (livenessA.lastAckedRecvNonce) > 4n);
+    t.true(/** @type {bigint} */ (livenessB.lastAckedRecvNonce) > 4n);
     t.not(livenessA.peerAckedRecvNonce, undefined);
     t.not(livenessB.peerAckedRecvNonce, undefined);
     t.true(
       /** @type {bigint} */ (livenessA.peerAckedRecvNonce) <=
-        livenessB.lastAckedRecvNonce,
+        /** @type {bigint} */ (livenessB.lastAckedRecvNonce),
     );
   });
 }
@@ -132,21 +135,154 @@ test('a peer without heartbeats receives op:ping and op:pong frames', async t =>
   sessionA.close();
 });
 
-test('closing a heartbeat session stops its timers', async t => {
+/**
+ * Record the heartbeat and liveness timers that sessions arm, by their
+ * period, and which of them are later cleared. Only run from serial
+ * tests, which AVA runs before the concurrent ones, so no other test's
+ * timers are observed.
+ *
+ * @param {ExecutionContext<unknown>} t
+ */
+const watchSessionTimers = t => {
+  const {
+    setInterval: realSetInterval,
+    clearInterval: realClearInterval,
+    setTimeout: realSetTimeout,
+    clearTimeout: realClearTimeout,
+  } = globalThis;
+  /** @type {Set<unknown>} */
+  const armed = new Set();
+  /** @type {Set<unknown>} */
+  const cleared = new Set();
+  /** @type {any} */
+  const g = globalThis;
+  g.setInterval = (/** @type {any} */ fn, /** @type {number} */ ms) => {
+    const handle = realSetInterval(fn, ms);
+    if (ms === heartbeat.intervalMs) armed.add(handle);
+    return handle;
+  };
+  g.setTimeout = (/** @type {any} */ fn, /** @type {number} */ ms) => {
+    const handle = realSetTimeout(fn, ms);
+    if (ms === heartbeat.sessionTimeoutMs) armed.add(handle);
+    return handle;
+  };
+  g.clearInterval = (/** @type {any} */ handle) => {
+    cleared.add(handle);
+    realClearInterval(handle);
+  };
+  g.clearTimeout = (/** @type {any} */ handle) => {
+    cleared.add(handle);
+    realClearTimeout(handle);
+  };
+  t.teardown(() => {
+    g.setInterval = realSetInterval;
+    g.clearInterval = realClearInterval;
+    g.setTimeout = realSetTimeout;
+    g.clearTimeout = realClearTimeout;
+  });
+  return {
+    /** Heartbeat or liveness timers armed and not yet cleared. */
+    live: () => [...armed].filter(handle => !cleared.has(handle)),
+  };
+};
+
+for (const [how, end] of /** @type {const} */ ([
+  [
+    'close()',
+    async (/** @type {any} */ sessionA, /** @type {any} */ sessionB) => {
+      sessionA.close();
+      sessionB.close();
+    },
+  ],
+  [
+    'reader.return',
+    async (/** @type {any} */ sessionA, /** @type {any} */ sessionB) => {
+      await sessionA.reader.return(undefined);
+      await sessionB.reader.return(undefined);
+    },
+  ],
+  [
+    'a peer-initiated end of stream',
+    async (/** @type {any} */ sessionA, /** @type {any} */ sessionB) => {
+      await null;
+      // Only A ends; B must notice the end of stream and stop its own.
+      sessionA.close();
+      let result;
+      do {
+        // eslint-disable-next-line no-await-in-loop
+        result = await sessionB.reader.next(undefined);
+      } while (!result.done);
+    },
+  ],
+])) {
+  test.serial(
+    `ending a heartbeat session by ${how} clears its timers`,
+    async t => {
+      const timers = watchSessionTimers(t);
+      const { sessionA, sessionB } = await connectPair(
+        t,
+        { codec: cborCodec, heartbeat },
+        { codec: cborCodec, heartbeat },
+      );
+      // One heartbeat interval and one liveness timeout per session.
+      t.true(timers.live().length >= 4);
+      await end(sessionA, sessionB);
+      t.deepEqual(timers.live(), []);
+    },
+  );
+}
+
+test('getLiveness reports the received nonce once the peer has spoken', async t => {
+  const { sessionA } = await connectPair(
+    t,
+    { codec: cborCodec, heartbeat },
+    { codec: cborCodec },
+  );
+  // A has decrypted B's identity greeting, nonce 0.
+  t.is(sessionA.getLiveness().lastAckedRecvNonce, 0n);
+  sessionA.close();
+});
+
+test('a malformed heartbeat operation aborts the session', async t => {
   const { sessionA, sessionB } = await connectPair(
     t,
     { codec: cborCodec, heartbeat },
-    { codec: cborCodec, heartbeat },
+    { codec: cborCodec },
   );
-  sessionA.close();
-  sessionB.close();
-  // Were the timers still armed, a timeout would surface here as a
-  // rejection rather than the clean end of stream.
-  await delay(heartbeat.sessionTimeoutMs * 2);
-  t.deepEqual(await sessionA.writer.next(new Uint8Array([1])), {
-    done: true,
-    value: undefined,
+  const ping = writeOcapnHeartbeatMessage(
+    { type: 'op:ping', epoch: 0n, sequence: 0n },
+    cborCodec,
+  );
+  await sessionB.writer.next(Uint8Array.of(...ping, 0));
+  await t.throwsAsync(() => sessionA.reader.next(undefined), {
+    message: /malformed heartbeat operation from peer/,
   });
+});
+
+test('a frame that is not a heartbeat reaches the session', async t => {
+  const { sessionA, sessionB } = await connectPair(
+    t,
+    { codec: cborCodec, heartbeat },
+    { codec: cborCodec },
+  );
+  // A record that is not a heartbeat, then raw bytes that are not a
+  // record at all.
+  const writer = cborCodec.makeWriter();
+  writer.enterRecord(1);
+  writer.writeSelectorFromString('op:abort');
+  writer.exitRecord();
+  const record = writer.getBytes();
+  await sessionB.writer.next(record);
+  await sessionB.writer.next(Uint8Array.of(0xff, 0xfe));
+  const first = await sessionA.reader.next(undefined);
+  const second = await sessionA.reader.next(undefined);
+  t.false(first.done);
+  t.false(second.done);
+  if (!first.done && !second.done) {
+    t.deepEqual([...first.value], [...record]);
+    t.deepEqual([...second.value], [0xff, 0xfe]);
+  }
+  sessionA.close();
 });
 
 test('heartbeat options are validated', t => {
