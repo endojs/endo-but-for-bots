@@ -108,9 +108,11 @@ export interface OcapnNoiseSession {
  * `intervalMs`, and the session closes with an error once
  * `sessionTimeoutMs` elapse without any frame from the peer.
  *
- * `op:ping` and `op:pong` are proposed OCapN operations, pending
- * OCapN-org review. Enable heartbeats only toward peers that absorb
- * them: a peer that does not know them aborts the session.
+ * Heartbeats are on by default (`makeOcapnNoiseNetwork({ heartbeat:
+ * false })` turns them off), and a session runs them only when the
+ * peer's `op:session-hello` advertises heartbeat support too, so a peer
+ * that does not take part never receives a heartbeat frame. `op:ping`
+ * and `op:pong` are proposed OCapN operations, pending OCapN-org review.
  */
 export interface HeartbeatOptions {
   /** `HEARTBEAT_INTERVAL`. Default 5000. */
@@ -143,7 +145,10 @@ export interface ReconnectOptions {
 }
 
 export interface SessionLiveness {
-  /** Whether this session sends and absorbs heartbeats. */
+  /**
+   * Whether this session sends and absorbs heartbeats: both sides
+   * enabled them.
+   */
   heartbeat: boolean;
   /** Whether this session resumes after losing its transport instance. */
   reconnect: boolean;

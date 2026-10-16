@@ -185,8 +185,8 @@ test('writer.return delivers queued frames before ending the stream', async t =>
 });
 
 test('sessions without heartbeats write directly and report no queue', async t => {
-  const netA = makeOcapnNoiseNetwork({ codec: cborCodec });
-  const netB = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const netA = makeOcapnNoiseNetwork({ codec: cborCodec, heartbeat: false });
+  const netB = makeOcapnNoiseNetwork({ codec: cborCodec, heartbeat: false });
   t.teardown(() => {
     netA.shutdown();
     netB.shutdown();
