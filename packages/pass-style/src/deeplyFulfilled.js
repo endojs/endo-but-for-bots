@@ -1,3 +1,4 @@
+// spell-out-exempt: the established public parameter is `val`; the Parcel arm only returns it unchanged.
 import harden from '@endo/harden';
 import { X, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
@@ -135,6 +136,12 @@ export const deeplyFulfilled = async val => {
       const rem = /** @type {RemotableObject} */ (val);
       // @ts-expect-error not assignable to type 'DeeplyAwaited<T>'
       return rem;
+    }
+    case 'parcel': {
+      // Like a remotable, a Parcel is already fulfilled. It is opened
+      // explicitly, with `Parcel.open`, never by awaiting.
+      // @ts-expect-error not assignable to type 'DeeplyAwaited<T>'
+      return val;
     }
     case 'error': {
       const err = /** @type {Error} */ (val);

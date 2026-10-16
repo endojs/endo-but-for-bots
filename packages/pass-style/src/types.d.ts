@@ -42,7 +42,7 @@ export type PrimitiveStyle = AtomStyle;
 export type ContainerStyle = 'copyRecord' | 'copyArray' | 'tagged';
 
 export type PassStyle =
-  AtomStyle | ContainerStyle | 'remotable' | 'error' | 'promise';
+  AtomStyle | ContainerStyle | 'remotable' | 'error' | 'promise' | 'parcel';
 
 export type PassStyleMarker = 'tagged' | 'remotable';
 
@@ -60,6 +60,10 @@ export type ExtractStyle<P extends PassStyled<any, any>> = P[typeof PASS_STYLE];
 
 export type PassByCopy = Atom | Error | CopyArray | CopyRecord | CopyTagged;
 
+/**
+ * Excludes `ParcelObject`, a dormant capability that has object identity but
+ * no marshal slot representation, so it is not pass-by-reference.
+ */
 export type PassByRef =
   | RemotableObject
   | RemotableBrand<any, any>
@@ -68,9 +72,9 @@ export type PassByRef =
   | Promise<PassByCopy>;
 
 /**
- * A Passable is acyclic data that can be marshalled. It must be hardened to
- * remain
- * stable (even if some components are proxies; see PureData restriction below),
+ * A Passable is acyclic data that a transport can classify for passage. It
+ * must be hardened to remain stable (even if some components are proxies; see
+ * PureData restriction below),
  * and is classified by PassStyle:
  *   * Atomic values have an AtomStyle (PassStyle
  *     'undefined' | 'null' | 'boolean' | 'number' | 'bigint'
@@ -84,6 +88,9 @@ export type PassByRef =
  *     remote interaction.
  *   * As a special case to support system observability, error objects are
  *     Passable (PassStyle 'error').
+ *   * Parcels (PassStyle 'parcel') are dormant capabilities. They are
+ *     Passable but are not PassableCaps. A transport needs explicit Parcel
+ *     support to carry one; the generic marshal does not yet provide it.
  *
  * A Passable is essentially a pass-by-copy superstructure with a
  * pass-by-reference
@@ -93,24 +100,35 @@ export type PassByRef =
 export type Passable<
   PC extends PassableCap = PassableCap,
   E extends Error = Error,
-> = void | Atom | Container<PC, E> | PC | E;
+  P extends ParcelObject = ParcelObject,
+> = void | Atom | Container<PC, E, P> | PC | E | P;
 
-export type Container<PC extends PassableCap, E extends Error> =
-  | CopyArrayInterface<PC, E>
-  | CopyRecordInterface<PC, E>
-  | CopyTaggedInterface<PC, E>;
+export type Container<
+  PC extends PassableCap,
+  E extends Error,
+  P extends ParcelObject = ParcelObject,
+> =
+  | CopyArrayInterface<PC, E, P>
+  | CopyRecordInterface<PC, E, P>
+  | CopyTaggedInterface<PC, E, P>;
 export interface CopyArrayInterface<
   PC extends PassableCap,
   E extends Error,
-> extends CopyArray<Passable<PC, E>> {}
+  P extends ParcelObject = ParcelObject,
+> extends CopyArray<Passable<PC, E, P>> {}
 export interface CopyRecordInterface<
   PC extends PassableCap,
   E extends Error,
-> extends CopyRecord<Passable<PC, E>> {}
+  P extends ParcelObject = ParcelObject,
+> extends CopyRecord<Passable<PC, E, P>> {
+  readonly [PASS_STYLE]?: never;
+  readonly [Symbol.toStringTag]?: never;
+}
 export interface CopyTaggedInterface<
   PC extends PassableCap,
   E extends Error,
-> extends CopyTagged<string, Passable<PC, E>> {}
+  P extends ParcelObject = ParcelObject,
+> extends CopyTagged<string, Passable<PC, E, P>> {}
 
 export type PassStyleOf = {
   (p: undefined): 'undefined';
@@ -123,6 +141,7 @@ export type PassStyleOf = {
   (p: Promise<any>): 'promise';
   (p: Error): 'error';
   (p: CopyTagged): 'tagged';
+  (p: ParcelObject): 'parcel';
   (p: readonly any[]): 'copyArray';
   // A `Uint8Array` is also `Iterable<number>`; place its byteArray
   // overload before the Iterable-as-remotable fallback so the more
@@ -157,7 +176,7 @@ export type PassStyleOf = {
  * trip (as exists between vats) to produce data structures disconnected from
  * any potential proxies.
  */
-export type PureData = Passable<never, never>;
+export type PureData = Passable<never, never, never>;
 
 /**
  * @deprecated this type doesn't carry the type of the behavior for remote
@@ -183,6 +202,18 @@ export type RemotableObject<I extends InterfaceSpec = string> = PassStyled<
 // to type method names of Remotables.
 // export type RemotableMethodName = string | symbol;
 export type RemotableMethodName = PropertyKey;
+
+/**
+ * A Parcel is a passable dormant capability with no exposed data.
+ *
+ * This package owns the type structurally, so that it has no dependency on
+ * `@endo/parcel`, whose `Parcel` type is assignable to it. At runtime,
+ * `src/parcel.js` senses `globalThis.Parcel` and asks its brand check rather
+ * than importing the shim.
+ */
+export type ParcelObject = {
+  readonly [Symbol.toStringTag]: 'Parcel';
+};
 
 /**
  * The authority-bearing leaves of a Passable's pass-by-copy superstructure.

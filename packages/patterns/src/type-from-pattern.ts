@@ -5,6 +5,7 @@ import type {
   CopyRecord,
   CopyTagged,
   Passable,
+  ParcelObject,
   RemotableObject,
 } from '@endo/pass-style';
 import type { RemotableBrand } from '@endo/eventual-send';
@@ -165,6 +166,7 @@ type TFKindMap = {
   string: string;
   symbol: symbol;
   byteArray: Uint8Array;
+  parcel: ParcelObject;
   copyRecord: CopyRecord;
   copyArray: CopyArray;
   copySet: CopySet;

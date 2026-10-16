@@ -1,5 +1,6 @@
 /* eslint-disable */
 import { ONE_N } from '@endo/nat';
+import { makeParcel } from '@endo/parcel';
 import { expectTypeOf } from 'expect-type';
 import { Far } from './make-far.js';
 import { passStyleOf } from './passStyleOf.js';
@@ -12,7 +13,10 @@ import type {
   CopyTaggedInterface,
   Passable,
   PassableCap,
+  PassByRef,
   PassStyle,
+  ParcelObject,
+  PureData,
 } from './types.js';
 import { PASS_STYLE } from './passStyle-helpers.js';
 import { passableSymbolForName } from './symbol.js';
@@ -58,6 +62,12 @@ expectTypeOf(
   passStyleOf({ [PASS_STYLE]: 'arbitrary' } as const),
 ).toEqualTypeOf<'copyRecord'>();
 expectTypeOf(passStyleOf(remotable)).toEqualTypeOf<'remotable'>();
+declare const parcel: ParcelObject;
+expectTypeOf(passStyleOf(parcel)).toEqualTypeOf<'parcel'>();
+// ParcelObject is structural; @endo/parcel's Parcel must stay assignable to it.
+expectTypeOf<ReturnType<typeof makeParcel>>().toExtend<ParcelObject>();
+// A plain record cannot pose as a Parcel.
+expectTypeOf<{ a: 1 }>().not.toExtend<ParcelObject>();
 expectTypeOf(passStyleOf(someUnknown)).toEqualTypeOf<PassStyle>();
 
 const expectPassable = (val: Passable) => {};
@@ -73,6 +83,9 @@ expectPassable(fn());
 
 expectPassable({});
 expectPassable({ a: {} });
+expectPassable(parcel);
+expectPassable({ ref: parcel });
+expectPassable([parcel]);
 // @ts-expect-error not passable
 expectPassable(fn);
 // FIXME promise for a non-Passable is not Passable
@@ -86,5 +99,16 @@ expectPassable(copyTagged);
 expectPassable(Promise.resolve(remotable));
 expectPassable({ a: Promise.resolve(remotable) });
 expectPassable({ a: Promise.resolve(fn) });
+
+const expectPureData = (value: PureData) => value;
+expectPureData(harden({ nested: [1, 'two'] }));
+// @ts-expect-error a Parcel is a dormant capability, not pure data
+expectPureData(parcel);
+// @ts-expect-error nested Parcels are not pure data
+expectPureData(harden({ nested: [parcel] }));
+
+// A Parcel has object identity but no marshal slot representation.
+// @ts-expect-error a Parcel is not PassByRef
+const parcelRef: PassByRef = parcel;
 
 expectTypeOf((cond: boolean, details?: unknown) => cond).toExtend<Checker>();
