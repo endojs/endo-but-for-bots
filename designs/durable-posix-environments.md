@@ -1039,6 +1039,20 @@ allows the next command to acquire a fresh controller. Failed cleanup retains th
 exact owner and the admission fence for an explicit admin stop retry. Ordinary
 nonzero exit results do not retire a usable controller.
 
+Tokyo's 2026-10-17 failure also left an irreconcilable native owner: conmon
+reported `mkdir /workspace: No such file or directory`, and the driver could not
+establish a successful OCI startup witness before removal. The controller retry
+fix cannot manufacture that lost witness. Recovery must retain this old owner
+and its evidence, preserve the checkout, and explicitly provision fresh execution
+authority after external quiescence.
+
+A separate recovery obstruction was captured inside V8's ephemeron-table rehash
+while `make-hardener.js` marked a decoder function in its global WeakSet. The
+observed table had 8,388,608 slots. Node 24 contains V8's large-ephemeron hash
+spreading implementation; Tokyo's runtime acceptance must include the isolated
+large-WeakSet probe and rebuild native addons under the selected Node ABI.
+This stack does not establish why the original OCI workspace path failed.
+
 ### Formula collection and permanent cleanup
 
 Permanent collection is distinct from cancelling a native incarnation.
