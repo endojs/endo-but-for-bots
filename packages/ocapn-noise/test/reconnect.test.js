@@ -1,6 +1,10 @@
 // @ts-check
 
-/** @import { ExecutionContext } from 'ava' */
+/**
+ * @import { ExecutionContext } from 'ava'
+ * @import { OcapnCodec } from '@endo/ocapn/codec-interface'
+ * @import { OcapnNoiseSession } from '../src/types.js'
+ */
 
 import test from '@endo/ses-ava/test.js';
 
@@ -42,7 +46,7 @@ const eventually = async (predicate, timeoutMs = 8000) => {
  * partitioned.
  *
  * @param {ExecutionContext<unknown>} t
- * @param {import('@endo/ocapn/codec-interface').OcapnCodec} codec
+ * @param {OcapnCodec} codec
  * @param {object} [options]
  * @param {object | false} [options.reconnectA]
  * @param {object | false} [options.reconnectB]
@@ -80,7 +84,7 @@ const connectLossyPair = async (
 };
 
 /**
- * @param {import('../src/types.js').OcapnNoiseSession} session
+ * @param {OcapnNoiseSession} session
  * @param {number} count
  */
 const readBytes = async (session, count) => {

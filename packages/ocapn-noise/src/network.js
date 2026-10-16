@@ -1,31 +1,21 @@
 // @ts-check
 /* global setTimeout, clearTimeout, setInterval, clearInterval */
 
-/** @import { HeartbeatOptions, ReconnectOptions } from './types.js' */
-
 /**
- * @typedef {import('./types.js').ByteStream} ByteStream
- * @typedef {import('./types.js').KeyIdHex} KeyIdHex
- * @typedef {import('./types.js').OcapnNoiseNetwork} OcapnNoiseNetwork
- * @typedef {import('./types.js').OcapnNoiseSession} OcapnNoiseSession
- * @typedef {import('./types.js').OcapnNoiseTransport} OcapnNoiseTransport
- * @typedef {import('./types.js').SigningKeys} SigningKeys
- * @typedef {import('./types.js').TransportListener} TransportListener
- * @typedef {import('@endo/ocapn/codec-interface').OcapnCodec} OcapnCodec
- * @typedef {import('@endo/ocapn/components').OcapnLocation} OcapnLocation
- * @typedef {import('@endo/ocapn/components').OcapnSignature} OcapnSignature
- */
-/**
- * @template T
- * @typedef {import('@endo/stream').Reader<T>} Reader
- */
-/**
- * @template T
- * @typedef {import('@endo/stream').Writer<T>} Writer
- */
-/**
- * @template T
- * @typedef {import('@endo/stream').AsyncQueue<T>} AsyncQueue
+ * @import { AsyncQueue, Reader, Writer } from '@endo/stream'
+ * @import { OcapnCodec } from '@endo/ocapn/codec-interface'
+ * @import { OcapnLocation, OcapnSignature } from '@endo/ocapn/components'
+ * @import {
+ *   ByteStream,
+ *   HeartbeatOptions,
+ *   KeyIdHex,
+ *   OcapnNoiseNetwork,
+ *   OcapnNoiseSession,
+ *   OcapnNoiseTransport,
+ *   ReconnectOptions,
+ *   SigningKeys,
+ *   TransportListener,
+ * } from './types.js'
  */
 
 import harden from '@endo/harden';
@@ -235,6 +225,8 @@ const hasFeature = (features, bit) => (features / bit) % 2n === 1n;
 const DEFAULT_RECONNECT_BACKOFF_INITIAL_MS = 250;
 const DEFAULT_RECONNECT_BACKOFF_MAX_MS = 30_000;
 const DEFAULT_SESSION_HARD_TIMEOUT_MS = 10 * 60_000;
+/** How long `close()` waits for the end notice before closing anyway. */
+const SESSION_END_WRITE_TIMEOUT_MS = 1000;
 
 /**
  * @param {ReconnectOptions | boolean | undefined} reconnect
@@ -397,6 +389,7 @@ export const makeOcapnNoiseNetwork = ({
    *   getEpoch: () => bigint,
    *   isAttached: () => boolean,
    *   getReceivedFrames: () => bigint,
+   *   suspend: () => bigint,
    *   attach: (instance: Instance, epoch: bigint, peerReceived: bigint) => void,
    *   abort: (error: Error) => void,
    *   dial: (epoch: bigint, received: bigint) => Promise<{ instance: Instance, peerHello: SessionHello }>,
@@ -478,7 +471,7 @@ export const makeOcapnNoiseNetwork = ({
    * `provideSession` (i.e. peer-initiated handshakes). Drained by any
    * consumer iterating `inboundSessions`.
    *
-   * @type {import('@endo/stream').AsyncQueue<IteratorResult<OcapnNoiseSession, undefined>>}
+   * @type {AsyncQueue<IteratorResult<OcapnNoiseSession, undefined>>}
    */
   const inboundQueue = makeQueue();
   let inboundClosed = false;
@@ -1144,9 +1137,18 @@ export const makeOcapnNoiseNetwork = ({
           { type: 'op:session-end', epoch },
           codec,
         );
-        return Promise.resolve(
-          instance.stream.writer.next(instance.encrypt(end)),
-        ).catch(() => {});
+        // Bounded: the instance being closed may be the stalled one, and
+        // the close must not wait on its write.
+        /** @type {ReturnType<typeof setTimeout> | undefined} */
+        let endTimer;
+        return Promise.race([
+          Promise.resolve(
+            instance.stream.writer.next(instance.encrypt(end)),
+          ).catch(() => {}),
+          new Promise(resolve => {
+            endTimer = setTimeout(resolve, SESSION_END_WRITE_TIMEOUT_MS);
+          }),
+        ]).finally(() => clearTimeout(endTimer));
       } catch (_e) {
         // best effort
         return Promise.resolve();
@@ -1393,7 +1395,7 @@ export const makeOcapnNoiseNetwork = ({
           // A transport write that does not complete within the session
           // timeout is loss, not a stall: the peer, hearing nothing from
           // us for as long, has given up on this transport instance too.
-          writeStallTimer = setTimeout(
+          const stallTimer = setTimeout(
             () =>
               loseInstance(
                 instance,
@@ -1403,6 +1405,7 @@ export const makeOcapnNoiseNetwork = ({
               ),
             sessionTimeoutMs,
           );
+          writeStallTimer = stallTimer;
           const nonce = instance.sentCount;
           try {
             // eslint-disable-next-line no-await-in-loop
@@ -1411,8 +1414,9 @@ export const makeOcapnNoiseNetwork = ({
             loseInstance(instance, /** @type {Error} */ (error));
             return;
           } finally {
-            clearTimeout(writeStallTimer);
-            writeStallTimer = undefined;
+            // A stale drain must not clear a newer instance's timer.
+            clearTimeout(stallTimer);
+            if (writeStallTimer === stallTimer) writeStallTimer = undefined;
           }
           instance.sentCount += 1n;
           if (current !== instance) return;
@@ -1639,6 +1643,13 @@ export const makeOcapnNoiseNetwork = ({
           getEpoch: () => epoch,
           isAttached: () => current !== undefined,
           getReceivedFrames: () => receivedFrames,
+          // Stop delivery on the current instance before a resume reply
+          // advertises how many frames this side took, so the count the
+          // peer replays from is final.
+          suspend: () => {
+            if (current !== undefined) loseInstance(current, undefined);
+            return receivedFrames;
+          },
           attach,
           abort: fail,
           // Installed by the network once the session is registered.
@@ -2139,10 +2150,14 @@ export const makeOcapnNoiseNetwork = ({
             await stream.writer.return(undefined);
             return;
           }
+          // Suspend before sampling the count: an old instance that
+          // still delivers during the hello write would otherwise take
+          // frames the peer then replays.
+          const received = resumable.suspend();
           await writeSessionHello(stream.writer, encrypt, {
             epoch: peerHello.epoch,
             session: resumable.sessionToken,
-            received: resumable.getReceivedFrames(),
+            received,
           });
           resumable.attach(instance, peerHello.epoch, peerHello.received);
           return;
