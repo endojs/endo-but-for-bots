@@ -6,7 +6,7 @@ import harden from '@endo/harden';
 import { makePipe } from '@endo/stream';
 import { makeSyrupReader } from '@endo/syrup-frame/reader.js';
 
-import { locationToLocationId } from '../client/util.js';
+import { locationNetworkId, locationToLocationId } from '../client/util.js';
 import { sendHandshake } from '../client/handshake.js';
 
 /**
@@ -386,9 +386,8 @@ export const makeTcpNetLayer = async ({
    * @returns {Connection}
    */
   const lookupOrConnect = location => {
-    const remoteNetworkId = location.network ?? location.transport;
-    const localNetworkId = localLocation.network ?? localLocation.transport;
-    if (remoteNetworkId !== localNetworkId) {
+    const remoteNetworkId = locationNetworkId(location);
+    if (remoteNetworkId !== locationNetworkId(localLocation)) {
       throw Error(`Unsupported network: ${remoteNetworkId}`);
     }
     const existingConnection = outgoingConnections.get(location.designator);

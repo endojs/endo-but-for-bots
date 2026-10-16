@@ -19,19 +19,52 @@ export const toHex = value => {
 };
 
 /**
+ * The network identifier of a location. During the `network` migration a
+ * location carries the legacy `transport` field on the wire and may carry
+ * `network` in memory; the network is `network ?? transport`. A network
+ * names how a peer is identified; it does not select a byte carrier.
+ *
+ * @param {Pick<OcapnLocation, 'network' | 'transport'>} location
+ * @returns {string}
+ */
+export const locationNetworkId = location =>
+  location.network ?? location.transport;
+
+/**
+ * Networks whose session identity is `(network, designator)`: the designator
+ * is an authenticated key, and the hints only suggest ways to reach it. A
+ * peer's hints change as its endpoints bind, rebind, or are withdrawn, so
+ * they must not take part in its location ID, lest one authenticated peer
+ * appear as several and defeat session reuse.
+ *
+ * See designs/ocapn-network-transport-separation.md § Target Model.
+ */
+const identityKeyedNetworks = new Set(['np']);
+
+/**
  * We need a unique and deterministic way to identify a location as a string, for internal use.
  * We use https://github.com/ocapn/ocapn/blob/main/draft-specifications/Locators.md#uri-serialization
+ *
+ * For identity-keyed networks (`np`), the ID is `ocapn://<designator>.<network>`
+ * and omits the hints. Other networks keep the hints as sorted query
+ * parameters until they migrate to the identity rule.
+ *
  * @param {OcapnLocation} location
  * @returns {LocationId}
  */
 export const locationToLocationId = location => {
-  const { designator, transport, hints } = location;
+  const { designator, hints } = location;
+  const networkId = locationNetworkId(location);
 
-  // Build the base URI: ocapn://<designator>.<transport>
-  let uri = `ocapn://${designator}.${transport}`;
+  // Build the base URI: ocapn://<designator>.<network>
+  let uri = `ocapn://${designator}.${networkId}`;
 
   // Add hints as query parameters if present
-  if (hints && typeof hints === 'object') {
+  if (
+    !identityKeyedNetworks.has(networkId) &&
+    hints &&
+    typeof hints === 'object'
+  ) {
     // Sort keys deterministically
     const sortedKeys = Object.keys(hints).sort();
     if (sortedKeys.length > 0) {
