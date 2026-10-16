@@ -18,6 +18,10 @@ const delay = milliseconds =>
 
 // Wide enough that timer jitter on a loaded CI runner cannot fake a loss.
 const heartbeat = { intervalMs: 50, sessionTimeoutMs: 500 };
+// For tests that stall the transport but must not see a loss: the stall
+// window is a few heartbeat intervals, and a loaded macOS runner has
+// stretched it past 500ms.
+const wideHeartbeat = { intervalMs: 50, sessionTimeoutMs: 2000 };
 
 /**
  * Connect A to B over a mock transport whose writes from A can be
@@ -25,10 +29,15 @@ const heartbeat = { intervalMs: 50, sessionTimeoutMs: 500 };
  *
  * @param {ExecutionContext<unknown>} t
  * @param {import('@endo/ocapn/codec-interface').OcapnCodec} codec
+ * @param {{ intervalMs: number, sessionTimeoutMs: number }} [heartbeatSettings]
  */
-const connectStallablePair = async (t, codec) => {
-  const netA = makeOcapnNoiseNetwork({ codec, heartbeat });
-  const netB = makeOcapnNoiseNetwork({ codec, heartbeat });
+const connectStallablePair = async (
+  t,
+  codec,
+  heartbeatSettings = heartbeat,
+) => {
+  const netA = makeOcapnNoiseNetwork({ codec, heartbeat: heartbeatSettings });
+  const netB = makeOcapnNoiseNetwork({ codec, heartbeat: heartbeatSettings });
   t.teardown(() => {
     netA.shutdown();
     netB.shutdown();
@@ -54,6 +63,7 @@ for (const [codecName, codec] of /** @type {const} */ ([
     const { sessionA, sessionB, injector } = await connectStallablePair(
       t,
       codec,
+      wideHeartbeat,
     );
     const sentBefore = /** @type {bigint} */ (
       sessionA.getLiveness().lastSentNonce

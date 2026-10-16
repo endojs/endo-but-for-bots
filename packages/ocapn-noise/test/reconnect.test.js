@@ -16,8 +16,10 @@ import { makeLossyTransport } from './_loss-injector.js';
 const delay = milliseconds =>
   new Promise(resolve => setTimeout(resolve, milliseconds));
 
-// Wide enough that timer jitter on a loaded CI runner cannot fake a loss.
-const heartbeat = { intervalMs: 50, sessionTimeoutMs: 500 };
+// Wide enough that timer jitter on a loaded CI runner cannot fake a loss:
+// a macOS runner under the unsafe-lockdown pass has stretched heartbeat
+// gaps past 500ms and forced a spurious second reconnect.
+const heartbeat = { intervalMs: 50, sessionTimeoutMs: 1000 };
 const reconnect = {
   backoffInitialMs: 20,
   backoffMaxMs: 200,
