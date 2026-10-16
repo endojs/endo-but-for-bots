@@ -3206,6 +3206,12 @@ export interface DaemonCoreExternal {
   formulateEndo: DaemonCore['formulateEndo'];
   nodeNumber: NodeNumber;
   provide: DaemonCore['provide'];
+  parcelForFormula: ReturnType<
+    typeof import('./formula-parcel.js').makeFormulaParcelKit
+  >['parcelForFormula'];
+  formulaIdOf: ReturnType<
+    typeof import('./formula-parcel.js').makeFormulaParcelKit
+  >['formulaIdOf'];
   capTpConnectionRegistrar: CapTpConnectionRegistrar;
 }
 

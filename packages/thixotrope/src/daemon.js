@@ -68,8 +68,8 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  *
  * @typedef {object} ThixotropeDaemon
  * @property {any} location this daemon's OCapN location; combine with a
- *   publication's swissnum to mint a sturdy ref on any peer
- * @property {(secret: string) => { location: any, secret: string }} makeSturdyRefDetails
+ *   publication's swissnum to mint a Parcel on any peer
+ * @property {(secret: string) => { location: any, secret: string }} makeParcelDetails
  * @property {(source: string, endowments?: Record<string, unknown>) => Promise<any>} eval
  *   evaluate in a fresh implicitly-created worker and return the
  *   result; the worker persists like any other (find it via
@@ -1065,7 +1065,7 @@ const buildDaemon = async ({
   /** @type {ThixotropeDaemon} */
   const daemon = {
     location,
-    makeSturdyRefDetails: secret => harden({ location, secret }),
+    makeParcelDetails: secret => harden({ location, secret }),
     eval: async (source, endowments = {}) => {
       // The lambda-shaped entry point: evaluation implies a worker.
       const workerId = randomHex128();
