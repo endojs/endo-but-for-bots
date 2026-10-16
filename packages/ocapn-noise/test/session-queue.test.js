@@ -65,26 +65,31 @@ for (const [codecName, codec] of /** @type {const} */ ([
   ['syrup', syrupCodec],
 ])) {
   test(`${codecName}: writes queue through a transport stall and replay in order`, async t => {
+    // A session timeout well past the stall, so a loaded runner's timer
+    // slip cannot turn the stall into a loss.
     const { sessionA, sessionB, injector } = await connectStallablePair(
       t,
       codec,
+      { intervalMs: heartbeat.intervalMs, sessionTimeoutMs: 5000 },
     );
     injector.stall();
-    // Sample the send nonce only once the stall holds a write, so a
-    // write already in flight when the stall began is counted.
-    await until(() => injector.getHeldWrites() === 1);
-    const sentBefore = /** @type {bigint} */ (
-      sessionA.getLiveness().lastSentNonce
-    );
-
     // Stall for longer than the heartbeat interval, writing as we go.
     // The writes resolve although nothing reaches the transport.
+    /** @type {bigint | undefined} */
+    let sentBefore;
     for (const byte of [1, 2, 3]) {
       // eslint-disable-next-line no-await-in-loop
       t.deepEqual(await sessionA.writer.next(Uint8Array.of(byte)), {
         done: false,
         value: undefined,
       });
+      if (sentBefore === undefined) {
+        // Sample the send nonce only once the stall holds a write, so a
+        // write already in flight when the stall began is counted.
+        // eslint-disable-next-line no-await-in-loop
+        await until(() => injector.getHeldWrites() === 1);
+        sentBefore = sessionA.getLiveness().lastSentNonce;
+      }
       // eslint-disable-next-line no-await-in-loop
       await delay(heartbeat.intervalMs);
     }
@@ -114,7 +119,10 @@ for (const [codecName, codec] of /** @type {const} */ ([
     const recovered = sessionA.getLiveness();
     t.is(recovered.queuedFrames, 0);
     t.is(recovered.epoch, 0n);
-    t.true(/** @type {bigint} */ (recovered.lastSentNonce) > sentBefore);
+    t.true(
+      /** @type {bigint} */ (recovered.lastSentNonce) >
+        /** @type {bigint} */ (sentBefore),
+    );
     t.true(
       sessionB.getLiveness().lastAckedRecvNonce >=
         /** @type {bigint} */ (recovered.lastSentNonce) - 2n,
