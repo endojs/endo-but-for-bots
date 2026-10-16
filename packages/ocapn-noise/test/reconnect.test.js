@@ -306,9 +306,17 @@ test('a peer without reconnect keeps the Phase 2 loss semantics', async t => {
 });
 
 test('reconnect options are validated', t => {
-  t.throws(() => makeOcapnNoiseNetwork({ codec: cborCodec, reconnect: true }), {
-    message: /reconnect requires heartbeat/,
-  });
+  t.throws(
+    () =>
+      makeOcapnNoiseNetwork({
+        codec: cborCodec,
+        heartbeat: false,
+        reconnect: true,
+      }),
+    {
+      message: /reconnect requires heartbeat/,
+    },
+  );
   t.throws(
     () =>
       makeOcapnNoiseNetwork({
