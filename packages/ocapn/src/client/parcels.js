@@ -138,6 +138,23 @@ export const makeParcel = (location, secret) =>
   makeBoundParcel(location, secret, openUnbound);
 
 /**
+ * Resolve a swiss number held as bytes against the nonce locator, the way
+ * a peer's bootstrap `fetch` does: ASCII-decoded where possible, otherwise
+ * a fresh copy of the raw bytes.
+ *
+ * @param {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} locator
+ * @param {Uint8Array} secretBytes
+ */
+const lookupSecretBytes = (locator, secretBytes) => {
+  const swissNum = swissnumFromBytes(thawedBytes(secretBytes));
+  try {
+    return locator.get(decodeSwissnum(swissNum));
+  } catch {
+    return locator.get(swissnumToBytes(swissNum));
+  }
+};
+
+/**
  * @param {ParcelDetails} details
  * @param {(location: OcapnLocation) => Promise<InternalSession>} provideSession
  * @param {(location: OcapnLocation) => boolean} isSelfLocation
@@ -151,7 +168,9 @@ export const openParcelDetails = async (
 ) => {
   const { location, secret } = details;
   if (isSelfLocation(location)) {
-    const value = await locator.get(secret);
+    const value = await (typeof secret === 'string'
+      ? locator.get(secret)
+      : lookupSecretBytes(locator, secret));
     if (value === undefined) {
       throw Error('ocapn: locator has no capability for parcel value');
     }
@@ -199,12 +218,5 @@ export const makeParcelTracker = (locator, openDetails = openUnbound) =>
   harden({
     makeParcel: (location, secret) =>
       makeBoundParcel(location, secret, openDetails),
-    lookup: async secretBytes => {
-      const swissNum = swissnumFromBytes(thawedBytes(secretBytes));
-      try {
-        return locator.get(decodeSwissnum(swissNum));
-      } catch {
-        return locator.get(swissnumToBytes(swissNum));
-      }
-    },
+    lookup: async secretBytes => lookupSecretBytes(locator, secretBytes),
   });
