@@ -25,6 +25,8 @@ const runAva = (snapshotDir, ...args) =>
   );
 
 test('ava snapshots written under @endo/init read back', t => {
+  // Two child ava runs, each with its own 2m budget.
+  t.timeout(5 * 60_000);
   const snapshotDir = mkdtempSync(join(tmpdir(), 'endo-snapshot-roundtrip-'));
   t.teardown(() => rmSync(snapshotDir, { recursive: true, force: true }));
 
