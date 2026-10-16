@@ -65,6 +65,22 @@ fn a_resumed_non_growing_crank_installs_a_guest_interned_name() {
     );
 }
 
+/// Reflecting on an intrinsic whose surface an earlier crank completed still
+/// installs the pending backlog (here `toJSON`, interned by `JSON.parse`),
+/// on the live machine as after a resume, which derives the surfaces still
+/// to complete afresh at boot.
+#[test]
+fn reflecting_on_a_completed_surface_installs_the_backlog_alike_after_resume() {
+    assert_twin(
+        "ih-floor-twin-completed-surface",
+        "Reflect.ownKeys(Math); 0",
+        &["var i = Temporal.Instant.fromEpochMilliseconds(0); \
+           var o = JSON.parse('{\"toJSON\":1}'); Reflect.ownKeys(Math); \
+           JSON.stringify(i)"],
+        &["\"1970-01-01T00:00:00Z\""],
+    );
+}
+
 /// A runtime-interned intrinsic global can be created and deleted without a
 /// static property-name atom. Its per-environment binding history remains
 /// authoritative on both the next live relink and after restore.
@@ -107,5 +123,103 @@ fn a_computed_intrinsic_name_and_its_deletion_survive_resume() {
          delete Object.prototype[k]; t = 7; t",
         &["var k; var t; t = typeof ({})[k]; t"],
         &["undefined"],
+    );
+}
+
+/// An intrinsic's keys come in its own order after a resume, as they do
+/// live: members installed only after the resume (all of `Set.prototype`'s
+/// but `add`) take their places among those installed before it, a deleted
+/// member stays deleted, and a guest's key stays last.
+#[test]
+fn intrinsic_key_order_survives_resume() {
+    assert_twin(
+        "ih-floor-twin-key-order",
+        "var add = Set.prototype.add; var p = Map.prototype; \
+         delete p['cl' + 'ear']; p.zz = 1; 0",
+        &[
+            "Object.getOwnPropertyNames(Set.prototype).join()",
+            "Object.getOwnPropertyNames(Map.prototype).join()",
+        ],
+        &[
+            "size,add,clear,delete,entries,forEach,has,values,keys,difference,intersection,\
+             isDisjointFrom,isSubsetOf,isSupersetOf,symmetricDifference,union,constructor",
+            "size,delete,entries,forEach,get,has,keys,set,values,getOrInsert,\
+             getOrInsertComputed,constructor,zz",
+        ],
+    );
+}
+
+/// The floor itself travels: a resumed machine, eager or lazy, adopts the
+/// live machine's floor rather than its name table's length, so a name the
+/// last install pass interned is still pending after resume.
+#[test]
+fn the_installed_names_floor_survives_resume() {
+    use ironhorse_snapshot::machine::{
+        begin_store_session, resume_from_store, resume_from_store_lazy,
+    };
+    let (bytecode, names) = carry::compile(
+        "var lf = new Intl.ListFormat('en'); var k = 'cl' + 'ear'; Map.prototype[k]; 0",
+    );
+    let mut machine = ironhorse_vm::Interp::new();
+    machine.link_intrinsics(&names);
+    assert!(machine.run(&bytecode).completed);
+    let floor = machine.installed_names_floor();
+    let mut store = MemoryStore::new();
+    drop(
+        begin_store_session(machine, &carry::sig(), &mut store)
+            .map_err(|(_, error)| error)
+            .expect("begin"),
+    );
+    let eager = resume_from_store(&store, &carry::sig()).expect("eager resume");
+    assert_eq!(eager.machine().installed_names_floor(), floor);
+    let store = std::rc::Rc::new(std::cell::RefCell::new(store));
+    let lazy = resume_from_store_lazy(store, &carry::sig()).expect("lazy resume");
+    assert_eq!(lazy.machine().installed_names_floor(), floor);
+}
+
+/// `JSON.stringify` reads `toJSON` implicitly. A crank that first reaches
+/// `Date` after a resume installs `Date.prototype.toJSON` at that read, on the
+/// resumed machine as on its live twin.
+#[test]
+fn a_resumed_machine_installs_an_implicitly_read_member_at_first_use() {
+    assert_twin(
+        "ih-floor-twin-implicit-read",
+        "var t = 0; t",
+        &[
+            "JSON.stringify(new Date(0))",
+            "JSON.stringify(new globalThis['Da' + 'te'](1))",
+        ],
+        &[
+            "\"1970-01-01T00:00:00.000Z\"",
+            "\"1970-01-01T00:00:00.001Z\"",
+        ],
+    );
+}
+
+/// The same when a `JSON.parse` key interned `toJSON` before the resume
+/// without installing the members it names.
+#[test]
+fn a_resumed_machine_installs_a_guest_interned_implicit_read() {
+    assert_twin(
+        "ih-floor-twin-implicit-guest",
+        "var o = JSON.parse('{\"toJSON\":1}'); 0",
+        &["JSON.stringify(new Date(0))"],
+        &["\"1970-01-01T00:00:00.000Z\""],
+    );
+}
+
+/// A member the guest deleted stays deleted at a later implicit read, live
+/// and resumed.
+#[test]
+fn an_implicit_read_resurrects_no_deleted_member() {
+    assert_twin(
+        "ih-floor-twin-implicit-deleted",
+        "delete Date.prototype.toJSON; 0",
+        &[
+            "JSON.stringify(new Date(0))",
+            "JSON.stringify(new globalThis['Da' + 'te'](0))",
+            "Date.prototype.hasOwnProperty('to' + 'JSON')",
+        ],
+        &["{}", "{}", "false"],
     );
 }

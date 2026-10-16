@@ -626,6 +626,27 @@ const KEPT: &[Row] = &[
         why: "Object.prototype.toString reads @@toStringTag from ToObject(this), so a getter sees the wrapper",
     },
     Row {
+        program: "Object.getOwnPropertyNames(Map.prototype).join('+')",
+        ironhorse: "size+clear+delete+entries+forEach+get+has+keys+set+values+getOrInsert+getOrInsertComputed+constructor",
+        xs: "size+clear+delete+entries+forEach+get+has+keys+set+values+getOrInsert+getOrInsertComputed+constructor",
+        v8: "constructor+get+set+has+delete+clear+entries+forEach+keys+size+values",
+        why: "the specification leaves the order a built-in's properties are created in to the engine; Ironhorse creates each intrinsic's in XS's order (`intrinsic_key_order.rs` checks them all)",
+    },
+    Row {
+        program: "var q = { clear: 1 }; Object.getOwnPropertyNames(Map.prototype).join('+')",
+        ironhorse: "size+clear+delete+entries+forEach+get+has+keys+set+values+getOrInsert+getOrInsertComputed+constructor",
+        xs: "size+clear+delete+entries+forEach+get+has+keys+set+values+getOrInsert+getOrInsertComputed+constructor",
+        v8: "constructor+get+set+has+delete+clear+entries+forEach+keys+size+values",
+        why: "as above, whatever the program's text names: a member linked early takes its place in the order",
+    },
+    Row {
+        program: "var s = new SharedArrayBuffer(4); [Object.getPrototypeOf(s) === SharedArrayBuffer.prototype, s instanceof SharedArrayBuffer, Reflect.ownKeys(SharedArrayBuffer.prototype).map(String).join('+')].join()",
+        ironhorse: "true,true,byteLength+growable+maxByteLength+grow+slice+constructor+Symbol(Symbol.toStringTag)",
+        xs: "true,true,byteLength+growable+maxByteLength+grow+slice+constructor+Symbol(Symbol.toStringTag)",
+        v8: "true,true,constructor+byteLength+slice+maxByteLength+growable+grow+Symbol(Symbol.toStringTag)",
+        why: "as above: %SharedArrayBuffer.prototype% lists its members before `constructor`, as XS creates them",
+    },
+    Row {
         program: "function f() { var x = 1; return eval(...['x']); } f()",
         ironhorse: "1",
         xs: "1",
@@ -675,20 +696,6 @@ const SHARED: &[Row] = &[
 /// [`Halt`] label: these are guest-reachable `NotImplemented` halts.
 const GAPS: &[Row] = &[
     Row {
-        program: "Object.getOwnPropertyNames(Map.prototype).join('+')",
-        ironhorse: "set+size+constructor+get+has+delete+forEach+entries+keys+values+clear+getOrInsert+getOrInsertComputed",
-        xs: "size+clear+delete+entries+forEach+get+has+keys+set+values+getOrInsert+getOrInsertComputed+constructor",
-        v8: "constructor+get+set+has+delete+clear+entries+forEach+keys+size+values",
-        why: "Ironhorse lists a built-in prototype's members in its boot roster's order rather than the order XS creates them (V8 has its own order)",
-    },
-    Row {
-        program: "var q = { clear: 1 }; Object.getOwnPropertyNames(Map.prototype).join('+')",
-        ironhorse: "set+clear+size+constructor+get+has+delete+forEach+entries+keys+values+getOrInsert+getOrInsertComputed",
-        xs: "size+clear+delete+entries+forEach+get+has+keys+set+values+getOrInsert+getOrInsertComputed+constructor",
-        v8: "constructor+get+set+has+delete+clear+entries+forEach+keys+size+values",
-        why: "the members a program's text names (here `clear`) are linked before the rest, so the reflected order of a built-in prototype depends on unrelated identifiers in the program",
-    },
-    Row {
         program: "typeof Object.getOwnPropertyDescriptor(RegExp.prototype, 'flags')",
         ironhorse: "undefined",
         xs: "object",
@@ -722,13 +729,6 @@ const GAPS: &[Row] = &[
         xs: "function,function,function",
         v8: "function,function,function",
         why: "%TypedArray.prototype% lacks ES2023's toSorted, toReversed and with",
-    },
-    Row {
-        program: "var s = new SharedArrayBuffer(4); [Object.getPrototypeOf(s) === SharedArrayBuffer.prototype, s instanceof SharedArrayBuffer, Reflect.ownKeys(SharedArrayBuffer.prototype).map(String).join('+')].join()",
-        ironhorse: "true,true,constructor+byteLength+growable+maxByteLength+grow+slice+Symbol(Symbol.toStringTag)",
-        xs: "true,true,byteLength+growable+maxByteLength+grow+slice+constructor+Symbol(Symbol.toStringTag)",
-        v8: "true,true,constructor+byteLength+slice+maxByteLength+growable+grow+Symbol(Symbol.toStringTag)",
-        why: "%SharedArrayBuffer.prototype% lists its members before `constructor`, as XS creates them; Ironhorse lists `constructor` first (the boot-roster order of the Map.prototype rows; V8 has its own order)",
     },
     Row {
         program: "var r = Proxy.revocable(() => 1, {}); r.revoke(); try { new r.proxy(); 'constructed' } catch (e) { e.message }",

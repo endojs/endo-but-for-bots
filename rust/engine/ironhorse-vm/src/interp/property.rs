@@ -2322,19 +2322,10 @@ impl Interp {
                 let key = self.property_key_slot(prototype_id)?;
                 self.push_prepaid_scratch(&mut out, key)?;
             }
-            let intrinsic_ids = self.intrinsic_own_string_order(inst).unwrap_or_default();
-            for &id in &intrinsic_ids {
-                if ordinary_ids.contains(&id) {
-                    self.charge_builtin_work(1)?;
-                    let key = self.property_key_slot(id)?;
-                    self.push_prepaid_scratch(&mut out, key)?;
-                }
-            }
             for id in ordinary_ids {
                 if (id == length_id && length_live)
                     || (id == name_id && name_live)
                     || (has_proto && id == prototype_id)
-                    || intrinsic_ids.contains(&id)
                     || self.key_id_index(id).is_some()
                 {
                     continue;

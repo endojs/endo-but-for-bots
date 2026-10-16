@@ -295,6 +295,7 @@ fn inventory_in(
             "ascending",
             "present_and_non_empty",
             "read_block",
+            "read_or_corrupt",
             "row_len",
             "skip_leaves",
         ]
@@ -351,7 +352,7 @@ fn inventory_in(
                 .any(|w| word(&tokens[i], w))
         {
             1
-        } else if ["ascending", "skip_leaves"]
+        } else if ["ascending", "read_or_corrupt", "skip_leaves"]
             .iter()
             .any(|w| word(&tokens[i], w))
         {
@@ -372,7 +373,10 @@ fn inventory_in(
                     .iter()
                     .any(|s| args == lex(s))
             } else {
-                word(&tokens[i], "file_corrupt") && args == lex("what")
+                ["file_corrupt", "read_or_corrupt"]
+                    .iter()
+                    .any(|w| word(&tokens[i], w))
+                    && args == lex("what")
             };
             assert!(
                 dynamic,
@@ -477,7 +481,11 @@ fn every_named_corruption_is_asserted_or_explicitly_allowlisted() {
             "store.rs" => &[("Corrupt", "name", 2)],
             "snapshot_roster.rs" => &[("Corrupt", "name", 2)],
             "store_sections.rs" => &[("Corrupt", "message", 1)],
-            "store_file.rs" => &[("Corrupt", "what", 1), ("file_corrupt", "what", 5)],
+            "store_file.rs" => &[
+                ("Corrupt", "what", 1),
+                ("file_corrupt", "what", 4),
+                ("read_or_corrupt", "what", 2),
+            ],
             "format.rs" => &[("Corrupt", "&'static str", 1)],
             _ => &[],
         };

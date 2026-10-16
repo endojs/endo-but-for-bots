@@ -193,7 +193,6 @@ pub const NOT_IMPLEMENTED_HELPER_LABELS: &[&str] = &[
 /// Labels of the interpreter's own invariant guards: the engine reporting
 /// that its state is wrong. Never skip-eligible. Sorted by byte order.
 pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
-    "Date.toJSON:toISOString-key",
     "GetIterator:symbol",
     "Iterator.concat:symbol",
     "Iterator.setter:missing-toStringTag",

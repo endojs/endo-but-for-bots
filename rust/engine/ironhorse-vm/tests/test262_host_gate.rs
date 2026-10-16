@@ -99,6 +99,32 @@ fn the_harness_install_is_idempotent() {
     assert_eq!(outcome.result, "0:true");
 }
 
+/// Reflection completes `$262`'s surface as it does an intrinsic's, although
+/// the host joins the rosters after boot: its member is listed, and freezing
+/// the host first does not lose it.
+#[test]
+fn reflection_lists_the_test262_host_member() {
+    for (src, expected) in [
+        (
+            "var out = {}; out.v = Object.getOwnPropertyNames($262).join(); out.v",
+            "detachArrayBuffer",
+        ),
+        (
+            "Object.freeze($262); var out = {}; \
+             out.v = typeof $262['detach' + 'ArrayBuffer']; out.v",
+            "function",
+        ),
+    ] {
+        let (bytecode, names) = compile(src);
+        let mut machine = Interp::new();
+        machine.install_test262_host();
+        machine.link_intrinsics(&names);
+        let outcome = machine.run(&bytecode);
+        assert!(outcome.completed, "{src}\n  halted: {:?}", outcome.halt);
+        assert_eq!(outcome.result, expected, "{src}");
+    }
+}
+
 /// Run one crank on a harness machine (host installed, then linked).
 fn harness(src: &str) -> Interp {
     let (bytecode, names) = compile(src);

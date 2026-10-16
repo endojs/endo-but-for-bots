@@ -388,11 +388,12 @@ fn small_state_stays_small_with_a_large_free_list() {
         .len();
     assert!(
         // The Promise/RegExp/ArrayBuffer species getters, matchAll iterator
-        // natives, ArrayBuffer slice metadata, and the eagerly linked Error
-        // name/message keys add only fixed boot state. Keep a tight constant
-        // ceiling while allowing those constant-sized rows and the 32-byte
-        // cost-table digest in METR.
-        small_len < 672 + native_name_bytes,
+        // natives, ArrayBuffer slice metadata, the eagerly linked Error
+        // name/message keys, and the names of the standard globals every link
+        // binds (with the members their constructors read) add only fixed boot
+        // state. Keep a tight constant ceiling while allowing those
+        // constant-sized rows and the 32-byte cost-table digest in METR.
+        small_len < 1646 + native_name_bytes,
         "small state is O(1) in heap size, got {small_len} bytes for \
          {} free entries",
         manifest.free_len

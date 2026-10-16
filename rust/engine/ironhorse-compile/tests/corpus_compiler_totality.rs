@@ -15,6 +15,18 @@
 //! panics. No oracle, no VM, no harness assembly — a file is read and handed
 //! to the compiler, and the only question asked is whether it returns.
 //!
+//! **Every file goes through all five goal/strictness modes**, not through one
+//! goal guessed from its `flags:` line. The goal selects which grammar is
+//! parsed, so it selects which code paths run, and the guess left a hole: a
+//! panic reachable only under one goal, in a file whose frontmatter names
+//! another, was not compiled in the mode that reaches it. That is not a
+//! hypothetical class — `async function f(a=await 0){}` reached `code_await`
+//! with no return target under the MODULE goal specifically, and the
+//! coder-side fix for it left three other goals compiling the same early
+//! error into a function whose body never ran. A guest reaches every one of
+//! these modes anyway, through `eval` and `new Function` as well as through
+//! how the host loads the source, so the corpus is swept the same way.
+//!
 //! **What it does not check.** Not whether the compiler's ANSWER is right:
 //! a file that should be a SyntaxError and compiles cleanly passes here.
 //! That is the 262 harness's job and it has the oracle to do it with. This
@@ -68,6 +80,19 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
 /// partial clone) must not read as "swept everything, found nothing".
 const MIN_CASES: usize = 40_000;
 
+/// The five goal/strictness modes a source can reach the compiler through.
+///
+/// A guest reaches all of them: the host picks Script or Module when it loads
+/// the source, `eval` reaches the Eval goal, and strictness follows the
+/// enclosing code or a directive.
+const MODES: &[(&str, ironhorse_compile::Goal, bool)] = &[
+    ("script-sloppy", ironhorse_compile::Goal::Script, false),
+    ("script-strict", ironhorse_compile::Goal::Script, true),
+    ("module", ironhorse_compile::Goal::Module, false),
+    ("eval-sloppy", ironhorse_compile::Goal::Eval, false),
+    ("eval-strict", ironhorse_compile::Goal::Eval, true),
+];
+
 #[test]
 fn the_compiler_does_not_panic_on_any_test262_source() {
     let Some(root) = corpus() else {
@@ -109,34 +134,32 @@ fn the_compiler_does_not_panic_on_any_test262_source() {
             // compiler's; `utf16_source.rs` owns that boundary.
             continue;
         };
-        // The goal only selects which grammar is parsed. A module case
-        // compiled as a Script (or the reverse) would report an error, and an
-        // error is a fine outcome here — the question is only whether the
-        // compiler RETURNS. The `flags:` line is read so the common case is
-        // the honest one.
-        let goal = if source.contains("flags:") && source.contains("module") {
-            ironhorse_compile::Goal::Module
-        } else {
-            ironhorse_compile::Goal::Script
-        };
-        let outcome = std::panic::catch_unwind(|| {
-            ironhorse_compile::compile_atoms_goal(&source, goal, false)
-        });
-        match outcome {
-            Ok(_) => compiled += 1,
-            Err(payload) => {
-                let message = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
-                    .unwrap_or_else(|| "non-string compiler panic".to_string());
-                let key = message.lines().next().unwrap_or("?").to_string();
-                panics.entry(key).or_default().push(
-                    file.strip_prefix(&root)
-                        .unwrap_or(file)
-                        .to_string_lossy()
-                        .to_string(),
-                );
+        // A module case compiled as a Script (or the reverse) reports an
+        // error, and an error is a fine outcome here — the question is only
+        // whether the compiler RETURNS. So every file goes through every
+        // mode rather than through one guessed from `flags:`.
+        for &(mode, goal, strict) in MODES {
+            let owned = source.clone();
+            let outcome = std::panic::catch_unwind(move || {
+                ironhorse_compile::compile_atoms_goal(&owned, goal, strict)
+            });
+            match outcome {
+                Ok(_) => compiled += 1,
+                Err(payload) => {
+                    let message = payload
+                        .downcast_ref::<String>()
+                        .cloned()
+                        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                        .unwrap_or_else(|| "non-string compiler panic".to_string());
+                    let key = message.lines().next().unwrap_or("?").to_string();
+                    // The mode belongs to the case, not to the key: a panic
+                    // reachable in one mode and not another is the same
+                    // defect, and which modes reach it is what a reader needs.
+                    panics.entry(key).or_default().push(format!(
+                        "[{mode}] {}",
+                        file.strip_prefix(&root).unwrap_or(file).to_string_lossy()
+                    ));
+                }
             }
         }
     }
@@ -155,19 +178,21 @@ fn the_compiler_does_not_panic_on_any_test262_source() {
             }
         }
         panic!(
-            "the compiler panicked on {total} of {} test262 source(s), in {} \
+            "the compiler panicked on {total} of {} test262 compilation(s), in {} \
              distinct place(s). Each one is an engine fault a guest can reach \
              by handing the engine a source string. Route the site through \
              `Coder::report_kind` with a KIND — `Syntax` for a spec early \
              error, `Unsupported` for a construct this compiler has not \
              ported — or fix the invariant.{detail}",
-            files.len(),
+            files.len() * MODES.len(),
             panics.len()
         );
     }
     eprintln!(
-        "corpus_compiler_totality: {} test262 source(s) swept, {compiled} \
-         returned, 0 panicked",
-        files.len()
+        "corpus_compiler_totality: {} test262 source(s) x {} mode(s) = {} \
+         compilation(s) swept, {compiled} returned, 0 panicked",
+        files.len(),
+        MODES.len(),
+        files.len() * MODES.len()
     );
 }

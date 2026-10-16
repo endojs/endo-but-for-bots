@@ -240,6 +240,16 @@ fn file_corrupt(what: &'static str) -> StoreError {
     StoreError::Snapshot(SnapshotError::Corrupt(what))
 }
 
+/// Fill `buf` from `file`. Only running out of file is the truncation `what`
+/// names; any other failure is the medium's, so it stays retryable I/O
+/// rather than poisoning the session as a corrupt store does.
+fn read_or_corrupt(file: &mut File, buf: &mut [u8], what: &'static str) -> Result<(), StoreError> {
+    file.read_exact(buf).map_err(|e| match e.kind() {
+        std::io::ErrorKind::UnexpectedEof => file_corrupt(what),
+        _ => io_err(e),
+    })
+}
+
 impl FileStore {
     /// Write a whole store file through `layout` — unique temp, fsync,
     /// rename, directory sync — then reload the in-memory view from the
@@ -329,7 +339,8 @@ impl FileStore {
     /// (its first commit creates the file); a present file has its
     /// header and directories decoded and checked immediately, so a
     /// foreign or truncated file fails closed here rather than on a
-    /// later fault.
+    /// later fault. Only a file that ends early is truncated: a read the
+    /// medium itself fails is [`StoreError::Io`].
     ///
     /// Open does NOT migrate: an older but decodable store opens as-is
     /// and the caller upgrades it with [`crate::store::migrate_store`],
@@ -354,8 +365,7 @@ impl FileStore {
         let file_len = file.metadata().map_err(io_err)?.len();
         let mut header = [0u8; 8];
         file.seek(SeekFrom::Start(0)).map_err(io_err)?;
-        file.read_exact(&mut header)
-            .map_err(|_| file_corrupt("file store header truncated"))?;
+        read_or_corrupt(file, &mut header, "file store header truncated")?;
         let legacy = header == LEGACY_FILE_MAGIC;
         if !legacy && header != FILE_MAGIC {
             return Err(file_corrupt("file store magic"));
@@ -363,14 +373,13 @@ impl FileStore {
 
         let read_u32 = |file: &mut File| -> Result<u32, StoreError> {
             let mut b = [0u8; 4];
-            file.read_exact(&mut b)
-                .map_err(|_| file_corrupt("file store header truncated"))?;
+            read_or_corrupt(file, &mut b, "file store header truncated")?;
             Ok(u32::from_be_bytes(b))
         };
         let read_block = |file: &mut File, what: &'static str| -> Result<Vec<u8>, StoreError> {
             let len = {
                 let mut b = [0u8; 4];
-                file.read_exact(&mut b).map_err(|_| file_corrupt(what))?;
+                read_or_corrupt(file, &mut b, what)?;
                 u32::from_be_bytes(b) as usize
             };
             // Clamp the reservation to what the file can hold before
@@ -379,7 +388,7 @@ impl FileStore {
                 return Err(file_corrupt(what));
             }
             let mut buf = vec![0u8; len];
-            file.read_exact(&mut buf).map_err(|_| file_corrupt(what))?;
+            read_or_corrupt(file, &mut buf, what)?;
             Ok(buf)
         };
         // The legacy layout's leaf hashes: skipped, but they must be
@@ -409,8 +418,7 @@ impl FileStore {
             let mut dir = Vec::with_capacity(n as usize);
             for _ in 0..n {
                 let mut b = [0u8; 12];
-                file.read_exact(&mut b)
-                    .map_err(|_| file_corrupt("file store directory truncated"))?;
+                read_or_corrupt(file, &mut b, "file store directory truncated")?;
                 let offset = u64::from_be_bytes(b[0..8].try_into().unwrap());
                 let length = u32::from_be_bytes(b[8..12].try_into().unwrap());
                 let end = offset
@@ -461,8 +469,7 @@ impl FileStore {
                 return Err(file_corrupt("file store free segments truncated"));
             }
             let mut b = vec![0u8; len as usize];
-            file.read_exact(&mut b)
-                .map_err(|_| file_corrupt("file store free segments truncated"))?;
+            read_or_corrupt(file, &mut b, "file store free segments truncated")?;
             free_segs.push(b);
         }
         if legacy {
@@ -1363,6 +1370,45 @@ mod tests {
         let bytes = std::fs::read(&path).unwrap();
         std::fs::write(&path, &bytes[..bytes.len() / 2]).unwrap();
         assert!(FileStore::open(&path).is_err());
+    }
+
+    /// Only a short read means the file ends early. A read the medium fails
+    /// is I/O, which a supervisor may retry; a truncated file still poisons.
+    #[test]
+    #[cfg(unix)]
+    fn a_failed_read_is_io_and_a_short_one_is_corrupt() {
+        use crate::store::StoreFailure;
+        let dir = tmp_dir("read-failure");
+        let path = dir.join("heap.ihstore");
+        let mut store = FileStore::open(&path).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(
+                &ran_image(),
+                1,
+                CommitToken::ZERO,
+            ))
+            .unwrap();
+        drop(store);
+        let bytes = std::fs::read(&path).unwrap();
+
+        // Cut inside the magic, the first read runs out of file.
+        std::fs::write(&path, &bytes[..4]).unwrap();
+        let short = FileStore::open(&path).unwrap_err();
+        assert_eq!(
+            short,
+            StoreError::Snapshot(SnapshotError::Corrupt("file store header truncated"))
+        );
+        assert_eq!(short.classify(), StoreFailure::Poisoned);
+
+        // A directory in the file's place opens and seeks, then fails that
+        // same read with EISDIR: the medium failed, not the file's length.
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let read = File::open(&path).unwrap().read(&mut [0u8; 8]).unwrap_err();
+        assert_eq!(read.kind(), std::io::ErrorKind::IsADirectory);
+        let failed = FileStore::open(&path).unwrap_err();
+        assert_eq!(failed, StoreError::Io(read.to_string()));
+        assert_eq!(failed.classify(), StoreFailure::Transient);
     }
 
     /// A leftover temp file from a torn commit is inert: open ignores

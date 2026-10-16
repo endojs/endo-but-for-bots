@@ -1223,7 +1223,12 @@ impl Interp {
         Ok(Ok((helper, state)))
     }
 
-    /// `%IteratorHelperPrototype%.next()`.
+    /// `%IteratorHelperPrototype%.next()`, out of line rather than inlined into
+    /// a union of every iterator method's arms (`native_method_iterator`):
+    /// each level of a chain of lazy helpers (`it.take(5)`, `it.map(f)`,
+    /// nested) re-enters through it, so a level carries this frame and the
+    /// thin dispatcher's.
+    #[inline(never)]
     pub(in crate::interp) fn iterator_helper_next(
         &mut self,
         code: &[u8],
@@ -1352,9 +1357,7 @@ impl Interp {
                     };
                     let counter = self.helper_counter(helper);
                     let args = [value, Slot::number(counter)];
-                    let produced = match self.array_from_try(|this| {
-                        this.call_any(code, callback, Slot::undefined(), &args)
-                    })? {
+                    let produced = match self.helper_call_callback(code, callback, &args)? {
                         Ok(produced) => produced,
                         Err(error) => {
                             return Ok(Err(self.array_from_close(code, underlying, error)?))
@@ -1371,6 +1374,22 @@ impl Interp {
             }
             _ => Err(Step::Host(Halt::EngineInvariant("Iterator:helper-kind"))),
         }
+    }
+
+    /// Call a lazy helper's callback (`map`, `filter`, `flatMap`) behind a
+    /// native try boundary. Out of line: a chain of helpers re-enters through
+    /// each level's underlying step, not through this call, so the boundary's
+    /// temporaries stay out of the frame every level of a chain holds
+    /// ([`Self::iterator_helper_next`]). A nest that re-enters through the
+    /// callback carries both frames.
+    #[inline(never)]
+    fn helper_call_callback(
+        &mut self,
+        code: &[u8],
+        callback: Slot,
+        args: &[Slot],
+    ) -> Result<Result<Slot, Slot>, Step> {
+        self.array_from_try(|this| this.call_any(code, callback, Slot::undefined(), args))
     }
 
     /// Read the helper's callback counter and post-increment it.
@@ -1395,6 +1414,12 @@ impl Interp {
     /// `next()` calls, so a partially drained inner survives; an abrupt inner
     /// step closes the OUTER iterator, matching IfAbruptCloseIterator on the
     /// outer record in the spec's closure.
+    ///
+    /// Out of line, so the inner-iterator machinery stays out of the frame
+    /// every level of a chain of `take`, `drop`, `map` or `filter` helpers
+    /// holds ([`Self::iterator_helper_next`]). A chain of `flatMap` helpers
+    /// re-enters through this step, so it carries both frames.
+    #[inline(never)]
     fn iterator_helper_flat_map_step(
         &mut self,
         code: &[u8],
@@ -1425,9 +1450,7 @@ impl Interp {
             let callback = self.helper_get(holder, Self::HELPER_ARG);
             let counter = self.helper_counter(helper);
             let args = [value, Slot::number(counter)];
-            let mapped = match self
-                .array_from_try(|this| this.call_any(code, callback, Slot::undefined(), &args))?
-            {
+            let mapped = match self.helper_call_callback(code, callback, &args)? {
                 Ok(mapped) => mapped,
                 Err(error) => return Ok(Err(self.array_from_close(code, underlying, error)?)),
             };
@@ -1542,6 +1565,12 @@ impl Interp {
     /// the next item with its captured method. A throw from opening, from
     /// `next`, or from the result propagates without a close, as the
     /// specification's `?` does; the caller latches the helper done.
+    ///
+    /// Out of line for the reason `iterator_helper_flat_map_step` is: a
+    /// `take`, `drop`, `map` or `filter` chain re-enters through
+    /// `iterator_helper_next` once per level and never through this step, so
+    /// inlined it would grow the frame every level of those chains carries.
+    #[inline(never)]
     fn iterator_concat_step(
         &mut self,
         code: &[u8],

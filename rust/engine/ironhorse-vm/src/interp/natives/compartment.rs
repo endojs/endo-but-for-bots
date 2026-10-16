@@ -119,15 +119,13 @@ impl Interp {
         // in any case (see `CompartmentEnvironment::global_names`).
         // Allocation-driven metering, as `designs/ironhorse-guest-compartment.md`
         // requires: `create_environment` allocates a global object plus one
-        // property per bound intrinsic name, and the bound set is whatever the
-        // crank's source text has interned -- guest-controlled, and measured at
-        // 58 slots for a program naming the standard intrinsics against 6 for
-        // one naming none. A constant charge here would let a loop over
-        // `new Compartment()` buy that spread unmetered, so charge what was
-        // actually allocated. `create_environment` only allocates, so the
-        // live-count delta IS the allocation count; charging after the fact
-        // costs one environment's overshoot and keeps the charge honest
-        // without hand-counting a set that will change.
+        // property per standard global binding. The bound set is every
+        // standard global the environment admits, so the count no longer
+        // depends on what the crank's source text interned, but it still
+        // changes whenever a global is added, so charge what was actually
+        // allocated rather than a hand-counted constant. `create_environment`
+        // only allocates, so the live-count delta IS the allocation count;
+        // charging after the fact costs one environment's overshoot.
         // `create_environment` leaves the NEW environment active. Keep the
         // whole operation -- including that call and the final instance/table
         // commit -- inside one unwind boundary. A ceiling hit during the final

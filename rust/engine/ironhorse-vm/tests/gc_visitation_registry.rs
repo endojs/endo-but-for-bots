@@ -1509,6 +1509,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("pending_rejections", &[Req::GcRoots], "settlement candidates survive collection until the job drain"),
     ("locked_down_constructors", &[Req::GcRoots], "boot-minted lockdown() stand-ins: unreferenced until step 2 wires them, so nothing else roots them in between"),
     ("pending_surfaces", &[Req::GcRoots], "boot holders whose intrinsic surface may be partly uninstalled; the boot rosters root them too"),
+    ("intrinsic_key_ranks", &[Req::GcRoots], "boot holders with an ordered intrinsic surface; the boot rosters root them too"),
     ("lockdown_complete", &[Req::GcRoots], "private boot boolean: no guest graph edge roots the persisted completion marker"),
     ("promise_jobs", &[Req::GcRoots], "queued microtasks (survive halted cranks)"),
     // --- side tables with strong outgoing edges, walked by BOTH collectors ---

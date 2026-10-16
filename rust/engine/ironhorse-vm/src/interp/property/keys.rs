@@ -98,6 +98,24 @@ impl Interp {
         self.intern_key_reserved(name)
     }
 
+    /// [`Self::intern_static_key`] for a key a native reads implicitly, such
+    /// as SerializeJSONProperty's `toJSON`: when no install pass has covered
+    /// the name yet, install the intrinsic members it names before the read.
+    ///
+    /// A name at or below the installed-names floor has had its members
+    /// installed, so a missing one was deleted by the guest and stays deleted;
+    /// only a name above the floor, interned here or by an earlier runtime
+    /// intern such as a `JSON.parse` key, still owes its members. The floor is
+    /// persisted (`NFLR`), so a resumed machine installs at the same read as
+    /// its live twin, and the install is unmetered, as at link.
+    pub(in crate::interp) fn intern_implicit_key(&mut self, name: &'static str) -> u16 {
+        let id = self.intern_static_key(name);
+        if usize::from(id) > self.installed_names_len {
+            self.install_pending_intrinsics();
+        }
+        id
+    }
+
     /// Append a novel string key to the name table and hand out its id (the
     /// new table position). The table IS the persisted id→name map (the NAME
     /// row), so a key interned here round-trips a snapshot with its id — the
@@ -130,9 +148,11 @@ impl Interp {
         // differently from its own resumed twin — a result AND
         // computron divergence, checked for `value`/`done` by
         // `ironhorse-snapshot/tests/iterator_result_carry.rs`. The
-        // refresh is additive (fills only `None` caches) and O(a few
-        // map lookups) on the rare novel-intern path.
-        self.refresh_special_ids_from_symbols();
+        // refresh is additive (fills only `None` caches) and looks up
+        // only the name just appended, the one cache it can fill: a link
+        // appends every standard global's name, and refreshing all the
+        // caches for each of them was most of a fresh machine's link time.
+        self.refresh_special_ids_matching(Some(&name));
         id
     }
 
@@ -221,6 +241,20 @@ impl Interp {
         descriptor: crate::value::SlotIndex,
         id: u16,
     ) {
+        // These are intrinsic members, placed in their holders' order like
+        // any other ([`Self::place_intrinsic_key`]).
+        let was_installing = self.installing_intrinsics;
+        self.installing_intrinsics = true;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.install_well_known_symbol_members(descriptor, id);
+        }));
+        self.installing_intrinsics = was_installing;
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    fn install_well_known_symbol_members(&mut self, descriptor: crate::value::SlotIndex, id: u16) {
         let well_known_name = self.well_known_symbols.iter().find_map(|(name, value)| {
             (value.value == Payload::Reference(descriptor)).then_some(*name)
         });
