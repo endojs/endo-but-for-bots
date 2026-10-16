@@ -11,8 +11,8 @@ language/expressions/class/elements/private-getter-access-on-inner-arrow-functio
 language/expressions/class/elements/private-getter-access-on-inner-arrow-function.js strict pass
 language/expressions/class/elements/private-getter-access-on-inner-function.js sloppy pass
 language/expressions/class/elements/private-getter-access-on-inner-function.js strict pass
-language/expressions/class/elements/private-getter-is-not-a-own-property.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
-language/expressions/class/elements/private-getter-is-not-a-own-property.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+language/expressions/class/elements/private-getter-is-not-a-own-property.js sloppy pass
+language/expressions/class/elements/private-getter-is-not-a-own-property.js strict pass
 language/expressions/class/elements/private-getter-on-nested-class.js sloppy pass
 language/expressions/class/elements/private-getter-on-nested-class.js strict pass
 language/expressions/class/elements/private-getter-shadowed-by-field-on-nested-class.js sloppy pass
@@ -58,8 +58,8 @@ language/expressions/class/elements/private-setter-access-on-inner-arrow-functio
 language/expressions/class/elements/private-setter-access-on-inner-arrow-function.js strict pass
 language/expressions/class/elements/private-setter-access-on-inner-function.js sloppy pass
 language/expressions/class/elements/private-setter-access-on-inner-function.js strict pass
-language/expressions/class/elements/private-setter-is-not-a-own-property.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
-language/expressions/class/elements/private-setter-is-not-a-own-property.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+language/expressions/class/elements/private-setter-is-not-a-own-property.js sloppy pass
+language/expressions/class/elements/private-setter-is-not-a-own-property.js strict pass
 language/expressions/class/elements/private-setter-on-nested-class.js sloppy pass
 language/expressions/class/elements/private-setter-on-nested-class.js strict pass
 language/expressions/class/elements/private-setter-shadowed-by-field-on-nested-class.js sloppy pass

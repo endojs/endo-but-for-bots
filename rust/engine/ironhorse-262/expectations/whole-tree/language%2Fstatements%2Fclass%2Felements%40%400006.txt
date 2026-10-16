@@ -43,8 +43,8 @@ language/statements/class/elements/private-getter-brand-check-super-class.js slo
 language/statements/class/elements/private-getter-brand-check-super-class.js strict pass
 language/statements/class/elements/private-getter-brand-check.js sloppy pass
 language/statements/class/elements/private-getter-brand-check.js strict pass
-language/statements/class/elements/private-getter-is-not-a-own-property.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
-language/statements/class/elements/private-getter-is-not-a-own-property.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+language/statements/class/elements/private-getter-is-not-a-own-property.js sloppy pass
+language/statements/class/elements/private-getter-is-not-a-own-property.js strict pass
 language/statements/class/elements/private-getter-is-not-clobbered-by-computed-property.js sloppy pass
 language/statements/class/elements/private-getter-is-not-clobbered-by-computed-property.js strict pass
 language/statements/class/elements/private-getter-on-nested-class.js sloppy pass
@@ -128,8 +128,8 @@ language/statements/class/elements/private-setter-brand-check-super-class.js slo
 language/statements/class/elements/private-setter-brand-check-super-class.js strict pass
 language/statements/class/elements/private-setter-brand-check.js sloppy pass
 language/statements/class/elements/private-setter-brand-check.js strict pass
-language/statements/class/elements/private-setter-is-not-a-own-property.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
-language/statements/class/elements/private-setter-is-not-a-own-property.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+language/statements/class/elements/private-setter-is-not-a-own-property.js sloppy pass
+language/statements/class/elements/private-setter-is-not-a-own-property.js strict pass
 language/statements/class/elements/private-setter-is-not-clobbered-by-computed-property.js sloppy pass
 language/statements/class/elements/private-setter-is-not-clobbered-by-computed-property.js strict pass
 language/statements/class/elements/private-setter-on-nested-class.js sloppy pass
