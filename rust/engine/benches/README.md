@@ -128,6 +128,12 @@ Each case runs on a fresh thread of `NATIVE_STACK_BYTES`; before each stage unde
 frame is painted with a sentinel, and afterwards the lowest dirtied byte gives the stage's
 high-water mark in bytes.
 One run per case, read to the byte, no bisection and no engine instrumentation.
+The paint stops 2 KiB below the stage's frame (`STAGE_GAP` in `stack-lanes/paint.rs`), so a
+stage that uses less reads 2,048 B; every case uses more, the least being an empty program's
+run at 2,287 B.
+The gap is measured from the stage's frame, not rounded to a page: rounded, the least a
+stage could read ranged from 8.3 to 12.3 KB with the address of the stage's frame, and a
+stage that used less read that instead.
 The cases are the `native_recursion_budget` scenarios at their halting and accepted sizes
 (the report's 25 family cases) plus the accepted compiler pins of
 `ironhorse-compile/tests/recursion_bounds.rs`, and a few in-place walks as controls.

@@ -167,3 +167,41 @@ fn the_measurement_is_deterministic() {
     let second = on_contract_stack(|| stage(|| burn(50)).1);
     assert_eq!(first, second, "the same recursion must paint the same mark");
 }
+
+/// `stage(f)` called `levels` frames below the caller, so that the stage's
+/// frame lies at a different address for each `levels`.
+#[inline(never)]
+fn stage_below<T>(levels: usize, f: impl FnOnce() -> T) -> (T, usize) {
+    let pad = [levels as u8; 40];
+    std::hint::black_box(&pad);
+    if levels == 0 {
+        return stage(f);
+    }
+    let staged = stage_below(levels - 1, f);
+    // Live across the call, so the recursion keeps a frame per level.
+    std::hint::black_box(&pad);
+    staged
+}
+
+#[test]
+fn a_stage_that_dirties_nothing_past_the_gap_reads_the_floor() {
+    let (_, mark) = on_contract_stack(|| stage(|| 1));
+    assert_eq!(mark, paint::STAGE_GAP);
+}
+
+#[test]
+fn a_mark_does_not_depend_on_where_the_stage_frame_lies() {
+    // One 4 KiB frame: over the floor, and under the 8 to 12 KiB floor of a
+    // gap rounded to a page, which it would have read instead.
+    let marks: Vec<usize> = on_contract_stack(|| {
+        (0..64)
+            .map(|levels| stage_below(levels, || burn(0)).1)
+            .collect()
+    });
+    assert!(marks.iter().all(|&mark| mark == marks[0]), "{marks:?}");
+    assert!(
+        (4096..8192).contains(&marks[0]),
+        "one 4 KiB frame: {} B",
+        marks[0]
+    );
+}
