@@ -184,14 +184,17 @@ const DEFAULT_MAX_IN_PROGRESS_PER_LOCAL_KEY = 256;
 /** Default `HEARTBEAT_INTERVAL`, per designs/ocapn-noise-session-reconnect.md § 5. */
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 5000;
 
-/**
- * The default `SESSION_TIMEOUT` is this multiple of the heartbeat
- * interval: 30 s for the default 5 s interval.
- */
+/** The default `SESSION_TIMEOUT` is this multiple of the heartbeat interval. */
 const DEFAULT_SESSION_TIMEOUT_INTERVALS = 6;
 
-/** The design's floor: `SESSION_TIMEOUT >= 3 * HEARTBEAT_INTERVAL`. */
 const MIN_SESSION_TIMEOUT_INTERVALS = 3;
+
+/**
+ * With heartbeats, the transport is read ahead of the consumer. This
+ * many decrypted frames may wait for the consumer before the read-ahead
+ * pauses, so a slow consumer applies backpressure to the peer.
+ */
+const MAX_INBOUND_QUEUED_FRAMES = 64;
 
 /**
  * @param {HeartbeatOptions | undefined} heartbeat
@@ -219,26 +222,36 @@ const normalizeHeartbeatOptions = heartbeat => {
 };
 
 /**
- * Count the transport-phase messages the receiving Noise CipherState
- * has accepted. Each successful `decrypt` consumes exactly one nonce,
- * so once the count is nonzero, the count minus one is the highest
- * receive nonce, which `op:pong` acknowledges. While the count is zero
- * no nonce has been received and there is nothing to acknowledge.
+ * Count the transport-phase messages each Noise CipherState has
+ * processed. Each successful `encrypt` or `decrypt` consumes exactly one
+ * nonce, so once a count is nonzero, the count minus one is the highest
+ * nonce in that direction. `op:pong` acknowledges the highest receive
+ * nonce, and the send count bounds what a peer's `op:pong` can
+ * truthfully acknowledge.
  *
- * The session must decrypt through the returned `decrypt`, not the raw
- * one it wraps, or the count stays at zero.
+ * The session must encrypt and decrypt through the returned functions,
+ * not the raw ones they wrap, or the counts fall behind.
  *
+ * @param {(bytes: Uint8Array) => Uint8Array} encrypt
  * @param {(bytes: Uint8Array) => Uint8Array} decrypt
  */
-const countReceivedNonces = decrypt => {
+const countNonces = (encrypt, decrypt) => {
+  let sentCount = 0n;
   let receivedCount = 0n;
   return harden({
+    /** @param {Uint8Array} bytes */
+    encrypt: bytes => {
+      const cipherText = encrypt(bytes);
+      sentCount += 1n;
+      return cipherText;
+    },
     /** @param {Uint8Array} bytes */
     decrypt: bytes => {
       const plainText = decrypt(bytes);
       receivedCount += 1n;
       return plainText;
     },
+    getSentCount: () => sentCount,
     getReceivedCount: () => receivedCount,
   });
 };
@@ -849,6 +862,8 @@ export const makeOcapnNoiseNetwork = ({
    * @param {ByteStream} params.stream
    * @param {(bytes: Uint8Array) => Uint8Array} params.encrypt
    * @param {(bytes: Uint8Array) => Uint8Array} params.decrypt
+   * @param {() => bigint} params.getSentCount - How many transport
+   *   messages `encrypt` has sealed on this CipherState.
    * @param {() => bigint} params.getReceivedCount - How many
    *   transport messages `decrypt` has accepted on this CipherState.
    * @param {() => void} params.onClose - Called when the session closes
@@ -868,6 +883,7 @@ export const makeOcapnNoiseNetwork = ({
     stream,
     encrypt,
     decrypt,
+    getSentCount,
     getReceivedCount,
     onClose,
   }) => {
@@ -885,18 +901,17 @@ export const makeOcapnNoiseNetwork = ({
     /** @type {ReturnType<typeof setTimeout> | undefined} */
     let livenessTimer;
 
-    /**
-     * The highest receive nonce, or `undefined` before the first
-     * transport message has been decrypted.
-     *
-     * @returns {bigint | undefined}
-     */
+    /** @returns {bigint | undefined} */
     const getLastReceivedNonce = () => {
       const receivedCount = getReceivedCount();
       return receivedCount === 0n ? undefined : receivedCount - 1n;
     };
 
+    /** Wakes a paused read-ahead so it can observe the close. */
+    let releaseReadAhead = () => {};
+
     const stopHeartbeat = () => {
+      releaseReadAhead();
       if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer);
       if (livenessTimer !== undefined) clearTimeout(livenessTimer);
       heartbeatTimer = undefined;
@@ -915,8 +930,8 @@ export const makeOcapnNoiseNetwork = ({
     const close = () => {
       if (closed) return;
       closed = true;
-      // Tear both directions down. We suppress any rejection here
-      // because a transport's write half may have already closed.
+      // Suppress rejections: a transport's write half may have already
+      // closed.
       Promise.resolve(stream.writer.return(undefined)).catch(() => {});
       Promise.resolve(stream.reader.return(undefined)).catch(() => {});
       fireOnClose();
@@ -1004,8 +1019,8 @@ export const makeOcapnNoiseNetwork = ({
        * Whether a frame is labelled as a heartbeat operation. Both
        * codecs open a record with its label: Syrup inside the record
        * brackets, CBOR as the first element of the record's tagged
-       * array. A frame that is not a record, or does not begin like one,
-       * is not a heartbeat.
+       * array. A frame that cannot be peeked this way is handed to the
+       * session above, whose own reader reports it.
        *
        * @param {Uint8Array} plainText
        * @returns {boolean}
@@ -1050,11 +1065,14 @@ export const makeOcapnNoiseNetwork = ({
           );
         }
         // A heartbeat from an earlier epoch is a straggler from an
-        // obsolete transport instance: dropped without effect.
+        // obsolete transport instance.
         if (message.epoch < epoch) return true;
         const { lastAckedRecvNonce } = message;
+        // An acknowledgment of a nonce this side has not yet used is not
+        // evidence of anything, so it is ignored rather than recorded.
         if (
           lastAckedRecvNonce !== undefined &&
+          lastAckedRecvNonce < getSentCount() &&
           (peerAckedRecvNonce === undefined ||
             lastAckedRecvNonce > peerAckedRecvNonce)
         ) {
@@ -1087,6 +1105,16 @@ export const makeOcapnNoiseNetwork = ({
         livenessTimer = setTimeout(onSessionTimeout, sessionTimeoutMs);
       };
 
+      let queuedFrames = 0;
+      /** @type {(() => void) | undefined} */
+      let resumePump;
+      const releasePump = () => {
+        const resume = resumePump;
+        resumePump = undefined;
+        if (resume !== undefined) resume();
+      };
+      releaseReadAhead = releasePump;
+
       // Read the transport eagerly rather than at the consumer's pace,
       // so that a consumer that is slow to call `next` cannot starve
       // the liveness timer of the traffic that resets it.
@@ -1100,6 +1128,10 @@ export const makeOcapnNoiseNetwork = ({
           try {
             // eslint-disable-next-line no-await-in-loop
             result = await stream.reader.next(undefined);
+            if (closed) {
+              inbound.put(harden({ done: true }));
+              return;
+            }
             if (result.done) {
               inbound.put(harden({ done: true }));
               if (!closed) {
@@ -1126,6 +1158,22 @@ export const makeOcapnNoiseNetwork = ({
           }
           if (!absorbed) {
             inbound.put(harden({ done: false, value: plainText }));
+            queuedFrames += 1;
+            if (queuedFrames >= MAX_INBOUND_QUEUED_FRAMES) {
+              // A full queue proves the peer is alive, and the stall is
+              // local, so the liveness timer waits with the read-ahead.
+              if (livenessTimer !== undefined) clearTimeout(livenessTimer);
+              livenessTimer = undefined;
+              // eslint-disable-next-line no-await-in-loop
+              await new Promise(resolve => {
+                resumePump = () => resolve(undefined);
+              });
+              if (closed) {
+                inbound.put(harden({ done: true }));
+                return;
+              }
+              resetLivenessTimer();
+            }
           }
         }
       };
@@ -1146,6 +1194,10 @@ export const makeOcapnNoiseNetwork = ({
         next: async () => {
           await null;
           const item = await inbound.get();
+          if (!('error' in item) && !item.done) {
+            queuedFrames -= 1;
+            if (queuedFrames < MAX_INBOUND_QUEUED_FRAMES) releasePump();
+          }
           if ('error' in item || item.done) {
             // Leave the terminal state for any later or concurrent read.
             inbound.put(harden({ done: true }));
@@ -1303,9 +1355,9 @@ export const makeOcapnNoiseNetwork = ({
       expectFrameLength(synack, SYNACK_LENGTH, 'SYNACK');
       // IK has no message 3 (ACK); reading the SYNACK finalizes the
       // handshake and exposes the transcript hash for channel binding.
-      const { encrypt, handshakeHash, ...cipher } = initiatorReadSynack(synack);
-      const nonces = countReceivedNonces(cipher.decrypt);
-      const { decrypt } = nonces;
+      const { handshakeHash, ...cipher } = initiatorReadSynack(synack);
+      const nonces = countNonces(cipher.encrypt, cipher.decrypt);
+      const { encrypt, decrypt } = nonces;
 
       const {
         peerLocation,
@@ -1340,6 +1392,7 @@ export const makeOcapnNoiseNetwork = ({
         stream,
         encrypt,
         decrypt,
+        getSentCount: nonces.getSentCount,
         getReceivedCount: nonces.getReceivedCount,
         onClose: () => {
           if (candidate) forgetActive(peerId, candidate);
@@ -1435,10 +1488,10 @@ export const makeOcapnNoiseNetwork = ({
       // The bindings reject a SYN whose claimed `initiatorVerifyingKey`
       // does not match the static key Noise authenticated, so an
       // initiator cannot claim a key it does not hold.
-      const { initiatorVerifyingKey, encrypt, handshakeHash, ...cipher } =
+      const { initiatorVerifyingKey, handshakeHash, ...cipher } =
         asResp.responderReadSynWriteSynack(prefixedSyn, synack);
-      const nonces = countReceivedNonces(cipher.decrypt);
-      const { decrypt } = nonces;
+      const nonces = countNonces(cipher.encrypt, cipher.decrypt);
+      const { encrypt, decrypt } = nonces;
       const initiatorKeyHex = toHex(initiatorVerifyingKey);
 
       // Late crossed hello against an ADOPTED session: refuse before we
@@ -1540,6 +1593,7 @@ export const makeOcapnNoiseNetwork = ({
         stream,
         encrypt,
         decrypt,
+        getSentCount: nonces.getSentCount,
         getReceivedCount: nonces.getReceivedCount,
         onClose: () => {
           if (candidate) forgetActive(initiatorKeyHex, candidate);
