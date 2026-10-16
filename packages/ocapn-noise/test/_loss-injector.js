@@ -18,7 +18,7 @@ const never = new Promise(() => {});
  * a kernel send buffer are when the path dies, and reads never yield
  * again), while streams opened afterwards work normally. A test can
  * also refuse new connections, to hold a partition open across
- * reconnect attempts, or delay them to force crossed hellos (Phase 5).
+ * reconnect attempts, or hold them to force crossed hellos (Phase 5).
  *
  * @param {OcapnNoiseTransport} transport
  */
@@ -28,7 +28,9 @@ export const makeLossyTransport = transport => {
   let refusing = false;
   let refusingOutbound = false;
   let connects = 0;
-  let connectDelayMs = 0;
+  /** @type {Promise<void> | undefined} */
+  let held;
+  let release = () => {};
 
   /**
    * @param {ByteStream} stream
@@ -81,9 +83,7 @@ export const makeLossyTransport = transport => {
     connect: async hints => {
       await null;
       connects += 1;
-      if (connectDelayMs > 0) {
-        await new Promise(resolve => setTimeout(resolve, connectDelayMs));
-      }
+      if (held) await held;
       if (refusing || refusingOutbound) {
         throw Error('lossy transport: connection refused');
       }
@@ -118,14 +118,21 @@ export const makeLossyTransport = transport => {
       refusingOutbound = refuse;
     },
     /**
-     * Hold every new connection attempt for `ms` before it reaches the
-     * peer, so that two sides redialing at nearly the same moment are
-     * both mid-dial when the other's attempt arrives (crossed hellos).
+     * Hold every new connection attempt short of the peer until released,
+     * so that a test can wait for two sides to both be mid-dial before
+     * either attempt arrives (crossed hellos).
      *
-     * @param {number} ms
+     * @param {boolean} hold
      */
-    delayConnects: ms => {
-      connectDelayMs = ms;
+    holdConnects: hold => {
+      if (hold && !held) {
+        held = new Promise(resolve => {
+          release = () => resolve(undefined);
+        });
+      } else if (!hold && held) {
+        held = undefined;
+        release();
+      }
     },
     /** Streams neither partitioned nor closed by this side. */
     getOpenStreams: () =>

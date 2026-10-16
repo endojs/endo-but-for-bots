@@ -166,14 +166,23 @@ for (const [codecName, codec] of /** @type {const} */ ([
       codec,
     );
     // Simultaneous loss: both sides stop hearing each other at the same
-    // moment, so both time out within a heartbeat of each other and both
-    // redial; holding each dial in flight makes the two cross.
-    injector.delayConnects(150);
-    injectorB.delayConnects(150);
+    // moment, so both time out and both redial. Holding every dial short
+    // of the peer until both sides are dialing makes the two cross however
+    // far apart timer jitter puts the two timeouts.
+    injector.holdConnects(true);
+    injectorB.holdConnects(true);
     injector.sever();
     injectorB.sever();
     await sessionA.writer.next(Uint8Array.of(1));
     await sessionB.writer.next(Uint8Array.of(101));
+
+    // Both sides redial (A's first connection opened the session; B had
+    // only ever accepted).
+    await eventually(
+      () => injector.getConnects() >= 2 && injectorB.getConnects() >= 1,
+    );
+    injector.holdConnects(false);
+    injectorB.holdConnects(false);
 
     await eventually(
       () =>
@@ -181,10 +190,6 @@ for (const [codecName, codec] of /** @type {const} */ ([
         !sessionB.getLiveness().reconnecting &&
         sessionA.getLiveness().epoch > 0n,
     );
-    // Both sides redialed (A's first connection opened the session; B
-    // had only ever accepted).
-    t.true(injector.getConnects() >= 2, `A dialed ${injector.getConnects()}`);
-    t.true(injectorB.getConnects() >= 1, `B dialed ${injectorB.getConnects()}`);
     // Exactly one new transport instance survives, seen once from each
     // end, and both sides agree on its epoch.
     await delay(heartbeat.intervalMs * 4);
