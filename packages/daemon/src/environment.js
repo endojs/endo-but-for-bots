@@ -11,6 +11,7 @@ const NetworkPolicy = M.or('off', 'public-internet');
 const AdminInterface = M.interface('EnvironmentAdmin', {
   inspect: M.callWhen().returns(M.record()),
   stop: M.callWhen().returns(M.undefined()),
+  acknowledgeExternalCleanup: M.callWhen(M.string()).returns(M.undefined()),
   setNetworkPolicy: M.callWhen(NetworkPolicy).returns(M.undefined()),
   dispose: M.callWhen().returns(M.undefined()),
   help: M.call().returns(M.string()),
@@ -21,6 +22,8 @@ const AdminInterface = M.interface('EnvironmentAdmin', {
  * Only Shell crosses to a model. The exact runner/workspace dependencies are
  * resolved lazily; inspection and formula restoration do not start native work.
  * Active intent after process loss is refused, never adopted or replayed.
+ * A private operator attestation can reopen a cold interrupted environment only
+ * after independently established external cleanup; it is not cleanup proof.
  * Admin stop preserves storage; explicit dispose waits for native stop first.
  * The private state directory uses the daemon's atomic formula-backed text
  * publication, not guest-writable storage or a mutable inventory lookup.
@@ -47,6 +50,7 @@ export const makeEnvironment = async ({ id, recipe, directory, resolve }) => {
     }),
   );
   let uncertain = state.phase === 'active';
+  const interruptedOnRestore = uncertain;
   let closed = false;
   let fenced = false;
   let epoch = 0n;
@@ -253,6 +257,28 @@ export const makeEnvironment = async ({ id, recipe, directory, resolve }) => {
       !maintenance || Fail`Environment administration is busy`;
       return stop();
     },
+    acknowledgeExternalCleanup: note => {
+      (note.trim().length > 0 && note.length <= 10_000) ||
+        Fail`Record the external native cleanup evidence in a nonempty note`;
+      (interruptedOnRestore &&
+        uncertain &&
+        state.phase === 'active' &&
+        !controller &&
+        !activation) ||
+        Fail`External cleanup acknowledgement requires an interrupted restored environment without a live owner`;
+      return administer(async () => {
+        // This private admin is an operator authority, not native shutdown
+        // proof. The operator must first exclude old admission and prove the
+        // original producers/resources stopped externally. Never infer that
+        // from this incarnation's empty controller map or a caller timeout.
+        await E(directory).writeText(
+          'external-cleanup',
+          JSON.stringify({ environment: id, note }),
+        );
+        !closed || Fail`Environment is closed`;
+        await publish({ ...state, phase: 'idle' });
+      });
+    },
     setNetworkPolicy: networkPolicy =>
       administer(async () => {
         await stop();
@@ -272,7 +298,7 @@ export const makeEnvironment = async ({ id, recipe, directory, resolve }) => {
         await publish({ ...state, phase: 'disposed' });
       }),
     help: () =>
-      'stop preserves development storage. dispose stops native work then deletes only owned development storage. Retain this admin until disposal succeeds before removing durable roots. Automatic GC and process-loss recovery are not supported.',
+      'stop preserves development storage. dispose stops native work then deletes only owned development storage. acknowledgeExternalCleanup(note) is an explicit operator attestation for a cold interrupted environment only: first independently exclude the old owner and prove all native producers/resources stopped, then record that evidence. It does not perform or prove cleanup. Retain this admin until disposal succeeds before removing durable roots. Automatic GC and automatic process-loss recovery are not supported.',
   });
   return harden({
     shell,

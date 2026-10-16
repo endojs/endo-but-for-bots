@@ -16,9 +16,10 @@ const recipe = harden({
 const flush = async () => {
   for (let i = 0; i < 20; i += 1) await null; // eslint-disable-line no-await-in-loop
 };
-/** @param {{ stored?: string, provide?: () => any, remove?: () => any, write?: (text: string) => any }} [options] */
+/** @param {{ stored?: string, provide?: () => any, remove?: () => any, write?: (text: string, name: string) => any }} [options] */
 const fixture = async ({ stored, provide, remove, write } = {}) => {
   let text = stored;
+  const otherTexts = new Map();
   const calls = [];
   const workspace = Far('Workspace', {});
   const nativeShell = Far('NativeShell', {
@@ -59,9 +60,10 @@ const fixture = async ({ stored, provide, remove, write } = {}) => {
   });
   const directory = Far('State', {
     maybeReadText: async () => text,
-    writeText: async (_name, value) => {
-      if (write) await write(value);
-      text = value;
+    writeText: async (name, value) => {
+      if (write) await write(value, name);
+      if (name === 'lifecycle') text = value;
+      else otherTexts.set(name, value);
     },
   });
   const resolve = async role => {
@@ -80,6 +82,7 @@ const fixture = async ({ stored, provide, remove, write } = {}) => {
     directory,
     resolve,
     nativeShell,
+    getNamedText: name => otherTexts.get(name),
     getText: () => {
       if (text === undefined) throw Error('Missing lifecycle state');
       return text;
@@ -364,5 +367,96 @@ test('ordinary nonzero command status retains the usable native owner', async t 
   }
   t.is(owners, 1);
   t.is(stops, 0);
+  await f.owner.shutdown();
+});
+
+test('operator records external cleanup before reopening a cold interrupted environment', async t => {
+  const written = [];
+  const f = await fixture({
+    stored: JSON.stringify({ phase: 'active', networkPolicy: 'off' }),
+    write: (_text, name) => written.push(name),
+  });
+  await t.throwsAsync(E(f.owner.shell).exec('sh', harden([])), {
+    message: /operator cleanup/,
+  });
+  const note =
+    'Old service admission excluded; original cgroup drained and recorded native resources reclaimed.';
+  await E(f.owner.admin).acknowledgeExternalCleanup(note);
+  t.deepEqual(written, ['external-cleanup', 'lifecycle']);
+  t.deepEqual(JSON.parse(f.getNamedText('external-cleanup')), {
+    environment: 'exact-id',
+    note,
+  });
+  t.deepEqual(
+    f.calls,
+    [],
+    'acknowledgement never revives a runner to infer cleanup',
+  );
+  t.false((await E(f.owner.admin).inspect()).interrupted);
+  await E(f.owner.shell).exec('sh', harden([]));
+  t.is(f.calls.filter(call => call[0] === 'provide').length, 1);
+  t.is(f.calls.filter(call => call[0] === 'remove').length, 0);
+  await f.owner.shutdown();
+});
+
+test('external cleanup cannot bypass a live owner, idle state, or a failed in-process intent', async t => {
+  const f = await fixture();
+  await t.throwsAsync(
+    E(f.owner.admin).acknowledgeExternalCleanup('operator evidence'),
+    {
+      message: /interrupted restored environment/,
+    },
+  );
+  await E(f.owner.shell).exec('sh', harden([]));
+  await t.throwsAsync(
+    E(f.owner.admin).acknowledgeExternalCleanup('operator evidence'),
+    {
+      message: /interrupted restored environment/,
+    },
+  );
+  await E(f.owner.shell).exec('sh', harden([]));
+  t.is(f.calls.filter(call => call[0] === 'stop').length, 0);
+  await f.owner.shutdown();
+  const failed = await fixture({
+    write: () => {
+      throw Error('lost intent ACK');
+    },
+  });
+  await t.throwsAsync(E(failed.owner.shell).exec('sh', harden([])), {
+    message: /lost intent ACK/,
+  });
+  await t.throwsAsync(
+    E(failed.owner.admin).acknowledgeExternalCleanup('operator evidence'),
+    {
+      message: /interrupted restored environment/,
+    },
+  );
+  t.deepEqual(failed.calls, []);
+});
+
+test('external cleanup publication failure preserves the fence and permits explicit retry', async t => {
+  let refuse = true;
+  const f = await fixture({
+    stored: JSON.stringify({ phase: 'active', networkPolicy: 'off' }),
+    write: (_text, name) => {
+      if (refuse && name === 'external-cleanup')
+        throw Error('cleanup note ACK lost');
+    },
+  });
+  await t.throwsAsync(E(f.owner.admin).acknowledgeExternalCleanup(' '), {
+    message: /nonempty note/,
+  });
+  await t.throwsAsync(
+    E(f.owner.admin).acknowledgeExternalCleanup('operator evidence'),
+    { message: /note ACK lost/ },
+  );
+  await t.throwsAsync(E(f.owner.shell).exec('sh', harden([])), {
+    message: /stopped/,
+  });
+  t.is(JSON.parse(f.getText()).phase, 'active');
+  t.deepEqual(f.calls, []);
+  refuse = false;
+  await E(f.owner.admin).acknowledgeExternalCleanup('operator evidence');
+  await E(f.owner.shell).exec('sh', harden([]));
   await f.owner.shutdown();
 });

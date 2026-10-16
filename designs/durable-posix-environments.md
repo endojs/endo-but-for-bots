@@ -1028,7 +1028,7 @@ It must not cancel a shared factory and thereby terminate unrelated environments
 Reuse a scoped controller where its existing cleanup authority is suitable;
 do not copy a native supervisor into the environment caplet.
 Failed or uncertain cleanup keeps the environment fenced, with operator-assisted
-cleanup where needed; this does not select process-loss recovery from #1323.
+cleanup where needed; automatic process-loss recovery remains outside this design.
 
 2026-10-17: a rejected native Shell execution now retires its retained controller
 through the same stop barrier. Timeouts and containment failures can permanently
@@ -1042,9 +1042,19 @@ nonzero exit results do not retire a usable controller.
 Tokyo's 2026-10-17 failure also left an irreconcilable native owner: conmon
 reported `mkdir /workspace: No such file or directory`, and the driver could not
 establish a successful OCI startup witness before removal. The controller retry
-fix cannot manufacture that lost witness. Recovery must retain this old owner
-and its evidence, preserve the checkout, and explicitly provision fresh execution
-authority after external quiescence.
+fix cannot manufacture that lost witness. Recovery must retain its evidence,
+preserve the checkout, and establish external quiescence before fresh execution.
+
+The private admin now offers `acknowledgeExternalCleanup(note)` for explicit
+operator recovery after process loss. It accepts only an environment that was
+interrupted on cold restoration and has acquired no native controller in this
+incarnation. The operator must independently exclude all old admission and prove
+the original native producers and resources stopped; the method does neither.
+It durably records the environment identity and the operator's evidence before
+publishing idle. Failed publication retains the fence. It cannot bypass a live
+or failed in-process owner, revive a runner to infer cleanup, delete HOME, or
+resolve historical command outcomes. This is an operator attestation boundary,
+analogous to explicit uncertain-turn resolution, not automatic crash recovery.
 
 A separate recovery obstruction was captured inside V8's ephemeron-table rehash
 while `make-hardener.js` marked a decoder function in its global WeakSet. The
