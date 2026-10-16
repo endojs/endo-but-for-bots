@@ -96,7 +96,44 @@ export interface OcapnNoiseSession {
   isInitiator: boolean;
   reader: Reader<Uint8Array>;
   writer: Writer<Uint8Array>;
+  /** A snapshot of the session's heartbeat state. */
+  getLiveness(): SessionLiveness;
   close(): void;
+}
+
+/**
+ * Session heartbeat settings, per
+ * `designs/ocapn-noise-session-reconnect.md` § 5. With heartbeats, each
+ * side emits `op:ping` and `op:pong` inside the Noise channel every
+ * `intervalMs`, and the session closes with an error once
+ * `sessionTimeoutMs` elapse without any frame from the peer.
+ *
+ * `op:ping` and `op:pong` are proposed OCapN operations, pending
+ * OCapN-org review. Enable heartbeats only toward peers that absorb
+ * them: a peer that does not know them aborts the session.
+ */
+export interface HeartbeatOptions {
+  /** `HEARTBEAT_INTERVAL`. Default 5000. */
+  intervalMs?: number;
+  /**
+   * `SESSION_TIMEOUT`. Default six intervals (30000 for the default
+   * interval); must be at least three intervals.
+   */
+  sessionTimeoutMs?: number;
+}
+
+export interface SessionLiveness {
+  /** Whether this session sends and absorbs heartbeats. */
+  heartbeat: boolean;
+  /** The transport instance number; 0 until reconnect exists. */
+  epoch: bigint;
+  /** The highest Noise nonce this side has decrypted. */
+  lastAckedRecvNonce: bigint;
+  /**
+   * The highest of this side's send nonces the peer has acknowledged
+   * by `op:pong`, or `undefined` before the first `op:pong`.
+   */
+  peerAckedRecvNonce: bigint | undefined;
 }
 
 /**
