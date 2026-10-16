@@ -10,9 +10,8 @@ import harden from '@endo/harden';
  * The simulated-stall fault injector of
  * `designs/ocapn-noise-session-reconnect.md` § Phased Implementation,
  * Phase 2. Wraps a transport so that a test can hold every write on
- * every stream the transport opens or accepts, as a TCP connection
- * whose send window has closed would, and later let them through in
- * order. Reads are unaffected.
+ * every stream the transport opens or accepts, and later let them
+ * through in order. Reads are unaffected.
  *
  * @param {OcapnNoiseTransport} transport
  */

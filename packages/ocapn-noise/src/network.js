@@ -1022,7 +1022,6 @@ export const makeOcapnNoiseNetwork = ({
         );
       };
 
-      // Hand queued frames to the transport one at a time, in order.
       // Encrypting at hand-off keeps the Noise nonce order equal to the
       // transport order however long a frame waits in the queue.
       // `draining` is cleared in the same turn as the final empty-queue
@@ -1244,9 +1243,8 @@ export const makeOcapnNoiseNetwork = ({
         await null;
         if (closed) return harden({ done: true, value: undefined });
         if (heartbeatSettings !== undefined) {
-          // The session queue owns the frame from here. The caller waits
-          // only while the queue is at its high-water mark; a transport
-          // write error ends the session and surfaces through the reader.
+          // A transport write error ends the session and surfaces
+          // through the reader.
           enqueueFrame(value);
           if (outbound.length >= OUTBOUND_HIGH_WATER_FRAMES) {
             await new Promise(resolve => {
@@ -1260,7 +1258,6 @@ export const makeOcapnNoiseNetwork = ({
       },
       return: async () => {
         await null;
-        // Flush the queue first, unless the session is lost.
         await Promise.race([drained, closedPromise]);
         if (!closed) {
           closed = true;

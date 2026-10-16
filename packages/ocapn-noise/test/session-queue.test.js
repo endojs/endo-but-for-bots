@@ -18,7 +18,6 @@ import { makeStallableTransport } from './_stall-injector.js';
 const delay = milliseconds =>
   new Promise(resolve => setTimeout(resolve, milliseconds));
 
-// Wide enough that timer jitter on a loaded CI runner cannot fake a loss.
 const heartbeat = { intervalMs: 50, sessionTimeoutMs: 500 };
 
 /**
