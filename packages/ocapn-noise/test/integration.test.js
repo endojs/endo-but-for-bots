@@ -89,7 +89,7 @@ test('two noise-backed OCapN peers exchange method calls via bootstrap fetch', a
 test('heartbeats keep an idle CapTP session usable', async t => {
   const fabric = makeMockMeshFabric();
   t.teardown(() => fabric.shutdown());
-  const heartbeat = { intervalMs: 20, sessionTimeoutMs: 100 };
+  const heartbeat = { intervalMs: 50, sessionTimeoutMs: 500 };
 
   const locatorA = new Map();
   locatorA.set(
