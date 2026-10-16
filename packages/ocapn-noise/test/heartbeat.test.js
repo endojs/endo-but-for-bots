@@ -285,6 +285,61 @@ test('a frame that is not a heartbeat reaches the session', async t => {
   sessionA.close();
 });
 
+test('an op:pong acknowledging an unsent nonce is ignored', async t => {
+  const { sessionA, sessionB } = await connectPair(
+    t,
+    { codec: cborCodec, heartbeat },
+    { codec: cborCodec },
+  );
+  const forged = writeOcapnHeartbeatMessage(
+    {
+      type: 'op:pong',
+      epoch: 0n,
+      sequence: 0n,
+      lastAckedRecvNonce: 2n ** 64n,
+    },
+    cborCodec,
+  );
+  await sessionB.writer.next(forged);
+  const honest = writeOcapnHeartbeatMessage(
+    { type: 'op:pong', epoch: 0n, sequence: 1n, lastAckedRecvNonce: 0n },
+    cborCodec,
+  );
+  await sessionB.writer.next(honest);
+  await delay(heartbeat.intervalMs);
+  // A sent its greeting at nonce 0, so only the honest pong counts.
+  t.is(sessionA.getLiveness().peerAckedRecvNonce, 0n);
+  sessionA.close();
+});
+
+test('a slow consumer pauses the read-ahead without losing the session', async t => {
+  const { sessionA, sessionB } = await connectPair(
+    t,
+    { codec: cborCodec, heartbeat },
+    { codec: cborCodec },
+  );
+  const frameCount = 200;
+  // B writes far more than the read-ahead holds while A reads nothing,
+  // for longer than the session timeout.
+  const writes = [];
+  for (let index = 0; index < frameCount; index += 1) {
+    writes.push(sessionB.writer.next(Uint8Array.of(index)));
+  }
+  await delay(heartbeat.sessionTimeoutMs * 2);
+  for (let index = 0; index < frameCount; index += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const result = await sessionA.reader.next(undefined);
+    t.false(result.done);
+    if (!result.done) t.is(result.value[0], index);
+  }
+  await Promise.all(writes);
+  // The stall was local, so the session survived it.
+  await sessionB.writer.next(Uint8Array.of(42));
+  const last = await sessionA.reader.next(undefined);
+  t.false(last.done);
+  sessionA.close();
+});
+
 test('heartbeat options are validated', t => {
   t.throws(
     () =>
