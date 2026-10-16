@@ -67,6 +67,47 @@ const OpGcAnswersCodec = makeOcapnRecordCodecFromDefinition(
   },
 );
 
+// Proposed, pending OCapN-org review: the session heartbeat of
+// designs/ocapn-noise-session-reconnect.md. Only the OCapN-Noise network
+// emits these; other networks neither send nor expect them.
+const OpPingCodec = makeOcapnRecordCodecFromDefinition('OpPing', 'op:ping', {
+  epoch: NonNegativeIntegerCodec,
+  sequence: NonNegativeIntegerCodec,
+});
+
+const OpPongCodec = makeOcapnRecordCodecFromDefinition('OpPong', 'op:pong', {
+  epoch: NonNegativeIntegerCodec,
+  sequence: NonNegativeIntegerCodec,
+  lastAckedRecvNonce: NonNegativeIntegerCodec,
+});
+
+export const OcapnHeartbeatOperationsCodecs = makeRecordUnionCodec(
+  'OcapnHeartbeatOperations',
+  {
+    OpPing: OpPingCodec,
+    OpPong: OpPongCodec,
+  },
+);
+
+/**
+ * @param {OcapnReader} reader
+ * @returns {any}
+ */
+export const readOcapnHeartbeatMessage = reader => {
+  return OcapnHeartbeatOperationsCodecs.read(reader);
+};
+
+/**
+ * @param {any} message
+ * @param {OcapnCodec} codec
+ * @returns {Uint8Array}
+ */
+export const writeOcapnHeartbeatMessage = (message, codec) => {
+  const writer = codec.makeWriter();
+  OcapnHeartbeatOperationsCodecs.write(message, writer);
+  return writer.getBytes();
+};
+
 export const OcapnPreSessionOperationsCodecs = makeRecordUnionCodec(
   'OcapnPreSessionOperations',
   {
@@ -233,6 +274,8 @@ export const makeOcapnOperationsCodecs = (
     OpListenCodec,
     OpGcExportsCodec,
     OpGcAnswersCodec,
+    OpPingCodec,
+    OpPongCodec,
   });
 
   /**
