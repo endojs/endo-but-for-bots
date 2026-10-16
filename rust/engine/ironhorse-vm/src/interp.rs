@@ -2897,17 +2897,11 @@ impl Interp {
         let payload = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.run_inner(shared, execute_script, pump_jobs, guest_thrown_rendering)
         })) {
-            Ok(outcome) => {
-                if matches!(
-                    outcome.halt,
-                    Halt::HeapExhausted | Halt::HostAllocationFailed
-                ) {
-                    // A nested boundary caught the stop; the unwind below it
-                    // can still have dropped charged storage.
-                    self.rederive_side_reserved();
-                }
-                return outcome;
-            }
+            // `run_inner` re-derives the ledger itself for a stop a nested
+            // boundary caught, before it builds the outcome: holding a
+            // `RunOutcome` here across that call gives it a slot of its own
+            // in this frame, which lies under every run.
+            Ok(outcome) => return outcome,
             Err(payload) => payload,
         };
         let Some(halt) = resource_halt(&*payload) else {
@@ -3085,6 +3079,11 @@ impl Interp {
             self.result = script_result;
         }
         let halt = self.finish_step_rendering_throws(code, step, guest_thrown_rendering);
+        if matches!(halt, Halt::HeapExhausted | Halt::HostAllocationFailed) {
+            // A nested boundary caught the stop; the unwind below it can
+            // still have dropped charged storage.
+            self.rederive_side_reserved();
+        }
         // The ENGINE's verdict on this crank: the dispatch reached `END`
         // and the job queue drained, so the machine stands at a crank
         // boundary. `completed`, the boundary-register clear and the
