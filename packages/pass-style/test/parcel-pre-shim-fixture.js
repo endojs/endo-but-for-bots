@@ -264,11 +264,14 @@ if (scenario === 'absent') {
   });
   install(impostor);
   const { passStyleOf } = await import('../src/passStyleOf.js');
-  const declined = candidateFor(impostor);
-  assert.throws(() => passStyleOf(declined));
-  assert.throws(() => passStyleOf(declined));
+  // A decline is an error and is not memoized, so it may be asked again, but
+  // once `passStyleOf` answers 'parcel' its memo keeps that answer.
+  const candidate = candidateFor(impostor);
+  assert.throws(() => passStyleOf(candidate));
   assert.equal(calls, 1);
-  assert.equal(passStyleOf(candidateFor(impostor)), 'parcel');
+  assert.equal(passStyleOf(candidate), 'parcel');
+  assert.equal(passStyleOf(candidate), 'parcel');
+  assert.equal(calls, 2);
 } else if (scenario === 'proxy-global') {
   let traps = 0;
   install(

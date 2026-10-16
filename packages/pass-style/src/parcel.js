@@ -1,3 +1,4 @@
+// @ts-check
 import harden from '@endo/harden';
 
 /**
@@ -7,7 +8,6 @@ import harden from '@endo/harden';
 const { apply, getOwnPropertyDescriptor, getPrototypeOf, ownKeys } = Reflect;
 const { isFrozen, prototype: objectPrototype } = Object;
 const { toStringTag } = Symbol;
-const { get: weakMapGet, has: weakMapHas, set: weakMapSet } = WeakMap.prototype;
 
 /**
  * Reads an own data property without invoking an accessor, which could throw
@@ -57,7 +57,9 @@ const hasOwnHiddenDataValue = (object, key, expected) => {
  * a shim-shaped prototype, after every other pass style has declined it
  * (`test/parcel-pre-shim-fixture.js`). A rejected global may be replaced by a
  * later shim, but a captured valid check stays fixed for this module's
- * lifetime, as `passStyleOf`'s memo requires.
+ * lifetime, as `passStyleOf`'s memo requires. That memo also keeps the first
+ * `'parcel'` answer for each candidate, so this module keeps no per-candidate
+ * cache of its own.
  *
  * @type {((value: object) => boolean) | undefined}
  */
@@ -69,15 +71,6 @@ let brandCheck;
  * otherwise recurse without bound. A reentrant check rejects its candidate.
  */
 let checking = false;
-
-/**
- * The brand check's answer for each candidate it was asked about. A frozen
- * `isParcel` can still close over mutable state, so its first answer is kept
- * to make classification stable.
- *
- * @type {WeakMap<object, boolean>}
- */
-const decisions = new WeakMap();
 
 /**
  * Validates the shape of a global Parcel constructor. Every step treats
@@ -133,23 +126,18 @@ const makeBrandCheck = candidateConstructor => {
     if (getPrototypeOf(value) !== prototype || ownKeys(value).length !== 0) {
       return false;
     }
-    if (apply(weakMapHas, decisions, [value])) {
-      return apply(weakMapGet, decisions, [value]);
-    }
     if (checking) {
       return false;
     }
     checking = true;
-    let decision = false;
     try {
-      decision = apply(isParcel, candidateConstructor, [value]) === true;
+      return apply(isParcel, candidateConstructor, [value]) === true;
     } catch {
       // A throwing brand check declines its candidate.
+      return false;
     } finally {
       checking = false;
     }
-    apply(weakMapSet, decisions, [value, decision]);
-    return decision;
   };
 };
 
