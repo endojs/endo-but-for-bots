@@ -18,22 +18,24 @@ const never = new Promise(() => {});
  * a kernel send buffer are when the path dies, and reads never yield
  * again), while streams opened afterwards work normally. A test can
  * also refuse new connections, to hold a partition open across
- * reconnect attempts.
+ * reconnect attempts, or delay them to force crossed hellos (Phase 5).
  *
  * @param {OcapnNoiseTransport} transport
  */
 export const makeLossyTransport = transport => {
-  /** @type {Set<{ severed: boolean }>} */
+  /** @type {Set<{ severed: boolean, closed: boolean }>} */
   const live = new Set();
   let refusing = false;
+  let refusingOutbound = false;
   let connects = 0;
+  let connectDelayMs = 0;
 
   /**
    * @param {ByteStream} stream
    * @returns {ByteStream}
    */
   const wrapStream = stream => {
-    const state = { severed: false };
+    const state = { severed: false, closed: false };
     live.add(state);
     /** @type {ByteStream['reader']} */
     const reader = harden({
@@ -44,7 +46,10 @@ export const makeLossyTransport = transport => {
         if (state.severed) return never;
         return result;
       },
-      return: value => stream.reader.return(value),
+      return: value => {
+        state.closed = true;
+        return stream.reader.return(value);
+      },
       throw: error => stream.reader.throw(error),
       [Symbol.asyncIterator]() {
         return reader;
@@ -57,7 +62,10 @@ export const makeLossyTransport = transport => {
         if (state.severed) return harden({ done: false, value: undefined });
         return stream.writer.next(value);
       },
-      return: value => stream.writer.return(value),
+      return: value => {
+        state.closed = true;
+        return stream.writer.return(value);
+      },
       throw: error => stream.writer.throw(error),
       [Symbol.asyncIterator]() {
         return writer;
@@ -73,7 +81,12 @@ export const makeLossyTransport = transport => {
     connect: async hints => {
       await null;
       connects += 1;
-      if (refusing) throw Error('lossy transport: connection refused');
+      if (connectDelayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, connectDelayMs));
+      }
+      if (refusing || refusingOutbound) {
+        throw Error('lossy transport: connection refused');
+      }
       return wrapStream(await transport.connect(hints));
     },
     listen:
@@ -100,6 +113,23 @@ export const makeLossyTransport = transport => {
     refuse: refuse => {
       refusing = refuse;
     },
+    /** @param {boolean} refuse Refuse (or again allow) outbound connections only. */
+    refuseOutbound: refuse => {
+      refusingOutbound = refuse;
+    },
+    /**
+     * Hold every new connection attempt for `ms` before it reaches the
+     * peer, so that two sides redialing at nearly the same moment are
+     * both mid-dial when the other's attempt arrives (crossed hellos).
+     *
+     * @param {number} ms
+     */
+    delayConnects: ms => {
+      connectDelayMs = ms;
+    },
+    /** Streams neither partitioned nor closed by this side. */
+    getOpenStreams: () =>
+      [...live].filter(state => !state.closed && !state.severed).length,
     /** How many connections have been attempted through the transport. */
     getConnects: () => connects,
   });

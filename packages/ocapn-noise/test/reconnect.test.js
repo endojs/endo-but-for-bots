@@ -70,13 +70,14 @@ const connectLossyPair = async (
   const keyB = netB.addSigningKeys(netB.generateSigningKeys());
   const { transportA, transportB } = makeMockTransportPair();
   const injector = makeLossyTransport(transportA);
+  const injectorB = makeLossyTransport(transportB);
   await netA.addTransport(injector.transport);
-  await netB.addTransport(transportB);
+  await netB.addTransport(injectorB.transport);
   const [sessionA, sessionB] = await Promise.all([
     netA.provideSession(netB.locationFor(keyB)),
     netB.waitForInboundSession(keyA),
   ]);
-  return { netA, netB, keyA, keyB, sessionA, sessionB, injector };
+  return { netA, netB, keyA, keyB, sessionA, sessionB, injector, injectorB };
 };
 
 /**
@@ -154,6 +155,68 @@ for (const [codecName, codec] of /** @type {const} */ ([
     sessionA.close();
   });
 }
+
+for (const [codecName, codec] of /** @type {const} */ ([
+  ['cbor', cborCodec],
+  ['syrup', syrupCodec],
+])) {
+  test(`${codecName}: crossed hellos on reconnect converge on one transport instance`, async t => {
+    const { sessionA, sessionB, injector, injectorB } = await connectLossyPair(
+      t,
+      codec,
+    );
+    // Simultaneous loss: both sides stop hearing each other at the same
+    // moment, so both time out within a heartbeat of each other and both
+    // redial; holding each dial in flight makes the two cross.
+    injector.delayConnects(150);
+    injectorB.delayConnects(150);
+    injector.sever();
+    injectorB.sever();
+    await sessionA.writer.next(Uint8Array.of(1));
+    await sessionB.writer.next(Uint8Array.of(101));
+
+    await eventually(
+      () =>
+        !sessionA.getLiveness().reconnecting &&
+        !sessionB.getLiveness().reconnecting &&
+        sessionA.getLiveness().epoch > 0n,
+    );
+    // Both sides redialed (A's first connection opened the session; B
+    // had only ever accepted).
+    t.true(injector.getConnects() >= 2, `A dialed ${injector.getConnects()}`);
+    t.true(injectorB.getConnects() >= 1, `B dialed ${injectorB.getConnects()}`);
+    // Exactly one new transport instance survives, seen once from each
+    // end, and both sides agree on its epoch.
+    await delay(heartbeat.intervalMs * 4);
+    t.is(injector.getOpenStreams() + injectorB.getOpenStreams(), 2);
+    t.is(injector.getOpenStreams(), 1);
+    t.is(sessionA.getLiveness().epoch, sessionB.getLiveness().epoch);
+
+    t.deepEqual(await readBytes(sessionB, 1), [1]);
+    t.deepEqual(await readBytes(sessionA, 1), [101]);
+    await sessionA.writer.next(Uint8Array.of(2));
+    t.deepEqual(await readBytes(sessionB, 1), [2]);
+    sessionA.close();
+  });
+}
+
+test('either side redials: the side that accepted the session reconnects it', async t => {
+  const { sessionA, sessionB, injector, injectorB } = await connectLossyPair(
+    t,
+    cborCodec,
+  );
+  // A, which opened the session, cannot dial out; B must.
+  injector.refuseOutbound(true);
+  injector.sever();
+  await sessionB.writer.next(Uint8Array.of(7));
+  await eventually(
+    () =>
+      sessionA.getLiveness().epoch === 1n &&
+      sessionB.getLiveness().epoch === 1n,
+  );
+  t.true(injectorB.getConnects() >= 1);
+  t.deepEqual(await readBytes(sessionA, 1), [7]);
+});
 
 test('the session aborts once SESSION_HARD_TIMEOUT passes unreconnected', async t => {
   const hardTimeoutMs = 1500;

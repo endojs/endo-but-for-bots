@@ -396,6 +396,7 @@ export const makeOcapnNoiseNetwork = ({
    *   sessionToken: Uint8Array,
    *   getEpoch: () => bigint,
    *   isAttached: () => boolean,
+   *   prefersOwnDial: () => boolean,
    *   getReceivedFrames: () => bigint,
    *   attach: (instance: Instance, epoch: bigint, peerReceived: bigint) => void,
    *   abort: (error: Error) => void,
@@ -1015,6 +1016,12 @@ export const makeOcapnNoiseNetwork = ({
    * @param {Uint8Array} params.sessionToken - The Noise transcript hash
    *   of the handshake that opened the session, which names it in a
    *   reconnect's `op:session-hello`.
+   * @param {Uint8Array} params.localEphemeral - This side's x25519
+   *   ephemeral from the handshake that opened the session.
+   * @param {Uint8Array} params.peerEphemeral - The peer's x25519
+   *   ephemeral from that handshake. The two are the crossed-hellos
+   *   tiebreaker on reconnect (designs/ocapn-noise-session-reconnect.md
+   *   § 3).
    * @param {bigint} params.peerFeatures - The `features` bitset of the
    *   peer's `op:session-hello`.
    * @param {() => void} params.onClose - Called when the session closes
@@ -1033,10 +1040,18 @@ export const makeOcapnNoiseNetwork = ({
     isInitiator,
     instance: firstInstance,
     sessionToken,
+    localEphemeral,
+    peerEphemeral,
     peerFeatures,
     onClose,
   }) => {
     let closed = false;
+    // When both sides redial at once, the side whose ephemeral is the
+    // greater (as a 32-byte big-endian integer) initiates the new
+    // transport instance and the lesser responds.
+    const initiatesOnCrossedHellos =
+      compareUint8Arrays(localEphemeral, peerEphemeral) > 0;
+    let dialing = false;
     const reconnectSettings =
       heartbeatSettings !== undefined &&
       hasFeature(peerFeatures, FEATURE_RECONNECT)
@@ -1270,7 +1285,9 @@ export const makeOcapnNoiseNetwork = ({
           }, hardTimeoutMs);
           backoffMs = reconnectSettings.backoffInitialMs;
         }
-        if (isInitiator) scheduleRedial(0);
+        // Either side redials; should both, the crossed-hellos
+        // tiebreaker keeps one of the two new transport instances.
+        scheduleRedial(0);
       };
 
       /**
@@ -1313,21 +1330,29 @@ export const makeOcapnNoiseNetwork = ({
         const nextEpoch = epoch + 1n;
         /** @type {Awaited<ReturnType<Reconnector['dial']>>} */
         let dialed;
+        dialing = true;
         try {
           dialed = await /** @type {Reconnector} */ (reconnector).dial(
             nextEpoch,
             receivedFrames,
           );
         } catch (_error) {
+          dialing = false;
           if (closed || current !== undefined) return;
           const delayMs = backoffMs;
           backoffMs = Math.min(backoffMs * 2, reconnectSettings.backoffMaxMs);
           scheduleRedial(delayMs);
           return;
         }
+        dialing = false;
         const { instance, peerHello } = dialed;
-        if (closed || current !== undefined) {
+        // Crossed hellos: the peer's dial reached us first and we took
+        // it, so this one is the instance the tiebreaker discards.
+        if (closed || current !== undefined || epoch + 1n !== nextEpoch) {
           closeInstance(instance);
+          // The session moved to a later epoch while we dialed and lost
+          // that instance too: dial again for the epoch after it.
+          if (!closed && current === undefined) scheduleRedial(0);
           return;
         }
         if (
@@ -1638,6 +1663,7 @@ export const makeOcapnNoiseNetwork = ({
           sessionToken,
           getEpoch: () => epoch,
           isAttached: () => current !== undefined,
+          prefersOwnDial: () => dialing && initiatesOnCrossedHellos,
           getReceivedFrames: () => receivedFrames,
           attach,
           abort: fail,
@@ -1840,6 +1866,9 @@ export const makeOcapnNoiseNetwork = ({
         identity,
         peerHello,
         tiebreaker,
+        localEphemeral: tiebreaker,
+        // The SYNACK opens with the responder's x25519 ephemeral.
+        peerEphemeral: synack.slice(0, 32),
         handshakeHash: asUint8(handshakeHash),
       };
     } catch (err) {
@@ -1873,6 +1902,8 @@ export const makeOcapnNoiseNetwork = ({
    * @param {Awaited<ReturnType<typeof exchangeIdentity>>} params.identity
    * @param {SessionHello} params.peerHello
    * @param {Uint8Array} params.tiebreaker
+   * @param {Uint8Array} params.localEphemeral
+   * @param {Uint8Array} params.peerEphemeral
    * @param {Uint8Array} params.handshakeHash
    * @returns {Candidate}
    */
@@ -1885,6 +1916,8 @@ export const makeOcapnNoiseNetwork = ({
     identity,
     peerHello,
     tiebreaker,
+    localEphemeral,
+    peerEphemeral,
     handshakeHash,
   }) => {
     /** @type {Candidate | undefined} */
@@ -1901,6 +1934,8 @@ export const makeOcapnNoiseNetwork = ({
       isInitiator,
       instance,
       sessionToken: handshakeHash,
+      localEphemeral,
+      peerEphemeral,
       peerFeatures: peerHello.features,
       onClose: () => {
         if (reconnector && reconnectors.get(peerId) === reconnector) {
@@ -2121,21 +2156,35 @@ export const makeOcapnNoiseNetwork = ({
 
       if (resumable) {
         if (peerHello.epoch > 0n) {
-          // A reconnect: the hello must name this session and its next
-          // epoch. Anything else (a replay into another session, a
-          // stale epoch) is answered with a refusal, which tells the
-          // dialer this side does not hold what it asks to resume.
-          const resumes =
+          // A reconnect. A hello that names another session (a replay
+          // into the wrong session) is answered with a refusal, which
+          // tells the dialer this side does not hold what it asks to
+          // resume.
+          const known =
             reconnectors.get(initiatorKeyHex) === resumable &&
-            compareUint8Arrays(peerHello.session, resumable.sessionToken) ===
-              0 &&
-            peerHello.epoch === resumable.getEpoch() + 1n;
-          if (!resumes) {
+            compareUint8Arrays(peerHello.session, resumable.sessionToken) === 0;
+          if (!known) {
             await writeSessionHello(stream.writer, encrypt, {
               epoch: 0n,
               session: asUint8(handshakeHash),
               received: 0n,
             });
+            await stream.writer.return(undefined);
+            return;
+          }
+          // A dial for an epoch the session has already reached is a
+          // straggler (the losing half of crossed hellos, or a dial whose
+          // answer was lost): close it without an answer, which the
+          // dialer takes as an ordinary failed attempt. A later epoch is
+          // taken as is, so a dialer that missed our answer to an earlier
+          // reconnect still converges.
+          // Crossed hellos: when both sides are redialing and ours wins
+          // the tiebreaker, this one is dropped the same way and our own
+          // dial carries the session.
+          if (
+            peerHello.epoch <= resumable.getEpoch() ||
+            resumable.prefersOwnDial()
+          ) {
             await stream.writer.return(undefined);
             return;
           }
@@ -2217,6 +2266,8 @@ export const makeOcapnNoiseNetwork = ({
         identity,
         peerHello,
         tiebreaker,
+        localEphemeral: synack.slice(0, 32),
+        peerEphemeral: tiebreaker,
         handshakeHash: asUint8(handshakeHash),
       });
 
