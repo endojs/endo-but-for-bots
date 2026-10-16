@@ -146,14 +146,16 @@ profile does.
 mismatch unless `--ignore-provenance` is passed.
 Within one build the marks still vary from run to run: the standard library seeds its hash
 tables randomly in each process, which changes what runs at a case's deepest point.
-Over eight identical runs, no two alike, 27 of the 347 marks moved, by at most 184 B, which
-is 1.41% of the 13,087 B mark it moved; no mark over 100 KB moved by more than 0.14%.
+Over 24 identical runs, 20 of the 429 marks moved, by at most 184 B, which is 0.14% of the
+127,487 B mark it moved; the largest share was 152 B of 7,343 B, 2.07%.
+The variation is a frame or two, a number of bytes rather than a share of the mark.
 With the seeds pinned (an `LD_PRELOAD` that fixes `getrandom`) twelve runs were
 byte-identical, with address-space randomization on or off; turning it off alone did not
 make two runs agree.
-A case fails when it grows past the baseline by more than the baseline's `slack` (2%), which
-absorbs that variation, or when its outcome changes; an outcome change is an acceptance
-change, which the report says needs a versioned release.
+A case fails when it grows past the baseline by more than the baseline's `slack` (2%) or its
+`slack_bytes` (256 B), whichever is larger, which absorbs that variation, or when its outcome
+changes; an outcome change is an acceptance change, which the report says needs a versioned
+release.
 A case well under the baseline is reported as a note: lower the baseline explicitly, never as
 part of a check.
 

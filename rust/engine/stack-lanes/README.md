@@ -186,7 +186,7 @@ Natively the probe's `--stack` does the same with `paint.rs`.
 Frame sizes are a property of the compiler, so the marks belong to one build and
 host, but they are not exactly reproducible: the engine's hash tables are seeded
 per process, which changes what runs at a case's deepest point.
-Natively, runs of one build differ by up to about 1.4% (`../benches/README.md`);
+Natively, runs of one build differ by up to about 184 B (`../benches/README.md`);
 the wasm lanes draw their seeds from WASI's `random_get` and have not been
 measured for it.
 Node's minima do not predict workerd's, and neither predicts a browser; the

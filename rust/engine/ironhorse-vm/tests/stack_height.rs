@@ -11,11 +11,12 @@
 //!
 //! Frame sizes are a property of the build, so the marks move when the
 //! compiler, target or profile does. Within one build they vary from run to
-//! run by up to about 1.4%: the standard library seeds its hash tables
+//! run by up to about 184 B: the standard library seeds its hash tables
 //! randomly in each process, which changes what runs at a case's deepest
 //! point (`benches/README.md`). The gate is `benches/stack_height.py`, which
 //! keeps a baseline per build provenance and fails when a case grows past it
-//! by more than its 2% slack or changes outcome.
+//! by more than its slack, 2% or 256 B, whichever is larger, or changes
+//! outcome.
 //!
 //! The marks are native. They show whether a refactor shrinks frames; they do
 //! not predict which cases trap on Wasmtime or V8, whose frames differ (report

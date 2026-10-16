@@ -9,10 +9,13 @@ property of the build, so the baseline records the compiler, target and
 profile it was measured with, and the check refuses a mismatch unless told
 otherwise.
 
-Within one build the marks still vary from run to run, by up to about 1.4%:
-the standard library seeds its hash tables randomly in each process, which
-changes what runs at a case's deepest point. The baseline's 2% slack
-(`DEFAULT_SLACK`) absorbs that variation.
+Within one build the marks still vary from run to run: the standard library
+seeds its hash tables randomly in each process, which changes what runs at a
+case's deepest point. That is a frame or two, so the variation is a number of
+bytes rather than a share of the mark: over 24 runs, at most 184 B (0.14% of
+the 127 KB mark it moved), while 152 B was 2.07% of a 7 KB one. A case may
+therefore grow by the baseline's `slack`, 2% (`DEFAULT_SLACK`), or by its
+`slack_bytes`, 256 B (`DEFAULT_SLACK_BYTES`), whichever is larger.
 
 The baseline also records the engine tree it was measured at: the hash of
 HEAD's `rust/engine` tree with the baseline file left out. A tree hash names
@@ -37,6 +40,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / "benches/stack-height-baseline.json"
 DEFAULT_SLACK = 0.02
+DEFAULT_SLACK_BYTES = 256
 PROVENANCE_KEYS = ("target", "rustc", "profile")
 
 
@@ -57,8 +61,10 @@ def parse_metrics(output):
     return metrics
 
 
-def compare(actual, baseline, slack):
-    """Problems (a list of strings) and notes for cases well under the baseline."""
+def compare(actual, baseline, slack, slack_bytes=0):
+    """Problems (a list of strings) and notes for cases well under the baseline.
+    A case may move by `slack` of its baseline or by `slack_bytes`, whichever
+    is larger."""
     problems = []
     notes = []
     if actual.keys() != baseline.keys():
@@ -68,7 +74,8 @@ def compare(actual, baseline, slack):
     for name, expected in baseline.items():
         if name not in actual:
             continue
-        limit = int(expected["bytes"] * (1 + slack))
+        allowance = max(expected["bytes"] * slack, slack_bytes)
+        limit = int(expected["bytes"] + allowance)
         measured = actual[name]
         if measured["outcome"] != expected["outcome"]:
             problems.append(
@@ -79,7 +86,7 @@ def compare(actual, baseline, slack):
                 f"{name}: {measured['bytes']} B > {limit} B "
                 f"({measured['bytes'] / expected['bytes']:.3f}x of baseline {expected['bytes']} B)"
             )
-        elif expected["bytes"] and measured["bytes"] < expected["bytes"] * (1 - slack):
+        elif expected["bytes"] and measured["bytes"] < expected["bytes"] - allowance:
             notes.append(
                 f"{name}: {measured['bytes']} B, {measured['bytes'] / expected['bytes']:.3f}x of "
                 f"baseline {expected['bytes']} B; lower the baseline with --write-baseline"
@@ -225,6 +232,8 @@ def main():
     mode.add_argument("--check", action="store_true", help="compare against the baseline (default)")
     mode.add_argument("--write-baseline", action="store_true")
     parser.add_argument("--slack", type=float, help="allowed growth over the baseline (default: the baseline's)")
+    parser.add_argument("--slack-bytes", type=int,
+                        help="allowed growth in bytes, where it exceeds --slack (default: the baseline's)")
     parser.add_argument("--ignore-provenance", action="store_true",
                         help="compare even when compiler, target or profile differ from the baseline")
     parser.add_argument("--allow-dirty", action="store_true",
@@ -244,6 +253,7 @@ def main():
         baseline = {
             "provenance": current,
             "slack": DEFAULT_SLACK if args.slack is None else args.slack,
+            "slack_bytes": DEFAULT_SLACK_BYTES if args.slack_bytes is None else args.slack_bytes,
             "cases": metrics,
         }
         args.baseline.write_text(json.dumps(baseline, indent=2) + "\n")
@@ -254,10 +264,11 @@ def main():
 
     baseline = json.loads(args.baseline.read_text())
     slack = baseline["slack"] if args.slack is None else args.slack
+    slack_bytes = baseline.get("slack_bytes", 0) if args.slack_bytes is None else args.slack_bytes
     if not args.ignore_provenance:
         validate_provenance(baseline["provenance"], current)
-    problems, notes = compare(metrics, baseline["cases"], slack)
-    report.update({"baseline": baseline["provenance"], "slack": slack,
+    problems, notes = compare(metrics, baseline["cases"], slack, slack_bytes)
+    report.update({"baseline": baseline["provenance"], "slack": slack, "slack_bytes": slack_bytes,
                    "problems": problems, "notes": notes})
     if args.output:
         args.output.write_text(json.dumps(report, indent=2) + "\n")
@@ -274,7 +285,7 @@ def main():
         print(f"FAIL: {problem}")
     if problems:
         return 1
-    print(f"stack height: {len(metrics)} cases within {slack:.0%} of the baseline")
+    print(f"stack height: {len(metrics)} cases within {slack:.0%} or {slack_bytes} B of the baseline")
     return 0
 
 

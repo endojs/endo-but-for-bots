@@ -7,7 +7,7 @@
 //! bisection. Frame sizes are a property of the build, but what runs at the
 //! deepest point is not fixed by it: the engine's hash tables are seeded per
 //! process, so marks of one native build vary from run to run by up to about
-//! 1.4% (`benches/README.md`).
+//! 184 B (`benches/README.md`).
 //!
 //! The paint stops `STAGE_GAP` bytes below the stage's frame, so a stage that
 //! dirties nothing past that reads exactly `STAGE_GAP`, the floor. The gap is

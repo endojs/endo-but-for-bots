@@ -80,6 +80,34 @@ class Compare(unittest.TestCase):
         self.assertEqual(len(notes), 1)
         self.assertIn("a.run: 50000 B, 0.500x", notes[0])
 
+    # A shallow mark that moved by 152 B between two runs of one build: 2.07%.
+    shallow = {"s.run": {"bytes": 7343, "outcome": "completed"}}
+
+    def test_a_small_mark_may_grow_by_the_byte_slack(self):
+        grown = {"s.run": {"bytes": 7495, "outcome": "completed"}}
+        problems, _ = stack_height.compare(grown, self.shallow, 0.02)
+        self.assertEqual(len(problems), 1, "2% alone refuses it")
+        self.assertEqual(stack_height.compare(grown, self.shallow, 0.02, 256), ([], []))
+        past = {"s.run": {"bytes": 7600, "outcome": "completed"}}
+        problems, _ = stack_height.compare(past, self.shallow, 0.02, 256)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("s.run: 7600 B > 7599 B", problems[0])
+
+    def test_a_large_mark_keeps_the_percentage_slack(self):
+        actual = {
+            "a.run": {"bytes": 103000, "outcome": "completed"},
+            "b.run": {"bytes": 200000, "outcome": "ReentryLimit"},
+        }
+        problems, _ = stack_height.compare(actual, self.baseline, 0.02, 256)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("a.run: 103000 B > 102000 B", problems[0])
+
+    def test_a_drop_within_the_byte_slack_is_not_noted(self):
+        baseline = {"s.run": {"bytes": 7495, "outcome": "completed"}}
+        _, notes = stack_height.compare(self.shallow, baseline, 0.02)
+        self.assertEqual(len(notes), 1, "2% alone notes it")
+        self.assertEqual(stack_height.compare(self.shallow, baseline, 0.02, 256), ([], []))
+
 
 class Provenance(unittest.TestCase):
     def test_mismatch_is_refused(self):
