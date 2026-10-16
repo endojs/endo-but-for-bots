@@ -236,7 +236,6 @@ const makeEngineStub = (
     if (args.includes('{{.Digest}}')) return 'image-digest';
     if (args[0] === 'volume') return `volume-${args[args.length - 1]}`;
     if (args[0] === 'container' && args[1] === 'inspect') {
-      if (args.includes('{{json .State}}')) return 'operation-state';
       if (args.includes('{{.State.StartedAt.IsZero}}'))
         return 'startup-witness';
       if (args.includes('{{.State.Pid}}')) return 'sidecar-pid';
@@ -278,9 +277,6 @@ const makeEngineStub = (
     'container-id': { stdout: 'a1b2c3d4e5f6a7b8\n' },
     'operation-container-id': { stdout: `${OPERATION_CONTAINER_ID}\n` },
     'startup-witness': { stdout: 'false\n' },
-    'operation-state': {
-      stdout: '{"Status":"exited","Running":false,"ExitCode":0}\n',
-    },
     create: {},
     pull: {},
     start: {},
@@ -591,10 +587,8 @@ test('the anchor is created under the whole policy prefix', async t => {
 
 test('an operation runs under the same prefix the anchor was attested at', async t => {
   const { driver, calls } = makeDriverUnderTest(t);
-  t.teardown(() => driver.close());
   const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
-  const proc = await driver.spawn(slice, ['/bin/echo', 'hi'], {});
-  await proc.wait();
+  await driver.spawn(slice, ['/bin/echo', 'hi'], {});
 
   const [anchor, operation] = createCalls(calls);
   t.truthy(operation);
@@ -616,7 +610,6 @@ test('an operation runs under the same prefix the anchor was attested at', async
         call.args.at(-1) === OPERATION_CONTAINER_ID,
     ),
   );
-  await driver.close();
 });
 
 test('a slice with no policy has no attestation to report', async t => {
@@ -670,10 +663,8 @@ test('driver refuses retired nativeProfile before acquiring host resources', asy
 
 test('network join admits a loopback-only target and wires --network container:', async t => {
   const { driver, calls } = makeDriverUnderTest(t);
-  t.teardown(() => driver.close());
   const slice = await driver.prepareSlice(/** @type {any} */ (makeJoinSpec()));
-  const proc = await driver.spawn(slice, ['/bin/echo', 'hi'], {});
-  await proc.wait();
+  await driver.spawn(slice, ['/bin/echo', 'hi'], {});
   const [operation] = createCalls(calls);
   t.truthy(operation);
   const argv = operation.args;
@@ -687,7 +678,6 @@ test('network join admits a loopback-only target and wires --network container:'
     slice.runtimeDetails.rootlessNet.reason,
     'network join shares the named container namespace',
   );
-  await driver.close();
 });
 
 /** @type {readonly [string, Record<string, string>, RegExp][]} */

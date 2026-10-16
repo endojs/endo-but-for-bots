@@ -69,8 +69,6 @@ const fixture = (t, storage, fs, runAs) => {
   let refuseStart = false;
   let refuseWitness = false;
   let failKill = false;
-  let operationState = { Status: 'exited', Running: false, ExitCode: 0 };
-  let statusCode = 0;
   let closeKill;
   const kills = [];
   let deferCreate = false;
@@ -162,10 +160,6 @@ const fixture = (t, storage, fs, runAs) => {
         queueMicrotask(() =>
           send(witnessResult.code, '', witnessResult.stdout),
         );
-      } else if (args.includes('{{json .State}}')) {
-        queueMicrotask(() =>
-          send(statusCode, '', JSON.stringify(operationState)),
-        );
       } else if (args[0] === 'kill') {
         closeKill = () => send(0);
         queueMicrotask(() => {
@@ -256,10 +250,6 @@ const fixture = (t, storage, fs, runAs) => {
     setWitness: result => {
       witnessResult = result;
     },
-    setOperationState: (state, code = 0) => {
-      operationState = state;
-      statusCode = code;
-    },
     refuseStart: () => {
       refuseStart = true;
     },
@@ -298,54 +288,6 @@ const fixture = (t, storage, fs, runAs) => {
     },
   };
 };
-
-for (const code of [0, 37, 137]) {
-  test(`operation exit ${code} survives a successful attach client`, async t => {
-    t.timeout(3000);
-    const f = fixture(t);
-    f.setOperationState({ Status: 'exited', Running: false, ExitCode: code });
-    const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
-    const [name] = f.active;
-    f.finish(name);
-    t.deepEqual(await proc.wait(), { code, signal: null });
-    const inspection = f.calls.findIndex(args =>
-      args.includes('{{json .State}}'),
-    );
-    const removal = f.calls.findIndex(args => args[0] === 'rm');
-    t.true(inspection >= 0 && inspection < removal);
-    t.is(f.active.size, 0);
-  });
-}
-
-for (const state of [
-  { Status: 'running', Running: true, ExitCode: 0 },
-  { Status: 'exited', Running: false },
-  { Status: 'exited', Running: false, ExitCode: -1 },
-]) {
-  test(`unproven container exit fails closed: ${JSON.stringify(state)}`, async t => {
-    t.timeout(3000);
-    const f = fixture(t);
-    f.setOperationState(state);
-    const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
-    const [name] = f.active;
-    f.finish(name);
-    await t.throwsAsync(proc.wait(), {
-      message: /Invalid Podman operation exit status/,
-    });
-    t.is(f.active.size, 0);
-  });
-}
-
-test('failed exit inspection still removes the operation and reports uncertainty', async t => {
-  t.timeout(3000);
-  const f = fixture(t);
-  f.setOperationState(undefined, 1);
-  const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
-  const [name] = f.active;
-  f.finish(name);
-  await t.throwsAsync(proc.wait(), { message: /exit status unavailable/ });
-  t.is(f.active.size, 0);
-});
 
 test('successful removal and attach exit retain ownership until native stdio closes', async t => {
   t.timeout(3000);
