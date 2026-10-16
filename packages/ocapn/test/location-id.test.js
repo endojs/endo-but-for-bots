@@ -43,8 +43,10 @@ test('np location ID is (network, designator) and ignores hints', t => {
       'wss+cbor': 'minion.town:443/.well-known/ocapn-cbor-np',
     },
   });
+  const empty = makeLocation({ hints: {} });
   const expected = `ocapn://${designator}.np`;
   t.is(idOf(bare), expected);
+  t.is(idOf(empty), expected);
   t.is(idOf(tcp), expected);
   t.is(idOf(dual), expected);
 });

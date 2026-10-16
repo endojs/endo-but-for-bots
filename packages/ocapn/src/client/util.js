@@ -35,6 +35,7 @@ export const locationNetworkId = location =>
  * they must not take part in its location ID, lest one authenticated peer
  * appear as several and defeat session reuse.
  *
+ * A new identity-keyed network registers here.
  * See designs/ocapn-network-transport-separation.md § Target Model.
  */
 const identityKeyedNetworks = new Set(['np']);
