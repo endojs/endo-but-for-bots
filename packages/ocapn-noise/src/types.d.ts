@@ -138,7 +138,7 @@ export interface SessionLiveness {
    * by `op:pong`, or `undefined` before the first `op:pong`. An
    * acknowledgment of a nonce this side has not used is ignored.
    */
-  peerAckedRecvNonce: bigint | undefined;
+  peerLastAckedRecvNonce: bigint | undefined;
 }
 
 /**

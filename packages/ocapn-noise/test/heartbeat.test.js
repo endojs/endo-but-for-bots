@@ -75,10 +75,10 @@ for (const [codecName, codec] of /** @type {const} */ ([
     // heartbeats, and has heard the peer acknowledge some of its own.
     t.true(/** @type {bigint} */ (livenessA.lastAckedRecvNonce) > 4n);
     t.true(/** @type {bigint} */ (livenessB.lastAckedRecvNonce) > 4n);
-    t.not(livenessA.peerAckedRecvNonce, undefined);
-    t.not(livenessB.peerAckedRecvNonce, undefined);
+    t.not(livenessA.peerLastAckedRecvNonce, undefined);
+    t.not(livenessB.peerLastAckedRecvNonce, undefined);
     t.true(
-      /** @type {bigint} */ (livenessA.peerAckedRecvNonce) <=
+      /** @type {bigint} */ (livenessA.peerLastAckedRecvNonce) <=
         /** @type {bigint} */ (livenessB.lastAckedRecvNonce),
     );
   });
@@ -308,7 +308,7 @@ test('an op:pong acknowledging an unsent nonce is ignored', async t => {
   await sessionB.writer.next(honest);
   await delay(heartbeat.intervalMs);
   // A sent its greeting at nonce 0, so only the honest pong counts.
-  t.is(sessionA.getLiveness().peerAckedRecvNonce, 0n);
+  t.is(sessionA.getLiveness().peerLastAckedRecvNonce, 0n);
   sessionA.close();
 });
 
