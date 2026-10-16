@@ -215,6 +215,55 @@ test('a peer that no longer holds the session refuses the reconnect', async t =>
   t.true(Date.now() - started < reconnect.hardTimeoutMs);
 });
 
+test('a peer that restarts and opens a fresh session aborts the one waiting to resume', async t => {
+  const netA = makeOcapnNoiseNetwork({
+    codec: cborCodec,
+    heartbeat,
+    reconnect,
+  });
+  const netB = makeOcapnNoiseNetwork({
+    codec: cborCodec,
+    heartbeat,
+    reconnect,
+  });
+  const restartedA = makeOcapnNoiseNetwork({
+    codec: cborCodec,
+    heartbeat,
+    reconnect,
+  });
+  t.teardown(() => {
+    netA.shutdown();
+    netB.shutdown();
+    restartedA.shutdown();
+  });
+  const signingKeysA = netA.generateSigningKeys();
+  const keyA = netA.addSigningKeys(signingKeysA);
+  const keyB = netB.addSigningKeys(netB.generateSigningKeys());
+  const { transportA, transportB } = makeMockTransportPair();
+  const injector = makeLossyTransport(transportA);
+  await netA.addTransport(injector.transport);
+  await netB.addTransport(transportB);
+  const [_sessionA, sessionB] = await Promise.all([
+    netA.provideSession(netB.locationFor(keyB)),
+    netB.waitForInboundSession(keyA),
+  ]);
+
+  // A dies in a partition, so B never hears it go.
+  injector.refuse(true);
+  injector.sever();
+  netA.shutdown();
+  await eventually(() => sessionB.getLiveness().reconnecting);
+
+  // A comes back with the same identity but none of the session state.
+  restartedA.addSigningKeys(signingKeysA);
+  await restartedA.addTransport(transportA);
+  const fresh = await restartedA.provideSession(netB.locationFor(keyB));
+  t.is(fresh.getLiveness().epoch, 0n);
+  await t.throwsAsync(() => sessionB.reader.next(undefined), {
+    message: /peer opened a new session instead of resuming/,
+  });
+});
+
 test('a deliberate close ends the session without a reconnect', async t => {
   const { sessionA, sessionB, injector } = await connectLossyPair(t, cborCodec);
   sessionA.close();
@@ -254,5 +303,14 @@ test('reconnect options are validated', t => {
         reconnect: { backoffMaxMs: 10, backoffInitialMs: 100 },
       }),
     { message: /backoffMaxMs/ },
+  );
+  t.throws(
+    () =>
+      makeOcapnNoiseNetwork({
+        codec: cborCodec,
+        heartbeat,
+        reconnect: { backoffInitialMs: -1 },
+      }),
+    { message: /backoffInitialMs.* must be a positive number/ },
   );
 });

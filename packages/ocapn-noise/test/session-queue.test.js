@@ -18,6 +18,9 @@ const delay = milliseconds =>
 
 // Wide enough that timer jitter on a loaded CI runner cannot fake a loss.
 const heartbeat = { intervalMs: 50, sessionTimeoutMs: 500 };
+// For a stall that must stay short of loss: the stall below lasts about
+// five intervals, which a loaded CI runner can stretch past 500ms.
+const tolerantHeartbeat = { intervalMs: 50, sessionTimeoutMs: 3000 };
 
 /**
  * Connect A to B over a mock transport whose writes from A can be
@@ -25,10 +28,11 @@ const heartbeat = { intervalMs: 50, sessionTimeoutMs: 500 };
  *
  * @param {ExecutionContext<unknown>} t
  * @param {import('@endo/ocapn/codec-interface').OcapnCodec} codec
+ * @param {typeof heartbeat} [heartbeatOptions]
  */
-const connectStallablePair = async (t, codec) => {
-  const netA = makeOcapnNoiseNetwork({ codec, heartbeat });
-  const netB = makeOcapnNoiseNetwork({ codec, heartbeat });
+const connectStallablePair = async (t, codec, heartbeatOptions = heartbeat) => {
+  const netA = makeOcapnNoiseNetwork({ codec, heartbeat: heartbeatOptions });
+  const netB = makeOcapnNoiseNetwork({ codec, heartbeat: heartbeatOptions });
   t.teardown(() => {
     netA.shutdown();
     netB.shutdown();
@@ -54,6 +58,7 @@ for (const [codecName, codec] of /** @type {const} */ ([
     const { sessionA, sessionB, injector } = await connectStallablePair(
       t,
       codec,
+      tolerantHeartbeat,
     );
     const sentBefore = /** @type {bigint} */ (
       sessionA.getLiveness().lastSentNonce
