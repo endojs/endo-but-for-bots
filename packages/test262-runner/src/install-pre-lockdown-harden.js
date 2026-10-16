@@ -17,7 +17,8 @@
  *    own into `Object[@harden]` if neither is there. `repairIntrinsics` then
  *    refuses outright -- "a prior harden implementation has been used and
  *    installed" (`packages/ses/src/lockdown.js:395`). This is how the node host
- *    fails `Symbol.toStringTag-lockdown.js` today.
+ *    used to fail `Symbol.toStringTag-lockdown.js`, before it imported this
+ *    module too.
  * 2. Install a TRAVERSING one, or install one BEFORE the shim is evaluated.
  *    Either way the guest ends up with a hardener that does not traverse, or
  *    with no `lockdown()` at all. `packages/ses/src/make-hardener.js:142-147`
@@ -50,9 +51,12 @@
  * nothing having hardened.
  *
  * Nothing Ironhorse-specific here -- this is the CORPUS's repair, which is why
- * it lives in the test harness rather than in `@endo/ironhorse-prelude`. It is
- * wired into `ironhorse-prelude.js` only; whether any other host wants it is
- * not a question this change answers.
+ * it lives in the test harness rather than in `@endo/ironhorse-prelude`. Both
+ * `ironhorse-prelude.js` and `node-prelude.js` import it, for the same reason
+ * and at the same point in their order. `xs-prelude.js` does NOT, and that is
+ * not a judgement: `xst` is unavailable without building the `c/moddable`
+ * submodule, so whether XS needs it is unmeasured here and guessing would put
+ * an unverified repair in the one lane nobody can run.
  */
 
 import { makeHardener } from '@endo/harden/make-hardener.js';

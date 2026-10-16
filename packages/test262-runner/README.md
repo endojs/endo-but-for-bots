@@ -51,14 +51,14 @@ Counts at the time of writing, over the 16 runs the corpus produces
 | lane | passing | notes |
 | --- | --- | --- |
 | `test262:xs` | not measured here | needs `xst`; build the `c/moddable` submodule |
-| `test262:node` | 14 / 16 | the 2 failures are the `lockdown()` case, below |
+| `test262:node` | **16 / 16** | the `lockdown()` case took three fixes; below |
 | `test262:ironhorse-host` | **16 / 16** | the number this ratchet tracks |
 | `test262:ironhorse` | 0 / 8 covered, 1 failed | the two `Compartment` cases now RUN; see below |
 
-Ironhorse now passes the whole corpus, including the one case node still fails:
-`Symbol.toStringTag-lockdown.js`, whose sloppy and strict runs are node's two.
-The hosts were red on it for different reasons, which is why node's 14/16 was
-never a ceiling for this lane — see "The `lockdown()` case" below.
+Both hosts now pass the whole corpus. `Symbol.toStringTag-lockdown.js` — whose
+sloppy and strict runs are the two that used to be red on each — was red for
+unrelated reasons on each, which is why neither host's number was ever a
+ceiling for the other. See "The `lockdown()` case" below.
 
 It went 6/16 to 14/16 in four steps, each of which this lane surfaced:
 
@@ -80,22 +80,54 @@ intrinsics `lockdown()` still needed to tame. See "The `lockdown()` case".
 ### The `lockdown()` case
 
 One file — `Symbol.toStringTag-lockdown.js`, whose sloppy and strict runs are
-two of the sixteen — used to be red on both hosts, for two different reasons.
-Ironhorse now passes it; node still does not.
-Both reasons are `harden` running before `lockdown`, which is why it was
-tempting to file them as one; they part company on what `harden` did.
+two of the sixteen — used to be red on both hosts, for unrelated reasons.
+Both now pass it.
+On each host the first reason was `harden` running before `lockdown`, which is
+why it was tempting to file them as one; they part company on what `harden`
+did, and node then had two more layers behind that one.
 
-Node's failure is not an engine gap.
+**Node, layer 1: the poisoned slot.**
 `@endo/harden`'s selector resolves `Object[Symbol.for('harden')]`, then
 `globalThis.harden`, and only failing both installs its own — non-configurably,
 with a comment saying that doing so "will prevent any HardenedJS's lockdown
 from succeeding".
 XS and Ironhorse both supply a host `harden` the selector adopts, so
-`repairIntrinsics` starts; Node supplies none, the slot gets installed, and
-every `lockdown()`-calling case fails before `repairIntrinsics` does anything.
+`repairIntrinsics` starts; node supplied none, the slot got installed, and
+every `lockdown()`-calling case failed before `repairIntrinsics` did anything.
+`node-prelude.js` now imports `./install-pre-lockdown-harden.js`, the same
+stand-in the Ironhorse prelude uses, at the same point in its order.
 
-Ironhorse's failure was an engine gap, and starting `repairIntrinsics` was as
-far as it got. Ironhorse's native `harden` is a faithful port of XS's
+**Node, layer 2: borrowed codecs.**
+Removing layer 1 let `lockdown()` run, and it aborted on
+`Unexpected [[Prototype]] at intrinsics.TextEncoder.__proto__ (expected
+%FunctionPrototype%)`.
+`node-prelude.js` reaches `TextEncoder`/`TextDecoder` through
+`globalThis.require('node:util')`, because the realm it runs in has none of its
+own — eshost builds its `vm` context with exactly
+`{ setTimeout, require, console, print }`.
+Those classes belong to the *host* realm, and `permits-intrinsics.js` cannot
+clean a `[[Prototype]]` it cannot reach, so it aborts rather than guess.
+The prelude now hands the loans back in its `lockdown` wrapper, the way the
+hardener is handed back. The six cases that need the codecs never call
+`lockdown()`; the one that calls it never touches them.
+
+**Node, layer 3: a partial descriptor, and the real bug.**
+Removing layer 2 got as far as
+`TypeError: Cannot redefine property: BigInt64Array`.
+`@endo/immutable-arraybuffer`'s shim replaced the eleven global TypedArray
+constructors with `defineProperty(globalThis, name, { value })`, relying on the
+merge semantics an *ordinary* object gives a partial descriptor.
+A `vm` context's global is a Proxy, and its `defineProperty` fills in the
+spec's `false` defaults instead of merging — so in a `vm` realm the shim
+silently made those globals non-configurable, and `lockdown()` could not repair
+them.
+This one was not the corpus's to work around: the descriptor is now spelled out
+in the shim, and
+`packages/immutable-arraybuffer/test/shim-global-descriptors.test.js` pins it
+against a `vm` global, which is the only realm where the mistake is visible.
+
+**Ironhorse: one layer, and it was an engine gap.** Starting `repairIntrinsics`
+was as far as it got. Ironhorse's native `harden` is a faithful port of XS's
 `fx_hardenFreezeAndTraverse` and walks prototype chains: at boot
 `Function.prototype.constructor` carries the spec's
 `{writable: true, enumerable: false, configurable: true}`, and a single
