@@ -17,6 +17,8 @@ const OVERLOAD_RETRY_DELAYS_MS = harden([5000, 10_000, 20_000, 40_000, 60_000]);
 // These events stay inside the adapter. In particular, seeing a function-call
 // item does not dispatch a tool: only a completed response leaves the adapter.
 const BUFFERED_PROGRESS_EVENTS = harden([
+  // Subscription streams also send ignored response metadata before completion.
+  'response.metadata',
   'response.output_item.added',
   'response.output_item.done',
   'response.content_part.added',
@@ -31,6 +33,17 @@ const BUFFERED_PROGRESS_EVENTS = harden([
   'response.reasoning_text.delta',
   'response.reasoning_text.done',
 ]);
+// Only bounded protocol identifiers may enter diagnostics, never arbitrary
+// provider strings, response ids, payloads, or credential-shaped segments.
+/** @param {string} type */
+const diagnosticEventType = type =>
+  type.length <= 96 &&
+  /^(?:response|stream)\.[a-z_]{1,24}(?:\.[a-z_]{1,24}){0,3}$/.test(type) &&
+  !/(?:^|[._])(?:sk|pk|rk|gsk|hf|ghp|gho|ghs|ghu|glpat|xox[a-z]?|bearer)(?:[._]|$)/i.test(
+    type,
+  )
+    ? type
+    : 'unrecognized';
 const reasoningEffortPattern = /^[a-z][a-z0-9_-]{0,63}$/;
 /** @type {Record<string, string>} */
 const FAILURE_EXPLANATIONS = harden({
@@ -405,11 +418,12 @@ export const makeSubscriptionResponsesProvider = ({
 
   /**
    * @param {{method: string, path: string, body: string}} request
+   * @param {number} attemptNumber
    * @param {(text: string) => void} [onToken]
    * @param {AbortSignal} [signal]
    * @param {(usage: any) => void} [onUsage]
    */
-  const attempt = async (request, onToken, signal, onUsage) => {
+  const attempt = async (request, attemptNumber, onToken, signal, onUsage) => {
     await null;
     !disposed || Fail`Subscription provider disposed`;
     !cleanupFailed || Fail`Subscription provider cleanup pending`;
@@ -487,7 +501,8 @@ export const makeSubscriptionResponsesProvider = ({
       const completedItems = new Map();
       let doneMarker = false;
       let usage;
-      let retryEligible = true;
+      /** @type {{ reason: string, eventType: string } | undefined} */
+      let retryBlock;
       for (;;) {
         const next = await wait(events.next());
         assertLive();
@@ -511,16 +526,37 @@ export const makeSubscriptionResponsesProvider = ({
         // Known reasoning and tool fragments have not left this adapter, but
         // visible text and any usage may already have reached an observer or
         // a meter. Unknown events keep the conservative fence too.
-        if (
-          (!failureEvent && !emptyLifecycle && !bufferedProgress) ||
-          event.usage != null ||
-          event.response?.usage != null ||
-          event.message?.usage != null ||
-          (event.response?.output !== undefined &&
+        if (!retryBlock) {
+          let reason;
+          if (
+            event.usage != null ||
+            event.response?.usage != null ||
+            event.message?.usage != null
+          ) {
+            reason = 'usage';
+          } else if (
+            event.response?.output !== undefined &&
             (!Array.isArray(event.response.output) ||
-              event.response.output.length !== 0))
-        ) {
-          retryEligible = false;
+              event.response.output.length !== 0)
+          ) {
+            reason = 'response-output';
+          } else if (event.type === 'response.incomplete') {
+            reason = 'incomplete-response';
+          } else if (
+            event.type === 'response.output_text.delta' &&
+            onToken !== undefined
+          ) {
+            reason = 'delivered-text';
+          } else if (!failureEvent && !emptyLifecycle && !bufferedProgress) {
+            reason = 'unknown-progress';
+          }
+          if (reason) {
+            // Retain only the first fence, not the provider event or its body.
+            retryBlock = {
+              reason,
+              eventType: diagnosticEventType(event.type),
+            };
+          }
         }
         !doneMarker || Fail`Responses event after stream end`;
         if (event.type === 'stream.done') {
@@ -552,14 +588,14 @@ export const makeSubscriptionResponsesProvider = ({
               ? (event.error ?? event)
               : event.response?.error;
           if (
-            retryEligible &&
+            !retryBlock &&
             event.type !== 'response.incomplete' &&
             error?.code === 'server_is_overloaded'
           ) {
             overloadFailures.add(failure);
           } else if (error?.code === 'server_is_overloaded') {
             log(
-              '[subscription-responses] provider overloaded; retry blocked by delivered output, usage, or unknown progress',
+              `[subscription-responses] provider overloaded; retry blocked (attempt ${attemptNumber}; reason=${retryBlock?.reason}; event=${retryBlock?.eventType})`,
             );
           }
           throw failure;
@@ -687,7 +723,13 @@ export const makeSubscriptionResponsesProvider = ({
       for (let retry = 0; ; retry += 1) {
         liveSignal.throwIfAborted();
         try {
-          return await attempt(request, onToken, liveSignal, onUsage);
+          return await attempt(
+            request,
+            retry + 1,
+            onToken,
+            liveSignal,
+            onUsage,
+          );
         } catch (error) {
           liveSignal.throwIfAborted();
           if (

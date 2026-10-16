@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-10-01 |
-| **Updated** | 2026-10-07 |
+| **Updated** | 2026-10-16 |
 | **Author** | kumavis (prompted) |
 | **Status** | Initial implementation complete; Tokyo acceptance passed |
 
@@ -51,16 +51,19 @@ the sequence (empty disables retries). Each retry keeps the identical serialized
 request/session affinity and acknowledges endpoint revocation before waiting.
 Only a named `server_is_overloaded` refusal before delivered text or usage qualifies.
 The October 16 follow-up permits retries after known buffered reasoning and
-function-call fragments: neither leaves the adapter or executes a tool before a
-complete response returns to the agent loop.
+function-call fragments and ignored `response.metadata` events: none leaves the
+adapter or executes a tool before a complete response returns to the agent loop.
 An unsuccessful attempt's fragments are discarded, and the identical current
 inference request is retried without replaying earlier tool rounds.
 Non-streaming callers may also discard text that has not reached an observer.
 Unknown events, delivered text or usage, observer failures, malformed streams,
 HTTP errors and transport uncertainty are not replayed. Cancellation
 and disposal interrupt backoff. Sanitized diagnostics report attempts/delays,
-not provider prose or credentials; they also identify a blocked retry or an
-exhausted retry budget. This is volatile inference retry state, not
+not provider prose or credentials; blocked retries identify the first fence
+(delivered text, usage, response output, incomplete response, or unknown progress),
+a bounded sanitized event type, and the attempt number.
+The first fence is retained even if later events have different reasons to block.
+The exhausted retry budget is reported separately. This is volatile inference retry state, not
 another durable turn or a recovered-turn replay mechanism; tool dispatch stays
 behind the existing journaled complete-response boundary. OpenRouter reuses the
 same abortable delay, without changing its retry policy.

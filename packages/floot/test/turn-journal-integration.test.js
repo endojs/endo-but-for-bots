@@ -2001,7 +2001,7 @@ test('end-of-turn compaction restores retained tools and final answer exactly on
   t.is(replayExecutions, 0);
 });
 
-test('Responses overload retries the current inference without repeating a completed tool', async t => {
+test('Responses overload after metadata retries without repeating a completed tool', async t => {
   t.timeout(5000);
   const f = fixture();
   const requests = [];
@@ -2031,6 +2031,20 @@ test('Responses overload retries the current inference without repeating a compl
       {
         type: 'response.reasoning_summary_text.delta',
         delta: 'Private partial reasoning',
+      },
+      {
+        type: 'response.function_call_arguments.delta',
+        delta: '{}',
+      },
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: call('discarded'),
+      },
+      {
+        type: 'response.metadata',
+        response_id: 'private-response-id',
+        metadata: { private: 'not published' },
       },
       {
         type: 'error',

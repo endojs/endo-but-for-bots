@@ -940,6 +940,7 @@ test('overload delay configuration can be changed or disabled', async t => {
 });
 
 for (const [label, event] of [
+  ['metadata', { type: 'response.metadata', metadata: { private: 'hidden' } }],
   [
     'item',
     { type: 'response.output_item.added', output_index: 0, item: callItem },
@@ -992,13 +993,33 @@ test('non-streaming overload retries discard undelivered text', async t => {
   t.is(subject.requests.length, 2);
 });
 
-for (const [label, event] of [
-  ['text', { type: 'response.output_text.delta', delta: 'Partial' }],
-  ['unknown event', { type: 'future.event' }],
-  ['incomplete lifecycle', { type: 'response.created', response: {} }],
+/** @type {Array<[string, { type: string, [key: string]: any }, string]>} */
+const retryFences = [
+  [
+    'text',
+    { type: 'response.output_text.delta', delta: 'Partial' },
+    'delivered-text',
+  ],
+  ['unknown event', { type: 'response.future_event' }, 'unknown-progress'],
+  [
+    'incomplete lifecycle',
+    { type: 'response.created', response: {} },
+    'unknown-progress',
+  ],
   [
     'lifecycle output',
     { type: 'response.created', response: { output: [callItem] } },
+    'response-output',
+  ],
+  [
+    'metadata usage',
+    { type: 'response.metadata', usage: { input_tokens: 1 } },
+    'usage',
+  ],
+  [
+    'metadata output',
+    { type: 'response.metadata', response: { output: [callItem] } },
+    'response-output',
   ],
   [
     'positive usage',
@@ -1006,6 +1027,7 @@ for (const [label, event] of [
       type: 'response.in_progress',
       response: { output: [], usage: { input_tokens: 2 } },
     },
+    'usage',
   ],
   [
     'zero usage',
@@ -1013,6 +1035,7 @@ for (const [label, event] of [
       type: 'response.in_progress',
       response: { output: [], usage: { input_tokens: 0, output_tokens: 0 } },
     },
+    'usage',
   ],
   [
     'unrecognized usage',
@@ -1020,8 +1043,10 @@ for (const [label, event] of [
       type: 'response.in_progress',
       response: { output: [], usage: { mystery: 1 } },
     },
+    'usage',
   ],
-]) {
+];
+for (const [label, event, reason] of retryFences) {
   test(`overload never retries after ${label}`, async t => {
     const subject = retryFixture([[event, overload], [completion()]]);
     t.teardown(() => subject.provider.dispose());
@@ -1039,8 +1064,67 @@ for (const [label, event] of [
     );
     t.is(subject.requests.length, 1);
     t.deepEqual(subject.delays, []);
+    t.deepEqual(subject.logs, [
+      `[subscription-responses] provider overloaded; retry blocked (attempt 1; reason=${reason}; event=${event.type})`,
+    ]);
   });
 }
+
+test('retry diagnostics preserve the first fence and identify the current attempt', async t => {
+  const subject = retryFixture([
+    [overload],
+    [
+      { type: 'response.future_event', private: 'hidden payload' },
+      { type: 'response.output_text.delta', delta: 'hidden text' },
+      { type: 'response.metadata', metadata: { private: 'hidden metadata' } },
+      overload,
+    ],
+  ]);
+  t.teardown(() => subject.provider.dispose());
+  await t.throwsAsync(
+    subject.provider.chatStream([], [], () => {}),
+    {
+      message: /server_is_overloaded/,
+    },
+  );
+  t.is(subject.requests.length, 2);
+  t.deepEqual(subject.logs, [
+    '[subscription-responses] provider overloaded; retry 1/5 in 5000ms',
+    '[subscription-responses] provider overloaded; retry blocked (attempt 2; reason=unknown-progress; event=response.future_event)',
+  ]);
+});
+
+for (const type of [
+  'response.private\nINJECTED',
+  `response.${'a'.repeat(100)}`,
+  'response.sk_secret',
+  'private-response-id',
+]) {
+  test(`retry diagnostics redact untrusted event type ${JSON.stringify(type)}`, async t => {
+    const subject = retryFixture([[{ type }, overload]]);
+    t.teardown(() => subject.provider.dispose());
+    await t.throwsAsync(subject.provider.chat([], []), {
+      message: /server_is_overloaded/,
+    });
+    t.deepEqual(subject.logs, [
+      '[subscription-responses] provider overloaded; retry blocked (attempt 1; reason=unknown-progress; event=unrecognized)',
+    ]);
+  });
+}
+
+test('incomplete overload reports an explicit non-retryable response', async t => {
+  const subject = retryFixture([
+    [{ type: 'response.incomplete', response: { error: overload.error } }],
+  ]);
+  t.teardown(() => subject.provider.dispose());
+  await t.throwsAsync(subject.provider.chat([], []), {
+    message: /server_is_overloaded/,
+  });
+  t.is(subject.requests.length, 1);
+  t.deepEqual(subject.logs, [
+    '[subscription-responses] provider overloaded; retry blocked (attempt 1; reason=incomplete-response; event=response.incomplete)',
+  ]);
+});
 
 test('overload carrying output or usage is not retried', async t => {
   for (const response of [
