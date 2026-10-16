@@ -2,6 +2,7 @@
 
 /** @import { ExecutionContext } from 'ava' */
 
+import harden from '@endo/harden';
 import test from '@endo/ses-ava/test.js';
 
 import { cborCodec } from '@endo/ocapn/cbor';
@@ -203,4 +204,54 @@ test('sessions without heartbeats write directly and report no queue', async t =
   const liveness = sessionA.getLiveness();
   t.is(liveness.lastSentNonce, undefined);
   t.is(liveness.queuedFrames, 0);
+});
+
+test('a transport write that rejects ends the session with its error', async t => {
+  const netA = makeOcapnNoiseNetwork({ codec: cborCodec, heartbeat });
+  const netB = makeOcapnNoiseNetwork({ codec: cborCodec, heartbeat });
+  t.teardown(() => {
+    netA.shutdown();
+    netB.shutdown();
+  });
+  const keyA = netA.addSigningKeys(netA.generateSigningKeys());
+  const keyB = netB.addSigningKeys(netB.generateSigningKeys());
+  const { transportA, transportB } = makeMockTransportPair();
+  let broken = false;
+  await netA.addTransport(
+    harden({
+      ...transportA,
+      connect: async hints => {
+        await null;
+        const stream = await transportA.connect(hints);
+        /** @type {typeof stream.writer} */
+        const writer = harden({
+          ...stream.writer,
+          next: async value => {
+            await null;
+            if (broken) throw Error('transport write failed');
+            return stream.writer.next(value);
+          },
+          [Symbol.asyncIterator]() {
+            return writer;
+          },
+        });
+        return harden({ reader: stream.reader, writer });
+      },
+    }),
+  );
+  await netB.addTransport(transportB);
+  const [sessionA] = await Promise.all([
+    netA.provideSession(netB.locationFor(keyB)),
+    netB.waitForInboundSession(keyA),
+  ]);
+
+  broken = true;
+  await sessionA.writer.next(Uint8Array.of(1));
+  await t.throwsAsync(() => sessionA.reader.next(undefined), {
+    message: 'transport write failed',
+  });
+  t.deepEqual(await sessionA.writer.next(Uint8Array.of(2)), {
+    done: true,
+    value: undefined,
+  });
 });
