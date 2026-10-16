@@ -14,6 +14,23 @@ import { abortableDelay } from './delay.js';
 // A transport bound matching the Codex broker, not a model context limit.
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const OVERLOAD_RETRY_DELAYS_MS = harden([5000, 10_000, 20_000, 40_000, 60_000]);
+// These events stay inside the adapter. In particular, seeing a function-call
+// item does not dispatch a tool: only a completed response leaves the adapter.
+const BUFFERED_PROGRESS_EVENTS = harden([
+  'response.output_item.added',
+  'response.output_item.done',
+  'response.content_part.added',
+  'response.content_part.done',
+  'response.output_text.done',
+  'response.function_call_arguments.delta',
+  'response.function_call_arguments.done',
+  'response.reasoning_summary_part.added',
+  'response.reasoning_summary_part.done',
+  'response.reasoning_summary_text.delta',
+  'response.reasoning_summary_text.done',
+  'response.reasoning_text.delta',
+  'response.reasoning_text.done',
+]);
 const reasoningEffortPattern = /^[a-z][a-z0-9_-]{0,63}$/;
 /** @type {Record<string, string>} */
 const FAILURE_EXPLANATIONS = harden({
@@ -342,7 +359,8 @@ const responseEvents = async function* responseEventIterator(bytes) {
  * @param {number} [options.contextLength] Provider-observed metadata supplied by
  *   the catalog integration, not an execution budget. Absent means unknown.
  * @param {readonly number[]} [options.overloadRetryDelaysMs] One delay per retry;
- *   an empty array disables retries. Only explicit refusals before output qualify.
+ *   an empty array disables retries. Explicit overloads can retry while output
+ *   is still buffered here; delivered text, usage, or unknown events fence retry.
  * @param {(ms: number, signal?: AbortSignal) => Promise<void>} [options.sleep]
  * @param {(line: string) => void} [options.log] Sanitized retry diagnostics.
  */
@@ -485,11 +503,16 @@ export const makeSubscriptionResponsesProvider = ({
           ['response.created', 'response.in_progress'].includes(event.type) &&
           Array.isArray(event.response?.output) &&
           event.response.output.length === 0;
-        // Unknown/ignored deltas are still output. Usage, even zero or an
-        // unrecognized shape, may already have reached an observer or a meter.
-        // Never infer permission to replay from a missing common message.
+        const bufferedProgress =
+          BUFFERED_PROGRESS_EVENTS.includes(event.type) ||
+          (event.type === 'response.output_text.delta' &&
+            onToken === undefined);
+        // Retry only the current inference, not the surrounding tool loop.
+        // Known reasoning and tool fragments have not left this adapter, but
+        // visible text and any usage may already have reached an observer or
+        // a meter. Unknown events keep the conservative fence too.
         if (
-          (!failureEvent && !emptyLifecycle) ||
+          (!failureEvent && !emptyLifecycle && !bufferedProgress) ||
           event.usage != null ||
           event.response?.usage != null ||
           event.message?.usage != null ||
@@ -534,6 +557,10 @@ export const makeSubscriptionResponsesProvider = ({
             error?.code === 'server_is_overloaded'
           ) {
             overloadFailures.add(failure);
+          } else if (error?.code === 'server_is_overloaded') {
+            log(
+              '[subscription-responses] provider overloaded; retry blocked by delivered output, usage, or unknown progress',
+            );
           }
           throw failure;
         }
@@ -611,7 +638,8 @@ export const makeSubscriptionResponsesProvider = ({
   };
   /**
    * Retries belong to this live inference call, never to a recovered turn.
-   * Tools run only after a complete response has returned to the agent loop.
+   * Tools run only after a complete response has returned to the agent loop;
+   * buffered tool fragments from a failed attempt are discarded here.
    * @param {any[]} messages
    * @param {any[]} tools
    * @param {(text: string) => void} [onToken]
@@ -668,6 +696,11 @@ export const makeSubscriptionResponsesProvider = ({
             retry >= retryDelays.length ||
             cleanupFailed
           ) {
+            if (error instanceof Error && overloadFailures.has(error)) {
+              log(
+                `[subscription-responses] provider overloaded; retry limit reached after ${retry + 1} attempts`,
+              );
+            }
             throw error;
           }
           // attempt's finally acknowledged revocation before this catch.

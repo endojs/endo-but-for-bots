@@ -904,7 +904,11 @@ test('persistent overload is bounded to six attempts and five gentle delays', as
   });
   t.is(subject.requests.length, 6);
   t.deepEqual(subject.delays, [5000, 10_000, 20_000, 40_000, 60_000]);
-  t.is(subject.logs.length, 5);
+  t.is(subject.logs.length, 6);
+  t.is(
+    subject.logs.at(-1),
+    '[subscription-responses] provider overloaded; retry limit reached after 6 attempts',
+  );
   t.false(subject.logs.join('').includes('Private'));
 });
 
@@ -936,7 +940,6 @@ test('overload delay configuration can be changed or disabled', async t => {
 });
 
 for (const [label, event] of [
-  ['text', { type: 'response.output_text.delta', delta: 'Partial' }],
   [
     'item',
     { type: 'response.output_item.added', output_index: 0, item: callItem },
@@ -949,6 +952,48 @@ for (const [label, event] of [
     'reasoning',
     { type: 'response.reasoning_summary_text.delta', delta: 'Private' },
   ],
+  ['reasoning part', { type: 'response.reasoning_summary_part.added' }],
+  ['content part', { type: 'response.content_part.added' }],
+  [
+    'completed item',
+    { type: 'response.output_item.done', output_index: 0, item: callItem },
+  ],
+]) {
+  test(`overload retries after buffered ${label} without publishing failed output`, async t => {
+    const subject = retryFixture([[event, overload], [completion()]]);
+    t.teardown(() => subject.provider.dispose());
+    const tokens = [];
+    const usages = [];
+    const result = await subject.provider.chatStream(
+      [],
+      [],
+      text => tokens.push(text),
+      undefined,
+      usage => usages.push(usage),
+    );
+    t.is(result.message.content, 'Done');
+    t.falsy(result.message.tool_calls);
+    t.deepEqual(tokens, []);
+    t.is(usages.length, 1);
+    t.is(subject.requests.length, 2);
+    t.deepEqual(subject.requests[0], subject.requests[1]);
+    t.deepEqual(subject.delays, [5000]);
+  });
+}
+
+test('non-streaming overload retries discard undelivered text', async t => {
+  const subject = retryFixture([
+    [{ type: 'response.output_text.delta', delta: 'Discard me' }, overload],
+    [completion()],
+  ]);
+  t.teardown(() => subject.provider.dispose());
+  const result = await subject.provider.chat([], []);
+  t.is(result.message.content, 'Done');
+  t.is(subject.requests.length, 2);
+});
+
+for (const [label, event] of [
+  ['text', { type: 'response.output_text.delta', delta: 'Partial' }],
   ['unknown event', { type: 'future.event' }],
   ['incomplete lifecycle', { type: 'response.created', response: {} }],
   [

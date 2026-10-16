@@ -49,11 +49,18 @@ subscription Responses adapter: five waits of 5, 10, 20, 40 and 60 seconds, then
 the sixth refusal is terminal. Constructor `overloadRetryDelaysMs` configures
 the sequence (empty disables retries). Each retry keeps the identical serialized
 request/session affinity and acknowledges endpoint revocation before waiting.
-Only a named `server_is_overloaded` refusal before any output or usage qualifies;
-unknown events, partial reasoning/tool/text output, observer failures, malformed
-streams, HTTP errors and transport uncertainty are not replayed. Cancellation
+Only a named `server_is_overloaded` refusal before delivered text or usage qualifies.
+The October 16 follow-up permits retries after known buffered reasoning and
+function-call fragments: neither leaves the adapter or executes a tool before a
+complete response returns to the agent loop.
+An unsuccessful attempt's fragments are discarded, and the identical current
+inference request is retried without replaying earlier tool rounds.
+Non-streaming callers may also discard text that has not reached an observer.
+Unknown events, delivered text or usage, observer failures, malformed streams,
+HTTP errors and transport uncertainty are not replayed. Cancellation
 and disposal interrupt backoff. Sanitized diagnostics report attempts/delays,
-not provider prose or credentials. This is volatile transport retry state, not
+not provider prose or credentials; they also identify a blocked retry or an
+exhausted retry budget. This is volatile inference retry state, not
 another durable turn or a recovered-turn replay mechanism; tool dispatch stays
 behind the existing journaled complete-response boundary. OpenRouter reuses the
 same abortable delay, without changing its retry policy.
