@@ -14,6 +14,36 @@ import { abortableDelay } from './delay.js';
 // A transport bound matching the Codex broker, not a model context limit.
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const OVERLOAD_RETRY_DELAYS_MS = harden([5000, 10_000, 20_000, 40_000, 60_000]);
+// These events stay inside the adapter. In particular, seeing a function-call
+// item does not dispatch a tool: only a completed response leaves the adapter.
+const BUFFERED_PROGRESS_EVENTS = harden([
+  // Subscription streams also send ignored response metadata before completion.
+  'response.metadata',
+  'response.output_item.added',
+  'response.output_item.done',
+  'response.content_part.added',
+  'response.content_part.done',
+  'response.output_text.done',
+  'response.function_call_arguments.delta',
+  'response.function_call_arguments.done',
+  'response.reasoning_summary_part.added',
+  'response.reasoning_summary_part.done',
+  'response.reasoning_summary_text.delta',
+  'response.reasoning_summary_text.done',
+  'response.reasoning_text.delta',
+  'response.reasoning_text.done',
+]);
+// Only bounded protocol identifiers may enter diagnostics, never arbitrary
+// provider strings, response ids, payloads, or credential-shaped segments.
+/** @param {string} type */
+const diagnosticEventType = type =>
+  type.length <= 96 &&
+  /^(?:response|stream)\.[a-z_]{1,24}(?:\.[a-z_]{1,24}){0,3}$/.test(type) &&
+  !/(?:^|[._])(?:sk|pk|rk|gsk|hf|ghp|gho|ghs|ghu|glpat|xox[a-z]?|bearer)(?:[._]|$)/i.test(
+    type,
+  )
+    ? type
+    : 'unrecognized';
 const reasoningEffortPattern = /^[a-z][a-z0-9_-]{0,63}$/;
 /** @type {Record<string, string>} */
 const FAILURE_EXPLANATIONS = harden({
@@ -342,7 +372,8 @@ const responseEvents = async function* responseEventIterator(bytes) {
  * @param {number} [options.contextLength] Provider-observed metadata supplied by
  *   the catalog integration, not an execution budget. Absent means unknown.
  * @param {readonly number[]} [options.overloadRetryDelaysMs] One delay per retry;
- *   an empty array disables retries. Only explicit refusals before output qualify.
+ *   an empty array disables retries. Explicit overloads can retry while output
+ *   is still buffered here; delivered text, usage, or unknown events fence retry.
  * @param {(ms: number, signal?: AbortSignal) => Promise<void>} [options.sleep]
  * @param {(line: string) => void} [options.log] Sanitized retry diagnostics.
  */
@@ -387,11 +418,12 @@ export const makeSubscriptionResponsesProvider = ({
 
   /**
    * @param {{method: string, path: string, body: string}} request
+   * @param {number} attemptNumber
    * @param {(text: string) => void} [onToken]
    * @param {AbortSignal} [signal]
    * @param {(usage: any) => void} [onUsage]
    */
-  const attempt = async (request, onToken, signal, onUsage) => {
+  const attempt = async (request, attemptNumber, onToken, signal, onUsage) => {
     await null;
     !disposed || Fail`Subscription provider disposed`;
     !cleanupFailed || Fail`Subscription provider cleanup pending`;
@@ -469,7 +501,8 @@ export const makeSubscriptionResponsesProvider = ({
       const completedItems = new Map();
       let doneMarker = false;
       let usage;
-      let retryEligible = true;
+      /** @type {{ reason: string, eventType: string } | undefined} */
+      let retryBlock;
       for (;;) {
         const next = await wait(events.next());
         assertLive();
@@ -485,19 +518,45 @@ export const makeSubscriptionResponsesProvider = ({
           ['response.created', 'response.in_progress'].includes(event.type) &&
           Array.isArray(event.response?.output) &&
           event.response.output.length === 0;
-        // Unknown/ignored deltas are still output. Usage, even zero or an
-        // unrecognized shape, may already have reached an observer or a meter.
-        // Never infer permission to replay from a missing common message.
-        if (
-          (!failureEvent && !emptyLifecycle) ||
-          event.usage != null ||
-          event.response?.usage != null ||
-          event.message?.usage != null ||
-          (event.response?.output !== undefined &&
+        const bufferedProgress =
+          BUFFERED_PROGRESS_EVENTS.includes(event.type) ||
+          (event.type === 'response.output_text.delta' &&
+            onToken === undefined);
+        // Retry only the current inference, not the surrounding tool loop.
+        // Known reasoning and tool fragments have not left this adapter, but
+        // visible text and any usage may already have reached an observer or
+        // a meter. Unknown events keep the conservative fence too.
+        if (!retryBlock) {
+          let reason;
+          if (
+            event.usage != null ||
+            event.response?.usage != null ||
+            event.message?.usage != null
+          ) {
+            reason = 'usage';
+          } else if (
+            event.response?.output !== undefined &&
             (!Array.isArray(event.response.output) ||
-              event.response.output.length !== 0))
-        ) {
-          retryEligible = false;
+              event.response.output.length !== 0)
+          ) {
+            reason = 'response-output';
+          } else if (event.type === 'response.incomplete') {
+            reason = 'incomplete-response';
+          } else if (
+            event.type === 'response.output_text.delta' &&
+            onToken !== undefined
+          ) {
+            reason = 'delivered-text';
+          } else if (!failureEvent && !emptyLifecycle && !bufferedProgress) {
+            reason = 'unknown-progress';
+          }
+          if (reason) {
+            // Retain only the first fence, not the provider event or its body.
+            retryBlock = {
+              reason,
+              eventType: diagnosticEventType(event.type),
+            };
+          }
         }
         !doneMarker || Fail`Responses event after stream end`;
         if (event.type === 'stream.done') {
@@ -529,11 +588,15 @@ export const makeSubscriptionResponsesProvider = ({
               ? (event.error ?? event)
               : event.response?.error;
           if (
-            retryEligible &&
+            !retryBlock &&
             event.type !== 'response.incomplete' &&
             error?.code === 'server_is_overloaded'
           ) {
             overloadFailures.add(failure);
+          } else if (error?.code === 'server_is_overloaded') {
+            log(
+              `[subscription-responses] provider overloaded; retry blocked (attempt ${attemptNumber}; reason=${retryBlock?.reason}; event=${retryBlock?.eventType})`,
+            );
           }
           throw failure;
         }
@@ -611,7 +674,8 @@ export const makeSubscriptionResponsesProvider = ({
   };
   /**
    * Retries belong to this live inference call, never to a recovered turn.
-   * Tools run only after a complete response has returned to the agent loop.
+   * Tools run only after a complete response has returned to the agent loop;
+   * buffered tool fragments from a failed attempt are discarded here.
    * @param {any[]} messages
    * @param {any[]} tools
    * @param {(text: string) => void} [onToken]
@@ -659,7 +723,13 @@ export const makeSubscriptionResponsesProvider = ({
       for (let retry = 0; ; retry += 1) {
         liveSignal.throwIfAborted();
         try {
-          return await attempt(request, onToken, liveSignal, onUsage);
+          return await attempt(
+            request,
+            retry + 1,
+            onToken,
+            liveSignal,
+            onUsage,
+          );
         } catch (error) {
           liveSignal.throwIfAborted();
           if (
@@ -668,6 +738,11 @@ export const makeSubscriptionResponsesProvider = ({
             retry >= retryDelays.length ||
             cleanupFailed
           ) {
+            if (error instanceof Error && overloadFailures.has(error)) {
+              log(
+                `[subscription-responses] provider overloaded; retry limit reached after ${retry + 1} attempts`,
+              );
+            }
             throw error;
           }
           // attempt's finally acknowledged revocation before this catch.

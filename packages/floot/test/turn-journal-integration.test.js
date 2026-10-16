@@ -2001,6 +2001,140 @@ test('end-of-turn compaction restores retained tools and final answer exactly on
   t.is(replayExecutions, 0);
 });
 
+test('Responses overload after metadata retries without repeating a completed tool', async t => {
+  t.timeout(5000);
+  const f = fixture();
+  const requests = [];
+  const delays = [];
+  let effects = 0;
+  let revocations = 0;
+  const call = id => ({
+    type: 'function_call',
+    id: `item-${id}`,
+    call_id: id,
+    name: 'effect',
+    arguments: '{}',
+    status: 'completed',
+  });
+  const completion = output => ({
+    type: 'response.completed',
+    response: { status: 'completed', output },
+  });
+  const attempts = [
+    [completion([call('committed')])],
+    [
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: call('discarded'),
+      },
+      {
+        type: 'response.reasoning_summary_text.delta',
+        delta: 'Private partial reasoning',
+      },
+      {
+        type: 'response.function_call_arguments.delta',
+        delta: '{}',
+      },
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: call('discarded'),
+      },
+      {
+        type: 'response.metadata',
+        response_id: 'private-response-id',
+        metadata: { private: 'not published' },
+      },
+      {
+        type: 'error',
+        error: {
+          code: 'server_is_overloaded',
+          type: 'service_unavailable_error',
+        },
+      },
+    ],
+    [
+      completion([
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'Done' }],
+        },
+      ]),
+    ],
+  ];
+  const provider = makeSubscriptionResponsesProvider({
+    model: 'test-luna',
+    sessionId: 'overload-with-committed-tool',
+    sleep: async ms => {
+      delays.push(ms);
+    },
+    subscription: Far('RetrySubscription', {
+      describe: () => harden({ models: ['test-luna'] }),
+      openEndpoint: () =>
+        Far('RetryEndpoint', {
+          requestByteStream: request => {
+            const events = attempts[requests.length];
+            if (!events) throw Error('Unexpected extra inference');
+            requests.push(JSON.parse(request.body));
+            const bytes = new TextEncoder().encode(
+              events
+                .map(event => `data: ${JSON.stringify(event)}\n\n`)
+                .join(''),
+            );
+            return harden({
+              status: 200,
+              contentType: 'text/event-stream',
+              reader: bytesReaderFromIterator([bytes][Symbol.iterator]()),
+            });
+          },
+          revoke: () => {
+            revocations += 1;
+          },
+        }),
+    }),
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { kind: 'provider', provideProvider: () => provider },
+    'Test',
+    {
+      journalPowers: f.powers,
+      extraTools: new Map([
+        [
+          'effect',
+          effectTool(async () => {
+            effects += 1;
+            return 'Changed once';
+          }),
+        ],
+      ]),
+    },
+  );
+  t.teardown(() => agent.shutdown());
+  await agent.converse('Implement and validate', makeReplyChannel().writer);
+  t.is(effects, 1);
+  t.is(requests.length, 3);
+  t.is(revocations, 3);
+  t.deepEqual(delays, [5000]);
+  t.deepEqual(requests[1], requests[2]);
+  t.true(
+    requests[2].input.some(
+      item =>
+        item.type === 'function_call_output' &&
+        item.call_id === 'committed' &&
+        item.output === 'Changed once',
+    ),
+  );
+  const [turn] = await agent.getTurns();
+  t.is(turn.state, 'completed');
+  t.is(turn.tools.length, 1);
+  t.true(turn.tools[0].settled);
+  t.false(JSON.stringify(await agent.getHistory()).includes('discarded'));
+});
+
 for (const event of [
   { type: 'error', code: 'invalid_encrypted_content' },
   {
