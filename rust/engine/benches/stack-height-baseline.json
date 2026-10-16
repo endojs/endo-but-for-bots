@@ -3,7 +3,7 @@
     "target": "x86_64-unknown-linux-gnu",
     "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
     "profile": "release",
-    "engine_tree": "d520b7326220ef930aa4e14172935775247533ea"
+    "engine_tree": "c9c105c8ca5d955246c4a6ffcab1c8041c6053dd"
   },
   "slack": 0.02,
   "cases": {
@@ -160,7 +160,7 @@
       "outcome": "compiled"
     },
     "string-self.run": {
-      "bytes": 546479,
+      "bytes": 546447,
       "outcome": "ReentryLimit"
     },
     "render-nested-256.compile": {
@@ -304,7 +304,7 @@
       "outcome": "compiled"
     },
     "regexp-deep.run": {
-      "bytes": 8615,
+      "bytes": 8583,
       "outcome": "completed"
     },
     "regexp-nests-512.compile": {
@@ -312,7 +312,7 @@
       "outcome": "compiled"
     },
     "regexp-nests-512.run": {
-      "bytes": 8615,
+      "bytes": 8583,
       "outcome": "completed"
     },
     "proto-chain-ordinary-20k.compile": {
@@ -348,11 +348,11 @@
       "outcome": "completed"
     },
     "eval-deep.compile": {
-      "bytes": 8807,
+      "bytes": 8831,
       "outcome": "compiled"
     },
     "eval-deep.run": {
-      "bytes": 182199,
+      "bytes": 180583,
       "outcome": "completed"
     },
     "forEach-63.compile": {
@@ -488,7 +488,7 @@
       "outcome": "compiled"
     },
     "toString-62.run": {
-      "bytes": 542719,
+      "bytes": 542687,
       "outcome": "completed"
     },
     "toString-63.compile": {
@@ -496,7 +496,7 @@
       "outcome": "compiled"
     },
     "toString-63.run": {
-      "bytes": 546479,
+      "bytes": 546447,
       "outcome": "ReentryLimit"
     },
     "take-126.compile": {
@@ -504,7 +504,7 @@
       "outcome": "compiled"
     },
     "take-126.run": {
-      "bytes": 438887,
+      "bytes": 349927,
       "outcome": "completed"
     },
     "take-127.compile": {
@@ -512,7 +512,7 @@
       "outcome": "compiled"
     },
     "take-127.run": {
-      "bytes": 439319,
+      "bytes": 349911,
       "outcome": "ReentryLimit"
     },
     "iter-map-126.compile": {
@@ -520,7 +520,7 @@
       "outcome": "compiled"
     },
     "iter-map-126.run": {
-      "bytes": 438887,
+      "bytes": 349927,
       "outcome": "completed"
     },
     "iter-map-127.compile": {
@@ -528,7 +528,7 @@
       "outcome": "compiled"
     },
     "iter-map-127.run": {
-      "bytes": 439319,
+      "bytes": 349911,
       "outcome": "ReentryLimit"
     },
     "string-x-63.compile": {
@@ -536,7 +536,7 @@
       "outcome": "compiled"
     },
     "string-x-63.run": {
-      "bytes": 318123,
+      "bytes": 316107,
       "outcome": "completed"
     },
     "string-x-64.compile": {
@@ -544,7 +544,7 @@
       "outcome": "compiled"
     },
     "string-x-64.run": {
-      "bytes": 320487,
+      "bytes": 318439,
       "outcome": "ReentryLimit"
     },
     "promise-exec-63.compile": {
@@ -616,7 +616,7 @@
       "outcome": "compiled"
     },
     "asyncgen-62.run": {
-      "bytes": 304623,
+      "bytes": 219951,
       "outcome": "completed"
     },
     "asyncgen-63.compile": {
@@ -624,7 +624,7 @@
       "outcome": "compiled"
     },
     "asyncgen-63.run": {
-      "bytes": 308479,
+      "bytes": 222463,
       "outcome": "ReentryLimit"
     },
     "for-of-62.compile": {
@@ -808,7 +808,7 @@
       "outcome": "compiled"
     },
     "eval-direct-42.run": {
-      "bytes": 262039,
+      "bytes": 194167,
       "outcome": "completed"
     },
     "eval-direct-43.compile": {
@@ -816,7 +816,7 @@
       "outcome": "compiled"
     },
     "eval-direct-43.run": {
-      "bytes": 268103,
+      "bytes": 198615,
       "outcome": "ReentryLimit"
     },
     "eval-indirect-42.compile": {
@@ -824,7 +824,7 @@
       "outcome": "compiled"
     },
     "eval-indirect-42.run": {
-      "bytes": 261863,
+      "bytes": 193991,
       "outcome": "completed"
     },
     "eval-indirect-43.compile": {
@@ -832,7 +832,7 @@
       "outcome": "compiled"
     },
     "eval-indirect-43.run": {
-      "bytes": 267927,
+      "bytes": 198439,
       "outcome": "ReentryLimit"
     },
     "compartment-42.compile": {
@@ -912,7 +912,7 @@
       "outcome": "compiled"
     },
     "proxy-has-trap-127.run": {
-      "bytes": 335959,
+      "bytes": 335927,
       "outcome": "ReentryLimit"
     },
     "proxy-delete-trap-126.compile": {
@@ -1176,7 +1176,7 @@
       "outcome": "compiled"
     },
     "proxy-forin-getprototypeof-trap-61.run": {
-      "bytes": 350107,
+      "bytes": 334491,
       "outcome": "completed"
     },
     "proxy-forin-getprototypeof-trap-62.compile": {
@@ -1184,7 +1184,7 @@
       "outcome": "compiled"
     },
     "proxy-forin-getprototypeof-trap-62.run": {
-      "bytes": 354635,
+      "bytes": 338763,
       "outcome": "ReentryLimit"
     },
     "replace-re-fn-42.compile": {
@@ -1200,7 +1200,7 @@
       "outcome": "compiled"
     },
     "replace-re-fn-43.run": {
-      "bytes": 266671,
+      "bytes": 266639,
       "outcome": "ReentryLimit"
     },
     "user-exec-42.compile": {
@@ -1216,7 +1216,7 @@
       "outcome": "compiled"
     },
     "user-exec-43.run": {
-      "bytes": 277423,
+      "bytes": 277391,
       "outcome": "ReentryLimit"
     },
     "species-41.compile": {
@@ -1224,7 +1224,7 @@
       "outcome": "compiled"
     },
     "species-41.run": {
-      "bytes": 290287,
+      "bytes": 290255,
       "outcome": "completed"
     },
     "species-42.compile": {
@@ -1232,7 +1232,7 @@
       "outcome": "compiled"
     },
     "species-42.run": {
-      "bytes": 292639,
+      "bytes": 292607,
       "outcome": "ReentryLimit"
     },
     "lastindex-valueof-63.compile": {
@@ -1248,7 +1248,7 @@
       "outcome": "compiled"
     },
     "lastindex-valueof-64.run": {
-      "bytes": 320431,
+      "bytes": 320399,
       "outcome": "ReentryLimit"
     },
     "regexp-test-exec-63.compile": {
@@ -1256,7 +1256,7 @@
       "outcome": "compiled"
     },
     "regexp-test-exec-63.run": {
-      "bytes": 234111,
+      "bytes": 234079,
       "outcome": "completed"
     },
     "regexp-test-exec-64.compile": {
@@ -1264,7 +1264,7 @@
       "outcome": "compiled"
     },
     "regexp-test-exec-64.run": {
-      "bytes": 235759,
+      "bytes": 235727,
       "outcome": "ReentryLimit"
     },
     "jparse-arr-2016.compile": {
@@ -1512,7 +1512,7 @@
       "outcome": "compiled"
     },
     "parse-binding-511.compile": {
-      "bytes": 127671,
+      "bytes": 127487,
       "outcome": "refused"
     },
     "parse-cond-chain-1011.compile": {
@@ -1688,7 +1688,7 @@
       "outcome": "compiled"
     },
     "u2-tojson-regexp-512.run": {
-      "bytes": 14151,
+      "bytes": 14175,
       "outcome": "completed"
     },
     "u3-eval-nest-tagged-2038.compile": {
@@ -1696,7 +1696,7 @@
       "outcome": "compiled"
     },
     "u3-eval-nest-tagged-2038.run": {
-      "bytes": 265031,
+      "bytes": 197159,
       "outcome": "completed"
     },
     "u3-eval-nest-callchain-2044.compile": {
@@ -1704,7 +1704,7 @@
       "outcome": "compiled"
     },
     "u3-eval-nest-callchain-2044.run": {
-      "bytes": 264823,
+      "bytes": 196951,
       "outcome": "completed"
     },
     "u4-function-callchain-in-tojson-1900.compile": {
@@ -1712,7 +1712,7 @@
       "outcome": "compiled"
     },
     "u4-function-callchain-in-tojson-1900.run": {
-      "bytes": 22183,
+      "bytes": 22151,
       "outcome": "completed"
     },
     "regexp-backtrack.compile": {
