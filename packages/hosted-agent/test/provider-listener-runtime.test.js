@@ -203,7 +203,11 @@ test.serial(
 test.serial(
   'controlled PID replacement during procfs reads refuses admission',
   async t => {
-    t.timeout(5000);
+    // This walks the same startup and cleanup path as the namespace mismatch
+    // above: two 10s handshakes with a real worker child, then 1s per stop
+    // attempt and 5s waiting for the child. A loaded macOS runner has spent
+    // more than 5s here, so share that test's finite deadline.
+    t.timeout(30_000);
     const f = await fixture(t);
     const runtime = await makePodmanProviderListenerRuntime(f.options);
     t.teardown(runtime.dispose);

@@ -10,7 +10,11 @@ import { readHttpText, requestHttp } from './http-client.js';
 test.serial(
   'separate credential-free worker forwards HTTP over private capability pipes',
   async t => {
-    t.timeout(5000);
+    // A hang guard, not a speed bound: booting the worker child (lockdown,
+    // CapTP bootstrap, and listener startup) takes a fraction of a second
+    // here but has exceeded 5s on a loaded macOS runner. The production
+    // runtime grants a worker two 10s handshakes; keep the guard above that.
+    t.timeout(30_000);
     const worker = spawn(
       process.execPath,
       [
