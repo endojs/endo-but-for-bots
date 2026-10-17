@@ -8,6 +8,7 @@ import { cborCodec } from '@endo/ocapn/cbor';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import { makeOcapnNoiseNetwork } from '../index.js';
 import { makeMockTransportPair } from '../src/transports/mock.js';
+import { compareUint8Arrays } from '../src/bytewise-compare.js';
 import { makeLossyTransport } from './_loss-injector.js';
 
 /**
@@ -79,6 +80,36 @@ const connectLossyPair = async (
   ]);
   return { netA, netB, keyA, keyB, sessionA, sessionB, injector, injectorB };
 };
+
+/**
+ * Sort the two sides of a pair by the crossed-hellos tiebreaker: the
+ * x25519 ephemerals of the handshake that opened the session, read off
+ * A's SYN (bytes 32 to 64) and B's SYNACK (its first 32 bytes).
+ *
+ * @param {ReturnType<typeof makeLossyTransport>} injector
+ * @param {ReturnType<typeof makeLossyTransport>} injectorB
+ */
+const byEphemeral = (injector, injectorB) => {
+  const [syn] = injector.getStreams();
+  const [synack] = injectorB.getStreams();
+  const ephemeralA = /** @type {Uint8Array} */ (syn.firstWrite).slice(32, 64);
+  const ephemeralB = /** @type {Uint8Array} */ (synack.firstWrite).slice(0, 32);
+  return compareUint8Arrays(ephemeralA, ephemeralB) > 0
+    ? { greater: injector, lesser: injectorB }
+    : { greater: injectorB, lesser: injector };
+};
+
+/**
+ * Inbound dials that this side closed without an `op:session-hello`
+ * answer: it wrote only the SYNACK and its identity greeting.
+ *
+ * @param {ReturnType<typeof makeLossyTransport>} injector
+ */
+const droppedDials = injector =>
+  injector
+    .getStreams()
+    .filter(stream => !stream.outbound && stream.closed && stream.writes === 2)
+    .length;
 
 /**
  * @param {import('../src/types.js').OcapnNoiseSession} session
@@ -190,14 +221,79 @@ for (const [codecName, codec] of /** @type {const} */ ([
         sessionA.getLiveness().epoch > 0n,
     );
     await delay(heartbeat.intervalMs * 4);
-    t.is(injector.getOpenStreams() + injectorB.getOpenStreams(), 2);
-    t.is(injector.getOpenStreams(), 1);
-    t.is(sessionA.getLiveness().epoch, sessionB.getLiveness().epoch);
+    // One crossed round, settled by the rule: the greater side's dial is
+    // the instance both keep, so the session is at epoch 1, and the
+    // greater side dropped the lesser side's dial unanswered.
+    const { greater, lesser } = byEphemeral(injector, injectorB);
+    t.is(sessionA.getLiveness().epoch, 1n);
+    t.is(sessionB.getLiveness().epoch, 1n);
+    t.is(greater.getOpenStreams(true), 1);
+    t.is(greater.getOpenStreams(false), 0);
+    t.is(lesser.getOpenStreams(true), 0);
+    t.is(lesser.getOpenStreams(false), 1);
+    t.is(droppedDials(greater), 1);
+    t.is(droppedDials(lesser), 0);
 
     t.deepEqual(await readBytes(sessionB, 1), [1]);
     t.deepEqual(await readBytes(sessionA, 1), [101]);
     await sessionA.writer.next(Uint8Array.of(2));
     t.deepEqual(await readBytes(sessionB, 1), [2]);
+    sessionA.close();
+  });
+}
+
+for (const [codecName, codec] of /** @type {const} */ ([
+  ['cbor', cborCodec],
+  ['syrup', syrupCodec],
+])) {
+  test(`${codecName}: dials for an epoch the session has reached are dropped unanswered`, async t => {
+    const { sessionA, sessionB, injector, injectorB } = await connectLossyPair(
+      t,
+      codec,
+    );
+    // Stall the dials of the side that loses the tiebreaker, so it never
+    // drops the other side's dial in favor of its own and the session
+    // moves on without them.
+    const { greater, lesser } = byEphemeral(injector, injectorB);
+    const connectsBefore = lesser.getConnects();
+    lesser.holdConnects(true);
+
+    // Twice over, let the lesser side's dial stall before the greater
+    // side's goes through: first to epoch 1, then to epoch 2.
+    for (const epoch of [1n, 2n]) {
+      greater.holdConnects(true);
+      injector.sever();
+      injectorB.sever();
+      // eslint-disable-next-line no-await-in-loop
+      await sessionA.writer.next(Uint8Array.of(Number(epoch)));
+      // eslint-disable-next-line no-await-in-loop
+      await eventually(
+        () => lesser.getConnects() === connectsBefore + Number(epoch),
+      );
+      greater.holdConnects(false);
+      // eslint-disable-next-line no-await-in-loop
+      await eventually(
+        () =>
+          sessionA.getLiveness().epoch === epoch &&
+          sessionB.getLiveness().epoch === epoch,
+      );
+    }
+    t.is(droppedDials(greater), 0);
+
+    // The stragglers, for epochs 1 and 2, now reach a session at epoch 2.
+    lesser.holdConnects(false);
+    await eventually(() => droppedDials(greater) === 2);
+    await delay(heartbeat.intervalMs * 4);
+    t.is(sessionA.getLiveness().epoch, 2n);
+    t.is(sessionB.getLiveness().epoch, 2n);
+    t.false(sessionA.getLiveness().reconnecting);
+    t.false(sessionB.getLiveness().reconnecting);
+    t.is(greater.getOpenStreams(true), 1);
+    t.is(lesser.getOpenStreams(false), 1);
+
+    t.deepEqual(await readBytes(sessionB, 2), [1, 2]);
+    await sessionA.writer.next(Uint8Array.of(3));
+    t.deepEqual(await readBytes(sessionB, 1), [3]);
     sessionA.close();
   });
 }

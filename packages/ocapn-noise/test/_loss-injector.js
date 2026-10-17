@@ -25,8 +25,19 @@ const never = new Promise(() => {});
  * @param {OcapnNoiseTransport} transport
  */
 export const makeLossyTransport = transport => {
-  /** @type {Set<{ severed: boolean, closed: boolean }>} */
+  /**
+   * @typedef {{
+   *   severed: boolean,
+   *   closed: boolean,
+   *   outbound: boolean,
+   *   writes: number,
+   *   firstWrite: Uint8Array | undefined,
+   * }} StreamState
+   */
+  /** @type {Set<StreamState>} */
   const live = new Set();
+  /** @type {StreamState[]} */
+  const all = [];
   let refusing = false;
   let refusingOutbound = false;
   let connects = 0;
@@ -36,11 +47,20 @@ export const makeLossyTransport = transport => {
 
   /**
    * @param {ByteStream} stream
+   * @param {boolean} outbound
    * @returns {ByteStream}
    */
-  const wrapStream = stream => {
-    const state = { severed: false, closed: false };
+  const wrapStream = (stream, outbound) => {
+    /** @type {StreamState} */
+    const state = {
+      severed: false,
+      closed: false,
+      outbound,
+      writes: 0,
+      firstWrite: undefined,
+    };
     live.add(state);
+    all.push(state);
     /** @type {ByteStream['reader']} */
     const reader = harden({
       next: async value => {
@@ -63,6 +83,8 @@ export const makeLossyTransport = transport => {
     const writer = harden({
       next: async value => {
         await null;
+        if (state.writes === 0) state.firstWrite = value;
+        state.writes += 1;
         if (state.severed) return harden({ done: false, value: undefined });
         return stream.writer.next(value);
       },
@@ -89,7 +111,7 @@ export const makeLossyTransport = transport => {
       if (refusing || refusingOutbound) {
         throw Error('lossy transport: connection refused');
       }
-      return wrapStream(await transport.connect(hints));
+      return wrapStream(await transport.connect(hints), true);
     },
     listen:
       listen &&
@@ -99,7 +121,7 @@ export const makeLossyTransport = transport => {
             Promise.resolve(stream.writer.return(undefined)).catch(() => {});
             return;
           }
-          handler(wrapStream(stream));
+          handler(wrapStream(stream, false));
         })),
     shutdown: () => transport.shutdown(),
   });
@@ -136,9 +158,32 @@ export const makeLossyTransport = transport => {
         release();
       }
     },
-    /** Streams neither partitioned nor closed by this side. */
-    getOpenStreams: () =>
-      [...live].filter(state => !state.closed && !state.severed).length,
+    /**
+     * Streams neither partitioned nor closed by this side.
+     *
+     * @param {boolean} [outbound] Count only streams this side dialed
+     *   (`true`) or accepted (`false`).
+     */
+    getOpenStreams: outbound =>
+      [...live].filter(
+        state =>
+          !state.closed &&
+          !state.severed &&
+          (outbound === undefined || state.outbound === outbound),
+      ).length,
+    /**
+     * Every stream this side has dialed or accepted, in order: its
+     * direction, how many chunks this side wrote to it, and the first
+     * (an initiator's SYN or a responder's SYNACK, which carry the
+     * handshake ephemerals in the clear).
+     */
+    getStreams: () =>
+      all.map(({ outbound, writes, firstWrite, closed }) => ({
+        outbound,
+        writes,
+        firstWrite,
+        closed,
+      })),
     /** How many connections have been attempted through the transport. */
     getConnects: () => connects,
   });
