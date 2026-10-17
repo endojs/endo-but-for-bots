@@ -121,8 +121,9 @@ The session advances its epoch and replays, exactly once, the frames
 the lost instance did not deliver.
 If both sides dial at once (crossed hellos), the side whose handshake
 ephemeral is the greater keeps its own dial and drops the other side's
-unanswered, but only for `sessionTimeoutMs` after it first drops one;
-if its own dial has not landed by then, it takes the other side's.
+unanswered.
+If its own dial has not even connected within `sessionTimeoutMs` of the
+first one it drops, it takes the other side's instead.
 A dial for an epoch the session has already reached is dropped the same
 way.
 The session aborts if no new instance is up within `hardTimeoutMs`.

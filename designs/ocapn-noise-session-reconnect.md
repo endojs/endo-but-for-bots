@@ -34,11 +34,13 @@ Deviations from the design as written:
   side with the greater ephemeral keeps its own dial, which is the same
   outcome as the smaller side being responder. Equal ephemerals, which
   only a peer echoing ours could produce, go to the side that opened the
-  session. The winner drops the peer's dials only for `sessionTimeoutMs`
-  after it first drops one while its own is in flight; after that it
-  takes the peer's dial, so an outbound dial that hangs (a one-way partition where
-  connect neither fails nor completes) delays recovery by at most one
-  session timeout rather than until `hardTimeoutMs`. P3 stays open for
+  session. Once its own redial has connected, the rest of that dial is
+  bounded by the handshake timeout, and the winner drops the peer's dials
+  until it settles. While its own redial has not connected, it drops them
+  only for `sessionTimeoutMs` after it first drops one, then takes the
+  peer's dial, so an outbound connect that hangs (a one-way partition
+  where connect neither fails nor completes) delays recovery by at most
+  one session timeout rather than until `hardTimeoutMs`. P3 stays open for
   review.
 - **Either side redials (§ 3).** Both sides redial on loss, rather than
   only the side that opened the session.

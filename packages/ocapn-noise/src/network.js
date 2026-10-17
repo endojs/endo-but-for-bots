@@ -393,8 +393,9 @@ export const makeOcapnNoiseNetwork = ({
   /**
    * The network's handle on a session that resumes after loss.
    * `prefersOwnDial` is asked only when a peer dial would otherwise be
-   * taken; a `true` answer drops that dial and, the first time in a run of
-   * redials, starts the window after which the session stops deferring.
+   * taken; a `true` answer drops that dial. While no dial of ours has
+   * connected, the first such answer in a run of redials starts the window
+   * after which the session stops deferring.
    *
    * @typedef {{
    *   sessionToken: Uint8Array,
@@ -404,7 +405,7 @@ export const makeOcapnNoiseNetwork = ({
    *   getReceivedFrames: () => bigint,
    *   attach: (instance: Instance, epoch: bigint, peerReceived: bigint) => void,
    *   abort: (error: Error) => void,
-   *   dial: (epoch: bigint, received: bigint) => Promise<{ instance: Instance, peerHello: SessionHello }>,
+   *   dial: (epoch: bigint, received: bigint, onConnected: () => void) => Promise<{ instance: Instance, peerHello: SessionHello }>,
    * }} Reconnector
    */
   /**
@@ -1060,11 +1061,15 @@ export const makeOcapnNoiseNetwork = ({
     // between, so no peer dial is accepted after ours lands but before it
     // attaches.
     let dialing = 0;
-    // When, during the current run of redials, the winner of the crossed
-    // hellos first dropped a peer dial in favor of its own. It defers only
-    // for a session timeout from then, so a dial of ours that hangs (a
-    // one-way partition where connect neither fails nor completes) cannot
-    // keep refusing a peer dial that has a working path.
+    // Redials in flight whose transport has connected. The rest of such a
+    // dial is bounded by the handshake timeout, so the winner of the
+    // crossed hellos can defer to it outright.
+    let connectedDials = 0;
+    // When, during the current run of redials, the winner first dropped a
+    // peer dial while none of its own had connected. It defers on that
+    // ground only for a session timeout from then, so a dial of ours whose
+    // connect hangs (a one-way partition where connect neither fails nor
+    // completes) cannot keep refusing a peer dial that has a working path.
     /** @type {number | undefined} */
     let deferringSince;
     const reconnectSettings =
@@ -1345,11 +1350,16 @@ export const makeOcapnNoiseNetwork = ({
         const nextEpoch = epoch + 1n;
         /** @type {Awaited<ReturnType<Reconnector['dial']>>} */
         let dialed;
+        let connected = false;
         dialing += 1;
         try {
           dialed = await /** @type {Reconnector} */ (reconnector).dial(
             nextEpoch,
             receivedFrames,
+            () => {
+              connected = true;
+              connectedDials += 1;
+            },
           );
         } catch (_error) {
           if (closed || current !== undefined) return;
@@ -1359,6 +1369,7 @@ export const makeOcapnNoiseNetwork = ({
           return;
         } finally {
           dialing -= 1;
+          if (connected) connectedDials -= 1;
           if (dialing === 0) deferringSince = undefined;
         }
         const { instance, peerHello } = dialed;
@@ -1685,6 +1696,7 @@ export const makeOcapnNoiseNetwork = ({
           isAttached: () => current !== undefined,
           prefersOwnDial: () => {
             if (dialing === 0 || !winsCrossedHellos) return false;
+            if (connectedDials > 0) return true;
             const now = Date.now();
             if (deferringSince === undefined) deferringSince = now;
             return (
@@ -1816,8 +1828,16 @@ export const makeOcapnNoiseNetwork = ({
    * @param {OcapnLocation} location
    * @param {Uint8Array} peerEd25519
    * @param {(handshakeHash: Uint8Array) => { epoch: bigint, session: Uint8Array, received: bigint }} makeHello
+   * @param {() => void} [onConnected] Called once the transport connects,
+   *   after which the rest of the dial is bounded by `handshakeTimeoutMs`.
    */
-  const dialHandshake = async (localKey, location, peerEd25519, makeHello) => {
+  const dialHandshake = async (
+    localKey,
+    location,
+    peerEd25519,
+    makeHello,
+    onConnected = () => {},
+  ) => {
     const { transport, hints } = selectOutgoingTransport(location);
 
     // Build the SYN before dialing: `initiatorWriteSyn` rejects a weak or
@@ -1840,6 +1860,7 @@ export const makeOcapnNoiseNetwork = ({
     const tiebreaker = tiebreakerFromPrefixedSyn(prefixedSyn);
 
     const stream = await transport.connect(hints);
+    onConnected();
     try {
       await stream.writer.next(prefixedSyn);
 
@@ -1977,12 +1998,13 @@ export const makeOcapnNoiseNetwork = ({
     reconnector = built.reconnector;
     if (reconnector) {
       const { sessionToken } = reconnector;
-      reconnector.dial = async (epoch, received) => {
+      reconnector.dial = async (epoch, received, onConnected) => {
         const dialed = await dialHandshake(
           localKey,
           identity.peerLocation,
           peerEd25519,
           () => ({ epoch, session: sessionToken, received }),
+          onConnected,
         );
         return { instance: dialed.instance, peerHello: dialed.peerHello };
       };
