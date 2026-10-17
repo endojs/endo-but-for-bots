@@ -3,6 +3,7 @@
 /** @import { ExecutionContext } from 'ava' */
 
 import test from '@endo/ses-ava/test.js';
+import harden from '@endo/harden';
 
 import { cborCodec } from '@endo/ocapn/cbor';
 import { syrupCodec } from '@endo/ocapn/syrup';
@@ -63,7 +64,6 @@ for (const [codecName, codec] of /** @type {const} */ ([
     const replyP = sessionA.reader.next(undefined);
     await delay(heartbeat.sessionTimeoutMs * 3);
 
-    // Each pending read skips the peer's heartbeats and gets its data.
     await sessionA.writer.next(Uint8Array.of(1, 2, 3));
     const received = await receivedP;
     t.false(received.done);
@@ -188,7 +188,6 @@ const watchSessionTimers = t => {
     g.clearTimeout = realClearTimeout;
   });
   return {
-    /** Heartbeat or liveness timers armed and not yet cleared. */
     live: () => [...armed].filter(handle => !cleared.has(handle)),
   };
 };
@@ -319,7 +318,6 @@ test('an op:pong acknowledging an unsent nonce is ignored', async t => {
   );
   await sessionB.writer.next(honest);
   await sessionB.writer.next(Uint8Array.of(1));
-  // Reading the data frame absorbs both pongs ahead of it.
   const data = await sessionA.reader.next(undefined);
   t.false(data.done);
   // A sent its greeting at nonce 0, so only the honest pong counts.
@@ -347,7 +345,6 @@ test('a consumer that stops reading is not mistaken for a lost peer', async t =>
     if (!result.done) t.is(result.value[0], index);
   }
   await Promise.all(writes);
-  // The stall was local, so the session survived it.
   await sessionB.writer.next(Uint8Array.of(42));
   const last = await sessionA.reader.next(undefined);
   t.false(last.done);
@@ -387,7 +384,6 @@ test('heartbeat options are validated', t => {
       `sessionTimeoutMs ${sessionTimeoutMs}`,
     );
   }
-  // The bounds themselves are accepted.
   for (const options of [
     { intervalMs: 10 },
     { intervalMs: 10, sessionTimeoutMs: 30 },
@@ -411,4 +407,114 @@ test('closing the writer ends a pending heartbeat read', async t => {
   const pending = sessionA.reader.next(undefined);
   await sessionA.writer.return(undefined);
   t.deepEqual(await pending, { done: true, value: undefined });
+});
+
+/**
+ * Like `connectPair`, but A's transport stream can be made to fail.
+ *
+ * @param {ExecutionContext<unknown>} t
+ * @param {Parameters<typeof makeOcapnNoiseNetwork>[0]} options
+ */
+const connectFaultyPair = async (t, options) => {
+  const netA = makeOcapnNoiseNetwork(options);
+  const netB = makeOcapnNoiseNetwork({ codec: options.codec });
+  t.teardown(() => {
+    netA.shutdown();
+    netB.shutdown();
+  });
+  const keyA = netA.addSigningKeys(netA.generateSigningKeys());
+  const keyB = netB.addSigningKeys(netB.generateSigningKeys());
+  const { transportA, transportB } = makeMockTransportPair();
+  const faults = {
+    /** @type {Error | undefined} */
+    read: undefined,
+    /** @type {Error | undefined} */
+    write: undefined,
+    /** @type {Error | undefined} */
+    writerReturn: undefined,
+  };
+  await netA.addTransport(
+    harden({
+      ...transportA,
+      connect: async (/** @type {Record<string, string>} */ hints) => {
+        const stream = await transportA.connect(hints);
+        const reader = harden({
+          ...stream.reader,
+          next: () =>
+            faults.read
+              ? Promise.reject(faults.read)
+              : stream.reader.next(undefined),
+        });
+        const writer = harden({
+          ...stream.writer,
+          next: (/** @type {Uint8Array} */ value) =>
+            faults.write
+              ? Promise.reject(faults.write)
+              : stream.writer.next(value),
+          return: () =>
+            faults.writerReturn
+              ? Promise.reject(faults.writerReturn)
+              : stream.writer.return(undefined),
+        });
+        return harden({ reader, writer });
+      },
+    }),
+  );
+  await netB.addTransport(transportB);
+  const locationB = netB.locationFor(keyB);
+  const [sessionA, sessionB] = await Promise.all([
+    netA.provideSession(locationB),
+    netB.waitForInboundSession(keyA),
+  ]);
+  return { netA, locationB, sessionA, sessionB, faults };
+};
+
+test.serial(
+  'a transport read failure closes the session and stops its heartbeat',
+  async t => {
+    const timers = watchSessionTimers(t);
+    const { sessionA, faults } = await connectFaultyPair(t, {
+      codec: cborCodec,
+      heartbeat,
+    });
+    faults.read = Error('reset');
+    await t.throwsAsync(() => sessionA.reader.next(undefined), {
+      message: 'reset',
+    });
+    t.deepEqual(timers.live(), []);
+    t.deepEqual(await sessionA.reader.next(undefined), {
+      done: true,
+      value: undefined,
+    });
+  },
+);
+
+test.serial(
+  'a heartbeat write failure closes the session and stops its heartbeat',
+  async t => {
+    const timers = watchSessionTimers(t);
+    const { sessionA, faults } = await connectFaultyPair(t, {
+      codec: cborCodec,
+      heartbeat,
+    });
+    faults.write = Error('broken pipe');
+    await t.throwsAsync(() => sessionA.reader.next(undefined), {
+      message: 'broken pipe',
+    });
+    t.deepEqual(timers.live(), []);
+  },
+);
+
+test('a rejecting writer.return still forgets the session', async t => {
+  const { netA, locationB, sessionA, sessionB, faults } =
+    await connectFaultyPair(t, { codec: cborCodec });
+  sessionB.close();
+  faults.writerReturn = Error('already closed');
+  await t.throwsAsync(() => sessionA.writer.return(undefined), {
+    message: 'already closed',
+  });
+  faults.writerReturn = undefined;
+  const replacement = await netA.provideSession(locationB);
+  t.not(replacement, sessionA);
+  replacement.close();
 });
