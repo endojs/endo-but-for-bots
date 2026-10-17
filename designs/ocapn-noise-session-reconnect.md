@@ -413,10 +413,8 @@ state.
 | `RECONNECT_BACKOFF_MAX`     | 30 s    | up to `SESSION_HARD_TIMEOUT` | Cap on the exponential backoff.                                                       |
 | `SESSION_HARD_TIMEOUT`      | 10 min  | up to `2 ** 31 - 1` ms       | Total time the session may remain in "reconnecting" before being abandoned.           |
 
-The ceiling on `SESSION_HARD_TIMEOUT` (and so on every reconnect timer) is
-2³¹−1 ms, about 24.8 days, the largest delay `setTimeout` honors.
-A longer delay, `Infinity` included, would be clamped to 1 ms and give up
-at once, so the network refuses any value above the ceiling.
+Every reconnect timer is capped at 2³¹−1 ms (about 24.8 days), the
+`setTimeout` ceiling; the network refuses longer values.
 
 **Hard-timeout queue terminal semantics.**
 When `SESSION_HARD_TIMEOUT` fires, the session is abandoned and the
@@ -441,7 +439,8 @@ The amendment specifies the following:
   resource-release semantics it carries) covers the
   `SESSION_HARD_TIMEOUT` exit.
 - Once a session is in the "approaching `SESSION_HARD_TIMEOUT`" window
-  (within the last `RECONNECT_BACKOFF_MAX` of the budget), new
+  (within the last `RECONNECT_BACKOFF_MAX` of the budget, or its last
+  half if that is shorter), new
   enqueues from the application MAY be rejected immediately rather
   than allowed to accumulate.
   This is fail-fast for callers who would otherwise see a long delay

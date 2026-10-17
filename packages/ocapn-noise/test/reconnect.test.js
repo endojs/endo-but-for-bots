@@ -130,8 +130,6 @@ for (const [codecName, codec] of /** @type {const} */ ([
     await sessionA.writer.next(Uint8Array.of(4));
     await sessionB.writer.next(Uint8Array.of(104));
 
-    // Every frame arrives exactly once, in order, on the same session
-    // objects the CapTP layer holds.
     t.deepEqual(await readBytes(sessionB, 3), [2, 3, 4]);
     t.deepEqual(await readBytes(sessionA, 3), [102, 103, 104]);
 
@@ -192,19 +190,20 @@ test('the session aborts once SESSION_HARD_TIMEOUT passes unreconnected', async 
 
 test('writes fail fast in the last stretch of the reconnect budget', async t => {
   const { sessionA, injector } = await connectLossyPair(t, cborCodec, {
-    // The fail-fast stretch opens 1 s after the loss and the session
-    // aborts at 6 s, so a slow (coverage-instrumented) runner still
-    // writes inside it.
+    // `backoffMaxMs` is capped to half the budget, so the fail-fast
+    // stretch opens 3 s after the loss and the session aborts at 8 s: a
+    // slow (coverage-instrumented) runner still writes inside it.
     reconnectA: {
       backoffInitialMs: 20,
-      backoffMaxMs: 5000,
-      hardTimeoutMs: 6000,
+      backoffMaxMs: 8000,
+      hardTimeoutMs: 8000,
     },
   });
   injector.refuse(true);
   injector.sever();
   await eventually(() => sessionA.getLiveness().reconnecting);
-  await delay(1500);
+  await sessionA.writer.next(Uint8Array.of(0));
+  await delay(4000);
   await t.throwsAsync(() => sessionA.writer.next(Uint8Array.of(1)), {
     message: /about to abort/,
   });
@@ -227,7 +226,8 @@ test('a lost resume reply is retried at the same epoch', async t => {
       sessionA.getLiveness().epoch === 1n &&
       sessionB.getLiveness().epoch === 1n,
   );
-  t.true(injector.getConnects() >= 2);
+  // The handshake, the redial whose reply was lost, and its retry.
+  t.true(injector.getConnects() >= 3);
   t.deepEqual(await readBytes(sessionB, 1), [1]);
   await sessionB.writer.next(Uint8Array.of(101));
   t.deepEqual(await readBytes(sessionA, 1), [101]);
@@ -243,7 +243,7 @@ test('a peer that no longer holds the session refuses the reconnect', async t =>
   await t.throwsAsync(() => sessionA.reader.next(undefined), {
     message: /refused to resume/,
   });
-  t.true(Date.now() - started < reconnect.hardTimeoutMs);
+  t.true(Date.now() - started < reconnect.hardTimeoutMs / 2);
 });
 
 test('a peer that restarts and opens a fresh session aborts the one waiting to resume', async t => {
@@ -352,7 +352,6 @@ test('reconnect options are validated', t => {
     ['hardTimeoutMs', 0],
     ['hardTimeoutMs', NaN],
     ['hardTimeoutMs', '600000'],
-    // `setTimeout` would clamp these to 1 ms and abort at once.
     ['hardTimeoutMs', Infinity],
     ['hardTimeoutMs', 2 ** 31],
   ])) {

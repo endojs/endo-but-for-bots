@@ -1576,7 +1576,6 @@ export const makeOcapnNoiseNetwork = ({
             lastAckedRecvNonce > peerAckedRecvNonce)
         ) {
           peerAckedRecvNonce = lastAckedRecvNonce;
-          // The peer has these session frames; they need no replay.
           const acked = lastAckedRecvNonce;
           unacked = unacked.filter(entry => entry.nonce > acked);
         }
@@ -1703,12 +1702,19 @@ export const makeOcapnNoiseNetwork = ({
         if (heartbeatSettings !== undefined) {
           // Fail fast in the last stretch of the reconnect budget rather
           // than accept a frame that will only be rejected with the
-          // session (designs/ocapn-noise-session-reconnect.md § 5).
+          // session (designs/ocapn-noise-session-reconnect.md § 5). The
+          // stretch is at most half the budget, so a `backoffMaxMs` as
+          // long as `hardTimeoutMs` still leaves the queue to bridge the
+          // first half of an outage.
           if (
             reconnectSettings !== undefined &&
             reconnectingSince !== undefined &&
             Date.now() - reconnectingSince >
-              reconnectSettings.hardTimeoutMs - reconnectSettings.backoffMaxMs
+              reconnectSettings.hardTimeoutMs -
+                Math.min(
+                  reconnectSettings.backoffMaxMs,
+                  reconnectSettings.hardTimeoutMs / 2,
+                )
           ) {
             throw makeError(
               X`ocapn-noise: session is about to abort; not reconnected`,
