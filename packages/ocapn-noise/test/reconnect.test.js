@@ -319,9 +319,9 @@ test('the winner of crossed hellos stops deferring to a dial of its own that han
   await eventually(() => greater.getConnects() > connectsBefore);
   lesser.holdConnects(false);
 
-  // The greater side drops the lesser side's dials while its own is
-  // young, then takes one once it has waited a session timeout.
-  const reconnectedBy = Date.now() + heartbeat.sessionTimeoutMs * 4;
+  // The greater side drops the lesser side's dials for a session timeout,
+  // then takes one. Were it to defer for as long as its own dial hangs,
+  // the session would stay down until hardTimeoutMs, past this wait.
   await eventually(
     () =>
       sessionA.getLiveness().epoch === 1n &&
@@ -329,7 +329,6 @@ test('the winner of crossed hellos stops deferring to a dial of its own that han
       !sessionA.getLiveness().reconnecting &&
       !sessionB.getLiveness().reconnecting,
   );
-  t.true(Date.now() < reconnectedBy);
   t.true(droppedDials(greater) >= 1);
   t.is(greater.getOpenStreams(false), 1);
 

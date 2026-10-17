@@ -392,6 +392,9 @@ export const makeOcapnNoiseNetwork = ({
    */
   /**
    * The network's handle on a session that resumes after loss.
+   * `prefersOwnDial` is asked only when a peer dial would otherwise be
+   * taken; a `true` answer drops that dial and, the first time in a run of
+   * redials, starts the window after which the session stops deferring.
    *
    * @typedef {{
    *   sessionToken: Uint8Array,
@@ -1057,12 +1060,13 @@ export const makeOcapnNoiseNetwork = ({
     // between, so no peer dial is accepted after ours lands but before it
     // attaches.
     let dialing = 0;
-    // When the oldest redial in flight started. The winner of the crossed
-    // hellos defers to its own dial only for a session timeout from then,
-    // so a dial of ours that hangs (a one-way partition where connect
-    // neither fails nor completes) cannot keep refusing a peer dial that
-    // has a working path.
-    let dialingSince = 0;
+    // When, during the current run of redials, the winner of the crossed
+    // hellos first dropped a peer dial in favor of its own. It defers only
+    // for a session timeout from then, so a dial of ours that hangs (a
+    // one-way partition where connect neither fails nor completes) cannot
+    // keep refusing a peer dial that has a working path.
+    /** @type {number | undefined} */
+    let deferringSince;
     const reconnectSettings =
       heartbeatSettings !== undefined &&
       hasFeature(peerFeatures, FEATURE_RECONNECT)
@@ -1341,7 +1345,6 @@ export const makeOcapnNoiseNetwork = ({
         const nextEpoch = epoch + 1n;
         /** @type {Awaited<ReturnType<Reconnector['dial']>>} */
         let dialed;
-        if (dialing === 0) dialingSince = Date.now();
         dialing += 1;
         try {
           dialed = await /** @type {Reconnector} */ (reconnector).dial(
@@ -1356,6 +1359,7 @@ export const makeOcapnNoiseNetwork = ({
           return;
         } finally {
           dialing -= 1;
+          if (dialing === 0) deferringSince = undefined;
         }
         const { instance, peerHello } = dialed;
         // The peer's dial won the crossed hellos, or the session moved past
@@ -1679,12 +1683,16 @@ export const makeOcapnNoiseNetwork = ({
           sessionToken,
           getEpoch: () => epoch,
           isAttached: () => current !== undefined,
-          prefersOwnDial: () =>
-            dialing > 0 &&
-            winsCrossedHellos &&
-            Date.now() - dialingSince <
+          prefersOwnDial: () => {
+            if (dialing === 0 || !winsCrossedHellos) return false;
+            const now = Date.now();
+            if (deferringSince === undefined) deferringSince = now;
+            return (
+              now - deferringSince <
               /** @type {{ sessionTimeoutMs: number }} */ (heartbeatSettings)
-                .sessionTimeoutMs,
+                .sessionTimeoutMs
+            );
+          },
           getReceivedFrames: () => receivedFrames,
           attach,
           abort: fail,
