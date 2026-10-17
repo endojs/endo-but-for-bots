@@ -679,6 +679,11 @@ that introduced it.
 - **C1** (§ 4): Rekey on every reconnect, per R3 of the cryptographic
   review in [#1475](https://github.com/endojs/endo-but-for-bots/pull/1475). This reverses the tentative Resume-with-rekey-cap
   decision on #252 and awaits the maintainer's confirmation.
+  If the maintainer keeps a Resume path instead, it needs a nonce-safe
+  construction (for example a fresh key derived per transport instance
+  from the session's keys, so no `(key, nonce)` pair can repeat after a
+  crash-restore) plus the rekey-cap that bounds how long derived keys
+  chain from one handshake.
 
 The following were open in earlier drafts and are now settled:
 
