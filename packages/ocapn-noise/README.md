@@ -119,9 +119,6 @@ on a new instance and sends an `op:session-hello` naming the session
 and its next epoch.
 The session advances its epoch and replays, exactly once, the frames
 the lost instance did not deliver.
-If both sides dial at once (crossed hellos), the side whose handshake
-ephemeral is the greater keeps its own dial and drops the other side's
-unanswered.
 The session aborts if no new instance is up within `hardTimeoutMs`.
 
 # Aspirational Design

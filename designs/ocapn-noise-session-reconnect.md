@@ -13,18 +13,28 @@
 Phases 1, 2, 3, and 5 are implemented in `packages/ocapn-noise`
 (`src/network.js`, `src/crossed-hellos.js`; tests in
 `test/heartbeat.test.js`, `test/session-queue.test.js`, and
-`test/reconnect.test.js`). Phase 4 (Resume) is not started; reconnect
-uses Rekey only, pending Open question C1.
+`test/reconnect.test.js`). Phase 4 (Resume) is not started. The
+maintainer's guidance on #252 was to run with Resume and a rekey cap;
+reconnect is Rekey-only for now on the strength of the cryptographic
+review in #1487, which C1 still has to reconcile.
 
-Deviations from the design as written:
+Settled: P3, the tiebreaker material, is the designator (the x25519 IK
+ephemerals), per the maintainer on #252. It is implemented by
+`initiatesOnCrossedHellos` in `src/crossed-hellos.js`.
+
+Deviations from the design as written, on which the maintainer has not
+ruled:
 
 - **Resumption hello (§ 4).** Under Rekey, the new instance carries an
   `op:session-hello` naming the session and the epoch the dialer asks
   for, not a `RESUME` record. The responder accepts any later epoch, not
   only `previous_epoch + 1`, so a dialer that missed an answer still
   converges.
-- **Tiebreaker (§ 3, P3).** Designator comparison is implemented (see
-  `prefersOwnDial` in `src/network.js`); P3 stays open.
+- **Crossed hellos (§ 3, steps 3–4).** The winner does not wait on its
+  own dial indefinitely: once it has dropped a peer dial, it defers for
+  at most `sessionTimeoutMs` (plus one handshake already connected), then
+  takes the peer's dial. A peer that echoes our ephemeral ties; the side
+  that opened the session wins the tie.
 
 ## What is the Problem Being Solved?
 
