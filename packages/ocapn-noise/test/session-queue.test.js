@@ -73,7 +73,6 @@ for (const [codecName, codec] of /** @type {const} */ ([
     );
     injector.stall();
     // Stall for longer than the heartbeat interval, writing as we go.
-    // The writes resolve although nothing reaches the transport.
     /** @type {bigint | undefined} */
     let sentBefore;
     for (const byte of [1, 2, 3]) {
@@ -207,8 +206,12 @@ test('writer.next waits while the queue is at its high-water mark', async t => {
     );
   }
   await delay(heartbeat.intervalMs);
-  t.true(settled > 0, `settled ${settled}`);
-  t.true(settled < count, `settled ${settled}`);
+  // The writes are concurrent, yet the queue holds no more than the
+  // high-water mark plus one coalesced ping/pong pair.
+  // Queued heartbeats count against the mark too.
+  t.true(settled >= 62 && settled <= 64, `settled ${settled}`);
+  const { queuedFrames } = sessionA.getLiveness();
+  t.true(queuedFrames <= 66, `queued ${queuedFrames}`);
 
   injector.resume();
   await Promise.all(writes);
@@ -218,6 +221,32 @@ test('writer.next waits while the queue is at its high-water mark', async t => {
     t.false(received.done);
     if (!received.done) t.deepEqual([...received.value], [i]);
   }
+});
+
+test('writers waiting for room settle as done when the session is lost', async t => {
+  const { sessionA, injector } = await connectStallablePair(t, cborCodec);
+  injector.stall();
+  const count = 80;
+  const writes = [];
+  for (let i = 0; i < count; i += 1) {
+    writes.push(sessionA.writer.next(Uint8Array.of(i)));
+  }
+  // The stall outlasts the session timeout while writers wait for room.
+  const results = await Promise.all(writes);
+  // The writes that found room were accepted; the writes still waiting
+  // when the session ended, in call order after them, were not.
+  const accepted = results.filter(({ done }) => !done).length;
+  t.true(accepted >= 62 && accepted <= 64, `accepted ${accepted}`);
+  t.deepEqual(
+    results.map(({ done }) => done),
+    [...Array(count).keys()].map(i => i >= accepted),
+  );
+  t.deepEqual(await sessionA.writer.next(Uint8Array.of(count)), {
+    done: true,
+    value: undefined,
+  });
+  t.is(sessionA.getLiveness().queuedFrames, 0);
+  injector.resume();
 });
 
 test('a write enqueued as a drain finishes is sent without waiting for a heartbeat', async t => {
