@@ -90,19 +90,9 @@ export const OcapnHeartbeatOperationsCodecs = makeRecordUnionCodec(
   },
 );
 
-// Proposed, pending OCapN-org review: the session control records of
+// Proposed, pending OCapN-org review; see
 // designs/ocapn-noise-session-reconnect.md § 7. The OCapN-Noise network
-// exchanges `op:session-hello` right after `op:start-session` on every
-// transport instance, and sends `op:session-end` before a deliberate
-// close. Both are consumed by the network and never reach the session.
-//
-// `features` is a bitset of what the sender supports (bit 0: heartbeat,
-// bit 1: reconnect). `epoch` numbers the transport instance: 0 opens a
-// session, and a reconnect names the next epoch of the session that
-// `session` (the 32-byte Noise transcript hash of its first handshake)
-// identifies. `received` counts the session frames the sender has
-// delivered so far, so the peer replays exactly the frames that a lost
-// transport instance did not carry.
+// consumes these records: they never reach a CapTP session.
 const OpSessionHelloCodec = makeOcapnRecordCodecFromDefinition(
   'OpSessionHello',
   'op:session-hello',

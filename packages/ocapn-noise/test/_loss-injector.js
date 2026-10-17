@@ -99,7 +99,6 @@ export const makeLossyTransport = transport => {
 
   return harden({
     transport: lossy,
-    /** Partition every stream opened so far. */
     sever: () => {
       for (const state of live) state.severed = true;
       live.clear();
@@ -117,7 +116,6 @@ export const makeLossyTransport = transport => {
     limitNextReads: count => {
       nextReadLimit = count;
     },
-    /** How many connections have been attempted through the transport. */
     getConnects: () => connects,
   });
 };
