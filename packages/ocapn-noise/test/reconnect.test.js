@@ -194,16 +194,19 @@ test('the session aborts once SESSION_HARD_TIMEOUT passes unreconnected', async 
 
 test('writes fail fast in the last stretch of the reconnect budget', async t => {
   const { sessionA, injector } = await connectLossyPair(t, cborCodec, {
+    // The fail-fast stretch opens 1 s after the loss and the session
+    // aborts at 6 s, so a slow (coverage-instrumented) runner still
+    // writes inside it.
     reconnectA: {
       backoffInitialMs: 20,
-      backoffMaxMs: 1000,
-      hardTimeoutMs: 1200,
+      backoffMaxMs: 5000,
+      hardTimeoutMs: 6000,
     },
   });
   injector.refuse(true);
   injector.sever();
   await eventually(() => sessionA.getLiveness().reconnecting);
-  await delay(300);
+  await delay(1500);
   await t.throwsAsync(() => sessionA.writer.next(Uint8Array.of(1)), {
     message: /about to abort/,
   });
