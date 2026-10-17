@@ -2132,15 +2132,21 @@ export const makeOcapnNoiseNetwork = ({
 
       if (resumable) {
         if (peerHello.epoch > 0n) {
-          // A reconnect: the hello must name this session and its next
-          // epoch. Anything else (a replay into another session, a
-          // stale epoch) is answered with a refusal, which tells the
-          // dialer this side does not hold what it asks to resume.
+          // A reconnect: the hello must name this session and either
+          // its next epoch or the epoch this side last attached. The
+          // latter is a retry whose resume reply the dialer never
+          // received: it has not attached that epoch, so resuming it
+          // again is safe. Anything else (a replay into another
+          // session, a stale epoch) is answered with a refusal, which
+          // tells the dialer this side does not hold what it asks to
+          // resume.
+          const attachedEpoch = resumable.getEpoch();
           const resumes =
             reconnectors.get(initiatorKeyHex) === resumable &&
             compareUint8Arrays(peerHello.session, resumable.sessionToken) ===
               0 &&
-            peerHello.epoch === resumable.getEpoch() + 1n;
+            (peerHello.epoch === attachedEpoch + 1n ||
+              peerHello.epoch === attachedEpoch);
           if (!resumes) {
             await writeSessionHello(stream.writer, encrypt, {
               epoch: 0n,

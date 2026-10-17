@@ -27,19 +27,25 @@ export const makeLossyTransport = transport => {
   const live = new Set();
   let refusing = false;
   let connects = 0;
+  /** @type {number | undefined} */
+  let nextReadLimit;
 
   /**
    * @param {ByteStream} stream
+   * @param {number} [readLimit] Messages the stream yields before its
+   *   reads stall.
    * @returns {ByteStream}
    */
-  const wrapStream = stream => {
+  const wrapStream = (stream, readLimit = Infinity) => {
     const state = { severed: false };
     live.add(state);
+    let reads = 0;
     /** @type {ByteStream['reader']} */
     const reader = harden({
       next: async value => {
         await null;
-        if (state.severed) return never;
+        if (state.severed || reads >= readLimit) return never;
+        reads += 1;
         const result = await stream.reader.next(value);
         if (state.severed) return never;
         return result;
@@ -74,7 +80,9 @@ export const makeLossyTransport = transport => {
       await null;
       connects += 1;
       if (refusing) throw Error('lossy transport: connection refused');
-      return wrapStream(await transport.connect(hints));
+      const readLimit = nextReadLimit;
+      nextReadLimit = undefined;
+      return wrapStream(await transport.connect(hints), readLimit);
     },
     listen:
       listen &&
@@ -99,6 +107,15 @@ export const makeLossyTransport = transport => {
     /** @param {boolean} refuse Refuse (or again allow) new connections. */
     refuse: refuse => {
       refusing = refuse;
+    },
+    /**
+     * Let the next opened connection read only `count` messages; later
+     * reads never yield, as if the peer's replies were lost.
+     *
+     * @param {number} count
+     */
+    limitNextReads: count => {
+      nextReadLimit = count;
     },
     /** How many connections have been attempted through the transport. */
     getConnects: () => connects,

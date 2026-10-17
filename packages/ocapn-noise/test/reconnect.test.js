@@ -50,16 +50,18 @@ const eventually = async (predicate, timeoutMs = 8000) => {
  * @param {object} [options]
  * @param {object | false} [options.reconnectA]
  * @param {object | false} [options.reconnectB]
+ * @param {number} [options.handshakeTimeoutMs]
  */
 const connectLossyPair = async (
   t,
   codec,
-  { reconnectA = reconnect, reconnectB = reconnect } = {},
+  { reconnectA = reconnect, reconnectB = reconnect, handshakeTimeoutMs } = {},
 ) => {
   const netA = makeOcapnNoiseNetwork({
     codec,
     heartbeat,
     reconnect: reconnectA,
+    handshakeTimeoutMs,
   });
   const netB = makeOcapnNoiseNetwork({
     codec,
@@ -205,6 +207,30 @@ test('writes fail fast in the last stretch of the reconnect budget', async t => 
   await t.throwsAsync(() => sessionA.writer.next(Uint8Array.of(1)), {
     message: /about to abort/,
   });
+});
+
+test('a lost resume reply is retried at the same epoch', async t => {
+  const { sessionA, sessionB, injector } = await connectLossyPair(
+    t,
+    cborCodec,
+    { handshakeTimeoutMs: 1000 },
+  );
+  // The dialer reads the SYNACK and the identity greeting, then loses
+  // the resume reply: the responder attaches epoch 1, the dialer times
+  // out and must ask for epoch 1 again.
+  injector.limitNextReads(2);
+  injector.sever();
+  await sessionA.writer.next(Uint8Array.of(1));
+  await eventually(
+    () =>
+      sessionA.getLiveness().epoch === 1n &&
+      sessionB.getLiveness().epoch === 1n,
+  );
+  t.true(injector.getConnects() >= 2);
+  t.deepEqual(await readBytes(sessionB, 1), [1]);
+  await sessionB.writer.next(Uint8Array.of(101));
+  t.deepEqual(await readBytes(sessionA, 1), [101]);
+  sessionA.close();
 });
 
 test('a peer that no longer holds the session refuses the reconnect', async t => {
