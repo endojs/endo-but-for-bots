@@ -54,12 +54,7 @@ import { locationToLocationId } from '../client/util.js';
  * @param {string} captpVersion
  * @param {OcapnCodec} codec
  */
-const sendHandshake = (
-  connection,
-  selfIdentity,
-  captpVersion,
-  codec,
-) => {
+const sendHandshake = (connection, selfIdentity, captpVersion, codec) => {
   const { keyPair, location, locationSignature } = selfIdentity;
   const opStartSession = {
     type: 'op:start-session',
