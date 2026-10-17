@@ -120,6 +120,38 @@ test('heartbeats keep an idle CapTP session usable', async t => {
   t.is(await E(greeter).hello('Bob'), 'hello, Bob');
 });
 
+test('a peer without heartbeats ignores op:ping and op:pong', async t => {
+  const fabric = makeMockMeshFabric();
+  t.teardown(() => fabric.shutdown());
+  // A long timeout, because B sends no heartbeats to keep A's reads alive.
+  const heartbeat = { intervalMs: 20, sessionTimeoutMs: 5000 };
+
+  const locatorA = new Map();
+  locatorA.set(
+    'Greeter',
+    Far('Greeter', {
+      hello: (who = 'world') => `hello, ${who}`,
+    }),
+  );
+  const peerA = await makeNoisePeer({
+    fabric,
+    name: 'A',
+    locator: locatorA,
+    heartbeat,
+  });
+  t.teardown(() => peerA.client.shutdown());
+  const peerB = await makeNoisePeer({ fabric, name: 'B' });
+  t.teardown(() => peerB.client.shutdown());
+
+  const sturdyRef = peerB.client.makeSturdyRef(peerA.location, 'Greeter');
+  const greeter = await peerB.client.enlivenSturdyRef(sturdyRef);
+  t.is(await E(greeter).hello('Alice'), 'hello, Alice');
+
+  // B's OCapN client receives several of A's heartbeats.
+  await new Promise(resolve => setTimeout(resolve, heartbeat.intervalMs * 10));
+  t.is(await E(greeter).hello('Bob'), 'hello, Bob');
+});
+
 test('three-party handoff: A forwards a cap from B into C, and C invokes it', async t => {
   const fabric = makeMockMeshFabric();
   t.teardown(() => fabric.shutdown());
