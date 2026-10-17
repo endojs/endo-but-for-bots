@@ -198,17 +198,24 @@ const network = makeOcapnNoiseNetwork({
 });
 ```
 
-Each session then sends `op:ping` and `op:pong` inside the Noise
-channel every `intervalMs`.
-It closes with an error once `sessionTimeoutMs` (default six intervals,
-at least three) pass without any frame from the peer.
-The network absorbs heartbeat frames, so the session reader never sees
+Each session then sends `op:ping` inside the Noise channel every
+`intervalMs`, followed by an `op:pong` once it has received a frame
+from the peer.
+The session reader skips heartbeat frames, so the consumer never sees
 them.
+A call to `session.reader.next()` that waits `sessionTimeoutMs`
+(default six intervals, at least three) without any frame from the peer
+rejects, and the session closes.
+The timeout runs only while the consumer is waiting on the reader: a
+consumer that stops reading is not mistaken for a lost peer, and a lost
+peer is noticed only once the consumer reads again.
 `session.getLiveness()` returns a `SessionLiveness` snapshot: whether
 heartbeats are on, the epoch, the highest nonce this side has received,
 and the highest of its own nonces the peer has acknowledged.
 
 `op:ping` and `op:pong` are proposed OCapN operations, pending
 OCapN-org review.
-Enable heartbeats only toward peers that absorb them, because a peer
-that does not know them aborts the session.
+Enable heartbeats only toward peers that use this version of
+`@endo/ocapn` or later, which ignores them: an older peer aborts the
+session on the unknown operation, and a peer that sends no heartbeats
+is declared lost whenever it stays quiet for `sessionTimeoutMs`.
