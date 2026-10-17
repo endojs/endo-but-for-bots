@@ -96,7 +96,40 @@ export interface OcapnNoiseSession {
   isInitiator: boolean;
   reader: Reader<Uint8Array>;
   writer: Writer<Uint8Array>;
+  getLiveness(): SessionLiveness;
   close(): void;
+}
+
+/**
+ * Session heartbeat settings; the README's "Session heartbeats" section
+ * describes the behavior.
+ */
+export interface HeartbeatOptions {
+  /** Milliseconds between heartbeats. Default 5000. */
+  intervalMs?: number;
+  /**
+   * Milliseconds a pending read waits for a frame from the peer before
+   * the session is lost. Default six intervals; must be at least three
+   * intervals.
+   */
+  sessionTimeoutMs?: number;
+}
+
+export interface SessionLiveness {
+  /** Whether this side sends and absorbs heartbeats. */
+  heartbeat: boolean;
+  /** The transport epoch carried in heartbeats; `0n` until reconnect. */
+  epoch: bigint;
+  /**
+   * The highest Noise nonce this side has decrypted, or `undefined`
+   * before the first transport message from the peer.
+   */
+  lastAckedRecvNonce: bigint | undefined;
+  /**
+   * The highest of this side's send nonces the peer has acknowledged
+   * by `op:pong`, or `undefined` before the first `op:pong`.
+   */
+  peerLastAckedRecvNonce: bigint | undefined;
 }
 
 /**
@@ -158,6 +191,9 @@ export interface OcapnNoiseNetwork {
 
 export interface MakeOcapnNoiseNetworkOptions {
   codec: OcapnCodec;
+  handshakeTimeoutMs?: number;
+  maxInProgressPerLocalKey?: number;
+  heartbeat?: HeartbeatOptions;
 }
 
 export declare function makeOcapnNoiseNetwork(

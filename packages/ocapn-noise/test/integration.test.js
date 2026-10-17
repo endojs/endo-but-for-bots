@@ -1,4 +1,8 @@
 // @ts-check
+// prefer-endo-primitives-exempt: these tests use the bare Far remotables of
+// the @endo/ocapn suites; this package does not depend on @endo/exo.
+
+/** @import { HeartbeatOptions } from '../src/types.js' */
 
 import test from '@endo/ses-ava/test.js';
 import harden from '@endo/harden';
@@ -21,10 +25,16 @@ import { makeMockMeshFabric } from './_fabric.js';
  *   fabric: ReturnType<typeof makeMockMeshFabric>,
  *   name: string,
  *   locator?: Map<string, any>,
+ *   heartbeat?: HeartbeatOptions,
  * }} options
  */
-const makeNoisePeer = async ({ fabric, name, locator = new Map() }) => {
-  const network = makeOcapnNoiseNetwork({ codec: cborCodec });
+const makeNoisePeer = async ({
+  fabric,
+  name,
+  locator = new Map(),
+  heartbeat,
+}) => {
+  const network = makeOcapnNoiseNetwork({ codec: cborCodec, heartbeat });
   const signingKeys = network.generateSigningKeys();
   const keyId = network.addSigningKeys(signingKeys);
   await network.addTransport(fabric.transportFor(name));
@@ -74,6 +84,72 @@ test('two noise-backed OCapN peers exchange method calls via bootstrap fetch', a
   const greeter = await peerB.client.enlivenSturdyRef(sturdyRef);
   const reply = await E(greeter).hello('Alice');
   t.is(reply, 'hello, Alice');
+});
+
+test('heartbeats keep an idle CapTP session usable', async t => {
+  const fabric = makeMockMeshFabric();
+  t.teardown(() => fabric.shutdown());
+  const heartbeat = { intervalMs: 50, sessionTimeoutMs: 500 };
+
+  const locatorA = new Map();
+  locatorA.set(
+    'Greeter',
+    Far('Greeter', {
+      hello: (who = 'world') => `hello, ${who}`,
+    }),
+  );
+  const peerA = await makeNoisePeer({
+    fabric,
+    name: 'A',
+    locator: locatorA,
+    heartbeat,
+  });
+  t.teardown(() => peerA.client.shutdown());
+  const peerB = await makeNoisePeer({ fabric, name: 'B', heartbeat });
+  t.teardown(() => peerB.client.shutdown());
+
+  const sturdyRef = peerB.client.makeSturdyRef(peerA.location, 'Greeter');
+  const greeter = await peerB.client.enlivenSturdyRef(sturdyRef);
+  t.is(await E(greeter).hello('Alice'), 'hello, Alice');
+
+  // Idle across several session timeouts: heartbeats alone keep the
+  // session from being declared lost.
+  await new Promise(resolve =>
+    setTimeout(resolve, heartbeat.sessionTimeoutMs * 3),
+  );
+  t.is(await E(greeter).hello('Bob'), 'hello, Bob');
+});
+
+test('a peer without heartbeats ignores op:ping and op:pong', async t => {
+  const fabric = makeMockMeshFabric();
+  t.teardown(() => fabric.shutdown());
+  // A long timeout, because B sends no heartbeats to keep A's reads alive.
+  const heartbeat = { intervalMs: 20, sessionTimeoutMs: 5000 };
+
+  const locatorA = new Map();
+  locatorA.set(
+    'Greeter',
+    Far('Greeter', {
+      hello: (who = 'world') => `hello, ${who}`,
+    }),
+  );
+  const peerA = await makeNoisePeer({
+    fabric,
+    name: 'A',
+    locator: locatorA,
+    heartbeat,
+  });
+  t.teardown(() => peerA.client.shutdown());
+  const peerB = await makeNoisePeer({ fabric, name: 'B' });
+  t.teardown(() => peerB.client.shutdown());
+
+  const sturdyRef = peerB.client.makeSturdyRef(peerA.location, 'Greeter');
+  const greeter = await peerB.client.enlivenSturdyRef(sturdyRef);
+  t.is(await E(greeter).hello('Alice'), 'hello, Alice');
+
+  // B's OCapN client receives several of A's heartbeats.
+  await new Promise(resolve => setTimeout(resolve, heartbeat.intervalMs * 10));
+  t.is(await E(greeter).hello('Bob'), 'hello, Bob');
 });
 
 test('three-party handoff: A forwards a cap from B into C, and C invokes it', async t => {

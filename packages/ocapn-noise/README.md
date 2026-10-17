@@ -185,3 +185,39 @@ await session.writer.next(new TextEncoder().encode('hello'));
 Both peers must share the same OCapN wire codec; the Noise handshake
 provides mutual Ed25519 authentication but leaves codec selection to
 the embedding application.
+
+## Session heartbeats
+
+Heartbeats are off by default.
+Pass `heartbeat` to detect a peer that has gone silent:
+
+```js
+const network = makeOcapnNoiseNetwork({
+  codec: cborCodec,
+  heartbeat: { intervalMs: 5000, sessionTimeoutMs: 30000 },
+});
+```
+
+Each session then sends `op:ping` inside the Noise channel every
+`intervalMs`.
+Once it has received a frame from the peer, each tick also sends an
+`op:pong` that acknowledges the frames received so far; it does not
+answer a particular `op:ping`.
+When `heartbeat` is set, the session reader skips heartbeat frames, so
+the consumer never sees them.
+A call to `session.reader.next()` that waits `sessionTimeoutMs` without
+any frame from the peer rejects, and the session closes.
+The timeout runs only while the consumer is waiting on the reader.
+A consumer that stops reading does not notice a lost peer until it
+reads again, and until then the session keeps sending heartbeats.
+A transport read or heartbeat write that fails closes the session and
+stops its heartbeats.
+`session.getLiveness()` returns a `SessionLiveness` snapshot (see the
+type).
+
+`op:ping` and `op:pong` are proposed OCapN operations, pending
+OCapN-org review.
+Enable heartbeats only toward peers that use this version of
+`@endo/ocapn` or later, which ignores them: an older peer aborts the
+session on the unknown operation, and a peer that sends no heartbeats
+is declared lost whenever it stays quiet for `sessionTimeoutMs`.
