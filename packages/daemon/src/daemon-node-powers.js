@@ -1,5 +1,4 @@
 // @ts-check
-/* global process */
 /* eslint-disable no-void */
 
 import harden from '@endo/harden';
@@ -14,12 +13,11 @@ import { makeReaderRef } from './reader-ref.js';
 import { makePetStoreMaker } from './pet-store.js';
 import { servePrivatePath } from './serve-private-path.js';
 import { makeSerialJobs } from './serial-jobs.js';
+import { makeAmaroExecArgv } from './amaro-exec-argv.js';
 
 /** @import { Reader, Writer } from '@endo/stream' */
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
 /** @import { Config, CryptoPowers, DaemonWorkerFacet, DaemonicPersistencePowers, DaemonicPowers, EndoReadable, FilePowers, Formula, FormulaNumber, NetworkPowers, SocketPowers, WorkerDaemonFacet } from './types.js' */
-
-const amaroExecArgv = ['--import', 'amaro/strip'];
 
 /**
  * @param {object} modules
@@ -499,7 +497,7 @@ export const makeDaemonicControlPowers = (
 
     const log = fs.openSync(logPath, 'a');
     const child = popen.fork(endoWorkerPath, [], {
-      execArgv: [...process.execArgv, ...amaroExecArgv],
+      execArgv: makeAmaroExecArgv(),
       stdio: ['ignore', log, log, 'pipe', 'pipe', 'ipc'],
       // @ts-ignore Stale Node.js type definition.
       windowsHide: true,

@@ -16,13 +16,12 @@ import {
   whereEndoCache,
 } from '@endo/where';
 import { makeEndoClient } from './src/client.js';
+import { makeAmaroExecArgv } from './src/amaro-exec-argv.js';
 
 // Reexports:
 export { makeEndoClient } from './src/client.js';
 export { makeRefReader, makeRefIterator } from './src/ref-reader.js';
 export { makeReaderRef, makeIteratorRef } from './src/reader-ref.js';
-
-const amaroExecArgv = ['--import', 'amaro/strip'];
 
 const removePath = async removalPath => {
   return fs.promises
@@ -93,7 +92,7 @@ export const start = async (config = defaultConfig) => {
     ],
     {
       detached: true,
-      execArgv: [...process.execArgv, ...amaroExecArgv],
+      execArgv: makeAmaroExecArgv(),
       env,
       stdio: ['ignore', output, output, 'ipc'],
     },
