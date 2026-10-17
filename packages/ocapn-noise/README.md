@@ -50,8 +50,9 @@ first message.
      The Edwards-to-Montgomery conversion drops the sign of x, so the
      holder of key A can also claim -A: a second identity for the same
      key holder, not an impersonation.
-     Message 1 carries no freshness (Noise §7.7 destination property
-     2), so anyone who has seen a genuine SYN can replay it.
+     Message 1 carries no freshness (Noise §7.7 payload security
+     properties, destination property 2), so anyone who has seen a
+     genuine SYN can replay it.
      A replay never becomes a session, because it cannot produce the
      channel-bound `op:start-session` below.
      Displacing the named peer's existing (unclaimed) session is deferred
@@ -107,6 +108,101 @@ Once the handshake completes, each peer exchanges its
 The location signature in `op:start-session` carries the Noise
 transcript hash as a channel-binding value, so it cannot be replayed
 across sessions even though it is signed only once per identity.
+
+## Wire contract
+
+This section is the contract a second implementation of `np/1` must
+match.
+The rationale for the key checks, channel binding, and key
+confirmation is in the OCapN-Noise cryptographic review of the as-built
+handshake, proposed in
+[endojs/endo-but-for-bots#1475](https://github.com/endojs/endo-but-for-bots/pull/1475).
+"Must" and "must not" are normative.
+
+### Protocol and keys
+
+- The Noise protocol name is `Noise_IK_25519_ChaChaPoly_BLAKE2s`.
+- The prologue is the 10 ASCII bytes `OCapN/np/1`, one zero byte, and
+  the intended responder's 32-byte Ed25519 verifying key.
+- Each peer's static X25519 private key is the clamped first half of
+  `SHA-512(seed)`, where `seed` is its 32-byte Ed25519 seed (the scalar
+  Ed25519 signs with).
+  Its static X25519 public key is the Montgomery form of its Ed25519
+  verifying key, `u = (1 + y) / (1 - y)`.
+  There is no separate bonding signature between the two keys.
+
+### Message layouts
+
+Each message below is one transport frame.
+Lengths are in bytes, and multi-byte integers are big-endian.
+
+| Message | Layout | Length |
+|---|---|---|
+| Prefixed SYN | responder Ed25519 key (32, cleartext) \|\| Noise message 1 (132) | 164 |
+| Noise message 1 | `e` (32) \|\| encrypted `s` (32 + 16 tag) \|\| encrypted SYN payload (36 + 16 tag) | 132 |
+| SYN payload | initiator Ed25519 key (32) \|\| first encoding (2) \|\| further-encodings mask (2) | 36 |
+| SYNACK (Noise message 2) | `e` (32) \|\| encrypted SYNACK payload (1 + 16 tag) | 49 |
+| SYNACK payload | accepted encoding (1) | 1 |
+| Transport message | ChaCha20-Poly1305 ciphertext of at most 65519 plaintext bytes, plus a 16-byte tag | at most 65535 |
+
+In the encoding offer, bit `i` of the mask means the initiator also
+supports encoding `first + i + 1`.
+The responder accepts the highest encoding both sides support.
+Transport messages use the Noise `CipherState` nonces, counting up from
+zero in each direction.
+The handshake has no third message.
+
+### Key checks
+
+- An initiator must reject a responder key that is small-order or
+  carries a torsion component before it sends anything.
+  A weak responder static zeroes the `es` and `ss` Diffie-Hellman
+  results.
+- A responder must drop a SYN whose cleartext prefix is not one of its
+  own keys.
+- A responder must reject a SYN whose claimed initiator Ed25519 key is
+  small-order, carries a torsion component, or does not convert to the
+  static X25519 key Noise authenticated (`rs`).
+- The conversion to Montgomery form drops the sign of x, so the
+  holder of key `A` can also present and sign as `-A`.
+  This lets no one impersonate a key they do not hold, but an
+  implementation must not assume that one key holder has only one
+  designator.
+
+### Handshake hash and channel binding
+
+The handshake hash is the 32-byte Noise `h` after message 2.
+Each peer's `op:start-session` location signature covers
+
+```text
+"ocapn-location-v1\0" || uint32(len(h)) || h || my-location
+```
+
+where `my-location` is the codec-serialized `my-location` record.
+On `np/1` the binding is always the 32-byte `h`; it must never be
+empty.
+
+### Key confirmation
+
+Noise IK message 1 authenticates its sender only weakly (Noise §7.7
+payload security properties, source property 1), so a holder of the
+responder's key can forge a SYN and anyone can replay one; the review
+above gives the attacks.
+
+- A responder **must not** treat an initiator as authenticated until it
+  has decrypted and verified that initiator's `op:start-session`, the
+  first transport message.
+  Until then it must not hand out a session for that peer, and its
+  handshake must not win crossed-hello settlement or displace an
+  existing session with that peer.
+  An unproven handshake may still occupy a settlement slot, bounded by
+  the handshake timeout, as described under SYN above.
+- An initiator **must not** send application data in message 1.
+  The SYN payload carries only the initiator's key and the encoding
+  offer: it can be forged by a holder of the responder's key, it can be
+  replayed, and it loses its secrecy if the responder's key later
+  leaks.
+  There is no 0-RTT `op:start-session`.
 
 # Aspirational Design
 

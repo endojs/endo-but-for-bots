@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-14 |
-| **Updated** | 2026-05-19 |
+| **Updated** | 2026-10-17 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 | **Source** | Amends [ocapn-noise-network](ocapn-noise-network.md) and [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md). |
@@ -39,8 +39,8 @@ Across CapTP implementations the consensus has been to build a
 (b) runs a continuous ping/pong heartbeat for liveness,
 (c) re-establishes the underlying TCP transport on detected loss without
 tearing down the CapTP session, and
-(d) keeps the cryptographic state continuous across the reconnect so that
-the application sees one session even as the byte pipe changes underneath.
+(d) keeps the session continuous across the reconnect so that the
+application sees one session even as the byte pipe changes underneath.
 
 This document amends the OCapN-Noise design to add that meta-TCP session
 layer.
@@ -80,8 +80,8 @@ Four facts taken together force the design:
 
 Out of these: the amendment proposes a short logical session timeout, a
 continuous heartbeat via a new `op:ping` operation, transparent TCP
-reconnection on heartbeat loss, and a sequence-continuity rule that
-preserves Noise nonce monotonicity across reconnects.
+reconnection on heartbeat loss, and a fresh Noise handshake on every
+reconnect, so that no `(key, nonce)` pair can be reused.
 
 ## Design
 
@@ -135,7 +135,7 @@ The amendment uses a *single* `op:ping` opcode for the liveness signal
 liveness path): each side emits `op:ping` on its own clock, and any
 incoming op resets the per-peer timeout. A separate `op:pong` exists
 for the explicit-ack path (defined below; carries the
-`last_acked_recv_nonce` the resumption handshake in § 4 reads),
+`last_acked_recv_nonce` that bounds the replay buffer of § 4),
 not for liveness.
 
 #### Tentative OCapN Extension: `op:pong`
@@ -154,13 +154,17 @@ Field semantics:
 - `sequence`: a monotonic counter that increments on every `op:pong`
   this side emits in this session epoch. A uint64. Independent of
   the `op:ping` sequence.
-- `last_acked_recv_nonce`: the highest Noise recv-nonce this side
-  has decrypted successfully on the current CipherState. A uint64.
+- `last_acked_recv_nonce`: the number of session frames this side
+  has decrypted successfully in the current session epoch. A uint64.
+  It counts session frames only, not the reconnect handshake's own
+  records, so it need not equal the Noise recv-nonce of the current
+  CipherState; the count is the contract, and it restarts at 0 with
+  each epoch.
 
 `op:pong` is the explicit-ack form C2 (§ 4) calls out. A side that
 receives `op:pong` updates its `peer_acked_recv_nonce` for the
-incoming direction, which the resumption handshake then uses to
-compute a safe next-to-send nonce after a TCP-instance break.
+incoming direction, and may release every frame that ack covers:
+those frames never need replaying after a TCP-instance break (§ 4).
 `op:pong` is also useful for measuring round-trip time, though
 that is not its primary purpose.
 
@@ -198,13 +202,14 @@ A:
 1. Closes the local TCP socket (if not already closed).
 2. Marks the session as "reconnecting"; queues outbound CapTP operations.
 3. Opens a new TCP connection to the peer's transport hints.
-4. Runs a **resumption handshake** (see § 4) that proves the new TCP
-   pipe belongs to the same session and synchronizes the next epoch
-   and the next Noise nonces.
-5. Resumes draining the outbound queue.
+4. Runs a **reconnect handshake** (see § 4): a fresh Noise IK handshake
+   and `op:start-session` exchange, followed by a record that proves
+   the new TCP pipe belongs to the same session and advances the epoch.
+5. Replays what the peer has not acknowledged, then resumes draining
+   the outbound queue.
 
 Side B, on detecting loss (independent timeout, or an incoming
-resumption attempt), does the symmetric thing.
+reconnect handshake), does the symmetric thing.
 
 #### Crossed-Hellos Tiebreaker
 
@@ -238,8 +243,8 @@ The procedure when crossed-hellos is detected:
    and accepts the inbound one.
 4. The peer who computes "I am initiator" cancels its inbound socket
    and proceeds with its outbound one.
-5. Both sides converge on a single TCP transport instance and proceed
-   to the resumption handshake on it.
+5. Both sides converge on a single TCP transport instance and complete
+   the reconnect handshake on it.
 
 **Open question (P3).** Is designator comparison the right tiebreaker,
 or should it be a per-session value (e.g., the hash of the initial
@@ -249,7 +254,7 @@ comparison guarantees independence from key-reuse across sessions but
 needs the transcript to be remembered on both sides. The amendment
 leans toward designator comparison.
 
-### 4. Noise Sequence Continuity Across Reconnects
+### 4. Rekey on Every Reconnect
 
 The Noise Protocol's `CipherState` is a `(key, nonce)` pair, separate
 per direction.
@@ -260,86 +265,62 @@ After the handshake, both sides hold an `initiator->responder` cipher
 state and a `responder->initiator` cipher state; each is incremented
 on every encrypted message it processes.
 
-The Noise spec's monotonicity guarantee is local: each side knows its
-own send-nonce and its own recv-nonce trivially.
-The spec does not define a peer-acked-recv-nonce concept; this design
-extends Noise's local counter with a peer-acked-recv-nonce exchange
-in the resumption handshake (below) so that, after a TCP-instance
-break, both sides can agree on a next-to-send nonce that strictly
-exceeds every nonce previously used under the same key.
+**Every new TCP transport instance runs a fresh Noise IK handshake
+(Rekey).**
+The previous instance's CipherStates are discarded, never carried
+across the boundary.
+The new instance gets new keys from its own handshake, and its nonces
+start at 0 under those keys.
+This proposes to settle Open question C1 as recommendation R3 of the
+cryptographic review in
+[#1475](https://github.com/endojs/endo-but-for-bots/pull/1475), which
+rewrites [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md)
+and carries the reasoning in its section 6, "Reconnect: Rekey, not
+Resume".
+The reasoning:
 
-The amendment specifies the following on reconnect, to preserve nonce
-monotonicity without nonce reuse:
+- With IK a Rekey is two Noise messages, 213 bytes and one round trip.
+- Continuing a CipherState (the former Option Resume) would require
+  both sides to keep live keys and nonce high-water marks across TCP
+  connections.
+  A single crash-restore or forked copy of that state would then reuse
+  a `(key, nonce)` pair, which under ChaCha20-Poly1305 reveals the XOR
+  of two plaintexts and the Poly1305 one-time key.
+  Rekey makes that impossible by construction.
+- Rekey gives each transport instance its own forward secrecy.
+- The channel-bound `op:start-session` exchange proves on every new
+  instance that the same two identities are at both ends.
 
-**Option Resume (preferred): continue the cipher state.**
-Both sides remember the four state quantities at the moment the
-previous TCP instance was last known healthy: the two
-`(key, nonce)` pairs (initiator-side send/recv and responder-side
-send/recv).
-On the new TCP transport instance, both sides continue using these
-keys with `nonce = max(local_send_nonce, peer_acked_recv_nonce) + 1`.
-The resumption handshake (below) exchanges each side's last-acked
-receive nonce so that both sides can compute the next-to-send nonce
-unambiguously.
-
-This is sound because the Noise key is the same and the nonces
-monotonically increase. No `(key, nonce)` pair is reused.
-
-**Option Rekey: do a fresh Noise handshake.**
-Discard the previous CipherStates, run a full Noise IK handshake
-(OCapN-Noise's chosen pattern, per
-[ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md))
-on the new TCP transport, and start fresh nonces at 0 under a new key.
-The CapTP session above continues with no awareness that the
-underlying keys have rotated.
-
-**Resumption handshake (Option Resume).**
+**Reconnect handshake.**
 On the new TCP transport, after TCP connect succeeds:
 
-1. Initiator side sends a `RESUME` record, encrypted under the existing
-   initiator-to-responder CipherState at the next sequential nonce
-   (`local_send_nonce + 1`).
-   The CipherState is continuous across the TCP-instance boundary, so
-   this record is one more AEAD-encrypted message under the same key,
-   not a new cleartext frame.
-   The plaintext payload is:
-
-   ```text
-   RESUME = previous_epoch :u64 || new_epoch :u64 || last_acked_recv_nonce :u64
-   ```
-
-2. Responder side decrypts and validates that
-   `new_epoch == previous_epoch + 1`, that the resumption is on the
-   expected session (cross-referenced by the designator pair), and
-   that `last_acked_recv_nonce` does not jump backward.
-
-3. Responder side sends a `RESUME-ACK` record, encrypted under the
-   existing responder-to-initiator CipherState at its own next
-   sequential nonce, with the same shape as `RESUME` and the
-   responder's `last_acked_recv_nonce` in the third field:
-
-   ```text
-   RESUME-ACK = previous_epoch :u64 || new_epoch :u64 || last_acked_recv_nonce :u64
-   ```
-
-4. Both sides then advance their `local_send_nonce` per the formula
-   given under **Option Resume** above
-   (`nonce = max(local_send_nonce, peer_acked_recv_nonce) + 1`) and
-   resume normal encrypted traffic.
-
-5. Any operations from the previous TCP instance that one side sent
-   but the peer did not acknowledge are replayed at the new (higher)
-   nonces.
-   The CapTP application layer absorbs the resulting at-least-once
-   duplication idempotently; see **Replay idempotence at the CapTP
-   layer** below.
+1. The two sides run the Noise IK handshake and the `op:start-session`
+   exchange exactly as for a new session.
+   The responder's key-confirmation rule applies unchanged: nothing on
+   the new instance counts as the peer until its `op:start-session`
+   verifies.
+2. Inside the new encrypted channel, the reconnecting side names the
+   session it is reconnecting (a token bound to that session, such as
+   its opening handshake hash, so a reconnect cannot be pointed at a
+   different session) and the next epoch, `previous_epoch + 1`.
+3. The other side validates that the named session exists with this
+   peer and that the epoch advances by exactly one, then answers.
+   A side that no longer holds the session refuses, and the
+   reconnecting side ends the session rather than waiting out
+   `SESSION_HARD_TIMEOUT`.
+4. Each side tells the other how many session frames it has received.
+   Each side then replays, in order, the frames the peer has not
+   received, ahead of anything queued during the gap.
+   The `last_acked_recv_nonce` counts carried by `op:pong` (§ 1) bound
+   how much each side must retain for replay.
 
 **Replay idempotence at the CapTP layer.**
-Step 5 above replays unacknowledged operations at fresh, higher Noise
-nonces.
-At the Noise layer this is sound (no `(key, nonce)` pair is reused);
-at the CapTP layer it is semantically equivalent to delivering the
-same operation twice, which the application must absorb idempotently.
+Step 4 above replays unacknowledged operations under the new
+instance's keys.
+At the Noise layer this is sound (no `(key, nonce)` pair is reused).
+Frames received but not yet counted when the old instance broke are
+replayed, so the receiver must absorb a duplicate delivery
+idempotently.
 Each CapTP operation type carries this requirement on the receiver:
 
 - `op:deliver` (request-response): the receiver dedupes by
@@ -367,18 +348,6 @@ requirement.
 This is in scope for the implementation of this amendment in
 `packages/ocapn-noise-network` and the consuming CapTP layer.
 
-**Open question (C1).** Resume vs. Rekey. Resume is bandwidth-cheap
-(no fresh DH) but extends the lifetime of the same Noise key across
-TCP instances, increasing the blast radius of a key compromise.
-Rekey is bandwidth-heavier (three Noise messages) but rotates the key,
-which is the conservative cryptographic choice.
-The amendment leans toward Resume for the common case and Rekey on a
-configurable cap (e.g., rekey unconditionally every N reconnects or
-every M total bytes encrypted).
-This question is the most security-sensitive in this document and
-should be reviewed alongside
-[ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md).
-
 **Resolution of C2 (was: implicit vs. explicit ack).**
 `last_acked_recv_nonce` is acknowledged explicitly, via the
 `op:pong` operation defined in § 1. Each side emits `op:pong`
@@ -386,18 +355,16 @@ on the heartbeat cadence (independent of its `op:ping` cadence)
 carrying its current `last_acked_recv_nonce`; the receiver of
 `op:pong` updates its `peer_acked_recv_nonce` for the matching
 direction. The explicit form is preferred over implicit-via-any-op
-because it lets the resumption handshake compute the safe
-next-to-send nonce without per-op bookkeeping at the application
-layer, and because it bounds the lag between a successful decrypt
+because it lets each side release frames it no longer needs to replay
+without per-op bookkeeping at the application layer, and because it
+bounds the lag between a successful decrypt
 and the peer's knowledge of that ack to at most one heartbeat
 interval rather than to "the next op of any kind."
 
 **Critical non-negotiable.** Under no circumstance may a
-`(key, nonce)` pair be reused. If the resumption logic ever cannot
-prove that the new nonce strictly exceeds every nonce previously
-used under that key, the side that cannot prove it MUST tear down
-the session and force a Rekey. This is the rule that protects the
-ChaCha20-Poly1305 guarantee.
+`(key, nonce)` pair be reused. This is the rule that protects the
+ChaCha20-Poly1305 guarantee. Rekey on every reconnect makes it hold
+trivially: no key outlives the transport instance that negotiated it.
 
 ### 5. Timeout Values
 
@@ -486,7 +453,7 @@ queue of outbound operations bridges across the framer instances.
 
 ## Diagrams
 
-### Steady-State Heartbeat to TCP Drop to Reconnect to Sequence Resume
+### Steady-State Heartbeat to TCP Drop to Reconnect with Rekey
 
 ```mermaid
 sequenceDiagram
@@ -513,12 +480,14 @@ sequenceDiagram
 
     A->>T: TCP connect (new instance)
     T->>B: TCP accept
-    Note over A,B: epoch advance: 0 -> 1
-    A->>B: RESUME(prev=0, new=1, last_acked_recv_nonce=R_A)
-    B->>A: RESUME-ACK(prev=0, new=1, last_acked_recv_nonce=R_B)
-    Note over A,B: both advance send-nonce = max(local, peer.R) + 1<br/>same Noise key, no (key,nonce) reuse
+    A->>B: Noise IK message 1 (SYN)
+    B->>A: Noise IK message 2 (SYNACK)
+    Note over A,B: new keys, nonces restart at 0
+    A->>B: op:start-session, then reconnect(session, epoch=1, received)
+    B->>A: op:start-session, then reconnect(session, epoch=1, received)
+    Note over A,B: epoch advance: 0 -> 1<br/>each side replays the frames the peer did not receive
 
-    A->>T: op:ping epoch=1 seq=0 (encrypted under continued CipherState)
+    A->>T: op:ping epoch=1 seq=0 (encrypted under the new CipherState)
     T->>B: op:ping epoch=1 seq=0
     B->>T: op:ping epoch=1 seq=0
     T->>A: op:ping epoch=1 seq=0
@@ -547,14 +516,12 @@ sequenceDiagram
         Note over A,B: A is responder, B is initiator
         A->>A: cancel my outbound socket;<br/>accept B's inbound
         B->>B: cancel my inbound socket;<br/>proceed with my outbound
-        B->>A: RESUME on B's outbound socket
-        A->>B: RESUME-ACK
+        B->>A: reconnect handshake on B's outbound socket
     else d_A > d_B
         Note over A,B: A is initiator, B is responder
         B->>B: cancel my outbound socket;<br/>accept A's inbound
         A->>A: cancel my inbound socket;<br/>proceed with my outbound
-        A->>B: RESUME on A's outbound socket
-        B->>A: RESUME-ACK
+        A->>B: reconnect handshake on A's outbound socket
     end
     Note over A,B: exactly one TCP transport instance survives;<br/>epoch advances by 1
 ```
@@ -575,28 +542,28 @@ sequenceDiagram
 | Design | Relationship |
 |---|---|
 | [ocapn-noise-network](ocapn-noise-network.md) | Direct: this amendment extends that network with reconnection semantics. |
-| [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md) | Direct: the Resume-vs-Rekey choice (Open question C1) belongs in the cryptographic review's deliverable. |
+| [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md) | Direct: its recommendation R3, as rewritten in [#1475](https://github.com/endojs/endo-but-for-bots/pull/1475), proposes to settle Open question C1 as Rekey. |
 | [ocapn-network-transport-separation](ocapn-network-transport-separation.md) | Indirect: this design lives entirely inside the network layer that document establishes. |
 | [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md) | Indirect: each TCP transport instance mounts a fresh framer; the session-level operation queue bridges across instances. |
 
 ## Security Considerations
 
 - The non-negotiable rule is no `(key, nonce)` pair is ever reused under
-  ChaCha20-Poly1305. Both the Resume and the Rekey paths preserve this.
-- Resume extends the cryptographic lifetime of the Noise key across
-  TCP-instance boundaries. The defense is a configurable rekey cap
-  (Open question C1).
-- The `last_acked_recv_nonce` exchange in the resumption handshake is
-  itself encrypted under the existing CipherState, so a man-in-the-middle
-  cannot inject a forged resumption.
+  ChaCha20-Poly1305. Rekey on every reconnect preserves it by
+  construction: no Noise key outlives its transport instance.
+- A reconnect is authenticated exactly like a new session (Noise IK plus
+  the channel-bound `op:start-session`). The record naming the session
+  and epoch travels inside the new encrypted channel, so a
+  man-in-the-middle cannot inject a forged reconnect, and a record
+  captured from one session cannot reconnect another.
 - The designator-comparison tiebreaker is deterministic and uses the
   per-session ephemeral x25519 (not the long-term signing Ed25519),
   so the comparison is fresh every session and does not bias any peer
   across reconnect attempts. It does not leak information beyond what
   is already exchanged in the Noise IK handshake.
 - A spurious reconnect (false heartbeat-loss detection) costs one TCP
-  handshake and one resumption round-trip; it does not compromise
-  confidentiality or integrity.
+  handshake and one Noise IK handshake (213 bytes, one round trip); it
+  does not compromise confidentiality or integrity.
 
 ## Test Plan
 
@@ -609,14 +576,14 @@ sequenceDiagram
   instance.
 - Integration: crossed-hellos. Force both sides to detect loss
   simultaneously; verify exactly one transport instance survives.
-- Integration: nonce monotonicity. Inject a fault that would reuse a
-  nonce; verify the session aborts rather than encrypting under a
-  reused nonce.
+- Integration: nonce freshness. Across successive reconnects, verify
+  each transport instance runs its own handshake and that no
+  CipherState is carried from one instance to the next.
 - Adversarial: replay an `op:ping` from a previous epoch; verify it is
   silently dropped (per § 2).
 - Adversarial: CapTP replay idempotence. Force a reconnect that
-  replays unacknowledged `op:deliver` and `op:deliver-only` at higher
-  Noise nonces; verify the receiver dedupes by
+  replays unacknowledged `op:deliver` and `op:deliver-only` on the new
+  instance; verify the receiver dedupes by
   `(session, answer-position)` and `(session, deliver-id)`
   respectively, so the application observes each operation exactly
   once.
@@ -626,11 +593,10 @@ sequenceDiagram
   for `op:deliver`, delivery-failed notifications for
   `op:deliver-only`, and an `op:abort`-equivalent upward terminal
   event on the session itself).
-- Adversarial: cross-session `RESUME` replay. Capture a `RESUME`
-  record from one session; attempt to bind it to a different session
-  (different designator pair) with a `prev → prev + 1` epoch advance;
-  verify the responder rejects on the designator-pair cross-reference
-  (per § 4 step 2) and does not advance the second session's epoch.
+- Adversarial: cross-session reconnect. Attempt a reconnect that names
+  a session other than the one the peer holds with this identity, or an
+  epoch other than `previous + 1`; verify the responder refuses (per
+  § 4 step 3) and does not advance any session's epoch.
 
 ## Phased Implementation
 
@@ -657,15 +623,11 @@ sequenceDiagram
    reconnect-with-rekey path.
 
 3. **Phase 3: Reconnect with Rekey.** Implement transparent reconnect
-   using a fresh Noise handshake on the new TCP transport. This is
-   simpler than Resume and exercises the queue/epoch/tiebreaker logic
-   without touching CipherState continuity.
+   using a fresh Noise handshake on the new TCP transport. This
+   exercises the queue/epoch/tiebreaker logic and never carries a
+   CipherState across instances.
 
-4. **Phase 4: Reconnect with Resume.** Add the resumption handshake
-   that continues the CipherState across instances. Gate behind the
-   Open question C1 review.
-
-5. **Phase 5: Crossed-hellos.** Add the designator-comparison
+4. **Phase 4: Crossed-hellos.** Add the designator-comparison
    tiebreaker. Most easily tested with a fault injector that forces
    simultaneous loss detection.
 
@@ -681,10 +643,9 @@ sequenceDiagram
    Both sides already know both designators and can compute the
    comparison without exchange. Flagged for review (Open question P3).
 
-3. **Resume preferred, Rekey configurable.**
-   Bandwidth-cheap in the common case; configurable rekey cap defends
-   against indefinite key reuse. Most security-sensitive decision;
-   flagged for cryptographic review (Open question C1).
+3. **Rekey on every reconnect; no Resume.**
+   A fresh Noise IK handshake costs one round trip and rules out
+   `(key, nonce)` reuse by construction (§ 4).
 
 4. **Session state lives in the network, not in OCapN core.**
    Consistent with the layering established by
@@ -706,13 +667,19 @@ that introduced it.
 
 - **P3** (§ 3): Designator comparison vs. transcript hash for the
   crossed-hellos tiebreaker. Amendment leans toward designator.
-- **C1** (§ 4): Resume vs. Rekey for Noise state across reconnects,
-  and the rekey-cap policy. Most security-sensitive question; defer
-  to [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md).
 - **T1** (§ 5): Default `HEARTBEAT_INTERVAL` / `SESSION_TIMEOUT` and
   whether the OCapN spec recommends a profile range.
 - **T2** (§ 5): Fixed vs. adaptive heartbeat. Amendment leans toward
   fixed.
+- **C1** (§ 4): Rekey on every reconnect, per R3 of the cryptographic
+  review in [#1475](https://github.com/endojs/endo-but-for-bots/pull/1475).
+  This reverses the tentative Resume-with-rekey-cap decision on #252
+  and awaits the maintainer's confirmation.
+  If the maintainer keeps a Resume path instead, it needs a nonce-safe
+  construction (for example a fresh key derived per transport instance
+  from the session's keys, so no `(key, nonce)` pair can repeat after a
+  crash-restore) plus the rekey-cap that bounds how long derived keys
+  chain from one handshake.
 
 The following were open in earlier drafts and are now settled:
 
@@ -738,7 +705,7 @@ The following were open in earlier drafts and are now settled:
   the operations are registered in the OCapN spec, OCapN-Noise running
   this amendment is interoperable only with implementations that have
   adopted the same proposal.
-- The session epoch and the resumption handshake live entirely inside
+- The session epoch and the reconnect handshake live entirely inside
   the OCapN-Noise network and do not affect other networks
   (`tcp-testing-only`, `tcp-syrups`, etc.).
 - The behavior is opt-in by network identifier: a locator with

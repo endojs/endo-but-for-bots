@@ -40,7 +40,7 @@ OCapN.
 
 > **See also**: [ocapn-noise-session-reconnect](ocapn-noise-session-reconnect.md)
 > amends this design with a meta-TCP session layer (heartbeat, transparent
-> reconnect, Noise sequence continuity across TCP instances) per the
+> reconnect, a fresh Noise handshake on every TCP instance) per the
 > 2026-05-14 maintainer directive relaying erights' framing.
 
 ## What is the Problem Being Solved?
