@@ -201,7 +201,8 @@ const MIN_SESSION_TIMEOUT_INTERVALS = 3;
 // ping/pong pair, so the queue never holds more than this plus two.
 const OUTBOUND_HIGH_WATER_FRAMES = 64;
 
-/** The longest plaintext Noise `encrypt` accepts: a frame less its tag. */
+// The longest plaintext Noise `encrypt` accepts: Noise §3 caps a
+// message at 65535 bytes, less the 16-byte AEAD tag.
 const MAX_FRAME_PLAINTEXT_LENGTH = 65_535 - 16;
 
 /**

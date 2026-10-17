@@ -135,8 +135,8 @@ export interface SessionLiveness {
    */
   peerAckedRecvNonce: bigint | undefined;
   /**
-   * The highest Noise send nonce this side has encrypted, read from the
-   * sending CipherState. A frame the transport is still taking counts,
+   * The highest Noise send nonce this side has encrypted, counted at
+   * each `encrypt`. A frame the transport is still taking counts,
    * since it has consumed its nonce; a frame still in the queue does
    * not.
    */
