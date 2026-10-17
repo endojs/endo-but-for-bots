@@ -22,9 +22,10 @@ because plain websockets authenticate nothing).
 - **Framing** — netstring-framed OCapN messages, in the codec the
   embedding `makeOcapn` instance was constructed with.
 - **Sessions** — the standard OCapN `op:start-session` handshake, run by
-  the OCapN client over this netlayer; crossed hellos are resolved by the
-  client's session-key comparison, as with the other connect-style
-  netlayers.
+  the `makeStartSessionNetwork` adapter
+  (`@endo/ocapn/netlayer/start-session`) that wraps this netlayer;
+  crossed hellos are resolved by the adapter's session-key comparison, as
+  with the other connect-style netlayers.
 - **Keep-alive** — a QUIC datagram heartbeat keeps quiet CapTP sessions
   alive across iroh's ~2 minute idle timeout and presumes the peer dead
   after two missed beats (mirroring the `@endo/daemon` iroh transport).

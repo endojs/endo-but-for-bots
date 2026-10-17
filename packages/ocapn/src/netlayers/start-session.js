@@ -24,6 +24,7 @@
  * @import { OcapnPublicKey, Cryptography } from '../cryptography.js'
  * @import { OcapnCodec } from '../codec-interface.js'
  * @import { AdoptableSession, AdoptedSession, Connection, LocationId, Logger, NetLayer, NetlayerHandlers, OcapnNetwork, SelfIdentity, SessionHandlers, SessionResumption, SocketOperations } from '../client/types.js'
+ * @import { PromiseKit } from '@endo/promise-kit'
  */
 
 import harden from '@endo/harden';
@@ -127,7 +128,6 @@ const handleSessionHandshakeMessage = (
         location: peerLocation,
         locationSignature: peerLocationSig,
       } = message;
-      // Handle invalid version
       if (messageCaptpVersion !== captpVersion) {
         logger.info('Abort during start-session message with invalid version', {
           received: messageCaptpVersion,
@@ -143,7 +143,6 @@ const handleSessionHandshakeMessage = (
         throw Error(`Active session already exists for ${locationId}`);
       }
 
-      // Check if the location signature is valid
       const peerPublicKey = cryptography.makeOcapnPublicKey(sessionPublicKey.q);
       try {
         // tcp-testing-only does not have a Noise transcript hash to
@@ -187,7 +186,6 @@ const handleSessionHandshakeMessage = (
         }
       }
 
-      // Check for crossed hellos
       const outgoingConnection =
         sessionManager.getOutgoingConnection(locationId);
       if (
@@ -201,28 +199,20 @@ const handleSessionHandshakeMessage = (
           peerPublicKey,
           getSelfIdentityForConnection,
         );
-        // Close the non-preferred connection
         sendAbortAndClose(connectionToClose, 'Crossed hellos mitigated');
         sessionManager.deleteConnection(connectionToClose);
 
-        // If the incomming connection is the one that was just closed, we're done.
         if (incommingConnection === connectionToClose) {
           return;
         }
       }
 
-      // Send our hello if we haven't already
-      if (connection.isOutgoing) {
-        // We've already sent our hello, so our session data is already set
-      } else {
-        // We've received a hello, so we need to send our own
-        // Send our op:start-session
+      if (!connection.isOutgoing) {
         logger.info('Server sending op:start-session');
         const selfIdentity = getSelfIdentityForConnection(connection);
         sendHandshake(connection, selfIdentity, captpVersion, codec);
       }
 
-      // Create session
       const selfIdentity = getSelfIdentityForConnection(connection);
       const sessionId = makeSessionId(
         selfIdentity.keyPair.publicKey.id,
@@ -660,7 +650,7 @@ export const makeStartSessionNetwork = (
       }
       const selfIdentity = getSelfIdentityForConnection(connection);
       sendHandshake(connection, selfIdentity, captpVersion, codec);
-      /** @type {import('@endo/promise-kit').PromiseKit<AdoptableSession>} */
+      /** @type {PromiseKit<AdoptableSession>} */
       const { promise, resolve, reject } = makePromiseKit();
       pendingSessions.set(locationId, {
         outgoingConnection: connection,

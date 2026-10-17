@@ -263,10 +263,7 @@ const buildDaemon = async ({
       });
     },
   });
-  // The endpoint's session with the hub: adopted directly
-  // (handshake-free, restorable exports), frames
-  // flowing directly between the hub duct and the client's message
-  // handler.
+  // The endpoint's hub session is adopted handshake-free.
   let stopped = false;
   /** @type {Uint8Array[]} */
   const endpointOutbound = [];

@@ -259,7 +259,6 @@ test('adopted sessions reach bootstrap with no op:start-session on the wire', as
     message: /already adopted/,
   });
 
-  // Resolving the adopted object from provideSession yields that session.
   const sessionA = await clientA.provideSession(locationB);
   const again = await clientA.provideSession(locationB);
   const bootstrap = sessionA.getBootstrap();

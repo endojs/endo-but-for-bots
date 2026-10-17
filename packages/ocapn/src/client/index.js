@@ -5,7 +5,7 @@
  * @import { OcapnPublicKey } from '../cryptography.js'
  * @import { OcapnCodec } from '../codec-interface.js'
  * @import { SturdyRef } from './sturdyrefs.js'
- * @import { AdoptableSession, AdoptedSession, Client, Connection, InternalSession, LocationId, Logger, NetLayer, NetworkSession, NonceLocator, OcapnNetwork, Session, SessionHandlers, SessionManager } from './types.js'
+ * @import { AdoptableSession, AdoptedSession, Client, Connection, InternalSession, LocationId, Logger, NetLayer, NetworkSession, NonceLocator, OcapnNetwork, Session, SessionHandlers, SessionId, SessionManager } from './types.js'
  */
 
 import harden from '@endo/harden';
@@ -395,7 +395,7 @@ export const makeOcapn = async ({
 
   /**
    * @param {Connection} connection
-   * @param {import('./types.js').SessionId} sessionId
+   * @param {SessionId} sessionId
    * @param {OcapnLocation} peerLocation
    * @param {any} [hookKey] identity passed to `sessionHooks` callbacks
    */
