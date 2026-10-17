@@ -13,6 +13,12 @@ import {
 } from '../src/bindings.js';
 import { makeMockTransportPair } from '../src/transports/mock.js';
 import { makeMockMeshFabric } from './_fabric.js';
+import {
+  edwardsToMontgomery,
+  makePrefixedSyn,
+  scalarFromSeed,
+  x25519,
+} from './_noise-ik-msg1.js';
 
 /**
  * Register a freshly-minted Ed25519 key on the network and return the
@@ -464,6 +470,64 @@ test('replayed genuine SYN cannot displace the peer unclaimed session', async t 
   if (!received.done) {
     t.is(new TextDecoder().decode(received.value), 'still-here');
   }
+});
+
+test('a key-compromise-impersonation SYN never graduates', async t => {
+  // IK message 1 authenticates its sender only at Noise level 1: anyone
+  // holding the responder's static key can compute `ss` for any claimed
+  // initiator and forge a SYN the responder accepts. The forger still
+  // lacks the claimed initiator's static key, so it cannot compute `se`,
+  // derive the transport keys, or answer `op:start-session`. The
+  // responder must not treat the initiator as authenticated until that
+  // answer decrypts and verifies.
+  t.timeout(10_000);
+  const handshakeTimeoutMs = 500;
+  const fabric = makeFabricForTest(t);
+  const netA = makeNetworkForTest(t, { codec: cborCodec, handshakeTimeoutMs });
+  const netV = makeNetworkForTest(t, { codec: cborCodec });
+  const responder = addFreshKey(netA);
+  // V never dials; only its public key is known to the forger.
+  const victim = addFreshKey(netV);
+  await netA.addTransport(fabric.transportFor('A'));
+
+  let graduated = false;
+  netA.waitForInboundSession(victim.keyId).then(
+    () => {
+      graduated = true;
+    },
+    () => {},
+  );
+
+  const victimStatic = edwardsToMontgomery(victim.publicKey);
+  const forgedSyn = makePrefixedSyn({
+    responderVerifyingKey: responder.publicKey,
+    initiatorStatic: victimStatic,
+    staticSharedSecret: x25519(
+      scalarFromSeed(responder.privateKey),
+      victimStatic,
+    ),
+    claimedVerifyingKey: victim.publicKey,
+  });
+  const forgerStream = await fabric.transportFor('M').connect({ to: 'A' });
+  await forgerStream.writer.next(forgedSyn);
+  const synack = await forgerStream.reader.next(undefined);
+  t.false(synack.done, 'A accepts the forged SYN and answers it');
+
+  // Without `se` the forger can only guess at an encrypted
+  // `op:start-session`.
+  await forgerStream.writer.next(new Uint8Array(64));
+  /** @returns {Promise<boolean>} */
+  const drainUntilHangUp = async () => {
+    const frame = await forgerStream.reader.next(undefined);
+    return frame.done || drainUntilHangUp();
+  };
+  const hungUp = await within(
+    drainUntilHangUp(),
+    4 * handshakeTimeoutMs,
+    'hang-up',
+  ).catch(() => false);
+  t.true(hungUp, 'A hangs up on the forger');
+  t.false(graduated, 'A never graduates a session for the claimed peer');
 });
 
 /**
