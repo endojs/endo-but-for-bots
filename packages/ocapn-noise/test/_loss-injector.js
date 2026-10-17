@@ -18,23 +18,54 @@ const never = new Promise(() => {});
  * a kernel send buffer are when the path dies, and reads never yield
  * again), while streams opened afterwards work normally. A test can
  * also refuse new connections, to hold a partition open across
- * reconnect attempts.
+ * reconnect attempts, or hold them to force crossed hellos
+ * (`designs/ocapn-noise-session-reconnect.md` § 3, Crossed-Hellos
+ * Tiebreaker).
  *
  * @param {OcapnNoiseTransport} transport
  */
 export const makeLossyTransport = transport => {
-  /** @type {Set<{ severed: boolean }>} */
+  /**
+   * @typedef {{
+   *   severed: boolean,
+   *   closed: boolean,
+   *   outbound: boolean,
+   *   writes: number,
+   *   firstWrite: Uint8Array | undefined,
+   *   writesAtReturn: number | undefined,
+   * }} StreamState
+   */
+  /** @type {Set<StreamState>} */
   const live = new Set();
+  /** @type {StreamState[]} */
+  const all = [];
   let refusing = false;
+  let refusingOutbound = false;
+  /** @type {number | undefined} */
+  let failOutboundAfterMs;
+  let outboundDelayMs = 0;
   let connects = 0;
+  /** @type {Promise<void> | undefined} */
+  let held;
+  let release = () => {};
 
   /**
    * @param {ByteStream} stream
+   * @param {boolean} outbound
    * @returns {ByteStream}
    */
-  const wrapStream = stream => {
-    const state = { severed: false };
+  const wrapStream = (stream, outbound) => {
+    /** @type {StreamState} */
+    const state = {
+      severed: false,
+      closed: false,
+      outbound,
+      writes: 0,
+      firstWrite: undefined,
+      writesAtReturn: undefined,
+    };
     live.add(state);
+    all.push(state);
     /** @type {ByteStream['reader']} */
     const reader = harden({
       next: async value => {
@@ -44,7 +75,10 @@ export const makeLossyTransport = transport => {
         if (state.severed) return never;
         return result;
       },
-      return: value => stream.reader.return(value),
+      return: value => {
+        state.closed = true;
+        return stream.reader.return(value);
+      },
       throw: error => stream.reader.throw(error),
       [Symbol.asyncIterator]() {
         return reader;
@@ -54,10 +88,18 @@ export const makeLossyTransport = transport => {
     const writer = harden({
       next: async value => {
         await null;
+        if (state.writes === 0) state.firstWrite = value;
+        state.writes += 1;
         if (state.severed) return harden({ done: false, value: undefined });
         return stream.writer.next(value);
       },
-      return: value => stream.writer.return(value),
+      return: value => {
+        state.closed = true;
+        if (state.writesAtReturn === undefined) {
+          state.writesAtReturn = state.writes;
+        }
+        return stream.writer.return(value);
+      },
       throw: error => stream.writer.throw(error),
       [Symbol.asyncIterator]() {
         return writer;
@@ -73,8 +115,20 @@ export const makeLossyTransport = transport => {
     connect: async hints => {
       await null;
       connects += 1;
-      if (refusing) throw Error('lossy transport: connection refused');
-      return wrapStream(await transport.connect(hints));
+      if (held) await held;
+      if (outboundDelayMs > 0) {
+        const ms = outboundDelayMs;
+        await new Promise(resolve => setTimeout(resolve, ms));
+      }
+      if (failOutboundAfterMs !== undefined) {
+        const ms = failOutboundAfterMs;
+        await new Promise(resolve => setTimeout(resolve, ms));
+        throw Error('lossy transport: connection timed out');
+      }
+      if (refusing || refusingOutbound) {
+        throw Error('lossy transport: connection refused');
+      }
+      return wrapStream(await transport.connect(hints), true);
     },
     listen:
       listen &&
@@ -84,7 +138,7 @@ export const makeLossyTransport = transport => {
             Promise.resolve(stream.writer.return(undefined)).catch(() => {});
             return;
           }
-          handler(wrapStream(stream));
+          handler(wrapStream(stream, false));
         })),
     shutdown: () => transport.shutdown(),
   });
@@ -100,6 +154,76 @@ export const makeLossyTransport = transport => {
     refuse: refuse => {
       refusing = refuse;
     },
+    /**
+     * Refuse (or again allow) outbound connections only, so the peer's
+     * dials still arrive.
+     *
+     * @param {boolean} refuse
+     */
+    refuseOutbound: refuse => {
+      refusingOutbound = refuse;
+    },
+    /**
+     * Fail every outbound connection attempt after a delay, as an OS
+     * connect timeout would, or (with `undefined`) stop doing so.
+     *
+     * @param {number | undefined} ms
+     */
+    failOutboundAfter: ms => {
+      failOutboundAfterMs = ms;
+    },
+    /**
+     * Delay every outbound connection attempt, to pace a side's redials
+     * independently of its backoff.
+     *
+     * @param {number} ms
+     */
+    delayOutbound: ms => {
+      outboundDelayMs = ms;
+    },
+    /**
+     * Hold every new connection attempt short of the peer until released,
+     * so that a test can wait for two sides to both be mid-dial before
+     * either attempt arrives (crossed hellos).
+     *
+     * @param {boolean} hold
+     */
+    holdConnects: hold => {
+      if (hold && !held) {
+        held = new Promise(resolve => {
+          release = () => resolve(undefined);
+        });
+      } else if (!hold && held) {
+        held = undefined;
+        release();
+      }
+    },
+    /**
+     * Streams neither partitioned nor closed by this side.
+     *
+     * @param {boolean} [outbound] Count only streams this side dialed
+     *   (`true`) or accepted (`false`).
+     */
+    getOpenStreams: outbound =>
+      [...live].filter(
+        state =>
+          !state.closed &&
+          !state.severed &&
+          (outbound === undefined || state.outbound === outbound),
+      ).length,
+    /**
+     * Every stream this side has dialed or accepted, in order. The first
+     * write is kept because an initiator's SYN or a responder's SYNACK
+     * carries the handshake ephemerals in the clear.
+     */
+    getStreams: () =>
+      all.map(({ outbound, writes, firstWrite, closed, writesAtReturn }) => ({
+        outbound,
+        writes,
+        firstWrite,
+        closed,
+        writesAtReturn,
+      })),
     /** How many connections have been attempted through the transport. */
     getConnects: () => connects,
   });

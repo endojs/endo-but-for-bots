@@ -8,6 +8,8 @@ import { cborCodec } from '@endo/ocapn/cbor';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import { makeOcapnNoiseNetwork } from '../index.js';
 import { makeMockTransportPair } from '../src/transports/mock.js';
+import { compareUint8Arrays } from '../src/bytewise-compare.js';
+import { initiatesOnCrossedHellos } from '../src/crossed-hellos.js';
 import { makeLossyTransport } from './_loss-injector.js';
 
 /**
@@ -17,7 +19,7 @@ const delay = milliseconds =>
   new Promise(resolve => setTimeout(resolve, milliseconds));
 
 // Wide enough that timer jitter on a loaded CI runner cannot fake a loss.
-const heartbeat = { intervalMs: 50, sessionTimeoutMs: 500 };
+const heartbeat = { intervalMs: 50, sessionTimeoutMs: 1000 };
 const reconnect = {
   backoffInitialMs: 20,
   backoffMaxMs: 200,
@@ -70,14 +72,50 @@ const connectLossyPair = async (
   const keyB = netB.addSigningKeys(netB.generateSigningKeys());
   const { transportA, transportB } = makeMockTransportPair();
   const injector = makeLossyTransport(transportA);
+  const injectorB = makeLossyTransport(transportB);
   await netA.addTransport(injector.transport);
-  await netB.addTransport(transportB);
+  await netB.addTransport(injectorB.transport);
   const [sessionA, sessionB] = await Promise.all([
     netA.provideSession(netB.locationFor(keyB)),
     netB.waitForInboundSession(keyA),
   ]);
-  return { netA, netB, keyA, keyB, sessionA, sessionB, injector };
+  return { netA, netB, keyA, keyB, sessionA, sessionB, injector, injectorB };
 };
+
+/**
+ * Sort the two sides of a pair by the crossed-hellos tiebreaker: the
+ * x25519 ephemerals of the handshake that opened the session, read off
+ * A's SYN (bytes 32 to 64) and B's SYNACK (its first 32 bytes).
+ *
+ * @param {ReturnType<typeof makeLossyTransport>} injector
+ * @param {ReturnType<typeof makeLossyTransport>} injectorB
+ * @returns {{
+ *   greater: ReturnType<typeof makeLossyTransport>,
+ *   lesser: ReturnType<typeof makeLossyTransport>,
+ * }}
+ */
+const byEphemeral = (injector, injectorB) => {
+  const [syn] = injector.getStreams();
+  const [synack] = injectorB.getStreams();
+  const ephemeralA = /** @type {Uint8Array} */ (syn.firstWrite).slice(32, 64);
+  const ephemeralB = /** @type {Uint8Array} */ (synack.firstWrite).slice(0, 32);
+  return compareUint8Arrays(ephemeralA, ephemeralB) > 0
+    ? { greater: injector, lesser: injectorB }
+    : { greater: injectorB, lesser: injector };
+};
+
+/**
+ * Inbound dials that this side closed without an `op:session-hello`
+ * answer: it ended its writer having written only the SYNACK and its
+ * identity greeting. A refusal writes a hello first, and an instance
+ * that attached wrote one too, so neither counts.
+ *
+ * @param {ReturnType<typeof makeLossyTransport>} injector
+ */
+const droppedDials = injector =>
+  injector
+    .getStreams()
+    .filter(stream => !stream.outbound && stream.writesAtReturn === 2).length;
 
 /**
  * @param {import('../src/types.js').OcapnNoiseSession} session
@@ -155,6 +193,252 @@ for (const [codecName, codec] of /** @type {const} */ ([
   });
 }
 
+for (const [codecName, codec] of /** @type {const} */ ([
+  ['cbor', cborCodec],
+  ['syrup', syrupCodec],
+])) {
+  test(`${codecName}: crossed hellos on reconnect converge on one transport instance`, async t => {
+    const { sessionA, sessionB, injector, injectorB } = await connectLossyPair(
+      t,
+      codec,
+    );
+    // Holding every dial short of the peer until both sides are dialing
+    // makes the two cross however far apart timer jitter puts the two
+    // timeouts.
+    injector.holdConnects(true);
+    injectorB.holdConnects(true);
+    injector.sever();
+    injectorB.sever();
+    await sessionA.writer.next(Uint8Array.of(1));
+    await sessionB.writer.next(Uint8Array.of(101));
+
+    // Both sides redial (A's first connection opened the session; B had
+    // only ever accepted).
+    await eventually(
+      () => injector.getConnects() >= 2 && injectorB.getConnects() >= 1,
+    );
+    injector.holdConnects(false);
+    injectorB.holdConnects(false);
+
+    await eventually(
+      () =>
+        !sessionA.getLiveness().reconnecting &&
+        !sessionB.getLiveness().reconnecting &&
+        sessionA.getLiveness().epoch > 0n,
+    );
+    await delay(heartbeat.intervalMs * 4);
+    const { greater, lesser } = byEphemeral(injector, injectorB);
+    t.is(sessionA.getLiveness().epoch, 1n);
+    t.is(sessionB.getLiveness().epoch, 1n);
+    t.is(greater.getOpenStreams(true), 1);
+    t.is(greater.getOpenStreams(false), 0);
+    t.is(lesser.getOpenStreams(true), 0);
+    t.is(lesser.getOpenStreams(false), 1);
+    t.is(droppedDials(greater), 1);
+    t.is(droppedDials(lesser), 0);
+
+    t.deepEqual(await readBytes(sessionB, 1), [1]);
+    t.deepEqual(await readBytes(sessionA, 1), [101]);
+    await sessionA.writer.next(Uint8Array.of(2));
+    t.deepEqual(await readBytes(sessionB, 1), [2]);
+    sessionA.close();
+  });
+}
+
+for (const [codecName, codec] of /** @type {const} */ ([
+  ['cbor', cborCodec],
+  ['syrup', syrupCodec],
+])) {
+  test(`${codecName}: dials for an epoch the session has reached are dropped unanswered`, async t => {
+    const { sessionA, sessionB, injector, injectorB } = await connectLossyPair(
+      t,
+      codec,
+    );
+    // Stall the dials of the side that loses the tiebreaker, so it never
+    // drops the other side's dial in favor of its own and the session
+    // moves on without them.
+    const { greater, lesser } = byEphemeral(injector, injectorB);
+    const connectsBefore = lesser.getConnects();
+    lesser.holdConnects(true);
+
+    for (const epoch of [1n, 2n]) {
+      greater.holdConnects(true);
+      injector.sever();
+      injectorB.sever();
+      // eslint-disable-next-line no-await-in-loop
+      await sessionA.writer.next(Uint8Array.of(Number(epoch)));
+      // eslint-disable-next-line no-await-in-loop
+      await eventually(
+        () => lesser.getConnects() === connectsBefore + Number(epoch),
+      );
+      greater.holdConnects(false);
+      // eslint-disable-next-line no-await-in-loop
+      await eventually(
+        () =>
+          sessionA.getLiveness().epoch === epoch &&
+          sessionB.getLiveness().epoch === epoch,
+      );
+    }
+    t.is(droppedDials(greater), 0);
+
+    lesser.holdConnects(false);
+    await eventually(() => droppedDials(greater) === 2);
+    await delay(heartbeat.intervalMs * 4);
+    t.is(sessionA.getLiveness().epoch, 2n);
+    t.is(sessionB.getLiveness().epoch, 2n);
+    t.false(sessionA.getLiveness().reconnecting);
+    t.false(sessionB.getLiveness().reconnecting);
+    t.is(greater.getOpenStreams(true), 1);
+    t.is(lesser.getOpenStreams(false), 1);
+
+    t.deepEqual(await readBytes(sessionB, 2), [1, 2]);
+    await sessionA.writer.next(Uint8Array.of(3));
+    t.deepEqual(await readBytes(sessionB, 1), [3]);
+    sessionA.close();
+  });
+}
+
+test('the winner of crossed hellos stops deferring to a dial of its own that hangs', async t => {
+  const { sessionA, sessionB, injector, injectorB } = await connectLossyPair(
+    t,
+    cborCodec,
+  );
+  // The greater side's dials neither fail nor complete, as in a one-way
+  // partition; only the lesser side's dials have a path. The lesser
+  // side's dials are held too until the greater side is dialing, so that
+  // they arrive while it defers to its own.
+  const { greater, lesser } = byEphemeral(injector, injectorB);
+  const connectsBefore = greater.getConnects();
+  greater.holdConnects(true);
+  lesser.holdConnects(true);
+  injector.sever();
+  injectorB.sever();
+  await sessionA.writer.next(Uint8Array.of(1));
+  await sessionB.writer.next(Uint8Array.of(101));
+  await eventually(() => greater.getConnects() > connectsBefore);
+  lesser.holdConnects(false);
+
+  // The greater side drops the lesser side's dials for a session timeout,
+  // then takes one. Were it to defer for as long as its own dial hangs,
+  // the session would stay down until hardTimeoutMs, past this wait.
+  await eventually(
+    () =>
+      sessionA.getLiveness().epoch === 1n &&
+      sessionB.getLiveness().epoch === 1n &&
+      !sessionA.getLiveness().reconnecting &&
+      !sessionB.getLiveness().reconnecting,
+  );
+  t.true(droppedDials(greater) >= 1);
+  t.is(greater.getOpenStreams(false), 1);
+
+  greater.holdConnects(false);
+  await delay(heartbeat.intervalMs * 4);
+  t.is(sessionA.getLiveness().epoch, 1n);
+  t.is(sessionB.getLiveness().epoch, 1n);
+  t.deepEqual(await readBytes(sessionB, 1), [1]);
+  t.deepEqual(await readBytes(sessionA, 1), [101]);
+  await sessionA.writer.next(Uint8Array.of(2));
+  t.deepEqual(await readBytes(sessionB, 1), [2]);
+  sessionA.close();
+});
+
+test('the winner of crossed hellos stops deferring when its dials keep failing', async t => {
+  // Backoff of a millisecond keeps the greater side dialing nearly all
+  // the time, so a deference window that restarted with each of its
+  // failed dials would drop nearly every dial of the lesser side (paced
+  // apart here) until hardTimeoutMs, past the wait below.
+  const quickBackoff = { ...reconnect, backoffInitialMs: 1, backoffMaxMs: 1 };
+  const { sessionA, sessionB, injector, injectorB } = await connectLossyPair(
+    t,
+    cborCodec,
+    { reconnectA: quickBackoff, reconnectB: quickBackoff },
+  );
+  // The lesser side's dials are held until the greater side is dialing,
+  // so that they arrive while it defers to its own.
+  const { greater, lesser } = byEphemeral(injector, injectorB);
+  const connectsBefore = greater.getConnects();
+  greater.failOutboundAfter((heartbeat.sessionTimeoutMs * 9) / 10);
+  lesser.delayOutbound(heartbeat.sessionTimeoutMs / 4);
+  lesser.holdConnects(true);
+  injector.sever();
+  injectorB.sever();
+  await sessionA.writer.next(Uint8Array.of(1));
+  await sessionB.writer.next(Uint8Array.of(101));
+  await eventually(() => greater.getConnects() > connectsBefore);
+  lesser.holdConnects(false);
+
+  await eventually(
+    () =>
+      sessionA.getLiveness().epoch >= 1n &&
+      sessionB.getLiveness().epoch === sessionA.getLiveness().epoch &&
+      !sessionA.getLiveness().reconnecting &&
+      !sessionB.getLiveness().reconnecting,
+  );
+  t.is(greater.getOpenStreams(false), 1);
+  greater.failOutboundAfter(undefined);
+  t.deepEqual(await readBytes(sessionB, 1), [1]);
+  t.deepEqual(await readBytes(sessionA, 1), [101]);
+  sessionA.close();
+});
+
+test('the crossed-hellos tiebreaker picks exactly one side, even on a tie', t => {
+  const low = new Uint8Array(32).fill(1);
+  const high = new Uint8Array(32).fill(2);
+  t.true(initiatesOnCrossedHellos(high, low, false));
+  t.false(initiatesOnCrossedHellos(low, high, true));
+  // A peer that echoed our ephemeral: the side that opened the session
+  // wins, and only one side did.
+  t.true(initiatesOnCrossedHellos(low, low, true));
+  t.false(initiatesOnCrossedHellos(low, low, false));
+});
+
+test('closing a session while both sides are mid-redial ends it on both', async t => {
+  const { sessionA, sessionB, injector, injectorB } = await connectLossyPair(
+    t,
+    cborCodec,
+  );
+  injector.holdConnects(true);
+  injectorB.holdConnects(true);
+  injector.sever();
+  injectorB.sever();
+  await sessionA.writer.next(Uint8Array.of(1));
+  await sessionB.writer.next(Uint8Array.of(101));
+  await eventually(
+    () => injector.getConnects() >= 2 && injectorB.getConnects() >= 1,
+  );
+  sessionA.close();
+  injector.holdConnects(false);
+  injectorB.holdConnects(false);
+
+  // B learns of the close only by A refusing to resume, however the two
+  // dials interleave.
+  await t.throwsAsync(() => sessionB.reader.next(undefined), {
+    message: /refused to resume|not reconnected/,
+  });
+  t.false(sessionA.getLiveness().reconnecting);
+  t.deepEqual(await sessionA.writer.next(Uint8Array.of(2)), {
+    done: true,
+    value: undefined,
+  });
+});
+
+test('either side redials: the side that accepted the session reconnects it', async t => {
+  const { sessionA, sessionB, injector, injectorB } = await connectLossyPair(
+    t,
+    cborCodec,
+  );
+  injector.refuseOutbound(true);
+  injector.sever();
+  await sessionB.writer.next(Uint8Array.of(7));
+  await eventually(
+    () =>
+      sessionA.getLiveness().epoch === 1n &&
+      sessionB.getLiveness().epoch === 1n,
+  );
+  t.true(injectorB.getConnects() >= 1);
+  t.deepEqual(await readBytes(sessionA, 1), [7]);
+});
+
 test('the session aborts once SESSION_HARD_TIMEOUT passes unreconnected', async t => {
   const hardTimeoutMs = 1500;
   const { sessionA, sessionB, injector } = await connectLossyPair(
@@ -187,11 +471,14 @@ test('the session aborts once SESSION_HARD_TIMEOUT passes unreconnected', async 
 });
 
 test('writes fail fast in the last stretch of the reconnect budget', async t => {
+  // The last stretch opens 200ms into reconnecting and the session aborts
+  // at 5s, so a loaded runner that stalls the write by seconds still lands
+  // it inside the window rather than after the abort.
   const { sessionA, injector } = await connectLossyPair(t, cborCodec, {
     reconnectA: {
       backoffInitialMs: 20,
-      backoffMaxMs: 1000,
-      hardTimeoutMs: 1200,
+      backoffMaxMs: 4800,
+      hardTimeoutMs: 5000,
     },
   });
   injector.refuse(true);
